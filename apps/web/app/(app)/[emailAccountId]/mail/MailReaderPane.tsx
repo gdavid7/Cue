@@ -35,6 +35,8 @@ export const MailReaderPane = memo(function MailReaderPane({
   lastMessage,
   isStarred,
   onToggleStar,
+  isImportant,
+  onToggleImportant,
   onMarkSpam,
   onDelete,
   onLabel,
@@ -58,6 +60,8 @@ export const MailReaderPane = memo(function MailReaderPane({
   lastMessage: ThreadMessage | null;
   isStarred: boolean;
   onToggleStar: () => void;
+  isImportant: boolean;
+  onToggleImportant?: () => void;
   onMarkSpam: () => void;
   onDelete: () => void;
   onLabel?: () => void;
@@ -117,6 +121,8 @@ export const MailReaderPane = memo(function MailReaderPane({
                 message={lastMessage}
                 isStarred={isStarred}
                 onToggleStar={onToggleStar}
+                isImportant={isImportant}
+                onToggleImportant={onToggleImportant}
                 onMarkSpam={onMarkSpam}
                 onDelete={onDelete}
                 onLabel={onLabel}

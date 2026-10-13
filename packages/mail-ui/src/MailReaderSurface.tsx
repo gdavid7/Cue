@@ -7,6 +7,8 @@ export type MailReaderToolbarButton = {
     | "collapse_all"
     | "archive"
     | "move_to_inbox"
+    | "restore"
+    | "not_spam"
     | "mark_read"
     | "mark_unread";
   ariaLabel: string;
@@ -26,6 +28,12 @@ export type MailReaderToolbarProps = {
   onArchive: () => void;
   /** Replaces Archive when the thread is already out of the inbox. */
   onMoveToInbox?: () => void;
+  /** Replaces Archive when the thread is in the trash. */
+  onRestore?: () => void;
+  /** Replaces Archive when the thread is in spam. */
+  onNotSpam?: () => void;
+  /** Actions the host renders itself, such as a snooze picker. */
+  extraActions?: ReactNode;
   onMarkRead: () => void;
   onMarkUnread: () => void;
   menu?: ReactNode;
@@ -50,6 +58,9 @@ export function MailReaderToolbar({
   onBackToInbox,
   onArchive,
   onMoveToInbox,
+  onRestore,
+  onNotSpam,
+  extraActions,
   onMarkRead,
   onMarkUnread,
   menu,
@@ -118,22 +129,15 @@ export function MailReaderToolbar({
             })
           : null}
         {actionButton(
-          onMoveToInbox
-            ? {
-                action: "move_to_inbox",
-                ariaLabel: "Move to inbox",
-                variant: "outline",
-                icon: icons?.move_to_inbox,
-                onClick: onMoveToInbox,
-              }
-            : {
-                action: "archive",
-                ariaLabel: "Archive",
-                variant: "outline",
-                icon: icons?.archive,
-                onClick: onArchive,
-              },
+          getPrimaryAction({
+            onArchive,
+            onMoveToInbox,
+            onRestore,
+            onNotSpam,
+            icons,
+          }),
         )}
+        {extraActions}
         {actionButton({
           action: readAction,
           ariaLabel: readLabel,
@@ -145,6 +149,52 @@ export function MailReaderToolbar({
       </div>
     </div>
   );
+}
+
+function getPrimaryAction({
+  onArchive,
+  onMoveToInbox,
+  onRestore,
+  onNotSpam,
+  icons,
+}: Pick<
+  MailReaderToolbarProps,
+  "onArchive" | "onMoveToInbox" | "onRestore" | "onNotSpam" | "icons"
+>): MailReaderToolbarButton {
+  if (onNotSpam) {
+    return {
+      action: "not_spam",
+      ariaLabel: "Not spam",
+      variant: "outline",
+      icon: icons?.not_spam,
+      onClick: onNotSpam,
+    };
+  }
+  if (onRestore) {
+    return {
+      action: "restore",
+      ariaLabel: "Restore",
+      variant: "outline",
+      icon: icons?.restore,
+      onClick: onRestore,
+    };
+  }
+  if (onMoveToInbox) {
+    return {
+      action: "move_to_inbox",
+      ariaLabel: "Move to inbox",
+      variant: "outline",
+      icon: icons?.move_to_inbox,
+      onClick: onMoveToInbox,
+    };
+  }
+  return {
+    action: "archive",
+    ariaLabel: "Archive",
+    variant: "outline",
+    icon: icons?.archive,
+    onClick: onArchive,
+  };
 }
 
 export type MailReaderSurfaceProps = {

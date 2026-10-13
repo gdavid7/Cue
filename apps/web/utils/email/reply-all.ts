@@ -56,6 +56,39 @@ export function buildReplyAllRecipients(
 }
 
 /**
+ * Recipients the inline composer opens with. Following up on your own message
+ * keeps its recipients; replying to someone else goes back to them, and reply
+ * all also copies everyone else on the message except you.
+ */
+export function buildComposeReplyRecipients({
+  headers,
+  sentFromUser,
+  replyAll,
+  userEmail,
+}: {
+  headers: ParsedMessageHeaders;
+  sentFromUser: boolean;
+  replyAll: boolean;
+  userEmail: string;
+}): { to: string; cc: string; bcc: string } {
+  if (sentFromUser) {
+    return { to: headers.to, cc: headers.cc ?? "", bcc: headers.bcc ?? "" };
+  }
+  if (!replyAll) return { to: headers.from, cc: headers.cc ?? "", bcc: "" };
+
+  const recipients = buildReplyAllRecipients(headers, undefined, userEmail);
+  return { to: recipients.to, cc: recipients.cc.join(", "), bcc: "" };
+}
+
+/** Reply all only means something when someone besides the sender and you is on it. */
+export function hasReplyAllRecipients(
+  headers: ParsedMessageHeaders,
+  userEmail: string,
+) {
+  return buildReplyAllRecipients(headers, undefined, userEmail).cc.length > 0;
+}
+
+/**
  * Converts array of CC recipients to a comma-separated string.
  * Returns undefined if the array is empty.
  */

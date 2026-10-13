@@ -62,6 +62,8 @@ import { useWarmNeighbourThreads } from "@/app/(app)/[emailAccountId]/mail/use-w
 import { useMailPerformanceTelemetry } from "@/app/(app)/[emailAccountId]/mail/use-mail-performance-telemetry";
 import {
   isThreadArchived,
+  isThreadImportant,
+  isThreadOnlyIn,
   isThreadUnread,
 } from "@/app/(app)/[emailAccountId]/mail/read-state";
 import { MailLayout, MailSplitFilterKind } from "@/generated/prisma/enums";
@@ -164,6 +166,7 @@ export function MailShell() {
     targets: ThreadSelection[];
   } | null>(null);
   const [replyToMessageId, setReplyToMessageId] = useState<string>();
+  const [replyAll, setReplyAll] = useState(false);
   const [forwardToMessageId, setForwardToMessageId] = useState<string>();
   const pendingComposeRequest = useRef<{
     mode: "reply" | "forward";
@@ -619,6 +622,9 @@ export function MailShell() {
     moveToInbox,
     trash,
     markSpam,
+    markNotSpam,
+    restoreFromTrash,
+    setImportantState,
     setReadState,
     setStarredState,
     snooze,
@@ -634,6 +640,7 @@ export function MailShell() {
   );
   const composeTargetMessageId = getComposeTargetMessageId(openMessages);
   const requestReaderReply = useCallback(() => {
+    setReplyAll(false);
     const messageId = composeTargetMessageId;
     if (messageId) {
       pendingComposeRequest.current = null;
@@ -849,6 +856,32 @@ export function MailShell() {
   const targetsArchived =
     actionTargets.length > 0 &&
     actionTargets.every((target) => isThreadArchived(target.messages));
+  // Archiving from Trash or Spam would leave it there, so those offer the way out.
+  const targetsTrashed =
+    actionTargets.length > 0 &&
+    actionTargets.every((target) =>
+      isThreadOnlyIn(target.messages, GmailLabel.TRASH),
+    );
+  const targetsSpam =
+    actionTargets.length > 0 &&
+    actionTargets.every((target) =>
+      isThreadOnlyIn(target.messages, GmailLabel.SPAM),
+    );
+  const restoreTargets = useCallback(
+    () => runOn(restoreFromTrash, true, true),
+    [restoreFromTrash, runOn],
+  );
+  const notSpamTargets = useCallback(
+    () => runOn(markNotSpam, true, true),
+    [markNotSpam, runOn],
+  );
+  const allImportant =
+    actionTargets.length > 0 &&
+    actionTargets.every((target) => isThreadImportant(target.messages));
+  const importantTargets = useCallback(
+    () => runOn((ids) => setImportantState(ids, !allImportant), false),
+    [allImportant, runOn, setImportantState],
+  );
   const trashTargets = useCallback(
     () => runOn(trash, true, true),
     [runOn, trash],
@@ -1145,13 +1178,8 @@ export function MailShell() {
       markSpam: markSpamTargets,
       markUnread: markUnreadTargets,
       delete: trashTargets,
-      reply: () => {
-        setForwardToMessageId(undefined);
-        if (!openThreadId && focusedThread) {
-          setOpenThread(getListThreadSelection(focusedThread, emailAccountId));
-        }
-        setReplyToMessageId(composeTargetMessageId);
-      },
+      reply: () => openReply(false),
+      replyAll: () => openReply(true),
       forward: singleActionTarget ? requestForwardTarget : undefined,
       moreActions: openThreadId
         ? () => setIsMenuOpen((open) => !open)
@@ -1184,6 +1212,15 @@ export function MailShell() {
           },
     };
   })();
+
+  function openReply(toEveryone: boolean) {
+    setForwardToMessageId(undefined);
+    if (!openThreadId && focusedThread) {
+      setOpenThread(getListThreadSelection(focusedThread, emailAccountId));
+    }
+    setReplyAll(toEveryone);
+    setReplyToMessageId(composeTargetMessageId);
+  }
 
   useLayoutEffect(() => {
     // The search field remounts when selection clears or the list returns, so
@@ -1555,6 +1592,12 @@ export function MailShell() {
                 lastMessage={openMessages.at(-1) ?? null}
                 isStarred={allStarred}
                 onToggleStar={starTargets}
+                isImportant={allImportant}
+                onToggleImportant={
+                  isGoogleProvider(readerEmailAccount?.account.provider)
+                    ? importantTargets
+                    : undefined
+                }
                 onMarkSpam={markSpamTargets}
                 onDelete={trashTargets}
                 onLabel={canLabel ? openLabelPicker : undefined}
@@ -1584,12 +1627,18 @@ export function MailShell() {
                 onRemoveLabel={onRemoveLabel}
                 onArchive={archiveTargets}
                 onMoveToInbox={targetsArchived ? moveToInboxTargets : undefined}
+                onRestore={targetsTrashed ? restoreTargets : undefined}
+                onNotSpam={targetsSpam ? notSpamTargets : undefined}
+                onSnooze={
+                  targetsTrashed || targetsSpam ? undefined : snoozeTargets
+                }
                 isUnread={isOpenThreadUnread}
                 onMarkRead={markOpenThreadRead}
                 onMarkUnread={markUnreadTargets}
                 refetch={refetchReader}
                 onSendSuccess={onSendSuccess}
                 autoOpenReplyForMessageId={replyToMessageId}
+                autoOpenReplyAll={replyAll}
                 autoOpenForwardForMessageId={forwardToMessageId}
               />
             </div>

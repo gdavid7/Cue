@@ -5,6 +5,8 @@ import {
   ArrowBigUpIcon,
   ArchiveRestoreIcon,
   ExternalLinkIcon,
+  FlagIcon,
+  FlagOffIcon,
   FolderInputIcon,
   LanguagesIcon,
   MailXIcon,
@@ -41,6 +43,9 @@ export type ThreadActionsMenuProps = {
   message: ParsedMessage | null;
   isStarred: boolean;
   onToggleStar: () => void;
+  isImportant?: boolean;
+  /** Gmail only: Outlook has no per-thread importance in the mail engine. */
+  onToggleImportant?: () => void;
   onMarkSpam: () => void;
   onDelete: () => void;
   onLabel?: () => void;
@@ -58,6 +63,8 @@ export function ThreadActionsMenu({
   message,
   isStarred,
   onToggleStar,
+  isImportant = false,
+  onToggleImportant,
   onMarkSpam,
   onDelete,
   onLabel,
@@ -130,6 +137,17 @@ export function ThreadActionsMenu({
             {isStarred ? "Unstar" : "Star"}
             <MenuShortcut id="star" />
           </DropdownMenuItem>
+
+          {onToggleImportant && (
+            <DropdownMenuItem onSelect={onToggleImportant}>
+              {isImportant ? (
+                <FlagOffIcon className="mr-2 size-4" />
+              ) : (
+                <FlagIcon className="mr-2 size-4" />
+              )}
+              {isImportant ? "Mark as not important" : "Mark as important"}
+            </DropdownMenuItem>
+          )}
 
           <DropdownMenuSeparator />
 

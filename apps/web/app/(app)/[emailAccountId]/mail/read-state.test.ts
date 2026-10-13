@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { ListThread } from "./types";
 import {
   isThreadArchived,
+  isThreadImportant,
   isThreadInInbox,
+  isThreadOnlyIn,
   isThreadUnread,
   withThreadReadState,
 } from "./read-state";
@@ -32,6 +34,29 @@ describe("thread read state", () => {
     expect(isThreadArchived(createThread([["TRASH"]]).messages)).toBe(false);
     expect(isThreadArchived(createThread([["SPAM"]]).messages)).toBe(false);
     expect(isThreadArchived([])).toBe(false);
+  });
+
+  it("offers restore only when every message is in trash or spam", () => {
+    expect(
+      isThreadOnlyIn(
+        createThread([["TRASH"], ["TRASH", "SENT"]]).messages,
+        "TRASH",
+      ),
+    ).toBe(true);
+    expect(
+      isThreadOnlyIn(createThread([["TRASH"], ["INBOX"]]).messages, "TRASH"),
+    ).toBe(false);
+    expect(isThreadOnlyIn(createThread([["SPAM"]]).messages, "TRASH")).toBe(
+      false,
+    );
+    expect(isThreadOnlyIn([], "SPAM")).toBe(false);
+  });
+
+  it("is important when any message is", () => {
+    expect(
+      isThreadImportant(createThread([["INBOX"], ["IMPORTANT"]]).messages),
+    ).toBe(true);
+    expect(isThreadImportant(createThread([["INBOX"]]).messages)).toBe(false);
   });
 
   it("removes the unread label from every message", () => {

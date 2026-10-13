@@ -77,6 +77,9 @@ export type ThreadReaderProps = {
   onBackToInbox: () => void;
   onArchive: () => void;
   onMoveToInbox?: () => void;
+  onRestore?: () => void;
+  onNotSpam?: () => void;
+  onSnooze?: (until: Date) => void;
   isUnread: boolean;
   onMarkRead: () => void;
   onMarkUnread: () => void;
@@ -93,6 +96,7 @@ export type ThreadReaderProps = {
    * a message that already has an AI draft.
    */
   autoOpenReplyForMessageId?: string;
+  autoOpenReplyAll?: boolean;
   autoOpenForwardForMessageId?: string;
   /** The ⋯ dropdown, i.e. `ThreadActionsMenu`, composed by the shell. */
   menu?: ReactNode;
@@ -115,12 +119,16 @@ export function ThreadReader({
   onBackToInbox,
   onArchive,
   onMoveToInbox,
+  onRestore,
+  onNotSpam,
+  onSnooze,
   isUnread,
   onMarkRead,
   onMarkUnread,
   refetch,
   onSendSuccess,
   autoOpenReplyForMessageId,
+  autoOpenReplyAll,
   autoOpenForwardForMessageId,
   menu,
   renderMessageMenu,
@@ -199,6 +207,9 @@ export function ThreadReader({
       menu={menu}
       onArchive={onArchive}
       onMoveToInbox={onMoveToInbox}
+      onRestore={onRestore}
+      onNotSpam={onNotSpam}
+      onSnooze={onSnooze}
       onMarkRead={onMarkRead}
       onMarkUnread={onMarkUnread}
       onBackToInbox={onBackToInbox}
@@ -259,6 +270,7 @@ export function ThreadReader({
           renderMessageMenu={renderMessageMenu}
           enableMessageNavigation={enableMessageNavigation}
           autoOpenReplyForMessageId={autoOpenReplyForMessageId}
+          autoOpenReplyAll={autoOpenReplyAll}
           autoOpenForwardForMessageId={autoOpenForwardForMessageId}
           key={threadId}
           messages={messages}
