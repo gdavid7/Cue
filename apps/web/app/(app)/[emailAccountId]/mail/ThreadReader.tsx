@@ -292,6 +292,9 @@ export function ThreadReader({
               assist?.messageId ??
               replyRequestedFor
             }
+            focusAutoOpenedReply={Boolean(
+              autoOpenReplyForMessageId ?? replyRequestedFor,
+            )}
             afterLatestMessage={
               canAssist && emailAccountId && threadId ? (
                 <div className="mt-4 -mx-2">

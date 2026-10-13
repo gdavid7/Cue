@@ -107,6 +107,7 @@ export function EmailMessage({
   replyAnchor,
   composerSessionMessageId,
   onReplySent,
+  focusComposer = false,
 }: {
   message: ThreadMessage;
   bodyAvailable?: boolean;
@@ -163,6 +164,11 @@ export function EmailMessage({
   composerSessionMessageId?: string;
   /** A reply or forward from this message just left its composer. */
   onReplySent?: () => void;
+  /**
+   * The user asked for the composer the thread opened here, so it takes focus.
+   * One that opens on its own, such as a saved draft, leaves focus alone.
+   */
+  focusComposer?: boolean;
 }) {
   const { emailAccountId } = useAccount();
   const { poppedOutDraftSessionId } = useComposeModal();
@@ -236,6 +242,9 @@ export function EmailMessage({
     (draft) => draft.message.id === message.id,
   );
   const hasOpenComposer = Boolean(composeMode) || Boolean(openDraft);
+  // Set only by the user's own Reply or Forward in this message.
+  const takeFocus =
+    focusComposer || (composeOverride !== null && composeOverride !== "closed");
   const showLocalDraftRow =
     !composerOpen &&
     Boolean(requestedComposeMode) &&
@@ -471,6 +480,7 @@ export function EmailMessage({
                 key={sessionMessageId}
               >
                 <ReplyPanel
+                  autoFocus={takeFocus}
                   autoScroll={!composeMode}
                   draftBodyAvailable={!missingBodyIds?.has(draft.id)}
                   draftMessage={draft}
@@ -520,6 +530,7 @@ export function EmailMessage({
               <ReplyPanel
                 // Remounts so the composer picks up the other recipients.
                 key={`${composerKey}:${replyAll}`}
+                autoFocus={takeFocus}
                 replyAll={replyAll}
                 autoScroll
                 bodyAvailable={bodyAvailable}
@@ -811,6 +822,7 @@ function ReplyPanel({
   draftMessage,
   draftSessionMessageId,
   draftBodyAvailable = true,
+  autoFocus,
   autoScroll = false,
   bodyAvailable = true,
   replyAnchor,
@@ -830,6 +842,7 @@ function ReplyPanel({
   draftMessage?: ThreadMessage;
   draftSessionMessageId?: string;
   draftBodyAvailable?: boolean;
+  autoFocus: boolean;
   autoScroll?: boolean;
   bodyAvailable?: boolean;
   replyAnchor?: ParsedMessage;
@@ -986,6 +999,7 @@ function ReplyPanel({
       ref={replyRef}
     >
       <ComposeEmailFormLazy
+        autoFocus={autoFocus}
         initialBodyHtml={assist?.suggestedBodyHtml}
         summaryTag={
           assist?.suggestedBodyHtml && !edited ? "Suggested by Cue" : undefined

@@ -200,6 +200,11 @@ type ComposeEmailFormProps = {
   initialBodyHtml?: string;
   /** A muted note after the reply's "Draft to …" line, e.g. who wrote it. */
   summaryTag?: string;
+  /**
+   * Whether the composer takes focus when it opens. Off for one that opens on
+   * its own, so keys meant as shortcuts aren't typed into it.
+   */
+  autoFocus?: boolean;
 };
 
 type ComposeFormValues = Omit<SendEmailBody, "attachments" | "messageHtml">;
@@ -330,6 +335,7 @@ function ComposeEmailFormContent({
   initialDraftMissing,
   initialBodyHtml,
   summaryTag,
+  autoFocus = true,
 }: ComposeEmailFormProps & {
   localDraftIdentity?: ReplyDraftIdentity;
   storedDraft?: StoredReplyDraft;
@@ -1607,7 +1613,9 @@ function ComposeEmailFormContent({
                     <ComposeContactRecipientField
                       {...recipientFieldProps}
                       active={activeRecipientField === field}
-                      autoFocus={field === "to" && focusRecipientField}
+                      autoFocus={
+                        autoFocus && field === "to" && focusRecipientField
+                      }
                       className="min-h-8"
                       name={field}
                       selectedRecipients={watch(field) ?? ""}
@@ -1618,7 +1626,8 @@ function ComposeEmailFormContent({
                       name={field}
                       registerProps={{
                         ...register(field, { required: field === "to" }),
-                        autoFocus: field === "to" && focusRecipientField,
+                        autoFocus:
+                          autoFocus && field === "to" && focusRecipientField,
                       }}
                       error={errors[field]}
                       className="h-7 rounded-none border-0 bg-transparent p-0 text-sm leading-5 shadow-none focus:border-transparent focus:ring-0 sm:text-sm"
@@ -1656,7 +1665,7 @@ function ComposeEmailFormContent({
       <EmailEditor
         placeholder={isInlineReply ? "" : undefined}
         appearance={isComposeWindow || isInlineReply ? "seamless" : "contained"}
-        autofocus={!focusRecipientField}
+        autofocus={autoFocus && !focusRecipientField}
         onSlashKeyDown={onSlashKeyDown}
         onSlashTrigger={onSlashTrigger}
         ref={editorRef}

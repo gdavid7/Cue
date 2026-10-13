@@ -44,6 +44,7 @@ export function EmailThread({
   autoOpenReplyForMessageId,
   autoOpenReplyAll = false,
   autoOpenForwardForMessageId,
+  focusAutoOpenedReply = true,
   topRightComponent,
   onSendSuccess,
   onMarkDone,
@@ -68,6 +69,8 @@ export function EmailThread({
   /** Addresses the auto-opened reply to everyone on the message. */
   autoOpenReplyAll?: boolean;
   autoOpenForwardForMessageId?: string;
+  /** False when Cue, not the user, opened the reply, so it leaves focus alone. */
+  focusAutoOpenedReply?: boolean;
   topRightComponent?: React.ReactNode;
   onSendSuccess?: (
     messageId: string,
@@ -213,12 +216,21 @@ export function EmailThread({
   useEffect(() => {
     const messageId = autoOpenForwardForMessageId ?? autoOpenReplyForMessageId;
     if (messageId) {
-      requestOpen({ kind: "compose", id: messageId });
+      requestOpen({
+        kind: "compose",
+        id: messageId,
+        focus: Boolean(autoOpenForwardForMessageId) || focusAutoOpenedReply,
+      });
       setExpansionOverrides((previous) =>
         new Map(previous).set(messageId, true),
       );
     }
-  }, [autoOpenForwardForMessageId, autoOpenReplyForMessageId, requestOpen]);
+  }, [
+    autoOpenForwardForMessageId,
+    autoOpenReplyForMessageId,
+    focusAutoOpenedReply,
+    requestOpen,
+  ]);
   const expanded = (id: string, hasDraft: boolean) =>
     expansionOverrides.get(id) ?? (id === lastMessageId || hasDraft);
   const localDraftFor = (message: ThreadMessage) => {
@@ -239,10 +251,15 @@ export function EmailThread({
       shownDraftsOf(draftMessages).map((draft) => draft.sessionMessageId),
     ),
   );
-  let request = openRequest?.threadId === threadId ? openRequest : undefined;
+  const latestRequest =
+    openRequest?.threadId === threadId ? openRequest : undefined;
+  let request = latestRequest;
   // A closed or discarded draft hands the composer back to the one before it.
   while (request?.kind === "draft" && !shownDraftIds.has(request.id))
     request = request.previous;
+  // A composer handed back that way, or opened on its own, leaves focus alone.
+  const focusOpenComposer =
+    Boolean(request?.focus) && request === latestRequest;
   const openComposer: Pick<OpenComposerRequest, "kind" | "id"> | undefined =
     request ??
     newestDraft([
@@ -438,13 +455,18 @@ export function EmailThread({
                 dismissedDraftIds={dismissedDraftIds}
                 onDraftDismissedChange={setDraftDismissed}
                 onOpenDraft={(sessionMessageId) =>
-                  requestOpen({ kind: "draft", id: sessionMessageId })
+                  requestOpen({
+                    kind: "draft",
+                    id: sessionMessageId,
+                    focus: true,
+                  })
                 }
                 onComposerClosed={() => onComposerClosed(message.id)}
                 localDraftSnippet={localDraftSnippet(localDraftFor(message))}
                 onStartCompose={() =>
-                  requestOpen({ kind: "compose", id: message.id })
+                  requestOpen({ kind: "compose", id: message.id, focus: true })
                 }
+                focusComposer={focusOpenComposer}
                 defaultComposeMode={defaultComposeMode}
                 defaultReplyAll={autoOpenMode === "reply" && autoOpenReplyAll}
                 draftMessages={draftMessages}
@@ -528,7 +550,7 @@ export function EmailThread({
             messageIds={messages.map((message) => message.id)}
             refetch={refetch}
             onEditReply={(messageId, mode) => {
-              requestOpen({ kind: "compose", id: messageId });
+              requestOpen({ kind: "compose", id: messageId, focus: true });
               setExpansionOverrides((previous) =>
                 new Map(previous).set(messageId, true),
               );
@@ -558,6 +580,8 @@ type OpenComposerRequest = {
   /** A mailbox draft by its session id, or a message's own reply or forward. */
   kind: "draft" | "compose";
   id: string;
+  /** The user asked for it, so it takes focus when it opens. */
+  focus: boolean;
   previous?: OpenComposerRequest;
 };
 

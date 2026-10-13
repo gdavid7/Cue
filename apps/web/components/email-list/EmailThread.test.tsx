@@ -640,6 +640,73 @@ describe("EmailThread draft discard", () => {
   });
 });
 
+describe("EmailThread composer focus", () => {
+  afterEach(cleanup);
+
+  // Otherwise a shortcut such as `r` types into the draft instead.
+  it("leaves a saved draft unfocused when the conversation opens", () => {
+    render(
+      <EmailThread
+        messages={[
+          createReaderMessage("parent", "1000"),
+          createReaderDraft("saved", "2000"),
+        ]}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+
+    const editor = screen.getByRole("textbox", { name: "Email message" });
+    expect(document.activeElement).not.toBe(editor);
+  });
+
+  it("leaves a reply Cue opened on its own unfocused", () => {
+    render(
+      <EmailThread
+        autoOpenReplyForMessageId="parent"
+        focusAutoOpenedReply={false}
+        messages={[createReaderMessage("parent", "1000")]}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+
+    const editor = screen.getByRole("textbox", { name: "Email message" });
+    expect(document.activeElement).not.toBe(editor);
+  });
+
+  it("focuses a reply the user asked for", () => {
+    render(
+      <EmailThread
+        autoOpenReplyForMessageId="parent"
+        messages={[createReaderMessage("parent", "1000")]}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("textbox", { name: "Email message" }),
+    );
+  });
+
+  it("focuses the reply when Reply is clicked", () => {
+    render(
+      <EmailThread
+        messages={[createReaderMessage("parent", "1000")]}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("textbox", { name: "Email message" }),
+    );
+  });
+});
+
 describe("EmailThread mailbox copies of local replies", () => {
   afterEach(() => {
     cleanup();
@@ -895,12 +962,14 @@ function createReaderDraft(id: string, internalDate: string) {
 }
 
 function MockComposer({
+  autoFocus = true,
   draftKeyMessageId,
   draftSessionId,
   providerDraftMessageId,
   onClose,
   onDiscard,
 }: {
+  autoFocus?: boolean;
   draftKeyMessageId?: string;
   draftSessionId?: string;
   providerDraftMessageId?: string;
@@ -914,6 +983,8 @@ function MockComposer({
     <>
       <textarea
         aria-label="Email message"
+        // Like the real composer, it takes focus on mount unless told not to.
+        autoFocus={autoFocus}
         data-draft-key-message-id={draftKeyMessageId}
         data-draft-session-id={draftSessionId}
         data-provider-draft-message-id={providerDraftMessageId}

@@ -353,6 +353,17 @@ describe("useShortcuts", () => {
     expect(goToAllMail).not.toHaveBeenCalled();
   });
 
+  // Reply focuses the composer, which must not then receive the "r".
+  it("keeps the key of a shortcut that ran out of the page", () => {
+    const reply = vi.fn();
+    renderShortcuts({ reply });
+
+    const event = press({ key: "r", code: "KeyR" });
+
+    expect(reply).toHaveBeenCalledOnce();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
   it("does not bind keys that have no handler", () => {
     const archive = vi.fn();
     renderShortcuts({ archive });

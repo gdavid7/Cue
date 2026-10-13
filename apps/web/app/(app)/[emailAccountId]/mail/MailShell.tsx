@@ -711,6 +711,7 @@ export function MailShell() {
       pendingComposeRequest.current = null;
       setForwardToMessageId(undefined);
       setReplyToMessageId(messageId);
+      focusOpenReply();
       return;
     }
 
@@ -1304,6 +1305,7 @@ export function MailShell() {
     }
     setReplyAll(toEveryone);
     setReplyToMessageId(composeTargetMessageId);
+    focusOpenReply();
   }
 
   useLayoutEffect(() => {
@@ -1803,3 +1805,15 @@ function useStableOrderedIds(threads: ListThread[]) {
 
 const EMPTY_SEARCH_THREADS: ListThread[] = [];
 const NO_SEARCH_OPTIONS: { name: string }[] = [];
+
+// A reply already open, such as a saved draft, didn't take focus when it
+// appeared. A new one focuses itself as it mounts.
+function focusOpenReply() {
+  requestAnimationFrame(() => {
+    document
+      .querySelector<HTMLElement>(
+        '[data-testid="thread-reader"] [data-email-editor-content]',
+      )
+      ?.focus();
+  });
+}
