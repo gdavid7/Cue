@@ -247,8 +247,8 @@ export function buildMailCommandPalette({
       id: "mail-auto-archive",
       shortcut: getShortcutHint("toggleAutoArchive"),
       label: isAutoArchived
-        ? "Disable auto archive"
-        : "Auto archive future emails",
+        ? "Show this sender in inbox again"
+        : "Skip inbox for this sender",
       icon: isAutoArchived ? ArchiveRestoreIcon : ArchiveIcon,
       section: "actions",
       priority: 13,

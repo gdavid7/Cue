@@ -14,7 +14,7 @@ describe("composeInsight", () => {
     expect(
       compose({
         from: "News <n@x.com>",
-        data: { insight: none(), meeting: null, replyReady: false },
+        data: { insight: none(), meeting: null, reply: null },
       }),
     ).toBeNull();
   });
@@ -33,12 +33,12 @@ describe("composeInsight", () => {
             dateRole: "deadline",
           },
           meeting: null,
-          replyReady: false,
+          reply: null,
         },
       }),
     ).toEqual({
       tone: "action",
-      parts: ["Reply: share availability for 2 interviews", "due Thu"],
+      parts: ["Share availability for 2 interviews", "due Thu"],
     });
   });
 
@@ -56,7 +56,7 @@ describe("composeInsight", () => {
         labels: ["Label_Awaiting Reply"],
         sentAt: new Date(2026, 9, 10, 9, 0),
       }),
-    ).toEqual({ tone: "waiting", parts: ["Waiting on Alex Kim · 3d"] });
+    ).toEqual({ tone: "pending", parts: ["Waiting on Alex Kim · 3d"] });
   });
 
   it("keeps an offer's end date and a detail worth keeping", () => {
@@ -72,13 +72,13 @@ describe("composeInsight", () => {
             factLabel: "Confirmation",
           },
           meeting: null,
-          replyReady: false,
+          reply: null,
         },
       }),
     ).toEqual({ tone: "info", parts: ["Ends Sun", "Confirmation PX7Q2M"] });
   });
 
-  it("mentions an upcoming meeting with the sender and a ready reply", () => {
+  it("leads with a ready reply, then the meeting with the sender", () => {
     expect(
       compose({
         from: "Sarah Chen <sarah@acme.com>",
@@ -89,12 +89,33 @@ describe("composeInsight", () => {
             at: new Date(2026, 9, 16, 10, 0).toISOString(),
             with: "Sarah Chen",
           },
-          replyReady: true,
+          reply: "ready",
         },
       }),
     ).toEqual({
-      tone: "action",
-      parts: ["Meeting with Sarah Fri 10 AM", "Reply ready"],
+      tone: "ready",
+      parts: ["Reply ready", "Meeting with Sarah Fri 10 AM"],
+    });
+  });
+
+  it("says a reply is blocked on missing information, ahead of the task", () => {
+    expect(
+      compose({
+        from: "Sarah Chen <sarah@acme.com>",
+        labels: ["Label_To Reply"],
+        data: {
+          insight: {
+            ...none(),
+            action: "reply",
+            task: "Send the updated pricing",
+          },
+          meeting: null,
+          reply: "needs-info",
+        },
+      }),
+    ).toEqual({
+      tone: "pending",
+      parts: ["Needs info to reply", "Send the updated pricing"],
     });
   });
 });

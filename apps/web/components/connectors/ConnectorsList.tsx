@@ -15,7 +15,11 @@ import { prefixPath } from "@/utils/path";
  * The apps Cue reads alongside your email, in the order a student reaches for
  * them. All come through Composio; an app not listed there isn't supported.
  */
-const CONNECTORS: { name: string; displayName: string; domain: string }[] = [
+export const CONNECTORS: {
+  name: string;
+  displayName: string;
+  domain: string;
+}[] = [
   {
     name: "googledrive",
     displayName: "Google Drive",

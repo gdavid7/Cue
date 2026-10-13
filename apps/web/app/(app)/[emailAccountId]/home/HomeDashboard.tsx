@@ -28,7 +28,7 @@ import { useThreadBrief } from "@/hooks/useThreadBrief";
 import { useThreadContext } from "@/hooks/useThreadContext";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { cn } from "@/utils";
-import type { AgentTask, HomeThread, Priority } from "@/utils/home/get-home";
+import type { AgentTask, HomeThread } from "@/utils/home/get-home";
 import { formatShortDate } from "@/utils/date";
 import { getInitials } from "@/utils/email";
 import { prefixPath } from "@/utils/path";
@@ -107,19 +107,22 @@ export function HomeDashboard() {
                 ))}
               </Section>
 
-              <Section
-                title="Agent working on"
-                count={data.agentTasks.length}
-                empty="Nothing in progress. Reply drafts the assistant writes and actions it schedules show up here."
-              >
-                {data.agentTasks.map((task) => (
-                  <AgentTaskRow
-                    href={threadHref(task.threadId)}
-                    key={task.id}
-                    task={task}
-                  />
-                ))}
-              </Section>
+              {/* Only when the assistant has something in flight: an empty stat is noise. */}
+              {data.agentTasks.length ? (
+                <Section
+                  title="Cue is working on"
+                  count={data.agentTasks.length}
+                  empty=""
+                >
+                  {data.agentTasks.map((task) => (
+                    <AgentTaskRow
+                      href={threadHref(task.threadId)}
+                      key={task.id}
+                      task={task}
+                    />
+                  ))}
+                </Section>
+              ) : null}
 
               <Section
                 title="Waiting on others"
@@ -167,8 +170,8 @@ export function HomeDashboard() {
                 empty="Nothing sorted in the last week."
               >
                 <p className="px-1 pb-1 text-muted-foreground text-sm">
-                  Labeled by your rules and left in your inbox. Open a label to
-                  see everything in it:
+                  Labeled by Cue and still in your inbox. Open a label to see
+                  everything in it:
                 </p>
                 <div className="flex flex-wrap gap-2 px-1 pb-2">
                   {data.handledLabels.map((label) => (
@@ -236,13 +239,6 @@ function StatCards({
         "bg-rose-50 text-rose-950 dark:bg-rose-950/30 dark:text-rose-100",
     },
     {
-      value: String(stats.agentWorking),
-      label: "Agent working on",
-      detail: stats.agentWorking ? "In progress" : "Idle",
-      icon: BotIcon,
-      className: "bg-sky-50 text-sky-950 dark:bg-sky-950/30 dark:text-sky-100",
-    },
-    {
       value: countLabel(stats.waiting, stats.waitingCapped),
       label: "Waiting on others",
       detail: "Replies expected",
@@ -261,7 +257,7 @@ function StatCards({
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <div className="grid grid-cols-3 gap-3">
       {cards.map((card) => (
         <div className={cn("rounded-xl p-4", card.className)} key={card.label}>
           <div className="flex items-start justify-between">
@@ -305,12 +301,6 @@ function Section({
     </section>
   );
 }
-
-const PRIORITY_STYLE: Record<Priority, string> = {
-  high: "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
-  medium: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
-  low: "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
-};
 
 function ThreadRow({
   thread,
@@ -365,19 +355,9 @@ function ThreadRow({
         </div>
         <div className="truncate text-foreground text-sm">{thread.subject}</div>
         {compact ? null : (
-          <div className="mt-0.5 flex items-start gap-2">
-            <p className="line-clamp-1 flex-1 text-muted-foreground text-sm">
-              {thread.preview}
-            </p>
-            <span
-              className={cn(
-                "shrink-0 rounded-md px-2 py-0.5 font-medium text-xs capitalize",
-                PRIORITY_STYLE[thread.priority],
-              )}
-            >
-              {thread.priority}
-            </span>
-          </div>
+          <p className="mt-0.5 line-clamp-1 text-muted-foreground text-sm">
+            {thread.preview}
+          </p>
         )}
       </div>
     </button>
@@ -633,8 +613,8 @@ function suggestedSteps({
 function HomeSkeleton() {
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {[0, 1, 2, 3].map((i) => (
+      <div className="grid grid-cols-3 gap-3">
+        {[0, 1, 2].map((i) => (
           <Skeleton className="h-28 rounded-xl" key={i} />
         ))}
       </div>

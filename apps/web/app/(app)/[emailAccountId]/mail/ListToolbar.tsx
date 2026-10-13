@@ -73,6 +73,8 @@ export type ListToolbarProps = {
   onToggleLayout: () => void;
   onTogglePreview: () => void;
   onToggleAssistant: () => void;
+  /** Sends the search box's text to the assistant as a question. */
+  onAskAssistant?: (question: string) => void;
   /** Rendered here only when the split tabs row isn't showing to hold it. */
   selectAll?: ReactNode;
   selectedCount: number;
@@ -107,6 +109,7 @@ export const ListToolbar = memo(function ListToolbar({
   onToggleLayout,
   onTogglePreview,
   onToggleAssistant,
+  onAskAssistant,
   selectAll,
   selectedCount,
   onArchiveSelected,
@@ -245,6 +248,7 @@ export const ListToolbar = memo(function ListToolbar({
           searchLabels={searchLabels}
           searchFolders={searchFolders}
           searchVariant={searchVariant}
+          onAskAssistant={onAskAssistant}
         />
       )}
 
@@ -320,6 +324,7 @@ function MailSearchInput({
   searchLabels = [],
   searchFolders = [],
   searchVariant = "gmail",
+  onAskAssistant,
 }: {
   searchQuery: string;
   onSearch: (query: string) => void;
@@ -329,6 +334,7 @@ function MailSearchInput({
   searchLabels?: { name: string }[];
   searchFolders?: { name: string }[];
   searchVariant?: "gmail" | "outlook" | "common";
+  onAskAssistant?: (question: string) => void;
 }) {
   const localRef = useRef<HTMLInputElement>(null);
   const inputRef = inputRefProp ?? localRef;
@@ -376,6 +382,17 @@ function MailSearchInput({
           }}
           controls={
             <>
+              {onAskAssistant && draft.trim() ? (
+                <button
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => onAskAssistant(draft.trim())}
+                  className="flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-primary text-xs transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <SparklesIcon className="size-3" />
+                  Ask Cue
+                </button>
+              ) : null}
               <PopoverTrigger asChild>
                 <button
                   type="button"
@@ -408,7 +425,7 @@ function MailSearchInput({
           <input
             ref={inputRef}
             value={draft}
-            placeholder="Search mail"
+            placeholder="Search mail, or ask Cue a question"
             enterKeyHint="search"
             role="combobox"
             aria-label="Search mail"

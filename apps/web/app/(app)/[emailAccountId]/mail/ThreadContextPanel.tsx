@@ -17,10 +17,14 @@ export function ThreadContextPanel({
   threadId,
   emailAccountId,
   onClose,
+  onDraftSaved,
+  onWriteReply,
 }: {
   threadId: string;
   emailAccountId: string;
   onClose: () => void;
+  onDraftSaved?: () => void;
+  onWriteReply?: () => void;
 }) {
   const [, setOpenThread] = useQueryStates({
     "thread-id": parseAsString,
@@ -63,13 +67,15 @@ export function ThreadContextPanel({
           </h3>
           <SuggestedReply
             emailAccountId={emailAccountId}
+            onDraftSaved={onDraftSaved}
             onOpenThread={openThread}
+            onWriteReply={onWriteReply}
             threadId={threadId}
           />
         </section>
         <section className="space-y-2 border-border border-t px-2 pt-4">
           <p className="text-muted-foreground text-xs leading-5">
-            Should this be waiting on you? Cue will track it until you reply.
+            Not marked as needing your reply? Cue can track it until you answer.
           </p>
           <MarkNeedsReplyButton
             emailAccountId={emailAccountId}

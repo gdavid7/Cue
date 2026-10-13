@@ -94,8 +94,8 @@ test("opens mail from Command K", async ({ page }, testInfo) => {
   await page.keyboard.press(`${modifier}+KeyK`);
   const search = page.getByPlaceholder("Type a command or search...");
   await expect(search).toBeVisible();
-  await search.fill("go to mail");
-  await page.getByRole("option", { name: "Go to Mail", exact: true }).click();
+  await search.fill("go to inbox");
+  await page.getByRole("option", { name: "Go to Inbox", exact: true }).click();
 
   await expect(page).toHaveURL(new RegExp(`/${emailAccountId}/mail$`));
   await expect(

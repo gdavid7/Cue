@@ -48,7 +48,7 @@ export function MarkNeedsReplyButton({
       variant="outline"
     >
       <CornerUpLeftIcon className="mr-2 size-4" />
-      {done ? "In Needs you" : "This needs me"}
+      {done ? "Tracking until you reply" : "Track until I reply"}
     </Button>
   );
 }

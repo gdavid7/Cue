@@ -49,7 +49,6 @@ import {
   useSidebar,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
-import { SetupProgressCard } from "@/components/SetupProgressCard";
 import { SideNavMenu } from "@/components/SideNavMenu";
 import { CommandShortcut } from "@/components/ui/command";
 import { useSplitLabels } from "@/hooks/useLabels";
@@ -110,14 +109,9 @@ export const useNavigation = () => {
         icon: MessageSquareIcon,
       },
       {
-        name: "Assistant",
+        name: "Rules",
         href: prefixPath(currentEmailAccountId, "/automation"),
         icon: SparklesIcon,
-      },
-      {
-        name: "Channels",
-        href: prefixPath(currentEmailAccountId, "/channels"),
-        icon: MessagesSquareIcon,
       },
       ...(showMeetingRecorder
         ? [
@@ -132,17 +126,14 @@ export const useNavigation = () => {
     [currentEmailAccountId, showMeetingRecorder],
   );
 
+  // Mailbox tools sit under Tools: Cue never archives in bulk on its own, so
+  // these are for a user who goes looking.
   const cleanupItems: NavItem[] = useMemo(
     () => [
       {
-        name: "Bulk Unsubscribe",
+        name: "Unsubscribe",
         href: prefixPath(currentEmailAccountId, "/bulk-unsubscribe"),
         icon: MailsIcon,
-      },
-      {
-        name: "Bulk Archive",
-        href: prefixPath(currentEmailAccountId, "/bulk-archive"),
-        icon: ArchiveIcon,
       },
       {
         name: "Analytics",
@@ -270,9 +261,10 @@ export function SideNav({
   const currentEmailAccountId = emailAccount?.id || emailAccountId;
   const path = usePathname();
   const showMailNav = path.includes("/compose");
-  const isMoreActive = navigation.moreItems.some(
-    (item) => path === item.href || path.startsWith(`${item.href}/`),
-  );
+  const isMoreActive = [
+    ...navigation.moreItems,
+    ...navigation.cleanupItems,
+  ].some((item) => path === item.href || path.startsWith(`${item.href}/`));
   const [showMoreItems, setShowMoreItems] = useState(isMoreActive);
 
   useEffect(() => {
@@ -314,8 +306,6 @@ export function SideNav({
       </SidebarHeader>
 
       <SidebarContent>
-        {state.includes("left-sidebar") ? <SetupProgressCard /> : null}
-
         <SidebarGroupContent>
           {showMailNav ? (
             <MailNav path={path} />
@@ -335,13 +325,6 @@ export function SideNav({
                 </SidebarGroup>
               ) : null}
               <SidebarGroup>
-                <SidebarGroupLabel>Cleanup</SidebarGroupLabel>
-                <SideNavMenu
-                  items={navigation.cleanupItems}
-                  activeHref={path}
-                />
-              </SidebarGroup>
-              <SidebarGroup>
                 <SidebarGroupLabel asChild>
                   <button
                     type="button"
@@ -358,7 +341,13 @@ export function SideNav({
                   </button>
                 </SidebarGroupLabel>
                 {showMoreItems && (
-                  <SideNavMenu items={navigation.moreItems} activeHref={path} />
+                  <SideNavMenu
+                    items={[
+                      ...navigation.moreItems,
+                      ...navigation.cleanupItems,
+                    ]}
+                    activeHref={path}
+                  />
                 )}
               </SidebarGroup>
             </>

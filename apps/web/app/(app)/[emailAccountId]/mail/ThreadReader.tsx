@@ -133,6 +133,13 @@ export function ThreadReader({
   menu,
   renderMessageMenu,
 }: ThreadReaderProps) {
+  // The context panel's "write it myself" opens a reply like the reply action does.
+  const [replyRequestedFor, setReplyRequestedFor] = useState<string | null>(
+    null,
+  );
+  const lastReceivedId = messages.findLast(
+    (message) => !message.labelIds?.includes("DRAFT"),
+  )?.id;
   const [senderContext, setSenderContext] = useState<{
     messageId: string;
     senderEmail: string;
@@ -258,6 +265,8 @@ export function ThreadReader({
             <ThreadContextPanel
               emailAccountId={emailAccountId}
               onClose={() => setThreadContextHidden(true)}
+              onDraftSaved={refetch}
+              onWriteReply={() => setReplyRequestedFor(lastReceivedId ?? null)}
               threadId={threadId}
             />
           )
@@ -269,7 +278,9 @@ export function ThreadReader({
           renderToolbar={renderToolbar}
           renderMessageMenu={renderMessageMenu}
           enableMessageNavigation={enableMessageNavigation}
-          autoOpenReplyForMessageId={autoOpenReplyForMessageId}
+          autoOpenReplyForMessageId={
+            autoOpenReplyForMessageId ?? replyRequestedFor ?? undefined
+          }
           autoOpenReplyAll={autoOpenReplyAll}
           autoOpenForwardForMessageId={autoOpenForwardForMessageId}
           key={threadId}

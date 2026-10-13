@@ -40,10 +40,18 @@ const allocatedPorts = new Set<number>();
 // Cue's demo inbox (David Lin) is the default. Set CUE_DEMO_INBOX=inbox-zero
 // for Inbox Zero's original SaaS-founder demo.
 const USE_CUE_DEMO = process.env.CUE_DEMO_INBOX !== "inbox-zero";
-const DEMO_GOOGLE_EMAIL = "developer@example.com";
+const DEMO_GOOGLE_EMAIL = "david.lin@ucsd.edu";
 // A fixed emulator token, so the demo calendar stays connected across restarts
 // (the emulator forgets OAuth tokens it issued when it stops).
 const DEMO_CALENDAR_TOKEN = "cue-local-dev-calendar-token";
+const EMPTY_INSIGHT = {
+  action: "none",
+  task: "",
+  date: "",
+  dateRole: "none",
+  fact: "",
+  factLabel: "",
+};
 
 main().catch((error) => {
   console.error(
@@ -328,6 +336,11 @@ async function main() {
           object: { summary: brief.summary, keyPoints: brief.keyPoints },
         });
       }
+      // Mail without a scripted note gets none, not the emulator's placeholder.
+      llm.reply({
+        match: "You add a one-line note under an email",
+        object: EMPTY_INSIGHT,
+      });
       for (const insight of buildCueDemoInsights()) {
         // The inbox insight prompt opens with the email's own subject line.
         llm.reply({
@@ -377,7 +390,7 @@ async function main() {
       240_000,
     );
     console.log(
-      `\n[local] Ready: ${env.NEXT_PUBLIC_BASE_URL}/mail\n[local] Sign in with Google: developer@example.com\n[local] Or Microsoft: developer@outlook.test\n[local] Mail, billing, email delivery, and AI use local emulators. AI responses are canned.\n[local] Data survives restarts. Press Ctrl-C to stop.\n`,
+      `\n[local] Ready: ${env.NEXT_PUBLIC_BASE_URL}/mail\n[local] Sign in with Google: ${USE_CUE_DEMO ? DEMO_GOOGLE_EMAIL : "developer@example.com"}\n[local] Or Microsoft: developer@outlook.test\n[local] Mail, billing, email delivery, and AI use local emulators. AI responses are canned.\n[local] Data survives restarts. Press Ctrl-C to stop.\n`,
     );
     await delay(2 ** 31 - 1, undefined, { signal: processes.signal });
   } catch (error) {
@@ -435,7 +448,7 @@ async function configureDemoOnboarding(databaseUrl: string) {
       $$ LANGUAGE plpgsql;
       DROP TRIGGER IF EXISTS local_dev_onboarding ON "User";
       CREATE TRIGGER local_dev_onboarding BEFORE INSERT ON "User"
-      FOR EACH ROW WHEN (NEW.email IN ('developer@example.com', 'developer@outlook.test'))
+      FOR EACH ROW WHEN (NEW.email IN ('developer@example.com', '${DEMO_GOOGLE_EMAIL}', 'developer@outlook.test'))
       EXECUTE FUNCTION local_dev_complete_onboarding();
     `);
   } finally {
@@ -447,6 +460,7 @@ function cueDemoSeedOptions(): EmulateSeedOptions {
   const now = new Date();
   return {
     fixture: buildCueDemoInbox(now),
+    googleEmail: DEMO_GOOGLE_EMAIL,
     googleName: "David Lin",
     calendarEvents: buildCueDemoCalendarEvents(DEMO_GOOGLE_EMAIL, now),
     tokens: { [DEMO_CALENDAR_TOKEN]: { login: DEMO_GOOGLE_EMAIL, scopes: [] } },

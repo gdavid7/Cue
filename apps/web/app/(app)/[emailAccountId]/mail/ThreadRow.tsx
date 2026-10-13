@@ -35,6 +35,8 @@ import { cn } from "@/utils";
 import { internalDateToDate } from "@/utils/date";
 import { decodeSnippet } from "@/utils/gmail/decode";
 import { GmailLabel } from "@/utils/gmail/label";
+import { SystemType } from "@/generated/prisma/enums";
+import { getRuleLabel } from "@/utils/rule/consts";
 import {
   composeInsight,
   type InsightLine,
@@ -123,7 +125,13 @@ export const ThreadRow = memo(function ThreadRow({
 
   if (!message) return null;
 
-  const chips = labels.slice(0, layout === "list" && !compact ? 3 : 2);
+  // The insight line already says whose move it is, so the reply-tracking
+  // labels would only repeat it.
+  const chips = (
+    insight
+      ? labels.filter((label) => !REPLY_TRACKING_LABELS.has(label.name))
+      : labels
+  ).slice(0, layout === "list" && !compact ? 3 : 2);
   const showActions = !!rowActions && !compact;
   const isDraft = thread.messages.some((message) =>
     message.labelIds?.includes(GmailLabel.DRAFT),
@@ -211,9 +219,15 @@ export const ThreadRow = memo(function ThreadRow({
   );
 });
 
+const REPLY_TRACKING_LABELS = new Set([
+  getRuleLabel(SystemType.TO_REPLY),
+  getRuleLabel(SystemType.AWAITING_REPLY),
+]);
+
 const INSIGHT_TONE: Record<InsightLine["tone"], string> = {
+  ready: "text-emerald-700 dark:text-emerald-400",
   action: "text-primary",
-  waiting: "text-amber-700 dark:text-amber-400",
+  pending: "text-amber-700 dark:text-amber-400",
   info: "text-muted-foreground",
 };
 

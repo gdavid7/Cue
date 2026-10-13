@@ -6,8 +6,11 @@ import { getRuleLabel } from "@/utils/rule/consts";
 const MAX_PARTS = 3;
 
 export type InsightLine = {
-  /** "action": something is on the user. "waiting": on someone else. "info": worth knowing. */
-  tone: "action" | "waiting" | "info";
+  /**
+   * "ready": a checked reply is waiting. "action": something is on the user.
+   * "pending": blocked on someone else or on missing information. "info": worth knowing.
+   */
+  tone: "ready" | "action" | "pending" | "info";
   parts: string[];
 };
 
@@ -55,22 +58,31 @@ export function composeInsight({
   const insight = data?.insight;
   const when = insight?.date ? formatWhen(insight.date, now) : null;
 
+  // The reply's state leads, so "ready", "blocked" and "to do" don't look alike.
+  if (data?.reply === "ready") {
+    tone = "ready";
+    parts.push("Reply ready");
+  } else if (data?.reply === "needs-info") {
+    tone = "pending";
+    parts.push("Needs info to reply");
+  }
+
   if (insight && insight.action !== "none" && insight.task) {
-    tone = "action";
-    parts.push(
-      insight.action === "reply"
-        ? `Reply: ${lowerFirst(insight.task)}`
-        : capitalize(insight.task),
-    );
+    if (tone === "info") tone = "action";
+    parts.push(capitalize(insight.task));
     if (when && insight.dateRole === "deadline") parts.push(`due ${when}`);
-  } else if (!userWroteLast && names.has(getRuleLabel(SystemType.TO_REPLY))) {
+  } else if (
+    !data?.reply &&
+    !userWroteLast &&
+    names.has(getRuleLabel(SystemType.TO_REPLY))
+  ) {
     tone = "action";
     parts.push("Needs your reply");
   } else if (
     userWroteLast &&
     names.has(getRuleLabel(SystemType.AWAITING_REPLY))
   ) {
-    tone = "waiting";
+    tone = "pending";
     const days = Math.floor(
       (now.getTime() - Number(latest.internalDate ?? now.getTime())) /
         86_400_000,
@@ -98,11 +110,6 @@ export function composeInsight({
       `Meeting with ${firstName(data.meeting.with)} ${formatWhen(data.meeting.at, now)}`,
     );
   }
-  if (data?.replyReady) {
-    tone = "action";
-    parts.push("Reply ready");
-  }
-
   return parts.length ? { tone, parts: parts.slice(0, MAX_PARTS) } : null;
 }
 
@@ -137,10 +144,6 @@ function startOfDay(date: Date) {
 
 function capitalize(text: string) {
   return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-function lowerFirst(text: string) {
-  return text.charAt(0).toLowerCase() + text.slice(1);
 }
 
 function firstName(name: string) {

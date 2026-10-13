@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { LoadingContent } from "@/components/LoadingContent";
 import { TypographyP } from "@/components/Typography";
@@ -18,13 +18,17 @@ import { IntegrationRow } from "@/app/(app)/[emailAccountId]/integrations/Integr
 import { Card } from "@/components/ui/card";
 import { toastError, toastInfo, toastSuccess } from "@/components/Toast";
 import { useProductAnalytics } from "@/hooks/useProductAnalytics";
+import { Button } from "@/components/ui/button";
+import { CONNECTORS } from "@/components/connectors/ConnectorsList";
 
 export function Integrations() {
   const { data, isLoading, error, mutate } = useIntegrations();
-
-  const integrations = data?.integrations || [];
+  const [showMore, setShowMore] = useState(false);
 
   useIntegrationNotifications(data?.integrations);
+
+  const { featured, more } = splitIntegrations(data?.integrations ?? []);
+  const rows = showMore ? [...featured, ...more] : featured;
 
   return (
     <Card>
@@ -38,8 +42,8 @@ export function Integrations() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {integrations.length ? (
-              integrations.map((integration) => (
+            {rows.length ? (
+              rows.map((integration) => (
                 <IntegrationRow
                   key={integration.name}
                   integration={integration}
@@ -55,9 +59,44 @@ export function Integrations() {
             )}
           </TableBody>
         </Table>
+        {more.length ? (
+          <div className="border-t p-2">
+            <Button
+              className="w-full"
+              onClick={() => setShowMore((value) => !value)}
+              size="sm"
+              variant="ghost"
+            >
+              {showMore ? "Show fewer apps" : `Show ${more.length} more apps`}
+            </Button>
+          </div>
+        ) : null}
       </LoadingContent>
     </Card>
   );
+}
+
+/**
+ * The apps Cue reads for context come first, in the sidebar's order, with
+ * anything already connected; the long tail of other apps waits behind a click.
+ */
+function splitIntegrations(
+  integrations: GetIntegrationsResponse["integrations"],
+) {
+  const rank = (name: string) => {
+    const index = CONNECTORS.findIndex((c) => c.name === name);
+    return index === -1 ? CONNECTORS.length : index;
+  };
+  const isFeatured = (
+    integration: GetIntegrationsResponse["integrations"][number],
+  ) => !!integration.connection || rank(integration.name) < CONNECTORS.length;
+
+  return {
+    featured: integrations
+      .filter(isFeatured)
+      .sort((a, b) => rank(a.name) - rank(b.name)),
+    more: integrations.filter((integration) => !isFeatured(integration)),
+  };
 }
 
 function useIntegrationNotifications(

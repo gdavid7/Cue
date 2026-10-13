@@ -51,7 +51,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           bodyText:
             "Hi David,\n\nFollowing up on the SSO security issue from last week: can you confirm it's resolved on your side?\n\nAlso, could you send the updated enterprise pricing sheet before our renewal meeting on Friday? We're considering a 3-year term, but we need to stay within budget.\n\nThanks,\nSarah",
           unread: true,
-          labels: ["INBOX", "To Reply", "Customer"],
+          labels: ["INBOX", "To Reply", "Work"],
           date: ago(2),
         }),
       ]),
@@ -62,7 +62,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           subject: "SSO login failures for Acme users",
           bodyText:
             "Hi David, several of our users haven't been able to log in with SSO since Tuesday. It's blocking our support team. Can you look into it?",
-          labels: ["Customer"],
+          labels: ["Work"],
           date: ago(24 * 9 + 3),
         }),
         message({
@@ -227,10 +227,10 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
       thread(id(), [
         message({
           id: id(),
-          from: person("Slack from Salesforce", "marketing@salesforce.com"),
-          subject: "The HR agent that lives in Slack",
+          from: person("Spotify", "no-reply@spotify.com"),
+          subject: "Premium Student: your first month is on us",
           bodyText:
-            "HR support that doesn't require a ticket, login, or hallway conversation.",
+            "Students get Premium for less. Try it free for one month, then $5.99/month. Offer ends Sunday.",
           labels: ["INBOX", "Marketing"],
           date: ago(22),
         }),
@@ -389,7 +389,7 @@ function labels() {
       "To Reply",
       "Awaiting Reply",
       "FYI",
-      "Customer",
+      "Work",
       "Recruiting",
       "Newsletter",
       "Marketing",
@@ -547,7 +547,7 @@ export const cueDemoReplySuggestions: {
     object: {
       enoughEvidence: false,
       missing:
-        "Nothing in your email or calendar says whether the SSO issue is fixed or what the updated enterprise pricing is.",
+        "The updated prices: Marcus confirmed the SSO fix shipped, but the v3 pricing sheet Priya mentioned isn't in your email.",
       reply: "",
       claims: [],
     },
@@ -654,8 +654,36 @@ export function buildCueDemoInsights(
       subject: "You paid Kevin Ruiz $18.50",
       object: { ...empty, fact: "$18.50", factLabel: "Paid" },
     },
-    { subject: "The HR agent that lives in Slack", object: empty },
+    {
+      subject: "Premium Student: your first month is on us",
+      object: {
+        ...empty,
+        date: at(nextWeekday(now, 0, 23), 59),
+        dateRole: "expires",
+      },
+    },
     { subject: "Triton Today: fall career fair recap", object: empty },
+    {
+      subject: "Enterprise pricing v3",
+      object: {
+        ...empty,
+        fact: "15% for a 3-year commitment",
+      },
+    },
+    {
+      subject: "ACME-482: SSO security patch deployed",
+      object: { ...empty, fact: "Acme users can sign in again" },
+    },
+    {
+      subject: "Your trip confirmation: SAN to SFO",
+      object: {
+        ...empty,
+        date: "2026-11-25",
+        dateRole: "event",
+        fact: "PX7Q2M",
+        factLabel: "Confirmation",
+      },
+    },
     { subject: "12 new jobs for Software Engineer, New Grad", object: empty },
   ];
 }

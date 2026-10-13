@@ -38,7 +38,8 @@ type CachedMessage = {
 export type ThreadInsightData = {
   insight: EmailInsight | null;
   meeting: { title: string; at: string; with: string; url?: string } | null;
-  replyReady: boolean;
+  /** The evidence-checked reply for the latest message, once Cue has tried one. */
+  reply: "ready" | "needs-info" | null;
 };
 
 /**
@@ -90,7 +91,7 @@ export async function getInboxInsights({
     ]),
   );
 
-  const [events, replyReady] = await Promise.all([
+  const [events, replies] = await Promise.all([
     [...byThread.values()].some((m) => m?.people.length)
       ? upcomingEvents({ emailAccountId, now, logger })
       : [],
@@ -100,8 +101,8 @@ export async function getInboxInsights({
           .get<SuggestedReply>(
             `suggested-reply:${emailAccountId}:${item.threadId}:${item.messageId}`,
           )
-          .then((s) => s?.status === "suggested")
-          .catch(() => false),
+          .then((s) => replyState(s))
+          .catch(() => null),
       ),
     ),
   ]);
@@ -115,7 +116,7 @@ export async function getInboxInsights({
           {
             insight: message?.insight ?? null,
             meeting: nextMeetingWith(message?.people ?? [], events),
-            replyReady: replyReady[i] ?? false,
+            reply: replies[i] ?? null,
           },
         ];
       }),
@@ -259,4 +260,12 @@ function peopleOn(message: ParsedMessage, userEmail: string) {
 
 function cacheKey(emailAccountId: string, messageId: string) {
   return `inbox-insight:${emailAccountId}:${messageId}`;
+}
+
+function replyState(
+  suggestion: SuggestedReply | null,
+): ThreadInsightData["reply"] {
+  if (suggestion?.status === "suggested") return "ready";
+  if (suggestion?.status === "insufficient") return "needs-info";
+  return null;
 }

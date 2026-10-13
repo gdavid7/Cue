@@ -215,8 +215,8 @@ export function ThreadActionsMenu({
                 <ArchiveIcon className="mr-2 size-4" />
               )}
               {isAutoArchived
-                ? "Disable auto archive"
-                : "Auto archive future emails"}
+                ? "Show this sender in inbox again"
+                : "Skip inbox for this sender"}
               <MenuShortcut id="toggleAutoArchive" />
             </DropdownMenuItem>
           ) : null}

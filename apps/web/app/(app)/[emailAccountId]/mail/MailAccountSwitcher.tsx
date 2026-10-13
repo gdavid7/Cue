@@ -38,6 +38,13 @@ import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-accoun
 import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 import { cn } from "@/utils";
 
+const SWITCHER_WRAPPER: Record<"compact" | "sidebar" | "bar", string> = {
+  compact:
+    "shrink-0 border-border border-t bg-background px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:hidden",
+  sidebar: "mt-2 hidden shrink-0 border-border border-t pt-2 lg:block",
+  bar: "shrink-0",
+};
+
 export const MailAccountSwitcher = memo(function MailAccountSwitcher({
   isAllAccounts,
   isDesktopApp,
@@ -50,7 +57,8 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
   isDesktopApp: boolean;
   onSelectAccount: (accountId: string) => void;
   onSelectAll: () => void;
-  variant: "compact" | "sidebar";
+  /** "bar": an avatar in the phone's bottom bar. */
+  variant: "compact" | "sidebar" | "bar";
   /** Icon-only rail: the trigger shrinks to the account avatar. */
   collapsed?: boolean;
 }) {
@@ -79,14 +87,7 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
   }
 
   return (
-    <div
-      className={cn(
-        "shrink-0 border-border border-t pt-2",
-        variant === "compact"
-          ? "bg-background px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:hidden"
-          : "mt-2 hidden lg:block",
-      )}
-    >
+    <div className={SWITCHER_WRAPPER[variant]}>
       <DropdownMenu>
         <RailTooltip label={collapsed ? activeLabel : null}>
           <DropdownMenuTrigger asChild>
@@ -97,8 +98,8 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
               }
               label={activeLabel}
               email={activeEmail}
-              collapsed={collapsed}
-              compact={variant === "compact"}
+              collapsed={collapsed || variant === "bar"}
+              compact={variant !== "sidebar"}
             />
           </DropdownMenuTrigger>
         </RailTooltip>
@@ -106,7 +107,7 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
           align="start"
           className={cn(
             "rounded-2xl p-2 shadow-xl",
-            variant === "compact"
+            variant !== "sidebar"
               ? "w-[calc(100vw-1.5rem)]"
               : "w-[--radix-dropdown-menu-trigger-width] min-w-72",
           )}

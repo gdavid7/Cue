@@ -6,11 +6,15 @@ export function reasonLabel(reason: ContextReason) {
     case "person":
       return `With ${reason.label}`;
     case "organization":
-      return `Same org · ${reason.label}`;
+      return `Also from ${reason.label}`;
     case "via":
       return `Via ${reason.label}`;
     case "topic":
-      return `About ${reason.terms.join(", ")}`;
+      // Two shared words read as a reason; a run of them reads as a dump.
+      return `Also mentions ${reason.terms
+        .slice(0, 2)
+        .map((term) => `“${term}”`)
+        .join(" and ")}`;
     case "upcoming":
       return reason.days === 0 ? "Today" : `In ${reason.days}d`;
     case "due":

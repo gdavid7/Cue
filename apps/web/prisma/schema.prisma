@@ -155,7 +155,7 @@ model EmailAccount {
   writingStyle                   String?
   signature                      String? // User's email signature from provider or manually set
   includeReferralSignature       Boolean   @default(false)
-  includeSentWithSignature       Boolean   @default(true) // "Sent with <brand>" footer on emails sent from the mail client
+  includeSentWithSignature       Boolean   @default(false) // "Sent with <brand>" footer on emails sent from the mail client; opt-in
   sentMessageOpenTrackingEnabled Boolean   @default(true) // show when sent mail-client emails are opened
   watchEmailsExpirationDate      DateTime?
   watchEmailsSubscriptionId      String? // For Outlook subscription ID

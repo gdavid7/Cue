@@ -20,6 +20,8 @@ const TEAMMATE_NAME = "Teammate";
 export type EmulateSeedOptions = {
   /** The inbox to seed. Defaults to the SaaS founder demo the tests expect. */
   fixture?: DemoInboxFixture;
+  /** Address of the signed-in Google user. */
+  googleEmail?: string;
   /** Display name of the signed-in Google user. */
   googleName?: string;
   calendarEvents?: CueDemoCalendarEvent[];
@@ -31,6 +33,7 @@ export function buildEmulateSeed(
   baseUrl = DEFAULT_BASE_URL,
   {
     fixture = saasFounderMixedInbox,
+    googleEmail = GOOGLE_EMAIL,
     googleName = GOOGLE_NAME,
     calendarEvents,
     tokens,
@@ -41,7 +44,7 @@ export function buildEmulateSeed(
   return {
     ...(tokens ? { tokens } : {}),
     google: {
-      users: [{ email: GOOGLE_EMAIL, name: googleName }],
+      users: [{ email: googleEmail, name: googleName }],
       oauth_clients: [
         {
           client_id: "emulate-google-client.apps.googleusercontent.com",
@@ -54,16 +57,16 @@ export function buildEmulateSeed(
           ],
         },
       ],
-      labels: toSeedLabels(fixture, GOOGLE_EMAIL),
+      labels: toSeedLabels(fixture, googleEmail),
       messages: toSeedMessages(fixture, {
-        email: GOOGLE_EMAIL,
+        email: googleEmail,
         name: googleName,
       }),
       calendars: [
         {
           id: "primary",
-          user_email: GOOGLE_EMAIL,
-          summary: GOOGLE_EMAIL,
+          user_email: googleEmail,
+          summary: googleEmail,
           primary: true,
           selected: true,
           time_zone: "UTC",
@@ -73,7 +76,7 @@ export function buildEmulateSeed(
       drive_items: [
         {
           id: "drv_root_child",
-          user_email: GOOGLE_EMAIL,
+          user_email: googleEmail,
           name: "Smoke Docs",
           mime_type: "application/vnd.google-apps.folder",
           parent_ids: ["root"],

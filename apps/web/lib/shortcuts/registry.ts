@@ -90,7 +90,7 @@ const SHORTCUT_DEFINITIONS = [
     keys: ["shift+e"],
     scope: "mail",
     group: "Triage",
-    label: "Toggle auto archive for sender",
+    label: "Skip inbox for sender, or undo",
   },
   {
     id: "next",
@@ -362,7 +362,7 @@ const SHORTCUT_DEFINITIONS = [
     keys: ["m"],
     scope: "mail",
     group: "View",
-    label: "Comment",
+    label: "Comment for your team",
   },
   {
     id: "undo",

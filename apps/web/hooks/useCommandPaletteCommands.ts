@@ -65,7 +65,7 @@ export function useCommandPaletteCommands({
 
     const navigationItems = [
       {
-        name: "Mail",
+        name: "Inbox",
         href: prefixPath(emailAccountId, "/mail"),
         icon: InboxIcon,
         keywords: ["mail", "inbox", "email"],
@@ -77,7 +77,7 @@ export function useCommandPaletteCommands({
         keywords: ["home", "today", "dashboard"],
       },
       {
-        name: "Assistant",
+        name: "Rules",
         href: prefixPath(emailAccountId, "/automation"),
         icon: SparklesIcon,
         keywords: ["ai", "assistant", "rules", "auto"],

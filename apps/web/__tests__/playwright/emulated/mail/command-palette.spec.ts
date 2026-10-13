@@ -364,10 +364,10 @@ test("sender actions are available for a selected list row and match the reader"
     palette.getByRole("option", { name: "Block sender ⇧U" }),
   ).toBeEnabled();
   await expect(
-    palette.getByRole("option", { name: "Auto archive future emails ⇧E" }),
+    palette.getByRole("option", { name: "Skip inbox for this sender ⇧E" }),
   ).toBeEnabled();
   await palette
-    .getByRole("option", { name: "Auto archive future emails ⇧E" })
+    .getByRole("option", { name: "Skip inbox for this sender ⇧E" })
     .scrollIntoViewIfNeeded();
   await attachScreenshotForChangedTest(
     testInfo,
@@ -383,7 +383,7 @@ test("sender actions are available for a selected list row and match the reader"
     menu.getByRole("menuitem", { name: "Block sender ⇧U" }),
   ).toBeEnabled();
   await expect(
-    menu.getByRole("menuitem", { name: "Auto archive future emails ⇧E" }),
+    menu.getByRole("menuitem", { name: "Skip inbox for this sender ⇧E" }),
   ).toBeEnabled();
   await attachScreenshotForChangedTest(
     testInfo,

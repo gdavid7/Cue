@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import { ListToolbar } from "@/app/(app)/[emailAccountId]/mail/ListToolbar";
 import { getMailSearchFolders } from "@/app/(app)/[emailAccountId]/mail/outlook-folder-list";
 import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
+import { MailMobileNav } from "@/app/(app)/[emailAccountId]/mail/MailMobileNav";
 import {
   getMailNavPath,
   MAIL_SCHEDULED_TYPE,
@@ -73,6 +74,7 @@ import {
 } from "@/app/(app)/[emailAccountId]/mail/read-state";
 import { MailLayout, MailSplitFilterKind } from "@/generated/prisma/enums";
 import { useSidebar } from "@/components/ui/sidebar";
+import { useChat } from "@/providers/ChatProvider";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
   commandPaletteOpenAtom,
@@ -139,7 +141,8 @@ export function MailShell() {
   const { userLabels: allLabels, mutate: mutateLabels } = useLabels();
   const { folders } = useFolders(provider);
   const { data: settings, mutate: mutateSettings } = useMailSettings();
-  const { toggleSidebar } = useSidebar();
+  const { toggleSidebar, setOpen: setSidebarOpen } = useSidebar();
+  const { submitTextMessage } = useChat();
   const router = useRouter();
   const isPaletteOpen = useAtomValue(commandPaletteOpenAtom);
   const isHelpOpen = useAtomValue(shortcutsDialogOpenAtom);
@@ -1398,6 +1401,12 @@ export function MailShell() {
   const onToggleAssistant = useStableCallback(() =>
     toggleSidebar(["chat-sidebar"]),
   );
+  const onAskAssistant = useStableCallback((question: string) => {
+    setSidebarOpen((open) =>
+      open.includes("chat-sidebar") ? open : [...open, "chat-sidebar"],
+    );
+    submitTextMessage(question).catch(() => undefined);
+  });
   const searchFolders = useMemo(
     () =>
       isOutlook && !isAllAccounts
@@ -1477,12 +1486,16 @@ export function MailShell() {
   return (
     <MailProductFrame
       accountSwitcher={
-        <MailAccountSwitcher
-          isDesktopApp={isDesktopApp}
-          isAllAccounts={isAllAccounts}
-          onSelectAccount={selectAccount}
-          onSelectAll={selectAllAccounts}
-          variant="compact"
+        <MailMobileNav
+          accountSwitcher={
+            <MailAccountSwitcher
+              isDesktopApp={isDesktopApp}
+              isAllAccounts={isAllAccounts}
+              onSelectAccount={selectAccount}
+              onSelectAll={selectAllAccounts}
+              variant="bar"
+            />
+          }
         />
       }
       floating={senderCommandsPanel}
@@ -1533,6 +1546,7 @@ export function MailShell() {
                 expandedPreview={expandedPreview}
                 onTogglePreview={togglePreview}
                 onToggleAssistant={onToggleAssistant}
+                onAskAssistant={onAskAssistant}
                 showLayoutToggle={!isAllAccounts}
                 selectAll={showSplitTabs ? null : selectAllCheckbox}
                 selectedCount={selection.selectedCount}

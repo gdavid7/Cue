@@ -206,7 +206,7 @@ test("captures the rich message reader states", async ({ page }, testInfo) => {
   await page.getByRole("button", { name: /^More actions/ }).click();
   const actionsMenu = page.getByRole("menu");
   const autoArchive = actionsMenu.getByRole("menuitem", {
-    name: "Auto archive future emails",
+    name: "Skip inbox for this sender",
   });
   const openExternal = actionsMenu.getByRole("menuitem", {
     name: openExternalLabel,
@@ -309,11 +309,13 @@ test("offers to disable auto archive for an enabled sender", async ({
   await page.getByRole("button", { name: /^More actions/ }).click();
   const actionsMenu = page.getByRole("menu");
   await expect(
-    actionsMenu.getByRole("menuitem", { name: "Disable auto archive" }),
+    actionsMenu.getByRole("menuitem", {
+      name: "Show this sender in inbox again",
+    }),
   ).toBeEnabled();
   await expect(
     actionsMenu.getByRole("menuitem", {
-      name: "Auto archive future emails",
+      name: "Skip inbox for this sender",
     }),
   ).toHaveCount(0);
 });

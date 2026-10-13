@@ -147,7 +147,7 @@ describe("buildMailCommandPalette", () => {
       disabled: true,
     });
     expect(commands.find(({ id }) => id === "mail-auto-archive")).toMatchObject(
-      { label: "Auto archive future emails", disabled: false },
+      { label: "Skip inbox for this sender", disabled: false },
     );
     expect(
       commands.find(({ id }) => id === "mail-open-external"),
@@ -164,7 +164,7 @@ describe("buildMailCommandPalette", () => {
     });
 
     expect(commands.find(({ id }) => id === "mail-auto-archive")).toMatchObject(
-      { label: "Disable auto archive" },
+      { label: "Show this sender in inbox again" },
     );
   });
 });
