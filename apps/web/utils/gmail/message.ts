@@ -126,6 +126,18 @@ export async function getMessage(
   });
 }
 
+/** The message exactly as Gmail stores it, as RFC 822 bytes. */
+export async function getRawMessage(
+  messageId: string,
+  gmail: gmail_v1.Gmail,
+): Promise<Buffer> {
+  const message = await withGmailRetry(() =>
+    gmail.users.messages.get({ userId: "me", id: messageId, format: "raw" }),
+  );
+  if (!message.data.raw) throw new Error("Gmail returned no raw message");
+  return Buffer.from(message.data.raw, "base64url");
+}
+
 export async function getMessageByRfc822Id(
   rfc822MessageId: string,
   gmail: gmail_v1.Gmail,

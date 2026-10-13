@@ -39,6 +39,7 @@ import { LabelPickerDialog } from "@/app/(app)/[emailAccountId]/mail/LabelPicker
 import { ThreadList } from "@/app/(app)/[emailAccountId]/mail/ThreadList";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
 import { useTranslateThread } from "@/app/(app)/[emailAccountId]/mail/use-thread-translation";
+import { printThread } from "@/app/(app)/[emailAccountId]/mail/print-thread";
 import { GmailLabel } from "@/utils/gmail/label";
 import {
   getComposeTargetMessageId,
@@ -549,6 +550,17 @@ export function MailShell() {
       });
     };
   }, [openMessages, readerEmailAccountId, translateThread]);
+  const printOpenThread = useMemo(() => {
+    const printable = openMessages.filter(
+      (message) => !message.labelIds?.includes(GmailLabel.DRAFT),
+    );
+    if (!printable.length) return;
+    return () =>
+      printThread({
+        subject: printable[0].headers.subject || "(no subject)",
+        messages: printable,
+      });
+  }, [openMessages]);
   const teamCommentsAvailable = useTeamCommentsAvailable(readerEmailAccountId);
   const openTeamComments = useMemo(
     () =>
@@ -1636,6 +1648,7 @@ export function MailShell() {
                 onMove={canLabel ? openMovePicker : undefined}
                 onTranslate={translateOpenThread}
                 onComment={openTeamComments}
+                onPrint={printOpenThread}
                 isMenuOpen={isMenuOpen}
                 onMenuOpenChange={setIsMenuOpen}
                 enableMessageNavigation={!sidePanelThreadId}

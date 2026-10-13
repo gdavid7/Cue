@@ -930,6 +930,24 @@ export async function queryMessagesWithAttachments(
   };
 }
 
+/** The message's MIME content, as Graph serves it from `$value`. */
+export async function getRawMessage(
+  messageId: string,
+  client: OutlookClient,
+  logger: Logger,
+): Promise<Buffer> {
+  const raw: ArrayBuffer = await withMicrosoftGraphRetry(
+    () =>
+      client
+        .getClient()
+        .api(`/me/messages/${encodeURIComponent(messageId)}/$value`)
+        .responseType(ResponseType.ARRAYBUFFER)
+        .get(),
+    logger,
+  );
+  return Buffer.from(raw);
+}
+
 export async function getMessage(
   messageId: string,
   client: OutlookClient,

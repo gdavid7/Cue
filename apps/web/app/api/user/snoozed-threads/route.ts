@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { SnoozedThreadStatus } from "@/generated/prisma/enums";
 import { snoozeThreadsBody } from "@/utils/actions/snooze.validation";
+import { mapWithConcurrency } from "@/utils/async";
 import type { EmailProvider } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
 import { withEmailProvider } from "@/utils/middleware";
@@ -92,43 +93,37 @@ async function listSnoozedThreads({
   });
 
   // The rows only know thread ids; the provider supplies what each one is.
-  const summaries = new Map<string, ThreadSummary>();
-  for (let start = 0; start < rows.length; start += SUMMARY_CONCURRENCY) {
-    const chunk = rows.slice(start, start + SUMMARY_CONCURRENCY);
-    const results = await Promise.allSettled(
-      chunk.map((row) => provider.getLatestMessageInThread(row.threadId)),
-    );
-    results.forEach((result, index) => {
-      const threadId = chunk[index].threadId;
-      if (result.status === "rejected") {
+  const summaries = await mapWithConcurrency(
+    rows,
+    SUMMARY_CONCURRENCY,
+    async (row) => {
+      try {
+        const message = await provider.getLatestMessageInThread(row.threadId);
+        return {
+          subject: message?.headers.subject || message?.subject || "",
+          from: message?.headers.from || "",
+          snippet: message?.snippet || "",
+        };
+      } catch (error) {
         logger.warn("Failed to load snoozed thread", {
-          threadId,
-          error: result.reason,
+          threadId: row.threadId,
+          error,
         });
-        return;
+        return { subject: "", from: "", snippet: "" };
       }
-      if (!result.value) return;
-      summaries.set(threadId, {
-        subject: result.value.headers.subject || result.value.subject || "",
-        from: result.value.headers.from || "",
-        snippet: result.value.snippet || "",
-      });
-    });
-  }
+    },
+  );
 
   return {
-    threads: rows.map((row) => ({
+    threads: rows.map((row, index) => ({
       id: row.id,
       threadId: row.threadId,
       scheduledFor: row.scheduledFor.toISOString(),
       status: row.status,
-      ...(summaries.get(row.threadId) ?? EMPTY_SUMMARY),
+      ...summaries[index],
     })),
   };
 }
 
-type ThreadSummary = { subject: string; from: string; snippet: string };
-
 const MAX_LISTED_SNOOZES = 100;
 const SUMMARY_CONCURRENCY = 5;
-const EMPTY_SUMMARY: ThreadSummary = { subject: "", from: "", snippet: "" };

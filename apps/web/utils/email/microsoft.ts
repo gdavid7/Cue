@@ -13,11 +13,17 @@ import { DraftNotFoundError } from "@/utils/error";
 import type { Message } from "@microsoft/microsoft-graph-types";
 import type { OutlookClient } from "@/utils/outlook/client";
 import type { ParsedMessage } from "@/utils/types";
+import type { VacationResponderBody } from "@/utils/actions/vacation-responder.validation";
+import {
+  getAutomaticReplies,
+  updateAutomaticReplies,
+} from "@/utils/outlook/mailbox-settings";
 import type { Attachment as MailAttachment } from "nodemailer/lib/mailer";
 import { toMailerAttachments } from "@/utils/types/mail";
 import {
   getMessage,
   getMessages,
+  getRawMessage,
   queryBatchMessages,
   queryMessagesWithAttachments,
   getCategoryMap,
@@ -309,6 +315,10 @@ export class OutlookProvider implements EmailProvider {
     options?: { includeCalendarContent?: boolean },
   ): Promise<ParsedMessage> {
     return getMessage(messageId, this.client, this.logger, options);
+  }
+
+  async getRawMessage(messageId: string): Promise<Buffer> {
+    return getRawMessage(messageId, this.client, this.logger);
   }
 
   async getMessageByRfc822MessageId(
@@ -2650,6 +2660,14 @@ export class OutlookProvider implements EmailProvider {
       getFolderIds(this.client, this.logger),
     ]);
     return addOutlookSystemFolderTypes(folders, folderIds);
+  }
+
+  async getVacationResponder(): Promise<VacationResponderBody> {
+    return getAutomaticReplies(this.client, this.logger);
+  }
+
+  async updateVacationResponder(body: VacationResponderBody): Promise<void> {
+    await updateAutomaticReplies(this.client, this.logger, body);
   }
 
   async getForwardingAddresses(): Promise<string[]> {

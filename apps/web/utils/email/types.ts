@@ -11,6 +11,7 @@ import type {
 import type { Attachment as MailAttachment } from "nodemailer/lib/mailer";
 import type { SendEmailBody } from "@/utils/types/mail";
 import type { DraftAttachmentMetadata } from "@/utils/actions/draft-attachments.validation";
+import type { VacationResponderBody } from "@/utils/actions/vacation-responder.validation";
 import type { DraftMessageUploadPart } from "@/utils/email/draft-attachment-upload";
 import type { EmailContact } from "@/utils/email/contact";
 import type {
@@ -351,6 +352,8 @@ export interface EmailProvider {
   getPreviousConversationMessages(
     messageIds: string[],
   ): Promise<ParsedMessage[]>;
+  /** The original RFC 822 message, headers and MIME parts included. */
+  getRawMessage(messageId: string): Promise<Buffer>;
   getSentMessageIds(options: {
     maxResults: number;
     after?: Date;
@@ -390,6 +393,8 @@ export interface EmailProvider {
     threads: EmailThread[];
     nextPageToken?: string;
   }>;
+  /** The out-of-office auto-reply (Gmail vacation responder, Outlook automatic replies). */
+  getVacationResponder(): Promise<VacationResponderBody>;
   hasPreviousCommunicationsWithSenderOrDomain(options: {
     from: string;
     date: Date;
@@ -520,6 +525,7 @@ export interface EmailProvider {
     },
   ): Promise<void>;
   updateLabel(labelId: string, update: EmailLabelUpdate): Promise<void>;
+  updateVacationResponder(body: VacationResponderBody): Promise<void>;
   watchEmails(): Promise<{
     expirationDate: Date;
     subscriptionId?: string;

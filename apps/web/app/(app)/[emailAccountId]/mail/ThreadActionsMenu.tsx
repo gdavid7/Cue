@@ -12,6 +12,7 @@ import {
   MailXIcon,
   MessageSquareIcon,
   MoreHorizontalIcon,
+  PrinterIcon,
   ShieldAlertIcon,
   StarIcon,
   StarOffIcon,
@@ -52,6 +53,7 @@ export type ThreadActionsMenuProps = {
   onMove?: () => void;
   onTranslate?: () => void;
   onComment?: () => void;
+  onPrint?: () => void;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 };
@@ -71,6 +73,7 @@ export function ThreadActionsMenu({
   onMove,
   onTranslate,
   onComment,
+  onPrint,
   open,
   onOpenChange,
 }: ThreadActionsMenuProps) {
@@ -174,7 +177,7 @@ export function ThreadActionsMenu({
             </DropdownMenuItem>
           ) : null}
 
-          {(onTranslate || onComment || canManageAutoArchive) && (
+          {(onTranslate || onComment || onPrint || canManageAutoArchive) && (
             <DropdownMenuSeparator />
           )}
 
@@ -183,6 +186,13 @@ export function ThreadActionsMenu({
               <LanguagesIcon className="mr-2 size-4" />
               Translate
               <MenuShortcut id="translate" />
+            </DropdownMenuItem>
+          )}
+
+          {onPrint && (
+            <DropdownMenuItem onSelect={onPrint}>
+              <PrinterIcon className="mr-2 size-4" />
+              Print conversation
             </DropdownMenuItem>
           )}
 

@@ -1,7 +1,12 @@
 "use client";
 
 import type { ComponentProps } from "react";
-import { MoreHorizontalIcon, SparklesIcon } from "lucide-react";
+import {
+  DownloadIcon,
+  FileCodeIcon,
+  MoreHorizontalIcon,
+  SparklesIcon,
+} from "lucide-react";
 import { FixWithChat } from "@/app/(app)/[emailAccountId]/assistant/FixWithChat";
 import { getRuleResultReasonDisplay } from "@/app/(app)/[emailAccountId]/assistant/ResultDisplay";
 import { RuleActions } from "@/components/RuleActions";
@@ -12,6 +17,8 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
   DropdownMenuSub,
   DropdownMenuSubTrigger,
@@ -32,6 +39,7 @@ export function MessageActionsMenu({
   plans: ThreadPlan[];
   showFixWithChat: boolean;
 }) {
+  const { emailAccountId } = useAccount();
   const messagePlans = plans.filter((plan) => plan.messageId === message.id);
   return (
     <DropdownMenu>
@@ -79,6 +87,23 @@ export function MessageActionsMenu({
             </DropdownMenuSubContent>
           </DropdownMenuPortal>
         </DropdownMenuSub>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <a
+            href={rawMessageUrl(emailAccountId, message.id, false)}
+            rel="noopener noreferrer"
+            target="_blank"
+          >
+            <FileCodeIcon className="mr-2 size-4" />
+            View original
+          </a>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <a download href={rawMessageUrl(emailAccountId, message.id, true)}>
+            <DownloadIcon className="mr-2 size-4" />
+            Download message
+          </a>
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -177,6 +202,16 @@ function RuleAttribution({
  * execution time being unknown here, where a real date would be invented.
  */
 const FIX_RESULT_BATCH = new Date(0);
+
+function rawMessageUrl(
+  emailAccountId: string,
+  messageId: string,
+  download: boolean,
+) {
+  const searchParams = new URLSearchParams({ emailAccountId, messageId });
+  if (download) searchParams.set("download", "1");
+  return `/api/messages/raw?${searchParams}`;
+}
 
 function toFixResults(plan: ThreadPlan): FixWithChatResults {
   return [
