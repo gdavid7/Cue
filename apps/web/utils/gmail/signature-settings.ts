@@ -9,6 +9,8 @@ export interface GmailSignature {
   email: string;
   isDefault: boolean;
   signature: string;
+  /** Gmail sends only from aliases whose verification was accepted. */
+  verificationStatus?: string;
 }
 
 /**
@@ -40,6 +42,7 @@ export async function getGmailSignatures(
         signature: sendAs.signature || "",
         isDefault: sendAs.isDefault ?? false,
         displayName: sendAs.displayName || undefined,
+        verificationStatus: sendAs.verificationStatus || undefined,
       });
     }
 

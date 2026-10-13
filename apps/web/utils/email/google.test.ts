@@ -848,6 +848,40 @@ describe("GmailProvider.createDraft", () => {
     expect(mime).toContain("Bcc: hidden@example.com");
     expect(mime).toContain("In-Reply-To: <parent@example.com>");
   });
+
+  it("writes a reply draft from the send-as alias the parent was sent to", async () => {
+    gmailSignatureMock.getGmailSignatures.mockResolvedValue([
+      { email: "user@example.com", signature: "", isDefault: true },
+      {
+        email: "alias@school.edu",
+        displayName: "User at School",
+        signature: "",
+        isDefault: false,
+      },
+    ]);
+    const create = vi.fn().mockResolvedValue({ data: { id: "draft-1" } });
+    const provider = new GmailProvider({
+      context: { _options: {} },
+      users: { drafts: { create } },
+    } as any);
+    vi.spyOn(provider, "getMessage").mockResolvedValue(
+      createParsedMessage({
+        id: "parent-1",
+        internalDate: "1000",
+        headers: { to: "Alias@School.edu" },
+      }),
+    );
+
+    await provider.createDraft({
+      to: "sender@example.com",
+      subject: "Re: Example",
+      messageHtml: "<p>Example</p>",
+      replyToMessageId: "parent-1",
+    });
+
+    const mime = await readStream(create.mock.calls[0]?.[0].media.body);
+    expect(mime).toContain("From: User at School <alias@school.edu>");
+  });
 });
 
 describe("GmailProvider.updateDraft", () => {

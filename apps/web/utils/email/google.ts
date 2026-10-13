@@ -127,7 +127,11 @@ import {
 import { startGmailDraftUploadSession } from "@/utils/gmail/resumable-draft-upload";
 import type { SendEmailBody } from "@/utils/types/mail";
 import { createScopedLogger, type Logger } from "@/utils/logger";
-import { getGmailSignatures } from "@/utils/gmail/signature-settings";
+import {
+  getGmailSignatures,
+  type GmailSignature,
+} from "@/utils/gmail/signature-settings";
+import { getGmailReplyFrom } from "@/utils/gmail/reply-from";
 import {
   getForwardingAddresses,
   getVacationResponder,
@@ -149,7 +153,7 @@ export class GmailProvider implements EmailProvider {
   private readonly client: gmail_v1.Gmail;
   private readonly logger: Logger;
   private readonly emailAccountId?: string;
-  private sendAsEmailAddressesPromise?: Promise<string[]>;
+  private sendAsPromise?: Promise<GmailSignature[]>;
 
   constructor(
     client: gmail_v1.Gmail,
@@ -999,6 +1003,7 @@ export class GmailProvider implements EmailProvider {
     let threadId: string | undefined;
     let headerMessageId = "";
     let parentReferences: string | undefined;
+    let from: string | undefined;
 
     if (params.replyToMessageId) {
       try {
@@ -1006,6 +1011,7 @@ export class GmailProvider implements EmailProvider {
         threadId = originalMessage.threadId;
         headerMessageId = originalMessage.headers?.["message-id"] || "";
         parentReferences = originalMessage.headers?.references;
+        from = await this.getReplyFrom(originalMessage.headers);
       } catch {
         this.logger.warn("Could not get original message for threading");
       }
@@ -1024,6 +1030,7 @@ export class GmailProvider implements EmailProvider {
     }
 
     const message = await buildMailMessage({
+      from,
       to: params.to,
       cc: params.cc,
       bcc: params.bcc,
@@ -1135,7 +1142,13 @@ export class GmailProvider implements EmailProvider {
     });
 
     const userEmails = await this.getSelfEmailAddresses(userEmail);
-    const draftPromise = draftEmail(this.client, email, args, userEmails);
+    const from = await this.getReplyFrom(email.headers);
+    const draftPromise = draftEmail(
+      this.client,
+      email,
+      { ...args, from },
+      userEmails,
+    );
     let result: Awaited<typeof draftPromise>;
 
     if (executedRule) {
@@ -1173,7 +1186,7 @@ export class GmailProvider implements EmailProvider {
       this.client,
       email,
       content,
-      options?.from,
+      options?.from || (await this.getReplyFrom(email.headers)),
       options,
     );
     return { messageId: requireSentMessageId(result.data.id) };
@@ -1199,6 +1212,7 @@ export class GmailProvider implements EmailProvider {
         attachments: toMailerAttachments(body.attachments),
       },
       this.logger,
+      () => this.getReplySendAs(),
     );
     return {
       messageId: result.data.id || "",
@@ -2205,15 +2219,32 @@ export class GmailProvider implements EmailProvider {
     }
   }
 
-  private getSendAsEmailAddresses(): Promise<string[]> {
-    this.sendAsEmailAddressesPromise ??= getGmailSignatures(this.client)
-      .then((signatures) => signatures.map((signature) => signature.email))
-      .catch((error) => {
-        this.sendAsEmailAddressesPromise = undefined;
-        throw error;
-      });
+  private async getSendAsEmailAddresses(): Promise<string[]> {
+    const sendAs = await this.getSendAs();
+    return sendAs.map((alias) => alias.email);
+  }
 
-    return this.sendAsEmailAddressesPromise;
+  private async getReplyFrom(
+    headers: Parameters<typeof getGmailReplyFrom>[0],
+  ): Promise<string | undefined> {
+    return getGmailReplyFrom(headers, await this.getReplySendAs());
+  }
+
+  // A failed lookup only costs the alias, so the reply still goes out.
+  private getReplySendAs(): Promise<GmailSignature[]> {
+    return this.getSendAs().catch((error) => {
+      this.logger.warn("Failed to fetch Gmail send-as addresses", { error });
+      return [];
+    });
+  }
+
+  private getSendAs(): Promise<GmailSignature[]> {
+    this.sendAsPromise ??= getGmailSignatures(this.client).catch((error) => {
+      this.sendAsPromise = undefined;
+      throw error;
+    });
+
+    return this.sendAsPromise;
   }
 }
 

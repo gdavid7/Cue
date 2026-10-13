@@ -176,6 +176,43 @@ describe("sending a Gmail draft from the reader", () => {
     expect(drafts.send).not.toHaveBeenCalled();
   });
 
+  it("replies from the send-as alias the original message was sent to", async () => {
+    const { gmail, messages } = createGmail();
+    messages.get.mockResolvedValue({
+      data: {
+        labelIds: ["INBOX"],
+        payload: {
+          headers: [
+            { name: "From", value: "Teacher <teacher@school.edu>" },
+            { name: "To", value: "dana.park@school.edu" },
+          ],
+        },
+      },
+    });
+
+    await sendEmailWithHtml(gmail, email, undefined, async () => [
+      {
+        email: "dana@gmail.com",
+        displayName: "Dana Park",
+        isDefault: true,
+        signature: "",
+      },
+      {
+        email: "dana.park@school.edu",
+        displayName: "Dana Park (School)",
+        isDefault: false,
+        signature: "",
+      },
+    ]);
+
+    const sent = messages.send.mock.calls.at(0);
+    assert.isDefined(sent);
+    const mime = Buffer.from(sent[0].requestBody.raw, "base64url").toString();
+    expect(mime).toMatch(
+      /^From: "Dana Park \(School\)" <dana\.park@school\.edu>$/m,
+    );
+  });
+
   it("carries the attachments of the message being forwarded", async () => {
     const { gmail, messages } = createGmail();
     messages.get.mockResolvedValue({
