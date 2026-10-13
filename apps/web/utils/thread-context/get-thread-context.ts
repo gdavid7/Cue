@@ -1,0 +1,258 @@
+import {
+  type ContextCandidate,
+  type ContextReason,
+  type FocusThread,
+  focusKeywords,
+  isAutomatedAddress,
+  type Person,
+  rankContext,
+} from "@cue/context";
+import { mapWithConcurrency } from "@/utils/async";
+import { fetchCalendarEventsInWindow } from "@/utils/calendar/fetch-events-in-window";
+import type { CalendarEvent } from "@/utils/calendar/event-types";
+import {
+  extractEmailAddress,
+  extractNameFromEmail,
+  isSameEmailAddress,
+  splitRecipientList,
+} from "@/utils/email";
+import { getMessageTimestamp } from "@/utils/email/message-timestamp";
+import type { EmailProvider, EmailThread } from "@/utils/email/types";
+import type { Logger } from "@/utils/logger";
+import { parseReply } from "@/utils/mail";
+import type { ParsedMessage } from "@/utils/types";
+
+// Each thread open costs about 1 + 3 × 2 + 1 provider calls, so keep the
+// fan-out small: the panel shows four items at most.
+const MAX_PARTICIPANTS = 3;
+const THREADS_PER_PARTICIPANT = 3;
+const PARTICIPANT_CONCURRENCY = 2;
+const TOPIC_THREADS = 6;
+const CALENDAR_WINDOW_DAYS = 30;
+const MAX_MESSAGE_TEXT = 600;
+const SNIPPET_LENGTH = 180;
+
+export type ThreadContextItem = {
+  /** For emails, the thread id, so the panel can open that conversation. */
+  id: string;
+  kind: ContextCandidate["kind"];
+  title: string;
+  snippet: string;
+  at: string;
+  url?: string;
+  reasons: ContextReason[];
+};
+
+/**
+ * Finds the few items elsewhere in the user's mailbox and calendar that matter
+ * for this thread: other conversations with the same people or about the same
+ * thing, and meetings with them. Every source is optional; one failing only
+ * means fewer items.
+ */
+export async function getThreadContext({
+  emailAccountId,
+  userEmail,
+  threadId,
+  emailProvider,
+  logger,
+  now = new Date(),
+}: {
+  emailAccountId: string;
+  userEmail: string;
+  threadId: string;
+  emailProvider: EmailProvider;
+  logger: Logger;
+  now?: Date;
+}): Promise<{ items: ThreadContextItem[] }> {
+  // The reader can hold a thread the provider hasn't synced yet.
+  const thread = await emailProvider.getThread(threadId).catch((error) => {
+    logger.warn("Failed to load thread for context", { error });
+    return null;
+  });
+  if (!thread?.messages.length) return { items: [] };
+
+  const focus = toFocus(thread);
+  const participants = focus.people
+    .filter(
+      (p) =>
+        !isSameEmailAddress(p.email, userEmail) && !isAutomatedAddress(p.email),
+    )
+    .slice(0, MAX_PARTICIPANTS);
+
+  const [peopleThreads, topicThreads, events] = await Promise.all([
+    mapWithConcurrency(participants, PARTICIPANT_CONCURRENCY, (p) =>
+      emailProvider
+        .getThreadsWithParticipant({
+          participantEmail: p.email,
+          maxThreads: THREADS_PER_PARTICIPANT,
+        })
+        .catch((error) => {
+          logger.warn("Failed to fetch threads with participant", { error });
+          return [];
+        }),
+    ),
+    findTopicThreads({ focus, emailProvider, logger }),
+    fetchCalendarEventsInWindow({
+      emailAccountId,
+      timeMin: addDays(now, -CALENDAR_WINDOW_DAYS),
+      timeMax: addDays(now, CALENDAR_WINDOW_DAYS),
+      maxResultsPerProvider: 50,
+      logger,
+    })
+      .then((result) => result.events)
+      .catch((error) => {
+        logger.warn("Failed to fetch calendar events for context", { error });
+        return [];
+      }),
+  ]);
+
+  const otherThreads = uniqueById([
+    ...peopleThreads.flat(),
+    ...topicThreads,
+  ]).filter((t) => t.id !== thread.id);
+
+  const ranked = rankContext({
+    focus,
+    candidates: [
+      ...otherThreads.map(threadToCandidate),
+      ...events.map(eventToCandidate),
+    ],
+    selfEmails: [userEmail],
+    now: now.toISOString(),
+  });
+
+  return {
+    items: ranked.map(({ candidate, reasons }) => ({
+      id: candidate.id,
+      kind: candidate.kind,
+      title: candidate.title,
+      snippet: truncate(candidate.snippet ?? candidate.text, SNIPPET_LENGTH),
+      at: candidate.at,
+      url: candidate.url,
+      reasons,
+    })),
+  };
+}
+
+async function findTopicThreads({
+  focus,
+  emailProvider,
+  logger,
+}: {
+  focus: FocusThread;
+  emailProvider: EmailProvider;
+  logger: Logger;
+}): Promise<EmailThread[]> {
+  const keywords = focusKeywords(focus, 4);
+  if (!keywords.length) return [];
+  try {
+    const { threads } = await emailProvider.searchThreads({
+      query: keywords.join(" OR "),
+      maxResults: TOPIC_THREADS,
+      // Headers and snippets are enough to rank, and much cheaper than bodies.
+      messageFormat: "metadata",
+    });
+    return threads;
+  } catch (error) {
+    logger.warn("Failed to search threads by topic", { error });
+    return [];
+  }
+}
+
+function toFocus(thread: EmailThread): FocusThread {
+  const latest = thread.messages.at(-1)!;
+  return {
+    id: thread.id,
+    subject: latest.headers.subject || latest.subject,
+    text: threadText(thread.messages),
+    at: messageTime(latest),
+    people: peopleOf(thread.messages),
+  };
+}
+
+function threadToCandidate(
+  thread: EmailThread,
+): ContextCandidate & { snippet?: string } {
+  const latest = thread.messages.at(-1);
+  return {
+    id: thread.id,
+    kind: "email",
+    title:
+      latest?.headers.subject ||
+      latest?.subject ||
+      thread.snippet ||
+      "(no subject)",
+    text: threadText(thread.messages) || thread.snippet,
+    snippet: latest?.snippet || thread.snippet,
+    at: latest ? messageTime(latest) : new Date(0).toISOString(),
+    people: peopleOf(thread.messages),
+  };
+}
+
+function eventToCandidate(event: CalendarEvent): ContextCandidate {
+  return {
+    id: `event:${event.id}`,
+    kind: "event",
+    title: event.title,
+    // Google event descriptions can contain HTML.
+    text: [event.description?.replace(/<[^>]+>/g, " "), event.location]
+      .filter(Boolean)
+      .join(" "),
+    at: event.startTime.toISOString(),
+    people: event.attendees
+      .filter((a) => !a.declined)
+      .map((a) => ({ email: a.email, name: a.name })),
+    url: event.eventUrl,
+  };
+}
+
+/** Senders first (latest first), then recipients: who wrote matters most. */
+function peopleOf(messages: ParsedMessage[]): Person[] {
+  const people = new Map<string, Person>();
+  const add = (raw: string) => {
+    const email = extractEmailAddress(raw).toLowerCase();
+    if (!email || people.has(email)) return;
+    people.set(email, { email, name: extractNameFromEmail(raw) || undefined });
+  };
+  for (const m of [...messages].reverse()) add(m.headers.from);
+  for (const m of messages) {
+    for (const raw of [
+      ...splitRecipientList(m.headers.to),
+      ...splitRecipientList(m.headers.cc ?? ""),
+    ]) {
+      add(raw);
+    }
+  }
+  return [...people.values()];
+}
+
+/**
+ * What each message says in its own words: quoted history and signatures are
+ * dropped, and each message is capped, so one long reply chain can't dominate.
+ */
+function threadText(messages: ParsedMessage[]) {
+  return messages
+    .map((m) =>
+      (m.textPlain ? parseReply(m.textPlain) : m.snippet || "")
+        .trim()
+        .slice(0, MAX_MESSAGE_TEXT),
+    )
+    .join("\n");
+}
+
+function messageTime(m: ParsedMessage) {
+  return new Date(getMessageTimestamp(m)).toISOString();
+}
+
+function uniqueById<T extends { id: string }>(items: T[]): T[] {
+  return [...new Map(items.map((item) => [item.id, item])).values()];
+}
+
+function addDays(date: Date, days: number) {
+  return new Date(date.getTime() + days * 86_400_000);
+}
+
+function truncate(text: string, length: number) {
+  const clean = text.replace(/\s+/g, " ").trim();
+  return clean.length > length ? `${clean.slice(0, length - 1)}…` : clean;
+}

@@ -6,6 +6,10 @@
 - **An outcome-based home screen**: *Needs you*, *Agent working*, *Waiting on others*, and *Handled automatically*.
 - **Any connected app**: apps without a dedicated integration come in through stored per-app field mappings.
 
+**What's built so far:**
+
+- **Relevant context panel** (in the mail reader, beside an open thread): other conversations with the same people or organization, conversations on the same topic, and meetings with those people from a connected calendar. Each item says why it's there ("With Nora Patel", "Via Ari Cohen", "About payment, invoice", "In 2d"). Ranking lives in [`packages/cue-context`](packages/cue-context), a dependency-free package that walks a people/organization graph from the thread and scores candidates on shared rare words (TF-IDF), recency, and graph distance. Candidates are fetched in [`apps/web/utils/thread-context`](apps/web/utils/thread-context) through Inbox Zero's existing email and calendar providers.
+
 The original Cue prototype (context engine, triage, demo UI, and design docs) lives in [`prototype/`](prototype/). It runs on its own with `cd prototype && npm install && npm start`.
 
 **Running locally:** see Inbox Zero's [Local Development](#local-development) section below. In short, with Node 24:

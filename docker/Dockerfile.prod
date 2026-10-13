@@ -23,6 +23,7 @@ COPY apps/image-proxy-aws/package.json apps/image-proxy-aws/package.json
 COPY packages/api/package.json packages/api/package.json
 COPY packages/cli/package.json packages/cli/package.json
 COPY packages/email-editor/package.json packages/email-editor/package.json
+COPY packages/cue-context/package.json packages/cue-context/package.json
 COPY packages/mail-core/package.json packages/mail-core/package.json
 COPY packages/mail-sqlite/package.json packages/mail-sqlite/package.json
 COPY packages/mail-react/package.json packages/mail-react/package.json

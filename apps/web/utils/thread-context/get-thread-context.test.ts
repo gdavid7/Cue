@@ -1,0 +1,282 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestLogger, getMockMessage } from "@/__tests__/helpers";
+import { fetchCalendarEventsInWindow } from "@/utils/calendar/fetch-events-in-window";
+import type { EmailProvider, EmailThread } from "@/utils/email/types";
+import { getThreadContext } from "./get-thread-context";
+
+vi.mock("server-only", () => ({}));
+vi.mock("@/utils/calendar/fetch-events-in-window", () => ({
+  fetchCalendarEventsInWindow: vi.fn(),
+}));
+
+const USER = "david@example.com";
+const NOW = new Date("2026-10-13T16:00:00Z");
+
+describe("getThreadContext", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fetchCalendarEventsInWindow).mockResolvedValue({
+      events: [],
+      complete: true,
+    });
+  });
+
+  it("finds other conversations with the people on the thread, never the thread itself", async () => {
+    const open = thread("renewal", [
+      message({
+        threadId: "renewal",
+        from: "Nora Patel <nora@northwind.com>",
+        subject: "Renewal terms",
+        textPlain: "Need your answer on renewal terms.",
+      }),
+    ]);
+    const pricing = thread("pricing", [
+      message({
+        threadId: "pricing",
+        from: "Nora Patel <nora@northwind.com>",
+        subject: "Pricing sheet",
+        textPlain: "Attached the pricing sheet we discussed.",
+      }),
+    ]);
+    const provider = mockProvider({
+      threads: { renewal: open },
+      withParticipant: { "nora@northwind.com": [open, pricing] },
+    });
+
+    const { items } = await run(provider, "renewal");
+
+    expect(items.map((i) => i.id)).toEqual(["pricing"]);
+    expect(items[0]).toMatchObject({
+      kind: "email",
+      reasons: [{ type: "person", label: "Nora Patel" }],
+    });
+  });
+
+  it("includes meetings with those people from the connected calendar", async () => {
+    const open = thread("renewal", [
+      message({
+        threadId: "renewal",
+        from: "Nora Patel <nora@northwind.com>",
+        subject: "Renewal terms",
+      }),
+    ]);
+    vi.mocked(fetchCalendarEventsInWindow).mockResolvedValue({
+      complete: true,
+      events: [
+        {
+          id: "evt1",
+          title: "Renewal call",
+          startTime: new Date("2026-10-15T17:00:00Z"),
+          endTime: new Date("2026-10-15T17:30:00Z"),
+          attendees: [
+            { email: "nora@northwind.com", name: "Nora Patel" },
+            { email: USER },
+          ],
+          eventUrl: "https://calendar.example/evt1",
+        },
+      ],
+    });
+
+    const { items } = await run(
+      mockProvider({ threads: { renewal: open } }),
+      "renewal",
+    );
+
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        id: "event:evt1",
+        kind: "event",
+        url: "https://calendar.example/evt1",
+        reasons: expect.arrayContaining([{ type: "upcoming", days: 2 }]),
+      }),
+    );
+  });
+
+  it("finds threads on the same topic even when no person links them", async () => {
+    const open = thread("vercel", [
+      message({
+        threadId: "vercel",
+        from: "Vercel Billing <billing@vercel.com>",
+        subject: "Invoice payment failed",
+        textPlain: "Please update your payment method.",
+      }),
+    ]);
+    const figma = thread("figma", [
+      message({
+        threadId: "figma",
+        from: "Figma Billing <billing@figma.com>",
+        subject: "Payment failed for invoice INV-4432",
+        textPlain: "Update your payment method.",
+      }),
+    ]);
+    const provider = mockProvider({
+      threads: { vercel: open },
+      search: [open, figma],
+    });
+
+    const { items } = await run(provider, "vercel");
+
+    expect(items.map((i) => i.id)).toEqual(["figma"]);
+    expect(provider.searchThreads).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.stringContaining("payment") }),
+    );
+  });
+
+  it("still returns what it found when one source fails", async () => {
+    const open = thread("renewal", [
+      message({
+        threadId: "renewal",
+        from: "Nora Patel <nora@northwind.com>",
+        subject: "Renewal terms",
+      }),
+    ]);
+    const pricing = thread("pricing", [
+      message({
+        threadId: "pricing",
+        from: "Nora Patel <nora@northwind.com>",
+        subject: "Pricing sheet",
+      }),
+    ]);
+    const provider = mockProvider({
+      threads: { renewal: open },
+      withParticipant: { "nora@northwind.com": [pricing] },
+    });
+    vi.mocked(provider.searchThreads).mockRejectedValue(
+      new Error("search down"),
+    );
+
+    const { items } = await run(provider, "renewal");
+
+    expect(items.map((i) => i.id)).toEqual(["pricing"]);
+  });
+
+  it("reads Outlook's ISO internalDate instead of falling back to 1970", async () => {
+    const open = thread("renewal", [
+      message({
+        threadId: "renewal",
+        from: "Nora Patel <nora@northwind.com>",
+        subject: "Renewal terms",
+      }),
+    ]);
+    const outlookStyle = {
+      ...message({
+        threadId: "pricing",
+        from: "Nora Patel <nora@northwind.com>",
+        subject: "Pricing sheet",
+      }),
+      internalDate: "2026-10-11T09:30:00.000Z",
+    };
+    const provider = mockProvider({
+      threads: { renewal: open },
+      withParticipant: {
+        "nora@northwind.com": [thread("pricing", [outlookStyle])],
+      },
+    });
+
+    const { items } = await run(provider, "renewal");
+
+    expect(items[0]?.at).toBe("2026-10-11T09:30:00.000Z");
+  });
+
+  it("still returns email context when the calendar fails", async () => {
+    const open = thread("renewal", [
+      message({
+        threadId: "renewal",
+        from: "Nora Patel <nora@northwind.com>",
+        subject: "Renewal terms",
+      }),
+    ]);
+    const pricing = thread("pricing", [
+      message({
+        threadId: "pricing",
+        from: "Nora Patel <nora@northwind.com>",
+        subject: "Pricing sheet",
+      }),
+    ]);
+    vi.mocked(fetchCalendarEventsInWindow).mockRejectedValue(
+      new Error("calendar down"),
+    );
+
+    const { items } = await run(
+      mockProvider({
+        threads: { renewal: open },
+        withParticipant: { "nora@northwind.com": [pricing] },
+      }),
+      "renewal",
+    );
+
+    expect(items.map((i) => i.id)).toEqual(["pricing"]);
+  });
+
+  it("returns nothing, rather than failing, for a thread the provider can't find", async () => {
+    const provider = mockProvider({ threads: {} });
+    vi.mocked(provider.getThread).mockRejectedValue(new Error("Not Found"));
+
+    await expect(run(provider, "missing")).resolves.toEqual({ items: [] });
+  });
+
+  it("doesn't search mail for automated participants", async () => {
+    const open = thread("alert", [
+      message({
+        threadId: "alert",
+        from: "GitHub <notifications@github.com>",
+        subject: "Review requested",
+      }),
+    ]);
+    const provider = mockProvider({ threads: { alert: open } });
+
+    await run(provider, "alert");
+
+    expect(provider.getThreadsWithParticipant).not.toHaveBeenCalled();
+  });
+});
+
+function run(emailProvider: EmailProvider, threadId: string) {
+  return getThreadContext({
+    emailAccountId: "account-1",
+    userEmail: USER,
+    threadId,
+    emailProvider,
+    logger: createTestLogger(),
+    now: NOW,
+  });
+}
+
+function message(
+  overrides: Parameters<typeof getMockMessage>[0] & { threadId: string },
+) {
+  return {
+    ...getMockMessage({ to: USER, ...overrides }),
+    internalDate: String(NOW.getTime() - 86_400_000),
+  };
+}
+
+function thread(
+  id: string,
+  messages: ReturnType<typeof message>[],
+): EmailThread {
+  return { id, messages, snippet: messages[0]?.snippet ?? "" };
+}
+
+function mockProvider({
+  threads,
+  withParticipant = {},
+  search = [],
+}: {
+  threads: Record<string, EmailThread>;
+  withParticipant?: Record<string, EmailThread[]>;
+  search?: EmailThread[];
+}) {
+  return {
+    getThread: vi.fn(async (id: string) => threads[id]),
+    getThreadsWithParticipant: vi.fn(
+      async ({ participantEmail }: { participantEmail: string }) =>
+        withParticipant[participantEmail] ?? [],
+    ),
+    searchThreads: vi.fn(async () => ({ threads: search })),
+  } as unknown as EmailProvider & {
+    getThread: ReturnType<typeof vi.fn>;
+    getThreadsWithParticipant: ReturnType<typeof vi.fn>;
+    searchThreads: ReturnType<typeof vi.fn>;
+  };
+}

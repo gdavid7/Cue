@@ -69,6 +69,7 @@
     "@chat-adapter/state-memory": "4.28.1",
     "@chat-adapter/teams": "4.28.1",
     "@chat-adapter/telegram": "4.28.1",
+    "@cue/context": "workspace:*",
     "@date-fns/tz": "1.5.0",
     "@dub/analytics": "0.0.32",
     "@googleapis/calendar": "15.0.0",

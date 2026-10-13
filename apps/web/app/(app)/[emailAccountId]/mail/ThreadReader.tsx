@@ -7,8 +7,13 @@ import {
   type ReactNode,
 } from "react";
 import dynamic from "next/dynamic";
+import { useLocalStorage } from "usehooks-ts";
 import { AlertCircleIcon, Loader2Icon, MailIcon } from "lucide-react";
 import { ReaderToolbar } from "@/app/(app)/[emailAccountId]/mail/ReaderToolbar";
+import {
+  ThreadContextPanel,
+  ThreadContextRail,
+} from "@/app/(app)/[emailAccountId]/mail/ThreadContextPanel";
 import { MailReaderSurface } from "@inboxzero/mail-ui/MailReaderSurface";
 import { isThreadStarred } from "@/app/(app)/[emailAccountId]/mail/star-state";
 import { useThreadTranslation } from "@/app/(app)/[emailAccountId]/mail/use-thread-translation";
@@ -39,9 +44,9 @@ const SenderContextPanel = dynamic(
 
 /**
  * Below this the reader would be squeezed too far by a pane beside it, so the
- * sender profile slides over the reader instead.
+ * sender profile slides over the reader instead, and relevant context is left out.
  */
-const INLINE_SENDER_CONTEXT_MIN_WIDTH = 880;
+const INLINE_SIDE_PANEL_MIN_WIDTH = 880;
 
 export type ThreadReaderProps = {
   enableMessageNavigation: boolean;
@@ -125,6 +130,11 @@ export function ThreadReader({
     senderEmail: string;
     senderName: string;
   } | null>(null);
+  // Remembered across threads: the reader remounts for each one.
+  const [threadContextHidden, setThreadContextHidden] = useLocalStorage(
+    "cue-thread-context-hidden",
+    false,
+  );
   const [readerRef, readerWidth] = useElementWidth();
   const { emailAccountId } = useAccount();
   const hiddenDraftMessageIds = useHiddenDraftMessageIds(emailAccountId);
@@ -223,11 +233,23 @@ export function ThreadReader({
             senderEmail={senderContext.senderEmail}
             senderName={senderContext.senderName}
             variant={
-              readerWidth >= INLINE_SENDER_CONTEXT_MIN_WIDTH
-                ? "inline"
-                : "sheet"
+              readerWidth >= INLINE_SIDE_PANEL_MIN_WIDTH ? "inline" : "sheet"
             }
           />
+        ) : emailAccountId &&
+          threadId &&
+          // Waits for keyboard navigation to settle before fetching.
+          detailSelectionSettled &&
+          readerWidth >= INLINE_SIDE_PANEL_MIN_WIDTH ? (
+          threadContextHidden ? (
+            <ThreadContextRail onOpen={() => setThreadContextHidden(false)} />
+          ) : (
+            <ThreadContextPanel
+              emailAccountId={emailAccountId}
+              onClose={() => setThreadContextHidden(true)}
+              threadId={threadId}
+            />
+          )
         ) : null
       }
     >
