@@ -6,6 +6,7 @@ import { LoginForm } from "@/app/(landing)/login/LoginForm";
 import {
   getEmailAlreadyLinkedDescription,
   getRequiresReconsentDescription,
+  getSignInSupportText,
 } from "@/app/(landing)/login/messages";
 import { env } from "@/env";
 import { auth } from "@/utils/auth";
@@ -20,7 +21,6 @@ import { MutedText } from "@/components/Typography";
 import { normalizeInternalPath } from "@/utils/path";
 import {
   BRAND_NAME,
-  SUPPORT_EMAIL,
   getBrandTitle,
   getPossessiveBrandName,
 } from "@/utils/branding";
@@ -183,7 +183,7 @@ function ErrorAlert({ error }: { error: string }) {
       <AlertBasic
         variant="destructive"
         title="Error logging in"
-        description={`There was an error logging in. Please try logging in again. If this error persists please contact support at ${SUPPORT_EMAIL}`}
+        description={`There was an error logging in. Please try logging in again. ${getSignInSupportText()}`}
       />
       <Suspense>
         <CrispChatLoggedOutVisible />

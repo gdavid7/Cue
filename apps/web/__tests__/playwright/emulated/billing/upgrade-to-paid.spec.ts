@@ -23,7 +23,7 @@ test.afterEach(async () => {
   await resetBillingState();
 });
 
-test("starts a trial from the post-onboarding upgrade page", async ({
+test("starts a trial from the upgrade page and returns to mail", async ({
   page,
 }) => {
   // The upgrade page sends signed-out visitors to /login. It can only tell the
@@ -45,7 +45,7 @@ test("starts a trial from the post-onboarding upgrade page", async ({
 
   await payOnStripeCheckout(page, STARTER_TIER);
 
-  await expect(page).toHaveURL(/\/setup(?:\?.*)?$/, { timeout: 60_000 });
+  await expect(page).toHaveURL(/\/mail(?:\?.*)?$/, { timeout: 60_000 });
   await expect.poll(getPremiumBillingState, { timeout: 60_000 }).toMatchObject({
     stripeSubscriptionStatus: "trialing",
     tier: STARTER_ANNUALLY_TIER_COLUMN,

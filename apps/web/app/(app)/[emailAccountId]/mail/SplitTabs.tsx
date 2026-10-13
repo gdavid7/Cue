@@ -70,8 +70,10 @@ export function SplitTabs({
         // Padded to sit under the toolbar's search field rather than against
         // the column edge, and ruled off so the tabs read as a header for the
         // list instead of crowding the first row. On a phone they scroll
-        // sideways: a second row of tabs pushes the mail down.
-        "flex flex-wrap items-center gap-1 border-border border-b px-3 pb-2 max-lg:flex-nowrap max-lg:overflow-x-auto max-lg:[scrollbar-width:none] [&>*]:shrink-0",
+        // sideways: a second row of tabs pushes the mail down. The right edge
+        // fades so a cut-off tab reads as "more this way", and the extra end
+        // padding lets the last tab scroll clear of the fade.
+        "flex flex-wrap items-center gap-1 border-border border-b px-3 pb-2 max-lg:flex-nowrap max-lg:overflow-x-auto max-lg:pr-8 max-lg:[mask-image:linear-gradient(to_right,black_calc(100%_-_2rem),transparent)] max-lg:[scrollbar-width:none] [&>*]:shrink-0",
         className,
       )}
     >

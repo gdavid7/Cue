@@ -3,7 +3,7 @@
 import { Calendar, CheckIcon } from "lucide-react";
 import { PageHeading, TypographyP } from "@/components/Typography";
 import { useCalendars } from "@/hooks/useCalendars";
-import { IconCircle } from "@/app/(app)/[emailAccountId]/onboarding/IconCircle";
+import { IconCircle } from "@/components/IconCircle";
 import { ConnectCalendar } from "@/app/(app)/[emailAccountId]/calendars/ConnectCalendar";
 import { Button } from "@/components/ui/button";
 import { useAccount } from "@/providers/EmailAccountProvider";

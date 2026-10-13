@@ -316,24 +316,6 @@ const categoryAction = z.enum([
 ]);
 export type CategoryAction = z.infer<typeof categoryAction>;
 
-const categoryConfig = z.object({
-  action: categoryAction.nullish(),
-  hasDigest: z.boolean().nullish(),
-  name: z
-    .string()
-    .trim()
-    .min(1, "Please enter a name")
-    .max(40, "Please keep names under 40 characters"),
-  description: z.string(),
-  key: zodSystemRule.nullable(),
-});
-export type CategoryConfig = z.infer<typeof categoryConfig>;
-
-export const createRulesOnboardingBody = z.array(categoryConfig);
-export type CreateRulesOnboardingBody = z.infer<
-  typeof createRulesOnboardingBody
->;
-
 export const toggleRuleBody = z
   .object({
     ruleId: z.string().optional(),

@@ -1,43 +1,35 @@
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { registerUtmTracking } from "@/app/(landing)/welcome/utms";
 import { auth } from "@/utils/auth";
 import prisma from "@/utils/prisma";
 import { redirectToEmailAccountPath } from "@/utils/account";
-import { isPremiumRecord, premiumEntitlementSelect } from "@/utils/premium";
 
-export default async function WelcomeRedirectPage(props: {
-  searchParams: Promise<{ force?: boolean; mode?: string }>;
-}) {
-  const searchParams = await props.searchParams;
+export default async function WelcomeRedirectPage() {
   const session = await auth();
 
   if (!session?.user) redirect("/login");
 
   const user = await prisma.user.findUnique({
     where: { id: session.user.id },
-    select: {
-      completedOnboardingAt: true,
-      premiumId: true,
-    },
+    select: { completedOnboardingAt: true },
   });
 
   // Session exists but user doesn't - invalid state, log out
   if (!user) redirect("/logout");
-  if (searchParams.force) redirect("/onboarding");
-  if (user.completedOnboardingAt) {
-    // Cue opens on the inbox: every email in order, with insights added.
-    await redirectToEmailAccountPath("/mail");
-  }
 
-  if (user.premiumId) {
-    const premium = await prisma.premium.findUnique({
-      where: { id: user.premiumId },
-      select: premiumEntitlementSelect,
+  // Cue's first run happens in the inbox itself, so arriving there is what
+  // completes onboarding.
+  if (!user.completedOnboardingAt) {
+    registerUtmTracking({
+      authPromise: Promise.resolve(session),
+      cookieStore: await cookies(),
     });
-
-    if (isPremiumRecord(premium)) {
-      await redirectToEmailAccountPath("/setup");
-    }
+    await prisma.user.updateMany({
+      where: { id: session.user.id, completedOnboardingAt: null },
+      data: { completedOnboardingAt: new Date() },
+    });
   }
 
-  redirect("/onboarding");
+  await redirectToEmailAccountPath("/mail");
 }

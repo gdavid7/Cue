@@ -8,7 +8,7 @@ import { PageHeading, TypographyP } from "@/components/Typography";
 import { Button } from "@/components/ui/button";
 import { LoadingContent } from "@/components/LoadingContent";
 import { toastSuccess, toastError } from "@/components/Toast";
-import { IconCircle } from "@/app/(app)/[emailAccountId]/onboarding/IconCircle";
+import { IconCircle } from "@/components/IconCircle";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useCalendarUpcomingEvents } from "@/hooks/useCalendarUpcomingEvents";
 import { sendBriefAction } from "@/utils/actions/meeting-briefs";

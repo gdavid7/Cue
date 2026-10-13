@@ -72,13 +72,9 @@ export function SideNavWithTopNav({
   // The mail screen ships its own sidebar, so this one would be a second copy.
   const isMailRoute = pathname.includes("/mail");
 
-  // Ugly code. May change the onboarding path later so we don't need to do this.
-  // Only return children for the onboarding or onboarding-brief pages: /[emailAccountId]/onboarding or /[emailAccountId]/onboarding-brief
+  // The meeting briefs onboarding (/[emailAccountId]/onboarding-brief) is full screen.
   const segments = pathname.split("/").filter(Boolean);
-  if (
-    segments.length === 2 &&
-    (segments[1] === "onboarding" || segments[1] === "onboarding-brief")
-  )
+  if (segments.length === 2 && segments[1] === "onboarding-brief")
     return children;
 
   return (

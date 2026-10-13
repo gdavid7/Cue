@@ -3,16 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
   findUser: vi.fn(),
-  findPremium: vi.fn(),
+  updateUsers: vi.fn(),
   redirectToEmailAccountPath: vi.fn((path: string) => {
     throw new Error(`account-redirect:${path}`);
   }),
   redirect: vi.fn((url: string) => {
     throw new Error(`redirect:${url}`);
   }),
-  env: {
-    NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS: false,
-  },
+  registerUtmTracking: vi.fn(),
 }));
 
 vi.mock("@/utils/auth", () => ({
@@ -24,12 +22,16 @@ vi.mock("@/utils/prisma", () => ({
     user: {
       findUnique: (...args: Parameters<typeof mocks.findUser>) =>
         mocks.findUser(...args),
-    },
-    premium: {
-      findUnique: (...args: Parameters<typeof mocks.findPremium>) =>
-        mocks.findPremium(...args),
+      updateMany: (...args: Parameters<typeof mocks.updateUsers>) =>
+        mocks.updateUsers(...args),
     },
   },
+}));
+
+vi.mock("next/headers", () => ({ cookies: async () => ({}) }));
+
+vi.mock("@/app/(landing)/welcome/utms", () => ({
+  registerUtmTracking: mocks.registerUtmTracking,
 }));
 
 vi.mock("next/navigation", () => ({
@@ -41,11 +43,6 @@ vi.mock("@/utils/account", () => ({
     mocks.redirectToEmailAccountPath(path),
 }));
 
-vi.mock("@/env", () => ({
-  env: mocks.env,
-}));
-
-import { premiumEntitlementSelect } from "@/utils/premium";
 import WelcomeRedirectPage from "./page";
 
 describe("WelcomeRedirectPage", () => {
@@ -54,113 +51,38 @@ describe("WelcomeRedirectPage", () => {
     mocks.auth.mockResolvedValue({ user: { id: "user-1" } });
   });
 
-  it("sends completed web users to their inbox without loading premium", async () => {
+  it("sends a new user straight to their inbox and marks onboarding complete", async () => {
+    mocks.findUser.mockResolvedValue({ completedOnboardingAt: null });
+
+    await expect(WelcomeRedirectPage()).rejects.toThrow(
+      "account-redirect:/mail",
+    );
+
+    expect(mocks.updateUsers).toHaveBeenCalledWith({
+      where: { id: "user-1", completedOnboardingAt: null },
+      data: { completedOnboardingAt: expect.any(Date) },
+    });
+    expect(mocks.registerUtmTracking).toHaveBeenCalledTimes(1);
+    expect(mocks.redirect).not.toHaveBeenCalled();
+  });
+
+  it("sends a returning user to their inbox without touching the user row", async () => {
     mocks.findUser.mockResolvedValue({
       completedOnboardingAt: new Date("2026-01-01T00:00:00.000Z"),
-      premiumId: "premium-1",
     });
 
-    await expect(
-      WelcomeRedirectPage({ searchParams: Promise.resolve({}) }),
-    ).rejects.toThrow("account-redirect:/mail");
+    await expect(WelcomeRedirectPage()).rejects.toThrow(
+      "account-redirect:/mail",
+    );
 
-    expect(mocks.findPremium).not.toHaveBeenCalled();
+    expect(mocks.updateUsers).not.toHaveBeenCalled();
+    expect(mocks.registerUtmTracking).not.toHaveBeenCalled();
   });
 
-  it("sends completed mail-mode users to mail without loading premium", async () => {
-    mocks.findUser.mockResolvedValue({
-      completedOnboardingAt: new Date("2026-01-01T00:00:00.000Z"),
-      premiumId: "premium-1",
-    });
+  it("sends signed-out visitors to login", async () => {
+    mocks.auth.mockResolvedValue(null);
 
-    await expect(
-      WelcomeRedirectPage({
-        searchParams: Promise.resolve({ mode: "mail" }),
-      }),
-    ).rejects.toThrow("account-redirect:/mail");
-
-    expect(mocks.findPremium).not.toHaveBeenCalled();
-  });
-
-  it("sends mobile-paid users with active Apple premium to setup", async () => {
-    mocks.findUser.mockResolvedValue({
-      completedOnboardingAt: null,
-      premiumId: "premium-1",
-    });
-    mocks.findPremium.mockResolvedValue({
-      appleExpiresAt: new Date("2099-07-01T00:00:00.000Z"),
-      appleRevokedAt: null,
-      appleSubscriptionStatus: "ACTIVE",
-      lemonSqueezyRenewsAt: null,
-      stripeSubscriptionStatus: null,
-      tier: "STARTER_MONTHLY",
-    });
-
-    await expect(
-      WelcomeRedirectPage({ searchParams: Promise.resolve({}) }),
-    ).rejects.toThrow("account-redirect:/setup");
-
-    expect(mocks.findUser).toHaveBeenCalledWith({
-      where: { id: "user-1" },
-      select: {
-        completedOnboardingAt: true,
-        premiumId: true,
-      },
-    });
-    expect(mocks.findPremium).toHaveBeenCalledWith({
-      where: { id: "premium-1" },
-      select: premiumEntitlementSelect,
-    });
-    expect(mocks.redirectToEmailAccountPath).toHaveBeenCalledWith("/setup");
-  });
-
-  it("keeps incomplete mail-mode users without premium in onboarding", async () => {
-    mocks.findUser.mockResolvedValue({
-      completedOnboardingAt: null,
-      premiumId: null,
-    });
-
-    await expect(
-      WelcomeRedirectPage({
-        searchParams: Promise.resolve({ mode: "mail" }),
-      }),
-    ).rejects.toThrow("redirect:/onboarding");
-
-    expect(mocks.findPremium).not.toHaveBeenCalled();
-  });
-
-  it("keeps incomplete users with expired premium in onboarding", async () => {
-    mocks.findUser.mockResolvedValue({
-      completedOnboardingAt: null,
-      premiumId: "premium-1",
-    });
-    mocks.findPremium.mockResolvedValue({
-      appleExpiresAt: new Date("2020-07-01T00:00:00.000Z"),
-      appleRevokedAt: null,
-      appleSubscriptionStatus: "EXPIRED",
-      lemonSqueezyRenewsAt: null,
-      stripeSubscriptionStatus: null,
-      tier: "STARTER_MONTHLY",
-    });
-
-    await expect(
-      WelcomeRedirectPage({ searchParams: Promise.resolve({}) }),
-    ).rejects.toThrow("redirect:/onboarding");
-  });
-
-  it("honors forced onboarding for premium users", async () => {
-    mocks.findUser.mockResolvedValue({
-      completedOnboardingAt: null,
-      premiumId: "premium-1",
-    });
-
-    await expect(
-      WelcomeRedirectPage({
-        searchParams: Promise.resolve({ force: true }),
-      }),
-    ).rejects.toThrow("redirect:/onboarding");
-
-    expect(mocks.findPremium).not.toHaveBeenCalled();
-    expect(mocks.redirectToEmailAccountPath).not.toHaveBeenCalled();
+    await expect(WelcomeRedirectPage()).rejects.toThrow("redirect:/login");
+    expect(mocks.findUser).not.toHaveBeenCalled();
   });
 });

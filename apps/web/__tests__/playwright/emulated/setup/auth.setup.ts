@@ -16,7 +16,7 @@ const authorizeUrl =
 test(`${playwrightMailProvider} emulator signs in and creates an app account`, async ({
   page,
 }) => {
-  await page.goto("/login?next=%2Fwelcome-redirect%3Fforce%3Dtrue", {
+  await page.goto("/login?next=%2Fwelcome-redirect", {
     waitUntil: "domcontentloaded",
   });
   await expect(page.getByRole("heading", { name: "Sign In" })).toBeVisible();
@@ -29,7 +29,7 @@ test(`${playwrightMailProvider} emulator signs in and creates an app account`, a
       },
       body: JSON.stringify({
         provider,
-        callbackURL: "/welcome-redirect?force=true",
+        callbackURL: "/welcome-redirect",
         errorCallbackURL: "/login/error",
       }),
     });

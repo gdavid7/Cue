@@ -1,4 +1,15 @@
-import { BRAND_NAME, SUPPORT_EMAIL } from "@/utils/branding";
+import { env } from "@/env";
+import { BRAND_NAME } from "@/utils/branding";
+
+/**
+ * Sign-in problems point at this deployment's own support. The support email
+ * still defaults to the upstream project's address, so it isn't offered here.
+ */
+export function getSignInSupportText() {
+  return env.NEXT_PUBLIC_CRISP_WEBSITE_ID
+    ? "If this keeps happening, use the support chat."
+    : `If this keeps happening, contact the ${BRAND_NAME} team.`;
+}
 
 export function getRequiresReconsentDescription(options?: {
   includeSupportText?: boolean;
@@ -7,7 +18,7 @@ export function getRequiresReconsentDescription(options?: {
 
   if (!options?.includeSupportText) return description;
 
-  return `${description} If this error persists please contact support at ${SUPPORT_EMAIL}`;
+  return `${description} ${getSignInSupportText()}`;
 }
 
 export function getEmailAlreadyLinkedDescription(options?: {
@@ -17,5 +28,5 @@ export function getEmailAlreadyLinkedDescription(options?: {
 
   if (!options?.includeSupportText) return description;
 
-  return `${description} You can use the support chat or email us at ${SUPPORT_EMAIL}.`;
+  return `${description} ${getSignInSupportText()}`;
 }

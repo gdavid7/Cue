@@ -62,10 +62,6 @@ import {
   shouldShowSystemRule,
   sortRulesByCanonicalOrder,
 } from "@/utils/rule/sort";
-import {
-  STEP_KEYS,
-  getOnboardingStepHref,
-} from "@/app/(app)/[emailAccountId]/onboarding/onboardingFlow";
 
 export function Rules({
   showAddRuleButton = true,
@@ -413,7 +409,7 @@ export function Rules({
               </TableBody>
             </Table>
           ) : (
-            <NoRules />
+            <NoRules onCreateRule={onCreateRule} />
           )}
         </LoadingContent>
       </Card>
@@ -473,20 +469,14 @@ export function ActionBadges({
   );
 }
 
-function NoRules() {
-  const { emailAccountId } = useAccount();
-
+function NoRules({ onCreateRule }: { onCreateRule: () => void }) {
   return (
     <CardHeader>
       <CardDescription className="flex flex-col items-center gap-4 py-20">
         You don't have any rules yet.
         <div>
-          <Button asChild size="sm">
-            <Link
-              href={getOnboardingStepHref(emailAccountId, STEP_KEYS.LABELS)}
-            >
-              Set up default rules
-            </Link>
+          <Button size="sm" onClick={onCreateRule}>
+            Add Rule
           </Button>
         </div>
       </CardDescription>

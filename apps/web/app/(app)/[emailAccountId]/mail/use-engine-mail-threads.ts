@@ -100,6 +100,13 @@ export function useEngineMailThreads({
     isLoadingMore: mailbox.isLoadingMore,
     loadMore: mailbox.loadMore,
     coverageComplete: isMetadataCoverageComplete(mailbox.data?.coverage ?? []),
+    /** No sync of this mailbox has finished yet, so an empty list isn't final. */
+    isFirstSync:
+      enabled &&
+      Boolean(client) &&
+      !mailbox.data?.coverage.some(
+        (coverage) => coverage.lastCompletedSyncAtMs != null,
+      ),
     failedAccountIds,
     labelsByAccount: NO_LABELS_BY_ACCOUNT,
     refetch: async () => {
