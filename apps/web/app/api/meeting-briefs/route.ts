@@ -8,7 +8,7 @@ import { getPremiumUserFilter } from "@/utils/premium";
 import { processMeetingBriefings } from "@/utils/meeting-briefs/process";
 import { runWithBoundedConcurrency } from "@/utils/async";
 
-export const maxDuration = 800;
+export const maxDuration = 300;
 const MEETING_BRIEFING_ACCOUNT_CONCURRENCY = 5;
 
 export const GET = withError("meeting-briefs", async (request) => {

@@ -14,7 +14,7 @@ const STOP_CHANNEL = "assistant-chat:stop";
 const SUBSCRIBE_TIMEOUT_MS = 2000;
 // The chat route's maxDuration. A marker older than this belongs to a run whose
 // instance died before it could clear it.
-const MAX_RUN_MS = 800_000;
+const MAX_RUN_MS = 300_000;
 const logger = createScopedLogger("assistant-chat-run");
 
 declare global {

@@ -11,7 +11,7 @@ import { runWithBoundedConcurrency } from "@/utils/async";
 import { isVercelQueueDispatchEnabled } from "@/utils/queue/vercel";
 import { getEligibleFollowUpReminderEmailAccountIds } from "@/utils/follow-up/process";
 
-export const maxDuration = 800;
+export const maxDuration = 300;
 const FOLLOW_UP_REMINDER_ACCOUNT_PATH = "/api/follow-up-reminders/account";
 const FOLLOW_UP_REMINDER_ACCOUNT_TOPIC = "follow-up-reminders-account";
 const INTERNAL_DISPATCH_CONCURRENCY = 10;
