@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildCueDemoConnectorData } from "@/__tests__/fixtures/inboxes/cue-demo-inbox";
-import { composioProvider } from "@/utils/mcp/providers/composio";
+import {
+  composioProvider,
+  uploadComposioFile,
+} from "@/utils/mcp/providers/composio";
 import {
   searchCanvas,
   searchGoogleDrive,
@@ -120,5 +123,30 @@ describe("Composio emulator with the Cue demo data", () => {
     await expect(searchSlack(execute, search(["pricing"]))).rejects.toThrow(
       "No active slack connection",
     );
+  });
+});
+
+describe("Composio emulator file uploads", () => {
+  it("saves an uploaded attachment to Drive, where search then finds it", async () => {
+    const file = await uploadComposioFile({
+      app: "googledrive",
+      tool: "GOOGLEDRIVE_UPLOAD_FILE",
+      filename: "Milestone 2 rubric.pdf",
+      mimetype: "application/pdf",
+      content: Buffer.from("%PDF-1.4"),
+    });
+    const saved = await executor("googledrive")("GOOGLEDRIVE_UPLOAD_FILE", {
+      file_to_upload: file,
+    });
+
+    expect(saved).toMatchObject({
+      name: "Milestone 2 rubric.pdf",
+      webViewLink: expect.stringContaining("drive.google.com"),
+    });
+    const found = await searchGoogleDrive(
+      executor("googledrive"),
+      search(["rubric"]),
+    );
+    expect(found.map((item) => item.title)).toContain("Milestone 2 rubric.pdf");
   });
 });

@@ -63,6 +63,7 @@ type RequestBody = {
   auth_config?: { id?: string; name?: string };
   connected_account_id?: string;
   connection?: { user_id?: string };
+  filename?: string;
   toolkit?: { slug?: string };
 };
 
@@ -118,6 +119,31 @@ export async function createComposioEmulator(
       response_data: canvasEvents,
     }),
     SLACK_SEARCH_MESSAGES: () => ({ messages: { matches: [] } }),
+    // A saved file joins the drive, so it can turn up as context afterwards.
+    GOOGLEDRIVE_UPLOAD_FILE: (args) => {
+      const file = uploadedFile(args.file_to_upload, "drive");
+      driveFiles.push({
+        id: file.id,
+        name: file.name,
+        mimeType: file.mimetype,
+        modifiedTime: new Date().toISOString(),
+        webViewLink: `https://drive.google.com/file/d/${file.id}/view`,
+        owners: [],
+      });
+      return {
+        id: file.id,
+        name: file.name,
+        webViewLink: `https://drive.google.com/file/d/${file.id}/view`,
+      };
+    },
+    ONE_DRIVE_ONEDRIVE_UPLOAD_FILE: (args) => {
+      const file = uploadedFile(args.file, "onedrive");
+      return {
+        id: file.id,
+        name: file.name,
+        webUrl: `https://onedrive.live.com/?id=${file.id}`,
+      };
+    },
   };
 
   const server = createServer((request, response) => {
@@ -131,9 +157,25 @@ export async function createComposioEmulator(
     const method = request.method ?? "GET";
     const path = url.pathname.replace(/^\/api\/v3/, "");
     const raw = await readBody(request);
+    // An upload's body is the file itself, not JSON.
+    if (path.startsWith("/__uploads/") && method === "PUT") {
+      response.writeHead(200);
+      return response.end();
+    }
     const body: RequestBody = raw ? JSON.parse(raw) : {};
 
     if (path === "/health") return respondJson(response, 200, { ok: true });
+
+    // Files reach tools through Composio's storage: request a slot, then PUT.
+    if (path === "/files/upload/request" && method === "POST") {
+      const key = `emulated/${++sequence}/${body.filename ?? "file"}`;
+      return respondJson(response, 200, {
+        key,
+        new_presigned_url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/__uploads/${encodeURIComponent(key)}`,
+        type: "new",
+        metadata: { storage_backend: "s3" },
+      });
+    }
 
     if (request.headers["x-api-key"] !== apiKey) {
       return respondJson(response, 401, {
@@ -229,6 +271,15 @@ export async function createComposioEmulator(
     apiKey,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
     url: `http://127.0.0.1:${port}/api/v3`,
+  };
+}
+
+function uploadedFile(value: unknown, prefix: string) {
+  const file = (value ?? {}) as { name?: string; mimetype?: string };
+  return {
+    id: `${prefix}-${Math.random().toString(36).slice(2, 10)}`,
+    name: file.name ?? "file",
+    mimetype: file.mimetype ?? "application/octet-stream",
   };
 }
 
