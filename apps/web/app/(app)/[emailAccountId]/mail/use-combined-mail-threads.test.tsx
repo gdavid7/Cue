@@ -1,0 +1,330 @@
+/** @vitest-environment jsdom */
+
+import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { describe, expect, it, vi } from "vitest";
+import type { MailClient } from "@inboxzero/mail-core/engine";
+import {
+  mailPredicateSchema,
+  type Coverage,
+  type MailboxView,
+  type QuerySnapshot,
+} from "@inboxzero/mail-core/queries";
+import { MailEngineProvider } from "@inboxzero/mail-react/MailEngineProvider";
+import {
+  labelNamesToAccountScopedPredicate,
+  useCombinedMailThreads,
+} from "./use-combined-mail-threads";
+
+const GMAIL = {
+  id: "gmail",
+  email: "ada@gmail.com",
+  name: null,
+  image: null,
+  provider: "google",
+};
+const OUTLOOK = {
+  id: "outlook",
+  email: "david@brightline.io",
+  name: null,
+  image: null,
+  provider: "microsoft",
+};
+
+describe("useCombinedMailThreads", () => {
+  it("starts the first sync for an included account this browser has never synced, and shows its mail once it lands", async () => {
+    const engine = fakeEngine(
+      mailboxSnapshot({
+        conversations: [conversation("gmail", "g-1")],
+        coverage: [
+          coverage("gmail", 10),
+          // The engine has never seen the Outlook account in this browser.
+          coverage("outlook", null),
+        ],
+      }),
+    );
+
+    const { result } = renderHook(
+      () =>
+        useCombinedMailThreads({
+          accounts: [GMAIL, OUTLOOK],
+          emailAccountId: "gmail",
+          enabled: true,
+          isUnread: false,
+        }),
+      { wrapper: engine.wrapper },
+    );
+
+    await waitFor(() =>
+      expect(engine.client.ensureAccount).toHaveBeenCalledWith({
+        accountId: "outlook",
+        provider: "microsoft",
+      }),
+    );
+    expect(engine.client.ensureAccount).not.toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "gmail" }),
+    );
+    await waitFor(() =>
+      expect(engine.client.requestSync).toHaveBeenCalledWith(["outlook"]),
+    );
+    expect(result.current.firstSyncAccounts).toEqual([OUTLOOK]);
+    expect(result.current.threads.map((thread) => thread.id)).toEqual(["g-1"]);
+
+    act(() =>
+      engine.push(
+        mailboxSnapshot({
+          conversations: [
+            conversation("outlook", "o-1"),
+            conversation("gmail", "g-1"),
+          ],
+          coverage: [coverage("gmail", 10), coverage("outlook", 20)],
+        }),
+      ),
+    );
+
+    expect(result.current.threads.map((thread) => thread.id)).toEqual([
+      "o-1",
+      "g-1",
+    ]);
+    expect(result.current.firstSyncAccounts).toEqual([]);
+  });
+
+  it("does not report an account whose connection failed as still loading", async () => {
+    const engine = fakeEngine(
+      mailboxSnapshot({
+        conversations: [],
+        coverage: [coverage("gmail", 10), coverage("outlook", null)],
+        connection: "blocked_auth",
+      }),
+      { blockedAccountIds: ["outlook"] },
+    );
+
+    const { result } = renderHook(
+      () =>
+        useCombinedMailThreads({
+          accounts: [GMAIL, OUTLOOK],
+          emailAccountId: "gmail",
+          enabled: true,
+          isUnread: false,
+        }),
+      { wrapper: engine.wrapper },
+    );
+
+    await waitFor(() =>
+      expect(result.current.failedAccountIds).toEqual(["outlook"]),
+    );
+    expect(result.current.firstSyncAccounts).toEqual([]);
+  });
+});
+
+describe("labelNamesToAccountScopedPredicate", () => {
+  it("resolves the same label name to each account's own label id", () => {
+    expect(
+      labelNamesToAccountScopedPredicate({
+        accountIds: ["acc-1", "acc-2"],
+        labelNames: ["Customers"],
+        labelsByAccount: {
+          "acc-1": {
+            "label-a": { id: "label-a", name: "Customers", type: "user" },
+          },
+          "acc-2": {
+            "label-b": { id: "label-b", name: "Customers", type: "user" },
+          },
+        },
+      }),
+    ).toEqual({
+      kind: "all",
+      predicates: [
+        { kind: "role", role: "inbox" },
+        {
+          kind: "any",
+          predicates: [
+            {
+              kind: "membership",
+              membership: "label",
+              id: "label-a",
+              accountId: "acc-1",
+            },
+            {
+              kind: "membership",
+              membership: "label",
+              id: "label-b",
+              accountId: "acc-2",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not let the same label id on another account match a different name", () => {
+    expect(
+      labelNamesToAccountScopedPredicate({
+        accountIds: ["acc-1", "acc-2"],
+        labelNames: ["Customers"],
+        labelsByAccount: {
+          "acc-1": {
+            shared: { id: "shared", name: "Customers", type: "user" },
+          },
+          "acc-2": {
+            shared: { id: "shared", name: "Suppliers", type: "user" },
+          },
+        },
+      }),
+    ).toEqual({
+      kind: "all",
+      predicates: [
+        { kind: "role", role: "inbox" },
+        {
+          kind: "any",
+          predicates: [
+            {
+              kind: "membership",
+              membership: "label",
+              id: "shared",
+              accountId: "acc-1",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("matches no rows while selected label mappings are unloaded", () => {
+    expect(
+      labelNamesToAccountScopedPredicate({
+        accountIds: ["acc-1"],
+        labelNames: ["Customers"],
+        labelsByAccount: {},
+      }),
+    ).toEqual({
+      kind: "all",
+      predicates: [
+        { kind: "role", role: "inbox" },
+        { kind: "any", predicates: [] },
+      ],
+    });
+  });
+
+  it("chunks more than 32 account labels into schema-valid OR groups", () => {
+    const accountIds = Array.from({ length: 40 }, (_, index) => `acc-${index}`);
+    const labelsByAccount = Object.fromEntries(
+      accountIds.map((accountId) => [
+        accountId,
+        {
+          label: { id: `label-${accountId}`, name: "Customers", type: "user" },
+        },
+      ]),
+    );
+
+    const predicate = labelNamesToAccountScopedPredicate({
+      accountIds,
+      labelNames: ["Customers"],
+      labelsByAccount,
+    });
+
+    expect(mailPredicateSchema.parse(predicate)).toEqual(predicate);
+  });
+});
+
+function fakeEngine(
+  initial: QuerySnapshot<MailboxView>,
+  { blockedAccountIds = [] }: { blockedAccountIds?: string[] } = {},
+) {
+  let snapshot = initial;
+  const listeners = new Set<() => void>();
+  const client = {
+    observeMailbox: vi.fn(() => ({
+      getSnapshot: () => snapshot,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      close: () => undefined,
+    })),
+    requestSync: vi.fn(async () => ({ status: "scheduled" as const })),
+    ensureAccount: vi.fn(async () => undefined),
+    getDiagnostics: vi.fn(async (accountId: string) => ({
+      accountId,
+      connection: blockedAccountIds.includes(accountId)
+        ? "blocked_auth"
+        : "ready",
+    })),
+  };
+  return {
+    client,
+    push(next: QuerySnapshot<MailboxView>) {
+      snapshot = next;
+      for (const listener of listeners) listener();
+    },
+    wrapper({ children }: { children: ReactNode }) {
+      return (
+        <MailEngineProvider client={client as unknown as MailClient}>
+          {children}
+        </MailEngineProvider>
+      );
+    },
+  };
+}
+
+function conversation(
+  accountId: string,
+  conversationId: string,
+): MailboxView["conversations"][number] {
+  return {
+    key: { accountId, conversationId },
+    subject: `Subject ${conversationId}`,
+    preview: "Preview",
+    from: "sender@example.com",
+    to: "me@example.com",
+    senders: ["sender@example.com"],
+    latestMessageAtMs: 1,
+    unread: false,
+    starred: false,
+    labelIds: [],
+    roles: ["inbox"],
+    pendingOperationIds: [],
+  };
+}
+
+function coverage(
+  accountId: string,
+  lastCompletedSyncAtMs: number | null,
+): Coverage {
+  return {
+    accountId,
+    scopeId: "primary",
+    metadata: lastCompletedSyncAtMs == null ? "partial" : "complete",
+    content: "not_requested",
+    indexedContent: "not_requested",
+    lastCompletedSyncAtMs,
+  };
+}
+
+function mailboxSnapshot({
+  conversations,
+  coverage,
+  connection = "ready",
+}: {
+  conversations: MailboxView["conversations"];
+  coverage: Coverage[];
+  connection?: MailboxView["connection"];
+}): QuerySnapshot<MailboxView> {
+  return {
+    status: "ready",
+    revision: { databaseEpoch: "e1", sequence: 1 },
+    refreshing: false,
+    error: null,
+    data: {
+      conversations,
+      counts: {
+        matchingConversations: conversations.length,
+        unreadConversations: 0,
+        extent: "local_coverage",
+      },
+      nextPage: null,
+      coverage,
+      connection,
+    },
+  };
+}

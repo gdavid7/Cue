@@ -14,17 +14,27 @@ const ACCOUNT_COLOR_CLASS_NAMES = [
   "bg-lime-600",
 ];
 
+export type AllInboxesAccount = CombinedListThread["account"] & {
+  provider: string;
+};
+
 /** Connected accounts the user has chosen to show in All inboxes, in account order. */
 export function getAllInboxesAccounts(
   emailAccounts: GetEmailAccountsResponse["emailAccounts"],
-): CombinedListThread["account"][] {
+): AllInboxesAccount[] {
   return emailAccounts
     .filter(
       (emailAccount) =>
         emailAccount.includeInAllAccounts &&
         emailAccount.account.disconnectedAt === null,
     )
-    .map(({ id, email, name, image }) => ({ id, email, name, image }));
+    .map(({ id, email, name, image, account }) => ({
+      id,
+      email,
+      name,
+      image,
+      provider: account.provider,
+    }));
 }
 
 export function getAccountColorClassName(index: number) {

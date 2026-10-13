@@ -308,6 +308,9 @@ export function createTabFollowerClient(input: {
         pageConnectivityOnline(),
         () => call("requestSync", [accountIds]) as Promise<WorkAdmission>,
       ),
+    ensureAccount: async (account) => {
+      await call("ensureAccount", [account]);
+    },
     ensureMessageContent: (key) => call("ensureMessageContent", [key]) as never,
     async getDiagnostics(accountId) {
       return call("getDiagnostics", [accountId]) as never;

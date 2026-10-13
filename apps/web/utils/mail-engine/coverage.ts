@@ -8,6 +8,19 @@ export function isMetadataCoverageComplete(coverage: Coverage[]) {
   );
 }
 
+/** Accounts with no finished sync in this local store, so their mail may not be here yet. */
+export function getFirstSyncAccountIds(
+  accountIds: string[],
+  coverage: Coverage[],
+) {
+  const syncedAccountIds = new Set(
+    coverage
+      .filter((item) => item.lastCompletedSyncAtMs != null)
+      .map((item) => item.accountId),
+  );
+  return accountIds.filter((accountId) => !syncedAccountIds.has(accountId));
+}
+
 export async function waitForMetadataCoverage(
   client: MailClient,
   accountId: string,

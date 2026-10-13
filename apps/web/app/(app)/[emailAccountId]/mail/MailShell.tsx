@@ -40,7 +40,10 @@ import { LabelPickerDialog } from "@/app/(app)/[emailAccountId]/mail/LabelPicker
 import { ThreadList } from "@/app/(app)/[emailAccountId]/mail/ThreadList";
 import { InboxStyleCard } from "@/app/(app)/[emailAccountId]/mail/InboxStylePicker";
 import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
-import { MailListPlaceholder } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
+import {
+  MailListPlaceholder,
+  MailLoadingNote,
+} from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
 import { useTranslateThread } from "@/app/(app)/[emailAccountId]/mail/use-thread-translation";
 import { printThread } from "@/app/(app)/[emailAccountId]/mail/print-thread";
@@ -436,6 +439,18 @@ export function MailShell() {
     : accountThreadState;
   const hasProviderResponse = searchSettled && providerState.hasRemoteResponse;
   const threads = searchSettled ? remoteThreads : EMPTY_SEARCH_THREADS;
+  const allInboxesFirstSyncMessage =
+    isAllAccounts && combinedThreadState.firstSyncAccounts.length
+      ? `Loading mail from ${combinedThreadState.firstSyncAccounts
+          .map((account) => account.email)
+          .join(", ")}…`
+      : null;
+  const isFirstSync = isAllAccounts
+    ? Boolean(allInboxesFirstSyncMessage)
+    : accountThreadState.isFirstSync;
+  const listPlaceholderMessage = isAllAccounts
+    ? (allInboxesFirstSyncMessage ?? "Loading your mail…")
+    : `Loading your mail from ${isOutlook ? "Outlook" : "Gmail"}…`;
   const searchViewIdentity = JSON.stringify([
     emailAccountId,
     isAllAccounts,
@@ -1600,6 +1615,9 @@ export function MailShell() {
                   check their connections.
                 </div>
               ) : null}
+              {allInboxesFirstSyncMessage && (threads.length || searchQuery) ? (
+                <MailLoadingNote message={allInboxesFirstSyncMessage} />
+              ) : null}
               <MailPanelErrorBoundary
                 resetKey={JSON.stringify([
                   emailAccountId,
@@ -1616,15 +1634,11 @@ export function MailShell() {
                       !threads.length &&
                       (isLoading ||
                         (!!searchQuery && !searchSettled) ||
-                        (!searchQuery &&
-                          !isAllAccounts &&
-                          accountThreadState.isFirstSync))
+                        (!searchQuery && isFirstSync))
                     }
                     loadingComponent={
                       searchQuery ? undefined : (
-                        <MailListPlaceholder
-                          providerName={isOutlook ? "Outlook" : "Gmail"}
-                        />
+                        <MailListPlaceholder message={listPlaceholderMessage} />
                       )
                     }
                     error={searchQuery ? undefined : error}
