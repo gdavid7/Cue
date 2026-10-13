@@ -1,14 +1,12 @@
-import { Client } from "@microsoft/microsoft-graph-client";
+import type { Client } from "@microsoft/microsoft-graph-client";
 import type {
   DriveItem,
   UploadSession,
 } from "@microsoft/microsoft-graph-types";
 import type { Logger } from "@/utils/logger";
 import { createScopedLogger } from "@/utils/logger";
-import {
-  fetchMicrosoftGraph,
-  getMicrosoftGraphClientOptions,
-} from "@/utils/outlook/oauth";
+import { createMicrosoftGraphClient } from "@/utils/outlook/client";
+import { fetchMicrosoftGraph } from "@/utils/outlook/oauth";
 import { isNotFoundError } from "@/utils/outlook/errors";
 import { uploadResumableChunks } from "@/utils/outlook/upload-session";
 import type {
@@ -34,13 +32,7 @@ export class OneDriveProvider implements DriveProvider {
       provider: "microsoft",
     });
 
-    this.client = Client.init({
-      authProvider: (done) => {
-        done(null, this.accessToken);
-      },
-      defaultVersion: "v1.0",
-      ...getMicrosoftGraphClientOptions(accessToken),
-    });
+    this.client = createMicrosoftGraphClient(() => this.accessToken);
   }
 
   toJSON() {

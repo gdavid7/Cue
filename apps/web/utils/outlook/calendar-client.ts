@@ -1,7 +1,7 @@
 import { env } from "@/env";
 import type { Logger } from "@/utils/logger";
+import { createMicrosoftGraphClient } from "@/utils/outlook/client";
 import {
-  getMicrosoftGraphClientOptions,
   getMicrosoftOauthAuthorizeUrl,
   requestMicrosoftToken,
 } from "@/utils/outlook/oauth";
@@ -9,24 +9,9 @@ import { CALENDAR_SCOPES } from "@/utils/outlook/scopes";
 import { isInvalidGrantError, SafeError } from "@/utils/error";
 import prisma from "@/utils/prisma";
 import { saveCalendarTokens } from "@/utils/calendar/save-calendar-tokens";
-import {
-  Client,
-  type AuthenticationProvider,
-} from "@microsoft/microsoft-graph-client";
+import type { Client } from "@microsoft/microsoft-graph-client";
 
 const TOKEN_REFRESH_BUFFER_MS = 10 * 60 * 1000;
-
-class CalendarAuthProvider implements AuthenticationProvider {
-  private readonly accessToken: string;
-
-  constructor(accessToken: string) {
-    this.accessToken = accessToken;
-  }
-
-  async getAccessToken(): Promise<string> {
-    return this.accessToken;
-  }
-}
 
 export function getCalendarOAuth2Url(state: string): string {
   if (!env.MICROSOFT_CLIENT_ID) {
@@ -65,11 +50,7 @@ export const getCalendarClientWithRefresh = async ({
     expiresAt > Date.now() + TOKEN_REFRESH_BUFFER_MS &&
     accessToken
   ) {
-    const authProvider = new CalendarAuthProvider(accessToken);
-    return Client.initWithMiddleware({
-      authProvider,
-      ...getMicrosoftGraphClientOptions(accessToken),
-    });
+    return createMicrosoftGraphClient(() => accessToken);
   }
 
   // Token is expired or missing, need to refresh
@@ -125,11 +106,8 @@ export const getCalendarClientWithRefresh = async ({
       });
     }
 
-    const authProvider = new CalendarAuthProvider(tokens.access_token);
-    return Client.initWithMiddleware({
-      authProvider,
-      ...getMicrosoftGraphClientOptions(tokens.access_token),
-    });
+    const refreshedToken: string = tokens.access_token;
+    return createMicrosoftGraphClient(() => refreshedToken);
   } catch (error) {
     if (isInvalidGrantError(error)) {
       logger.warn("Microsoft calendar authorization expired");

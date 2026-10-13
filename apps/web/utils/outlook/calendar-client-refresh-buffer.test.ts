@@ -1,16 +1,14 @@
-import { Client } from "@microsoft/microsoft-graph-client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockDeep } from "vitest-mock-extended";
 import type { CalendarConnection } from "@/generated/prisma/client";
 import { createTestLogger } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
+import { createMicrosoftGraphClient } from "@/utils/outlook/client";
 import { requestMicrosoftToken } from "@/utils/outlook/oauth";
 import { getCalendarClientWithRefresh } from "./calendar-client";
 
-vi.mock("@microsoft/microsoft-graph-client", () => ({
-  Client: {
-    initWithMiddleware: vi.fn(),
-  },
+vi.mock("@/utils/outlook/client", () => ({
+  createMicrosoftGraphClient: vi.fn(() => ({})),
 }));
 
 vi.mock("@/utils/prisma");
@@ -77,14 +75,8 @@ describe("getCalendarClientWithRefresh token buffer", () => {
         grant_type: "refresh_token",
       }),
     );
-    const options = vi.mocked(Client.initWithMiddleware).mock.calls[0][0];
-    expect(await options.authProvider.getAccessToken()).toBe(
-      "new-access-token",
-    );
-    expect(Client.initWithMiddleware).toHaveBeenCalledWith({
-      authProvider: expect.any(Object),
-      baseUrl: "http://localhost:4003/",
-    });
+    const getToken = vi.mocked(createMicrosoftGraphClient).mock.calls[0][0];
+    expect(getToken()).toBe("new-access-token");
   });
 
   it("reuses a cached token beyond the ten-minute buffer", async () => {
@@ -98,9 +90,7 @@ describe("getCalendarClientWithRefresh token buffer", () => {
 
     expect(requestMicrosoftToken).not.toHaveBeenCalled();
     expect(prisma.calendarConnection.updateMany).not.toHaveBeenCalled();
-    const options = vi.mocked(Client.initWithMiddleware).mock.calls[0][0];
-    expect(await options.authProvider.getAccessToken()).toBe(
-      "cached-access-token",
-    );
+    const getToken = vi.mocked(createMicrosoftGraphClient).mock.calls[0][0];
+    expect(getToken()).toBe("cached-access-token");
   });
 });

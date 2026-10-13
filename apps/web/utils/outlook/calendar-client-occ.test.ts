@@ -1,14 +1,11 @@
-import { Client } from "@microsoft/microsoft-graph-client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
 import { requestMicrosoftToken } from "@/utils/outlook/oauth";
 import { createTestLogger } from "@/__tests__/helpers";
 import { getCalendarClientWithRefresh } from "./calendar-client";
 
-vi.mock("@microsoft/microsoft-graph-client", () => ({
-  Client: {
-    initWithMiddleware: vi.fn(),
-  },
+vi.mock("@/utils/outlook/client", () => ({
+  createMicrosoftGraphClient: vi.fn(() => ({})),
 }));
 
 vi.mock("@/utils/prisma");
@@ -34,7 +31,6 @@ vi.mock("@/env", () => ({
 describe("getCalendarClientWithRefresh token save concurrency", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(Client.initWithMiddleware).mockReturnValue({} as any);
     vi.mocked(requestMicrosoftToken).mockResolvedValue({
       ok: true,
       json: vi.fn().mockResolvedValue({

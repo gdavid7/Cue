@@ -31,39 +31,8 @@ export class OutlookClient {
   constructor(accessToken: string, logger: Logger) {
     this.accessToken = accessToken;
     this.logger = logger;
-    const graphClientOptions = getMicrosoftGraphClientOptions(accessToken);
-    const fetchOptions = {
-      headers: {
-        Prefer: 'IdType="ImmutableId"',
-      },
-    };
-
-    if (graphClientOptions.baseUrl?.startsWith("http://")) {
-      const authProvider = {
-        getAccessToken: async () => this.accessToken,
-      };
-      const middleware =
-        MiddlewareFactory.getDefaultMiddlewareChain(authProvider);
-      middleware.splice(
-        1,
-        0,
-        new OutlookEmulatorUrlMiddleware(graphClientOptions.baseUrl),
-      );
-      this.client = Client.initWithMiddleware({
-        defaultVersion: graphClientOptions.defaultVersion,
-        fetchOptions,
-        middleware,
-      });
-      return;
-    }
-
-    this.client = Client.init({
-      authProvider: (done) => {
-        done(null, this.accessToken);
-      },
-      defaultVersion: "v1.0",
-      ...graphClientOptions,
-      fetchOptions,
+    this.client = createMicrosoftGraphClient(() => this.accessToken, {
+      Prefer: 'IdType="ImmutableId"',
     });
   }
 
@@ -150,6 +119,44 @@ class OutlookEmulatorUrlMiddleware implements Middleware {
       throw new Error("Outlook emulator middleware is incomplete");
     await this.next.execute(context);
   }
+}
+
+/**
+ * A Graph client for mail, calendar or files. Against a local emulator
+ * (an http base URL) requests are rewritten to it after the auth middleware,
+ * which only signs requests to Microsoft's own hosts.
+ */
+export function createMicrosoftGraphClient(
+  getAccessToken: () => string,
+  headers?: Record<string, string>,
+): Client {
+  const graphClientOptions = getMicrosoftGraphClientOptions(getAccessToken());
+  const fetchOptions = headers ? { headers } : undefined;
+
+  if (graphClientOptions.baseUrl?.startsWith("http://")) {
+    const middleware = MiddlewareFactory.getDefaultMiddlewareChain({
+      getAccessToken: async () => getAccessToken(),
+    });
+    middleware.splice(
+      1,
+      0,
+      new OutlookEmulatorUrlMiddleware(graphClientOptions.baseUrl),
+    );
+    return Client.initWithMiddleware({
+      defaultVersion: graphClientOptions.defaultVersion,
+      fetchOptions,
+      middleware,
+    });
+  }
+
+  return Client.init({
+    authProvider: (done) => {
+      done(null, getAccessToken());
+    },
+    defaultVersion: "v1.0",
+    ...graphClientOptions,
+    fetchOptions,
+  });
 }
 
 // Helper to create OutlookClient instance
