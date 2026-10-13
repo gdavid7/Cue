@@ -13,12 +13,12 @@ import { Button } from "@/components/ui/button";
 import { SystemType } from "@/generated/prisma/enums";
 import { useInboxInsights } from "@/hooks/useInboxInsights";
 import { useReplySuggestion } from "@/hooks/useReplySuggestion";
+import { useSuggestedReply } from "@/hooks/useSuggestedReply";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { extractEmailAddress, isSameEmailAddress } from "@/utils/email";
 import { GmailLabel } from "@/utils/gmail/label";
 import { getRuleLabel } from "@/utils/rule/consts";
-import { textToHtmlParagraphs } from "@/utils/string";
 
 /**
  * Write the suggested reply as soon as a conversation that needs one opens:
@@ -114,14 +114,26 @@ export function useReaderReplySuggestion({
     enabled: enabled && run,
   });
 
+  // Reopened with a draft: the suggestion Cue made for this message, if any,
+  // so a draft that is still Cue's text keeps saying so.
+  const { data: saved } = useSuggestedReply({
+    threadId,
+    emailAccountId,
+    enabled: enabled && !run && !latestIsFromUser && hasDraft,
+    cachedFor: latestId,
+  });
+  const latestSuggestion = suggestion ?? saved?.suggestion;
+  const verified =
+    latestSuggestion?.status === "suggested" ? latestSuggestion : undefined;
+
   const assist: ReplyAssist | null =
-    latest && suggestion?.status === "suggested"
+    latest && verified
       ? {
           messageId: latest.id,
-          suggestedBodyHtml: textToHtmlParagraphs(suggestion.reply),
-          footer: (
+          reply: verified.reply,
+          evidence: (
             <CheckedAgainst
-              citations={suggestion.citations}
+              citations={verified.citations}
               onOpenThread={onOpenThread}
             />
           ),

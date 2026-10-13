@@ -15,11 +15,15 @@ import type { ThreadInsightData } from "@/utils/inbox-insights/get-inbox-insight
 
 const mocks = vi.hoisted(() => ({
   useReplySuggestion: vi.fn(),
+  useSuggestedReply: vi.fn(),
   insights: undefined as Record<string, ThreadInsightData> | undefined,
 }));
 
 vi.mock("@/hooks/useReplySuggestion", () => ({
   useReplySuggestion: mocks.useReplySuggestion,
+}));
+vi.mock("@/hooks/useSuggestedReply", () => ({
+  useSuggestedReply: mocks.useSuggestedReply,
 }));
 vi.mock("@/hooks/useInboxInsights", () => ({
   useInboxInsights: () => ({ data: mocks.insights }),
@@ -43,6 +47,7 @@ describe("useReaderReplySuggestion", () => {
       phase: "idle",
       suggestion: undefined,
     });
+    mocks.useSuggestedReply.mockReturnValue({ data: undefined });
     mocks.insights = undefined;
   });
   afterEach(cleanup);
@@ -78,6 +83,36 @@ describe("useReaderReplySuggestion", () => {
     renderSuggestion([incoming("ask", ["INBOX"])]);
 
     expect(lastEnabled()).toBe(true);
+  });
+
+  // The draft Cue saved keeps its credit when the conversation is reopened.
+  it("brings back the suggestion behind a saved draft without writing a new one", () => {
+    mocks.useSuggestedReply.mockImplementation(({ enabled, cachedFor }) => ({
+      data:
+        enabled && cachedFor === "ask"
+          ? {
+              suggestion: {
+                status: "suggested",
+                reply: "See you Thursday.",
+                citations: [],
+              },
+            }
+          : undefined,
+    }));
+
+    const { result } = renderSuggestion([
+      incoming("ask", ["INBOX", "Label_to_reply"]),
+      {
+        ...incoming("draft", ["DRAFT"]),
+        headers: { from: "user@example.com" },
+      },
+    ] as ThreadMessage[]);
+
+    expect(lastEnabled()).toBe(false);
+    expect(result.current.assist).toMatchObject({
+      messageId: "ask",
+      reply: "See you Thursday.",
+    });
   });
 
   it("offers Reply while Cue is still checking", () => {

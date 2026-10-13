@@ -27,9 +27,11 @@ import {
 import {
   type ChangeEvent,
   type CSSProperties,
+  type ReactNode,
   useCallback,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -44,6 +46,7 @@ import { ButtonLoader } from "@/components/Loading";
 import { LoadingContent } from "@/components/LoadingContent";
 import { Tooltip } from "@/components/Tooltip";
 import { threadScheduledEmailsKey } from "@/components/email-list/ThreadDeliveryStatus";
+import { isUneditedSuggestion } from "@/components/email-list/reply-assist";
 import {
   hideSendingDraftMessages,
   upcomingScheduledEmailsKey,
@@ -198,8 +201,12 @@ type ComposeEmailFormProps = {
    * suggested. It is saved as a draft right away, like anything typed.
    */
   initialBodyHtml?: string;
-  /** A muted note after the reply's "Draft to …" line, e.g. who wrote it. */
-  summaryTag?: string;
+  /**
+   * Cue's verified reply to the message, when this composer may hold it.
+   * While the body is still exactly that text, the reply reads as ready and
+   * credits Cue, with what backs it.
+   */
+  suggestion?: { reply: string; evidence?: ReactNode };
   /**
    * Whether the composer takes focus when it opens. Off for one that opens on
    * its own, so keys meant as shortcuts aren't typed into it.
@@ -334,7 +341,7 @@ function ComposeEmailFormContent({
   initialProviderDraftId,
   initialDraftMissing,
   initialBodyHtml,
-  summaryTag,
+  suggestion,
   autoFocus = true,
 }: ComposeEmailFormProps & {
   localDraftIdentity?: ReplyDraftIdentity;
@@ -587,6 +594,14 @@ function ComposeEmailFormContent({
     };
   };
 
+  const [bodyHtml, setBodyHtml] = useState(initialDraft.editableHtml);
+  const suggestedReply = suggestion?.reply;
+  const isCueSuggestion = useMemo(
+    () =>
+      suggestedReply !== undefined &&
+      isUneditedSuggestion(bodyHtml, suggestedReply),
+    [bodyHtml, suggestedReply],
+  );
   // A reply reads as a draft once the mailbox holds a copy of it.
   const [isMailboxDraft, setIsMailboxDraft] = useState(
     Boolean(providerDraftMessageId || providerDraftId.current),
@@ -842,6 +857,7 @@ function ComposeEmailFormContent({
   };
 
   const handleEditorStateChange = (state: EmailEditorState) => {
+    setBodyHtml(editorRef.current?.getValue().editableHtml ?? "");
     removeUnusedInlineAttachments(state.inlineContentIds);
     if (!editorInitialized.current) {
       queueMicrotask(() => {
@@ -1571,13 +1587,12 @@ function ComposeEmailFormContent({
               onClick={openInlineReplyFields}
               className="flex min-w-0 items-center gap-1.5 rounded-sm text-left text-sm font-medium leading-5 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              {isMailboxDraft ? (
-                <span className="text-red-600 dark:text-red-400">Draft</span>
-              ) : (
-                <span>Reply</span>
-              )}
+              <ReplyStatus
+                isCueSuggestion={isCueSuggestion}
+                isMailboxDraft={isMailboxDraft}
+              />
               <span className="min-w-0 truncate">
-                to{" "}
+                {isCueSuggestion ? "for" : "to"}{" "}
                 {formatRecipientNames(
                   [
                     ...splitRecipientList(
@@ -1592,9 +1607,9 @@ function ComposeEmailFormContent({
               </span>
               <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
             </button>
-            {summaryTag ? (
+            {isCueSuggestion ? (
               <span className="shrink-0 text-muted-foreground text-xs">
-                {summaryTag}
+                · Suggested by Cue
               </span>
             ) : null}
             {popOutButton}
@@ -1850,6 +1865,7 @@ function ComposeEmailFormContent({
           )}
         </div>
       </div>
+      {isCueSuggestion && suggestion?.evidence}
       {providerAutosave.error && (
         <p role="alert" className="text-xs text-destructive">
           {providerAutosave.error}
@@ -2018,4 +2034,20 @@ function stripBrandingOutsideSignature(body: HTMLElement) {
   const html = stripBrandingSignatures(body.innerHTML);
   // A function replacer keeps "$" sequences in the signature literal.
   return html.replace("<!--signature-->", () => signature.outerHTML);
+}
+
+function ReplyStatus({
+  isCueSuggestion,
+  isMailboxDraft,
+}: {
+  isCueSuggestion: boolean;
+  isMailboxDraft: boolean;
+}) {
+  // Red marks words the user wrote and hasn't sent. Cue's untouched reply is
+  // waiting on a decision, not on unfinished writing.
+  if (isCueSuggestion)
+    return <span className="text-muted-foreground">Reply ready</span>;
+  if (isMailboxDraft)
+    return <span className="text-red-600 dark:text-red-400">Draft</span>;
+  return <span>Reply</span>;
 }

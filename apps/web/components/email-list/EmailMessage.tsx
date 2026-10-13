@@ -37,6 +37,7 @@ import { extractDraftComposerContent } from "@/utils/parse/extract-reply.client"
 import type { ReplyingToEmail } from "@/app/(app)/[emailAccountId]/compose/ComposeEmailForm";
 import { createReplyContent } from "@/utils/gmail/reply";
 import { cn } from "@/utils";
+import { textToHtmlParagraphs } from "@/utils/string";
 import { decodeSnippet } from "@/utils/gmail/decode";
 import { GmailLabel } from "@/utils/gmail/label";
 import { deleteDraftAction } from "@/utils/actions/mail";
@@ -852,17 +853,17 @@ function ReplyPanel({
   const { popOutReply } = useComposeModal();
   const replyTargetId = replyAnchor?.id ?? message.id;
   const replyAssist = useContext(ReplyAssistContext);
-  // Taken as the composer opens: a suggestion that lands after the user
-  // started their own reply must not label it as Cue's.
-  const [assist] = useState(() =>
+  const assist =
     replyAssist &&
     composeMode === "reply" &&
-    !draftMessage &&
     replyAssist.messageId === message.id
       ? replyAssist
-      : null,
+      : undefined;
+  // Taken as the composer opens: a suggestion that lands after the user
+  // started their own reply must not fill it, and a saved draft keeps its text.
+  const [suggestedBodyHtml] = useState(() =>
+    assist && !draftMessage ? textToHtmlParagraphs(assist.reply) : undefined,
   );
-  const [edited, setEdited] = useState(false);
   const draftSessionId = getReplyDraftSessionId(
     draftSessionMessageId ?? message.id,
     composeMode,
@@ -996,17 +997,14 @@ function ReplyPanel({
       className={cn(
         "mt-5",
         // Suggested text crossfades in rather than appearing all at once.
-        assist?.suggestedBodyHtml && "fade-in animate-in duration-150",
+        suggestedBodyHtml && "fade-in animate-in duration-150",
       )}
-      onInputCapture={() => setEdited(true)}
       ref={replyRef}
     >
       <ComposeEmailFormLazy
         autoFocus={autoFocus}
-        initialBodyHtml={assist?.suggestedBodyHtml}
-        summaryTag={
-          assist?.suggestedBodyHtml && !edited ? "Suggested by Cue" : undefined
-        }
+        initialBodyHtml={suggestedBodyHtml}
+        suggestion={assist}
         providerDraftMessageId={
           composeMode === "reply" ? draftMessage?.id : undefined
         }
@@ -1040,7 +1038,6 @@ function ReplyPanel({
         refetch={refetch}
         replyingToEmail={replyingToEmail}
       />
-      {assist?.footer ? <div className="mt-2">{assist.footer}</div> : null}
     </div>
   );
 }

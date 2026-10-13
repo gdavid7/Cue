@@ -139,8 +139,9 @@ export async function suggestReply({
   }
 
   // A new message changes the key, so a cached suggestion is never stale.
-  const cacheKey = `suggested-reply:v2:${emailAccountId}:${threadId}:${latest.id}`;
-  const webCacheKey = `suggested-reply-web:v2:${emailAccountId}:${threadId}:${latest.id}`;
+  const keyFor = { emailAccountId, threadId, messageId: latest.id };
+  const cacheKey = suggestionCacheKey(keyFor);
+  const webCacheKey = suggestionCacheKey({ ...keyFor, web: true });
   const cached = await getCached(searchWeb ? webCacheKey : cacheKey);
   if (cached) return cached;
 
@@ -432,6 +433,36 @@ export function renderSource(source: Source) {
   return `<source id="${source.id}" kind="${source.kind}">
 ${he.escape(source.text)}
 </source>`;
+}
+
+/**
+ * The reply Cue last worked out for a message, without working out a new
+ * one: the web pass's answer when there was one, else the first answer.
+ */
+export async function getCachedSuggestedReply(key: {
+  emailAccountId: string;
+  threadId: string;
+  messageId: string;
+}) {
+  const [web, plain] = await Promise.all([
+    getCached(suggestionCacheKey({ ...key, web: true })),
+    getCached(suggestionCacheKey(key)),
+  ]);
+  return web ?? plain;
+}
+
+function suggestionCacheKey({
+  emailAccountId,
+  threadId,
+  messageId,
+  web = false,
+}: {
+  emailAccountId: string;
+  threadId: string;
+  messageId: string;
+  web?: boolean;
+}) {
+  return `${web ? "suggested-reply-web" : "suggested-reply"}:v2:${emailAccountId}:${threadId}:${messageId}`;
 }
 
 function getCached(key: string) {
