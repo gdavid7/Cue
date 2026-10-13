@@ -98,7 +98,19 @@ async function markOnboardingComplete(email: string) {
            WHERE email = $1`,
           [email],
         );
-        if (account.rowCount === 1) return;
+        if (account.rowCount === 1) {
+          // The first-run "Which looks like your inbox?" card (hint id from
+          // getInboxStyleHintId) would shift every mail spec's list down.
+          await client.query(
+            `UPDATE "User" u
+             SET "dismissedHints" = array_append(u."dismissedHints", 'inbox-style:' || ea.id)
+             FROM "EmailAccount" ea
+             WHERE ea."userId" = u.id AND ea.email = $1
+               AND NOT ('inbox-style:' || ea.id = ANY(u."dismissedHints"))`,
+            [email],
+          );
+          return;
+        }
       }
       await new Promise((resolve) => setTimeout(resolve, 250));
     }

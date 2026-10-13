@@ -38,6 +38,8 @@ import { ListSenderCommands } from "@/app/(app)/[emailAccountId]/mail/ListSender
 import { extractEmailAddress } from "@/utils/email";
 import { LabelPickerDialog } from "@/app/(app)/[emailAccountId]/mail/LabelPickerDialog";
 import { ThreadList } from "@/app/(app)/[emailAccountId]/mail/ThreadList";
+import { InboxStyleCard } from "@/app/(app)/[emailAccountId]/mail/InboxStylePicker";
+import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
 import { useTranslateThread } from "@/app/(app)/[emailAccountId]/mail/use-thread-translation";
 import { printThread } from "@/app/(app)/[emailAccountId]/mail/print-thread";
@@ -171,6 +173,7 @@ export function MailShell() {
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [isDesktopApp, setIsDesktopApp] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isTourOpen, setIsTourOpen] = useState(false);
   const [labelPicker, setLabelPicker] = useState<{
     mode: "label" | "move";
     targets: ThreadSelection[];
@@ -1575,6 +1578,12 @@ export function MailShell() {
                   }
                   labelsByAccount={isAllAccounts ? labelsByAccount : undefined}
                 />
+              )}
+              {showSplitTabs && !isAllAccounts && (
+                <InboxStyleCard onDone={() => setIsTourOpen(true)} />
+              )}
+              {isTourOpen && (
+                <WhatsNewTour onClose={() => setIsTourOpen(false)} />
               )}
               {isAllAccounts && combinedThreadState.failedAccountIds.length ? (
                 <div className="border-border border-b bg-amber-50 px-3 py-2 text-amber-900 text-xs dark:bg-amber-950/30 dark:text-amber-200">
