@@ -27,7 +27,7 @@ import { deleteEmailAccountAction } from "@/utils/actions/user";
 import { toastSuccess, toastError } from "@/components/Toast";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { prefixPath } from "@/utils/path";
-import { AddAccount } from "@/app/(app)/accounts/AddAccount";
+import { AddAccount } from "@/components/AddAccount";
 import { PageHeader } from "@/components/PageHeader";
 import { PageWrapper } from "@/components/PageWrapper";
 import { logOut } from "@/utils/user";
