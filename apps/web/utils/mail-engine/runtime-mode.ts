@@ -19,6 +19,7 @@ export function shouldStartMailEngine(input: {
   if (segments.length === 2) {
     return [
       "mail",
+      "home",
       "compose",
       "bulk-archive",
       "quick-bulk-archive",

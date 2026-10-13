@@ -25,6 +25,12 @@ export function isInternalPath(path: string | null | undefined): boolean {
   return !!normalizeInternalPath(path);
 }
 
+/** Mail and Today share the mail screen's own sidebar and phone tab bar. */
+export function isMailShellPath(pathname: string) {
+  const section = pathname.split("/").filter(Boolean)[1];
+  return pathname.includes("/mail") || section === "home";
+}
+
 function hasDisallowedPathCharacter(path: string): boolean {
   for (const char of path) {
     if (char === "\\") return true;

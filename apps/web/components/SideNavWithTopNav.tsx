@@ -12,6 +12,7 @@ import {
 import { SideNav } from "@/components/SideNav";
 import { SidebarRight } from "@/components/SidebarRight";
 import { cn } from "@/utils";
+import { isMailShellPath } from "@/utils/path";
 
 const CrispWithNoSSR = dynamic(() => import("@/components/CrispChat"));
 
@@ -19,7 +20,7 @@ function ContentWrapper({ children }: { children: React.ReactNode }) {
   const { state } = useSidebar();
   const pathname = usePathname();
   const isAssistantRoute = pathname?.includes("/assistant");
-  const isMailRoute = pathname?.includes("/mail");
+  const isMailRoute = pathname ? isMailShellPath(pathname) : false;
   const isRightSidebarOpen =
     !isAssistantRoute && state.includes("chat-sidebar");
 
@@ -70,7 +71,7 @@ export function SideNavWithTopNav({
 
   const isAssistantRoute = pathname.includes("/assistant");
   // The mail screen ships its own sidebar, so this one would be a second copy.
-  const isMailRoute = pathname.includes("/mail");
+  const isMailRoute = isMailShellPath(pathname);
 
   // The meeting briefs onboarding (/[emailAccountId]/onboarding-brief) is full screen.
   const segments = pathname.split("/").filter(Boolean);

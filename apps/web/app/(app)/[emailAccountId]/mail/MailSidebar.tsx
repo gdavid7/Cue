@@ -344,7 +344,7 @@ export function MailSidebar({
           {todayHref ? (
             <NavRow
               href={todayHref}
-              active={false}
+              active={activeType === "today"}
               icon={<HomeIcon className="size-4 shrink-0" />}
               name="Today"
               count={null}

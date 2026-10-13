@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isInternalPath, normalizeInternalPath } from "./path";
+import { isInternalPath, isMailShellPath, normalizeInternalPath } from "./path";
 
 describe("isInternalPath", () => {
   it("should return true for valid internal paths", () => {
@@ -54,5 +54,14 @@ describe("normalizeInternalPath", () => {
   it("returns null for paths that resolve off-site", () => {
     expect(normalizeInternalPath("/\\example.com")).toBeNull();
     expect(normalizeInternalPath("/\t/example.com")).toBeNull();
+  });
+});
+
+describe("isMailShellPath", () => {
+  it("keeps Today inside the mail shell", () => {
+    expect(isMailShellPath("/account/mail")).toBe(true);
+    expect(isMailShellPath("/account/home")).toBe(true);
+    expect(isMailShellPath("/account/settings")).toBe(false);
+    expect(isMailShellPath("/account/assistant/home")).toBe(false);
   });
 });
