@@ -294,7 +294,12 @@ function useAccountNotifications() {
       });
 
       setNotification(null);
-      router.replace(pathname);
+      // Someone who just added a mailbox wants to see it with the rest.
+      router.replace(
+        successParam === "account_created_and_linked"
+          ? "/mail?accountScope=all"
+          : pathname,
+      );
     }
   }, [searchParams, router, pathname]);
 
