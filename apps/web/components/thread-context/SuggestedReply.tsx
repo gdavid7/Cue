@@ -345,7 +345,7 @@ function CitationRow({
     </div>
   );
   const className =
-    "block w-full rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60";
+    "block w-full rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted/60 active:bg-muted";
 
   if (source.threadId) {
     const threadId = source.threadId;

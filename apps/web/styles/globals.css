@@ -198,6 +198,56 @@
   font-variant-ligatures: none;
 }
 
+/* Motion follows Apple's fluid-interface defaults: a critically damped spring
+   (response 0.35s) to arrive and an ease-in to leave the way it came. Sampled
+   into `linear()` so menus, sheets and dialogs settle without overshoot. */
+:root {
+  --ease-spring: linear(
+    0,
+    0.0751,
+    0.2266,
+    0.3895,
+    0.5357,
+    0.656,
+    0.75,
+    0.821,
+    0.8734,
+    0.9113,
+    0.9383,
+    0.9574,
+    0.9707,
+    0.98,
+    0.9864,
+    0.9908,
+    1
+  );
+  --ease-leave: cubic-bezier(0.4, 0, 1, 1);
+}
+
+/* Matches state variants too (`data-[state=open]:animate-in`). */
+[class*="animate-in"] {
+  animation-timing-function: var(--ease-spring);
+}
+
+[data-state="closed"][class*="animate-out"],
+.animate-out {
+  animation-timing-function: var(--ease-leave);
+}
+
+/* Tracking is size-specific: large type reads loose, so headings tighten. */
+h1,
+.text-2xl,
+.text-3xl,
+.text-4xl {
+  letter-spacing: -0.02em;
+}
+
+h2,
+.text-xl,
+.text-lg {
+  letter-spacing: -0.01em;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -206,6 +256,13 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .backdrop-blur-xl {
+    background-color: hsl(var(--background));
+    backdrop-filter: none;
   }
 }
 

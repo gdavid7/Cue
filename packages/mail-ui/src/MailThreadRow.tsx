@@ -249,5 +249,5 @@ function rowBackground({
 }) {
   if (isSelected) return "bg-primary/10";
   if (isFocused) return "bg-primary/5";
-  return "bg-background hover:bg-muted/50";
+  return "bg-background hover:bg-muted/50 active:bg-muted";
 }

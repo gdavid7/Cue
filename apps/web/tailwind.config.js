@@ -23,6 +23,9 @@ module.exports = {
       },
     },
     extend: {
+      animationDuration: {
+        DEFAULT: "200ms",
+      },
       transitionTimingFunction: {
         "back-out": "cubic-bezier(0.175, 0.885, 0.32, 2.2)",
       },

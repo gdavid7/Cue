@@ -26,7 +26,7 @@ export function getMailSidebarRowPresentation({
     nested && "pl-7",
     active
       ? "bg-card font-medium text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.04),0_0_0_1px_rgba(17,24,39,0.05)]"
-      : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+      : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground active:bg-sidebar-accent/80",
   );
   const content = collapsed ? (
     <>
