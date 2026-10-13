@@ -85,7 +85,8 @@ export function ConnectorsList({
         const integration = available.get(connector.name);
         const connected = !!integration?.connection;
         const status = connectorStatus({ integration, connected });
-        const label = `${connector.displayName}: ${STATUS_LABEL[status]}`;
+        const via = integration?.connection?.connectedVia;
+        const label = `${connector.displayName}: ${STATUS_LABEL[status]}${via ? ` via ${via}` : ""}`;
         const content = (
           <>
             <ConnectorLogo
@@ -132,7 +133,7 @@ export function ConnectorsList({
             className={className}
             href={integrationsHref}
             key={connector.name}
-            title={collapsed ? label : undefined}
+            title={collapsed || via ? label : undefined}
           >
             {content}
           </Link>

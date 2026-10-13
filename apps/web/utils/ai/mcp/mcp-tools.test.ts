@@ -25,15 +25,17 @@ vi.mock("@/utils/mcp/transport", () => ({
 
 type ConnectionRow = {
   id: string;
+  emailAccountId?: string;
   integration: { id: string; name: string };
   tools: { name: string }[];
 };
 
 function mockConnections(connections: ConnectionRow[]) {
   prisma.mcpConnection.findMany.mockResolvedValue(
-    connections as unknown as Awaited<
-      ReturnType<typeof prisma.mcpConnection.findMany>
-    >,
+    connections.map((connection) => ({
+      emailAccountId: "email-account-1",
+      ...connection,
+    })) as unknown as Awaited<ReturnType<typeof prisma.mcpConnection.findMany>>,
   );
 }
 
@@ -212,5 +214,46 @@ describe("createMcpToolsForAgent", () => {
     const result = await createMcpToolsForAgent("email-account-1");
 
     expect(Object.keys(result.tools)).toEqual(["notion-search"]);
+  });
+
+  it("uses an app connected from the user's other account with that account's credentials", async () => {
+    mockConnections([
+      {
+        id: "connection-1",
+        emailAccountId: "email-account-2",
+        integration: { id: "integration-1", name: "notion" },
+        tools: [{ name: "notion-search" }],
+      },
+    ]);
+
+    const result = await createMcpToolsForAgent("email-account-1");
+
+    expect(mockGetAuthToken).toHaveBeenCalledWith(
+      expect.objectContaining({ emailAccountId: "email-account-2" }),
+    );
+    expect(Object.keys(result.tools)).toEqual(["notion-search"]);
+  });
+
+  it("connects once to an app connected from two of the user's accounts", async () => {
+    mockConnections([
+      {
+        id: "connection-other",
+        emailAccountId: "email-account-2",
+        integration: { id: "integration-1", name: "notion" },
+        tools: [{ name: "notion-search" }],
+      },
+      {
+        id: "connection-own",
+        integration: { id: "integration-1", name: "notion" },
+        tools: [{ name: "notion-search" }],
+      },
+    ]);
+
+    await createMcpToolsForAgent("email-account-1");
+
+    expect(mockCreateMCPClient).toHaveBeenCalledTimes(1);
+    expect(mockGetAuthToken).toHaveBeenCalledWith(
+      expect.objectContaining({ emailAccountId: "email-account-1" }),
+    );
   });
 });

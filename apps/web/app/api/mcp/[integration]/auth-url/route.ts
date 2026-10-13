@@ -13,6 +13,7 @@ import { resolveMcpIntegration } from "@/utils/mcp/resolve-integration";
 import { generateOAuthUrl } from "@/utils/mcp/oauth";
 import { assertIntegrationsTierAccess } from "@/utils/mcp/tier-access";
 import { getIntegrationProvider } from "@/utils/mcp/providers/registry";
+import { findConnectionAccountId } from "@/utils/mcp/user-connections";
 
 export type GetMcpAuthUrlResponse = { url: string };
 
@@ -39,6 +40,12 @@ export const GET = withEmailAccount(
       throw new SafeError(`Integration ${integration} not found`);
     }
 
+    // Reconnecting an app first connected from another of the person's
+    // accounts renews that connection rather than adding a second one.
+    const connectionAccountId =
+      (await findConnectionAccountId({ integration, emailAccountId })) ??
+      emailAccountId;
+
     if (integrationConfig.provider) {
       const provider = getIntegrationProvider(integrationConfig.provider.id);
       if (!provider.isConfigured()) {
@@ -50,7 +57,7 @@ export const GET = withEmailAccount(
         const url = await provider.getConnectUrl({
           app: integrationConfig.provider.app,
           authScheme: integrationConfig.provider.authScheme,
-          emailAccountId,
+          emailAccountId: connectionAccountId,
           callbackUrl: `${env.NEXT_PUBLIC_BASE_URL}/api/mcp/${integration}/provider-callback`,
         });
 
@@ -61,7 +68,7 @@ export const GET = withEmailAccount(
           getMcpStateCookieName(integration),
           generateSignedOAuthState({
             userId,
-            emailAccountId,
+            emailAccountId: connectionAccountId,
             type: getMcpOAuthStateType(integration),
           }),
           oauthStateCookieOptions,
@@ -85,7 +92,7 @@ export const GET = withEmailAccount(
 
       const state = generateSignedOAuthState({
         userId,
-        emailAccountId,
+        emailAccountId: connectionAccountId,
         type: getMcpOAuthStateType(integration),
       });
 

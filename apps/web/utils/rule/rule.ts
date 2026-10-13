@@ -37,6 +37,7 @@ import {
   getOnlyIntegrationToolSpec,
   normalizeSelectArgValue,
 } from "@/utils/mcp/tool-specs";
+import { ownedBySameUser } from "@/utils/mcp/user-connections";
 import { assertNoSenderOnlyOverlap } from "@/utils/rule/sender-scope-overlap";
 import { isIntegrationActionEnabledForEmailAccountId } from "@/utils/integration-action.server";
 
@@ -889,7 +890,7 @@ export async function assertIntegrationActionsConnected(
 
   const connections = await prisma.mcpConnection.findMany({
     where: {
-      emailAccountId,
+      ...ownedBySameUser(emailAccountId),
       isActive: true,
       integration: { name: { in: integrationNames } },
     },
