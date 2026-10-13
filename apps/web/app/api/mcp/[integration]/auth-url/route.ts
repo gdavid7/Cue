@@ -49,6 +49,7 @@ export const GET = withEmailAccount(
       try {
         const url = await provider.getConnectUrl({
           app: integrationConfig.provider.app,
+          authScheme: integrationConfig.provider.authScheme,
           emailAccountId,
           callbackUrl: `${env.NEXT_PUBLIC_BASE_URL}/api/mcp/${integration}/provider-callback`,
         });

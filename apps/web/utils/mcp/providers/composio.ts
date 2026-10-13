@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { env } from "@/env";
 import { createScopedLogger } from "@/utils/logger";
-import type { IntegrationProvider } from "@/utils/mcp/providers/types";
+import {
+  CredentialsRejectedError,
+  type IntegrationProvider,
+} from "@/utils/mcp/providers/types";
 
 const logger = createScopedLogger("composio");
 
@@ -17,8 +20,8 @@ const mcpServerUrls = new Map<string, Promise<string>>();
 export const composioProvider: IntegrationProvider = {
   isConfigured: () => !!env.COMPOSIO_API_KEY,
 
-  async getConnectUrl({ app, emailAccountId, callbackUrl }) {
-    const authConfigId = await getAuthConfigId(app);
+  async getConnectUrl({ app, emailAccountId, callbackUrl, authScheme }) {
+    const authConfigId = await getAuthConfigId(app, authScheme);
     const link = linkSchema.parse(
       await composioFetch("/connected_accounts/link", {
         method: "POST",
@@ -32,8 +35,12 @@ export const composioProvider: IntegrationProvider = {
     return link.redirect_url;
   },
 
-  async completeConnection({ app, emailAccountId }) {
-    const accounts = await listConnectedAccounts({ app, emailAccountId });
+  async completeConnection({ app, emailAccountId, authScheme }) {
+    const accounts = await listConnectedAccounts({
+      app,
+      emailAccountId,
+      authScheme,
+    });
     const [newestActive] = accounts
       .filter((account) => account.status === "ACTIVE")
       .sort((a, b) => b.created_at.localeCompare(a.created_at));
@@ -45,14 +52,85 @@ export const composioProvider: IntegrationProvider = {
     return true;
   },
 
-  async disconnect({ app, emailAccountId }) {
+  async connectWithCredentials({
+    app,
+    emailAccountId,
+    authScheme,
+    credentials,
+    verifyTool,
+  }) {
+    const previous = await listConnectedAccounts({
+      app,
+      emailAccountId,
+      authScheme,
+    });
+    const created = createdConnectedAccountSchema.parse(
+      await composioFetch("/connected_accounts", {
+        method: "POST",
+        body: {
+          auth_config: { id: await getAuthConfigId(app, authScheme) },
+          connection: {
+            user_id: emailAccountId,
+            state: {
+              authScheme: authScheme ?? "API_KEY",
+              val: { status: "ACTIVE", ...credentials },
+            },
+          },
+        },
+      }),
+    );
+
+    // Composio stores API keys without checking them, so ask the app itself.
+    const check = executeResultSchema.parse(
+      await composioFetch(`/tools/execute/${verifyTool}`, {
+        method: "POST",
+        body: {
+          connected_account_id: created.id,
+          user_id: emailAccountId,
+          arguments: {},
+        },
+      }),
+    );
+    if (!check.successful) {
+      await deleteConnectedAccounts([created]);
+      throw new CredentialsRejectedError(
+        `${app} rejected the credentials: ${check.error ?? "unknown error"}`,
+      );
+    }
+
+    await deleteConnectedAccounts(previous);
+  },
+
+  async executeTool({ app, emailAccountId, authScheme, tool, args }) {
+    const [account] = (
+      await listConnectedAccounts({ app, emailAccountId, authScheme })
+    ).filter((item) => item.status === "ACTIVE");
+    if (!account) throw new Error(`No active ${app} connection`);
+
+    const result = executeResultSchema.parse(
+      await composioFetch(`/tools/execute/${tool}`, {
+        method: "POST",
+        body: {
+          connected_account_id: account.id,
+          user_id: emailAccountId,
+          arguments: args,
+        },
+      }),
+    );
+    if (!result.successful) {
+      throw new Error(`${tool} failed: ${result.error ?? "unknown error"}`);
+    }
+    return result.data;
+  },
+
+  async disconnect({ app, emailAccountId, authScheme }) {
     await deleteConnectedAccounts(
-      await listConnectedAccounts({ app, emailAccountId }),
+      await listConnectedAccounts({ app, emailAccountId, authScheme }),
     );
   },
 
-  async getMcpServer({ app, emailAccountId, allowedTools }) {
-    const serverUrl = await getMcpServerUrl(app, allowedTools);
+  async getMcpServer({ app, emailAccountId, allowedTools, authScheme }) {
+    const serverUrl = await getMcpServerUrl(app, allowedTools, authScheme);
     const url = new URL(serverUrl);
     url.searchParams.set("user_id", emailAccountId);
     return {
@@ -62,7 +140,7 @@ export const composioProvider: IntegrationProvider = {
   },
 };
 
-function getAuthConfigId(app: string) {
+function getAuthConfigId(app: string, authScheme?: "OAUTH2" | "API_KEY") {
   return memoize(authConfigIds, app, async () => {
     const name = getResourceName(app);
     const { items } = authConfigListSchema.parse(
@@ -80,7 +158,17 @@ function getAuthConfigId(app: string) {
         method: "POST",
         body: {
           toolkit: { slug: app },
-          auth_config: { type: "use_composio_managed_auth", name },
+          // A key-based app has no Composio-managed OAuth; each user brings
+          // their own credentials when they connect.
+          auth_config:
+            authScheme === "API_KEY"
+              ? {
+                  type: "use_custom_auth",
+                  authScheme: "API_KEY",
+                  name,
+                  credentials: {},
+                }
+              : { type: "use_composio_managed_auth", name },
         },
       }),
     );
@@ -89,9 +177,13 @@ function getAuthConfigId(app: string) {
   });
 }
 
-function getMcpServerUrl(app: string, allowedTools: string[]) {
+function getMcpServerUrl(
+  app: string,
+  allowedTools: string[],
+  authScheme?: "OAUTH2" | "API_KEY",
+) {
   return memoize(mcpServerUrls, app, async () => {
-    const authConfigId = await getAuthConfigId(app);
+    const authConfigId = await getAuthConfigId(app, authScheme);
     const name = getResourceName(app);
     const { items } = mcpServerListSchema.parse(
       await composioFetch(
@@ -137,11 +229,13 @@ function getMcpServerUrl(app: string, allowedTools: string[]) {
 async function listConnectedAccounts({
   app,
   emailAccountId,
+  authScheme,
 }: {
   app: string;
   emailAccountId: string;
+  authScheme?: "OAUTH2" | "API_KEY";
 }) {
-  const authConfigId = await getAuthConfigId(app);
+  const authConfigId = await getAuthConfigId(app, authScheme);
   const { items } = connectedAccountListSchema.parse(
     await composioFetch(
       `/connected_accounts?${new URLSearchParams({
@@ -245,6 +339,14 @@ const mcpServerSchema = z.object({
 });
 
 const mcpServerListSchema = z.object({ items: z.array(mcpServerSchema) });
+
+const createdConnectedAccountSchema = z.object({ id: z.string() });
+
+const executeResultSchema = z.object({
+  data: z.unknown(),
+  successful: z.boolean(),
+  error: z.string().nullish(),
+});
 
 const connectedAccountListSchema = z.object({
   items: z.array(

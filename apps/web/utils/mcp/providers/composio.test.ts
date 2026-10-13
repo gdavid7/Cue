@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { composioProvider } from "@/utils/mcp/providers/composio";
+import { CredentialsRejectedError } from "@/utils/mcp/providers/types";
 
 vi.mock("@/env", () => ({ env: { COMPOSIO_API_KEY: "test-composio-key" } }));
 
@@ -113,6 +114,54 @@ describe("composioProvider", () => {
     expect(api.state.accounts.map((a) => a.id)).toEqual(["ca_3"]);
   });
 
+  it("connects a key-based app only after the app accepts the key", async () => {
+    api.state.validKeys.add("good-token");
+    api.state.authConfigs.push({
+      id: "ac_canvas",
+      name: "inbox-zero-app-key",
+      status: "ENABLED",
+      created_at: "2026-01-01T00:00:00Z",
+    });
+    api.state.accounts.push(
+      account("ca_old", "email-account-1", "ac_canvas", "ACTIVE", "2026-01"),
+    );
+
+    await composioProvider.connectWithCredentials({
+      app: "app-key",
+      authScheme: "API_KEY",
+      emailAccountId: "email-account-1",
+      credentials: {
+        full: "https://canvas.example.edu",
+        generic_api_key: "good-token",
+      },
+      verifyTool: "APP_LIST",
+    });
+
+    // The new connection replaces the old one.
+    expect(api.state.accounts.map((a) => a.id)).toEqual(["ca_2"]);
+  });
+
+  it("keeps nothing when the app rejects the key", async () => {
+    await expect(
+      composioProvider.connectWithCredentials({
+        app: "app-bad-key",
+        authScheme: "API_KEY",
+        emailAccountId: "email-account-1",
+        credentials: {
+          full: "https://canvas.example.edu",
+          generic_api_key: "wrong",
+        },
+        verifyTool: "APP_LIST",
+      }),
+    ).rejects.toBeInstanceOf(CredentialsRejectedError);
+
+    expect(api.state.accounts).toEqual([]);
+    // Key-based apps get a custom auth config, not Composio-managed OAuth.
+    expect(api.state.authConfigTypes.get("inbox-zero-app-bad-key")).toBe(
+      "use_custom_auth",
+    );
+  });
+
   async function createAuthConfig(app: string) {
     await composioProvider.getConnectUrl({
       app,
@@ -157,6 +206,9 @@ function createFakeComposioApi() {
       allowed_tools: string[];
     }[],
     accounts: [] as ReturnType<typeof account>[],
+    authConfigTypes: new Map<string, string>(),
+    validKeys: new Set<string>(),
+    keysByAccount: new Map<string, string>(),
   };
 
   const fetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
@@ -176,7 +228,28 @@ function createFakeComposioApi() {
         status: "ENABLED",
         created_at: new Date().toISOString(),
       });
+      state.authConfigTypes.set(body.auth_config.name, body.auth_config.type);
       return json({ auth_config: { id } });
+    }
+    if (method === "POST" && path === "/connected_accounts") {
+      const id = `ca_${state.accounts.length + 1}`;
+      state.accounts.push(
+        account(
+          id,
+          body.connection.user_id,
+          body.auth_config.id,
+          "ACTIVE",
+          new Date().toISOString(),
+        ),
+      );
+      state.keysByAccount.set(id, body.connection.state.val.generic_api_key);
+      return json({ id, status: "ACTIVE" });
+    }
+    if (method === "POST" && path.startsWith("/tools/execute/")) {
+      const key = state.keysByAccount.get(body.connected_account_id) ?? "";
+      return state.validKeys.has(key)
+        ? json({ data: { items: [] }, successful: true, error: null })
+        : json({ data: {}, successful: false, error: "401 Unauthorized" });
     }
     if (method === "GET" && path === "/mcp/servers") {
       return json({

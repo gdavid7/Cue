@@ -9,7 +9,11 @@ export type ResolvedMcpIntegration = {
   name: string;
   displayName: string;
   serverUrl?: string;
-  provider?: { id: IntegrationProviderId; app: string };
+  provider?: {
+    id: IntegrationProviderId;
+    app: string;
+    authScheme?: "API_KEY";
+  };
   authType: "oauth" | "api-token" | "none";
   scopes: string[];
   skipResourceParam?: boolean;

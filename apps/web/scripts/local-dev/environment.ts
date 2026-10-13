@@ -30,6 +30,8 @@ export function createLocalEnvironment({
   for (const key of [
     "PATH",
     "HOME",
+    // Networks that inspect TLS (company or school proxies) need their CA.
+    "NODE_EXTRA_CA_CERTS",
     "USER",
     "LOGNAME",
     "TMPDIR",

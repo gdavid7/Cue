@@ -5,11 +5,28 @@ type McpIntegrationConfig = {
   serverUrl?: string;
   // Hosted by a provider instead of a direct MCP server; `app` is the
   // provider's identifier for it
-  provider?: { id: IntegrationProviderId; app: string };
+  provider?: {
+    id: IntegrationProviderId;
+    app: string;
+    // Set for apps users connect with a key instead of OAuth
+    authScheme?: "API_KEY";
+  };
   authType: "oauth" | "api-token";
   scopes: string[];
   skipResourceParam?: boolean; // Some OAuth servers don't support RFC 8707 resource parameter
   filterWriteTools?: boolean; // Require read-only annotations and names; new tools start disabled
+  // For key-based provider apps: what the connect form asks for, sent to the
+  // provider under each field's name
+  credentialFields?: {
+    name: string;
+    label: string;
+    description: string;
+    placeholder?: string;
+    secret?: boolean;
+    kind?: "url";
+  }[];
+  // A read-only tool that only answers for valid credentials
+  verifyTool?: string;
   ruleActionWriteTools?: string[];
 };
 
@@ -271,6 +288,40 @@ export const MCP_INTEGRATIONS: Record<
       "MICROSOFT_TEAMS_LIST_USER_CHAT_MESSAGES",
       "MICROSOFT_TEAMS_GET_CHAT_MESSAGE",
       "MICROSOFT_TEAMS_LIST_MESSAGE_REPLIES",
+    ],
+  },
+  canvas: {
+    name: "canvas",
+    displayName: "Canvas",
+    url: "instructure.com",
+    provider: { id: "composio", app: "canvas", authScheme: "API_KEY" },
+    authType: "api-token",
+    scopes: [],
+    credentialFields: [
+      {
+        name: "full",
+        label: "Canvas address",
+        description: "The address you open Canvas at.",
+        placeholder: "https://canvas.yourschool.edu",
+        kind: "url",
+      },
+      {
+        name: "generic_api_key",
+        label: "Access token",
+        description:
+          "In Canvas: Account → Settings → New Access Token. Canvas shows it only once.",
+        secret: true,
+      },
+    ],
+    verifyTool: "CANVAS_LIST_COURSES",
+    allowedTools: [
+      "CANVAS_LIST_COURSES",
+      "CANVAS_LIST_ASSIGNMENTS_FOR_USER",
+      "CANVAS_LIST_ANNOUNCEMENTS",
+      "CANVAS_LIST_DISCUSSION_TOPICS",
+      "CANVAS_LIST_CALENDAR_EVENTS_FOR_USER",
+      "CANVAS_LIST_COURSE_TODO_ITEMS",
+      "CANVAS_LIST_CONVERSATIONS",
     ],
   },
   slack: {

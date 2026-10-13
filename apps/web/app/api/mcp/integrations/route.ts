@@ -56,6 +56,7 @@ async function getData(emailAccountId: string) {
       url: integration.url,
       comingSoon: integration.comingSoon,
       authType: integration.authType,
+      credentialFields: integration.credentialFields,
       isCustom: false,
       connection: findConnection(integration.name),
     }));
@@ -73,6 +74,7 @@ async function getData(emailAccountId: string) {
       authType: integration.authType
         ? fromDbAuthType(integration.authType)
         : ("oauth" as const),
+      credentialFields: undefined,
       isCustom: true,
       connection: findConnection(integration.name),
     };

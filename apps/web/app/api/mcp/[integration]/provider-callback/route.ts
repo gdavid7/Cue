@@ -10,6 +10,7 @@ import { prefixPath } from "@/utils/path";
 import prisma from "@/utils/prisma";
 import { findIntegration } from "@/utils/mcp/integrations";
 import { getIntegrationProvider } from "@/utils/mcp/providers/registry";
+import { saveProviderConnection } from "@/utils/mcp/provider-connection";
 import { syncMcpTools } from "@/utils/mcp/sync-tools";
 
 // The provider ran the app's OAuth and holds the tokens. We only record that the
@@ -60,6 +61,7 @@ export const GET = withError(
     const connected = await provider
       .completeConnection({
         app: integrationConfig.provider.app,
+        authScheme: integrationConfig.provider.authScheme,
         emailAccountId,
       })
       .catch((error) => {
@@ -72,28 +74,7 @@ export const GET = withError(
       return redirect(redirectUrl);
     }
 
-    const dbIntegration = await prisma.mcpIntegration.upsert({
-      where: { name: integration },
-      update: {},
-      create: { name: integration },
-      select: { id: true },
-    });
-
-    await prisma.mcpConnection.upsert({
-      where: {
-        emailAccountId_integrationId: {
-          emailAccountId,
-          integrationId: dbIntegration.id,
-        },
-      },
-      update: { isActive: true },
-      create: {
-        name: integration,
-        emailAccountId,
-        integrationId: dbIntegration.id,
-        isActive: true,
-      },
-    });
+    await saveProviderConnection({ integration, emailAccountId });
 
     logger.info("Connected provider integration", { emailAccountId });
 

@@ -37,3 +37,8 @@ export type CreateCustomMcpServerBody = z.infer<
 export const removeCustomMcpServerBody = z.object({
   name: z.string(),
 });
+
+export const connectWithCredentialsBody = z.object({
+  integration: z.string().trim().min(1).max(100),
+  credentials: z.record(z.string(), z.string().trim().max(4096)),
+});

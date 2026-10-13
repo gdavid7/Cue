@@ -18,6 +18,7 @@ export async function getMcpServerConnection(
   if (integration.provider) {
     return getIntegrationProvider(integration.provider.id).getMcpServer({
       app: integration.provider.app,
+      authScheme: integration.provider.authScheme,
       emailAccountId,
       allowedTools: integration.allowedTools ?? [],
     });

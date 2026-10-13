@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { startMcpOAuth } from "@/app/(app)/[emailAccountId]/integrations/startMcpOAuth";
 import { DomainIcon } from "@/components/charts/DomainIcon";
+import { ConnectWithCredentialsDialog } from "@/components/connectors/ConnectWithCredentialsDialog";
 import { toastError } from "@/components/Toast";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { cn } from "@/utils";
@@ -42,8 +43,9 @@ export function ConnectorsList({
   /** Icon-only sidebar rail. */
   collapsed?: boolean;
 }) {
-  const { data } = useIntegrations();
+  const { data, mutate } = useIntegrations();
   const [connecting, setConnecting] = useState<string | null>(null);
+  const [keyFormFor, setKeyFormFor] = useState<string | null>(null);
   const available = new Map(
     (data?.integrations ?? []).map((integration) => [
       integration.name,
@@ -52,7 +54,13 @@ export function ConnectorsList({
   );
   const integrationsHref = prefixPath(emailAccountId, "/integrations");
 
+  const keyForm = keyFormFor ? available.get(keyFormFor) : undefined;
+
   const connect = async (name: string) => {
+    if (available.get(name)?.credentialFields?.length) {
+      setKeyFormFor(name);
+      return;
+    }
     setConnecting(name);
     try {
       await startMcpOAuth({ integrationName: name, emailAccountId });
@@ -93,7 +101,7 @@ export function ConnectorsList({
           </>
         );
         const className = cn(
-          "flex items-center gap-2 rounded-md py-1.5 text-sm text-foreground hover:bg-muted/60",
+          "flex items-center gap-2 rounded-md py-1.5 text-left text-foreground text-sm hover:bg-muted/60",
           collapsed ? "justify-center px-0" : "px-2.5",
         );
 
@@ -122,6 +130,17 @@ export function ConnectorsList({
           </Link>
         );
       })}
+      {keyForm?.credentialFields ? (
+        <ConnectWithCredentialsDialog
+          displayName={keyForm.displayName}
+          emailAccountId={emailAccountId}
+          fields={keyForm.credentialFields}
+          integration={keyForm.name}
+          onConnected={() => mutate()}
+          onOpenChange={(open) => setKeyFormFor(open ? keyForm.name : null)}
+          open
+        />
+      ) : null}
       {collapsed ? null : (
         <Link
           className="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-muted-foreground text-xs hover:text-foreground"

@@ -17,6 +17,7 @@ import { MoreVertical } from "lucide-react";
 import clsx from "clsx";
 import { toastError, toastSuccess } from "@/components/Toast";
 import { DomainIcon } from "@/components/charts/DomainIcon";
+import { ConnectWithCredentialsDialog } from "@/components/connectors/ConnectWithCredentialsDialog";
 import {
   disconnectMcpConnectionAction,
   removeCustomMcpServerAction,
@@ -41,6 +42,7 @@ export function IntegrationRow({
   const { emailAccountId } = useAccount();
   const analytics = useProductAnalytics("integrations");
   const [connecting, setConnecting] = useState(false);
+  const [keyFormOpen, setKeyFormOpen] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [expandedTools, setExpandedTools] = useState(false);
 
@@ -59,6 +61,11 @@ export function IntegrationRow({
       integration: integration.name,
       auth_type: integration.authType,
     });
+
+    if (integration.credentialFields?.length) {
+      setKeyFormOpen(true);
+      return;
+    }
 
     if (integration.authType === "api-token") {
       analytics.captureAction("integration_connect_failed", {
@@ -226,6 +233,17 @@ export function IntegrationRow({
 
   return (
     <>
+      {integration.credentialFields?.length ? (
+        <ConnectWithCredentialsDialog
+          displayName={integration.displayName}
+          emailAccountId={emailAccountId}
+          fields={integration.credentialFields}
+          integration={integration.name}
+          onConnected={onConnectionChange}
+          onOpenChange={setKeyFormOpen}
+          open={keyFormOpen}
+        />
+      ) : null}
       <TableRow>
         <TableCell className="w-full">
           <div className="flex items-center gap-3">
