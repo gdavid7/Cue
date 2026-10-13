@@ -180,4 +180,18 @@ describe("MailSidebar", () => {
     expect(screen.queryByText("Mail")).toBeNull();
     expect(screen.getByText("All inboxes")).toBeDefined();
   });
+
+  it("offers All inboxes above a single account's inbox when it has one", () => {
+    renderSidebar({ allInboxesHref: "/account-1/mail?accountScope=all" });
+
+    const links = screen.getAllByRole("link").map((link) => link.textContent);
+    expect(links.indexOf("All inboxes")).toBeLessThan(links.indexOf("Inbox"));
+    expect(
+      screen.getByText("All inboxes").closest("a")?.getAttribute("href"),
+    ).toBe("/account-1/mail?accountScope=all");
+
+    cleanup();
+    renderSidebar();
+    expect(screen.queryByText("All inboxes")).toBeNull();
+  });
 });

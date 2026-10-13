@@ -59,6 +59,7 @@ import {
 import type { ThreadMessage } from "@/components/email-list/types";
 import { useMailThreads } from "@/app/(app)/[emailAccountId]/mail/use-mail-threads";
 import { useCombinedMailThreads } from "@/app/(app)/[emailAccountId]/mail/use-combined-mail-threads";
+import { getAllInboxesAccounts } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { useThreadActions } from "@/app/(app)/[emailAccountId]/mail/use-thread-actions";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import { MailProductFrame } from "@inboxzero/mail-ui/MailProductFrame";
@@ -201,20 +202,15 @@ export function MailShell() {
     [isAllAccounts, setOpenThreadQuery],
   );
   const combinedAccounts = useMemo(
-    () =>
-      (accountsData?.emailAccounts ?? [])
-        .filter(
-          (emailAccount) =>
-            emailAccount.includeInAllAccounts &&
-            emailAccount.account.disconnectedAt === null,
-        )
-        .map(({ id, email, name, image }) => ({
-          id,
-          email,
-          name,
-          image,
-        })),
+    () => getAllInboxesAccounts(accountsData?.emailAccounts ?? []),
     [accountsData?.emailAccounts],
+  );
+  const accountColorIndexById = useMemo(
+    () =>
+      Object.fromEntries(
+        combinedAccounts.map((account, index) => [account.id, index]),
+      ),
+    [combinedAccounts],
   );
   const accountLayout: MailLayoutMode =
     settings?.layout === MailLayout.SPLIT ? "split" : "list";
@@ -1612,6 +1608,7 @@ export function MailShell() {
                       userEmail={userEmail}
                       userLabels={isAllAccounts ? NO_LABELS : userLabels}
                       labelsByAccount={labelsByAccount}
+                      accountColorIndexById={accountColorIndexById}
                       focusedIndex={clampedIndex}
                       isSelected={selection.isSelected}
                       selectedCount={selection.selectedCount}

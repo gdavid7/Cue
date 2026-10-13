@@ -152,6 +152,20 @@ describe("MailAccountSwitcher", () => {
     expect(onSelectAccount).toHaveBeenCalledWith("account-2");
     expect(mockOpenWindow).not.toHaveBeenCalled();
   });
+
+  it("offers both providers straight from Add another account", async () => {
+    renderSwitcher({ onSelectAccount: vi.fn() });
+
+    selectMenuItem(
+      await screen.findByRole("menuitem", { name: "Add another account" }),
+    );
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Add another account",
+    });
+    expect(dialog.textContent).toContain("Add Google");
+    expect(dialog.textContent).toContain("Add Microsoft");
+  });
 });
 
 function renderSwitcher({

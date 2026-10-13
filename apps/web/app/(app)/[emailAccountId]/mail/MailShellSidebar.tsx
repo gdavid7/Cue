@@ -20,7 +20,9 @@ import {
   MAIL_SIDEBAR_DEFAULT_WIDTH,
   MAIL_SIDEBAR_RAIL_WIDTH,
 } from "@/app/(app)/[emailAccountId]/mail/sidebar-width";
+import { getAllInboxesAccounts } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { Sidebar, useSidebar } from "@/components/ui/sidebar";
+import { useAccounts } from "@/hooks/useAccounts";
 import { useFolders } from "@/hooks/useFolders";
 import { useLabelCounts } from "@/hooks/useLabelCounts";
 import { useLabels } from "@/hooks/useLabels";
@@ -91,6 +93,9 @@ export const MailShellSidebar = memo(function MailShellSidebar({
     folders,
   });
   const { onOpen: openCompose } = useComposeModal();
+  const { data: accountsData } = useAccounts();
+  const hasAllInboxes =
+    getAllInboxesAccounts(accountsData?.emailAccounts ?? []).length > 1;
   const { state: openSidebars } = useSidebar();
   const isMailSidebarOpen = openSidebars.includes("left-sidebar");
 
@@ -225,6 +230,11 @@ export const MailShellSidebar = memo(function MailShellSidebar({
             isOutlook ? OUTLOOK_LABEL_COLOR_OPTIONS : GMAIL_LABEL_COLORS
           }
           unified={isAllAccounts}
+          allInboxesHref={
+            hasAllInboxes
+              ? prefixPath(emailAccountId, "/mail?accountScope=all")
+              : undefined
+          }
           connectors={
             isAllAccounts ? undefined : (
               <ConnectorsList

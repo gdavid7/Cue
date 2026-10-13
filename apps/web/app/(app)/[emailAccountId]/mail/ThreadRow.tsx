@@ -25,11 +25,6 @@ import { getEmailThreadLabels } from "@/components/EmailMessageCellLabels";
 import { Tooltip } from "@/components/Tooltip";
 import { Checkbox } from "@/components/ui/checkbox";
 import { mailCheckboxClassName } from "@/app/(app)/[emailAccountId]/mail/SelectAllCheckbox";
-import {
-  Avatar,
-  AvatarFallbackColor,
-  AvatarImage,
-} from "@/components/ui/avatar";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { cn } from "@/utils";
 import { internalDateToDate } from "@/utils/date";
@@ -68,6 +63,8 @@ export type ThreadRowProps = {
     openCount: number;
   };
   insightData?: ThreadInsightData;
+  /** Background of the marker naming a combined-inbox row's account. */
+  accountColorClassName?: string;
   /** Hover actions on wide rows; touch layouts use selection instead. */
   rowActions?: ThreadRowActionHandlers;
 };
@@ -90,6 +87,7 @@ export const ThreadRow = memo(function ThreadRow({
   rowRef,
   sentMessageOpen,
   insightData,
+  accountColorClassName,
   rowActions,
 }: ThreadRowProps) {
   const message = thread.messages.at(-1);
@@ -139,7 +137,14 @@ export const ThreadRow = memo(function ThreadRow({
 
   return (
     <MailThreadRow
-      accountAvatar={account ? <AccountAvatar account={account} /> : null}
+      accountAvatar={
+        account ? (
+          <AccountMarker
+            account={account}
+            colorClassName={accountColorClassName}
+          />
+        ) : null
+      }
       compact={compact}
       date={
         <div className="relative flex items-center justify-end">
@@ -248,25 +253,28 @@ function InsightText({ line }: { line: InsightLine }) {
   );
 }
 
-function AccountAvatar({
+// A color and initial rather than the profile photo: one person's accounts
+// often share a photo, which would make every row look the same.
+function AccountMarker({
   account,
+  colorClassName,
 }: {
-  account: { email: string; image: string | null; name: string | null };
+  account: { email: string };
+  colorClassName?: string;
 }) {
-  const label = account.name || account.email;
-  const initial = label.trim().at(0)?.toUpperCase() || "A";
+  const initial = account.email.trim().at(0)?.toUpperCase() || "@";
 
   return (
-    <Avatar
-      aria-label={`Inbox: ${label}`}
-      className="size-5"
+    <span
+      aria-label={`Inbox: ${account.email}`}
+      className={cn(
+        "flex size-5 shrink-0 items-center justify-center rounded-full font-medium text-[10px] text-white",
+        colorClassName ?? "bg-muted-foreground",
+      )}
+      role="img"
       title={account.email}
     >
-      <AvatarImage alt="" src={account.image || undefined} />
-      <AvatarFallbackColor
-        className="text-[10px] font-medium"
-        content={initial}
-      />
-    </Avatar>
+      {initial}
+    </span>
   );
 }

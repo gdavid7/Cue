@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { AddAccount } from "@/app/(app)/accounts/AddAccount";
+import { AddAccount } from "@/components/AddAccount";
 import { MutedText } from "@/components/Typography";
 import { auth } from "@/utils/auth";
 import { BRAND_NAME, getBrandTitle } from "@/utils/branding";

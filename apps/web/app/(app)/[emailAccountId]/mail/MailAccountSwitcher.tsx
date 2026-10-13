@@ -8,12 +8,25 @@ import {
   ChevronsUpDownIcon,
   MessagesSquareIcon,
   PlusIcon,
+  Settings2Icon,
   SlidersHorizontalIcon,
 } from "lucide-react";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
+import { AddAccount } from "@/components/AddAccount";
 import { AllAccountsSelectionDialog } from "@/app/(app)/[emailAccountId]/mail/AllAccountsSelectionDialog";
+import {
+  getAccountColorClassName,
+  getAllInboxesAccounts,
+} from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { ProfileImage } from "@/components/ProfileImage";
 import { Kbd } from "@/components/Kbd";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -65,8 +78,19 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
   const { data, mutate } = useAccounts();
   const { emailAccount } = useAccount();
   const [isSelectionOpen, setIsSelectionOpen] = useState(false);
+  const [isAddAccountOpen, setIsAddAccountOpen] = useState(false);
 
   if (!data) return null;
+
+  const allInboxesAccounts = getAllInboxesAccounts(data.emailAccounts);
+  const getAccountColor = (accountId: string) => {
+    const index = allInboxesAccounts.findIndex(
+      (account) => account.id === accountId,
+    );
+    return allInboxesAccounts.length > 1 && index >= 0
+      ? getAccountColorClassName(index)
+      : undefined;
+  };
 
   const activeLabel = isAllAccounts
     ? "All accounts"
@@ -148,6 +172,7 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
           {data.emailAccounts.map((account, index) => (
             <AccountItem
               account={account}
+              colorClassName={getAccountColor(account.id)}
               isDesktopApp={isDesktopApp}
               key={account.id}
               onSelect={onSelectAccount}
@@ -172,14 +197,19 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
             </Link>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem asChild className="gap-3 rounded-xl p-3">
+          <DropdownMenuItem
+            className="gap-3 rounded-xl p-3"
+            onSelect={() => setIsAddAccountOpen(true)}
+          >
+            <span className="flex size-8 items-center justify-center rounded-full bg-muted">
+              <PlusIcon className="size-4" />
+            </span>
+            <span className="font-medium">Add another account</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild className="gap-3 rounded-xl px-3 py-2">
             <Link href="/accounts">
-              <span className="flex size-8 items-center justify-center rounded-full bg-muted">
-                <PlusIcon className="size-4" />
-              </span>
-              <span className="font-medium text-muted-foreground">
-                Add or manage accounts
-              </span>
+              <Settings2Icon className="size-4 text-muted-foreground" />
+              Manage accounts
             </Link>
           </DropdownMenuItem>
         </DropdownMenuContent>
@@ -191,17 +221,31 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
           onSaved={mutate}
         />
       ) : null}
+      <Dialog open={isAddAccountOpen} onOpenChange={setIsAddAccountOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add another account</DialogTitle>
+            <DialogDescription>
+              Its mail joins All inboxes alongside your other accounts.
+            </DialogDescription>
+          </DialogHeader>
+          <AddAccount />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 });
 
 function AccountItem({
   account,
+  colorClassName,
   isDesktopApp,
   onSelect,
   shortcutKey,
 }: {
   account: GetEmailAccountsResponse["emailAccounts"][number];
+  /** Matches the marker on this account's rows in All inboxes. */
+  colorClassName: string | undefined;
   isDesktopApp: boolean;
   onSelect: (accountId: string) => void;
   shortcutKey: string | undefined;
@@ -250,6 +294,12 @@ function AccountItem({
           </span>
         ) : null}
       </span>
+      {colorClassName ? (
+        <span
+          aria-hidden
+          className={cn("size-2 shrink-0 rounded-full", colorClassName)}
+        />
+      ) : null}
       {shortcutKey && (
         <Kbd className="shrink-0">
           {formatShortcutKeys({

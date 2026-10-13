@@ -13,7 +13,10 @@ import { useModal } from "@/hooks/useModal";
 import { useAccounts } from "@/hooks/useAccounts";
 import { ComposeEmailFormLazy } from "@/app/(app)/[emailAccountId]/compose/ComposeEmailFormLazy";
 import type { ReplyingToEmail } from "@/app/(app)/[emailAccountId]/compose/ComposeEmailForm";
-import { useAccount } from "@/providers/EmailAccountProvider";
+import {
+  EmailAccountScopeProvider,
+  useAccount,
+} from "@/providers/EmailAccountProvider";
 import { deleteDraftAction } from "@/utils/actions/mail";
 import { getActiveMailClient } from "@/utils/mail-engine/active-client";
 import type { ReplyDraftMode } from "@/utils/mail-engine/reply-drafts";
@@ -60,14 +63,28 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [composerKey, setComposerKey] = useState(0);
   const [poppedOutReply, setPoppedOutReply] = useState<PoppedOutReply>();
-  // A popped-out reply belongs to the account it was written from.
-  const reply =
-    poppedOutReply?.emailAccountId === emailAccountId
-      ? poppedOutReply
-      : undefined;
   const isAllAccountsMailView =
     pathname.endsWith("/mail") && searchParams.get("accountScope") === "all";
-  const { data: accountsData } = useAccounts(isAllAccountsMailView);
+  const { data: accountsData } = useAccounts(
+    isAllAccountsMailView || isModalOpen,
+  );
+  // A popped-out reply belongs to the account it was written from, which the
+  // combined inbox shows alongside the account in the URL.
+  const otherReplyAccount =
+    poppedOutReply && poppedOutReply.emailAccountId !== emailAccountId
+      ? accountsData?.emailAccounts.find(
+          (account) => account.id === poppedOutReply.emailAccountId,
+        )
+      : undefined;
+  const reply =
+    poppedOutReply?.emailAccountId === emailAccountId ||
+    (isAllAccountsMailView && otherReplyAccount)
+      ? poppedOutReply
+      : undefined;
+  const fromAccounts =
+    accountsData && accountsData.emailAccounts.length > 1
+      ? accountsData.emailAccounts
+      : undefined;
   const isOpen = isModalOpen && (!poppedOutReply || Boolean(reply));
   const returnOpenReply = useCallback(() => {
     if (isOpen) reply?.onReturn?.();
@@ -220,24 +237,26 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
               )}
             >
               {reply ? (
-                <ComposeEmailFormLazy
-                  key={`${reply.draftSessionId}:${composerKey}`}
-                  draftKeyMessageId={reply.draftKeyMessageId}
-                  draftMode={reply.draftMode}
-                  draftSessionId={reply.draftSessionId}
-                  layout="window"
-                  onClose={closeCompose}
-                  onDiscard={discardReply}
-                  onRestore={restoreCompose}
-                  onSuccess={closeCompose}
-                  providerDraftMessageId={reply.providerDraftMessageId}
-                  replyingToEmail={reply.replyingToEmail}
-                />
+                <EmailAccountScopeProvider emailAccount={otherReplyAccount}>
+                  <ComposeEmailFormLazy
+                    key={`${reply.draftSessionId}:${composerKey}`}
+                    draftKeyMessageId={reply.draftKeyMessageId}
+                    draftMode={reply.draftMode}
+                    draftSessionId={reply.draftSessionId}
+                    layout="window"
+                    onClose={closeCompose}
+                    onDiscard={discardReply}
+                    onRestore={restoreCompose}
+                    onSuccess={closeCompose}
+                    providerDraftMessageId={reply.providerDraftMessageId}
+                    replyingToEmail={reply.replyingToEmail}
+                  />
+                </EmailAccountScopeProvider>
               ) : (
                 <ComposeEmailFormLazy
                   key={composerKey}
                   draftSessionId="compose:new-message"
-                  fromAccounts={accountsData?.emailAccounts}
+                  fromAccounts={fromAccounts}
                   layout="window"
                   onClose={closeCompose}
                   onDiscard={() => {

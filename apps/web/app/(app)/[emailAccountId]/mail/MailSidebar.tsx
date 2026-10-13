@@ -15,6 +15,7 @@ import {
   FlagIcon,
   FolderIcon,
   InboxIcon,
+  LayersIcon,
   type LucideIcon,
   MailsIcon,
   MegaphoneIcon,
@@ -98,6 +99,8 @@ export type MailSidebarProps = {
   /** Connected apps, listed under the labels. */
   connectors?: ReactNode;
   unified?: boolean;
+  /** Offered above a single account's inbox when there are inboxes to combine. */
+  allInboxesHref?: string;
   className?: string;
 };
 
@@ -210,6 +213,7 @@ export function MailSidebar({
   footer,
   connectors,
   unified = false,
+  allInboxesHref,
   className,
 }: MailSidebarProps) {
   const [isAddingLabel, setIsAddingLabel] = useState(false);
@@ -342,20 +346,29 @@ export function MailSidebar({
           padding, so a platform-width bar can't crowd the unread counts. */}
       <div className="-mr-1.5 flex min-h-0 flex-1 flex-col overflow-y-auto pr-1.5 scrollbar-thin">
         <nav className="flex flex-col gap-px">
-          <NavRow
-            href={
-              unified ? undefined : hrefFor({ kind: "type", type: "inbox" })
-            }
-            active={
-              unified ||
-              (!activeLabelId && !activeFolderId && activeType === "inbox")
-            }
-            icon={<InboxIcon className="size-4 shrink-0" />}
-            name={unified ? "All inboxes" : "Inbox"}
-            count={unified ? null : displayCount(countsById.get("INBOX"))}
-            emphasizeCount
-            collapsed={collapsed}
-          />
+          {unified || allInboxesHref ? (
+            <NavRow
+              href={unified ? undefined : allInboxesHref}
+              active={unified}
+              icon={<LayersIcon className="size-4 shrink-0" />}
+              name="All inboxes"
+              count={null}
+              collapsed={collapsed}
+            />
+          ) : null}
+          {unified ? null : (
+            <NavRow
+              href={hrefFor({ kind: "type", type: "inbox" })}
+              active={
+                !activeLabelId && !activeFolderId && activeType === "inbox"
+              }
+              icon={<InboxIcon className="size-4 shrink-0" />}
+              name="Inbox"
+              count={displayCount(countsById.get("INBOX"))}
+              emphasizeCount
+              collapsed={collapsed}
+            />
+          )}
         </nav>
 
         {!unified && (!collapsed || showMailboxRows) && (

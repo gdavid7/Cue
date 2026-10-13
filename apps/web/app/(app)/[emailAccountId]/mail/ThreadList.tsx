@@ -10,10 +10,15 @@ import type {
   ListThread,
   MailLayoutMode,
 } from "@/app/(app)/[emailAccountId]/mail/types";
-import { getListThreadKey } from "@/app/(app)/[emailAccountId]/mail/types";
+import {
+  getListThreadEmailAccountId,
+  getListThreadKey,
+} from "@/app/(app)/[emailAccountId]/mail/types";
+import { getAccountColorClassName } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { LoadingMiniSpinner } from "@/components/Loading";
 import { Button } from "@/components/ui/button";
 import type { EmailLabels } from "@/providers/email-label-types";
+import { useAccount } from "@/providers/EmailAccountProvider";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useInboxInsights } from "@/hooks/useInboxInsights";
 import { useSentMessageOpensForThreads } from "@/hooks/useSentMessageOpens";
@@ -32,6 +37,8 @@ export type ThreadListProps = {
   userEmail: string;
   userLabels: EmailLabels;
   labelsByAccount?: Record<string, EmailLabels>;
+  /** Each All inboxes account's position, which picks its row marker color. */
+  accountColorIndexById?: Record<string, number>;
   selectionEnabled?: boolean;
   /** The row `J`/`K` sits on. */
   focusedIndex: number;
@@ -57,6 +64,7 @@ export const ThreadList = memo(function ThreadList({
   userEmail,
   userLabels,
   labelsByAccount,
+  accountColorIndexById,
   selectionEnabled = true,
   focusedIndex,
   isSelected,
@@ -71,6 +79,7 @@ export const ThreadList = memo(function ThreadList({
   showSentOpenStatus = false,
   rowActions,
 }: ThreadListProps) {
+  const { emailAccountId } = useAccount();
   const isMobile = useIsMobile();
   const dayStart = useDayStart();
   const sentThreadIds = useMemo(
@@ -89,16 +98,26 @@ export const ThreadList = memo(function ThreadList({
   const insightItems = useMemo(
     () =>
       threads.flatMap((thread) => {
-        // Other accounts' rows in the combined view are read with their own token.
-        if ("account" in thread) return [];
         const messageId =
           thread.latestMessageId ??
           thread.messages.findLast(
             (message) => !message.labelIds?.includes(GmailLabel.DRAFT),
           )?.id;
-        return messageId ? [{ threadId: thread.id, messageId }] : [];
+        return messageId
+          ? [
+              {
+                key: getListThreadKey(thread),
+                emailAccountId: getListThreadEmailAccountId(
+                  thread,
+                  emailAccountId,
+                ),
+                threadId: thread.id,
+                messageId,
+              },
+            ]
+          : [];
       }),
-    [threads],
+    [threads, emailAccountId],
   );
   const { data: insights } = useInboxInsights(insightItems);
   const groupHeaderClassName = cn(
@@ -162,7 +181,14 @@ export const ThreadList = memo(function ThreadList({
               ? sentMessageOpens?.opens[row.item.messages.at(-1)?.id ?? ""]
               : undefined
           }
-          insightData={insights?.insights[row.item.id]}
+          insightData={insights?.[getListThreadKey(row.item)]}
+          accountColorClassName={
+            "account" in row.item
+              ? getAccountColorClassName(
+                  accountColorIndexById?.[row.item.account.id] ?? 0,
+                )
+              : undefined
+          }
           thread={row.item}
           userEmail={userEmail}
           userLabels={
