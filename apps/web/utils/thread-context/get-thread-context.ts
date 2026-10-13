@@ -21,6 +21,7 @@ import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
 import { parseReply } from "@/utils/mail";
 import { fetchConnectorCandidates } from "@/utils/thread-context/connector-context";
+import { fetchLinkedPages } from "@/utils/thread-context/linked-pages";
 import type { ParsedMessage } from "@/utils/types";
 
 // Each thread open costs about 1 + 3 × 2 + 1 provider calls, so keep the
@@ -119,7 +120,7 @@ export async function collectThreadContext({
     )
     .slice(0, MAX_PARTICIPANTS);
 
-  const [peopleThreads, topicThreads, events, connectorItems] =
+  const [peopleThreads, topicThreads, events, connectorItems, linkedPages] =
     await Promise.all([
       mapWithConcurrency(participants, PARTICIPANT_CONCURRENCY, (p) =>
         emailProvider
@@ -151,6 +152,7 @@ export async function collectThreadContext({
         logger,
         now,
       }),
+      fetchLinkedPages({ message: thread.messages.at(-1)!, logger }),
     ]);
 
   const otherThreads = uniqueById([
@@ -164,6 +166,7 @@ export async function collectThreadContext({
       ...otherThreads.map(threadToCandidate),
       ...events.map(eventToCandidate),
       ...connectorItems,
+      ...linkedPages,
     ],
     selfEmails: [userEmail],
     now: now.toISOString(),

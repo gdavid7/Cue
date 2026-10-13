@@ -198,7 +198,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           from: MOM,
           subject: "Thanksgiving flight?",
           bodyText:
-            "Hi honey, is your flight home Wednesday or Thursday for Thanksgiving? Dad will pick you up at SFO. Love, Mom",
+            "Hi honey, is your flight home Wednesday or Thursday for Thanksgiving? Dad will pick you up at SFO, and which terminal do you land at? Dad wants to park close. Love, Mom",
           unread: true,
           labels: ["CATEGORY_PERSONAL", "INBOX", "To Reply"],
           date: ago(6),
@@ -223,7 +223,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           from: person("Handshake", "notifications@joinhandshake.com"),
           subject: "New event: Tech & Finance Career Series",
           bodyText:
-            "You might be interested in this event: Tech & Finance Career Series, next Tuesday at 6pm.",
+            "You might be interested in this event: Tech & Finance Career Series, next Tuesday at 6pm.\n\nSee details and RSVP: https://app.joinhandshake.com/events/1428571",
           labels: ["CATEGORY_UPDATES", "INBOX", "Notification"],
           date: ago(23),
         }),
@@ -545,8 +545,8 @@ export const cueDemoThreadBriefs: {
 
 /**
  * What a model would answer when asked to suggest a reply, for three threads
- * that show each outcome: a reply backed by the thread itself, one backed by
- * another email, and an abstention. Matched by the thread's subject, like the
+ * that show each outcome: a reply backed by the thread itself, an abstention
+ * that a web search settles, and an abstention. Matched by the thread's subject, like the
  * briefs. Quotes are exact text from the fixture, so they pass the same check
  * a real model's do; source ids follow the context ranking for these threads.
  */
@@ -587,24 +587,14 @@ export const cueDemoReplySuggestions: {
     },
   },
   {
+    // Searching the web settles it: see cueDemoWebReply in cue-demo-web.ts.
     subject: "Thanksgiving flight?",
     object: {
-      enoughEvidence: true,
-      missing: "",
-      reply:
-        "Hi Mom! I fly home Wednesday, November 25 on UA 2231, landing at SFO at 6:35 PM. Thanks for picking me up!",
-      claims: [
-        {
-          fact: "The flight home is Wednesday, November 25, UA 2231",
-          sourceId: "c1",
-          quote: "Departing Wednesday, November 25: flight UA 2231",
-        },
-        {
-          fact: "It lands at SFO at 6:35 PM",
-          sourceId: "c1",
-          quote: "SAN 5:05 PM to SFO 6:35 PM",
-        },
-      ],
+      enoughEvidence: false,
+      missing:
+        "Which SFO terminal your United flight lands at. Your trip confirmation has the day and time, but not the terminal.",
+      reply: "",
+      claims: [],
     },
   },
   {

@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { checkSuggestion, type Source } from "./suggest-reply";
+import {
+  checkSuggestion,
+  renderSource,
+  type Source,
+  webSearchQuery,
+  webSource,
+} from "./suggest-reply";
 
 vi.mock("server-only", () => ({}));
 
@@ -110,5 +116,77 @@ describe("checkSuggestion", () => {
       missing: "The agreed renewal price.",
       unsupported: [],
     });
+  });
+});
+
+describe("web sources", () => {
+  const page = webSource({
+    id: "c3",
+    title: "Airlines at SFO",
+    url: "https://www.flysfo.com/flights/airlines",
+    text: "United Airlines operates from Terminal 3 at SFO.",
+  });
+
+  it("render as a web page with its title and domain, like the other kinds", () => {
+    expect(renderSource(page)).toBe(
+      `<source id="c3" kind="web">
+Web page: Airlines at SFO (flysfo.com)
+United Airlines operates from Terminal 3 at SFO.
+</source>`,
+    );
+  });
+
+  it("back a reply only with words the page contains", () => {
+    const claim = (quote: string) =>
+      checkSuggestion(
+        {
+          enoughEvidence: true,
+          missing: "",
+          reply: "I land at Terminal 3.",
+          claims: [{ fact: "United uses Terminal 3", sourceId: "c3", quote }],
+        },
+        [...SOURCES, page],
+      );
+
+    expect(
+      claim("United Airlines operates from Terminal 3 at SFO"),
+    ).toMatchObject({
+      status: "suggested",
+      citations: [
+        {
+          source: {
+            kind: "web",
+            url: "https://www.flysfo.com/flights/airlines",
+          },
+        },
+      ],
+    });
+    expect(claim("United Airlines operates from Terminal 2").status).toBe(
+      "insufficient",
+    );
+  });
+});
+
+describe("webSearchQuery", () => {
+  it("searches for what was missing, in the conversation's terms", () => {
+    expect(
+      webSearchQuery({
+        missing: "Which SFO terminal your United flight lands at.",
+        unsupported: [],
+        subject: "Thanksgiving flight?",
+      }),
+    ).toBe(
+      "Which SFO terminal your United flight lands at. Thanksgiving flight?",
+    );
+  });
+
+  it("falls back to the facts it couldn't confirm when nothing was named missing", () => {
+    expect(
+      webSearchQuery({
+        missing: " ",
+        unsupported: ["The venue is Price Center"],
+        subject: "Career fair",
+      }),
+    ).toBe("The venue is Price Center Career fair");
   });
 });

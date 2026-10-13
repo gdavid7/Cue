@@ -32,6 +32,7 @@ import type { AgentTask, HomeThread } from "@/utils/home/get-home";
 import { formatShortDate } from "@/utils/date";
 import { getInitials } from "@/utils/email";
 import { prefixPath } from "@/utils/path";
+import { BeforeYourMeeting } from "./BeforeYourMeeting";
 
 /**
  * Cue's home: the inbox organized around outcomes instead of time. What needs
@@ -91,6 +92,8 @@ export function HomeDashboard() {
           {data ? (
             <>
               <StatCards stats={data.stats} />
+
+              <BeforeYourMeeting emailAccountId={emailAccountId} />
 
               <Section
                 title="Needs you"

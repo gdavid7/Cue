@@ -15,6 +15,7 @@ import { promisify, parseArgs } from "node:util";
 import { Client } from "pg";
 import Redis from "ioredis";
 import { createComposioEmulator } from "../__tests__/emulators/composio";
+import { createExaEmulator } from "../__tests__/emulators/exa";
 import { createLlmEmulator } from "../__tests__/emulators/llm";
 import { createStripeEmulator } from "../__tests__/emulators/stripe";
 import {
@@ -26,6 +27,10 @@ import {
   cueDemoReplySuggestions,
   cueDemoThreadBriefs,
 } from "../__tests__/fixtures/inboxes/cue-demo-inbox";
+import {
+  buildCueDemoWebData,
+  cueDemoWebReply,
+} from "../__tests__/fixtures/inboxes/cue-demo-web";
 import { escapeHtml } from "../utils/string";
 import { type EmulateSeedOptions, writeEmulateSeed } from "./emulate-seed";
 import { createLocalEnvironment } from "./local-dev/environment";
@@ -57,6 +62,10 @@ const EMPTY_INSIGHT = {
 };
 // Without a real Composio key, the demo's connected apps come from an emulator.
 const USE_COMPOSIO_EMULATOR = USE_CUE_DEMO && !process.env.COMPOSIO_API_KEY;
+// Likewise the public web pages and searches, without a real Exa key.
+const USE_EXA_EMULATOR = USE_CUE_DEMO && !process.env.EXA_API_KEY;
+// Enough ids for every related item that can come before a web page.
+const MAX_SOURCE_IDS = 12;
 
 main().catch((error) => {
   console.error(
@@ -156,7 +165,8 @@ async function main() {
       stripePort,
       emailPort,
       composioPort,
-    ] = await Promise.all(Array.from({ length: 9 }, () => availablePort()));
+      exaPort,
+    ] = await Promise.all(Array.from({ length: 10 }, () => availablePort()));
     const env = createLocalEnvironment({
       appPort,
       databasePort,
@@ -178,6 +188,10 @@ async function main() {
     if (USE_COMPOSIO_EMULATOR) {
       env.COMPOSIO_API_KEY = "emulator-composio-key";
       env.COMPOSIO_API_URL = `http://127.0.0.1:${composioPort}/api/v3`;
+    }
+    if (USE_EXA_EMULATOR) {
+      env.EXA_API_KEY = "emulator-exa-key";
+      env.EXA_API_URL = `http://127.0.0.1:${exaPort}`;
     }
     manager = createProcessManager(APP_DIR, env);
     const processes = manager;
@@ -375,6 +389,15 @@ async function main() {
           object: suggestion.object,
         });
       }
+      // Registered last, so with the SFO page among the sources it wins over
+      // the abstention for Mom's thread.
+      const { page } = cueDemoWebReply;
+      for (let n = 1; n <= MAX_SOURCE_IDS; n++) {
+        llm.reply({
+          match: `<source id="c${n}" kind="web">\n${escapeHtml(`Web page: ${page.title} (${new URL(page.url).hostname.replace(/^www\./, "")})`)}`,
+          object: cueDemoWebReply.object(`c${n}`),
+        });
+      }
     }
     const stripe = await createStripeEmulator({
       port: stripePort,
@@ -390,6 +413,14 @@ async function main() {
         ...buildCueDemoConnectorData(),
       });
       cleanup.push({ close: composio.close });
+    }
+    if (USE_EXA_EMULATOR) {
+      const exa = await createExaEmulator({
+        port: exaPort,
+        apiKey: env.EXA_API_KEY,
+        ...buildCueDemoWebData(),
+      });
+      cleanup.push({ close: exa.close });
     }
     processes.start("Email emulator", process.execPath, [
       "__tests__/playwright/email-server.mjs",

@@ -14,7 +14,14 @@ import { Corpus, tokenize } from "./text";
 
 export type Person = { email: string; name?: string };
 
-export type CandidateKind = "email" | "event" | "file" | "assignment" | "chat";
+/** `web` is a public page the open thread links to. */
+export type CandidateKind =
+  | "email"
+  | "event"
+  | "file"
+  | "assignment"
+  | "chat"
+  | "web";
 
 export type ContextCandidate = {
   id: string;
@@ -43,6 +50,7 @@ export type ContextReason =
   | { type: "person"; label: string }
   | { type: "organization"; label: string }
   | { type: "via"; label: string }
+  | { type: "linked" }
   | { type: "topic"; terms: string[] }
   | { type: "upcoming"; days: number }
   | { type: "due"; days: number };
@@ -71,6 +79,7 @@ const KIND_PRIOR: Record<CandidateKind, number> = {
   email: 0.6,
   file: 0.5,
   chat: 0.5,
+  web: 0.6,
 };
 const MIN_SCORE = 0.18;
 const MIN_TOPIC_SIMILARITY = 0.12;
@@ -132,6 +141,11 @@ export function rankContext({
     { structure: number; reasons: ContextReason[] }
   >();
   for (const c of pool) {
+    // The thread itself points to the page: as direct a link as a shared person.
+    if (c.kind === "web") {
+      links.set(c.id, { structure: 1, reasons: [{ type: "linked" }] });
+      continue;
+    }
     const people = others(c.people);
     const shared = people.filter((p) =>
       focusEmails.has(normalizeEmail(p.email)),
