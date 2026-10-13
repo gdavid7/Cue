@@ -31,6 +31,7 @@ import { MailSplitTabs } from "@/app/(app)/[emailAccountId]/mail/MailSplitTabs";
 import { SelectAllCheckbox } from "@/app/(app)/[emailAccountId]/mail/SelectAllCheckbox";
 import { MailReaderPane } from "@/app/(app)/[emailAccountId]/mail/MailReaderPane";
 import { MailTitlebarNav } from "@/app/(app)/[emailAccountId]/mail/MailTitlebarNav";
+import { SearchAnswerCard } from "@/app/(app)/[emailAccountId]/mail/SearchAnswerCard";
 import { ScheduledEmailList } from "@/app/(app)/[emailAccountId]/mail/ScheduledEmailList";
 import { SnoozedThreadList } from "@/app/(app)/[emailAccountId]/mail/SnoozedThreadList";
 import type { MailboxItem } from "@/app/(app)/[emailAccountId]/mail/MailboxItemContextMenu";
@@ -1423,7 +1424,7 @@ export function MailShell() {
   const onToggleAssistant = useStableCallback(() =>
     toggleSidebar(["chat-sidebar"]),
   );
-  const onAskAssistant = useStableCallback((question: string) => {
+  const onContinueInChat = useStableCallback((question: string) => {
     setSidebarOpen((open) =>
       open.includes("chat-sidebar") ? open : [...open, "chat-sidebar"],
     );
@@ -1569,7 +1570,6 @@ export function MailShell() {
                 expandedPreview={expandedPreview}
                 onTogglePreview={togglePreview}
                 onToggleAssistant={onToggleAssistant}
-                onAskAssistant={onAskAssistant}
                 showLayoutToggle={!isAllAccounts}
                 selectAll={showSplitTabs ? null : selectAllCheckbox}
                 selectedCount={selection.selectedCount}
@@ -1617,6 +1617,14 @@ export function MailShell() {
               ) : null}
               {allInboxesFirstSyncMessage && (threads.length || searchQuery) ? (
                 <MailLoadingNote message={allInboxesFirstSyncMessage} />
+              ) : null}
+              {searchParam && emailAccountId ? (
+                <SearchAnswerCard
+                  emailAccountId={emailAccountId}
+                  key={searchParam}
+                  onContinueInChat={onContinueInChat}
+                  query={searchParam}
+                />
               ) : null}
               <MailPanelErrorBoundary
                 resetKey={JSON.stringify([

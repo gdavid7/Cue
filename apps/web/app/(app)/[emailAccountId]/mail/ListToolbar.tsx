@@ -44,6 +44,7 @@ import {
 import { parseMailSearchQuery } from "@/app/(app)/[emailAccountId]/mail/mail-search-query";
 import { parseOutlookSearchQuery } from "@/app/(app)/[emailAccountId]/mail/outlook-search-query";
 import type { MailLayoutMode } from "@/app/(app)/[emailAccountId]/mail/types";
+import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/Tooltip";
 import {
   Popover,
@@ -73,8 +74,6 @@ export type ListToolbarProps = {
   onToggleLayout: () => void;
   onTogglePreview: () => void;
   onToggleAssistant: () => void;
-  /** Sends the search box's text to the assistant as a question. */
-  onAskAssistant?: (question: string) => void;
   /** Rendered here only when the split tabs row isn't showing to hold it. */
   selectAll?: ReactNode;
   selectedCount: number;
@@ -109,7 +108,6 @@ export const ListToolbar = memo(function ListToolbar({
   onToggleLayout,
   onTogglePreview,
   onToggleAssistant,
-  onAskAssistant,
   selectAll,
   selectedCount,
   onArchiveSelected,
@@ -248,7 +246,6 @@ export const ListToolbar = memo(function ListToolbar({
           searchLabels={searchLabels}
           searchFolders={searchFolders}
           searchVariant={searchVariant}
-          onAskAssistant={onAskAssistant}
         />
       )}
 
@@ -297,18 +294,16 @@ export const ListToolbar = memo(function ListToolbar({
       ) : null}
 
       {selectedCount === 0 ? (
-        <Tooltip content="Assistant">
-          <button
-            type="button"
+        <Tooltip content="Chat with Cue">
+          <Button
+            aria-label="Chat with Cue"
             onClick={onToggleAssistant}
-            aria-label="Toggle the assistant"
-            className={cn(
-              toolbarButton,
-              "w-8 justify-center border-blue-600 bg-blue-600 px-0 text-white hover:border-blue-700 hover:bg-blue-700 hover:text-white dark:border-blue-700 dark:bg-blue-700 dark:hover:border-blue-800 dark:hover:bg-blue-800",
-            )}
+            size="iconSm"
+            type="button"
+            variant="ghostMuted"
           >
             <SparklesIcon className="size-3.5" />
-          </button>
+          </Button>
         </Tooltip>
       ) : null}
     </MailListToolbarSurface>
@@ -324,7 +319,6 @@ function MailSearchInput({
   searchLabels = [],
   searchFolders = [],
   searchVariant = "gmail",
-  onAskAssistant,
 }: {
   searchQuery: string;
   onSearch: (query: string) => void;
@@ -334,7 +328,6 @@ function MailSearchInput({
   searchLabels?: { name: string }[];
   searchFolders?: { name: string }[];
   searchVariant?: "gmail" | "outlook" | "common";
-  onAskAssistant?: (question: string) => void;
 }) {
   const localRef = useRef<HTMLInputElement>(null);
   const inputRef = inputRefProp ?? localRef;
@@ -382,21 +375,6 @@ function MailSearchInput({
           }}
           controls={
             <>
-              {onAskAssistant && draft.trim() ? (
-                <button
-                  type="button"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => {
-                    onAskAssistant(draft.trim());
-                    // A question isn't a mail search; leave the inbox showing.
-                    onSearchChange("");
-                  }}
-                  className="flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-primary text-xs transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <SparklesIcon className="size-3" />
-                  Ask Cue
-                </button>
-              ) : null}
               <PopoverTrigger asChild>
                 <button
                   type="button"
@@ -429,7 +407,7 @@ function MailSearchInput({
           <input
             ref={inputRef}
             value={draft}
-            placeholder="Search mail, or ask Cue a question"
+            placeholder="Search mail or ask Cue"
             enterKeyHint="search"
             role="combobox"
             aria-label="Search mail"
