@@ -7,7 +7,7 @@ import { StepSendTestBrief } from "./StepSendTestBrief";
 import { StepReady } from "./StepReady";
 import { prefixPath } from "@/utils/path";
 import { useAccount } from "@/providers/EmailAccountProvider";
-import { OnboardingWrapper } from "@/app/(app)/[emailAccountId]/onboarding/OnboardingWrapper";
+import { OnboardingWrapper } from "@/app/(app)/[emailAccountId]/onboarding-brief/OnboardingWrapper";
 
 const TOTAL_STEPS = 3;
 

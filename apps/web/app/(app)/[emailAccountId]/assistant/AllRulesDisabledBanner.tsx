@@ -1,19 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { SettingsIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { ActionCard } from "@/components/ui/card";
 import { useRules } from "@/hooks/useRules";
-import { useAccount } from "@/providers/EmailAccountProvider";
-import {
-  STEP_KEYS,
-  getOnboardingStepHref,
-} from "@/app/(app)/[emailAccountId]/onboarding/onboardingFlow";
 
 export function AllRulesDisabledBanner() {
   const { data: rules, isLoading } = useRules();
-  const { emailAccountId } = useAccount();
 
   if (isLoading || !rules) return null;
 
@@ -27,18 +19,7 @@ export function AllRulesDisabledBanner() {
       variant="blue"
       icon={<SettingsIcon className="h-5 w-5" />}
       title="All rules are disabled"
-      description="Your AI Assistant isn't processing emails because all rules are disabled. Enable them to get started."
-      action={
-        <Button asChild variant="primaryBlack">
-          <Link
-            href={getOnboardingStepHref(emailAccountId, STEP_KEYS.LABELS, {
-              force: true,
-            })}
-          >
-            Set up rules
-          </Link>
-        </Button>
-      }
+      description="Your AI Assistant isn't processing emails because all rules are disabled. Turn on the rules you want below to get started."
     />
   );
 }

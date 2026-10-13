@@ -51,7 +51,7 @@ const suiteEntryFiles = new Map([
     ],
   ],
   ["meetings", ["app/(app)/[emailAccountId]/meetings/page.tsx"]],
-  ["onboarding", ["app/(app)/[emailAccountId]/onboarding/page.tsx"]],
+  ["onboarding", ["app/(landing)/welcome-redirect/page.tsx"]],
   [
     "settings",
     [
@@ -100,8 +100,7 @@ const directSuiteMappings = [
   ["app/(redirects)/integrations/", ["integrations"]],
   ["app/(redirects)/calendars/", ["calendars"]],
   ["app/(redirects)/meetings/", ["meetings"]],
-  ["app/(redirects)/onboarding/", ["onboarding"]],
-  ["app/(redirects)/setup/", ["onboarding"]],
+  ["app/(landing)/welcome-redirect/", ["onboarding"]],
   ["app/(redirects)/mail/", ["mail"]],
   ["app/(redirects)/drive/", ["attachments"]],
   ["app/(redirects)/channels/", ["channels"]],
@@ -123,8 +122,6 @@ const directSuiteMappings = [
   ["app/(app)/[emailAccountId]/integrations/", ["integrations"]],
   ["app/(app)/[emailAccountId]/mail/", ["mail"]],
   ["app/(app)/[emailAccountId]/meetings/", ["meetings"]],
-  ["app/(app)/[emailAccountId]/onboarding/", ["onboarding"]],
-  ["app/(app)/[emailAccountId]/setup/", ["onboarding"]],
   ["app/(app)/[emailAccountId]/settings/", ["mail", "settings"]],
   ["app/(app)/settings/", ["settings"]],
   ["components/assistant-chat/", ["chat"]],

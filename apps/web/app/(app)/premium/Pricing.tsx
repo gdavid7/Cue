@@ -154,7 +154,7 @@ export default function Pricing(props: PricingProps) {
 
             {userPremiumTier && (
               <Button className="ml-2" asChild>
-                <Link href="/setup">
+                <Link href="/mail">
                   <SparklesIcon className="mr-2 h-4 w-4" />
                   Go to app
                 </Link>

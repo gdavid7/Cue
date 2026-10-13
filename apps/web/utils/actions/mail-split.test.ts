@@ -3,6 +3,7 @@ import { Prisma } from "@/generated/prisma/client";
 import { MailLayout, MailSplitFilterKind } from "@/generated/prisma/enums";
 import prisma from "@/utils/__mocks__/prisma";
 import {
+  applyInboxStyleAction,
   buildMailSplitFromPromptAction,
   createMailSplitAction,
   deleteMailSplitAction,
@@ -11,6 +12,8 @@ import {
   updateMailSplitAction,
 } from "@/utils/actions/mail-split";
 import { aiPromptToSplitFilters } from "@/utils/ai/split/prompt-to-split";
+import { addCueTabs } from "@/utils/split-inbox/cue-tabs.server";
+import { applyInboxStyle } from "@/utils/split-inbox/inbox-styles.server";
 
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/auth", () => ({
@@ -20,6 +23,12 @@ vi.mock("@/utils/auth", () => ({
 }));
 vi.mock("@/utils/ai/split/prompt-to-split", () => ({
   aiPromptToSplitFilters: vi.fn(),
+}));
+vi.mock("@/utils/split-inbox/inbox-styles.server", () => ({
+  applyInboxStyle: vi.fn(),
+}));
+vi.mock("@/utils/split-inbox/cue-tabs.server", () => ({
+  addCueTabs: vi.fn(),
 }));
 
 const EMAIL_ACCOUNT_ID = "email-account-1";
@@ -42,6 +51,30 @@ describe("mail split actions", () => {
       email: "user@example.com",
       account: { userId: "user-1", provider: "google" },
     } as never);
+  });
+
+  it("adds the Needs reply and Reading tabs only when the person opts in", async () => {
+    await applyInboxStyleAction(EMAIL_ACCOUNT_ID, {
+      style: "one-inbox",
+      addCueTabs: false,
+    });
+    expect(applyInboxStyle).toHaveBeenCalledWith({
+      emailAccountId: EMAIL_ACCOUNT_ID,
+      provider: "google",
+      style: "one-inbox",
+    });
+    expect(addCueTabs).not.toHaveBeenCalled();
+
+    await applyInboxStyleAction(EMAIL_ACCOUNT_ID, {
+      style: "tabs",
+      addCueTabs: true,
+    });
+    expect(addCueTabs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emailAccountId: EMAIL_ACCOUNT_ID,
+        provider: "google",
+      }),
+    );
   });
 
   it("rejects duplicate split IDs before attempting a reorder", async () => {

@@ -64,7 +64,7 @@ import {
   ItemDescription,
   ItemTitle,
 } from "@/components/ui/item";
-import { IconCircle } from "@/app/(app)/[emailAccountId]/onboarding/IconCircle";
+import { IconCircle } from "@/components/IconCircle";
 import { isValidEmail } from "@/utils/email";
 import { EmailAccountPreviewProvider } from "@/providers/EmailAccountProvider";
 import { ActionBadges } from "@/app/(app)/[emailAccountId]/assistant/Rules";
@@ -116,11 +116,6 @@ function ComponentsDemo() {
           </div>
           <div>
             <TextLink href="/components/slack">Slack Components →</TextLink>
-          </div>
-          <div>
-            <TextLink href="/components/onboarding">
-              Onboarding Components →
-            </TextLink>
           </div>
         </div>
 

@@ -11,7 +11,7 @@ import {
 import { PageHeading, TypographyP } from "@/components/Typography";
 import { Button } from "@/components/ui/button";
 import { CardBasic } from "@/components/ui/card";
-import { IconCircle } from "@/app/(app)/[emailAccountId]/onboarding/IconCircle";
+import { IconCircle } from "@/components/IconCircle";
 import { getGmailBasicSearchUrl } from "@/utils/url";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { isGoogleProvider } from "@/utils/email/provider-types";

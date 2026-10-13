@@ -248,7 +248,7 @@ const nextConfig: NextConfig = {
   async redirects() {
     return [
       {
-        destination: "/automation",
+        destination: "/mail",
         has: [
           {
             key: "__Secure-better-auth.session_token",
@@ -259,7 +259,7 @@ const nextConfig: NextConfig = {
         source: "/",
       },
       {
-        destination: "/setup",
+        destination: "/mail",
         has: [
           {
             key: "__Secure-better-auth.session-token.1",

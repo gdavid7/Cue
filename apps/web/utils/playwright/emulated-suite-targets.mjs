@@ -7,7 +7,7 @@ const featureGroups = [
   {
     name: "onboarding",
     specs: [
-      "onboarding/control-onboarding.spec.ts",
+      "onboarding/first-run.spec.ts",
       "attachments/attachment-onboarding.spec.ts",
     ],
   },

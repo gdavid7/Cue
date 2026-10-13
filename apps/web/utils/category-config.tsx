@@ -1,4 +1,4 @@
-import type { IconCircleColor } from "@/app/(app)/[emailAccountId]/onboarding/IconCircle";
+import type { IconCircleColor } from "@/components/IconCircle";
 import type { CategoryAction } from "@/utils/actions/rule.validation";
 import {
   getCategoryAction,

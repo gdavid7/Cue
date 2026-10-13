@@ -2,7 +2,7 @@
 
 import { useAction } from "next-safe-action/hooks";
 import Link from "next/link";
-import { Trash2, MoreVertical, Settings } from "lucide-react";
+import { InboxIcon, Trash2, MoreVertical } from "lucide-react";
 import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
@@ -196,12 +196,12 @@ function AccountOptionsDropdown({
       >
         <DropdownMenuItem asChild>
           <Link
-            href={prefixPath(emailAccount.id, "/setup")}
+            href={prefixPath(emailAccount.id, "/mail")}
             className="flex items-center gap-2"
             onClick={(e: MouseEvent<HTMLAnchorElement>) => e.stopPropagation()}
           >
-            <Settings className="size-4" />
-            Setup
+            <InboxIcon className="size-4" />
+            Open inbox
           </Link>
         </DropdownMenuItem>
         <ConfirmDialog

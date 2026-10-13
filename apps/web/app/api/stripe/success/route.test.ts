@@ -74,7 +74,7 @@ describe("stripe success route", () => {
       logger: expect.anything(),
     });
     expect(redirectMock).toHaveBeenCalledWith(
-      "/setup?conversion_event=trial_started&conversion_event_id=checkout-session-id",
+      "/mail?conversion_event=trial_started&conversion_event_id=checkout-session-id",
     );
 
     const trackCheckoutCompleted = afterMock.mock.calls[0]?.[0];
@@ -86,32 +86,6 @@ describe("stripe success route", () => {
       {
         source: "success_redirect",
       },
-    );
-  });
-
-  it("returns paywall-first users to onboarding after checkout", async () => {
-    await GET(
-      new Request(
-        "http://localhost:3000/api/stripe/success?session_id=checkout-session-id&returnTo=onboarding",
-      ) as never,
-      {} as never,
-    );
-
-    expect(redirectMock).toHaveBeenCalledWith(
-      "/onboarding?conversion_event=trial_started&conversion_event_id=checkout-session-id",
-    );
-  });
-
-  it("ignores unknown return destinations", async () => {
-    await GET(
-      new Request(
-        "http://localhost:3000/api/stripe/success?session_id=checkout-session-id&returnTo=https://evil.example",
-      ) as never,
-      {} as never,
-    );
-
-    expect(redirectMock).toHaveBeenCalledWith(
-      "/setup?conversion_event=trial_started&conversion_event_id=checkout-session-id",
     );
   });
 });

@@ -29,7 +29,7 @@ export async function signInTeammate(browser: Browser, role: "b" | "c" | "d") {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           provider,
-          callbackURL: "/welcome-redirect?force=true",
+          callbackURL: "/welcome-redirect",
           errorCallbackURL: "/login/error",
         }),
       });

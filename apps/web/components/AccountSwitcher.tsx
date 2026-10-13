@@ -52,7 +52,7 @@ export function AccountSwitcherInternal({
 
   const getHref = useCallback(
     (emailAccountId: string) => {
-      if (!activeEmailAccountId) return `/${emailAccountId}/setup`;
+      if (!activeEmailAccountId) return `/${emailAccountId}/mail`;
 
       return getAccountSwitchUrl({
         pathname,

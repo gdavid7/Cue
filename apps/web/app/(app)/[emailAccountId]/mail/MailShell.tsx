@@ -40,6 +40,7 @@ import { LabelPickerDialog } from "@/app/(app)/[emailAccountId]/mail/LabelPicker
 import { ThreadList } from "@/app/(app)/[emailAccountId]/mail/ThreadList";
 import { InboxStyleCard } from "@/app/(app)/[emailAccountId]/mail/InboxStylePicker";
 import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
+import { MailListPlaceholder } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
 import { useTranslateThread } from "@/app/(app)/[emailAccountId]/mail/use-thread-translation";
 import { printThread } from "@/app/(app)/[emailAccountId]/mail/print-thread";
@@ -1613,7 +1614,18 @@ export function MailShell() {
                   <LoadingContent
                     loading={
                       !threads.length &&
-                      (isLoading || (!!searchQuery && !searchSettled))
+                      (isLoading ||
+                        (!!searchQuery && !searchSettled) ||
+                        (!searchQuery &&
+                          !isAllAccounts &&
+                          accountThreadState.isFirstSync))
+                    }
+                    loadingComponent={
+                      searchQuery ? undefined : (
+                        <MailListPlaceholder
+                          providerName={isOutlook ? "Outlook" : "Gmail"}
+                        />
+                      )
                     }
                     error={searchQuery ? undefined : error}
                   >

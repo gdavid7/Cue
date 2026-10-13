@@ -7,9 +7,10 @@ import { usePostHog } from "posthog-js/react";
 import {
   getEmailAlreadyLinkedDescription,
   getRequiresReconsentDescription,
+  getSignInSupportText,
 } from "@/app/(landing)/login/messages";
 import { Button } from "@/components/ui/button";
-import { BasicLayout } from "@/components/layouts/BasicLayout";
+import { SignInLayout } from "@/components/layouts/SignInLayout";
 import { ErrorPage } from "@/components/ErrorPage";
 import { useUser } from "@/hooks/useUser";
 import { LoadingContent } from "@/components/LoadingContent";
@@ -17,7 +18,6 @@ import { Loading } from "@/components/Loading";
 import { WELCOME_PATH } from "@/utils/config";
 import { CrispChatLoggedOutVisible } from "@/components/CrispChat";
 import { getAndClearAuthErrorCookie } from "@/utils/auth-cookies";
-import { SUPPORT_EMAIL } from "@/utils/branding";
 import {
   getPendingAuthProvider,
   trackAuthFailure,
@@ -100,7 +100,7 @@ function LoginErrorContent() {
 
   const errorInfo = resolvedErrorCode ? errorMessages[resolvedErrorCode] : null;
   const title = errorInfo?.title || "Error Logging In";
-  const supportText = `If this error persists, please use the support chat or email us at ${SUPPORT_EMAIL}.`;
+  const supportText = getSignInSupportText();
   const fallbackDescription = resolvedErrorCode
     ? `Please try signing in again. (Error code: ${resolvedErrorCode}) ${supportText}`
     : `Please try signing in again. ${supportText}`;
@@ -126,7 +126,7 @@ function LoginErrorContent() {
 
 export default function LogInErrorPage() {
   return (
-    <BasicLayout>
+    <SignInLayout>
       <Suspense fallback={<Loading />}>
         <LoginErrorContent />
       </Suspense>
@@ -134,7 +134,7 @@ export default function LogInErrorPage() {
       <Suspense>
         <CrispChatLoggedOutVisible />
       </Suspense>
-    </BasicLayout>
+    </SignInLayout>
   );
 }
 

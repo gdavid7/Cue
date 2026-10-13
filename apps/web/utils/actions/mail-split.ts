@@ -21,13 +21,20 @@ import {
   reorderMailSplits,
 } from "@/utils/split-inbox/splits.server";
 import { applyInboxStyle } from "@/utils/split-inbox/inbox-styles.server";
+import { addCueTabs } from "@/utils/split-inbox/cue-tabs.server";
 
 export const applyInboxStyleAction = actionClient
   .metadata({ name: "applyInboxStyle" })
   .inputSchema(applyInboxStyleBody)
   .action(
-    async ({ ctx: { emailAccountId, provider }, parsedInput: { style } }) => {
+    async ({
+      ctx: { emailAccountId, provider, logger },
+      parsedInput: { style, addCueTabs: shouldAddCueTabs },
+    }) => {
       await applyInboxStyle({ emailAccountId, provider, style });
+      if (shouldAddCueTabs) {
+        await addCueTabs({ emailAccountId, provider, logger });
+      }
     },
   );
 

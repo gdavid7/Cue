@@ -45,7 +45,7 @@ const SenderContextPanel = dynamic(
 
 /**
  * Below this the reader would be squeezed too far by a pane beside it, so the
- * sender profile slides over the reader instead, and relevant context is left out.
+ * sender profile and relevant context slide over the reader instead.
  */
 const INLINE_SIDE_PANEL_MIN_WIDTH = 880;
 
@@ -152,7 +152,13 @@ export function ThreadReader({
     false,
   );
   const [readerRef, readerWidth] = useElementWidth();
+  const isNarrow = readerWidth < INLINE_SIDE_PANEL_MIN_WIDTH;
+  const [isContextSheetOpen, setIsContextSheetOpen] = useState(false);
   const { emailAccountId } = useAccount();
+  // Until the reader is measured its width reads as 0, which isn't narrow.
+  const canOpenContextSheet = Boolean(
+    readerWidth > 0 && isNarrow && emailAccountId && threadId,
+  );
   const hiddenDraftMessageIds = useHiddenDraftMessageIds(emailAccountId);
   const headerMessage =
     latestShownMessage(thread?.messages ?? [], hiddenDraftMessageIds) ??
@@ -201,6 +207,41 @@ export function ThreadReader({
       userLabels,
     }) ?? [];
 
+  let threadContext: ReactNode = null;
+  // Waits for keyboard navigation to settle before fetching.
+  if (detailSelectionSettled && emailAccountId && threadId) {
+    if (isNarrow) {
+      threadContext = isContextSheetOpen ? (
+        <ThreadContextPanel
+          emailAccountId={emailAccountId}
+          onClose={() => setIsContextSheetOpen(false)}
+          onDraftSaved={refetch}
+          onWriteReply={() => {
+            setIsContextSheetOpen(false);
+            setReplyRequestedFor(lastReceivedId ?? null);
+          }}
+          threadId={threadId}
+          variant="sheet"
+        />
+      ) : null;
+    } else if (threadContextHidden) {
+      threadContext = (
+        <ThreadContextRail onOpen={() => setThreadContextHidden(false)} />
+      );
+    } else {
+      threadContext = (
+        <ThreadContextPanel
+          emailAccountId={emailAccountId}
+          onClose={() => setThreadContextHidden(true)}
+          onDraftSaved={refetch}
+          onWriteReply={() => setReplyRequestedFor(lastReceivedId ?? null)}
+          threadId={threadId}
+          variant="inline"
+        />
+      );
+    }
+  }
+
   const renderToolbar = (
     messageExpansion?: ComponentProps<typeof ReaderToolbar>["messageExpansion"],
   ) => (
@@ -230,6 +271,9 @@ export function ThreadReader({
       onSnooze={onSnooze}
       onMarkRead={onMarkRead}
       onMarkUnread={onMarkUnread}
+      onOpenContext={
+        canOpenContextSheet ? () => setIsContextSheetOpen(true) : undefined
+      }
       onBackToInbox={onBackToInbox}
       onRemoveLabel={onRemoveLabel}
       subject={
@@ -261,27 +305,11 @@ export function ThreadReader({
             onClose={() => setSenderContext(null)}
             senderEmail={senderContext.senderEmail}
             senderName={senderContext.senderName}
-            variant={
-              readerWidth >= INLINE_SIDE_PANEL_MIN_WIDTH ? "inline" : "sheet"
-            }
+            variant={isNarrow ? "sheet" : "inline"}
           />
-        ) : emailAccountId &&
-          threadId &&
-          // Waits for keyboard navigation to settle before fetching.
-          detailSelectionSettled &&
-          readerWidth >= INLINE_SIDE_PANEL_MIN_WIDTH ? (
-          threadContextHidden ? (
-            <ThreadContextRail onOpen={() => setThreadContextHidden(false)} />
-          ) : (
-            <ThreadContextPanel
-              emailAccountId={emailAccountId}
-              onClose={() => setThreadContextHidden(true)}
-              onDraftSaved={refetch}
-              onWriteReply={() => setReplyRequestedFor(lastReceivedId ?? null)}
-              threadId={threadId}
-            />
-          )
-        ) : null
+        ) : (
+          threadContext
+        )
       }
     >
       {messages.length > 0 ? (

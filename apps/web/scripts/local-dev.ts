@@ -668,8 +668,9 @@ async function configureDemoAccount(
       END;
       $$ LANGUAGE plpgsql;
 
-      -- The inbox tabs onboarding would create from the demo's rules: Today's
-      -- lanes as filters over the inbox, which never move mail.
+      -- The "Needs reply" and "Reading" tabs the first-run inbox card's opt-in
+      -- creates (see addCueTabs): label filters over the inbox, which never
+      -- move mail.
       CREATE OR REPLACE FUNCTION cue_local_dev_add_splits(account_id text)
       RETURNS void AS $$
       BEGIN

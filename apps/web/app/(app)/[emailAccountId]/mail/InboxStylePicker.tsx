@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -12,10 +13,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useMailSettings } from "@/hooks/useMailSettings";
+import { useSignUpEvent } from "@/hooks/useSignupEvent";
 import { useUser } from "@/hooks/useUser";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { dismissHintAction } from "@/utils/actions/hints";
 import { applyInboxStyleAction } from "@/utils/actions/mail-split";
+import type { ApplyInboxStyleBody } from "@/utils/actions/mail-split.validation";
 import { isGoogleProvider } from "@/utils/email/provider-types";
 import { getActionErrorMessage } from "@/utils/error";
 import {
@@ -27,8 +30,7 @@ import {
 import { cn } from "@/utils";
 
 const TITLE = "Which looks like your inbox?";
-const REASSURANCE =
-  "Cue adds matching tabs. Nothing in your mailbox is moved or changed.";
+const REASSURANCE = "Cue adds matching tabs. Nothing in your mailbox is moved.";
 
 const STYLE_COPY: Record<
   InboxStyle,
@@ -59,6 +61,7 @@ export function InboxStyleCard({ onDone }: { onDone: () => void }) {
   const { emailAccountId, provider } = useAccount();
   const { data: user, mutate: mutateUser } = useUser();
   const [chosen, setChosen] = useState<InboxStyle | null>(null);
+  const [addCueTabs, setAddCueTabs] = useState(true);
   // Hides the card at once; the hint saved below keeps it hidden next visit.
   const [isClosed, setIsClosed] = useState(false);
   const { apply, isApplying } = useApplyInboxStyle(() => close());
@@ -97,6 +100,24 @@ export function InboxStyleCard({ onDone }: { onDone: () => void }) {
         value={style}
         onChange={setChosen}
       />
+      <label
+        htmlFor="inbox-style-cue-tabs"
+        className="mt-3 flex cursor-pointer items-start gap-2 text-xs sm:max-w-md"
+      >
+        <Checkbox
+          id="inbox-style-cue-tabs"
+          className="mt-0.5"
+          checked={addCueTabs}
+          onCheckedChange={(checked) => setAddCueTabs(checked === true)}
+        />
+        <span>
+          Also add &ldquo;Needs reply&rdquo; and &ldquo;Reading&rdquo; tabs.{" "}
+          <span className="text-muted-foreground">
+            Cue adds labels such as &ldquo;To Reply&rdquo; and
+            &ldquo;Newsletter&rdquo; in your mailbox; it never moves emails.
+          </span>
+        </span>
+      </label>
       <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
         {isGoogleProvider(provider) && (
           <p className="mr-auto text-muted-foreground text-xs">
@@ -111,10 +132,15 @@ export function InboxStyleCard({ onDone }: { onDone: () => void }) {
         >
           Not now
         </Button>
-        <Button size="xs-2" loading={isApplying} onClick={() => apply(style)}>
+        <Button
+          size="xs-2"
+          loading={isApplying}
+          onClick={() => apply({ style, addCueTabs })}
+        >
           Use this
         </Button>
       </div>
+      <RegistrationConversion />
     </section>
   );
 }
@@ -147,7 +173,10 @@ export function InboxStyleDialog({
           onChange={setChosen}
         />
         <DialogFooter>
-          <Button loading={isApplying} onClick={() => apply(style)}>
+          <Button
+            loading={isApplying}
+            onClick={() => apply({ style, addCueTabs: false })}
+          >
             Use this
           </Button>
         </DialogFooter>
@@ -161,9 +190,9 @@ function useApplyInboxStyle(onApplied: () => void) {
   const { mutate: mutateSettings } = useMailSettings();
   const [isApplying, setIsApplying] = useState(false);
 
-  const apply = async (style: InboxStyle) => {
+  const apply = async (input: ApplyInboxStyleBody) => {
     setIsApplying(true);
-    const result = await applyInboxStyleAction(emailAccountId, { style });
+    const result = await applyInboxStyleAction(emailAccountId, input);
     setIsApplying(false);
     if (result?.serverError || result?.validationErrors) {
       toast.error(getActionErrorMessage(result));
@@ -174,6 +203,15 @@ function useApplyInboxStyle(onApplied: () => void) {
   };
 
   return { apply, isApplying };
+}
+
+/**
+ * The card is the first thing a new account sees, so it reports the completed
+ * sign-up the old onboarding used to. The endpoint only counts new users.
+ */
+function RegistrationConversion() {
+  useSignUpEvent();
+  return null;
 }
 
 function InboxStyleOptions({

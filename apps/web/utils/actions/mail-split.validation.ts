@@ -64,7 +64,11 @@ export const reorderMailSplitsBody = z.object({
     ),
 });
 
-export const applyInboxStyleBody = z.object({ style: z.enum(INBOX_STYLES) });
+export const applyInboxStyleBody = z.object({
+  style: z.enum(INBOX_STYLES),
+  addCueTabs: z.boolean(),
+});
+export type ApplyInboxStyleBody = z.infer<typeof applyInboxStyleBody>;
 
 export const deleteMailSplitBody = z.object({ id: z.string() });
 export type DeleteMailSplitBody = z.infer<typeof deleteMailSplitBody>;
