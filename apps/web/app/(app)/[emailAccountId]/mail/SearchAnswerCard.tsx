@@ -1,18 +1,14 @@
 "use client";
 
+import Link from "next/link";
 import useSWR from "swr";
+import type { GetSearchAnswerResponse } from "@/app/api/user/search-answer/route";
 import { Button } from "@/components/ui/button";
+import { prefixPath } from "@/utils/path";
+import { getAccountScopedKey } from "@/utils/swr";
 
-/**
- * Answer a committed search that reads as a question, above the results.
- * Off until its read-only answer step is approved.
- */
-export const SEARCH_ANSWERS = false;
-
-type SearchAnswer = {
-  answer: string;
-  sources: { id: string; title: string; href: string }[];
-};
+/** Answer a committed search that reads as a question, above the results. */
+export const SEARCH_ANSWERS = true;
 
 /**
  * What the user's mail says in answer to a search, when it reads as a
@@ -29,9 +25,13 @@ export function SearchAnswerCard({
   query: string;
   onContinueInChat: (question: string) => void;
 }) {
-  const { data, isLoading, error } = useSWR(
-    SEARCH_ANSWERS && query ? ["search-answer", emailAccountId, query] : null,
-    () => fetchAnswer({ emailAccountId, query }),
+  const { data, isLoading, error } = useSWR<GetSearchAnswerResponse>(
+    SEARCH_ANSWERS && query
+      ? getAccountScopedKey(
+          `/api/user/search-answer?q=${encodeURIComponent(query)}`,
+          emailAccountId,
+        )
+      : null,
     { revalidateOnFocus: false },
   );
 
@@ -50,20 +50,35 @@ export function SearchAnswerCard({
       className="fade-in animate-in border-border border-b px-4 py-3 duration-150"
     >
       <p className="text-foreground text-sm leading-6">{data.answer}</p>
-      {data.sources.length ? (
-        <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
-          {data.sources.map((source) => (
+      <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+        {data.sources.map((source) => {
+          const href =
+            source.kind === "email"
+              ? prefixPath(
+                  emailAccountId,
+                  `/mail?thread-id=${encodeURIComponent(source.id)}&thread-account-id=${emailAccountId}`,
+                )
+              : source.url;
+          const className = "text-muted-foreground text-xs";
+          return (
             <li key={source.id}>
-              <a
-                className="text-muted-foreground text-xs underline-offset-2 hover:text-foreground hover:underline"
-                href={source.href}
-              >
-                {source.title}
-              </a>
+              {href ? (
+                <Link
+                  className={`${className} underline-offset-2 hover:text-foreground hover:underline`}
+                  href={href}
+                  {...(source.kind === "email"
+                    ? {}
+                    : { rel: "noreferrer", target: "_blank" })}
+                >
+                  {source.title}
+                </Link>
+              ) : (
+                <span className={className}>{source.title}</span>
+              )}
             </li>
-          ))}
-        </ul>
-      ) : null}
+          );
+        })}
+      </ul>
       <Button
         className="-ml-2 mt-1"
         onClick={() => onContinueInChat(query)}
@@ -75,12 +90,4 @@ export function SearchAnswerCard({
       </Button>
     </section>
   );
-}
-
-// No backend yet: the answer step is pending approval.
-async function fetchAnswer(_input: {
-  emailAccountId: string;
-  query: string;
-}): Promise<SearchAnswer | null> {
-  return null;
 }

@@ -818,3 +818,19 @@ export const cueDemoChat = {
   answer:
     'Milestone 2 for CSE 151B is due **Friday at 11:59pm**. Each group submits one PDF.\n\nSources: Prof. Alvarez\'s email "CSE 151B: milestone 2 due Friday at 11:59pm", and the Canvas assignment "Milestone 2: model evaluation and write-up". Kevin also asked to meet Wednesday at 4pm in the CSE building to finish it.',
 };
+
+/**
+ * What a model would answer when the demo question is searched with Enter:
+ * the professor's email and the Canvas assignment, by the ids they get in the
+ * search answer prompt (found from the LLM emulator's request log). Any other
+ * search gets no answer.
+ */
+export const cueDemoSearchAnswer = {
+  question: cueDemoChat.question,
+  object: {
+    answer:
+      "Milestone 2 for CSE 151B is due Friday at 11:59pm, one PDF per group.",
+    sourceIds: ["s1", "s4"],
+  },
+  none: { answer: null, sourceIds: [] },
+};

@@ -27,6 +27,7 @@ import {
   buildCueDemoWorkInbox,
   cueDemoChat,
   cueDemoReplySuggestions,
+  cueDemoSearchAnswer,
   cueDemoThreadBriefs,
 } from "../__tests__/fixtures/inboxes/cue-demo-inbox";
 import {
@@ -398,6 +399,17 @@ async function main() {
           object: suggestion.object,
         });
       }
+      // A search that only looks for mail gets no answer; the demo question,
+      // registered after, gets one. Both after the chat's replies, which also
+      // match the question.
+      llm.reply({
+        match: "You answer a search the user typed into their mailbox",
+        object: cueDemoSearchAnswer.none,
+      });
+      llm.reply({
+        match: `<question>${escapeHtml(cueDemoSearchAnswer.question)}</question>`,
+        object: cueDemoSearchAnswer.object,
+      });
       // Registered last, so with the SFO page among the sources it wins over
       // the abstention for Mom's thread.
       const { page } = cueDemoWebReply;
