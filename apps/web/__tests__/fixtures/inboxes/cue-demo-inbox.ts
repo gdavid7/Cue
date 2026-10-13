@@ -613,6 +613,7 @@ export const cueDemoReplySuggestions: {
   object: {
     enoughEvidence: boolean;
     missing: string;
+    webQuery: string;
     reply: string;
     claims: { fact: string; sourceId: string; quote: string }[];
   };
@@ -622,6 +623,7 @@ export const cueDemoReplySuggestions: {
     object: {
       enoughEvidence: true,
       missing: "",
+      webQuery: "",
       reply:
         "Hey Kevin, Wednesday at 4pm in the CSE building works. I'll take the write-up if you make the plots, so we can submit before the Friday 11:59pm deadline.",
       claims: [
@@ -651,6 +653,7 @@ export const cueDemoReplySuggestions: {
       enoughEvidence: false,
       missing:
         "Which SFO terminal your United flight lands at. Your trip confirmation has the day and time, but not the terminal.",
+      webQuery: "SFO United domestic arrivals terminal",
       reply: "",
       claims: [],
     },
@@ -661,6 +664,8 @@ export const cueDemoReplySuggestions: {
       enoughEvidence: false,
       missing:
         "The updated prices. Marcus confirmed the SSO fix shipped, and the v3 pricing sheet is in Google Drive, but Cue can see only its title, not the prices.",
+      // Private pricing: nothing public settles it, so there's no web search.
+      webQuery: "",
       reply: "",
       claims: [],
     },

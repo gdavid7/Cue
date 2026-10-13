@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { extractMainLinks } from "@/utils/thread-context/linked-pages";
+import { webSearchQuery } from "@/utils/thread-context/suggest-reply";
 import { buildCueDemoInbox, cueDemoReplySuggestions } from "./cue-demo-inbox";
 import {
   buildCueDemoWebData,
@@ -39,9 +40,17 @@ describe("Cue demo web", () => {
     expect(plain?.object.enoughEvidence).toBe(false);
     expect(messages.map((m) => m.subject)).toContain(cueDemoWebReply.subject);
 
-    const query = `${plain?.object.missing} ${cueDemoWebReply.subject}`;
+    const query = webSearchQuery({ webQuery: plain?.object.webQuery ?? "" });
     const found = web.searches.find((s) => s.match.test(query))?.results;
     expect(found?.map((p) => p.url)).toContain(cueDemoWebReply.page.url);
+  });
+
+  it("searches the web for nothing when only private mail could settle it", () => {
+    const sarah = cueDemoReplySuggestions.find((s) =>
+      s.subject.startsWith("Renewal discussion"),
+    );
+    expect(sarah?.object.enoughEvidence).toBe(false);
+    expect(webSearchQuery({ webQuery: sarah?.object.webQuery ?? "" })).toBe("");
   });
 
   it("quotes only words the demo mail or the cited web page contains", () => {

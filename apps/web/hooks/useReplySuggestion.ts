@@ -2,9 +2,9 @@ import { useSuggestedReply } from "@/hooks/useSuggestedReply";
 
 /**
  * When mail and calendar can't back a reply, look on the web before giving
- * up. Off until the web query is privacy-reviewed.
+ * up. The search sends only a query the model wrote from public words.
  */
-export const AUTO_WEB_LOOKUP = false;
+export const AUTO_WEB_LOOKUP = true;
 
 /**
  * A reply Cue backs with sources, and where it is in getting one: first the

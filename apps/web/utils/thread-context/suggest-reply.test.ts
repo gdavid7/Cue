@@ -31,6 +31,7 @@ describe("checkSuggestion", () => {
       {
         enoughEvidence: true,
         missing: "",
+        webQuery: "",
         reply: "Hi Sarah, the renewal is $48,000 per year.",
         claims: [
           {
@@ -65,6 +66,7 @@ describe("checkSuggestion", () => {
       {
         enoughEvidence: true,
         missing: "",
+        webQuery: "",
         reply: "Hi Sarah, the renewal is $45,000.",
         claims: [
           {
@@ -81,6 +83,7 @@ describe("checkSuggestion", () => {
       status: "insufficient",
       missing: "",
       unsupported: ["The renewal is $45,000"],
+      webQuery: "",
     });
   });
 
@@ -89,6 +92,7 @@ describe("checkSuggestion", () => {
       {
         enoughEvidence: true,
         missing: "",
+        webQuery: "",
         reply: "See you Thursday.",
         claims: [
           { fact: "The call is Thursday", sourceId: "c9", quote: "Thursday" },
@@ -105,6 +109,7 @@ describe("checkSuggestion", () => {
       {
         enoughEvidence: false,
         missing: "The agreed renewal price.",
+        webQuery: "",
         reply: "",
         claims: [],
       },
@@ -115,6 +120,7 @@ describe("checkSuggestion", () => {
       status: "insufficient",
       missing: "The agreed renewal price.",
       unsupported: [],
+      webQuery: "",
     });
   });
 });
@@ -168,25 +174,27 @@ United Airlines operates from Terminal 3 at SFO.
 });
 
 describe("webSearchQuery", () => {
-  it("searches for what was missing, in the conversation's terms", () => {
-    expect(
-      webSearchQuery({
+  // The query leaves Cue for a web search API, so it carries only the public
+  // words the model chose: never the subject or what the mail says is missing.
+  it("searches for the model's public query and nothing else", () => {
+    const abstention = checkSuggestion(
+      {
+        enoughEvidence: false,
         missing: "Which SFO terminal your United flight lands at.",
-        unsupported: [],
-        subject: "Thanksgiving flight?",
-      }),
-    ).toBe(
-      "Which SFO terminal your United flight lands at. Thanksgiving flight?",
+        webQuery: "  SFO United   domestic arrivals terminal ",
+        reply: "",
+        claims: [],
+      },
+      SOURCES,
+    );
+    if (abstention.status !== "insufficient")
+      throw new Error("expected abstention");
+    expect(webSearchQuery(abstention)).toBe(
+      "SFO United domestic arrivals terminal",
     );
   });
 
-  it("falls back to the facts it couldn't confirm when nothing was named missing", () => {
-    expect(
-      webSearchQuery({
-        missing: " ",
-        unsupported: ["The venue is Price Center"],
-        subject: "Career fair",
-      }),
-    ).toBe("The venue is Price Center Career fair");
+  it("skips the web when nothing public would settle it", () => {
+    expect(webSearchQuery({ webQuery: "  " })).toBe("");
   });
 });

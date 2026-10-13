@@ -42,6 +42,11 @@ const suggestionSchema = z.object({
     .describe(
       "When enoughEvidence is false: what information is missing, as one short sentence the user can act on. Empty otherwise.",
     ),
+  webQuery: z
+    .string()
+    .describe(
+      "When enoughEvidence is false and a public web page could settle what is missing: a short search query of public names and topic words only, with no personal details from the sources. Empty otherwise.",
+    ),
   reply: z
     .string()
     .describe(
@@ -85,7 +90,13 @@ export type Citation = {
 export type SuggestedReply =
   | { status: "suggested"; reply: string; citations: Citation[] }
   /** The model said it lacked a fact, or cited one it couldn't back up. */
-  | { status: "insufficient"; missing: string; unsupported: string[] }
+  | {
+      status: "insufficient";
+      missing: string;
+      unsupported: string[];
+      /** What a web search could settle, in public words only; empty for none. */
+      webQuery: string;
+    }
   | { status: "already-replied" }
   | { status: "unavailable" };
 
@@ -128,8 +139,8 @@ export async function suggestReply({
   }
 
   // A new message changes the key, so a cached suggestion is never stale.
-  const cacheKey = `suggested-reply:${emailAccountId}:${threadId}:${latest.id}`;
-  const webCacheKey = `suggested-reply-web:${emailAccountId}:${threadId}:${latest.id}`;
+  const cacheKey = `suggested-reply:v2:${emailAccountId}:${threadId}:${latest.id}`;
+  const webCacheKey = `suggested-reply-web:v2:${emailAccountId}:${threadId}:${latest.id}`;
   const cached = await getCached(searchWeb ? webCacheKey : cacheKey);
   if (cached) return cached;
 
@@ -176,14 +187,13 @@ export async function suggestReply({
   }
   if (!searchWeb || plain.status !== "insufficient" || !isExaSearchEnabled())
     return plain;
+  // Only the model's public query leaves for the web: never the subject or
+  // anything else from the user's mail. No query means nothing public helps.
+  const query = webSearchQuery(plain);
+  if (!query) return plain;
 
-  // The web is searched for exactly what the reply was missing.
   const results = await searchExa({
-    query: webSearchQuery({
-      missing: plain.missing,
-      unsupported: plain.unsupported,
-      subject: latest.headers.subject,
-    }),
+    query,
     numResults: WEB_SEARCH_RESULTS + 2,
     maxTextCharacters: MAX_SOURCE_TEXT,
     logger,
@@ -205,22 +215,11 @@ export async function suggestReply({
 }
 
 /**
- * What to search the web for when a reply can't be verified: the model's own
- * account of what's missing, and what the conversation is about. No model call.
+ * What to search the web for when a reply can't be verified: only the query
+ * the model wrote from public names and topic words. Empty means don't search.
  */
-export function webSearchQuery({
-  missing,
-  unsupported,
-  subject,
-}: {
-  missing: string;
-  unsupported: string[];
-  subject: string;
-}) {
-  return [missing.trim() || unsupported.join(" "), subject]
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .join(" ");
+export function webSearchQuery({ webQuery }: { webQuery: string }) {
+  return webQuery.replace(/\s+/g, " ").trim();
 }
 
 /** A public page as a source, in the same shape as the other kinds. */
@@ -304,6 +303,7 @@ export function checkSuggestion(
       status: "insufficient",
       missing: output.missing.trim(),
       unsupported: [],
+      webQuery: output.webQuery.trim(),
     };
   }
 
@@ -321,7 +321,7 @@ export function checkSuggestion(
   }
 
   if (unsupported.length) {
-    return { status: "insufficient", missing: "", unsupported };
+    return { status: "insufficient", missing: "", unsupported, webQuery: "" };
   }
   return { status: "suggested", reply, citations };
 }

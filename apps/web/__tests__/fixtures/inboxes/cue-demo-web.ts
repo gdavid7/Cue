@@ -84,6 +84,7 @@ export const cueDemoWebReply = {
   object: (pageSourceId: string) => ({
     enoughEvidence: true,
     missing: "",
+    webQuery: "",
     reply:
       "Hi Mom! I fly home Wednesday, November 25 on UA 2231, landing at SFO at 6:35 PM. United uses Terminal 3, and Dad can park in the Domestic Garage right across from it. Thanks for picking me up!",
     claims: [
