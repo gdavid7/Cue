@@ -85,7 +85,7 @@ describe("handleGmailPermissionsCheck", () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  it("does not require optional contact access", async () => {
+  it("does not require optional contact or calendar access", async () => {
     vi.mocked(global.fetch).mockResolvedValue({
       ok: true,
       json: vi.fn().mockResolvedValue({
@@ -100,7 +100,12 @@ describe("handleGmailPermissionsCheck", () => {
       grantedScope: null,
     });
 
-    expect(SCOPES).toHaveLength(REQUIRED_SCOPES.length + 1);
+    expect(SCOPES).toEqual(
+      expect.arrayContaining([
+        "https://www.googleapis.com/auth/contacts",
+        "https://www.googleapis.com/auth/calendar.events",
+      ]),
+    );
     expect(result).toEqual({
       hasAllPermissions: true,
       missingScopes: [],

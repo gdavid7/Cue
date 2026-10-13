@@ -34,10 +34,7 @@ import { logOut } from "@/utils/user";
 import { getAndClearAuthErrorCookie } from "@/utils/auth-cookies";
 import { getActionErrorMessage } from "@/utils/error";
 import { BRAND_NAME } from "@/utils/branding";
-import {
-  CALENDAR_SCOPES,
-  SCOPES as MICROSOFT_EMAIL_SCOPES,
-} from "@/utils/outlook/scopes";
+import { SCOPES as MICROSOFT_EMAIL_SCOPES } from "@/utils/outlook/scopes";
 import { MICROSOFT_DRIVE_SCOPES } from "@/utils/drive/scopes";
 import { clearLocalMailAccountState } from "@/utils/mail-engine/clear-local-mail-account";
 import { clearOfflineMailCacheForAccount } from "@/utils/offline/clear-mail-cache";
@@ -431,23 +428,14 @@ function buildMicrosoftPermissionHelp(summary: string) {
         </Link>
       </Button>
       <div>
-        <p className="font-medium">Email and inbox connection</p>
+        <p className="font-medium">Email, inbox and calendar connection</p>
         <PermissionList scopes={MICROSOFT_EMAIL_SCOPES} />
       </div>
       <div>
         <p className="font-medium">
-          Additional permissions if you later connect other Microsoft features
+          Additional permissions if you later connect Docs and OneDrive
         </p>
-        <div className="space-y-2">
-          <div>
-            <p className="font-medium">Calendar</p>
-            <PermissionList scopes={CALENDAR_SCOPES} />
-          </div>
-          <div>
-            <p className="font-medium">Docs and OneDrive</p>
-            <PermissionList scopes={MICROSOFT_DRIVE_SCOPES} />
-          </div>
-        </div>
+        <PermissionList scopes={MICROSOFT_DRIVE_SCOPES} />
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { REQUIRED_SCOPES, SCOPES } from "./scopes";
+import { CALENDAR_SCOPES, REQUIRED_SCOPES, SCOPES } from "./scopes";
 
 vi.mock("@/env", () => ({
   env: {
@@ -17,5 +17,16 @@ describe("Outlook scopes", () => {
   it("keeps contact access optional so existing accounts stay connected", () => {
     expect(REQUIRED_SCOPES).not.toContain("Contacts.Read");
     expect(REQUIRED_SCOPES).not.toContain("People.Read");
+  });
+
+  it("asks for calendar access at sign-in without requiring it", () => {
+    const calendarAccess = CALENDAR_SCOPES.filter((scope) =>
+      scope.startsWith("Calendars."),
+    );
+
+    expect(calendarAccess).not.toHaveLength(0);
+    expect(SCOPES).toEqual(expect.arrayContaining(calendarAccess));
+    for (const scope of calendarAccess)
+      expect(REQUIRED_SCOPES).not.toContain(scope);
   });
 });

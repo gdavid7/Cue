@@ -54,9 +54,8 @@ const USE_CUE_DEMO = process.env.CUE_DEMO_INBOX !== "inbox-zero";
 const DEMO_GOOGLE_EMAIL = "david.lin@ucsd.edu";
 // David's work mailbox, an Outlook account he adds next to the school Gmail.
 const DEMO_MICROSOFT_EMAIL = "david@brightline.io";
-// Fixed emulator tokens, so the demo calendars stay connected across restarts
-// (the emulator forgets OAuth tokens it issued when it stops).
-const DEMO_CALENDAR_TOKEN = "cue-local-dev-calendar-token";
+// A fixed emulator token for clearing the Outlook emulator's sample data before
+// anyone signs in (the emulator forgets OAuth tokens it issued when it stops).
 const DEMO_OUTLOOK_TOKEN = "cue-local-dev-outlook-token";
 const EMPTY_INSIGHT = {
   action: "none",
@@ -553,9 +552,7 @@ function cueDemoSeedOptions(): EmulateSeedOptions {
       DEMO_MICROSOFT_EMAIL,
       now,
     ),
-    // Each emulator accepts both; each answers only for its own user.
     tokens: {
-      [DEMO_CALENDAR_TOKEN]: { login: DEMO_GOOGLE_EMAIL, scopes: [] },
       [DEMO_OUTLOOK_TOKEN]: {
         login: DEMO_MICROSOFT_EMAIL,
         scopes: [],
@@ -610,14 +607,13 @@ async function removeOutlookEmulatorSamples(
 }
 
 /**
- * Connects the demo accounts' calendars (Google for the school Gmail, Outlook
- * for the work mailbox) and adds the Gmail account's inbox tabs as soon as
- * each account exists, and for an account that already does. The calendars
- * use the fixed emulator tokens with a far-future expiry, so the app never
- * tries to refresh them. With `connectApps`, also connects Google Drive and
- * Canvas to the Gmail account, which the Composio emulator answers for; the
- * app shares them with the person's other accounts. When the Cue demo is off,
- * removes the triggers and the connections, whose credentials would be dead.
+ * With `connectApps`, connects Google Drive and Canvas to the demo Gmail
+ * account as soon as it exists, and to an account that already does; the
+ * Composio emulator answers for them, and the app shares them with the
+ * person's other accounts. Calendars connect the way they do for anyone:
+ * signing in asks for calendar access and syncs the emulator's calendars.
+ * When the Cue demo is off, removes the trigger and the connections, whose
+ * credentials would be dead.
  */
 async function configureDemoAccount(
   databaseUrl: string,
@@ -630,16 +626,22 @@ async function configureDemoAccount(
   });
   await client.connect();
   try {
+    // Before sign-in connected calendars, the demo faked connections with
+    // fixed tokens the emulator no longer accepts.
+    await client.query(`
+      DROP TRIGGER IF EXISTS cue_local_dev_calendar ON "EmailAccount";
+      DROP TRIGGER IF EXISTS cue_local_dev_outlook_calendar ON "EmailAccount";
+      DROP FUNCTION IF EXISTS cue_local_dev_connect_calendar_trigger();
+      DROP FUNCTION IF EXISTS cue_local_dev_connect_calendar(text, text, text);
+      DROP FUNCTION IF EXISTS cue_local_dev_connect_calendar(text, text, text, text);
+      DELETE FROM "CalendarConnection" WHERE id LIKE '%-cue-demo-calendar';
+    `);
     if (!enabled) {
       await client.query(`
-        DROP TRIGGER IF EXISTS cue_local_dev_calendar ON "EmailAccount";
-        DROP TRIGGER IF EXISTS cue_local_dev_outlook_calendar ON "EmailAccount";
-        DROP FUNCTION IF EXISTS cue_local_dev_connect_calendar_trigger();
-        DROP FUNCTION IF EXISTS cue_local_dev_connect_calendar(text, text, text);
-        DROP FUNCTION IF EXISTS cue_local_dev_connect_calendar(text, text, text, text);
+        DROP TRIGGER IF EXISTS cue_local_dev_apps ON "EmailAccount";
+        DROP FUNCTION IF EXISTS cue_local_dev_connect_apps_trigger();
         DROP FUNCTION IF EXISTS cue_local_dev_add_splits(text);
         DROP FUNCTION IF EXISTS cue_local_dev_connect_apps(text);
-        DELETE FROM "CalendarConnection" WHERE id LIKE '%-cue-demo-calendar';
         DELETE FROM "McpConnection" WHERE id LIKE '%-cue-demo-app-%';
       `);
       return;
@@ -652,34 +654,6 @@ async function configureDemoAccount(
     }
 
     await client.query(`
-      -- Superseded by the version that takes the calendar's provider.
-      DROP FUNCTION IF EXISTS cue_local_dev_connect_calendar(text, text, text);
-      CREATE OR REPLACE FUNCTION cue_local_dev_connect_calendar(account_id text, account_email text, token text, calendar_provider text)
-      RETURNS void AS $$
-      BEGIN
-        INSERT INTO "CalendarConnection" (
-          id, "createdAt", "updatedAt", provider, email,
-          "accessToken", "refreshToken", "expiresAt", "isConnected", "emailAccountId"
-        ) VALUES (
-          account_id || '-cue-demo-calendar', NOW(), NOW(), calendar_provider, account_email,
-          token, 'cue-local-dev-unused-refresh-token', '2100-01-01', true, account_id
-        )
-        ON CONFLICT ("emailAccountId", provider, email) DO UPDATE SET
-          "accessToken" = EXCLUDED."accessToken",
-          "expiresAt" = EXCLUDED."expiresAt",
-          "isConnected" = true,
-          "updatedAt" = NOW();
-        INSERT INTO "Calendar" (
-          id, "createdAt", "updatedAt", "calendarId", name, "primary", "isEnabled", timezone, "connectionId"
-        )
-        SELECT account_id || '-cue-demo-primary-calendar', NOW(), NOW(), 'primary', account_email, true, true,
-          'America/Los_Angeles', c.id
-        FROM "CalendarConnection" c
-        WHERE c."emailAccountId" = account_id AND c.provider = calendar_provider AND c.email = account_email
-        ON CONFLICT ("connectionId", "calendarId") DO NOTHING;
-      END;
-      $$ LANGUAGE plpgsql;
-
       -- The "Needs reply" and "Reading" tabs the first-run inbox card's opt-in
       -- creates (see addCueTabs): label filters over the inbox, which never
       -- move mail.
@@ -703,44 +677,27 @@ async function configureDemoAccount(
       $$ LANGUAGE plpgsql;
 
       -- Runs inside the sign-in transaction, so a schema change that breaks
-      -- these inserts must not break signing in. Arguments: the calendar
-      -- token, its provider, and whether to connect apps. Inbox tabs come
-      -- from the first-run card, as for a real user.
-      CREATE OR REPLACE FUNCTION cue_local_dev_connect_calendar_trigger() RETURNS trigger AS $$
+      -- these inserts must not break signing in. Inbox tabs come from the
+      -- first-run card, as for a real user.
+      CREATE OR REPLACE FUNCTION cue_local_dev_connect_apps_trigger() RETURNS trigger AS $$
       BEGIN
-        PERFORM cue_local_dev_connect_calendar(NEW.id, NEW.email, TG_ARGV[0], TG_ARGV[1]);
-        IF TG_ARGV[2] = 'true' THEN
-          PERFORM cue_local_dev_connect_apps(NEW.id);
-        END IF;
+        PERFORM cue_local_dev_connect_apps(NEW.id);
         RETURN NEW;
       EXCEPTION WHEN OTHERS THEN
-        RAISE WARNING 'Cue demo calendar not connected: %', SQLERRM;
+        RAISE WARNING 'Cue demo apps not connected: %', SQLERRM;
         RETURN NEW;
       END;
       $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS cue_local_dev_apps ON "EmailAccount";
     `);
-    // Trigger definitions can't take bind parameters; all values are
-    // constants defined in this file.
-    await client.query(`
-      DROP TRIGGER IF EXISTS cue_local_dev_calendar ON "EmailAccount";
-      CREATE TRIGGER cue_local_dev_calendar AFTER INSERT ON "EmailAccount"
-      FOR EACH ROW WHEN (NEW.email = '${DEMO_GOOGLE_EMAIL}')
-      EXECUTE FUNCTION cue_local_dev_connect_calendar_trigger('${DEMO_CALENDAR_TOKEN}', 'google', '${connectApps}');
-      DROP TRIGGER IF EXISTS cue_local_dev_outlook_calendar ON "EmailAccount";
-      CREATE TRIGGER cue_local_dev_outlook_calendar AFTER INSERT ON "EmailAccount"
-      FOR EACH ROW WHEN (NEW.email = '${DEMO_MICROSOFT_EMAIL}')
-      EXECUTE FUNCTION cue_local_dev_connect_calendar_trigger('${DEMO_OUTLOOK_TOKEN}', 'microsoft', 'false');
-    `);
-    for (const [email, token, provider] of [
-      [DEMO_GOOGLE_EMAIL, DEMO_CALENDAR_TOKEN, "google"],
-      [DEMO_MICROSOFT_EMAIL, DEMO_OUTLOOK_TOKEN, "microsoft"],
-    ]) {
-      await client.query(
-        `SELECT cue_local_dev_connect_calendar(id, email, $2, $3) FROM "EmailAccount" WHERE email = $1`,
-        [email, token, provider],
-      );
-    }
     if (connectApps) {
+      // Trigger definitions can't take bind parameters; the address is a
+      // constant defined in this file.
+      await client.query(`
+        CREATE TRIGGER cue_local_dev_apps AFTER INSERT ON "EmailAccount"
+        FOR EACH ROW WHEN (NEW.email = '${DEMO_GOOGLE_EMAIL}')
+        EXECUTE FUNCTION cue_local_dev_connect_apps_trigger();
+      `);
       await client.query(
         `SELECT cue_local_dev_connect_apps(id) FROM "EmailAccount" WHERE email = $1`,
         [DEMO_GOOGLE_EMAIL],

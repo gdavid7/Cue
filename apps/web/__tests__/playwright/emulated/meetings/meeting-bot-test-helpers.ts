@@ -105,6 +105,12 @@ export async function prepareMeetingBotFixture(
       [emailAccountId],
     );
 
+    // Signing in connects the mailbox's calendar; this fixture replaces it.
+    await client.query(
+      `DELETE FROM "CalendarConnection"
+       WHERE "emailAccountId" = $1 AND provider = 'google' AND email = $2`,
+      [emailAccountId, account.email],
+    );
     await client.query(
       `INSERT INTO "CalendarConnection" (
          id, "createdAt", "updatedAt", provider, email,

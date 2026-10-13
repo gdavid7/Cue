@@ -12,7 +12,7 @@ import {
   decodeMicrosoftIdTokenClaims,
   requestMicrosoftToken,
 } from "@/utils/outlook/oauth";
-import { SCOPES as OUTLOOK_SCOPES } from "@/utils/outlook/scopes";
+import { REQUIRED_SCOPES as OUTLOOK_REQUIRED_SCOPES } from "@/utils/outlook/scopes";
 import prisma from "@/utils/prisma";
 
 const UUID_REGEX =
@@ -209,7 +209,8 @@ async function getMicrosoftObjectId(
     client_secret: credentials.clientSecret,
     grant_type: "refresh_token",
     refresh_token: refreshToken,
-    scope: OUTLOOK_SCOPES.join(" "),
+    // Optional scopes were asked for later; older grants can't refresh with them.
+    scope: OUTLOOK_REQUIRED_SCOPES.join(" "),
   });
 
   const tokens = (await tokenResponse.json()) as MicrosoftTokenResponse;

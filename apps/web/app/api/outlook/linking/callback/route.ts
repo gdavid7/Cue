@@ -46,6 +46,7 @@ import {
   SCOPES as OUTLOOK_SCOPES,
 } from "@/utils/outlook/scopes";
 import type { Logger } from "@/utils/logger";
+import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 
 export const GET = withError("outlook/linking/callback", async (request) => {
   const actorSession = await auth(request.headers);
@@ -318,6 +319,7 @@ export const GET = withError("outlook/linking/callback", async (request) => {
         logger.warn("Failed to fetch profile picture", { error });
       }
 
+      let linkedAccountId: string;
       try {
         const newAccount = await prisma.account.create({
           data: {
@@ -345,6 +347,7 @@ export const GET = withError("outlook/linking/callback", async (request) => {
           },
         });
 
+        linkedAccountId = newAccount.id;
         logger.info("Successfully created and linked new Microsoft account", {
           email: providerEmail,
           targetUserId,
@@ -379,6 +382,7 @@ export const GET = withError("outlook/linking/callback", async (request) => {
             );
 
             await updateMicrosoftAccountTokens(accountNow.id, tokens);
+            linkedAccountId = accountNow.id;
             logger.info("OAuth linking callback completed", {
               accountId: accountNow.id,
               outcome: "tokens_updated",
@@ -393,6 +397,7 @@ export const GET = withError("outlook/linking/callback", async (request) => {
         }
       }
 
+      await connectCalendarAtSignIn({ accountId: linkedAccountId, logger });
       await setOAuthCodeResult(code, { success: "account_created_and_linked" });
       return createAccountLinkingRedirect({
         query: { success: "account_created_and_linked" },
@@ -463,6 +468,10 @@ export const GET = withError("outlook/linking/callback", async (request) => {
       sourceUserId: linkingResult.sourceUserId,
     });
 
+    await connectCalendarAtSignIn({
+      accountId: linkingResult.sourceAccountId,
+      logger,
+    });
     await setOAuthCodeResult(code, { success: successMessage });
     return createAccountLinkingRedirect({
       query: { success: successMessage },
@@ -515,6 +524,7 @@ async function completeMicrosoftTokenUpdate({
     providerSubjectHash: hashOAuthAuditIdentifier(providerAccountId),
   });
 
+  await connectCalendarAtSignIn({ accountId, logger });
   await setOAuthCodeResult(code, { success: "tokens_updated" });
   return createAccountLinkingRedirect({
     query: { success: "tokens_updated" },

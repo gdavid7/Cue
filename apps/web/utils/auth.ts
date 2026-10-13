@@ -28,6 +28,7 @@ import {
 } from "@/utils/email/provider-types";
 import { ensureEmailAccountsWatched } from "@/utils/email/watch-manager";
 import { captureException } from "@/utils/error";
+import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 import { SCOPES as GMAIL_SCOPES } from "@/utils/gmail/scopes";
 import {
   fetchGoogleOpenIdProfile,
@@ -863,6 +864,8 @@ export async function handleLinkAccount(
       });
       captureException(error, { extra: { userId: account.userId } });
     });
+
+    await connectCalendarAtSignIn({ accountId: account.id, logger });
 
     scheduleEmailWatchesAfterLink(account.userId);
 

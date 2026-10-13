@@ -9,6 +9,7 @@ import { saveTokens } from "@/utils/auth/save-tokens";
 import { createOutlookClient } from "@/utils/outlook/client";
 import { fetchGoogleOpenIdProfile } from "@/utils/gmail/oauth";
 import { ensureEmailAccountsWatched } from "@/utils/email/watch-manager";
+import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 import {
   betterAuthConfig,
   handleLinkAccount,
@@ -77,6 +78,9 @@ vi.mock("@/utils/gmail/oauth", async (importActual) => ({
 }));
 vi.mock("@/utils/email/watch-manager", () => ({
   ensureEmailAccountsWatched: vi.fn(),
+}));
+vi.mock("@/utils/calendar/connect-sign-in-calendar", () => ({
+  connectCalendarAtSignIn: vi.fn(),
 }));
 vi.mock("@/utils/premium/seats", () => ({
   claimPendingPremiumInvite: vi.fn(),
@@ -620,6 +624,27 @@ describe("handleLinkAccount", () => {
 
     expect(ensureEmailAccountsWatched).toHaveBeenCalledWith({
       userIds: ["user_1"],
+      logger: expect.anything(),
+    });
+  });
+
+  it("connects the linked mailbox's calendar", async () => {
+    mockGoogleProfile();
+    prisma.emailAccount.findUnique.mockResolvedValue(null);
+    prisma.user.findUnique.mockResolvedValue({
+      email: "user@example.com",
+      name: "Test User",
+      image: null,
+    } as Awaited<ReturnType<typeof prisma.user.findUnique>>);
+    prisma.$transaction.mockResolvedValue([
+      { id: "email_account_1" },
+      { id: "account_1" },
+    ] as never);
+
+    await handleLinkAccount(getGoogleAccount());
+
+    expect(connectCalendarAtSignIn).toHaveBeenCalledWith({
+      accountId: "account_1",
       logger: expect.anything(),
     });
   });
