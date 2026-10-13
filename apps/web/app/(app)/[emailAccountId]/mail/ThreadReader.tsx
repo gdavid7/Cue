@@ -158,12 +158,15 @@ export function ThreadReader({
   const canAssist = Boolean(
     detailSelectionSettled && emailAccountId && threadId,
   );
+  // Opened from "Reply" beside Cue's note that it left the reply to the user.
+  const [replyRequestedFor, setReplyRequestedFor] = useState<string>();
   const { assist, idleReplyArea } = useReaderReplySuggestion({
     emailAccountId,
     threadId,
     messages,
     enabled: canAssist,
     onOpenThread: openThread,
+    onReply: setReplyRequestedFor,
   });
   const hiddenDraftMessageIds = useHiddenDraftMessageIds(emailAccountId);
   const headerMessage =
@@ -285,7 +288,9 @@ export function ThreadReader({
             renderMessageMenu={renderMessageMenu}
             enableMessageNavigation={enableMessageNavigation}
             autoOpenReplyForMessageId={
-              autoOpenReplyForMessageId ?? assist?.messageId
+              autoOpenReplyForMessageId ??
+              assist?.messageId ??
+              replyRequestedFor
             }
             afterLatestMessage={
               canAssist && emailAccountId && threadId ? (

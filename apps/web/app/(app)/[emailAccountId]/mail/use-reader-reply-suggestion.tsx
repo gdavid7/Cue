@@ -1,6 +1,6 @@
 "use client";
 
-import { SparklesIcon } from "lucide-react";
+import { ReplyIcon } from "lucide-react";
 import { useState } from "react";
 import type { ThreadMessage } from "@/components/email-list/types";
 import type { ReplyAssist } from "@/components/email-list/reply-assist";
@@ -18,15 +18,16 @@ import { textToHtmlParagraphs } from "@/utils/string";
 
 /**
  * Write the suggested reply as soon as a conversation that needs one opens:
- * its newest message isn't from the user and it has no draft. Off until the
- * founder approves running a model call on every open.
+ * its newest message isn't from the user and it has no draft. The founder's
+ * rule: only if we have the context to reply, but if we do, write it.
  */
-export const AUTO_SUGGEST = false;
+export const AUTO_SUGGEST = true;
 
 /**
  * Cue's suggested reply for the open conversation, delivered where the user
- * would reply anyway: the reply composer, pre-filled. `idleReplyArea` sits
- * after the thread while nothing is being written.
+ * would reply anyway: the reply composer, pre-filled, and only when every fact
+ * in it is backed. Otherwise `idleReplyArea` says in one line why Cue left
+ * the reply to the user, beside the normal Reply button.
  */
 export function useReaderReplySuggestion({
   emailAccountId,
@@ -34,6 +35,7 @@ export function useReaderReplySuggestion({
   messages,
   enabled,
   onOpenThread,
+  onReply,
 }: {
   emailAccountId: string;
   threadId: string | null;
@@ -41,6 +43,8 @@ export function useReaderReplySuggestion({
   /** False while keyboard navigation is still moving through threads. */
   enabled: boolean;
   onOpenThread: (threadId: string) => void;
+  /** Opens an empty reply to the newest message. */
+  onReply: (messageId: string) => void;
 }) {
   const { userEmail } = useAccount();
   const latest = messages.findLast(
@@ -53,68 +57,67 @@ export function useReaderReplySuggestion({
   const hasDraft = messages.some((message) =>
     message.labelIds?.includes(GmailLabel.DRAFT),
   );
-  const [requestedFor, setRequestedFor] = useState<string | null>(null);
-  const requested =
-    Boolean(latest) &&
-    ((AUTO_SUGGEST && !latestIsFromUser && !hasDraft) ||
-      requestedFor === latest?.id);
+  // Decided once per newest message: the draft a suggestion saves must not
+  // turn the suggestion off.
+  const [decision, setDecision] = useState<{ id: string; run: boolean }>();
+  if (latest && decision?.id !== latest.id) {
+    setDecision({
+      id: latest.id,
+      run: AUTO_SUGGEST && !latestIsFromUser && !hasDraft,
+    });
+  }
+  const run = Boolean(latest && decision?.id === latest.id && decision.run);
   const { phase, suggestion } = useReplySuggestion({
     threadId,
     emailAccountId,
-    enabled: enabled && requested,
+    enabled: enabled && run,
   });
 
-  let assist: ReplyAssist | null = null;
-  if (latest && suggestion?.status === "suggested") {
-    assist = {
-      messageId: latest.id,
-      suggestedBodyHtml: textToHtmlParagraphs(suggestion.reply),
-      footer: (
-        <CheckedAgainst
-          citations={suggestion.citations}
-          onOpenThread={onOpenThread}
-        />
-      ),
-    };
-  } else if (latest && suggestion?.status === "insufficient") {
-    assist = {
-      messageId: latest.id,
-      footer: (
-        <p className="text-muted-foreground text-xs">
-          {abstentionLine(suggestion.missing)}
-        </p>
-      ),
-    };
-  }
+  const assist: ReplyAssist | null =
+    latest && suggestion?.status === "suggested"
+      ? {
+          messageId: latest.id,
+          suggestedBodyHtml: textToHtmlParagraphs(suggestion.reply),
+          footer: (
+            <CheckedAgainst
+              citations={suggestion.citations}
+              onOpenThread={onOpenThread}
+            />
+          ),
+        }
+      : null;
 
   let idleReplyArea: React.ReactNode = null;
-  if (latest && !latestIsFromUser) {
-    if (phase === "checking-mail" || phase === "checking-web") {
-      idleReplyArea = (
-        <ReplyArea>
-          <p
-            className="fade-in animate-in text-muted-foreground text-sm duration-150"
-            role="status"
-          >
-            {suggestionPhaseLabel(phase)}
-          </p>
-        </ReplyArea>
-      );
-    } else if (!requested) {
-      idleReplyArea = (
-        <ReplyArea>
+  if (latest && (phase === "checking-mail" || phase === "checking-web")) {
+    idleReplyArea = (
+      <ReplyArea>
+        <p
+          className="fade-in animate-in text-muted-foreground text-sm duration-150"
+          role="status"
+        >
+          {suggestionPhaseLabel(phase)}
+        </p>
+      </ReplyArea>
+    );
+  } else if (latest && suggestion?.status === "insufficient") {
+    idleReplyArea = (
+      <ReplyArea>
+        <div className="fade-in flex animate-in flex-wrap items-center gap-x-3 gap-y-1 duration-150">
           <Button
-            onClick={() => setRequestedFor(latest.id)}
+            onClick={() => onReply(latest.id)}
             size="sm"
             type="button"
-            variant="ghostMuted"
+            variant="outline"
           >
-            <SparklesIcon className="mr-2 size-4" />
-            Suggest a reply
+            <ReplyIcon className="mr-2 size-4" />
+            Reply
           </Button>
-        </ReplyArea>
-      );
-    }
+          <p className="text-muted-foreground text-xs">
+            {abstentionLine(suggestion.missing)}
+          </p>
+        </div>
+      </ReplyArea>
+    );
   }
 
   return { assist, idleReplyArea };
