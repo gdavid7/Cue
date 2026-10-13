@@ -89,7 +89,8 @@ export function buildEmulateSeed(
           summary: googleEmail,
           primary: true,
           selected: true,
-          time_zone: "UTC",
+          // Signing in syncs this calendar and takes the account's time zone from it.
+          time_zone: fixture.mailbox.timezone,
         },
       ],
       ...(calendarEvents ? { calendar_events: calendarEvents } : {}),

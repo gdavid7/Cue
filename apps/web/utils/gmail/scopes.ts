@@ -12,8 +12,18 @@ export const REQUIRED_SCOPES = [
   "https://www.googleapis.com/auth/gmail.settings.basic",
 ] as const;
 
+// Asked for at sign-in, so a new account's calendar connects with its mailbox.
+// Optional: accounts consented before then keep working without them, and the
+// Calendars page can still connect a calendar separately.
+const CALENDAR_ACCESS_SCOPES = [
+  "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/calendar.events", // For writing/creating events in the future
+  "https://www.googleapis.com/auth/calendar.freebusy", // For checking free/busy status
+];
+
 export const SCOPES = [
   ...REQUIRED_SCOPES,
+  ...CALENDAR_ACCESS_SCOPES,
   // Saved Contacts and Other Contacts are optional and were requested at
   // different times. Accounts consented before either was requested keep
   // working with whichever they hold.
@@ -27,9 +37,7 @@ export const SCOPES = [
 export const CALENDAR_SCOPES = [
   "https://www.googleapis.com/auth/userinfo.profile",
   "https://www.googleapis.com/auth/userinfo.email",
-  "https://www.googleapis.com/auth/calendar.readonly",
-  "https://www.googleapis.com/auth/calendar.events", // For writing/creating events in the future
-  "https://www.googleapis.com/auth/calendar.freebusy", // For checking free/busy status
+  ...CALENDAR_ACCESS_SCOPES,
   // "https://www.googleapis.com/auth/calendar.settings.readonly", // For reading calendar settings
   // "https://www.googleapis.com/auth/calendar.settings", // For modifying calendar settings
   // "https://www.googleapis.com/auth/calendar.calendars.readonly", // For reading calendar metadata

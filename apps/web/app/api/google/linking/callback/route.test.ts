@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
 import prisma from "@/utils/__mocks__/prisma";
+import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 
 const {
   mockValidateOAuthCallback,
@@ -54,6 +55,9 @@ vi.mock("@/utils/middleware", async () => {
 });
 
 vi.mock("@/utils/prisma");
+vi.mock("@/utils/calendar/connect-sign-in-calendar", () => ({
+  connectCalendarAtSignIn: vi.fn(),
+}));
 vi.mock("@/utils/error-messages", () => ({
   clearAccountDisconnectedErrorIfResolved: vi.fn().mockResolvedValue(undefined),
 }));
@@ -199,6 +203,10 @@ describe("google linking callback route", () => {
     expect(mockSetOAuthCodeResult).toHaveBeenCalledWith("valid-auth-code", {
       success: "tokens_updated",
     });
+    expect(connectCalendarAtSignIn).toHaveBeenCalledWith({
+      accountId: "existing-account-123",
+      logger: expect.anything(),
+    });
     expect(mockSetOAuthCodeResult.mock.invocationCallOrder[0]).toBeLessThan(
       mockAfter.mock.invocationCallOrder[0],
     );
@@ -304,6 +312,10 @@ describe("google linking callback route", () => {
     expect(redirectLocation).toContain("success=account_created_and_linked");
     expect(prisma.account.create).toHaveBeenCalled();
     expect(prisma.account.update).not.toHaveBeenCalled();
+    expect(connectCalendarAtSignIn).toHaveBeenCalledWith({
+      accountId: "account-123",
+      logger: expect.anything(),
+    });
   });
 
   it("rejects the callback when the actor differs from the target user", async () => {

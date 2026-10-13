@@ -33,6 +33,7 @@ import {
 import { isDuplicateError } from "@/utils/prisma-helpers";
 import { SafeError } from "@/utils/error";
 import { ensureEmailAccountsWatched } from "@/utils/email/watch-manager";
+import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 
 export const GET = withError("google/linking/callback", async (request) => {
   const actorSession = await auth(request.headers);
@@ -195,6 +196,7 @@ export const GET = withError("google/linking/callback", async (request) => {
       });
 
       return completeGoogleAccountLinking({
+        accountId: linkingResult.existingAccountId,
         code,
         logger,
         success: "tokens_updated",
@@ -232,6 +234,7 @@ export const GET = withError("google/linking/callback", async (request) => {
           });
 
           return completeGoogleAccountLinking({
+            accountId: existingEmulatedAccount.accountId,
             code,
             logger,
             success: "tokens_updated",
@@ -245,6 +248,7 @@ export const GET = withError("google/linking/callback", async (request) => {
         targetUserId,
       });
 
+      let linkedAccountId: string;
       try {
         const newAccount = await prisma.account.create({
           data: {
@@ -271,6 +275,7 @@ export const GET = withError("google/linking/callback", async (request) => {
           },
         });
 
+        linkedAccountId = newAccount.id;
         logger.info("Successfully created and linked new Google account", {
           email: providerEmail,
           targetUserId,
@@ -308,6 +313,7 @@ export const GET = withError("google/linking/callback", async (request) => {
               accountId: accountNow.id,
               tokens,
             });
+            linkedAccountId = accountNow.id;
 
             logger.info("OAuth linking callback completed", {
               accountId: accountNow.id,
@@ -324,6 +330,7 @@ export const GET = withError("google/linking/callback", async (request) => {
       }
 
       return completeGoogleAccountLinking({
+        accountId: linkedAccountId,
         code,
         logger,
         success: "account_created_and_linked",
@@ -356,6 +363,7 @@ export const GET = withError("google/linking/callback", async (request) => {
       });
 
       return completeGoogleAccountLinking({
+        accountId: linkingResult.existingAccountId,
         code,
         logger,
         success: "tokens_updated",
@@ -406,6 +414,7 @@ export const GET = withError("google/linking/callback", async (request) => {
     });
 
     return completeGoogleAccountLinking({
+      accountId: linkingResult.sourceAccountId,
       code,
       logger,
       success: successMessage,
@@ -431,16 +440,19 @@ interface GoogleTokens {
 }
 
 async function completeGoogleAccountLinking({
+  accountId,
   code,
   logger,
   success,
   targetUserId,
 }: {
+  accountId: string;
   code: string;
   logger: Parameters<typeof handleOAuthCallbackError>[0]["logger"];
   success: "account_created_and_linked" | "account_merged" | "tokens_updated";
   targetUserId: string;
 }) {
+  await connectCalendarAtSignIn({ accountId, logger });
   await setOAuthCodeResult(code, { success });
 
   after(() =>

@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
+import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 
 const {
   mockValidateOAuthCallback,
@@ -82,6 +83,10 @@ vi.mock("@/utils/redis/oauth-code", () => ({
 
 vi.mock("@/utils/prisma-helpers", () => ({
   isDuplicateError: vi.fn(() => false),
+}));
+
+vi.mock("@/utils/calendar/connect-sign-in-calendar", () => ({
+  connectCalendarAtSignIn: vi.fn(),
 }));
 
 vi.mock("@/utils/auth", () => ({
@@ -231,7 +236,7 @@ describe("outlook linking callback route", () => {
     expect(mockClearOAuthCode).toHaveBeenCalledWith("valid-auth-code");
   });
 
-  it("allows linking without optional contact access", async () => {
+  it("allows linking without optional contact or calendar access", async () => {
     mockHandleAccountLinking.mockResolvedValue({
       type: "continue_create",
     });
@@ -291,6 +296,10 @@ describe("outlook linking callback route", () => {
     );
     expect(mockSetOAuthCodeResult).toHaveBeenCalledWith("valid-auth-code", {
       success: "account_created_and_linked",
+    });
+    expect(connectCalendarAtSignIn).toHaveBeenCalledWith({
+      accountId: "account-123",
+      logger: expect.anything(),
     });
   });
 

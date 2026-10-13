@@ -51,4 +51,18 @@ describe("Gmail scopes", () => {
       "https://www.googleapis.com/auth/contacts.other.readonly",
     );
   });
+
+  it("asks for calendar access at sign-in without requiring it", async () => {
+    const { CALENDAR_SCOPES, REQUIRED_SCOPES, SCOPES } = await import(
+      "./scopes"
+    );
+    const calendarAccess = CALENDAR_SCOPES.filter((scope) =>
+      scope.includes("/auth/calendar"),
+    );
+
+    expect(calendarAccess).not.toHaveLength(0);
+    expect(SCOPES).toEqual(expect.arrayContaining(calendarAccess));
+    for (const scope of calendarAccess)
+      expect(REQUIRED_SCOPES).not.toContain(scope);
+  });
 });
