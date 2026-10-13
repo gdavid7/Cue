@@ -4,7 +4,7 @@ import { PlusIcon } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { startMcpOAuth } from "@/app/(app)/[emailAccountId]/integrations/startMcpOAuth";
-import { DomainIcon } from "@/components/charts/DomainIcon";
+import { ConnectorLogo } from "@/components/connectors/ConnectorLogo";
 import { ConnectWithCredentialsDialog } from "@/components/connectors/ConnectWithCredentialsDialog";
 import { toastError } from "@/components/Toast";
 import { useIntegrations } from "@/hooks/useIntegrations";
@@ -84,7 +84,11 @@ export function ConnectorsList({
         const label = `${connector.displayName}: ${STATUS_LABEL[status]}`;
         const content = (
           <>
-            <DomainIcon domain={connector.domain} size={16} />
+            <ConnectorLogo
+              domain={connector.domain}
+              logo={`/images/connectors/${connector.name}.svg`}
+              size={16}
+            />
             {collapsed ? (
               <span className="sr-only">{label}</span>
             ) : (

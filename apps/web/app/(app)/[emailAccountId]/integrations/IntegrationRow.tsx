@@ -16,7 +16,7 @@ import {
 import { MoreVertical } from "lucide-react";
 import clsx from "clsx";
 import { toastError, toastSuccess } from "@/components/Toast";
-import { DomainIcon } from "@/components/charts/DomainIcon";
+import { ConnectorLogo } from "@/components/connectors/ConnectorLogo";
 import { ConnectWithCredentialsDialog } from "@/components/connectors/ConnectWithCredentialsDialog";
 import {
   disconnectMcpConnectionAction,
@@ -247,7 +247,11 @@ export function IntegrationRow({
       <TableRow>
         <TableCell className="w-full">
           <div className="flex items-center gap-3">
-            <DomainIcon domain={integration.url} size={32} />
+            <ConnectorLogo
+              domain={integration.url}
+              logo={integration.logo}
+              size={32}
+            />
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span>{integration.shortName || integration.displayName}</span>

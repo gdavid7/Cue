@@ -54,6 +54,7 @@ async function getData(emailAccountId: string) {
       shortName: integration.shortName,
       description: integration.description,
       url: integration.url,
+      logo: integration.logo,
       comingSoon: integration.comingSoon,
       authType: integration.authType,
       credentialFields: integration.credentialFields,
@@ -70,6 +71,7 @@ async function getData(emailAccountId: string) {
       shortName: undefined,
       description: host,
       url: host,
+      logo: undefined,
       comingSoon: undefined,
       authType: integration.authType
         ? fromDbAuthType(integration.authType)

@@ -37,6 +37,7 @@ export const MCP_INTEGRATIONS: Record<
     shortName?: string; // Short name for display in compact contexts (e.g. "Connected to X")
     description?: string; // Only for rows whose name alone does not say what they connect
     url: string; // Domain URL for favicon display
+    logo?: string; // The app's own logo, when its domain's favicon is a parent brand's
     allowedTools?: string[];
     comingSoon?: boolean;
     oauthConfig?: {
@@ -239,6 +240,7 @@ export const MCP_INTEGRATIONS: Record<
     name: "googlesheets",
     displayName: "Google Sheets",
     url: "sheets.google.com",
+    logo: "/images/connectors/googlesheets.svg",
     provider: { id: "composio", app: "googlesheets" },
     authType: "oauth",
     scopes: [],
@@ -253,6 +255,7 @@ export const MCP_INTEGRATIONS: Record<
     name: "googledrive",
     displayName: "Google Drive",
     url: "drive.google.com",
+    logo: "/images/connectors/googledrive.svg",
     provider: { id: "composio", app: "googledrive" },
     authType: "oauth",
     scopes: [],
@@ -262,6 +265,7 @@ export const MCP_INTEGRATIONS: Record<
     name: "one_drive",
     displayName: "OneDrive",
     url: "onedrive.live.com",
+    logo: "/images/connectors/one_drive.svg",
     provider: { id: "composio", app: "one_drive" },
     authType: "oauth",
     scopes: [],
@@ -276,6 +280,7 @@ export const MCP_INTEGRATIONS: Record<
     displayName: "Microsoft Teams",
     shortName: "Teams",
     url: "teams.microsoft.com",
+    logo: "/images/connectors/microsoft_teams.svg",
     provider: { id: "composio", app: "microsoft_teams" },
     authType: "oauth",
     scopes: [],
@@ -290,6 +295,7 @@ export const MCP_INTEGRATIONS: Record<
     name: "canvas",
     displayName: "Canvas",
     url: "instructure.com",
+    logo: "/images/connectors/canvas.svg",
     provider: { id: "composio", app: "canvas", authScheme: "API_KEY" },
     authType: "api-token",
     scopes: [],
@@ -322,6 +328,7 @@ export const MCP_INTEGRATIONS: Record<
     name: "slack",
     displayName: "Slack",
     url: "slack.com",
+    logo: "/images/connectors/slack.svg",
     provider: { id: "composio", app: "slack" },
     authType: "oauth",
     scopes: [],
