@@ -102,6 +102,9 @@ export function createLocalEnvironment({
     ...(process.env.COMPOSIO_API_URL
       ? { COMPOSIO_API_URL: process.env.COMPOSIO_API_URL }
       : {}),
+    ...(process.env.EXA_API_KEY
+      ? { EXA_API_KEY: process.env.EXA_API_KEY }
+      : {}),
     NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS: "true",
     NEXT_PUBLIC_EMAIL_SEND_ENABLED: "true",
     NEXT_PUBLIC_CONTACTS_ENABLED: "true",
