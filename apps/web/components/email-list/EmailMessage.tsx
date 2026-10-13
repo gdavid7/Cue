@@ -852,13 +852,16 @@ function ReplyPanel({
   const { popOutReply } = useComposeModal();
   const replyTargetId = replyAnchor?.id ?? message.id;
   const replyAssist = useContext(ReplyAssistContext);
-  const assist =
+  // Taken as the composer opens: a suggestion that lands after the user
+  // started their own reply must not label it as Cue's.
+  const [assist] = useState(() =>
     replyAssist &&
     composeMode === "reply" &&
     !draftMessage &&
     replyAssist.messageId === message.id
       ? replyAssist
-      : null;
+      : null,
+  );
   const [edited, setEdited] = useState(false);
   const draftSessionId = getReplyDraftSessionId(
     draftSessionMessageId ?? message.id,

@@ -227,14 +227,16 @@ export function CheckedAgainst({
   );
 }
 
-/** Says, without alarm, that Cue left a reply to the user and why. */
+/**
+ * Says, without alarm, that Cue left a reply to the user and why. The reason
+ * is the model's own words, so it is named only when it reads as a short
+ * phrase; anything else would put raw model text in front of the user.
+ */
 export function abstentionLine(missing: string) {
   // Its first sentence names what's missing; the rest explains, too long here.
-  const what = (missing.trim().split(/(?<=[.!?])\s/)[0] ?? "").replace(
-    /[.!?]+$/,
-    "",
-  );
-  if (!what) return "Cue couldn't confirm the facts, so it left this for you.";
+  const sentence = missing.trim().split(/(?<=[.!?])\s/)[0] ?? "";
+  const what = sentence.replace(/[.!]+$/, "");
+  if (!isShortPhrase(what)) return "Cue left this reply to you.";
   return `Cue couldn't confirm ${what.charAt(0).toLowerCase()}${what.slice(1)}, so it left this for you.`;
 }
 
@@ -323,4 +325,17 @@ function joinWords(words: string[]) {
 
 function Note({ children }: { children: React.ReactNode }) {
   return <p className="text-muted-foreground text-sm">{children}</p>;
+}
+
+const MAX_REASON_LENGTH = 60;
+const MAX_REASON_WORDS = 8;
+
+// A list, a question or a clause doesn't fit "Cue couldn't confirm …".
+function isShortPhrase(text: string) {
+  return (
+    text.length > 0 &&
+    text.length <= MAX_REASON_LENGTH &&
+    text.split(/\s+/).length <= MAX_REASON_WORDS &&
+    !/[?,:;()[\]{}"“”<>\n]/.test(text)
+  );
 }

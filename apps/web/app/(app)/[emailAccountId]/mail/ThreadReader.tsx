@@ -164,6 +164,7 @@ export function ThreadReader({
     emailAccountId,
     threadId,
     messages,
+    userLabels,
     enabled: canAssist,
     onOpenThread: openThread,
     onReply: setReplyRequestedFor,

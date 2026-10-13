@@ -1,7 +1,7 @@
 "use client";
 
 import { ReplyIcon } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { ThreadMessage } from "@/components/email-list/types";
 import type { ReplyAssist } from "@/components/email-list/reply-assist";
 import {
@@ -10,18 +10,25 @@ import {
   suggestionPhaseLabel,
 } from "@/components/thread-context/SuggestedReply";
 import { Button } from "@/components/ui/button";
+import { SystemType } from "@/generated/prisma/enums";
+import { useInboxInsights } from "@/hooks/useInboxInsights";
 import { useReplySuggestion } from "@/hooks/useReplySuggestion";
 import { useAccount } from "@/providers/EmailAccountProvider";
+import type { EmailLabels } from "@/providers/email-label-types";
 import { extractEmailAddress, isSameEmailAddress } from "@/utils/email";
 import { GmailLabel } from "@/utils/gmail/label";
+import { getRuleLabel } from "@/utils/rule/consts";
 import { textToHtmlParagraphs } from "@/utils/string";
 
 /**
  * Write the suggested reply as soon as a conversation that needs one opens:
- * its newest message isn't from the user and it has no draft. The founder's
- * rule: only if we have the context to reply, but if we do, write it.
+ * its newest message isn't from the user, it has no draft, and it is waiting
+ * on a reply. The founder's rule: only if we have the context to reply, but
+ * if we do, write it.
  */
 export const AUTO_SUGGEST = true;
+
+const TO_REPLY_LABEL = getRuleLabel(SystemType.TO_REPLY);
 
 /**
  * Cue's suggested reply for the open conversation, delivered where the user
@@ -33,6 +40,7 @@ export function useReaderReplySuggestion({
   emailAccountId,
   threadId,
   messages,
+  userLabels,
   enabled,
   onOpenThread,
   onReply,
@@ -40,6 +48,8 @@ export function useReaderReplySuggestion({
   emailAccountId: string;
   threadId: string | null;
   messages: ThreadMessage[];
+  /** Label id to label, to tell whether the conversation is To Reply. */
+  userLabels: EmailLabels;
   /** False while keyboard navigation is still moving through threads. */
   enabled: boolean;
   onOpenThread: (threadId: string) => void;
@@ -59,14 +69,45 @@ export function useReaderReplySuggestion({
   );
   // Decided once per newest message: the draft a suggestion saves must not
   // turn the suggestion off.
-  const [decision, setDecision] = useState<{ id: string; run: boolean }>();
+  const [decision, setDecision] = useState<{
+    id: string;
+    eligible: boolean;
+    run: boolean;
+  }>();
   if (latest && decision?.id !== latest.id) {
     setDecision({
       id: latest.id,
-      run: AUTO_SUGGEST && !latestIsFromUser && !hasDraft,
+      eligible: AUTO_SUGGEST && !latestIsFromUser && !hasDraft,
+      run: false,
     });
   }
-  const run = Boolean(latest && decision?.id === latest.id && decision.run);
+  const current = latest && decision?.id === latest.id ? decision : undefined;
+
+  // Only mail waiting on a reply gets one: the rules filed it To Reply, or
+  // Cue's read of the newest message says the sender is waiting, or Cue has
+  // already tried a reply to it.
+  const hasToReplyLabel = messages.some((message) =>
+    message.labelIds?.some((id) => userLabels[id]?.name === TO_REPLY_LABEL),
+  );
+  const latestId = latest?.id;
+  const insightItems = useMemo(
+    () =>
+      current?.eligible && !hasToReplyLabel && threadId && latestId
+        ? [{ key: threadId, emailAccountId, threadId, messageId: latestId }]
+        : [],
+    [current?.eligible, hasToReplyLabel, threadId, latestId, emailAccountId],
+  );
+  const { data: insights } = useInboxInsights(insightItems);
+  const insight = threadId ? insights?.[threadId] : undefined;
+  const needsReply =
+    hasToReplyLabel ||
+    insight?.insight?.action === "reply" ||
+    Boolean(insight?.reply);
+  if (current?.eligible && !current.run && needsReply) {
+    setDecision({ ...current, run: true });
+  }
+
+  const run = Boolean(current?.run);
   const { phase, suggestion } = useReplySuggestion({
     threadId,
     emailAccountId,
@@ -87,35 +128,23 @@ export function useReaderReplySuggestion({
         }
       : null;
 
+  // Reply is there from the start: checking must never stand in the way of
+  // the user writing the reply themselves.
   let idleReplyArea: React.ReactNode = null;
   if (latest && (phase === "checking-mail" || phase === "checking-web")) {
     idleReplyArea = (
-      <ReplyArea>
-        <p
-          className="fade-in animate-in text-muted-foreground text-sm duration-150"
-          role="status"
-        >
+      <ReplyArea onReply={() => onReply(latest.id)}>
+        <p className="text-muted-foreground text-xs" role="status">
           {suggestionPhaseLabel(phase)}
         </p>
       </ReplyArea>
     );
   } else if (latest && suggestion?.status === "insufficient") {
     idleReplyArea = (
-      <ReplyArea>
-        <div className="fade-in flex animate-in flex-wrap items-center gap-x-3 gap-y-1 duration-150">
-          <Button
-            onClick={() => onReply(latest.id)}
-            size="sm"
-            type="button"
-            variant="outline"
-          >
-            <ReplyIcon className="mr-2 size-4" />
-            Reply
-          </Button>
-          <p className="text-muted-foreground text-xs">
-            {abstentionLine(suggestion.missing)}
-          </p>
-        </div>
+      <ReplyArea onReply={() => onReply(latest.id)}>
+        <p className="fade-in animate-in text-muted-foreground text-xs duration-150">
+          {abstentionLine(suggestion.missing)}
+        </p>
       </ReplyArea>
     );
   }
@@ -123,6 +152,22 @@ export function useReaderReplySuggestion({
   return { assist, idleReplyArea };
 }
 
-function ReplyArea({ children }: { children: React.ReactNode }) {
-  return <div className="px-2 pt-1 pb-4 sm:pr-5 sm:pl-14">{children}</div>;
+function ReplyArea({
+  onReply,
+  children,
+}: {
+  onReply: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="px-2 pt-1 pb-4 sm:pr-5 sm:pl-14">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <Button onClick={onReply} size="sm" type="button" variant="outline">
+          <ReplyIcon className="mr-2 size-4" />
+          Reply
+        </Button>
+        {children}
+      </div>
+    </div>
+  );
 }
