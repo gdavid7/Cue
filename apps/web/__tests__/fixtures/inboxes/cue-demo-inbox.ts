@@ -1,4 +1,8 @@
 import type {
+  ComposioEmulatorCanvasEvent,
+  ComposioEmulatorDriveFile,
+} from "@/__tests__/emulators/composio";
+import type {
   DemoInboxAddress,
   DemoInboxFixture,
   DemoInboxMessage,
@@ -353,6 +357,59 @@ export function buildCueDemoCalendarEvents(
       },
     ),
   ];
+}
+
+/**
+ * What David's connected Google Drive and Canvas hold, for the Composio
+ * emulator: the pricing sheet Priya's email points to, the write-up Kevin's
+ * thread is about, and the milestone the course announcement reminds of.
+ */
+export function buildCueDemoConnectorData(now = new Date()): {
+  driveFiles: ComposioEmulatorDriveFile[];
+  canvasEvents: ComposioEmulatorCanvasEvent[];
+} {
+  const dueAt = new Date(
+    nextWeekday(now, 5, 23).getTime() + 59 * 60_000,
+  ).toISOString();
+  const assignmentUrl =
+    "https://canvas.ucsd.edu/courses/61234/assignments/812345";
+  const description =
+    "<p>Evaluate your CSE 151B model on the held-out test set and finish the <strong>evaluation section</strong>: metrics, plots, and error analysis.</p><p>Submit the write-up as one PDF per group by Friday at 11:59pm.</p>";
+
+  return {
+    driveFiles: [
+      {
+        id: "cue-demo-enterprise-pricing-v3",
+        name: "Enterprise pricing v3",
+        mimeType: "application/vnd.google-apps.spreadsheet",
+        modifiedTime: new Date(now.getTime() - 26 * 3_600_000).toISOString(),
+        webViewLink:
+          "https://docs.google.com/spreadsheets/d/cue-demo-enterprise-pricing-v3/edit",
+        owners: [{ displayName: "Priya Nair", emailAddress: PRIYA.email }],
+      },
+      {
+        id: "cue-demo-cse151b-milestone-2",
+        name: "CSE 151B milestone 2 write-up",
+        mimeType: "application/vnd.google-apps.document",
+        modifiedTime: new Date(now.getTime() - 20 * 3_600_000).toISOString(),
+        webViewLink:
+          "https://docs.google.com/document/d/cue-demo-cse151b-milestone-2/edit",
+        owners: [{ displayName: "Kevin Ruiz", emailAddress: KEVIN.email }],
+      },
+    ],
+    canvasEvents: [
+      {
+        id: 812_345,
+        title: "Milestone 2: model evaluation and write-up",
+        description,
+        start_at: dueAt,
+        end_at: dueAt,
+        html_url: assignmentUrl,
+        context_name: "CSE 151B",
+        assignment: { due_at: dueAt, description, html_url: assignmentUrl },
+      },
+    ],
+  };
 }
 
 // Pacific daylight time is UTC-7; close enough for demo data.

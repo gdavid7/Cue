@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { composioProvider } from "@/utils/mcp/providers/composio";
 import { CredentialsRejectedError } from "@/utils/mcp/providers/types";
 
-vi.mock("@/env", () => ({ env: { COMPOSIO_API_KEY: "test-composio-key" } }));
+vi.mock("@/env", () => ({
+  env: {
+    COMPOSIO_API_KEY: "test-composio-key",
+    COMPOSIO_API_URL: "https://backend.composio.dev/api/v3",
+  },
+}));
 
 // The provider memoizes per app for the life of the process, so each test uses
 // its own app name.

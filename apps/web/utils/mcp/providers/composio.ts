@@ -8,7 +8,6 @@ import {
 
 const logger = createScopedLogger("composio");
 
-const COMPOSIO_API_URL = "https://backend.composio.dev/api/v3";
 const COMPOSIO_REQUEST_TIMEOUT_MS = 15_000;
 
 // Auth configs and MCP servers are shared per app across all users. Every
@@ -263,7 +262,7 @@ async function composioFetch(
     body?: unknown;
   } = {},
 ): Promise<unknown> {
-  const response = await fetch(`${COMPOSIO_API_URL}${path}`, {
+  const response = await fetch(`${env.COMPOSIO_API_URL}${path}`, {
     method: options.method ?? "GET",
     headers: {
       "x-api-key": getApiKey(),

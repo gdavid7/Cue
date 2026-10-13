@@ -14,10 +14,12 @@ import { fileURLToPath } from "node:url";
 import { promisify, parseArgs } from "node:util";
 import { Client } from "pg";
 import Redis from "ioredis";
+import { createComposioEmulator } from "../__tests__/emulators/composio";
 import { createLlmEmulator } from "../__tests__/emulators/llm";
 import { createStripeEmulator } from "../__tests__/emulators/stripe";
 import {
   buildCueDemoCalendarEvents,
+  buildCueDemoConnectorData,
   buildCueDemoInbox,
   buildCueDemoInsights,
   cueDemoReplySuggestions,
@@ -52,6 +54,8 @@ const EMPTY_INSIGHT = {
   fact: "",
   factLabel: "",
 };
+// Without a real Composio key, the demo's connected apps come from an emulator.
+const USE_COMPOSIO_EMULATOR = USE_CUE_DEMO && !process.env.COMPOSIO_API_KEY;
 
 main().catch((error) => {
   console.error(
@@ -150,7 +154,8 @@ async function main() {
       llmPort,
       stripePort,
       emailPort,
-    ] = await Promise.all(Array.from({ length: 8 }, () => availablePort()));
+      composioPort,
+    ] = await Promise.all(Array.from({ length: 9 }, () => availablePort()));
     const env = createLocalEnvironment({
       appPort,
       databasePort,
@@ -169,6 +174,10 @@ async function main() {
     env.RESEND_BASE_URL = `http://127.0.0.1:${emailPort}`;
     env.RESEND_FROM_EMAIL = "Inbox Zero <signin@example.com>";
     env.RESEND_AUDIENCE_ID = "playwright-audience";
+    if (USE_COMPOSIO_EMULATOR) {
+      env.COMPOSIO_API_KEY = "emulator-composio-key";
+      env.COMPOSIO_API_URL = `http://127.0.0.1:${composioPort}/api/v3`;
+    }
     manager = createProcessManager(APP_DIR, env);
     const processes = manager;
 
@@ -276,7 +285,10 @@ async function main() {
       "deploy",
     ]);
     await configureDemoOnboarding(env.DATABASE_URL);
-    await configureDemoAccount(env.DATABASE_URL, USE_CUE_DEMO);
+    await configureDemoAccount(env.DATABASE_URL, {
+      enabled: USE_CUE_DEMO,
+      connectApps: USE_COMPOSIO_EMULATOR,
+    });
 
     const redis = new Redis(env.REDIS_URL, {
       lazyConnect: true,
@@ -363,6 +375,14 @@ async function main() {
       webhookUrl: `${env.NEXT_PUBLIC_BASE_URL}/api/stripe/webhook`,
     });
     cleanup.push({ close: stripe.close });
+    if (USE_COMPOSIO_EMULATOR) {
+      const composio = await createComposioEmulator({
+        port: composioPort,
+        apiKey: env.COMPOSIO_API_KEY,
+        ...buildCueDemoConnectorData(),
+      });
+      cleanup.push({ close: composio.close });
+    }
     processes.start("Email emulator", process.execPath, [
       "__tests__/playwright/email-server.mjs",
       String(emailPort),
@@ -471,10 +491,14 @@ function cueDemoSeedOptions(): EmulateSeedOptions {
  * Connects the demo account's Google Calendar and adds its inbox tabs as soon
  * as the account exists, and for an account that already does. The calendar
  * uses the fixed emulator token with a far-future expiry, so the app never
- * tries to refresh it. When the Cue demo is off, removes the trigger and the
- * connection, whose token would be dead.
+ * tries to refresh it. With `connectApps`, also connects Google Drive and
+ * Canvas, which the Composio emulator answers for. When the Cue demo is off,
+ * removes the trigger and the connections, whose credentials would be dead.
  */
-async function configureDemoAccount(databaseUrl: string, enabled: boolean) {
+async function configureDemoAccount(
+  databaseUrl: string,
+  { enabled, connectApps }: { enabled: boolean; connectApps: boolean },
+) {
   const client = new Client({
     connectionString: databaseUrl,
     connectionTimeoutMillis: 2000,
@@ -488,9 +512,17 @@ async function configureDemoAccount(databaseUrl: string, enabled: boolean) {
         DROP FUNCTION IF EXISTS cue_local_dev_connect_calendar_trigger();
         DROP FUNCTION IF EXISTS cue_local_dev_connect_calendar(text, text, text);
         DROP FUNCTION IF EXISTS cue_local_dev_add_splits(text);
+        DROP FUNCTION IF EXISTS cue_local_dev_connect_apps(text);
         DELETE FROM "CalendarConnection" WHERE id LIKE '%-cue-demo-calendar';
+        DELETE FROM "McpConnection" WHERE id LIKE '%-cue-demo-app-%';
       `);
       return;
+    }
+    // A real Composio account has none of the connections the emulator faked.
+    if (!connectApps) {
+      await client.query(
+        `DELETE FROM "McpConnection" WHERE id LIKE '%-cue-demo-app-%'`,
+      );
     }
 
     await client.query(`
@@ -539,12 +571,33 @@ async function configureDemoAccount(databaseUrl: string, enabled: boolean) {
       END;
       $$ LANGUAGE plpgsql;
 
+      -- The rows connecting an app through Composio would create; the Composio
+      -- emulator treats every account as connected on its side.
+      CREATE OR REPLACE FUNCTION cue_local_dev_connect_apps(account_id text)
+      RETURNS void AS $$
+      BEGIN
+        INSERT INTO "McpIntegration" (id, "createdAt", "updatedAt", name)
+        VALUES
+          ('cue-demo-integration-googledrive', NOW(), NOW(), 'googledrive'),
+          ('cue-demo-integration-canvas', NOW(), NOW(), 'canvas')
+        ON CONFLICT (name) DO NOTHING;
+        INSERT INTO "McpConnection" (id, "createdAt", "updatedAt", name, "isActive", "integrationId", "emailAccountId")
+        SELECT account_id || '-cue-demo-app-' || i.name, NOW(), NOW(), i.name, true, i.id, account_id
+        FROM "McpIntegration" i
+        WHERE i.name IN ('googledrive', 'canvas')
+        ON CONFLICT ("emailAccountId", "integrationId") DO NOTHING;
+      END;
+      $$ LANGUAGE plpgsql;
+
       -- Runs inside the sign-in transaction, so a schema change that breaks
       -- these inserts must not break signing in.
       CREATE OR REPLACE FUNCTION cue_local_dev_connect_calendar_trigger() RETURNS trigger AS $$
       BEGIN
         PERFORM cue_local_dev_connect_calendar(NEW.id, NEW.email, TG_ARGV[0]);
         PERFORM cue_local_dev_add_splits(NEW.id);
+        IF TG_ARGV[1] = 'true' THEN
+          PERFORM cue_local_dev_connect_apps(NEW.id);
+        END IF;
         RETURN NEW;
       EXCEPTION WHEN OTHERS THEN
         RAISE WARNING 'Cue demo calendar not connected: %', SQLERRM;
@@ -552,13 +605,13 @@ async function configureDemoAccount(databaseUrl: string, enabled: boolean) {
       END;
       $$ LANGUAGE plpgsql;
     `);
-    // Trigger definitions can't take bind parameters; both values are
+    // Trigger definitions can't take bind parameters; all values are
     // constants defined in this file.
     await client.query(`
       DROP TRIGGER IF EXISTS cue_local_dev_calendar ON "EmailAccount";
       CREATE TRIGGER cue_local_dev_calendar AFTER INSERT ON "EmailAccount"
       FOR EACH ROW WHEN (NEW.email = '${DEMO_GOOGLE_EMAIL}')
-      EXECUTE FUNCTION cue_local_dev_connect_calendar_trigger('${DEMO_CALENDAR_TOKEN}');
+      EXECUTE FUNCTION cue_local_dev_connect_calendar_trigger('${DEMO_CALENDAR_TOKEN}', '${connectApps}');
     `);
     await client.query(
       `SELECT cue_local_dev_connect_calendar(id, email, $2) FROM "EmailAccount" WHERE email = $1`,
@@ -568,6 +621,12 @@ async function configureDemoAccount(databaseUrl: string, enabled: boolean) {
       `SELECT cue_local_dev_add_splits(id) FROM "EmailAccount" WHERE email = $1`,
       [DEMO_GOOGLE_EMAIL],
     );
+    if (connectApps) {
+      await client.query(
+        `SELECT cue_local_dev_connect_apps(id) FROM "EmailAccount" WHERE email = $1`,
+        [DEMO_GOOGLE_EMAIL],
+      );
+    }
     // A database from before the Cue demo still calls the demo user "Developer".
     await client.query(
       `UPDATE "User" SET name = 'David Lin' WHERE email = $1 AND name = 'Developer'`,
