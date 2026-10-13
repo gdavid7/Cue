@@ -5,7 +5,12 @@
 // the rest of Cue never has to care where a fact came from — only that it can
 // cite it.
 
-export type Provider = "gmail" | "outlook" | "gcal" | "gdrive";
+/**
+ * Sources Cue has dedicated adapters for. Any other app (anything Composio can
+ * connect) still works through the generic path — its provider is just a string.
+ */
+export type KnownProvider = "gmail" | "outlook" | "gcal" | "gdrive";
+export type Provider = KnownProvider | (string & {});
 
 /** Where a fact came from. Every node and edge carries one so answers can cite it. */
 export interface Provenance {
@@ -68,10 +73,30 @@ export interface Doc {
   source: Provenance;
 }
 
+/**
+ * The generic envelope for any app without a dedicated adapter (Slack, Notion,
+ * Linear, Zoom, ...). A handful of fields every record has — who, when, what it
+ * says — plus the untouched original payload. See ingest/generic.ts.
+ */
+export interface Item {
+  id: string;
+  app: string; // "slack", "notion", ...
+  type: string; // "message", "page", "issue", ...
+  title: string;
+  text: string;
+  at: string;
+  url?: string;
+  author?: Identity;
+  people: Identity[];
+  raw: unknown;
+  source: Provenance;
+}
+
 export type SourceObject =
   | { kind: "message"; value: Message }
   | { kind: "event"; value: CalendarEvent }
-  | { kind: "doc"; value: Doc };
+  | { kind: "doc"; value: Doc }
+  | { kind: "item"; value: Item };
 
 // ---------------------------------------------------------------------------
 // Knowledge graph shapes
@@ -84,6 +109,7 @@ export type NodeKind =
   | "message"
   | "event"
   | "doc"
+  | "item"
   | "fact";
 
 export type EdgeType =
@@ -91,6 +117,7 @@ export type EdgeType =
   | "received"
   | "attended"
   | "owns"
+  | "authored"
   | "shared_with"
   | "works_at"
   | "in_thread"

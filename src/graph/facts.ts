@@ -27,6 +27,7 @@ export function extractFacts(text: string): ExtractedFact[] {
   for (const m of text.matchAll(/(monthly rent|rent)\s*:\s*\$([\d,]+(?:\.\d{2})?)/gi)) add("rent", money(m[2]), m[0]);
   for (const m of text.matchAll(/(?:renewal|offering)[^.$]*?\$([\d,]+(?:\.\d{2})?)\s*\/\s*month/gi)) add("rent", money(m[1]), m[0], true);
   for (const m of text.matchAll(/amount due\s*:\s*\$([\d,]+(?:\.\d{2})?)/gi)) add("amount_due", money(m[1]), m[0]);
+  for (const m of text.matchAll(/budget[^.$]*?\$([\d,]+(?:\.\d{2})?)/gi)) add("budget", money(m[1]), m[0]);
   for (const m of text.matchAll(/capped at (\d+(?:\.\d+)?)%/gi)) add("increase_cap_pct", Number(m[1]), m[0]);
 
   // A stated term ("Term: Nov 1, 2025 to Oct 31, 2026") bounds every fact in the text.

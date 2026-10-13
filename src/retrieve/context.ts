@@ -25,17 +25,17 @@ export interface RetrievalInput {
   k?: number;
 }
 
-const CANDIDATE_KINDS: NodeKind[] = ["doc", "event", "message"];
-const WALKABLE: EdgeType[] = ["sent", "received", "attended", "owns", "shared_with", "works_at", "in_thread", "about"];
+const CANDIDATE_KINDS: NodeKind[] = ["doc", "event", "message", "item"];
+const WALKABLE: EdgeType[] = ["sent", "received", "attended", "owns", "authored", "mentions", "shared_with", "works_at", "in_thread", "about"];
 const MAX_HOPS = 3;
 
 /** How useful each kind of item tends to be, per intent (0..1). */
 const KIND_PRIOR: Partial<Record<Intent, Partial<Record<NodeKind, number>>>> = {
-  scheduling: { event: 1, message: 0.5, doc: 0.2 },
-  document_request: { doc: 1, message: 0.4, event: 0.2 },
-  decision: { doc: 1, message: 0.7, event: 0.3 },
-  question: { message: 0.8, event: 0.7, doc: 0.6 },
-  bill: { message: 0.6, doc: 0.4, event: 0.2 },
+  scheduling: { event: 1, item: 0.7, message: 0.5, doc: 0.2 },
+  document_request: { doc: 1, message: 0.4, item: 0.4, event: 0.2 },
+  decision: { doc: 1, item: 0.8, message: 0.7, event: 0.3 },
+  question: { message: 0.8, item: 0.7, event: 0.7, doc: 0.6 },
+  bill: { message: 0.6, doc: 0.4, item: 0.3, event: 0.2 },
 };
 
 interface Reached {
@@ -145,12 +145,13 @@ export function retrieveContext(input: RetrievalInput): ContextItem[] {
 function textOf(n: GraphNode): string {
   if (n.kind === "doc") return `${n.label} ${n.props.text ?? ""}`;
   if (n.kind === "message") return `${n.label} ${n.props.body ?? ""}`;
+  if (n.kind === "item") return `${n.label} ${n.props.text ?? ""}`;
   if (n.kind === "event") return `${n.label} ${n.props.location ?? ""} ${n.props.notes ?? ""}`;
   return n.label;
 }
 
 function timeOf(n: GraphNode): string | undefined {
-  return (n.props.sentAt ?? n.props.start ?? n.props.modifiedAt) as string | undefined;
+  return (n.props.sentAt ?? n.props.start ?? n.props.modifiedAt ?? n.props.at) as string | undefined;
 }
 
 function titleOf(n: GraphNode, tz: string): string {
@@ -159,7 +160,8 @@ function titleOf(n: GraphNode, tz: string): string {
 }
 
 function snippetOf(n: GraphNode): string {
-  const raw = n.kind === "doc" ? n.props.text : n.kind === "message" ? n.props.body : [n.props.location, n.props.notes].filter(Boolean).join(" · ");
+  const raw =
+    n.kind === "doc" || n.kind === "item" ? n.props.text : n.kind === "message" ? n.props.body : [n.props.location, n.props.notes].filter(Boolean).join(" · ");
   const s = String(raw ?? "");
   return s.length > 180 ? s.slice(0, 177) + "…" : s;
 }

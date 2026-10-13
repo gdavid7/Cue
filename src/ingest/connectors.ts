@@ -5,7 +5,8 @@
 // same interface, so nothing downstream changes when real accounts are connected.
 
 import type { Account, SourceObject } from "../core/types.ts";
-import { calendarEvents, demoUser, driveFiles, gmailMessages, outlookMessages } from "./fixtures.ts";
+import { calendarEvents, demoUser, driveFiles, genericRecords, gmailMessages, outlookMessages } from "./fixtures.ts";
+import { fromRecord } from "./generic.ts";
 import { fromGcal, fromGdrive, fromGmail, fromOutlook } from "./normalize.ts";
 
 export interface SourceConnector {
@@ -40,5 +41,14 @@ export function demoConnectors(): SourceConnector[] {
       calendarEvents.map((e) => ({ kind: "event", value: fromGcal(e, "acct_gcal") }) as const)),
     new DemoConnector(acct("acct_gdrive"), () =>
       driveFiles.map((f) => ({ kind: "doc", value: fromGdrive(f, "acct_gdrive") }) as const)),
+    // One connector per long-tail app, all through the same generic mapper.
+    ...["acct_slack", "acct_notion"].map((accountId) =>
+      new DemoConnector(acct(accountId), () =>
+        genericRecords
+          .filter((r) => r.accountId === accountId)
+          .map((r, i) => ({
+            kind: "item",
+            value: fromRecord(r.app, r.type, r.record, { provider: r.app, sourceId: `${r.type}_${i}`, accountId }, r.hints),
+          }) as const))),
   ];
 }

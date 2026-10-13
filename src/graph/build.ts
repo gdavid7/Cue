@@ -3,6 +3,7 @@
 //   person ──sent──▶ message ──in_thread──▶ thread ──about──▶ topic
 //   person ──works_at──▶ org          person ──attended──▶ event
 //   person ──owns──▶ doc ──shared_with──▶ person      doc ──states──▶ fact
+//   person ──authored──▶ item ──mentions──▶ person     (any other app)
 //
 // Every edge carries a timestamp, a confidence, and the source it came from.
 
@@ -36,7 +37,7 @@ export function buildGraph(objects: SourceObject[], resolver: EntityResolver, to
 
   // Emails first: they carry the richest identity evidence (full addresses,
   // signatures), which later helps resolve sparse calendar attendees.
-  const order = { message: 0, doc: 1, event: 2 } as const;
+  const order = { message: 0, doc: 1, item: 2, event: 3 } as const;
   const sorted = [...objects].sort((a, b) => order[a.kind] - order[b.kind] || timeOf(a).localeCompare(timeOf(b)));
 
   const personNode = (personId: string, source: Provenance) => {
@@ -91,6 +92,22 @@ export function buildGraph(objects: SourceObject[], resolver: EntityResolver, to
         graph.addEdge({ type: "attended", from: res.personId, to: e.id, validFrom: e.start, confidence: res.confidence, source: e.source });
       }
       linkTopics(e.id, text, e.start, e.source);
+    } else if (obj.kind === "item") {
+      const it = obj.value;
+      const text = `${it.title} ${it.text}`;
+      graph.upsertNode(it.id, "item", it.title, { app: it.app, itemType: it.type, text: it.text, at: it.at, url: it.url }, it.source);
+      if (it.author) {
+        const res = resolver.resolve(it.author, text);
+        personNode(res.personId, it.source);
+        graph.addEdge({ type: "authored", from: res.personId, to: it.id, validFrom: it.at, confidence: res.confidence, source: it.source });
+      }
+      for (const p of it.people) {
+        const res = resolver.resolve(p, text);
+        personNode(res.personId, it.source);
+        graph.addEdge({ type: "mentions", from: it.id, to: res.personId, validFrom: it.at, confidence: res.confidence, source: it.source });
+      }
+      linkTopics(it.id, text, it.at, it.source);
+      addFacts(graph, it.id, text, it.at, it.source);
     } else {
       const d = obj.value;
       docs.set(d.id, d);
@@ -141,5 +158,8 @@ function supersedeFacts(graph: TemporalGraph) {
 }
 
 function timeOf(o: SourceObject): string {
-  return o.kind === "message" ? o.value.sentAt : o.kind === "event" ? o.value.start : o.value.modifiedAt;
+  if (o.kind === "message") return o.value.sentAt;
+  if (o.kind === "event") return o.value.start;
+  if (o.kind === "item") return o.value.at;
+  return o.value.modifiedAt;
 }

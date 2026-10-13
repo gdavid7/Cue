@@ -14,6 +14,9 @@ export const demoUser = {
     { id: "acct_outlook", provider: "outlook", address: "alex.rivera@outlook.com", label: "Old inbox (Outlook)" },
     { id: "acct_gcal", provider: "gcal", address: "alex.rivera@gmail.com", label: "Google Calendar" },
     { id: "acct_gdrive", provider: "gdrive", address: "alex.rivera@gmail.com", label: "Google Drive" },
+    // Connected through the generic path — no Slack- or Notion-specific code in Cue.
+    { id: "acct_slack", provider: "slack", address: "alex.rivera@gmail.com", label: "Slack · Hornets Parents" },
+    { id: "acct_notion", provider: "notion", address: "alex.rivera@gmail.com", label: "Notion" },
   ],
   /** People the user has labelled as family get a priority boost (and a warmer sign-off). */
   family: [{ email: "linda.rivera52@yahoo.com", label: "Mom" }],
@@ -276,6 +279,58 @@ export const driveFiles: GdriveRaw[] = [
     modifiedTime: "2025-11-30T05:00:00Z",
     owners: [{ displayName: "Alex Rivera", emailAddress: "alex.rivera@gmail.com" }],
     exportedText: "Photos from last Thanksgiving at Mom and Dad's.",
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Long-tail apps, as an integration layer (e.g. Composio) would hand them over:
+// each app's own JSON shape. Cue has no adapter for either; ingest/generic.ts
+// pulls out an envelope and keeps the rest as `raw`.
+
+const slackTs = (iso: string) => `${Date.parse(iso) / 1000}.000100`;
+
+export const genericRecords: { accountId: string; app: string; type: string; hints?: Record<string, string>; record: Record<string, unknown> }[] = [
+  {
+    accountId: "acct_slack",
+    app: "slack",
+    type: "message",
+    record: {
+      type: "message",
+      channel: { id: "C07HORNETS", name: "hornets-parents" },
+      user: { id: "U0DANA", real_name: "Dana Kim", profile: { email: "dana.kim@eastsideyouthsoccer.org" } },
+      text: "Field change for Saturday's makeup game: we're on Field 3 at Garfield Park. Please arrive by 8:30 for warm-ups. Coach Dana",
+      ts: slackTs("2026-10-12T20:05:00Z"),
+      permalink: "https://hornetsparents.slack.com/archives/C07HORNETS/p1760299500000100",
+    },
+  },
+  {
+    accountId: "acct_slack",
+    app: "slack",
+    type: "message",
+    record: {
+      type: "message",
+      channel: { id: "C07HORNETS", name: "hornets-parents" },
+      user: { id: "U0JEN", real_name: "Jen Park", profile: { email: "jen.park@gmail.com" } },
+      text: "Snack sign-up for the rest of the season is in the pinned sheet. Thanks all!",
+      ts: slackTs("2026-10-09T02:00:00Z"),
+    },
+  },
+  {
+    accountId: "acct_notion",
+    app: "notion",
+    type: "page",
+    // Notion buries the title in properties; a one-line hint tells the generic mapper where.
+    hints: { title: "properties.title.title" },
+    record: {
+      object: "page",
+      id: "8a1f-apartment-notes",
+      url: "https://www.notion.so/Apartment-notes-8a1f",
+      last_edited_time: "2026-10-01T18:00:00Z",
+      created_by: { object: "user", name: "Alex Rivera", person: { email: "alex.rivera@gmail.com" } },
+      properties: { title: { title: [{ plain_text: "Apartment notes" }] } },
+      content:
+        "Rent budget for next year: up to $2,200/month. Priya prefers renewal decisions by email. Dishwasher repair still pending since August, mention at renewal.",
+    },
   },
 ];
 
