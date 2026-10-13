@@ -1566,9 +1566,7 @@ function ComposeEmailFormContent({
               className="flex min-w-0 items-center gap-1.5 rounded-sm text-left text-sm font-medium leading-5 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {isMailboxDraft ? (
-                <span className="text-emerald-600 dark:text-emerald-400">
-                  Draft
-                </span>
+                <span className="text-red-600 dark:text-red-400">Draft</span>
               ) : (
                 <span>Reply</span>
               )}
