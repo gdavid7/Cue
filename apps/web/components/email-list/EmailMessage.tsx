@@ -74,7 +74,13 @@ export function EmailMessage({
   showReplyButton,
   defaultComposeMode,
   defaultReplyAll = false,
-  hideComposer,
+  composerOpen = true,
+  openDraftSessionId,
+  dismissedDraftIds: dismissedDraftIdsProp,
+  onDraftDismissedChange,
+  onOpenDraft,
+  onComposerClosed,
+  localDraftSnippet,
   onStartCompose,
   draftMessages,
   expanded,
@@ -103,7 +109,21 @@ export function EmailMessage({
   defaultComposeMode?: ReplyDraftMode;
   /** Opens a default reply addressed to everyone on the message. */
   defaultReplyAll?: boolean;
-  hideComposer?: boolean;
+  /** Whether the thread's one open composer is this message's reply or forward. */
+  composerOpen?: boolean;
+  /** The thread's open mailbox draft, by session id, if that is what's open. */
+  openDraftSessionId?: string;
+  /** Left unset, the message keeps its own: it is the only one open. */
+  dismissedDraftIds?: ReadonlySet<string>;
+  onDraftDismissedChange?: (
+    sessionMessageId: string,
+    dismissed: boolean,
+  ) => void;
+  /** Left unset, the message's newest draft is open unless it is composing. */
+  onOpenDraft?: (sessionMessageId: string) => void;
+  onComposerClosed?: () => void;
+  /** The text of this message's unsent local reply, shown while it is collapsed. */
+  localDraftSnippet?: string;
   onStartCompose?: () => void;
   expanded: boolean;
   /** Absent when the thread has a single message, which never collapses. */
@@ -156,27 +176,24 @@ export function EmailMessage({
   const [composeOverride, setComposeOverride] = useState<
     ReplyDraftMode | "closed" | null
   >(null);
-  const composeMode = hideComposer
-    ? undefined
-    : resolveComposeMode(
-        composeOverride,
-        defaultComposeMode,
-        (mode) =>
-          getReplyDraftSessionId(
-            composerSessionMessageId ?? message.id,
-            mode,
-          ) === poppedOutDraftSessionId,
-      );
+  const requestedComposeMode = resolveComposeMode(
+    composeOverride,
+    defaultComposeMode,
+    (mode) =>
+      getReplyDraftSessionId(composerSessionMessageId ?? message.id, mode) ===
+      poppedOutDraftSessionId,
+  );
+  const composeMode = composerOpen ? requestedComposeMode : undefined;
   const serverDrafts = (draftMessages ?? []).map((draft) => ({
     message: draft,
     sessionMessageId: getDraftSessionMessageId(emailAccountId, draft.id),
   }));
-  const [dismissedDraftIds, setDismissedDraftIds] = useState(
+  const [ownDismissedDraftIds, setOwnDismissedDraftIds] = useState(
     () => new Set<string>(),
   );
-  const setDraftDismissed = useCallback(
+  const setOwnDraftDismissed = useCallback(
     (sessionMessageId: string, dismissed: boolean) => {
-      setDismissedDraftIds((previous) => {
+      setOwnDismissedDraftIds((previous) => {
         if (previous.has(sessionMessageId) === dismissed) return previous;
         const next = new Set(previous);
         if (dismissed) next.add(sessionMessageId);
@@ -186,6 +203,8 @@ export function EmailMessage({
     },
     [],
   );
+  const dismissedDraftIds = dismissedDraftIdsProp ?? ownDismissedDraftIds;
+  const setDraftDismissed = onDraftDismissedChange ?? setOwnDraftDismissed;
   const visibleDrafts = serverDrafts.filter(
     (draft) =>
       !dismissedDraftIds.has(draft.sessionMessageId) &&
@@ -194,10 +213,22 @@ export function EmailMessage({
   );
   const composingMailboxReply =
     composeMode === "reply" && visibleDrafts.length > 0;
+  // A reply on a message with a saved draft continues that draft.
+  const openDraft =
+    visibleDrafts.find(
+      (draft) => draft.sessionMessageId === openDraftSessionId,
+    ) ??
+    (composingMailboxReply || (!onOpenDraft && !composeMode)
+      ? visibleDrafts.at(-1)
+      : undefined);
   const isDraftRow = serverDrafts.some(
     (draft) => draft.message.id === message.id,
   );
-  const hasOpenComposer = Boolean(composeMode) || visibleDrafts.length > 0;
+  const hasOpenComposer = Boolean(composeMode) || Boolean(openDraft);
+  const showLocalDraftRow =
+    !composerOpen &&
+    Boolean(requestedComposeMode) &&
+    localDraftSnippet !== undefined;
 
   const [showDetails, setShowDetails] = useState(false);
   const composeSessionRef = useRef(0);
@@ -206,18 +237,16 @@ export function EmailMessage({
   const startReply = useCallback(() => {
     onStartCompose?.();
     composeSessionRef.current += 1;
-    const savedDraft = serverDrafts[0];
+    const savedDraft = serverDrafts.at(-1);
     if (savedDraft) {
       setDraftDismissed(savedDraft.sessionMessageId, false);
-      setComposeOverride("closed");
       requestAnimationFrame(() => {
         messageRef.current
           ?.querySelector<HTMLElement>("[data-email-editor-content]")
           ?.focus();
       });
-    } else {
-      setComposeOverride("reply");
     }
+    setComposeOverride("reply");
     onExpand?.();
   }, [onExpand, onStartCompose, serverDrafts, setDraftDismissed]);
   const onReply = useCallback(() => {
@@ -237,7 +266,8 @@ export function EmailMessage({
 
   const onCloseCompose = useCallback(() => {
     setComposeOverride("closed");
-  }, []);
+    onComposerClosed?.();
+  }, [onComposerClosed]);
   const closeMailboxDraft = (sessionMessageId: string) => {
     if (composeMode === "reply") onCloseCompose();
     setDraftDismissed(sessionMessageId, true);
@@ -255,11 +285,15 @@ export function EmailMessage({
     return composeSession;
   }, [composeMode, onCloseCompose]);
 
-  const onRestoreCompose = useCallback((composeSession: ComposeSession) => {
-    if (composeSessionRef.current !== composeSession.id) return;
-    composeSessionRef.current += 1;
-    setComposeOverride(composeSession.mode);
-  }, []);
+  const onRestoreCompose = useCallback(
+    (composeSession: ComposeSession) => {
+      if (composeSessionRef.current !== composeSession.id) return;
+      composeSessionRef.current += 1;
+      onStartCompose?.();
+      setComposeOverride(composeSession.mode);
+    },
+    [onStartCompose],
+  );
   const onCloseComposeAfterSend = useCallback(() => {
     if (composeMode) {
       undoSendSessionRef.current = {
@@ -274,8 +308,9 @@ export function EmailMessage({
     if (!session) return;
     composeSessionRef.current += 1;
     setComposerKey((key) => key + 1);
+    onStartCompose?.();
     setComposeOverride(session.mode);
-  }, []);
+  }, [onStartCompose]);
 
   const toggleDetails = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -299,6 +334,21 @@ export function EmailMessage({
     },
     [expanded, onReply, onToggle, showReplyButton],
   );
+
+  // A conversation that is only drafts shows each one as a draft row.
+  const collapsedDraftOnlyRow = visibleDrafts.find(
+    (draft) => draft.message.id === message.id && draft !== openDraft,
+  );
+  if (collapsedDraftOnlyRow) {
+    return (
+      <li className="px-2 sm:px-5" data-thread-message-id={message.id}>
+        <CollapsedDraft
+          onOpen={() => onOpenDraft?.(collapsedDraftOnlyRow.sessionMessageId)}
+          snippet={draftSnippet(collapsedDraftOnlyRow.message)}
+        />
+      </li>
+    );
+  }
 
   return (
     <li
@@ -402,58 +452,121 @@ export function EmailMessage({
 
           {message.attachments && <EmailAttachments message={message} />}
 
-          {visibleDrafts.map(({ message: draft, sessionMessageId }, index) => (
-            <ReplyPanel
-              key={sessionMessageId}
-              autoScroll={!composeMode && index === visibleDrafts.length - 1}
-              draftBodyAvailable={!missingBodyIds?.has(draft.id)}
-              draftMessage={draft}
-              draftSessionMessageId={sessionMessageId}
-              message={message}
-              onCloseCompose={() => closeMailboxDraft(sessionMessageId)}
-              onRestoreCompose={() =>
-                setDraftDismissed(sessionMessageId, false)
-              }
-              onRestore={() => setDraftDismissed(sessionMessageId, false)}
-              onSendSuccess={onSendSuccess}
-              onSent={onReplySent}
-              onMarkDone={onMarkDone}
-              onDraftDiscarded={onDraftDiscarded}
-              onStartDiscard={() => {
-                closeMailboxDraft(sessionMessageId);
-                return {
-                  id: composeSessionRef.current,
-                  mode: "reply" as const,
-                };
-              }}
-              refetch={refetch}
-              composeMode="reply"
+          {visibleDrafts.map(({ message: draft, sessionMessageId }) =>
+            draft === openDraft?.message ? (
+              <div
+                className="fade-in slide-in-from-top-1 animate-in duration-300"
+                key={sessionMessageId}
+              >
+                <ReplyPanel
+                  autoScroll={!composeMode}
+                  draftBodyAvailable={!missingBodyIds?.has(draft.id)}
+                  draftMessage={draft}
+                  draftSessionMessageId={sessionMessageId}
+                  message={message}
+                  onCloseCompose={() => closeMailboxDraft(sessionMessageId)}
+                  onRestoreCompose={() =>
+                    setDraftDismissed(sessionMessageId, false)
+                  }
+                  onRestore={() => {
+                    onOpenDraft?.(sessionMessageId);
+                    setDraftDismissed(sessionMessageId, false);
+                  }}
+                  onSendSuccess={onSendSuccess}
+                  onSent={onReplySent}
+                  onMarkDone={onMarkDone}
+                  onDraftDiscarded={onDraftDiscarded}
+                  onStartDiscard={() => {
+                    closeMailboxDraft(sessionMessageId);
+                    return {
+                      id: composeSessionRef.current,
+                      mode: "reply" as const,
+                    };
+                  }}
+                  refetch={refetch}
+                  composeMode="reply"
+                />
+              </div>
+            ) : (
+              !isDraftRow && (
+                <CollapsedDraft
+                  key={sessionMessageId}
+                  onOpen={() => onOpenDraft?.(sessionMessageId)}
+                  snippet={draftSnippet(draft)}
+                />
+              )
+            ),
+          )}
+          {showLocalDraftRow && (
+            <CollapsedDraft
+              onOpen={() => onStartCompose?.()}
+              snippet={localDraftSnippet ?? ""}
             />
-          ))}
+          )}
           {composeMode && !composingMailboxReply && (
-            <ReplyPanel
-              // Remounts so the composer picks up the other recipients.
-              key={`${composerKey}:${replyAll}`}
-              replyAll={replyAll}
-              autoScroll
-              bodyAvailable={bodyAvailable}
-              draftSessionMessageId={composerSessionMessageId}
-              message={message}
-              replyAnchor={replyAnchor}
-              onCloseCompose={onCloseComposeAfterSend}
-              onRestore={onRestoreComposeAfterSend}
-              onRestoreCompose={onRestoreCompose}
-              onSendSuccess={onSendSuccess}
-              onSent={onReplySent}
-              onMarkDone={onMarkDone}
-              onStartDiscard={onStartDiscard}
-              refetch={refetch}
-              composeMode={composeMode}
-            />
+            <div className="fade-in slide-in-from-top-1 animate-in duration-300">
+              <ReplyPanel
+                // Remounts so the composer picks up the other recipients.
+                key={`${composerKey}:${replyAll}`}
+                replyAll={replyAll}
+                autoScroll
+                bodyAvailable={bodyAvailable}
+                draftSessionMessageId={composerSessionMessageId}
+                message={message}
+                replyAnchor={replyAnchor}
+                onCloseCompose={onCloseComposeAfterSend}
+                onRestore={onRestoreComposeAfterSend}
+                onRestoreCompose={onRestoreCompose}
+                onSendSuccess={onSendSuccess}
+                onSent={onReplySent}
+                onMarkDone={onMarkDone}
+                onStartDiscard={onStartDiscard}
+                refetch={refetch}
+                composeMode={composeMode}
+              />
+            </div>
           )}
         </div>
       )}
     </li>
+  );
+}
+
+/**
+ * A draft that isn't the one being written: its label and first line, the way
+ * Gmail shows a conversation's other drafts. Opening it closes the open one.
+ */
+function CollapsedDraft({
+  snippet,
+  onOpen,
+}: {
+  snippet: string;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      className="mt-3 flex w-full min-w-0 items-center gap-2 rounded-md border border-border px-3 py-2 text-left text-sm transition-colors hover:bg-muted/40 active:bg-muted"
+      data-testid="collapsed-draft"
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpen();
+      }}
+      type="button"
+    >
+      <span className="shrink-0 font-medium text-red-600 dark:text-red-400">
+        Draft
+      </span>
+      <span className="min-w-0 truncate text-muted-foreground">
+        {snippet || "(no text)"}
+      </span>
+    </button>
+  );
+}
+
+function draftSnippet(draft: ParsedMessage) {
+  return (
+    decodeSnippet(draft.snippet) ||
+    (draft.textPlain ?? "").replace(/\s+/g, " ").trim()
   );
 }
 
@@ -610,7 +723,9 @@ function MessageHeader({
 
       {hasDraft &&
         (!expanded || message.labelIds?.includes(GmailLabel.DRAFT)) && (
-          <span className="shrink-0 text-primary text-xs">Draft</span>
+          <span className="shrink-0 text-red-600 text-xs dark:text-red-400">
+            Draft
+          </span>
         )}
 
       <div className="ml-auto flex shrink-0 items-center gap-2">

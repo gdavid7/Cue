@@ -80,7 +80,9 @@ export function MailThreadRow({
         })
       : null;
   const draftMarker = isDraft ? (
-    <span className="shrink-0 text-primary text-sm">Draft</span>
+    <span className="shrink-0 text-red-600 text-sm dark:text-red-400">
+      Draft
+    </span>
   ) : null;
   const messageCountMarker =
     messageCount > 1 ? (

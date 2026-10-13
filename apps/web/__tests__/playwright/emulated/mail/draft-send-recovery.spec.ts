@@ -21,8 +21,10 @@ test("sends an autosaved reply using its stable mailbox draft reference", async 
     conversations,
     "Draft deletion example",
   ).click();
-  const editor = page.getByRole("textbox", { name: "Email message" }).first();
+  // The newest of the conversation's two drafts is the one open.
+  const editor = page.getByRole("textbox", { name: "Email message" });
   await expect(editor).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("collapsed-draft")).toHaveCount(1);
   const saved = page.waitForResponse(async (response) => {
     const request = response.request();
     return Boolean(
@@ -76,9 +78,11 @@ test("sends an autosaved reply using its stable mailbox draft reference", async 
   await expect(
     page.locator(`[data-thread-message-id="${sent[0].id}"]`),
   ).toBeVisible();
+  // The other draft is now the only one, so it is open.
   await expect(
     page.getByRole("textbox", { name: "Email message" }),
   ).toBeVisible();
+  await expect(page.getByTestId("collapsed-draft")).toHaveCount(0);
   await expect(
     page.getByText("Reply could not be sent", { exact: true }),
   ).toHaveCount(0);

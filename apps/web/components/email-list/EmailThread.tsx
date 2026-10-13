@@ -1,5 +1,12 @@
 import { OpenedConversationAttachments } from "./OpenedConversationAttachments";
-import { useEffect, useMemo, useState, useRef, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useRef,
+  type ReactNode,
+} from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { isTypingTarget } from "@/lib/shortcuts/registry";
 import { ChevronsDownUpIcon, ChevronsUpDownIcon } from "lucide-react";
@@ -10,6 +17,7 @@ import { useAccount } from "@/providers/EmailAccountProvider";
 import { useReplyDrafts } from "@/hooks/useReplyDrafts";
 import { ThreadDeliveryStatus } from "@/components/email-list/ThreadDeliveryStatus";
 import { useHiddenDraftMessageIds } from "@/hooks/useHiddenDraftMessageIds";
+import { useComposeModal } from "@/providers/ComposeModalProvider";
 import { Button } from "@/components/ui/button";
 import {
   getDraftSessionMessageId,
@@ -152,14 +160,45 @@ export function EmailThread({
           .map(({ message }) => [message.id, true]),
       ),
   );
-  const [activeCompose, setActiveCompose] = useState<{
-    threadId: string;
-    messageId: string;
-  }>();
-  const activeComposeMessageId =
-    activeCompose?.threadId === threadId
-      ? getComposerMessageId(activeCompose.messageId, sendOperationIds)
-      : undefined;
+  // Like Gmail, one composer is open at a time: the one the user last opened,
+  // else the newest draft. Every other draft is a row that opens on click.
+  const [openRequest, setOpenRequest] = useState<OpenComposerRequest>();
+  const requestOpen = useCallback(
+    (request: Omit<OpenComposerRequest, "threadId" | "previous">) =>
+      setOpenRequest((previous) => ({
+        ...request,
+        threadId,
+        previous: previous?.threadId === threadId ? previous : undefined,
+      })),
+    [threadId],
+  );
+  const { poppedOutDraftSessionId } = useComposeModal();
+  const [dismissedDraftIds, setDismissedDraftIds] = useState(
+    () => new Set<string>(),
+  );
+  const setDraftDismissed = useCallback(
+    (sessionMessageId: string, dismissed: boolean) => {
+      setDismissedDraftIds((previous) => {
+        if (previous.has(sessionMessageId) === dismissed) return previous;
+        const next = new Set(previous);
+        if (dismissed) next.add(sessionMessageId);
+        else next.delete(sessionMessageId);
+        return next;
+      });
+    },
+    [],
+  );
+  const isDraftShown = (sessionMessageId: string) =>
+    !dismissedDraftIds.has(sessionMessageId) &&
+    getReplyDraftSessionId(sessionMessageId, "reply") !==
+      poppedOutDraftSessionId;
+  const shownDraftsOf = (draftMessages: ThreadMessage[]) =>
+    draftMessages
+      .map((draft) => ({
+        draft,
+        sessionMessageId: getDraftSessionMessageId(emailAccountId, draft.id),
+      }))
+      .filter(({ sessionMessageId }) => isDraftShown(sessionMessageId));
   const [recoveredReply, setRecoveredReply] = useState<{
     messageId: string;
     mode: ReplyDraftMode;
@@ -168,21 +207,67 @@ export function EmailThread({
   useEffect(() => {
     const messageId = autoOpenForwardForMessageId ?? autoOpenReplyForMessageId;
     if (messageId) {
-      setActiveCompose({ threadId, messageId });
+      requestOpen({ kind: "compose", id: messageId });
       setExpansionOverrides((previous) =>
         new Map(previous).set(messageId, true),
       );
     }
-  }, [autoOpenForwardForMessageId, autoOpenReplyForMessageId, threadId]);
+  }, [autoOpenForwardForMessageId, autoOpenReplyForMessageId, requestOpen]);
   const expanded = (id: string, hasDraft: boolean) =>
     expansionOverrides.get(id) ?? (id === lastMessageId || hasDraft);
-  const localDraftModeFor = (message: ThreadMessage) => {
+  const localDraftFor = (message: ThreadMessage) => {
     if (message.labelIds?.includes(GmailLabel.DRAFT)) return;
-    return getLocalDraftMode(
+    return getLatestLocalDraft(
       localDrafts,
       getComposerMessageId(message.id, sendOperationIds),
     );
   };
+  const localDraftModeFor = (message: ThreadMessage) => {
+    const draft = localDraftFor(message);
+    return draft && getLocalDraftMode(draft);
+  };
+  const composerIdOf = (messageId: string) =>
+    getComposerMessageId(messageId, sendOperationIds);
+  const shownDraftIds = new Set(
+    organizedMessages.flatMap(({ draftMessages }) =>
+      shownDraftsOf(draftMessages).map((draft) => draft.sessionMessageId),
+    ),
+  );
+  let request = openRequest?.threadId === threadId ? openRequest : undefined;
+  // A closed or discarded draft hands the composer back to the one before it.
+  while (request?.kind === "draft" && !shownDraftIds.has(request.id))
+    request = request.previous;
+  const openComposer: Pick<OpenComposerRequest, "kind" | "id"> | undefined =
+    request ??
+    newestDraft([
+      ...organizedMessages.flatMap(({ draftMessages }) =>
+        shownDraftsOf(draftMessages).map(({ draft, sessionMessageId }) => ({
+          kind: "draft" as const,
+          id: sessionMessageId,
+          recency: draftRecency(draft),
+        })),
+      ),
+      ...organizedMessages.flatMap(({ message }) => {
+        const local = localDraftFor(message);
+        return local
+          ? [
+              {
+                kind: "compose" as const,
+                id: message.id,
+                recency: local.updatedAt,
+              },
+            ]
+          : [];
+      }),
+    ]);
+  const onComposerClosed = (messageId: string) =>
+    setOpenRequest((request) =>
+      request?.threadId === threadId &&
+      request.kind === "compose" &&
+      composerIdOf(request.id) === composerIdOf(messageId)
+        ? request.previous
+        : request,
+    );
   const hasLocalDraft = (message: ThreadMessage) =>
     Boolean(localDraftModeFor(message));
   const allExpanded = organizedMessages.every(({ message, draftMessages }) =>
@@ -337,13 +422,22 @@ export function EmailThread({
                     ? () => setSelectedMessageId(message.id)
                     : undefined
                 }
-                hideComposer={Boolean(
-                  activeComposeMessageId &&
-                    activeComposeMessageId !==
-                      getComposerMessageId(message.id, sendOperationIds),
-                )}
+                composerOpen={
+                  openComposer?.kind === "compose" &&
+                  composerIdOf(openComposer.id) === composerIdOf(message.id)
+                }
+                openDraftSessionId={
+                  openComposer?.kind === "draft" ? openComposer.id : undefined
+                }
+                dismissedDraftIds={dismissedDraftIds}
+                onDraftDismissedChange={setDraftDismissed}
+                onOpenDraft={(sessionMessageId) =>
+                  requestOpen({ kind: "draft", id: sessionMessageId })
+                }
+                onComposerClosed={() => onComposerClosed(message.id)}
+                localDraftSnippet={localDraftSnippet(localDraftFor(message))}
                 onStartCompose={() =>
-                  setActiveCompose({ threadId, messageId: message.id })
+                  requestOpen({ kind: "compose", id: message.id })
                 }
                 defaultComposeMode={defaultComposeMode}
                 defaultReplyAll={autoOpenMode === "reply" && autoOpenReplyAll}
@@ -422,7 +516,7 @@ export function EmailThread({
             messageIds={messages.map((message) => message.id)}
             refetch={refetch}
             onEditReply={(messageId, mode) => {
-              setActiveCompose({ threadId, messageId });
+              requestOpen({ kind: "compose", id: messageId });
               setExpansionOverrides((previous) =>
                 new Map(previous).set(messageId, true),
               );
@@ -447,18 +541,46 @@ function getComposerMessageId(
   return operationId ? `outgoing:${operationId}` : messageId;
 }
 
-function getLocalDraftMode(drafts: StoredReplyDraft[], messageId: string) {
-  const latest = drafts
+type OpenComposerRequest = {
+  threadId: string;
+  /** A mailbox draft by its session id, or a message's own reply or forward. */
+  kind: "draft" | "compose";
+  id: string;
+  previous?: OpenComposerRequest;
+};
+
+function newestDraft<T extends { recency: number }>(drafts: T[]) {
+  return drafts.reduce<T | undefined>(
+    (newest, draft) =>
+      !newest || draft.recency >= newest.recency ? draft : newest,
+    undefined,
+  );
+}
+
+function getLatestLocalDraft(drafts: StoredReplyDraft[], messageId: string) {
+  return drafts
     .filter(
       (draft) =>
         draft.messageId === getReplyDraftSessionId(messageId, "reply") ||
         draft.messageId === getReplyDraftSessionId(messageId, "forward"),
     )
     .sort((left, right) => right.updatedAt - left.updatedAt)[0];
-  if (!latest) return;
-  return latest.messageId === getReplyDraftSessionId(messageId, "forward")
+}
+
+function getLocalDraftMode(draft: StoredReplyDraft) {
+  return draft.messageId.endsWith(":forward")
     ? ("forward" as const)
-    : getReplyDraftMode(latest);
+    : getReplyDraftMode(draft);
+}
+
+function localDraftSnippet(draft: StoredReplyDraft | undefined) {
+  if (!draft) return;
+  const html = draft.content?.draft?.editableHtml ?? "";
+  return html
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 // Drafts without reply headers still belong to this conversation. Keep each

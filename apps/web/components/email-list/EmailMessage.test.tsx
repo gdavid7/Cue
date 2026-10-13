@@ -185,9 +185,11 @@ describe("EmailMessage draft recovery", () => {
       rejectDiscard(new Error("Request failed"));
     });
 
+    // The draft comes back as a collapsed row; the forward stays the one open.
     expect(
       screen.getAllByTestId("composer").map((composer) => composer.textContent),
-    ).toEqual(["replyDiscard draft", "forwardDiscard draft"]);
+    ).toEqual(["forwardDiscard draft"]);
+    expect(screen.getByTestId("collapsed-draft")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Reply" }));
     expect(
       screen.getAllByTestId("composer").map((composer) => composer.textContent),

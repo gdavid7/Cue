@@ -133,11 +133,13 @@ describe("EmailThread reply composer", () => {
         showReplyButton
       />,
     );
+    // Only the reply being written is open; the other draft is a row.
     expect(
       screen
         .getAllByRole("textbox", { name: "Email message" })
         .map((editor) => editor.dataset.draftSessionId),
-    ).toEqual(["first:reply", "other-copy:reply"]);
+    ).toEqual(["first:reply"]);
+    expect(screen.getAllByTestId("collapsed-draft")).toHaveLength(1);
 
     view.rerender(
       <EmailThread
@@ -158,7 +160,7 @@ describe("EmailThread reply composer", () => {
     ).toBe("other-draft:reply");
   });
 
-  it("keeps independent mailbox drafts open while composing and closing a forward", () => {
+  it("opens one mailbox draft at a time and hands back to it after a forward", () => {
     render(
       <EmailThread
         messages={[
@@ -170,19 +172,23 @@ describe("EmailThread reply composer", () => {
         showReplyButton
       />,
     );
-    const editors = () =>
-      screen.getAllByRole("textbox", { name: "Email message" });
-    fireEvent.change(editors()[0], { target: { value: "Independent edit" } });
+    const openSessions = () =>
+      screen
+        .getAllByRole("textbox", { name: "Email message" })
+        .map((editor) => editor.dataset.draftSessionId);
+    // The newest draft is open; the other is a collapsed row.
+    expect(openSessions()).toEqual(["independent-second:reply"]);
+    expect(screen.getAllByTestId("collapsed-draft")).toHaveLength(1);
+
+    fireEvent.click(screen.getByTestId("collapsed-draft"));
+    expect(openSessions()).toEqual(["independent-first:reply"]);
+
     fireEvent.click(screen.getByRole("button", { name: "Forward" }));
-    expect(editors().map((editor) => editor.dataset.draftSessionId)).toEqual([
-      "independent-first:reply",
-      "independent-second:reply",
-      "parent:forward",
-    ]);
-    expect((editors()[0] as HTMLInputElement).value).toBe("Independent edit");
-    fireEvent.click(screen.getAllByRole("button", { name: "Send" })[2]);
-    expect(editors()).toHaveLength(2);
-    expect((editors()[0] as HTMLInputElement).value).toBe("Independent edit");
+    expect(openSessions()).toEqual(["parent:forward"]);
+    expect(screen.getAllByTestId("collapsed-draft")).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(openSessions()).toEqual(["independent-first:reply"]);
   });
 
   // Gmail gives a draft a new message ID each time it is saved. When sync
@@ -231,10 +237,7 @@ describe("EmailThread reply composer", () => {
       />,
     );
     expect(
-      screen.getAllByRole("textbox", { name: "Email message" }),
-    ).toHaveLength(2);
-    expect(
-      screen.getAllByRole("textbox", { name: "Email message" })[1].dataset
+      screen.getByRole("textbox", { name: "Email message" }).dataset
         .draftSessionId,
     ).toBe("parent:forward");
     view.rerender(
@@ -258,10 +261,7 @@ describe("EmailThread reply composer", () => {
     ).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Forward" }));
     expect(
-      screen.getAllByRole("textbox", { name: "Email message" }),
-    ).toHaveLength(2);
-    expect(
-      screen.getAllByRole("textbox", { name: "Email message" })[1].dataset
+      screen.getByRole("textbox", { name: "Email message" }).dataset
         .draftSessionId,
     ).toBe("parent:forward");
   });

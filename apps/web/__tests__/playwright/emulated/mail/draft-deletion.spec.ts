@@ -27,7 +27,10 @@ test("updates the draft indicator after deletion and retains remaining drafts", 
     name: "Discard draft",
     exact: true,
   });
-  await expect(discardButtons).toHaveCount(2);
+  // One draft is open to write in; the conversation's other draft is a row.
+  const collapsedDrafts = page.getByTestId("collapsed-draft");
+  await expect(discardButtons).toHaveCount(1);
+  await expect(collapsedDrafts).toHaveCount(1);
   const discard = discardButtons.first();
   await expect(discard).toBeVisible({ timeout: 60_000 });
   await page.route("**/mail**", async (route) => {
@@ -42,6 +45,8 @@ test("updates the draft indicator after deletion and retains remaining drafts", 
   await expect(row.getByText("Draft", { exact: true })).toBeVisible();
   await page.unroute("**/mail**");
   await discard.click();
+  // The remaining draft opens in its place.
+  await expect(collapsedDrafts).toHaveCount(0);
   await expect(discardButtons).toHaveCount(1);
   await expect(row.getByText("Draft", { exact: true })).toBeVisible();
   await expect(discard).toBeVisible();

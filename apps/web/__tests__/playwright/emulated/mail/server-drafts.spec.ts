@@ -26,24 +26,36 @@ test("preserves multiple server drafts without reply headers", async ({
     conversations,
     "Multiple Server Drafts",
   ).click();
+  // Like Gmail, one draft is open at a time: the newest. The other is a row.
   const editors = page.getByRole("textbox", { name: "Email message" });
-  await expect(editors).toHaveCount(2);
-  await expect(editors.nth(0)).toContainText("First saved reply");
-  await expect(editors.nth(1)).toContainText("Second saved reply");
-  await editors.nth(0).fill("Independent first edit");
+  const collapsed = page.getByTestId("collapsed-draft");
+  await expect(editors).toHaveCount(1);
+  await expect(editors).toContainText("Second saved reply");
+  await expect(collapsed).toHaveCount(1);
+  await expect(collapsed).toContainText("First saved reply");
+
+  await collapsed.click();
+  await expect(editors).toHaveCount(1);
+  await expect(editors).toContainText("First saved reply");
+  await expect(collapsed).toContainText("Second saved reply");
+  await editors.fill("Independent first edit");
   await expect(
     page.getByText("First saved reply", { exact: true }),
   ).toHaveCount(0);
-  await expect(editors.nth(1)).toContainText("Second saved reply");
   await capturePlaywrightCheckpoint(page, testInfo, "multiple-server-drafts");
 
+  // A forward takes the one open composer, and closing it hands back the draft.
   await page
     .locator('[data-thread-message-id="msg_playwright_multi_draft_parent"]')
     .getByRole("button", { name: "Forward", exact: true })
     .click();
-  await expect(editors).toHaveCount(3);
-  await expect(editors.nth(0)).toContainText("Independent first edit");
-  await expect(editors.nth(1)).toContainText("Second saved reply");
+  await expect(editors).toHaveCount(1);
+  await expect(collapsed).toHaveCount(2);
+  await page
+    .getByRole("button", { name: "Discard draft", exact: true })
+    .click();
+  await expect(editors).toContainText("Independent first edit");
+  await expect(collapsed).toHaveCount(1);
 
   const pendingDiscards = [
     Promise.withResolvers<void>(),
@@ -65,24 +77,26 @@ test("preserves multiple server drafts without reply headers", async ({
     }
     await route.fallback();
   });
+  // Discarding the open draft opens the other one.
   await page
     .getByRole("button", { name: "Discard draft", exact: true })
-    .nth(0)
     .click();
-  await expect(editors).toHaveCount(2);
+  await expect(editors).toContainText("Second saved reply");
+  await expect(collapsed).toHaveCount(0);
   await page
     .getByRole("button", { name: "Discard draft", exact: true })
-    .nth(0)
     .click();
-  await expect(editors).toHaveCount(1);
+  await expect(editors).toHaveCount(0);
   await expect.poll(() => discards).toBe(1);
   pendingDiscards[0].resolve();
-  await expect(editors).toHaveCount(2);
+  await expect(editors).toHaveCount(1);
   await expect.poll(() => discards).toBe(2);
   pendingDiscards[1].resolve();
-  await expect(editors).toHaveCount(3);
-  await expect(editors.nth(0)).toContainText("Independent first edit");
-  await expect(editors.nth(1)).toContainText("Second saved reply");
+  // Both failed, so both come back, still with one of them open.
+  await expect(editors).toHaveCount(1);
+  await expect(collapsed).toHaveCount(1);
+  await expect(editors).toContainText("Independent first edit");
+  await expect(collapsed).toContainText("Second saved reply");
   await capturePlaywrightCheckpoint(page, testInfo, "restored-server-drafts");
 });
 
@@ -97,13 +111,16 @@ test("preserves multiple server drafts without a sent parent", async ({
     "Drafts Without Parent",
   ).click();
   const editors = page.getByRole("textbox", { name: "Email message" });
-  await expect(editors).toHaveCount(2);
-  await expect(editors.nth(0)).toContainText("First saved reply");
-  await expect(editors.nth(1)).toContainText("Second saved reply");
-  await editors.nth(0).fill("Independent first edit");
+  const collapsed = page.getByTestId("collapsed-draft");
+  await expect(editors).toHaveCount(1);
+  await expect(editors).toContainText("Second saved reply");
+  await expect(collapsed).toContainText("First saved reply");
+  await collapsed.click();
+  await expect(editors).toContainText("First saved reply");
+  await editors.fill("Independent first edit");
   await expect(
     page.getByText("First saved reply", { exact: true }),
   ).toHaveCount(0);
-  await expect(editors.nth(1)).toContainText("Second saved reply");
+  await expect(collapsed).toContainText("Second saved reply");
   await capturePlaywrightCheckpoint(page, testInfo, "draft-only-composers");
 });
