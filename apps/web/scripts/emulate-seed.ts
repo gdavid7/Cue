@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type {
@@ -16,6 +17,13 @@ const MICROSOFT_NAME = "Developer";
 const TEAMMATE_GOOGLE_EMAIL = "teammate@example.com";
 const TEAMMATE_MICROSOFT_EMAIL = "teammate@outlook.test";
 const TEAMMATE_NAME = "Teammate";
+// Gmail's inbox tabs besides Primary; Outlook files the same mail under Other.
+const GMAIL_OTHER_TABS = new Set([
+  "CATEGORY_PROMOTIONS",
+  "CATEGORY_SOCIAL",
+  "CATEGORY_UPDATES",
+  "CATEGORY_FORUMS",
+]);
 
 export type EmulateSeedOptions = {
   /** The inbox to seed. Defaults to the SaaS founder demo the tests expect. */
@@ -25,6 +33,14 @@ export type EmulateSeedOptions = {
   /** Display name of the signed-in Google user. */
   googleName?: string;
   calendarEvents?: CueDemoCalendarEvent[];
+  /** Address of the Microsoft user. */
+  microsoftEmail?: string;
+  /** Display name of the Microsoft user. */
+  microsoftName?: string;
+  /** Outlook mail for the Microsoft user, on top of the emulator's samples. */
+  microsoftFixture?: DemoInboxFixture;
+  /** Events for the Microsoft user's default calendar. */
+  microsoftCalendarEvents?: CueDemoCalendarEvent[];
   /** Fixed access tokens the emulator accepts, keyed by token. */
   tokens?: Record<string, { login: string; scopes: string[] }>;
 };
@@ -36,6 +52,10 @@ export function buildEmulateSeed(
     googleEmail = GOOGLE_EMAIL,
     googleName = GOOGLE_NAME,
     calendarEvents,
+    microsoftEmail = MICROSOFT_EMAIL,
+    microsoftName = MICROSOFT_NAME,
+    microsoftFixture,
+    microsoftCalendarEvents,
     tokens,
   }: EmulateSeedOptions = {},
 ) {
@@ -84,7 +104,7 @@ export function buildEmulateSeed(
       ],
     },
     microsoft: {
-      users: [{ email: MICROSOFT_EMAIL, name: MICROSOFT_NAME }],
+      users: [{ email: microsoftEmail, name: microsoftName }],
       oauth_clients: [
         {
           client_id: "emulate-microsoft-client-id",
@@ -97,6 +117,22 @@ export function buildEmulateSeed(
           ],
         },
       ],
+      ...(microsoftFixture
+        ? {
+            categories: toSeedCategories(microsoftFixture, microsoftEmail),
+            messages: toMicrosoftSeedMessages(microsoftFixture, {
+              email: microsoftEmail,
+              name: microsoftName,
+            }),
+          }
+        : {}),
+      ...(microsoftCalendarEvents
+        ? {
+            calendar_events: microsoftCalendarEvents.map(
+              toMicrosoftCalendarEvent,
+            ),
+          }
+        : {}),
     },
   };
 }
@@ -180,6 +216,99 @@ function toSeedMessages(
       internal_date: String(new Date(message.date).getTime()),
     })),
   );
+}
+
+// Outlook keeps the fixture's user labels as categories, matched by name.
+function toSeedCategories(fixture: DemoInboxFixture, userEmail: string) {
+  return fixture.labels
+    .filter((label) => label.type === "user")
+    .map((label, index) => ({
+      id: categoryId(label.name),
+      user_email: userEmail,
+      display_name: label.name,
+      // Outlook's 25 preset colors, so categories don't all share one.
+      color: `preset${index % 25}`,
+    }));
+}
+
+function toMicrosoftSeedMessages(
+  fixture: DemoInboxFixture,
+  mailbox: { email: string; name: string },
+) {
+  const categoryNames = new Set(
+    fixture.labels
+      .filter((label) => label.type === "user")
+      .map((label) => label.name),
+  );
+  const toRecipient = (address: DemoInboxAddress) => {
+    const { email, name } = rewriteMailboxAddress(fixture, address, mailbox);
+    return { address: email, name };
+  };
+
+  return fixture.threads.flatMap((thread) =>
+    thread.messages.map((message) => {
+      const labels = message.labels ?? ["INBOX"];
+      return {
+        id: message.id,
+        conversation_id: thread.id,
+        user_email: mailbox.email,
+        subject: message.subject,
+        // A text body reaches the app's prompts exactly as Gmail's does.
+        body_content: message.bodyHtml ?? message.bodyText,
+        body_content_type: message.bodyHtml ? "html" : "text",
+        from: toRecipient(message.from),
+        to_recipients: message.to.map(toRecipient),
+        cc_recipients: message.cc?.map(toRecipient),
+        received_date_time: message.date,
+        is_read: !message.unread,
+        inference_classification: labels.some((label) =>
+          GMAIL_OTHER_TABS.has(label),
+        )
+          ? "other"
+          : "focused",
+        categories: labels.filter((label) => categoryNames.has(label)),
+        parent_folder_id: outlookFolderId(labels),
+      };
+    }),
+  );
+}
+
+// The emulator gives well-known folders their well-known name as id.
+function outlookFolderId(labels: string[]) {
+  if (labels.includes("SENT")) return "sentitems";
+  if (labels.includes("DRAFT")) return "drafts";
+  if (labels.includes("INBOX")) return "inbox";
+  return "archive";
+}
+
+// GUID-shaped like Graph's, and stable across emulator restarts so category
+// ids the app stored stay valid.
+function categoryId(name: string) {
+  const hex = createHash("sha256").update(name).digest("hex");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20, 32),
+  ].join("-");
+}
+
+function toMicrosoftCalendarEvent(event: CueDemoCalendarEvent) {
+  return {
+    id: event.id,
+    user_email: event.user_email,
+    calendar_id: event.calendar_id,
+    subject: event.summary,
+    body_preview: event.description,
+    location_display_name: event.location,
+    start_date_time: event.start_date_time,
+    end_date_time: event.end_date_time,
+    attendees: event.attendees.map((attendee) => ({
+      address: attendee.email,
+      name: attendee.display_name,
+    })),
+  };
 }
 
 function getMessageLabelIds(

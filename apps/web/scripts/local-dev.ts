@@ -22,6 +22,8 @@ import {
   buildCueDemoConnectorData,
   buildCueDemoInbox,
   buildCueDemoInsights,
+  buildCueDemoWorkCalendarEvents,
+  buildCueDemoWorkInbox,
   cueDemoChat,
   cueDemoReplySuggestions,
   cueDemoThreadBriefs,
@@ -44,9 +46,12 @@ const allocatedPorts = new Set<number>();
 // for Inbox Zero's original SaaS-founder demo.
 const USE_CUE_DEMO = process.env.CUE_DEMO_INBOX !== "inbox-zero";
 const DEMO_GOOGLE_EMAIL = "david.lin@ucsd.edu";
-// A fixed emulator token, so the demo calendar stays connected across restarts
+// David's work mailbox, an Outlook account he adds next to the school Gmail.
+const DEMO_MICROSOFT_EMAIL = "david@brightline.io";
+// Fixed emulator tokens, so the demo calendars stay connected across restarts
 // (the emulator forgets OAuth tokens it issued when it stops).
 const DEMO_CALENDAR_TOKEN = "cue-local-dev-calendar-token";
+const DEMO_OUTLOOK_TOKEN = "cue-local-dev-outlook-token";
 const EMPTY_INSIGHT = {
   action: "none",
   task: "",
@@ -314,12 +319,8 @@ async function main() {
     );
 
     const seedPath = join(DATA_DIR, "seed.json");
-    await writeEmulateSeed(
-      seedPath,
-      env.NEXT_PUBLIC_BASE_URL,
-      false,
-      USE_CUE_DEMO ? cueDemoSeedOptions() : undefined,
-    );
+    const demoSeed = USE_CUE_DEMO ? cueDemoSeedOptions() : undefined;
+    await writeEmulateSeed(seedPath, env.NEXT_PUBLIC_BASE_URL, false, demoSeed);
     for (const [service, port] of [
       ["google", googlePort],
       ["microsoft", microsoftPort],
@@ -337,6 +338,14 @@ async function main() {
       ]);
       await processes.ready(`${service} emulator`, () =>
         checkUrl(`http://localhost:${port}/.well-known/openid-configuration`),
+      );
+    }
+    if (demoSeed) {
+      await removeOutlookEmulatorSamples(
+        `http://localhost:${microsoftPort}`,
+        demoSeed,
+      ).catch((error) =>
+        console.warn("[local] Outlook sample mail not removed", error),
       );
     }
     const llm = await createLlmEmulator({ port: llmPort });
@@ -417,8 +426,11 @@ async function main() {
       () => checkUrl(`${env.NEXT_PUBLIC_BASE_URL}/api/auth/ok`),
       240_000,
     );
+    const signIn = USE_CUE_DEMO
+      ? `[local] Sign in with Google: ${DEMO_GOOGLE_EMAIL} (school Gmail)\n[local] Then add the work Outlook: account switcher > Add another account > Add Microsoft > ${DEMO_MICROSOFT_EMAIL}. Both show in All inboxes.`
+      : "[local] Sign in with Google: developer@example.com\n[local] Or Microsoft: developer@outlook.test";
     console.log(
-      `\n[local] Ready: ${env.NEXT_PUBLIC_BASE_URL}/mail\n[local] Sign in with Google: ${USE_CUE_DEMO ? DEMO_GOOGLE_EMAIL : "developer@example.com"}\n[local] Or Microsoft: developer@outlook.test\n[local] Mail, billing, email delivery, and AI use local emulators. AI responses are canned.\n[local] Data survives restarts. Press Ctrl-C to stop.\n`,
+      `\n[local] Ready: ${env.NEXT_PUBLIC_BASE_URL}/mail\n${signIn}\n[local] Mail, billing, email delivery, and AI use local emulators. AI responses are canned.\n[local] Data survives restarts. Press Ctrl-C to stop.\n`,
     );
     await delay(2 ** 31 - 1, undefined, { signal: processes.signal });
   } catch (error) {
@@ -476,7 +488,7 @@ async function configureDemoOnboarding(databaseUrl: string) {
       $$ LANGUAGE plpgsql;
       DROP TRIGGER IF EXISTS local_dev_onboarding ON "User";
       CREATE TRIGGER local_dev_onboarding BEFORE INSERT ON "User"
-      FOR EACH ROW WHEN (NEW.email IN ('developer@example.com', '${DEMO_GOOGLE_EMAIL}', 'developer@outlook.test'))
+      FOR EACH ROW WHEN (NEW.email IN ('developer@example.com', '${DEMO_GOOGLE_EMAIL}', 'developer@outlook.test', '${DEMO_MICROSOFT_EMAIL}'))
       EXECUTE FUNCTION local_dev_complete_onboarding();
     `);
   } finally {
@@ -491,17 +503,78 @@ function cueDemoSeedOptions(): EmulateSeedOptions {
     googleEmail: DEMO_GOOGLE_EMAIL,
     googleName: "David Lin",
     calendarEvents: buildCueDemoCalendarEvents(DEMO_GOOGLE_EMAIL, now),
-    tokens: { [DEMO_CALENDAR_TOKEN]: { login: DEMO_GOOGLE_EMAIL, scopes: [] } },
+    microsoftEmail: DEMO_MICROSOFT_EMAIL,
+    microsoftName: "David Lin",
+    microsoftFixture: buildCueDemoWorkInbox(now),
+    microsoftCalendarEvents: buildCueDemoWorkCalendarEvents(
+      DEMO_MICROSOFT_EMAIL,
+      now,
+    ),
+    // Each emulator accepts both; each answers only for its own user.
+    tokens: {
+      [DEMO_CALENDAR_TOKEN]: { login: DEMO_GOOGLE_EMAIL, scopes: [] },
+      [DEMO_OUTLOOK_TOKEN]: {
+        login: DEMO_MICROSOFT_EMAIL,
+        scopes: [],
+      },
+    },
   };
 }
 
 /**
- * Connects the demo account's Google Calendar and adds its inbox tabs as soon
- * as the account exists, and for an account that already does. The calendar
- * uses the fixed emulator token with a far-future expiry, so the app never
- * tries to refresh it. With `connectApps`, also connects Google Drive and
- * Canvas, which the Composio emulator answers for. When the Cue demo is off,
- * removes the trigger and the connections, whose credentials would be dead.
+ * The Microsoft emulator gives every mailbox sample mail and meetings. The
+ * demo's work mailbox should hold only David's, so this deletes the rest
+ * (deleted mail lands in Deleted Items; the emulator has no hard delete).
+ */
+async function removeOutlookEmulatorSamples(
+  baseUrl: string,
+  seed: EmulateSeedOptions,
+) {
+  const keep = new Set([
+    ...(seed.microsoftFixture?.threads ?? []).flatMap((t) =>
+      t.messages.map((m) => m.id),
+    ),
+    ...(seed.microsoftCalendarEvents ?? []).map((e) => e.id),
+  ]);
+  const graph = async (path: string, method = "GET") => {
+    const response = await fetch(`${baseUrl}/v1.0/me${path}`, {
+      method,
+      headers: { authorization: `Bearer ${DEMO_OUTLOOK_TOKEN}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok)
+      throw new Error(`HTTP ${response.status} from Outlook emulator ${path}`);
+    return method === "GET"
+      ? ((await response.json()) as { value: { id: string }[] })
+      : undefined;
+  };
+
+  const messages = await graph("/messages?$top=100");
+  const calendars = await graph("/calendars");
+  const events = (
+    await Promise.all(
+      (calendars?.value ?? []).map((c) =>
+        graph(`/calendars/${encodeURIComponent(c.id)}/events?$top=100`),
+      ),
+    )
+  ).flatMap((page) => page?.value ?? []);
+  for (const { id } of messages?.value ?? [])
+    if (!keep.has(id))
+      await graph(`/messages/${encodeURIComponent(id)}`, "DELETE");
+  for (const { id } of events)
+    if (!keep.has(id))
+      await graph(`/events/${encodeURIComponent(id)}`, "DELETE");
+}
+
+/**
+ * Connects the demo accounts' calendars (Google for the school Gmail, Outlook
+ * for the work mailbox) and adds the Gmail account's inbox tabs as soon as
+ * each account exists, and for an account that already does. The calendars
+ * use the fixed emulator tokens with a far-future expiry, so the app never
+ * tries to refresh them. With `connectApps`, also connects Google Drive and
+ * Canvas to the Gmail account, which the Composio emulator answers for; the
+ * app shares them with the person's other accounts. When the Cue demo is off,
+ * removes the triggers and the connections, whose credentials would be dead.
  */
 async function configureDemoAccount(
   databaseUrl: string,
@@ -517,8 +590,10 @@ async function configureDemoAccount(
     if (!enabled) {
       await client.query(`
         DROP TRIGGER IF EXISTS cue_local_dev_calendar ON "EmailAccount";
+        DROP TRIGGER IF EXISTS cue_local_dev_outlook_calendar ON "EmailAccount";
         DROP FUNCTION IF EXISTS cue_local_dev_connect_calendar_trigger();
         DROP FUNCTION IF EXISTS cue_local_dev_connect_calendar(text, text, text);
+        DROP FUNCTION IF EXISTS cue_local_dev_connect_calendar(text, text, text, text);
         DROP FUNCTION IF EXISTS cue_local_dev_add_splits(text);
         DROP FUNCTION IF EXISTS cue_local_dev_connect_apps(text);
         DELETE FROM "CalendarConnection" WHERE id LIKE '%-cue-demo-calendar';
@@ -534,14 +609,16 @@ async function configureDemoAccount(
     }
 
     await client.query(`
-      CREATE OR REPLACE FUNCTION cue_local_dev_connect_calendar(account_id text, account_email text, token text)
+      -- Superseded by the version that takes the calendar's provider.
+      DROP FUNCTION IF EXISTS cue_local_dev_connect_calendar(text, text, text);
+      CREATE OR REPLACE FUNCTION cue_local_dev_connect_calendar(account_id text, account_email text, token text, calendar_provider text)
       RETURNS void AS $$
       BEGIN
         INSERT INTO "CalendarConnection" (
           id, "createdAt", "updatedAt", provider, email,
           "accessToken", "refreshToken", "expiresAt", "isConnected", "emailAccountId"
         ) VALUES (
-          account_id || '-cue-demo-calendar', NOW(), NOW(), 'google', account_email,
+          account_id || '-cue-demo-calendar', NOW(), NOW(), calendar_provider, account_email,
           token, 'cue-local-dev-unused-refresh-token', '2100-01-01', true, account_id
         )
         ON CONFLICT ("emailAccountId", provider, email) DO UPDATE SET
@@ -555,7 +632,7 @@ async function configureDemoAccount(
         SELECT account_id || '-cue-demo-primary-calendar', NOW(), NOW(), 'primary', account_email, true, true,
           'America/Los_Angeles', c.id
         FROM "CalendarConnection" c
-        WHERE c."emailAccountId" = account_id AND c.provider = 'google' AND c.email = account_email
+        WHERE c."emailAccountId" = account_id AND c.provider = calendar_provider AND c.email = account_email
         ON CONFLICT ("connectionId", "calendarId") DO NOTHING;
       END;
       $$ LANGUAGE plpgsql;
@@ -598,12 +675,16 @@ async function configureDemoAccount(
       $$ LANGUAGE plpgsql;
 
       -- Runs inside the sign-in transaction, so a schema change that breaks
-      -- these inserts must not break signing in.
+      -- these inserts must not break signing in. Arguments: the calendar
+      -- token, its provider, and whether to connect apps. The inbox tabs
+      -- filter on Gmail label ids, so only the Gmail account gets them.
       CREATE OR REPLACE FUNCTION cue_local_dev_connect_calendar_trigger() RETURNS trigger AS $$
       BEGIN
-        PERFORM cue_local_dev_connect_calendar(NEW.id, NEW.email, TG_ARGV[0]);
-        PERFORM cue_local_dev_add_splits(NEW.id);
-        IF TG_ARGV[1] = 'true' THEN
+        PERFORM cue_local_dev_connect_calendar(NEW.id, NEW.email, TG_ARGV[0], TG_ARGV[1]);
+        IF TG_ARGV[1] = 'google' THEN
+          PERFORM cue_local_dev_add_splits(NEW.id);
+        END IF;
+        IF TG_ARGV[2] = 'true' THEN
           PERFORM cue_local_dev_connect_apps(NEW.id);
         END IF;
         RETURN NEW;
@@ -619,12 +700,21 @@ async function configureDemoAccount(
       DROP TRIGGER IF EXISTS cue_local_dev_calendar ON "EmailAccount";
       CREATE TRIGGER cue_local_dev_calendar AFTER INSERT ON "EmailAccount"
       FOR EACH ROW WHEN (NEW.email = '${DEMO_GOOGLE_EMAIL}')
-      EXECUTE FUNCTION cue_local_dev_connect_calendar_trigger('${DEMO_CALENDAR_TOKEN}', '${connectApps}');
+      EXECUTE FUNCTION cue_local_dev_connect_calendar_trigger('${DEMO_CALENDAR_TOKEN}', 'google', '${connectApps}');
+      DROP TRIGGER IF EXISTS cue_local_dev_outlook_calendar ON "EmailAccount";
+      CREATE TRIGGER cue_local_dev_outlook_calendar AFTER INSERT ON "EmailAccount"
+      FOR EACH ROW WHEN (NEW.email = '${DEMO_MICROSOFT_EMAIL}')
+      EXECUTE FUNCTION cue_local_dev_connect_calendar_trigger('${DEMO_OUTLOOK_TOKEN}', 'microsoft', 'false');
     `);
-    await client.query(
-      `SELECT cue_local_dev_connect_calendar(id, email, $2) FROM "EmailAccount" WHERE email = $1`,
-      [DEMO_GOOGLE_EMAIL, DEMO_CALENDAR_TOKEN],
-    );
+    for (const [email, token, provider] of [
+      [DEMO_GOOGLE_EMAIL, DEMO_CALENDAR_TOKEN, "google"],
+      [DEMO_MICROSOFT_EMAIL, DEMO_OUTLOOK_TOKEN, "microsoft"],
+    ]) {
+      await client.query(
+        `SELECT cue_local_dev_connect_calendar(id, email, $2, $3) FROM "EmailAccount" WHERE email = $1`,
+        [email, token, provider],
+      );
+    }
     await client.query(
       `SELECT cue_local_dev_add_splits(id) FROM "EmailAccount" WHERE email = $1`,
       [DEMO_GOOGLE_EMAIL],

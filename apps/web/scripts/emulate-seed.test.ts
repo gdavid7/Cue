@@ -34,6 +34,17 @@ describe("buildEmulateSeed", () => {
     expect(redirectUris.every((uri) => !uri.includes("//api/"))).toBe(true);
   });
 
+  it("leaves the default seed as the Playwright tests expect it", () => {
+    const seed = buildEmulateSeed();
+
+    expect("tokens" in seed).toBe(false);
+    expect("calendar_events" in seed.google).toBe(false);
+    expect(Object.keys(seed.microsoft)).toEqual(["users", "oauth_clients"]);
+    expect(seed.microsoft.users).toEqual([
+      { email: "developer@outlook.test", name: "Developer" },
+    ]);
+  });
+
   it("adds an empty second mailbox on each provider", () => {
     const seed = buildEmulateSeedWithTeammates("http://127.0.0.1:3000");
 
