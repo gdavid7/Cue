@@ -23,6 +23,7 @@ export function MailMobileNav({
   return (
     <nav
       aria-label="Mail"
+      data-mail-mobile-nav
       className="flex shrink-0 items-center justify-around gap-1 border-border/60 border-t bg-background/80 px-2 backdrop-blur-xl backdrop-saturate-150 pt-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] lg:hidden"
     >
       <Link

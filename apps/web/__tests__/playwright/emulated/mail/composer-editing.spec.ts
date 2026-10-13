@@ -441,7 +441,11 @@ test("does not add a line break for the send shortcut", async ({
   await editor.press("ControlOrMeta+Enter");
 
   await expect(dialog).toBeHidden();
-  await expect(page.getByText("Email sent!", { exact: true })).toBeVisible();
+  await expect(
+    page
+      .getByRole("region", { name: "Notifications alt+T" })
+      .getByText("Sending…", { exact: true }),
+  ).toBeVisible();
   await openMailboxFromSidebar(page, "Sent");
   await waitForComposeOutboxSend(page, emailAccountId);
   const sentConversation = conversationWithSubject(

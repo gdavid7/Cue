@@ -48,7 +48,11 @@ test("composes, sends, and reads a new message from Sent", async ({
   await dialog.getByRole("button", { exact: true, name: "Send" }).click();
 
   await expect(dialog).toBeHidden();
-  await expect(page.getByText("Email sent!", { exact: true })).toBeVisible();
+  await expect(
+    page
+      .getByRole("region", { name: "Notifications alt+T" })
+      .getByText("Sending…", { exact: true }),
+  ).toBeVisible();
 
   await openMailboxFromSidebar(page, "Sent");
   await waitForComposeOutboxSend(page, emailAccountId);
@@ -88,7 +92,7 @@ test("undoes a composed message before it is delivered", async ({
     name: "Notifications alt+T",
   });
   await expect(
-    notifications.getByText("Email sent!", { exact: true }),
+    notifications.getByText("Sending…", { exact: true }),
   ).toBeVisible();
   await expect
     .poll(() =>
@@ -301,7 +305,7 @@ test("opens and sends a reply from the reader with Enter", async ({
     name: "Notifications alt+T",
   });
   await expect(
-    notifications.getByText("Email sent!", { exact: true }),
+    notifications.getByText("Sending…", { exact: true }),
   ).toBeVisible();
   await expect(
     notifications.getByRole("button", { name: /^Undo/ }),

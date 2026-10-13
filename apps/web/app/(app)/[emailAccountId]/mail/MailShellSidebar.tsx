@@ -1,7 +1,7 @@
 "use client";
 
 import { ConnectorsList } from "@/components/connectors/ConnectorsList";
-import { type CSSProperties, memo, useCallback, useRef } from "react";
+import { type CSSProperties, memo, useCallback } from "react";
 import { toast } from "sonner";
 import { AllInboxesSidebarSections } from "@/app/(app)/[emailAccountId]/mail/AllInboxesSidebarSections";
 import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
@@ -101,10 +101,13 @@ export const MailShellSidebar = memo(function MailShellSidebar({
   const isMailSidebarOpen = openSidebars.includes("left-sidebar");
 
   // Dragging writes straight to the CSS variable: re-rendering on every
-  // pointer move would make the sidebar edge lag behind the cursor.
-  const sidebarScopeRef = useRef<HTMLDivElement>(null);
+  // pointer move would make the sidebar edge lag behind the cursor. It lives
+  // on the root so toasts can clear the sidebar too.
   const setSidebarWidth = useCallback((width: number) => {
-    sidebarScopeRef.current?.style.setProperty("--sidebar-width", `${width}px`);
+    document.documentElement.style.setProperty(
+      "--mail-sidebar-width",
+      `${width}px`,
+    );
   }, []);
 
   const hrefFor = useCallback(
@@ -190,8 +193,8 @@ export const MailShellSidebar = memo(function MailShellSidebar({
 
   return (
     <div
-      ref={sidebarScopeRef}
       className="hidden lg:contents"
+      data-mail-sidebar={isMailSidebarOpen ? "open" : "rail"}
       style={
         {
           "--sidebar-width": `var(--mail-sidebar-width, ${MAIL_SIDEBAR_DEFAULT_WIDTH}px)`,

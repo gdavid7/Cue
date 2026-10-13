@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import { cookies } from "next/headers";
 import { MailThemeScope } from "@/app/(app)/[emailAccountId]/mail/MailThemeScope";
 import {
@@ -26,13 +25,9 @@ export default async function MailLayout({
   return (
     <ShortcutsProvider scopes={MAIL_SHORTCUT_SCOPES}>
       <MailThemeScope />
-      {/* `contents` so the variable inherits without joining the flex layout. */}
-      <div
-        className="contents"
-        style={{ "--mail-sidebar-width": `${sidebarWidth}px` } as CSSProperties}
-      >
-        {children}
-      </div>
+      {/* On the root so toasts, rendered outside this layout, can clear it. */}
+      <style>{`:root{--mail-sidebar-width:${sidebarWidth}px}`}</style>
+      {children}
     </ShortcutsProvider>
   );
 }
