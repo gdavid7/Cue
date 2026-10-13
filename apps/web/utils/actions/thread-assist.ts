@@ -1,0 +1,113 @@
+"use server";
+
+import { SystemType } from "@/generated/prisma/enums";
+import { actionClient } from "@/utils/actions/safe-action";
+import {
+  markNeedsReplyBody,
+  saveSuggestedReplyBody,
+} from "@/utils/actions/thread-assist.validation";
+import { isSameEmailAddress } from "@/utils/email";
+import { getMessageTimestamp } from "@/utils/email/message-timestamp";
+import { createEmailProvider } from "@/utils/email/provider";
+import { buildDraftReplyBody } from "@/utils/email/reply-body";
+import { SafeError } from "@/utils/error";
+import { HANDLED_LABELS } from "@/utils/home/get-home";
+import { updateThreadTrackers } from "@/utils/reply-tracker/handle-conversation-status";
+import { applyThreadStatusLabel } from "@/utils/reply-tracker/label-helpers";
+
+/**
+ * The user's correction when the AI got a conversation wrong: back in the
+ * inbox, out of the category it was filed under, and tracked as needing a reply.
+ */
+export const markNeedsReplyAction = actionClient
+  .metadata({ name: "markNeedsReply" })
+  .inputSchema(markNeedsReplyBody)
+  .action(
+    async ({
+      ctx: { emailAccountId, provider, logger },
+      parsedInput: { threadId },
+    }) => {
+      const emailProvider = await createEmailProvider({
+        emailAccountId,
+        provider,
+        logger,
+      });
+      const [thread, labels] = await Promise.all([
+        emailProvider.getThread(threadId),
+        emailProvider.getLabels(),
+      ]);
+      const latest = thread.messages.at(-1);
+      if (!latest) throw new SafeError("Conversation not found.");
+
+      const onThread = new Set(
+        thread.messages.flatMap((m) => m.labelIds ?? []),
+      );
+      const filed = labels
+        .filter(
+          (l) =>
+            onThread.has(l.id) &&
+            HANDLED_LABELS.some(
+              (n) => n.toLowerCase() === l.name.toLowerCase(),
+            ),
+        )
+        .map((l) => l.id);
+
+      // Sequential: Outlook rewrites a message's whole category list per
+      // write, so overlapping label changes can lose one.
+      await emailProvider.unarchiveThread(threadId);
+      if (filed.length) await emailProvider.removeThreadLabels(threadId, filed);
+      await applyThreadStatusLabel({
+        emailAccountId,
+        threadId,
+        messageId: latest.id,
+        systemType: SystemType.TO_REPLY,
+        provider: emailProvider,
+        logger,
+      });
+      await updateThreadTrackers({
+        emailAccountId,
+        threadId,
+        messageId: latest.id,
+        sentAt: new Date(getMessageTimestamp(latest)),
+        status: SystemType.TO_REPLY,
+      });
+    },
+  );
+
+/** Saves a suggested reply, as the user edited it, as a draft in the conversation. */
+export const saveSuggestedReplyAction = actionClient
+  .metadata({ name: "saveSuggestedReply" })
+  .inputSchema(saveSuggestedReplyBody)
+  .action(
+    async ({
+      ctx: { emailAccountId, emailAccount, userId, provider, logger },
+      parsedInput: { threadId, content },
+    }) => {
+      const emailProvider = await createEmailProvider({
+        emailAccountId,
+        provider,
+        logger,
+      });
+      const thread = await emailProvider.getThread(threadId);
+      const replyTo =
+        thread.messages.findLast(
+          (m) => !isSameEmailAddress(m.headers.from, emailAccount.email),
+        ) ?? thread.messages.at(-1);
+      if (!replyTo) throw new SafeError("Conversation not found.");
+
+      const { draftId } = await emailProvider.draftEmail(
+        replyTo,
+        {
+          content: await buildDraftReplyBody({
+            text: content,
+            emailAccountId,
+            userId,
+          }),
+        },
+        emailAccount.email,
+      );
+      if (!draftId)
+        throw new SafeError("Drafts are turned off on this server.");
+      return { draftId };
+    },
+  );

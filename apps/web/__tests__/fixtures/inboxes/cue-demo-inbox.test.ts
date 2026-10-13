@@ -3,6 +3,7 @@ import { buildEmulateSeed } from "@/scripts/emulate-seed";
 import {
   buildCueDemoCalendarEvents,
   buildCueDemoInbox,
+  cueDemoReplySuggestions,
   cueDemoThreadBriefs,
 } from "./cue-demo-inbox";
 
@@ -39,6 +40,16 @@ describe("Cue demo inbox", () => {
     const subjects = new Set(messages.map((m) => m.subject));
     for (const brief of cueDemoThreadBriefs)
       expect(subjects).toContain(brief.subject);
+  });
+
+  it("quotes only words the demo mail actually contains", () => {
+    const subjects = new Set(messages.map((m) => m.subject));
+    const bodies = messages.map((m) => m.bodyText ?? "");
+    for (const { subject, object } of cueDemoReplySuggestions) {
+      expect(subjects).toContain(subject);
+      for (const claim of object.claims)
+        expect(bodies.some((b) => b.includes(claim.quote))).toBe(true);
+    }
   });
 
   it("puts the renewal meeting on the coming Friday at 10am Pacific", () => {

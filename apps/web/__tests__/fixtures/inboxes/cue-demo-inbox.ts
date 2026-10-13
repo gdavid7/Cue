@@ -478,3 +478,78 @@ export const cueDemoThreadBriefs: {
     keyPoints: ["No reply in 6 days. Consider a short nudge."],
   },
 ];
+
+/**
+ * What a model would answer when asked to suggest a reply, for three threads
+ * that show each outcome: a reply backed by the thread itself, one backed by
+ * another email, and an abstention. Matched by the thread's subject, like the
+ * briefs. Quotes are exact text from the fixture, so they pass the same check
+ * a real model's do; source ids follow the context ranking for these threads.
+ */
+export const cueDemoReplySuggestions: {
+  subject: string;
+  object: {
+    enoughEvidence: boolean;
+    missing: string;
+    reply: string;
+    claims: { fact: string; sourceId: string; quote: string }[];
+  };
+}[] = [
+  {
+    subject: "CSE 151B milestone 2: meet Wednesday?",
+    object: {
+      enoughEvidence: true,
+      missing: "",
+      reply:
+        "Hey Kevin, Wednesday at 4pm in the CSE building works. I'll take the write-up if you make the plots, so we can submit before the Friday 11:59pm deadline.",
+      claims: [
+        {
+          fact: "Meet Wednesday at 4pm in the CSE building",
+          sourceId: "m1",
+          quote: "Can we meet Wednesday at 4pm in the CSE building",
+        },
+        {
+          fact: "Kevin makes the plots and David takes the write-up",
+          sourceId: "m1",
+          quote: "I can make the plots if you take the write-up",
+        },
+        {
+          fact: "Milestone 2 is due Friday at 11:59pm",
+          sourceId: "c2",
+          quote: "is due Friday at 11:59pm",
+        },
+      ],
+    },
+  },
+  {
+    subject: "Thanksgiving flight?",
+    object: {
+      enoughEvidence: true,
+      missing: "",
+      reply:
+        "Hi Mom! I fly home Wednesday, November 25 on UA 2231, landing at SFO at 6:35 PM. Thanks for picking me up!",
+      claims: [
+        {
+          fact: "The flight home is Wednesday, November 25, UA 2231",
+          sourceId: "c1",
+          quote: "Departing Wednesday, November 25: flight UA 2231",
+        },
+        {
+          fact: "It lands at SFO at 6:35 PM",
+          sourceId: "c1",
+          quote: "SAN 5:05 PM to SFO 6:35 PM",
+        },
+      ],
+    },
+  },
+  {
+    subject: "Renewal discussion & updated pricing",
+    object: {
+      enoughEvidence: false,
+      missing:
+        "Nothing in your email or calendar says whether the SSO issue is fixed or what the updated enterprise pricing is.",
+      reply: "",
+      claims: [],
+    },
+  },
+];

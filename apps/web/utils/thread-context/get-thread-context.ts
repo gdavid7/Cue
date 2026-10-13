@@ -64,12 +64,45 @@ export async function getThreadContext({
   logger: Logger;
   now?: Date;
 }): Promise<{ items: ThreadContextItem[] }> {
+  const { items } = await collectThreadContext({
+    emailAccountId,
+    userEmail,
+    threadId,
+    emailProvider,
+    logger,
+    now,
+  });
+  return { items: items.map(({ text: _text, ...item }) => item) };
+}
+
+/**
+ * The thread itself and its ranked context, with the text each item was
+ * ranked on, for features that reason over the evidence rather than show it.
+ */
+export async function collectThreadContext({
+  emailAccountId,
+  userEmail,
+  threadId,
+  emailProvider,
+  logger,
+  now = new Date(),
+}: {
+  emailAccountId: string;
+  userEmail: string;
+  threadId: string;
+  emailProvider: EmailProvider;
+  logger: Logger;
+  now?: Date;
+}): Promise<{
+  thread: EmailThread | null;
+  items: (ThreadContextItem & { text: string })[];
+}> {
   // The reader can hold a thread the provider hasn't synced yet.
   const thread = await emailProvider.getThread(threadId).catch((error) => {
     logger.warn("Failed to load thread for context", { error });
     return null;
   });
-  if (!thread?.messages.length) return { items: [] };
+  if (!thread?.messages.length) return { thread: null, items: [] };
 
   const focus = toFocus(thread);
   const participants = focus.people
@@ -122,11 +155,13 @@ export async function getThreadContext({
   });
 
   return {
+    thread,
     items: ranked.map(({ candidate, reasons }) => ({
       id: candidate.id,
       kind: candidate.kind,
       title: candidate.title,
       snippet: truncate(candidate.snippet ?? candidate.text, SNIPPET_LENGTH),
+      text: candidate.text,
       at: candidate.at,
       url: candidate.url,
       reasons,
@@ -170,7 +205,7 @@ function toFocus(thread: EmailThread): FocusThread {
   };
 }
 
-function threadToCandidate(
+export function threadToCandidate(
   thread: EmailThread,
 ): ContextCandidate & { snippet?: string } {
   const latest = thread.messages.at(-1);
@@ -189,7 +224,7 @@ function threadToCandidate(
   };
 }
 
-function eventToCandidate(event: CalendarEvent): ContextCandidate {
+export function eventToCandidate(event: CalendarEvent): ContextCandidate {
   return {
     id: `event:${event.id}`,
     kind: "event",
@@ -252,7 +287,7 @@ function addDays(date: Date, days: number) {
   return new Date(date.getTime() + days * 86_400_000);
 }
 
-function truncate(text: string, length: number) {
+export function truncate(text: string, length: number) {
   const clean = text.replace(/\s+/g, " ").trim();
   return clean.length > length ? `${clean.slice(0, length - 1)}…` : clean;
 }

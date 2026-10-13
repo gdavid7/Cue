@@ -258,6 +258,26 @@ export function MessagePart({
     }
   }
 
+  if (part.type === "tool-searchContext") {
+    return renderToolStatus({
+      part,
+      loadingText: "Searching your email and calendar...",
+      renderSuccess: ({ toolCallId, output }) => {
+        const count = getOutputField<number>(output, "count");
+        return (
+          <BasicToolInfo
+            key={toolCallId}
+            text={`Searched email and calendar${
+              typeof count === "number"
+                ? ` (${count} result${count === 1 ? "" : "s"})`
+                : ""
+            }`}
+          />
+        );
+      },
+    });
+  }
+
   if (part.type === "tool-readEmail") {
     const { toolCallId, state } = part;
     if (state === "input-available") {

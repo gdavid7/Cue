@@ -23,6 +23,10 @@ vi.mock("@/components/email-list/EmailThread", () => ({
 vi.mock("@/components/team-comments/PublisherDiscussion", () => ({
   PublisherDiscussion: () => null,
 }));
+vi.mock("@/utils/actions/thread-assist", () => ({
+  markNeedsReplyAction: vi.fn(),
+  saveSuggestedReplyAction: vi.fn(),
+}));
 
 class MockResizeObserver {
   observe() {}

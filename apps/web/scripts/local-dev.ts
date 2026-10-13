@@ -19,6 +19,7 @@ import { createStripeEmulator } from "../__tests__/emulators/stripe";
 import {
   buildCueDemoCalendarEvents,
   buildCueDemoInbox,
+  cueDemoReplySuggestions,
   cueDemoThreadBriefs,
 } from "../__tests__/fixtures/inboxes/cue-demo-inbox";
 import { escapeHtml } from "../utils/string";
@@ -324,6 +325,13 @@ async function main() {
         llm.reply({
           match: `<subject>${escapeHtml(brief.subject)}</subject>`,
           object: { summary: brief.summary, keyPoints: brief.keyPoints },
+        });
+      }
+      for (const suggestion of cueDemoReplySuggestions) {
+        // The thread's own first message, which no other thread's prompt has.
+        llm.reply({
+          match: `<source id="m1" kind="message">\nSubject: ${escapeHtml(suggestion.subject)}`,
+          object: suggestion.object,
         });
       }
     }

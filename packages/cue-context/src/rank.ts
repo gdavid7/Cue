@@ -57,6 +57,8 @@ export type RankOptions = {
   selfEmails: string[];
   now: string;
   limit?: number;
+  /** Keeps one kind from crowding out the rest. */
+  maxPerKind?: number;
 };
 
 const WEIGHTS = { similarity: 0.4, structure: 0.3, recency: 0.2, kind: 0.1 };
@@ -88,6 +90,7 @@ export function rankContext({
   selfEmails,
   now,
   limit = 4,
+  maxPerKind = MAX_PER_KIND,
 }: RankOptions): RankedContext[] {
   const self = new Set(selfEmails.map(normalizeEmail));
   const selfOrgs = new Set([...self].map(orgOf).filter(isString));
@@ -197,7 +200,7 @@ export function rankContext({
     // Two strong items beat two strong items plus two weak ones.
     if (r.score < Math.max(MIN_SCORE, top * 0.5)) break;
     const count = perKind.get(r.candidate.kind) ?? 0;
-    if (count >= MAX_PER_KIND) continue;
+    if (count >= maxPerKind) continue;
     perKind.set(r.candidate.kind, count + 1);
     picked.push(r);
     if (picked.length >= limit) break;
@@ -224,7 +227,6 @@ export function focusKeywords(
   return [...new Set([...subject, ...body])].slice(0, limit);
 }
 
-/** Organization implied by an email's domain, unless it's a consumer mail provider. */
 /**
  * Organization implied by an email's domain. Consumer mail domains imply none,
  * and neither do automated senders: notifications from github.com don't make

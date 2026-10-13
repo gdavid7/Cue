@@ -2,12 +2,16 @@
 
 import { PanelRightOpenIcon, SparklesIcon, XIcon } from "lucide-react";
 import { parseAsString, useQueryStates } from "nuqs";
+import { MarkNeedsReplyButton } from "@/components/thread-context/MarkNeedsReplyButton";
+import { SuggestedReply } from "@/components/thread-context/SuggestedReply";
 import { ThreadContextList } from "@/components/thread-context/ThreadContextList";
 import { Button } from "@/components/ui/button";
 
 /**
  * What else in the user's mail and calendar matters for this thread, found by
- * walking from the people on it and by shared topic. Each item says why it's here.
+ * walking from the people on it and by shared topic, each item saying why it's
+ * here. Also where to correct the AI's triage and ask for a reply backed by
+ * that context.
  */
 export function ThreadContextPanel({
   threadId,
@@ -22,6 +26,8 @@ export function ThreadContextPanel({
     "thread-id": parseAsString,
     "thread-account-id": parseAsString,
   });
+  const openThread = (id: string) =>
+    setOpenThread({ "thread-id": id, "thread-account-id": emailAccountId });
 
   return (
     <aside
@@ -45,17 +51,31 @@ export function ThreadContextPanel({
           <XIcon className="size-4" />
         </Button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 py-3">
         <ThreadContextList
           emailAccountId={emailAccountId}
-          onOpenThread={(id) =>
-            setOpenThread({
-              "thread-id": id,
-              "thread-account-id": emailAccountId,
-            })
-          }
+          onOpenThread={openThread}
           threadId={threadId}
         />
+        <section className="space-y-2 border-border border-t px-2 pt-4">
+          <h3 className="font-medium text-foreground text-sm">
+            Suggested reply
+          </h3>
+          <SuggestedReply
+            emailAccountId={emailAccountId}
+            onOpenThread={openThread}
+            threadId={threadId}
+          />
+        </section>
+        <section className="space-y-2 border-border border-t px-2 pt-4">
+          <p className="text-muted-foreground text-xs leading-5">
+            Should this be waiting on you? Cue will track it until you reply.
+          </p>
+          <MarkNeedsReplyButton
+            emailAccountId={emailAccountId}
+            threadId={threadId}
+          />
+        </section>
       </div>
     </aside>
   );

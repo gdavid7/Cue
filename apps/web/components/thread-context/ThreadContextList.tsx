@@ -5,6 +5,7 @@ import { LoadingContent } from "@/components/LoadingContent";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useThreadContext } from "@/hooks/useThreadContext";
 import type { ThreadContextItem } from "@/utils/thread-context/get-thread-context";
+import { reasonLabel } from "@/utils/thread-context/reason-label";
 
 const KIND: Record<
   ThreadContextItem["kind"],
@@ -149,21 +150,6 @@ function ContextSkeleton() {
       ))}
     </div>
   );
-}
-
-function reasonLabel(reason: ThreadContextItem["reasons"][number]) {
-  switch (reason.type) {
-    case "person":
-      return `With ${reason.label}`;
-    case "organization":
-      return `Same org · ${reason.label}`;
-    case "via":
-      return `Via ${reason.label}`;
-    case "topic":
-      return `About ${reason.terms.join(", ")}`;
-    case "upcoming":
-      return reason.days === 0 ? "Today" : `In ${reason.days}d`;
-  }
 }
 
 // Whole days, rounded toward zero like the "In 2d" reason, so they agree.

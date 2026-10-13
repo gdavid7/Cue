@@ -27,7 +27,12 @@ const HANDLED_WINDOW_DAYS = 7;
 const DRAFT_WINDOW_DAYS = 7;
 const RUNNING_WINDOW_MINUTES = 30;
 /** Labels Inbox Zero's rules file mail under without asking the user. */
-const HANDLED_LABELS = ["Newsletter", "Marketing", "Receipt", "Notification"];
+export const HANDLED_LABELS = [
+  "Newsletter",
+  "Marketing",
+  "Receipt",
+  "Notification",
+];
 const HIDDEN_TAGS = new Set([
   "inbox",
   "unread",
@@ -282,12 +287,17 @@ function toHomeThread(
     skip: (string | undefined)[];
   },
 ): HomeThread | null {
-  const latest = thread.messages.at(-1);
+  // An unsent draft isn't part of the conversation yet; it would show as the
+  // newest message, from the user.
+  const messages = thread.messages.filter(
+    (m) => !m.labelIds?.includes("DRAFT"),
+  );
+  const latest = messages.at(-1);
   if (!latest) return null;
   // Show who the conversation is with: the latest sender who isn't the user,
   // or the first recipient when the user wrote last.
   const other =
-    thread.messages.findLast(
+    messages.findLast(
       (m) =>
         extractEmailAddress(m.headers.from).toLowerCase() !==
         userEmail.toLowerCase(),
@@ -295,7 +305,7 @@ function toHomeThread(
   const counterpart = other
     ? other.headers.from
     : (splitRecipientList(latest.headers.to)[0] ?? latest.headers.to);
-  const labelIds = new Set(thread.messages.flatMap((m) => m.labelIds ?? []));
+  const labelIds = new Set(messages.flatMap((m) => m.labelIds ?? []));
   const tag = [...labelIds]
     .filter((id) => !skip.includes(id))
     .map((id) => labelNames.get(id))

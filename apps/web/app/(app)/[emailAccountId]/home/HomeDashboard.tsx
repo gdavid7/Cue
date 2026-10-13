@@ -17,6 +17,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useMediaQuery } from "usehooks-ts";
 import { LoadingContent } from "@/components/LoadingContent";
+import { MarkNeedsReplyButton } from "@/components/thread-context/MarkNeedsReplyButton";
+import { SuggestedReply } from "@/components/thread-context/SuggestedReply";
 import { ThreadContextList } from "@/components/thread-context/ThreadContextList";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -37,7 +39,7 @@ import { prefixPath } from "@/utils/path";
  */
 export function HomeDashboard() {
   const { emailAccountId, emailAccount } = useAccount();
-  const { data, isLoading, error } = useHome(emailAccountId);
+  const { data, isLoading, error, mutate } = useHome(emailAccountId);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // The detail panel only fits beside the lists on wide screens. Narrower,
   // a row opens the conversation instead, and nothing is fetched for a panel
@@ -203,6 +205,8 @@ export function HomeDashboard() {
       {selected ? (
         <DetailPanel
           emailAccountId={emailAccountId}
+          lane={laneOf(data, selected.threadId)}
+          onChanged={() => mutate()}
           threadHref={threadHref}
           thread={selected}
         />
@@ -411,10 +415,14 @@ function DetailPanel({
   thread,
   emailAccountId,
   threadHref,
+  lane,
+  onChanged,
 }: {
   thread: HomeThread;
   emailAccountId: string;
   threadHref: (threadId: string) => string;
+  lane: "needs-you" | "waiting" | "other";
+  onChanged: () => void;
 }) {
   const {
     data: briefData,
@@ -455,6 +463,13 @@ function DetailPanel({
           </div>
         </div>
       </div>
+      {lane === "other" ? (
+        <MarkNeedsReplyButton
+          emailAccountId={emailAccountId}
+          onMarked={onChanged}
+          threadId={thread.threadId}
+        />
+      ) : null}
 
       <PanelCard icon={SparklesIcon} title="AI summary">
         <LoadingContent
@@ -508,6 +523,16 @@ function DetailPanel({
           />
         </div>
       </PanelCard>
+
+      {lane === "waiting" ? null : (
+        <PanelCard icon={SparklesIcon} title="Suggested reply">
+          <SuggestedReply
+            emailAccountId={emailAccountId}
+            onOpenThread={(id) => router.push(threadHref(id))}
+            threadId={thread.threadId}
+          />
+        </PanelCard>
+      )}
 
       <PanelCard icon={SparklesIcon} title="Suggested next steps">
         <div className="space-y-1">
@@ -652,4 +677,13 @@ function formatTime(iso: string) {
 function waitingFor(iso: string) {
   const days = Math.floor((Date.now() - Date.parse(iso)) / 86_400_000);
   return days < 1 ? "Today" : `Waiting ${days}d`;
+}
+
+function laneOf(
+  data: ReturnType<typeof useHome>["data"],
+  threadId: string,
+): "needs-you" | "waiting" | "other" {
+  if (data?.needsYou.some((t) => t.threadId === threadId)) return "needs-you";
+  if (data?.waiting.some((t) => t.threadId === threadId)) return "waiting";
+  return "other";
 }

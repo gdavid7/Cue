@@ -29,6 +29,7 @@ import type {
   SearchMemoriesTool,
 } from "@/utils/ai/assistant/chat-memory-tools";
 import type { GetCalendarEventsTool } from "@/utils/ai/assistant/chat-calendar-tools";
+import type { SearchContextTool } from "@/utils/ai/assistant/chat-context-tools";
 
 // export type DataPart = { type: "append-message"; message: string };
 
@@ -45,6 +46,7 @@ export type ChatTools = {
   getSenderCategorizationStatus: GetSenderCategorizationStatusTool;
   manageSenderCategory: ManageSenderCategoryTool;
   searchInbox: SearchInboxTool;
+  searchContext: SearchContextTool;
   readEmail: ReadEmailTool;
   manageInbox: ManageInboxTool;
   getUserRulesAndSettings: GetUserRulesAndSettingsTool;

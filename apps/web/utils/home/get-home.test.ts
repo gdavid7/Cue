@@ -76,6 +76,32 @@ describe("getHomeData", () => {
     });
   });
 
+  it("ignores an unsent draft when showing who and when", async () => {
+    const mom = thread("mom", {
+      from: "Mom <mom@example.org>",
+      subject: "Thanksgiving flight?",
+      labels: ["INBOX", "Label_To Reply"],
+    });
+    mom.messages.push({
+      ...getMockMessage({
+        id: "draft",
+        threadId: "mom",
+        from: USER,
+        to: "mom@example.org",
+        subject: "Re: Thanksgiving flight?",
+        labelIds: ["DRAFT"],
+      }),
+      internalDate: String(NOW.getTime() + 60_000),
+    });
+
+    const home = await run(mockProvider({ "To Reply": [mom] }));
+
+    expect(home.needsYou[0]).toMatchObject({
+      fromName: "Mom",
+      at: NOW.toISOString(),
+    });
+  });
+
   it("counts filed mail once even when it has several handled labels", async () => {
     const receipt = thread("venmo", {
       from: "Venmo <venmo@venmo.com>",
