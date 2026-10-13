@@ -251,7 +251,7 @@ async function buildSearchTools({
     });
   }
 
-  // Web search (OpenAI, Google, or OpenRouter - if configured)
+  // Web search (Exa, or OpenAI, Google, or OpenRouter built-in search)
   const resolvedWebSearchModelOptions = getModelForUseCase(
     emailAccount.user,
     LlmUseCase.MeetingWebSearch,
@@ -314,6 +314,8 @@ function createWebSearchTool({
     tools: searchTools,
     providerOptions,
     toolChoice,
+    stopWhen,
+    prepareStep,
   } = webSearchConfig;
 
   return tool({
@@ -347,6 +349,8 @@ function createWebSearchTool({
           tools: searchTools,
           providerOptions,
           toolChoice,
+          stopWhen,
+          prepareStep,
         });
 
         const text = searchResult.text;

@@ -149,6 +149,28 @@ describe("getPublicContactContext", () => {
     });
   });
 
+  it("gives a client-side search tool the steps it needs to answer", async () => {
+    const stopWhen = vi.fn();
+    const prepareStep = vi.fn();
+    getWebSearchConfigMock.mockReturnValue({
+      providerName: "Exa",
+      tools: { web_search: { type: "function" } },
+      stopWhen,
+      prepareStep,
+    });
+
+    await getPublicContactContext({
+      email: "john@acme.com",
+      name: "John Smith",
+      emailAccount: getEmailAccount(),
+    });
+
+    const request = generateTextMock.mock.calls[0]?.[0];
+    expect(request.stopWhen).toBe(stopWhen);
+    expect(request.prepareStep).toBe(prepareStep);
+    expect(request.toolChoice).toBeUndefined();
+  });
+
   it("records the research start time so slow workers cannot become current", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-14T10:00:00.000Z"));

@@ -4,6 +4,7 @@ import { createEmailProvider } from "@/utils/email/provider";
 import type { Logger } from "@/utils/logger";
 import { posthogCaptureEvent } from "@/utils/posthog";
 import { searchContext } from "@/utils/thread-context/search-context";
+import { searchExa } from "@/utils/exa/search";
 
 const searchContextInputSchema = z.object({
   query: z
@@ -62,3 +63,45 @@ Results have short snippets only: call readEmail with an email result's messageI
 export type SearchContextTool = InferUITool<
   ReturnType<typeof searchContextTool>
 >;
+
+const searchWebInputSchema = z.object({
+  query: z
+    .string()
+    .trim()
+    .min(1)
+    .max(300)
+    .describe(
+      'A focused web search query using public names and topic words, e.g. "Acme Corp Series B funding" or "Next.js caching docs".',
+    ),
+});
+
+export const searchWebTool = ({
+  email,
+  logger,
+}: {
+  email: string;
+  logger: Logger;
+}) =>
+  tool({
+    description: `Search the public internet. Returns up to 5 web pages, each with title, URL, publish date when known, and text excerpts.
+Use for public facts that are not in the user's own data: a company or organization, what a person does publicly, news and current events, public events, product documentation, or anything the user asks you to look up online. Use searchContext or searchInbox instead for anything in the user's email, calendar, or connected apps; when a question needs both (for example, background on a company that emailed the user), use each for its part.
+The query is sent to a third-party search service: never put email contents, private contact details, or other private information from the user's data in it.
+In the answer, cite the URL of each page you rely on, and say plainly when the results don't answer the question rather than guessing.`,
+    inputSchema: searchWebInputSchema,
+    execute: async ({ query }) => {
+      logger.trace("Tracking tool call", { tool: "search_web", email });
+      posthogCaptureEvent(email, "AI Assistant Chat Tool Call", {
+        tool: "search_web",
+      });
+
+      try {
+        const results = await searchExa({ query, logger });
+        return { results, count: results.length };
+      } catch (error) {
+        logger.error("Failed to search the web", { error });
+        return { error: "Failed to search the web" };
+      }
+    },
+  });
+
+export type SearchWebTool = InferUITool<ReturnType<typeof searchWebTool>>;

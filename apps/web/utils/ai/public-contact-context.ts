@@ -135,6 +135,8 @@ Return JSON matching the provided schema, including direct public source URLs.`,
       tools: webSearch.tools,
       providerOptions: webSearch.providerOptions,
       toolChoice: webSearch.toolChoice,
+      stopWhen: webSearch.stopWhen,
+      prepareStep: webSearch.prepareStep,
       output: Output.object({
         schema: publicContactResearchSchema,
         name: "public_contact_research",

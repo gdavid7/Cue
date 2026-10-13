@@ -124,6 +124,7 @@
         "CODEX_CLI_ALLOW_NPX",
         "CODEX_CLI_PATH",
         "PERPLEXITY_API_KEY",
+        "EXA_API_KEY",
 
         "REDIS_HTTP_URL",
         "REDIS_HTTP_TOKEN",

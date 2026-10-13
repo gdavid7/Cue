@@ -89,6 +89,7 @@ Reference for environment variables relevant to self-hosting Inbox Zero. Hosted-
 | `DEFAULT_DECISION_MODEL_ENABLED` | No | Turn the decision model on for users who haven't chosen; otherwise users opt in | `false` |
 | `TYPESAFE_API_KEY` | No | TypeSafe API key, for `typesafe:` decision models | — |
 | `PERPLEXITY_API_KEY` | No | Perplexity API key for guest research for meeting briefs | — |
+| `EXA_API_KEY` | No | Exa API key for public web search in sender research, meeting briefs, and assistant chat. Takes precedence over the LLM provider's built-in web search | — |
 | **Azure OpenAI** ||||
 | `AZURE_API_KEY` | No | Azure OpenAI API key (required when `azure` is used and `LLM_API_KEY` is not set) | — |
 | `AZURE_RESOURCE_NAME` | No | Azure OpenAI resource name (required when `azure` is used as a default or fallback provider) | — |
