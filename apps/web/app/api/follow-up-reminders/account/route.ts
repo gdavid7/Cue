@@ -6,7 +6,7 @@ import { captureException } from "@/utils/error";
 import { withError } from "@/utils/middleware";
 import { processFollowUpRemindersForEmailAccountId } from "@/utils/follow-up/process";
 
-export const maxDuration = 800;
+export const maxDuration = 300;
 
 const bodySchema = z.object({
   emailAccountId: z.string().min(1),

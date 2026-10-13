@@ -58,7 +58,7 @@ import { LlmUseCase } from "@/utils/llms/use-cases";
 import { isIntegrationActionEnabledForUserId } from "@/utils/integration-action.server";
 import { trimStaleToolResults } from "@/utils/ai/assistant/trim-stale-tool-results";
 
-export const maxDuration = 800;
+export const maxDuration = 300;
 // Increment when chat prompts, tools, or routing change so run quality remains attributable.
 export const ASSISTANT_CHAT_PIPELINE_VERSION = 18;
 const ASSISTANT_CHAT_TOOL_BUDGET_MS = {
