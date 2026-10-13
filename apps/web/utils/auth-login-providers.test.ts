@@ -21,6 +21,10 @@ vi.mock("@googleapis/gmail", () => ({
 vi.mock("@/utils/encryption", () => ({
   encryptToken: vi.fn((token) => token),
 }));
+// Sign-in pulls in the whole calendar stack, which makes a cold import slow.
+vi.mock("@/utils/calendar/connect-sign-in-calendar", () => ({
+  connectCalendarAtSignIn: vi.fn(),
+}));
 
 describe("betterAuthConfig login providers", () => {
   afterEach(() => {
