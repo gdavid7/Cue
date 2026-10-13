@@ -28,10 +28,14 @@ import type { ParsedMessage } from "@/utils/types";
 const MAX_PARTICIPANTS = 3;
 const THREADS_PER_PARTICIPANT = 3;
 const PARTICIPANT_CONCURRENCY = 2;
-const TOPIC_THREADS = 6;
+const TOPIC_THREADS = 10;
+const TOPIC_KEYWORDS = 6;
 const CALENDAR_WINDOW_DAYS = 30;
 const MAX_MESSAGE_TEXT = 600;
 const SNIPPET_LENGTH = 180;
+// Suggested replies are checked against these same items, so a short list
+// hides evidence the reply needs; the ranker still drops weak matches.
+const CONTEXT_LIMIT = 8;
 
 export type ThreadContextItem = {
   /** For emails, the thread id, so the panel can open that conversation. */
@@ -143,7 +147,7 @@ export async function collectThreadContext({
         }),
       fetchConnectorCandidates({
         emailAccountId,
-        keywords: focusKeywords(focus, 4),
+        keywords: focusKeywords(focus, TOPIC_KEYWORDS),
         logger,
         now,
       }),
@@ -163,6 +167,7 @@ export async function collectThreadContext({
     ],
     selfEmails: [userEmail],
     now: now.toISOString(),
+    limit: CONTEXT_LIMIT,
   });
 
   return {
@@ -190,7 +195,7 @@ async function findTopicThreads({
   emailProvider: EmailProvider;
   logger: Logger;
 }): Promise<EmailThread[]> {
-  const keywords = focusKeywords(focus, 4);
+  const keywords = focusKeywords(focus, TOPIC_KEYWORDS);
   if (!keywords.length) return [];
   try {
     const { threads } = await emailProvider.searchThreads({

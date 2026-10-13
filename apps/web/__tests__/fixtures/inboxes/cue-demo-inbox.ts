@@ -572,7 +572,8 @@ export const cueDemoReplySuggestions: {
         },
         {
           fact: "Milestone 2 is due Friday at 11:59pm",
-          sourceId: "c2",
+          // The write-up in Drive and the group meeting rank above it.
+          sourceId: "c3",
           quote: "is due Friday at 11:59pm",
         },
       ],
@@ -604,7 +605,7 @@ export const cueDemoReplySuggestions: {
     object: {
       enoughEvidence: false,
       missing:
-        "The updated prices: Marcus confirmed the SSO fix shipped, but the v3 pricing sheet Priya mentioned isn't in your email.",
+        "The updated prices. Marcus confirmed the SSO fix shipped, and the v3 pricing sheet is in Google Drive, but Cue can see only its title, not the prices.",
       reply: "",
       claims: [],
     },

@@ -23,7 +23,8 @@ const CONNECTOR_SOURCE_LABEL = {
   chat: "Message",
 } as const;
 const MAX_SOURCE_TEXT = 2000;
-const MAX_CONTEXT_SOURCES = 4;
+// Everything Relevant context shows, so a fact the user can see there can back the reply.
+const MAX_CONTEXT_SOURCES = 8;
 const CACHE_TTL_SECONDS = 24 * 60 * 60;
 
 const suggestionSchema = z.object({

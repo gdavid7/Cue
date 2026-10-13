@@ -225,18 +225,42 @@ export function rankContext({
  * person links them: subject words first, then the body's most frequent words.
  */
 export function focusKeywords(
-  focus: Pick<FocusThread, "subject" | "text">,
+  focus: Pick<FocusThread, "subject" | "text"> & { people?: Person[] },
   limit = 4,
 ): string[] {
-  const subject = tokenize(focus.subject).filter(isKeyword);
+  // "Hey David" names someone on the thread, and their name is in nearly all
+  // of their mail: as a search word it only crowds out the topic.
+  const names = new Set(
+    (focus.people ?? []).flatMap((p) =>
+      tokenize(`${p.name ?? ""} ${p.email.split("@")[0]}`),
+    ),
+  );
+  // Short acronyms ("SSO", "API") are often the most specific words there are.
+  const acronyms = new Set(
+    [...`${focus.subject} ${focus.text}`.matchAll(/\b\p{Lu}{2,5}\b/gu)].map(
+      ([word]) => word.toLowerCase(),
+    ),
+  );
+  const keep = (t: string) =>
+    !names.has(t) && (isKeyword(t) || acronyms.has(t));
+  const subject = [...new Set(tokenize(focus.subject).filter(keep))];
   const counts = new Map<string, number>();
-  for (const t of tokenize(focus.text).filter(isKeyword)) {
+  for (const t of tokenize(focus.text).filter(keep)) {
     counts.set(t, (counts.get(t) ?? 0) + 1);
   }
   const body = [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([t]) => t);
-  return [...new Set([...subject, ...body])].slice(0, limit);
+    .sort(
+      (a, b) =>
+        Number(acronyms.has(b[0])) - Number(acronyms.has(a[0])) || b[1] - a[1],
+    )
+    .map(([t]) => t)
+    .filter((t) => !subject.includes(t));
+  // The subject says what it's about, but a long one mustn't crowd out the
+  // body, where the asks usually are.
+  const fromSubject = subject.slice(0, Math.max(limit - 2, 1));
+  return [
+    ...new Set([...fromSubject, ...body, ...subject.slice(fromSubject.length)]),
+  ].slice(0, limit);
 }
 
 /**

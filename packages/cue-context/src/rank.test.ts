@@ -216,6 +216,35 @@ describe("focusKeywords", () => {
       }),
     ).toEqual(["rollout", "copy", "approval", "launch"]);
   });
+
+  it("keeps the body's asks and acronyms when the subject is long", () => {
+    expect(
+      focusKeywords(
+        {
+          subject: "Renewal discussion & updated pricing",
+          text: "Following up on the SSO security issue. Is SSO fixed?",
+        },
+        6,
+      ),
+    ).toEqual([
+      "renewal",
+      "discussion",
+      "updated",
+      "pricing",
+      "sso",
+      "following",
+    ]);
+  });
+
+  it("skips the names of the people on the thread", () => {
+    expect(
+      focusKeywords({
+        subject: "Milestone 2",
+        text: "Hey David, can we meet Wednesday? David, the plots are mine.",
+        people: [{ email: "david.lin@ucsd.edu", name: "David Lin" }],
+      }),
+    ).toEqual(["milestone", "meet", "wednesday", "plots"]);
+  });
 });
 
 describe("orgOf", () => {
