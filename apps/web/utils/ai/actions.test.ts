@@ -84,7 +84,7 @@ vi.mock("@/utils/prisma", () => ({
       update: vi.fn().mockResolvedValue({}),
     },
     mcpConnection: {
-      findFirst: vi.fn().mockResolvedValue({ id: "connection-1" }),
+      findMany: vi.fn().mockResolvedValue([]),
     },
   },
 }));
@@ -948,9 +948,9 @@ describe("runActionFunction", () => {
 
     beforeEach(() => {
       mockIsIntegrationActionEnabledForUserId.mockResolvedValue(true);
-      vi.mocked(prisma.mcpConnection.findFirst).mockResolvedValue({
-        id: "connection-1",
-      } as never);
+      vi.mocked(prisma.mcpConnection.findMany).mockResolvedValue([
+        { emailAccountId: "account-1", integration: { name: "todoist" } },
+      ] as never);
       vi.mocked(callMcpTool).mockResolvedValue([]);
     });
 
@@ -1071,8 +1071,21 @@ describe("runActionFunction", () => {
       });
     });
 
+    it("runs the tool through the connection made from the user's other account", async () => {
+      vi.mocked(prisma.mcpConnection.findMany).mockResolvedValue([
+        { emailAccountId: "account-2", integration: { name: "todoist" } },
+      ] as never);
+
+      const result = await runIntegration(integrationAction);
+
+      expect(result).toEqual({ success: true });
+      expect(callMcpTool).toHaveBeenCalledWith(
+        expect.objectContaining({ emailAccountId: "account-2" }),
+      );
+    });
+
     it("fails with a clear code when the integration is not connected", async () => {
-      vi.mocked(prisma.mcpConnection.findFirst).mockResolvedValue(null);
+      vi.mocked(prisma.mcpConnection.findMany).mockResolvedValue([]);
 
       const result = await runIntegration(integrationAction);
 

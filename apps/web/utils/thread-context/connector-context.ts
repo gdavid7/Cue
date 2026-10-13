@@ -2,6 +2,10 @@ import type { ContextCandidate, Person } from "@cue/context";
 import { z } from "zod";
 import { findIntegration } from "@/utils/mcp/integrations";
 import { getIntegrationProvider } from "@/utils/mcp/providers/registry";
+import {
+  onePerIntegration,
+  ownedBySameUser,
+} from "@/utils/mcp/user-connections";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";
@@ -20,6 +24,7 @@ type Execute = (
 ) => Promise<unknown>;
 
 type Search = {
+  /** The account the app was connected from. */
   emailAccountId: string;
   /** Distinctive words of the thread or query. */
   keywords: string[];
@@ -27,9 +32,9 @@ type Search = {
 };
 
 /**
- * Items from the account's connected apps that may relate to a thread or a
- * question: files from Drive and OneDrive, assignments from Canvas, messages
- * from Slack. Each app is asked in its own way and turned into candidates the
+ * Items from the person's connected apps, whichever of their email accounts
+ * connected them, that may relate to a thread or a question: files from Drive
+ * and OneDrive, assignments from Canvas, messages from Slack. Each app is asked in its own way and turned into candidates the
  * ranker treats like emails and meetings; an app that fails or is slow is
  * left out.
  */
@@ -38,7 +43,9 @@ export async function fetchConnectorCandidates({
   keywords,
   logger,
   now = new Date(),
-}: Omit<Search, "now"> & {
+}: Pick<Search, "keywords"> & {
+  /** The account being viewed; apps connected from the person's others count. */
+  emailAccountId: string;
   logger: Logger;
   now?: Date;
 }): Promise<ContextCandidate[]> {
@@ -46,11 +53,15 @@ export async function fetchConnectorCandidates({
   const connections = await prisma.mcpConnection
     .findMany({
       where: {
-        emailAccountId,
         isActive: true,
         integration: { name: { in: Object.keys(SOURCES) } },
+        ...ownedBySameUser(emailAccountId),
       },
-      select: { integration: { select: { name: true } } },
+      select: {
+        emailAccountId: true,
+        integration: { select: { name: true } },
+      },
+      orderBy: { createdAt: "asc" },
     })
     .catch((error) => {
       logger.warn("Failed to load connected apps", { error });
@@ -58,21 +69,28 @@ export async function fetchConnectorCandidates({
     });
 
   const results = await Promise.all(
-    connections.map(async ({ integration: { name } }) => {
+    onePerIntegration(connections, emailAccountId).map(async (connection) => {
+      const name = connection.integration.name;
       const source = SOURCES[name];
       const provider = findIntegration(name)?.provider;
-      if (!source || !provider) return [];
+      if (!source || !provider || !connection.emailAccountId) return [];
+      // The provider knows the connection by the account it was made from.
+      const connectionAccountId = connection.emailAccountId;
       const execute: Execute = (tool, args) =>
         getIntegrationProvider(provider.id).executeTool({
           app: provider.app,
           authScheme: provider.authScheme,
-          emailAccountId,
+          emailAccountId: connectionAccountId,
           tool,
           args,
         });
       try {
         return await withTimeout(
-          source(execute, { emailAccountId, keywords, now }),
+          source(execute, {
+            emailAccountId: connectionAccountId,
+            keywords,
+            now,
+          }),
           SOURCE_TIMEOUT_MS,
         );
       } catch (error) {

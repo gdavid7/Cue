@@ -3,6 +3,10 @@ import { withEmailAccount } from "@/utils/middleware";
 import { MCP_INTEGRATIONS } from "@/utils/mcp/integrations";
 import { fromDbAuthType } from "@/utils/mcp/resolve-integration";
 import { getIntegrationProvider } from "@/utils/mcp/providers/registry";
+import {
+  onePerIntegration,
+  ownedBySameUser,
+} from "@/utils/mcp/user-connections";
 import prisma from "@/utils/prisma";
 
 export type GetIntegrationsResponse = Awaited<ReturnType<typeof getData>>;
@@ -12,23 +16,28 @@ export const GET = withEmailAccount("mcp/integrations", async (request) => {
   return NextResponse.json(await getData(emailAccountId));
 });
 
+// Apps connected from any of the person's email accounts show as connected in
+// every one of them.
 async function getData(emailAccountId: string) {
-  const [connections, customIntegrations] = await Promise.all([
+  const [allConnections, customIntegrations] = await Promise.all([
     prisma.mcpConnection.findMany({
-      where: { emailAccountId },
+      where: ownedBySameUser(emailAccountId),
       select: {
         id: true,
         name: true,
         isActive: true,
+        emailAccountId: true,
+        emailAccount: { select: { email: true } },
         integration: { select: { id: true, name: true } },
         tools: {
           where: { isWrite: false },
           select: { id: true, name: true, description: true, isEnabled: true },
         },
       },
+      orderBy: { createdAt: "asc" },
     }),
     prisma.mcpIntegration.findMany({
-      where: { emailAccountId },
+      where: ownedBySameUser(emailAccountId),
       select: {
         name: true,
         displayName: true,
@@ -39,6 +48,16 @@ async function getData(emailAccountId: string) {
     }),
   ]);
 
+  const connections = onePerIntegration(allConnections, emailAccountId).map(
+    ({ emailAccountId: connectionAccountId, emailAccount, ...connection }) => ({
+      ...connection,
+      // Their other account it was connected from, if not this one
+      connectedVia:
+        connectionAccountId === emailAccountId
+          ? null
+          : (emailAccount?.email ?? null),
+    }),
+  );
   const findConnection = (name: string) =>
     connections.find((connection) => connection.integration.name === name);
 

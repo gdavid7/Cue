@@ -2,6 +2,7 @@ import type { McpAuthType } from "@/generated/prisma/enums";
 import prisma from "@/utils/prisma";
 import { findIntegration } from "@/utils/mcp/integrations";
 import type { IntegrationProviderId } from "@/utils/mcp/providers/types";
+import { ownedBySameUser } from "@/utils/mcp/user-connections";
 
 export const CUSTOM_INTEGRATION_PREFIX = "custom_";
 
@@ -41,9 +42,10 @@ export async function resolveMcpIntegration({
     return { ...builtIn, isCustom: false };
   }
 
-  // A custom server is only resolvable by the email account that registered it
+  // A custom server is only resolvable by the person who registered it, from
+  // any of their email accounts
   const custom = await prisma.mcpIntegration.findFirst({
-    where: { name, emailAccountId },
+    where: { name, ...ownedBySameUser(emailAccountId) },
     select: {
       name: true,
       displayName: true,

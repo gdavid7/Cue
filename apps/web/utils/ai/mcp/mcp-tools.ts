@@ -8,6 +8,10 @@ import { createScopedLogger, type Logger } from "@/utils/logger";
 import { createMcpTransport } from "@/utils/mcp/transport";
 import { getMcpServerConnection } from "@/utils/mcp/server-connection";
 import { isValidMcpToolName } from "@/utils/mcp/tool-name";
+import {
+  onePerIntegration,
+  ownedBySameUser,
+} from "@/utils/mcp/user-connections";
 
 type MCPClient = Awaited<ReturnType<typeof createMCPClient>>;
 
@@ -22,9 +26,10 @@ export async function createMcpToolsForAgent(
   const logger = createScopedLogger("ai-mcp-tools").with({ emailAccountId });
 
   try {
-    const connections = await prisma.mcpConnection.findMany({
+    // Apps connected from any of the person's email accounts
+    const allConnections = await prisma.mcpConnection.findMany({
       where: {
-        emailAccountId,
+        ...ownedBySameUser(emailAccountId),
         isActive: true,
         tools: {
           some: {
@@ -35,6 +40,7 @@ export async function createMcpToolsForAgent(
       },
       select: {
         id: true,
+        emailAccountId: true,
         integration: {
           select: {
             id: true,
@@ -48,7 +54,9 @@ export async function createMcpToolsForAgent(
           },
         },
       },
+      orderBy: { createdAt: "asc" },
     });
+    const connections = onePerIntegration(allConnections, emailAccountId);
 
     if (connections.length === 0) {
       return {
@@ -66,9 +74,13 @@ export async function createMcpToolsForAgent(
 
     for (const connection of connections) {
       const integration = connection.integration;
+      // The app's provider and stored credentials know the connection by the
+      // account it was made from
+      const connectionAccountId = connection.emailAccountId;
+      if (!connectionAccountId) continue;
       const integrationConfig = await resolveMcpIntegration({
         name: integration.name,
-        emailAccountId,
+        emailAccountId: connectionAccountId,
       });
 
       if (!integrationConfig) {
@@ -80,7 +92,7 @@ export async function createMcpToolsForAgent(
 
       try {
         const transport = createMcpTransport(
-          await getMcpServerConnection(integrationConfig, emailAccountId),
+          await getMcpServerConnection(integrationConfig, connectionAccountId),
         );
 
         const mcpClient = await createMCPClient({ transport });

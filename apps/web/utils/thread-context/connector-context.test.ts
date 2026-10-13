@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import prisma from "@/utils/__mocks__/prisma";
+import { createScopedLogger } from "@/utils/logger";
 import {
+  fetchConnectorCandidates,
   searchCanvas,
   searchGoogleDrive,
   searchOneDrive,
@@ -11,6 +14,10 @@ vi.mock("@/utils/prisma");
 vi.mock("@/utils/redis", () => ({
   redis: { get: vi.fn(async () => null), set: vi.fn(async () => "OK") },
 }));
+const { mockExecuteTool } = vi.hoisted(() => ({ mockExecuteTool: vi.fn() }));
+vi.mock("@/utils/mcp/providers/registry", () => ({
+  getIntegrationProvider: () => ({ executeTool: mockExecuteTool }),
+}));
 
 const NOW = new Date("2026-10-13T16:00:00Z");
 const SEARCH = {
@@ -18,6 +25,64 @@ const SEARCH = {
   keywords: ["milestone", "kevin's"],
   now: NOW,
 };
+
+describe("fetchConnectorCandidates", () => {
+  const logger = createScopedLogger("connector-context-test");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("searches an app connected from the person's other account through that account, once", async () => {
+    prisma.mcpConnection.findMany.mockResolvedValue([
+      { emailAccountId: "personal", integration: { name: "googledrive" } },
+      { emailAccountId: "school", integration: { name: "googledrive" } },
+      { emailAccountId: "personal", integration: { name: "slack" } },
+    ] as never);
+    mockExecuteTool.mockImplementation(async ({ app }: { app: string }) =>
+      app === "slack"
+        ? { messages: { matches: [] } }
+        : {
+            files: [
+              {
+                id: "f1",
+                name: "Milestone 2",
+                modifiedTime: NOW.toISOString(),
+              },
+            ],
+          },
+    );
+
+    const candidates = await fetchConnectorCandidates({
+      emailAccountId: "school",
+      keywords: ["milestone"],
+      logger,
+      now: NOW,
+    });
+
+    expect(candidates.map((c) => c.id)).toEqual(["googledrive:f1"]);
+    expect(
+      mockExecuteTool.mock.calls.map(([args]) => [
+        args.app,
+        args.emailAccountId,
+      ]),
+    ).toEqual([
+      ["googledrive", "school"],
+      ["slack", "personal"],
+    ]);
+    // Only the person's own accounts; the real query is covered in
+    // __tests__/db/user-connections.test.ts
+    expect(prisma.mcpConnection.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          emailAccount: {
+            user: { emailAccounts: { some: { id: "school" } } },
+          },
+        }),
+      }),
+    );
+  });
+});
 
 describe("searchGoogleDrive", () => {
   it("searches file contents for each word and keeps who owns each file", async () => {

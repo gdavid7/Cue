@@ -55,6 +55,9 @@ export function IntegrationRow({
   const totalTools = conn?.tools?.length || 0;
   const connectionId = conn?.id;
   const tools = conn?.tools || [];
+  const viaTitle = conn?.connectedVia
+    ? `Connected via ${conn.connectedVia}`
+    : undefined;
 
   const handleConnect = async () => {
     analytics.captureAction("integration_connect_started", {
@@ -273,9 +276,16 @@ export function IntegrationRow({
             <div className="flex items-center gap-2">
               {connected ? (
                 isActive ? (
-                  <span className="text-green-600 text-sm">✓ Connected</span>
+                  <span className="text-green-600 text-sm" title={viaTitle}>
+                    ✓ Connected
+                  </span>
                 ) : (
-                  <span className="text-muted-foreground text-sm">Paused</span>
+                  <span
+                    className="text-muted-foreground text-sm"
+                    title={viaTitle}
+                  >
+                    Paused
+                  </span>
                 )
               ) : (
                 <Button

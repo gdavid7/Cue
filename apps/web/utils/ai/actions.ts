@@ -29,6 +29,7 @@ import { isDeleteEmailActionEnabled } from "@/utils/delete-email-action";
 import { callMcpTool } from "@/utils/mcp/call-tool";
 import { findIntegration } from "@/utils/mcp/integrations";
 import { getIntegrationToolSpec } from "@/utils/mcp/tool-specs";
+import { findConnectionAccountId } from "@/utils/mcp/user-connections";
 import { resolveActionAttachments } from "@/utils/ai/action-attachments";
 import {
   getMessagingRuleNotificationResult,
@@ -632,15 +633,12 @@ const integration: ActionFunction<{
     };
   }
 
-  const connection = await prisma.mcpConnection.findFirst({
-    where: {
-      emailAccountId: emailAccount.id,
-      isActive: true,
-      integration: { name: integrationName },
-    },
-    select: { id: true },
+  const connectionAccountId = await findConnectionAccountId({
+    integration: integrationName,
+    emailAccountId: emailAccount.id,
+    activeOnly: true,
   });
-  if (!connection) {
+  if (!connectionAccountId) {
     return {
       success: false,
       errorCode: "INTEGRATION_NOT_CONNECTED",
@@ -673,7 +671,7 @@ const integration: ActionFunction<{
 
   try {
     await callMcpTool({
-      emailAccountId: emailAccount.id,
+      emailAccountId: connectionAccountId,
       integration: integrationName,
       toolName: integrationToolName,
       args: toolArgs,
