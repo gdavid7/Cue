@@ -78,6 +78,28 @@ export function orderSplitsForInboxStyle(
   ];
 }
 
+/**
+ * Whether a split is the tab its inbox style opens on, Primary or Focused, as
+ * the inbox it mirrors does. Matched by filter, so a renamed tab still counts.
+ */
+export function isInboxStyleLandingSplit(split: {
+  filters: MailSplitFilter[];
+}) {
+  const [filter, ...rest] = split.filters;
+  return (
+    !!filter &&
+    rest.length === 0 &&
+    filter.kind === MailSplitFilterKind.CATEGORY &&
+    LANDING_CATEGORIES.has(filter.value ?? "")
+  );
+}
+
+const LANDING_CATEGORIES = new Set(
+  Object.values(SPLITS_BY_STYLE).flatMap(
+    (splits) => splits[0]?.filters.map((filter) => filter.value ?? "") ?? [],
+  ),
+);
+
 function categorySplit(name: string, category: string): InboxStyleSplit {
   return {
     name,

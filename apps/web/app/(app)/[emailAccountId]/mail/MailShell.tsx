@@ -123,6 +123,7 @@ import {
   mailSplitToThreadsQuery,
   mailTypeToThreadsQuery,
 } from "@/utils/split-inbox/split-query";
+import { isInboxStyleLandingSplit } from "@/utils/split-inbox/inbox-styles";
 import { getActionErrorMessage } from "@/utils/error";
 import { prefixPath } from "@/utils/path";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
@@ -384,8 +385,12 @@ export function MailShell() {
       })),
     [splits],
   );
+  // With an inbox style chosen, mail opens on its Primary or Focused tab
+  // rather than All, which shows the same mail and more.
   const activeSplit =
-    splits.find((split) => split.id === activeSplitId) ?? splits[0];
+    splits.find((split) => split.id === activeSplitId) ??
+    splits.find(isInboxStyleLandingSplit) ??
+    splits[0];
   const displayedActiveSplitId = activeSplit?.id ?? null;
   const activeCombinedLabelNames = combinedLabelSplits.find(
     (split) => split.id === displayedActiveSplitId,
