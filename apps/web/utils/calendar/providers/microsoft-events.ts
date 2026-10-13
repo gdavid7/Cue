@@ -276,14 +276,29 @@ export class MicrosoftCalendarEventProvider implements CalendarEventProvider {
           contentType: "text",
           content: input.description || "",
         },
-        start: {
-          dateTime: formatMicrosoftUtcDateTime(input.startTime),
-          timeZone: "UTC",
-        },
-        end: {
-          dateTime: formatMicrosoftUtcDateTime(input.endTime),
-          timeZone: "UTC",
-        },
+        // Graph wants an all-day item at midnight in a named time zone.
+        ...(input.allDay
+          ? {
+              isAllDay: true,
+              start: {
+                dateTime: formatMicrosoftMidnight(input.startTime),
+                timeZone: input.timezone,
+              },
+              end: {
+                dateTime: formatMicrosoftMidnight(input.endTime),
+                timeZone: input.timezone,
+              },
+            }
+          : {
+              start: {
+                dateTime: formatMicrosoftUtcDateTime(input.startTime),
+                timeZone: "UTC",
+              },
+              end: {
+                dateTime: formatMicrosoftUtcDateTime(input.endTime),
+                timeZone: "UTC",
+              },
+            }),
         attendees: input.attendees.map((attendee) => ({
           emailAddress: {
             address: attendee.email,
@@ -405,6 +420,10 @@ export class MicrosoftCalendarEventProvider implements CalendarEventProvider {
 function formatMicrosoftUtcDateTime(date: Date) {
   // Graph DateTimeTimeZone expects a local datetime for the supplied timezone.
   return date.toISOString().replace(/Z$/, "0000");
+}
+
+function formatMicrosoftMidnight(date: Date) {
+  return `${date.toISOString().slice(0, 10)}T00:00:00.0000000`;
 }
 
 function getJoinUrl(event: MicrosoftEvent): string | undefined {

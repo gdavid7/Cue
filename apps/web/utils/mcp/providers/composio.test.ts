@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { composioProvider } from "@/utils/mcp/providers/composio";
+import { createHash } from "node:crypto";
+import {
+  composioProvider,
+  uploadComposioFile,
+} from "@/utils/mcp/providers/composio";
 import { CredentialsRejectedError } from "@/utils/mcp/providers/types";
 
 vi.mock("@/env", () => ({
@@ -176,6 +180,89 @@ describe("composioProvider", () => {
     return api.state.authConfigs.find(
       (config) => config.name === `inbox-zero-${app}`,
     )!.id;
+  }
+});
+
+describe("uploadComposioFile", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("stages the file for the tool and returns the descriptor tools accept", async () => {
+    const content = Buffer.from("%PDF-1.7 syllabus");
+    const fetch = stubUploadFetch({ putStatus: 200 });
+
+    const file = await uploadComposioFile({
+      app: "googledrive",
+      tool: "GOOGLEDRIVE_UPLOAD_FILE",
+      filename: "syllabus.pdf",
+      mimetype: "application/pdf",
+      content,
+    });
+
+    expect(file).toEqual({
+      name: "syllabus.pdf",
+      mimetype: "application/pdf",
+      s3key: "uploads/key-1",
+    });
+
+    const [requestUrl, requestInit] = fetch.mock.calls[0];
+    expect(String(requestUrl)).toBe(
+      "https://backend.composio.dev/api/v3/files/upload/request",
+    );
+    expect(new Headers(requestInit?.headers).get("x-api-key")).toBe(
+      "test-composio-key",
+    );
+    expect(JSON.parse(String(requestInit?.body))).toEqual({
+      toolkit_slug: "googledrive",
+      tool_slug: "GOOGLEDRIVE_UPLOAD_FILE",
+      filename: "syllabus.pdf",
+      mimetype: "application/pdf",
+      md5: createHash("md5").update(content).digest("hex"),
+    });
+
+    const [uploadUrl, uploadInit] = fetch.mock.calls[1];
+    expect(String(uploadUrl)).toBe("https://storage.example.com/put-here");
+    expect(uploadInit?.method).toBe("PUT");
+    expect(new Headers(uploadInit?.headers).get("content-type")).toBe(
+      "application/pdf",
+    );
+    // The API key is for Composio's API, never for the storage host.
+    expect(new Headers(uploadInit?.headers).get("x-api-key")).toBeNull();
+    expect(Buffer.from(uploadInit?.body as Uint8Array)).toEqual(content);
+  });
+
+  it("fails when storage rejects the bytes", async () => {
+    stubUploadFetch({ putStatus: 403 });
+
+    await expect(
+      uploadComposioFile({
+        app: "one_drive",
+        tool: "ONE_DRIVE_ONEDRIVE_UPLOAD_FILE",
+        filename: "notes.txt",
+        mimetype: "text/plain",
+        content: Buffer.from("notes"),
+      }),
+    ).rejects.toThrow("Composio file upload failed: 403");
+  });
+
+  function stubUploadFetch({ putStatus }: { putStatus: number }) {
+    const fetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Response(null, { status: putStatus });
+      }
+      if (String(input).endsWith("/files/upload/request")) {
+        return json({
+          id: "file-1",
+          key: "uploads/key-1",
+          new_presigned_url: "https://storage.example.com/put-here",
+          metadata: { storage_backend: "s3" },
+        });
+      }
+      return new Response("Not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetch);
+    return fetch;
   }
 });
 

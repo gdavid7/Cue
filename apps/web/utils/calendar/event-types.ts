@@ -23,6 +23,9 @@ export interface CalendarEvent {
 }
 
 export interface CalendarEventWriteInput {
+  // All-day items span whole dates: startTime is the first day and endTime the
+  // day after the last, both at UTC midnight.
+  allDay?: boolean;
   attendees: CalendarEventAttendee[];
   calendarId: string;
   description?: string;

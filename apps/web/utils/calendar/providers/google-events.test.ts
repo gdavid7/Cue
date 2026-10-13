@@ -3,12 +3,13 @@ import { createTestLogger } from "@/__tests__/helpers";
 import { GoogleCalendarEventProvider } from "@/utils/calendar/providers/google-events";
 
 const calendarMocks = vi.hoisted(() => ({
+  insert: vi.fn(),
   list: vi.fn(),
 }));
 
 vi.mock("@/utils/calendar/client", () => ({
   getCalendarClientWithRefresh: vi.fn(async () => ({
-    events: { list: calendarMocks.list },
+    events: { insert: calendarMocks.insert, list: calendarMocks.list },
   })),
 }));
 
@@ -98,6 +99,32 @@ describe("GoogleCalendarEventProvider", () => {
         videoConferenceLink: "https://acme.zoom.us/j/8123456789?pwd=secret",
       }),
     );
+  });
+});
+
+describe("GoogleCalendarEventProvider.createEvent", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    calendarMocks.insert.mockResolvedValue({
+      data: { id: "event-id", htmlLink: "https://calendar.google.com/e" },
+    });
+  });
+
+  it("writes an all-day item as dates, not times", async () => {
+    await createProvider().createEvent({
+      allDay: true,
+      attendees: [],
+      calendarId: "primary",
+      endTime: new Date("2026-10-21T00:00:00Z"),
+      locationType: "CUSTOM",
+      startTime: new Date("2026-10-20T00:00:00Z"),
+      timezone: "America/Los_Angeles",
+      title: "HW 3 due",
+    });
+
+    const { requestBody } = calendarMocks.insert.mock.calls[0][0];
+    expect(requestBody.start).toEqual({ date: "2026-10-20" });
+    expect(requestBody.end).toEqual({ date: "2026-10-21" });
   });
 });
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { env } from "@/env";
 import { createScopedLogger } from "@/utils/logger";
@@ -9,6 +10,7 @@ import {
 const logger = createScopedLogger("composio");
 
 const COMPOSIO_REQUEST_TIMEOUT_MS = 15_000;
+const COMPOSIO_UPLOAD_TIMEOUT_MS = 60_000;
 
 // Auth configs and MCP servers are shared per app across all users. Every
 // instance resolves the oldest matching resource so concurrent first-time
@@ -138,6 +140,54 @@ export const composioProvider: IntegrationProvider = {
     };
   },
 };
+
+/**
+ * Stages a file in Composio's storage for one tool's file parameter. Composio
+ * tools take files only as this staged descriptor, never as raw bytes.
+ */
+export async function uploadComposioFile({
+  app,
+  tool,
+  filename,
+  mimetype,
+  content,
+}: {
+  app: string;
+  tool: string;
+  filename: string;
+  mimetype: string;
+  content: Buffer;
+}): Promise<{ name: string; mimetype: string; s3key: string }> {
+  const request = uploadRequestSchema.parse(
+    await composioFetch("/files/upload/request", {
+      method: "POST",
+      body: {
+        toolkit_slug: app,
+        tool_slug: tool,
+        filename,
+        mimetype,
+        md5: createHash("md5").update(content).digest("hex"),
+      },
+    }),
+  );
+
+  const upload = await fetch(request.new_presigned_url, {
+    method: "PUT",
+    headers: {
+      "content-type": mimetype,
+      ...(request.metadata?.storage_backend === "azure_blob_storage"
+        ? { "x-ms-blob-type": "BlockBlob" }
+        : {}),
+    },
+    body: new Uint8Array(content),
+    signal: AbortSignal.timeout(COMPOSIO_UPLOAD_TIMEOUT_MS),
+  });
+  if (!upload.ok) {
+    throw new Error(`Composio file upload failed: ${upload.status}`);
+  }
+
+  return { name: filename, mimetype, s3key: request.key };
+}
 
 function getAuthConfigId(app: string, authScheme?: "OAUTH2" | "API_KEY") {
   return memoize(authConfigIds, app, async () => {
@@ -313,6 +363,12 @@ function haveSameItems(a: string[], b: string[]) {
 }
 
 const linkSchema = z.object({ redirect_url: z.string().url() });
+
+const uploadRequestSchema = z.object({
+  key: z.string(),
+  new_presigned_url: z.string().url(),
+  metadata: z.object({ storage_backend: z.string() }).nullish(),
+});
 
 const authConfigListSchema = z.object({
   items: z.array(

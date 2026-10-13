@@ -47,6 +47,8 @@ type ReaderToolbarProps = {
   onMarkUnread: () => void;
   /** The ⋯ dropdown, i.e. `ThreadActionsMenu`, composed by the shell. */
   menu?: ReactNode;
+  /** Shown beside snooze, e.g. `AddToCalendarButton`. */
+  extraAction?: ReactNode;
   messageExpansion?: {
     allExpanded: boolean;
     canExpand: boolean;
@@ -74,6 +76,7 @@ export function ReaderToolbar({
   onMarkRead,
   onMarkUnread,
   menu,
+  extraAction,
   messageExpansion,
 }: ReaderToolbarProps) {
   return (
@@ -89,7 +92,14 @@ export function ReaderToolbar({
         not_spam: <ShieldCheckIcon className="size-3.5" />,
         restore: <Undo2Icon className="size-3.5" />,
       }}
-      extraActions={onSnooze ? <SnoozeButton onSnooze={onSnooze} /> : null}
+      extraActions={
+        extraAction || onSnooze ? (
+          <>
+            {extraAction}
+            {onSnooze ? <SnoozeButton onSnooze={onSnooze} /> : null}
+          </>
+        ) : null
+      }
       isStarred={isStarred}
       isUnread={isUnread}
       labelChips={labels.map((label) => (

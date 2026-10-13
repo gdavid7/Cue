@@ -519,6 +519,42 @@ describe("MicrosoftCalendarEventProvider", () => {
   });
 });
 
+describe("MicrosoftCalendarEventProvider all-day items", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    graphMocks.api.mockReturnValue({ post: graphMocks.post });
+    graphMocks.post.mockResolvedValue({ id: "event-id" });
+  });
+
+  it("writes an all-day item at midnight in the user's zone", async () => {
+    await createProvider().createEvent({
+      allDay: true,
+      attendees: [],
+      calendarId: "calendar-id",
+      endTime: new Date("2026-10-21T00:00:00Z"),
+      locationType: "CUSTOM",
+      startTime: new Date("2026-10-20T00:00:00Z"),
+      timezone: "America/Los_Angeles",
+      title: "HW 3 due",
+    });
+
+    expect(graphMocks.post.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        isAllDay: true,
+        start: {
+          dateTime: "2026-10-20T00:00:00.0000000",
+          timeZone: "America/Los_Angeles",
+        },
+        end: {
+          dateTime: "2026-10-21T00:00:00.0000000",
+          timeZone: "America/Los_Angeles",
+        },
+        attendees: [],
+      }),
+    );
+  });
+});
+
 function createProvider() {
   return new MicrosoftCalendarEventProvider(
     {

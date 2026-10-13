@@ -4,6 +4,8 @@ import type { Logger } from "@/utils/logger";
 import type { CalendarEvent } from "@/utils/calendar/event-types";
 import { posthogCaptureEvent } from "@/utils/posthog";
 import { createCalendarEventProviders } from "@/utils/calendar/event-provider";
+import { addToCalendar } from "@/utils/calendar/add-to-calendar";
+import { SafeError } from "@/utils/error";
 
 const getCalendarEventsInputSchema = z.object({
   startDate: z
@@ -102,6 +104,70 @@ export const getCalendarEventsTool = ({
 
 export type GetCalendarEventsTool = InferUITool<
   ReturnType<typeof getCalendarEventsTool>
+>;
+
+const addToCalendarInputSchema = z.object({
+  title: z
+    .string()
+    .trim()
+    .min(1)
+    .describe('Short event title, e.g. "CSE 151B group meeting".'),
+  start: z
+    .string()
+    .describe(
+      "Start as an ISO 8601 date-time with offset, or a date (YYYY-MM-DD) for an all-day item such as a deadline.",
+    ),
+  end: z
+    .string()
+    .optional()
+    .describe(
+      "End, same format as start. Omit for a one-hour event, or for an all-day item.",
+    ),
+  location: z
+    .string()
+    .optional()
+    .describe("Place or video link, as written in the email."),
+});
+
+export const addToCalendarTool = ({
+  email,
+  emailAccountId,
+  timezone,
+  logger,
+}: {
+  email: string;
+  emailAccountId: string;
+  timezone: string;
+  logger: Logger;
+}) =>
+  tool({
+    description:
+      "Add an event to the user's own calendar (the Google or Microsoft calendar connected to Cue). Use when the user asks to put something on their calendar, such as a meeting, interview, or deadline from an email. Read the email first with readEmail and use only the date, time, and place it states; if the time or time zone is unclear, ask instead of guessing. Confirm the title and time with the user before calling. Creates the event only; never invites other people.",
+    inputSchema: addToCalendarInputSchema,
+    execute: async ({ title, start, end, location }) => {
+      trackToolCall({ tool: "add_to_calendar", email, logger });
+
+      try {
+        const event = await addToCalendar({
+          emailAccountId,
+          title,
+          start,
+          end,
+          location,
+          timezone,
+          logger,
+        });
+        return { added: true, ...event };
+      } catch (error) {
+        if (error instanceof SafeError) return { error: error.message };
+        logger.error("Failed to add event to calendar", { error });
+        return { error: "Failed to add the event to the calendar" };
+      }
+    },
+  });
+
+export type AddToCalendarTool = InferUITool<
+  ReturnType<typeof addToCalendarTool>
 >;
 
 async function trackToolCall({
