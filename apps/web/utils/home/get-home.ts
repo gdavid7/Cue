@@ -106,15 +106,22 @@ export async function getHomeData({
         return [] as EmailThread[];
       });
 
-  const [needsYou, waiting, handled, agentTasks] = await Promise.all([
-    toReplyId ? list({ labelIds: ["INBOX", toReplyId] }, "needs-you") : [],
-    awaitingId ? list({ labelIds: [awaitingId] }, "waiting") : [],
-    // One query per label: the EmailProvider interface has no "any of these labels".
-    Promise.all(
-      handledIds.map((id) => list({ labelIds: [id], after: since }, "handled")),
-    ).then((lists) => uniqueByThreadId(lists.flat())),
-    getAgentTasks({ emailAccountId, now }),
-  ]);
+  const [needsYou, waiting, handledByLabel, inbox, agentTasks] =
+    await Promise.all([
+      toReplyId ? list({ labelIds: ["INBOX", toReplyId] }, "needs-you") : [],
+      awaitingId ? list({ labelIds: [awaitingId] }, "waiting") : [],
+      // One query per label: the EmailProvider interface has no "any of these labels".
+      Promise.all(
+        handledIds.map((id) =>
+          list({ labelIds: [id], after: since }, "handled"),
+        ),
+      ),
+      // Everything still in the inbox, so nothing is only reachable through AI triage.
+      list({ labelIds: ["INBOX"] }, "inbox"),
+      getAgentTasks({ emailAccountId, now }),
+    ]);
+  const handled = uniqueByThreadId(handledByLabel.flat());
+  const needsYouIds = new Set(needsYou.map((t) => t.id));
 
   const toRow = (thread: EmailThread) =>
     toHomeThread(thread, {
@@ -136,6 +143,18 @@ export async function getHomeData({
     needsYou: needsYouRows,
     waiting: waiting.map(toRow).filter(isDefined),
     handled: handled.map(toRow).filter(isDefined),
+    // Where filed mail went, so the user can check what was moved out of the way.
+    handledLabels: handledIds
+      .map((id, index) => ({
+        labelId: id,
+        name: labelNames.get(id) ?? "",
+        count: handledByLabel[index]?.length ?? 0,
+      }))
+      .filter((label) => label.count > 0),
+    alsoInInbox: inbox
+      .filter((t) => !needsYouIds.has(t.id))
+      .map(toRow)
+      .filter(isDefined),
     agentTasks,
     stats: {
       needsYou: needsYouRows.length,

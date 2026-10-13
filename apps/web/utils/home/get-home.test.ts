@@ -133,7 +133,50 @@ describe("getHomeData", () => {
     const home = await run(provider);
 
     expect(home.needsYou).toEqual([]);
-    expect(provider.getThreadsWithQuery).not.toHaveBeenCalled();
+    // Only the plain inbox is listed: there's no label to query for the lanes.
+    expect(provider.getThreadsWithQuery).toHaveBeenCalledTimes(1);
+    expect(provider.getThreadsWithQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ query: { labelIds: ["INBOX"] } }),
+    );
+  });
+
+  it("lists the rest of the inbox, so nothing depends on AI triage to be seen", async () => {
+    const sarah = thread("sarah", {
+      from: "Sarah <s@acme.com>",
+      subject: "Renewal",
+      labels: ["INBOX", "Label_To Reply"],
+    });
+    const dentist = thread("dentist", {
+      from: "Dentist <d@smile.com>",
+      subject: "Your appointment",
+      labels: ["INBOX"],
+    });
+    const provider = mockProvider({
+      "To Reply": [sarah],
+      INBOX: [sarah, dentist],
+    });
+
+    const home = await run(provider);
+
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["dentist"]);
+  });
+
+  it("says where filed mail went, per label", async () => {
+    const provider = mockProvider({
+      Newsletter: [
+        thread("n1", {
+          from: "News <n@x.com>",
+          subject: "Weekly",
+          labels: ["Label_Newsletter"],
+        }),
+      ],
+    });
+
+    const home = await run(provider);
+
+    expect(home.handledLabels).toEqual([
+      { labelId: "Label_Newsletter", name: "Newsletter", count: 1 },
+    ]);
   });
 });
 
@@ -209,10 +252,8 @@ function mockProvider(threadsByLabel: Record<string, EmailThread[]>) {
     getLabels: vi.fn(async () => LABELS),
     getThreadsWithQuery: vi.fn(
       async ({ query }: { query: { labelIds?: string[] } }) => {
-        const labelId = query.labelIds?.find((id) => id !== "INBOX");
-        return {
-          threads: threadsByLabel[nameById.get(labelId ?? "") ?? ""] ?? [],
-        };
+        const labelId = query.labelIds?.find((id) => id !== "INBOX") ?? "INBOX";
+        return { threads: threadsByLabel[nameById.get(labelId) ?? ""] ?? [] };
       },
     ),
   } as unknown as EmailProvider & {

@@ -19,6 +19,7 @@ import { useMediaQuery } from "usehooks-ts";
 import { LoadingContent } from "@/components/LoadingContent";
 import { ThreadContextList } from "@/components/thread-context/ThreadContextList";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useHome } from "@/hooks/useHome";
 import { useThreadBrief } from "@/hooks/useThreadBrief";
@@ -49,6 +50,7 @@ export function HomeDashboard() {
   const selected = wide
     ? (data?.needsYou.find((t) => t.threadId === selectedId) ??
       data?.waiting.find((t) => t.threadId === selectedId) ??
+      data?.alsoInInbox.find((t) => t.threadId === selectedId) ??
       data?.needsYou[0] ??
       null)
     : null;
@@ -61,14 +63,22 @@ export function HomeDashboard() {
   return (
     <div className="flex min-h-full flex-col xl:flex-row">
       <div className="min-w-0 flex-1 space-y-8 px-4 py-6 md:px-8">
-        <header>
-          <h1 className="font-title text-2xl text-foreground">
-            {greetingText}
-            {firstName ? `, ${firstName}` : ""}
-          </h1>
-          <p className="mt-1 text-muted-foreground text-sm">
-            Here's what needs your attention.
-          </p>
+        <header className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="font-title text-2xl text-foreground">
+              {greetingText}
+              {firstName ? `, ${firstName}` : ""}
+            </h1>
+            <p className="mt-1 text-muted-foreground text-sm">
+              Here's what needs your attention.
+            </p>
+          </div>
+          <Button asChild variant="outline">
+            <Link href={prefixPath(emailAccountId, "/mail")}>
+              <InboxIcon className="mr-2 size-4" />
+              Open inbox
+            </Link>
+          </Button>
         </header>
 
         <LoadingContent
@@ -116,6 +126,7 @@ export function HomeDashboard() {
               >
                 {data.waiting.map((thread) => (
                   <ThreadRow
+                    waiting
                     compact
                     key={thread.threadId}
                     onSelect={() => select(thread.threadId)}
@@ -126,10 +137,48 @@ export function HomeDashboard() {
               </Section>
 
               <Section
+                title="Also in your inbox"
+                count={data.alsoInInbox.length}
+                empty="Nothing else in your inbox."
+              >
+                {data.alsoInInbox.map((thread) => (
+                  <ThreadRow
+                    compact
+                    key={thread.threadId}
+                    onSelect={() => select(thread.threadId)}
+                    selected={selected?.threadId === thread.threadId}
+                    thread={thread}
+                  />
+                ))}
+                <Link
+                  className="flex items-center gap-1 px-1 pt-1 text-muted-foreground text-sm hover:text-foreground"
+                  href={prefixPath(emailAccountId, "/mail")}
+                >
+                  See everything in your inbox
+                  <ArrowRightIcon className="size-3.5" />
+                </Link>
+              </Section>
+
+              <Section
                 title="Handled automatically"
                 count={data.handled.length}
                 empty="Nothing filed in the last week."
               >
+                <p className="px-1 pb-1 text-muted-foreground text-sm">
+                  Filed out of your inbox by your rules and labeled, never
+                  deleted. Check any of them:
+                </p>
+                <div className="flex flex-wrap gap-2 px-1 pb-2">
+                  {data.handledLabels.map((label) => (
+                    <Link
+                      className="rounded-full border border-border px-3 py-1 text-sm hover:bg-muted/60"
+                      href={`${prefixPath(emailAccountId, "/mail")}?type=label&labelId=${encodeURIComponent(label.labelId)}`}
+                      key={label.labelId}
+                    >
+                      {label.name} · {label.count}
+                    </Link>
+                  ))}
+                </div>
                 {data.handled.slice(0, 5).map((thread) => (
                   <Link
                     className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm hover:bg-muted/60"
@@ -266,11 +315,14 @@ function ThreadRow({
   selected,
   onSelect,
   compact,
+  waiting,
 }: {
   thread: HomeThread;
   selected: boolean;
   onSelect: () => void;
   compact?: boolean;
+  /** Show how long the user has been waiting instead of when it arrived. */
+  waiting?: boolean;
 }) {
   return (
     <button
@@ -306,7 +358,7 @@ function ThreadRow({
             </span>
           ) : null}
           <span className="ml-auto shrink-0 text-muted-foreground text-xs">
-            {compact ? waitingFor(thread.at) : formatTime(thread.at)}
+            {waiting ? waitingFor(thread.at) : formatTime(thread.at)}
           </span>
         </div>
         <div className="truncate text-foreground text-sm">{thread.subject}</div>
