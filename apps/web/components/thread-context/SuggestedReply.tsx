@@ -82,7 +82,8 @@ export function SuggestedReply({
     return (
       <div>
         <p className="text-muted-foreground text-xs leading-5">
-          Only suggested when your email and calendar back every fact in it.
+          Only suggested when every fact in it is quoted from your mail,
+          calendar, apps or the web.
         </p>
         <Button
           className="mt-2"
