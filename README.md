@@ -8,6 +8,15 @@
 
 The original Cue prototype (context engine, triage, demo UI, and design docs) lives in [`prototype/`](prototype/). It runs on its own with `cd prototype && npm install && npm start`.
 
+**Running locally:** see Inbox Zero's [Local Development](#local-development) section below. In short, with Node 24:
+
+```bash
+pnpm install
+pnpm local:start            # add --backend docker if you run as root (Postgres refuses to init as root)
+```
+
+Then open **http://localhost:3000/mail**. Use `localhost`, not `127.0.0.1`, or the sign-in callback fails with `state_mismatch`. Sign in with Google as `developer@example.com`. Everything runs against local emulators (Gmail, Outlook, an LLM with canned responses), so no OAuth credentials or API keys are needed. The inbox can take ~30 seconds to fill on first load.
+
 **Pulling upstream changes:**
 
 ```bash
