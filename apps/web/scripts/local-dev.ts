@@ -671,22 +671,6 @@ async function configureDemoAccount(
       -- The "Needs reply" and "Reading" tabs the first-run inbox card's opt-in
       -- creates (see addCueTabs): label filters over the inbox, which never
       -- move mail.
-      CREATE OR REPLACE FUNCTION cue_local_dev_add_splits(account_id text)
-      RETURNS void AS $$
-      BEGIN
-        INSERT INTO "MailSplit" (id, "createdAt", "updatedAt", name, "order", "matchAll", "emailAccountId")
-        VALUES
-          (account_id || '-cue-split-needs-reply', NOW(), NOW(), 'Needs reply', 2, true, account_id),
-          (account_id || '-cue-split-reading', NOW(), NOW(), 'Reading', 3, false, account_id)
-        ON CONFLICT ("emailAccountId", name) DO NOTHING;
-        INSERT INTO "MailSplitFilter" (id, kind, value, "order", "mailSplitId")
-        VALUES
-          (account_id || '-cue-split-needs-reply-0', 'LABEL', 'Label_To Reply', 0, account_id || '-cue-split-needs-reply'),
-          (account_id || '-cue-split-reading-0', 'LABEL', 'Label_Newsletter', 0, account_id || '-cue-split-reading'),
-          (account_id || '-cue-split-reading-1', 'LABEL', 'Label_Marketing', 1, account_id || '-cue-split-reading')
-        ON CONFLICT DO NOTHING;
-      END;
-      $$ LANGUAGE plpgsql;
 
       -- The rows connecting an app through Composio would create; the Composio
       -- emulator treats every account as connected on its side.
@@ -708,14 +692,11 @@ async function configureDemoAccount(
 
       -- Runs inside the sign-in transaction, so a schema change that breaks
       -- these inserts must not break signing in. Arguments: the calendar
-      -- token, its provider, and whether to connect apps. The inbox tabs
-      -- filter on Gmail label ids, so only the Gmail account gets them.
+      -- token, its provider, and whether to connect apps. Inbox tabs come
+      -- from the first-run card, as for a real user.
       CREATE OR REPLACE FUNCTION cue_local_dev_connect_calendar_trigger() RETURNS trigger AS $$
       BEGIN
         PERFORM cue_local_dev_connect_calendar(NEW.id, NEW.email, TG_ARGV[0], TG_ARGV[1]);
-        IF TG_ARGV[1] = 'google' THEN
-          PERFORM cue_local_dev_add_splits(NEW.id);
-        END IF;
         IF TG_ARGV[2] = 'true' THEN
           PERFORM cue_local_dev_connect_apps(NEW.id);
         END IF;
@@ -747,10 +728,6 @@ async function configureDemoAccount(
         [email, token, provider],
       );
     }
-    await client.query(
-      `SELECT cue_local_dev_add_splits(id) FROM "EmailAccount" WHERE email = $1`,
-      [DEMO_GOOGLE_EMAIL],
-    );
     if (connectApps) {
       await client.query(
         `SELECT cue_local_dev_connect_apps(id) FROM "EmailAccount" WHERE email = $1`,
