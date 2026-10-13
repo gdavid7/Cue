@@ -106,9 +106,10 @@ function Capabilities() {
           </FeatureIcon>
         </ItemMedia>
         <ItemContent>
-          <ItemTitle>Better drafts</ItemTitle>
+          <ItemTitle>Context from your apps</ItemTitle>
           <ItemDescription>
-            Replies arrive knowing the sender's plan, tickets, and history.
+            Files, messages, and deadlines from the apps you connect appear next
+            to the emails they relate to, and back the replies Cue suggests.
           </ItemDescription>
         </ItemContent>
       </Item>

@@ -12,6 +12,7 @@ import { auth } from "@/utils/auth";
 import { isGoogleOauthEmulationEnabled } from "@/utils/gmail/oauth";
 import { getEnabledLoginProviders } from "@/utils/oauth/login-providers";
 import { AlertBasic } from "@/components/Alert";
+import { Logo } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 import { WELCOME_PATH } from "@/utils/config";
 import { CrispChatLoggedOutVisible } from "@/components/CrispChat";
@@ -47,10 +48,11 @@ export default async function AuthenticationPage(props: {
   return (
     <div className="flex min-h-screen flex-col justify-center py-10 text-foreground">
       <div className="mx-auto flex w-full flex-col justify-center space-y-6 sm:w-[350px]">
-        <div className="flex flex-col text-center">
+        <div className="flex flex-col items-center text-center">
+          <Logo className="mb-6 h-7" />
           <h1 className="font-title text-2xl text-foreground">Sign In</h1>
           <p className="mt-4 text-muted-foreground">
-            Your AI personal assistant for email.
+            Every email, with the context to act on it.
           </p>
         </div>
         <div className="mt-4">
