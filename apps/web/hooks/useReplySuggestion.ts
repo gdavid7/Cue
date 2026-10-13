@@ -23,7 +23,7 @@ export function useReplySuggestion({
   const needsWeb = Boolean(
     AUTO_WEB_LOOKUP &&
       plain.data?.canSearchWeb &&
-      plain.data.suggestion.status === "insufficient",
+      plain.data.suggestion?.status === "insufficient",
   );
   const web = useSuggestedReply({
     threadId,

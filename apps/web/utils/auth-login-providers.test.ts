@@ -26,7 +26,8 @@ vi.mock("@/utils/calendar/connect-sign-in-calendar", () => ({
   connectCalendarAtSignIn: vi.fn(),
 }));
 
-describe("betterAuthConfig login providers", () => {
+// Each test re-imports the whole sign-in module, which takes several seconds cold.
+describe("betterAuthConfig login providers", { timeout: 30_000 }, () => {
   afterEach(() => {
     vi.resetModules();
     vi.doUnmock("@/utils/oauth/login-providers");
