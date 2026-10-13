@@ -164,6 +164,27 @@ describe("rankContext", () => {
     );
   });
 
+  it("surfaces an assignment on the same topic, with when it's due", () => {
+    const ranked = rankContext({
+      focus,
+      candidates: [
+        candidate({
+          id: "assignment",
+          kind: "assignment",
+          title: "Renewal terms memo",
+          text: "Draft the renewal terms memo for legal review.",
+          at: "2026-10-16T06:59:00Z",
+          source: "Canvas",
+        }),
+      ],
+      selfEmails: [ME.email],
+      now: NOW,
+    });
+
+    expect(ranked[0]?.candidate.id).toBe("assignment");
+    expect(ranked[0]?.reasons).toContainEqual({ type: "due", days: 2 });
+  });
+
   it("returns at most `limit` items and caps how many of one kind", () => {
     const many = Array.from({ length: 6 }, (_, i) =>
       candidate({ id: `e${i}`, title: `Renewal note ${i}`, people: [NORA] }),

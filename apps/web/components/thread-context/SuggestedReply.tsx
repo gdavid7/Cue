@@ -3,9 +3,12 @@
 import {
   CalendarIcon,
   CopyIcon,
+  FileTextIcon,
+  GraduationCapIcon,
   type LucideIcon,
   MailIcon,
   MessageSquareQuoteIcon,
+  MessagesSquareIcon,
   SparklesIcon,
 } from "lucide-react";
 import { useAction } from "next-safe-action/hooks";
@@ -27,6 +30,9 @@ const SOURCE_ICON: Record<Citation["source"]["kind"], LucideIcon> = {
   message: MessageSquareQuoteIcon,
   email: MailIcon,
   event: CalendarIcon,
+  file: FileTextIcon,
+  assignment: GraduationCapIcon,
+  chat: MessagesSquareIcon,
 };
 
 /**

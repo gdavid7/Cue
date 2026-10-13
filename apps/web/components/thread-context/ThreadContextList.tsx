@@ -1,6 +1,13 @@
 "use client";
 
-import { CalendarIcon, type LucideIcon, MailIcon } from "lucide-react";
+import {
+  CalendarIcon,
+  FileTextIcon,
+  GraduationCapIcon,
+  type LucideIcon,
+  MailIcon,
+  MessagesSquareIcon,
+} from "lucide-react";
 import { LoadingContent } from "@/components/LoadingContent";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useThreadContext } from "@/hooks/useThreadContext";
@@ -13,6 +20,9 @@ const KIND: Record<
 > = {
   email: { icon: MailIcon, label: "Email" },
   event: { icon: CalendarIcon, label: "Calendar" },
+  file: { icon: FileTextIcon, label: "File" },
+  assignment: { icon: GraduationCapIcon, label: "Assignment" },
+  chat: { icon: MessagesSquareIcon, label: "Message" },
 };
 
 /**
@@ -80,7 +90,7 @@ function ContextItem({
             {item.title}
           </div>
           <div className="mt-0.5 text-muted-foreground text-xs">
-            {label} · {formatWhen(item.at)}
+            {item.source ?? label} · {formatWhen(item.at)}
           </div>
         </div>
       </div>

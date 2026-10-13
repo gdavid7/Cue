@@ -14,7 +14,7 @@ import { Corpus, tokenize } from "./text";
 
 export type Person = { email: string; name?: string };
 
-export type CandidateKind = "email" | "event";
+export type CandidateKind = "email" | "event" | "file" | "assignment" | "chat";
 
 export type ContextCandidate = {
   id: string;
@@ -27,6 +27,8 @@ export type ContextCandidate = {
   at: string;
   people: Person[];
   url?: string;
+  /** Where it came from when that isn't obvious from the kind, e.g. "Canvas". */
+  source?: string;
 };
 
 export type FocusThread = {
@@ -42,7 +44,8 @@ export type ContextReason =
   | { type: "organization"; label: string }
   | { type: "via"; label: string }
   | { type: "topic"; terms: string[] }
-  | { type: "upcoming"; days: number };
+  | { type: "upcoming"; days: number }
+  | { type: "due"; days: number };
 
 export type RankedContext = {
   candidate: ContextCandidate;
@@ -62,7 +65,13 @@ export type RankOptions = {
 };
 
 const WEIGHTS = { similarity: 0.4, structure: 0.3, recency: 0.2, kind: 0.1 };
-const KIND_PRIOR: Record<CandidateKind, number> = { event: 0.8, email: 0.6 };
+const KIND_PRIOR: Record<CandidateKind, number> = {
+  event: 0.8,
+  assignment: 0.8,
+  email: 0.6,
+  file: 0.5,
+  chat: 0.5,
+};
 const MIN_SCORE = 0.18;
 const MIN_TOPIC_SIMILARITY = 0.12;
 const MAX_PER_KIND = 3;
@@ -189,6 +198,9 @@ export function rankContext({
     if (c.kind === "event" && days >= 0 && days <= 14) {
       reasons.push({ type: "upcoming", days: Math.floor(days) });
     }
+    if (c.kind === "assignment" && days >= 0 && days <= 14) {
+      reasons.push({ type: "due", days: Math.floor(days) });
+    }
     scored.push({ candidate: c, score: round(score), reasons });
   }
 
@@ -246,8 +258,9 @@ export function isAutomatedAddress(email: string): boolean {
 }
 
 function recency(kind: CandidateKind, days: number): number {
-  // An upcoming meeting is most useful just before it happens.
-  if (kind === "event" && days >= 0) return Math.exp(-days / 14);
+  // An upcoming meeting or due date is most useful just before it happens.
+  if ((kind === "event" || kind === "assignment") && days >= 0)
+    return Math.exp(-days / 14);
   return Math.exp(-Math.abs(days) / 45);
 }
 

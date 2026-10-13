@@ -15,6 +15,7 @@ import {
   threadToCandidate,
   truncate,
 } from "@/utils/thread-context/get-thread-context";
+import { fetchConnectorCandidates } from "@/utils/thread-context/connector-context";
 import { reasonLabel } from "@/utils/thread-context/reason-label";
 
 const MAX_TERMS = 6;
@@ -37,6 +38,8 @@ export type ContextSearchResult = {
   messageId?: string;
   from?: string;
   url?: string;
+  /** The app it came from, e.g. "Google Drive" or a Canvas course. */
+  source?: string;
   why: string[];
 };
 
@@ -64,7 +67,7 @@ export async function searchContext({
   const terms = queryTerms(query);
   if (!terms.length) return { results: [] };
 
-  const [hits, events] = await Promise.all([
+  const [hits, events, connectorItems] = await Promise.all([
     emailProvider
       .searchThreads({
         query: terms.join(" OR "),
@@ -88,6 +91,7 @@ export async function searchContext({
         logger.warn("Failed to fetch calendar events for search", { error });
         return [];
       }),
+    fetchConnectorCandidates({ emailAccountId, keywords: terms, logger, now }),
   ]);
 
   const hitCandidates = hits.map(threadToCandidate);
@@ -122,6 +126,7 @@ export async function searchContext({
     candidates: [
       ...[...threads.values()].map(threadToCandidate),
       ...events.map(eventToCandidate),
+      ...connectorItems,
     ],
     selfEmails: [userEmail],
     now: now.toISOString(),
@@ -141,6 +146,7 @@ export async function searchContext({
         messageId: latest?.id,
         from: latest?.headers.from,
         url: candidate.url,
+        source: candidate.source,
         why: reasons.map(reasonLabel),
       };
     }),

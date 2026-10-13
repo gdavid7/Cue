@@ -17,6 +17,11 @@ import type { ParsedMessage } from "@/utils/types";
 import { getEmailAccountWithAi } from "@/utils/user/get";
 
 const MAX_THREAD_MESSAGES = 6;
+const CONNECTOR_SOURCE_LABEL = {
+  file: "File",
+  assignment: "Assignment",
+  chat: "Message",
+} as const;
 const MAX_SOURCE_TEXT = 2000;
 const MAX_CONTEXT_SOURCES = 4;
 const CACHE_TTL_SECONDS = 24 * 60 * 60;
@@ -58,7 +63,7 @@ const suggestionSchema = z.object({
 
 export type Source = {
   id: string;
-  kind: "message" | "email" | "event";
+  kind: "message" | "email" | "event" | "file" | "assignment" | "chat";
   title: string;
   text: string;
   /** For related emails, so the user can open them. */
@@ -279,6 +284,15 @@ async function contextSources({
           kind: "event" as const,
           title: item.title,
           text: `Meeting: ${item.title}\nWhen: ${formatTime(item.at, timezone)}\n${item.text}`,
+          url: item.url,
+        };
+      }
+      if (item.kind !== "email") {
+        return {
+          id,
+          kind: item.kind,
+          title: item.title,
+          text: `${CONNECTOR_SOURCE_LABEL[item.kind]}: ${item.title}${item.source ? ` (${item.source})` : ""}\n${item.kind === "assignment" ? `Due: ${formatTime(item.at, timezone)}\n` : ""}${item.text}`,
           url: item.url,
         };
       }

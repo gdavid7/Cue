@@ -28,7 +28,7 @@ export const searchContextTool = ({
   logger: Logger;
 }) =>
   tool({
-    description: `Search the user's email and calendar together, following the people involved. Finds conversations and meetings that match the words, plus other conversations and meetings with the people or organizations those words name, ranked by relevance. Each result says why it matched.
+    description: `Search the user's email, calendar, and connected apps (files in Google Drive or OneDrive, Canvas assignments, Slack messages) together, following the people involved. Finds items that match the words, plus other conversations and meetings with the people or organizations those words name, ranked by relevance. Each result says why it matched and, for app items, which app or course it came from.
 Use for questions about a person, organization, or topic that may span email and calendar ("what did Nora say about the start date", "when is my Citadel interview", "what's happening with Acme"). Use searchInbox instead for exact mailbox filters such as unread, a date range, a sender address, or a label.
 Results have short snippets only: call readEmail with an email result's messageId before relying on details. In the answer, say which emails or meetings it comes from, and say plainly when the results don't answer the question rather than guessing.`,
     inputSchema: searchContextInputSchema,

@@ -13,5 +13,7 @@ export function reasonLabel(reason: ContextReason) {
       return `About ${reason.terms.join(", ")}`;
     case "upcoming":
       return reason.days === 0 ? "Today" : `In ${reason.days}d`;
+    case "due":
+      return reason.days === 0 ? "Due today" : `Due in ${reason.days}d`;
   }
 }

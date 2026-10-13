@@ -256,11 +256,7 @@ export const MCP_INTEGRATIONS: Record<
     provider: { id: "composio", app: "googledrive" },
     authType: "oauth",
     scopes: [],
-    allowedTools: [
-      "GOOGLEDRIVE_FIND_FILE",
-      "GOOGLEDRIVE_GET_FILE_METADATA",
-      "GOOGLEDRIVE_GET_DOCUMENT",
-    ],
+    allowedTools: ["GOOGLEDRIVE_FIND_FILE", "GOOGLEDRIVE_GET_FILE_METADATA"],
   },
   one_drive: {
     name: "one_drive",
@@ -270,7 +266,7 @@ export const MCP_INTEGRATIONS: Record<
     authType: "oauth",
     scopes: [],
     allowedTools: [
-      "ONE_DRIVE_SEARCH_DRIVE_ITEMS",
+      "ONE_DRIVE_SEARCH_ITEMS",
       "ONE_DRIVE_GET_ITEM",
       "ONE_DRIVE_DOWNLOAD_FILE",
     ],
@@ -285,7 +281,7 @@ export const MCP_INTEGRATIONS: Record<
     scopes: [],
     allowedTools: [
       "MICROSOFT_TEAMS_CHATS_GET_ALL_CHATS",
-      "MICROSOFT_TEAMS_LIST_USER_CHAT_MESSAGES",
+      "MICROSOFT_TEAMS_CHATS_GET_ALL_MESSAGES",
       "MICROSOFT_TEAMS_GET_CHAT_MESSAGE",
       "MICROSOFT_TEAMS_LIST_MESSAGE_REPLIES",
     ],
@@ -316,12 +312,10 @@ export const MCP_INTEGRATIONS: Record<
     verifyTool: "CANVAS_LIST_COURSES",
     allowedTools: [
       "CANVAS_LIST_COURSES",
-      "CANVAS_LIST_ASSIGNMENTS_FOR_USER",
-      "CANVAS_LIST_ANNOUNCEMENTS",
+      "CANVAS_GET_ALL_ASSIGNMENTS",
       "CANVAS_LIST_DISCUSSION_TOPICS",
       "CANVAS_LIST_CALENDAR_EVENTS_FOR_USER",
-      "CANVAS_LIST_COURSE_TODO_ITEMS",
-      "CANVAS_LIST_CONVERSATIONS",
+      "CANVAS_GET_CURRENT_USER",
     ],
   },
   slack: {

@@ -20,6 +20,7 @@ import { getMessageTimestamp } from "@/utils/email/message-timestamp";
 import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
 import { parseReply } from "@/utils/mail";
+import { fetchConnectorCandidates } from "@/utils/thread-context/connector-context";
 import type { ParsedMessage } from "@/utils/types";
 
 // Each thread open costs about 1 + 3 × 2 + 1 provider calls, so keep the
@@ -40,6 +41,8 @@ export type ThreadContextItem = {
   snippet: string;
   at: string;
   url?: string;
+  /** The app it came from, for items that aren't email or calendar. */
+  source?: string;
   reasons: ContextReason[];
 };
 
@@ -112,32 +115,39 @@ export async function collectThreadContext({
     )
     .slice(0, MAX_PARTICIPANTS);
 
-  const [peopleThreads, topicThreads, events] = await Promise.all([
-    mapWithConcurrency(participants, PARTICIPANT_CONCURRENCY, (p) =>
-      emailProvider
-        .getThreadsWithParticipant({
-          participantEmail: p.email,
-          maxThreads: THREADS_PER_PARTICIPANT,
-        })
+  const [peopleThreads, topicThreads, events, connectorItems] =
+    await Promise.all([
+      mapWithConcurrency(participants, PARTICIPANT_CONCURRENCY, (p) =>
+        emailProvider
+          .getThreadsWithParticipant({
+            participantEmail: p.email,
+            maxThreads: THREADS_PER_PARTICIPANT,
+          })
+          .catch((error) => {
+            logger.warn("Failed to fetch threads with participant", { error });
+            return [];
+          }),
+      ),
+      findTopicThreads({ focus, emailProvider, logger }),
+      fetchCalendarEventsInWindow({
+        emailAccountId,
+        timeMin: addDays(now, -CALENDAR_WINDOW_DAYS),
+        timeMax: addDays(now, CALENDAR_WINDOW_DAYS),
+        maxResultsPerProvider: 50,
+        logger,
+      })
+        .then((result) => result.events)
         .catch((error) => {
-          logger.warn("Failed to fetch threads with participant", { error });
+          logger.warn("Failed to fetch calendar events for context", { error });
           return [];
         }),
-    ),
-    findTopicThreads({ focus, emailProvider, logger }),
-    fetchCalendarEventsInWindow({
-      emailAccountId,
-      timeMin: addDays(now, -CALENDAR_WINDOW_DAYS),
-      timeMax: addDays(now, CALENDAR_WINDOW_DAYS),
-      maxResultsPerProvider: 50,
-      logger,
-    })
-      .then((result) => result.events)
-      .catch((error) => {
-        logger.warn("Failed to fetch calendar events for context", { error });
-        return [];
+      fetchConnectorCandidates({
+        emailAccountId,
+        keywords: focusKeywords(focus, 4),
+        logger,
+        now,
       }),
-  ]);
+    ]);
 
   const otherThreads = uniqueById([
     ...peopleThreads.flat(),
@@ -149,6 +159,7 @@ export async function collectThreadContext({
     candidates: [
       ...otherThreads.map(threadToCandidate),
       ...events.map(eventToCandidate),
+      ...connectorItems,
     ],
     selfEmails: [userEmail],
     now: now.toISOString(),
@@ -164,6 +175,7 @@ export async function collectThreadContext({
       text: candidate.text,
       at: candidate.at,
       url: candidate.url,
+      source: candidate.source,
       reasons,
     })),
   };
