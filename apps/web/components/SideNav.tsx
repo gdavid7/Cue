@@ -1,5 +1,6 @@
 "use client";
 
+import { ConnectorsList } from "@/components/connectors/ConnectorsList";
 import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
@@ -265,6 +266,8 @@ export function SideNav({
   ...props
 }: React.ComponentProps<typeof Sidebar> & { feedbackEnabled: boolean }) {
   const navigation = useNavigation();
+  const { emailAccount, emailAccountId } = useAccount();
+  const currentEmailAccountId = emailAccount?.id || emailAccountId;
   const path = usePathname();
   const showMailNav = path.includes("/compose");
   const isMoreActive = navigation.moreItems.some(
@@ -322,6 +325,15 @@ export function SideNav({
                 <SidebarGroupLabel>Manage</SidebarGroupLabel>
                 <SideNavMenu items={navigation.manageItems} activeHref={path} />
               </SidebarGroup>
+              {currentEmailAccountId ? (
+                <SidebarGroup>
+                  <SidebarGroupLabel>Connectors</SidebarGroupLabel>
+                  <ConnectorsList
+                    collapsed={!state.includes("left-sidebar")}
+                    emailAccountId={currentEmailAccountId}
+                  />
+                </SidebarGroup>
+              ) : null}
               <SidebarGroup>
                 <SidebarGroupLabel>Cleanup</SidebarGroupLabel>
                 <SideNavMenu

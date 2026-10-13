@@ -1,5 +1,6 @@
 "use client";
 
+import { ConnectorsList } from "@/components/connectors/ConnectorsList";
 import { type CSSProperties, memo, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
@@ -224,6 +225,14 @@ export const MailShellSidebar = memo(function MailShellSidebar({
             isOutlook ? OUTLOOK_LABEL_COLOR_OPTIONS : GMAIL_LABEL_COLORS
           }
           unified={isAllAccounts}
+          connectors={
+            isAllAccounts ? undefined : (
+              <ConnectorsList
+                collapsed={!isMailSidebarOpen}
+                emailAccountId={emailAccountId}
+              />
+            )
+          }
           footer={
             <MailAccountSwitcher
               isDesktopApp={isDesktopApp}

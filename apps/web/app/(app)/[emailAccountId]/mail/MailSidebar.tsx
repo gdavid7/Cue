@@ -95,6 +95,8 @@ export type MailSidebarProps = {
   /** Icon-only rail: rows shrink to their icon and names move into tooltips. */
   collapsed?: boolean;
   footer?: ReactNode;
+  /** Connected apps, listed under the labels. */
+  connectors?: ReactNode;
   unified?: boolean;
   className?: string;
 };
@@ -206,6 +208,7 @@ export function MailSidebar({
   collapsibleCategories = false,
   collapsed = false,
   footer,
+  connectors,
   unified = false,
   className,
 }: MailSidebarProps) {
@@ -573,6 +576,13 @@ export function MailSidebar({
                 </Button>
               </form>
             ) : null}
+          </>
+        ) : null}
+
+        {connectors ? (
+          <>
+            <GroupHeading collapsed={collapsed}>Connectors</GroupHeading>
+            {connectors}
           </>
         ) : null}
       </div>
