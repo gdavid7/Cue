@@ -1,3 +1,24 @@
+# Cue
+
+**Cue is an AI-native inbox for students and young professionals**, built on top of [Inbox Zero](https://github.com/elie222/inbox-zero). Inbox Zero provides the email plumbing (Gmail and Outlook, calendar, Drive, Slack, reply tracking, AI rules). Cue adds:
+
+- **Cross-app context**: when you open an email, Cue walks a knowledge graph of your email, calendar, files and connected apps and shows the 2–4 things you'd otherwise go searching for.
+- **An outcome-based home screen**: *Needs you*, *Agent working*, *Waiting on others*, and *Handled automatically*.
+- **Any connected app**: apps without a dedicated integration come in through stored per-app field mappings.
+
+The original Cue prototype (context engine, triage, demo UI, and design docs) lives in [`prototype/`](prototype/). It runs on its own with `cd prototype && npm install && npm start`.
+
+**Pulling upstream changes:**
+
+```bash
+git remote add upstream https://github.com/elie222/inbox-zero.git   # once
+git fetch upstream && git merge upstream/main
+```
+
+**License:** Cue inherits Inbox Zero's license ([LICENSE](LICENSE)): AGPL-3.0 plus additional terms that restrict commercial use. Cue is a non-commercial, open-source project.
+
+---
+
 [![](apps/web/app/opengraph-image.jpg)](https://www.getinboxzero.com)
 
 <p align="center">
