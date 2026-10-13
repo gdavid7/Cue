@@ -71,15 +71,28 @@ export function MailEngineRuntime({ children }: { children: ReactNode }) {
   return <MailEngineRuntimeInner>{children}</MailEngineRuntimeInner>;
 }
 
-export function MailEngineHost({ children }: { children: ReactNode }) {
+export function MailEngineHost({
+  children,
+  fallback,
+}: {
+  children: ReactNode;
+  fallback?: ReactNode;
+}) {
   return (
     <MailEngineRuntime>
-      <MailCoverageGate>{children}</MailCoverageGate>
+      <MailCoverageGate fallback={fallback}>{children}</MailCoverageGate>
     </MailEngineRuntime>
   );
 }
 
-export function MailCoverageGate({ children }: { children: ReactNode }) {
+export function MailCoverageGate({
+  children,
+  fallback = <LoadingContent loading>{null}</LoadingContent>,
+}: {
+  children: ReactNode;
+  /** Shown until the engine is ready, so the screen's frame needn't wait. */
+  fallback?: ReactNode;
+}) {
   const status = useContext(MailEngineRuntimeStatusContext);
   // SSR has no OPFS; checking capabilities before hydration paints the
   // storage-error shell instead of the shared loading state.
@@ -89,9 +102,7 @@ export function MailCoverageGate({ children }: { children: ReactNode }) {
     () => false,
   );
 
-  if (!isClient) {
-    return <LoadingContent loading>{null}</LoadingContent>;
-  }
+  if (!isClient) return fallback;
   const mode = selectMailEngineRuntimeMode({
     desktopIpc: hasDesktopMailEngineIpc(),
     opfs: browserMailEngineCapabilities().opfs,
@@ -103,9 +114,7 @@ export function MailCoverageGate({ children }: { children: ReactNode }) {
       </div>
     );
   }
-  if (!status.client) {
-    return <LoadingContent loading>{null}</LoadingContent>;
-  }
+  if (!status.client) return fallback;
   return children;
 }
 

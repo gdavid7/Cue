@@ -7,13 +7,13 @@ const ROW_WIDTHS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2", "w-4/5", "w-3/5"];
  * Stands in for the list while mail is still arriving, so a brand-new account
  * never reads "No emails" for an inbox that simply hasn't synced yet.
  */
-export function MailListPlaceholder({ message }: { message: string }) {
+export function MailListPlaceholder({ message }: { message?: string }) {
   return (
     <div
       className="flex min-h-0 flex-1 flex-col overflow-hidden"
       data-mail-list-placeholder
     >
-      <MailLoadingNote message={message} />
+      {message ? <MailLoadingNote message={message} /> : null}
       <div aria-hidden className="flex flex-col">
         {ROW_WIDTHS.map((width) => (
           <div
