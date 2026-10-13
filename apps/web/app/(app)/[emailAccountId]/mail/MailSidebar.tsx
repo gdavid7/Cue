@@ -20,6 +20,7 @@ import {
   FileIcon,
   FlagIcon,
   FolderIcon,
+  HomeIcon,
   InboxIcon,
   LayersIcon,
   type LucideIcon,
@@ -107,6 +108,8 @@ export type MailSidebarProps = {
   unified?: boolean;
   /** Offered above a single account's inbox when there are inboxes to combine. */
   allInboxesHref?: string;
+  /** Today's briefing, which lives outside the mail view. */
+  todayHref?: string;
   /** Each account's own labels and folders, shown in their place in All inboxes. */
   accountSections?: ReactNode;
   className?: string;
@@ -222,6 +225,7 @@ export function MailSidebar({
   connectors,
   unified = false,
   allInboxesHref,
+  todayHref,
   accountSections,
   className,
 }: MailSidebarProps) {
@@ -337,6 +341,16 @@ export function MailSidebar({
               collapsed={collapsed}
             />
           )}
+          {todayHref ? (
+            <NavRow
+              href={todayHref}
+              active={false}
+              icon={<HomeIcon className="size-4 shrink-0" />}
+              name="Today"
+              count={null}
+              collapsed={collapsed}
+            />
+          ) : null}
         </nav>
 
         {!unified && (!collapsed || showMailboxRows) && (

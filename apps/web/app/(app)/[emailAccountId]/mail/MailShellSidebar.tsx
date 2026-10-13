@@ -238,6 +238,7 @@ export const MailShellSidebar = memo(function MailShellSidebar({
               />
             ) : undefined
           }
+          todayHref={prefixPath(emailAccountId, "/home")}
           allInboxesHref={
             hasAllInboxes
               ? prefixPath(emailAccountId, "/mail?accountScope=all")
