@@ -2,7 +2,7 @@
 // Rare words that two texts share count for more than common ones.
 
 const STOP = new Set(
-  "a an the and or but if of to in on at for from by with is are was were be been it its this that these those you your we our i me my he she they them his her their as so do does did can could would should will just not no yes have has had am pm hi hello hey thanks thank please re fw fwd let know get got also us any all one".split(
+  "a an the and or but if of to in on at for from by with is are was were be been it its this that these those you your we our i me my he she they them his her their as so do does did can could would should will just not no yes have has had am pm hi hello hey thanks thank please re fw fwd let know get got also us any all one what when where who whom why how which".split(
     " ",
   ),
 );
