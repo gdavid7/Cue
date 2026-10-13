@@ -55,7 +55,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           bodyText:
             "Hi David,\n\nFollowing up on the SSO security issue from last week: can you confirm it's resolved on your side?\n\nAlso, could you send the updated enterprise pricing sheet before our renewal meeting on Friday? We're considering a 3-year term, but we need to stay within budget.\n\nThanks,\nSarah",
           unread: true,
-          labels: ["INBOX", "To Reply", "Work"],
+          labels: ["CATEGORY_PERSONAL", "INBOX", "To Reply", "Work"],
           date: ago(2),
         }),
       ]),
@@ -66,7 +66,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           subject: "SSO login failures for Acme users",
           bodyText:
             "Hi David, several of our users haven't been able to log in with SSO since Tuesday. It's blocking our support team. Can you look into it?",
-          labels: ["Work"],
+          labels: ["CATEGORY_PERSONAL", "Work"],
           date: ago(24 * 9 + 3),
         }),
         message({
@@ -87,7 +87,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           subject: "Enterprise pricing v3",
           bodyText:
             "Hi David, the latest enterprise pricing sheet (v3) is in the shared drive. Use this one for the Acme renewal. Multi-year terms get 12% off list, and we can go to 15% for a 3-year commitment.\n\nPriya",
-          labels: ["FYI"],
+          labels: ["CATEGORY_PERSONAL", "FYI"],
           date: ago(24 * 3 + 5),
         }),
       ]),
@@ -99,7 +99,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           subject: "ACME-482: SSO security patch deployed",
           bodyText:
             "Heads up: the fix for ACME-482 (SSO login failures) went to production last night. Acme users can sign in again. The security review is closed.",
-          labels: ["FYI"],
+          labels: ["CATEGORY_PERSONAL", "FYI"],
           date: ago(20),
         }),
       ]),
@@ -113,7 +113,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           bodyText:
             "Hi David,\n\nCongrats on passing the online assessment! Could you share your availability for two 45-minute technical interviews next week? Mornings Pacific time work best for the team.\n\nBest,\nJessica Park\nUniversity Recruiting, NVIDIA",
           unread: true,
-          labels: ["INBOX", "To Reply", "Recruiting"],
+          labels: ["CATEGORY_PERSONAL", "INBOX", "To Reply", "Recruiting"],
           date: ago(5),
         }),
       ]),
@@ -127,7 +127,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           subject: "Final reminder: register for the new-grad webinar",
           bodyText:
             "Meet NVIDIA's new-grad software engineering team at our virtual webinar this Wednesday at noon Pacific. Register to save your spot.",
-          labels: ["INBOX", "Recruiting"],
+          labels: ["CATEGORY_PROMOTIONS", "INBOX", "Recruiting"],
           date: ago(26),
         }),
       ]),
@@ -138,7 +138,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           subject: "Superday scheduling",
           bodyText:
             "Hi David, we'd love to bring you in for a Superday. Do October 22 or October 23 work for you?",
-          labels: ["Recruiting"],
+          labels: ["CATEGORY_PERSONAL", "Recruiting"],
           date: ago(24 * 4),
         }),
         message({
@@ -174,7 +174,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           bodyText:
             "Hey David, milestone 2 is due Friday. Can we meet Wednesday at 4pm in the CSE building to finish the evaluation section? I can make the plots if you take the write-up.",
           unread: true,
-          labels: ["INBOX", "To Reply"],
+          labels: ["CATEGORY_PERSONAL", "INBOX", "To Reply"],
           date: ago(3),
         }),
       ]),
@@ -186,7 +186,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           subject: "CSE 151B: milestone 2 due Friday at 11:59pm",
           bodyText:
             "Reminder: milestone 2 (model evaluation and write-up) is due Friday at 11:59pm. Each group submits one PDF. Office hours are Wednesday 2-4pm.",
-          labels: ["INBOX", "FYI"],
+          labels: ["CATEGORY_UPDATES", "INBOX", "FYI"],
           date: ago(24 * 2),
         }),
       ]),
@@ -200,7 +200,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           bodyText:
             "Hi honey, is your flight home Wednesday or Thursday for Thanksgiving? Dad will pick you up at SFO. Love, Mom",
           unread: true,
-          labels: ["INBOX", "To Reply"],
+          labels: ["CATEGORY_PERSONAL", "INBOX", "To Reply"],
           date: ago(6),
         }),
       ]),
@@ -211,7 +211,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           subject: "Your trip confirmation: SAN to SFO",
           bodyText:
             "Your flight is confirmed. Confirmation PX7Q2M for David Lin. Departing Wednesday, November 25: flight UA 2231, SAN 5:05 PM to SFO 6:35 PM. Returning Sunday, November 29.",
-          labels: ["Receipt"],
+          labels: ["CATEGORY_UPDATES", "Receipt"],
           date: ago(24 * 20),
         }),
       ]),
@@ -224,7 +224,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           subject: "New event: Tech & Finance Career Series",
           bodyText:
             "You might be interested in this event: Tech & Finance Career Series, next Tuesday at 6pm.",
-          labels: ["INBOX", "Notification"],
+          labels: ["CATEGORY_UPDATES", "INBOX", "Notification"],
           date: ago(23),
         }),
       ]),
@@ -235,7 +235,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           subject: "Premium Student: your first month is on us",
           bodyText:
             "Students get Premium for less. Try it free for one month, then $5.99/month. Offer ends Sunday.",
-          labels: ["INBOX", "Marketing"],
+          labels: ["CATEGORY_PROMOTIONS", "INBOX", "Marketing"],
           date: ago(22),
         }),
       ]),
@@ -246,7 +246,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           subject: "Triton Today: fall career fair recap",
           bodyText:
             "Over 3,000 students attended this year's fall career fair. Here's what employers said they're looking for.",
-          labels: ["INBOX", "Newsletter"],
+          labels: ["CATEGORY_UPDATES", "INBOX", "Newsletter"],
           date: ago(24 * 2 + 4),
         }),
       ]),
@@ -256,7 +256,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           from: person("Venmo", "venmo@venmo.com"),
           subject: "You paid Kevin Ruiz $18.50",
           bodyText: "You paid Kevin Ruiz $18.50 for pizza.",
-          labels: ["INBOX", "Receipt"],
+          labels: ["CATEGORY_UPDATES", "INBOX", "Receipt"],
           date: ago(24 * 2 + 1),
         }),
       ]),
@@ -267,7 +267,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           subject: "12 new jobs for Software Engineer, New Grad",
           bodyText:
             "New jobs matching your alert in San Diego and the Bay Area.",
-          labels: ["INBOX", "Notification"],
+          labels: ["CATEGORY_SOCIAL", "INBOX", "Notification"],
           date: ago(18),
         }),
       ]),
@@ -442,6 +442,13 @@ function labels() {
     { id: "INBOX", name: "INBOX", type: "system" as const },
     { id: "UNREAD", name: "UNREAD", type: "system" as const },
     { id: "SENT", name: "SENT", type: "system" as const },
+    // Gmail sorts every received email into one of its inbox tabs.
+    ...[
+      "CATEGORY_PERSONAL",
+      "CATEGORY_PROMOTIONS",
+      "CATEGORY_SOCIAL",
+      "CATEGORY_UPDATES",
+    ].map((id) => ({ id, name: id, type: "system" as const })),
     ...[
       "To Reply",
       "Awaiting Reply",
