@@ -386,7 +386,11 @@ function MailSearchInput({
                 <button
                   type="button"
                   onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => onAskAssistant(draft.trim())}
+                  onClick={() => {
+                    onAskAssistant(draft.trim());
+                    // A question isn't a mail search; leave the inbox showing.
+                    onSearchChange("");
+                  }}
                   className="flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-primary text-xs transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <SparklesIcon className="size-3" />

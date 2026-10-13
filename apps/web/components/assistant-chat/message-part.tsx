@@ -261,13 +261,13 @@ export function MessagePart({
   if (part.type === "tool-searchContext") {
     return renderToolStatus({
       part,
-      loadingText: "Searching your email and calendar...",
+      loadingText: "Searching your email, calendar, and apps...",
       renderSuccess: ({ toolCallId, output }) => {
         const count = getOutputField<number>(output, "count");
         return (
           <BasicToolInfo
             key={toolCallId}
-            text={`Searched email and calendar${
+            text={`Searched email, calendar, and apps${
               typeof count === "number"
                 ? ` (${count} result${count === 1 ? "" : "s"})`
                 : ""

@@ -22,6 +22,7 @@ import {
   buildCueDemoConnectorData,
   buildCueDemoInbox,
   buildCueDemoInsights,
+  cueDemoChat,
   cueDemoReplySuggestions,
   cueDemoThreadBriefs,
 } from "../__tests__/fixtures/inboxes/cue-demo-inbox";
@@ -348,6 +349,13 @@ async function main() {
           object: { summary: brief.summary, keyPoints: brief.keyPoints },
         });
       }
+      // Registered first, so the mail-specific replies below win where the
+      // answer's matching text also appears in an email.
+      llm.reply({
+        match: cueDemoChat.question,
+        toolCall: { name: "searchContext", arguments: cueDemoChat.search },
+      });
+      llm.reply({ match: cueDemoChat.answerAfter, text: cueDemoChat.answer });
       // Mail without a scripted note gets none, not the emulator's placeholder.
       llm.reply({
         match: "You add a one-line note under an email",

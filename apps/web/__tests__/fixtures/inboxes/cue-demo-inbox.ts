@@ -745,3 +745,16 @@ export function buildCueDemoInsights(
     { subject: "12 new jobs for Software Engineer, New Grad", object: empty },
   ];
 }
+
+/**
+ * The demo's one chat exchange, asked from the search box: the assistant
+ * searches mail, calendar and apps, then answers from what it found. The
+ * answer is matched on text only the search results contain.
+ */
+export const cueDemoChat = {
+  question: "When is milestone 2 due?",
+  search: { query: "milestone 2 due" },
+  answerAfter: "Each group submits one PDF",
+  answer:
+    'Milestone 2 for CSE 151B is due **Friday at 11:59pm**. Each group submits one PDF.\n\nSources: Prof. Alvarez\'s email "CSE 151B: milestone 2 due Friday at 11:59pm", and the Canvas assignment "Milestone 2: model evaluation and write-up". Kevin also asked to meet Wednesday at 4pm in the CSE building to finish it.',
+};

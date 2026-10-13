@@ -145,7 +145,14 @@ export function MailShell() {
   const { folders } = useFolders(provider);
   const { data: settings, mutate: mutateSettings } = useMailSettings();
   const { toggleSidebar, setOpen: setSidebarOpen } = useSidebar();
-  const { submitTextMessage } = useChat();
+  const { submitTextMessage, chatId, setNewChat } = useChat();
+  // A question waits for a conversation to exist; sent before one, it's dropped.
+  const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
+  useEffect(() => {
+    if (!pendingQuestion || !chatId) return;
+    setPendingQuestion(null);
+    submitTextMessage(pendingQuestion).catch(() => undefined);
+  }, [pendingQuestion, chatId, submitTextMessage]);
   const router = useRouter();
   const isPaletteOpen = useAtomValue(commandPaletteOpenAtom);
   const isHelpOpen = useAtomValue(shortcutsDialogOpenAtom);
@@ -1404,7 +1411,8 @@ export function MailShell() {
     setSidebarOpen((open) =>
       open.includes("chat-sidebar") ? open : [...open, "chat-sidebar"],
     );
-    submitTextMessage(question).catch(() => undefined);
+    if (!chatId) setNewChat();
+    setPendingQuestion(question);
   });
   const searchFolders = useMemo(
     () =>
