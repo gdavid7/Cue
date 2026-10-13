@@ -2,6 +2,7 @@
 
 import { memo, type ReactNode, useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { InboxStyleDialog } from "@/app/(app)/[emailAccountId]/mail/InboxStylePicker";
 import { getMailCategories } from "@/app/(app)/[emailAccountId]/mail/MailSidebar";
 import {
   NewSplitDialog,
@@ -30,6 +31,7 @@ import {
 } from "@/utils/email/provider-types";
 import { getActionErrorMessage } from "@/utils/error";
 import { GmailLabel } from "@/utils/gmail/label";
+import { getInboxStyleOptions } from "@/utils/split-inbox/inbox-styles";
 import type { MailSplitFilterDraft } from "@/utils/split-inbox/split-filters";
 import type {
   MailSplit,
@@ -71,7 +73,9 @@ export const MailSplitTabs = memo(function MailSplitTabs({
   const { userLabels: allLabels, mutate: mutateLabels } = useLabels();
   const { data: settings, mutate: mutateSettings } = useMailSettings();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isInboxStyleOpen, setIsInboxStyleOpen] = useState(false);
   const [editingSplitId, setEditingSplitId] = useState<string | null>(null);
+  const canMatchInbox = getInboxStyleOptions(provider).length > 1;
   const countsById = useSplitCounts({
     accountIds: countAccountIds,
     splits,
@@ -269,6 +273,20 @@ export const MailSplitTabs = memo(function MailSplitTabs({
           onEdit={setEditingSplitId}
           onDescribe={onDescribe}
           onToggleSystemType={onToggleSystemType}
+          onMatchInbox={
+            canMatchInbox
+              ? () => {
+                  setIsDialogOpen(false);
+                  setIsInboxStyleOpen(true);
+                }
+              : undefined
+          }
+        />
+      )}
+      {!isAllAccounts && canMatchInbox && (
+        <InboxStyleDialog
+          open={isInboxStyleOpen}
+          onOpenChange={setIsInboxStyleOpen}
         />
       )}
     </>

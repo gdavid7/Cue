@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { MAX_MAIL_SPLITS } from "@/utils/split-inbox/split-constants";
 import { MailLayout } from "@/generated/prisma/enums";
+import { INBOX_STYLES } from "@/utils/split-inbox/inbox-styles";
 import {
   mailSplitFiltersSchema,
   mailSplitNameSchema,
@@ -62,6 +63,8 @@ export const reorderMailSplitsBody = z.object({
       "Split IDs must be unique",
     ),
 });
+
+export const applyInboxStyleBody = z.object({ style: z.enum(INBOX_STYLES) });
 
 export const deleteMailSplitBody = z.object({ id: z.string() });
 export type DeleteMailSplitBody = z.infer<typeof deleteMailSplitBody>;

@@ -7,6 +7,7 @@ import {
   CheckIcon,
   GripVerticalIcon,
   ChevronLeftIcon,
+  InboxIcon,
   Loader2Icon,
   PlusIcon,
   SparklesIcon,
@@ -90,6 +91,8 @@ export type NewSplitDialogProps = {
     systemType: SystemType,
     enabled: boolean,
   ) => Promise<boolean>;
+  /** Offered when the provider has a familiar inbox layout to copy. */
+  onMatchInbox?: () => void;
 };
 
 const EXAMPLES = [
@@ -114,6 +117,7 @@ export function NewSplitDialog({
   onEdit,
   onDescribe,
   onToggleSystemType,
+  onMatchInbox,
 }: NewSplitDialogProps) {
   const [mode, setMode] = useState<"library" | "build" | "describe">("library");
   const [category, setCategory] = useState(YOUR_SPLITS);
@@ -417,6 +421,14 @@ export function NewSplitDialog({
                   label="Describe it"
                   onClick={() => setMode("describe")}
                 />
+                {onMatchInbox && (
+                  <RouteCard
+                    className="col-span-2"
+                    icon={<InboxIcon className="size-3.5" />}
+                    label="Match my old inbox"
+                    onClick={onMatchInbox}
+                  />
+                )}
               </div>
 
               <div className="mb-2 font-medium text-[11px] text-muted-foreground">
@@ -732,16 +744,21 @@ function RouteCard({
   icon,
   label,
   onClick,
+  className,
 }: {
   icon: React.ReactNode;
   label: string;
   onClick: () => void;
+  className?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-2.5 rounded-xl border border-border bg-card px-3 py-2.5 text-left shadow-sm hover:border-primary/25 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className={cn(
+        "flex items-center gap-2.5 rounded-xl border border-border bg-card px-3 py-2.5 text-left shadow-sm hover:border-primary/25 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        className,
+      )}
     >
       <span className="flex size-4.5 shrink-0 items-center justify-center text-primary">
         {icon}

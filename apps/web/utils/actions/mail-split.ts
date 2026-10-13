@@ -4,6 +4,7 @@ import prisma from "@/utils/prisma";
 import { actionClient } from "@/utils/actions/safe-action";
 import { SafeError } from "@/utils/error";
 import {
+  applyInboxStyleBody,
   buildMailSplitFromPromptBody,
   createMailSplitBody,
   deleteMailSplitBody,
@@ -19,6 +20,16 @@ import {
   deleteMailSplit,
   reorderMailSplits,
 } from "@/utils/split-inbox/splits.server";
+import { applyInboxStyle } from "@/utils/split-inbox/inbox-styles.server";
+
+export const applyInboxStyleAction = actionClient
+  .metadata({ name: "applyInboxStyle" })
+  .inputSchema(applyInboxStyleBody)
+  .action(
+    async ({ ctx: { emailAccountId, provider }, parsedInput: { style } }) => {
+      await applyInboxStyle({ emailAccountId, provider, style });
+    },
+  );
 
 export const createMailSplitAction = actionClient
   .metadata({ name: "createMailSplit" })
