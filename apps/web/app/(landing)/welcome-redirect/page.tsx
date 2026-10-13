@@ -25,7 +25,7 @@ export default async function WelcomeRedirectPage(props: {
   if (searchParams.force) redirect("/onboarding");
   if (user.completedOnboardingAt) {
     await redirectToEmailAccountPath(
-      searchParams.mode === "mail" ? "/mail" : "/automation",
+      searchParams.mode === "mail" ? "/mail" : "/home",
     );
   }
 

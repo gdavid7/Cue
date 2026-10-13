@@ -87,7 +87,7 @@ function AccountItem({
   onAccountDeleted: () => void;
 }) {
   return (
-    <Link href={prefixPath(emailAccount.id, "/automation")} className="block">
+    <Link href={prefixPath(emailAccount.id, "/home")} className="block">
       <Card className="cursor-pointer transition-colors hover:bg-slate-50 dark:hover:bg-slate-900">
         <AccountHeader
           emailAccount={emailAccount}

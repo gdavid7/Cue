@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { useRouter } from "next/navigation";
 import {
+  HomeIcon,
   SparklesIcon,
   BarChartBigIcon,
   SettingsIcon,
@@ -68,6 +69,12 @@ export function useCommandPaletteCommands({
         href: prefixPath(emailAccountId, "/mail"),
         icon: InboxIcon,
         keywords: ["mail", "inbox", "email"],
+      },
+      {
+        name: "Home",
+        href: prefixPath(emailAccountId, "/home"),
+        icon: HomeIcon,
+        keywords: ["home", "today", "dashboard"],
       },
       {
         name: "Assistant",

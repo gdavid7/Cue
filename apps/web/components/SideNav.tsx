@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useQueryState } from "nuqs";
 import { getEmailTerminology } from "@/utils/terminology";
 import {
+  HomeIcon,
   AlertCircleIcon,
   ArchiveIcon,
   ArrowLeftIcon,
@@ -97,6 +98,11 @@ export const useNavigation = () => {
 
   const manageItems: NavItem[] = useMemo(
     () => [
+      {
+        name: "Home",
+        href: prefixPath(currentEmailAccountId, "/home"),
+        icon: HomeIcon,
+      },
       ...(isDesktopApp
         ? [
             {
@@ -205,7 +211,7 @@ export const useNavigation = () => {
   );
 
   return {
-    homeHref: prefixPath(currentEmailAccountId, "/automation"),
+    homeHref: prefixPath(currentEmailAccountId, "/home"),
     manageItems,
     cleanupItems,
     moreItems,
@@ -285,12 +291,12 @@ export function SideNav({
         ? [
             {
               name: "Back",
-              href: "/automation",
+              href: navigation.homeHref,
               icon: ArrowLeftIcon,
             },
           ]
         : [],
-    [showMailNav],
+    [showMailNav, navigation.homeHref],
   );
 
   const { state } = useSidebar();
