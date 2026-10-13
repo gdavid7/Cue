@@ -31,7 +31,10 @@ import { MailSplitTabs } from "@/app/(app)/[emailAccountId]/mail/MailSplitTabs";
 import { SelectAllCheckbox } from "@/app/(app)/[emailAccountId]/mail/SelectAllCheckbox";
 import { MailReaderPane } from "@/app/(app)/[emailAccountId]/mail/MailReaderPane";
 import { MailTitlebarNav } from "@/app/(app)/[emailAccountId]/mail/MailTitlebarNav";
-import { SearchAnswerCard } from "@/app/(app)/[emailAccountId]/mail/SearchAnswerCard";
+import {
+  SearchAnswerCard,
+  useSearchAnswer,
+} from "@/app/(app)/[emailAccountId]/mail/SearchAnswerCard";
 import { ScheduledEmailList } from "@/app/(app)/[emailAccountId]/mail/ScheduledEmailList";
 import { SnoozedThreadList } from "@/app/(app)/[emailAccountId]/mail/SnoozedThreadList";
 import type { MailboxItem } from "@/app/(app)/[emailAccountId]/mail/MailboxItemContextMenu";
@@ -471,10 +474,13 @@ export function MailShell() {
     previousSearchFocus.current = next;
     if (next.index !== focusedIndex) setFocusedIndex(next.index);
   }, [orderedIds, focusedIndex, searchQuery, searchViewIdentity]);
+  const { data: searchAnswer } = useSearchAnswer(emailAccountId, searchParam);
   let emptySearchMessage: string | undefined;
   if (searchQuery && hasProviderResponse && !threads.length) {
     emptySearchMessage = "No emails in this view";
   }
+  // The answer above already leads to the mail; "no emails" would contradict it.
+  if (searchAnswer && searchParam) emptySearchMessage = "";
 
   const selection = useThreadSelection(orderedIds);
 

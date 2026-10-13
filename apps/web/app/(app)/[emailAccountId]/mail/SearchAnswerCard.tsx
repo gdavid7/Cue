@@ -25,15 +25,7 @@ export function SearchAnswerCard({
   query: string;
   onContinueInChat: (question: string) => void;
 }) {
-  const { data, isLoading, error } = useSWR<GetSearchAnswerResponse>(
-    SEARCH_ANSWERS && query
-      ? getAccountScopedKey(
-          `/api/user/search-answer?q=${encodeURIComponent(query)}`,
-          emailAccountId,
-        )
-      : null,
-    { revalidateOnFocus: false },
-  );
+  const { data, isLoading, error } = useSearchAnswer(emailAccountId, query);
 
   if (isLoading) {
     return (
@@ -89,5 +81,18 @@ export function SearchAnswerCard({
         Continue in chat →
       </Button>
     </section>
+  );
+}
+
+/** The answer to a committed search, shared by the card and the list under it. */
+export function useSearchAnswer(emailAccountId: string, query: string | null) {
+  return useSWR<GetSearchAnswerResponse>(
+    SEARCH_ANSWERS && query
+      ? getAccountScopedKey(
+          `/api/user/search-answer?q=${encodeURIComponent(query)}`,
+          emailAccountId,
+        )
+      : null,
+    { revalidateOnFocus: false },
   );
 }
