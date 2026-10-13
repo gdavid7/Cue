@@ -1,13 +1,18 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
+import type { MailClient } from "@inboxzero/mail-core/engine";
 import type { MailPredicate } from "@inboxzero/mail-core/queries";
 import useSWR from "swr";
 import { useSWRConfig } from "swr";
-import { useEngineMailThreads } from "@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads";
+import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
+import {
+  useEngineMailClient,
+  useEngineMailThreads,
+} from "@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads";
 import type { LabelsResponse } from "@/app/api/labels/route";
 import type { EmailLabels } from "@/providers/email-label-types";
-import type { CombinedListThread } from "@/utils/threads/load-combined";
+import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 
 const EMPTY_LABELS_BY_ACCOUNT: Record<string, EmailLabels> = {};
@@ -21,7 +26,7 @@ export function useCombinedMailThreads({
   labelNames,
   searchQuery,
 }: {
-  accounts: CombinedListThread["account"][];
+  accounts: AllInboxesAccount[];
   emailAccountId: string;
   enabled: boolean;
   isUnread: boolean;
@@ -64,10 +69,53 @@ export function useCombinedMailThreads({
     predicate: searchQuery ? undefined : predicate,
     enabled,
   });
+  const client = useEngineMailClient();
+  const { firstSyncAccountIds, failedAccountIds } = state;
+
+  // The local engine only syncs accounts it has been told about, and only the
+  // routed account is registered on startup. Without this, an account never
+  // opened alone in this browser contributes nothing to All inboxes.
+  useEffect(() => {
+    if (!client || !enabled) return;
+    const unsynced = firstSyncAccountIds.flatMap((accountId) => {
+      const account = accountsById[accountId];
+      return account ? [account] : [];
+    });
+    if (unsynced.length) startFirstSync(client, unsynced);
+  }, [accountsById, client, enabled, firstSyncAccountIds]);
+
+  const firstSyncAccounts = useMemo(
+    () =>
+      firstSyncAccountIds.flatMap((accountId) => {
+        const account = accountsById[accountId];
+        return account && !failedAccountIds.includes(accountId)
+          ? [account]
+          : [];
+      }),
+    [accountsById, failedAccountIds, firstSyncAccountIds],
+  );
+
   return {
     ...state,
+    /** Included accounts whose first sync in this browser is still running. */
+    firstSyncAccounts,
     labelsByAccount,
   };
+}
+
+function startFirstSync(client: MailClient, accounts: AllInboxesAccount[]) {
+  Promise.all(
+    accounts.map((account) =>
+      client.ensureAccount?.({
+        accountId: account.id,
+        provider: isMicrosoftProvider(account.provider)
+          ? "microsoft"
+          : "google",
+      }),
+    ),
+  )
+    .then(() => client.requestSync(accounts.map((account) => account.id)))
+    .catch(() => undefined);
 }
 
 function useLabelsByAccount(accountIds: string[]): Record<string, EmailLabels> {

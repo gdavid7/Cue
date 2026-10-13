@@ -28,7 +28,7 @@ import { browserStoragePressure } from "@/utils/mail-engine/storage-pressure";
 
 export { browserMailEngineCapabilities };
 
-export type BrowserMailEngine = MailEngine & {
+export type BrowserMailEngine = Omit<MailEngine, "ensureAccount"> & {
   ensureAccount(input: {
     accountId: string;
     provider: "google" | "microsoft";

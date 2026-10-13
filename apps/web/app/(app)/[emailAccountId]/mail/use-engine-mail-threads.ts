@@ -14,9 +14,13 @@ import type { EmailLabels } from "@/providers/email-label-types";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 import { conversationSummaryToListThread } from "@/utils/mail-engine/list-thread";
 import { threadsQueryToConversationQuery } from "@/utils/mail-engine/threads-query";
-import { isMetadataCoverageComplete } from "@/utils/mail-engine/coverage";
+import {
+  getFirstSyncAccountIds,
+  isMetadataCoverageComplete,
+} from "@/utils/mail-engine/coverage";
 
 const EMPTY_THREADS: ListThread[] = [];
+const NO_ACCOUNT_IDS: string[] = [];
 const NO_LABELS_BY_ACCOUNT: Record<string, EmailLabels> = {};
 
 export function useEngineMailThreads({
@@ -75,6 +79,19 @@ export function useEngineMailThreads({
     };
   }, [client, enabled, mailbox.data?.connection, resolvedAccountIds]);
 
+  const coverage = mailbox.data?.coverage;
+  // Every pushed snapshot carries fresh coverage; keyed so consumers only see
+  // a new list when the set of unsynced accounts actually changes.
+  const firstSyncAccountKey =
+    client && enabled && coverage
+      ? getFirstSyncAccountIds(resolvedAccountIds, coverage).join("\n")
+      : "";
+  const firstSyncAccountIds = useMemo(
+    () =>
+      firstSyncAccountKey ? firstSyncAccountKey.split("\n") : NO_ACCOUNT_IDS,
+    [firstSyncAccountKey],
+  );
+
   const previousThreads = useRef<PreviousThreads>({
     rows: new Map(),
     threads: EMPTY_THREADS,
@@ -107,6 +124,8 @@ export function useEngineMailThreads({
       !mailbox.data?.coverage.some(
         (coverage) => coverage.lastCompletedSyncAtMs != null,
       ),
+    /** Included accounts with no finished sync yet, once the mailbox has loaded. */
+    firstSyncAccountIds,
     failedAccountIds,
     labelsByAccount: NO_LABELS_BY_ACCOUNT,
     refetch: async () => {

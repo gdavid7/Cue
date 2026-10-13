@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { MailClient } from "@inboxzero/mail-core/engine";
+import type { Coverage } from "@inboxzero/mail-core/queries";
 import {
+  getFirstSyncAccountIds,
   isMetadataCoverageComplete,
   waitForMetadataCoverage,
 } from "./coverage";
@@ -32,6 +34,40 @@ describe("isMetadataCoverageComplete", () => {
         },
       ]),
     ).toBe(true);
+  });
+});
+
+describe("getFirstSyncAccountIds", () => {
+  it("lists accounts that have never finished a sync in this browser", () => {
+    expect(
+      getFirstSyncAccountIds(
+        ["gmail", "outlook", "work"],
+        [
+          coverage({ accountId: "gmail", lastCompletedSyncAtMs: 10 }),
+          coverage({ accountId: "outlook", lastCompletedSyncAtMs: null }),
+        ],
+      ),
+    ).toEqual(["outlook", "work"]);
+  });
+
+  it("treats an account as synced once any of its scopes finished a sync", () => {
+    expect(
+      getFirstSyncAccountIds(
+        ["gmail"],
+        [
+          coverage({
+            accountId: "gmail",
+            scopeId: "primary",
+            lastCompletedSyncAtMs: null,
+          }),
+          coverage({
+            accountId: "gmail",
+            scopeId: "archive",
+            lastCompletedSyncAtMs: 10,
+          }),
+        ],
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -83,3 +119,16 @@ describe("waitForMetadataCoverage", () => {
     await expect(waiting).resolves.toBe(false);
   });
 });
+
+function coverage(
+  overrides: Partial<Coverage> & { accountId: string },
+): Coverage {
+  return {
+    scopeId: "primary",
+    metadata: "partial",
+    content: "not_requested",
+    indexedContent: "not_requested",
+    lastCompletedSyncAtMs: null,
+    ...overrides,
+  };
+}

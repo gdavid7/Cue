@@ -130,6 +130,14 @@ export type MailClient = {
     | { status: "too_late" | "not_found" | "unavailable" }
   >;
   requestSync(accountIds: string[]): Promise<WorkAdmission>;
+  /**
+   * Registers an account with the local store so its sync lane starts. Hosts
+   * that register accounts themselves (desktop, on requestSync) omit it.
+   */
+  ensureAccount?(input: {
+    accountId: string;
+    provider: "google" | "microsoft";
+  }): Promise<void>;
   ensureMessageContent(key: MessageKey): Promise<WorkAdmission>;
   getDiagnostics(accountId: string): Promise<MailDiagnostics>;
   purgeAccount(accountId: string): Promise<LocalRevision>;
