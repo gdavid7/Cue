@@ -1,0 +1,39 @@
+diff --git a/dist/dist-FKBPSE2E.js b/dist/dist-FKBPSE2E.js
+index 0cf536b906f2aa9107e78b84112329f4684937bf..1a23c0f6ac1e8e33a7fc05d847325a16ee499b64 100644
+--- a/dist/dist-FKBPSE2E.js
++++ b/dist/dist-FKBPSE2E.js
+@@ -721,9 +721,31 @@ function untrashLabelIds(labelIds) {
+ }
+ function buildMessageQueryMatcher(gs, userEmail, query) {
+   const terms = query.match(/"[^"]+"|\S+/g) ?? [];
+-  const predicates = terms.flatMap((term) => buildQueryPredicates(gs, userEmail, term));
+-  if (!predicates.length) return () => true;
+-  return (message) => predicates.every((predicate) => predicate(message));
++  // Gmail semantics: OR binds tighter than the implicit AND between terms, so
++  // "a b OR c" means a AND (b OR c). Each clause is a list of alternatives.
++  const clauses = [];
++  let joinNext = false;
++  // Whether the previous term became a clause; an OR after a term this
++  // emulator can't evaluate must not attach to an earlier, unrelated clause.
++  let previousWasClause = false;
++  for (const term of terms) {
++    if (term === "OR") {
++      joinNext = previousWasClause;
++      continue;
++    }
++    const predicates = buildQueryPredicates(gs, userEmail, term);
++    if (!predicates.length) {
++      previousWasClause = false;
++      joinNext = false;
++      continue;
++    }
++    if (joinNext) clauses[clauses.length - 1].push(predicates);
++    else clauses.push([predicates]);
++    joinNext = false;
++    previousWasClause = true;
++  }
++  if (!clauses.length) return () => true;
++  return (message) => clauses.every((alternatives) => alternatives.some((predicates) => predicates.every((predicate) => predicate(message))));
+ }
+ function buildRawMessage(message) {
+   const headers = [

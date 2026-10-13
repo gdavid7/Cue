@@ -5,6 +5,7 @@ import type {
   DemoInboxFixture,
   DemoInboxMessage,
 } from "../__tests__/fixtures/inboxes/types";
+import type { CueDemoCalendarEvent } from "../__tests__/fixtures/inboxes/cue-demo-inbox";
 import { saasFounderMixedInbox } from "../__tests__/fixtures/inboxes/demo-inboxes";
 
 const DEFAULT_BASE_URL = "http://localhost:3000";
@@ -16,12 +17,31 @@ const TEAMMATE_GOOGLE_EMAIL = "teammate@example.com";
 const TEAMMATE_MICROSOFT_EMAIL = "teammate@outlook.test";
 const TEAMMATE_NAME = "Teammate";
 
-export function buildEmulateSeed(baseUrl = DEFAULT_BASE_URL) {
+export type EmulateSeedOptions = {
+  /** The inbox to seed. Defaults to the SaaS founder demo the tests expect. */
+  fixture?: DemoInboxFixture;
+  /** Display name of the signed-in Google user. */
+  googleName?: string;
+  calendarEvents?: CueDemoCalendarEvent[];
+  /** Fixed access tokens the emulator accepts, keyed by token. */
+  tokens?: Record<string, { login: string; scopes: string[] }>;
+};
+
+export function buildEmulateSeed(
+  baseUrl = DEFAULT_BASE_URL,
+  {
+    fixture = saasFounderMixedInbox,
+    googleName = GOOGLE_NAME,
+    calendarEvents,
+    tokens,
+  }: EmulateSeedOptions = {},
+) {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/u, "");
 
   return {
+    ...(tokens ? { tokens } : {}),
     google: {
-      users: [{ email: GOOGLE_EMAIL, name: GOOGLE_NAME }],
+      users: [{ email: GOOGLE_EMAIL, name: googleName }],
       oauth_clients: [
         {
           client_id: "emulate-google-client.apps.googleusercontent.com",
@@ -34,10 +54,10 @@ export function buildEmulateSeed(baseUrl = DEFAULT_BASE_URL) {
           ],
         },
       ],
-      labels: toSeedLabels(saasFounderMixedInbox, GOOGLE_EMAIL),
-      messages: toSeedMessages(saasFounderMixedInbox, {
+      labels: toSeedLabels(fixture, GOOGLE_EMAIL),
+      messages: toSeedMessages(fixture, {
         email: GOOGLE_EMAIL,
-        name: GOOGLE_NAME,
+        name: googleName,
       }),
       calendars: [
         {
@@ -49,6 +69,7 @@ export function buildEmulateSeed(baseUrl = DEFAULT_BASE_URL) {
           time_zone: "UTC",
         },
       ],
+      ...(calendarEvents ? { calendar_events: calendarEvents } : {}),
       drive_items: [
         {
           id: "drv_root_child",
@@ -102,11 +123,15 @@ export async function writeEmulateSeed(
   outputPath: string,
   baseUrl?: string,
   teammates = false,
+  options?: EmulateSeedOptions,
 ) {
+  if (teammates && options) {
+    throw new Error("Seed options are not supported with teammates");
+  }
   await mkdir(dirname(outputPath), { recursive: true });
   const seed = teammates
     ? buildEmulateSeedWithTeammates(baseUrl)
-    : buildEmulateSeed(baseUrl);
+    : buildEmulateSeed(baseUrl, options);
   await writeFile(outputPath, `${JSON.stringify(seed, null, 2)}\n`);
 }
 

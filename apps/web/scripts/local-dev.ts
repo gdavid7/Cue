@@ -16,7 +16,13 @@ import { Client } from "pg";
 import Redis from "ioredis";
 import { createLlmEmulator } from "../__tests__/emulators/llm";
 import { createStripeEmulator } from "../__tests__/emulators/stripe";
-import { writeEmulateSeed } from "./emulate-seed";
+import {
+  buildCueDemoCalendarEvents,
+  buildCueDemoInbox,
+  cueDemoThreadBriefs,
+} from "../__tests__/fixtures/inboxes/cue-demo-inbox";
+import { escapeHtml } from "../utils/string";
+import { type EmulateSeedOptions, writeEmulateSeed } from "./emulate-seed";
 import { createLocalEnvironment } from "./local-dev/environment";
 import { acquireLocalLock } from "./local-dev/lock";
 import { createProcessManager } from "./local-dev/processes";
@@ -28,6 +34,14 @@ const DATA_DIR = resolve(ROOT_DIR, ".context/local-dev");
 const PNPM = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const exec = promisify(execFile);
 const allocatedPorts = new Set<number>();
+
+// Cue's demo inbox (David Lin) is the default. Set CUE_DEMO_INBOX=inbox-zero
+// for Inbox Zero's original SaaS-founder demo.
+const USE_CUE_DEMO = process.env.CUE_DEMO_INBOX !== "inbox-zero";
+const DEMO_GOOGLE_EMAIL = "developer@example.com";
+// A fixed emulator token, so the demo calendar stays connected across restarts
+// (the emulator forgets OAuth tokens it issued when it stops).
+const DEMO_CALENDAR_TOKEN = "cue-local-dev-calendar-token";
 
 main().catch((error) => {
   console.error(
@@ -252,6 +266,7 @@ async function main() {
       "deploy",
     ]);
     await configureDemoOnboarding(env.DATABASE_URL);
+    await configureDemoCalendar(env.DATABASE_URL, USE_CUE_DEMO);
 
     const redis = new Redis(env.REDIS_URL, {
       lazyConnect: true,
@@ -276,7 +291,12 @@ async function main() {
     );
 
     const seedPath = join(DATA_DIR, "seed.json");
-    await writeEmulateSeed(seedPath, env.NEXT_PUBLIC_BASE_URL);
+    await writeEmulateSeed(
+      seedPath,
+      env.NEXT_PUBLIC_BASE_URL,
+      false,
+      USE_CUE_DEMO ? cueDemoSeedOptions() : undefined,
+    );
     for (const [service, port] of [
       ["google", googlePort],
       ["microsoft", microsoftPort],
@@ -298,6 +318,15 @@ async function main() {
     }
     const llm = await createLlmEmulator({ port: llmPort });
     cleanup.push({ close: llm.close });
+    if (USE_CUE_DEMO) {
+      for (const brief of cueDemoThreadBriefs) {
+        // Matches the escaped subject the brief prompt sends (see stringifyEmail).
+        llm.reply({
+          match: `<subject>${escapeHtml(brief.subject)}</subject>`,
+          object: { summary: brief.summary, keyPoints: brief.keyPoints },
+        });
+      }
+    }
     const stripe = await createStripeEmulator({
       port: stripePort,
       secretKey: env.STRIPE_SECRET_KEY,
@@ -393,6 +422,105 @@ async function configureDemoOnboarding(databaseUrl: string) {
       FOR EACH ROW WHEN (NEW.email IN ('developer@example.com', 'developer@outlook.test'))
       EXECUTE FUNCTION local_dev_complete_onboarding();
     `);
+  } finally {
+    await client.end();
+  }
+}
+
+function cueDemoSeedOptions(): EmulateSeedOptions {
+  const now = new Date();
+  return {
+    fixture: buildCueDemoInbox(now),
+    googleName: "David Lin",
+    calendarEvents: buildCueDemoCalendarEvents(DEMO_GOOGLE_EMAIL, now),
+    tokens: { [DEMO_CALENDAR_TOKEN]: { login: DEMO_GOOGLE_EMAIL, scopes: [] } },
+  };
+}
+
+/**
+ * Connects the demo account's Google Calendar as soon as the account exists,
+ * and for an account that already does. It uses the fixed emulator token with
+ * a far-future expiry, so the app never tries to refresh it. When the Cue demo
+ * is off, removes the trigger and the connection, whose token would be dead.
+ */
+async function configureDemoCalendar(databaseUrl: string, enabled: boolean) {
+  const client = new Client({
+    connectionString: databaseUrl,
+    connectionTimeoutMillis: 2000,
+    query_timeout: 5000,
+  });
+  await client.connect();
+  try {
+    if (!enabled) {
+      await client.query(`
+        DROP TRIGGER IF EXISTS cue_local_dev_calendar ON "EmailAccount";
+        DROP FUNCTION IF EXISTS cue_local_dev_connect_calendar_trigger();
+        DROP FUNCTION IF EXISTS cue_local_dev_connect_calendar(text, text, text);
+        DELETE FROM "CalendarConnection" WHERE id LIKE '%-cue-demo-calendar';
+      `);
+      return;
+    }
+
+    await client.query(`
+      CREATE OR REPLACE FUNCTION cue_local_dev_connect_calendar(account_id text, account_email text, token text)
+      RETURNS void AS $$
+      BEGIN
+        INSERT INTO "CalendarConnection" (
+          id, "createdAt", "updatedAt", provider, email,
+          "accessToken", "refreshToken", "expiresAt", "isConnected", "emailAccountId"
+        ) VALUES (
+          account_id || '-cue-demo-calendar', NOW(), NOW(), 'google', account_email,
+          token, 'cue-local-dev-unused-refresh-token', '2100-01-01', true, account_id
+        )
+        ON CONFLICT ("emailAccountId", provider, email) DO UPDATE SET
+          "accessToken" = EXCLUDED."accessToken",
+          "expiresAt" = EXCLUDED."expiresAt",
+          "isConnected" = true,
+          "updatedAt" = NOW();
+        INSERT INTO "Calendar" (
+          id, "createdAt", "updatedAt", "calendarId", name, "primary", "isEnabled", timezone, "connectionId"
+        )
+        SELECT account_id || '-cue-demo-primary-calendar', NOW(), NOW(), 'primary', account_email, true, true,
+          'America/Los_Angeles', c.id
+        FROM "CalendarConnection" c
+        WHERE c."emailAccountId" = account_id AND c.provider = 'google' AND c.email = account_email
+        ON CONFLICT ("connectionId", "calendarId") DO NOTHING;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      -- Runs inside the sign-in transaction, so a schema change that breaks
+      -- these inserts must not break signing in.
+      CREATE OR REPLACE FUNCTION cue_local_dev_connect_calendar_trigger() RETURNS trigger AS $$
+      BEGIN
+        PERFORM cue_local_dev_connect_calendar(NEW.id, NEW.email, TG_ARGV[0]);
+        RETURN NEW;
+      EXCEPTION WHEN OTHERS THEN
+        RAISE WARNING 'Cue demo calendar not connected: %', SQLERRM;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `);
+    // Trigger definitions can't take bind parameters; both values are
+    // constants defined in this file.
+    await client.query(`
+      DROP TRIGGER IF EXISTS cue_local_dev_calendar ON "EmailAccount";
+      CREATE TRIGGER cue_local_dev_calendar AFTER INSERT ON "EmailAccount"
+      FOR EACH ROW WHEN (NEW.email = '${DEMO_GOOGLE_EMAIL}')
+      EXECUTE FUNCTION cue_local_dev_connect_calendar_trigger('${DEMO_CALENDAR_TOKEN}');
+    `);
+    await client.query(
+      `SELECT cue_local_dev_connect_calendar(id, email, $2) FROM "EmailAccount" WHERE email = $1`,
+      [DEMO_GOOGLE_EMAIL, DEMO_CALENDAR_TOKEN],
+    );
+    // A database from before the Cue demo still calls the demo user "Developer".
+    await client.query(
+      `UPDATE "User" SET name = 'David Lin' WHERE email = $1 AND name = 'Developer'`,
+      [DEMO_GOOGLE_EMAIL],
+    );
+    await client.query(
+      `UPDATE "EmailAccount" SET name = 'David Lin' WHERE email = $1 AND name = 'Developer'`,
+      [DEMO_GOOGLE_EMAIL],
+    );
   } finally {
     await client.end();
   }
