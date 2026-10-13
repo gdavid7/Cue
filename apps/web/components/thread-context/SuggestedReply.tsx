@@ -229,7 +229,11 @@ export function CheckedAgainst({
 
 /** Says, without alarm, that Cue left a reply to the user and why. */
 export function abstentionLine(missing: string) {
-  const what = missing.trim().replace(/[.!?]+$/, "");
+  // Its first sentence names what's missing; the rest explains, too long here.
+  const what = (missing.trim().split(/(?<=[.!?])\s/)[0] ?? "").replace(
+    /[.!?]+$/,
+    "",
+  );
   if (!what) return "Cue couldn't confirm the facts, so it left this for you.";
   return `Cue couldn't confirm ${what.charAt(0).toLowerCase()}${what.slice(1)}, so it left this for you.`;
 }
