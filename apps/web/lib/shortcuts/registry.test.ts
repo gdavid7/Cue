@@ -69,7 +69,7 @@ describe("shortcut registry", () => {
     expect(formatShortcutKeys(getShortcut("remindMe"))).toBe("⌘⇧H");
     expect(formatShortcutKeys(getShortcut("attachFiles"))).toBe("⌘⇧U");
     expect(formatShortcutKeys(getShortcut("discardDraft"))).toBe("⌘⇧,");
-    expect(formatShortcutKeys(getShortcut("backToApp"))).toBe("G A");
+    expect(formatShortcutKeys(getShortcut("goToAllMail"))).toBe("G A");
     expect(formatShortcutKeys(getShortcut("delete"))).toBe("#");
     expect(formatShortcutKeys(getShortcut("markUnread"))).toBe("U");
     expect(formatShortcutKeys(getShortcut("move"))).toBe("V");
@@ -102,7 +102,7 @@ describe("shortcut registry", () => {
       "enter",
     ]);
     expect(getShortcutKeyLabels("sendLater")).toEqual(["⌘", "shift", "L"]);
-    expect(getShortcutKeyLabels("backToApp")).toEqual(["G", "A"]);
+    expect(getShortcutKeyLabels("goToAllMail")).toEqual(["G", "A"]);
   });
 });
 
@@ -128,16 +128,18 @@ describe("findShortcutConflicts", () => {
 
   it("flags a plain binding that swallows a sequence prefix", () => {
     const conflicts = findShortcutConflicts([
-      buildEntry({ id: "backToApp", keys: ["g>a"] }),
-      buildEntry({ id: "goToInbox", keys: ["g"] }),
+      buildEntry({ id: "goToAllMail", keys: ["g>a"] }),
+      buildEntry({ id: "openGoMenu", keys: ["g"] }),
     ]);
 
-    expect(conflicts).toEqual([{ key: "g", ids: ["backToApp", "goToInbox"] }]);
+    expect(conflicts).toEqual([
+      { key: "g", ids: ["goToAllMail", "openGoMenu"] },
+    ]);
   });
 
   it("lets two sequences share a prefix", () => {
     const conflicts = findShortcutConflicts([
-      buildEntry({ id: "backToApp", keys: ["g>a"] }),
+      buildEntry({ id: "goToAllMail", keys: ["g>a"] }),
       buildEntry({ id: "goToInbox", keys: ["g>i"] }),
     ]);
 

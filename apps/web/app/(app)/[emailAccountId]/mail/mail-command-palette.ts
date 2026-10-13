@@ -136,6 +136,7 @@ export function buildMailCommandPalette({
       id: "mail-mark-read",
       label: targetCount === 1 ? "Mark as read" : `Mark ${targetCount} as read`,
       icon: MailOpenIcon,
+      shortcut: getShortcutHint("markRead"),
       section: "actions",
       priority: 1,
       keywords: ["read", "seen", "open"],

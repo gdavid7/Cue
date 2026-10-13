@@ -151,7 +151,7 @@ function renderActionTooltip(
     return <Tooltip content="Not spam">{children}</Tooltip>;
   }
   if (button.action === "mark_read") {
-    return <Tooltip content="Mark as read">{children}</Tooltip>;
+    return <Tooltip shortcuts={["markRead"]}>{children}</Tooltip>;
   }
   return children;
 }

@@ -15,6 +15,7 @@ import {
   useState,
 } from "react";
 import { parseAsString, useQueryState, useQueryStates } from "nuqs";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ListToolbar } from "@/app/(app)/[emailAccountId]/mail/ListToolbar";
 import { getMailSearchFolders } from "@/app/(app)/[emailAccountId]/mail/outlook-folder-list";
@@ -138,6 +139,7 @@ export function MailShell() {
   const { folders } = useFolders(provider);
   const { data: settings, mutate: mutateSettings } = useMailSettings();
   const { toggleSidebar } = useSidebar();
+  const router = useRouter();
   const isPaletteOpen = useAtomValue(commandPaletteOpenAtom);
   const isHelpOpen = useAtomValue(shortcutsDialogOpenAtom);
   const setIsHelpOpen = useSetAtom(shortcutsDialogOpenAtom);
@@ -1192,6 +1194,13 @@ export function MailShell() {
       delete: trashTargets,
       reply: () => openReply(false),
       replyAll: () => openReply(true),
+      markRead: markReadTargets,
+      // The combined inbox has no per-account mailboxes to go to.
+      goToInbox: isAllAccounts ? undefined : () => goToMailbox("inbox"),
+      goToStarred: isAllAccounts ? undefined : () => goToMailbox("starred"),
+      goToSent: isAllAccounts ? undefined : () => goToMailbox("sent"),
+      goToDrafts: isAllAccounts ? undefined : () => goToMailbox("draft"),
+      goToAllMail: isAllAccounts ? undefined : () => goToMailbox("all"),
       forward: singleActionTarget ? requestForwardTarget : undefined,
       moreActions: openThreadId
         ? () => setIsMenuOpen((open) => !open)
@@ -1224,6 +1233,13 @@ export function MailShell() {
           },
     };
   })();
+
+  // Same destination as the sidebar row, so the view starts fresh.
+  function goToMailbox(type: string) {
+    router.push(
+      prefixPath(emailAccountId, getMailNavPath({ kind: "type", type })),
+    );
+  }
 
   function openReply(toEveryone: boolean) {
     setForwardToMessageId(undefined);
