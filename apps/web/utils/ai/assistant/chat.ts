@@ -37,7 +37,8 @@ import {
 } from "./chat-inbox-tools";
 import { saveMemoryTool, searchMemoriesTool } from "./chat-memory-tools";
 import { getCalendarEventsTool } from "./chat-calendar-tools";
-import { searchContextTool } from "./chat-context-tools";
+import { searchContextTool, searchWebTool } from "./chat-context-tools";
+import { isExaSearchEnabled } from "@/utils/exa/search";
 import { hasUsableCalendarConnection } from "@/utils/calendar/event-provider";
 import type { MessagingPlatform } from "@/utils/messaging/platforms";
 import type { SerializedMatchReason } from "@/utils/ai/choose-rule/types";
@@ -54,7 +55,7 @@ import { trimStaleToolResults } from "@/utils/ai/assistant/trim-stale-tool-resul
 
 export const maxDuration = 800;
 // Increment when chat prompts, tools, or routing change so run quality remains attributable.
-export const ASSISTANT_CHAT_PIPELINE_VERSION = 16;
+export const ASSISTANT_CHAT_PIPELINE_VERSION = 17;
 const ASSISTANT_CHAT_TOOL_BUDGET_MS = {
   web: 720_000,
   messaging: 60_000,
@@ -292,6 +293,7 @@ export async function aiProcessAssistantChat({
     manageSenderCategory: manageSenderCategoryTool(toolOptions),
     searchInbox: searchInboxTool(toolOptions),
     searchContext: searchContextTool(toolOptions),
+    ...(isExaSearchEnabled() ? { searchWeb: searchWebTool(toolOptions) } : {}),
     readEmail: readEmailTool(toolOptions),
     manageInbox: manageInboxTool(toolOptions),
     getUserRulesAndSettings: getUserRulesAndSettingsTool(toolOptions),
