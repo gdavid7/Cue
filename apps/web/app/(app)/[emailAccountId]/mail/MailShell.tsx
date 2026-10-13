@@ -632,6 +632,18 @@ export function MailShell() {
     (threadKeys: string[]) => setReadState(threadKeys, true, false),
     [setReadState],
   );
+  const rowActions = useMemo(
+    () => ({
+      archive: (key: string) => archive([key]),
+      moveToInbox: (key: string) => moveToInbox([key]),
+      trash: (key: string) => trash([key]),
+      setRead: (key: string, read: boolean) => setReadState([key], read),
+      setStarred: (key: string, starred: boolean) =>
+        setStarredState([key], starred),
+      snooze: (key: string, until: Date) => snooze([key], until),
+    }),
+    [archive, moveToInbox, trash, setReadState, setStarredState, snooze],
+  );
   const composeTargetMessageId = getComposeTargetMessageId(openMessages);
   const requestReaderReply = useCallback(() => {
     const messageId = composeTargetMessageId;
@@ -1514,6 +1526,7 @@ export function MailShell() {
                       showLoadMore={hasMore}
                       isLoadingMore={isLoadingMore}
                       onLoadMore={loadMore}
+                      rowActions={rowActions}
                       showSentOpenStatus={
                         scopeType === "sent" && !isAllAccounts
                       }

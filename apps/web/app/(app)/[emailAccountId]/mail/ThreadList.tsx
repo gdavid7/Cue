@@ -5,6 +5,7 @@ import { startOfDay } from "date-fns/startOfDay";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { MailboxThreadList } from "@inboxzero/mail-ui/MailboxSurface";
 import { ThreadRow } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
+import type { ThreadRowActionHandlers } from "@/app/(app)/[emailAccountId]/mail/ThreadRowActions";
 import type {
   ListThread,
   MailLayoutMode,
@@ -14,6 +15,7 @@ import { LoadingMiniSpinner } from "@/components/Loading";
 import { Button } from "@/components/ui/button";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useInboxInsights } from "@/hooks/useInboxInsights";
 import { useSentMessageOpensForThreads } from "@/hooks/useSentMessageOpens";
 import { cn } from "@/utils";
 import { formatDateGroupLabel } from "@/utils/date";
@@ -44,6 +46,7 @@ export type ThreadListProps = {
   /** Identity of the current view so prefetch state does not leak across splits. */
   listKey: string;
   showSentOpenStatus?: boolean;
+  rowActions?: ThreadRowActionHandlers;
 };
 
 export const ThreadList = memo(function ThreadList({
@@ -66,6 +69,7 @@ export const ThreadList = memo(function ThreadList({
   onLoadMore,
   listKey,
   showSentOpenStatus = false,
+  rowActions,
 }: ThreadListProps) {
   const isMobile = useIsMobile();
   const dayStart = useDayStart();
@@ -82,6 +86,21 @@ export const ThreadList = memo(function ThreadList({
   );
   const { data: sentMessageOpens } =
     useSentMessageOpensForThreads(sentThreadIds);
+  const insightItems = useMemo(
+    () =>
+      threads.flatMap((thread) => {
+        // Other accounts' rows in the combined view are read with their own token.
+        if ("account" in thread) return [];
+        const messageId =
+          thread.latestMessageId ??
+          thread.messages.findLast(
+            (message) => !message.labelIds?.includes(GmailLabel.DRAFT),
+          )?.id;
+        return messageId ? [{ threadId: thread.id, messageId }] : [];
+      }),
+    [threads],
+  );
+  const { data: insights } = useInboxInsights(insightItems);
   const groupHeaderClassName = cn(
     "pt-4 pr-5 pb-1.5 font-normal text-muted-foreground text-sm",
     selectionEnabled ? "pl-[3.25rem]" : "pl-8",
@@ -135,6 +154,7 @@ export const ThreadList = memo(function ThreadList({
           onOpen={row.onOpen}
           onSelectRangeTo={row.onSelectRangeTo}
           onToggleSelect={row.onToggleSelect}
+          rowActions={rowActions}
           rowRef={row.rowRef}
           selectionEnabled={row.selectionEnabled}
           sentMessageOpen={
@@ -142,6 +162,7 @@ export const ThreadList = memo(function ThreadList({
               ? sentMessageOpens?.opens[row.item.messages.at(-1)?.id ?? ""]
               : undefined
           }
+          insightData={insights?.insights[row.item.id]}
           thread={row.item}
           userEmail={userEmail}
           userLabels={

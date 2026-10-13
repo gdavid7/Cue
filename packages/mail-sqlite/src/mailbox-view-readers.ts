@@ -393,11 +393,12 @@ async function readConversationSummaries(
   if (page.length === 0) return [];
   const members = await tx.query(
     `SELECT account_id, conversation_id, message_id, subject, preview, from_address, to_json,
-            received_at_ms, unread, starred, label_ids_json, roles_json, pending_operation_ids_json
+            received_at_ms, unread, starred, label_ids_json, roles_json, pending_operation_ids_json,
+            has_attachments
      FROM (
        SELECT e.account_id, e.conversation_id, e.message_id, e.subject, e.preview, e.from_address,
               e.to_json, e.received_at_ms, e.read AS unread, e.starred, e.label_ids_json, e.roles_json,
-              e.pending_operation_ids_json
+              e.pending_operation_ids_json, e.has_attachments
        FROM effective_messages e
        WHERE ${page
          .map(() => "(e.account_id = ? AND e.conversation_id = ?)")
@@ -457,6 +458,10 @@ async function readConversationSummaries(
         ),
       ) as MessageMetadata["roles"],
       pendingOperationIds: jsonStringArray(message.pending_operation_ids_json),
+      latestMessageId: String(subjectMessage.message_id),
+      hasAttachments: conversationMembers.some(
+        (member) => Number(member.has_attachments) === 1,
+      ),
     };
   });
 }

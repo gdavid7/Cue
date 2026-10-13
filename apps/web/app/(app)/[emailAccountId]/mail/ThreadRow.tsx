@@ -1,14 +1,23 @@
 "use client";
 
+import { PaperclipIcon } from "lucide-react";
 import { memo, useMemo, type Ref } from "react";
 import { MailThreadRow } from "@inboxzero/mail-ui/MailThreadRow";
 import { isThreadStarred } from "@/app/(app)/[emailAccountId]/mail/star-state";
 import { MailLabelChip } from "@/app/(app)/[emailAccountId]/mail/MailLabelChip";
-import { isThreadUnread } from "@/app/(app)/[emailAccountId]/mail/read-state";
+import {
+  isThreadArchived,
+  isThreadUnread,
+} from "@/app/(app)/[emailAccountId]/mail/read-state";
+import {
+  type ThreadRowActionHandlers,
+  ThreadRowActions,
+} from "@/app/(app)/[emailAccountId]/mail/ThreadRowActions";
 import { getThreadParticipantNames } from "@/app/(app)/[emailAccountId]/mail/thread-participants";
-import type {
-  ListThread,
-  MailLayoutMode,
+import {
+  getListThreadKey,
+  type ListThread,
+  type MailLayoutMode,
 } from "@/app/(app)/[emailAccountId]/mail/types";
 import { EmailDate } from "@/components/email-list/EmailDate";
 import { SentMessageOpenStatus } from "@/components/email-list/SentMessageOpenStatus";
@@ -26,6 +35,11 @@ import { cn } from "@/utils";
 import { internalDateToDate } from "@/utils/date";
 import { decodeSnippet } from "@/utils/gmail/decode";
 import { GmailLabel } from "@/utils/gmail/label";
+import {
+  composeInsight,
+  type InsightLine,
+} from "@/utils/inbox-insights/compose-insight";
+import type { ThreadInsightData } from "@/utils/inbox-insights/get-inbox-insights";
 
 export type ThreadRowProps = {
   thread: ListThread;
@@ -51,6 +65,9 @@ export type ThreadRowProps = {
     lastOpenedAt: string | null;
     openCount: number;
   };
+  insightData?: ThreadInsightData;
+  /** Hover actions on wide rows; touch layouts use selection instead. */
+  rowActions?: ThreadRowActionHandlers;
 };
 
 export const ThreadRow = memo(function ThreadRow({
@@ -70,6 +87,8 @@ export const ThreadRow = memo(function ThreadRow({
   onSelectRangeTo,
   rowRef,
   sentMessageOpen,
+  insightData,
+  rowActions,
 }: ThreadRowProps) {
   const message = thread.messages.at(-1);
   const labels = useMemo(
@@ -91,9 +110,21 @@ export const ThreadRow = memo(function ThreadRow({
     [thread.messages, thread.participantMessages, accountEmail],
   );
 
+  const insight = useMemo(
+    () =>
+      composeInsight({
+        thread,
+        labelNames: (id) => userLabels[id]?.name,
+        userEmail: accountEmail,
+        data: insightData,
+      }),
+    [thread, userLabels, accountEmail, insightData],
+  );
+
   if (!message) return null;
 
   const chips = labels.slice(0, layout === "list" && !compact ? 3 : 2);
+  const showActions = !!rowActions && !compact;
   const isDraft = thread.messages.some((message) =>
     message.labelIds?.includes(GmailLabel.DRAFT),
   );
@@ -103,19 +134,44 @@ export const ThreadRow = memo(function ThreadRow({
       accountAvatar={account ? <AccountAvatar account={account} /> : null}
       compact={compact}
       date={
-        <div className="flex items-center justify-end gap-1.5">
-          {sentMessageOpen ? (
-            <SentMessageOpenStatus compact open={sentMessageOpen} />
+        <div className="relative flex items-center justify-end">
+          <div
+            className={cn(
+              "flex items-center justify-end gap-1.5",
+              showActions && "group-hover:invisible",
+            )}
+          >
+            {thread.hasAttachments ? (
+              <PaperclipIcon
+                aria-label="Has attachments"
+                className="size-3.5 shrink-0 text-muted-foreground"
+              />
+            ) : null}
+            {sentMessageOpen ? (
+              <SentMessageOpenStatus compact open={sentMessageOpen} />
+            ) : null}
+            <EmailDate
+              className="font-normal text-xs"
+              date={internalDateToDate(message.internalDate)}
+            />
+          </div>
+          {showActions && rowActions ? (
+            <div className="-translate-y-1/2 absolute top-1/2 right-0 hidden rounded-md bg-background shadow-sm group-hover:flex">
+              <ThreadRowActions
+                handlers={rowActions}
+                isArchived={isThreadArchived(thread.messages)}
+                isStarred={isThreadStarred(thread.messages)}
+                isUnread={isThreadUnread(thread.messages)}
+                threadKey={getListThreadKey(thread)}
+              />
+            </div>
           ) : null}
-          <EmailDate
-            className="font-normal text-xs"
-            date={internalDateToDate(message.internalDate)}
-          />
         </div>
       }
       expandedPreview={expandedPreview}
       hasAnySelection={hasAnySelection}
       index={index}
+      insight={insight ? <InsightText line={insight} /> : null}
       isDraft={isDraft}
       isFocused={isFocused}
       isSelected={isSelected}
@@ -154,6 +210,29 @@ export const ThreadRow = memo(function ThreadRow({
     />
   );
 });
+
+const INSIGHT_TONE: Record<InsightLine["tone"], string> = {
+  action: "text-primary",
+  waiting: "text-amber-700 dark:text-amber-400",
+  info: "text-muted-foreground",
+};
+
+function InsightText({ line }: { line: InsightLine }) {
+  return (
+    <span
+      className={cn(
+        "flex min-w-0 items-center gap-1 text-xs",
+        INSIGHT_TONE[line.tone],
+      )}
+      data-testid="thread-insight"
+    >
+      <span aria-hidden className="shrink-0">
+        ↳
+      </span>
+      <span className="truncate">{line.parts.join(" · ")}</span>
+    </span>
+  );
+}
 
 function AccountAvatar({
   account,

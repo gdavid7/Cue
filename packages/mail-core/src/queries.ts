@@ -140,6 +140,9 @@ export const conversationSummarySchema = z.object({
   labelIds: z.array(z.string().max(256)).max(500),
   roles: z.array(mailboxRoleSchema).max(8),
   pendingOperationIds: z.array(z.string()),
+  /** The newest message that isn't a draft or in the trash. */
+  latestMessageId: z.string().optional(),
+  hasAttachments: z.boolean().optional(),
 });
 export type ConversationSummary = z.infer<typeof conversationSummarySchema>;
 

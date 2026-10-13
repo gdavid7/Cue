@@ -1,7 +1,14 @@
 import type { CombinedListThread } from "@/utils/threads/load-combined";
 import type { ThreadListItem } from "@/utils/threads/load";
 
-export type ListThread = ThreadListItem | CombinedListThread;
+export type ListThread = (ThreadListItem | CombinedListThread) & {
+  /**
+   * The newest real message. Rows built from the local mail engine carry
+   * placeholder message ids, so this is the one to send to the server.
+   */
+  latestMessageId?: string;
+  hasAttachments?: boolean;
+};
 export type ListMessage = ListThread["messages"][number];
 
 /** One rule execution for a message in a thread, with its matched reason. */

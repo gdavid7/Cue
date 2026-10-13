@@ -18,6 +18,8 @@ export type MailThreadRowProps = {
   labels?: ReactNode[];
   accountAvatar?: ReactNode;
   actions?: ReactNode;
+  /** A short line under the row: what the email asks, or what's worth knowing. */
+  insight?: ReactNode;
   isUnread: boolean;
   isStarred: boolean;
   isDraft: boolean;
@@ -45,6 +47,7 @@ export function MailThreadRow({
   labels = [],
   accountAvatar,
   actions,
+  insight,
   isUnread,
   isStarred,
   isDraft,
@@ -185,13 +188,17 @@ export function MailThreadRow({
               <span className="line-clamp-2 text-muted-foreground text-sm">
                 {snippet}
               </span>
+              {insight}
             </div>
           ) : (
-            <div className="flex min-w-0 flex-1 items-center gap-2.5">
-              {headline}
-              <span className="min-w-0 flex-1 truncate text-muted-foreground text-sm">
-                {snippet}
-              </span>
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <div className="flex min-w-0 items-center gap-2.5">
+                {headline}
+                <span className="min-w-0 flex-1 truncate text-muted-foreground text-sm">
+                  {snippet}
+                </span>
+              </div>
+              {insight}
             </div>
           )}
           <div className="w-16 shrink-0 text-right">{date}</div>
@@ -221,6 +228,7 @@ export function MailThreadRow({
           >
             {snippet}
           </div>
+          {insight}
           {accountAvatar ? <div className="pt-1">{accountAvatar}</div> : null}
           {labels.length ? (
             <div className="flex flex-wrap gap-1 pt-1">{labels}</div>

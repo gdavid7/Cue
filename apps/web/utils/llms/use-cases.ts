@@ -20,6 +20,7 @@ export const LlmUseCase = {
   EmailHistoryExtraction: "email-history-extraction",
   EmailReportActionableRecommendations:
     "email-report-actionable-recommendations",
+  InboxInsight: "inbox-insight",
   EmailReportEmailBehavior: "email-report-email-behavior",
   EmailReportExecutiveSummary: "email-report-executive-summary",
   EmailReportLabelAnalysis: "email-report-label-analysis",
@@ -67,6 +68,7 @@ export const LLM_USE_CASE_MODEL_TYPES = {
   [LlmUseCase.DraftReply]: "draft",
   [LlmUseCase.EmailHistoryExtraction]: "economy",
   [LlmUseCase.EmailReportActionableRecommendations]: "default",
+  [LlmUseCase.InboxInsight]: "economy",
   [LlmUseCase.EmailReportEmailBehavior]: "economy",
   [LlmUseCase.EmailReportExecutiveSummary]: "default",
   [LlmUseCase.EmailReportLabelAnalysis]: "economy",
