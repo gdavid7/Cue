@@ -879,6 +879,44 @@ export function MessagePart({
     return null;
   }
 
+  if (part.type === "tool-addToCalendar") {
+    return renderToolStatus({
+      part,
+      loadingText: "Adding to calendar...",
+      renderSuccess: ({ toolCallId }) => {
+        const output = part.output;
+        if (!output || "error" in output) return null;
+        return (
+          <ToolResultWithLink
+            key={toolCallId}
+            text={`Added to calendar: ${output.title}, ${formatCalendarItemTime(output)}`}
+            href={output.eventUrl}
+            linkText="Open event"
+          />
+        );
+      },
+    });
+  }
+
+  if (part.type === "tool-saveToDrive") {
+    return renderToolStatus({
+      part,
+      loadingText: "Saving attachment...",
+      renderSuccess: ({ toolCallId }) => {
+        const output = part.output;
+        if (!output || "error" in output) return null;
+        return (
+          <ToolResultWithLink
+            key={toolCallId}
+            text={`Saved ${output.filename} to ${output.destination}`}
+            href={output.url}
+            linkText="Open file"
+          />
+        );
+      },
+    });
+  }
+
   if (part.type.startsWith("tool-")) {
     const toolPart = part as {
       type: `tool-${string}`;
@@ -900,6 +938,60 @@ export function MessagePart({
   }
 
   return null;
+}
+
+function ToolResultWithLink({
+  text,
+  href,
+  linkText,
+}: {
+  text: string;
+  href: string | null;
+  linkText: string;
+}) {
+  return (
+    <div className="text-xs text-muted-foreground">
+      {text}
+      {href ? (
+        <>
+          {" · "}
+          <a
+            className="underline underline-offset-2 hover:text-foreground"
+            href={href}
+            rel="noopener noreferrer"
+            target="_blank"
+          >
+            {linkText}
+          </a>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function formatCalendarItemTime({
+  allDay,
+  start,
+}: {
+  allDay: boolean;
+  start: string;
+}) {
+  if (allDay) {
+    // An all-day date has no zone; read it as written.
+    return new Date(`${start}T00:00:00Z`).toLocaleDateString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    });
+  }
+  return new Date(start).toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function getInProgressManageInboxOutput(input: {

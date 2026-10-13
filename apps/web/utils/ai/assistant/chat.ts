@@ -36,10 +36,15 @@ import {
   startSenderCategorizationTool,
 } from "./chat-inbox-tools";
 import { saveMemoryTool, searchMemoriesTool } from "./chat-memory-tools";
-import { getCalendarEventsTool } from "./chat-calendar-tools";
+import {
+  addToCalendarTool,
+  getCalendarEventsTool,
+} from "./chat-calendar-tools";
+import { saveToDriveTool } from "./chat-drive-tools";
 import { searchContextTool, searchWebTool } from "./chat-context-tools";
 import { isExaSearchEnabled } from "@/utils/exa/search";
 import { hasUsableCalendarConnection } from "@/utils/calendar/event-provider";
+import { getConnectedDriveApps } from "@/utils/attachments/save-to-drive";
 import type { MessagingPlatform } from "@/utils/messaging/platforms";
 import type { SerializedMatchReason } from "@/utils/ai/choose-rule/types";
 import {
@@ -55,7 +60,7 @@ import { trimStaleToolResults } from "@/utils/ai/assistant/trim-stale-tool-resul
 
 export const maxDuration = 800;
 // Increment when chat prompts, tools, or routing change so run quality remains attributable.
-export const ASSISTANT_CHAT_PIPELINE_VERSION = 17;
+export const ASSISTANT_CHAT_PIPELINE_VERSION = 18;
 const ASSISTANT_CHAT_TOOL_BUDGET_MS = {
   web: 720_000,
   messaging: 60_000,
@@ -150,6 +155,15 @@ export async function aiProcessAssistantChat({
       message: describeCalendarLookupError(error),
     };
   }
+  const hasConnectedDrive = await getConnectedDriveApps(emailAccountId).then(
+    (apps) => apps.length > 0,
+    (error) => {
+      logger.warn("Failed to check drive connections for chat tools", {
+        error,
+      });
+      return false;
+    },
+  );
   const system = buildResolvedSystemPrompt({
     emailSendToolsEnabled,
     draftReplyActionsEnabled,
@@ -315,10 +329,17 @@ export async function aiProcessAssistantChat({
 
     // Progressive disclosure groups (registered but not active by default)
     ...(calendarConnection.state === "connected"
-      ? { getCalendarEvents: getCalendarEventsTool(toolOptions) }
+      ? {
+          getCalendarEvents: getCalendarEventsTool(toolOptions),
+          addToCalendar: addToCalendarTool({
+            ...toolOptions,
+            timezone: userTimezone,
+          }),
+        }
       : {}),
     // Attachments
     readAttachment: readAttachmentTool(toolOptions),
+    ...(hasConnectedDrive ? { saveToDrive: saveToDriveTool(toolOptions) } : {}),
     ...providerPolicy.getTaxonomyTools(toolOptions),
     // Settings
     updateAssistantSettings: updateAssistantSettingsTool(toolOptions),

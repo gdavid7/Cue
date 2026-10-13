@@ -2,6 +2,7 @@
 
 import { actionClient } from "@/utils/actions/safe-action";
 import {
+  addToCalendarBody,
   disconnectCalendarBody,
   toggleCalendarBody,
   updateTimezoneBody,
@@ -9,6 +10,7 @@ import {
 } from "@/utils/actions/calendar.validation";
 import prisma from "@/utils/prisma";
 import { SafeError } from "@/utils/error";
+import { addToCalendar } from "@/utils/calendar/add-to-calendar";
 
 export const disconnectCalendarAction = actionClient
   .metadata({ name: "disconnectCalendar" })
@@ -90,3 +92,22 @@ export const updateCalendarBookingLinkAction = actionClient
       data: { calendarBookingLink: bookingLink || null },
     });
   });
+
+export const addToCalendarAction = actionClient
+  .metadata({ name: "addToCalendar" })
+  .inputSchema(addToCalendarBody)
+  .action(
+    async ({
+      ctx: { emailAccountId, logger },
+      parsedInput: { title, start, end, location, timezone },
+    }) =>
+      addToCalendar({
+        emailAccountId,
+        title,
+        start,
+        end,
+        location,
+        timezone,
+        logger,
+      }),
+  );

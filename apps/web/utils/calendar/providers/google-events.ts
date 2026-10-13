@@ -191,14 +191,15 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
         summary: input.title,
         description: input.description,
         location: useGoogleMeet ? undefined : input.locationValue || undefined,
-        start: {
-          dateTime: input.startTime.toISOString(),
-          timeZone: input.timezone,
-        },
-        end: {
-          dateTime: input.endTime.toISOString(),
-          timeZone: input.timezone,
-        },
+        start: input.allDay
+          ? { date: toIsoDate(input.startTime) }
+          : {
+              dateTime: input.startTime.toISOString(),
+              timeZone: input.timezone,
+            },
+        end: input.allDay
+          ? { date: toIsoDate(input.endTime) }
+          : { dateTime: input.endTime.toISOString(), timeZone: input.timezone },
         attendees: input.attendees.map((attendee) => ({
           email: attendee.email,
           displayName: attendee.name,
@@ -296,4 +297,8 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
         })) || [],
     };
   }
+}
+
+function toIsoDate(date: Date) {
+  return date.toISOString().slice(0, 10);
 }

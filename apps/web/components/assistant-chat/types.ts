@@ -28,7 +28,11 @@ import type {
   SaveMemoryTool,
   SearchMemoriesTool,
 } from "@/utils/ai/assistant/chat-memory-tools";
-import type { GetCalendarEventsTool } from "@/utils/ai/assistant/chat-calendar-tools";
+import type {
+  AddToCalendarTool,
+  GetCalendarEventsTool,
+} from "@/utils/ai/assistant/chat-calendar-tools";
+import type { SaveToDriveTool } from "@/utils/ai/assistant/chat-drive-tools";
 import type {
   SearchContextTool,
   SearchWebTool,
@@ -68,7 +72,9 @@ export type ChatTools = {
   replyEmail: ReplyEmailTool;
   forwardEmail: ForwardEmailTool;
   getCalendarEvents: GetCalendarEventsTool;
+  addToCalendar: AddToCalendarTool;
   readAttachment: ReadAttachmentTool;
+  saveToDrive: SaveToDriveTool;
 };
 
 // biome-ignore lint/complexity/noBannedTypes: ignore

@@ -9,6 +9,7 @@ import {
 import dynamic from "next/dynamic";
 import { useLocalStorage } from "usehooks-ts";
 import { AlertCircleIcon, Loader2Icon, MailIcon } from "lucide-react";
+import { AddToCalendarButton } from "@/app/(app)/[emailAccountId]/mail/AddToCalendarButton";
 import { ReaderToolbar } from "@/app/(app)/[emailAccountId]/mail/ReaderToolbar";
 import {
   ThreadContextPanel,
@@ -212,6 +213,16 @@ export function ThreadReader({
       labelHref={labelHref}
       labels={labels}
       menu={menu}
+      extraAction={
+        emailAccountId && threadId && lastReceivedId ? (
+          <AddToCalendarButton
+            emailAccountId={emailAccountId}
+            messageId={lastReceivedId}
+            subject={headerMessage?.headers.subject ?? ""}
+            threadId={threadId}
+          />
+        ) : null
+      }
       onArchive={onArchive}
       onMoveToInbox={onMoveToInbox}
       onRestore={onRestore}

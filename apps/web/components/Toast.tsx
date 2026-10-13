@@ -18,11 +18,38 @@ export function toastSuccess(options: {
   });
 }
 
-export function toastError(options: { title?: string; description: string }) {
+/** A success that made something elsewhere, with a link to open it. */
+export function toastSuccessWithLink(options: {
+  description: string;
+  link: { label: string; href: string } | null;
+  id?: string | number;
+}) {
+  const { link } = options;
+  return toast.success(options.description, {
+    id: options.id,
+    action: link
+      ? {
+          label: link.label,
+          onClick: () => window.open(link.href, "_blank", "noopener"),
+        }
+      : undefined,
+  });
+}
+
+export function toastError(options: {
+  title?: string;
+  description: string;
+  id?: string | number;
+}) {
   return toast.error(options.title || options.description, {
     description: options.title ? options.description : undefined,
     duration: 10_000,
+    id: options.id,
   });
+}
+
+export function toastLoading(description: string) {
+  return toast.loading(description);
 }
 
 export function toastInfo(options: {

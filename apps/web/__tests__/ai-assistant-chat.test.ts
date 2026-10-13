@@ -29,6 +29,7 @@ const {
     sendEmailEnabled: true,
     autoDraftDisabled: false,
     webhookActionsEnabled: true,
+    composioApiKey: undefined as string | undefined,
   },
   mockToolCallAgentStream: vi.fn(),
   mockCreateEmailProvider: vi.fn(),
@@ -57,6 +58,9 @@ const {
       findMany: vi.fn().mockResolvedValue([]),
     },
     calendarConnection: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    mcpConnection: {
       findMany: vi.fn().mockResolvedValue([]),
     },
     executedRule: {
@@ -122,6 +126,9 @@ vi.mock("@/env", () => ({
     },
     get NEXT_PUBLIC_WEBHOOK_ACTION_ENABLED() {
       return envState.webhookActionsEnabled;
+    },
+    get COMPOSIO_API_KEY() {
+      return envState.composioApiKey;
     },
   },
 }));
@@ -206,7 +213,9 @@ describe("aiProcessAssistantChat", () => {
     envState.sendEmailEnabled = true;
     envState.autoDraftDisabled = false;
     envState.webhookActionsEnabled = true;
+    envState.composioApiKey = undefined;
     mockPrisma.calendarConnection.findMany.mockResolvedValue([]);
+    mockPrisma.mcpConnection.findMany.mockResolvedValue([]);
   });
 
   it("ties reply language to the source email unless the user overrides it", async () => {
@@ -416,12 +425,59 @@ describe("aiProcessAssistantChat", () => {
 
     if (enabled) {
       expect(args.tools.getCalendarEvents).toBeDefined();
+      expect(args.tools.addToCalendar).toBeDefined();
       expect(systemPrompt).not.toContain("connect a calendar");
       return;
     }
 
     expect(args.tools.getCalendarEvents).toBeUndefined();
+    expect(args.tools.addToCalendar).toBeUndefined();
     expect(systemPrompt).toContain("connect a calendar in settings");
+  });
+
+  it.each([
+    {
+      title: "offers saveToDrive when the person has connected a drive",
+      composioApiKey: "composio-key",
+      connections: [
+        { emailAccountId: "other-account", integration: { name: "one_drive" } },
+      ],
+      enabled: true,
+    },
+    {
+      title: "omits saveToDrive when no drive is connected",
+      composioApiKey: "composio-key",
+      connections: [],
+      enabled: false,
+    },
+    {
+      title: "omits saveToDrive when connectors aren't configured",
+      composioApiKey: undefined,
+      connections: [
+        {
+          emailAccountId: "email-account-id",
+          integration: { name: "googledrive" },
+        },
+      ],
+      enabled: false,
+    },
+  ])("$title", async ({ composioApiKey, connections, enabled }) => {
+    envState.composioApiKey = composioApiKey;
+    mockPrisma.mcpConnection.findMany.mockResolvedValue(connections);
+
+    const tools = await captureToolSet();
+
+    expect(Boolean(tools.saveToDrive)).toBe(enabled);
+  });
+
+  it("keeps chat working without saveToDrive when the drive lookup fails", async () => {
+    envState.composioApiKey = "composio-key";
+    mockPrisma.mcpConnection.findMany.mockRejectedValue(new Error("db down"));
+
+    const tools = await captureToolSet();
+
+    expect(tools.saveToDrive).toBeUndefined();
+    expect(tools.searchInbox).toBeDefined();
   });
 
   it("tells the model when the calendar connection lookup fails", async () => {

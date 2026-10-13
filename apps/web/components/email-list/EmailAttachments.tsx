@@ -1,6 +1,7 @@
 "use client";
 
 import { useOpenedConversationAttachments } from "./OpenedConversationAttachments";
+import { SaveToDriveMenu } from "./SaveToDriveMenu";
 import Image from "next/image";
 import { useEffect, useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toastError } from "@/components/Toast";
+import { useSaveDestinations } from "@/hooks/useSaveDestinations";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { cn } from "@/utils";
 import {
@@ -32,6 +34,8 @@ const PREVIEW_MAX_BYTES = 50 * 1024 * 1024;
 export function EmailAttachments({ message }: { message: ThreadMessage }) {
   const { emailAccountId } = useAccount();
   const [isDownloading, setIsDownloading] = useState(false);
+  const { data: destinations } = useSaveDestinations(emailAccountId);
+  const drives = destinations?.drives ?? [];
   const [previewingId, setPreviewingId] = useState<string>();
   const previewing = message.attachments?.find(
     (attachment) => attachment.attachmentId === previewingId,
@@ -133,23 +137,34 @@ export function EmailAttachments({ message }: { message: ThreadMessage }) {
                 >
                   {mimeTypeToString(attachment.mimeType)}
                 </div>
-                <Button
-                  variant="outline"
-                  size="iconSm"
-                  type="button"
-                  className="relative"
-                  aria-label={`Download ${attachment.filename}`}
-                  title="Download attachment"
-                  disabled={!emailAccountId || isDownloading}
-                  onClick={() =>
-                    downloadAttachment({
-                      filename: attachment.filename,
-                      url,
-                    })
-                  }
-                >
-                  <DownloadIcon className="size-4" aria-hidden="true" />
-                </Button>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {emailAccountId && drives.length > 0 ? (
+                    <SaveToDriveMenu
+                      emailAccountId={emailAccountId}
+                      messageId={message.id}
+                      attachmentId={attachment.attachmentId}
+                      filename={attachment.filename}
+                      drives={drives}
+                    />
+                  ) : null}
+                  <Button
+                    variant="outline"
+                    size="iconSm"
+                    type="button"
+                    className="relative"
+                    aria-label={`Download ${attachment.filename}`}
+                    title="Download attachment"
+                    disabled={!emailAccountId || isDownloading}
+                    onClick={() =>
+                      downloadAttachment({
+                        filename: attachment.filename,
+                        url,
+                      })
+                    }
+                  >
+                    <DownloadIcon className="size-4" aria-hidden="true" />
+                  </Button>
+                </div>
               </div>
             </div>
           </CardBasic>

@@ -10,6 +10,7 @@ import type {
 } from "@/utils/calendar/event-types";
 
 export type CreateCalendarEventInput = {
+  allDay?: boolean;
   attendees: CalendarEventAttendee[];
   description?: string;
   destinationCalendarId?: string | null;
@@ -28,6 +29,7 @@ export type CreatedCalendarEvent = CalendarEventWriteResult & {
 };
 
 export async function createCalendarEvent({
+  allDay,
   emailAccountId,
   destinationCalendarId,
   title,
@@ -53,6 +55,7 @@ export async function createCalendarEvent({
   });
 
   const createdEvent = await provider.createEvent({
+    allDay,
     calendarId: destination.calendarId,
     title,
     description,
