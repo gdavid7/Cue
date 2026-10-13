@@ -42,11 +42,13 @@ async function getData(emailAccountId: string) {
   const findConnection = (name: string) =>
     connections.find((connection) => connection.integration.name === name);
 
+  // Cue offers the apps Composio hosts. Others stay listed only once
+  // connected, so an existing connection can still be managed or removed.
   const builtIn = Object.values(MCP_INTEGRATIONS)
-    .filter(
-      (integration) =>
-        !integration.provider ||
-        getIntegrationProvider(integration.provider.id).isConfigured(),
+    .filter((integration) =>
+      integration.provider
+        ? getIntegrationProvider(integration.provider.id).isConfigured()
+        : !!findConnection(integration.name),
     )
     .map((integration) => ({
       name: integration.name,

@@ -115,9 +115,9 @@ test("adds, inspects, and removes a custom MCP server", async ({
   await expect(row).toHaveCount(0);
 
   await openIntegrations(page);
-  await expect(getIntegrationRow(page, "Notion")).toBeVisible({
-    timeout: 60_000,
-  });
+  await expect(
+    page.getByRole("button", { name: "Add custom server" }),
+  ).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(SERVER_NAME, { exact: true })).toHaveCount(0);
   await expect.poll(() => countCustomServers(emailAccountId)).toBe(0);
   // Syncing only lists tools; nothing should have invoked one
