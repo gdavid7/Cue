@@ -10,7 +10,6 @@ import {
   MailIcon,
   MailOpenIcon,
   ShieldCheckIcon,
-  SparklesIcon,
   Undo2Icon,
 } from "lucide-react";
 import {
@@ -46,11 +45,6 @@ type ReaderToolbarProps = {
   onSnooze?: (until: Date) => void;
   onMarkRead: () => void;
   onMarkUnread: () => void;
-  /**
-   * Set when the reader is too narrow for the relevant context pane, which
-   * then opens from here instead.
-   */
-  onOpenContext?: () => void;
   /** The ⋯ dropdown, i.e. `ThreadActionsMenu`, composed by the shell. */
   menu?: ReactNode;
   /** Shown beside snooze, e.g. `AddToCalendarButton`. */
@@ -81,7 +75,6 @@ export function ReaderToolbar({
   onSnooze,
   onMarkRead,
   onMarkUnread,
-  onOpenContext,
   menu,
   extraAction,
   messageExpansion,
@@ -100,19 +93,8 @@ export function ReaderToolbar({
         restore: <Undo2Icon className="size-3.5" />,
       }}
       extraActions={
-        extraAction || onSnooze || onOpenContext ? (
+        extraAction || onSnooze ? (
           <>
-            {onOpenContext ? (
-              <Button
-                onClick={onOpenContext}
-                size="xs-2"
-                title="Related mail, meetings and files, and a suggested reply"
-                variant="outline"
-              >
-                <SparklesIcon className="size-3.5" />
-                Context
-              </Button>
-            ) : null}
             {extraAction}
             {onSnooze ? <SnoozeButton onSnooze={onSnooze} /> : null}
           </>

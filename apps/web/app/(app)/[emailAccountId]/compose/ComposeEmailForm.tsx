@@ -193,6 +193,11 @@ type ComposeEmailFormProps = {
   onRestore?: () => void;
   onDiscard?: (draftId?: string) => boolean | Promise<boolean>;
   onPopOut?: () => void;
+  /**
+   * Text to start from when there is no saved draft, such as a reply Cue
+   * suggested. It is saved as a draft right away, like anything typed.
+   */
+  initialBodyHtml?: string;
 };
 
 type ComposeFormValues = Omit<SendEmailBody, "attachments" | "messageHtml">;
@@ -321,6 +326,7 @@ function ComposeEmailFormContent({
   initialAttachments,
   initialProviderDraftId,
   initialDraftMissing,
+  initialBodyHtml,
 }: ComposeEmailFormProps & {
   localDraftIdentity?: ReplyDraftIdentity;
   storedDraft?: StoredReplyDraft;
@@ -411,7 +417,7 @@ function ComposeEmailFormContent({
     }
 
     const preparedDraft = prepareEmailDraft({
-      html: replyingToEmail?.draftHtml ?? "",
+      html: initialBodyHtml ?? replyingToEmail?.draftHtml ?? "",
       quotedHtml: replyingToEmail?.quotedContentHtml,
       signatureHtml:
         replyingToEmail?.signatureHtml ?? accountSignatureHtml ?? undefined,
@@ -684,6 +690,14 @@ function ComposeEmailFormContent({
   useEffect(() => {
     if (storedDraft?.content) captureDraft();
   }, [storedDraft, captureDraft]);
+  // Opened with text and no saved draft: that text is the draft, and must
+  // reach the mailbox even if the user sends nothing else.
+  const startedFromBody = useRef(Boolean(initialBodyHtml && !storedDraft));
+  useEffect(() => {
+    if (!startedFromBody.current) return;
+    startedFromBody.current = false;
+    captureDraft();
+  }, [captureDraft]);
   useEffect(() => {
     const subscription = watch(() => captureDraft());
     return () => subscription.unsubscribe();

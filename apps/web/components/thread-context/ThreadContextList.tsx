@@ -9,8 +9,7 @@ import {
   MailIcon,
   MessagesSquareIcon,
 } from "lucide-react";
-import { LoadingContent } from "@/components/LoadingContent";
-import { Skeleton } from "@/components/ui/skeleton";
+import { useState } from "react";
 import { useThreadContext } from "@/hooks/useThreadContext";
 import type { ThreadContextItem } from "@/utils/thread-context/get-thread-context";
 import { reasonLabel } from "@/utils/thread-context/reason-label";
@@ -29,49 +28,62 @@ const KIND: Record<
 
 /**
  * Items elsewhere in the user's mail and calendar that matter for a thread,
- * each with the reason it's here. Used beside the mail reader and on Home.
+ * one line each, with why it's here on hover. Renders nothing until there is
+ * something to show, so it never takes room from the conversation.
  */
 export function ThreadContextList({
   threadId,
   emailAccountId,
   onOpenThread,
+  limit,
+  heading,
 }: {
   threadId: string;
   emailAccountId: string;
   onOpenThread: (threadId: string) => void;
+  /** Rows shown before "Show more". All of them when unset. */
+  limit?: number;
+  heading?: string;
 }) {
-  const { data, isLoading, error } = useThreadContext({
-    threadId,
-    emailAccountId,
-  });
+  const { data } = useThreadContext({ threadId, emailAccountId });
+  const [expanded, setExpanded] = useState(false);
+  const items = data?.items ?? [];
+  if (!items.length) return null;
+
+  const shown = expanded || !limit ? items : items.slice(0, limit);
+  const hidden = items.length - shown.length;
 
   return (
-    <LoadingContent
-      error={error}
-      errorComponent={
-        <PanelMessage
-          title="Couldn't load context"
-          body="Try opening the conversation again."
-        />
-      }
-      loading={isLoading}
-      loadingComponent={<ContextSkeleton />}
-    >
-      {data?.items.length ? (
-        <ul className="space-y-1">
-          {data.items.map((item) => (
-            <li key={item.id}>
-              <ContextItem item={item} onOpenThread={onOpenThread} />
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <PanelMessage
-          title="Nothing related found"
-          body="No other conversations or meetings with these people or about this topic."
-        />
-      )}
-    </LoadingContent>
+    <section aria-label={heading ?? "Related"}>
+      {heading ? (
+        <h3 className="mb-1 px-2 font-medium text-muted-foreground text-xs">
+          {heading}
+        </h3>
+      ) : null}
+      <ul>
+        {shown.map((item, index) => (
+          <li
+            className={
+              limit && index >= limit
+                ? "fade-in slide-in-from-top-1 animate-in duration-300"
+                : undefined
+            }
+            key={item.id}
+          >
+            <ContextItem item={item} onOpenThread={onOpenThread} />
+          </li>
+        ))}
+      </ul>
+      {hidden > 0 ? (
+        <button
+          className="mt-0.5 rounded-md px-2 py-1 text-muted-foreground text-xs transition-colors hover:bg-muted/60 hover:text-foreground"
+          onClick={() => setExpanded(true)}
+          type="button"
+        >
+          Show {hidden} more
+        </button>
+      ) : null}
+    </section>
   );
 }
 
@@ -85,86 +97,37 @@ function ContextItem({
   const { icon: Icon, label } = KIND[item.kind];
   const content = (
     <>
-      <div className="flex items-start gap-2">
-        <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-        <div className="min-w-0 flex-1">
-          <div className="line-clamp-2 font-medium text-foreground text-sm">
-            {item.title}
-          </div>
-          <div className="mt-0.5 text-muted-foreground text-xs">
-            {item.source ?? label} · {formatWhen(item.at)}
-          </div>
-        </div>
-      </div>
-      {item.snippet ? (
-        <p className="mt-1.5 line-clamp-2 pl-6 text-muted-foreground text-xs leading-5">
-          {item.snippet}
-        </p>
-      ) : null}
-      {item.reasons.length ? (
-        <div className="mt-2 flex flex-wrap gap-1 pl-6">
-          {item.reasons.map((reason, index) => (
-            <span
-              className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
-              // Reasons never reorder, and two can read the same.
-              key={index}
-            >
-              {reasonLabel(reason)}
-            </span>
-          ))}
-        </div>
-      ) : null}
+      <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate text-foreground">{item.title}</span>
+      <span className="shrink-0 text-muted-foreground text-xs">
+        {item.source ?? label} · {formatWhen(item.at)}
+      </span>
     </>
   );
-
-  const className =
-    "block w-full rounded-md px-2 py-2.5 text-left transition-colors hover:bg-muted/60 active:bg-muted";
+  const props = {
+    className:
+      "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted/60 active:bg-muted",
+    title: item.reasons.map(reasonLabel).join(" · ") || undefined,
+  };
 
   if (item.kind === "email") {
     return (
-      <button
-        className={className}
-        onClick={() => onOpenThread(item.id)}
-        type="button"
-      >
+      <button {...props} onClick={() => onOpenThread(item.id)} type="button">
         {content}
       </button>
     );
   }
   if (item.url) {
     return (
-      <a className={className} href={item.url} rel="noreferrer" target="_blank">
+      <a {...props} href={item.url} rel="noreferrer" target="_blank">
         {content}
       </a>
     );
   }
-  return <div className={className}>{content}</div>;
+  return <div {...props}>{content}</div>;
 }
 
-function PanelMessage({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="flex min-h-48 flex-col items-center justify-center px-4 text-center">
-      <div className="font-medium text-foreground text-sm">{title}</div>
-      <p className="mt-1 text-muted-foreground text-xs leading-5">{body}</p>
-    </div>
-  );
-}
-
-function ContextSkeleton() {
-  return (
-    <div className="space-y-4 px-2 py-1">
-      {[0, 1, 2].map((i) => (
-        <div className="space-y-2" key={i}>
-          <Skeleton className="h-4 w-4/5" />
-          <Skeleton className="h-3 w-1/3" />
-          <Skeleton className="h-3 w-full" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// Whole days, rounded toward zero like the "In 2d" reason, so they agree.
+// Whole days, rounded toward zero, so "in 2d" agrees with the reason it gives.
 function formatWhen(iso: string) {
   const date = new Date(iso);
   const days = Math.trunc((date.getTime() - Date.now()) / 86_400_000);

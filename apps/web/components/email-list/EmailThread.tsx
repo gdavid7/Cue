@@ -53,6 +53,8 @@ export function EmailThread({
   renderToolbar,
   renderMessageMenu,
   enableMessageNavigation = false,
+  afterLatestMessage,
+  idleReplyArea,
 }: {
   messages: ThreadMessage[];
   missingBodyIds?: Set<string>;
@@ -78,6 +80,10 @@ export function EmailThread({
   onThreadDiscarded?: () => void;
   withHeader?: boolean;
   enableMessageNavigation?: boolean;
+  /** Shown under the newest message, above where its reply is written. */
+  afterLatestMessage?: ReactNode;
+  /** Shown after the thread while no reply or draft is open. */
+  idleReplyArea?: ReactNode;
   renderMessageMenu?: (message: ThreadMessage) => ReactNode;
   renderToolbar?: (controls: {
     allExpanded: boolean;
@@ -452,6 +458,11 @@ export function EmailThread({
                 key={`${sendOperationId ?? getDraftSessionMessageId(emailAccountId, message.id)}:${recoveredReply?.messageId === message.id ? recoveredReply.version : 0}`}
                 message={message}
                 menu={renderMessageMenu?.(message)}
+                afterBody={
+                  message.id === replyAnchor?.id
+                    ? afterLatestMessage
+                    : undefined
+                }
                 replyAnchor={outgoing ? replyAnchor : undefined}
                 composerSessionMessageId={
                   sendOperationId ? `outgoing:${sendOperationId}` : undefined
@@ -508,6 +519,7 @@ export function EmailThread({
             );
           })}
         </ul>
+        {!openComposer && idleReplyArea}
         {threadId && (
           <ThreadDeliveryStatus
             emailAccountId={emailAccountId}

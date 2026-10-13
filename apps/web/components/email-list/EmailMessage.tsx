@@ -1,6 +1,14 @@
 import { CalendarInvitation } from "@/components/email-list/CalendarInvitation";
 import { isCalendarInvitationMessage } from "@/utils/calendar/invitations/detection";
-import { useCallback, useMemo, useState, useRef, useEffect } from "react";
+import {
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  useRef,
+  useEffect,
+} from "react";
+import { ReplyAssistContext } from "@/components/email-list/reply-assist";
 import { useAction } from "next-safe-action/hooks";
 import {
   ForwardIcon,
@@ -70,6 +78,7 @@ export function EmailMessage({
   bodyAvailable = true,
   missingBodyIds,
   menu,
+  afterBody,
   refetch,
   showReplyButton,
   defaultComposeMode,
@@ -103,6 +112,8 @@ export function EmailMessage({
   bodyAvailable?: boolean;
   missingBodyIds?: Set<string>;
   menu?: React.ReactNode;
+  /** Shown under the body, above any draft or reply. */
+  afterBody?: React.ReactNode;
   draftMessages?: ThreadMessage[];
   refetch: () => void;
   showReplyButton: boolean;
@@ -451,6 +462,7 @@ export function EmailMessage({
             ))}
 
           {message.attachments && <EmailAttachments message={message} />}
+          {afterBody}
 
           {visibleDrafts.map(({ message: draft, sessionMessageId }) =>
             draft === openDraft?.message ? (
@@ -826,6 +838,15 @@ function ReplyPanel({
   const { emailAccountId, userEmail } = useAccount();
   const { popOutReply } = useComposeModal();
   const replyTargetId = replyAnchor?.id ?? message.id;
+  const replyAssist = useContext(ReplyAssistContext);
+  const assist =
+    replyAssist &&
+    composeMode === "reply" &&
+    !draftMessage &&
+    replyAssist.messageId === message.id
+      ? replyAssist
+      : null;
+  const [edited, setEdited] = useState(false);
   const draftSessionId = getReplyDraftSessionId(
     draftSessionMessageId ?? message.id,
     composeMode,
@@ -955,8 +976,29 @@ function ReplyPanel({
     );
 
   return (
-    <div className="mt-5" ref={replyRef}>
+    <div
+      className={cn(
+        "mt-5",
+        // Suggested text crossfades in rather than appearing all at once.
+        assist?.suggestedBodyHtml && "fade-in animate-in duration-150",
+      )}
+      onInputCapture={() => setEdited(true)}
+      ref={replyRef}
+    >
+      {assist ? (
+        <div className="mb-2 flex items-baseline gap-2 text-sm">
+          <span className="font-medium text-foreground">
+            Reply to {firstName(message.headers.from)}
+          </span>
+          {assist.suggestedBodyHtml && !edited ? (
+            <span className="text-muted-foreground text-xs">
+              Suggested by Cue
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       <ComposeEmailFormLazy
+        initialBodyHtml={assist?.suggestedBodyHtml}
         providerDraftMessageId={
           composeMode === "reply" ? draftMessage?.id : undefined
         }
@@ -990,8 +1032,14 @@ function ReplyPanel({
         refetch={refetch}
         replyingToEmail={replyingToEmail}
       />
+      {assist?.footer ? <div className="mt-2">{assist.footer}</div> : null}
     </div>
   );
+}
+
+function firstName(from: string) {
+  const name = extractNameFromEmail(from) || extractEmailAddress(from);
+  return name.split(/[\s@]/)[0];
 }
 
 function resolveComposeMode(

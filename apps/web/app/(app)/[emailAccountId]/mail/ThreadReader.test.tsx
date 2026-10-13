@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadReader } from "@/app/(app)/[emailAccountId]/mail/ThreadReader";
@@ -11,7 +12,10 @@ vi.mock("@/env", () => ({
   env: { NEXT_PUBLIC_SUPPORT_EMAIL: "support@example.com" },
 }));
 vi.mock("@/providers/EmailAccountProvider", () => ({
-  useAccount: () => ({ emailAccountId: "account-1" }),
+  useAccount: () => ({
+    emailAccountId: "account-1",
+    userEmail: "user@example.com",
+  }),
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/ReaderToolbar", () => ({
   ReaderToolbar: ({ subject }: { subject: string }) => <h1>{subject}</h1>,
@@ -88,24 +92,26 @@ function renderReader({
   messages?: ThreadMessage[];
 }) {
   return render(
-    <ThreadReader
-      detailSelectionSettled
-      enableMessageNavigation={false}
-      error={error}
-      labelHref={() => "/labels"}
-      layout="split"
-      loading={false}
-      messages={messages}
-      onArchive={vi.fn()}
-      isUnread={false}
-      onMarkRead={vi.fn()}
-      onMarkUnread={vi.fn()}
-      onBackToInbox={vi.fn()}
-      refetch={refetch}
-      thread={null}
-      threadId="thread-1"
-      userLabels={{}}
-    />,
+    <NuqsTestingAdapter>
+      <ThreadReader
+        detailSelectionSettled
+        enableMessageNavigation={false}
+        error={error}
+        labelHref={() => "/labels"}
+        layout="split"
+        loading={false}
+        messages={messages}
+        onArchive={vi.fn()}
+        isUnread={false}
+        onMarkRead={vi.fn()}
+        onMarkUnread={vi.fn()}
+        onBackToInbox={vi.fn()}
+        refetch={refetch}
+        thread={null}
+        threadId="thread-1"
+        userLabels={{}}
+      />
+    </NuqsTestingAdapter>,
   );
 }
 

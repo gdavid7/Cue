@@ -3,6 +3,7 @@
 import {
   ArchiveIcon,
   ArrowBigUpIcon,
+  CornerUpLeftIcon,
   ArchiveRestoreIcon,
   ExternalLinkIcon,
   FlagIcon,
@@ -19,9 +20,11 @@ import {
   Trash2Icon,
   TagIcon,
 } from "lucide-react";
+import { useAction } from "next-safe-action/hooks";
 import { useSenderCommands } from "@/app/(app)/[emailAccountId]/mail/use-sender-commands";
 import { getEmailMessageCellActions } from "@/components/EmailMessageCellActions";
 import { Kbd } from "@/components/Kbd";
+import { toastError, toastSuccess } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/Tooltip";
 import {
@@ -38,6 +41,8 @@ import {
 } from "@/lib/shortcuts/registry";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { getOpenInMailboxLabel } from "@/utils/url";
+import { markNeedsReplyAction } from "@/utils/actions/thread-assist";
+import { getActionErrorMessage } from "@/utils/error";
 import type { ParsedMessage } from "@/utils/types";
 
 export type ThreadActionsMenuProps = {
@@ -77,7 +82,20 @@ export function ThreadActionsMenu({
   open,
   onOpenChange,
 }: ThreadActionsMenuProps) {
-  const { provider, userEmail } = useAccount();
+  const { emailAccountId, provider, userEmail } = useAccount();
+  // The correction for when the AI filed or skipped something that matters.
+  const { execute: markNeedsReply } = useAction(
+    markNeedsReplyAction.bind(null, emailAccountId),
+    {
+      onSuccess: () => toastSuccess({ description: "Moved to Needs you" }),
+      onError: (error) =>
+        toastError({
+          description: getActionErrorMessage(error.error, {
+            prefix: "Couldn't mark it",
+          }),
+        }),
+    },
+  );
   const {
     canManageAutoArchive,
     isUnsubscribeDisabled,
@@ -151,6 +169,15 @@ export function ThreadActionsMenu({
               {isImportant ? "Mark as not important" : "Mark as important"}
             </DropdownMenuItem>
           )}
+
+          {message ? (
+            <DropdownMenuItem
+              onSelect={() => markNeedsReply({ threadId: message.threadId })}
+            >
+              <CornerUpLeftIcon className="mr-2 size-4" />
+              Track until I reply
+            </DropdownMenuItem>
+          ) : null}
 
           <DropdownMenuSeparator />
 

@@ -7,14 +7,11 @@ import {
   type ReactNode,
 } from "react";
 import dynamic from "next/dynamic";
-import { useLocalStorage } from "usehooks-ts";
+import { parseAsString, useQueryStates } from "nuqs";
 import { AlertCircleIcon, Loader2Icon, MailIcon } from "lucide-react";
 import { AddToCalendarButton } from "@/app/(app)/[emailAccountId]/mail/AddToCalendarButton";
 import { ReaderToolbar } from "@/app/(app)/[emailAccountId]/mail/ReaderToolbar";
-import {
-  ThreadContextPanel,
-  ThreadContextRail,
-} from "@/app/(app)/[emailAccountId]/mail/ThreadContextPanel";
+import { useReaderReplySuggestion } from "@/app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion";
 import { MailReaderSurface } from "@inboxzero/mail-ui/MailReaderSurface";
 import { isThreadStarred } from "@/app/(app)/[emailAccountId]/mail/star-state";
 import { useThreadTranslation } from "@/app/(app)/[emailAccountId]/mail/use-thread-translation";
@@ -23,6 +20,8 @@ import type {
   MailLayoutMode,
 } from "@/app/(app)/[emailAccountId]/mail/types";
 import { EmailThread } from "@/components/email-list/EmailThread";
+import { ReplyAssistContext } from "@/components/email-list/reply-assist";
+import { ThreadContextList } from "@/components/thread-context/ThreadContextList";
 import type { ThreadMessage } from "@/components/email-list/types";
 import { getEmailMessageCellLabels } from "@/components/EmailMessageCellLabels";
 import { LoadingContent } from "@/components/LoadingContent";
@@ -45,9 +44,11 @@ const SenderContextPanel = dynamic(
 
 /**
  * Below this the reader would be squeezed too far by a pane beside it, so the
- * sender profile and relevant context slide over the reader instead.
+ * sender profile slides over the reader instead.
  */
 const INLINE_SIDE_PANEL_MIN_WIDTH = 880;
+/** Below this the reader is a phone's width, and shows fewer related items. */
+const PHONE_READER_MAX_WIDTH = 640;
 
 export type ThreadReaderProps = {
   enableMessageNavigation: boolean;
@@ -134,10 +135,6 @@ export function ThreadReader({
   menu,
   renderMessageMenu,
 }: ThreadReaderProps) {
-  // The context panel's "write it myself" opens a reply like the reply action does.
-  const [replyRequestedFor, setReplyRequestedFor] = useState<string | null>(
-    null,
-  );
   const lastReceivedId = messages.findLast(
     (message) => !message.labelIds?.includes("DRAFT"),
   )?.id;
@@ -146,19 +143,28 @@ export function ThreadReader({
     senderEmail: string;
     senderName: string;
   } | null>(null);
-  // Remembered across threads: the reader remounts for each one.
-  const [threadContextHidden, setThreadContextHidden] = useLocalStorage(
-    "cue-thread-context-hidden",
-    false,
-  );
   const [readerRef, readerWidth] = useElementWidth();
   const isNarrow = readerWidth < INLINE_SIDE_PANEL_MIN_WIDTH;
-  const [isContextSheetOpen, setIsContextSheetOpen] = useState(false);
+  // Until the reader is measured its width reads as 0, which isn't a phone.
+  const isPhone = readerWidth > 0 && readerWidth < PHONE_READER_MAX_WIDTH;
   const { emailAccountId } = useAccount();
-  // Until the reader is measured its width reads as 0, which isn't narrow.
-  const canOpenContextSheet = Boolean(
-    readerWidth > 0 && isNarrow && emailAccountId && threadId,
+  const [, setOpenThread] = useQueryStates({
+    "thread-id": parseAsString,
+    "thread-account-id": parseAsString,
+  });
+  const openThread = (id: string) =>
+    setOpenThread({ "thread-id": id, "thread-account-id": emailAccountId });
+  // Waits for keyboard navigation to settle before fetching.
+  const canAssist = Boolean(
+    detailSelectionSettled && emailAccountId && threadId,
   );
+  const { assist, idleReplyArea } = useReaderReplySuggestion({
+    emailAccountId,
+    threadId,
+    messages,
+    enabled: canAssist,
+    onOpenThread: openThread,
+  });
   const hiddenDraftMessageIds = useHiddenDraftMessageIds(emailAccountId);
   const headerMessage =
     latestShownMessage(thread?.messages ?? [], hiddenDraftMessageIds) ??
@@ -207,41 +213,6 @@ export function ThreadReader({
       userLabels,
     }) ?? [];
 
-  let threadContext: ReactNode = null;
-  // Waits for keyboard navigation to settle before fetching.
-  if (detailSelectionSettled && emailAccountId && threadId) {
-    if (isNarrow) {
-      threadContext = isContextSheetOpen ? (
-        <ThreadContextPanel
-          emailAccountId={emailAccountId}
-          onClose={() => setIsContextSheetOpen(false)}
-          onDraftSaved={refetch}
-          onWriteReply={() => {
-            setIsContextSheetOpen(false);
-            setReplyRequestedFor(lastReceivedId ?? null);
-          }}
-          threadId={threadId}
-          variant="sheet"
-        />
-      ) : null;
-    } else if (threadContextHidden) {
-      threadContext = (
-        <ThreadContextRail onOpen={() => setThreadContextHidden(false)} />
-      );
-    } else {
-      threadContext = (
-        <ThreadContextPanel
-          emailAccountId={emailAccountId}
-          onClose={() => setThreadContextHidden(true)}
-          onDraftSaved={refetch}
-          onWriteReply={() => setReplyRequestedFor(lastReceivedId ?? null)}
-          threadId={threadId}
-          variant="inline"
-        />
-      );
-    }
-  }
-
   const renderToolbar = (
     messageExpansion?: ComponentProps<typeof ReaderToolbar>["messageExpansion"],
   ) => (
@@ -271,9 +242,6 @@ export function ThreadReader({
       onSnooze={onSnooze}
       onMarkRead={onMarkRead}
       onMarkUnread={onMarkUnread}
-      onOpenContext={
-        canOpenContextSheet ? () => setIsContextSheetOpen(true) : undefined
-      }
       onBackToInbox={onBackToInbox}
       onRemoveLabel={onRemoveLabel}
       subject={
@@ -307,45 +275,59 @@ export function ThreadReader({
             senderName={senderContext.senderName}
             variant={isNarrow ? "sheet" : "inline"}
           />
-        ) : (
-          threadContext
-        )
+        ) : null
       }
     >
       {messages.length > 0 ? (
-        <EmailThread
-          renderToolbar={renderToolbar}
-          renderMessageMenu={renderMessageMenu}
-          enableMessageNavigation={enableMessageNavigation}
-          autoOpenReplyForMessageId={
-            autoOpenReplyForMessageId ?? replyRequestedFor ?? undefined
-          }
-          autoOpenReplyAll={autoOpenReplyAll}
-          autoOpenForwardForMessageId={autoOpenForwardForMessageId}
-          key={threadId}
-          messages={messages}
-          missingBodyIds={localAvailability?.missingBodyIds}
-          outgoing={localAvailability?.outgoing}
-          sendOperationIds={localAvailability?.sendOperationIds}
-          onMarkDone={onArchive}
-          onOpenSenderContext={(message) => {
-            const senderEmail = extractEmailAddress(message.headers.from);
-            setSenderContext({
-              messageId: message.id,
-              senderEmail,
-              senderName:
-                extractNameFromEmail(message.headers.from) || senderEmail,
-            });
-          }}
-          refetch={refetch}
-          onSendSuccess={onSendSuccess}
-          onThreadDiscarded={
-            // A partially loaded conversation can look draft-only, so only
-            // leave once every message is here to say it is.
-            localAvailability?.hasMore ? undefined : onBackToInbox
-          }
-          showReplyButton
-        />
+        <ReplyAssistContext.Provider value={assist}>
+          <EmailThread
+            renderToolbar={renderToolbar}
+            renderMessageMenu={renderMessageMenu}
+            enableMessageNavigation={enableMessageNavigation}
+            autoOpenReplyForMessageId={
+              autoOpenReplyForMessageId ?? assist?.messageId
+            }
+            afterLatestMessage={
+              canAssist && emailAccountId && threadId ? (
+                <div className="mt-4 -mx-2">
+                  <ThreadContextList
+                    emailAccountId={emailAccountId}
+                    heading="Related"
+                    limit={isPhone ? 2 : 3}
+                    onOpenThread={openThread}
+                    threadId={threadId}
+                  />
+                </div>
+              ) : null
+            }
+            idleReplyArea={idleReplyArea}
+            autoOpenReplyAll={autoOpenReplyAll}
+            autoOpenForwardForMessageId={autoOpenForwardForMessageId}
+            key={threadId}
+            messages={messages}
+            missingBodyIds={localAvailability?.missingBodyIds}
+            outgoing={localAvailability?.outgoing}
+            sendOperationIds={localAvailability?.sendOperationIds}
+            onMarkDone={onArchive}
+            onOpenSenderContext={(message) => {
+              const senderEmail = extractEmailAddress(message.headers.from);
+              setSenderContext({
+                messageId: message.id,
+                senderEmail,
+                senderName:
+                  extractNameFromEmail(message.headers.from) || senderEmail,
+              });
+            }}
+            refetch={refetch}
+            onSendSuccess={onSendSuccess}
+            onThreadDiscarded={
+              // A partially loaded conversation can look draft-only, so only
+              // leave once every message is here to say it is.
+              localAvailability?.hasMore ? undefined : onBackToInbox
+            }
+            showReplyButton
+          />
+        </ReplyAssistContext.Provider>
       ) : (
         renderToolbar()
       )}
