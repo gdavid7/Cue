@@ -1,7 +1,7 @@
 "use client";
 
 import { ConnectorsList } from "@/components/connectors/ConnectorsList";
-import { type CSSProperties, memo, useCallback } from "react";
+import { type CSSProperties, memo, useCallback, useMemo } from "react";
 import { toast } from "sonner";
 import { AllInboxesSidebarSections } from "@/app/(app)/[emailAccountId]/mail/AllInboxesSidebarSections";
 import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
@@ -16,6 +16,7 @@ import type {
   MailboxItem,
   MailboxItemEdit,
 } from "@/app/(app)/[emailAccountId]/mail/MailboxItemContextMenu";
+import { getRuleLabelIds } from "@/app/(app)/[emailAccountId]/mail/label-visibility";
 import { MailSidebarResizeHandle } from "@/app/(app)/[emailAccountId]/mail/MailSidebarResizeHandle";
 import {
   MAIL_SIDEBAR_DEFAULT_WIDTH,
@@ -27,6 +28,7 @@ import { useAccounts } from "@/hooks/useAccounts";
 import { useFolders } from "@/hooks/useFolders";
 import { useLabelCounts } from "@/hooks/useLabelCounts";
 import { useLabels } from "@/hooks/useLabels";
+import { useRules } from "@/hooks/useRules";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useComposeModal } from "@/providers/ComposeModalProvider";
 import type { EmailLabel } from "@/providers/email-label-types";
@@ -87,6 +89,14 @@ export const MailShellSidebar = memo(function MailShellSidebar({
   const isOutlook = isMicrosoftProvider(provider);
   const terminology = getEmailTerminology(provider);
   const { userLabels: allLabels, mutate: mutateLabels } = useLabels();
+  const { data: rules, error: rulesError } = useRules();
+  // Held back until the rules arrive, so Cue's own labels never flash in.
+  const sidebarLabels = useMemo(() => {
+    if (rulesError) return allLabels;
+    if (!rules) return NO_LABELS;
+    const ruleLabelIds = getRuleLabelIds(rules);
+    return allLabels.filter((label) => !ruleLabelIds.has(label.id));
+  }, [allLabels, rules, rulesError]);
   const { folders, mutate: mutateFolders } = useFolders(provider);
   const { countsById, mutate: mutateCounts } = useLabelCounts({
     emailAccountId,
@@ -210,7 +220,7 @@ export const MailShellSidebar = memo(function MailShellSidebar({
           activeLabelId={activeLabelId}
           activeFolderId={activeFolderId}
           hrefFor={hrefFor}
-          labels={isAllAccounts ? NO_LABELS : allLabels}
+          labels={isAllAccounts ? NO_LABELS : sidebarLabels}
           folders={isAllAccounts || !isOutlook ? NO_FOLDERS : folders}
           countsById={isAllAccounts ? NO_COUNTS : countsById}
           categories={

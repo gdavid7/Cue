@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { MailboxLabelCount } from "@/utils/mail-engine/label-count-targets";
-import { splitLabelsByListVisibility } from "./label-visibility";
+import {
+  getRuleLabelIds,
+  splitLabelsByListVisibility,
+} from "./label-visibility";
 
 function counts(entries: Array<{ id: string; unread: number }>) {
   return new Map<string, MailboxLabelCount>(
@@ -66,5 +69,17 @@ describe("splitLabelsByListVisibility", () => {
     });
 
     expect(visibleLabels.map((label) => label.id)).toEqual(["receipts"]);
+  });
+});
+
+describe("getRuleLabelIds", () => {
+  it("collects the labels rules apply, whatever they are named", () => {
+    const ids = getRuleLabelIds([
+      { actions: [{ labelId: "Label_1" }, { labelId: null }] },
+      { actions: [{ labelId: "Label_2" }] },
+      { actions: [] },
+    ]);
+
+    expect([...ids]).toEqual(["Label_1", "Label_2"]);
   });
 });

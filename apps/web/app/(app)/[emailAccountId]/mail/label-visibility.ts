@@ -25,6 +25,23 @@ export function splitLabelsByListVisibility({
   return { visibleLabels, hiddenLabels };
 }
 
+/**
+ * The labels Cue's own rules apply, like To Reply or Newsletter. They are Cue's
+ * bookkeeping, so the sidebar leaves them to the label picker and search.
+ * Matched by the label id each rule stores rather than by name.
+ */
+export function getRuleLabelIds(
+  rules: { actions: { labelId: string | null }[] }[],
+) {
+  return new Set(
+    rules.flatMap((rule) =>
+      rule.actions.flatMap((action) =>
+        action.labelId ? [action.labelId] : [],
+      ),
+    ),
+  );
+}
+
 function isVisibleInLabelList(
   label: EmailLabel,
   countsById: Map<string, MailboxLabelCount>,
