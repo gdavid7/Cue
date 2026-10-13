@@ -14,6 +14,8 @@ import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";
 import { collectThreadContext } from "@/utils/thread-context/get-thread-context";
 import type { ParsedMessage } from "@/utils/types";
+import { isExaSearchEnabled, searchExa } from "@/utils/exa/search";
+import { domainOf } from "@/utils/thread-context/linked-pages";
 import { getEmailAccountWithAi } from "@/utils/user/get";
 
 const MAX_THREAD_MESSAGES = 6;
@@ -21,8 +23,10 @@ const CONNECTOR_SOURCE_LABEL = {
   file: "File",
   assignment: "Assignment",
   chat: "Message",
+  web: "Web page",
 } as const;
 const MAX_SOURCE_TEXT = 2000;
+const WEB_SEARCH_RESULTS = 3;
 // Everything Relevant context shows, so a fact the user can see there can back the reply.
 const MAX_CONTEXT_SOURCES = 8;
 const CACHE_TTL_SECONDS = 24 * 60 * 60;
@@ -64,7 +68,7 @@ const suggestionSchema = z.object({
 
 export type Source = {
   id: string;
-  kind: "message" | "email" | "event" | "file" | "assignment" | "chat";
+  kind: "message" | "email" | "event" | "file" | "assignment" | "chat" | "web";
   title: string;
   text: string;
   /** For related emails, so the user can open them. */
@@ -97,6 +101,7 @@ export async function suggestReply({
   threadId,
   emailProvider,
   logger,
+  searchWeb = false,
   now = new Date(),
 }: {
   emailAccountId: string;
@@ -104,6 +109,8 @@ export async function suggestReply({
   threadId: string;
   emailProvider: EmailProvider;
   logger: Logger;
+  /** After an abstention: search the web for what was missing and try again. */
+  searchWeb?: boolean;
   now?: Date;
 }): Promise<SuggestedReply | null> {
   const { thread, items } = await collectThreadContext({
@@ -122,7 +129,8 @@ export async function suggestReply({
 
   // A new message changes the key, so a cached suggestion is never stale.
   const cacheKey = `suggested-reply:${emailAccountId}:${threadId}:${latest.id}`;
-  const cached = await redis.get<SuggestedReply>(cacheKey).catch(() => null);
+  const webCacheKey = `suggested-reply-web:${emailAccountId}:${threadId}:${latest.id}`;
+  const cached = await getCached(searchWeb ? webCacheKey : cacheKey);
   if (cached) return cached;
 
   const emailAccount = await getEmailAccountWithAi({ emailAccountId });
@@ -135,16 +143,17 @@ export async function suggestReply({
     .catch(() => false);
   if (!hasAccess) return { status: "unavailable" };
 
+  const context = await contextSources({
+    items: items.slice(0, MAX_CONTEXT_SOURCES),
+    emailProvider,
+    timezone: emailAccount.timezone,
+    logger,
+  });
   const sources = [
     ...thread.messages
       .slice(-MAX_THREAD_MESSAGES)
       .map((m, i) => messageSource(m, i, emailAccount.timezone)),
-    ...(await contextSources({
-      items: items.slice(0, MAX_CONTEXT_SOURCES),
-      emailProvider,
-      timezone: emailAccount.timezone,
-      logger,
-    })),
+    ...context,
   ];
 
   const { writingStyle } =
@@ -152,17 +161,87 @@ export async function suggestReply({
       where: { id: emailAccountId },
       select: { writingStyle: true },
     })) ?? {};
+  const suggest = (extra: Source[]) =>
+    aiSuggestReply({
+      emailAccount,
+      sources: [...sources, ...extra],
+      writingStyle,
+      now,
+    });
 
-  const suggestion = await aiSuggestReply({
-    emailAccount,
-    sources,
-    writingStyle,
-    now,
+  let plain = searchWeb ? await getCached(cacheKey) : null;
+  if (!plain) {
+    plain = await suggest([]);
+    await setCached(cacheKey, plain);
+  }
+  if (!searchWeb || plain.status !== "insufficient" || !isExaSearchEnabled())
+    return plain;
+
+  // The web is searched for exactly what the reply was missing.
+  const results = await searchExa({
+    query: webSearchQuery({
+      missing: plain.missing,
+      unsupported: plain.unsupported,
+      subject: latest.headers.subject,
+    }),
+    numResults: WEB_SEARCH_RESULTS + 2,
+    maxTextCharacters: MAX_SOURCE_TEXT,
+    logger,
   });
-  await redis
-    .set(cacheKey, suggestion, { ex: CACHE_TTL_SECONDS })
-    .catch(() => null);
+  const pages = results
+    .filter((result) => result.text)
+    .slice(0, WEB_SEARCH_RESULTS)
+    .map((result, i) =>
+      webSource({
+        id: `c${context.length + i + 1}`,
+        title: result.title,
+        url: result.url,
+        text: result.text ?? "",
+      }),
+    );
+  const suggestion = pages.length ? await suggest(pages) : plain;
+  await setCached(webCacheKey, suggestion);
   return suggestion;
+}
+
+/**
+ * What to search the web for when a reply can't be verified: the model's own
+ * account of what's missing, and what the conversation is about. No model call.
+ */
+export function webSearchQuery({
+  missing,
+  unsupported,
+  subject,
+}: {
+  missing: string;
+  unsupported: string[];
+  subject: string;
+}) {
+  return [missing.trim() || unsupported.join(" "), subject]
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+/** A public page as a source, in the same shape as the other kinds. */
+export function webSource({
+  id,
+  title,
+  url,
+  text,
+}: {
+  id: string;
+  title: string;
+  url: string;
+  text: string;
+}): Source {
+  return {
+    id,
+    kind: "web",
+    title,
+    text: `${CONNECTOR_SOURCE_LABEL.web}: ${title} (${domainOf(url)})\n${text}`,
+    url,
+  };
 }
 
 /** The model call on sources already gathered, so evals can feed it fixed ones. */
@@ -191,7 +270,7 @@ export async function aiSuggestReply({
   const result = await generateObject({
     ...modelOptions,
     instructions: `You suggest a reply to the latest message in an email conversation, on behalf of ${emailAccount.name || emailAccount.email}.
-The sources are the conversation's messages (m1, m2, ...) and related emails and meetings from the user's account (c1, c2, ...).
+The sources are the conversation's messages (m1, m2, ...) and related items (c1, c2, ...): emails, meetings, files and messages from the user's connected apps, and public web pages.
 Suggest a reply only if the sources state every fact the reply needs. A reply that commits the user to something, gives a number, date, price, time or decision, or answers a question needs a source that states it. Never fill a gap with a plausible guess.
 If the sources don't settle what the user should say, set enoughEvidence to false and say what is missing instead.
 For each fact in the reply, cite the source and copy the exact words that state it.
@@ -288,6 +367,14 @@ async function contextSources({
           url: item.url,
         };
       }
+      if (item.kind === "web" && item.url) {
+        return webSource({
+          id,
+          title: item.title,
+          url: item.url,
+          text: item.text,
+        });
+      }
       if (item.kind !== "email") {
         return {
           id,
@@ -341,10 +428,18 @@ Date: ${formatTime(new Date(getMessageTimestamp(m)).toISOString(), timezone)}
 ${body}`;
 }
 
-function renderSource(source: Source) {
+export function renderSource(source: Source) {
   return `<source id="${source.id}" kind="${source.kind}">
 ${he.escape(source.text)}
 </source>`;
+}
+
+function getCached(key: string) {
+  return redis.get<SuggestedReply>(key).catch(() => null);
+}
+
+async function setCached(key: string, suggestion: SuggestedReply) {
+  await redis.set(key, suggestion, { ex: CACHE_TTL_SECONDS }).catch(() => null);
 }
 
 function formatTime(iso: string, timezone: string | null) {

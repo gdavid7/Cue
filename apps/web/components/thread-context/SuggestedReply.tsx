@@ -6,6 +6,7 @@ import {
   CopyIcon,
   PenLineIcon,
   FileTextIcon,
+  GlobeIcon,
   GraduationCapIcon,
   type LucideIcon,
   MailIcon,
@@ -35,6 +36,7 @@ const SOURCE_ICON: Record<Citation["source"]["kind"], LucideIcon> = {
   file: FileTextIcon,
   assignment: GraduationCapIcon,
   chat: MessagesSquareIcon,
+  web: GlobeIcon,
 };
 
 /**
@@ -60,11 +62,21 @@ export function SuggestedReply({
   // Per thread, so picking another conversation doesn't run another model call.
   const [requestedFor, setRequestedFor] = useState<string | null>(null);
   const requested = requestedFor === threadId;
-  const { data, isLoading, error } = useSuggestedReply({
+  const [searchedWebFor, setSearchedWebFor] = useState<string | null>(null);
+  const searchedWeb = requested && searchedWebFor === threadId;
+  const plain = useSuggestedReply({
     threadId,
     emailAccountId,
     enabled: requested,
   });
+  const web = useSuggestedReply({
+    threadId,
+    emailAccountId,
+    enabled: searchedWeb,
+    searchWeb: true,
+  });
+  // The web result replaces the abstention it was asked for.
+  const { data, isLoading, error } = searchedWeb ? web : plain;
 
   if (!requested) {
     return (
@@ -93,7 +105,9 @@ export function SuggestedReply({
       loadingComponent={
         <div className="space-y-2">
           <p className="text-muted-foreground text-xs">
-            Checking what your email and calendar can back up…
+            {searchedWeb
+              ? "Searching the web…"
+              : "Checking what your email and calendar can back up…"}
           </p>
           <Skeleton className="h-3 w-full" />
           <Skeleton className="h-3 w-5/6" />
@@ -103,11 +117,17 @@ export function SuggestedReply({
     >
       {data?.suggestion ? (
         <SuggestionBody
-          // A new thread starts a new edit.
-          key={threadId}
+          // A new thread, or a web result, starts a new edit.
+          key={`${threadId}:${searchedWeb}`}
           onOpenThread={onOpenThread}
           onDraftSaved={onDraftSaved}
           onWriteReply={onWriteReply}
+          onSearchWeb={
+            data.canSearchWeb && !searchedWeb
+              ? () => setSearchedWebFor(threadId)
+              : undefined
+          }
+          searchedWeb={searchedWeb}
           emailAccountId={emailAccountId}
           suggestion={data.suggestion}
           threadId={threadId}
@@ -126,6 +146,8 @@ function SuggestionBody({
   onOpenThread,
   onDraftSaved,
   onWriteReply,
+  onSearchWeb,
+  searchedWeb,
 }: {
   suggestion: Suggestion;
   threadId: string;
@@ -133,6 +155,10 @@ function SuggestionBody({
   onOpenThread: (threadId: string) => void;
   onDraftSaved?: () => void;
   onWriteReply?: () => void;
+  /** Retries with a web search, for what email and calendar couldn't back. */
+  onSearchWeb?: () => void;
+  /** This answer already includes what the web search found. */
+  searchedWeb: boolean;
 }) {
   const [edited, setEdited] = useState<string | null>(null);
   const { execute, isExecuting, hasSucceeded } = useAction(
@@ -182,17 +208,36 @@ function SuggestionBody({
               </ul>
             </>
           ) : null}
-          {onWriteReply ? (
-            <Button
-              className="mt-3 bg-background"
-              onClick={onWriteReply}
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              <PenLineIcon className="mr-2 size-4" />
-              Write it myself
-            </Button>
+          {searchedWeb ? (
+            <p className="mt-2 leading-5">The web didn't settle it either.</p>
+          ) : null}
+          {onWriteReply || onSearchWeb ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {onWriteReply ? (
+                <Button
+                  className="bg-background"
+                  onClick={onWriteReply}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  <PenLineIcon className="mr-2 size-4" />
+                  Write it myself
+                </Button>
+              ) : null}
+              {onSearchWeb ? (
+                <Button
+                  className="bg-background"
+                  onClick={onSearchWeb}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  <GlobeIcon className="mr-2 size-4" />
+                  Search the web
+                </Button>
+              ) : null}
+            </div>
           ) : null}
         </div>
       );
@@ -293,7 +338,7 @@ function CitationRow({
           “{citation.quote}”
         </div>
         <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-          {source.kind === "message" ? "This conversation" : source.title}
+          {sourceLabel(source)}
         </div>
       </div>
     </div>
@@ -335,7 +380,15 @@ const SOURCE_PLACE: Record<Citation["source"]["kind"], string> = {
   file: "your files",
   assignment: "your courses",
   chat: "your chats",
+  web: "the web",
 };
+
+function sourceLabel(source: Citation["source"]) {
+  if (source.kind === "message") return "This conversation";
+  if (source.kind === "web" && source.url)
+    return `Web · ${new URL(source.url).hostname.replace(/^www\./, "")}`;
+  return source.title;
+}
 
 function saveLabel(saved: boolean, opensInConversation: boolean) {
   if (opensInConversation) return saved ? "Added to reply" : "Reply with this";

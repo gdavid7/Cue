@@ -182,6 +182,7 @@ const parsedEnv = createEnv({
     AI_GATEWAY_API_KEY: z.string().optional(),
     PERPLEXITY_API_KEY: z.string().optional(),
     EXA_API_KEY: z.string().optional(),
+    EXA_API_URL: z.string().url().default("https://api.exa.ai"),
     OLLAMA_BASE_URL: z.string().optional(),
     OLLAMA_MODEL: z.string().optional(),
     OPENAI_COMPATIBLE_BASE_URL: z.string().optional(),

@@ -105,6 +105,9 @@ export function createLocalEnvironment({
     ...(process.env.EXA_API_KEY
       ? { EXA_API_KEY: process.env.EXA_API_KEY }
       : {}),
+    ...(process.env.EXA_API_URL
+      ? { EXA_API_URL: process.env.EXA_API_URL }
+      : {}),
     NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS: "true",
     NEXT_PUBLIC_EMAIL_SEND_ENABLED: "true",
     NEXT_PUBLIC_CONTACTS_ENABLED: "true",

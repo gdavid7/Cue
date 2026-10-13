@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isExaSearchEnabled, searchExa } from "@/utils/exa/search";
 
 const { mockEnv } = vi.hoisted(() => ({
-  mockEnv: { EXA_API_KEY: "test-exa-key" as string | undefined },
+  mockEnv: {
+    EXA_API_KEY: "test-exa-key" as string | undefined,
+    EXA_API_URL: "https://api.exa.ai",
+  },
 }));
 
 vi.mock("@/env", () => ({ env: mockEnv }));

@@ -3,6 +3,7 @@
 import {
   CalendarIcon,
   FileTextIcon,
+  GlobeIcon,
   GraduationCapIcon,
   type LucideIcon,
   MailIcon,
@@ -23,6 +24,7 @@ const KIND: Record<
   file: { icon: FileTextIcon, label: "File" },
   assignment: { icon: GraduationCapIcon, label: "Assignment" },
   chat: { icon: MessagesSquareIcon, label: "Message" },
+  web: { icon: GlobeIcon, label: "Web" },
 };
 
 /**

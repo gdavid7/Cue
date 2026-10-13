@@ -200,6 +200,30 @@ describe("rankContext", () => {
     ).toHaveLength(3);
   });
 
+  it("ranks a page the thread links to like a shared person, though no words match", () => {
+    const page = candidate({
+      id: "web:https://events.example.org/1428571",
+      kind: "web",
+      title: "Career Series: Tech & Finance",
+      text: "Tuesday 6–8pm, Ballroom West",
+    });
+    const sameOrg = candidate({
+      id: "colleague",
+      title: "Lunch",
+      people: [{ email: "lee@northwind.com" }],
+    });
+
+    const ranked = rankContext({
+      focus,
+      candidates: [sameOrg, page],
+      selfEmails: [ME.email],
+      now: NOW,
+    });
+
+    expect(ranked[0]?.candidate.id).toBe(page.id);
+    expect(ranked[0]?.reasons).toEqual([{ type: "linked" }]);
+  });
+
   it("excludes the open thread itself", () => {
     expect(
       ids([candidate({ id: focus.id, title: focus.subject, people: [NORA] })]),

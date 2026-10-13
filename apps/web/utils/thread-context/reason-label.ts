@@ -9,6 +9,8 @@ export function reasonLabel(reason: ContextReason) {
       return `Also from ${reason.label}`;
     case "via":
       return `Via ${reason.label}`;
+    case "linked":
+      return "Linked in this email";
     case "topic":
       // Two shared words read as a reason; a run of them reads as a dump.
       return `Also mentions ${reason.terms
