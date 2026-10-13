@@ -11,9 +11,12 @@ import { getMessageTimestamp } from "@/utils/email/message-timestamp";
 import { createEmailProvider } from "@/utils/email/provider";
 import { buildDraftReplyBody } from "@/utils/email/reply-body";
 import { SafeError } from "@/utils/error";
+import { createReplyContent } from "@/utils/gmail/reply";
+import { GmailLabel } from "@/utils/gmail/label";
 import { HANDLED_LABELS } from "@/utils/home/get-home";
 import { updateThreadTrackers } from "@/utils/reply-tracker/handle-conversation-status";
 import { applyThreadStatusLabel } from "@/utils/reply-tracker/label-helpers";
+import type { ParsedMessage } from "@/utils/types";
 
 /**
  * The user's correction when the AI got a conversation wrong: back in the
@@ -74,7 +77,10 @@ export const markNeedsReplyAction = actionClient
     },
   );
 
-/** Saves a suggested reply, as the user edited it, as a draft in the conversation. */
+/**
+ * Saves a suggested reply, as the user edited it, as the conversation's reply
+ * draft. Like Gmail, a conversation has one: saving again rewrites it.
+ */
 export const saveSuggestedReplyAction = actionClient
   .metadata({ name: "saveSuggestedReply" })
   .inputSchema(saveSuggestedReplyBody)
@@ -88,22 +94,40 @@ export const saveSuggestedReplyAction = actionClient
         provider,
         logger,
       });
-      const thread = await emailProvider.getThread(threadId);
+      const thread = await emailProvider.getThread(threadId, {
+        includeDrafts: true,
+      });
+      const isDraft = (m: ParsedMessage) =>
+        m.labelIds?.includes(GmailLabel.DRAFT) ?? false;
+      const messages = thread.messages.filter((m) => !isDraft(m));
       const replyTo =
-        thread.messages.findLast(
+        messages.findLast(
           (m) => !isSameEmailAddress(m.headers.from, emailAccount.email),
-        ) ?? thread.messages.at(-1);
+        ) ?? messages.at(-1);
       if (!replyTo) throw new SafeError("Conversation not found.");
+
+      const body = await buildDraftReplyBody({
+        text: content,
+        emailAccountId,
+        userId,
+      });
+      const existing = thread.messages.findLast(isDraft);
+      const existingDraft =
+        existing &&
+        (await emailProvider.getDraftReferenceForMessage(existing.id));
+      if (existingDraft) {
+        await emailProvider.updateDraft(existingDraft.id, {
+          messageHtml: createReplyContent({
+            textContent: body,
+            message: replyTo,
+          }).html,
+        });
+        return { draftId: existingDraft.id };
+      }
 
       const { draftId } = await emailProvider.draftEmail(
         replyTo,
-        {
-          content: await buildDraftReplyBody({
-            text: content,
-            emailAccountId,
-            userId,
-          }),
-        },
+        { content: body },
         emailAccount.email,
       );
       if (!draftId)
