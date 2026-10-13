@@ -65,6 +65,7 @@ vi.mock("@/app/(app)/[emailAccountId]/compose/ComposeEmailFormLazy", () => ({
     onPopOut?: () => void;
     replyingToEmail?: {
       to?: string;
+      cc?: string;
       threadId?: string;
       forwardedMessageId?: string;
       forwardedAttachments?: Array<{ filename: string }>;
@@ -74,6 +75,7 @@ vi.mock("@/app/(app)/[emailAccountId]/compose/ComposeEmailFormLazy", () => ({
       data-testid="composer"
       data-inline-reply="true"
       data-thread-id={replyingToEmail?.threadId}
+      data-cc={replyingToEmail?.cc}
       data-forwarded-message-id={replyingToEmail?.forwardedMessageId}
       data-forwarded-attachments={replyingToEmail?.forwardedAttachments
         ?.map((attachment) => attachment.filename)
@@ -230,6 +232,31 @@ describe("EmailMessage reply", () => {
       />,
     );
     expect(screen.getByRole("textbox", { name: "Email message" })).toBeTruthy();
+  });
+
+  it("copies the other recipients only when replying to all", () => {
+    const message = createMessage("message-1");
+    render(
+      <EmailMessage
+        expanded
+        message={{
+          ...message,
+          headers: {
+            ...message.headers,
+            to: "user@example.com, Alex Kim <alex@example.com>",
+          },
+        }}
+        onSendSuccess={vi.fn()}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    expect(screen.getByTestId("composer").dataset.cc ?? "").toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply all" }));
+    expect(screen.getByTestId("composer").dataset.cc).toBe("alex@example.com");
   });
 
   it("names To and Cc recipients in the recipient summary", () => {

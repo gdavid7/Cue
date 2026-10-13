@@ -295,22 +295,43 @@ describe("useShortcuts", () => {
     expect(openExternal).toHaveBeenCalledOnce();
   });
 
-  it("treats G then A as back to the app rather than reply all", () => {
-    const backToApp = vi.fn();
+  it("treats G then A as All Mail rather than reply all", () => {
+    const goToAllMail = vi.fn();
     const replyAll = vi.fn();
-    renderShortcuts({ backToApp, replyAll });
+    renderShortcuts({ goToAllMail, replyAll });
 
     press({ key: "g", code: "KeyG" });
     press({ key: "a", code: "KeyA" });
 
-    expect(backToApp).toHaveBeenCalledOnce();
+    expect(goToAllMail).toHaveBeenCalledOnce();
     expect(replyAll).not.toHaveBeenCalled();
   });
 
+  it("treats G then S as Starred rather than star", () => {
+    const goToStarred = vi.fn();
+    const star = vi.fn();
+    renderShortcuts({ goToStarred, star });
+
+    press({ key: "g", code: "KeyG" });
+    press({ key: "s", code: "KeyS" });
+
+    expect(goToStarred).toHaveBeenCalledOnce();
+    expect(star).not.toHaveBeenCalled();
+  });
+
+  it("marks as read with shift+I", () => {
+    const markRead = vi.fn();
+    renderShortcuts({ markRead });
+
+    press({ key: "I", code: "KeyI", shiftKey: true });
+
+    expect(markRead).toHaveBeenCalledOnce();
+  });
+
   it("lets an abandoned sequence prefix through to the next shortcut", () => {
-    const backToApp = vi.fn();
+    const goToAllMail = vi.fn();
     const next = vi.fn();
-    renderShortcuts({ backToApp, next });
+    renderShortcuts({ goToAllMail, next });
 
     // `g` starts a sequence that `j` doesn't complete, so `j` must still move
     // rather than being eaten by the dangling prefix.
@@ -318,18 +339,18 @@ describe("useShortcuts", () => {
     press({ key: "j", code: "KeyJ" });
 
     expect(next).toHaveBeenCalledOnce();
-    expect(backToApp).not.toHaveBeenCalled();
+    expect(goToAllMail).not.toHaveBeenCalled();
   });
 
   it("treats A on its own as reply all", () => {
-    const backToApp = vi.fn();
+    const goToAllMail = vi.fn();
     const replyAll = vi.fn();
-    renderShortcuts({ backToApp, replyAll });
+    renderShortcuts({ goToAllMail, replyAll });
 
     press({ key: "a", code: "KeyA" });
 
     expect(replyAll).toHaveBeenCalledOnce();
-    expect(backToApp).not.toHaveBeenCalled();
+    expect(goToAllMail).not.toHaveBeenCalled();
   });
 
   it("does not bind keys that have no handler", () => {

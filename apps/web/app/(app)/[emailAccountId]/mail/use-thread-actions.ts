@@ -348,6 +348,68 @@ export function useThreadActions({
     [enqueueTargets, resolveTargets],
   );
 
+  const runWithToast = useCallback(
+    async (
+      threadKeys: string[],
+      payload: ThreadMutationPayload,
+      copy: { done: (count: number) => string; failed: string },
+    ) => {
+      const { snapshots, rejectionCodes } = await enqueueTargets(
+        resolveTargets(threadKeys),
+        payload,
+      );
+      if (snapshots.length) toast.success(copy.done(snapshots.length));
+      if (snapshots.length < threadKeys.length) {
+        toast.error(enqueueFailureCopy(copy.failed, rejectionCodes));
+      }
+      return snapshots.map((snapshot) => snapshot.key);
+    },
+    [enqueueTargets, resolveTargets],
+  );
+
+  const markNotSpam = useCallback(
+    (threadKeys: string[]) =>
+      runWithToast(
+        threadKeys,
+        { kind: "not_spam" },
+        {
+          done: (count) =>
+            count === 1
+              ? "Moved to inbox"
+              : `Moved ${count} conversations to inbox`,
+          failed: "Couldn't queue marking as not spam",
+        },
+      ),
+    [runWithToast],
+  );
+
+  const restoreFromTrash = useCallback(
+    (threadKeys: string[]) =>
+      runWithToast(
+        threadKeys,
+        { kind: "untrash" },
+        {
+          done: (count) => summarise("Restored", count),
+          failed: "Couldn't queue restoring",
+        },
+      ),
+    [runWithToast],
+  );
+
+  const setImportantState = useCallback(
+    (threadKeys: string[], important: boolean) =>
+      runWithToast(
+        threadKeys,
+        { kind: "set_important_state", important },
+        {
+          done: (count) =>
+            `Marked ${count === 1 ? "" : `${count} conversations `}as ${important ? "important" : "not important"}`,
+          failed: "Couldn't queue changing importance",
+        },
+      ),
+    [runWithToast],
+  );
+
   return {
     archive: useCallback(
       (threadKeys: string[]) => runUndoable("archive", threadKeys),
@@ -366,6 +428,9 @@ export function useThreadActions({
       [setReadState],
     ),
     markSpam,
+    markNotSpam,
+    restoreFromTrash,
+    setImportantState,
     setReadState,
     setStarredState,
     snooze,

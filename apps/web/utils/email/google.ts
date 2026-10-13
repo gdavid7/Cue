@@ -19,6 +19,7 @@ import { parseMessage } from "@/utils/gmail/message";
 import {
   getMessage,
   getMessages,
+  getRawMessage,
   getSentMessages,
   queryBatchMessages,
   hasPreviousCommunicationsWithSenderOrDomain,
@@ -127,7 +128,12 @@ import { startGmailDraftUploadSession } from "@/utils/gmail/resumable-draft-uplo
 import type { SendEmailBody } from "@/utils/types/mail";
 import { createScopedLogger, type Logger } from "@/utils/logger";
 import { getGmailSignatures } from "@/utils/gmail/signature-settings";
-import { getForwardingAddresses } from "@/utils/gmail/settings";
+import {
+  getForwardingAddresses,
+  getVacationResponder,
+  updateVacationResponder,
+} from "@/utils/gmail/settings";
+import type { VacationResponderBody } from "@/utils/actions/vacation-responder.validation";
 import { withRateLimitRecording } from "@/utils/email/rate-limit";
 import { shouldSkipAutoDraft } from "@/utils/auto-draft";
 import { extractUniqueEmailAddresses } from "@/utils/email";
@@ -294,6 +300,10 @@ export class GmailProvider implements EmailProvider {
   ): Promise<ParsedMessage> {
     const message = await getMessage(messageId, this.client, "full");
     return parseMessage(message, options);
+  }
+
+  async getRawMessage(messageId: string): Promise<Buffer> {
+    return getRawMessage(messageId, this.client);
   }
 
   async getMessageByRfc822MessageId(
@@ -2114,6 +2124,14 @@ export class GmailProvider implements EmailProvider {
 
   async getFolderCounts() {
     return [];
+  }
+
+  async getVacationResponder(): Promise<VacationResponderBody> {
+    return getVacationResponder(this.client);
+  }
+
+  async updateVacationResponder(body: VacationResponderBody): Promise<void> {
+    await updateVacationResponder(this.client, body);
   }
 
   async getForwardingAddresses(): Promise<string[]> {

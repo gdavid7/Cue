@@ -35,12 +35,12 @@ export function parsedMessageMetadata(message: ParsedMessage): MessageMetadata {
     ]),
   ].filter((role) => role !== "inbox" || !archived);
   const categoryIds = labels.filter((label) => label.startsWith("CATEGORY_"));
+  // IMPORTANT stays a label so the Important view and its toggle can see it.
   const labelIds = labels.filter(
     (label) =>
       !(label in ROLE_LABELS) &&
       label !== "UNREAD" &&
       label !== "STARRED" &&
-      label !== "IMPORTANT" &&
       !label.startsWith("CATEGORY_"),
   );
   return {

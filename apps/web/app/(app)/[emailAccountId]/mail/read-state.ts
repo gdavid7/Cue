@@ -44,6 +44,26 @@ export function isThreadArchived(
   );
 }
 
+/** Every message is in Trash (or Spam), so the way out is Restore (or Not spam). */
+export function isThreadOnlyIn(
+  messages: readonly { labelIds?: string[] | null }[],
+  labelId: typeof GmailLabel.TRASH | typeof GmailLabel.SPAM,
+) {
+  return (
+    messages.length > 0 &&
+    messages.every((message) => message.labelIds?.includes(labelId))
+  );
+}
+
+/** Gmail marks importance per message; Gmail shows a thread as important if any is. */
+export function isThreadImportant(
+  messages: readonly { labelIds?: string[] | null }[],
+) {
+  return messages.some((message) =>
+    message.labelIds?.includes(GmailLabel.IMPORTANT),
+  );
+}
+
 /** Read state lives on every message, so marking a thread rewrites all of them. */
 export function withThreadReadState<T extends ListThread>(
   thread: T,

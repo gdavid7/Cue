@@ -71,7 +71,9 @@ describe("MailSidebar", () => {
         "Sent",
         "Archived",
         "Starred",
+        "Snoozed",
         "Scheduled",
+        "All Mail",
         "Spam",
         "Trash",
       ].map((name) =>
@@ -82,10 +84,23 @@ describe("MailSidebar", () => {
       "/mail?type=sent",
       "/mail?type=archive",
       "/mail?type=starred",
+      "/mail?type=snoozed",
       "/mail?type=scheduled",
+      "/mail?type=all",
       "/mail?type=spam",
       "/mail?type=trash",
     ]);
+    expect(screen.queryByText("Important")).toBeNull();
+  });
+
+  it("offers the Important view only where the provider has one", () => {
+    renderSidebar({ supportsImportant: true });
+
+    fireEvent.click(screen.getByText("Mail"));
+
+    expect(
+      screen.getByText("Important").closest("a")?.getAttribute("href"),
+    ).toBe("/mail?type=important");
   });
 
   it("opens the Mail group when one of its views is showing", () => {

@@ -20,7 +20,14 @@ describe("parsedMessageMetadata", () => {
       internalDate: "1735689600000",
       subject: "Hello",
       snippet: "Hi",
-      labelIds: ["INBOX", "UNREAD", "STARRED", "CATEGORY_UPDATES", "Label_2"],
+      labelIds: [
+        "INBOX",
+        "UNREAD",
+        "STARRED",
+        "IMPORTANT",
+        "CATEGORY_UPDATES",
+        "Label_2",
+      ],
       headers: { from: "ada@example.com", to: "me@example.com", date: "" },
       inline: [],
     } as ParsedMessage);
@@ -28,7 +35,7 @@ describe("parsedMessageMetadata", () => {
     expect(metadata.read).toBe(false);
     expect(metadata.starred).toBe(true);
     expect(metadata.categoryIds).toEqual(["CATEGORY_UPDATES"]);
-    expect(metadata.labelIds).toEqual(["Label_2"]);
+    expect(metadata.labelIds).toEqual(["IMPORTANT", "Label_2"]);
   });
 
   it("maps Outlook folder identity into mailbox roles when labels are absent", () => {

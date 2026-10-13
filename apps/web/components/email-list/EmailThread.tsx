@@ -34,6 +34,7 @@ export function EmailThread({
   refetch,
   showReplyButton,
   autoOpenReplyForMessageId,
+  autoOpenReplyAll = false,
   autoOpenForwardForMessageId,
   topRightComponent,
   onSendSuccess,
@@ -54,6 +55,8 @@ export function EmailThread({
   refetch: () => void;
   showReplyButton: boolean;
   autoOpenReplyForMessageId?: string;
+  /** Addresses the auto-opened reply to everyone on the message. */
+  autoOpenReplyAll?: boolean;
   autoOpenForwardForMessageId?: string;
   topRightComponent?: React.ReactNode;
   onSendSuccess?: (
@@ -343,6 +346,7 @@ export function EmailThread({
                   setActiveCompose({ threadId, messageId: message.id })
                 }
                 defaultComposeMode={defaultComposeMode}
+                defaultReplyAll={autoOpenMode === "reply" && autoOpenReplyAll}
                 draftMessages={draftMessages}
                 expanded={expanded(
                   message.id,

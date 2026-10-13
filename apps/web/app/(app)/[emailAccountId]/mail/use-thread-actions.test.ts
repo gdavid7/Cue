@@ -44,6 +44,29 @@ describe("useThreadActions", () => {
     });
   });
 
+  it("restores trash and spam and toggles importance through the engine", async () => {
+    const { result } = renderActions();
+    await act(() => result.current.restoreFromTrash(["thread"]));
+    await act(() => result.current.markNotSpam(["thread"]));
+    await act(() => result.current.setImportantState(["thread"], true));
+
+    expect(
+      mail.client.submitConversations.mock.calls.map(([call]) => call.change),
+    ).toEqual([
+      { kind: "restore_from_trash" },
+      { kind: "set_spam", spam: false },
+      {
+        kind: "set_membership",
+        membership: "label",
+        id: "IMPORTANT",
+        present: true,
+      },
+    ]);
+    expect(notifications.success).toHaveBeenLastCalledWith(
+      "Marked as important",
+    );
+  });
+
   it("archives a multi-thread selection as one engine command", async () => {
     const threads = [
       createThread(["INBOX"], "one"),

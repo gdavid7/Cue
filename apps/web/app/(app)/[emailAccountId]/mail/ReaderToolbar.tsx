@@ -9,12 +9,15 @@ import {
   ChevronsUpDownIcon,
   MailIcon,
   MailOpenIcon,
+  ShieldCheckIcon,
+  Undo2Icon,
 } from "lucide-react";
 import {
   MailReaderToolbar,
   type MailReaderToolbarButton,
 } from "@inboxzero/mail-ui/MailReaderSurface";
 import { MailLabelChip } from "@/app/(app)/[emailAccountId]/mail/MailLabelChip";
+import { SnoozeButton } from "@/app/(app)/[emailAccountId]/mail/SnoozeButton";
 import type { EmailMessageCellLabel } from "@/components/EmailMessageCellLabels";
 import { Tooltip } from "@/components/Tooltip";
 import { Button } from "@/components/ui/button";
@@ -35,6 +38,11 @@ type ReaderToolbarProps = {
   onArchive: () => void;
   /** Set when the thread is already archived; swaps out the Archive button. */
   onMoveToInbox?: () => void;
+  /** Set when the thread is in the trash; swaps out the Archive button. */
+  onRestore?: () => void;
+  /** Set when the thread is in spam; swaps out the Archive button. */
+  onNotSpam?: () => void;
+  onSnooze?: (until: Date) => void;
   onMarkRead: () => void;
   onMarkUnread: () => void;
   /** The ⋯ dropdown, i.e. `ThreadActionsMenu`, composed by the shell. */
@@ -60,6 +68,9 @@ export function ReaderToolbar({
   onBackToInbox,
   onArchive,
   onMoveToInbox,
+  onRestore,
+  onNotSpam,
+  onSnooze,
   onMarkRead,
   onMarkUnread,
   menu,
@@ -75,7 +86,10 @@ export function ReaderToolbar({
         mark_read: <MailOpenIcon className="size-3.5" />,
         move_to_inbox: <ArchiveRestoreIcon className="size-3.5" />,
         mark_unread: <MailIcon className="size-3.5" />,
+        not_spam: <ShieldCheckIcon className="size-3.5" />,
+        restore: <Undo2Icon className="size-3.5" />,
       }}
+      extraActions={onSnooze ? <SnoozeButton onSnooze={onSnooze} /> : null}
       isStarred={isStarred}
       isUnread={isUnread}
       labelChips={labels.map((label) => (
@@ -91,6 +105,8 @@ export function ReaderToolbar({
       messageExpansion={messageExpansion}
       onArchive={onArchive}
       onMoveToInbox={onMoveToInbox}
+      onRestore={onRestore}
+      onNotSpam={onNotSpam}
       onBackToInbox={onBackToInbox}
       onMarkRead={onMarkRead}
       onMarkUnread={onMarkUnread}
@@ -128,8 +144,14 @@ function renderActionTooltip(
   if (button.action === "mark_unread") {
     return <Tooltip shortcuts={["markUnread"]}>{children}</Tooltip>;
   }
+  if (button.action === "restore") {
+    return <Tooltip content="Restore to inbox">{children}</Tooltip>;
+  }
+  if (button.action === "not_spam") {
+    return <Tooltip content="Not spam">{children}</Tooltip>;
+  }
   if (button.action === "mark_read") {
-    return <Tooltip content="Mark as read">{children}</Tooltip>;
+    return <Tooltip shortcuts={["markRead"]}>{children}</Tooltip>;
   }
   return children;
 }

@@ -90,7 +90,7 @@ export function getSnoozePresets(now: Date) {
   });
 }
 
-function formatSnoozeTime(date: Date) {
+export function formatSnoozeTime(date: Date) {
   return format(date, "EEE, MMM d 'at' p");
 }
 

@@ -12,6 +12,16 @@ describe("threadsQueryToPredicate", () => {
     });
   });
 
+  it("maps the Important view onto Gmail's IMPORTANT label across the mailbox", () => {
+    expect(threadsQueryToPredicate({ type: "important" })).toEqual({
+      kind: "all",
+      predicates: [
+        { kind: "mailbox", mailbox: "all" },
+        { kind: "membership", membership: "label", id: "IMPORTANT" },
+      ],
+    });
+  });
+
   it("maps Outlook inbox sections onto an inbox section predicate", () => {
     expect(
       threadsQueryToPredicate({ type: "inbox", inboxSection: "focused" }),

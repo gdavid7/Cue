@@ -23,3 +23,9 @@ export const attachmentQuery = z.object({
   filename: z.string(),
 });
 export type AttachmentQuery = z.infer<typeof attachmentQuery>;
+
+export const rawMessageQuery = z.object({
+  messageId: z.string().min(1),
+  /** Present to save the message as an .eml file instead of viewing it. */
+  download: z.literal("1").nullish(),
+});

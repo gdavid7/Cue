@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
+  buildComposeReplyRecipients,
   buildReplyAllRecipients,
   formatCcList,
+  hasReplyAllRecipients,
   mergeAndDedupeRecipients,
 } from "./reply-all";
 import type { ParsedMessageHeaders } from "@/utils/types";
@@ -489,5 +491,95 @@ describe("mergeAndDedupeRecipients", () => {
       '"Doe, Jane" <jane@example.com>',
       '"Smith, Bob" <bob@example.com>',
     ]);
+  });
+});
+
+describe("buildComposeReplyRecipients", () => {
+  const headers: ParsedMessageHeaders = {
+    from: "Dana <dana@example.com>",
+    to: "Me <me@example.com>, Alex <alex@example.com>",
+    cc: "sam@example.com, ME@example.com",
+    subject: "Plans",
+    date: "2024-01-01",
+  };
+
+  it("replies only to the sender, keeping the original Cc", () => {
+    expect(
+      buildComposeReplyRecipients({
+        headers,
+        sentFromUser: false,
+        replyAll: false,
+        userEmail: "me@example.com",
+      }),
+    ).toEqual({
+      to: "Dana <dana@example.com>",
+      cc: "sam@example.com, ME@example.com",
+      bcc: "",
+    });
+  });
+
+  it("copies everyone else on the message except the user for reply all", () => {
+    const recipients = buildComposeReplyRecipients({
+      headers,
+      sentFromUser: false,
+      replyAll: true,
+      userEmail: "me@example.com",
+    });
+
+    expect(recipients.to).toBe("Dana <dana@example.com>");
+    expect(recipients.cc.split(", ").sort()).toEqual([
+      "alex@example.com",
+      "sam@example.com",
+    ]);
+  });
+
+  it("follows up on the user's own message with its original recipients", () => {
+    expect(
+      buildComposeReplyRecipients({
+        headers: {
+          ...headers,
+          from: "me@example.com",
+          bcc: "hidden@example.com",
+        },
+        sentFromUser: true,
+        replyAll: true,
+        userEmail: "me@example.com",
+      }),
+    ).toEqual({
+      to: headers.to,
+      cc: headers.cc,
+      bcc: "hidden@example.com",
+    });
+  });
+});
+
+describe("hasReplyAllRecipients", () => {
+  it("is false for a message only between the sender and the user", () => {
+    expect(
+      hasReplyAllRecipients(
+        {
+          from: "dana@example.com",
+          to: "Me <me@example.com>",
+          subject: "Hi",
+          date: "2024-01-01",
+        },
+        "me@example.com",
+      ),
+    ).toBe(false);
+  });
+
+  it("is true when someone else is on the message", () => {
+    expect(
+      hasReplyAllRecipients(
+        {
+          from: "dana@example.com",
+          to: "me@example.com",
+          cc: "alex@example.com",
+          subject: "Hi",
+          date: "2024-01-01",
+        },
+        "me@example.com",
+      ),
+    ).toBe(true);
   });
 });

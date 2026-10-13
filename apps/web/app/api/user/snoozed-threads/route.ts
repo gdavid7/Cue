@@ -2,7 +2,10 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { SnoozedThreadStatus } from "@/generated/prisma/enums";
 import { snoozeThreadsBody } from "@/utils/actions/snooze.validation";
-import { withEmailAccount, withEmailProvider } from "@/utils/middleware";
+import { mapWithConcurrency } from "@/utils/async";
+import type { EmailProvider } from "@/utils/email/types";
+import type { Logger } from "@/utils/logger";
+import { withEmailProvider } from "@/utils/middleware";
 import prisma from "@/utils/prisma";
 import { snoozeThreads } from "@/utils/snooze/snooze";
 import { unsnoozeThreads } from "@/utils/snooze/unsnooze";
@@ -25,8 +28,14 @@ export type UnsnoozeThreadsResponse = Awaited<
   ReturnType<typeof unsnoozeThreads>
 >;
 
-export const GET = withEmailAccount("user/snoozed-threads", async (request) =>
-  NextResponse.json(await listSnoozedThreads(request.auth.emailAccountId)),
+export const GET = withEmailProvider("user/snoozed-threads", async (request) =>
+  NextResponse.json(
+    await listSnoozedThreads({
+      emailAccountId: request.auth.emailAccountId,
+      provider: request.emailProvider,
+      logger: request.logger,
+    }),
+  ),
 );
 
 export const POST = withEmailProvider(
@@ -59,13 +68,22 @@ export const DELETE = withEmailProvider(
   },
 );
 
-async function listSnoozedThreads(emailAccountId: string) {
+async function listSnoozedThreads({
+  emailAccountId,
+  provider,
+  logger,
+}: {
+  emailAccountId: string;
+  provider: EmailProvider;
+  logger: Logger;
+}) {
   const rows = await prisma.snoozedThread.findMany({
     where: {
       emailAccountId,
       status: { in: ACTIVE_SNOOZE_STATUSES },
     },
     orderBy: { scheduledFor: "asc" },
+    take: MAX_LISTED_SNOOZES,
     select: {
       id: true,
       threadId: true,
@@ -74,12 +92,38 @@ async function listSnoozedThreads(emailAccountId: string) {
     },
   });
 
+  // The rows only know thread ids; the provider supplies what each one is.
+  const summaries = await mapWithConcurrency(
+    rows,
+    SUMMARY_CONCURRENCY,
+    async (row) => {
+      try {
+        const message = await provider.getLatestMessageInThread(row.threadId);
+        return {
+          subject: message?.headers.subject || message?.subject || "",
+          from: message?.headers.from || "",
+          snippet: message?.snippet || "",
+        };
+      } catch (error) {
+        logger.warn("Failed to load snoozed thread", {
+          threadId: row.threadId,
+          error,
+        });
+        return { subject: "", from: "", snippet: "" };
+      }
+    },
+  );
+
   return {
-    threads: rows.map((row) => ({
+    threads: rows.map((row, index) => ({
       id: row.id,
       threadId: row.threadId,
       scheduledFor: row.scheduledFor.toISOString(),
       status: row.status,
+      ...summaries[index],
     })),
   };
 }
+
+const MAX_LISTED_SNOOZES = 100;
+const SUMMARY_CONCURRENCY = 5;

@@ -5,6 +5,7 @@ import type { ListThread } from "./types";
 import { MailPanelErrorBoundary } from "@/app/(app)/[emailAccountId]/mail/MailPanelErrorBoundary";
 import { isThreadStarred } from "@/app/(app)/[emailAccountId]/mail/star-state";
 import {
+  type ReactNode,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -14,6 +15,7 @@ import {
   useState,
 } from "react";
 import { parseAsString, useQueryState, useQueryStates } from "nuqs";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ListToolbar } from "@/app/(app)/[emailAccountId]/mail/ListToolbar";
 import { getMailSearchFolders } from "@/app/(app)/[emailAccountId]/mail/outlook-folder-list";
@@ -21,6 +23,7 @@ import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccou
 import {
   getMailNavPath,
   MAIL_SCHEDULED_TYPE,
+  MAIL_SNOOZED_TYPE,
 } from "@/app/(app)/[emailAccountId]/mail/MailSidebar";
 import { MailShellSidebar } from "@/app/(app)/[emailAccountId]/mail/MailShellSidebar";
 import { MailSplitTabs } from "@/app/(app)/[emailAccountId]/mail/MailSplitTabs";
@@ -28,6 +31,7 @@ import { SelectAllCheckbox } from "@/app/(app)/[emailAccountId]/mail/SelectAllCh
 import { MailReaderPane } from "@/app/(app)/[emailAccountId]/mail/MailReaderPane";
 import { MailTitlebarNav } from "@/app/(app)/[emailAccountId]/mail/MailTitlebarNav";
 import { ScheduledEmailList } from "@/app/(app)/[emailAccountId]/mail/ScheduledEmailList";
+import { SnoozedThreadList } from "@/app/(app)/[emailAccountId]/mail/SnoozedThreadList";
 import type { MailboxItem } from "@/app/(app)/[emailAccountId]/mail/MailboxItemContextMenu";
 import { ListSenderCommands } from "@/app/(app)/[emailAccountId]/mail/ListSenderCommands";
 import { extractEmailAddress } from "@/utils/email";
@@ -35,6 +39,7 @@ import { LabelPickerDialog } from "@/app/(app)/[emailAccountId]/mail/LabelPicker
 import { ThreadList } from "@/app/(app)/[emailAccountId]/mail/ThreadList";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
 import { useTranslateThread } from "@/app/(app)/[emailAccountId]/mail/use-thread-translation";
+import { printThread } from "@/app/(app)/[emailAccountId]/mail/print-thread";
 import { GmailLabel } from "@/utils/gmail/label";
 import {
   getComposeTargetMessageId,
@@ -62,6 +67,8 @@ import { useWarmNeighbourThreads } from "@/app/(app)/[emailAccountId]/mail/use-w
 import { useMailPerformanceTelemetry } from "@/app/(app)/[emailAccountId]/mail/use-mail-performance-telemetry";
 import {
   isThreadArchived,
+  isThreadImportant,
+  isThreadOnlyIn,
   isThreadUnread,
 } from "@/app/(app)/[emailAccountId]/mail/read-state";
 import { MailLayout, MailSplitFilterKind } from "@/generated/prisma/enums";
@@ -133,6 +140,7 @@ export function MailShell() {
   const { folders } = useFolders(provider);
   const { data: settings, mutate: mutateSettings } = useMailSettings();
   const { toggleSidebar } = useSidebar();
+  const router = useRouter();
   const isPaletteOpen = useAtomValue(commandPaletteOpenAtom);
   const isHelpOpen = useAtomValue(shortcutsDialogOpenAtom);
   const setIsHelpOpen = useSetAtom(shortcutsDialogOpenAtom);
@@ -164,6 +172,7 @@ export function MailShell() {
     targets: ThreadSelection[];
   } | null>(null);
   const [replyToMessageId, setReplyToMessageId] = useState<string>();
+  const [replyAll, setReplyAll] = useState(false);
   const [forwardToMessageId, setForwardToMessageId] = useState<string>();
   const pendingComposeRequest = useRef<{
     mode: "reply" | "forward";
@@ -293,6 +302,9 @@ export function MailShell() {
   // list to fetch.
   const isScheduledView =
     !isAllAccounts && !searchQuery && scopeType === MAIL_SCHEDULED_TYPE;
+  // The mailbox doesn't know what's snoozed or until when; our database does.
+  const isSnoozedView =
+    !isAllAccounts && !searchQuery && scopeType === MAIL_SNOOZED_TYPE;
   const [settledSearch, setSettledSearch] = useState(searchQuery);
   useEffect(() => {
     const timeout = setTimeout(() => setSettledSearch(searchQuery), 250);
@@ -376,7 +388,8 @@ export function MailShell() {
   const accountThreadState = useMailThreads({
     emailAccountId,
     query,
-    enabled: !isAllAccounts && searchSettled && !isScheduledView,
+    enabled:
+      !isAllAccounts && searchSettled && !isScheduledView && !isSnoozedView,
   });
   const combinedThreadState = useCombinedMailThreads({
     accounts: combinedAccounts,
@@ -537,6 +550,17 @@ export function MailShell() {
       });
     };
   }, [openMessages, readerEmailAccountId, translateThread]);
+  const printOpenThread = useMemo(() => {
+    const printable = openMessages.filter(
+      (message) => !message.labelIds?.includes(GmailLabel.DRAFT),
+    );
+    if (!printable.length) return;
+    return () =>
+      printThread({
+        subject: printable[0].headers.subject || "(no subject)",
+        messages: printable,
+      });
+  }, [openMessages]);
   const teamCommentsAvailable = useTeamCommentsAvailable(readerEmailAccountId);
   const openTeamComments = useMemo(
     () =>
@@ -619,6 +643,9 @@ export function MailShell() {
     moveToInbox,
     trash,
     markSpam,
+    markNotSpam,
+    restoreFromTrash,
+    setImportantState,
     setReadState,
     setStarredState,
     snooze,
@@ -646,6 +673,7 @@ export function MailShell() {
   );
   const composeTargetMessageId = getComposeTargetMessageId(openMessages);
   const requestReaderReply = useCallback(() => {
+    setReplyAll(false);
     const messageId = composeTargetMessageId;
     if (messageId) {
       pendingComposeRequest.current = null;
@@ -861,6 +889,32 @@ export function MailShell() {
   const targetsArchived =
     actionTargets.length > 0 &&
     actionTargets.every((target) => isThreadArchived(target.messages));
+  // Archiving from Trash or Spam would leave it there, so those offer the way out.
+  const targetsTrashed =
+    actionTargets.length > 0 &&
+    actionTargets.every((target) =>
+      isThreadOnlyIn(target.messages, GmailLabel.TRASH),
+    );
+  const targetsSpam =
+    actionTargets.length > 0 &&
+    actionTargets.every((target) =>
+      isThreadOnlyIn(target.messages, GmailLabel.SPAM),
+    );
+  const restoreTargets = useCallback(
+    () => runOn(restoreFromTrash, true, true),
+    [restoreFromTrash, runOn],
+  );
+  const notSpamTargets = useCallback(
+    () => runOn(markNotSpam, true, true),
+    [markNotSpam, runOn],
+  );
+  const allImportant =
+    actionTargets.length > 0 &&
+    actionTargets.every((target) => isThreadImportant(target.messages));
+  const importantTargets = useCallback(
+    () => runOn((ids) => setImportantState(ids, !allImportant), false),
+    [allImportant, runOn, setImportantState],
+  );
   const trashTargets = useCallback(
     () => runOn(trash, true, true),
     [runOn, trash],
@@ -1076,6 +1130,11 @@ export function MailShell() {
     setSearchParam,
   ]);
 
+  const openSnoozedThread = useCallback(
+    (threadId: string) => setOpenThread({ emailAccountId, threadId }),
+    [emailAccountId, setOpenThread],
+  );
+
   const closeReader = useCallback(() => {
     setOpenThread(null);
   }, [setOpenThread]);
@@ -1157,13 +1216,15 @@ export function MailShell() {
       markSpam: markSpamTargets,
       markUnread: markUnreadTargets,
       delete: trashTargets,
-      reply: () => {
-        setForwardToMessageId(undefined);
-        if (!openThreadId && focusedThread) {
-          setOpenThread(getListThreadSelection(focusedThread, emailAccountId));
-        }
-        setReplyToMessageId(composeTargetMessageId);
-      },
+      reply: () => openReply(false),
+      replyAll: () => openReply(true),
+      markRead: markReadTargets,
+      // The combined inbox has no per-account mailboxes to go to.
+      goToInbox: isAllAccounts ? undefined : () => goToMailbox("inbox"),
+      goToStarred: isAllAccounts ? undefined : () => goToMailbox("starred"),
+      goToSent: isAllAccounts ? undefined : () => goToMailbox("sent"),
+      goToDrafts: isAllAccounts ? undefined : () => goToMailbox("draft"),
+      goToAllMail: isAllAccounts ? undefined : () => goToMailbox("all"),
       forward: singleActionTarget ? requestForwardTarget : undefined,
       moreActions: openThreadId
         ? () => setIsMenuOpen((open) => !open)
@@ -1196,6 +1257,22 @@ export function MailShell() {
           },
     };
   })();
+
+  // Same destination as the sidebar row, so the view starts fresh.
+  function goToMailbox(type: string) {
+    router.push(
+      prefixPath(emailAccountId, getMailNavPath({ kind: "type", type })),
+    );
+  }
+
+  function openReply(toEveryone: boolean) {
+    setForwardToMessageId(undefined);
+    if (!openThreadId && focusedThread) {
+      setOpenThread(getListThreadSelection(focusedThread, emailAccountId));
+    }
+    setReplyAll(toEveryone);
+    setReplyToMessageId(composeTargetMessageId);
+  }
 
   useLayoutEffect(() => {
     // The search field remounts when selection clears or the list returns, so
@@ -1344,6 +1421,12 @@ export function MailShell() {
       ) : null,
     [threadCount, selectedCount, selectAll, clearSelection],
   );
+
+  // Views kept in our database rather than the mailbox list their own rows.
+  let databaseList: ReactNode = null;
+  if (isScheduledView) databaseList = <ScheduledEmailList />;
+  else if (isSnoozedView)
+    databaseList = <SnoozedThreadList onOpenThread={openSnoozedThread} />;
 
   const showList = layout === "split" || !openThreadSelection;
   const showReader = layout === "split" || Boolean(openThreadSelection);
@@ -1499,9 +1582,7 @@ export function MailShell() {
                 ])}
                 title="Unable to show your mail list"
               >
-                {isScheduledView ? (
-                  <ScheduledEmailList />
-                ) : (
+                {databaseList ?? (
                   <LoadingContent
                     loading={
                       !threads.length &&
@@ -1568,12 +1649,19 @@ export function MailShell() {
                 lastMessage={openMessages.at(-1) ?? null}
                 isStarred={allStarred}
                 onToggleStar={starTargets}
+                isImportant={allImportant}
+                onToggleImportant={
+                  isGoogleProvider(readerEmailAccount?.account.provider)
+                    ? importantTargets
+                    : undefined
+                }
                 onMarkSpam={markSpamTargets}
                 onDelete={trashTargets}
                 onLabel={canLabel ? openLabelPicker : undefined}
                 onMove={canLabel ? openMovePicker : undefined}
                 onTranslate={translateOpenThread}
                 onComment={openTeamComments}
+                onPrint={printOpenThread}
                 isMenuOpen={isMenuOpen}
                 onMenuOpenChange={setIsMenuOpen}
                 enableMessageNavigation={!sidePanelThreadId}
@@ -1597,12 +1685,18 @@ export function MailShell() {
                 onRemoveLabel={onRemoveLabel}
                 onArchive={archiveTargets}
                 onMoveToInbox={targetsArchived ? moveToInboxTargets : undefined}
+                onRestore={targetsTrashed ? restoreTargets : undefined}
+                onNotSpam={targetsSpam ? notSpamTargets : undefined}
+                onSnooze={
+                  targetsTrashed || targetsSpam ? undefined : snoozeTargets
+                }
                 isUnread={isOpenThreadUnread}
                 onMarkRead={markOpenThreadRead}
                 onMarkUnread={markUnreadTargets}
                 refetch={refetchReader}
                 onSendSuccess={onSendSuccess}
                 autoOpenReplyForMessageId={replyToMessageId}
+                autoOpenReplyAll={replyAll}
                 autoOpenForwardForMessageId={forwardToMessageId}
               />
             </div>

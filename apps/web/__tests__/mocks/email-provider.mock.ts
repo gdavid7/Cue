@@ -50,6 +50,9 @@ export function createMockEmailProvider(
     getMessage: vi.fn().mockResolvedValue(defaultMessage),
     getMessageByRfc822MessageId: vi.fn().mockResolvedValue(null),
     getMessagesBatch: vi.fn().mockResolvedValue([defaultMessage]),
+    getRawMessage: vi.fn().mockResolvedValue(Buffer.from("")),
+    getVacationResponder: vi.fn(),
+    updateVacationResponder: vi.fn(),
     getOriginalMessage: vi.fn().mockResolvedValue(null),
 
     // Thread operations
