@@ -5,6 +5,7 @@ import type { ListThread } from "./types";
 import { MailPanelErrorBoundary } from "@/app/(app)/[emailAccountId]/mail/MailPanelErrorBoundary";
 import { isThreadStarred } from "@/app/(app)/[emailAccountId]/mail/star-state";
 import {
+  type ReactNode,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -21,6 +22,7 @@ import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccou
 import {
   getMailNavPath,
   MAIL_SCHEDULED_TYPE,
+  MAIL_SNOOZED_TYPE,
 } from "@/app/(app)/[emailAccountId]/mail/MailSidebar";
 import { MailShellSidebar } from "@/app/(app)/[emailAccountId]/mail/MailShellSidebar";
 import { MailSplitTabs } from "@/app/(app)/[emailAccountId]/mail/MailSplitTabs";
@@ -28,6 +30,7 @@ import { SelectAllCheckbox } from "@/app/(app)/[emailAccountId]/mail/SelectAllCh
 import { MailReaderPane } from "@/app/(app)/[emailAccountId]/mail/MailReaderPane";
 import { MailTitlebarNav } from "@/app/(app)/[emailAccountId]/mail/MailTitlebarNav";
 import { ScheduledEmailList } from "@/app/(app)/[emailAccountId]/mail/ScheduledEmailList";
+import { SnoozedThreadList } from "@/app/(app)/[emailAccountId]/mail/SnoozedThreadList";
 import type { MailboxItem } from "@/app/(app)/[emailAccountId]/mail/MailboxItemContextMenu";
 import { ListSenderCommands } from "@/app/(app)/[emailAccountId]/mail/ListSenderCommands";
 import { extractEmailAddress } from "@/utils/email";
@@ -296,6 +299,9 @@ export function MailShell() {
   // list to fetch.
   const isScheduledView =
     !isAllAccounts && !searchQuery && scopeType === MAIL_SCHEDULED_TYPE;
+  // The mailbox doesn't know what's snoozed or until when; our database does.
+  const isSnoozedView =
+    !isAllAccounts && !searchQuery && scopeType === MAIL_SNOOZED_TYPE;
   const [settledSearch, setSettledSearch] = useState(searchQuery);
   useEffect(() => {
     const timeout = setTimeout(() => setSettledSearch(searchQuery), 250);
@@ -379,7 +385,8 @@ export function MailShell() {
   const accountThreadState = useMailThreads({
     emailAccountId,
     query,
-    enabled: !isAllAccounts && searchSettled && !isScheduledView,
+    enabled:
+      !isAllAccounts && searchSettled && !isScheduledView && !isSnoozedView,
   });
   const combinedThreadState = useCombinedMailThreads({
     accounts: combinedAccounts,
@@ -1097,6 +1104,11 @@ export function MailShell() {
     setSearchParam,
   ]);
 
+  const openSnoozedThread = useCallback(
+    (threadId: string) => setOpenThread({ emailAccountId, threadId }),
+    [emailAccountId, setOpenThread],
+  );
+
   const closeReader = useCallback(() => {
     setOpenThread(null);
   }, [setOpenThread]);
@@ -1370,6 +1382,12 @@ export function MailShell() {
     [threadCount, selectedCount, selectAll, clearSelection],
   );
 
+  // Views kept in our database rather than the mailbox list their own rows.
+  let databaseList: ReactNode = null;
+  if (isScheduledView) databaseList = <ScheduledEmailList />;
+  else if (isSnoozedView)
+    databaseList = <SnoozedThreadList onOpenThread={openSnoozedThread} />;
+
   const showList = layout === "split" || !openThreadSelection;
   const showReader = layout === "split" || Boolean(openThreadSelection);
   const readerUserLabels = isAllAccounts
@@ -1524,9 +1542,7 @@ export function MailShell() {
                 ])}
                 title="Unable to show your mail list"
               >
-                {isScheduledView ? (
-                  <ScheduledEmailList />
-                ) : (
+                {databaseList ?? (
                   <LoadingContent
                     loading={
                       !threads.length &&

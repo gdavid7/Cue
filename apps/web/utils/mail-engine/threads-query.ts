@@ -73,6 +73,10 @@ export function threadsQueryToPredicate(query: ThreadsQuery): MailPredicate {
     clauses.push({ kind: "mailbox", mailbox: "snoozed" });
   } else if (query.type === "all") {
     clauses.push({ kind: "mailbox", mailbox: "all" });
+  } else if (query.type === "important") {
+    // Gmail's Important view spans the mailbox, not just the inbox.
+    clauses.push({ kind: "mailbox", mailbox: "all" });
+    clauses.push(gmailTokenToPredicate("IMPORTANT"));
   } else if (query.type?.startsWith("CATEGORY_")) {
     clauses.push(gmailTokenToPredicate(query.type));
   } else if (

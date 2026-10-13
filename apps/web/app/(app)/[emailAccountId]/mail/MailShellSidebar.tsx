@@ -219,6 +219,7 @@ export const MailShellSidebar = memo(function MailShellSidebar({
           onDeleteMailboxItem={onDeleteMailboxItem}
           labelEditMode={isOutlook ? "color" : "name-and-color"}
           supportsLabelVisibility={isGoogle}
+          supportsImportant={isGoogle}
           labelColorOptions={
             isOutlook ? OUTLOOK_LABEL_COLOR_OPTIONS : GMAIL_LABEL_COLORS
           }

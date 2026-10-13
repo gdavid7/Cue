@@ -9,11 +9,14 @@ import {
   BellIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  AlarmClockIcon,
   Clock3Icon,
   FileIcon,
+  FlagIcon,
   FolderIcon,
   InboxIcon,
   type LucideIcon,
+  MailsIcon,
   MegaphoneIcon,
   MessagesSquareIcon,
   PenLineIcon,
@@ -85,6 +88,8 @@ export type MailSidebarProps = {
   labelColorOptions: readonly MailboxItemColorOption[];
   /** Gmail lets a label be hidden from the label and message lists. */
   supportsLabelVisibility?: boolean;
+  /** Gmail has an Important view; Outlook has no matching folder. */
+  supportsImportant?: boolean;
   /** Hide the categories group behind a toggle, collapsed by default. */
   collapsibleCategories?: boolean;
   /** Icon-only rail: rows shrink to their icon and names move into tooltips. */
@@ -100,9 +105,12 @@ type SystemItem = {
   /** null means the row never shows a count (a "sent unread" number is noise). */
   countId: string | null;
   Icon: LucideIcon;
+  /** Shown only for accounts with an Important view. */
+  importantOnly?: boolean;
 };
 
 export const MAIL_SCHEDULED_TYPE = "scheduled";
+export const MAIL_SNOOZED_TYPE = "snoozed";
 
 /** Everything the inbox isn't. Visited rarely enough to stay behind a toggle. */
 const MAILBOX_ITEMS: SystemItem[] = [
@@ -111,11 +119,25 @@ const MAILBOX_ITEMS: SystemItem[] = [
   { name: "Archived", type: "archive", countId: null, Icon: ArchiveIcon },
   { name: "Starred", type: "starred", countId: null, Icon: StarIcon },
   {
+    name: "Important",
+    type: "important",
+    countId: null,
+    Icon: FlagIcon,
+    importantOnly: true,
+  },
+  {
+    name: "Snoozed",
+    type: MAIL_SNOOZED_TYPE,
+    countId: null,
+    Icon: AlarmClockIcon,
+  },
+  {
     name: "Scheduled",
     type: MAIL_SCHEDULED_TYPE,
     countId: null,
     Icon: Clock3Icon,
   },
+  { name: "All Mail", type: "all", countId: null, Icon: MailsIcon },
   { name: "Spam", type: "spam", countId: null, Icon: ShieldAlertIcon },
   { name: "Trash", type: "trash", countId: null, Icon: Trash2Icon },
 ];
@@ -180,6 +202,7 @@ export function MailSidebar({
   labelEditMode,
   labelColorOptions,
   supportsLabelVisibility = false,
+  supportsImportant = false,
   collapsibleCategories = false,
   collapsed = false,
   footer,
@@ -217,10 +240,13 @@ export function MailSidebar({
   const showCategoryRows =
     !collapsibleCategories || (collapsed ? isCategoryActive : showCategories);
 
+  const mailboxItems = MAILBOX_ITEMS.filter(
+    (item) => supportsImportant || !item.importantOnly,
+  );
   const isMailboxActive =
     !activeLabelId &&
     !activeFolderId &&
-    MAILBOX_ITEMS.some((item) => item.type === activeType);
+    mailboxItems.some((item) => item.type === activeType);
   const [showMailboxes, setShowMailboxes] = useState(isMailboxActive);
   const showMailboxRows = collapsed ? isMailboxActive : showMailboxes;
 
@@ -340,7 +366,7 @@ export function MailSidebar({
             </GroupHeading>
             {showMailboxRows && (
               <nav className="flex flex-col gap-px">
-                {MAILBOX_ITEMS.map(({ name, type, countId, Icon }) => (
+                {mailboxItems.map(({ name, type, countId, Icon }) => (
                   <NavRow
                     key={type}
                     href={hrefFor({ kind: "type", type })}
