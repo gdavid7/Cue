@@ -55,6 +55,7 @@ import { deleteMeetingNotesAction } from "@/utils/actions/meeting-recorder";
 import { getActionErrorMessage } from "@/utils/error";
 import { formatTranscriptTimestamp } from "@/utils/meeting-recorder/transcript-prompt";
 import { getAccountScopedKey } from "@/utils/swr";
+import { BRAND_NAME } from "@/utils/branding";
 
 export function MeetingDetail({
   meetingId,
@@ -317,7 +318,7 @@ export function MeetingDetail({
               <AlertDialogTitle>Delete meeting notes?</AlertDialogTitle>
               <AlertDialogDescription>
                 The summary and transcript will be permanently deleted from
-                Inbox Zero. Recap emails already sent and follow-up drafts in
+                {BRAND_NAME}. Recap emails already sent and follow-up drafts in
                 your mailbox will remain.
               </AlertDialogDescription>
             </AlertDialogHeader>

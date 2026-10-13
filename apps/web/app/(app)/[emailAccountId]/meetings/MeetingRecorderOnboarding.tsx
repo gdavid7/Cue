@@ -22,6 +22,7 @@ import { useAccount } from "@/providers/EmailAccountProvider";
 import { getMeetingBotDisplayName } from "@/utils/meeting-recorder/bot-provider";
 import { ConnectCalendar } from "@/app/(app)/[emailAccountId]/calendars/ConnectCalendar";
 import { JOIN_RULE_OPTIONS } from "@/app/(app)/[emailAccountId]/meetings/join-rule-options";
+import { BRAND_NAME } from "@/utils/branding";
 
 const features = [
   {
@@ -73,7 +74,7 @@ export function MeetingRecorderOnboarding({
       imageSrc="/images/illustrations/calling-help.svg"
       imageAlt="Meeting notetaker"
       title="Never write meeting notes again"
-      description="Inbox Zero joins your calls, takes the notes, and drafts the follow-up email."
+      description={`${BRAND_NAME} joins your calls, takes the notes, and drafts the follow-up email.`}
       features={features}
     >
       {hasCalendarConnected ? (

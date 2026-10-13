@@ -13,6 +13,7 @@ import {
 import { isGoogleProvider } from "@/utils/email/provider-types";
 import { prefixPath } from "@/utils/path";
 import { useAccount } from "@/providers/EmailAccountProvider";
+import { BRAND_NAME } from "@/utils/branding";
 
 export default function RequestAccessPage() {
   const { emailAccountId, provider } = useAccount();
@@ -25,7 +26,7 @@ export default function RequestAccessPage() {
           <CardHeader>
             <CardTitle>Mail</CardTitle>
             <CardDescription>
-              Open your inbox in the Inbox Zero mail client.
+              Open your inbox in the {BRAND_NAME} mail client.
             </CardDescription>
           </CardHeader>
           <CardContent>

@@ -68,7 +68,6 @@ import { isGoogleProvider } from "@/utils/email/provider-types";
 import { NavUser } from "@/components/NavUser";
 import { PremiumCard } from "@/components/PremiumCard";
 import { FeedbackSidebarButton } from "@/components/FeedbackDialog";
-import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 
 type NavItem = {
   name: string;
@@ -87,12 +86,6 @@ export const useNavigation = () => {
   const showMeetingBriefs = useMeetingBriefsEnabled();
   const showMeetingRecorder = useMeetingRecorderEnabled();
   const showIntegrations = useIntegrationsEnabled();
-  const [isDesktopApp, setIsDesktopApp] = useState(false);
-
-  useEffect(() => {
-    setIsDesktopApp(Boolean(getInboxZeroDesktopApp()));
-  }, []);
-
   const { emailAccount, emailAccountId, provider } = useAccount();
   const currentEmailAccountId = emailAccount?.id || emailAccountId;
 
@@ -103,15 +96,12 @@ export const useNavigation = () => {
         href: prefixPath(currentEmailAccountId, "/home"),
         icon: HomeIcon,
       },
-      ...(isDesktopApp
-        ? [
-            {
-              name: "Inbox",
-              href: prefixPath(currentEmailAccountId, "/mail"),
-              icon: InboxIcon,
-            },
-          ]
-        : []),
+      // Every email stays one click away: Home is a lens over the inbox, not a replacement.
+      {
+        name: "Inbox",
+        href: prefixPath(currentEmailAccountId, "/mail"),
+        icon: InboxIcon,
+      },
       {
         name: "Chat",
         href: prefixPath(currentEmailAccountId, "/assistant"),
@@ -137,7 +127,7 @@ export const useNavigation = () => {
           ]
         : []),
     ],
-    [currentEmailAccountId, isDesktopApp, showMeetingRecorder],
+    [currentEmailAccountId, showMeetingRecorder],
   );
 
   const cleanupItems: NavItem[] = useMemo(
@@ -307,7 +297,7 @@ export function SideNav({
         {state.includes("left-sidebar") ? (
           <div className="flex items-center rounded-md pl-2 pr-0.5 py-3 text-foreground">
             <Link href={navigation.homeHref} data-hide-on-desktop-mac>
-              <Logo className="h-3.5" />
+              <Logo className="h-5" />
             </Link>
             <SidebarTrigger name="left-sidebar" className="ml-auto" />
           </div>

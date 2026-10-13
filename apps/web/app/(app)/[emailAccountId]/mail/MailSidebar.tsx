@@ -51,6 +51,7 @@ import {
   type MailboxItem,
   type MailboxItemEdit,
 } from "./MailboxItemContextMenu";
+import { BRAND_NAME } from "@/utils/branding";
 
 /** Where a sidebar row navigates. Mirrors the mail page's `?type=` query shape. */
 export type MailNavTarget =
@@ -272,7 +273,7 @@ export function MailSidebar({
           >
             <ArrowLeftIcon className="size-3.5 shrink-0" />
             <span className="flex-1 truncate" data-hide-on-desktop-mac>
-              Inbox Zero
+              {BRAND_NAME}
             </span>
           </Link>
           <SidebarTrigger

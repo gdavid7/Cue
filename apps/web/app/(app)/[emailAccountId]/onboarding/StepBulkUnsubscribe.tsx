@@ -24,6 +24,7 @@ import type {
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { usePremium } from "@/hooks/usePremium";
 import { createSearchParams } from "@/utils/url";
+import { BRAND_NAME } from "@/utils/branding";
 
 type Newsletter = NewsletterStatsResponse["newsletters"][number];
 
@@ -217,8 +218,8 @@ export function StepBulkUnsubscribe({ onNext }: { onNext: () => void }) {
         <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-sm text-muted-foreground">
           <SparklesIcon className="size-3.5 text-amber-500" />
           {hasMore
-            ? `Showing your top ${previewSenders.length}. We'll keep spotting more as you use Inbox Zero.`
-            : "We'll keep spotting more as you use Inbox Zero."}
+            ? `Showing your top ${previewSenders.length}. We'll keep spotting more as you use ${BRAND_NAME}.`
+            : `We'll keep spotting more as you use ${BRAND_NAME}.`}
         </p>
 
         <div className="mt-7 flex flex-col items-center gap-3">

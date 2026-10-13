@@ -30,6 +30,7 @@ import { updateBookingLinkBody } from "@/utils/actions/calendar.validation";
 import { getBookingLinkSlugSuggestion } from "@/utils/booking/slug";
 import { ConfigureBookingLinkDialog } from "./ConfigureBookingLinkDialog";
 import { CreateBookingLinkDialog } from "./CreateBookingLinkDialog";
+import { BRAND_NAME } from "@/utils/branding";
 
 type BookingLink = NonNullable<
   ReturnType<typeof useBookingLinks>["data"]
@@ -217,7 +218,7 @@ function CalendarBookingLinkCard({
         >
           {disabledByInboxZeroLink ? (
             <span className="text-sm text-muted-foreground">
-              Using Inbox Zero booking link
+              Using {BRAND_NAME} booking link
             </span>
           ) : data ? (
             <CalendarBookingLinkForm
