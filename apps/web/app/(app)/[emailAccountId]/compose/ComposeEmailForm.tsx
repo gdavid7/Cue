@@ -198,6 +198,8 @@ type ComposeEmailFormProps = {
    * suggested. It is saved as a draft right away, like anything typed.
    */
   initialBodyHtml?: string;
+  /** A muted note after the reply's "Draft to …" line, e.g. who wrote it. */
+  summaryTag?: string;
 };
 
 type ComposeFormValues = Omit<SendEmailBody, "attachments" | "messageHtml">;
@@ -327,6 +329,7 @@ function ComposeEmailFormContent({
   initialProviderDraftId,
   initialDraftMissing,
   initialBodyHtml,
+  summaryTag,
 }: ComposeEmailFormProps & {
   localDraftIdentity?: ReplyDraftIdentity;
   storedDraft?: StoredReplyDraft;
@@ -578,8 +581,13 @@ function ComposeEmailFormContent({
     };
   };
 
-  const followDraftMessage = (messageId: string | null) =>
-    followProviderDraftMessage({
+  // A reply reads as a draft once the mailbox holds a copy of it.
+  const [isMailboxDraft, setIsMailboxDraft] = useState(
+    Boolean(providerDraftMessageId || providerDraftId.current),
+  );
+  const followDraftMessage = (messageId: string | null) => {
+    setIsMailboxDraft(true);
+    return followProviderDraftMessage({
       client,
       emailAccountId: selectedEmailAccountId,
       messageId,
@@ -589,6 +597,7 @@ function ComposeEmailFormContent({
         requestId,
       },
     });
+  };
 
   // Every compose with files needs a mailbox draft to hold them. New messages
   // also get one from autosave; replies and forwards get one on first attach.
@@ -1556,9 +1565,13 @@ function ComposeEmailFormContent({
               onClick={openInlineReplyFields}
               className="flex min-w-0 items-center gap-1.5 rounded-sm text-left text-sm font-medium leading-5 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <span className="text-emerald-600 dark:text-emerald-400">
-                Draft
-              </span>
+              {isMailboxDraft ? (
+                <span className="text-emerald-600 dark:text-emerald-400">
+                  Draft
+                </span>
+              ) : (
+                <span>Reply</span>
+              )}
               <span className="min-w-0 truncate">
                 to{" "}
                 {formatRecipientNames(
@@ -1575,6 +1588,11 @@ function ComposeEmailFormContent({
               </span>
               <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
             </button>
+            {summaryTag ? (
+              <span className="shrink-0 text-muted-foreground text-xs">
+                {summaryTag}
+              </span>
+            ) : null}
             {popOutButton}
           </div>
         ) : (

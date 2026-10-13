@@ -985,20 +985,11 @@ function ReplyPanel({
       onInputCapture={() => setEdited(true)}
       ref={replyRef}
     >
-      {assist ? (
-        <div className="mb-2 flex items-baseline gap-2 text-sm">
-          <span className="font-medium text-foreground">
-            Reply to {firstName(message.headers.from)}
-          </span>
-          {assist.suggestedBodyHtml && !edited ? (
-            <span className="text-muted-foreground text-xs">
-              Suggested by Cue
-            </span>
-          ) : null}
-        </div>
-      ) : null}
       <ComposeEmailFormLazy
         initialBodyHtml={assist?.suggestedBodyHtml}
+        summaryTag={
+          assist?.suggestedBodyHtml && !edited ? "Suggested by Cue" : undefined
+        }
         providerDraftMessageId={
           composeMode === "reply" ? draftMessage?.id : undefined
         }
@@ -1035,11 +1026,6 @@ function ReplyPanel({
       {assist?.footer ? <div className="mt-2">{assist.footer}</div> : null}
     </div>
   );
-}
-
-function firstName(from: string) {
-  const name = extractNameFromEmail(from) || extractEmailAddress(from);
-  return name.split(/[\s@]/)[0];
 }
 
 function resolveComposeMode(

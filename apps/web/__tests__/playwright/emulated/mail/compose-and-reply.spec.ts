@@ -731,7 +731,7 @@ test("keeps reply and forward drafts in separate composer sessions", async ({
 
   await message.getByRole("button", { name: "Reply", exact: true }).click();
   await expect(editor).toContainText("Reply-only draft text");
-  await page.getByRole("button", { name: /^Draft to Leslie/ }).click();
+  await page.getByRole("button", { name: /^(Reply|Draft) to Leslie/ }).click();
   await expect(
     message.getByRole("button", { name: /^Remove .*leslie@example\.com/i }),
   ).toBeVisible();

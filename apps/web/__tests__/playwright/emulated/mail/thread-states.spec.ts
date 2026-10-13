@@ -247,7 +247,7 @@ test("captures thread reading and reply states", async ({ page }, testInfo) => {
     "Thanks Leslie, Thursday at 2 pm works for me. I will bring the updated proposal.",
   );
   await capturePlaywrightCheckpoint(page, testInfo, "06-populated-reply");
-  await page.getByRole("button", { name: /^Draft to Leslie/ }).click();
+  await page.getByRole("button", { name: /^(Reply|Draft) to Leslie/ }).click();
   await expect(
     page.getByRole("combobox", { name: "Cc", exact: true }),
   ).toBeVisible();
