@@ -212,7 +212,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
         }),
       ]),
 
-      // --- Handled automatically: filed out of the inbox -----------------------
+      // --- Sorted automatically: labeled, but still in the inbox ---------------
       thread(id(), [
         message({
           id: id(),
@@ -220,7 +220,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           subject: "New event: Tech & Finance Career Series",
           bodyText:
             "You might be interested in this event: Tech & Finance Career Series, next Tuesday at 6pm.",
-          labels: ["Notification"],
+          labels: ["INBOX", "Notification"],
           date: ago(23),
         }),
       ]),
@@ -231,7 +231,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           subject: "The HR agent that lives in Slack",
           bodyText:
             "HR support that doesn't require a ticket, login, or hallway conversation.",
-          labels: ["Marketing"],
+          labels: ["INBOX", "Marketing"],
           date: ago(22),
         }),
       ]),
@@ -242,7 +242,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           subject: "Triton Today: fall career fair recap",
           bodyText:
             "Over 3,000 students attended this year's fall career fair. Here's what employers said they're looking for.",
-          labels: ["Newsletter"],
+          labels: ["INBOX", "Newsletter"],
           date: ago(24 * 2 + 4),
         }),
       ]),
@@ -252,7 +252,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           from: person("Venmo", "venmo@venmo.com"),
           subject: "You paid Kevin Ruiz $18.50",
           bodyText: "You paid Kevin Ruiz $18.50 for pizza.",
-          labels: ["Receipt"],
+          labels: ["INBOX", "Receipt"],
           date: ago(24 * 2 + 1),
         }),
       ]),
@@ -263,7 +263,7 @@ export function buildCueDemoInbox(now = new Date()): DemoInboxFixture {
           subject: "12 new jobs for Software Engineer, New Grad",
           bodyText:
             "New jobs matching your alert in San Diego and the Bay Area.",
-          labels: ["Notification"],
+          labels: ["INBOX", "Notification"],
           date: ago(18),
         }),
       ]),
@@ -553,3 +553,109 @@ export const cueDemoReplySuggestions: {
     },
   },
 ];
+
+type DemoInsight = {
+  action: "reply" | "do" | "none";
+  task: string;
+  date: string;
+  dateRole: "deadline" | "expires" | "event" | "none";
+  fact: string;
+  factLabel: string;
+};
+
+/**
+ * What a model would note under each demo email in the inbox, matched by
+ * subject like the briefs. Dates are relative to `now` so "Friday" stays the
+ * coming Friday; facts are exact text from the emails, as the real check
+ * requires. Emails that ask nothing get an empty insight: no line at all.
+ */
+export function buildCueDemoInsights(
+  now = new Date(),
+): { subject: string; object: DemoInsight }[] {
+  const empty: DemoInsight = {
+    action: "none",
+    task: "",
+    date: "",
+    dateRole: "none",
+    fact: "",
+    factLabel: "",
+  };
+  const at = (d: Date, minutes = 0) =>
+    new Date(d.getTime() + minutes * 60_000).toISOString();
+  const friday = nextWeekday(now, 5, 17);
+  const wednesday = (hour: number) => nextWeekday(now, 3, hour);
+
+  return [
+    {
+      subject: "Renewal discussion & updated pricing",
+      object: {
+        ...empty,
+        action: "reply",
+        task: "Confirm the SSO fix and send updated pricing",
+        date: at(friday),
+        dateRole: "deadline",
+      },
+    },
+    {
+      subject: "Next steps: NVIDIA Software Engineer, New College Grad",
+      object: {
+        ...empty,
+        action: "reply",
+        task: "Share availability for 2 technical interviews",
+        fact: "Mornings Pacific time work best",
+      },
+    },
+    {
+      subject: "Final reminder: register for the new-grad webinar",
+      object: {
+        ...empty,
+        action: "do",
+        task: "Register for the new-grad webinar",
+        date: at(wednesday(12)),
+        dateRole: "event",
+      },
+    },
+    {
+      subject: "CSE 151B milestone 2: meet Wednesday?",
+      object: {
+        ...empty,
+        action: "reply",
+        task: "Confirm meeting Wednesday 4pm",
+        fact: "CSE building",
+        factLabel: "At",
+      },
+    },
+    {
+      subject: "CSE 151B: milestone 2 due Friday at 11:59pm",
+      object: {
+        ...empty,
+        date: at(nextWeekday(now, 5, 23), 59),
+        dateRole: "deadline",
+        fact: "Each group submits one PDF",
+      },
+    },
+    {
+      subject: "Thanksgiving flight?",
+      object: {
+        ...empty,
+        action: "reply",
+        task: "Tell Mom which day you fly home",
+      },
+    },
+    {
+      subject: "New event: Tech & Finance Career Series",
+      object: {
+        ...empty,
+        date: at(nextWeekday(now, 2, 18)),
+        dateRole: "event",
+      },
+    },
+    {
+      subject: "You paid Kevin Ruiz $18.50",
+      object: { ...empty, fact: "$18.50", factLabel: "Paid" },
+    },
+    { subject: "The HR agent that lives in Slack", object: empty },
+    { subject: "Triton Today: fall career fair recap", object: empty },
+    { subject: "12 new jobs for Software Engineer, New Grad", object: empty },
+  ];
+}

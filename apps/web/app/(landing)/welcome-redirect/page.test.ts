@@ -54,7 +54,7 @@ describe("WelcomeRedirectPage", () => {
     mocks.auth.mockResolvedValue({ user: { id: "user-1" } });
   });
 
-  it("sends completed web users to Home without loading premium", async () => {
+  it("sends completed web users to their inbox without loading premium", async () => {
     mocks.findUser.mockResolvedValue({
       completedOnboardingAt: new Date("2026-01-01T00:00:00.000Z"),
       premiumId: "premium-1",
@@ -62,7 +62,7 @@ describe("WelcomeRedirectPage", () => {
 
     await expect(
       WelcomeRedirectPage({ searchParams: Promise.resolve({}) }),
-    ).rejects.toThrow("account-redirect:/home");
+    ).rejects.toThrow("account-redirect:/mail");
 
     expect(mocks.findPremium).not.toHaveBeenCalled();
   });

@@ -40,9 +40,8 @@ const HIDDEN_TAGS = new Set([
   "important",
   "starred",
 ]);
-// Rough per-email estimates, shown with a "~" so nobody reads them as measured.
+// A rough per-email estimate, shown with a "~" so nobody reads it as measured.
 const MINUTES_PER_REPLY = 3;
-const MINUTES_SAVED_PER_HANDLED = 2;
 const URGENT =
   /\b(today|tonight|tomorrow|asap|urgent|deadline|due|before (mon|tues|wednes|thurs|fri|satur|sun)day|by (mon|tues|wednes|thurs|fri|satur|sun)day)\b/i;
 
@@ -126,7 +125,8 @@ export async function getHomeData({
       getAgentTasks({ emailAccountId, now }),
     ]);
   const handled = uniqueByThreadId(handledByLabel.flat());
-  const needsYouIds = new Set(needsYou.map((t) => t.id));
+  // Each thread shows once on Today: sorted mail has its own section.
+  const shownIds = new Set([...needsYou, ...handled].map((t) => t.id));
 
   const toRow = (thread: EmailThread) =>
     toHomeThread(thread, {
@@ -157,7 +157,7 @@ export async function getHomeData({
       }))
       .filter((label) => label.count > 0),
     alsoInInbox: inbox
-      .filter((t) => !needsYouIds.has(t.id))
+      .filter((t) => !shownIds.has(t.id))
       .map(toRow)
       .filter(isDefined),
     agentTasks,
@@ -167,7 +167,6 @@ export async function getHomeData({
       agentWorking: agentTasks.length,
       waiting: waiting.length,
       handled: handled.length,
-      savedMinutes: handled.length * MINUTES_SAVED_PER_HANDLED,
       handledWindowDays: HANDLED_WINDOW_DAYS,
       // Lists are capped, so a full one means "at least this many".
       needsYouCapped: needsYou.length >= LIST_LIMIT,

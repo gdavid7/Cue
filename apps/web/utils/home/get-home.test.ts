@@ -116,7 +116,7 @@ describe("getHomeData", () => {
     const home = await run(provider);
 
     expect(home.handled.map((t) => t.threadId)).toEqual(["venmo"]);
-    expect(home.stats).toMatchObject({ handled: 1, savedMinutes: 2 });
+    expect(home.stats).toMatchObject({ handled: 1 });
   });
 
   it("lists pending AI drafts as work in progress", async () => {
@@ -185,6 +185,23 @@ describe("getHomeData", () => {
     const home = await run(provider);
 
     expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["dentist"]);
+  });
+
+  it("doesn't repeat sorted mail under the rest of the inbox", async () => {
+    const newsletter = thread("weekly", {
+      from: "News <n@x.com>",
+      subject: "Weekly",
+      labels: ["INBOX", "Label_Newsletter"],
+    });
+    const provider = mockProvider({
+      Newsletter: [newsletter],
+      INBOX: [newsletter],
+    });
+
+    const home = await run(provider);
+
+    expect(home.handled.map((t) => t.threadId)).toEqual(["weekly"]);
+    expect(home.alsoInInbox).toEqual([]);
   });
 
   it("says where filed mail went, per label", async () => {

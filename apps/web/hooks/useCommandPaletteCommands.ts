@@ -71,7 +71,7 @@ export function useCommandPaletteCommands({
         keywords: ["mail", "inbox", "email"],
       },
       {
-        name: "Home",
+        name: "Today",
         href: prefixPath(emailAccountId, "/home"),
         icon: HomeIcon,
         keywords: ["home", "today", "dashboard"],

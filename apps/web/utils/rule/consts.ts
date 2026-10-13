@@ -30,6 +30,11 @@ const ruleConfig: Record<
     label: string;
     draftReply?: boolean;
     runOnThreads: boolean;
+    /**
+     * Cue's default for every category is to label and leave the email in the
+     * inbox: the AI organizes, it never moves mail out of sight unless the user
+     * opts in by picking archive or a folder.
+     */
     categoryAction: "label" | "label_archive" | "move_folder";
     categoryActionMicrosoft?: "move_folder";
     tooltipText: string;
@@ -99,7 +104,6 @@ const ruleConfig: Record<
     label: "Newsletter",
     runOnThreads: false,
     categoryAction: "label",
-    categoryActionMicrosoft: "move_folder",
     tooltipText: "Newsletters, blogs, and publications",
     shouldLearn: true,
   },
@@ -109,8 +113,7 @@ const ruleConfig: Record<
       "Marketing: Promotions, sales, and offers that can be safely archived. Exclude emails whose main purpose is account access, a transaction, or a service update, even if they include promotional content.",
     label: "Marketing",
     runOnThreads: false,
-    categoryAction: "label_archive",
-    categoryActionMicrosoft: "move_folder",
+    categoryAction: "label",
     tooltipText: "Promotional emails about sales and offers",
     shouldLearn: true,
   },
@@ -131,7 +134,6 @@ const ruleConfig: Record<
     label: "Receipt",
     runOnThreads: false,
     categoryAction: "label",
-    categoryActionMicrosoft: "move_folder",
     tooltipText: "Invoices, receipts, and payments",
     shouldLearn: true,
   },
@@ -141,7 +143,6 @@ const ruleConfig: Record<
     label: "Notification",
     runOnThreads: false,
     categoryAction: "label",
-    categoryActionMicrosoft: "move_folder",
     tooltipText: "Alerts, status updates, and system messages",
     shouldLearn: true,
   },
@@ -160,8 +161,7 @@ const ruleConfig: Record<
     instructions: DEFAULT_COLD_EMAIL_PROMPT,
     label: "Cold Email",
     runOnThreads: false,
-    categoryAction: "label_archive",
-    categoryActionMicrosoft: "move_folder",
+    categoryAction: "label",
     tooltipText:
       "Unsolicited sales pitches and cold emails. We'll never block someone that's emailed you before",
     shouldLearn: true,

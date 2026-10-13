@@ -91,16 +91,17 @@ export const useNavigation = () => {
 
   const manageItems: NavItem[] = useMemo(
     () => [
-      {
-        name: "Home",
-        href: prefixPath(currentEmailAccountId, "/home"),
-        icon: HomeIcon,
-      },
-      // Every email stays one click away: Home is a lens over the inbox, not a replacement.
+      // The inbox comes first: every email, in order, with insights added.
+      // Today is an optional briefing over it, not a replacement.
       {
         name: "Inbox",
         href: prefixPath(currentEmailAccountId, "/mail"),
         icon: InboxIcon,
+      },
+      {
+        name: "Today",
+        href: prefixPath(currentEmailAccountId, "/home"),
+        icon: HomeIcon,
       },
       {
         name: "Chat",
@@ -201,7 +202,7 @@ export const useNavigation = () => {
   );
 
   return {
-    homeHref: prefixPath(currentEmailAccountId, "/home"),
+    homeHref: prefixPath(currentEmailAccountId, "/mail"),
     manageItems,
     cleanupItems,
     moreItems,

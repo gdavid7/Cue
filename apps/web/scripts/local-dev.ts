@@ -19,6 +19,7 @@ import { createStripeEmulator } from "../__tests__/emulators/stripe";
 import {
   buildCueDemoCalendarEvents,
   buildCueDemoInbox,
+  buildCueDemoInsights,
   cueDemoReplySuggestions,
   cueDemoThreadBriefs,
 } from "../__tests__/fixtures/inboxes/cue-demo-inbox";
@@ -267,7 +268,7 @@ async function main() {
       "deploy",
     ]);
     await configureDemoOnboarding(env.DATABASE_URL);
-    await configureDemoCalendar(env.DATABASE_URL, USE_CUE_DEMO);
+    await configureDemoAccount(env.DATABASE_URL, USE_CUE_DEMO);
 
     const redis = new Redis(env.REDIS_URL, {
       lazyConnect: true,
@@ -325,6 +326,13 @@ async function main() {
         llm.reply({
           match: `<subject>${escapeHtml(brief.subject)}</subject>`,
           object: { summary: brief.summary, keyPoints: brief.keyPoints },
+        });
+      }
+      for (const insight of buildCueDemoInsights()) {
+        // The inbox insight prompt opens with the email's own subject line.
+        llm.reply({
+          match: `<email>\nSubject: ${escapeHtml(insight.subject)}\n`,
+          object: insight.object,
         });
       }
       for (const suggestion of cueDemoReplySuggestions) {
@@ -446,12 +454,13 @@ function cueDemoSeedOptions(): EmulateSeedOptions {
 }
 
 /**
- * Connects the demo account's Google Calendar as soon as the account exists,
- * and for an account that already does. It uses the fixed emulator token with
- * a far-future expiry, so the app never tries to refresh it. When the Cue demo
- * is off, removes the trigger and the connection, whose token would be dead.
+ * Connects the demo account's Google Calendar and adds its inbox tabs as soon
+ * as the account exists, and for an account that already does. The calendar
+ * uses the fixed emulator token with a far-future expiry, so the app never
+ * tries to refresh it. When the Cue demo is off, removes the trigger and the
+ * connection, whose token would be dead.
  */
-async function configureDemoCalendar(databaseUrl: string, enabled: boolean) {
+async function configureDemoAccount(databaseUrl: string, enabled: boolean) {
   const client = new Client({
     connectionString: databaseUrl,
     connectionTimeoutMillis: 2000,
@@ -464,6 +473,7 @@ async function configureDemoCalendar(databaseUrl: string, enabled: boolean) {
         DROP TRIGGER IF EXISTS cue_local_dev_calendar ON "EmailAccount";
         DROP FUNCTION IF EXISTS cue_local_dev_connect_calendar_trigger();
         DROP FUNCTION IF EXISTS cue_local_dev_connect_calendar(text, text, text);
+        DROP FUNCTION IF EXISTS cue_local_dev_add_splits(text);
         DELETE FROM "CalendarConnection" WHERE id LIKE '%-cue-demo-calendar';
       `);
       return;
@@ -496,11 +506,31 @@ async function configureDemoCalendar(databaseUrl: string, enabled: boolean) {
       END;
       $$ LANGUAGE plpgsql;
 
+      -- The inbox tabs onboarding would create from the demo's rules: Today's
+      -- lanes as filters over the inbox, which never move mail.
+      CREATE OR REPLACE FUNCTION cue_local_dev_add_splits(account_id text)
+      RETURNS void AS $$
+      BEGIN
+        INSERT INTO "MailSplit" (id, "createdAt", "updatedAt", name, "order", "matchAll", "emailAccountId")
+        VALUES
+          (account_id || '-cue-split-needs-reply', NOW(), NOW(), 'Needs reply', 2, true, account_id),
+          (account_id || '-cue-split-reading', NOW(), NOW(), 'Reading', 3, false, account_id)
+        ON CONFLICT ("emailAccountId", name) DO NOTHING;
+        INSERT INTO "MailSplitFilter" (id, kind, value, "order", "mailSplitId")
+        VALUES
+          (account_id || '-cue-split-needs-reply-0', 'LABEL', 'Label_To Reply', 0, account_id || '-cue-split-needs-reply'),
+          (account_id || '-cue-split-reading-0', 'LABEL', 'Label_Newsletter', 0, account_id || '-cue-split-reading'),
+          (account_id || '-cue-split-reading-1', 'LABEL', 'Label_Marketing', 1, account_id || '-cue-split-reading')
+        ON CONFLICT DO NOTHING;
+      END;
+      $$ LANGUAGE plpgsql;
+
       -- Runs inside the sign-in transaction, so a schema change that breaks
       -- these inserts must not break signing in.
       CREATE OR REPLACE FUNCTION cue_local_dev_connect_calendar_trigger() RETURNS trigger AS $$
       BEGIN
         PERFORM cue_local_dev_connect_calendar(NEW.id, NEW.email, TG_ARGV[0]);
+        PERFORM cue_local_dev_add_splits(NEW.id);
         RETURN NEW;
       EXCEPTION WHEN OTHERS THEN
         RAISE WARNING 'Cue demo calendar not connected: %', SQLERRM;
@@ -519,6 +549,10 @@ async function configureDemoCalendar(databaseUrl: string, enabled: boolean) {
     await client.query(
       `SELECT cue_local_dev_connect_calendar(id, email, $2) FROM "EmailAccount" WHERE email = $1`,
       [DEMO_GOOGLE_EMAIL, DEMO_CALENDAR_TOKEN],
+    );
+    await client.query(
+      `SELECT cue_local_dev_add_splits(id) FROM "EmailAccount" WHERE email = $1`,
+      [DEMO_GOOGLE_EMAIL],
     );
     // A database from before the Cue demo still calls the demo user "Developer".
     await client.query(

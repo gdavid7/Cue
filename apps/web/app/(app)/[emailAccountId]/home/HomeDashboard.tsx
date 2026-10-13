@@ -35,7 +35,7 @@ import { prefixPath } from "@/utils/path";
 
 /**
  * Cue's home: the inbox organized around outcomes instead of time. What needs
- * you, what the assistant is doing, who owes you a reply, and what was handled.
+ * you, what the assistant is doing, who owes you a reply, and what was sorted.
  */
 export function HomeDashboard() {
   const { emailAccountId, emailAccount } = useAccount();
@@ -162,13 +162,13 @@ export function HomeDashboard() {
               </Section>
 
               <Section
-                title="Handled automatically"
+                title="Sorted automatically"
                 count={data.handled.length}
-                empty="Nothing filed in the last week."
+                empty="Nothing sorted in the last week."
               >
                 <p className="px-1 pb-1 text-muted-foreground text-sm">
-                  Filed out of your inbox by your rules and labeled, never
-                  deleted. Check any of them:
+                  Labeled by your rules and left in your inbox. Open a label to
+                  see everything in it:
                 </p>
                 <div className="flex flex-wrap gap-2 px-1 pb-2">
                   {data.handledLabels.map((label) => (
@@ -192,7 +192,7 @@ export function HomeDashboard() {
                       {thread.subject}
                     </span>
                     <span className="ml-auto shrink-0 text-muted-foreground text-xs">
-                      {thread.tag ? `Filed as ${thread.tag}` : "Filed"}
+                      {thread.tag ? `Sorted as ${thread.tag}` : "Sorted"}
                     </span>
                   </Link>
                 ))}
@@ -252,10 +252,8 @@ function StatCards({
     },
     {
       value: countLabel(stats.handled, stats.handledCapped),
-      label: "Handled automatically",
-      detail: stats.handled
-        ? `Saved ~${stats.savedMinutes} min this week`
-        : `Last ${stats.handledWindowDays} days`,
+      label: "Sorted automatically",
+      detail: `Last ${stats.handledWindowDays} days`,
       icon: CheckCircle2Icon,
       className:
         "bg-emerald-50 text-emerald-950 dark:bg-emerald-950/30 dark:text-emerald-100",

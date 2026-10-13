@@ -70,7 +70,7 @@ export function AccountCommandList({
                             targetAccountId: account.id,
                             tab: searchParams.get("tab"),
                           })
-                        : prefixPath(account.id, "/home"),
+                        : prefixPath(account.id, "/mail"),
                     );
                   }
                 }}
