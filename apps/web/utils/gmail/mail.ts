@@ -9,7 +9,7 @@ import {
   forwardEmailSubject,
   forwardEmailText,
 } from "@/utils/gmail/forward";
-import type { ParsedMessage } from "@/utils/types";
+import type { MessageWithPayload, ParsedMessage } from "@/utils/types";
 import { createReplyContent } from "@/utils/gmail/reply";
 import { formatReplyQuotedHeader } from "@/utils/email/reply-quote";
 import type { EmailForAction } from "@/utils/ai/types";
@@ -28,6 +28,8 @@ import { formatReplySubject } from "@/utils/email/subject";
 import { buildThreadingHeaders } from "@/utils/email/threading";
 import { ensureEmailSendingEnabled } from "@/utils/mail";
 import { getMessage } from "@/utils/gmail/message";
+import { getGmailReplyFrom } from "@/utils/gmail/reply-from";
+import type { GmailSignature } from "@/utils/gmail/signature-settings";
 import {
   getGmailAttachment,
   getGmailMessageAttachments,
@@ -110,6 +112,7 @@ export async function sendEmailWithHtml(
   gmail: gmail_v1.Gmail,
   body: MailSendEmailBody,
   sendLogger: Logger = logger,
+  getSendAs?: () => Promise<GmailSignature[]>,
 ) {
   ensureEmailSendingEnabled();
 
@@ -127,55 +130,63 @@ export async function sendEmailWithHtml(
         .attachments
     : [];
 
+  const { replyToEmail } = body;
+  const replySource = replyToEmail?.messageId
+    ? await getMessage(replyToEmail.messageId, gmail, "metadata").catch(
+        (error: unknown) => {
+          if (extractErrorInfo(error).status === 404) {
+            sendLogger.warn("Reply source disappeared before sending", {
+              messageId: replyToEmail.messageId,
+            });
+            throw new SafeError(
+              "The email or draft you were replying to is no longer available in Gmail. Check Sent before trying again.",
+            );
+          }
+          throw error;
+        },
+      )
+    : undefined;
+
+  const from =
+    body.from ||
+    (replySource && getSendAs
+      ? getGmailReplyFrom(indexHeaders(replySource), await getSendAs())
+      : undefined);
   const raw = await createRawMailMessage({
     ...body,
+    from,
     attachments: forwardedAttachments.length
       ? [...(body.attachments ?? []), ...forwardedAttachments]
       : body.attachments,
     messageText,
   });
   sendLogger.info("Prepared Gmail send", getGmailSendMetadata(raw, body));
-  const { replyToEmail } = body;
-  if (replyToEmail?.messageId) {
-    const message = await getMessage(
-      replyToEmail.messageId,
-      gmail,
-      "metadata",
-    ).catch((error: unknown) => {
-      if (extractErrorInfo(error).status === 404) {
-        sendLogger.warn("Reply source disappeared before sending", {
-          messageId: replyToEmail.messageId,
-        });
-        throw new SafeError(
-          "The email or draft you were replying to is no longer available in Gmail. Check Sent before trying again.",
-        );
-      }
-      throw error;
-    });
-    if (message.labelIds?.includes(GmailLabel.DRAFT)) {
-      if (message.labelIds.includes(GmailLabel.SENT)) {
-        throw new SafeError(
-          "This draft is already marked as sent in Gmail. Check Sent before sending another copy.",
-        );
-      }
-      const draftId = await getDraftIdForMessage(gmail, replyToEmail.messageId);
-      if (!draftId) {
-        throw new SafeError(
-          "This draft is no longer available in Gmail. Check Sent before trying again.",
-        );
-      }
-
-      // Sending the existing draft consumes it and applies edits in one request.
-      return trackGmailSend("drafts.send", sendLogger, () =>
-        gmail.users.drafts.send({
-          userId: "me",
-          requestBody: {
-            id: draftId,
-            message: { threadId: replyToEmail.threadId, raw },
-          },
-        }),
+  if (
+    replyToEmail?.messageId &&
+    replySource?.labelIds?.includes(GmailLabel.DRAFT)
+  ) {
+    if (replySource.labelIds.includes(GmailLabel.SENT)) {
+      throw new SafeError(
+        "This draft is already marked as sent in Gmail. Check Sent before sending another copy.",
       );
     }
+    const draftId = await getDraftIdForMessage(gmail, replyToEmail.messageId);
+    if (!draftId) {
+      throw new SafeError(
+        "This draft is no longer available in Gmail. Check Sent before trying again.",
+      );
+    }
+
+    // Sending the existing draft consumes it and applies edits in one request.
+    return trackGmailSend("drafts.send", sendLogger, () =>
+      gmail.users.drafts.send({
+        userId: "me",
+        requestBody: {
+          id: draftId,
+          message: { threadId: replyToEmail.threadId, raw },
+        },
+      }),
+    );
   }
   const result = await trackGmailSend("messages.send", sendLogger, () =>
     gmail.users.messages.send({
@@ -338,6 +349,7 @@ export async function draftEmail(
     cc?: string;
     bcc?: string;
     attachments?: Attachment[];
+    from?: string;
   },
   userEmails: string | string[],
 ) {
@@ -364,6 +376,7 @@ export async function draftEmail(
 
   const raw = await createRawMailMessage({
     to: recipients.to,
+    from: args.from,
     cc: formatCcList(ccList),
     bcc: formatCcList(bccList),
     subject: args.subject || originalEmail.headers.subject,
@@ -570,4 +583,16 @@ function getGmailSendMetadata(raw: string, body: MailSendEmailBody) {
     mimeBytes: mime.length,
     attachmentCount: body.attachments?.length ?? 0,
   };
+}
+
+// The reply source is fetched as metadata, which leaves its headers unparsed.
+function indexHeaders(message: MessageWithPayload) {
+  const headers: Record<string, string> = {};
+  for (const { name, value } of message.payload?.headers ?? []) {
+    if (!name || !value) continue;
+    const key = name.toLowerCase();
+    // A message relayed through several mailboxes has a Delivered-To for each.
+    headers[key] = headers[key] ? `${headers[key]}, ${value}` : value;
+  }
+  return headers;
 }
