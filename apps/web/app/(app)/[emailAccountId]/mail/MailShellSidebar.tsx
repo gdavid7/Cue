@@ -3,6 +3,7 @@
 import { ConnectorsList } from "@/components/connectors/ConnectorsList";
 import { type CSSProperties, memo, useCallback, useRef } from "react";
 import { toast } from "sonner";
+import { AllInboxesSidebarSections } from "@/app/(app)/[emailAccountId]/mail/AllInboxesSidebarSections";
 import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
 import {
   getMailCategories,
@@ -230,6 +231,13 @@ export const MailShellSidebar = memo(function MailShellSidebar({
             isOutlook ? OUTLOOK_LABEL_COLOR_OPTIONS : GMAIL_LABEL_COLORS
           }
           unified={isAllAccounts}
+          accountSections={
+            isAllAccounts ? (
+              <AllInboxesSidebarSections
+                emailAccounts={accountsData?.emailAccounts ?? []}
+              />
+            ) : undefined
+          }
           allInboxesHref={
             hasAllInboxes
               ? prefixPath(emailAccountId, "/mail?accountScope=all")

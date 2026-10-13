@@ -1,6 +1,12 @@
 "use client";
 
-import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import {
+  type ComponentProps,
+  type FormEvent,
+  type ReactNode,
+  useEffect,
+  useState,
+} from "react";
 import Link from "next/link";
 import { getMailSidebarRowPresentation } from "@inboxzero/mail-ui/MailSidebarRow";
 import {
@@ -101,6 +107,8 @@ export type MailSidebarProps = {
   unified?: boolean;
   /** Offered above a single account's inbox when there are inboxes to combine. */
   allInboxesHref?: string;
+  /** Each account's own labels and folders, shown in their place in All inboxes. */
+  accountSections?: ReactNode;
   className?: string;
 };
 
@@ -214,33 +222,14 @@ export function MailSidebar({
   connectors,
   unified = false,
   allInboxesHref,
+  accountSections,
   className,
 }: MailSidebarProps) {
-  const [isAddingLabel, setIsAddingLabel] = useState(false);
-  const [newLabelName, setNewLabelName] = useState("");
-  const sidebarFolders = getMailSidebarFolders(folders);
-  const { visibleLabels, hiddenLabels } = splitLabelsByListVisibility({
-    labels,
-    countsById,
-  });
-  const labelTree = getLabelTree(
-    visibleLabels,
-    labelEditMode === "name-and-color",
-  );
-  const hasNestedLabels = labelTree.some((root) => root.children.length > 0);
-  // Hidden labels stay flat: they are an escape hatch, not a place to browse.
-  const hiddenLabelNodes = getLabelTree(hiddenLabels, false);
-  const hasHiddenActiveLabel = hiddenLabels.some(
-    (label) => label.id === activeLabelId,
-  );
-
   const isCategoryActive =
     !activeLabelId &&
     !activeFolderId &&
     categories.some((category) => category.type === activeType);
   const [showCategories, setShowCategories] = useState(isCategoryActive);
-  const [showLabels, setShowLabels] = useState(true);
-  const [showHiddenLabels, setShowHiddenLabels] = useState(false);
   // Nothing in the rail can toggle a group, so there a group follows the open
   // view rather than a stored choice, which would otherwise be a one-way door.
   // The expanded sidebar keeps whatever the user chose.
@@ -264,27 +253,6 @@ export function MailSidebar({
   useEffect(() => {
     if (isMailboxActive) setShowMailboxes(true);
   }, [isMailboxActive]);
-
-  // Expand when the open view changes to a label so a collapsed list can
-  // still reveal the selected row. A same-label collapse stays put.
-  useEffect(() => {
-    if (activeLabelId) setShowLabels(true);
-  }, [activeLabelId]);
-
-  // Opening a hidden label from elsewhere (search, a thread's chips) must not
-  // leave the sidebar without a row for the view the user is looking at.
-  useEffect(() => {
-    if (hasHiddenActiveLabel) setShowHiddenLabels(true);
-  }, [hasHiddenActiveLabel]);
-
-  const submitNewLabel = (event: FormEvent) => {
-    event.preventDefault();
-    const name = newLabelName.trim();
-    if (!name) return;
-    onCreateLabel(name);
-    setNewLabelName("");
-    setIsAddingLabel(false);
-  };
 
   return (
     <aside
@@ -439,158 +407,29 @@ export function MailSidebar({
             </>
           )}
 
-        {!unified && sidebarFolders.length > 0 && (
-          <>
-            <GroupHeading collapsed={collapsed}>Folders</GroupHeading>
-            <nav className="flex flex-col gap-px">
-              {sidebarFolders.map((folder) => (
-                <MailboxItemContextMenu
-                  key={folder.id}
-                  item={{
-                    kind: "folder",
-                    id: folder.id,
-                    name: folder.displayName,
-                  }}
-                  typeName="folder"
-                  editMode="name"
-                  onEdit={onEditMailboxItem}
-                  onDelete={onDeleteMailboxItem}
-                >
-                  <NavRow
-                    href={hrefFor({ kind: "folder", folderId: folder.id })}
-                    active={activeFolderId === folder.id}
-                    icon={
-                      <FolderIcon
-                        className="size-3.5 shrink-0"
-                        style={
-                          collapsed
-                            ? undefined
-                            : { marginLeft: folder.depth * 12 }
-                        }
-                      />
-                    }
-                    name={folder.displayName}
-                    count={displayCount(countsById.get(folder.id))}
-                    collapsed={collapsed}
-                  />
-                </MailboxItemContextMenu>
-              ))}
-            </nav>
-          </>
+        {/* Per-account headings don't fit the rail, so it shows none. */}
+        {unified && !collapsed ? accountSections : null}
+        {unified ? null : (
+          <MailboxGroups
+            activeLabelId={activeLabelId}
+            activeFolderId={activeFolderId}
+            hrefFor={hrefFor}
+            labels={labels}
+            folders={folders}
+            countsById={countsById}
+            labelsHeading={labelsHeading}
+            labelSingular={labelSingular}
+            labelEditMode={labelEditMode}
+            supportsLabelVisibility={supportsLabelVisibility}
+            collapsed={collapsed}
+            editing={{
+              labelColorOptions,
+              onCreateLabel,
+              onEditMailboxItem,
+              onDeleteMailboxItem,
+            }}
+          />
         )}
-
-        {!unified && (!collapsed || (showLabels && labelTree.length > 0)) ? (
-          <>
-            <GroupHeading
-              collapsed={collapsed}
-              expanded={showLabels}
-              onToggle={() => setShowLabels((open) => !open)}
-              action={
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowLabels(true);
-                    setIsAddingLabel((open) => !open);
-                  }}
-                  aria-expanded={isAddingLabel}
-                  aria-label={`Create ${labelSingular}`}
-                  className="rounded-md p-0.5 text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <PlusIcon className="size-3.5" />
-                </button>
-              }
-            >
-              {labelsHeading}
-            </GroupHeading>
-            {showLabels && (
-              <nav className="flex flex-col gap-px">
-                {labelTree.map((node) => (
-                  <LabelBranch
-                    key={node.label.id}
-                    node={node}
-                    hasNestedLabels={hasNestedLabels}
-                    collapsed={collapsed}
-                    activeLabelId={activeLabelId}
-                    hrefFor={hrefFor}
-                    countsById={countsById}
-                    labelSingular={labelSingular}
-                    labelEditMode={labelEditMode}
-                    labelColorOptions={labelColorOptions}
-                    supportsLabelVisibility={supportsLabelVisibility}
-                    onEditMailboxItem={onEditMailboxItem}
-                    onDeleteMailboxItem={onDeleteMailboxItem}
-                  />
-                ))}
-              </nav>
-            )}
-
-            {showLabels && hiddenLabelNodes.length > 0 && !collapsed && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setShowHiddenLabels((open) => !open)}
-                  aria-expanded={showHiddenLabels}
-                  className="flex items-center gap-1 rounded-md px-2.5 py-1 text-muted-foreground text-xs hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  {showHiddenLabels ? (
-                    <ChevronDownIcon className="size-3" />
-                  ) : (
-                    <ChevronRightIcon className="size-3" />
-                  )}
-                  More
-                </button>
-                {showHiddenLabels && (
-                  <nav className="flex flex-col gap-px">
-                    {hiddenLabelNodes.map((node) => (
-                      <LabelBranch
-                        key={node.label.id}
-                        node={node}
-                        hasNestedLabels={false}
-                        collapsed={collapsed}
-                        activeLabelId={activeLabelId}
-                        hrefFor={hrefFor}
-                        countsById={countsById}
-                        labelSingular={labelSingular}
-                        labelEditMode={labelEditMode}
-                        labelColorOptions={labelColorOptions}
-                        supportsLabelVisibility={supportsLabelVisibility}
-                        onEditMailboxItem={onEditMailboxItem}
-                        onDeleteMailboxItem={onDeleteMailboxItem}
-                      />
-                    ))}
-                  </nav>
-                )}
-              </>
-            )}
-
-            {showLabels && isAddingLabel && !collapsed ? (
-              <form
-                onSubmit={submitNewLabel}
-                className="flex gap-1.5 px-2.5 py-2"
-              >
-                <Input
-                  value={newLabelName}
-                  onChange={(event) => setNewLabelName(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") setIsAddingLabel(false);
-                  }}
-                  placeholder={`${labelSingular} name`}
-                  aria-label={`New ${labelSingular} name`}
-                  autoFocus
-                  className="h-7 min-w-0 flex-1 px-2 text-xs"
-                />
-                <Button
-                  type="submit"
-                  variant="gradient"
-                  size="xs-2"
-                  disabled={!newLabelName.trim()}
-                >
-                  Add
-                </Button>
-              </form>
-            ) : null}
-          </>
-        ) : null}
 
         {connectors ? (
           <>
@@ -604,23 +443,271 @@ export function MailSidebar({
   );
 }
 
-function LabelBranch({
-  node,
-  hasNestedLabels,
-  collapsed,
-  ...props
-}: Pick<
+type MailboxEditing = Pick<
+  MailSidebarProps,
+  | "labelColorOptions"
+  | "onCreateLabel"
+  | "onEditMailboxItem"
+  | "onDeleteMailboxItem"
+>;
+
+type LabelRowProps = Pick<
   MailSidebarProps,
   | "activeLabelId"
   | "hrefFor"
   | "countsById"
   | "labelSingular"
   | "labelEditMode"
-  | "labelColorOptions"
   | "supportsLabelVisibility"
-  | "onEditMailboxItem"
-  | "onDeleteMailboxItem"
-> & { node: SidebarLabel; hasNestedLabels: boolean; collapsed: boolean }) {
+> & {
+  /** Omitted where rows only navigate, like another account's labels in All inboxes. */
+  editing?: MailboxEditing;
+  /** Rows open another account, which loads fresh like the account switcher does. */
+  reloadDocument?: boolean;
+};
+
+/** An account's own folders and labels: the single-account sidebar's lower half. */
+export function MailboxGroups({
+  activeFolderId,
+  labels,
+  folders,
+  labelsHeading,
+  collapsed,
+  ...rowProps
+}: LabelRowProps &
+  Pick<
+    MailSidebarProps,
+    "activeFolderId" | "labels" | "folders" | "labelsHeading"
+  > & { collapsed: boolean }) {
+  const {
+    activeLabelId,
+    hrefFor,
+    countsById,
+    labelSingular,
+    labelEditMode,
+    editing,
+    reloadDocument,
+  } = rowProps;
+  const [isAddingLabel, setIsAddingLabel] = useState(false);
+  const [newLabelName, setNewLabelName] = useState("");
+  const [showLabels, setShowLabels] = useState(true);
+  const [showHiddenLabels, setShowHiddenLabels] = useState(false);
+  const sidebarFolders = getMailSidebarFolders(folders);
+  const { visibleLabels, hiddenLabels } = splitLabelsByListVisibility({
+    labels,
+    countsById,
+  });
+  const labelTree = getLabelTree(
+    visibleLabels,
+    labelEditMode === "name-and-color",
+  );
+  const hasNestedLabels = labelTree.some((root) => root.children.length > 0);
+  // Hidden labels stay flat: they are an escape hatch, not a place to browse.
+  const hiddenLabelNodes = getLabelTree(hiddenLabels, false);
+  const hasHiddenActiveLabel = hiddenLabels.some(
+    (label) => label.id === activeLabelId,
+  );
+  // Without a create button an empty group would be a heading over nothing.
+  const showLabelGroup = collapsed
+    ? showLabels && labelTree.length > 0
+    : Boolean(editing) || labels.length > 0;
+
+  // Expand when the open view changes to a label so a collapsed list can
+  // still reveal the selected row. A same-label collapse stays put.
+  useEffect(() => {
+    if (activeLabelId) setShowLabels(true);
+  }, [activeLabelId]);
+
+  // Opening a hidden label from elsewhere (search, a thread's chips) must not
+  // leave the sidebar without a row for the view the user is looking at.
+  useEffect(() => {
+    if (hasHiddenActiveLabel) setShowHiddenLabels(true);
+  }, [hasHiddenActiveLabel]);
+
+  const submitNewLabel = (event: FormEvent) => {
+    event.preventDefault();
+    const name = newLabelName.trim();
+    if (!name || !editing) return;
+    editing.onCreateLabel(name);
+    setNewLabelName("");
+    setIsAddingLabel(false);
+  };
+
+  return (
+    <>
+      {sidebarFolders.length > 0 && (
+        <>
+          <GroupHeading collapsed={collapsed}>Folders</GroupHeading>
+          <nav className="flex flex-col gap-px">
+            {sidebarFolders.map((folder) => (
+              <EditableMailboxItem
+                key={folder.id}
+                editing={editing}
+                item={{
+                  kind: "folder",
+                  id: folder.id,
+                  name: folder.displayName,
+                }}
+                typeName="folder"
+                editMode="name"
+              >
+                <NavRow
+                  href={hrefFor({ kind: "folder", folderId: folder.id })}
+                  reloadDocument={reloadDocument}
+                  active={activeFolderId === folder.id}
+                  icon={
+                    <FolderIcon
+                      className="size-3.5 shrink-0"
+                      style={
+                        collapsed
+                          ? undefined
+                          : { marginLeft: folder.depth * 12 }
+                      }
+                    />
+                  }
+                  name={folder.displayName}
+                  count={displayCount(countsById.get(folder.id))}
+                  collapsed={collapsed}
+                />
+              </EditableMailboxItem>
+            ))}
+          </nav>
+        </>
+      )}
+
+      {showLabelGroup ? (
+        <>
+          <GroupHeading
+            collapsed={collapsed}
+            expanded={showLabels}
+            onToggle={() => setShowLabels((open) => !open)}
+            action={
+              editing ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowLabels(true);
+                    setIsAddingLabel((open) => !open);
+                  }}
+                  aria-expanded={isAddingLabel}
+                  aria-label={`Create ${labelSingular}`}
+                  className="rounded-md p-0.5 text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <PlusIcon className="size-3.5" />
+                </button>
+              ) : null
+            }
+          >
+            {labelsHeading}
+          </GroupHeading>
+          {showLabels && (
+            <nav className="flex flex-col gap-px">
+              {labelTree.map((node) => (
+                <LabelBranch
+                  key={node.label.id}
+                  node={node}
+                  hasNestedLabels={hasNestedLabels}
+                  collapsed={collapsed}
+                  {...rowProps}
+                />
+              ))}
+            </nav>
+          )}
+
+          {showLabels && hiddenLabelNodes.length > 0 && !collapsed && (
+            <>
+              <button
+                type="button"
+                onClick={() => setShowHiddenLabels((open) => !open)}
+                aria-expanded={showHiddenLabels}
+                className="flex items-center gap-1 rounded-md px-2.5 py-1 text-muted-foreground text-xs hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {showHiddenLabels ? (
+                  <ChevronDownIcon className="size-3" />
+                ) : (
+                  <ChevronRightIcon className="size-3" />
+                )}
+                More
+              </button>
+              {showHiddenLabels && (
+                <nav className="flex flex-col gap-px">
+                  {hiddenLabelNodes.map((node) => (
+                    <LabelBranch
+                      key={node.label.id}
+                      node={node}
+                      hasNestedLabels={false}
+                      collapsed={collapsed}
+                      {...rowProps}
+                    />
+                  ))}
+                </nav>
+              )}
+            </>
+          )}
+
+          {showLabels && isAddingLabel && !collapsed ? (
+            <form
+              onSubmit={submitNewLabel}
+              className="flex gap-1.5 px-2.5 py-2"
+            >
+              <Input
+                value={newLabelName}
+                onChange={(event) => setNewLabelName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") setIsAddingLabel(false);
+                }}
+                placeholder={`${labelSingular} name`}
+                aria-label={`New ${labelSingular} name`}
+                autoFocus
+                className="h-7 min-w-0 flex-1 px-2 text-xs"
+              />
+              <Button
+                type="submit"
+                variant="gradient"
+                size="xs-2"
+                disabled={!newLabelName.trim()}
+              >
+                Add
+              </Button>
+            </form>
+          ) : null}
+        </>
+      ) : null}
+    </>
+  );
+}
+
+function EditableMailboxItem({
+  editing,
+  children,
+  ...menuProps
+}: Omit<
+  ComponentProps<typeof MailboxItemContextMenu>,
+  "onEdit" | "onDelete"
+> & { editing: MailboxEditing | undefined }) {
+  if (!editing) return children;
+
+  return (
+    <MailboxItemContextMenu
+      {...menuProps}
+      onEdit={editing.onEditMailboxItem}
+      onDelete={editing.onDeleteMailboxItem}
+    >
+      {children}
+    </MailboxItemContextMenu>
+  );
+}
+
+function LabelBranch({
+  node,
+  hasNestedLabels,
+  collapsed,
+  ...props
+}: LabelRowProps & {
+  node: SidebarLabel;
+  hasNestedLabels: boolean;
+  collapsed: boolean;
+}) {
   const { label, children } = node;
   const activeDescendantId = children.some((child) =>
     containsLabel(child, props.activeLabelId),
@@ -645,12 +732,13 @@ function LabelBranch({
 
   return (
     <div>
-      <MailboxItemContextMenu
+      <EditableMailboxItem
+        editing={props.editing}
         item={{ kind: "label", id: label.id, name: label.name }}
         typeName={props.labelSingular}
         editMode={props.labelEditMode}
         currentColor={label.color}
-        colorOptions={props.labelColorOptions}
+        colorOptions={props.editing?.labelColorOptions}
         visibility={
           props.supportsLabelVisibility
             ? {
@@ -659,8 +747,6 @@ function LabelBranch({
               }
             : undefined
         }
-        onEdit={props.onEditMailboxItem}
-        onDelete={props.onDeleteMailboxItem}
       >
         <div className="relative">
           {children.length > 0 && !collapsed && (
@@ -682,6 +768,7 @@ function LabelBranch({
           )}
           <NavRow
             href={props.hrefFor({ kind: "label", labelId: label.id })}
+            reloadDocument={props.reloadDocument}
             active={props.activeLabelId === label.id}
             icon={
               collapsed ? (
@@ -708,7 +795,7 @@ function LabelBranch({
             collapsed={collapsed}
           />
         </div>
-      </MailboxItemContextMenu>
+      </EditableMailboxItem>
       {expanded && children.length > 0 && (
         <div className={collapsed ? undefined : "ml-3"}>
           {children.map((child) => (
@@ -787,8 +874,10 @@ function NavRow({
   emphasizeCount,
   nested,
   collapsed,
+  reloadDocument,
 }: {
   href?: string;
+  reloadDocument?: boolean;
   active: boolean;
   icon: ReactNode;
   name: string;
@@ -809,14 +898,15 @@ function NavRow({
   const className = cn(presentation.className);
   const content = presentation.content;
 
+  const RowLink = reloadDocument ? "a" : Link;
   const row = href ? (
-    <Link
+    <RowLink
       href={href}
       aria-current={active ? "page" : undefined}
       className={className}
     >
       {content}
-    </Link>
+    </RowLink>
   ) : (
     <div aria-current={active ? "page" : undefined} className={className}>
       {content}

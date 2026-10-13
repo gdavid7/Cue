@@ -30,3 +30,18 @@ export function getAllInboxesAccounts(
 export function getAccountColorClassName(index: number) {
   return ACCOUNT_COLOR_CLASS_NAMES[index % ACCOUNT_COLOR_CLASS_NAMES.length];
 }
+
+/**
+ * Whether an account's sidebar section in All inboxes is open. The user's own
+ * choice wins; until they make one, two accounts fit open but more would bury
+ * each other.
+ */
+export function isAccountSectionOpen({
+  storedOpen,
+  accountCount,
+}: {
+  storedOpen: boolean | null;
+  accountCount: number;
+}) {
+  return storedOpen ?? accountCount <= 2;
+}

@@ -2,10 +2,14 @@ import useSWR from "swr";
 import type { GetFoldersResponse } from "@/app/api/user/folders/route";
 import { isMicrosoftProvider } from "@/utils/email/provider-types";
 
-export function useFolders(provider: string) {
+/** Pass `emailAccountId` to read an account other than the one in the URL. */
+export function useFolders(provider: string, emailAccountId?: string) {
   const enabled = isMicrosoftProvider(provider);
+  const key = emailAccountId
+    ? ["/api/user/folders", emailAccountId]
+    : "/api/user/folders";
   const { data, error, isLoading, mutate } = useSWR<GetFoldersResponse>(
-    enabled ? "/api/user/folders" : null,
+    enabled ? key : null,
   );
   return {
     folders: data || [],

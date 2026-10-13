@@ -181,6 +181,29 @@ describe("MailSidebar", () => {
     expect(screen.getByText("All inboxes")).toBeDefined();
   });
 
+  it("shows each account's own sections in place of one account's labels in the combined inbox", () => {
+    const labels = [{ id: "Label_1", name: "Receipts", type: "user" }];
+    const { rerender } = renderSidebar({
+      unified: true,
+      labels,
+      accountSections: <div>Account sections</div>,
+    });
+
+    expect(screen.getByText("Account sections")).toBeDefined();
+    expect(screen.queryByText("Receipts")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create label" })).toBeNull();
+
+    // The rail has no room for per-account headings.
+    rerender(
+      sidebar({
+        unified: true,
+        collapsed: true,
+        accountSections: <div>Account sections</div>,
+      }),
+    );
+    expect(screen.queryByText("Account sections")).toBeNull();
+  });
+
   it("offers All inboxes above a single account's inbox when it has one", () => {
     renderSidebar({ allInboxesHref: "/account-1/mail?accountScope=all" });
 

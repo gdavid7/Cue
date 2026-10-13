@@ -1,6 +1,26 @@
 import { describe, expect, it } from "vitest";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
-import { getAllInboxesAccounts } from "./all-inboxes";
+import { getAllInboxesAccounts, isAccountSectionOpen } from "./all-inboxes";
+
+describe("isAccountSectionOpen", () => {
+  it("opens sections by default only while there are two accounts or fewer", () => {
+    expect(isAccountSectionOpen({ storedOpen: null, accountCount: 2 })).toBe(
+      true,
+    );
+    expect(isAccountSectionOpen({ storedOpen: null, accountCount: 3 })).toBe(
+      false,
+    );
+  });
+
+  it("keeps the user's own choice whatever the account count", () => {
+    expect(isAccountSectionOpen({ storedOpen: true, accountCount: 5 })).toBe(
+      true,
+    );
+    expect(isAccountSectionOpen({ storedOpen: false, accountCount: 2 })).toBe(
+      false,
+    );
+  });
+});
 
 describe("getAllInboxesAccounts", () => {
   it("keeps connected accounts chosen for All inboxes, in account order", () => {
