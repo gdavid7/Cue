@@ -17,6 +17,9 @@
 - **Suggested replies only with evidence**: *Suggest a reply* drafts an answer from the conversation and its related context, and shows the sources it used. The model must cite a source and quote it for every fact; [`suggest-reply.ts`](apps/web/utils/thread-context/suggest-reply.ts) checks each quote against its source, and one fact it can't find withholds the reply. Otherwise Cue says what's missing ("Nothing in your email or calendar says what the updated pricing is"). A suggestion can be edited and saved as a draft in the conversation.
 - **Ask across email and calendar**: the assistant chat has a `searchContext` tool that searches email and calendar together and follows the graph: a word that names someone on a matching email (a first name, an organization's domain) brings in their other conversations and meetings too. Answers say which emails and meetings they come from.
 
+- **An inbox first, with insights added**: Cue opens on the full inbox in normal order, and nothing is moved out of it unless you turn that on (category rules label by default). A short line appears under an email only when it matters: what it asks and by when, who you're waiting on, a meeting with the people on it, a key detail (checked word for word against the email), or a reply that's ready. Today's lanes are inbox tabs (*Needs reply*, *Reading*), and Home is now **Today**, an optional briefing.
+- **Gmail features**: hover actions on each row, reply all, Snoozed / Important / All Mail views, a snooze button, restore from trash and not spam, mark important, print, view original and download (.eml), Gmail-style `g` shortcuts, and a vacation responder.
+
 The original Cue prototype (context engine, triage, demo UI, and design docs) lives in [`prototype/`](prototype/). It runs on its own with `cd prototype && npm install && npm start`.
 
 **Running locally:** see Inbox Zero's [Local Development](#local-development) section below. In short, with Node 24:

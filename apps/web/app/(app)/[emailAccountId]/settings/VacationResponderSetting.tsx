@@ -40,7 +40,22 @@ export function VacationResponderSetting({
   return (
     <>
       <ItemSeparator />
-      <LoadingContent loading={isLoading} error={error}>
+      <LoadingContent
+        loading={isLoading}
+        error={error}
+        // A provider that can't be read shouldn't take over the settings page.
+        errorComponent={
+          <Item size="sm">
+            <ItemContent>
+              <ItemTitle>Vacation responder</ItemTitle>
+              <ItemDescription>
+                Couldn&apos;t load your auto-reply settings from your email
+                provider. Try again later.
+              </ItemDescription>
+            </ItemContent>
+          </Item>
+        }
+      >
         {data && (
           <VacationResponderForm
             // Remounts with the saved values once they change on the server.
