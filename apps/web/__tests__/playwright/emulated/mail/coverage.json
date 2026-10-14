@@ -199,5 +199,11 @@
     "app/(app)/[emailAccountId]/mail/MailSidebar.tsx",
     "utils/mail-engine/worker-protocol.ts",
     "utils/mail-engine/admission-notice.ts"
+  ],
+  "dark-emails.spec.ts": [
+    "components/email-list/DarkEmailToggle.tsx",
+    "hooks/useDarkEmailMode.ts",
+    "components/ThemeSubmenu.tsx",
+    "components/email-list/EmailContents.tsx"
   ]
 }

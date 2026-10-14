@@ -396,6 +396,22 @@ function writeEmulateSeed({
     .replaceAll(
       "__PLAYWRIGHT_DESIGNED_HTML__",
       JSON.stringify(createDesignedThemeHtml()).slice(1, -1),
+    )
+    .replaceAll(
+      "__PLAYWRIGHT_DARK_NEWSLETTER_HTML__",
+      JSON.stringify(createDarkModeNewsletterHtml()).slice(1, -1),
+    )
+    .replaceAll(
+      "__PLAYWRIGHT_DARK_FOLLOWUP_HTML__",
+      JSON.stringify(createDarkModeFollowupHtml()).slice(1, -1),
+    )
+    .replaceAll(
+      "__PLAYWRIGHT_DARK_AUTHORED_HTML__",
+      JSON.stringify(createDarkModeAuthoredHtml()).slice(1, -1),
+    )
+    .replaceAll(
+      "__PLAYWRIGHT_DARK_RECEIPT_HTML__",
+      JSON.stringify(createDarkModeReceiptHtml()).slice(1, -1),
     );
 
   // Mailbox synchronization only covers recent mail. Preserve the fixture's
@@ -548,6 +564,99 @@ function createDesignedThemeHtml() {
             Finish setup
           </div>
         </body></html>`;
+}
+
+// A white newsletter of the kind most senders send: gray page, white card,
+// a vivid brand banner and button, a pastel callout, an image and a footer.
+function createDarkModeNewsletterHtml() {
+  const logo = svgDataUri(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="140" height="28"><rect width="28" height="28" rx="6" fill="#ff5a1f"/><text x="36" y="20" font-family="Arial" font-size="16" font-weight="700" fill="#111827">Field Notes</text></svg>',
+  );
+  const photo = svgDataUri(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="520" height="180"><defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#7dd3fc"/><stop offset="1" stop-color="#fde68a"/></linearGradient></defs><rect width="520" height="180" fill="url(#g)"/><circle cx="420" cy="60" r="28" fill="#fff7ed"/><path d="M0 180 L140 90 L260 160 L360 110 L520 180 Z" fill="#166534"/></svg>',
+  );
+  return `<html><head><style>
+    .preheader { display: none; }
+    a.button { text-decoration: none; }
+  </style></head>
+  <body style="margin:0;background:#f2f3f5;font-family:Arial,sans-serif">
+    <table width="100%" bgcolor="#f2f3f5" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 12px">
+      <table width="560" bgcolor="#ffffff" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:8px">
+        <tr><td style="padding:20px 24px"><img src="${logo}" width="140" height="28" alt="Field Notes"></td></tr>
+        <tr><td style="background:#ff5a1f;color:#ffffff;padding:14px 24px;font-size:15px;font-weight:bold">Issue 42 · The quiet trails edition</td></tr>
+        <tr><td style="padding:20px 24px 0"><img src="${photo}" width="512" alt="Mountain trail at dawn" style="display:block;border-radius:6px"></td></tr>
+        <tr><td style="padding:20px 24px;color:#333333;font-size:15px;line-height:1.6">
+          <h1 style="margin:0 0 12px;color:#111111;font-size:24px">Five trails nobody talks about</h1>
+          <p style="margin:0 0 12px">This week we walked the ridgelines that stay empty even in October. <a href="https://example.com/trails" style="color:#1a73e8">Read the full guide</a> or skip to the map.</p>
+          <p style="margin:0 0 16px;color:#6b7280;font-size:13px">Photos by our readers. Distances are one way.</p>
+          <table cellpadding="0" cellspacing="0" width="100%" style="background:#fff4e5;border-left:4px solid #f59e0b"><tr><td style="padding:12px 16px;color:#8a4b00;font-size:14px">Heads up: the north loop closes for repairs on November 3.</td></tr></table>
+          <p style="margin:20px 0"><a class="button" href="https://example.com/map" style="background:#1a73e8;color:#ffffff;padding:10px 18px;border-radius:6px;display:inline-block;font-weight:bold">Open the trail map</a></p>
+          <div style="background-image:linear-gradient(135deg,#1e3a8a,#0ea5e9);color:#ffffff;padding:16px;border-radius:6px">Member pick: a sunrise hike with the community, Saturday at 6am.</div>
+        </td></tr>
+        <tr><td bgcolor="#fafafa" style="padding:16px 24px;border-top:1px solid #e5e7eb;color:#6b7280;font-size:12px">You are receiving this because you subscribed to Field Notes. <a href="https://example.com/unsubscribe" style="color:#6b7280">Unsubscribe</a></td></tr>
+      </table>
+    </td></tr></table>
+  </body></html>`;
+}
+
+function createDarkModeFollowupHtml() {
+  return `<html><body style="margin:0;background:#ffffff;font-family:Arial,sans-serif">
+    <table width="100%" bgcolor="#ffffff" cellpadding="0" cellspacing="0"><tr><td style="padding:24px;color:#222222;font-size:15px">
+      <h2 style="margin:0 0 8px;color:#111111">Field Notes: reader mailbag</h2>
+      <p style="margin:0">Your questions about the quiet trails, answered.</p>
+    </td></tr></table>
+  </body></html>`;
+}
+
+// Declares its own dark palette, the way Apple and Stripe receipts do.
+function createDarkModeAuthoredHtml() {
+  return `<html><head>
+    <meta name="color-scheme" content="light dark">
+    <meta name="supported-color-schemes" content="light dark">
+    <style>
+      body, .canvas { background: #ffffff; color: #1f2937; }
+      .card { background: #f5f3ff; color: #312e81; }
+      .accent { color: #6d28d9; }
+      @media (prefers-color-scheme: dark) {
+        body, .canvas { background: #0f0a1f !important; color: #ede9fe !important; }
+        .card { background: #1e1840 !important; color: #ddd6fe !important; }
+        .accent { color: #c4b5fd !important; }
+      }
+    </style></head>
+  <body style="margin:0;font-family:Arial,sans-serif">
+    <div class="canvas" style="padding:24px">
+      <h1 class="accent" style="margin:0 0 12px;font-size:22px">Aurora · Your October recap</h1>
+      <div class="card" style="padding:16px;border-radius:8px">You logged 31 clear nights and spotted the aurora 4 times.</div>
+      <p style="margin:16px 0 0">Our own dark palette, chosen by the sender.</p>
+    </div>
+  </body></html>`;
+}
+
+// A receipt with a dark-on-transparent logo, line items and a totals table.
+function createDarkModeReceiptHtml() {
+  const logo = svgDataUri(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="172" height="36"><circle cx="18" cy="18" r="16" fill="#3f2a1d"/><text x="42" y="24" font-family="Georgia" font-size="18" fill="#3f2a1d">Lumen Coffee</text></svg>',
+  );
+  const row = (item, price) =>
+    `<tr><td style="padding:8px 0;border-bottom:1px solid #eeeeee">${item}</td><td align="right" style="padding:8px 0;border-bottom:1px solid #eeeeee">${price}</td></tr>`;
+  return `<html><body style="margin:0;font-family:Helvetica,Arial,sans-serif;color:#000000">
+    <table width="100%" cellpadding="0" cellspacing="0" bgcolor="#ffffff"><tr><td style="padding:24px">
+      <img src="${logo}" width="172" height="36" alt="Lumen Coffee">
+      <h2 style="margin:16px 0 4px;font-size:20px">Thanks for your order</h2>
+      <p style="margin:0 0 16px;color:#555555;font-size:13px">Order #LC-20931 · Pickup at Market Street</p>
+      <table width="100%" cellpadding="0" cellspacing="0" style="font-size:14px">
+        ${row("Flat white, oat", "$5.25")}
+        ${row("Cardamom bun", "$4.00")}
+        ${row("Beans: Ethiopia Guji, 250g", "$18.00")}
+        <tr><td style="padding:12px 0 0;font-weight:bold">Total</td><td align="right" style="padding:12px 0 0;font-weight:bold">$27.25</td></tr>
+      </table>
+      <p style="margin:20px 0 0;font-size:13px"><a href="https://example.com/receipt" style="color:#0645ad">View receipt online</a></p>
+    </td></tr></table>
+  </body></html>`;
+}
+
+function svgDataUri(svg) {
+  return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
 }
 
 function getUrlPort(url) {

@@ -37,7 +37,7 @@ describe("sanitizeMailHtml", () => {
     `);
     const document = buildMailHtmlDocument({
       html: sanitized,
-      isDarkMode: true,
+      darkTreatment: "theme",
       imageProxyBaseUrl: null,
       imageProxyOrigin: null,
       documentKey: "fragment-document",
@@ -64,7 +64,7 @@ describe("sanitizeMailHtml", () => {
     expect(parsedDocument.querySelectorAll("body")).toHaveLength(1);
   });
 
-  it("neutralizes authored dark-mode CSS inside parsed style elements", () => {
+  it("pins authored color-scheme queries to the light palette when shown as sent", () => {
     const sanitized = sanitizeMailHtml(`
       <html>
         <head>
@@ -78,7 +78,7 @@ describe("sanitizeMailHtml", () => {
     `);
     const document = buildMailHtmlDocument({
       html: sanitized,
-      isDarkMode: false,
+      darkTreatment: "light",
       imageProxyBaseUrl: null,
       imageProxyOrigin: null,
       documentKey: "styled-document",
@@ -90,13 +90,17 @@ describe("sanitizeMailHtml", () => {
     );
     const authoredStyle = Array.from(parsedDocument.querySelectorAll("style"))
       .map((style) => style.textContent ?? "")
-      .find((style) => style.includes("inbox-zero-authored"));
+      .find((style) => style.includes("body { color: white; }"));
 
+    // The frame follows the operating system's preference, so the sender's
+    // queries are pinned to the light palette the reader is showing.
+    expect(authoredStyle).not.toContain("prefers-color-scheme");
     expect(authoredStyle).toContain(
-      "prefers-color-scheme: inbox-zero-authored",
+      "@media (max-width: 0px) { body { color: white; } }",
     );
-    expect(authoredStyle).not.toContain("prefers-color-scheme: dark");
-    expect(authoredStyle).toContain("prefers-color-scheme: light");
+    expect(authoredStyle).toContain(
+      "@media (min-width: 0px) { body { color: black; } }",
+    );
     expect(parsedDocument.body.textContent).toContain("Styled content");
   });
 
@@ -107,7 +111,7 @@ describe("sanitizeMailHtml", () => {
     `);
     const document = buildMailHtmlDocument({
       html: sanitized,
-      isDarkMode: false,
+      darkTreatment: "light",
       imageProxyBaseUrl: null,
       imageProxyOrigin: null,
       documentKey: "test-document",

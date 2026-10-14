@@ -444,6 +444,58 @@ microsoft:
       parent_folder_id: sentitems
       is_read: true
       received_date_time: "2025-12-29T12:00:00.000Z"
+    - id: msg_playwright_dark_newsletter
+      conversation_id: thr_playwright_dark_newsletter
+      user_email: __PLAYWRIGHT_TEST_EMAIL__
+      from:
+        address: hello@fieldnotes.example
+        name: Field Notes
+      to_recipients:
+        - address: __PLAYWRIGHT_TEST_EMAIL__
+      subject: Field Notes Issue 42
+      body_content: "__PLAYWRIGHT_DARK_NEWSLETTER_HTML__"
+      parent_folder_id: sentitems
+      is_read: true
+      received_date_time: "2025-12-29T12:00:00.000Z"
+    - id: msg_playwright_dark_followup
+      conversation_id: thr_playwright_dark_followup
+      user_email: __PLAYWRIGHT_TEST_EMAIL__
+      from:
+        address: hello@fieldnotes.example
+        name: Field Notes
+      to_recipients:
+        - address: __PLAYWRIGHT_TEST_EMAIL__
+      subject: Field Notes Mailbag
+      body_content: "__PLAYWRIGHT_DARK_FOLLOWUP_HTML__"
+      parent_folder_id: sentitems
+      is_read: true
+      received_date_time: "2025-12-29T12:00:00.000Z"
+    - id: msg_playwright_dark_authored
+      conversation_id: thr_playwright_dark_authored
+      user_email: __PLAYWRIGHT_TEST_EMAIL__
+      from:
+        address: recap@aurora.example
+        name: Aurora
+      to_recipients:
+        - address: __PLAYWRIGHT_TEST_EMAIL__
+      subject: Aurora October Recap
+      body_content: "__PLAYWRIGHT_DARK_AUTHORED_HTML__"
+      parent_folder_id: sentitems
+      is_read: true
+      received_date_time: "2025-12-29T12:00:00.000Z"
+    - id: msg_playwright_dark_receipt
+      conversation_id: thr_playwright_dark_receipt
+      user_email: __PLAYWRIGHT_TEST_EMAIL__
+      from:
+        address: receipts@lumen.example
+        name: Lumen Coffee
+      to_recipients:
+        - address: __PLAYWRIGHT_TEST_EMAIL__
+      subject: Lumen Coffee Receipt
+      body_content: "__PLAYWRIGHT_DARK_RECEIPT_HTML__"
+      parent_folder_id: sentitems
+      is_read: true
+      received_date_time: "2025-12-29T12:00:00.000Z"
     - id: msg_playwright_matched_earlier
       conversation_id: thr_playwright_matched_reason
       user_email: __PLAYWRIGHT_TEST_EMAIL__

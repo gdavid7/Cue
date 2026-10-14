@@ -7,9 +7,15 @@ import {
   useState,
 } from "react";
 import { sanitizeMailHtml } from "./sanitize-html";
+import {
+  adaptMailDocumentForDarkMode,
+  DARK_MAIL_SURFACE,
+  hasAuthoredDarkSupport,
+} from "./dark-adapt";
 
 const SANS_FONT_STACK = `ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`;
 const BODY_TYPE = { fontSize: "14.5px", lineHeight: 1.65 } as const;
+const DARK_SURFACE_CSS = `rgb(${DARK_MAIL_SURFACE.r}, ${DARK_MAIL_SURFACE.g}, ${DARK_MAIL_SURFACE.b})`;
 
 export const EMAIL_DOCUMENT_MARKER = "inbox-zero-email-document";
 
@@ -28,6 +34,14 @@ type MailHtmlDocument = {
   srcDoc: string;
   documentKey: string;
 };
+
+/**
+ * How an email is colored in the reader. "theme" restyles plain emails with
+ * the app's palette; "authored" applies the sender's own dark styles; "adapt"
+ * recolors a light designed email for the dark surface once it renders;
+ * "light" shows it as sent.
+ */
+export type MailDarkTreatment = "light" | "theme" | "authored" | "adapt";
 
 export function MailMessageBody({
   html,
@@ -49,17 +63,20 @@ export function MailMessageBody({
   const document = useMemo(() => {
     if (!html) return null;
     const sanitizedHtml = sanitizeMailHtml(html);
-    const applyDarkTheme = shouldApplyDarkMailTheme(sanitizedHtml, isDarkMode);
+    const darkTreatment = getMailDarkTreatment(sanitizedHtml, {
+      isDarkMode,
+      adaptDesignedEmails: false,
+    });
     const documentKey = getMailHtmlDocumentKey(
       `${messageId}:${sanitizedHtml}`,
-      applyDarkTheme,
+      darkTreatment,
     );
     return {
       documentKey,
-      isDarkMode: applyDarkTheme,
+      darkTreatment,
       srcDoc: buildMailHtmlDocument({
         html: sanitizedHtml,
-        isDarkMode: applyDarkTheme,
+        darkTreatment,
         imageProxyBaseUrl,
         imageProxyOrigin,
         documentKey,
@@ -81,7 +98,7 @@ export function MailMessageBody({
         <BufferedMailHtmlFrame
           callbacks={{}}
           documentKey={document.documentKey}
-          isDarkMode={document.isDarkMode}
+          darkTreatment={document.darkTreatment}
           srcDoc={document.srcDoc}
         />
       </div>
@@ -130,11 +147,11 @@ export function MailPlainTextBody({
 export function BufferedMailHtmlFrame({
   srcDoc,
   documentKey,
-  isDarkMode,
+  darkTreatment,
   callbacks,
   label,
 }: MailHtmlDocument & {
-  isDarkMode: boolean;
+  darkTreatment: MailDarkTreatment;
   callbacks: MailHtmlFrameCallbacks;
   /** The frame's accessible name, such as who sent the message and when. */
   label?: string;
@@ -161,7 +178,7 @@ export function BufferedMailHtmlFrame({
           key={document.documentKey}
           document={document}
           pending={index > 0}
-          isDarkMode={isDarkMode}
+          darkTreatment={darkTreatment}
           onReady={setVisibleDocument}
           callbacks={callbacks}
           label={label}
@@ -173,14 +190,14 @@ export function BufferedMailHtmlFrame({
 
 export function buildMailHtmlDocument({
   html,
-  isDarkMode,
+  darkTreatment,
   imageProxyBaseUrl,
   imageProxyOrigin,
   documentKey,
   allowRemoteImages = true,
 }: {
   html: string;
-  isDarkMode: boolean;
+  darkTreatment: MailDarkTreatment;
   imageProxyBaseUrl: string | null;
   imageProxyOrigin: string | null;
   documentKey: string;
@@ -195,14 +212,16 @@ export function buildMailHtmlDocument({
       html.includes("text-decoration") ||
       styleAttributeCount === 1);
 
+  // The sender's dark styles paint their own body over the reader's surface.
+  const authoredDark = darkTreatment === "authored";
   const defaultFontCss = hasHeavyStyling
     ? `
       :root {
-        color-scheme: light;
-        background-color: white;
+        color-scheme: ${authoredDark ? "dark" : "light"};
+        background-color: ${authoredDark ? DARK_SURFACE_CSS : "white"};
       }
       body {
-        background-color: white;
+        ${authoredDark ? "" : "background-color: white;"}
         font-family: ${SANS_FONT_STACK};
         overflow-wrap: anywhere;
       }
@@ -303,20 +322,37 @@ export function buildMailHtmlDocument({
 
   return buildStructuredMailHtmlDocument({
     html,
-    isDarkMode,
+    darkTreatment,
     documentKey,
     contentSecurityPolicy,
     defaultFontCss,
-    shouldDisableAuthoredDarkColorScheme: hasHeavyStyling,
+    hasHeavyStyling,
   });
 }
 
-export function shouldApplyDarkMailTheme(html: string, isDarkMode: boolean) {
-  return isDarkMode && !isDesignedHtmlEmail(html);
+/**
+ * Plain emails always follow the app's theme. A designed email in dark mode
+ * uses the sender's own dark styles when it has them, otherwise it is adapted
+ * unless the reader asked to see it as sent.
+ */
+export function getMailDarkTreatment(
+  html: string,
+  {
+    isDarkMode,
+    adaptDesignedEmails,
+  }: { isDarkMode: boolean; adaptDesignedEmails: boolean },
+): MailDarkTreatment {
+  if (!isDarkMode) return "light";
+  if (!isDesignedHtmlEmail(html)) return "theme";
+  if (!adaptDesignedEmails) return "light";
+  return hasAuthoredDarkSupport(html) ? "authored" : "adapt";
 }
 
-export function getMailHtmlDocumentKey(html: string, isDarkMode: boolean) {
-  const source = `${isDarkMode ? "1" : "0"}:${html}`;
+export function getMailHtmlDocumentKey(
+  html: string,
+  darkTreatment: MailDarkTreatment,
+) {
+  const source = `${darkTreatment}:${html}`;
   let hash = 2_166_136_261;
   for (let index = 0; index < source.length; index += 1) {
     hash ^= source.charCodeAt(index);
@@ -328,7 +364,7 @@ export function getMailHtmlDocumentKey(html: string, isDarkMode: boolean) {
 function MailHtmlFrame({
   document,
   pending,
-  isDarkMode,
+  darkTreatment,
   onReady,
   callbacks,
   label,
@@ -336,7 +372,7 @@ function MailHtmlFrame({
   document: MailHtmlDocument;
   pending: boolean;
   label?: string;
-  isDarkMode: boolean;
+  darkTreatment: MailDarkTreatment;
   onReady: (document: MailHtmlDocument) => void;
   callbacks: MailHtmlFrameCallbacks;
 }) {
@@ -345,6 +381,7 @@ function MailHtmlFrame({
     iframeRef,
     document.srcDoc,
     document.documentKey,
+    darkTreatment === "adapt",
     callbacks,
   );
   useLayoutEffect(() => {
@@ -363,7 +400,7 @@ function MailHtmlFrame({
         position: pending ? "absolute" : undefined,
         top: pending ? 0 : undefined,
         visibility: pending ? "hidden" : undefined,
-        colorScheme: isDarkMode ? "dark" : "light",
+        colorScheme: usesDarkColorScheme(darkTreatment) ? "dark" : "light",
       }}
       aria-hidden={pending || undefined}
       // Names each message's frame apart; the title stays generic.
@@ -381,6 +418,7 @@ function useMailHtmlFrame(
   iframeRef: React.RefObject<HTMLIFrameElement | null>,
   srcDoc: string,
   documentKey: string,
+  adaptForDarkMode: boolean,
   callbacks: MailHtmlFrameCallbacks,
 ) {
   const callbacksRef = useRef(callbacks);
@@ -487,6 +525,12 @@ function useMailHtmlFrame(
       const { body, documentElement: root } = iframeDocument;
       if (!body || !root) return false;
       if (root === observedRoot) return true;
+      if (adaptForDarkMode) {
+        // The frame stays one pixel tall until it is measured, so recoloring
+        // the whole document first means it never shows the light version.
+        if (iframeDocument.readyState === "loading") return false;
+        adaptMailDocumentForDarkMode(iframeDocument);
+      }
 
       resizeObserver.disconnect();
       stopObservingDocument();
@@ -533,12 +577,12 @@ function useMailHtmlFrame(
       resizeObserver.disconnect();
       stopObservingDocument();
     };
-  }, [iframeRef, srcDoc, documentKey]);
+  }, [iframeRef, srcDoc, documentKey, adaptForDarkMode]);
 
   return measurement?.documentKey === documentKey ? measurement.height : 0;
 }
 
-function isDesignedHtmlEmail(html: string) {
+export function isDesignedHtmlEmail(html: string) {
   const markup = html.toLowerCase();
   const styleAttributeCount = (markup.match(/style=/g) || []).length;
   return (
@@ -553,46 +597,68 @@ function isDesignedHtmlEmail(html: string) {
 
 type StructuredMailHtmlDocumentInput = {
   html: string;
-  isDarkMode: boolean;
+  darkTreatment: MailDarkTreatment;
   documentKey: string;
   contentSecurityPolicy: string;
   defaultFontCss: string;
-  shouldDisableAuthoredDarkColorScheme: boolean;
+  hasHeavyStyling: boolean;
 };
 
 function buildStructuredMailHtmlDocument({
   html,
-  isDarkMode,
+  darkTreatment,
   documentKey,
   contentSecurityPolicy,
   defaultFontCss,
-  shouldDisableAuthoredDarkColorScheme,
+  hasHeavyStyling,
 }: StructuredMailHtmlDocumentInput) {
   const mailDocument = new DOMParser().parseFromString(html || "", "text/html");
 
-  if (shouldDisableAuthoredDarkColorScheme) {
-    disableAuthoredDarkColorScheme(mailDocument);
+  if (hasHeavyStyling) {
+    pinAuthoredColorScheme(mailDocument, darkTreatment === "authored");
+  }
+  if (darkTreatment === "adapt" && mailDocument.body) {
+    // Outlook.com marks a document it has recolored this way, and senders key
+    // their own corrections for that recoloring off these attributes.
+    mailDocument.body.setAttribute("data-ogsc", "");
+    mailDocument.body.setAttribute("data-ogsb", "");
   }
 
   prependMailDocumentHead(mailDocument, {
     documentKey,
-    isDarkMode,
+    isDarkMode: usesDarkColorScheme(darkTreatment),
     contentSecurityPolicy,
     defaultFontCss,
   });
-  applyDarkModeClass(mailDocument, isDarkMode);
+  applyDarkModeClass(mailDocument, darkTreatment === "theme");
 
   return `<!doctype html>
 ${mailDocument.documentElement.outerHTML}`;
 }
 
-function disableAuthoredDarkColorScheme(mailDocument: Document) {
+/**
+ * The frame's own color-scheme preference follows the operating system, not
+ * the app, so the sender's light and dark media queries are pinned to the
+ * palette the reader chose.
+ */
+function pinAuthoredColorScheme(mailDocument: Document, dark: boolean) {
+  const always = "(min-width: 0px)";
+  const never = "(max-width: 0px)";
   for (const stylesheet of mailDocument.querySelectorAll("style")) {
-    stylesheet.textContent = (stylesheet.textContent ?? "").replace(
-      /prefers-color-scheme\s*:\s*dark/gi,
-      "prefers-color-scheme: inbox-zero-authored",
-    );
+    stylesheet.textContent = (stylesheet.textContent ?? "")
+      .replace(
+        /\(\s*prefers-color-scheme\s*:\s*dark\s*\)/gi,
+        dark ? always : never,
+      )
+      .replace(
+        /\(\s*prefers-color-scheme\s*:\s*light\s*\)/gi,
+        dark ? never : always,
+      );
   }
+}
+
+function usesDarkColorScheme(darkTreatment: MailDarkTreatment) {
+  return darkTreatment === "theme" || darkTreatment === "authored";
 }
 
 function prependMailDocumentHead(

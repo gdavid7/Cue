@@ -6,6 +6,12 @@ export const THEME_OPTIONS = [
   { value: "dark", label: "Dark", icon: MoonIcon },
 ] as const;
 
+/** How designed emails show in dark mode, shared by both appearance menus. */
+export const DARK_EMAIL_OPTIONS = [
+  { value: "adapt", label: "Adapt", icon: MoonIcon },
+  { value: "original", label: "Show original", icon: SunIcon },
+] as const;
+
 /**
  * Public marketing pages are designed for a light surface only, so they keep
  * it whatever the visitor's preference. Everything signed-in, plus sign-in and

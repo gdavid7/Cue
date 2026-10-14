@@ -10,6 +10,8 @@ import {
 } from "react";
 import { ReplyAssistContext } from "@/components/email-list/reply-assist";
 import { useAction } from "next-safe-action/hooks";
+import { useTheme } from "next-themes";
+import { isDesignedHtmlEmail } from "@inboxzero/mail-ui/MailBody";
 import {
   ChevronDownIcon,
   ChevronUpIcon,
@@ -50,6 +52,7 @@ import { deleteDraftAction } from "@/utils/actions/mail";
 import type { ThreadMessage } from "@/components/email-list/types";
 import { EmailDetails } from "@/components/email-list/EmailDetails";
 import { HtmlEmail, PlainEmail } from "@/components/email-list/EmailContents";
+import { DarkEmailToggle } from "@/components/email-list/DarkEmailToggle";
 import { EmailAttachments } from "@/components/email-list/EmailAttachments";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useComposeModal } from "@/providers/ComposeModalProvider";
@@ -204,6 +207,12 @@ export function EmailMessage({
   );
   const translation = getMessageTranslation(threadTranslation, message.id);
   const showTranslation = Boolean(translation && !translation.showOriginal);
+  const { resolvedTheme } = useTheme();
+  const senderAddress = extractEmailAddress(message.headers.from);
+  const isDesignedHtml = useMemo(
+    () => Boolean(message.textHtml && isDesignedHtmlEmail(message.textHtml)),
+    [message.textHtml],
+  );
   // `null` follows `defaultComposeMode`, which the reader's Reply button flips
   // long after this message mounted.
   const [composeOverride, setComposeOverride] = useState<
@@ -371,6 +380,15 @@ export function EmailMessage({
     [expanded, onReply, onToggle, showReplyButton],
   );
 
+  // Only a designed email changes with this; plain ones already follow the theme.
+  const showDarkEmailToggle =
+    resolvedTheme === "dark" &&
+    expanded &&
+    bodyAvailable &&
+    !isDraftRow &&
+    !showTranslation &&
+    isDesignedHtml &&
+    Boolean(senderAddress);
   const replyBarShown =
     showReplyBar && showReplyButton && expanded && !hasOpenComposer;
 
@@ -428,6 +446,14 @@ export function EmailMessage({
       )}
     >
       <MessageHeader
+        darkEmailToggle={
+          showDarkEmailToggle && (
+            <DarkEmailToggle
+              emailAccountId={emailAccountId}
+              sender={senderAddress}
+            />
+          )
+        }
         expanded={expanded}
         message={message}
         menu={menu}
@@ -501,6 +527,7 @@ export function EmailMessage({
                 onNavigateMessage={onNavigateMessage}
                 onFocusMessage={onSelect}
                 emailAccountId={emailAccountId}
+                sender={senderAddress}
                 label={`Message from ${senderNameOf(message)}, ${formatShortDate(new Date(message.headers.date))}`}
                 html={message.textHtml}
                 inlineAttachments={message.inline}
@@ -652,6 +679,7 @@ function draftSnippet(draft: ParsedMessage) {
 function MessageHeader({
   message,
   menu,
+  darkEmailToggle,
   expanded,
   showDetails,
   toggleDetails,
@@ -665,6 +693,8 @@ function MessageHeader({
 }: {
   message: ParsedMessage;
   menu?: React.ReactNode;
+  /** Switches a designed email between dark adaptation and its original colors. */
+  darkEmailToggle?: React.ReactNode;
   expanded: boolean;
   showDetails: boolean;
   toggleDetails: (e: React.MouseEvent) => void;
@@ -799,6 +829,7 @@ function MessageHeader({
         )}
 
       <div className="ml-auto flex shrink-0 items-center gap-2">
+        {darkEmailToggle}
         {(showReplyButton || menu || (expanded && onToggle)) && (
           <span
             className={cn(

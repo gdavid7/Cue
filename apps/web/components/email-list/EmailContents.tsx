@@ -3,8 +3,8 @@ import {
   BufferedMailHtmlFrame,
   MailPlainTextBody,
   buildMailHtmlDocument,
+  getMailDarkTreatment,
   getMailHtmlDocumentKey,
-  shouldApplyDarkMailTheme,
 } from "@inboxzero/mail-ui/MailBody";
 import { useTheme } from "next-themes";
 import { EllipsisIcon } from "lucide-react";
@@ -30,6 +30,7 @@ import {
 } from "@/utils/attachments/download";
 import { queueAttachmentDownload } from "@/utils/attachments/download-queue";
 import { getAttachmentImagePreview } from "@/utils/attachments/image-preview";
+import { useDarkEmailMode } from "@/hooks/useDarkEmailMode";
 
 const NO_INLINE_ATTACHMENTS: ParsedMessage["inline"] = [];
 const INLINE_IMAGE_MAX_BYTES = 25 * 1024 * 1024;
@@ -38,6 +39,7 @@ export function HtmlEmail({
   html,
   messageId,
   emailAccountId,
+  sender,
   inlineAttachments = NO_INLINE_ATTACHMENTS,
   onReplyMessage,
   onForwardMessage,
@@ -50,6 +52,8 @@ export function HtmlEmail({
   html: string;
   messageId: string;
   emailAccountId?: string;
+  /** The sender's address, whose remembered dark-mode choice applies. */
+  sender?: string;
   inlineAttachments?: ParsedMessage["inline"];
   onReplyMessage?: () => void;
   onForwardMessage?: () => void;
@@ -73,6 +77,8 @@ export function HtmlEmail({
   );
   const { resolvedTheme } = useTheme();
   const isDarkMode = resolvedTheme === "dark";
+  const { mode: darkEmailMode } = useDarkEmailMode(emailAccountId, sender);
+  const adaptDesignedEmails = darkEmailMode === "adapt";
 
   useEffect(() => {
     let cancelled = false;
@@ -123,42 +129,47 @@ export function HtmlEmail({
     () => splitEmailContent(renderHtml),
     [renderHtml],
   );
-  const applyDarkTheme = shouldApplyDarkMailTheme(mainContent, isDarkMode);
-  const applyQuotedDarkTheme = shouldApplyDarkMailTheme(
-    quotedContent,
-    isDarkMode,
+  const darkTreatment = useMemo(
+    () =>
+      getMailDarkTreatment(mainContent, { isDarkMode, adaptDesignedEmails }),
+    [mainContent, isDarkMode, adaptDesignedEmails],
+  );
+  const quotedDarkTreatment = useMemo(
+    () =>
+      getMailDarkTreatment(quotedContent, { isDarkMode, adaptDesignedEmails }),
+    [quotedContent, isDarkMode, adaptDesignedEmails],
   );
 
   const documentKey = useMemo(
-    () => getMailHtmlDocumentKey(mainContent, applyDarkTheme),
-    [mainContent, applyDarkTheme],
+    () => getMailHtmlDocumentKey(mainContent, darkTreatment),
+    [mainContent, darkTreatment],
   );
   const srcDoc = useMemo(
     () =>
       buildMailHtmlDocument({
         html: mainContent,
-        isDarkMode: applyDarkTheme,
+        darkTreatment,
         imageProxyBaseUrl: IMAGE_PROXY_BASE_URL,
         imageProxyOrigin: IMAGE_PROXY_ORIGIN,
         documentKey,
       }),
-    [mainContent, applyDarkTheme, documentKey],
+    [mainContent, darkTreatment, documentKey],
   );
 
   const quotedDocumentKey = useMemo(
-    () => getMailHtmlDocumentKey(quotedContent, applyQuotedDarkTheme),
-    [quotedContent, applyQuotedDarkTheme],
+    () => getMailHtmlDocumentKey(quotedContent, quotedDarkTreatment),
+    [quotedContent, quotedDarkTreatment],
   );
   const quotedSrcDoc = useMemo(
     () =>
       buildMailHtmlDocument({
         html: quotedContent,
-        isDarkMode: applyQuotedDarkTheme,
+        darkTreatment: quotedDarkTreatment,
         imageProxyBaseUrl: IMAGE_PROXY_BASE_URL,
         imageProxyOrigin: IMAGE_PROXY_ORIGIN,
         documentKey: quotedDocumentKey,
       }),
-    [quotedContent, applyQuotedDarkTheme, quotedDocumentKey],
+    [quotedContent, quotedDarkTreatment, quotedDocumentKey],
   );
   const callbacks = {
     onForwardMessage,
@@ -172,7 +183,7 @@ export function HtmlEmail({
       <BufferedMailHtmlFrame
         srcDoc={srcDoc}
         documentKey={documentKey}
-        isDarkMode={applyDarkTheme}
+        darkTreatment={darkTreatment}
         callbacks={callbacks}
         label={label}
       />
@@ -193,7 +204,7 @@ export function HtmlEmail({
         <BufferedMailHtmlFrame
           srcDoc={quotedSrcDoc}
           documentKey={quotedDocumentKey}
-          isDarkMode={applyQuotedDarkTheme}
+          darkTreatment={quotedDarkTreatment}
           callbacks={callbacks}
           label={label && `Quoted text in ${label}`}
         />

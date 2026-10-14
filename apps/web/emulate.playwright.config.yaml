@@ -431,6 +431,50 @@ google:
       label_ids:
         - SENT
       internal_date: "1734880000000"
+    - id: msg_playwright_dark_newsletter
+      thread_id: thr_playwright_dark_newsletter
+      user_email: __PLAYWRIGHT_TEST_EMAIL__
+      from: Field Notes <hello@fieldnotes.example>
+      to: __PLAYWRIGHT_TEST_EMAIL__
+      subject: Field Notes Issue 42
+      body_text: Five trails nobody talks about
+      body_html: "__PLAYWRIGHT_DARK_NEWSLETTER_HTML__"
+      label_ids:
+        - SENT
+      internal_date: "1734880000000"
+    - id: msg_playwright_dark_followup
+      thread_id: thr_playwright_dark_followup
+      user_email: __PLAYWRIGHT_TEST_EMAIL__
+      from: Field Notes <hello@fieldnotes.example>
+      to: __PLAYWRIGHT_TEST_EMAIL__
+      subject: Field Notes Mailbag
+      body_text: Your questions about the quiet trails
+      body_html: "__PLAYWRIGHT_DARK_FOLLOWUP_HTML__"
+      label_ids:
+        - SENT
+      internal_date: "1734880000000"
+    - id: msg_playwright_dark_authored
+      thread_id: thr_playwright_dark_authored
+      user_email: __PLAYWRIGHT_TEST_EMAIL__
+      from: Aurora <recap@aurora.example>
+      to: __PLAYWRIGHT_TEST_EMAIL__
+      subject: Aurora October Recap
+      body_text: You logged 31 clear nights
+      body_html: "__PLAYWRIGHT_DARK_AUTHORED_HTML__"
+      label_ids:
+        - SENT
+      internal_date: "1734880000000"
+    - id: msg_playwright_dark_receipt
+      thread_id: thr_playwright_dark_receipt
+      user_email: __PLAYWRIGHT_TEST_EMAIL__
+      from: Lumen Coffee <receipts@lumen.example>
+      to: __PLAYWRIGHT_TEST_EMAIL__
+      subject: Lumen Coffee Receipt
+      body_text: Thanks for your order
+      body_html: "__PLAYWRIGHT_DARK_RECEIPT_HTML__"
+      label_ids:
+        - SENT
+      internal_date: "1734880000000"
     - id: msg_playwright_matched_earlier
       thread_id: thr_playwright_matched_reason
       user_email: __PLAYWRIGHT_TEST_EMAIL__
