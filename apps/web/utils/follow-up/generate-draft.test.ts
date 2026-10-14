@@ -9,7 +9,6 @@ const { envMock } = vi.hoisted(() => ({
   envMock: {
     NEXT_PUBLIC_BRAND_NAME: "Inbox Zero",
     NEXT_PUBLIC_AUTO_DRAFT_DISABLED: false,
-    NEXT_PUBLIC_DISABLE_REFERRAL_SIGNATURE: true,
   },
 }));
 
@@ -38,16 +37,6 @@ vi.mock("@/utils/prisma-retry", () => ({
 
 vi.mock("@/utils/error", () => ({
   captureException: vi.fn(),
-}));
-
-vi.mock("@/utils/referral/referral-code", () => ({
-  getOrCreateReferralCode: vi.fn().mockResolvedValue({ code: "TEST123" }),
-}));
-
-vi.mock("@/utils/referral/referral-link", () => ({
-  generateReferralLink: vi
-    .fn()
-    .mockReturnValue("https://getinboxzero.com/?ref=TEST123"),
 }));
 
 vi.mock("@/env", () => ({
@@ -125,9 +114,7 @@ describe("generateFollowUpDraft", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     envMock.NEXT_PUBLIC_AUTO_DRAFT_DISABLED = false;
-    envMock.NEXT_PUBLIC_DISABLE_REFERRAL_SIGNATURE = true;
     vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue({
-      includeReferralSignature: false,
       signature: null,
     } as any);
     vi.mocked(prisma.threadTracker.update).mockResolvedValue({} as any);
@@ -276,8 +263,8 @@ describe("generateFollowUpDraft", () => {
     );
   });
 
-  it("places the referral signature after the configured user signature", async () => {
-    envMock.NEXT_PUBLIC_DISABLE_REFERRAL_SIGNATURE = false;
+  // Accounts that opted in to the retired referral footer still have the flag
+  it("ends the draft with the user's signature and no branding footer", async () => {
     vi.mocked(aiDraftFollowUp).mockResolvedValue("What do you think about it?");
     vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue({
       includeReferralSignature: true,
@@ -314,8 +301,7 @@ describe("generateFollowUpDraft", () => {
     expect(mockProvider.draftEmail).toHaveBeenCalledWith(
       userMessage,
       expect.objectContaining({
-        content:
-          'What do you think about it?\n\nCheers!<br>Barbara\n\nDrafted by <a href="https://getinboxzero.com/?ref=TEST123">Inbox Zero</a>.',
+        content: "What do you think about it?\n\nCheers!<br>Barbara",
       }),
       "user@example.com",
       undefined,

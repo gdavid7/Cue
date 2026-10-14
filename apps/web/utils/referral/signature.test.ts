@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   hasReferralSignature,
-  renderReferralSignatureHtml,
   stripReferralSignature,
   stripBrandingSignatures,
 } from "@/utils/referral/signature";
@@ -20,15 +19,8 @@ describe("referral signatures", () => {
     expect(hasReferralSignature(stripReferralSignature(html))).toBe(false);
   });
 
-  // The link points at this deployment, so the footer names its brand.
-  it("signs new drafts with the current brand", () => {
-    expect(renderReferralSignatureHtml("https://example.com/?ref=test")).toBe(
-      `Drafted by <a href="https://example.com/?ref=test">${BRAND_NAME}</a>.`,
-    );
-  });
-
   it("recognizes footers in the current brand as well as older drafts", () => {
-    const current = `Reply\n\n${renderReferralSignatureHtml("https://example.com/?ref=test")}`;
+    const current = `Reply\n\nDrafted by <a href="https://example.com/?ref=test">${BRAND_NAME}</a>.`;
     const legacy =
       'Reply\n\nDrafted by <a href="https://example.com/?ref=test">Inbox Zero</a>.';
 

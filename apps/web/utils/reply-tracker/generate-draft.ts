@@ -106,7 +106,6 @@ export async function fetchMessagesAndGenerateDraftWithConfidenceThreshold(
   const finalResult = await buildDraftReplyBody({
     text: draft,
     emailAccountId: emailAccount.id,
-    userId: emailAccount.userId,
   });
 
   return {

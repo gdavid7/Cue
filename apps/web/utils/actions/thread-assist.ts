@@ -91,7 +91,7 @@ export const saveSuggestedReplyAction = actionClient
   .inputSchema(saveSuggestedReplyBody)
   .action(
     async ({
-      ctx: { emailAccountId, emailAccount, userId, provider, logger },
+      ctx: { emailAccountId, emailAccount, provider, logger },
       parsedInput: { threadId, content },
     }) => {
       const emailProvider = await createEmailProvider({
@@ -114,7 +114,6 @@ export const saveSuggestedReplyAction = actionClient
       const body = await buildDraftReplyBody({
         text: content,
         emailAccountId,
-        userId,
       });
       const existing = thread.messages.findLast(isDraft);
       const existingDraft =

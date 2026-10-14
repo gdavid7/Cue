@@ -155,7 +155,6 @@ const baseAccountSnapshot = {
   filingPrompt: null,
   writingStyle: "Friendly",
   signature: "Best,\nUser",
-  includeReferralSignature: false,
   followUpAwaitingReplyDays: 3,
   followUpNeedsReplyDays: 2,
   followUpAutoDraftEnabled: true,

@@ -56,7 +56,6 @@ const accountSnapshot = {
   filingPrompt: null,
   writingStyle: null,
   signature: null,
-  includeReferralSignature: false,
   followUpAwaitingReplyDays: 3,
   followUpNeedsReplyDays: 2,
   followUpAutoDraftEnabled: false,

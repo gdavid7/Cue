@@ -35,16 +35,6 @@ vi.mock("@/utils/prisma", () => ({
   },
 }));
 
-vi.mock("@/utils/referral/referral-code", () => ({
-  getOrCreateReferralCode: vi.fn().mockResolvedValue({ code: "TEST123" }),
-}));
-
-vi.mock("@/utils/referral/referral-link", () => ({
-  generateReferralLink: vi
-    .fn()
-    .mockReturnValue("https://getinboxzero.com/?ref=TEST123"),
-}));
-
 vi.mock("@/utils/ai/knowledge/extract", () => ({
   aiExtractRelevantKnowledge: vi.fn().mockResolvedValue(null),
 }));
@@ -96,7 +86,6 @@ vi.mock("@/utils/ai/knowledge/extract-from-email-history", () => ({
 vi.mock("@/env", () => ({
   env: {
     NEXT_PUBLIC_BRAND_NAME: "Inbox Zero",
-    NEXT_PUBLIC_DISABLE_REFERRAL_SIGNATURE: false,
   },
 }));
 
@@ -190,10 +179,7 @@ describe("fetchMessagesAndGenerateDraft - AI content escaping", () => {
       confidence: DraftReplyConfidence.HIGH_CONFIDENCE,
     });
     vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue(
-      createMockEmailAccountSettings({
-        includeReferralSignature: true,
-        signature: userSignature,
-      }),
+      createMockEmailAccountSettings({ signature: userSignature }),
     );
 
     const emailAccount = createMockEmailAccount();
@@ -212,11 +198,6 @@ describe("fetchMessagesAndGenerateDraft - AI content escaping", () => {
     expect(result).not.toContain('<div style="display:none">');
     expect(result).toContain("&lt;div");
     expect(result).toContain("LEAKED SECRET DATA"); // Text should still be visible (escaped)
-
-    // Referral signature HTML should NOT be escaped - link should work
-    expect(result).toContain(
-      '<a href="https://getinboxzero.com/?ref=TEST123">Inbox Zero</a>',
-    );
 
     // User signature HTML should NOT be escaped
     expect(result).toContain('<p style="color:blue">');
@@ -421,7 +402,8 @@ describe("fetchMessagesAndGenerateDraft - AI content escaping", () => {
     );
   });
 
-  it("places the referral signature after the configured user signature", async () => {
+  // Accounts that opted in to the retired referral footer still have the flag
+  it("ends the draft with the user's signature and no branding footer", async () => {
     vi.mocked(aiDraftReplyWithConfidence).mockResolvedValue({
       reply: "What do you think about it?",
       confidence: DraftReplyConfidence.HIGH_CONFIDENCE,
@@ -441,9 +423,7 @@ describe("fetchMessagesAndGenerateDraft - AI content escaping", () => {
       logger,
     );
 
-    expect(result).toBe(
-      'What do you think about it?\n\nCheers!<br>Barbara\n\nDrafted by <a href="https://getinboxzero.com/?ref=TEST123">Inbox Zero</a>.',
-    );
+    expect(result).toBe("What do you think about it?\n\nCheers!<br>Barbara");
   });
 
   it("converts AI link markup into provider-ready draft content for the reply-tracker flow", async () => {
