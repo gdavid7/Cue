@@ -25,6 +25,9 @@ import {
 import { getRetryAfterHeaderFromError } from "@/utils/retry/get-retry-after-header";
 
 const DEFAULT_RATE_LIMIT_DELAY_MS = 30_000;
+// Gmail's weighted-units quota is a per-minute budget, so a retry within
+// seconds only spends units that are not back yet and extends the outage.
+const GMAIL_PER_MINUTE_QUOTA_MIN_DELAY_MS = 30_000;
 const RETRY_AT_BUFFER_SECONDS = 5;
 
 export type EmailProviderRateLimitState = {
@@ -309,15 +312,23 @@ function getGoogleRateLimitDelayMs(error: unknown, attemptNumber: number) {
     attemptNumber,
     extractErrorInfo,
     isRateLimitError: (errorInfo) => isRetryableError(errorInfo).isRateLimit,
-    calculateDelayMs: ({ attemptNumber, retryAfterHeader, errorInfo }) =>
-      calculateRetryDelay(
+    calculateDelayMs: ({ attemptNumber, retryAfterHeader, errorInfo }) => {
+      const delayMs = calculateRetryDelay(
         true,
         false,
         false,
         attemptNumber,
         retryAfterHeader,
         errorInfo.errorMessage,
-      ),
+      );
+      const hasRetryTime =
+        retryAfterHeader !== undefined ||
+        /Retry after /i.test(errorInfo.errorMessage);
+      if (hasRetryTime || !/per minute/i.test(errorInfo.errorMessage)) {
+        return delayMs;
+      }
+      return Math.max(delayMs, GMAIL_PER_MINUTE_QUOTA_MIN_DELAY_MS);
+    },
   });
 }
 

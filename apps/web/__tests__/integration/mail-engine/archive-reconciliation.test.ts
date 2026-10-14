@@ -12,8 +12,11 @@ import {
 import { createEmailProviderMailboxSource } from "@/utils/mail-api/source";
 import { createEmailProviderOperationExecutor } from "@/utils/mail-api/operations";
 import type { EmailProvider } from "@/utils/email/types";
+import { createTestLogger } from "@/__tests__/helpers";
 
 vi.mock("server-only", () => ({}));
+
+const logger = createTestLogger();
 vi.mock("@inboxzero/tinybird", () => ({
   publishArchive: vi.fn().mockResolvedValue(undefined),
 }));
@@ -158,6 +161,7 @@ async function runArchiveSlice(input: {
   const engine = createMailEngine({
     store,
     source: createEmailProviderMailboxSource({
+      logger,
       provider: input.provider,
       accountId: input.accountId,
     }),

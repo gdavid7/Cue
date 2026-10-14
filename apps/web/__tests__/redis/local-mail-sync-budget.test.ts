@@ -31,7 +31,7 @@ const input = {
   emailAccountId: "account-1",
   provider: "google" as const,
   priority: "backfill" as const,
-  cost: 500,
+  cost: 1100,
 };
 let created = false;
 

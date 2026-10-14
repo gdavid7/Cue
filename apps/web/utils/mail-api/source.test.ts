@@ -10,8 +10,26 @@ import { syncPageSchema } from "@inboxzero/mail-core/sync";
 import { createEmailProviderMailboxSource } from "./source";
 import type { EmailProvider } from "@/utils/email/types";
 import type { ParsedMessage } from "@/utils/types";
+import { createTestLogger } from "@/__tests__/helpers";
+import { redis } from "@/utils/redis";
+import {
+  LocalMailSyncPausedError,
+  withLocalMailSyncBudget,
+} from "@/utils/email/local-mail-sync-budget";
 
 vi.mock("server-only", () => ({}));
+vi.mock("@/utils/redis", () => ({
+  redis: { get: vi.fn(), set: vi.fn(), del: vi.fn(), eval: vi.fn() },
+}));
+vi.mock("@/utils/email/local-mail-sync-budget", async (original) => ({
+  ...(await original<typeof import("@/utils/email/local-mail-sync-budget")>()),
+  withLocalMailSyncBudget: vi.fn(
+    (_input: unknown, operation: (signal: AbortSignal) => Promise<unknown>) =>
+      operation(new AbortController().signal),
+  ),
+}));
+
+const logger = createTestLogger();
 
 describe("createEmailProviderMailboxSource", () => {
   it("continues provider search after the first page", async () => {
@@ -22,6 +40,7 @@ describe("createEmailProviderMailboxSource", () => {
       }),
     );
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: { name: "google", searchMessages } as unknown as EmailProvider,
     });
@@ -68,6 +87,7 @@ describe("createEmailProviderMailboxSource", () => {
       }),
     );
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "microsoft",
@@ -100,6 +120,7 @@ describe("createEmailProviderMailboxSource", () => {
 
   it("reports a search the provider rejects as unsupported so it is not retried", async () => {
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "microsoft",
@@ -117,6 +138,7 @@ describe("createEmailProviderMailboxSource", () => {
 
   it("pauses a search when the provider fails transiently", async () => {
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "google",
@@ -136,6 +158,7 @@ describe("createEmailProviderMailboxSource", () => {
       nextPageToken: undefined,
     }));
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: { name: "google", searchMessages } as unknown as EmailProvider,
     });
@@ -171,6 +194,7 @@ describe("createEmailProviderMailboxSource", () => {
 
   it("retries conversation membership when the provider is unavailable", async () => {
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "google",
@@ -194,6 +218,7 @@ describe("createEmailProviderMailboxSource", () => {
 
   it("requests a scoped rebuild when the provider cursor is expired", async () => {
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "google",
@@ -225,6 +250,7 @@ describe("createEmailProviderMailboxSource", () => {
 
   it("treats an explicit reset page as expired history", async () => {
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "microsoft",
@@ -259,6 +285,7 @@ describe("createEmailProviderMailboxSource", () => {
 
   it("pauses catch-up when the provider is throttled", async () => {
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "google",
@@ -291,6 +318,7 @@ describe("createEmailProviderMailboxSource", () => {
   it("does not replace a failed delta cursor with a mailbox list page token", async () => {
     const getMessagesWithPagination = vi.fn();
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "google",
@@ -336,6 +364,7 @@ describe("createEmailProviderMailboxSource", () => {
       },
     ]);
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "microsoft",
@@ -380,6 +409,7 @@ describe("createEmailProviderMailboxSource", () => {
       messages: [],
     });
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "microsoft",
@@ -451,6 +481,7 @@ describe("createEmailProviderMailboxSource", () => {
         messages: [],
       });
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "microsoft",
@@ -508,6 +539,7 @@ describe("createEmailProviderMailboxSource", () => {
   it("maps folder delta removals to removed-from-scope changes", async () => {
     const deltaCursor = `folder-cursor-${"x".repeat(2000)}`;
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "microsoft",
@@ -571,6 +603,7 @@ describe("createEmailProviderMailboxSource", () => {
       inline: [],
     } as ParsedMessage);
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "google",
@@ -606,6 +639,7 @@ describe("createEmailProviderMailboxSource", () => {
     let maxInFlight = 0;
     const started: string[] = [];
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "microsoft",
@@ -657,6 +691,7 @@ describe("createEmailProviderMailboxSource", () => {
       snippet: `m${index + 1}`,
     }));
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "google",
@@ -713,6 +748,7 @@ describe("createEmailProviderMailboxSource", () => {
       messages: [],
     });
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "google",
@@ -748,6 +784,7 @@ describe("createEmailProviderMailboxSource", () => {
       messages: [],
     });
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "microsoft",
@@ -797,6 +834,7 @@ describe("createEmailProviderMailboxSource", () => {
       hasMore: false,
     });
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "google",
@@ -844,6 +882,7 @@ describe("createEmailProviderMailboxSource", () => {
 
   it("encodes the newest Gmail history id when the provider cursor is unavailable", async () => {
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "google",
@@ -900,6 +939,7 @@ describe("createEmailProviderMailboxSource", () => {
 
   it("returns enumerated bodies when the provider already fetched them", async () => {
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "google",
@@ -984,35 +1024,38 @@ describe("createEmailProviderMailboxSource", () => {
 
   it("hydrates attachment descriptors and meeting invitations with the body", async () => {
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "google",
-        async getMessage() {
-          return {
-            id: "msg-1",
-            threadId: "t1",
-            historyId: "11",
-            headers: { from: "ada@example.com" },
-            labelIds: ["INBOX"],
-            snippet: "Invite",
-            textPlain: "Please join",
-            attachments: [
-              {
-                attachmentId: "att-ics",
-                filename: "invite.ics",
-                mimeType: "text/calendar",
-                size: 80,
-                headers: {
-                  "content-description": "",
-                  "content-id": "",
-                  "content-transfer-encoding": "base64",
-                  "content-type": "text/calendar",
+        async getMessagesBatch() {
+          return [
+            {
+              id: "msg-1",
+              threadId: "t1",
+              historyId: "11",
+              headers: { from: "ada@example.com" },
+              labelIds: ["INBOX"],
+              snippet: "Invite",
+              textPlain: "Please join",
+              attachments: [
+                {
+                  attachmentId: "att-ics",
+                  filename: "invite.ics",
+                  mimeType: "text/calendar",
+                  size: 80,
+                  headers: {
+                    "content-description": "",
+                    "content-id": "",
+                    "content-transfer-encoding": "base64",
+                    "content-type": "text/calendar",
+                  },
                 },
-              },
-            ],
-            isMeetingInvitation: true,
-            inline: [],
-          };
+              ],
+              isMeetingInvitation: true,
+              inline: [],
+            },
+          ];
         },
       } as unknown as EmailProvider,
     });
@@ -1052,9 +1095,10 @@ describe("createEmailProviderMailboxSource", () => {
     [404, "ok"],
   ])("preserves hydration failures (%s)", async (status, expected) => {
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
-        name: "google",
+        name: "microsoft",
         async getMessage() {
           throw Object.assign(new Error(`Provider returned ${status}`), {
             status,
@@ -1077,21 +1121,286 @@ describe("createEmailProviderMailboxSource", () => {
     }
   });
 
-  it("emits an empty body observation when hydrate finds no text", async () => {
+  it("hydrates Gmail messages in one batch and reports the ones it could not read", async () => {
+    const getMessage = vi.fn();
+    const getMessagesBatch = vi.fn(async (ids: string[]) =>
+      ids
+        .filter((id) => id !== "gone")
+        .map((id) => ({
+          id,
+          threadId: `t-${id}`,
+          historyId: "5",
+          headers: { from: "ada@example.com" },
+          labelIds: ["INBOX"],
+          snippet: "Hi",
+          textPlain: "Hello",
+        })),
+    );
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "google",
-        async getMessage() {
+        getMessage,
+        getMessagesBatch,
+      } as unknown as EmailProvider,
+    });
+    const keys = ["a", "gone", "b"].map((messageId) => ({
+      accountId: "acc-1",
+      messageId,
+    }));
+    const result = await source.hydrate({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      keys,
+      purpose: "body",
+    });
+    expect(result).toMatchObject({
+      status: "ok",
+      value: {
+        bodies: [
+          { key: { messageId: "a" }, text: "Hello" },
+          { key: { messageId: "b" }, text: "Hello" },
+        ],
+        unresolved: [
+          {
+            key: { accountId: "acc-1", messageId: "gone" },
+            reason: "not_found",
+          },
+        ],
+      },
+    });
+    expect(getMessagesBatch).toHaveBeenCalledTimes(1);
+    expect(getMessage).not.toHaveBeenCalled();
+  });
+
+  it("backs off for Gmail's quota window and records rate-limit mode when Gmail throttles", async () => {
+    vi.mocked(redis.get).mockResolvedValue(null);
+    const quotaError = Object.assign(
+      new Error(
+        "Quota exceeded for quota metric 'Total Query Cost' and limit 'Units per minute per user' of service 'gmail.googleapis.com'",
+      ),
+      { status: 403, errors: [{ reason: "rateLimitExceeded" }] },
+    );
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        async getMessagesBatch() {
+          throw quotaError;
+        },
+      } as unknown as EmailProvider,
+    });
+    const result = await source.hydrate({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      keys: [{ accountId: "acc-1", messageId: "m1" }],
+      purpose: "body",
+    });
+    expect(result).toMatchObject({ status: "paused", reason: "throttled" });
+    if (result.status !== "paused") throw new Error("expected paused");
+    expect(result.retryAfterMs).toBeGreaterThanOrEqual(30_000);
+    expect(redis.set).toHaveBeenCalledWith(
+      "email-provider-rate-limit:acc-1",
+      expect.any(String),
+      expect.anything(),
+    );
+  });
+
+  it("returns the sync budget's wait as a throttled pause", async () => {
+    vi.mocked(withLocalMailSyncBudget).mockRejectedValueOnce(
+      new LocalMailSyncPausedError(12_000),
+    );
+    const getMessagesWithPagination = vi.fn();
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination,
+      } as unknown as EmailProvider,
+    });
+    await expect(
+      source.enumerate({
+        session: { accountId: "acc-1", generation: "g1" },
+        requestId: "r1",
+        signal: new AbortController().signal,
+        bootstrapId: "mailbox",
+        page: JSON.stringify({ scopeId: "history" }),
+        pageSize: 50,
+      }),
+    ).resolves.toEqual({
+      status: "paused",
+      retryAfterMs: 12_000,
+      reason: "throttled",
+    });
+    expect(getMessagesWithPagination).not.toHaveBeenCalled();
+  });
+
+  it("scans recent Gmail mail first and backfills older mail in a separate background scope", async () => {
+    const now = Date.now();
+    const getMessagesWithPagination = vi.fn(
+      async (_options: { after?: Date; before?: Date }) => ({ messages: [] }),
+    );
+    const getMailboxSyncPage = vi.fn(async () => ({
+      cursor: encodeMailboxSyncCursor({
+        version: 1,
+        provider: "google",
+        phase: "delta",
+        historyId: "42",
+        after: "1970-01-01T00:00:00.000Z",
+      }),
+      reset: true,
+      upsertedMessages: [],
+      deletedMessageIds: [],
+      hasMore: false,
+    }));
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination,
+        getMailboxSyncPage,
+      } as unknown as EmailProvider,
+    });
+    const discovered = await source.discoverScopes({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "scopes",
+      signal: new AbortController().signal,
+      page: null,
+    });
+    if (discovered.status !== "ok") throw new Error("expected ok");
+    const scopes = discovered.value.scopes;
+    expect(scopes.map((scope) => scope.id)).toEqual(["primary", "history"]);
+    expect(scopes[1]?.priority).toBe("low");
+
+    const windows: Array<{ after?: Date; before?: Date }> = [];
+    for (const scope of scopes) {
+      const bootstrap = await source.beginBootstrap({
+        session: { accountId: "acc-1", generation: "g1" },
+        requestId: `begin-${scope.id}`,
+        signal: new AbortController().signal,
+        scope,
+        afterMs: null,
+      });
+      if (bootstrap.status !== "ok") throw new Error("expected ok");
+      const page = await source.enumerate({
+        session: { accountId: "acc-1", generation: "g1" },
+        requestId: `enum-${scope.id}`,
+        signal: new AbortController().signal,
+        bootstrapId: bootstrap.value.bootstrapId,
+        page: bootstrap.value.enumerationToken,
+        pageSize: 50,
+      });
+      expect(page).toMatchObject({
+        status: "ok",
+        value: { nextPage: null, catchUpFrom: { streamId: scope.id } },
+      });
+      windows.push(getMessagesWithPagination.mock.calls.at(-1)?.[0] ?? {});
+    }
+    const [recent, history] = windows;
+    expect(recent?.before).toBeUndefined();
+    expect(history?.after).toBeUndefined();
+    const recentFrom = recent?.after?.getTime() ?? 0;
+    const historyTo = history?.before?.getTime() ?? 0;
+    expect(recentFrom).toBeGreaterThan(now - 30 * 24 * 60 * 60 * 1000);
+    expect(recentFrom).toBeLessThan(now);
+    // Overlapping windows leave no unsynced gap between the two scans.
+    expect(historyTo).toBeGreaterThan(recentFrom);
+    // The backfill only reads its own provider pages; catch-up for every
+    // message runs through the primary stream.
+    expect(getMailboxSyncPage).toHaveBeenCalledTimes(1);
+    expect(withLocalMailSyncBudget).toHaveBeenCalledWith(
+      expect.objectContaining({ priority: "backfill" }),
+      expect.any(Function),
+    );
+
+    const historyChanges = await source.readChanges({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "history-changes",
+      position: {
+        streamId: "history",
+        generation: "g1",
+        checkpoint: "history-complete",
+      },
+      pageSize: 50,
+      signal: new AbortController().signal,
+    });
+    expect(historyChanges).toMatchObject({
+      status: "page",
+      page: { changes: [], roundComplete: true },
+    });
+    expect(getMailboxSyncPage).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts Gmail catch-up from history rather than resuming a full mailbox snapshot", async () => {
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        async getMailboxSyncPage() {
           return {
-            id: "empty-1",
-            threadId: "t2",
-            historyId: "10",
-            headers: { from: "ada@example.com" },
-            labelIds: ["INBOX"],
-            snippet: "Hi",
-            inline: [],
+            cursor: encodeMailboxSyncCursor({
+              version: 1,
+              provider: "google",
+              phase: "snapshot",
+              historyId: "77",
+              after: "1970-01-01T00:00:00.000Z",
+              pageToken: "snapshot-page-2",
+            }),
+            reset: true,
+            upsertedMessages: [],
+            deletedMessageIds: [],
+            hasMore: true,
           };
+        },
+      } as unknown as EmailProvider,
+    });
+    const bootstrap = await source.beginBootstrap({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "begin",
+      signal: new AbortController().signal,
+      scope: { id: "primary", kind: "account", folderId: null },
+      afterMs: null,
+    });
+    if (bootstrap.status !== "ok") throw new Error("expected ok");
+    expect(
+      decodeMailboxSyncCursor(
+        bootstrap.value.catchUpFrom?.checkpoint ?? "",
+        "google",
+      ),
+    ).toEqual({
+      version: 1,
+      provider: "google",
+      phase: "delta",
+      historyId: "77",
+      after: "1970-01-01T00:00:00.000Z",
+    });
+  });
+
+  it("emits an empty body observation when hydrate finds no text", async () => {
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        async getMessagesBatch() {
+          return [
+            {
+              id: "empty-1",
+              threadId: "t2",
+              historyId: "10",
+              headers: { from: "ada@example.com" },
+              labelIds: ["INBOX"],
+              snippet: "Hi",
+              inline: [],
+            },
+          ];
         },
       } as unknown as EmailProvider,
     });
@@ -1118,6 +1427,7 @@ describe("createEmailProviderMailboxSource", () => {
 
   it("blocks catch-up when provider authentication fails", async () => {
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "google",
@@ -1147,6 +1457,7 @@ describe("createEmailProviderMailboxSource", () => {
   it("streams attachment bytes from the provider", async () => {
     const bytes = new Uint8Array([7, 8, 9]);
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "google",
@@ -1180,6 +1491,7 @@ describe("createEmailProviderMailboxSource", () => {
 
   it("pauses attachment reads when the provider is unavailable", async () => {
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "google",
@@ -1206,6 +1518,7 @@ describe("createEmailProviderMailboxSource", () => {
 
   it("does not retry a missing provider attachment", async () => {
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "acc-1",
       provider: {
         name: "google",
@@ -1292,6 +1605,7 @@ describe("structured mailbox search", () => {
     ];
     const getMessage = vi.fn();
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "a",
       provider: {
         name,
@@ -1329,6 +1643,7 @@ describe("structured mailbox search", () => {
   it("rejects metadata exclusions before loading omitted candidate bodies", async () => {
     const getMessage = vi.fn();
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "a",
       provider: {
         name: "microsoft",
@@ -1376,6 +1691,7 @@ describe("structured mailbox search", () => {
       textPlain: "alpha beta",
     }));
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "a",
       provider: {
         name: "microsoft",
@@ -1411,6 +1727,7 @@ describe("structured mailbox search", () => {
 
   it("does not hide a missing body when provider hydration fails", async () => {
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "a",
       provider: {
         name: "microsoft",
@@ -1456,6 +1773,7 @@ describe("structured mailbox search", () => {
       }),
     );
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "a",
       provider: {
         name: "microsoft",
@@ -1500,6 +1818,7 @@ describe("structured mailbox search", () => {
 
   it("keeps canonical archive scope and permits explicit sent/draft exclusions", async () => {
     const source = createEmailProviderMailboxSource({
+      logger,
       accountId: "a",
       provider: {
         name: "microsoft",

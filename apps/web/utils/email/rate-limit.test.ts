@@ -5,6 +5,7 @@ import { createTestLogger } from "@/__tests__/helpers";
 import {
   assertProviderNotRateLimited,
   getEmailProviderRateLimitState,
+  getProviderRateLimitDelayMs,
   recordRateLimitFromApiError,
   recordProviderRateLimitFromError,
   setEmailProviderRateLimitState,
@@ -357,5 +358,52 @@ describe("email provider rate-limit state", () => {
         logger,
       }),
     ).resolves.toBe("google");
+  });
+});
+
+describe("getProviderRateLimitDelayMs", () => {
+  const perMinuteQuotaError = {
+    cause: {
+      status: 403,
+      message:
+        "Quota exceeded for quota metric 'Total Query Cost' and limit 'Units per minute per user' of service 'gmail.googleapis.com'",
+      errors: [{ reason: "rateLimitExceeded" }],
+    },
+  };
+
+  it("waits out Gmail's per-minute quota window when no retry time is given", () => {
+    expect(
+      getProviderRateLimitDelayMs({
+        error: perMinuteQuotaError,
+        provider: "google",
+        attemptNumber: 1,
+      }),
+    ).toBeGreaterThanOrEqual(30_000);
+  });
+
+  it("uses Gmail's explicit retry time for per-minute quota errors", () => {
+    const retryAt = new Date(Date.now() + 5000).toISOString();
+    const delay = getProviderRateLimitDelayMs({
+      error: {
+        cause: {
+          ...perMinuteQuotaError.cause,
+          message: `${perMinuteQuotaError.cause.message}. Retry after ${retryAt}`,
+        },
+      },
+      provider: "google",
+      attemptNumber: 1,
+    });
+    expect(delay).toBeGreaterThan(0);
+    expect(delay).toBeLessThanOrEqual(5000);
+  });
+
+  it("keeps short backoff for Gmail rate limits that are not per-minute quotas", () => {
+    expect(
+      getProviderRateLimitDelayMs({
+        error: { cause: { status: 429, message: "Rate limit exceeded" } },
+        provider: "google",
+        attemptNumber: 1,
+      }),
+    ).toBeLessThan(30_000);
   });
 });

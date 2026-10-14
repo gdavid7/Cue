@@ -5,8 +5,11 @@ import {
   encodeMailboxSyncCursor,
 } from "@/utils/email/mailbox-sync";
 import { createEmailProviderMailboxSource } from "@/utils/mail-api/source";
+import { createTestLogger } from "@/__tests__/helpers";
 
 vi.mock("server-only", () => ({}));
+
+const logger = createTestLogger();
 
 const RUN_INTEGRATION_TESTS = process.env.RUN_INTEGRATION_TESTS;
 const EMAIL = "outlook-delta@example.com";
@@ -194,6 +197,7 @@ describe.skipIf(!RUN_INTEGRATION_TESTS)(
       ).not.toContain("deltatoken=expired");
 
       const source = createEmailProviderMailboxSource({
+        logger,
         accountId: "outlook-delta",
         provider: harness.provider,
       });

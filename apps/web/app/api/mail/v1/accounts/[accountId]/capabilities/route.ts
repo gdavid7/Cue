@@ -23,6 +23,7 @@ export const GET = withEmailProvider(
     const source = createEmailProviderMailboxSource({
       provider: request.emailProvider,
       accountId: request.auth.emailAccountId,
+      logger: request.logger,
     });
     const described = await source.describe({
       session: {

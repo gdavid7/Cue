@@ -43,6 +43,7 @@ export const POST = withEmailProvider(
     const source = createEmailProviderMailboxSource({
       provider: request.emailProvider,
       accountId: request.auth.emailAccountId,
+      logger: request.logger,
     });
     const results = await source.readChangesBatch({
       ...parsed.data,

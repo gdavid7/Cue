@@ -433,6 +433,31 @@ describe("engine bootstrap coverage", () => {
     await engine.close();
   });
 
+  it("keeps the account ready while a throttled enumeration waits", async () => {
+    const now = 1000;
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    const engine = createMailEngine({
+      store,
+      source: slowBootstrapSource({
+        onBootstrap: () => {},
+        onEnumerate: () => {},
+        pauseFirstEnumerationMs: 15_000,
+      }),
+      executor: uncertainExecutor(),
+      runtime: createHostRuntime({ nowMs: () => now }),
+    });
+    await engine.requestSync(["acc-1"]);
+    await engine.runUntil(5000);
+
+    expect((await engine.getDiagnostics("acc-1")).connection).toBe("ready");
+    await engine.close();
+  });
+
   it("waits for the idle interval when the provider keeps asking for a resync", async () => {
     let now = 1000;
     let beginCalls = 0;
