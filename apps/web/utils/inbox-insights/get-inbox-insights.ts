@@ -18,6 +18,7 @@ import { assertHasAiAccess } from "@/utils/premium/limits";
 import { redis } from "@/utils/redis";
 import {
   getCachedSuggestedReply,
+  getSuggestedReplySettings,
   type SuggestedReply,
 } from "@/utils/thread-context/suggest-reply";
 import type { ParsedMessage } from "@/utils/types";
@@ -100,15 +101,20 @@ export async function getInboxInsights({
       : [],
     // The same answer the reader shows: a reply Cue verified, maybe saved
     // as a draft, reads "Draft ready" here too.
-    Promise.all(
-      items.map((item) =>
-        getCachedSuggestedReply({
-          emailAccountId,
-          threadId: item.threadId,
-          messageId: item.messageId,
-        })
-          .then((s) => replyState(s))
-          .catch(() => null),
+    getSuggestedReplySettings(emailAccountId).then((settings) =>
+      Promise.all(
+        items.map((item) =>
+          getCachedSuggestedReply(
+            {
+              emailAccountId,
+              threadId: item.threadId,
+              messageId: item.messageId,
+            },
+            settings,
+          )
+            .then((s) => replyState(s))
+            .catch(() => null),
+        ),
       ),
     ),
   ]);

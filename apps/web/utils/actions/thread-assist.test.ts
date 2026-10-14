@@ -20,6 +20,7 @@ vi.mock("@/utils/email/provider", () => ({
 }));
 vi.mock("@/utils/thread-context/suggest-reply", () => ({
   getCachedSuggestedReply: mocks.getCachedSuggestedReply,
+  getSuggestedReplySettings: async () => SUGGESTION_SETTINGS,
 }));
 vi.mock("@/utils/email/reply-body", () => ({
   buildDraftReplyBody: async ({ text }: { text: string }) => text,
@@ -69,11 +70,14 @@ describe("saveSuggestedReplyAction", () => {
       content: "Wednesday at 3 works.",
     });
 
-    expect(mocks.getCachedSuggestedReply).toHaveBeenCalledWith({
-      emailAccountId: EMAIL_ACCOUNT_ID,
-      threadId: "thread-1",
-      messageId: "m1",
-    });
+    expect(mocks.getCachedSuggestedReply).toHaveBeenCalledWith(
+      {
+        emailAccountId: EMAIL_ACCOUNT_ID,
+        threadId: "thread-1",
+        messageId: "m1",
+      },
+      SUGGESTION_SETTINGS,
+    );
     expect(prisma.suggestedReplyDraft.upsert).toHaveBeenCalledWith({
       where: {
         emailAccountId_draftId: {
@@ -162,3 +166,8 @@ function createMailbox() {
   };
   return { provider, drafts };
 }
+
+const SUGGESTION_SETTINGS = {
+  draftRepliesEnabled: true,
+  webLookupEnabled: true,
+};

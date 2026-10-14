@@ -17,7 +17,10 @@ import { HANDLED_LABELS } from "@/utils/home/get-home";
 import prisma from "@/utils/prisma";
 import { updateThreadTrackers } from "@/utils/reply-tracker/handle-conversation-status";
 import { applyThreadStatusLabel } from "@/utils/reply-tracker/label-helpers";
-import { getCachedSuggestedReply } from "@/utils/thread-context/suggest-reply";
+import {
+  getCachedSuggestedReply,
+  getSuggestedReplySettings,
+} from "@/utils/thread-context/suggest-reply";
 import type { ParsedMessage } from "@/utils/types";
 
 /**
@@ -141,11 +144,10 @@ export const saveSuggestedReplyAction = actionClient
       // made here and later in the mail app both teach reply memories when
       // the draft is sent. Without the cached original there is nothing to
       // compare against, so the draft is saved without being remembered.
-      const suggestion = await getCachedSuggestedReply({
-        emailAccountId,
-        threadId,
-        messageId: replyTo.id,
-      });
+      const suggestion = await getCachedSuggestedReply(
+        { emailAccountId, threadId, messageId: replyTo.id },
+        await getSuggestedReplySettings(emailAccountId),
+      );
       if (suggestion?.status === "suggested") {
         try {
           await prisma.suggestedReplyDraft.upsert({

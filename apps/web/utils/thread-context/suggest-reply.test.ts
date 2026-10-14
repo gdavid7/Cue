@@ -223,6 +223,7 @@ describe("webSearchQuery", () => {
 
 describe("getCachedSuggestedReply", () => {
   const key = { emailAccountId: "a1", threadId: "t1", messageId: "m1" };
+  const enabled = { draftRepliesEnabled: true, webLookupEnabled: true };
 
   // The reader shows the web pass's answer when there was one, so the
   // inbox row must agree with it.
@@ -240,9 +241,49 @@ describe("getCachedSuggestedReply", () => {
       citations: [],
     });
 
-    expect(await getCachedSuggestedReply(key)).toMatchObject({
+    expect(await getCachedSuggestedReply(key, enabled)).toMatchObject({
       status: "suggested",
     });
+  });
+
+  // The route serves cached replies without running suggestReply, so the
+  // same settings must hold here.
+  it("returns nothing while auto draft replies are off", async () => {
+    cache.clear();
+    cache.set("suggested-reply:v2:a1:t1:m1", {
+      status: "suggested",
+      reply: "Yes.",
+      citations: [],
+    });
+
+    expect(
+      await getCachedSuggestedReply(key, {
+        ...enabled,
+        draftRepliesEnabled: false,
+      }),
+    ).toEqual({ status: "unavailable" });
+  });
+
+  it("ignores the web pass's answer while web lookup is off", async () => {
+    cache.clear();
+    cache.set("suggested-reply:v2:a1:t1:m1", {
+      status: "insufficient",
+      missing: "Flight time",
+      unsupported: [],
+      webQuery: "",
+    });
+    cache.set("suggested-reply-web:v2:a1:t1:m1", {
+      status: "suggested",
+      reply: "Landing at 6:35 PM.",
+      citations: [],
+    });
+
+    expect(
+      await getCachedSuggestedReply(key, {
+        ...enabled,
+        webLookupEnabled: false,
+      }),
+    ).toMatchObject({ status: "insufficient" });
   });
 
   it("falls back to the first answer, and to nothing for a new message", async () => {
@@ -253,11 +294,11 @@ describe("getCachedSuggestedReply", () => {
       citations: [],
     });
 
-    expect(await getCachedSuggestedReply(key)).toMatchObject({
+    expect(await getCachedSuggestedReply(key, enabled)).toMatchObject({
       status: "suggested",
     });
     expect(
-      await getCachedSuggestedReply({ ...key, messageId: "m2" }),
+      await getCachedSuggestedReply({ ...key, messageId: "m2" }, enabled),
     ).toBeNull();
   });
 });

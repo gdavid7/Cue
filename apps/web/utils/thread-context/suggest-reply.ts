@@ -125,6 +125,7 @@ export async function suggestReply({
   emailProvider,
   logger,
   searchWeb: searchWebRequested = false,
+  settings: knownSettings,
   now = new Date(),
 }: {
   emailAccountId: string;
@@ -134,6 +135,8 @@ export async function suggestReply({
   logger: Logger;
   /** After an abstention: search the web for what was missing and try again. */
   searchWeb?: boolean;
+  /** From `getSuggestedReplySettings`, when the caller already has them. */
+  settings?: SuggestedReplySettings;
   now?: Date;
 }): Promise<SuggestedReply | null> {
   const { thread, items } = await collectThreadContext({
@@ -150,22 +153,12 @@ export async function suggestReply({
     return { status: "already-replied" };
   }
 
-  const settings = await prisma.emailAccount.findUnique({
-    where: { id: emailAccountId },
-    select: {
-      webLookupEnabled: true,
-      rules: {
-        where: { systemType: SystemType.TO_REPLY },
-        select: { enabled: true, actions: { select: { type: true } } },
-      },
-    },
-  });
+  const settings =
+    knownSettings ?? (await getSuggestedReplySettings(emailAccountId));
   // Turning off "Auto draft replies" stops every AI-written reply, cached
   // ones included.
-  if (!isDraftRepliesEnabled(settings?.rules[0])) {
-    return { status: "unavailable" };
-  }
-  const searchWeb = searchWebRequested && Boolean(settings?.webLookupEnabled);
+  if (!settings.draftRepliesEnabled) return { status: "unavailable" };
+  const searchWeb = searchWebRequested && settings.webLookupEnabled;
 
   // A new message changes the key, so a cached suggestion is never stale.
   const keyFor = { emailAccountId, threadId, messageId: latest.id };
@@ -503,17 +496,50 @@ ${he.escape(source.text)}
 </source>`;
 }
 
+export type SuggestedReplySettings = {
+  draftRepliesEnabled: boolean;
+  webLookupEnabled: boolean;
+};
+
+/** The two settings that decide whether, and from what, Cue suggests a reply. */
+export async function getSuggestedReplySettings(
+  emailAccountId: string,
+): Promise<SuggestedReplySettings> {
+  const settings = await prisma.emailAccount.findUnique({
+    where: { id: emailAccountId },
+    select: {
+      webLookupEnabled: true,
+      rules: {
+        where: { systemType: SystemType.TO_REPLY },
+        select: { enabled: true, actions: { select: { type: true } } },
+      },
+    },
+  });
+  return {
+    draftRepliesEnabled: isDraftRepliesEnabled(settings?.rules[0]),
+    webLookupEnabled: Boolean(settings?.webLookupEnabled),
+  };
+}
+
 /**
  * The reply Cue last worked out for a message, without working out a new
  * one: the web pass's answer when there was one, else the first answer.
+ * Settings apply here as they do to `suggestReply`: nothing while drafting is
+ * off, and no web answer while web lookup is off.
  */
-export async function getCachedSuggestedReply(key: {
-  emailAccountId: string;
-  threadId: string;
-  messageId: string;
-}) {
+export async function getCachedSuggestedReply(
+  key: {
+    emailAccountId: string;
+    threadId: string;
+    messageId: string;
+  },
+  settings: SuggestedReplySettings,
+): Promise<SuggestedReply | null> {
+  if (!settings.draftRepliesEnabled) return { status: "unavailable" };
   const [web, plain] = await Promise.all([
-    getCached(suggestionCacheKey({ ...key, web: true })),
+    settings.webLookupEnabled
+      ? getCached(suggestionCacheKey({ ...key, web: true }))
+      : null,
     getCached(suggestionCacheKey(key)),
   ]);
   return web ?? plain;
