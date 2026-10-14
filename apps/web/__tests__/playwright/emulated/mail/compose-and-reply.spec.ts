@@ -13,6 +13,7 @@ import {
   openMail,
   openMailboxFromSidebar,
   readLatestMailMutation,
+  threadReaderBodyHasText,
   UNDO_WINDOW_SEND_TIMEOUT_MS,
   waitForComposeOutboxSend,
   watchReplyHandoff,
@@ -38,13 +39,7 @@ test("composes, sends, and reads a new message from Sent", async ({
   const composeEditor = dialog.locator("[contenteditable='true']");
   await composeEditor.pressSequentially("A composed message body.");
   await expect(composeEditor).toContainText("A composed message body.");
-  await dialog.getByRole("button", { name: "Show signature" }).click();
-  await expect(
-    composeEditor
-      .locator("[data-smartmail]")
-      .getByRole("link", { name: "Inbox Zero" }),
-  ).toBeVisible();
-  await capturePlaywrightCheckpoint(page, testInfo, "composer-with-footer");
+  await capturePlaywrightCheckpoint(page, testInfo, "composer-before-send");
   await dialog.getByRole("button", { exact: true, name: "Send" }).click();
 
   await expect(dialog).toBeHidden();
@@ -66,7 +61,8 @@ test("composes, sends, and reads a new message from Sent", async ({
   await expect(page.getByRole("heading", { name: subject })).toBeVisible();
   await expect(page.getByText("recipient@example.com").first()).toBeVisible();
   await expectThreadReaderBody(page, "A composed message body.");
-  await expectThreadReaderBody(page, "Sent with Inbox Zero");
+  // The "Sent with" footer is opt-in, so nothing was added to the message.
+  expect(await threadReaderBodyHasText(page, "Sent with")).toBe(false);
   await capturePlaywrightCheckpoint(page, testInfo, "composed-message-in-sent");
 });
 

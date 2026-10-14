@@ -9,8 +9,14 @@ import {
   conversationWithSubject,
   openMail,
   openMailboxFromSidebar,
+  setSentWithFooter,
   waitForComposeOutboxSend,
 } from "./mail-test-helpers";
+
+// These specs edit the signature, and the opt-in "Sent with" footer gives
+// every account one to edit.
+test.beforeAll(() => setSentWithFooter(true));
+test.afterAll(() => setSentWithFooter(false));
 
 test("keeps keyboard focus in the composer and follows the message field order", async ({
   page,
