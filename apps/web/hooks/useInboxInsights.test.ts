@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { getInboxInsightRequests } from "./useInboxInsights";
+// @vitest-environment jsdom
+
+import { createElement, type ReactNode } from "react";
+import { renderHook, waitFor } from "@testing-library/react";
+import { SWRConfig } from "swr";
+import { describe, expect, it, vi } from "vitest";
+import { getInboxInsightRequests, useInboxInsights } from "./useInboxInsights";
 
 describe("getInboxInsightRequests", () => {
   it("asks each account about its own rows, even when thread ids collide", () => {
@@ -27,6 +32,36 @@ describe("getInboxInsightRequests", () => {
     const requests = getInboxInsightRequests([...items, items[0]]);
 
     expect(requests.map((request) => request.items.length)).toEqual([50, 1]);
+  });
+});
+
+describe("useInboxInsights", () => {
+  it("asks for nothing while paused, then asks once for the rows on screen", async () => {
+    const fetcher = vi.fn(async () => ({
+      insights: { t1: { insight: null, meeting: null, reply: "ready" } },
+    }));
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(
+        SWRConfig,
+        { value: { fetcher, provider: () => new Map() } },
+        children,
+      );
+    const items = [item({ emailAccountId: "work", threadId: "t1" })];
+
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useInboxInsights(items, { enabled }),
+      { wrapper, initialProps: { enabled: false } },
+    );
+    rerender({ enabled: false });
+    expect(fetcher).not.toHaveBeenCalled();
+
+    rerender({ enabled: true });
+    await waitFor(() =>
+      expect(result.current.data).toEqual({
+        "work:t1": { insight: null, meeting: null, reply: "ready" },
+      }),
+    );
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });
 

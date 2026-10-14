@@ -19,22 +19,26 @@ type InboxInsightItem = {
  * sent with its latest message, which keys the server cache, so a new message
  * gets a fresh look and nothing else is recomputed. Rows from different
  * accounts are asked for with their own account, as the combined inbox mixes
- * them.
+ * them. While `enabled` is false nothing is asked for.
  */
-export function useInboxInsights(items: InboxInsightItem[]) {
+export function useInboxInsights(
+  items: InboxInsightItem[],
+  { enabled = true }: { enabled?: boolean } = {},
+) {
   const { fetcher } = useSWRConfig();
   const requests = useMemo(() => getInboxInsightRequests(items), [items]);
-  const key = requests.length
-    ? ([
-        "inbox-insights",
-        requests
-          .map(
-            (request) =>
-              `${request.emailAccountId}=${request.items.map((item) => item.pair).join(",")}`,
-          )
-          .join(";"),
-      ] as const)
-    : null;
+  const key =
+    enabled && requests.length
+      ? ([
+          "inbox-insights",
+          requests
+            .map(
+              (request) =>
+                `${request.emailAccountId}=${request.items.map((item) => item.pair).join(",")}`,
+            )
+            .join(";"),
+        ] as const)
+      : null;
 
   return useSWR<Record<string, ThreadInsightData>>(
     key,

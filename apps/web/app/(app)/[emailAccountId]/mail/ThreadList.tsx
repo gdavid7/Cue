@@ -54,6 +54,12 @@ export type ThreadListProps = {
   listKey: string;
   showSentOpenStatus?: boolean;
   rowActions?: ThreadRowActionHandlers;
+  /**
+   * Holds off on inbox insights, e.g. while the first sync is still filling the
+   * list: each new batch of rows would otherwise ask again, and every unseen
+   * email costs the server a provider read and a model call.
+   */
+  insightsPaused?: boolean;
 };
 
 export const ThreadList = memo(function ThreadList({
@@ -78,6 +84,7 @@ export const ThreadList = memo(function ThreadList({
   listKey,
   showSentOpenStatus = false,
   rowActions,
+  insightsPaused = false,
 }: ThreadListProps) {
   const { emailAccountId } = useAccount();
   const isMobile = useIsMobile();
@@ -119,7 +126,9 @@ export const ThreadList = memo(function ThreadList({
       }),
     [threads, emailAccountId],
   );
-  const { data: insights } = useInboxInsights(insightItems);
+  const { data: insights } = useInboxInsights(insightItems, {
+    enabled: !insightsPaused,
+  });
   const groupHeaderClassName = cn(
     "pt-4 pr-5 pb-1.5 font-normal text-muted-foreground text-sm",
     selectionEnabled ? "pl-[3.25rem]" : "pl-8",

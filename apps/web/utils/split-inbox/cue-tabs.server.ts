@@ -8,7 +8,9 @@ import { bulkProcessInboxEmails } from "@/utils/ai/choose-rule/bulk-process-emai
 import { ONBOARDING_PROCESS_EMAILS_COUNT } from "@/utils/config";
 import { createEmailProvider } from "@/utils/email/provider";
 import { SafeError } from "@/utils/error";
-import { resolveLabelNameAndId } from "@/utils/label/resolve-label";
+import type { EmailProvider } from "@/utils/email/types";
+import { findLabelByName } from "@/utils/label/find-label-by-name";
+import { normalizeLabelName } from "@/utils/label/normalize-label-name";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { CONVERSATION_STATUS_TYPES } from "@/utils/reply-tracker/conversation-status-config";
@@ -71,17 +73,18 @@ export async function addCueTabs({
       provider,
       logger,
     });
+    const resolvedLabelIds = await getOrCreateLabelIds({
+      emailProvider,
+      names: missing.map((systemType) => getRuleConfig(systemType).label),
+      logger,
+    });
     for (const systemType of missing) {
       const config = getRuleConfig(systemType);
-      const { label, labelId } = await resolveLabelNameAndId({
-        emailProvider,
-        label: config.label,
-        labelId: null,
-      });
+      const labelId = resolvedLabelIds.get(config.label) ?? null;
       await upsertSystemRule({
         name: config.name,
         instructions: config.instructions,
-        actions: [{ type: ActionType.LABEL, label, labelId }],
+        actions: [{ type: ActionType.LABEL, label: config.label, labelId }],
         emailAccountId,
         systemType,
         runOnThreads: config.runOnThreads,
@@ -139,4 +142,49 @@ export async function addCueTabs({
       });
     });
   }
+}
+
+/**
+ * One label listing for every tab label, then the missing ones created side by
+ * side: looking each up on its own lists every label again, and the provider
+ * rations calls per minute. A label that can't be resolved maps to nothing, so
+ * its rule is still added and resolves the label when it runs.
+ */
+async function getOrCreateLabelIds({
+  emailProvider,
+  names,
+  logger,
+}: {
+  emailProvider: EmailProvider;
+  names: string[];
+  logger: Logger;
+}) {
+  const labels = await emailProvider
+    .getLabels({ includeHidden: true })
+    .catch((error) => {
+      logger.warn("Failed to list labels for Cue tabs", { error });
+      return [];
+    });
+  const entries = await Promise.all(
+    names.map(async (name) => {
+      const existing = findLabelByName({
+        labels,
+        name,
+        getLabelName: (label) => label.name,
+        normalize: normalizeLabelName,
+      });
+      if (existing) return [name, existing.id] as const;
+      try {
+        const created = await emailProvider.createLabel(name);
+        return [name, created.id] as const;
+      } catch (error) {
+        logger.error("Failed to create Cue tab label", {
+          labelName: name,
+          error,
+        });
+        return null;
+      }
+    }),
+  );
+  return new Map(entries.filter((entry) => entry !== null));
 }
