@@ -21,6 +21,7 @@ import {
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { EmailCell } from "@/components/EmailCell";
 import { useThreads } from "@/hooks/useThreads";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { decodeSnippet } from "@/utils/gmail/decode";
 import { formatShortDate } from "@/utils/date";
@@ -198,6 +199,7 @@ export function GroupedTable({
 
   const [selectedCategoryName, setSelectedCategoryName] =
     useQueryState("categoryName");
+  const { confirm, dialog } = useConfirmDialog();
 
   return (
     <>
@@ -217,9 +219,12 @@ export function GroupedTable({
             };
 
             const onRemoveAllFromCategory = async () => {
-              const yes = confirm(
-                "This will remove all emails from this category. You can re-categorize them later. Do you want to continue?",
-              );
+              const yes = await confirm({
+                title: `Remove all senders from ${categoryName}?`,
+                description:
+                  "The senders become uncategorized. Their emails stay where they are, and you can categorize them again later.",
+                confirmText: `Remove ${senders.length} sender${senders.length === 1 ? "" : "s"}`,
+              });
               if (!yes) return;
               const result = await removeAllFromCategoryAction(emailAccountId, {
                 categoryName,
@@ -282,6 +287,7 @@ export function GroupedTable({
             : undefined
         }
       />
+      {dialog}
     </>
   );
 }

@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/select";
 import { toastError, toastSuccess } from "@/components/Toast";
 import { useBookingLinks } from "@/hooks/useBookingLinks";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { getActionErrorMessage } from "@/utils/error";
 import {
@@ -353,6 +354,7 @@ function AdvancedTab({
   onSaved: () => void;
 }) {
   const { emailAccountId } = useAccount();
+  const { confirm, dialog } = useConfirmDialog();
   const { executeAsync: deleteLink, isExecuting: isDeleting } = useAction(
     deleteBookingLinkAction.bind(null, emailAccountId),
     {
@@ -367,9 +369,12 @@ function AdvancedTab({
   );
 
   const handleDelete = async () => {
-    const confirmed = window.confirm(
-      "Delete this booking link permanently? This cannot be undone.",
-    );
+    const confirmed = await confirm({
+      title: `Delete "${link.title}"?`,
+      description:
+        "The link stops working and its booking history is removed. This can't be undone. Meetings already booked stay on your calendar.",
+      confirmText: "Delete booking link",
+    });
     if (!confirmed) return;
 
     try {
@@ -416,6 +421,7 @@ function AdvancedTab({
           Close
         </Button>
       </BookingLinkDialogFooter>
+      {dialog}
     </>
   );
 }

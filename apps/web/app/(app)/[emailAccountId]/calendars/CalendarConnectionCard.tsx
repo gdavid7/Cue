@@ -23,6 +23,7 @@ import {
 } from "@/utils/actions/calendar";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useCalendars } from "@/hooks/useCalendars";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { useState } from "react";
 import type { GetCalendarsResponse } from "@/app/api/user/calendars/route";
 import { TypographyP } from "@/components/Typography";
@@ -67,6 +68,7 @@ export function CalendarConnectionCard({
 }: CalendarConnectionCardProps) {
   const { emailAccountId } = useAccount();
   const { data, mutate } = useCalendars();
+  const { confirm, dialog } = useConfirmDialog();
   const [optimisticUpdates, setOptimisticUpdates] = useState<
     Record<string, boolean>
   >({});
@@ -88,9 +90,12 @@ export function CalendarConnectionCard({
 
   const handleDisconnect = async () => {
     if (
-      confirm(
-        "Are you sure you want to disconnect this calendar? This will remove all associated calendars.",
-      )
+      await confirm({
+        title: `Disconnect ${connection.email}?`,
+        description:
+          "Its calendars will no longer be used for availability or meeting briefs. Events stay in your calendar.",
+        confirmText: "Disconnect",
+      })
     ) {
       executeDisconnect({ connectionId: connection.id });
       mutate();
@@ -182,8 +187,7 @@ export function CalendarConnectionCard({
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem
-                  onSelect={(e) => {
-                    e.preventDefault();
+                  onSelect={() => {
                     handleDisconnect();
                   }}
                   className="text-destructive focus:text-destructive"
@@ -235,6 +239,7 @@ export function CalendarConnectionCard({
           </TypographyP>
         )}
       </CardContent>
+      {dialog}
     </Card>
   );
 }

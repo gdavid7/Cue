@@ -178,9 +178,12 @@ test("deletes a selected sender through the durable sender queue", async ({
   await selectOnlyArchiveSender(page);
 
   mailboxSync.expectDeleted(CLEANUP_ARCHIVE_THREAD_ID);
-  page.once("dialog", (dialog) => dialog.accept());
   await newsletterCard(page)
     .getByRole("button", { name: "Delete 1 of 2" })
+    .click();
+  await page
+    .getByRole("alertdialog")
+    .getByRole("button", { name: "Delete from 1 sender", exact: true })
     .click();
 
   await expect

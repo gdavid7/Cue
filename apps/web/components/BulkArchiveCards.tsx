@@ -27,6 +27,7 @@ import { changeSenderCategoryAction } from "@/utils/actions/categorize";
 import { toastError, toastSuccess } from "@/components/Toast";
 import { ButtonLoader } from "@/components/Loading";
 import { useThreads } from "@/hooks/useThreads";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { formatShortDate } from "@/utils/date";
 import { cn } from "@/utils";
 import {
@@ -65,6 +66,7 @@ export function BulkArchiveCards({
 }) {
   const { emailAccountId, userEmail } = useAccount();
   const { queueArchiveSenders } = useArchiveSenderQueueActions(emailAccountId);
+  const { confirm, dialog } = useConfirmDialog();
   const [expandedCategory, setExpandedCategory] = useQueryState("expanded");
   const [expandedSenders, setExpandedSenders] = useState<
     Record<string, boolean>
@@ -230,9 +232,12 @@ export function BulkArchiveCards({
     if (
       bulkAction === "delete" &&
       selectedToProcess.length > 0 &&
-      !window.confirm(
-        `Delete emails from ${selectedToProcess.length} sender${selectedToProcess.length === 1 ? "" : "s"}? This action cannot be undone.`,
-      )
+      !(await confirm({
+        title: `Delete emails from ${selectedToProcess.length} sender${selectedToProcess.length === 1 ? "" : "s"}?`,
+        description:
+          "Their emails will move to Trash, where you can still restore them for a while.",
+        confirmText: `Delete from ${selectedToProcess.length} sender${selectedToProcess.length === 1 ? "" : "s"}`,
+      }))
     ) {
       return;
     }
@@ -441,6 +446,7 @@ export function BulkArchiveCards({
           </Card>
         );
       })}
+      {dialog}
     </div>
   );
 }

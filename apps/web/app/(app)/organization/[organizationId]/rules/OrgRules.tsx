@@ -32,6 +32,7 @@ import { TypographyH3, MutedText } from "@/components/Typography";
 import { AccessDenied } from "@/components/AccessDenied";
 import { toastError, toastSuccess } from "@/components/Toast";
 import { useDialogState } from "@/hooks/useDialogState";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { useOrganizationRules } from "@/hooks/useOrganizationRules";
 import { useOrganizationMembership } from "@/hooks/useOrganizationMembership";
 import { hasOrganizationAdminRole } from "@/utils/organizations/roles";
@@ -54,6 +55,7 @@ export function OrgRules({ organizationId }: { organizationId: string }) {
     useOrganizationRules(organizationId);
 
   const ruleDialog = useDialogState<{ rule?: OrgRule }>();
+  const { confirm, dialog } = useConfirmDialog();
 
   if (membershipLoading) {
     return <Loading />;
@@ -96,9 +98,12 @@ export function OrgRules({ organizationId }: { organizationId: string }) {
   };
 
   const onDelete = async (rule: OrgRule) => {
-    const confirmed = confirm(
-      `Delete "${rule.name}"? This removes the rule for all organization members.`,
-    );
+    const confirmed = await confirm({
+      title: `Delete "${rule.name}"?`,
+      description:
+        "This removes the rule for every member of the organization.",
+      confirmText: "Delete rule",
+    });
     if (!confirmed) return;
 
     const result = await deleteOrganizationRuleAction({
@@ -224,6 +229,7 @@ export function OrgRules({ organizationId }: { organizationId: string }) {
           ruleDialog.onClose();
         }}
       />
+      {dialog}
     </div>
   );
 }

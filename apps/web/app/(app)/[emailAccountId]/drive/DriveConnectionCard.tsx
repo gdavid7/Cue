@@ -6,6 +6,7 @@ import type { GetDriveConnectionsResponse } from "@/app/api/user/drive/connectio
 import { disconnectDriveAction } from "@/utils/actions/drive";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useDriveConnections } from "@/hooks/useDriveConnections";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { toastError } from "@/components/Toast";
 import {
   DropdownMenu,
@@ -43,12 +44,19 @@ export function DriveConnectionCard({
   const { emailAccountId } = useAccount();
   const { mutate } = useDriveConnections();
   const providerInfo = getProviderInfo(connection.provider);
+  const { confirm, dialog } = useConfirmDialog();
 
   const { executeAsync: executeDisconnect, isExecuting: isDisconnecting } =
     useAction(disconnectDriveAction.bind(null, emailAccountId));
 
   const handleDisconnect = async () => {
-    if (confirm("Are you sure you want to disconnect this drive?")) {
+    if (
+      await confirm({
+        title: `Disconnect ${providerInfo.name}?`,
+        description: `${connection.email} will stop being used for filing attachments. Files already saved stay in the drive.`,
+        confirmText: "Disconnect",
+      })
+    ) {
       const result = await executeDisconnect({ connectionId: connection.id });
 
       if (result?.serverError) {
@@ -101,6 +109,7 @@ export function DriveConnectionCard({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      {dialog}
     </div>
   );
 }

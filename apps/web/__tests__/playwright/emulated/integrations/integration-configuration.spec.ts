@@ -71,9 +71,12 @@ test("persists pause state and disconnects the integration", async ({
   await expect(page.getByRole("menuitem", { name: "Resume" })).toBeVisible();
   await page.keyboard.press("Escape");
 
-  page.once("dialog", (dialog) => dialog.accept());
   await notionRow.getByRole("button", { name: "Integration actions" }).click();
   await page.getByRole("menuitem", { name: "Disconnect" }).click();
+  await page
+    .getByRole("alertdialog")
+    .getByRole("button", { name: "Disconnect", exact: true })
+    .click();
   await expect(
     page.getByText("Disconnected successfully", { exact: true }),
   ).toBeVisible({ timeout: 120_000 });

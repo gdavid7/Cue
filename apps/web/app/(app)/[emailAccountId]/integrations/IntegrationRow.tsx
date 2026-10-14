@@ -29,6 +29,7 @@ import { RequestAccessDialog } from "./RequestAccessDialog";
 import { startMcpOAuth } from "./startMcpOAuth";
 import { truncate } from "@/utils/string";
 import { useProductAnalytics } from "@/hooks/useProductAnalytics";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 interface IntegrationRowProps {
   integration: GetIntegrationsResponse["integrations"][number];
@@ -45,6 +46,7 @@ export function IntegrationRow({
   const [keyFormOpen, setKeyFormOpen] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [expandedTools, setExpandedTools] = useState(false);
+  const { confirm, dialog } = useConfirmDialog();
 
   const isCustom = integration.isCustom;
   const conn = integration.connection;
@@ -185,11 +187,22 @@ export function IntegrationRow({
   };
 
   const handleDisconnect = async () => {
-    const confirmMessage = isCustom
-      ? "Are you sure you want to remove this server? This permanently deletes its connection, credentials, and tools."
-      : "Are you sure you want to disconnect this integration? This will remove all associated tools.";
-
-    if (!confirm(confirmMessage)) return;
+    const confirmed = await confirm(
+      isCustom
+        ? {
+            title: `Remove ${integration.displayName}?`,
+            description:
+              "This permanently deletes its connection, credentials and tools.",
+            confirmText: "Remove server",
+          }
+        : {
+            title: `Disconnect ${integration.displayName}?`,
+            description:
+              "Its tools will no longer be available to the assistant. You can connect it again later.",
+            confirmText: "Disconnect",
+          },
+    );
+    if (!confirmed) return;
 
     if (!isCustom && !connectionId) return;
 
@@ -359,6 +372,7 @@ export function IntegrationRow({
       {expandedTools && tools.length > 0 && (
         <ToolsList tools={tools} onToggleTool={handleToggleTool} />
       )}
+      {dialog}
     </>
   );
 }

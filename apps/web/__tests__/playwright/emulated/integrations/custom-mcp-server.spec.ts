@@ -99,16 +99,14 @@ test("adds, inspects, and removes a custom MCP server", async ({
   await removeItem.hover();
   await capturePlaywrightCheckpoint(page, testInfo, "custom-server-remove");
 
-  const confirmMessage = new Promise<string>((resolve) => {
-    page.once("dialog", async (confirmDialog) => {
-      resolve(confirmDialog.message());
-      await confirmDialog.accept();
-    });
-  });
   await removeItem.click();
-  expect(await confirmMessage).toContain(
-    "Are you sure you want to remove this server?",
+  const confirmDialog = page.getByRole("alertdialog");
+  await expect(confirmDialog).toContainText(
+    "This permanently deletes its connection, credentials and tools.",
   );
+  await confirmDialog
+    .getByRole("button", { name: "Remove server", exact: true })
+    .click();
   await expect(page.getByText("Server removed", { exact: true })).toBeVisible({
     timeout: 120_000,
   });

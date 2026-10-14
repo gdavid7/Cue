@@ -55,6 +55,7 @@ import {
 import { InlineEmailCard } from "@/components/assistant-chat/inline-email-card";
 import { RuleDialog } from "@/app/(app)/[emailAccountId]/assistant/RuleDialog";
 import { useDialogState } from "@/hooks/useDialogState";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { Switch } from "@/components/ui/switch";
 import { Badge, type Color } from "@/components/Badge";
 import { getActionDisplay, getActionIcon } from "@/utils/action-display";
@@ -1677,16 +1678,23 @@ function RuleActions({
   initialEnabled?: boolean;
 }) {
   const { emailAccountId } = useAccount();
+  const { confirm, dialog } = useConfirmDialog();
 
   return (
     <div className="flex items-center gap-1.5">
+      {dialog}
       <RuleEditToggleActions ruleId={ruleId} initialEnabled={initialEnabled} />
       <Tooltip content="Delete rule">
         <Button
           variant="ghostMuted"
           size="iconSm"
           onClick={async () => {
-            const yes = confirm("Are you sure you want to delete this rule?");
+            const yes = await confirm({
+              title: "Delete this rule?",
+              description:
+                "Emails it already handled stay as they are; new emails won't be matched by it.",
+              confirmText: "Delete rule",
+            });
             if (yes) {
               try {
                 const result = await deleteRuleAction(emailAccountId, {
@@ -1695,9 +1703,7 @@ function RuleActions({
                 if (result?.serverError) {
                   toastError({ description: result.serverError });
                 } else {
-                  toastSuccess({
-                    description: "The rule has been deleted.",
-                  });
+                  toastSuccess({ description: "Rule deleted" });
                 }
               } catch {
                 toastError({ description: "Failed to delete rule." });

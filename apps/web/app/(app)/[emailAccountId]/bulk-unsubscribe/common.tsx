@@ -38,6 +38,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { PremiumTooltip } from "@/components/PremiumAlert";
 import { NewsletterStatus } from "@/generated/prisma/enums";
 import { toastError, toastSuccess } from "@/components/Toast";
@@ -387,6 +388,7 @@ export function MoreDropdown<T extends Row>({
   const terminology = getEmailTerminology(provider);
   const isMobile = useIsMobile();
   const [labelSheetOpen, setLabelSheetOpen] = useState(false);
+  const { confirm, dialog } = useConfirmDialog();
   const { onBulkArchive, isBulkArchiving } = useBulkArchive({
     posthog,
     emailAccountId,
@@ -542,10 +544,12 @@ export function MoreDropdown<T extends Row>({
 
           <DropdownMenuItem
             className="text-destructive focus:text-destructive"
-            onClick={() => {
-              const yes = confirm(
-                `Are you sure you want to delete all emails from ${item.name}?`,
-              );
+            onClick={async () => {
+              const yes = await confirm({
+                title: `Delete all emails from ${item.fromName || item.name}?`,
+                description: `Every email from ${item.name} will move to Trash.`,
+                confirmText: "Delete all emails",
+              });
               if (!yes) return;
 
               onBulkDelete([item]);
@@ -594,6 +598,7 @@ export function MoreDropdown<T extends Row>({
           </div>
         </SheetContent>
       </Sheet>
+      {dialog}
     </>
   );
 }
