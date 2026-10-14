@@ -144,6 +144,7 @@ const quotaContext = new AsyncLocalStorage<GmailQuotaContext>();
 const logger = createScopedLogger("gmail-quota");
 const accountsByToken = new Map<string, string>();
 const summarizedMinute = new Map<string, number>();
+const storeUnavailableLoggedMinute = new Map<string, number>();
 const initialSyncMarkedAt = new Map<string, number>();
 
 export class GmailCallDeferredError extends Error {
@@ -311,7 +312,7 @@ export async function admitGmailCall({
     } catch (error) {
       // Without the shared store nothing can be coordinated; Gmail's own
       // limit still protects the account, so the call goes ahead.
-      logger.warn("Gmail quota store unavailable", { error });
+      noteStoreUnavailable(emailAccountId, context.caller, error);
       return ticket;
     }
     if (wait === 0) {
@@ -509,11 +510,16 @@ async function summarizeLastMinute(emailAccountId: string) {
   const units: Record<string, number> = {};
   const deferred: Record<string, number> = {};
   const refused: Record<string, number> = {};
+  const storeUnavailable: Record<string, number> = {};
   let totalUnits = 0;
+  let storeUnavailableCalls = 0;
   for (const [field, value] of Object.entries(usage)) {
     if (field.startsWith("deferred:")) deferred[field.slice(9)] = value;
     else if (field.startsWith("refused:")) refused[field.slice(8)] = value;
-    else {
+    else if (field.startsWith("unavailable:")) {
+      storeUnavailable[field.slice(12)] = value;
+      storeUnavailableCalls += value;
+    } else {
       units[field] = value;
       totalUnits += value;
     }
@@ -526,7 +532,41 @@ async function summarizeLastMinute(emailAccountId: string) {
     unitsByCaller: units,
     deferredByCaller: deferred,
     refusedByCaller: refused,
+    // Calls admitted without the gate because its store failed or was slow.
+    storeUnavailableCalls,
+    storeUnavailableByCaller: storeUnavailable,
   });
+}
+
+/**
+ * A call the gate let through without its store. Warned once a minute per
+ * account on each instance, and counted into the account's usage summary so a
+ * store that keeps timing out shows up instead of silently switching the gate
+ * off. The count usually still lands: a slow store finishes the write after
+ * the gate stopped waiting.
+ */
+function noteStoreUnavailable(
+  emailAccountId: string,
+  caller: string,
+  error: unknown,
+) {
+  const minute = minuteOf(Date.now());
+  if (storeUnavailableLoggedMinute.get(emailAccountId) !== minute) {
+    storeUnavailableLoggedMinute.delete(emailAccountId);
+    storeUnavailableLoggedMinute.set(emailAccountId, minute);
+    if (storeUnavailableLoggedMinute.size > 1000) {
+      const oldest = storeUnavailableLoggedMinute.keys().next().value;
+      if (oldest) storeUnavailableLoggedMinute.delete(oldest);
+    }
+    logger.warn("Gmail quota store unavailable", { emailAccountId, error });
+  }
+  gmailQuotaStore
+    .note({
+      usageKey: accountKeys(emailAccountId).usage(minute),
+      field: `unavailable:${caller}`,
+      amount: 1,
+    })
+    .catch(() => undefined);
 }
 
 function rememberInitialSyncMark(emailAccountId: string) {

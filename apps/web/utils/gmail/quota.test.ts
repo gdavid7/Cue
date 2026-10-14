@@ -151,6 +151,47 @@ describe("Gmail quota gate", () => {
     ).resolves.toBe("page");
   });
 
+  it("counts calls the gate let through without its store in the next minute's usage summary", async () => {
+    vi.setSystemTime(new Date("2026-10-14T12:00:10Z"));
+    const info = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const take = vi.spyOn(gmailQuotaStore, "take");
+    take.mockReturnValueOnce(new Promise(() => undefined));
+    take.mockRejectedValueOnce(new Error("Redis unavailable"));
+    const read = () =>
+      runWithGmailQuota(
+        { caller: "mail/v1/conversation-membership", priority: "interactive" },
+        () =>
+          meterGmailCall(
+            { emailAccountId: ACCOUNT, cost: 40 },
+            async () => "thread",
+          ),
+      );
+
+    const hung = read();
+    await vi.advanceTimersByTimeAsync(300);
+    await hung;
+    await read();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await read();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Logged once for the minute rather than on every call.
+    expect(
+      warn.mock.calls.filter(([line]) =>
+        String(line).includes("Gmail quota store unavailable"),
+      ),
+    ).toHaveLength(1);
+    const summary = info.mock.calls
+      .map(([line]) => String(line))
+      .find((line) => line.includes("Gmail quota usage"));
+    expect(summary).toBeDefined();
+    expect(JSON.parse(summary!.slice(summary!.indexOf("{")))).toMatchObject({
+      storeUnavailableCalls: 2,
+      storeUnavailableByCaller: { "mail/v1/conversation-membership": 2 },
+    });
+  });
+
   it("lets a call through when the quota store fails, since Gmail's own limit still applies", async () => {
     vi.spyOn(gmailQuotaStore, "take").mockRejectedValueOnce(
       new Error("Redis unavailable"),
