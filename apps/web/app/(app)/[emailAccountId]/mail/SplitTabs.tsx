@@ -1,13 +1,29 @@
 "use client";
 
-import { PlusIcon } from "lucide-react";
-import { type ReactNode, useEffect, useRef } from "react";
+import { MoreHorizontalIcon, PlusIcon } from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/utils";
 
 export type MailSplitTab = {
@@ -20,7 +36,7 @@ export type MailSplitTab = {
 export type SplitTabsProps = {
   splits: MailSplitTab[];
   activeSplitId: string | null;
-  /** Conversations currently in each split. Missing entries and zeros stay blank. */
+  /** Unread conversations in each split. Missing entries and zeros stay blank. */
   countsById?: ReadonlyMap<string, number>;
   onSelect: (splitId: string) => void;
   onDelete: (splitId: string) => void;
@@ -33,6 +49,7 @@ export type SplitTabsProps = {
   className?: string;
 };
 
+// Users see splits as "tabs": "split" also names the reader's layout toggle.
 export function SplitTabs({
   splits,
   activeSplitId,
@@ -47,6 +64,7 @@ export function SplitTabs({
 }: SplitTabsProps) {
   const tabsRef = useRef<HTMLDivElement>(null);
   const activeTabRef = useRef<HTMLButtonElement>(null);
+  const [deleting, setDeleting] = useState<MailSplitTab | null>(null);
 
   useEffect(() => {
     const tabs = tabsRef.current;
@@ -83,68 +101,128 @@ export function SplitTabs({
         const countLabel = splitCountLabel(countsById?.get(split.id));
 
         return (
-          <ContextMenu key={split.id}>
-            <ContextMenuTrigger asChild disabled={!split.deletable}>
-              <button
-                type="button"
-                ref={active ? activeTabRef : undefined}
-                data-split-tab
-                onClick={() => onSelect(split.id)}
-                // The count sits in this button, so innerText includes it.
-                // The accessible name stays the split itself.
-                aria-label={split.name}
-                aria-current={active ? "true" : undefined}
-                aria-description={
-                  countLabel ? `${countLabel} in this view` : undefined
-                }
-                className={cn(
-                  "flex items-center gap-1 rounded-full py-0.5 pr-2 pl-2.5 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  active
-                    ? "bg-primary/10 font-medium text-primary"
-                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
+          <span className="flex items-center" key={split.id}>
+            <ContextMenu>
+              <ContextMenuTrigger asChild disabled={!split.deletable}>
+                <button
+                  type="button"
+                  ref={active ? activeTabRef : undefined}
+                  data-split-tab
+                  onClick={() => onSelect(split.id)}
+                  // The count sits in this button, so innerText includes it.
+                  // The accessible name stays the tab itself.
+                  aria-label={split.name}
+                  aria-current={active ? "true" : undefined}
+                  aria-description={
+                    countLabel ? `${countLabel} unread` : undefined
+                  }
+                  className={cn(
+                    "flex items-center gap-1 rounded-full py-0.5 pr-2 pl-2.5 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    active
+                      ? "bg-primary/10 font-medium text-primary"
+                      : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                  )}
+                >
+                  <span data-split-name>{split.name}</span>
+                  {countLabel ? (
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "font-normal tabular-nums",
+                        active ? "text-primary/70" : "opacity-70",
+                      )}
+                    >
+                      {countLabel}
+                    </span>
+                  ) : null}
+                </button>
+              </ContextMenuTrigger>
+              <ContextMenuContent className="w-44">
+                {onEdit && (
+                  <ContextMenuItem onSelect={() => onEdit(split.id)}>
+                    Edit tab…
+                  </ContextMenuItem>
                 )}
-              >
-                <span data-split-name>{split.name}</span>
-                {countLabel ? (
-                  <span
-                    aria-hidden="true"
-                    className={cn(
-                      "font-normal tabular-nums",
-                      active ? "text-primary/70" : "opacity-70",
-                    )}
-                  >
-                    {countLabel}
-                  </span>
-                ) : null}
-              </button>
-            </ContextMenuTrigger>
-            <ContextMenuContent className="w-44">
-              {onEdit && (
-                <ContextMenuItem onSelect={() => onEdit(split.id)}>
-                  Edit filters and name
+                <ContextMenuItem
+                  className="text-destructive focus:text-destructive"
+                  onSelect={() => setDeleting(split)}
+                >
+                  Delete tab…
                 </ContextMenuItem>
-              )}
-              <ContextMenuItem
-                className="text-destructive focus:text-destructive"
-                onSelect={() => onDelete(split.id)}
-              >
-                Turn off split
-              </ContextMenuItem>
-            </ContextMenuContent>
-          </ContextMenu>
+              </ContextMenuContent>
+            </ContextMenu>
+            {/* The same actions for touch and keyboard, on the open tab. */}
+            {active && split.deletable && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={`Options for the ${split.name} tab`}
+                    className="ml-0.5 flex size-6 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <MoreHorizontalIcon className="size-3.5" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-44">
+                  {onEdit && (
+                    <DropdownMenuItem onSelect={() => onEdit(split.id)}>
+                      Edit tab…
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onSelect={() => setDeleting(split)}
+                  >
+                    Delete tab…
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </span>
         );
       })}
 
       {canCreateSplits && (
         <button
           type="button"
-          aria-label="New split"
+          aria-label="New tab"
           onClick={onNewSplit}
           className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <PlusIcon className="size-3.5" />
         </button>
       )}
+
+      <AlertDialog
+        open={deleting !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleting(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete the “{deleting?.name}” tab?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Its mail stays in your inbox. You can add the tab again from New
+              tab.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (deleting) onDelete(deleting.id);
+                setDeleting(null);
+              }}
+            >
+              Delete tab
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
