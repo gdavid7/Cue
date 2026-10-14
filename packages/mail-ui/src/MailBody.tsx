@@ -212,14 +212,16 @@ export function buildMailHtmlDocument({
       html.includes("text-decoration") ||
       styleAttributeCount === 1);
 
+  // The sender's dark styles paint their own body over the reader's surface.
+  const authoredDark = darkTreatment === "authored";
   const defaultFontCss = hasHeavyStyling
     ? `
       :root {
-        color-scheme: ${darkTreatment === "authored" ? "dark" : "light"};
-        background-color: ${darkTreatment === "authored" ? DARK_SURFACE_CSS : "white"};
+        color-scheme: ${authoredDark ? "dark" : "light"};
+        background-color: ${authoredDark ? DARK_SURFACE_CSS : "white"};
       }
       body {
-        ${darkTreatment === "authored" ? "" : "background-color: white;"}
+        ${authoredDark ? "" : "background-color: white;"}
         font-family: ${SANS_FONT_STACK};
         overflow-wrap: anywhere;
       }

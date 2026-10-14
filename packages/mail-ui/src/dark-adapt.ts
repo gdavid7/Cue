@@ -84,7 +84,7 @@ export function adaptTextColor(color: Rgb, background: Rgb): Rgb | null {
  */
 export function hasAuthoredDarkSupport(html: string) {
   if (/prefers-color-scheme\s*:\s*dark/i.test(html)) return true;
-  if (/(?:supported-)?color-scheme\s*:\s*[^;}"'<>]*\bdark\b/i.test(html))
+  if (/(?:supported-)?color-scheme\s*:\s*[^;{}()"'<>]*\bdark\b/i.test(html))
     return true;
   for (const [tag] of html.matchAll(/<meta\b[^>]*>/gi)) {
     const name = /\bname\s*=\s*["']?([\w-]+)/i.exec(tag)?.[1]?.toLowerCase();
@@ -114,6 +114,8 @@ export function adaptMailDocumentForDarkMode(
   const view = mailDocument.defaultView;
   const root = mailDocument.documentElement;
   if (!view || !root) return { adapted: false };
+  if (mailDocument.getElementsByTagName("*").length > maxElements)
+    return { adapted: false };
 
   const startedAt = now();
   const writes: [HTMLElement, string, string][] = [];
@@ -126,7 +128,6 @@ export function adaptMailDocumentForDarkMode(
   while (stack.length) {
     const [element, parent] = stack.pop()!;
     visited += 1;
-    if (visited > maxElements) return { adapted: false };
     if (visited % 64 === 0 && now() - startedAt > budgetMs)
       return { adapted: false };
 

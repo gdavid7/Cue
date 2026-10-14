@@ -119,6 +119,7 @@ describe("hasAuthoredDarkSupport", () => {
     '<meta name="color-scheme" content="light">',
     "<style>:root { color-scheme: light only; }</style>",
     "<style>@media (prefers-color-scheme: light) { .a { color: #000 } }</style>",
+    "<style>@media (prefers-color-scheme: light) { .dark-logo { display: none } }</style>",
     '<table bgcolor="#ffffff"><tr><td>Hello</td></tr></table>',
   ])("does not treat %s as dark support", (html) => {
     expect(hasAuthoredDarkSupport(html)).toBe(false);
