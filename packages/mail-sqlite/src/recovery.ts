@@ -113,6 +113,9 @@ const CONVERSATION_COLUMNS = [
   "next_page",
   "complete",
 ];
+// A failed IndexedDB transaction is often transient; failing the open over
+// it would leave the user on the retry screen.
+const STASH_CLEAR_RETRY_DELAYS_MS = [50, 250, 1000];
 const FINISHED_OPERATION_STATUSES = [
   "succeeded",
   "failed",
@@ -192,7 +195,11 @@ export async function openMailStoreWithRecovery(input: {
   onDropped?: (drop: DroppedMailWork) => void;
 }): Promise<MailStore> {
   const drops = createDropCounter();
-  const stashed = await input.stash.read().catch(() => null);
+  let stashUnreadable: unknown = null;
+  const stashed = await input.stash.read().catch((error: unknown) => {
+    stashUnreadable = error;
+    return null;
+  });
   let carried = stashed && ownedWork(stashed, input.ownedAccountIds, drops);
   let opened: { driver: SqliteDriver; store: MailStore } | null = null;
   let failure: unknown = null;
@@ -204,15 +211,21 @@ export async function openMailStoreWithRecovery(input: {
     failure = error;
   }
   if (!opened) {
-    if (classifyMailboxError(failure) !== "corrupt") {
+    // A stash that could not be read may hold earlier work that the write
+    // below would replace.
+    const blocker =
+      classifyMailboxError(failure) === "corrupt" ? stashUnreadable : failure;
+    if (blocker) {
       await driver?.close().catch(() => undefined);
-      throw failure;
+      throw blocker;
     }
     input.onRebuild?.();
     if (driver) {
-      const current = await readPendingMailWork(driver);
-      const settled = await readSettledCommandKeys(driver);
-      await driver.close().catch(() => undefined);
+      const damaged = driver;
+      const [current, settled] = await Promise.all([
+        readPendingMailWork(damaged),
+        readSettledCommandKeys(damaged),
+      ]).finally(() => damaged.close().catch(() => undefined));
       carried = mergePendingWork(
         carried,
         ownedWork(current, input.ownedAccountIds, drops),
@@ -223,30 +236,51 @@ export async function openMailStoreWithRecovery(input: {
     // mailbox whose work cannot be kept aside is left as it is.
     if (carried) await input.stash.write(carried);
     await input.wipe();
-    const fresh = await input.open();
-    opened = {
-      driver: fresh,
-      store: await createSqliteMailStore(fresh, input.options),
-    };
+    opened = await openFreshStore(input.open, input.options);
   }
-  if (carried) {
-    await restorePendingMailWork(opened.store, opened.driver, carried, drops);
-  }
-  for (const drop of drops.list()) input.onDropped?.(drop);
-  if (carried || stashed) {
-    try {
-      await input.stash.clear();
-    } catch (error) {
-      // Work left in the stash would be restored again on a later open, after
-      // the engine sent the draft or finished the command.
-      await opened.store.close().catch(() => undefined);
-      throw error;
+  try {
+    if (carried) {
+      await restorePendingMailWork(opened.store, opened.driver, carried, drops);
     }
+    for (const drop of drops.list()) input.onDropped?.(drop);
+    // Work left in the stash would be restored again on a later open, after
+    // the engine sent the draft or finished the command.
+    if (carried || stashed) await clearWithRetries(input.stash);
+  } catch (error) {
+    // The stash still holds the work, so the next open restores it.
+    await opened.store.close().catch(() => undefined);
+    throw error;
   }
   return opened.store;
 }
 
-/** Best effort: whatever still reads from a damaged mailbox is kept. */
+async function openFreshStore(
+  open: () => Promise<SqliteDriver>,
+  options: SqliteMailStoreOptions | undefined,
+) {
+  const driver = await open();
+  try {
+    return { driver, store: await createSqliteMailStore(driver, options) };
+  } catch (error) {
+    await driver.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+async function clearWithRetries(stash: PendingMailWorkStash) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await stash.clear();
+      return;
+    } catch (error) {
+      const retryInMs = STASH_CLEAR_RETRY_DELAYS_MS[attempt];
+      if (retryInMs === undefined) throw error;
+      await new Promise((resolve) => setTimeout(resolve, retryInMs));
+    }
+  }
+}
+
+/** Whatever still reads from a damaged mailbox is kept. */
 export async function readPendingMailWork(
   driver: SqliteDriver,
 ): Promise<PendingMailWork> {
@@ -362,8 +396,11 @@ async function openCheckedStore(
 async function readRows(driver: SqliteDriver, sql: string) {
   try {
     return await driver.read((tx) => tx.query(sql));
-  } catch {
-    return [];
+  } catch (error) {
+    // Damage is expected here; anything else stops the rebuild before the
+    // wipe, since the work it would have read would be lost.
+    if (classifyMailboxError(error) === "corrupt") return [];
+    throw error;
   }
 }
 

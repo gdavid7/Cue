@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -304,6 +304,144 @@ describe("openMailStoreWithRecovery", () => {
     await store.close();
   });
 
+  it.each([
+    [
+      "an I/O error",
+      Object.assign(new Error("disk I/O error"), { resultCode: 266 }),
+    ],
+    [
+      "an unrecognised migration error",
+      new Error("SQLITE_ERROR: no such column: snoozed_until_ms"),
+    ],
+    ["a wasm trap", new Error("RuntimeError: unreachable")],
+  ])("never wipes or touches the files when opening fails with %s", async (_, error) => {
+    const path = await seededMailbox();
+    const before = await readFile(path);
+    const wipe = vi.fn(() => wipeNodeMailbox(path));
+
+    for (const open of [
+      async () => {
+        throw error;
+      },
+      async () => failingWrites(createNodeSqliteDriver(path), error),
+    ]) {
+      await expect(
+        openMailStoreWithRecovery({
+          open,
+          wipe,
+          stash: memoryStash(),
+          ownedAccountIds: ["acc-1"],
+        }),
+      ).rejects.toBe(error);
+    }
+
+    expect(wipe).not.toHaveBeenCalled();
+    expect((await readFile(path)).equals(before)).toBe(true);
+  });
+
+  it("does not rebuild when the stash cannot be read", async () => {
+    // Writing a new stash over one that failed to read would lose its work.
+    const path = await seededMailbox();
+    const wipe = vi.fn(() => wipeNodeMailbox(path));
+    const readFailed = new Error("IndexedDB read failed");
+
+    await expect(
+      openMailStoreWithRecovery({
+        open: corruptOnFirstOpen(path),
+        wipe,
+        stash: {
+          ...memoryStash(),
+          read: async () => {
+            throw readFailed;
+          },
+        },
+        ownedAccountIds: ["acc-1"],
+      }),
+    ).rejects.toBe(readFailed);
+
+    expect(wipe).not.toHaveBeenCalled();
+  });
+
+  it("does not rebuild when the damaged mailbox fails to read for another reason", async () => {
+    const path = await seededMailbox();
+    const wipe = vi.fn(() => wipeNodeMailbox(path));
+    const outOfMemory = new Error("out of memory");
+
+    await expect(
+      openMailStoreWithRecovery({
+        open: async () =>
+          failingReads(
+            failingWrites(createNodeSqliteDriver(path)),
+            "FROM drafts",
+            outOfMemory,
+          ),
+        wipe,
+        stash: memoryStash(),
+        ownedAccountIds: ["acc-1"],
+      }),
+    ).rejects.toBe(outOfMemory);
+
+    expect(wipe).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["setting up", "INTO schema_migrations"],
+    ["restoring work into", "INTO accounts"],
+  ])("closes the rebuilt mailbox when %s it fails, keeping the stash", async (_, failingSql) => {
+    const path = await seededMailbox();
+    const stash = memoryStash();
+    const closes = vi.fn();
+    const failure = new Error("restore failed");
+    let opens = 0;
+
+    await expect(
+      openMailStoreWithRecovery({
+        open: async () => {
+          opens += 1;
+          const driver = createNodeSqliteDriver(path);
+          if (opens === 1) return failingWrites(driver);
+          return {
+            ...failingWriteSql(driver, failingSql, failure),
+            close: async () => {
+              closes();
+              await driver.close();
+            },
+          };
+        },
+        wipe: () => wipeNodeMailbox(path),
+        stash,
+        ownedAccountIds: ["acc-1"],
+      }),
+    ).rejects.toBe(failure);
+
+    expect(closes).toHaveBeenCalled();
+    expect((await stash.read())?.drafts).toHaveLength(1);
+  });
+
+  it("retries clearing the stash before giving up on the open", async () => {
+    const path = await seededMailbox();
+    const stash = memoryStash();
+    let clears = 0;
+
+    const store = await openMailStoreWithRecovery({
+      open: corruptOnFirstOpen(path),
+      wipe: () => wipeNodeMailbox(path),
+      stash: {
+        ...stash,
+        clear: async () => {
+          clears += 1;
+          if (clears < 3) throw new Error("transaction aborted");
+          await stash.clear();
+        },
+      },
+      ownedAccountIds: ["acc-1"],
+    });
+
+    expect(await stash.read()).toBeNull();
+    expect(await store.readDraft(DRAFT)).toMatchObject({ status: "found" });
+    await store.close();
+  });
+
   it("leaves a corrupt mailbox in place when its unsent work cannot be stashed", async () => {
     const path = await seededMailbox();
     const wipe = vi.fn(() => wipeNodeMailbox(path));
@@ -523,6 +661,46 @@ async function seedPendingWork(path: string) {
     ),
   );
   await store.close();
+}
+
+function failingReads(
+  driver: SqliteDriver,
+  sqlFragment: string,
+  error: Error,
+): SqliteDriver {
+  return {
+    ...driver,
+    read: (work) =>
+      driver.read((tx) =>
+        work({
+          ...tx,
+          query: async (sql, bindings) => {
+            if (sql.includes(sqlFragment)) throw error;
+            return tx.query(sql, bindings);
+          },
+        }),
+      ),
+  };
+}
+
+function failingWriteSql(
+  driver: SqliteDriver,
+  sqlFragment: string,
+  error: Error,
+): SqliteDriver {
+  return {
+    ...driver,
+    write: (work) =>
+      driver.write((tx) =>
+        work({
+          ...tx,
+          execute: async (sql, bindings) => {
+            if (sql.includes(sqlFragment)) throw error;
+            return tx.execute(sql, bindings);
+          },
+        }),
+      ),
+  };
 }
 
 function corruptOnFirstOpen(path: string) {
