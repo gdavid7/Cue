@@ -16,6 +16,10 @@ export const ACCESS_APPROVAL_EMAIL_DELIVERY: "manual" | "founder-mailbox" =
  * covering a friend's inbox. `null` removes the limit.
  */
 export const MAX_EXTRA_MAILBOXES_PER_USER: number | null = 2;
+export const MAILBOX_LIMIT_MESSAGE =
+  "You've connected as many mailboxes as the beta allows. Cue access is personal, so each person needs their own approval.";
+/** The accounts page `error` code for a link refused by that limit. */
+export const MAILBOX_LIMIT_ERROR = "mailbox_limit";
 
 /**
  * While the Google OAuth app is in Testing, only addresses listed as test

@@ -18,6 +18,8 @@ import {
   handleAccountLinking,
 } from "@/utils/oauth/account-linking";
 import { isReconnectTargetMismatch } from "@/utils/oauth/reconnect-target";
+import { isOverMailboxLimit } from "@/utils/access/mailbox-limit";
+import { MAILBOX_LIMIT_ERROR } from "@/utils/access/config";
 import { mergeAccount } from "@/utils/user/merge-account";
 import { handleOAuthCallbackError } from "@/utils/oauth/error-handler";
 import {
@@ -243,6 +245,16 @@ export const GET = withError("google/linking/callback", async (request) => {
         }
       }
 
+      if (await isOverMailboxLimit({ userId: targetUserId })) {
+        logger.warn("Mailbox link refused: beta mailbox limit reached", {
+          targetUserId,
+        });
+        return createAccountLinkingRedirect({
+          query: { error: MAILBOX_LIMIT_ERROR },
+          stateCookieName: GOOGLE_LINKING_STATE_COOKIE_NAME,
+        });
+      }
+
       logger.info("Creating new Google account and linking to current user", {
         email: providerEmail,
         targetUserId,
@@ -368,6 +380,16 @@ export const GET = withError("google/linking/callback", async (request) => {
         logger,
         success: "tokens_updated",
         targetUserId,
+      });
+    }
+
+    if (await isOverMailboxLimit({ userId: targetUserId })) {
+      logger.warn("Mailbox link refused: beta mailbox limit reached", {
+        targetUserId,
+      });
+      return createAccountLinkingRedirect({
+        query: { error: MAILBOX_LIMIT_ERROR },
+        stateCookieName: GOOGLE_LINKING_STATE_COOKIE_NAME,
       });
     }
 

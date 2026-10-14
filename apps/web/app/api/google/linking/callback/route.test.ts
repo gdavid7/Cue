@@ -1,8 +1,9 @@
 import { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
 import prisma from "@/utils/__mocks__/prisma";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
+import { env } from "@/env";
 
 const {
   mockValidateOAuthCallback,
@@ -348,6 +349,76 @@ describe("google linking callback route", () => {
     expect(warning).toContain('"actorUserId": "actor-user"');
     expect(warning).toContain('"targetUserId": "target-user"');
     consoleWarn.mockRestore();
+  });
+
+  describe("while the waitlist caps extra mailboxes", () => {
+    beforeEach(() => {
+      Object.assign(env, { AUTH_WAITLIST_ENABLED: true });
+    });
+    afterEach(() => {
+      Object.assign(env, { AUTH_WAITLIST_ENABLED: undefined });
+    });
+
+    // Two auth URLs created at once both pass the check there; the cap has to
+    // hold when each callback is about to add the mailbox.
+    it("refuses the second of two parallel links that would pass the cap", async () => {
+      mockHandleAccountLinking.mockResolvedValue({ type: "continue_create" });
+      prisma.emailAccount.count
+        .mockResolvedValueOnce(2)
+        .mockResolvedValueOnce(3);
+
+      const first = await GET(
+        createRequest("http://localhost:3000/api/google/linking/callback"),
+      );
+      mockValidateOAuthCallback.mockReturnValue({
+        success: true,
+        targetUserId: "user-123",
+        stateNonce: "state-nonce",
+        code: "second-auth-code",
+      });
+      const second = await GET(
+        createRequest("http://localhost:3000/api/google/linking/callback"),
+      );
+
+      expect(first.headers.get("location")).toContain(
+        "success=account_created_and_linked",
+      );
+      expect(second.headers.get("location")).toContain("error=mailbox_limit");
+      expect(prisma.account.create).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses moving another user's mailbox in past the cap", async () => {
+      mockHandleAccountLinking.mockResolvedValue({
+        type: "merge",
+        sourceAccountId: "source-account",
+        sourceUserId: "source-user",
+      });
+      prisma.emailAccount.count.mockResolvedValue(3);
+      const { mergeAccount } = await import("@/utils/user/merge-account");
+
+      const response = await GET(
+        createRequest("http://localhost:3000/api/google/linking/callback"),
+      );
+
+      expect(response.headers.get("location")).toContain("error=mailbox_limit");
+      expect(mergeAccount).not.toHaveBeenCalled();
+    });
+
+    it("never limits reconnecting a mailbox the user already has", async () => {
+      mockHandleAccountLinking.mockResolvedValue({
+        type: "update_existing_account",
+        existingAccountId: "existing-account-123",
+      });
+      prisma.emailAccount.count.mockResolvedValue(10);
+
+      const response = await GET(
+        createRequest("http://localhost:3000/api/google/linking/callback"),
+      );
+
+      expect(response.headers.get("location")).toContain(
+        "success=tokens_updated",
+      );
+    });
   });
 });
 
