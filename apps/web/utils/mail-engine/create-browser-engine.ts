@@ -161,11 +161,18 @@ async function createWorkerOwnedEngine(
     pending.clear();
   });
 
-  await request(worker, pending, {
-    id: crypto.randomUUID(),
-    type: "start",
-    input,
-  });
+  try {
+    await request(worker, pending, {
+      id: crypto.randomUUID(),
+      type: "start",
+      input,
+    });
+  } catch (error) {
+    // The worker may already hold the mailbox's OPFS handles, which the
+    // in-tab fallback needs.
+    worker.terminate();
+    throw error;
+  }
 
   function observe<T>(
     kind: WorkerObserveKind,
