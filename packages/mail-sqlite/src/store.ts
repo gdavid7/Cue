@@ -4,7 +4,7 @@ import {
   indexContactBacklog,
   readContactSuggestions,
 } from "./contact-suggestions";
-import { hashCanonical } from "@inboxzero/mail-core/canonical";
+import { canonicalJson, hashCanonical } from "@inboxzero/mail-core/canonical";
 import type { HostRuntime } from "@inboxzero/mail-core/ports/runtime";
 import type {
   Admission,
@@ -2207,7 +2207,7 @@ async function saveDraftRow(
   input: SaveDraft,
 ): Promise<DraftSaveResult> {
   const current = await tx.query(
-    "SELECT revision, frozen FROM drafts WHERE account_id = ? AND draft_id = ?",
+    "SELECT revision, frozen, content_json FROM drafts WHERE account_id = ? AND draft_id = ?",
     [input.key.accountId, input.key.draftId],
   );
   const currentRevision = current[0] ? Number(current[0].revision) : null;
@@ -2215,6 +2215,20 @@ async function saveDraftRow(
     return { status: "conflict", currentDraftRevision: currentRevision };
   }
   if (input.expectedRevision !== currentRevision) {
+    // A save resent after a tab handoff already landed through the old owner;
+    // its content is what is stored, so it is saved rather than in conflict.
+    if (
+      current[0] &&
+      currentRevision !== null &&
+      currentRevision > (input.expectedRevision ?? 0) &&
+      sameDraftContent(String(current[0].content_json), input.content)
+    ) {
+      return {
+        status: "saved",
+        draftRevision: currentRevision,
+        revision: await readRevision(tx),
+      };
+    }
     return { status: "conflict", currentDraftRevision: currentRevision };
   }
   const next = (currentRevision ?? 0) + 1;
@@ -3505,6 +3519,14 @@ async function defaultStoreSha256(bytes: Uint8Array): Promise<Uint8Array> {
   const copy = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(copy).set(bytes);
   return new Uint8Array(await subtle.digest("SHA-256", copy));
+}
+
+function sameDraftContent(stored: string, content: SaveDraft["content"]) {
+  try {
+    return canonicalJson(JSON.parse(stored)) === canonicalJson(content);
+  } catch {
+    return false;
+  }
 }
 
 export type { SyncPage, ConversationKey };
