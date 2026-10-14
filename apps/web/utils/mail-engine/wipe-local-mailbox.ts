@@ -2,6 +2,7 @@ import { clearRecentSearchHistory } from "@/store/mail-search-history";
 import { clearStoredSenderQueues } from "@/store/sender-queue";
 import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 import { closeActiveMailEngine } from "@/utils/mail-engine/active-client";
+import { deleteMailRecoveryStash } from "@/utils/mail-engine/recovery-stash";
 import { wipeOpfsMailEngine } from "@/utils/mail-engine/wasm-sqlite";
 import { clearOfflineMailCache } from "@/utils/offline/clear-mail-cache";
 
@@ -25,6 +26,7 @@ async function removeLocalMail(engineClosed: Promise<void>) {
   const [mailboxWiped] = await Promise.all([
     engineClosed.then(wipeMailboxStore),
     clearOfflineMailCache(),
+    deleteMailRecoveryStash(),
   ]);
   if (mailboxWiped) setWipePending(false);
 }

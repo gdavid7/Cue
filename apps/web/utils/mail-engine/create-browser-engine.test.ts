@@ -2,25 +2,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserMailEngine } from "./create-browser-engine";
 
 const wipe = vi.hoisted(() => ({ finishPending: vi.fn() }));
-const sqlite = vi.hoisted(() => ({ createDriver: vi.fn() }));
+const sqlite = vi.hoisted(() => ({ createStore: vi.fn() }));
+const BUSY =
+  "NoModificationAllowedError: Access Handles cannot be created if there is another open Access Handle";
 
 vi.mock("@/utils/mail-engine/wipe-local-mailbox", () => ({
   finishPendingLocalMailboxWipe: wipe.finishPending,
 }));
 vi.mock("@/utils/mail-engine/wasm-sqlite", () => ({
-  createWasmSqliteDriver: sqlite.createDriver,
+  createWasmMailStore: sqlite.createStore,
 }));
 
 describe("createBrowserMailEngine", () => {
   beforeEach(() => {
     FakeWorker.instances = [];
     FakeWorker.onCreate = undefined;
-    FakeWorker.failStart = false;
+    FakeWorker.startErrors = [];
+    FakeWorker.rebuildOnStart = false;
     wipe.finishPending.mockResolvedValue(undefined);
     vi.stubGlobal("Worker", FakeWorker);
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
@@ -52,14 +56,61 @@ describe("createBrowserMailEngine", () => {
   it("terminates a worker that failed to open the mailbox before falling back", async () => {
     // A worker that failed to start can still hold the mailbox's OPFS
     // handles, which the in-tab fallback (and every later tab) then needs.
-    FakeWorker.failStart = true;
-    sqlite.createDriver.mockRejectedValue(
-      new Error("NoModificationAllowedError"),
-    );
+    FakeWorker.startErrors = ["start failed"];
+    sqlite.createStore.mockRejectedValue(new Error("QuotaExceededError"));
 
-    await expect(startEngine()).rejects.toThrow("NoModificationAllowedError");
+    await expect(startEngine()).rejects.toThrow("QuotaExceededError");
 
     expect(FakeWorker.instances[0].terminated).toBe(true);
+  });
+
+  it("retries a start while a closing tab still holds the mailbox files", async () => {
+    vi.useFakeTimers();
+    FakeWorker.startErrors = [BUSY, BUSY];
+
+    const started = startEngine();
+    await vi.runAllTimersAsync();
+
+    await expect(started).resolves.toBeDefined();
+    expect(FakeWorker.instances).toHaveLength(3);
+    expect(FakeWorker.instances[0].terminated).toBe(true);
+    expect(FakeWorker.instances[1].terminated).toBe(true);
+    // The tab would contend for the same files, so it never opens them itself.
+    expect(sqlite.createStore).not.toHaveBeenCalled();
+  });
+
+  it("stops retrying a held mailbox after a bounded wait", async () => {
+    vi.useFakeTimers();
+    FakeWorker.startErrors = Array.from({ length: 20 }, () => BUSY);
+
+    const started = startEngine();
+    const settled = expect(started).rejects.toThrow("Access Handles");
+    await vi.runAllTimersAsync();
+
+    await settled;
+    expect(FakeWorker.instances.length).toBeGreaterThan(1);
+    expect(FakeWorker.instances.length).toBeLessThan(20);
+  });
+
+  it("reports storage that cannot hold a mailbox without retrying", async () => {
+    FakeWorker.startErrors = ["QuotaExceededError: quota exceeded"];
+    sqlite.createStore.mockRejectedValue(new Error("QuotaExceededError"));
+
+    await expect(startEngine()).rejects.toThrow("QuotaExceededError");
+
+    expect(FakeWorker.instances).toHaveLength(1);
+  });
+
+  it("tells the page while a corrupt mailbox is rebuilt", async () => {
+    FakeWorker.rebuildOnStart = true;
+    const onRebuild = vi.fn();
+
+    await createBrowserMailEngine(
+      { accountId: "account-1", provider: "google", online: false },
+      { onRebuild },
+    );
+
+    expect(onRebuild).toHaveBeenCalledOnce();
   });
 
   it("settles requests still waiting when the worker is terminated", async () => {
@@ -86,7 +137,8 @@ type Message = { id?: string; type: string; method?: string };
 class FakeWorker {
   static instances: FakeWorker[] = [];
   static onCreate: (() => void) | undefined;
-  static failStart = false;
+  static startErrors: string[] = [];
+  static rebuildOnStart = false;
   readonly silent = new Set<string>();
   terminated = false;
   private readonly sent: Message[] = [];
@@ -107,11 +159,19 @@ class FakeWorker {
     // A real worker answers on a later task and never after it is terminated.
     setTimeout(() => {
       if (this.terminated || !message.id) return;
-      const data =
-        message.type === "start" && FakeWorker.failStart
-          ? { id: message.id, type: "error", message: "start failed" }
-          : { id: message.id, type: "ok", value: undefined };
-      for (const listener of this.listeners) listener({ data });
+      const startError =
+        message.type === "start" ? FakeWorker.startErrors.shift() : undefined;
+      const replies: unknown[] = [
+        ...(message.type === "start" && FakeWorker.rebuildOnStart
+          ? [{ type: "rebuilding" }]
+          : []),
+        startError
+          ? { id: message.id, type: "error", message: startError }
+          : { id: message.id, type: "ok", value: undefined },
+      ];
+      for (const data of replies) {
+        for (const listener of this.listeners) listener({ data });
+      }
     }, 0);
   }
 

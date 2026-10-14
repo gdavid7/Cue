@@ -79,7 +79,9 @@ export type WorkerRequest =
 export type WorkerResponse =
   | { id: string; type: "ok"; value?: unknown }
   | { id: string; type: "error"; message: string }
-  | { type: "snapshot"; handleId: string; snapshot: QuerySnapshot<unknown> };
+  | { type: "snapshot"; handleId: string; snapshot: QuerySnapshot<unknown> }
+  /** The mailbox was corrupt and is being rebuilt while the engine starts. */
+  | { type: "rebuilding" };
 
 export function browserMailEngineCapabilities() {
   return {
