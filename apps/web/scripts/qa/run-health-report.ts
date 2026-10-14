@@ -13,6 +13,7 @@ import {
   type AxiomResults,
   buildAxiomQueries,
   buildHealthReport,
+  formatAxiomError,
   formatHumanSummary,
   formatJobSummary,
   formatReportBlock,
@@ -126,7 +127,15 @@ async function queryAxiom() {
             },
           );
           if (!response.ok) {
-            return [name, { error: `HTTP ${response.status}` }];
+            return [
+              name,
+              {
+                error: formatAxiomError(
+                  response.status,
+                  await response.text().catch(() => ""),
+                ),
+              },
+            ];
           }
           return [name, { rows: parseAxiomTabular(await response.json()) }];
         } catch (error) {
@@ -136,11 +145,13 @@ async function queryAxiom() {
     ),
   );
   const results = Object.fromEntries(entries) as AxiomResults;
-  if (Object.values(results).every((result) => "error" in result)) {
-    const first = Object.values(results)[0] as { error: string };
+  const errors = Object.values(results).flatMap((result) =>
+    "error" in result ? [result.error] : [],
+  );
+  if (errors.length === entries.length) {
     return {
       status: "error" as const,
-      error: `every Axiom query failed (${first.error})`,
+      error: `every Axiom query failed (${[...new Set(errors)].join("; ")})`,
     };
   }
   return { status: "ok" as const, summary: summarizeAxiom(results) };

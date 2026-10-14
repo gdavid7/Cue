@@ -6,6 +6,7 @@ export const HEALTH_REPORT_END = "=== CUE HEALTH REPORT END ===";
 
 const MAX_TEXT_LENGTH = 160;
 const MAX_LIST_ITEMS = 10;
+const MAX_AXIOM_ERROR_LENGTH = 200;
 
 const robotStepSchema = z.object({
   name: z.string(),
@@ -68,20 +69,38 @@ export type SentryIssue = {
 };
 
 /**
- * One APL query per signal, so a field missing from the dataset only blanks
- * that signal. Field names follow `createScopedLogger`: `message`, `level`,
- * and context under `fields.*` (`url` is the request path).
+ * One APL query per signal, so a failure only blanks that signal. Field names
+ * follow next-axiom's event shape for `createScopedLogger`: top-level
+ * `message` and `level`, and logger context flattened under `fields.*`
+ * (`fields.url` is the request path). Axiom rejects a query with HTTP 400 when
+ * it names a field missing from the dataset's schema, so every field goes
+ * through `column_ifexists`; `appLogs` then shows whether app logs arrived.
  */
 export function buildAxiomQueries(dataset: string) {
   const source = `['${dataset.replaceAll("'", "")}'] | where _time > ago(1h)`;
+  const level = `tostring(${field("level")})`;
+  const message = `tostring(${field("message")})`;
+  const route = `tostring(${field("fields.url")})`;
+  const durationMs = `todouble(${field("fields.durationMs")})`;
+  const totalUnits = `toint(${field("fields.totalUnits")})`;
+  const limitUnits = `toint(${field("fields.limitUnits")})`;
   return {
-    totals: `${source} | summarize total = count(), errors = countif(level == "error"), warnings = countif(level == "warn")`,
-    errorsByRoute: `${source} | where level == "error" | summarize count = count() by route = tostring(['fields.url']), message | top ${MAX_LIST_ITEMS} by count`,
-    gmailRateLimited: `${source} | search "rateLimitExceeded" | summarize count = count()`,
-    gmailQuotaUsage: `${source} | where message == "Gmail quota usage" | summarize samples = count(), maxUnits = max(toint(['fields.totalUnits'])), avgUnits = avg(toint(['fields.totalUnits'])), limitUnits = max(toint(['fields.limitUnits']))`,
-    gmailDeferred: `${source} | where message == "Gmail call deferred by the account's quota budget" | summarize count = count()`,
-    slowestRoutes: `${source} | where isnotnull(['fields.durationMs']) | summarize p95Ms = percentile(todouble(['fields.durationMs']), 95), maxMs = max(todouble(['fields.durationMs'])), count = count() by route = tostring(['fields.url']) | top ${MAX_LIST_ITEMS} by p95Ms`,
+    totals: `${source} | summarize total = count(), appLogs = countif(isnotempty(${level})), errors = countif(${level} == "error"), warnings = countif(${level} == "warn")`,
+    errorsByRoute: `${source} | where ${level} == "error" | summarize events = count() by route = ${route}, message = ${message} | top ${MAX_LIST_ITEMS} by events`,
+    gmailRateLimited: `${source} | search "rateLimitExceeded" | summarize events = count()`,
+    gmailQuotaUsage: `${source} | where ${message} == "Gmail quota usage" | summarize samples = count(), maxUnits = max(${totalUnits}), avgUnits = avg(${totalUnits}), limitUnits = max(${limitUnits})`,
+    gmailDeferred: `${source} | where ${message} == "Gmail call deferred by the account's quota budget" | summarize events = count()`,
+    slowestRoutes: `${source} | where isnotnull(${durationMs}) | summarize p95Ms = percentile(${durationMs}, 95), maxMs = max(${durationMs}), events = count() by route = ${route} | top ${MAX_LIST_ITEMS} by p95Ms`,
   } satisfies Record<keyof AxiomResults, string>;
+}
+
+/** Keeps a failed query diagnosable: status plus the start of Axiom's reason. */
+export function formatAxiomError(status: number, body: string) {
+  const reason = sanitizeBrowserDiagnosticText(body)
+    .replaceAll(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_AXIOM_ERROR_LENGTH);
+  return reason ? `HTTP ${status}: ${reason}` : `HTTP ${status}`;
 }
 
 /** Turns Axiom's `format=tabular` response into one object per row. */
@@ -109,9 +128,12 @@ export function summarizeAxiom(results: AxiomResults) {
   return {
     window: "1h",
     totalLogs: toNumber(totals?.total),
+    appLogs: toNumber(totals?.appLogs),
     errors: toNumber(totals?.errors),
     warnings: toNumber(totals?.warnings),
-    gmailRateLimitExceeded: toNumber(firstRow(results.gmailRateLimited)?.count),
+    gmailRateLimitExceeded: toNumber(
+      firstRow(results.gmailRateLimited)?.events,
+    ),
     gmailQuota:
       "error" in results.gmailQuotaUsage
         ? { status: "query_failed" as const }
@@ -122,25 +144,25 @@ export function summarizeAxiom(results: AxiomResults) {
               maxUnitsPerMinute: toNumber(quota?.maxUnits),
               avgUnitsPerMinute: round(toNumber(quota?.avgUnits)),
               limitUnitsPerMinute: toNumber(quota?.limitUnits),
-              deferredCalls: toNumber(firstRow(results.gmailDeferred)?.count),
+              deferredCalls: toNumber(firstRow(results.gmailDeferred)?.events),
             }
           : { status: "no_quota_logs" as const },
     topErrors: rowsOf(results.errorsByRoute).map((row) => ({
       route: normalizeRoute(row.route),
       message: redact(row.message),
-      count: toNumber(row.count),
+      count: toNumber(row.events),
     })),
     slowestRoutes: rowsOf(results.slowestRoutes).map((row) => ({
       route: normalizeRoute(row.route),
       p95Ms: Math.round(toNumber(row.p95Ms) ?? 0),
       maxMs: Math.round(toNumber(row.maxMs) ?? 0),
-      count: toNumber(row.count),
+      count: toNumber(row.events),
     })),
     failedQueries: Object.entries(results)
       .filter(([, result]) => "error" in result)
       .map(([name, result]) => ({
         query: name,
-        error: redact((result as { error: string }).error),
+        error: (result as { error: string }).error,
       })),
   };
 }
@@ -361,6 +383,14 @@ function listProblems({
   }
   if (axiom.status === "ok") {
     const { summary } = axiom;
+    if (summary.appLogs === 0) {
+      problems.push(
+        "Axiom has no app log events (no `level` field) in the last hour; server logs may not be reaching this dataset.",
+      );
+    }
+    for (const failed of summary.failedQueries) {
+      problems.push(`Axiom query ${failed.query} failed: ${failed.error}`);
+    }
     if (summary.gmailRateLimitExceeded) {
       problems.push(
         `Gmail rateLimitExceeded logged ${summary.gmailRateLimitExceeded} times in the last hour.`,
@@ -411,4 +441,8 @@ function toNumber(value: unknown) {
 
 function round(value: number | undefined) {
   return value === undefined ? undefined : Math.round(value);
+}
+
+function field(name: string) {
+  return `column_ifexists('${name}', "")`;
 }

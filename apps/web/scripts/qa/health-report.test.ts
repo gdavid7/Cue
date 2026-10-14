@@ -1,7 +1,9 @@
+import { Logger, LogLevel } from "next-axiom";
 import { describe, expect, it } from "vitest";
 import {
   buildAxiomQueries,
   buildHealthReport,
+  formatAxiomError,
   formatHumanSummary,
   formatReportBlock,
   HEALTH_REPORT_END,
@@ -46,22 +48,77 @@ describe("buildAxiomQueries", () => {
     const queries = buildAxiomQueries("vercel'] | delete");
     expect(queries.totals.startsWith("['vercel] | delete']")).toBe(true);
   });
+
+  it("only names fields that next-axiom ships for Cue's logger calls", () => {
+    const logger = new Logger({ autoFlush: false, logLevel: LogLevel.debug });
+    logger.error("Request failed", {
+      scope: "middleware",
+      url: "/api/threads",
+    });
+    logger.warn("Slow request", {
+      scope: "middleware",
+      url: "/api/chat",
+      durationMs: 9000,
+    });
+    logger.info("Gmail quota usage", {
+      scope: "gmail-quota",
+      totalUnits: 120,
+      limitUnits: 15_000,
+    });
+    const shipped = new Set(
+      logger.logEvents.flatMap((event) => flattenKeys(event)),
+    );
+
+    const checked = new Set<string>();
+    for (const [name, apl] of Object.entries(buildAxiomQueries("cue"))) {
+      const bracketed = [...apl.matchAll(/\['([^']+)'\]/g)].map((m) => m[1]);
+      expect(bracketed, name).toEqual(["cue"]);
+      for (const [, field] of apl.matchAll(/column_ifexists\('([^']+)'/g)) {
+        expect(shipped, `${name} names ${field}`).toContain(field);
+        checked.add(field);
+      }
+    }
+    expect([...checked].sort()).toEqual([
+      "fields.durationMs",
+      "fields.limitUnits",
+      "fields.totalUnits",
+      "fields.url",
+      "level",
+      "message",
+    ]);
+  });
+});
+
+describe("formatAxiomError", () => {
+  it("keeps the status and the start of Axiom's reason", () => {
+    const error = formatAxiomError(
+      400,
+      `{"code":400,"message":"invalid query:\n unknown field 'level'${" x".repeat(200)}"}`,
+    );
+    expect(error).toMatch(
+      /^HTTP 400: \{"code":400,"message":"invalid query: unknown field 'level'/,
+    );
+    expect(error.length).toBeLessThanOrEqual("HTTP 400: ".length + 200);
+    expect(formatAxiomError(502, "  ")).toBe("HTTP 502");
+  });
 });
 
 describe("summarizeAxiom", () => {
   it("summarizes errors, Gmail rate limits, quota usage and slow routes", () => {
     const summary = summarizeAxiom({
-      totals: { rows: [{ total: 900, errors: 14, warnings: 30 }] },
+      totals: {
+        rows: [{ total: 900, appLogs: 880, errors: 14, warnings: 30 }],
+      },
       errorsByRoute: {
         rows: [
           {
             route: "/api/threads/clx9k2m3n4p5q6r7s8t9u0v1w2",
             message: "Failed for jane.doe@example.org",
-            count: 9,
+            events: 9,
           },
         ],
       },
-      gmailRateLimited: { rows: [{ count: 4 }] },
+      gmailRateLimited: { rows: [{ events: 4 }] },
       gmailQuotaUsage: {
         rows: [
           {
@@ -72,16 +129,17 @@ describe("summarizeAxiom", () => {
           },
         ],
       },
-      gmailDeferred: { rows: [{ count: 2 }] },
+      gmailDeferred: { rows: [{ events: 2 }] },
       slowestRoutes: {
         rows: [
-          { route: "/api/chat?x=1", p95Ms: 8123.4, maxMs: 20_000, count: 5 },
+          { route: "/api/chat?x=1", p95Ms: 8123.4, maxMs: 20_000, events: 5 },
         ],
       },
     });
 
     expect(summary).toMatchObject({
       errors: 14,
+      appLogs: 880,
       gmailRateLimitExceeded: 4,
       gmailQuota: {
         status: "present",
@@ -113,6 +171,15 @@ describe("summarizeAxiom", () => {
       "gmailRateLimited",
       "slowestRoutes",
     ]);
+    const report = buildHealthReport({
+      robot: { status: "no_results" },
+      axiom: { status: "ok", summary },
+      sentry: { status: "not_configured", missing: ["SENTRY_AUTH_TOKEN"] },
+      now: NOW,
+    });
+    expect(report.problems).toContain(
+      "Axiom query gmailRateLimited failed: HTTP 400",
+    );
   });
 });
 
@@ -277,3 +344,11 @@ describe("redact", () => {
     expect(text.length).toBeLessThanOrEqual(161);
   });
 });
+
+function flattenKeys(value: object, prefix = ""): string[] {
+  return Object.entries(value).flatMap(([key, child]) =>
+    child && typeof child === "object" && !Array.isArray(child)
+      ? flattenKeys(child, `${prefix}${key}.`)
+      : [`${prefix}${key}`],
+  );
+}
