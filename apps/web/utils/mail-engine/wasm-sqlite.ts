@@ -62,10 +62,17 @@ export async function createWasmMailStore(input: {
       async open() {
         if (pool.isPaused()) await pool.unpauseVfs();
         const database = new pool.OpfsSAHPoolDb(MAILBOX_PATH);
-        return createDatabaseDriver(database, async () => {
+        const release = async () => {
           database.close();
           pool.pauseVfs();
-        });
+        };
+        try {
+          return createDatabaseDriver(database, release);
+        } catch (error) {
+          // The pool cannot wipe the files for a rebuild while this is open.
+          await release();
+          throw error;
+        }
       },
       async wipe() {
         if (pool.isPaused()) await pool.unpauseVfs();

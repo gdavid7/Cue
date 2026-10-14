@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Database } from "@sqlite.org/sqlite-wasm";
 import {
   applyReferenceChange,
   createReferenceModel,
@@ -12,9 +13,32 @@ import type { SqliteDriver } from "@inboxzero/mail-sqlite/driver";
 import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
 import {
   MAIL_ENGINE_OPFS_DIRECTORY,
+  createWasmMailStore,
   createWasmSqliteDriver,
   wipeOpfsMailEngine,
 } from "./wasm-sqlite";
+
+type Sqlite = Awaited<
+  ReturnType<typeof import("@sqlite.org/sqlite-wasm").default>
+>;
+
+const opfsPool = vi.hoisted(() => ({
+  install: undefined as undefined | ((sqlite: Sqlite) => unknown),
+}));
+
+vi.mock("@sqlite.org/sqlite-wasm", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@sqlite.org/sqlite-wasm")>();
+  return {
+    default: async () => {
+      const sqlite = await actual.default();
+      return {
+        ...sqlite,
+        installOpfsSAHPoolVfs: async () => opfsPool.install?.(sqlite),
+      };
+    },
+  };
+});
 
 const inboxQuery = {
   accountIds: ["acc-1"],
@@ -401,6 +425,44 @@ function messagePatch(
   };
 }
 
+describe("createWasmMailStore", () => {
+  afterEach(() => {
+    opfsPool.install = undefined;
+    vi.unstubAllGlobals();
+  });
+
+  it("closes a database that fails while being set up, so its files can be wiped for the rebuild", async () => {
+    vi.stubGlobal("navigator", { storage: { getDirectory: async () => ({}) } });
+    const pool = notADatabasePool({ failOnSetup: true });
+    opfsPool.install = pool.install;
+    const onRebuild = vi.fn();
+
+    const store = await createWasmMailStore({ onRebuild });
+
+    expect(onRebuild).toHaveBeenCalledOnce();
+    expect(pool.wipes).toBe(1);
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    await store.close();
+  });
+
+  it("rebuilds an OPFS mailbox file that is not a database", async () => {
+    vi.stubGlobal("navigator", { storage: { getDirectory: async () => ({}) } });
+    const pool = notADatabasePool({ failOnSetup: false });
+    opfsPool.install = pool.install;
+    const onRebuild = vi.fn();
+
+    const store = await createWasmMailStore({ onRebuild });
+
+    expect(onRebuild).toHaveBeenCalledOnce();
+    expect(pool.wipes).toBe(1);
+    await store.close();
+  });
+});
+
 describe("wipeOpfsMailEngine", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -473,3 +535,59 @@ describe("wipeOpfsMailEngine", () => {
     vi.useRealTimers();
   });
 });
+
+/**
+ * Stands in for the OPFS SAH pool on sqlite-wasm's in-memory file system,
+ * holding a mailbox file that is not a database. Like the real pool, it
+ * cannot wipe files a database still has open.
+ */
+function notADatabasePool({ failOnSetup }: { failOnSetup: boolean }) {
+  const path = `/mailbox-${crypto.randomUUID()}.sqlite`;
+  const open = new Set<Database>();
+  let paused = false;
+  const state = {
+    wipes: 0,
+    install(sqlite: Sqlite) {
+      sqlite.capi.sqlite3_js_posix_create_file(
+        path,
+        new TextEncoder().encode("this is not sqlite ".repeat(512)),
+      );
+      class PoolDb extends sqlite.oo1.DB {
+        constructor() {
+          super(path);
+          open.add(this);
+          // A damaged header can fail the very first statement.
+          if (failOnSetup && state.wipes === 0) {
+            const exec = this.exec.bind(this);
+            this.exec = ((sql: never) => {
+              if (sql === "PRAGMA foreign_keys=ON") {
+                exec("SELECT count(*) FROM sqlite_master");
+              }
+              return exec(sql);
+            }) as typeof this.exec;
+          }
+        }
+        override close() {
+          open.delete(this);
+          return super.close();
+        }
+      }
+      return {
+        OpfsSAHPoolDb: PoolDb,
+        isPaused: () => paused,
+        pauseVfs: () => {
+          paused = true;
+        },
+        unpauseVfs: async () => {
+          paused = false;
+        },
+        wipeFiles: async () => {
+          if (open.size > 0) throw new Error("SAH pool files are still open");
+          state.wipes += 1;
+          sqlite.capi.sqlite3_js_posix_create_file(path, new Uint8Array(0));
+        },
+      };
+    },
+  };
+  return state;
+}
