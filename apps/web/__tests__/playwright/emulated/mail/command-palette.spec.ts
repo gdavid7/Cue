@@ -423,7 +423,7 @@ test("the open reader exposes its actions in Command K and forwards with F", asy
     }),
   ).toBeVisible();
   await expect(
-    palette.getByRole("option", { name: /auto archive/i }),
+    palette.getByRole("option", { name: /Skip inbox for this sender/ }),
   ).toBeVisible();
   await expect(
     palette.getByRole("option", { name: `${openExternalLabel} G G` }),

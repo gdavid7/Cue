@@ -151,8 +151,11 @@ export async function openCleanupFeature(
     url,
     getCleanupFeatureReadyLocator(page, expectedPath),
   );
+  // The old `/{emailAccountId}/mail` address redirects to `/mail/u/{n}/inbox`.
   await expect(page).toHaveURL(
-    new RegExp(`/${fixture.emailAccountId}/${expectedPath}(?:\\?.*)?$`),
+    expectedPath === "mail"
+      ? /\/mail\/u\/\d+\/inbox(?:\?.*)?$/
+      : new RegExp(`/${fixture.emailAccountId}/${expectedPath}(?:\\?.*)?$`),
   );
 }
 

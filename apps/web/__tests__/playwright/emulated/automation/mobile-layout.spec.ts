@@ -245,7 +245,7 @@ test("keeps calendar options and availability controls on phones", async ({
   await expectNoHorizontalOverflow(availability);
 });
 
-test("keeps integration requests accessible on phones", async ({
+test("keeps integration actions accessible on phones", async ({
   page,
 }, testInfo) => {
   const emailAccountId = await getEmailAccountId(page);
@@ -266,19 +266,22 @@ test("keeps integration requests accessible on phones", async ({
   });
   await markAutomationOnboardingViewed(page);
   await page.goto(`/${emailAccountId}/integrations`);
-  const request = page.getByRole("button", {
-    name: "Request an Integration",
+  const showMore = page.getByRole("button", { name: /^Show \d+ more apps$/ });
+  await expect(showMore).toBeVisible();
+  await capturePlaywrightCheckpoint(page, testInfo, "mobile-integrations");
+  await expectInViewport(showMore);
+  const addServer = page.getByRole("button", {
+    name: "Add custom server",
     exact: true,
   });
-  await expect(request).toBeVisible();
-  await capturePlaywrightCheckpoint(page, testInfo, "mobile-integrations");
-  await expectInViewport(request);
-  await request.click();
-  await expect(page.getByRole("dialog")).toBeVisible();
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Close", exact: true })
-    .click();
+  await addServer.scrollIntoViewIfNeeded();
+  await expectInViewport(addServer);
+  await addServer.click();
+  const dialog = page.getByRole("dialog", { name: "Add custom server" });
+  await expect(dialog).toBeVisible();
+  await expectNoHorizontalOverflow(dialog);
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(dialog).toBeHidden();
 });
 
 async function expectNoHorizontalOverflow(locator: Locator) {

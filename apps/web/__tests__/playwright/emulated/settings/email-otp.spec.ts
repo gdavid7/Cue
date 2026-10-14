@@ -87,9 +87,7 @@ test("an assistant signs in after owner opt-in and loses access when it is disab
           subject: string;
         }[];
         code = messages
-          .findLast(
-            (message) => message.subject === "Your Inbox Zero sign-in code",
-          )
+          .findLast((message) => /^Your .+ sign-in code$/.test(message.subject))
           ?.text.match(/\b\d{6}\b/)?.[0];
         return !!code;
       })

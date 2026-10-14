@@ -215,7 +215,7 @@ async function selectOnlyArchiveSender(page: Page) {
 }
 
 async function chooseBulkAction(page: Page, action: "Delete" | "Mark as read") {
-  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   const settings = page.getByRole("dialog", {
     name: "Bulk Archive Settings",
   });

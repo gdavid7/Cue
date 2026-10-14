@@ -153,7 +153,7 @@ test("creates and edits a domain sender condition", async ({
   const tab = page.getByRole("button", { name: "Example domain", exact: true });
   await expect(tab).toBeVisible();
   await tab.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Edit filters and name" }).click();
+  await page.getByRole("menuitem", { name: "Edit tab…" }).click();
   await expect(page.getByLabel("Sender", { exact: true })).toHaveValue(
     "@example.com",
   );
@@ -200,8 +200,8 @@ test("builds a split from conditions and shows only matching mail", async ({
 
   // The tab's own menu edits the split rather than sending you back to the list.
   await promosSplit.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Edit filters and name" }).click();
-  await expect(page.getByText("Edit tab")).toBeVisible();
+  await page.getByRole("menuitem", { name: "Edit tab…" }).click();
+  await expect(page.getByRole("heading", { name: "Edit tab" })).toBeVisible();
   await expect(page.getByLabel("Condition value").first()).toHaveValue(
     isMicrosoft ? "Label_promotions" : "CATEGORY_PROMOTIONS",
   );
@@ -334,7 +334,7 @@ test("Other excludes enabled splits and restores mail when a split is disabled",
       exact: true,
     }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Close" }).click();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Important", exact: true }),
   ).toBeVisible();

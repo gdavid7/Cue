@@ -10,11 +10,19 @@ import { openMail } from "./mail-test-helpers";
 test("chooses which accounts appear in All Accounts", async ({
   page,
 }, testInfo) => {
-  const { emailAccountId } = await openMail(page);
+  const { emailAccountId, conversations } = await openMail(page);
   const secondAccount = await createSecondEmailAccount(emailAccountId);
+  // The account shortcuts, not the "?" on the Keyboard shortcuts row.
+  const accountShortcuts = page
+    .getByRole("menu")
+    .locator("kbd")
+    .filter({ hasText: /\d$/ });
 
   try {
     await page.reload();
+    // The frame painted before the mail engine is ready is replaced once it
+    // is, which would close a menu opened in it.
+    await expect(conversations).toBeVisible({ timeout: 60_000 });
     await page
       .getByRole("button", { name: /playwright-test\+/i })
       .last()
@@ -28,7 +36,7 @@ test("chooses which accounts appear in All Accounts", async ({
       for (const portal of portals) portal.remove();
     });
     await capturePlaywrightCheckpoint(page, testInfo, "all-accounts-menu");
-    await expect(page.getByRole("menu").locator("kbd")).toHaveCount(0);
+    await expect(accountShortcuts).toHaveCount(0);
 
     await page.addInitScript(() => {
       Object.assign(window, {
@@ -47,18 +55,21 @@ test("chooses which accounts appear in All Accounts", async ({
         checkpoint: "account-shortcuts-windows",
       },
     ]) {
-      await page.reload();
-      await page.evaluate((userAgent) => {
+      // Set before the app renders, so every shortcut hint reads the same
+      // platform. A later init script overrides an earlier one.
+      await page.addInitScript((userAgent) => {
         Object.defineProperty(navigator, "userAgent", {
           configurable: true,
           get: () => userAgent,
         });
       }, userAgent);
+      await page.reload();
+      await expect(conversations).toBeVisible({ timeout: 60_000 });
       await page
         .getByRole("button", { name: /playwright-test\+/i })
         .last()
         .click();
-      await expect(page.getByRole("menu").locator("kbd")).toHaveText([
+      await expect(accountShortcuts).toHaveText([
         `${modifier}0`,
         `${modifier}1`,
         `${modifier}2`,
