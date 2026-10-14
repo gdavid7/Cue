@@ -5,15 +5,13 @@ import { SettingCard } from "@/components/SettingCard";
 import { Button } from "@/components/ui/button";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { useAccount } from "@/providers/EmailAccountProvider";
-import { useIntegrationsEnabled } from "@/hooks/useFeatureFlags";
 
 export function IntegrationsSetting() {
   const { emailAccountId } = useAccount();
   const { data, isLoading } = useIntegrations();
-  const integrationsEnabled = useIntegrationsEnabled();
 
   // Wait for data so we don't flash the unconnected state
-  if (!integrationsEnabled || isLoading) {
+  if (isLoading) {
     return null;
   }
 

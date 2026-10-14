@@ -143,12 +143,8 @@ for (const target of targets) {
         ),
         PLAYWRIGHT_OUTPUT_DIR: path.join(testResultsDir, provider, target.name),
         PLAYWRIGHT_RUN_ID: targetRunId,
-        ...(isIntegrationsTarget(target.path)
-          ? { NEXT_PUBLIC_INTEGRATIONS_ENABLED: "true" }
-          : {}),
         ...(isAutomationTarget(target.path)
           ? {
-              NEXT_PUBLIC_INTEGRATIONS_ENABLED: "true",
               NEXT_PUBLIC_INTEGRATION_ACTION_ENABLED: "true",
               PLAYWRIGHT_TODOIST_ENABLED: "true",
             }
@@ -275,10 +271,6 @@ function isRequestedPlaywrightTarget(targetPath) {
 
 function isPlaywrightSpecFile(file) {
   return /\.spec\.[cm]?[jt]sx?$/.test(file);
-}
-
-function isIntegrationsTarget(targetPath) {
-  return /[\\\\/]integrations(?:[\\\\/]|$)/.test(targetPath);
 }
 
 function isAutomationTarget(targetPath) {

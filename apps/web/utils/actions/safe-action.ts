@@ -124,6 +124,10 @@ const baseClient = createSafeActionClient({
   );
 });
 
+// No session: for the few actions signed-out visitors may call. Each one
+// rate-limits itself.
+export const publicActionClient = baseClient;
+
 export const actionClient = baseClient
   .bindArgsSchemas<[emailAccountId: z.ZodString]>([z.string()])
   .use(async ({ next, metadata, bindArgsClientInputs, ctx }) => {

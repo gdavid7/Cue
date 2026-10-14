@@ -9,6 +9,7 @@ import {
   hasActiveAccountLinkingUser,
 } from "@/utils/oauth/account-linking";
 import { findReconnectTarget } from "@/utils/oauth/reconnect-target";
+import { getMailboxLimitResponse } from "@/utils/access/mailbox-limit";
 import { createOAuthLinkingAuditLogger } from "@/utils/oauth/linking-audit";
 import {
   generateSignedOAuthState,
@@ -82,6 +83,12 @@ export const GET = withAuth("google/linking/auth-url", async (request) => {
       { status: 404 },
     );
   }
+
+  const limitResponse = await getMailboxLimitResponse({
+    userId,
+    isReconnect: Boolean(reconnectTarget),
+  });
+  if (limitResponse) return limitResponse;
 
   const {
     url: authUrl,

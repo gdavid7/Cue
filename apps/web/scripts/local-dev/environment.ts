@@ -94,8 +94,6 @@ export function createLocalEnvironment({
     STRIPE_SECRET_KEY: "emulator-stripe-key",
     STRIPE_WEBHOOK_SECRET: "whsec_emulator",
     NEXT_PUBLIC_BRAND_NAME: "Cue",
-    // Cue's connectors (Drive, OneDrive, Teams, ...) come through Composio.
-    NEXT_PUBLIC_INTEGRATIONS_ENABLED: "true",
     ...(process.env.COMPOSIO_API_KEY
       ? { COMPOSIO_API_KEY: process.env.COMPOSIO_API_KEY }
       : {}),

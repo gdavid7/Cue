@@ -17,10 +17,7 @@ import { nextCookies } from "better-auth/next-js";
 import { cookies, headers } from "next/headers";
 import { after } from "next/server";
 import { env } from "@/env";
-import {
-  assertAllowedAuthSignupEmail,
-  isAllowedAuthSignupEmail,
-} from "@/utils/auth-signup-policy";
+import { assertSignUpAllowed } from "@/utils/access/policy";
 import { trackDubSignUp } from "@/utils/dub";
 import {
   isGoogleProvider,
@@ -348,11 +345,15 @@ export const betterAuthConfig = betterAuth({
     user: {
       create: {
         before: async (user) => {
-          if (!isAllowedAuthSignupEmail(user.email)) {
-            logger.warn("Blocked auth sign-up outside configured allowlist", {
-              emailDomain: user.email.split("@")[1]?.toLowerCase(),
-            });
-            assertAllowedAuthSignupEmail(user.email);
+          try {
+            await assertSignUpAllowed({ email: user.email, name: user.name });
+          } catch (error) {
+            if (error instanceof APIError) {
+              logger.warn("Blocked sign-up of an unapproved email", {
+                emailDomain: user.email.split("@")[1]?.toLowerCase(),
+              });
+            }
+            throw error;
           }
 
           return dropInlineImage(user);

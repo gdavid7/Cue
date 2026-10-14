@@ -68,6 +68,38 @@ export const MAIL_ANALYTICS_EVENTS = {
   performanceSummary: "mail_performance_summary",
 } as const;
 
+/**
+ * The access gate and the first run. Properties are ids, counts, enums and
+ * durations only; server events key on the request id, never the address.
+ *
+ * - `access_requested` (server): `source` "form" | "google_sign_in". Sent
+ *   once per address; repeats are not counted.
+ * - `access_approved` (server): `days_pending`, `batch_size`.
+ * - `access_declined` (server): no properties.
+ * - `onboarding_setup_choice`: the first-run setup card. `action` "apply" |
+ *   "not_now", `style` (inbox style id), `cue_tabs` (boolean).
+ * - `onboarding_tour_step`: `step` (1-based), `outcome` "shown" | "skipped"
+ *   | "closed" | "show_me", and on the Needs reply step
+ *   `needs_reply_count_bucket` "0" | "1" | "2-5" | "6+".
+ * - `suggested_reply_sent`: a reply that started from Cue's suggestion was
+ *   sent. `edited` (boolean), `is_first` (boolean).
+ */
+export const ONBOARDING_ANALYTICS_EVENTS = {
+  accessRequested: "access_requested",
+  accessApproved: "access_approved",
+  accessDeclined: "access_declined",
+  setupChoice: "onboarding_setup_choice",
+  tourStep: "onboarding_tour_step",
+  suggestedReplySent: "suggested_reply_sent",
+} as const;
+
+export function getCountBucket(count: number) {
+  if (count <= 0) return "0";
+  if (count === 1) return "1";
+  if (count <= 5) return "2-5";
+  return "6+";
+}
+
 export const PRODUCT_ANALYTICS_ACTIONS = {
   chat: {
     attachButtonClicked: "chat_attach_button_clicked",
