@@ -118,7 +118,7 @@ export function composeInsight({
   return parts.length ? { tone, parts: parts.slice(0, MAX_PARTS) } : null;
 }
 
-/** "today 5 PM", "tomorrow", "Thu", "Oct 16": short, and in the user's own time zone. */
+/** "today 5 PM", "tomorrow", "Thu", "Oct 16": short, in the user's own time zone and locale. */
 export function formatWhen(iso: string, now: Date) {
   const hasTime = iso.includes("T");
   // A bare date is a calendar day where the user is, not midnight UTC.
@@ -128,14 +128,14 @@ export function formatWhen(iso: string, now: Date) {
   );
   const time = hasTime
     ? ` ${date
-        .toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+        .toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
         .replace(":00", "")}`
     : "";
   if (days === 0) return `today${time}`;
   if (days === 1) return `tomorrow${time}`;
   if (days > 1 && days < 7)
-    return `${date.toLocaleDateString("en-US", { weekday: "short" })}${time}`;
-  return `${date.toLocaleDateString("en-US", { month: "short", day: "numeric" })}${time}`;
+    return `${date.toLocaleDateString(undefined, { weekday: "short" })}${time}`;
+  return `${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}${time}`;
 }
 
 function localDate(isoDate: string) {
