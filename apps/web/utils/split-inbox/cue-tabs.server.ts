@@ -1,5 +1,10 @@
 import { after } from "next/server";
-import { MailSplitFilterKind, SystemType } from "@/generated/prisma/enums";
+import {
+  ActionType,
+  MailSplitFilterKind,
+  SystemType,
+} from "@/generated/prisma/enums";
+import { normalizeLabelName } from "@/utils/label/normalize-label-name";
 import { bulkProcessInboxEmails } from "@/utils/ai/choose-rule/bulk-process-emails";
 import { ONBOARDING_PROCESS_EMAILS_COUNT } from "@/utils/config";
 import { SafeError } from "@/utils/error";
@@ -43,7 +48,7 @@ const CUE_TABS = [
  * The opt-in "Needs reply" and "Reading" tabs. They read what Cue's rules
  * decided from Cue's own database, so the rules they need are added with no
  * actions: nothing is labelled, archived, moved or drafted in the mailbox.
- * Rules the account already has are kept as they are.
+ * Rules the account already has are kept, minus the label action Cue added.
  */
 export async function addCueTabs({
   emailAccountId,
@@ -56,8 +61,31 @@ export async function addCueTabs({
 }) {
   const existingRules = await prisma.rule.findMany({
     where: { emailAccountId, systemType: { in: CUE_TAB_SYSTEM_TYPES } },
-    select: { systemType: true },
+    select: {
+      systemType: true,
+      actions: { select: { id: true, type: true, label: true } },
+    },
   });
+
+  // Earlier versions created these rules with one label action each. Dropping
+  // that action stops them labelling the mailbox; anything the person set up
+  // themselves (other actions, a renamed label) is left as it is.
+  const legacyLabelActionIds = existingRules.flatMap((rule) => {
+    const [action, ...rest] = rule.actions;
+    const isLegacyLabel =
+      rule.systemType &&
+      action &&
+      !rest.length &&
+      action.type === ActionType.LABEL &&
+      normalizeLabelName(action.label ?? "") ===
+        normalizeLabelName(getRuleConfig(rule.systemType).label);
+    return isLegacyLabel ? [action.id] : [];
+  });
+  if (legacyLabelActionIds.length) {
+    await prisma.action.deleteMany({
+      where: { id: { in: legacyLabelActionIds } },
+    });
+  }
   const missing = CUE_TAB_SYSTEM_TYPES.filter(
     (systemType) =>
       !existingRules.some((rule) => rule.systemType === systemType),

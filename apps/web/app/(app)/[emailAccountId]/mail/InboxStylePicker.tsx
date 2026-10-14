@@ -100,25 +100,12 @@ export function InboxStyleCard({ onDone }: { onDone: () => void }) {
         value={style}
         onChange={setChosen}
       />
-      <label
-        htmlFor="inbox-style-cue-tabs"
-        className="mt-3 flex cursor-pointer items-start gap-2 text-xs sm:max-w-md"
-      >
-        <Checkbox
-          id="inbox-style-cue-tabs"
-          className="mt-0.5"
-          checked={addCueTabs}
-          onCheckedChange={(checked) => setAddCueTabs(checked === true)}
-        />
-        <span>
-          Also add &ldquo;Needs reply&rdquo; and &ldquo;Reading&rdquo; tabs.{" "}
-          <span className="text-muted-foreground">
-            Cue sorts this mail inside Cue. Nothing changes in{" "}
-            {isMicrosoftProvider(provider) ? "Outlook" : "Gmail"}: no labels, no
-            moved emails.
-          </span>
-        </span>
-      </label>
+      <CueTabsCheckbox
+        id="inbox-style-cue-tabs"
+        className="mt-3"
+        checked={addCueTabs}
+        onCheckedChange={setAddCueTabs}
+      />
       <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
         <Button
           size="xs-2"
@@ -151,6 +138,9 @@ export function InboxStyleDialog({
 }) {
   const { provider } = useAccount();
   const [chosen, setChosen] = useState<InboxStyle | null>(null);
+  // Off here: people reopen this to change the style, so the tabs are an
+  // explicit choice rather than something re-added each time.
+  const [addCueTabs, setAddCueTabs] = useState(false);
   const { apply, isApplying } = useApplyInboxStyle(() => onOpenChange(false));
 
   const options = getInboxStyleOptions(provider);
@@ -168,16 +158,59 @@ export function InboxStyleDialog({
           value={style}
           onChange={setChosen}
         />
+        <CueTabsCheckbox
+          id="inbox-style-dialog-cue-tabs"
+          checked={addCueTabs}
+          onCheckedChange={setAddCueTabs}
+        />
         <DialogFooter>
           <Button
             loading={isApplying}
-            onClick={() => apply({ style, addCueTabs: false })}
+            onClick={() => apply({ style, addCueTabs })}
           >
             Use this
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function CueTabsCheckbox({
+  id,
+  checked,
+  onCheckedChange,
+  className,
+}: {
+  id: string;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+  className?: string;
+}) {
+  const { provider } = useAccount();
+  return (
+    <label
+      htmlFor={id}
+      className={cn(
+        "flex cursor-pointer items-start gap-2 text-xs sm:max-w-md",
+        className,
+      )}
+    >
+      <Checkbox
+        id={id}
+        className="mt-0.5"
+        checked={checked}
+        onCheckedChange={(value) => onCheckedChange(value === true)}
+      />
+      <span>
+        Also add &ldquo;Needs reply&rdquo; and &ldquo;Reading&rdquo; tabs.{" "}
+        <span className="text-muted-foreground">
+          Cue sorts this mail inside Cue. Nothing changes in{" "}
+          {isMicrosoftProvider(provider) ? "Outlook" : "Gmail"}: no labels, no
+          moved emails.
+        </span>
+      </span>
+    </label>
   );
 }
 

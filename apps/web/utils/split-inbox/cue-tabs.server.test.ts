@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MailSplitFilterKind, SystemType } from "@/generated/prisma/enums";
+import {
+  ActionType,
+  MailSplitFilterKind,
+  SystemType,
+} from "@/generated/prisma/enums";
+import { getRuleLabel } from "@/utils/rule/consts";
 import prisma from "@/utils/__mocks__/prisma";
 import { createEmailProvider } from "@/utils/email/provider";
 import { createScopedLogger } from "@/utils/logger";
@@ -89,7 +94,11 @@ describe("addCueTabs", () => {
 
   it("keeps rules the account already has and still adds the tabs", async () => {
     prisma.rule.findMany.mockResolvedValue(
-      NEEDED_RULES.map((systemType) => ({ systemType })) as never,
+      NEEDED_RULES.map((systemType) => ({
+        id: `rule-${systemType}`,
+        systemType,
+        actions: [],
+      })) as never,
     );
 
     await addCueTabs({ emailAccountId: "account", provider: "google", logger });
@@ -99,6 +108,48 @@ describe("addCueTabs", () => {
       vi.mocked(createMailSplit).mock.calls.map(([split]) => split.name),
     ).toEqual(["Needs reply", "Reading"]);
     expect(afterCallbacks).toHaveLength(0);
+  });
+
+  it("stops the rules it used to create from labelling the mailbox", async () => {
+    prisma.rule.findMany.mockResolvedValue(
+      NEEDED_RULES.map((systemType) => ({
+        id: `rule-${systemType}`,
+        systemType,
+        actions:
+          systemType === SystemType.FYI
+            ? [
+                { id: "fyi-label", type: ActionType.LABEL, label: "FYI" },
+                { id: "fyi-archive", type: ActionType.ARCHIVE, label: null },
+              ]
+            : [
+                {
+                  id: `label-${systemType}`,
+                  type: ActionType.LABEL,
+                  label:
+                    systemType === SystemType.MARKETING
+                      ? "My promos"
+                      : getRuleLabel(systemType).toLowerCase(),
+                },
+              ],
+      })) as never,
+    );
+
+    await addCueTabs({ emailAccountId: "account", provider: "google", logger });
+
+    expect(prisma.action.deleteMany).toHaveBeenCalledWith({
+      where: {
+        id: {
+          in: [
+            `label-${SystemType.TO_REPLY}`,
+            `label-${SystemType.AWAITING_REPLY}`,
+            `label-${SystemType.ACTIONED}`,
+            `label-${SystemType.NEWSLETTER}`,
+          ],
+        },
+      },
+    });
+    expect(upsertSystemRule).not.toHaveBeenCalled();
+    expect(prisma.rule.update).not.toHaveBeenCalled();
   });
 
   it("points an earlier label-backed tab of the same name at Cue's sorting", async () => {
