@@ -163,5 +163,8 @@ function renderActionTooltip(
   if (button.action === "mark_read") {
     return <Tooltip shortcuts={["markRead"]}>{children}</Tooltip>;
   }
+  if (button.action === "expand_all" || button.action === "collapse_all") {
+    return <Tooltip content={button.ariaLabel}>{children}</Tooltip>;
+  }
   return children;
 }

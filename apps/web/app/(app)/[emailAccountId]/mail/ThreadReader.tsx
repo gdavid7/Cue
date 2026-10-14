@@ -52,8 +52,6 @@ const SenderContextPanel = dynamic(
  * sender profile slides over the reader instead.
  */
 const INLINE_SIDE_PANEL_MIN_WIDTH = 880;
-/** Below this the reader is a phone's width, and shows fewer related items. */
-const PHONE_READER_MAX_WIDTH = 640;
 
 export type ThreadReaderProps = {
   enableMessageNavigation: boolean;
@@ -151,8 +149,6 @@ export function ThreadReader({
   } | null>(null);
   const [readerRef, readerWidth] = useElementWidth();
   const isNarrow = readerWidth < INLINE_SIDE_PANEL_MIN_WIDTH;
-  // Until the reader is measured its width reads as 0, which isn't a phone.
-  const isPhone = readerWidth > 0 && readerWidth < PHONE_READER_MAX_WIDTH;
   const { emailAccountId, userEmail } = useAccount();
   // Related items help answer the newest message, so they show only while
   // it's someone else's: not once the user's reply, sent or sending, is newest.
@@ -174,16 +170,13 @@ export function ThreadReader({
   const canAssist = Boolean(
     detailSelectionSettled && emailAccountId && threadId,
   );
-  // Opened from "Reply" beside Cue's note that it left the reply to the user.
-  const [replyRequestedFor, setReplyRequestedFor] = useState<string>();
-  const { assist, idleReplyArea } = useReaderReplySuggestion({
+  const { assist, replyStatus } = useReaderReplySuggestion({
     emailAccountId,
     threadId,
     messages,
     userLabels,
     enabled: canAssist,
     onOpenThread: openThread,
-    onReply: setReplyRequestedFor,
   });
   const hiddenDraftMessageIds = useHiddenDraftMessageIds(emailAccountId);
   const headerMessage =
@@ -275,7 +268,8 @@ export function ThreadReader({
       containerRef={readerRef}
       detailSelectionSettled={detailSelectionSettled}
       layout={layout}
-      localAvailability={localAvailability}
+      // Once messages show, the thread's own earlier-messages row loads more.
+      localAvailability={messages.length > 0 ? undefined : localAvailability}
       renderLoadMoreButton={({ disabled, loading, onClick }) => (
         <Button
           className="mb-4"
@@ -283,7 +277,7 @@ export function ThreadReader({
           onClick={onClick}
           variant="outline"
         >
-          {loading ? "Loading messages…" : "Load older messages"}
+          {loading ? "Loading earlier messages…" : "Show earlier messages"}
         </Button>
       )}
       sidePanel={
@@ -305,27 +299,31 @@ export function ThreadReader({
             renderMessageMenu={renderMessageMenu}
             enableMessageNavigation={enableMessageNavigation}
             autoOpenReplyForMessageId={
-              autoOpenReplyForMessageId ??
-              assist?.messageId ??
-              replyRequestedFor
+              autoOpenReplyForMessageId ?? assist?.messageId
             }
-            focusAutoOpenedReply={Boolean(
-              autoOpenReplyForMessageId ?? replyRequestedFor,
-            )}
+            focusAutoOpenedReply={Boolean(autoOpenReplyForMessageId)}
             afterLatestMessage={
               canAssist && newestIsIncoming && emailAccountId && threadId ? (
                 <div className="mt-4 -mx-2">
                   <ThreadContextList
                     emailAccountId={emailAccountId}
                     heading="Related"
-                    limit={isPhone ? 2 : 3}
+                    limit={2}
                     onOpenThread={openThread}
                     threadId={threadId}
                   />
                 </div>
               ) : null
             }
-            idleReplyArea={idleReplyArea}
+            replyStatus={replyStatus}
+            earlierMessages={
+              localAvailability?.hasMore
+                ? {
+                    loading: localAvailability.loadingMore,
+                    onLoad: localAvailability.loadMore,
+                  }
+                : undefined
+            }
             autoOpenReplyAll={autoOpenReplyAll}
             autoOpenForwardForMessageId={autoOpenForwardForMessageId}
             key={threadId}

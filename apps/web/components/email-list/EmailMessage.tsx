@@ -31,6 +31,12 @@ import { formatShortDate } from "@/utils/date";
 import { ComposeEmailFormLazy } from "@/app/(app)/[emailAccountId]/compose/ComposeEmailFormLazy";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { ParsedMessage } from "@/utils/types";
 import { forwardEmailHtml, forwardEmailSubject } from "@/utils/gmail/forward";
 import { extractDraftComposerContent } from "@/utils/parse/extract-reply.client";
@@ -83,6 +89,7 @@ export function EmailMessage({
   refetch,
   showReplyButton,
   showReplyBar = false,
+  replyStatus,
   defaultComposeMode,
   defaultReplyAll = false,
   composerOpen = true,
@@ -125,6 +132,8 @@ export function EmailMessage({
    * message replies go to while no composer is open.
    */
   showReplyBar?: boolean;
+  /** A line under the reply bar, such as what Cue is doing about the reply. */
+  replyStatus?: React.ReactNode;
   defaultComposeMode?: ReplyDraftMode;
   /** Opens a default reply addressed to everyone on the message. */
   defaultReplyAll?: boolean;
@@ -385,7 +394,9 @@ export function EmailMessage({
       ref={messageRef}
       data-thread-message-id={message.id}
       data-selected={selected}
-      tabIndex={selected !== undefined || hasOpenComposer ? -1 : undefined}
+      // Focusable from script only: arrow keys, an editor's Escape, and the
+      // earlier-messages row each hand focus to a message.
+      tabIndex={-1}
       aria-current={selected || undefined}
       onFocusCapture={onSelect}
       onClickCapture={onSelect}
@@ -409,11 +420,11 @@ export function EmailMessage({
         }
       }}
       className={cn(
-        "group/message min-w-0 border-l-2 border-transparent outline-none transition-colors focus-within:border-primary",
-        selected && "border-primary",
+        // The rule marks keyboard focus only; a click needs no extra emphasis.
+        "group/message min-w-0 rounded-md border-l-2 border-transparent outline-none transition-colors focus-visible:border-primary",
         expanded
           ? "my-2 px-2 py-3 sm:px-5"
-          : "px-2 py-1.5 hover:bg-muted/40 sm:px-5",
+          : "px-2 py-1.5 hover:bg-muted/50 sm:px-5",
       )}
     >
       <MessageHeader
@@ -421,11 +432,9 @@ export function EmailMessage({
         message={message}
         menu={menu}
         onForward={onForward}
-        onOpenSenderContext={onOpenSenderContext}
         onReply={onReply}
         onReplyAll={onReplyAll}
         onToggle={onToggle}
-        onToggleKeyDown={onMessageKeyDown}
         showDetails={showDetails}
         // The bar below offers the same actions by name.
         showReplyButton={showReplyButton && !replyBarShown}
@@ -437,7 +446,26 @@ export function EmailMessage({
       {expanded && (
         // Aligns the body with the sender's name rather than the avatar.
         <div className="min-w-0 pt-3 sm:pl-9">
-          {showDetails && <EmailDetails message={message} />}
+          {showDetails && (
+            <>
+              <EmailDetails message={message} />
+              {canResearchSender(message, userEmail, onOpenSenderContext) && (
+                <Button
+                  aria-label={`View public profile for ${senderNameOf(message)}`}
+                  className="-mt-2 mb-3 h-auto px-0 text-xs"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenSenderContext?.(message);
+                  }}
+                  size="sm"
+                  variant="link"
+                >
+                  <UserSearchIcon className="mr-1.5 size-3.5" />
+                  View public profile
+                </Button>
+              )}
+            </>
+          )}
 
           {isCalendarInvitationMessage(message) && (
             <CalendarInvitation key={message.id} messageId={message.id} />
@@ -491,6 +519,9 @@ export function EmailMessage({
               onReply={onReply}
               onReplyAll={onReplyAll}
             />
+          )}
+          {replyBarShown && replyStatus && (
+            <div className="mt-2">{replyStatus}</div>
           )}
           {afterBody}
 
@@ -629,9 +660,7 @@ function MessageHeader({
   onReply,
   onReplyAll,
   onForward,
-  onOpenSenderContext,
   onToggle,
-  onToggleKeyDown,
   hasDraft,
   sentMessageOpen,
 }: {
@@ -644,9 +673,7 @@ function MessageHeader({
   onReply: () => void;
   onReplyAll: () => void;
   onForward: () => void;
-  onOpenSenderContext?: (message: ThreadMessage) => void;
   onToggle?: () => void;
-  onToggleKeyDown: React.KeyboardEventHandler<HTMLElement>;
   hasDraft: boolean;
   sentMessageOpen?: SentMessageOpenState;
 }) {
@@ -655,29 +682,12 @@ function MessageHeader({
   const isSent = message.labelIds?.includes(GmailLabel.SENT) ?? false;
   const canReplyAll = canReplyAllTo(message, userEmail);
   const senderEmail = extractEmailAddress(message.headers.from);
-  const senderName = isSent
-    ? "Me"
-    : extractNameFromEmail(message.headers.from) || senderEmail;
+  const senderName = senderNameOf(message);
   const contactPhoto = useContactPhoto({
     email: expanded && !isSent ? senderEmail : null,
     emailAccountId,
   });
   const senderImage = isSent ? emailAccount?.image : contactPhoto;
-  const canResearchSender =
-    Boolean(onOpenSenderContext) &&
-    !isSent &&
-    Boolean(senderEmail) &&
-    !isSameEmailAddress(senderEmail, userEmail);
-
-  // Collapsing is the thread's call, so a row is only interactive once it has
-  // been handed a toggle.
-  const toggleProps: React.ComponentProps<"div"> | undefined = onToggle && {
-    "aria-expanded": expanded,
-    onClick: onToggle,
-    onKeyDown: onToggleKeyDown,
-    role: "button",
-    tabIndex: 0,
-  };
 
   const compose = (open: () => void) => (event: React.MouseEvent) => {
     event.stopPropagation();
@@ -707,63 +717,79 @@ function MessageHeader({
       ? "max-w-40 shrink font-semibold text-foreground"
       : "w-24 shrink-0 font-medium text-secondary-foreground sm:w-28",
   );
+  const identity = (
+    <>
+      {avatar}
+      <span className={senderNameClassName}>{senderName}</span>
+      {!expanded && (
+        <span className="line-clamp-1 min-w-0 flex-1 break-all text-muted-foreground text-sm">
+          {decodeSnippet(message.snippet)}
+        </span>
+      )}
+    </>
+  );
 
   return (
+    // A collapsed row opens from anywhere on it, as the pointer expects; the
+    // toggle button is what keyboards and screen readers use.
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the toggle button inside handles the keyboard
     <div
-      {...toggleProps}
       className={cn(
-        "flex min-w-0 items-center gap-2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        onToggle && "cursor-pointer",
+        "flex min-w-0 items-center gap-2",
+        !expanded && onToggle && "cursor-pointer",
       )}
+      onClick={
+        !expanded && onToggle
+          ? (event) => {
+              if (
+                event.target instanceof Element &&
+                event.target.closest("button, a, [role='menu']")
+              )
+                return;
+              onToggle();
+            }
+          : undefined
+      }
     >
-      {expanded ? (
-        <>
-          <button
-            aria-expanded={showDetails}
-            aria-label={showDetails ? "Hide details" : "Show details"}
-            className="group/details flex min-w-0 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            onClick={toggleDetails}
-            type="button"
-          >
-            {avatar}
-            <span className={senderNameClassName}>{senderName}</span>
-            <span className="hidden min-w-0 truncate text-muted-foreground text-xs sm:block">
-              {recipientSummary(message.headers, userEmail)}
-            </span>
-            <span className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors group-hover/details:bg-muted group-hover/details:text-foreground">
-              {/* One chevron, so it doesn't read as the toolbar's
-                  expand-all control. */}
-              {showDetails ? (
-                <ChevronUpIcon className="size-3.5" />
-              ) : (
-                <ChevronDownIcon className="size-3.5" />
-              )}
-            </span>
-          </button>
-          {canResearchSender && (
-            <Tooltip content="View public profile">
-              <Button
-                aria-label={`View public profile for ${senderName}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onOpenSenderContext?.(message);
-                }}
-                size="iconXs"
-                variant="ghostMuted"
-              >
-                <UserSearchIcon className="size-3.5" />
-              </Button>
-            </Tooltip>
+      {onToggle ? (
+        <button
+          aria-expanded={expanded}
+          className={cn(
+            "flex min-w-0 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            !expanded && "flex-1",
           )}
-        </>
+          data-message-toggle
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggle();
+          }}
+          type="button"
+        >
+          {identity}
+        </button>
       ) : (
-        <>
-          {avatar}
-          <span className={senderNameClassName}>{senderName}</span>
-          <span className="min-w-0 flex-1 truncate text-muted-foreground text-sm">
-            {decodeSnippet(message.snippet)}
+        <div className="flex min-w-0 items-center gap-2">{identity}</div>
+      )}
+      {expanded && (
+        <button
+          aria-expanded={showDetails}
+          aria-label={showDetails ? "Hide details" : "Show details"}
+          className="group/details flex min-w-0 items-center gap-1 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={toggleDetails}
+          type="button"
+        >
+          <span className="hidden min-w-0 truncate text-muted-foreground text-xs sm:block">
+            {recipientSummary(message.headers, userEmail)}
           </span>
-        </>
+          <span className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors group-hover/details:bg-muted group-hover/details:text-foreground">
+            <ChevronDownIcon
+              className={cn(
+                "size-3.5 transition-transform",
+                showDetails && "rotate-180",
+              )}
+            />
+          </span>
+        </button>
       )}
 
       {hasDraft &&
@@ -774,53 +800,106 @@ function MessageHeader({
         )}
 
       <div className="ml-auto flex shrink-0 items-center gap-2">
-        {(showReplyButton || menu) && (
+        {(showReplyButton || menu || (expanded && onToggle)) && (
           <span
             className={cn(
-              "flex shrink-0 items-center",
-              // An open message keeps its actions in view; collapsed rows
-              // reveal theirs on hover so the thread stays easy to scan.
-              !expanded &&
-                "transition-opacity focus-within:opacity-100 group-hover/message:opacity-100 has-[[data-state=open]]:opacity-100 sm:opacity-0",
+              "shrink-0 items-center",
+              // An open message keeps its actions in view. Collapsed rows
+              // reveal theirs on hover, and on phones not at all: tapping the
+              // row opens it, so the thread stays easy to scan.
+              expanded
+                ? "flex"
+                : "hidden transition-opacity focus-within:opacity-100 group-hover/message:opacity-100 has-[[data-state=open]]:opacity-100 sm:flex sm:opacity-0",
             )}
           >
             {showReplyButton && (
               <>
-                <Tooltip shortcuts={["reply"]}>
-                  <Button
-                    onClick={compose(onReply)}
-                    size="iconXs"
-                    variant="ghostMuted"
-                  >
-                    <ReplyIcon className="size-3.5" />
-                    <span className="sr-only">Reply</span>
-                  </Button>
-                </Tooltip>
-                {canReplyAll && (
-                  <Tooltip shortcuts={["replyAll"]}>
+                <span className="hidden items-center sm:flex">
+                  <Tooltip shortcuts={["reply"]}>
                     <Button
-                      onClick={compose(onReplyAll)}
+                      onClick={compose(onReply)}
                       size="iconXs"
                       variant="ghostMuted"
                     >
-                      <ReplyAllIcon className="size-3.5" />
-                      <span className="sr-only">Reply all</span>
+                      <ReplyIcon className="size-3.5" />
+                      <span className="sr-only">Reply</span>
                     </Button>
                   </Tooltip>
-                )}
-                <Tooltip shortcuts={["forward"]}>
-                  <Button
-                    onClick={compose(onForward)}
-                    size="iconXs"
-                    variant="ghostMuted"
+                  {canReplyAll && (
+                    <Tooltip shortcuts={["replyAll"]}>
+                      <Button
+                        onClick={compose(onReplyAll)}
+                        size="iconXs"
+                        variant="ghostMuted"
+                      >
+                        <ReplyAllIcon className="size-3.5" />
+                        <span className="sr-only">Reply all</span>
+                      </Button>
+                    </Tooltip>
+                  )}
+                  <Tooltip shortcuts={["forward"]}>
+                    <Button
+                      onClick={compose(onForward)}
+                      size="iconXs"
+                      variant="ghostMuted"
+                    >
+                      <ForwardIcon className="size-3.5" />
+                      <span className="sr-only">Forward</span>
+                    </Button>
+                  </Tooltip>
+                </span>
+                {/* Phones get one glyph for the three, so the sender's name
+                    keeps its room. */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      aria-label="Reply options"
+                      className="sm:hidden"
+                      onClick={(event) => event.stopPropagation()}
+                      size="iconXs"
+                      variant="ghostMuted"
+                    >
+                      <ReplyIcon className="size-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="end"
+                    onClick={(event) => event.stopPropagation()}
                   >
-                    <ForwardIcon className="size-3.5" />
-                    <span className="sr-only">Forward</span>
-                  </Button>
-                </Tooltip>
+                    <DropdownMenuItem onSelect={onReply}>
+                      <ReplyIcon className="mr-2 size-4" />
+                      Reply
+                    </DropdownMenuItem>
+                    {canReplyAll && (
+                      <DropdownMenuItem onSelect={onReplyAll}>
+                        <ReplyAllIcon className="mr-2 size-4" />
+                        Reply all
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuItem onSelect={onForward}>
+                      <ForwardIcon className="mr-2 size-4" />
+                      Forward
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </>
             )}
             {menu}
+            {expanded && onToggle && (
+              <Tooltip content="Collapse">
+                <Button
+                  aria-label="Collapse message"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggle();
+                  }}
+                  size="iconXs"
+                  variant="ghostMuted"
+                >
+                  <ChevronUpIcon className="size-3.5" />
+                </Button>
+              </Tooltip>
+            )}
           </span>
         )}
         {isSent &&
@@ -916,7 +995,13 @@ function ReplyPanel({
 
     // Wait for the reply panel layout before scrolling.
     const scrollTimeout = setTimeout(() => {
-      replyRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+      replyRef.current?.scrollIntoView({
+        behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)")
+          .matches
+          ? "auto"
+          : "smooth",
+        block: "end",
+      });
     }, 500);
 
     return () => clearTimeout(scrollTimeout);
@@ -1271,6 +1356,26 @@ function ReplyBar({
         </Button>
       </Tooltip>
     </div>
+  );
+}
+
+function senderNameOf(message: ParsedMessage) {
+  if (message.labelIds?.includes(GmailLabel.SENT)) return "Me";
+  const senderEmail = extractEmailAddress(message.headers.from);
+  return extractNameFromEmail(message.headers.from) || senderEmail;
+}
+
+function canResearchSender(
+  message: ParsedMessage,
+  userEmail: string,
+  onOpenSenderContext?: (message: ThreadMessage) => void,
+) {
+  const senderEmail = extractEmailAddress(message.headers.from);
+  return (
+    Boolean(onOpenSenderContext) &&
+    !message.labelIds?.includes(GmailLabel.SENT) &&
+    Boolean(senderEmail) &&
+    !isSameEmailAddress(senderEmail, userEmail)
   );
 }
 

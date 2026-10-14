@@ -58,7 +58,8 @@ export function EmailThread({
   renderMessageMenu,
   enableMessageNavigation = false,
   afterLatestMessage,
-  idleReplyArea,
+  replyStatus,
+  earlierMessages,
 }: {
   messages: ThreadMessage[];
   missingBodyIds?: Set<string>;
@@ -88,8 +89,10 @@ export function EmailThread({
   enableMessageNavigation?: boolean;
   /** Shown under the newest message, above where its reply is written. */
   afterLatestMessage?: ReactNode;
-  /** Shown after the thread while no reply or draft is open. */
-  idleReplyArea?: ReactNode;
+  /** A line under the newest message's reply actions. */
+  replyStatus?: ReactNode;
+  /** Set while older messages exist that haven't been loaded yet. */
+  earlierMessages?: { loading: boolean; onLoad: () => unknown };
   renderMessageMenu?: (message: ThreadMessage) => ReactNode;
   renderToolbar?: (controls: {
     allExpanded: boolean;
@@ -311,15 +314,31 @@ export function EmailThread({
   const allExpanded = organizedMessages.every(isRowExpanded);
 
   // Like Gmail, a run of read messages between the first and the newest folds
-  // into one row that says how many it holds.
+  // into one row that says how many it holds. While older messages are still
+  // to load, everything before the newest folds into that row, and opening it
+  // loads them too: one way to see the rest of the conversation.
   const [showEarlier, setShowEarlier] = useState(false);
-  const middleRows = organizedMessages.slice(1, -1);
+  const foldableRows = earlierMessages
+    ? organizedMessages.slice(0, -1)
+    : organizedMessages.slice(1, -1);
   const foldedIds =
     !showEarlier &&
-    middleRows.length >= MIN_FOLDED_MESSAGES &&
-    !middleRows.some(isRowExpanded)
-      ? new Set(middleRows.map(({ message }) => message.id))
+    foldableRows.length >= (earlierMessages ? 1 : MIN_FOLDED_MESSAGES) &&
+    !foldableRows.some(isRowExpanded)
+      ? new Set(foldableRows.map(({ message }) => message.id))
       : undefined;
+  const showEarlierMessages = () => {
+    // The row goes away once it has done its job, so focus moves to the
+    // first message it revealed rather than falling back to the page.
+    const focusId = foldedIds
+      ? foldableRows[0]?.message.id
+      : organizedMessages[0]?.message.id;
+    flushSync(() => setShowEarlier(true));
+    earlierMessages?.onLoad();
+    if (!focusId) return;
+    setSelectedMessageId(focusId);
+    focusMessage(focusId);
+  };
 
   const toggleAll = () => {
     if (allExpanded) setShowEarlier(false);
@@ -352,14 +371,17 @@ export function EmailThread({
     // Arrowing into the folded row unfolds it, so the message can take focus.
     if (foldedIds?.has(nextId)) flushSync(() => setShowEarlier(true));
     setSelectedMessageId(nextId);
+    focusMessage(nextId);
+  };
+  function focusMessage(messageId: string) {
     const element = Array.from(
       threadRef.current?.querySelectorAll<HTMLElement>(
         "[data-thread-message-id]",
       ) ?? [],
-    ).find((item) => item.dataset.threadMessageId === nextId);
+    ).find((item) => item.dataset.threadMessageId === messageId);
     element?.focus({ preventScroll: true });
-    element?.scrollIntoView({ block: "nearest" });
-  };
+    element?.scrollIntoView?.({ block: "nearest" });
+  }
   useHotkeys(
     "arrowup,arrowdown",
     (event) => selectRelativeMessage(event.key === "ArrowUp" ? -1 : 1),
@@ -432,13 +454,20 @@ export function EmailThread({
         )}
 
         <ul className="pt-1">
+          {earlierMessages && !foldedIds && (
+            <EarlierMessagesRow
+              loading={earlierMessages.loading}
+              onShow={showEarlierMessages}
+            />
+          )}
           {organizedMessages.map(({ message, draftMessages, outgoing }) => {
             if (foldedIds?.has(message.id))
-              return message.id === middleRows[0]?.message.id ? (
-                <FoldedMessagesRow
-                  count={foldedIds.size}
+              return message.id === foldableRows[0]?.message.id ? (
+                <EarlierMessagesRow
+                  count={earlierMessages ? undefined : foldedIds.size}
                   key="folded-messages"
-                  onShow={() => setShowEarlier(true)}
+                  loading={earlierMessages?.loading ?? false}
+                  onShow={showEarlierMessages}
                 />
               ) : null;
             const sendOperationId =
@@ -566,17 +595,14 @@ export function EmailThread({
                   showReplyButton &&
                   !message.labelIds?.includes(GmailLabel.DRAFT)
                 }
-                // Cue's own reply area, when it has one, already offers Reply.
-                showReplyBar={
-                  message.id === replyAnchor?.id &&
-                  !openComposer &&
-                  !idleReplyArea
+                showReplyBar={message.id === replyAnchor?.id && !openComposer}
+                replyStatus={
+                  message.id === replyAnchor?.id ? replyStatus : undefined
                 }
               />
             );
           })}
         </ul>
-        {!openComposer && idleReplyArea}
         {threadId && (
           <ThreadDeliveryStatus
             emailAccountId={emailAccountId}
@@ -602,27 +628,40 @@ export function EmailThread({
   );
 }
 
-function FoldedMessagesRow({
+/**
+ * The one way to reveal the rest of a conversation: the messages folded here,
+ * and any older ones still to load. `count` is left out when it isn't known.
+ */
+function EarlierMessagesRow({
   count,
+  loading,
   onShow,
 }: {
-  count: number;
+  count?: number;
+  loading: boolean;
   onShow: () => void;
 }) {
+  let label =
+    count === undefined ? "Show earlier messages" : `${count} earlier messages`;
+  if (loading) label = "Loading earlier messages…";
   return (
-    <li className="px-2 py-1.5 sm:px-5">
+    <li className="flex items-center gap-3 px-2 py-1.5 sm:px-5">
+      <span aria-hidden className="h-px flex-1 bg-border" />
       <button
-        aria-label={`Show ${count} earlier messages`}
-        className="flex w-full min-w-0 items-center gap-2 rounded-md text-left text-muted-foreground text-sm outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-        onClick={onShow}
+        // Not `disabled`: that would drop keyboard focus while it loads.
+        aria-disabled={loading || undefined}
+        aria-label={
+          count === undefined || loading
+            ? undefined
+            : `Show ${count} earlier messages`
+        }
+        className="shrink-0 rounded-md px-2 py-1 font-medium text-muted-foreground text-xs outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-disabled:pointer-events-none"
+        onClick={loading ? undefined : onShow}
         type="button"
       >
-        <span className="flex size-7 shrink-0 items-center justify-center rounded-full border border-border bg-background font-medium text-foreground text-xs tabular-nums">
-          {count}
-        </span>
-        <span className="font-medium">{count} earlier messages</span>
-        <ChevronsUpDownIcon className="size-3.5" />
+        {label}
       </button>
+      <span aria-hidden className="h-px flex-1 bg-border" />
     </li>
   );
 }
