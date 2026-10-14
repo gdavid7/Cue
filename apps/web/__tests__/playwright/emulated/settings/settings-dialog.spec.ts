@@ -29,7 +29,7 @@ test("opens settings in a dialog from a url and from the nav", async ({
     .getByRole("button")
     .filter({ hasText: email })
     .click();
-  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
   await expect(page).toHaveURL(/settings=open/);
   await expect(dialogHeading).toBeVisible();
 

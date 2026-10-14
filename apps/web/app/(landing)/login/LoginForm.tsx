@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { usePostHog } from "posthog-js/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button as UIButton } from "@/components/ui/button";
 import { signIn, signInWithSocialRedirect } from "@/utils/auth-client";
 import {
@@ -16,6 +16,7 @@ import { toastError } from "@/components/Toast";
 import { normalizeInternalPath } from "@/utils/path";
 import { buildRedirectUrl, redirectToSafeUrl } from "@/utils/redirect";
 import { createClientLogger } from "@/utils/logger-client";
+import { finishPendingLocalMailboxWipe } from "@/utils/mail-engine/wipe-local-mailbox";
 import type { LoginProvider } from "@/utils/oauth/login-providers";
 import {
   trackAuthFailure,
@@ -57,6 +58,13 @@ export function LoginForm({
   const [loadingApple, setLoadingApple] = useState(false);
   const [loadingGoogle, setLoadingGoogle] = useState(false);
   const [loadingMicrosoft, setLoadingMicrosoft] = useState(false);
+
+  // Sign-out lands here and stops waiting on a slow local mailbox wipe, so
+  // finish it now rather than leave the previous user's mail on this device
+  // until someone opens the mail app again.
+  useEffect(() => {
+    finishPendingLocalMailboxWipe();
+  }, []);
 
   const handleGoogleSignIn = async () => {
     setLoadingGoogle(true);

@@ -65,6 +65,9 @@ vi.mock("@/utils/redirect", async (importOriginal) => {
 });
 
 import { LoginForm } from "@/app/(landing)/login/LoginForm";
+import type { MailClient } from "@inboxzero/mail-core/engine";
+import { setActiveMailClient } from "@/utils/mail-engine/active-client";
+import { wipeLocalMailbox } from "@/utils/mail-engine/wipe-local-mailbox";
 
 describe("LoginForm", () => {
   beforeEach(() => {
@@ -223,5 +226,29 @@ describe("LoginForm", () => {
       });
     });
     expect(mockSignInSocial).not.toHaveBeenCalled();
+  });
+
+  it("finishes a local mailbox wipe that sign-out left before it completed", async () => {
+    // The page leaves while the mail engine is still closing.
+    setActiveMailClient({
+      close: () => new Promise(() => {}),
+    } as unknown as MailClient);
+    wipeLocalMailbox();
+    const wipeMailbox = vi.fn().mockResolvedValue(undefined);
+    window.inboxZeroDesktop = { startAuth: vi.fn(), wipeMailbox };
+
+    render(<LoginForm enabledProviders={["google"]} useGoogleOauthEmulator />);
+
+    await waitFor(() => expect(wipeMailbox).toHaveBeenCalledTimes(1));
+  });
+
+  it("leaves local mail alone when no sign-out wipe is pending", async () => {
+    const wipeMailbox = vi.fn().mockResolvedValue(undefined);
+    window.inboxZeroDesktop = { startAuth: vi.fn(), wipeMailbox };
+
+    render(<LoginForm enabledProviders={["google"]} useGoogleOauthEmulator />);
+
+    await screen.findByRole("button", { name: /continue with google/i });
+    expect(wipeMailbox).not.toHaveBeenCalled();
   });
 });

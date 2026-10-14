@@ -29,7 +29,7 @@ test("signs out in one click from Settings", async ({ page }) => {
   await openSignedInMail(page);
 
   await accountMenuButton(page).click();
-  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
   const settings = page.getByRole("dialog");
   await expect(
     settings.getByRole("heading", { name: "Settings", exact: true }),
