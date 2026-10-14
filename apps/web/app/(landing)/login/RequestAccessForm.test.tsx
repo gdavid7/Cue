@@ -28,7 +28,7 @@ describe("RequestAccessForm", () => {
     mockRequestAccess.mockResolvedValue({ data: { ok: true } });
     render(<RequestAccessForm />);
 
-    fireEvent.change(screen.getByLabelText("Gmail address"), {
+    fireEvent.change(screen.getByLabelText("Google account email"), {
       target: { value: " friend@gmail.com " },
     });
     fireEvent.click(screen.getByRole("button", { name: "Request access" }));
@@ -48,7 +48,7 @@ describe("RequestAccessForm", () => {
   it("asks for a valid address before sending anything", async () => {
     render(<RequestAccessForm />);
 
-    fireEvent.change(screen.getByLabelText("Gmail address"), {
+    fireEvent.change(screen.getByLabelText("Google account email"), {
       target: { value: "not-an-email" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Request access" }));
@@ -63,7 +63,7 @@ describe("RequestAccessForm", () => {
     });
     render(<RequestAccessForm />);
 
-    fireEvent.change(screen.getByLabelText("Gmail address"), {
+    fireEvent.change(screen.getByLabelText("Google account email"), {
       target: { value: "friend@gmail.com" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Request access" }));

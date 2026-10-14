@@ -185,15 +185,25 @@ describe("requestAccessAction", () => {
     });
   });
 
-  // The form asks for the Gmail address people will sign in with.
-  it.each([
-    "someone@outlook.com",
-    "someone@school.edu",
-  ])("refuses a non-Gmail address (%s) without recording it", async (email) => {
-    const result = await requestAccessAction({ email });
+  // School and work Google accounts sign in with Google too.
+  it("takes a school Google address", async () => {
+    prisma.accessRequest.findUnique.mockResolvedValue(null);
+    prisma.accessRequest.create.mockResolvedValue({ id: "r4" } as never);
+
+    const result = await requestAccessAction({ email: "Student@School.edu" });
+
+    expect(result?.data).toEqual({ ok: true });
+    expect(prisma.accessRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ email: "student@school.edu" }),
+      }),
+    );
+  });
+
+  it("refuses something that isn't an email without recording it", async () => {
+    const result = await requestAccessAction({ email: "not-an-email" });
 
     expect(result?.validationErrors).toBeDefined();
-    expect(result?.data).toBeUndefined();
     expect(prisma.accessRequest.create).not.toHaveBeenCalled();
     expect(mockCheckRateLimit).not.toHaveBeenCalled();
   });

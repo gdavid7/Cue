@@ -1,16 +1,7 @@
 import { z } from "zod";
-import { GMAIL_DOMAINS } from "@/utils/access/config";
 
 export const requestAccessBody = z.object({
-  email: z
-    .string()
-    .trim()
-    .email("Enter a valid email address")
-    .refine(
-      (email) =>
-        GMAIL_DOMAINS.includes(email.split("@").pop()?.toLowerCase() ?? ""),
-      "Enter a Gmail address (ending in @gmail.com)",
-    ),
+  email: z.string().trim().email("Enter a valid email address"),
   // Honeypot: hidden from people, filled in by bots.
   website: z.string().optional(),
 });

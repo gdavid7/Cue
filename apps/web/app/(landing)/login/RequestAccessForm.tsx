@@ -90,7 +90,7 @@ export function RequestAccessForm() {
         Request access
       </h2>
       <div className="space-y-1.5">
-        <Label htmlFor="request-access-email">Gmail address</Label>
+        <Label htmlFor="request-access-email">Google account email</Label>
         <Input
           id="request-access-email"
           type="email"
@@ -98,7 +98,7 @@ export function RequestAccessForm() {
           autoComplete="email"
           autoCapitalize="none"
           spellCheck={false}
-          placeholder="you@gmail.com"
+          placeholder="you@gmail.com or you@school.edu"
           aria-invalid={errors.email ? true : undefined}
           aria-describedby={
             errors.email
