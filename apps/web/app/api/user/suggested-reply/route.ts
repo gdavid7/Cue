@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isExaSearchEnabled } from "@/utils/exa/search";
 import { withEmailProvider } from "@/utils/middleware";
+import prisma from "@/utils/prisma";
 import {
   getCachedSuggestedReply,
   suggestReply,
@@ -32,23 +33,29 @@ export const GET = withEmailProvider(
       cachedFor: searchParams.get("cachedFor"),
     });
 
-    const suggestion = cachedFor
-      ? await getCachedSuggestedReply({
-          emailAccountId: request.auth.emailAccountId,
-          threadId,
-          messageId: cachedFor,
-        })
-      : await suggestReply({
-          emailAccountId: request.auth.emailAccountId,
-          userEmail: request.auth.email,
-          threadId,
-          emailProvider: request.emailProvider,
-          logger: request.logger,
-          searchWeb: web === "1",
-        });
+    const [suggestion, settings] = await Promise.all([
+      cachedFor
+        ? getCachedSuggestedReply({
+            emailAccountId: request.auth.emailAccountId,
+            threadId,
+            messageId: cachedFor,
+          })
+        : suggestReply({
+            emailAccountId: request.auth.emailAccountId,
+            userEmail: request.auth.email,
+            threadId,
+            emailProvider: request.emailProvider,
+            logger: request.logger,
+            searchWeb: web === "1",
+          }),
+      prisma.emailAccount.findUnique({
+        where: { id: request.auth.emailAccountId },
+        select: { webLookupEnabled: true },
+      }),
+    ]);
     return NextResponse.json({
       suggestion,
-      canSearchWeb: isExaSearchEnabled(),
+      canSearchWeb: isExaSearchEnabled() && Boolean(settings?.webLookupEnabled),
     } satisfies GetSuggestedReplyResponse);
   },
 );

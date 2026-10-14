@@ -5,6 +5,7 @@ import { SafeError } from "@/utils/error";
 import { getEmailProviderRateLimitState } from "@/utils/email/rate-limit";
 import type { Logger } from "@/utils/logger";
 import { resolveSensitiveDataPolicy } from "@/utils/dlp/policy.server";
+import { isExaSearchEnabled } from "@/utils/exa/search";
 
 export type EmailAccountFullResponse = Awaited<
   ReturnType<typeof getEmailAccount>
@@ -31,6 +32,7 @@ async function getEmailAccount({
       sensitiveDataPolicy: true,
       draftReplyConfidence: true,
       allowHiddenAiDraftLinks: true,
+      webLookupEnabled: true,
       timezone: true,
       calendarBookingLink: true,
       signature: true,
@@ -59,6 +61,8 @@ async function getEmailAccount({
     sensitiveDataPolicy: resolveSensitiveDataPolicy(
       emailAccount.sensitiveDataPolicy,
     ),
+    // Web lookup is only offered where the deployment can search the web.
+    webLookupAvailable: isExaSearchEnabled(),
     providerRateLimit: providerRateLimit
       ? {
           provider: providerRateLimit.provider,

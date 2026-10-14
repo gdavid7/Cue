@@ -21,6 +21,12 @@ import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { getTrackedThreads } from "@/utils/reply-tracker/tracked-threads";
 import { getRuleLabel } from "@/utils/rule/consts";
+import {
+  getUserTier,
+  hasAiAccess,
+  isPremiumRecord,
+  premiumEntitlementSelect,
+} from "@/utils/premium";
 
 const LIST_LIMIT = 10;
 const HANDLED_WINDOW_DAYS = 7;
@@ -130,7 +136,7 @@ export async function getHomeData({
       return [] as EmailThread[];
     });
 
-  const [needsYou, waiting, handledByLabel, inbox, agentTasks] =
+  const [needsYou, waiting, handledByLabel, inbox, agentTasks, cue] =
     await Promise.all([
       // An archived conversation is off the user's plate even before they reply.
       tracked(ThreadTrackerType.NEEDS_REPLY, "needs-you", true),
@@ -144,6 +150,7 @@ export async function getHomeData({
       // Everything still in the inbox, so nothing is only reachable through AI triage.
       list({ labelIds: ["INBOX"] }, "inbox"),
       getAgentTasks({ emailAccountId, now }),
+      getCueStatus(emailAccountId),
     ]);
   const handled = uniqueByThreadId(handledByLabel.flat());
   // Each thread shows once on Today: sorted mail has its own section.
@@ -175,6 +182,8 @@ export async function getHomeData({
         labelId: id,
         name: labelNames.get(id) ?? "",
         count: handledByLabel[index]?.length ?? 0,
+        // Each label's list is capped, so a full one means "at least".
+        capped: (handledByLabel[index]?.length ?? 0) >= LIST_LIMIT,
       }))
       .filter((label) => label.count > 0),
     alsoInInbox: inbox
@@ -182,6 +191,8 @@ export async function getHomeData({
       .map(toRow)
       .filter(isDefined),
     agentTasks,
+    // Whether an empty lane means "nothing there" or "nobody has looked".
+    cue,
     stats: {
       needsYou: needsYouRows.length,
       estimatedMinutes: needsYouRows.length * MINUTES_PER_REPLY,
@@ -198,6 +209,47 @@ export async function getHomeData({
 }
 
 const PRIORITY_ORDER: Record<Priority, number> = { high: 0, medium: 1, low: 2 };
+
+/**
+ * Whether Cue is in a position to say what needs a reply: it has AI access,
+ * the To Reply rule is on, and it has read at least some of this mailbox.
+ */
+async function getCueStatus(emailAccountId: string) {
+  const [account, firstRun, firstTracker] = await Promise.all([
+    prisma.emailAccount.findUnique({
+      where: { id: emailAccountId },
+      select: {
+        user: {
+          select: {
+            aiApiKey: true,
+            premium: { select: premiumEntitlementSelect },
+          },
+        },
+        rules: {
+          where: { systemType: SystemType.TO_REPLY },
+          select: { enabled: true },
+        },
+      },
+    }),
+    prisma.executedRule.findFirst({
+      where: { emailAccountId },
+      select: { id: true },
+    }),
+    prisma.threadTracker.findFirst({
+      where: { emailAccountId },
+      select: { id: true },
+    }),
+  ]);
+  const premium = account?.user.premium;
+
+  return {
+    aiAccess:
+      isPremiumRecord(premium) &&
+      hasAiAccess(getUserTier(premium), !!account?.user.aiApiKey),
+    replyTracking: account?.rules.some((rule) => rule.enabled) ?? false,
+    hasReadMail: Boolean(firstRun || firstTracker),
+  };
+}
 
 /**
  * What the assistant is doing right now: AI reply drafts waiting for review,

@@ -19,7 +19,7 @@ export function AllRulesDisabledBanner() {
       variant="blue"
       icon={<SettingsIcon className="h-5 w-5" />}
       title="All rules are disabled"
-      description="Your AI Assistant isn't processing emails because all rules are disabled. Turn on the rules you want below to get started."
+      description="Cue isn't sorting your mail because every rule is off. Turn on the rules you want below."
     />
   );
 }

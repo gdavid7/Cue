@@ -52,11 +52,11 @@ export function MultiRuleSetting() {
           <span>Multi-rule selection</span>
           <TooltipExplanation
             side="top"
-            text={`Turning this off stops the AI from intentionally choosing multiple custom rules for one email. ${BRAND_NAME} can still apply more than one rule in a few special cases.`}
+            text={`Turning this off stops ${BRAND_NAME} from choosing several custom rules for one email. It can still apply more than one rule in a few special cases.`}
           />
         </div>
       }
-      description="Allow the AI to select multiple rules for a single email when appropriate."
+      description={`Allow ${BRAND_NAME} to apply more than one rule to an email when it fits.`}
       right={
         <LoadingContent
           loading={isLoading}

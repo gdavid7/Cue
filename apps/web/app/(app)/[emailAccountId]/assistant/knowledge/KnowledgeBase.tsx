@@ -96,8 +96,7 @@ export function KnowledgeBase() {
                         <EmptyTitle>No knowledge entries yet</EmptyTitle>
                         <EmptyDescription>
                           Add information about your work, projects, or
-                          preferences. The assistant uses this when drafting
-                          replies.
+                          preferences. Cue uses this when drafting replies.
                         </EmptyDescription>
                       </EmptyHeader>
                     </Empty>

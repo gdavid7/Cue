@@ -1,5 +1,4 @@
 import { Fragment, useMemo, type ReactNode } from "react";
-import { Overview } from "./overview";
 import { MessagePart } from "./message-part";
 import { MessagingChannelHint } from "./messaging-channel-hint";
 import type { UseChatHelpers } from "@ai-sdk/react";
@@ -22,7 +21,6 @@ interface MessagesProps {
   messages: Array<ChatMessage>;
   persistedMessageIds: Set<string>;
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
-  setInput: (input: string) => void;
   setMessages: UseChatHelpers<ChatMessage>["setMessages"];
   status: UseChatHelpers<ChatMessage>["status"];
 }
@@ -31,7 +29,6 @@ export function Messages({
   status,
   messages,
   persistedMessageIds,
-  setInput,
   footer,
 }: MessagesProps) {
   const disableConfirm = status === "streaming" || status === "submitted";
@@ -49,8 +46,6 @@ export function Messages({
           scrollClassName="![scrollbar-gutter:auto] scrollbar-thin"
         >
           <div className="flex flex-1 flex-col gap-4">
-            {messages.length === 0 && <Overview setInput={setInput} />}
-
             {messages.map((message, index) => (
               <Fragment key={message.id}>
                 <Message from={message.role}>

@@ -191,7 +191,7 @@ function FollowUpSettingsDialog({
     updateFollowUpSettingsAction.bind(null, emailAccountId),
     {
       onSuccess: () => {
-        toastSuccess({ description: "Settings saved!" });
+        toastSuccess({ description: "Follow-up settings saved" });
         onSuccess();
       },
       onError: (error) => {
@@ -343,7 +343,7 @@ function showScanCompleteToast(
       emailAddress,
       `label:${FOLLOW_UP_LABEL}`,
     );
-    toast.success("Scan complete!", {
+    toast.success("Scan complete", {
       description: "View your follow-ups in Gmail.",
       action: {
         label: "View",
@@ -351,7 +351,7 @@ function showScanCompleteToast(
       },
     });
   } else {
-    toast.success("Scan complete!", {
+    toast.success("Scan complete", {
       description: `Look for the "${FOLLOW_UP_LABEL}" category in Outlook.`,
     });
   }

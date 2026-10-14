@@ -24,7 +24,7 @@ export function DraftKnowledgeSetting() {
   return (
     <SettingCard
       title="Draft knowledge base"
-      description="Information the assistant uses when writing replies."
+      description="Information Cue uses when writing replies."
       right={
         isEnabled ? (
           kb
@@ -50,7 +50,7 @@ function KnowledgeDialog({ enabled }: { enabled: boolean }) {
         <DialogHeader>
           <DialogTitle>Draft knowledge base</DialogTitle>
           <DialogDescription>
-            This is used to help the assistant draft replies.
+            Cue uses this when it drafts replies.
           </DialogDescription>
         </DialogHeader>
         <KnowledgeBase />

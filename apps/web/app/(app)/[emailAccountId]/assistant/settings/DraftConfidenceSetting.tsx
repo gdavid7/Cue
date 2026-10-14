@@ -101,7 +101,7 @@ export function DraftConfidenceSetting() {
   return (
     <SettingCard
       title="Draft confidence"
-      description="How sure should the AI be before drafting a reply?"
+      description="How sure should Cue be before drafting a reply?"
       right={
         <LoadingContent
           loading={isLoading}

@@ -1,5 +1,4 @@
 import { Suspense } from "react";
-import { SparklesIcon } from "lucide-react";
 import { PermissionsCheck } from "@/app/(app)/[emailAccountId]/PermissionsCheck";
 import { EmailLabelsProvider } from "@/providers/EmailLabelsProvider";
 import { checkUserOwnsEmailAccount } from "@/utils/email-account";
@@ -7,7 +6,6 @@ import { AIChatButton } from "@/app/(app)/[emailAccountId]/assistant/AIChatButto
 import { AllRulesDisabledBanner } from "@/app/(app)/[emailAccountId]/assistant/AllRulesDisabledBanner";
 import { PageWrapper } from "@/components/PageWrapper";
 import { PageHeader } from "@/components/PageHeader";
-import { DismissibleVideoCard } from "@/components/VideoCard";
 import { AutomationTabs } from "@/app/(app)/[emailAccountId]/automation/AutomationTabs";
 
 export const maxDuration = 300; // Applies to the actions
@@ -29,11 +27,11 @@ export default async function AutomationPage({
           <div className="flex items-center justify-between">
             <div>
               <PageHeader
-                title="AI Assistant"
+                title="Rules"
                 video={{
-                  title: "Getting started with AI Personal Assistant",
+                  title: "Getting started with Rules",
                   description:
-                    "Learn how to use the AI Personal Assistant to automatically label, archive, and more.",
+                    "Learn how to set up rules so Cue labels, archives and drafts for you.",
                   muxPlaybackId:
                     "TYo3SIMdhg008x022H79400CxeRSiB6mLyuwHx8Szc00Rec",
                 }}
@@ -46,19 +44,6 @@ export default async function AutomationPage({
           </div>
 
           <AllRulesDisabledBanner />
-
-          <DismissibleVideoCard
-            className="my-4"
-            icon={<SparklesIcon className="h-5 w-5" />}
-            title="Getting started with AI Assistant"
-            description="Learn how to use the AI Assistant to automatically label, archive, and more."
-            muxPlaybackId="TYo3SIMdhg008x022H79400CxeRSiB6mLyuwHx8Szc00Rec"
-            storageKey="ai-assistant-onboarding-video"
-            videoAnalytics={{
-              page: "automation",
-              surface: "dismissible_card",
-            }}
-          />
 
           <AutomationTabs />
         </PageWrapper>

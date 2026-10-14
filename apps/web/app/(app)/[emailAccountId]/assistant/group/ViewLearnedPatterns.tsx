@@ -153,7 +153,7 @@ const AddGroupItemForm = ({
           description: `Failed to add pattern. ${result.serverError || ""}`,
         });
       } else {
-        toastSuccess({ description: "Pattern added!" });
+        toastSuccess({ description: "Pattern added" });
       }
       mutate();
       onClose();
@@ -295,7 +295,7 @@ function GroupItemList({
                   {isCreatedRecently ||
                     (isUpdatedRecently && (
                       <Badge variant="green" className="mr-1">
-                        {isCreatedRecently ? "New!" : "Updated"}
+                        {isCreatedRecently ? "New" : "Updated"}
                       </Badge>
                     ))}
 
@@ -324,7 +324,7 @@ function GroupItemList({
                       });
                     } else {
                       toastSuccess({
-                        description: "Removed learned pattern!",
+                        description: "Learned pattern removed",
                       });
                       mutate();
                     }
