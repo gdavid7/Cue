@@ -66,7 +66,7 @@ test("creates, authorizes, lists, and revokes an API key", async ({
   await expect(keyRow).toContainText("Read rules");
   await keyRow.getByRole("button", { name: "Revoke" }).click();
   await expect(
-    page.getByText("API key deactivated!", { exact: true }),
+    page.getByText("API key deactivated", { exact: true }),
   ).toBeVisible({ timeout: 60_000 });
   await expect(keyRow).toBeHidden({ timeout: 60_000 });
 

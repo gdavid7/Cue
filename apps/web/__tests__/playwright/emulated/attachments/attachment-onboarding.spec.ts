@@ -37,7 +37,7 @@ test("uses Drive folders to complete auto-file attachment setup", async ({
   await createFolderDialog
     .getByRole("button", { name: "Create folder" })
     .click();
-  await expect(page.getByText("Folder created!", { exact: true })).toBeVisible({
+  await expect(page.getByText("Folder created", { exact: true })).toBeVisible({
     timeout: 60_000,
   });
   await expect(page.getByText(createdFolderName, { exact: true })).toBeVisible({
