@@ -257,10 +257,17 @@ export function getDesktopSessionRestoreUrl(
   return parsed.toString();
 }
 
+// The web app's old mail address; it still redirects to the readable one.
 const MAIL_ACCOUNT_PATH = /^\/([^/]+)\/mail\/?$/u;
+// `/mail/u/{n}/{view}`: mail addressed by the account's position.
+const MAIL_INDEX_PATH = /^\/mail\/u\/(\d+)(?:\/.*)?$/u;
 
 function isDesktopMailPath(pathname: string): boolean {
-  return pathname === "/mail" || MAIL_ACCOUNT_PATH.test(pathname);
+  return (
+    pathname === "/mail" ||
+    MAIL_ACCOUNT_PATH.test(pathname) ||
+    MAIL_INDEX_PATH.test(pathname)
+  );
 }
 
 export function getDesktopMailAccountId(
@@ -274,6 +281,10 @@ export function getDesktopMailAccountId(
     return null;
   }
   if (parsed.origin !== appOrigin) return null;
+  // Readable addresses name the account by position, which keys a window as
+  // well as an id does.
+  const accountIndex = MAIL_INDEX_PATH.exec(parsed.pathname)?.[1];
+  if (accountIndex !== undefined) return `u/${accountIndex}`;
   return MAIL_ACCOUNT_PATH.exec(parsed.pathname)?.[1] ?? null;
 }
 
