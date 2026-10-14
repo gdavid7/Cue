@@ -9,20 +9,25 @@ const CATCH_UP_DELAY_MS = 90_000;
 
 /**
  * Processes the account's history again shortly after the Gmail quota gate
- * deferred it, so a quiet mailbox does not wait hours for its next push.
- * Deferrals within one delay window share a single delivery, and a delivery
- * does nothing once a later push has caught up.
+ * deferred it, or once Gmail's rate limit on the account lifts, so a quiet
+ * mailbox does not wait hours for its next push. Deferrals within one delay
+ * window share a single delivery, and a delivery does nothing once a later
+ * push has caught up.
  */
 export async function scheduleGmailHistoryCatchUp({
   emailAccountId,
   historyId,
+  retryAt,
   logger,
 }: {
   emailAccountId: string;
   historyId: string;
+  retryAt?: Date;
   logger: Logger;
 }) {
-  const notBefore = new Date(Date.now() + CATCH_UP_DELAY_MS);
+  const notBefore = new Date(
+    Math.max(Date.now() + CATCH_UP_DELAY_MS, retryAt?.getTime() ?? 0),
+  );
   const window = Math.floor(notBefore.getTime() / CATCH_UP_DELAY_MS);
   try {
     const scheduled = await publishToQstashAt({

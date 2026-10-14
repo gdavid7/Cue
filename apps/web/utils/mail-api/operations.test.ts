@@ -87,6 +87,31 @@ describe("createEmailProviderOperationExecutor", () => {
     });
   });
 
+  it("holds an archive for reconnect when the grant was revoked mid-call", async () => {
+    const executor = createEmailProviderOperationExecutor({
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        async archiveMessages() {
+          throw Object.assign(new Error("No refresh token"), {
+            cause: new Error("invalid_grant"),
+          });
+        },
+      } as unknown as EmailProvider,
+    });
+
+    const result = await executor.execute({
+      operation: metadataOperation([{ accountId: "acc-1", messageId: "m1" }]),
+      attemptId: "attempt-1",
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toMatchObject({
+      status: "not_dispatched",
+      reason: "blocked_auth",
+    });
+  });
+
   it("archives every target with one provider call and one batched read", async () => {
     const archiveMessages = vi.fn();
     const getMessage = vi.fn();

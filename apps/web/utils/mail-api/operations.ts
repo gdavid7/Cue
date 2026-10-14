@@ -35,6 +35,7 @@ import {
   prepareSnoozedThread,
 } from "@/utils/snooze/scheduler";
 import prisma from "@/utils/prisma";
+import { isInvalidGrantError } from "@/utils/error";
 import { EmailSendOperationStatus } from "@/generated/prisma/enums";
 import type { ParsedMessage } from "@/utils/types";
 import { scheduleEmailBody } from "@/utils/actions/scheduled-email.validation";
@@ -298,7 +299,10 @@ function failedTargetOutcome(
 }
 
 function isAuthError(error: unknown) {
-  return /auth|unauthorized|401/i.test(errorMessage(error));
+  return (
+    isInvalidGrantError(error) ||
+    /auth|unauthorized|401|no refresh token/i.test(errorMessage(error))
+  );
 }
 
 function errorMessage(error: unknown) {

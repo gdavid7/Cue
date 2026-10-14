@@ -2,15 +2,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserMailEngine } from "./create-browser-engine";
 
 const wipe = vi.hoisted(() => ({ finishPending: vi.fn() }));
+const sqlite = vi.hoisted(() => ({ createDriver: vi.fn() }));
 
 vi.mock("@/utils/mail-engine/wipe-local-mailbox", () => ({
   finishPendingLocalMailboxWipe: wipe.finishPending,
+}));
+vi.mock("@/utils/mail-engine/wasm-sqlite", () => ({
+  createWasmSqliteDriver: sqlite.createDriver,
 }));
 
 describe("createBrowserMailEngine", () => {
   beforeEach(() => {
     FakeWorker.instances = [];
     FakeWorker.onCreate = undefined;
+    FakeWorker.failStart = false;
     wipe.finishPending.mockResolvedValue(undefined);
     vi.stubGlobal("Worker", FakeWorker);
   });
@@ -44,6 +49,19 @@ describe("createBrowserMailEngine", () => {
     expect(worker.terminated).toBe(true);
   });
 
+  it("terminates a worker that failed to open the mailbox before falling back", async () => {
+    // A worker that failed to start can still hold the mailbox's OPFS
+    // handles, which the in-tab fallback (and every later tab) then needs.
+    FakeWorker.failStart = true;
+    sqlite.createDriver.mockRejectedValue(
+      new Error("NoModificationAllowedError"),
+    );
+
+    await expect(startEngine()).rejects.toThrow("NoModificationAllowedError");
+
+    expect(FakeWorker.instances[0].terminated).toBe(true);
+  });
+
   it("settles requests still waiting when the worker is terminated", async () => {
     const engine = await startEngine();
     FakeWorker.instances[0].silent.add("getDiagnostics");
@@ -68,6 +86,7 @@ type Message = { id?: string; type: string; method?: string };
 class FakeWorker {
   static instances: FakeWorker[] = [];
   static onCreate: (() => void) | undefined;
+  static failStart = false;
   readonly silent = new Set<string>();
   terminated = false;
   private readonly sent: Message[] = [];
@@ -88,9 +107,11 @@ class FakeWorker {
     // A real worker answers on a later task and never after it is terminated.
     setTimeout(() => {
       if (this.terminated || !message.id) return;
-      for (const listener of this.listeners) {
-        listener({ data: { id: message.id, type: "ok", value: undefined } });
-      }
+      const data =
+        message.type === "start" && FakeWorker.failStart
+          ? { id: message.id, type: "error", message: "start failed" }
+          : { id: message.id, type: "ok", value: undefined };
+      for (const listener of this.listeners) listener({ data });
     }, 0);
   }
 
