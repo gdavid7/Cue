@@ -471,7 +471,10 @@ describe("chat route rule freshness persistence", () => {
     await POST(createRequest());
 
     expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
-      expect.objectContaining({ inboxStats: { total: 10, unread: 2 } }),
+      expect.objectContaining({
+        inboxStats: { total: 10, unread: 2 },
+        isFirstUserTurn: true,
+      }),
     );
 
     mockGetInboxStatsForChatContext.mockClear();
@@ -494,7 +497,7 @@ describe("chat route rule freshness persistence", () => {
 
     expect(mockGetInboxStatsForChatContext).not.toHaveBeenCalled();
     expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
-      expect.objectContaining({ inboxStats: null }),
+      expect.objectContaining({ inboxStats: null, isFirstUserTurn: false }),
     );
   });
 

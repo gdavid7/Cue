@@ -94,6 +94,7 @@ export async function aiProcessAssistantChat({
   chatHasHistory,
   memories,
   inboxStats,
+  isFirstUserTurn,
   responseSurface = "web",
   supportsInlineEmailCards = false,
   messagingPlatform,
@@ -114,6 +115,9 @@ export async function aiProcessAssistantChat({
   chatHasHistory?: boolean;
   memories?: { content: string; date: string }[];
   inboxStats?: { total: number; unread: number } | null;
+  // Callers that track the chat's stored state say whether this is its first
+  // user turn; counting user-role messages miscounts hidden context messages.
+  isFirstUserTurn?: boolean;
   responseSurface?: "web" | "messaging";
   supportsInlineEmailCards?: boolean;
   messagingPlatform?: MessagingPlatform;
@@ -236,7 +240,8 @@ export async function aiProcessAssistantChat({
     }
   }
 
-  const isFirstMessage = messages.filter((m) => m.role === "user").length <= 1;
+  const isFirstMessage =
+    isFirstUserTurn ?? messages.filter((m) => m.role === "user").length <= 1;
 
   const snapshotMessage = isFirstMessage
     ? buildInboxSnapshotMessage(inboxStats)

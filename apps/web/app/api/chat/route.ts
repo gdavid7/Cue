@@ -340,6 +340,7 @@ export const POST = withEmailAccount("chat", async (request) => {
       chatHasHistory,
       memories,
       inboxStats,
+      isFirstUserTurn,
       onRulesStateExposed: (rulesRevision) => {
         seenRulesRevision = mergeSeenRulesRevision(
           seenRulesRevision,
