@@ -108,6 +108,21 @@ describe("useShortcuts", () => {
     expect(send).toHaveBeenCalledOnce();
   });
 
+  // Browsers reflect `role` onto the element, and react-hotkeys-hook skips
+  // every focused option; jsdom doesn't, so the reflection is set by hand.
+  it("acts from a focused mail row but not from a picker's option", () => {
+    const archive = vi.fn();
+    renderShortcuts({ archive });
+    const row = optionElement({ mailRow: true });
+    const pickerOption = optionElement({ mailRow: false });
+
+    press({ key: "e", code: "KeyE" }, pickerOption);
+    expect(archive).not.toHaveBeenCalled();
+
+    press({ key: "e", code: "KeyE" }, row);
+    expect(archive).toHaveBeenCalledOnce();
+  });
+
   it("runs modified account shortcuts while the user is typing", () => {
     const switchAccount = vi.fn();
     const switchAllAccounts = vi.fn();
@@ -456,6 +471,15 @@ function press(init: KeyboardEventInit, target: Element = document.body) {
   });
   fireEvent(target, event);
   return event;
+}
+
+function optionElement({ mailRow }: { mailRow: boolean }) {
+  const option = document.createElement("div");
+  option.setAttribute("role", "option");
+  Object.defineProperty(option, "role", { value: "option" });
+  if (mailRow) option.setAttribute("data-mail-thread-row", "");
+  document.body.append(option);
+  return option;
 }
 
 function SuspendingShortcuts({
