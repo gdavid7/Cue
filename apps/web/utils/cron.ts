@@ -12,8 +12,8 @@ export function hasCronSecret(request: RequestWithLogger) {
   const valid = isValidCronSecret(request);
 
   if (!valid)
-    request.logger.error("Unauthorized cron request:", {
-      authHeader: request.headers.get("authorization"),
+    request.logger.error("Unauthorized cron request", {
+      hasAuthHeader: request.headers.has("authorization"),
     });
 
   return valid;
@@ -41,7 +41,10 @@ export async function hasPostCronSecret(request: RequestWithLogger) {
   const body = await clonedRequest.json();
   const valid = secureCompare(body.CRON_SECRET, env.CRON_SECRET);
 
-  if (!valid) request.logger.error("Unauthorized cron request:", { body });
+  if (!valid)
+    request.logger.error("Unauthorized cron request", {
+      hasCronSecret: typeof body?.CRON_SECRET === "string",
+    });
 
   return valid;
 }
