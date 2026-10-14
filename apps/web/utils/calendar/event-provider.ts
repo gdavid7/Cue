@@ -28,6 +28,9 @@ export async function createCalendarEventProviders(
       accessToken: true,
       refreshToken: true,
       expiresAt: true,
+      // Events are read from the calendars the user selected, not just the
+      // primary one (course and shared calendars live in the others).
+      calendars: { where: { isEnabled: true }, select: { calendarId: true } },
     },
   });
 
@@ -43,7 +46,16 @@ export async function createCalendarEventProviders(
 
     try {
       providers.push(
-        createCalendarEventProvider({ connection, emailAccountId, logger }),
+        createCalendarEventProvider({
+          connection: {
+            ...connection,
+            calendarIds: connection.calendars.map(
+              (calendar) => calendar.calendarId,
+            ),
+          },
+          emailAccountId,
+          logger,
+        }),
       );
     } catch (error) {
       logger.error("Failed to create calendar event provider", {
@@ -80,6 +92,7 @@ export function createCalendarEventProvider({
 }: {
   connection: {
     accessToken: string | null;
+    calendarIds?: string[];
     expiresAt: Date | null;
     id: string;
     provider: string;
@@ -90,6 +103,7 @@ export function createCalendarEventProvider({
 }) {
   const providerParams = {
     accessToken: connection.accessToken,
+    calendarIds: connection.calendarIds,
     connectionId: connection.id,
     refreshToken: connection.refreshToken,
     expiresAt: connection.expiresAt?.getTime() ?? null,

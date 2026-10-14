@@ -102,6 +102,78 @@ describe("GoogleCalendarEventProvider", () => {
   });
 });
 
+describe("GoogleCalendarEventProvider calendars and dates", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("reads every selected calendar, keeping an event shared between them once", async () => {
+    const lecture = {
+      id: "lecture",
+      iCalUID: "lecture@ucsd",
+      summary: "CSE 151B lecture",
+      start: { dateTime: "2026-10-15T17:00:00Z" },
+      end: { dateTime: "2026-10-15T18:20:00Z" },
+    };
+    calendarMocks.list.mockImplementation(async ({ calendarId }) => ({
+      data: {
+        items:
+          calendarId === "student@ucsd.edu"
+            ? [
+                {
+                  id: "office-hours",
+                  summary: "Office hours",
+                  start: { dateTime: "2026-10-15T20:00:00Z" },
+                  end: { dateTime: "2026-10-15T21:00:00Z" },
+                },
+                lecture,
+              ]
+            : [lecture],
+      },
+    }));
+
+    const events = await createProvider({
+      calendarIds: ["student@ucsd.edu", "cse151b@group.calendar.google.com"],
+    }).fetchEvents({
+      timeMin: new Date("2026-10-15T00:00:00Z"),
+      timeMax: new Date("2026-10-16T00:00:00Z"),
+    });
+
+    expect(
+      calendarMocks.list.mock.calls.map(([params]) => params.calendarId),
+    ).toEqual(["student@ucsd.edu", "cse151b@group.calendar.google.com"]);
+    expect(events.map((event) => event.title)).toEqual([
+      "CSE 151B lecture",
+      "Office hours",
+    ]);
+  });
+
+  it("marks a date-only event as all-day on its own date", async () => {
+    calendarMocks.list.mockResolvedValue({
+      data: {
+        items: [
+          {
+            id: "hw3",
+            summary: "HW 3 due",
+            start: { date: "2026-10-20" },
+            end: { date: "2026-10-21" },
+          },
+        ],
+      },
+    });
+
+    const [event] = await createProvider().fetchEvents({
+      timeMin: new Date("2026-10-20T00:00:00Z"),
+    });
+
+    expect(event).toMatchObject({
+      allDay: true,
+      startTime: new Date("2026-10-20T00:00:00Z"),
+      endTime: new Date("2026-10-21T00:00:00Z"),
+    });
+  });
+});
+
 describe("GoogleCalendarEventProvider.createEvent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -128,10 +200,11 @@ describe("GoogleCalendarEventProvider.createEvent", () => {
   });
 });
 
-function createProvider() {
+function createProvider({ calendarIds }: { calendarIds?: string[] } = {}) {
   return new GoogleCalendarEventProvider(
     {
       accessToken: "access-token",
+      calendarIds,
       connectionId: "connection-id",
       emailAccountId: "email-account-id",
       expiresAt: null,

@@ -6,6 +6,7 @@ import { posthogCaptureEvent } from "@/utils/posthog";
 import { createCalendarEventProviders } from "@/utils/calendar/event-provider";
 import { addToCalendar } from "@/utils/calendar/add-to-calendar";
 import { SafeError } from "@/utils/error";
+import prisma from "@/utils/prisma";
 
 const getCalendarEventsInputSchema = z.object({
   startDate: z
@@ -39,6 +40,18 @@ export const getCalendarEventsTool = ({
     execute: async ({ startDate, endDate, maxResults }) => {
       trackToolCall({ tool: "get_calendar_events", email, logger });
 
+      const timeMin = new Date(startDate);
+      const timeMax = new Date(endDate);
+      if (Number.isNaN(timeMin.getTime())) {
+        return { error: "startDate is not a valid ISO 8601 date-time." };
+      }
+      if (Number.isNaN(timeMax.getTime())) {
+        return { error: "endDate is not a valid ISO 8601 date-time." };
+      }
+      if (timeMax <= timeMin) {
+        return { error: "endDate must be after startDate." };
+      }
+
       try {
         const providers = await createCalendarEventProviders(
           emailAccountId,
@@ -46,17 +59,21 @@ export const getCalendarEventsTool = ({
         );
 
         if (providers.length === 0) {
+          const disconnected = await prisma.calendarConnection.count({
+            where: { emailAccountId, isConnected: false },
+          });
           return {
-            error:
-              "No calendar connected. The user needs to connect their calendar in Inbox Zero settings.",
+            error: disconnected
+              ? "The user's calendar connection has expired. They need to reconnect it on the Calendars page."
+              : "No calendar connected. The user needs to connect their calendar in Inbox Zero settings.",
           };
         }
 
         const allResults = await Promise.allSettled(
           providers.map((provider) =>
             provider.fetchEvents({
-              timeMin: new Date(startDate),
-              timeMax: new Date(endDate),
+              timeMin,
+              timeMax,
               maxResults: maxResults ?? 25,
             }),
           ),
@@ -65,6 +82,12 @@ export const getCalendarEventsTool = ({
         const fulfilled = allResults.filter(
           (r): r is PromiseFulfilledResult<CalendarEvent[]> =>
             r.status === "fulfilled",
+        );
+        // Reasons meant for the user, such as an expired connection
+        const failures = allResults.flatMap((r) =>
+          r.status === "rejected" && r.reason instanceof SafeError
+            ? [r.reason.message]
+            : [],
         );
         const rejectedCount = allResults.length - fulfilled.length;
 
@@ -77,6 +100,7 @@ export const getCalendarEventsTool = ({
         if (fulfilled.length === 0) {
           return {
             error:
+              failures[0] ??
               "All calendar providers failed to fetch events. Please try again later.",
           };
         }
@@ -87,14 +111,34 @@ export const getCalendarEventsTool = ({
           .slice(0, maxResults ?? 25)
           .map((event) => ({
             title: event.title,
-            startTime: event.startTime.toISOString(),
-            endTime: event.endTime.toISOString(),
+            ...(event.allDay
+              ? {
+                  allDay: true,
+                  startTime: isoDate(event.startTime),
+                  // The provider's end is the day after the last one
+                  endTime: isoDate(
+                    new Date(
+                      Math.max(
+                        event.startTime.getTime(),
+                        event.endTime.getTime() - 86_400_000,
+                      ),
+                    ),
+                  ),
+                }
+              : {
+                  startTime: event.startTime.toISOString(),
+                  endTime: event.endTime.toISOString(),
+                }),
             location: event.location ?? null,
             attendees: event.attendees.map((a) => a.email),
             videoConferenceLink: event.videoConferenceLink ?? null,
           }));
 
-        return { events, count: events.length };
+        return {
+          events,
+          count: events.length,
+          ...(failures.length ? { warnings: failures } : {}),
+        };
       } catch (error) {
         logger.error("Failed to fetch calendar events", { error });
         return { error: "Failed to fetch calendar events" };
@@ -183,4 +227,8 @@ async function trackToolCall({
   return posthogCaptureEvent(email, "AI Assistant Chat Tool Call", {
     tool: toolName,
   });
+}
+
+function isoDate(date: Date) {
+  return date.toISOString().slice(0, 10);
 }

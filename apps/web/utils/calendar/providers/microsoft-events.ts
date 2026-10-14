@@ -29,6 +29,8 @@ const MICROSOFT_TEAMS_PROVIDER = "teamsForBusiness";
 
 export interface MicrosoftCalendarConnectionParams {
   accessToken: string | null;
+  /** Calendars to read events from; the default calendar when empty. */
+  calendarIds?: string[];
   emailAccountId: string;
   expiresAt: number | null;
   refreshToken: string | null;
@@ -36,6 +38,8 @@ export interface MicrosoftCalendarConnectionParams {
 
 type MicrosoftEvent = {
   id?: string;
+  iCalUId?: string;
+  isAllDay?: boolean;
   subject?: string;
   body?: { content?: string };
   bodyPreview?: string;
@@ -100,18 +104,11 @@ export class MicrosoftCalendarEventProvider implements CalendarEventProvider {
   }): Promise<CalendarEvent[]> {
     const client = await this.getClient();
 
-    // Use calendarView endpoint which correctly returns events overlapping the time range
-    const response = await client
-      .api("/me/calendar/calendarView")
-      .query({
-        startDateTime: timeMin.toISOString(),
-        endDateTime: timeMax.toISOString(),
-      })
-      .top(maxResults * 3) // Fetch more to filter by attendee
-      .orderby("start/dateTime")
-      .get();
-
-    const events: MicrosoftEvent[] = response.value || [];
+    const events = await this.listCalendarView(client, {
+      timeMin,
+      timeMax,
+      top: maxResults * 3, // Fetch more to filter by attendee
+    });
 
     // Filter to events that have this attendee
     return events
@@ -143,24 +140,74 @@ export class MicrosoftCalendarEventProvider implements CalendarEventProvider {
     const effectiveTimeMax =
       timeMax ?? new Date(timeMin.getTime() + 30 * 24 * 60 * 60 * 1000);
 
-    // Use calendarView endpoint which correctly returns events overlapping the time range
     this.logger.info("Starting Microsoft calendar events request");
-    const response = await client
-      .api("/me/calendar/calendarView")
-      .query({
-        startDateTime: timeMin.toISOString(),
-        endDateTime: effectiveTimeMax.toISOString(),
-      })
-      .top(maxResults || 100)
-      .orderby("start/dateTime")
-      .get();
-
-    const events: MicrosoftEvent[] = response.value || [];
+    const events = await this.listCalendarView(client, {
+      timeMin,
+      timeMax: effectiveTimeMax,
+      top: maxResults || 100,
+    });
     this.logger.info("Completed Microsoft calendar events request", {
       eventCount: events.length,
     });
 
-    return events.map((event) => this.parseEvent(event));
+    return events
+      .slice(0, maxResults || 100)
+      .map((event) => this.parseEvent(event));
+  }
+
+  /**
+   * Events overlapping the range on each of the user's selected calendars,
+   * merged in start order. An event on several of them is kept once.
+   */
+  private async listCalendarView(
+    client: Client,
+    { timeMin, timeMax, top }: { timeMin: Date; timeMax: Date; top: number },
+  ): Promise<MicrosoftEvent[]> {
+    const paths = this.connection.calendarIds?.length
+      ? this.connection.calendarIds.map(
+          (id) => `/me/calendars/${encodeURIComponent(id)}/calendarView`,
+        )
+      : ["/me/calendar/calendarView"];
+    const lists = await Promise.all(
+      paths.map(async (path) => {
+        try {
+          // calendarView returns events overlapping the range, unlike /events
+          const response = await client
+            .api(path)
+            .query({
+              startDateTime: timeMin.toISOString(),
+              endDateTime: timeMax.toISOString(),
+            })
+            .top(top)
+            .orderby("start/dateTime")
+            .get();
+          return (response.value || []) as MicrosoftEvent[];
+        } catch (error) {
+          // A calendar removed or unshared since it was synced has no events.
+          if ((error as { statusCode?: number })?.statusCode === 404) {
+            this.logger.warn("Skipping a calendar that no longer exists");
+            return [];
+          }
+          throw error;
+        }
+      }),
+    );
+    if (lists.length === 1) return lists[0];
+
+    const seen = new Set<string>();
+    return lists
+      .flat()
+      .filter((event) => {
+        const key = `${event.iCalUId ?? event.id}|${event.start?.dateTime}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort(
+        (a, b) =>
+          parseGraphDateTime(a.start?.dateTime).getTime() -
+          parseGraphDateTime(b.start?.dateTime).getTime(),
+      );
   }
 
   async findInvitationEvent(
@@ -390,8 +437,17 @@ export class MicrosoftCalendarEventProvider implements CalendarEventProvider {
     });
   }
 
-  private parseEvent(event: MicrosoftEvent) {
+  private parseEvent(event: MicrosoftEvent): CalendarEvent {
+    // All-day items are whole dates; keep the day, not a zone-shifted instant.
+    const allDay = !!event.isAllDay;
+    const startTime = allDay
+      ? new Date(`${event.start?.dateTime?.slice(0, 10)}T00:00:00Z`)
+      : parseGraphDateTime(event.start?.dateTime);
+    const endTime = allDay
+      ? new Date(`${event.end?.dateTime?.slice(0, 10)}T00:00:00Z`)
+      : parseGraphDateTime(event.end?.dateTime);
     return {
+      ...(allDay ? { allDay } : {}),
       id: event.id || "",
       title: event.subject || "Untitled",
       description: event.bodyPreview || undefined,
@@ -403,8 +459,8 @@ export class MicrosoftCalendarEventProvider implements CalendarEventProvider {
           event.location?.displayName,
           event.body?.content ?? event.bodyPreview,
         ),
-      startTime: new Date(event.start?.dateTime || Date.now()),
-      endTime: new Date(event.end?.dateTime || Date.now()),
+      startTime,
+      endTime,
       organizerEmail: event.organizer?.emailAddress?.address || undefined,
       isOrganizer: event.isOrganizer,
       attendees:
@@ -415,6 +471,15 @@ export class MicrosoftCalendarEventProvider implements CalendarEventProvider {
         })) || [],
     };
   }
+}
+
+// Graph answers in UTC unless asked otherwise, but leaves the zone off the
+// string, which Date would read in the server's own zone.
+function parseGraphDateTime(dateTime: string | undefined) {
+  if (!dateTime) return new Date();
+  return new Date(
+    /(?:Z|[+-]\d{2}:?\d{2})$/.test(dateTime) ? dateTime : `${dateTime}Z`,
+  );
 }
 
 function formatMicrosoftUtcDateTime(date: Date) {

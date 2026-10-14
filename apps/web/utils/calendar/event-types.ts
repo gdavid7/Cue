@@ -7,6 +7,9 @@ export interface CalendarEventAttendee {
 }
 
 export interface CalendarEvent {
+  // All-day items span whole dates: startTime is the first day and endTime the
+  // day after the last, both at UTC midnight, so they are dates, not instants.
+  allDay?: boolean;
   attendees: CalendarEventAttendee[];
   description?: string;
   endTime: Date;
