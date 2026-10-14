@@ -64,8 +64,10 @@ export function ConnectorsList({
   return (
     <nav aria-label="Connectors" className="flex flex-col gap-px">
       {connectedApps.map((connector) => {
-        const via = connected.get(connector.name)?.connection?.connectedVia;
-        const label = `${connector.displayName}: connected${via ? ` via ${via}` : ""}`;
+        const connection = connected.get(connector.name)?.connection;
+        const via = connection?.connectedVia;
+        const status = getStatus(connection);
+        const label = `${connector.displayName}: ${status.label.toLowerCase()}${via ? ` via ${via}` : ""}`;
         return (
           <Link
             className={cn(rowClassName, "text-foreground")}
@@ -85,9 +87,20 @@ export function ConnectorsList({
                 <span className="min-w-0 flex-1 truncate">
                   {connector.displayName}
                 </span>
-                <span className="size-2 shrink-0 rounded-full bg-emerald-500">
-                  <span className="sr-only">Connected</span>
-                </span>
+                {status.needsReconnect ? (
+                  <span className="shrink-0 text-amber-600 text-xs dark:text-amber-400">
+                    Reconnect
+                  </span>
+                ) : (
+                  <span
+                    className={cn(
+                      "size-2 shrink-0 rounded-full",
+                      status.dotClassName,
+                    )}
+                  >
+                    <span className="sr-only">{status.label}</span>
+                  </span>
+                )}
               </>
             )}
           </Link>
@@ -109,4 +122,24 @@ export function ConnectorsList({
       </Link>
     </nav>
   );
+}
+
+function getStatus(
+  connection: { isActive: boolean; needsReconnect: boolean } | undefined,
+) {
+  if (!connection?.isActive) {
+    return {
+      label: "Paused",
+      dotClassName: "bg-muted-foreground/40",
+      needsReconnect: false,
+    };
+  }
+  if (connection.needsReconnect) {
+    return { label: "Needs reconnect", dotClassName: "", needsReconnect: true };
+  }
+  return {
+    label: "Connected",
+    dotClassName: "bg-emerald-500",
+    needsReconnect: false,
+  };
 }

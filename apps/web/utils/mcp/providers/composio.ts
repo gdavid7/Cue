@@ -3,14 +3,26 @@ import { z } from "zod";
 import { env } from "@/env";
 import { createScopedLogger } from "@/utils/logger";
 import {
+  ConnectionExpiredError,
   CredentialsRejectedError,
   type IntegrationProvider,
 } from "@/utils/mcp/providers/types";
+import { redis } from "@/utils/redis";
 
 const logger = createScopedLogger("composio");
 
 const COMPOSIO_REQUEST_TIMEOUT_MS = 15_000;
 const COMPOSIO_UPLOAD_TIMEOUT_MS = 60_000;
+// The integrations list reads status on every sidebar load; a healthy
+// connection is re-checked every few minutes, a lapsed one only clears when
+// the user reconnects.
+const ACTIVE_STATUS_CACHE_SECONDS = 10 * 60;
+const LAPSED_STATUS_CACHE_SECONDS = 24 * 60 * 60;
+// How apps word a lapsed authorization in a failed tool result
+const AUTH_FAILURE =
+  /\b401\b|unauthori[sz]ed|invalid_grant|invalid_auth|token_revoked|token[ _-]?expired|expired[ _-]?token|reauthori[sz]/i;
+
+type ConnectionStatus = "active" | "needs_reconnect";
 
 // Auth configs and MCP servers are shared per app across all users. Every
 // instance resolves the oldest matching resource so concurrent first-time
@@ -42,14 +54,13 @@ export const composioProvider: IntegrationProvider = {
       emailAccountId,
       authScheme,
     });
-    const [newestActive] = accounts
-      .filter((account) => account.status === "ACTIVE")
-      .sort((a, b) => b.created_at.localeCompare(a.created_at));
-    if (!newestActive) return false;
+    const active = newestActive(accounts);
+    if (!active) return false;
 
     await deleteConnectedAccounts(
-      accounts.filter((account) => account.id !== newestActive.id),
+      accounts.filter((account) => account.id !== active.id),
     );
+    await forgetStatus(app, emailAccountId);
     return true;
   },
 
@@ -82,16 +93,25 @@ export const composioProvider: IntegrationProvider = {
     );
 
     // Composio stores API keys without checking them, so ask the app itself.
-    const check = executeResultSchema.parse(
-      await composioFetch(`/tools/execute/${verifyTool}`, {
-        method: "POST",
-        body: {
-          connected_account_id: created.id,
-          user_id: emailAccountId,
-          arguments: {},
-        },
-      }),
-    );
+    // Whatever goes wrong, the unchecked account must not outlive the check.
+    const check = await composioFetch(`/tools/execute/${verifyTool}`, {
+      method: "POST",
+      body: {
+        connected_account_id: created.id,
+        user_id: emailAccountId,
+        arguments: {},
+      },
+    })
+      .then((result) => executeResultSchema.parse(result))
+      .catch(async (error) => {
+        await deleteConnectedAccounts([created]).catch((deleteError) => {
+          logger.error("Failed to remove an unverified connected account", {
+            app,
+            error: deleteError,
+          });
+        });
+        throw error;
+      });
     if (!check.successful) {
       await deleteConnectedAccounts([created]);
       throw new CredentialsRejectedError(
@@ -100,13 +120,17 @@ export const composioProvider: IntegrationProvider = {
     }
 
     await deleteConnectedAccounts(previous);
+    await forgetStatus(app, emailAccountId);
   },
 
   async executeTool({ app, emailAccountId, authScheme, tool, args }) {
-    const [account] = (
-      await listConnectedAccounts({ app, emailAccountId, authScheme })
-    ).filter((item) => item.status === "ACTIVE");
-    if (!account) throw new Error(`No active ${app} connection`);
+    const account = newestActive(
+      await listConnectedAccounts({ app, emailAccountId, authScheme }),
+    );
+    if (!account) {
+      await rememberStatus(app, emailAccountId, "needs_reconnect");
+      throw new ConnectionExpiredError(app, `No active ${app} connection`);
+    }
 
     const result = executeResultSchema.parse(
       await composioFetch(`/tools/execute/${tool}`, {
@@ -119,15 +143,37 @@ export const composioProvider: IntegrationProvider = {
       }),
     );
     if (!result.successful) {
-      throw new Error(`${tool} failed: ${result.error ?? "unknown error"}`);
+      const message = `${tool} failed: ${result.error ?? "unknown error"}`;
+      // Composio can keep an account ACTIVE after the app revoked its token;
+      // the app's auth error is the only sign.
+      if (result.error && AUTH_FAILURE.test(result.error)) {
+        await rememberStatus(app, emailAccountId, "needs_reconnect");
+        throw new ConnectionExpiredError(app, message);
+      }
+      throw new Error(message);
     }
     return result.data;
+  },
+
+  async getConnectionStatus({ app, emailAccountId, authScheme }) {
+    const key = statusKey(app, emailAccountId);
+    const cached = await redis.get<ConnectionStatus>(key).catch(() => null);
+    if (cached) return cached;
+
+    const status: ConnectionStatus = newestActive(
+      await listConnectedAccounts({ app, emailAccountId, authScheme }),
+    )
+      ? "active"
+      : "needs_reconnect";
+    await rememberStatus(app, emailAccountId, status);
+    return status;
   },
 
   async disconnect({ app, emailAccountId, authScheme }) {
     await deleteConnectedAccounts(
       await listConnectedAccounts({ app, emailAccountId, authScheme }),
     );
+    await forgetStatus(app, emailAccountId);
   },
 
   async getMcpServer({ app, emailAccountId, allowedTools, authScheme }) {
@@ -295,6 +341,41 @@ async function listConnectedAccounts({
     ),
   );
   return items;
+}
+
+function newestActive<T extends { status: string; created_at: string }>(
+  accounts: T[],
+): T | undefined {
+  return accounts
+    .filter((account) => account.status === "ACTIVE")
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+}
+
+function statusKey(app: string, emailAccountId: string) {
+  return `composio-status:${app}:${emailAccountId}`;
+}
+
+async function rememberStatus(
+  app: string,
+  emailAccountId: string,
+  status: ConnectionStatus,
+) {
+  await redis
+    .set(statusKey(app, emailAccountId), status, {
+      ex:
+        status === "active"
+          ? ACTIVE_STATUS_CACHE_SECONDS
+          : LAPSED_STATUS_CACHE_SECONDS,
+    })
+    .catch((error) => {
+      logger.warn("Failed to cache connection status", { app, error });
+    });
+}
+
+async function forgetStatus(app: string, emailAccountId: string) {
+  await redis.del(statusKey(app, emailAccountId)).catch((error) => {
+    logger.warn("Failed to clear connection status", { app, error });
+  });
 }
 
 async function deleteConnectedAccounts(accounts: { id: string }[]) {

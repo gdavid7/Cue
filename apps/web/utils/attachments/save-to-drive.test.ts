@@ -8,6 +8,7 @@ import {
 import { createEmailProvider } from "@/utils/email/provider";
 import { SafeError } from "@/utils/error";
 import { uploadComposioFile } from "@/utils/mcp/providers/composio";
+import { ConnectionExpiredError } from "@/utils/mcp/providers/types";
 
 const integration = vi.hoisted(() => ({
   isConfigured: vi.fn(() => true),
@@ -170,6 +171,27 @@ describe("saveAttachmentToDrive", () => {
       }),
     );
     expect(result.url).toBe("https://onedrive.live.com/item-1");
+  });
+
+  it("tells the user to reconnect a drive whose connection lapsed", async () => {
+    prisma.mcpConnection.findMany.mockResolvedValue([
+      connection("account-1", "googledrive"),
+    ] as never);
+    integration.executeTool.mockRejectedValue(
+      new ConnectionExpiredError("googledrive", "No active googledrive"),
+    );
+
+    const error = await saveAttachmentToDrive({
+      emailAccountId: "account-1",
+      provider: "google",
+      messageId: "message-1",
+      attachment: { filename: "syllabus.pdf" },
+      app: "googledrive",
+      logger,
+    }).catch((e) => e);
+
+    expect(error).toBeInstanceOf(SafeError);
+    expect(error.message).toContain("Reconnect Google Drive");
   });
 
   it("tells the user to connect the drive, without reading the email", async () => {

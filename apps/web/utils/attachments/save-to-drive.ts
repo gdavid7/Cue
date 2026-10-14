@@ -5,6 +5,7 @@ import type { Logger } from "@/utils/logger";
 import { findIntegration } from "@/utils/mcp/integrations";
 import { uploadComposioFile } from "@/utils/mcp/providers/composio";
 import { getIntegrationProvider } from "@/utils/mcp/providers/registry";
+import { ConnectionExpiredError } from "@/utils/mcp/providers/types";
 import {
   findConnectionAccountId,
   onePerIntegration,
@@ -142,13 +143,22 @@ export async function saveAttachmentToDrive({
     mimetype: attachment.mimeType || "application/octet-stream",
     content: Buffer.from(data, "base64"),
   });
-  const result = await getIntegrationProvider(integration.id).executeTool({
-    app: integration.app,
-    authScheme: integration.authScheme,
-    emailAccountId: connectionAccountId,
-    tool: upload.tool,
-    args: upload.args(file),
-  });
+  const result = await getIntegrationProvider(integration.id)
+    .executeTool({
+      app: integration.app,
+      authScheme: integration.authScheme,
+      emailAccountId: connectionAccountId,
+      tool: upload.tool,
+      args: upload.args(file),
+    })
+    .catch((error) => {
+      if (error instanceof ConnectionExpiredError) {
+        throw new SafeError(
+          `Cue's access to ${name} has expired. Reconnect ${name} from Connectors, then try again.`,
+        );
+      }
+      throw error;
+    });
   logger.info("Saved attachment to drive", { app });
 
   const uploaded = findUploadedFile(result);

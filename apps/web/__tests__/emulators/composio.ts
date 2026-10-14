@@ -64,11 +64,6 @@ export interface ComposioEmulatorOptions {
   apiKey?: string;
   canvasEvents?: ComposioEmulatorCanvasEvent[];
   driveFiles?: ComposioEmulatorDriveFile[];
-  /**
-   * Tools that answer as Composio does once the app's token is revoked:
-   * unsuccessful, with the app's auth error.
-   */
-  failingTools?: string[];
   port?: number;
   slackMessages?: ComposioEmulatorSlackMessage[];
 }
@@ -76,6 +71,21 @@ export interface ComposioEmulatorOptions {
 export interface ComposioEmulator {
   apiKey: string;
   close(): Promise<void>;
+  /** A user's connected accounts, oldest first. */
+  connectedAccounts(userId: string): ConnectedAccount[];
+  /**
+   * Marks a user's accounts EXPIRED, as Composio does when it can no longer
+   * refresh the app's token.
+   */
+  expireConnections(userId: string): void;
+  /**
+   * Makes a tool fail from now on: `revoked` answers as Composio does once
+   * the app's token is revoked (unsuccessful, with the app's auth error);
+   * `server_error` answers HTTP 500. `null` makes it work again.
+   */
+  failTool(slug: string, how: "revoked" | "server_error" | null): void;
+  /** Every tool execution, in order. */
+  toolCalls: { tool: string; connectedAccountId: string }[];
   /** The v3 base URL, for `COMPOSIO_API_URL`. */
   url: string;
 }
@@ -93,9 +103,12 @@ type ConnectedAccount = {
   id: string;
   user_id: string;
   auth_config_id: string;
-  status: "ACTIVE";
+  status: "ACTIVE" | "EXPIRED";
   created_at: string;
 };
+
+// Accounts are stamped a second apart so "newest" is never a tie.
+const EPOCH = Date.parse("2026-01-01T00:00:00Z");
 
 export async function createComposioEmulator(
   options: ComposioEmulatorOptions = {},
@@ -104,7 +117,8 @@ export async function createComposioEmulator(
   const driveFiles = options.driveFiles ?? [];
   const canvasEvents = options.canvasEvents ?? [];
   const slackMessages = options.slackMessages ?? [];
-  const failingTools = new Set(options.failingTools ?? []);
+  const failingTools = new Map<string, "revoked" | "server_error">();
+  const toolCalls: ComposioEmulator["toolCalls"] = [];
 
   const authConfigs: {
     id: string;
@@ -120,12 +134,13 @@ export async function createComposioEmulator(
   let sequence = 0;
 
   function createAccount(userId: string, authConfigId: string) {
+    const id = ++sequence;
     const account: ConnectedAccount = {
-      id: `ca_emulated_${++sequence}`,
+      id: `ca_emulated_${id}`,
       user_id: userId,
       auth_config_id: authConfigId,
       status: "ACTIVE",
-      created_at: new Date().toISOString(),
+      created_at: new Date(EPOCH + id * 1000).toISOString(),
     };
     accounts.set(account.id, account);
     return account;
@@ -292,14 +307,25 @@ export async function createComposioEmulator(
     const toolMatch = /^\/tools\/execute\/([^/]+)$/.exec(path);
     if (toolMatch && method === "POST") {
       const tool = tools[toolMatch[1]];
-      if (!accounts.has(String(body.connected_account_id))) {
+      const connectedAccountId = String(body.connected_account_id);
+      toolCalls.push({ tool: toolMatch[1], connectedAccountId });
+      const account = accounts.get(connectedAccountId);
+      if (account?.status !== "ACTIVE") {
         return respondJson(response, 200, {
           data: {},
           successful: false,
-          error: "Connected account not found",
+          error: account
+            ? `Connected account is ${account.status}`
+            : "Connected account not found",
         });
       }
-      if (tool && failingTools.has(toolMatch[1])) {
+      const failure = failingTools.get(toolMatch[1]);
+      if (failure === "server_error") {
+        return respondJson(response, 500, {
+          error: { message: "Internal server error" },
+        });
+      }
+      if (tool && failure === "revoked") {
         return respondJson(response, 200, {
           data: {},
           successful: false,
@@ -339,6 +365,18 @@ export async function createComposioEmulator(
   return {
     apiKey,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    connectedAccounts: (userId) =>
+      [...accounts.values()].filter((account) => account.user_id === userId),
+    expireConnections: (userId) => {
+      for (const account of accounts.values()) {
+        if (account.user_id === userId) account.status = "EXPIRED";
+      }
+    },
+    failTool: (slug, how) => {
+      if (how) failingTools.set(slug, how);
+      else failingTools.delete(slug);
+    },
+    toolCalls,
     url: `http://127.0.0.1:${port}/api/v3`,
   };
 }

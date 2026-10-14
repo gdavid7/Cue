@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { withEmailAccount } from "@/utils/middleware";
-import { MCP_INTEGRATIONS } from "@/utils/mcp/integrations";
+import type { Logger } from "@/utils/logger";
+import { findIntegration, MCP_INTEGRATIONS } from "@/utils/mcp/integrations";
 import { fromDbAuthType } from "@/utils/mcp/resolve-integration";
 import { getIntegrationProvider } from "@/utils/mcp/providers/registry";
 import {
@@ -9,16 +10,18 @@ import {
 } from "@/utils/mcp/user-connections";
 import prisma from "@/utils/prisma";
 
+const STATUS_TIMEOUT_MS = 3000;
+
 export type GetIntegrationsResponse = Awaited<ReturnType<typeof getData>>;
 
 export const GET = withEmailAccount("mcp/integrations", async (request) => {
   const emailAccountId = request.auth.emailAccountId;
-  return NextResponse.json(await getData(emailAccountId));
+  return NextResponse.json(await getData(emailAccountId, request.logger));
 });
 
 // Apps connected from any of the person's email accounts show as connected in
 // every one of them.
-async function getData(emailAccountId: string) {
+async function getData(emailAccountId: string, logger: Logger) {
   const [allConnections, customIntegrations] = await Promise.all([
     prisma.mcpConnection.findMany({
       where: ownedBySameUser(emailAccountId),
@@ -48,15 +51,26 @@ async function getData(emailAccountId: string) {
     }),
   ]);
 
-  const connections = onePerIntegration(allConnections, emailAccountId).map(
-    ({ emailAccountId: connectionAccountId, emailAccount, ...connection }) => ({
-      ...connection,
-      // Their other account it was connected from, if not this one
-      connectedVia:
-        connectionAccountId === emailAccountId
-          ? null
-          : (emailAccount?.email ?? null),
-    }),
+  const connections = await Promise.all(
+    onePerIntegration(allConnections, emailAccountId).map(
+      async ({
+        emailAccountId: connectionAccountId,
+        emailAccount,
+        ...connection
+      }) => ({
+        ...connection,
+        // Their other account it was connected from, if not this one
+        connectedVia:
+          connectionAccountId === emailAccountId
+            ? null
+            : (emailAccount?.email ?? null),
+        needsReconnect: await needsReconnect(
+          connection.integration.name,
+          connectionAccountId,
+          logger,
+        ),
+      }),
+    ),
   );
   const findConnection = (name: string) =>
     connections.find((connection) => connection.integration.name === name);
@@ -104,6 +118,35 @@ async function getData(emailAccountId: string) {
   });
 
   return { integrations: [...builtIn, ...custom] };
+}
+
+// A provider can lose an app's authorization (expired or revoked) while Cue
+// still holds the connection. Unknown counts as healthy, so a slow provider
+// never blocks the list.
+async function needsReconnect(
+  integrationName: string,
+  connectionAccountId: string | null,
+  logger: Logger,
+) {
+  const provider = findIntegration(integrationName)?.provider;
+  if (!provider || !connectionAccountId) return false;
+  const status = await Promise.race([
+    getIntegrationProvider(provider.id).getConnectionStatus({
+      app: provider.app,
+      authScheme: provider.authScheme,
+      emailAccountId: connectionAccountId,
+    }),
+    new Promise<null>((resolve) =>
+      setTimeout(() => resolve(null), STATUS_TIMEOUT_MS),
+    ),
+  ]).catch((error) => {
+    logger.warn("Failed to read connection status", {
+      integration: integrationName,
+      error,
+    });
+    return null;
+  });
+  return status === "needs_reconnect";
 }
 
 function getHostname(serverUrl: string | null) {
