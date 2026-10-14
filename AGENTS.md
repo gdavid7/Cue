@@ -73,6 +73,7 @@
 
 ## Component Guidelines
 - Use shadcn/ui components when available
+- For UI and interaction work, follow `.claude/skills/apple-design/SKILL.md` (Apple-style response, spatial consistency, reduced motion, typography and wayfinding; vendored from emilkowalski/skills under MIT). Apply it with the existing shadcn/Radix components rather than new animation libraries.
 - Use `LoadingContent` component for async data: `<LoadingContent loading={isLoading} error={error}>{data && <YourComponent data={data} />}</LoadingContent>`
 
 ## Fullstack Workflow
