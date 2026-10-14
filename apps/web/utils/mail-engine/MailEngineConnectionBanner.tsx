@@ -74,11 +74,11 @@ export const MailEngineConnectionBanner = memo(
                   )
                   .catch((error: unknown) => {
                     toastError({
-                      title: "Error initiating reconnection",
+                      title: "Couldn't start reconnecting",
                       description:
                         error instanceof Error
                           ? error.message
-                          : "Please try again or contact support",
+                          : "Check your connection and try again.",
                     });
                   })
                   .finally(() => setReconnecting(false));

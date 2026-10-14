@@ -3,16 +3,17 @@ export function mailEngineConnectionCopy(
 ) {
   if (connection === "blocked_auth") {
     return {
-      title: "Reconnect this account to continue syncing.",
+      title: "Reconnect this account to keep getting mail",
       description:
-        "Mailbox catch-up is paused until this account is reconnected.",
+        "Cue lost access, so new mail is paused. Nothing in your mailbox has changed.",
       action: "Reconnect",
     };
   }
   if (connection === "offline") {
     return {
-      title: "Waiting to sync.",
-      description: "Catch-up will retry automatically.",
+      title: "Can't reach your mailbox right now.",
+      description:
+        "Showing the mail Cue already has. It catches up on its own.",
     };
   }
 }

@@ -51,7 +51,7 @@ test("exposes engine diagnostics after metadata coverage", async ({
   expect(inspect.coverageComplete).toBe(true);
   await expect(
     page.getByRole("heading", {
-      name: "Reconnect this account to continue syncing.",
+      name: "Reconnect this account to keep getting mail",
     }),
   ).toHaveCount(0);
 });
@@ -153,7 +153,7 @@ test("opens account reconnect from blocked_auth catch-up", async ({
   });
   await expect(
     page.getByRole("heading", {
-      name: "Reconnect this account to continue syncing.",
+      name: "Reconnect this account to keep getting mail",
     }),
   ).toBeVisible({ timeout: 60_000 });
   expect(changeRequests).toBeGreaterThan(0);
