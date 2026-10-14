@@ -36,9 +36,13 @@ Sentry.init({
     : 0,
 });
 
-// Replay is a large part of Sentry's bundle and nothing on the first screen
-// needs it, so it joins once the page has loaded.
-const replayReady = loadReplayAfterPageLoad();
+// Replay is a large part of Sentry's bundle, and recording snapshots the
+// whole page, so it joins once the first screen has settled rather than
+// competing with the mail engine and the inbox's first render.
+const REPLAY_START_DELAY_MS = 10_000;
+const replayReady = env.NEXT_PUBLIC_SENTRY_DSN
+  ? loadReplayAfterPageSettles()
+  : Promise.resolve(undefined);
 
 if (!canUseTrackingCookies()) {
   const unsubscribe = subscribeToCookieConsent(() => {
@@ -58,7 +62,7 @@ installStaleDeploymentReload();
 
 export const onRouterTransitionStart = Sentry.captureRouterTransitionStart;
 
-function loadReplayAfterPageLoad() {
+function loadReplayAfterPageSettles() {
   return new Promise<Replay | undefined>((resolve) => {
     const load = () => {
       import("@sentry/nextjs")
@@ -72,13 +76,14 @@ function loadReplayAfterPageLoad() {
         })
         .catch(() => resolve(undefined));
     };
-    const schedule = () => {
+    const whenIdle = () => {
       if (typeof window.requestIdleCallback === "function") {
         window.requestIdleCallback(load, { timeout: 5000 });
       } else {
-        setTimeout(load, 1000);
+        load();
       }
     };
+    const schedule = () => setTimeout(whenIdle, REPLAY_START_DELAY_MS);
     if (document.readyState === "complete") schedule();
     else window.addEventListener("load", schedule, { once: true });
   });
