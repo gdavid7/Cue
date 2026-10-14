@@ -22,10 +22,7 @@ import {
   SunIcon,
   ZapIcon,
 } from "lucide-react";
-import {
-  CONNECTORS,
-  ConnectorsList,
-} from "@/components/connectors/ConnectorsList";
+import { ConnectorsList } from "@/components/connectors/ConnectorsList";
 import { Logo } from "@/components/Logo";
 import {
   Sidebar,
@@ -49,7 +46,6 @@ import {
   useMeetingRecorderEnabled,
 } from "@/hooks/useFeatureFlags";
 import { useCurrentOrganization } from "@/hooks/useCurrentOrganization";
-import { useIntegrations } from "@/hooks/useIntegrations";
 import { useMessagingChannels } from "@/hooks/useMessagingChannels";
 import { useMailHref } from "@/hooks/useMailHref";
 import { useAccount } from "@/providers/EmailAccountProvider";
@@ -329,18 +325,6 @@ export function SideNav({
   );
 }
 
-/** True once any listed app is connected. Until then Integrations connects one. */
-export function useHasConnectedApp() {
-  const { data } = useIntegrations();
-  return Boolean(
-    data?.integrations.some(
-      (integration) =>
-        integration.connection &&
-        CONNECTORS.some((connector) => connector.name === integration.name),
-    ),
-  );
-}
-
 function ConnectedAppsGroup({
   emailAccountId,
   collapsed,
@@ -348,9 +332,6 @@ function ConnectedAppsGroup({
   emailAccountId: string;
   collapsed: boolean;
 }) {
-  const hasConnectedApp = useHasConnectedApp();
-  if (!hasConnectedApp) return null;
-
   return (
     <SidebarGroup>
       <SidebarGroupLabel>Connectors</SidebarGroupLabel>

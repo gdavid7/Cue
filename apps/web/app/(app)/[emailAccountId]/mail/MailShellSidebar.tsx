@@ -35,7 +35,6 @@ import {
   useMailSlugs,
 } from "@/app/(app)/[emailAccountId]/mail/use-mail-route";
 import { useMailHref } from "@/hooks/useMailHref";
-import { useHasConnectedApp } from "@/components/SideNav";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Sidebar, useSidebar } from "@/components/ui/sidebar";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
@@ -129,7 +128,6 @@ export const MailShellSidebar = memo(function MailShellSidebar({
   const hasAllInboxes =
     getAllInboxesAccounts(accountsData?.emailAccounts ?? []).length > 1;
   const { appLinks, toolLinks } = useMailAppLinks();
-  const hasConnectedApp = useHasConnectedApp();
   const { state: openSidebars } = useSidebar();
   const isMailSidebarOpen = openSidebars.includes("left-sidebar");
 
@@ -281,9 +279,8 @@ export const MailShellSidebar = memo(function MailShellSidebar({
       allInboxesHref={
         hasAllInboxes ? mailHref({ allInboxes: true }) : undefined
       }
-      // Until an app is connected, Tools › Integrations is the way to one.
       connectors={
-        isAllAccounts || !hasConnectedApp ? undefined : (
+        isAllAccounts ? undefined : (
           <ConnectorsList
             collapsed={collapsed}
             emailAccountId={emailAccountId}
