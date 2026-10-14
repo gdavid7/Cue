@@ -11,8 +11,11 @@ const config = await serwist({
   precachePrerendered: false,
 });
 
-// The default static-asset extensions omit the search worker's WASM binary.
-config.globPatterns = config.globPatterns?.map((pattern) =>
-  pattern.replace(/\.\{([^}]+)\}$/u, ".{$1,wasm}"),
-);
+// Reopening mail offline needs the hashed JS/CSS the first visit loaded before
+// the worker controlled the page, plus the search worker's WASM (absent from
+// the default extensions). Public and imported images (marketing, blog,
+// splash screens) made up most of the precache and aren't needed offline.
+config.globPatterns = config.globPatterns
+  ?.filter((pattern) => !pattern.startsWith("public/"))
+  .map((pattern) => pattern.replace(/\.\{[^}]+\}$/u, ".{js,css,wasm}"));
 export default config;

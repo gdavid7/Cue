@@ -1,3 +1,5 @@
+import { isMicrosoftProvider } from "@/utils/email/provider-types";
+
 export type MailEngineRuntimeMode = "desktop-ipc" | "browser" | "unavailable";
 
 export function selectMailEngineRuntimeMode(input: {
@@ -32,4 +34,19 @@ export function shouldStartMailEngine(input: {
     segments[1] === "debug" &&
     segments[2] === "mail-queue"
   );
+}
+
+/**
+ * The provider the engine should boot with, or null while the account list is
+ * still loading. Booting before the provider is known starts the wrong engine
+ * for Microsoft accounts and forces an abort + reboot behind the owner lock.
+ * If the list fails to load, Google keeps the previous default.
+ */
+export function resolveMailEngineProvider(input: {
+  accountsLoading: boolean;
+  provider: string;
+}): "google" | "microsoft" | null {
+  if (isMicrosoftProvider(input.provider)) return "microsoft";
+  if (input.provider) return "google";
+  return input.accountsLoading ? null : "google";
 }

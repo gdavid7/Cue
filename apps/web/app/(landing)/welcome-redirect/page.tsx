@@ -31,5 +31,5 @@ export default async function WelcomeRedirectPage() {
     });
   }
 
-  await redirectToEmailAccountPath("/mail");
+  await redirectToEmailAccountPath("/mail", undefined, session);
 }

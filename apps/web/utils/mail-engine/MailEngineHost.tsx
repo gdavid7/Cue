@@ -25,9 +25,9 @@ import {
 } from "@/utils/mail-engine/desktop-ipc";
 import {
   selectMailEngineRuntimeMode,
+  resolveMailEngineProvider,
   shouldStartMailEngine,
 } from "@/utils/mail-engine/runtime-mode";
-import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import { fetchEmailAccounts } from "@/utils/fetch-email-accounts";
 import { followMailboxChanges } from "@/utils/mail-engine/follow-mailbox-changes";
 import { browserMailEngineCapabilities } from "@/utils/mail-engine/worker-protocol";
@@ -119,7 +119,7 @@ export function MailCoverageGate({
 }
 
 function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
-  const { emailAccountId, provider } = useAccount();
+  const { emailAccountId, provider, isLoading } = useAccount();
   const pathname = usePathname();
   const desktopIpc = useSyncExternalStore(
     subscribeNever,
@@ -133,11 +133,15 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
     desktopIpc,
     browserRequested,
   });
+  const mailProvider = resolveMailEngineProvider({
+    accountsLoading: isLoading,
+    provider,
+  });
   const [client, setClient] = useState<MailClient | null>(null);
   const [unavailable, setUnavailable] = useState(false);
 
   useEffect(() => {
-    if (!emailAccountId || !enabled) {
+    if (!emailAccountId || !enabled || !mailProvider) {
       setUnavailable(false);
       return;
     }
@@ -152,7 +156,6 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
       setUnavailable(true);
       return;
     }
-    const mailProvider = isMicrosoftProvider(provider) ? "microsoft" : "google";
     const abort = new AbortController();
     let published: MailClient | undefined;
 
@@ -297,7 +300,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
       engine?.close().catch(() => undefined);
       setClient(null);
     };
-  }, [emailAccountId, provider, enabled, desktopIpc, requestBrowserEngine]);
+  }, [emailAccountId, mailProvider, enabled, desktopIpc, requestBrowserEngine]);
 
   useEffect(() => {
     if (!client || !emailAccountId) return;

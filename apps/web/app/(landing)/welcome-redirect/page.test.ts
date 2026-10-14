@@ -39,8 +39,8 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/utils/account", () => ({
-  redirectToEmailAccountPath: (path: string) =>
-    mocks.redirectToEmailAccountPath(path),
+  redirectToEmailAccountPath: (...args: [string, unknown, unknown]) =>
+    mocks.redirectToEmailAccountPath(...args),
 }));
 
 import WelcomeRedirectPage from "./page";
@@ -77,6 +77,12 @@ describe("WelcomeRedirectPage", () => {
 
     expect(mocks.updateUsers).not.toHaveBeenCalled();
     expect(mocks.registerUtmTracking).not.toHaveBeenCalled();
+    expect(mocks.auth).toHaveBeenCalledTimes(1);
+    expect(mocks.redirectToEmailAccountPath).toHaveBeenCalledWith(
+      "/mail",
+      undefined,
+      { user: { id: "user-1" } },
+    );
   });
 
   it("sends signed-out visitors to login", async () => {

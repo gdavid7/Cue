@@ -117,6 +117,21 @@ describe("redirectToEmailAccountPath", () => {
     );
   });
 
+  it("reuses a session the caller already resolved", async () => {
+    mocks.findFirst.mockResolvedValue({ id: "account_456" });
+
+    await expect(
+      redirectToEmailAccountPath("/mail", undefined, {
+        user: { id: "user_456" },
+      } as Parameters<typeof redirectToEmailAccountPath>[2]),
+    ).rejects.toThrow("redirect:/account_456/mail");
+
+    expect(mocks.auth).not.toHaveBeenCalled();
+    expect(mocks.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: "user_456" } }),
+    );
+  });
+
   it("uses the last email account cookie after confirming it still exists", async () => {
     mocks.cookies.mockResolvedValue({
       get: () => ({

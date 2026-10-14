@@ -182,18 +182,21 @@ function ManageServiceWorker() {
     document.addEventListener("visibilitychange", checkForUpdate);
     window.addEventListener("online", checkForUpdate);
 
-    serwist
-      .register()
-      .then((serviceWorkerRegistration) => {
-        if (serviceWorkerRegistration) {
-          watchForWaitingWorker(serviceWorkerRegistration);
-        }
-        saveOfflineMail();
-        return checkForUpdate();
-      })
-      .catch(() => {});
+    const cancelRegistration = runWhenPageSettles(() => {
+      serwist
+        .register()
+        .then((serviceWorkerRegistration) => {
+          if (serviceWorkerRegistration) {
+            watchForWaitingWorker(serviceWorkerRegistration);
+          }
+          saveOfflineMail();
+          return checkForUpdate();
+        })
+        .catch(() => {});
+    });
 
     return () => {
+      cancelRegistration();
       stopWatchingForWaiting?.();
       navigator.serviceWorker.removeEventListener(
         "controllerchange",
@@ -227,6 +230,27 @@ function saveOfflineMailPage(worker: ServiceWorker | null | undefined) {
   )
     return;
   worker?.postMessage({ type: SAVE_OFFLINE_MAIL });
+}
+
+// Installing the worker downloads its precache, which would otherwise compete
+// with the first visit's own requests for bandwidth and main-thread time.
+function runWhenPageSettles(callback: () => void) {
+  let idleHandle: number | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const schedule = () => {
+    if (typeof window.requestIdleCallback === "function") {
+      idleHandle = window.requestIdleCallback(callback, { timeout: 5000 });
+    } else {
+      timer = setTimeout(callback, 1000);
+    }
+  };
+  if (document.readyState === "complete") schedule();
+  else window.addEventListener("load", schedule, { once: true });
+  return () => {
+    window.removeEventListener("load", schedule);
+    if (idleHandle !== undefined) window.cancelIdleCallback(idleHandle);
+    if (timer !== undefined) clearTimeout(timer);
+  };
 }
 
 function readDesktopWebUpdateLastPromptedAt(): number | null {

@@ -3,13 +3,15 @@ import config from "./serwist.config.mjs";
 
 vi.mock("@serwist/next/config", () => ({
   serwist: async () => ({
-    globPatterns: ["custom-output/static/**/*.{js,css,json}", "public/**/*"],
+    globPatterns: [
+      "custom-output/static/**/*.{js,css,png,svg,json}",
+      "public/**/*",
+    ],
   }),
 }));
 
-it("includes emitted WASM in the production precache without losing custom output paths or existing asset types", () => {
+it("precaches only the offline mail scripts, styles and WASM from the custom output path", () => {
   expect(config.globPatterns).toEqual([
-    "custom-output/static/**/*.{js,css,json,wasm}",
-    "public/**/*",
+    "custom-output/static/**/*.{js,css,wasm}",
   ]);
 });

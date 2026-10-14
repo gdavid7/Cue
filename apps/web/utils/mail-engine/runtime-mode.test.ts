@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  resolveMailEngineProvider,
   selectMailEngineRuntimeMode,
   shouldStartMailEngine,
 } from "./runtime-mode";
@@ -85,5 +86,31 @@ describe("shouldStartMailEngine", () => {
         desktopIpc: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveMailEngineProvider", () => {
+  it("waits for the account list instead of guessing a provider", () => {
+    expect(
+      resolveMailEngineProvider({ accountsLoading: true, provider: "" }),
+    ).toBeNull();
+  });
+
+  it("keeps the provider stable once the account list resolves", () => {
+    expect(
+      resolveMailEngineProvider({ accountsLoading: false, provider: "google" }),
+    ).toBe("google");
+    expect(
+      resolveMailEngineProvider({
+        accountsLoading: false,
+        provider: "microsoft",
+      }),
+    ).toBe("microsoft");
+  });
+
+  it("falls back to Google when the account list fails to load", () => {
+    expect(
+      resolveMailEngineProvider({ accountsLoading: false, provider: "" }),
+    ).toBe("google");
   });
 });

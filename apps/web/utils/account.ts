@@ -16,9 +16,12 @@ const logger = createScopedLogger("account-redirect");
 export async function redirectToEmailAccountPath(
   path: `/${string}`,
   searchParams?: Record<string, string | string[] | undefined>,
+  // Pages that already resolved the session pass it to skip a second lookup.
+  knownSession?: NonNullable<Awaited<ReturnType<typeof auth>>>,
 ) {
   const timing = createRedirectTiming(path, searchParams);
-  const session = await measureRedirectStep(timing, "auth", () => auth());
+  const session =
+    knownSession ?? (await measureRedirectStep(timing, "auth", () => auth()));
   const userId = session?.user.id;
   if (!userId) {
     logRedirectTiming(timing, {
