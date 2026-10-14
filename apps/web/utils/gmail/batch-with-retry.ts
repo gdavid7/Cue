@@ -4,11 +4,16 @@ import { getBatch } from "@/utils/gmail/batch";
 import { isRetryableError } from "@/utils/gmail/retry";
 import { sleep } from "@/utils/sleep";
 import type { Logger } from "@/utils/logger";
-import { gmailRequestCost } from "@/utils/gmail/quota";
+import {
+  currentGmailQuotaContext,
+  gmailRequestCost,
+} from "@/utils/gmail/quota";
 
 // Each batch is admitted against the account's Gmail budget as one debit, so
-// keep it to 500 units: 25 messages or 12 threads.
-const MAX_BATCH_UNITS = 500;
+// keep it to 500 units: 25 messages or 12 threads. Background work must also
+// leave half the bucket to everyone else, so a smaller debit fits the room
+// other callers leave instead of waiting for a nearly full bucket.
+const MAX_BATCH_UNITS = { foreground: 500, background: 200 };
 const RATE_LIMIT_RETRY_BATCH_SIZE = 10;
 const MAX_BATCH_RETRIES = 3;
 const MAX_RETRY_JITTER_MS = 1000;
@@ -188,9 +193,13 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
 }
 
 function batchSizeFor(endpoint: string) {
+  const maxUnits =
+    currentGmailQuotaContext().priority === "background"
+      ? MAX_BATCH_UNITS.background
+      : MAX_BATCH_UNITS.foreground;
   return Math.max(
     1,
-    Math.floor(MAX_BATCH_UNITS / gmailRequestCost("GET", `${endpoint}/id`)),
+    Math.floor(maxUnits / gmailRequestCost("GET", `${endpoint}/id`)),
   );
 }
 

@@ -101,6 +101,11 @@ vi.mock("@/utils/email/local-mail-sync-budget", async (importOriginal) => ({
 const ACCOUNT = "account-1";
 const logger = createScopedLogger("first-load-quota-test");
 const END_MS = 240_000;
+const STEADY_MS = 180_000;
+// The gate refills 3,600 units a minute; a thread open costs 40 units, so one
+// every 0.7 s spends 95% of that.
+const BUCKET_UNITS_PER_SECOND = 60;
+const OPEN_EVERY_MS = 700;
 
 // Replays what opening Cue fires at Gmail: two tabs each scanning the recent
 // window and backfilling older mail, a deep-linked thread plus three more
@@ -122,104 +127,17 @@ describe("Gmail quota on a first load", () => {
   });
 
   it("stays within Gmail's per-user minute while thread opens stay immediate", async () => {
-    const gmail = createFakeGmail({
-      unitsPerMinute: GMAIL_USER_UNITS_PER_MINUTE,
-      latencyMs: 250,
-    });
-    const client = await getGmailClientWithRefresh({
-      accessToken: "access-token",
-      refreshToken: "refresh-token",
-      expiresAt: Date.now() + 3_600_000,
-      emailAccountId: ACCOUNT,
-      logger,
-    });
-    const auth = client.context._options.auth as InstanceType<
-      typeof gmailAuth.OAuth2
-    >;
-    auth.transporter.defaults.fetchImplementation =
-      gmail.fetch as unknown as typeof fetch;
-    vi.stubGlobal("fetch", gmail.fetch);
-    const provider = new GmailProvider(client, logger, ACCOUNT);
-    const rateLimitModes: Array<{ at: number; source: string }> = [];
+    const {
+      gmail,
+      client,
+      provider,
+      route,
+      retried,
+      engineScope,
+      sleep,
+      rateLimitModes,
+    } = await startReplay(END_MS);
     const threadOpens: Array<{ at: number; ms: number; ok: boolean }> = [];
-
-    const route = async <T>(source: string, run: () => Promise<T>) =>
-      runWithAuditContext({ source, emailAccountId: ACCOUNT }, async () => {
-        try {
-          await assertProviderNotRateLimited({
-            emailAccountId: ACCOUNT,
-            provider: "google",
-            source,
-          });
-          return { ok: true as const, value: await run() };
-        } catch (error) {
-          const state = await recordProviderRateLimitFromError({
-            error,
-            emailAccountId: ACCOUNT,
-            provider: "google",
-            logger,
-            source,
-          });
-          if (state) rateLimitModes.push({ at: Date.now() - start, source });
-          return { ok: false as const, error };
-        }
-      });
-
-    // SWR retries a failed request until it succeeds.
-    const retried = async <T>(source: string, run: () => Promise<T>) => {
-      for (;;) {
-        const result = await route(source, run);
-        if (result.ok || !running()) return result;
-        await sleep(10_000);
-      }
-    };
-    const sleep = (ms: number) =>
-      new Promise((resolve) => setTimeout(resolve, ms));
-    const running = () => Date.now() - start < END_MS;
-
-    // Each tab or device runs its own engine with its own local store.
-    const engineScope = async (tab: string, scopeId: string) => {
-      const source = createEmailProviderMailboxSource({
-        provider,
-        accountId: ACCOUNT,
-        logger,
-      });
-      const session = { accountId: ACCOUNT, generation: `gen-${tab}` };
-      const context = {
-        session,
-        requestId: `${tab}-${scopeId}`,
-        signal: new AbortController().signal,
-      };
-      let page: string | null = null;
-      while (running() && page === null) {
-        const begun = await route("mail/v1/bootstrap", () =>
-          source.beginBootstrap({
-            ...context,
-            scope: { id: scopeId, kind: "account", folderId: null },
-            afterMs: null,
-          }),
-        );
-        if (begun.ok && begun.value.status === "ok")
-          page = begun.value.value.enumerationToken;
-        else await sleep(15_000);
-      }
-      while (running() && page) {
-        const result = await route("mail/v1/enumeration", () =>
-          source.enumerate({
-            ...context,
-            bootstrapId: "mailbox",
-            page: page as string,
-            pageSize: 50,
-          }),
-        );
-        if (!result.ok) await sleep(15_000);
-        else if (result.value.status === "ok")
-          page = result.value.value.nextPage;
-        else if (result.value.status === "paused")
-          await sleep(result.value.retryAfterMs);
-        else await sleep(1000);
-      }
-    };
 
     const openThread = async (threadId: string) => {
       const source = createEmailProviderMailboxSource({
@@ -380,4 +298,171 @@ describe("Gmail quota on a first load", () => {
       "user/inbox-insights": expect.any(Number),
     });
   }, 60_000);
+
+  it("keeps the backfill moving while someone opens threads at nearly the bucket's refill rate", async () => {
+    const { gmail, provider, route, engineScope, sleep, rateLimitModes } =
+      await startReplay(STEADY_MS);
+    const source = createEmailProviderMailboxSource({
+      provider,
+      accountId: ACCOUNT,
+      logger,
+    });
+    const opens: number[] = [];
+    const reader = async () => {
+      for (let i = 0; Date.now() - start < STEADY_MS; i++) {
+        const openedAt = Date.now();
+        const result = await route("mail/v1/conversation-membership", () =>
+          source.readConversationMembership({
+            session: { accountId: ACCOUNT, generation: "gen-a" },
+            requestId: `open-${i}`,
+            signal: new AbortController().signal,
+            conversation: { accountId: ACCOUNT, conversationId: `t${i % 40}` },
+            resolutionId: "r",
+            page: null,
+            pageSize: 50,
+          }),
+        );
+        if (result.ok) opens.push(Date.now() - openedAt);
+        await sleep(Math.max(0, OPEN_EVERY_MS - (Date.now() - openedAt)));
+      }
+    };
+    const actors = Promise.all([engineScope("a", "history"), reader()]);
+
+    for (let elapsed = 0; elapsed < STEADY_MS + 60_000; elapsed += 100) {
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    await actors;
+
+    expect(gmail.limitedCalls()).toEqual([]);
+    expect(rateLimitModes).toEqual([]);
+    expect(opens.every((ms) => ms === 250)).toBe(true);
+    // After the bucket's opening balance is spent, the backfill gets at
+    // least half of the little the reader leaves. A backfill batch that
+    // needs a nearly full bucket got a tenth of it.
+    const spareUnitsPerSecond =
+      BUCKET_UNITS_PER_SECOND - 40_000 / OPEN_EVERY_MS;
+    const backfill =
+      gmail.unitsByCaller(start + 60_000, start + STEADY_MS)[
+        "mail/v1/enumeration"
+      ] ?? 0;
+    expect(backfill).toBeGreaterThanOrEqual(
+      (spareUnitsPerSecond * (STEADY_MS - 60_000)) / 1000 / 2,
+    );
+  }, 60_000);
 });
+
+/**
+ * A fake Gmail that charges documented costs, wired under the real Gmail
+ * client and provider, and the actors a replay is built from: a route that
+ * records rate-limit mode, an SWR-style retry, and a tab's engine scope.
+ */
+async function startReplay(endMs: number) {
+  const start = Date.now();
+  const rateLimitModes: Array<{ at: number; source: string }> = [];
+  const gmail = createFakeGmail({
+    unitsPerMinute: GMAIL_USER_UNITS_PER_MINUTE,
+    latencyMs: 250,
+  });
+  const client = await getGmailClientWithRefresh({
+    accessToken: "access-token",
+    refreshToken: "refresh-token",
+    expiresAt: Date.now() + 3_600_000,
+    emailAccountId: ACCOUNT,
+    logger,
+  });
+  const auth = client.context._options.auth as InstanceType<
+    typeof gmailAuth.OAuth2
+  >;
+  auth.transporter.defaults.fetchImplementation =
+    gmail.fetch as unknown as typeof fetch;
+  vi.stubGlobal("fetch", gmail.fetch);
+  const provider = new GmailProvider(client, logger, ACCOUNT);
+
+  const route = async <T>(source: string, run: () => Promise<T>) =>
+    runWithAuditContext({ source, emailAccountId: ACCOUNT }, async () => {
+      try {
+        await assertProviderNotRateLimited({
+          emailAccountId: ACCOUNT,
+          provider: "google",
+          source,
+        });
+        return { ok: true as const, value: await run() };
+      } catch (error) {
+        const state = await recordProviderRateLimitFromError({
+          error,
+          emailAccountId: ACCOUNT,
+          provider: "google",
+          logger,
+          source,
+        });
+        if (state) rateLimitModes.push({ at: Date.now() - start, source });
+        return { ok: false as const, error };
+      }
+    });
+
+  // SWR retries a failed request until it succeeds.
+  const retried = async <T>(source: string, run: () => Promise<T>) => {
+    for (;;) {
+      const result = await route(source, run);
+      if (result.ok || !running()) return result;
+      await sleep(10_000);
+    }
+  };
+  const sleep = (ms: number) =>
+    new Promise((resolve) => setTimeout(resolve, ms));
+  const running = () => Date.now() - start < endMs;
+
+  // Each tab or device runs its own engine with its own local store.
+  const engineScope = async (tab: string, scopeId: string) => {
+    const source = createEmailProviderMailboxSource({
+      provider,
+      accountId: ACCOUNT,
+      logger,
+    });
+    const session = { accountId: ACCOUNT, generation: `gen-${tab}` };
+    const context = {
+      session,
+      requestId: `${tab}-${scopeId}`,
+      signal: new AbortController().signal,
+    };
+    let page: string | null = null;
+    while (running() && page === null) {
+      const begun = await route("mail/v1/bootstrap", () =>
+        source.beginBootstrap({
+          ...context,
+          scope: { id: scopeId, kind: "account", folderId: null },
+          afterMs: null,
+        }),
+      );
+      if (begun.ok && begun.value.status === "ok")
+        page = begun.value.value.enumerationToken;
+      else await sleep(15_000);
+    }
+    while (running() && page) {
+      const result = await route("mail/v1/enumeration", () =>
+        source.enumerate({
+          ...context,
+          bootstrapId: "mailbox",
+          page: page as string,
+          pageSize: 50,
+        }),
+      );
+      if (!result.ok) await sleep(15_000);
+      else if (result.value.status === "ok") page = result.value.value.nextPage;
+      else if (result.value.status === "paused")
+        await sleep(result.value.retryAfterMs);
+      else await sleep(1000);
+    }
+  };
+
+  return {
+    gmail,
+    client,
+    provider,
+    route,
+    retried,
+    engineScope,
+    sleep,
+    rateLimitModes,
+  };
+}
