@@ -480,12 +480,16 @@ export function MailShell() {
     if (next.index !== focusedIndex) setFocusedIndex(next.index);
   }, [orderedIds, focusedIndex, searchQuery, searchViewIdentity]);
   const { data: searchAnswer } = useSearchAnswer(emailAccountId, searchParam);
+  const searchFoundNothing = Boolean(
+    searchQuery && hasProviderResponse && !threads.length,
+  );
+  const isSearchCommitted = !!searchParam && searchQuery === searchParam.trim();
   let emptySearchMessage: string | undefined;
-  if (searchQuery && hasProviderResponse && !threads.length) {
-    emptySearchMessage = "No emails in this view";
-  }
-  // The answer above already leads to the mail; "no emails" would contradict it.
-  if (searchAnswer && searchParam) emptySearchMessage = "";
+  if (searchFoundNothing) emptySearchMessage = "No emails in this view";
+  // A committed search's card above speaks for it: the answer leads to the
+  // mail, and with no answer it offers to ask in chat instead.
+  if ((searchAnswer || searchFoundNothing) && isSearchCommitted)
+    emptySearchMessage = "";
 
   const selection = useThreadSelection(orderedIds);
 
@@ -1633,6 +1637,7 @@ export function MailShell() {
                 <SearchAnswerCard
                   emailAccountId={emailAccountId}
                   key={searchParam}
+                  noResults={searchFoundNothing && isSearchCommitted}
                   onContinueInChat={onContinueInChat}
                   query={searchParam}
                 />
