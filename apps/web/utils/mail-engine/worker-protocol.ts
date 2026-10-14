@@ -79,7 +79,10 @@ export type WorkerRequest =
 export type WorkerResponse =
   | { id: string; type: "ok"; value?: unknown }
   | { id: string; type: "error"; message: string }
-  | { type: "snapshot"; handleId: string; snapshot: QuerySnapshot<unknown> };
+  | {
+      type: "snapshots";
+      snapshots: { handleId: string; snapshot: QuerySnapshot<unknown> }[];
+    };
 
 export function browserMailEngineCapabilities() {
   return {

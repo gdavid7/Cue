@@ -1,30 +1,19 @@
-import {
-  createMailEngine,
-  createHostRuntime,
-  type MailEngine,
-  type WorkAdmission,
-} from "@inboxzero/mail-core/engine";
-import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
+import type { MailEngine, WorkAdmission } from "@inboxzero/mail-core/engine";
 import type {
   MailboxView,
   QueryHandle,
   QuerySnapshot,
 } from "@inboxzero/mail-core/queries";
-import { createMailHttpRequest } from "@/utils/mail-engine/http";
-import { createRoutedBackendAdapter } from "@inboxzero/mail-core/protocol/routed-backend-adapter";
-import { createWasmSqliteDriver } from "@/utils/mail-engine/wasm-sqlite";
 import {
   browserMailEngineCapabilities,
   pageConnectivityOnline,
   readPageMaxPendingOperations,
   requestSyncUnlessOffline,
-  shouldReleaseDeferredOnStart,
   type BrowserEngineStart,
   type WorkerObserveKind,
   type WorkerRequest,
   type WorkerResponse,
 } from "@/utils/mail-engine/worker-protocol";
-import { browserStoragePressure } from "@/utils/mail-engine/storage-pressure";
 import { finishPendingLocalMailboxWipe } from "@/utils/mail-engine/wipe-local-mailbox";
 
 export { browserMailEngineCapabilities };
@@ -54,75 +43,18 @@ export async function createBrowserMailEngine(
       // Dedicated workers can fail in private mode or without module workers.
     }
   }
+  // The engine, its store and SQLite normally load in the worker only, so the
+  // page downloads them only on this fallback.
+  const { createInTabEngine } = await import(
+    "@/utils/mail-engine/in-tab-engine"
+  );
   return createInTabEngine(start);
-}
-
-async function createInTabEngine(
-  input: BrowserEngineStart,
-): Promise<BrowserMailEngine> {
-  const driver = await createWasmSqliteDriver({ persist: input.persist });
-  const runtime = createHostRuntime({
-    storagePressure: browserStoragePressure,
-  });
-  const store = await createSqliteMailStore(driver, {
-    maxPendingOperations: input.maxPendingOperations,
-    runtime,
-  });
-  const ensureAccount: BrowserMailEngine["ensureAccount"] = async (account) => {
-    await store.ensureAccount({
-      accountId: account.accountId,
-      provider: account.provider,
-      generation: account.generation ?? account.accountId,
-    });
-  };
-  await ensureAccount(input);
-  const ports = createRoutedBackendAdapter({
-    requestFor: createMailHttpRequest,
-  });
-  const engine = createMailEngine({
-    store,
-    source: ports.source,
-    executor: ports.executor,
-    assistant: ports.assistant,
-    runtime,
-    ownerId: "browser-owner",
-  });
-  if (shouldReleaseDeferredOnStart(input.online)) {
-    await engine.requestSync([input.accountId]);
-  }
-  let stopped = false;
-  const loop = (async () => {
-    while (!stopped) {
-      try {
-        await engine.runUntil(Date.now() + 2000);
-      } catch {
-        await delay(1000);
-      }
-      await delay(250);
-    }
-  })();
-  const originalClose = engine.close.bind(engine);
-  const originalRequestSync = engine.requestSync.bind(engine);
-  return {
-    ...engine,
-    // Local autocomplete stays off the UI thread if dedicated workers fail.
-    queryContactSuggestions: undefined,
-    ensureAccount,
-    requestSync: (accountIds) =>
-      requestSyncUnlessOffline(pageConnectivityOnline(), () =>
-        originalRequestSync(accountIds),
-      ),
-    async close() {
-      stopped = true;
-      await originalClose();
-      await loop;
-    },
-  };
 }
 
 async function createWorkerOwnedEngine(
   input: BrowserEngineStart,
 ): Promise<BrowserMailEngine> {
+  performance.mark("mail-engine:worker-create");
   const worker = new Worker(new URL("./engine-worker.ts", import.meta.url), {
     type: "module",
   });
@@ -141,11 +73,18 @@ async function createWorkerOwnedEngine(
 
   worker.addEventListener("message", (event: MessageEvent<WorkerResponse>) => {
     const message = event.data;
-    if (message.type === "snapshot") {
-      const observation = observations.get(message.handleId);
-      if (!observation) return;
-      observation.snapshot = message.snapshot;
-      for (const listener of observation.listeners) listener();
+    if (message.type === "snapshots") {
+      // Every view takes its new state before any listener runs, so the page
+      // renders the whole change once.
+      const changed = message.snapshots.flatMap(({ handleId, snapshot }) => {
+        const observation = observations.get(handleId);
+        if (!observation) return [];
+        observation.snapshot = snapshot;
+        return [observation];
+      });
+      for (const observation of changed) {
+        for (const listener of observation.listeners) listener();
+      }
       return;
     }
     const waiter = pending.get(message.id);
@@ -166,6 +105,7 @@ async function createWorkerOwnedEngine(
     type: "start",
     input,
   });
+  performance.mark("mail-engine:ready");
 
   function observe<T>(
     kind: WorkerObserveKind,
@@ -309,8 +249,4 @@ function callWorker<T>(
     method,
     args,
   }) as Promise<T>;
-}
-
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
