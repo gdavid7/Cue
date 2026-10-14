@@ -7,10 +7,31 @@ import { MailAccountSwitcher } from "./MailAccountSwitcher";
 
 (globalThis as { React?: typeof React }).React = React;
 
-const { mockOpenWindow, mockUseAccounts, mockUseAccount } = vi.hoisted(() => ({
+const {
+  mockOpenWindow,
+  mockUseAccounts,
+  mockUseAccount,
+  mockLogOut,
+  mockOpenSettings,
+} = vi.hoisted(() => ({
   mockOpenWindow: vi.fn().mockResolvedValue(undefined),
   mockUseAccounts: vi.fn(),
   mockUseAccount: vi.fn(),
+  mockLogOut: vi.fn(),
+  mockOpenSettings: vi.fn(),
+}));
+
+vi.mock("@/utils/user", () => ({ logOut: mockLogOut }));
+
+vi.mock("@/hooks/useSettingsDialog", () => ({
+  useSettingsDialog: () => ({ openSettings: mockOpenSettings }),
+}));
+
+vi.mock("./use-mail-app-links", () => ({
+  useMailAppLinks: () => [
+    { name: "Chat", href: "/account-1/assistant", icon: null },
+    { name: "Rules", href: "/account-1/automation", icon: null },
+  ],
 }));
 
 vi.mock("next/link", () => ({
@@ -165,6 +186,19 @@ describe("MailAccountSwitcher", () => {
     });
     expect(dialog.textContent).toContain("Add Google");
     expect(dialog.textContent).toContain("Add Microsoft");
+  });
+
+  it("leads out of the mail screen: the app's places, Settings and Sign out", async () => {
+    renderSwitcher({ onSelectAccount: vi.fn() });
+
+    expect(
+      (await screen.findByRole("link", { name: "Rules" })).getAttribute("href"),
+    ).toBe("/account-1/automation");
+    selectMenuItem(screen.getByRole("menuitem", { name: "Settings" }));
+    expect(mockOpenSettings).toHaveBeenCalled();
+
+    selectMenuItem(screen.getByRole("menuitem", { name: "Sign out" }));
+    expect(mockLogOut).toHaveBeenCalledWith(window.location.origin);
   });
 });
 

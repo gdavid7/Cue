@@ -249,6 +249,30 @@ test("navigates drafts and sent mail from the sidebar", async ({ page }) => {
   await expect(draft).toHaveCount(0);
 });
 
+test("leads from the mail screen to Rules, Settings and Sign out", async ({
+  page,
+}, testInfo) => {
+  const { emailAccountId } = await openMail(page);
+  const sidebar = page.locator("[data-mail-sidebar]");
+
+  await expect(
+    sidebar.getByRole("link", { name: "Rules", exact: true }),
+  ).toHaveAttribute("href", `/${emailAccountId}/automation`);
+  await expect(
+    sidebar.getByRole("link", { name: "Chat", exact: true }),
+  ).toHaveAttribute("href", `/${emailAccountId}/assistant`);
+
+  await sidebar.getByRole("button", { name: /Smoke Test User/ }).click();
+  await expect(page.getByRole("menuitem", { name: "Sign out" })).toBeVisible();
+  await capturePlaywrightCheckpoint(page, testInfo, "mail-account-menu");
+
+  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await expect(page).toHaveURL(/settings=open/);
+  await expect(
+    page.getByRole("heading", { name: "Settings", exact: true }),
+  ).toBeVisible();
+});
+
 test("creates and edits a label and shows every keyboard workflow", async ({
   page,
 }, testInfo) => {

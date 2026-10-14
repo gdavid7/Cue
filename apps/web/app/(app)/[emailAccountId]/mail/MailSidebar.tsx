@@ -107,6 +107,8 @@ export type MailSidebarProps = {
   allInboxesHref?: string;
   /** Today's briefing, which lives outside the mail view. */
   todayHref?: string;
+  /** The app's other places, such as Chat and Rules, above the footer. */
+  appLinks?: { name: string; href: string; icon: ReactNode }[];
   /** Each account's own labels and folders, shown in their place in All inboxes. */
   accountSections?: ReactNode;
   className?: string;
@@ -222,6 +224,7 @@ export function MailSidebar({
   unified = false,
   allInboxesHref,
   todayHref,
+  appLinks,
   accountSections,
   className,
 }: MailSidebarProps) {
@@ -438,6 +441,26 @@ export function MailSidebar({
           </>
         ) : null}
       </div>
+      {appLinks?.length ? (
+        // Pinned outside the scrolling mailboxes, so the way to the rest of
+        // the app never scrolls out of view.
+        <nav
+          aria-label="App"
+          className="mt-2 flex shrink-0 flex-col gap-px border-border border-t pt-2"
+        >
+          {appLinks.map((link) => (
+            <NavRow
+              key={link.href}
+              href={link.href}
+              active={false}
+              icon={link.icon}
+              name={link.name}
+              count={null}
+              collapsed={collapsed}
+            />
+          ))}
+        </nav>
+      ) : null}
       {footer}
     </aside>
   );

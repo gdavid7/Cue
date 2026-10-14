@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -703,6 +704,95 @@ describe("EmailThread composer focus", () => {
 
     expect(document.activeElement).toBe(
       screen.getByRole("textbox", { name: "Email message" }),
+    );
+  });
+});
+
+describe("EmailThread reading a conversation", () => {
+  afterEach(cleanup);
+
+  it("offers Reply and Forward under the newest message until a reply opens", () => {
+    render(
+      <EmailThread
+        messages={[
+          createReaderMessage("first", "1000"),
+          createReaderMessage("latest", "2000"),
+        ]}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+
+    const bar = screen.getByRole("group", { name: "Reply actions" });
+    expect(bar.closest("[data-thread-message-id]")).toBe(
+      document.querySelector('[data-thread-message-id="latest"]'),
+    );
+
+    fireEvent.click(within(bar).getByRole("button", { name: "Forward" }));
+
+    expect(screen.queryByRole("group", { name: "Reply actions" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Email message" })).toBeTruthy();
+  });
+
+  it("leaves the reply area to Cue while it explains a reply it held back", () => {
+    render(
+      <EmailThread
+        messages={[createReaderMessage("latest", "1000")]}
+        refetch={vi.fn()}
+        idleReplyArea={<p>Cue left this reply to you.</p>}
+        showReplyButton
+      />,
+    );
+
+    expect(screen.getByText("Cue left this reply to you.")).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "Reply actions" })).toBeNull();
+  });
+
+  it("folds a long run of read messages into one row that reveals them", () => {
+    render(
+      <EmailThread
+        messages={["1", "2", "3", "4", "5"].map((id) =>
+          createReaderMessage(`message-${id}`, `${id}000`),
+        )}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+    const rows = () =>
+      Array.from(document.querySelectorAll("[data-thread-message-id]")).map(
+        (row) => row.getAttribute("data-thread-message-id"),
+      );
+    expect(rows()).toEqual(["message-1", "message-5"]);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show 3 earlier messages" }),
+    );
+
+    expect(rows()).toEqual([
+      "message-1",
+      "message-2",
+      "message-3",
+      "message-4",
+      "message-5",
+    ]);
+  });
+
+  it("keeps a short conversation's earlier messages as their own rows", () => {
+    render(
+      <EmailThread
+        messages={["1", "2", "3"].map((id) =>
+          createReaderMessage(`message-${id}`, `${id}000`),
+        )}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /earlier messages/ }),
+    ).toBeNull();
+    expect(document.querySelectorAll("[data-thread-message-id]")).toHaveLength(
+      3,
     );
   });
 });

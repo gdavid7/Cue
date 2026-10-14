@@ -23,6 +23,7 @@ import {
   MAIL_SIDEBAR_RAIL_WIDTH,
 } from "@/app/(app)/[emailAccountId]/mail/sidebar-width";
 import { getAllInboxesAccounts } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
+import { useMailAppLinks } from "@/app/(app)/[emailAccountId]/mail/use-mail-app-links";
 import { Sidebar, useSidebar } from "@/components/ui/sidebar";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useFolders } from "@/hooks/useFolders";
@@ -107,6 +108,7 @@ export const MailShellSidebar = memo(function MailShellSidebar({
   const { data: accountsData } = useAccounts();
   const hasAllInboxes =
     getAllInboxesAccounts(accountsData?.emailAccounts ?? []).length > 1;
+  const appLinks = useMailAppLinks();
   const { state: openSidebars } = useSidebar();
   const isMailSidebarOpen = openSidebars.includes("left-sidebar");
 
@@ -251,6 +253,7 @@ export const MailShellSidebar = memo(function MailShellSidebar({
             ) : undefined
           }
           todayHref={prefixPath(emailAccountId, "/home")}
+          appLinks={appLinks}
           allInboxesHref={
             hasAllInboxes
               ? prefixPath(emailAccountId, "/mail?accountScope=all")

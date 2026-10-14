@@ -5,8 +5,10 @@ import { memo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   ChevronsUpDownIcon,
+  LogOutIcon,
   PlusIcon,
   Settings2Icon,
+  SettingsIcon,
   SlidersHorizontalIcon,
 } from "lucide-react";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
@@ -46,6 +48,9 @@ import {
   getShortcutHint,
 } from "@/lib/shortcuts/registry";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
+import { useMailAppLinks } from "@/app/(app)/[emailAccountId]/mail/use-mail-app-links";
+import { useSettingsDialog } from "@/hooks/useSettingsDialog";
+import { logOut } from "@/utils/user";
 import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 import { cn } from "@/utils";
 
@@ -77,6 +82,8 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
   const { emailAccount } = useAccount();
   const [isSelectionOpen, setIsSelectionOpen] = useState(false);
   const [isAddAccountOpen, setIsAddAccountOpen] = useState(false);
+  const appLinks = useMailAppLinks();
+  const { openSettings } = useSettingsDialog();
 
   if (!data) return null;
 
@@ -196,6 +203,35 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
               <Settings2Icon className="size-4 text-muted-foreground" />
               Manage accounts
             </Link>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {/* The sidebar lists these itself; the phone has only this menu. */}
+          {variant !== "sidebar" &&
+            appLinks.map((link) => (
+              <DropdownMenuItem
+                asChild
+                className="gap-3 rounded-xl px-3 py-2 [&_svg]:text-muted-foreground"
+                key={link.href}
+              >
+                <Link href={link.href}>
+                  {link.icon}
+                  {link.name}
+                </Link>
+              </DropdownMenuItem>
+            ))}
+          <DropdownMenuItem
+            className="gap-3 rounded-xl px-3 py-2"
+            onSelect={openSettings}
+          >
+            <SettingsIcon className="size-4 text-muted-foreground" />
+            Settings
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className="gap-3 rounded-xl px-3 py-2"
+            onSelect={() => logOut(window.location.origin)}
+          >
+            <LogOutIcon className="size-4 text-muted-foreground" />
+            Sign out
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

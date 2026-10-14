@@ -171,6 +171,10 @@ test("captures the rich message reader states", async ({ page }, testInfo) => {
   await capturePlaywrightCheckpoint(page, testInfo, "mail-reader-toolbar");
 
   const message = page.locator("[data-thread-message-id]").last();
+  // Reply is in view without hovering anything.
+  await expect(
+    message.getByRole("group", { name: "Reply actions" }),
+  ).toBeVisible();
   await page
     .getByRole("heading", { name: "Re: Reader Visual Message" })
     .hover();

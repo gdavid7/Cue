@@ -11,11 +11,11 @@ import {
 import { ReplyAssistContext } from "@/components/email-list/reply-assist";
 import { useAction } from "next-safe-action/hooks";
 import {
+  ChevronDownIcon,
+  ChevronUpIcon,
   ForwardIcon,
   ReplyAllIcon,
   ReplyIcon,
-  ChevronsUpDownIcon,
-  ChevronsDownUpIcon,
   UserSearchIcon,
 } from "lucide-react";
 import { Tooltip } from "@/components/Tooltip";
@@ -82,6 +82,7 @@ export function EmailMessage({
   afterBody,
   refetch,
   showReplyButton,
+  showReplyBar = false,
   defaultComposeMode,
   defaultReplyAll = false,
   composerOpen = true,
@@ -119,6 +120,11 @@ export function EmailMessage({
   draftMessages?: ThreadMessage[];
   refetch: () => void;
   showReplyButton: boolean;
+  /**
+   * Reply, Reply all and Forward as named buttons under the body. Set on the
+   * message replies go to while no composer is open.
+   */
+  showReplyBar?: boolean;
   defaultComposeMode?: ReplyDraftMode;
   /** Opens a default reply addressed to everyone on the message. */
   defaultReplyAll?: boolean;
@@ -171,7 +177,7 @@ export function EmailMessage({
    */
   focusComposer?: boolean;
 }) {
-  const { emailAccountId } = useAccount();
+  const { emailAccountId, userEmail } = useAccount();
   const { poppedOutDraftSessionId } = useComposeModal();
   const [replyAllOverride, setReplyAllOverride] = useState<boolean | null>(
     null,
@@ -356,6 +362,9 @@ export function EmailMessage({
     [expanded, onReply, onToggle, showReplyButton],
   );
 
+  const replyBarShown =
+    showReplyBar && showReplyButton && expanded && !hasOpenComposer;
+
   // A conversation that is only drafts shows each one as a draft row.
   const collapsedDraftOnlyRow = visibleDrafts.find(
     (draft) => draft.message.id === message.id && draft !== openDraft,
@@ -418,7 +427,8 @@ export function EmailMessage({
         onToggle={onToggle}
         onToggleKeyDown={onMessageKeyDown}
         showDetails={showDetails}
-        showReplyButton={showReplyButton}
+        // The bar below offers the same actions by name.
+        showReplyButton={showReplyButton && !replyBarShown}
         toggleDetails={toggleDetails}
         hasDraft={hasDraft || visibleDrafts.length > 0}
         sentMessageOpen={sentMessageOpen}
@@ -472,6 +482,16 @@ export function EmailMessage({
             ))}
 
           {message.attachments && <EmailAttachments message={message} />}
+          {/* Right under the message, ahead of anything Cue adds, so reading
+              to the end of it always lands on a way to answer. */}
+          {replyBarShown && (
+            <ReplyBar
+              canReplyAll={canReplyAllTo(message, userEmail)}
+              onForward={onForward}
+              onReply={onReply}
+              onReplyAll={onReplyAll}
+            />
+          )}
           {afterBody}
 
           {visibleDrafts.map(({ message: draft, sessionMessageId }) =>
@@ -633,8 +653,7 @@ function MessageHeader({
   const { emailAccount, emailAccountId, userEmail } = useAccount();
 
   const isSent = message.labelIds?.includes(GmailLabel.SENT) ?? false;
-  const canReplyAll =
-    !isSent && hasReplyAllRecipients(message.headers, userEmail);
+  const canReplyAll = canReplyAllTo(message, userEmail);
   const senderEmail = extractEmailAddress(message.headers.from);
   const senderName = isSent
     ? "Me"
@@ -712,10 +731,12 @@ function MessageHeader({
               {recipientSummary(message.headers, userEmail)}
             </span>
             <span className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors group-hover/details:bg-muted group-hover/details:text-foreground">
+              {/* One chevron, so it doesn't read as the toolbar's
+                  expand-all control. */}
               {showDetails ? (
-                <ChevronsDownUpIcon className="size-3.5" />
+                <ChevronUpIcon className="size-3.5" />
               ) : (
-                <ChevronsUpDownIcon className="size-3.5" />
+                <ChevronDownIcon className="size-3.5" />
               )}
             </span>
           </button>
@@ -754,7 +775,15 @@ function MessageHeader({
 
       <div className="ml-auto flex shrink-0 items-center gap-2">
         {(showReplyButton || menu) && (
-          <span className="flex shrink-0 items-center transition-opacity focus-within:opacity-100 group-hover/message:opacity-100 has-[[data-state=open]]:opacity-100 sm:opacity-0">
+          <span
+            className={cn(
+              "flex shrink-0 items-center",
+              // An open message keeps its actions in view; collapsed rows
+              // reveal theirs on hover so the thread stays easy to scan.
+              !expanded &&
+                "transition-opacity focus-within:opacity-100 group-hover/message:opacity-100 has-[[data-state=open]]:opacity-100 sm:opacity-0",
+            )}
+          >
             {showReplyButton && (
               <>
                 <Tooltip shortcuts={["reply"]}>
@@ -1197,5 +1226,57 @@ function MessageBodyLoading() {
       <LoadingMiniSpinner />
       Loading message…
     </p>
+  );
+}
+
+/**
+ * Gmail's reply row: the actions a reader looks for at the end of a message,
+ * named rather than icon-only.
+ */
+function ReplyBar({
+  canReplyAll,
+  onReply,
+  onReplyAll,
+  onForward,
+}: {
+  canReplyAll: boolean;
+  onReply: () => void;
+  onReplyAll: () => void;
+  onForward: () => void;
+}) {
+  return (
+    <div
+      aria-label="Reply actions"
+      className="mt-4 flex flex-wrap items-center gap-2"
+      role="group"
+    >
+      <Tooltip shortcuts={["reply"]}>
+        <Button onClick={onReply} size="sm" variant="outline">
+          <ReplyIcon className="mr-2 size-4" />
+          Reply
+        </Button>
+      </Tooltip>
+      {canReplyAll && (
+        <Tooltip shortcuts={["replyAll"]}>
+          <Button onClick={onReplyAll} size="sm" variant="outline">
+            <ReplyAllIcon className="mr-2 size-4" />
+            Reply all
+          </Button>
+        </Tooltip>
+      )}
+      <Tooltip shortcuts={["forward"]}>
+        <Button onClick={onForward} size="sm" variant="outline">
+          <ForwardIcon className="mr-2 size-4" />
+          Forward
+        </Button>
+      </Tooltip>
+    </div>
+  );
+}
+
+function canReplyAllTo(message: ParsedMessage, userEmail: string) {
+  return (
+    !message.labelIds?.includes(GmailLabel.SENT) &&
+    hasReplyAllRecipients(message.headers, userEmail)
   );
 }

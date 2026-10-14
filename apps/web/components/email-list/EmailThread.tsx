@@ -7,6 +7,7 @@ import {
   useRef,
   type ReactNode,
 } from "react";
+import { flushSync } from "react-dom";
 import { useHotkeys } from "react-hotkeys-hook";
 import { isTypingTarget } from "@/lib/shortcuts/registry";
 import { ChevronsDownUpIcon, ChevronsUpDownIcon } from "lucide-react";
@@ -33,6 +34,8 @@ import { useSentMessageOpens } from "@/hooks/useSentMessageOpens";
 import type { OutgoingThreadMessage } from "@/utils/mail-engine/conversation-thread";
 
 const NO_OUTGOING: OutgoingThreadMessage[] = [];
+/** Fewer earlier messages than this stay as rows of their own. */
+const MIN_FOLDED_MESSAGES = 2;
 
 export function EmailThread({
   messages,
@@ -293,7 +296,10 @@ export function EmailThread({
     );
   const hasLocalDraft = (message: ThreadMessage) =>
     Boolean(localDraftModeFor(message));
-  const allExpanded = organizedMessages.every(({ message, draftMessages }) =>
+  const isRowExpanded = ({
+    message,
+    draftMessages,
+  }: (typeof organizedMessages)[number]) =>
     expanded(
       message.id,
       autoOpenReplyForMessageId === message.id ||
@@ -301,10 +307,22 @@ export function EmailThread({
         recoveredReply?.messageId === message.id ||
         draftMessages.length > 0 ||
         hasLocalDraft(message),
-    ),
-  );
+    );
+  const allExpanded = organizedMessages.every(isRowExpanded);
 
-  const toggleAll = () =>
+  // Like Gmail, a run of read messages between the first and the newest folds
+  // into one row that says how many it holds.
+  const [showEarlier, setShowEarlier] = useState(false);
+  const middleRows = organizedMessages.slice(1, -1);
+  const foldedIds =
+    !showEarlier &&
+    middleRows.length >= MIN_FOLDED_MESSAGES &&
+    !middleRows.some(isRowExpanded)
+      ? new Set(middleRows.map(({ message }) => message.id))
+      : undefined;
+
+  const toggleAll = () => {
+    if (allExpanded) setShowEarlier(false);
     setExpansionOverrides(
       new Map(
         organizedMessages.map(({ message }) => [
@@ -313,6 +331,7 @@ export function EmailThread({
         ]),
       ),
     );
+  };
   const [selectedMessageId, setSelectedMessageId] = useState<string>();
   const selectedId = organizedMessages.some(
     ({ message }) => message.id === selectedMessageId,
@@ -330,6 +349,8 @@ export function EmailThread({
     );
     const nextId = organizedMessages[nextIndex]?.message.id;
     if (!nextId) return;
+    // Arrowing into the folded row unfolds it, so the message can take focus.
+    if (foldedIds?.has(nextId)) flushSync(() => setShowEarlier(true));
     setSelectedMessageId(nextId);
     const element = Array.from(
       threadRef.current?.querySelectorAll<HTMLElement>(
@@ -412,6 +433,14 @@ export function EmailThread({
 
         <ul className="pt-1">
           {organizedMessages.map(({ message, draftMessages, outgoing }) => {
+            if (foldedIds?.has(message.id))
+              return message.id === middleRows[0]?.message.id ? (
+                <FoldedMessagesRow
+                  count={foldedIds.size}
+                  key="folded-messages"
+                  onShow={() => setShowEarlier(true)}
+                />
+              ) : null;
             const sendOperationId =
               outgoing?.operationId ?? sendOperationIds?.get(message.id);
             let autoOpenMode: ReplyDraftMode | undefined;
@@ -537,6 +566,12 @@ export function EmailThread({
                   showReplyButton &&
                   !message.labelIds?.includes(GmailLabel.DRAFT)
                 }
+                // Cue's own reply area, when it has one, already offers Reply.
+                showReplyBar={
+                  message.id === replyAnchor?.id &&
+                  !openComposer &&
+                  !idleReplyArea
+                }
               />
             );
           })}
@@ -564,6 +599,31 @@ export function EmailThread({
         )}
       </div>
     </OpenedConversationAttachments>
+  );
+}
+
+function FoldedMessagesRow({
+  count,
+  onShow,
+}: {
+  count: number;
+  onShow: () => void;
+}) {
+  return (
+    <li className="px-2 py-1.5 sm:px-5">
+      <button
+        aria-label={`Show ${count} earlier messages`}
+        className="flex w-full min-w-0 items-center gap-2 rounded-md text-left text-muted-foreground text-sm outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={onShow}
+        type="button"
+      >
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-full border border-border bg-background font-medium text-foreground text-xs tabular-nums">
+          {count}
+        </span>
+        <span className="font-medium">{count} earlier messages</span>
+        <ChevronsUpDownIcon className="size-3.5" />
+      </button>
+    </li>
   );
 }
 
