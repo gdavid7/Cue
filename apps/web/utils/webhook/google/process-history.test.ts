@@ -201,9 +201,10 @@ describe("processHistoryForUser - 404 Handling", () => {
         hasAiAccess: false,
       },
     } as any);
+    const retryAt = new Date(Date.now() + 5 * 60_000);
     vi.mocked(getEmailProviderRateLimitState).mockResolvedValue({
       provider: "google",
-      retryAt: new Date(Date.now() + 60_000),
+      retryAt,
       source: "test",
     });
 
@@ -220,6 +221,16 @@ describe("processHistoryForUser - 404 Handling", () => {
       "account-123",
       expect.anything(),
     );
+    // A quiet mailbox may get no further push, so the skipped history needs
+    // its own delivery once the limit lifts.
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/google/webhook/catch-up",
+        body: { emailAccountId: "account-123", historyId: "2000" },
+      }),
+    );
+    const { notBefore } = vi.mocked(publishToQstashAt).mock.calls[0][0];
+    expect(notBefore.getTime()).toBeGreaterThanOrEqual(retryAt.getTime());
   });
 
   it("should continue processing when rate-limit state lookup fails", async () => {
@@ -449,6 +460,13 @@ describe("processHistoryForUser - 404 Handling", () => {
       "account-123",
       expect.anything(),
     );
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/google/webhook/catch-up",
+        body: { emailAccountId: "account-123", historyId: "1200" },
+      }),
+    );
+    expect(captureException).not.toHaveBeenCalled();
   });
 
   it("keeps the cursor before history the Gmail quota gate deferred and catches up later", async () => {

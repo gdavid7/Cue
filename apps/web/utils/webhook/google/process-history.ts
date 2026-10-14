@@ -114,6 +114,12 @@ export async function processHistoryForUser(
 
     if (activeRateLimit?.provider === "google") {
       await markGmailHistoryCatchUp(validatedEmailAccount.id, logger);
+      await scheduleGmailHistoryCatchUp({
+        emailAccountId: validatedEmailAccount.id,
+        historyId,
+        retryAt: activeRateLimit.retryAt,
+        logger,
+      });
       logger.warn(
         "Skipping webhook processing due to active Gmail rate limit",
         {
@@ -261,8 +267,11 @@ export async function processHistoryForUser(
       return NextResponse.json({ ok: true });
     }
 
-    if (isGmailCallDeferredError(error)) {
-      logger.info("Webhook history deferred by the account's Gmail budget");
+    if (
+      isGmailCallDeferredError(error) ||
+      isEmailProviderRateLimitError({ error, provider: "google" })
+    ) {
+      logger.info("Webhook history deferred by Gmail rate limiting");
       await scheduleGmailHistoryCatchUp({
         emailAccountId: validatedEmailAccount.id,
         historyId,
