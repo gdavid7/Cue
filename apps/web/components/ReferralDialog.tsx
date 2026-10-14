@@ -77,7 +77,7 @@ export function Referrals({ source }: { source: ReferralSurface }) {
 
     try {
       await navigator.clipboard.writeText(text);
-      toastSuccess({ description: `Referral ${type} copied to clipboard!` });
+      toastSuccess({ description: `Referral ${type} copied` });
     } catch {
       toastError({
         title: `Failed to copy ${type}`,

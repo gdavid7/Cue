@@ -88,7 +88,7 @@ export function StepReady() {
             setFrequency={setFrequency}
           >
             <div className="ml-1">
-              <DiscountBadge>2 months free!</DiscountBadge>
+              <DiscountBadge>2 months free</DiscountBadge>
             </div>
           </PricingFrequencyToggle>
 

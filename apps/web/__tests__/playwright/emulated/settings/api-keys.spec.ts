@@ -40,9 +40,9 @@ test("creates, authorizes, lists, and revokes an API key", async ({
     createDialog.getByRole("checkbox", { name: "Unsubscribe senders" }),
   ).not.toBeChecked();
   await createDialog.getByRole("button", { name: "Create" }).click();
-  await expect(page.getByText("API key created!", { exact: true })).toBeVisible(
-    { timeout: 60_000 },
-  );
+  await expect(page.getByText("API key created", { exact: true })).toBeVisible({
+    timeout: 60_000,
+  });
 
   const secretKey = await createDialog
     .locator('input[name="copy-input"]')

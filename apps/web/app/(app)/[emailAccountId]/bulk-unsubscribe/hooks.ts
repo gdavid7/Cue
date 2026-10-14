@@ -570,7 +570,7 @@ async function autoArchive({
     labelName,
     queueArchiveSenders,
   });
-  toastSuccess({ description: "Auto archive enabled!" });
+  toastSuccess({ description: "Auto archive on" });
   await mutate();
   await refreshPremium(refetchPremium);
 }
@@ -635,7 +635,7 @@ export function useAutoArchive<T extends Row>({
         status: null,
       });
       assertActionSucceeded(statusResult);
-      toastSuccess({ description: "Auto archive disabled!" });
+      toastSuccess({ description: "Auto archive off" });
       await mutate();
     } catch (error) {
       captureException(error);
@@ -1102,7 +1102,7 @@ export function useBulkUnsubscribeShortcuts<T extends Row>({
             status: NewsletterStatus.AUTO_ARCHIVED,
           });
           assertActionSucceeded(statusResult);
-          toastSuccess({ description: "Auto archive enabled!" });
+          toastSuccess({ description: "Auto archive on" });
           await mutate();
           await decrementUnsubscribeCreditAction();
           await refreshPremium(refetchPremium);

@@ -43,7 +43,7 @@ function MeetingBriefsPageContent() {
     {
       onSuccess: () => {
         analytics.captureAction("meeting_briefs_enabled_saved");
-        toastSuccess({ description: "Settings saved!" });
+        toastSuccess({ description: "Settings saved" });
         mutate();
       },
       onError: () => {

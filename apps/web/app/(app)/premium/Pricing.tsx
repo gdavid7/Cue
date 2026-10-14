@@ -81,15 +81,12 @@ export default function Pricing(props: PricingProps) {
   const header = props.header || (
     <div className="mb-12">
       <div className="mx-auto max-w-2xl text-center lg:max-w-4xl">
-        <h2 className="font-title text-base leading-7 text-blue-600">
-          Pricing
-        </h2>
-        <p className="mt-2 font-title text-4xl text-gray-900 sm:text-5xl">
-          Try for free, affordable paid plans
-        </p>
+        <h1 className="font-title text-3xl text-gray-900 sm:text-4xl">
+          Choose a plan
+        </h1>
       </div>
-      <p className="mx-auto mt-6 max-w-2xl text-center text-lg leading-8 text-gray-600">
-        No hidden fees. Cancel anytime.
+      <p className="mx-auto mt-4 max-w-2xl text-center text-base leading-7 text-gray-600">
+        Start with a free trial. No hidden fees. Cancel anytime.
       </p>
     </div>
   );
@@ -291,7 +288,11 @@ function PriceTier({
           >
             {tier.name}
           </h3>
-          {tier.mostPopular ? <DiscountBadge>Popular</DiscountBadge> : null}
+          {tier.mostPopular ? (
+            <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium leading-5 text-gray-700">
+              Popular
+            </span>
+          ) : null}
         </div>
         <p className="mt-4 text-sm leading-6 text-gray-600">
           {tier.description}
@@ -310,14 +311,6 @@ function PriceTier({
                 /user
               </span>
             </>
-          )}
-
-          {!!tier.discount?.[frequency.value] && (
-            <DiscountBadge>
-              <span className="tracking-wide">
-                SAVE {tier.discount[frequency.value].toFixed(0)}%
-              </span>
-            </DiscountBadge>
           )}
         </p>
 

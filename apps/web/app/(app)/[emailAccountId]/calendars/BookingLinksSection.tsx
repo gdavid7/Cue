@@ -188,7 +188,7 @@ function CalendarBookingLinkCard({
         analytics.captureAction("calendar_booking_link_saved", {
           had_existing_booking_link: Boolean(calendarBookingLink),
         });
-        toastSuccess({ description: "Booking link updated!" });
+        toastSuccess({ description: "Booking link updated" });
         mutate();
       },
     },

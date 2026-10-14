@@ -420,7 +420,7 @@ export function MoreDropdown<T extends Row>({
         });
       } else {
         toastSuccess({
-          title: "Success!",
+          title: "Label filter removed",
           description: `Stopped labeling ${item.name} as ${label.name}`,
         });
         await mutate();
@@ -439,7 +439,7 @@ export function MoreDropdown<T extends Row>({
       });
     } else {
       toastSuccess({
-        title: "Success!",
+        title: "Label filter added",
         description: `Added ${item.name} to ${label.name}`,
       });
       await mutate();

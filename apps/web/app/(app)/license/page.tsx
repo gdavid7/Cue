@@ -46,10 +46,12 @@ function ActivateLicenseForm(props: { licenseKey?: string }) {
     activateLicenseKeyAction,
     {
       onSuccess: () => {
-        toastSuccess({ description: "License activated!" });
+        toastSuccess({ description: "License activated" });
       },
       onError: () => {
-        toastError({ description: "Error activating license!" });
+        toastError({
+          description: "Couldn't activate the license. Try again.",
+        });
       },
     },
   );

@@ -270,15 +270,15 @@ function useAccountNotifications() {
         { title: string; description: string }
       > = {
         account_merged: {
-          title: "Account merged successfully!",
+          title: "Accounts merged",
           description: "Your accounts have been merged.",
         },
         account_created_and_linked: {
-          title: "Account added successfully!",
+          title: "Account added",
           description: "Your new account has been linked.",
         },
         tokens_updated: {
-          title: "Account reconnected successfully!",
+          title: "Account reconnected",
           description: "Your account permissions were refreshed.",
         },
       };

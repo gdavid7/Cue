@@ -87,7 +87,7 @@ export function UnsubscribeCelebrationDialog({
     });
     try {
       await navigator.clipboard.writeText(shareLink);
-      toastSuccess({ description: "Link copied to clipboard!" });
+      toastSuccess({ description: "Link copied" });
     } catch {
       toastError({
         title: "Failed to copy link",

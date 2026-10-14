@@ -47,10 +47,10 @@ export function ColdEmailList() {
     markNotColdEmailAction.bind(null, emailAccountId),
     {
       onSuccess: () => {
-        toastSuccess({ description: "Marked not cold email!" });
+        toastSuccess({ description: "Marked as not cold" });
       },
       onError: () => {
-        toastError({ description: "Error marking not cold email!" });
+        toastError({ description: "Couldn't mark as not cold. Try again." });
       },
     },
   );
@@ -200,7 +200,7 @@ function NoColdEmails() {
     toggleRuleAction.bind(null, emailAccountId),
     {
       onSuccess: () => {
-        toastSuccess({ description: "Cold email blocker enabled!" });
+        toastSuccess({ description: "Cold email blocker on" });
         mutateRules();
       },
       onError: () => {
@@ -233,8 +233,8 @@ function NoColdEmails() {
   return (
     <div className="p-2">
       <AlertBasic
-        title="No cold emails!"
-        description={`We haven't marked any of your emails as cold emails yet!`}
+        title="No cold emails"
+        description={"None of your emails have been marked as cold yet."}
       />
     </div>
   );

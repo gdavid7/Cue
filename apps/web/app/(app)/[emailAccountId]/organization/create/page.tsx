@@ -54,7 +54,7 @@ export default function CreateOrganizationPage() {
           description: result.serverError,
         });
       } else {
-        toastSuccess({ description: "Organization created successfully!" });
+        toastSuccess({ description: "Organization created" });
         mutate();
         router.push(`/organization/${result?.data?.id}`);
       }
