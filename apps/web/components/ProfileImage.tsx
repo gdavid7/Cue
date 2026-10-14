@@ -16,7 +16,7 @@ export function ProfileImage({
     <Avatar className={className}>
       <AvatarImage src={image || undefined} width={size} height={size} />
       <AvatarFallback className="text-[0.625rem] font-medium">
-        {getInitials(label)}
+        {label ? getInitials(label) : null}
       </AvatarFallback>
     </Avatar>
   );

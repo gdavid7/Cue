@@ -83,7 +83,9 @@ export function NavUser() {
                 alt={emailAccount?.name || emailAccount?.email}
               />
               <AvatarFallback className="rounded-lg text-xs font-medium">
-                {getInitials(emailAccount?.name || emailAccount?.email || "")}
+                {emailAccount
+                  ? getInitials(emailAccount.name || emailAccount.email)
+                  : null}
               </AvatarFallback>
             </Avatar>
             {emailAccount ? (
