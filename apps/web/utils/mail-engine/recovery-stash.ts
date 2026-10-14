@@ -19,14 +19,13 @@ export function createMailRecoveryStash(): PendingMailWorkStash {
   let fallback: PendingMailWork | null = null;
   return {
     async read() {
-      try {
-        return (
-          (await withStore("readonly", (store) => store.get(RECOVERY_KEY))) ??
-          fallback
-        );
-      } catch {
-        return fallback;
-      }
+      if (typeof indexedDB === "undefined") return fallback;
+      // A failed read is reported, not answered as empty: the rebuild would
+      // otherwise write over whatever the stash still holds.
+      return (
+        (await withStore("readonly", (store) => store.get(RECOVERY_KEY))) ??
+        fallback
+      );
     },
     async write(work) {
       fallback = work;
@@ -76,7 +75,8 @@ function withStore<T>(
     open.onupgradeneeded = () => {
       open.result.createObjectStore(RECOVERY_STORE);
     };
-    open.onerror = () => reject(open.error);
+    open.onerror = () =>
+      reject(open.error ?? new Error("IndexedDB could not be opened"));
     open.onsuccess = () => {
       const database = open.result;
       const transaction = database.transaction(RECOVERY_STORE, mode);
@@ -87,11 +87,11 @@ function withStore<T>(
       };
       transaction.onerror = () => {
         database.close();
-        reject(transaction.error);
+        reject(transaction.error ?? new Error("IndexedDB transaction failed"));
       };
       transaction.onabort = () => {
         database.close();
-        reject(transaction.error);
+        reject(transaction.error ?? new Error("IndexedDB transaction failed"));
       };
     };
   });

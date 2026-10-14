@@ -22,6 +22,28 @@ describe("createMailRecoveryStash", () => {
   });
 });
 
+describe("createMailRecoveryStash read", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reports an IndexedDB it cannot read instead of answering empty", async () => {
+    const failed = new DOMException("open failed", "UnknownError");
+    const request: { error?: unknown; onerror?: () => void } = {};
+    vi.stubGlobal("indexedDB", {
+      open: () => {
+        setTimeout(() => {
+          request.error = failed;
+          request.onerror?.();
+        }, 0);
+        return request;
+      },
+    });
+
+    await expect(createMailRecoveryStash().read()).rejects.toBe(failed);
+  });
+});
+
 describe("deleteMailRecoveryStash", () => {
   afterEach(() => {
     vi.useRealTimers();
