@@ -2,7 +2,12 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { XIcon, CreditCardIcon, AlertTriangleIcon } from "lucide-react";
+import {
+  AlertTriangleIcon,
+  CreditCardIcon,
+  SparklesIcon,
+  XIcon,
+} from "lucide-react";
 import { useUser } from "@/hooks/useUser";
 import { isPremiumRecord } from "@/utils/premium";
 import { Button } from "@/components/ui/button";
@@ -10,6 +15,7 @@ import { Card } from "@/components/ui/card";
 import { cn } from "@/utils";
 import { HoverCard } from "@/components/HoverCard";
 import { MutedText } from "@/components/Typography";
+import { BRAND_NAME } from "@/utils/branding";
 import type { PremiumTier } from "@/generated/prisma/enums";
 
 interface PremiumData {
@@ -45,8 +51,9 @@ export function PremiumExpiredCardContent({
 
   const getSubscriptionMessage = () => {
     const UPGRADE_MESSAGE = {
-      title: "Upgrade to Premium",
-      description: "Upgrade to Premium to enable your AI email assistant.",
+      title: `Get more from ${BRAND_NAME}`,
+      description:
+        "Premium adds AI sorting, replies drafted in your voice, and meeting briefs.",
     };
 
     if (!premium) {
@@ -63,52 +70,48 @@ export function PremiumExpiredCardContent({
       !premium.stripeSubscriptionId &&
       !premium.lemonSqueezySubscriptionId;
 
-    if (!premium || hasNoSubscription) {
-      return {
-        title: "Upgrade to Premium",
-        description: "Upgrade to Premium to enable your AI email assistant.",
-      };
-    }
+    if (hasNoSubscription) return UPGRADE_MESSAGE;
 
     if (status === "past_due") {
       return {
-        title: "Payment Past Due",
-        description: "Update your payment method to continue service",
+        title: "Payment past due",
+        description: "Update your payment method to keep AI features running.",
       };
     }
 
     if (status === "canceled" || status === "cancelled") {
       return {
-        title: "Subscription Cancelled",
-        description: "Reactivate to resume AI email management",
+        title: "Subscription canceled",
+        description: "Reactivate to turn AI features back on.",
       };
     }
 
     if (status === "incomplete" || status === "incomplete_expired") {
       return {
-        title: "Payment Incomplete",
-        description: "Complete your payment to activate service",
+        title: "Payment incomplete",
+        description: "Finish checkout to turn on AI features.",
       };
     }
 
     if (status === "unpaid") {
       return {
-        title: "Payment Required",
-        description: "Update payment to continue AI features",
+        title: "Payment required",
+        description: "Update your payment method to keep AI features running.",
       };
     }
 
     if (hasLemonSqueezyExpired || status === "expired") {
       return {
-        title: "Subscription Expired",
-        description: "Renew your subscription to continue",
+        title: "Subscription expired",
+        description: "Renew to turn AI features back on.",
       };
     }
 
     // Default fallback
     return {
-      title: "Subscription Issue",
-      description: "Please check your subscription status",
+      title: "Check your subscription",
+      description:
+        "Something is off with your subscription. Open Settings to review it.",
     };
   };
 
@@ -122,39 +125,50 @@ export function PremiumExpiredCardContent({
 
   const buttonText = isNewUser ? "Upgrade" : "Reactivate";
   const buttonHref = isNewUser ? "/premium" : "/settings";
+  // A plain upsell is an offer, not a problem: only real billing failures get
+  // warning styling.
+  const Icon = isNewUser ? SparklesIcon : AlertTriangleIcon;
+  const iconClassName = isNewUser
+    ? "text-muted-foreground"
+    : "text-orange-600 dark:text-orange-400";
 
-  // When collapsed, show only the alert icon with a hover card
+  const action = (
+    <Button
+      asChild
+      size="sm"
+      variant={isNewUser ? "outline" : "default"}
+      className="w-full"
+    >
+      <Link href={buttonHref}>
+        {!isNewUser && <CreditCardIcon className="mr-1.5 size-3.5" />}
+        {buttonText}
+      </Link>
+    </Button>
+  );
+
   if (isCollapsed) {
     return (
       <HoverCard
         className="w-64"
         content={
           <div className="space-y-2">
-            <p className="text-sm font-semibold text-orange-800 dark:text-orange-200">
-              {title}
-            </p>
+            <p className="text-sm font-medium text-foreground">{title}</p>
             <MutedText>{description}</MutedText>
-            <Button
-              asChild
-              size="sm"
-              className="w-full bg-orange-600 text-white hover:bg-orange-700 border-0 shadow-sm h-8 mt-2"
-            >
-              <Link
-                href={buttonHref}
-                className="flex items-center justify-center gap-1.5"
-              >
-                <CreditCardIcon className="h-3.5 w-3.5" />
-                <span className="text-xs font-medium">{buttonText}</span>
-              </Link>
-            </Button>
+            <div className="pt-1">{action}</div>
           </div>
         }
       >
         <Link
           href={buttonHref}
-          className="flex items-center justify-center p-2 rounded-lg bg-orange-100 hover:bg-orange-200 transition-colors dark:bg-orange-900/30 dark:hover:bg-orange-900/50"
+          aria-label={title}
+          className={cn(
+            "flex items-center justify-center rounded-lg p-2 transition-colors",
+            isNewUser
+              ? "hover:bg-muted"
+              : "bg-orange-100 hover:bg-orange-200 dark:bg-orange-900/30 dark:hover:bg-orange-900/50",
+          )}
         >
-          <AlertTriangleIcon className="h-5 w-5 text-orange-600 dark:text-orange-400" />
+          <Icon className={cn("size-5", iconClassName)} aria-hidden />
         </Link>
       </HoverCard>
     );
@@ -163,54 +177,43 @@ export function PremiumExpiredCardContent({
   return (
     <Card
       className={cn(
-        "border-orange-200 bg-gradient-to-tr from-transparent via-orange-50/80 to-orange-500/15 shadow-sm",
-        "dark:border-orange-900 dark:from-orange-950/50 dark:via-orange-900/20 dark:to-orange-800/10",
+        "shadow-none",
+        !isNewUser &&
+          "border-orange-200 bg-orange-50/60 dark:border-orange-900 dark:bg-orange-950/30",
       )}
     >
       <div className="p-3">
         <div className="flex items-start gap-2">
-          <AlertTriangleIcon className="h-4 w-4 flex-shrink-0 text-orange-600 dark:text-orange-400 mt-0.5" />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-orange-800 dark:text-orange-200 leading-tight">
+          <Icon
+            className={cn("mt-0.5 size-4 flex-shrink-0", iconClassName)}
+            aria-hidden
+          />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium leading-tight text-foreground">
               {title}
             </p>
-            <p className="text-xs text-orange-700/80 dark:text-orange-300/80 mt-1">
-              {description}
-            </p>
+            <p className="mt-1 text-xs text-muted-foreground">{description}</p>
           </div>
 
           {onDismiss && (
-            <button
+            <Button
               type="button"
-              className="flex-shrink-0 rounded p-1 text-orange-600 hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-300 transition-colors dark:text-orange-400 dark:hover:bg-orange-900/20 dark:focus:ring-orange-700"
+              variant="ghost"
+              size="icon"
+              className="-mr-1 -mt-1 size-6 flex-shrink-0 text-muted-foreground"
               onClick={onDismiss}
-              aria-label="Dismiss banner"
+              aria-label="Dismiss"
             >
-              <XIcon className="h-3 w-3" />
-            </button>
+              <XIcon className="size-3" />
+            </Button>
           )}
         </div>
 
-        <div className="mt-3">
-          <Button
-            asChild
-            size="sm"
-            className="w-full bg-orange-600 text-white hover:bg-orange-700 border-0 shadow-sm h-8"
-          >
-            <Link
-              href={buttonHref}
-              className="flex items-center justify-center gap-1.5"
-            >
-              <CreditCardIcon className="h-3.5 w-3.5" />
-              <span className="text-xs font-medium">{buttonText}</span>
-            </Link>
-          </Button>
-        </div>
+        <div className="mt-3">{action}</div>
       </div>
     </Card>
   );
 }
-
 export function PremiumCard({
   isCollapsed = false,
 }: {

@@ -59,7 +59,7 @@ const AboutSectionForm = ({
     saveAboutAction.bind(null, emailAccountId),
     {
       onSuccess: () => {
-        toastSuccess({ description: "Your profile has been updated!" });
+        toastSuccess({ description: "Profile updated" });
         onSuccess();
       },
       onError: (error) => {

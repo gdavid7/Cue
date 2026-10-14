@@ -387,7 +387,7 @@ export function CreateFolderDialog({
           description: result.serverError,
         });
       } else {
-        toastSuccess({ description: "Folder created!" });
+        toastSuccess({ description: "Folder created" });
         reset();
         onClose();
         onFolderCreated?.();

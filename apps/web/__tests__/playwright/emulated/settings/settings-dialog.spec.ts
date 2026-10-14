@@ -9,7 +9,7 @@ test("opens settings in a dialog from a url and from the nav", async ({
   const { id: emailAccountId, email } = await getEmailAccount(page);
   const dialog = page.getByRole("dialog");
   const dialogHeading = dialog.getByRole("heading", {
-    name: "Email Accounts",
+    name: "Email accounts",
     exact: true,
   });
 
@@ -65,7 +65,7 @@ for (const view of ["mail", "settings"]) {
 
     const dialog = page.getByRole("dialog");
     await expect(
-      dialog.getByRole("heading", { name: "Email Accounts", exact: true }),
+      dialog.getByRole("heading", { name: "Email accounts", exact: true }),
     ).toBeVisible();
     await expect(search).toBeHidden();
     expect(new URL(page.url()).pathname).toBe(pathname);

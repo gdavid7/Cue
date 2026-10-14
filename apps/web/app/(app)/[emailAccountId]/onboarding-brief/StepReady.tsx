@@ -23,6 +23,8 @@ import {
 import { generateCheckoutSessionAction } from "@/utils/actions/premium";
 import { toastError } from "@/components/Toast";
 import { redirectToSafeUrl } from "@/utils/redirect";
+import { env } from "@/env";
+import { prefixPath } from "@/utils/path";
 
 const PRICING_FEATURES = [
   "Briefs for every external meeting",
@@ -32,7 +34,8 @@ const PRICING_FEATURES = [
 ];
 
 export function StepReady() {
-  const { emailAccount } = useAccount();
+  const { emailAccount, emailAccountId } = useAccount();
+  const showPricing = !env.NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS;
   const [frequency, setFrequency] = useState(frequencies[1]);
   const [loading, setLoading] = useState(false);
 
@@ -78,62 +81,73 @@ export function StepReady() {
         </TypographyP>
       </div>
 
-      <div className="mt-8 flex flex-col items-center">
-        <PricingFrequencyToggle
-          frequency={frequency}
-          setFrequency={setFrequency}
-        >
-          <div className="ml-1">
-            <DiscountBadge>2 months free!</DiscountBadge>
-          </div>
-        </PricingFrequencyToggle>
-
-        <CardBasic className="mt-4 p-6 w-full">
-          <div className="flex items-center justify-between mb-5">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Meeting Briefs Pro
-              </p>
-              <p className="text-3xl font-bold text-foreground mt-1">
-                ${frequency.value === "annually" ? "7.50" : "9"}
-                <span className="text-base font-normal text-muted-foreground">
-                  /month
-                </span>
-              </p>
-              <p className="text-sm text-muted-foreground mt-1">
-                {frequency.value === "annually"
-                  ? "billed annually ($90/year)"
-                  : "billed monthly"}
-              </p>
+      {showPricing && (
+        <div className="mt-8 flex flex-col items-center">
+          <PricingFrequencyToggle
+            frequency={frequency}
+            setFrequency={setFrequency}
+          >
+            <div className="ml-1">
+              <DiscountBadge>2 months free</DiscountBadge>
             </div>
-            <div className="rounded-full border border-green-200 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-700">
-              7-day free trial
-            </div>
-          </div>
+          </PricingFrequencyToggle>
 
-          <div className="flex flex-col gap-2.5">
-            {PRICING_FEATURES.map((feature) => (
-              <div key={feature} className="flex items-center gap-2.5">
-                <div className="flex h-5 w-5 items-center justify-center rounded-full bg-green-50">
-                  <CheckIcon className="h-3 w-3 text-green-600" />
-                </div>
-                <span className="text-foreground">{feature}</span>
+          <CardBasic className="mt-4 p-6 w-full">
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Meeting Briefs Pro
+                </p>
+                <p className="text-3xl font-bold text-foreground mt-1">
+                  ${frequency.value === "annually" ? "7.50" : "9"}
+                  <span className="text-base font-normal text-muted-foreground">
+                    /month
+                  </span>
+                </p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  {frequency.value === "annually"
+                    ? "billed annually ($90/year)"
+                    : "billed monthly"}
+                </p>
               </div>
-            ))}
-          </div>
-        </CardBasic>
-      </div>
+              <div className="rounded-full border border-green-200 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-700">
+                7-day free trial
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2.5">
+              {PRICING_FEATURES.map((feature) => (
+                <div key={feature} className="flex items-center gap-2.5">
+                  <div className="flex h-5 w-5 items-center justify-center rounded-full bg-green-50">
+                    <CheckIcon className="h-3 w-3 text-green-600" />
+                  </div>
+                  <span className="text-foreground">{feature}</span>
+                </div>
+              ))}
+            </div>
+          </CardBasic>
+        </div>
+      )}
 
       <div className="flex flex-col gap-3 mt-8">
-        <Button
-          size="lg"
-          className="w-full"
-          onClick={handleCheckout}
-          loading={loading}
-        >
-          Start Free Trial
-          <ChevronRightIcon className="ml-2 h-4 w-4" />
-        </Button>
+        {showPricing ? (
+          <Button
+            size="lg"
+            className="w-full"
+            onClick={handleCheckout}
+            loading={loading}
+          >
+            Start Free Trial
+            <ChevronRightIcon className="ml-2 h-4 w-4" />
+          </Button>
+        ) : (
+          <Button size="lg" className="w-full" asChild>
+            <Link href={prefixPath(emailAccountId, "/briefs")}>
+              Go to Meeting Briefs
+              <ChevronRightIcon className="ml-2 h-4 w-4" />
+            </Link>
+          </Button>
+        )}
 
         {emailAccount?.email &&
           isGoogleProvider(emailAccount?.account?.provider) && (

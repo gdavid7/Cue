@@ -20,7 +20,7 @@ export function OrgAnalyticsConsentBanner() {
     updateAnalyticsConsentAction.bind(null, emailAccountId),
     {
       onSuccess: () => {
-        toastSuccess({ description: "Analytics access granted to admins!" });
+        toastSuccess({ description: "Admins can now see analytics" });
         mutate();
       },
       onError: (error) => {

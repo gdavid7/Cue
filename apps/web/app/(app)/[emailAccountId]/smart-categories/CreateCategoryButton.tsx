@@ -176,7 +176,7 @@ function CreateCategoryForm({
           description: `There was an error creating the category. ${result.serverError || ""}`,
         });
       } else {
-        toastSuccess({ description: "Category created!" });
+        toastSuccess({ description: "Category created" });
         closeModal();
       }
     },

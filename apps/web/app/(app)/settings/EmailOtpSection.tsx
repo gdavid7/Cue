@@ -7,6 +7,7 @@ import { updateEmailOtpAction } from "@/utils/actions/email-otp";
 import { getActionErrorMessage } from "@/utils/error";
 import { toastError } from "@/components/Toast";
 import { LoadingContent } from "@/components/LoadingContent";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
   Item,
@@ -33,7 +34,11 @@ export function EmailOtpSection({
   });
 
   return (
-    <LoadingContent loading={isLoading} error={error}>
+    <LoadingContent
+      loading={isLoading}
+      error={error}
+      loadingComponent={<Skeleton className="mx-4 my-3 h-6" />}
+    >
       {data && (
         <Item size="sm">
           <ItemContent>

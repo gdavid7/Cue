@@ -23,7 +23,7 @@ import {
 export function DebugLabels() {
   const { execute, isExecuting, result } = useAction(adminGetLabelsAction, {
     onSuccess: () => {
-      toastSuccess({ description: "Labels found!" });
+      toastSuccess({ description: "Labels found" });
     },
     onError: ({ error }) => {
       toastError({

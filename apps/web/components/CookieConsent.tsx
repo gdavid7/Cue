@@ -41,11 +41,7 @@ export function CookieConsentBanner() {
           >
             Reject
           </Button>
-          <Button
-            variant="primaryBlack"
-            size="sm"
-            onClick={() => setCookieConsent("granted")}
-          >
+          <Button size="sm" onClick={() => setCookieConsent("granted")}>
             Accept
           </Button>
         </div>

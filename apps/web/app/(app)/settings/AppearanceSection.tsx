@@ -2,7 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
-import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Item,
   ItemActions,
@@ -10,28 +16,43 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 
+const THEME_OPTIONS = [
+  { value: "system", label: "System" },
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+];
+
 export function AppearanceSection() {
-  const { resolvedTheme, setTheme } = useTheme();
+  const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
 
+  // next-themes only knows the stored theme on the client.
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  const isDarkMode = mounted && resolvedTheme === "dark";
-
   return (
     <Item size="sm">
       <ItemContent>
-        <ItemTitle>Dark mode</ItemTitle>
+        <ItemTitle>Theme</ItemTitle>
       </ItemContent>
       <ItemActions>
-        <Switch
-          aria-label="Toggle dark mode"
-          checked={isDarkMode}
-          onCheckedChange={(checked) => setTheme(checked ? "dark" : "light")}
+        <Select
+          value={mounted ? (theme ?? "light") : undefined}
+          onValueChange={setTheme}
           disabled={!mounted}
-        />
+        >
+          <SelectTrigger aria-label="Theme" className="h-9 w-32">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {THEME_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </ItemActions>
     </Item>
   );

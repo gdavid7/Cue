@@ -4,6 +4,7 @@ import {
   stripReferralSignature,
   stripBrandingSignatures,
 } from "@/utils/referral/signature";
+import { BRAND_NAME } from "@/utils/branding";
 
 describe("referral signatures", () => {
   it("removes drafted branding without altering reply links or personal signatures", () => {
@@ -37,7 +38,7 @@ describe("branding signatures", () => {
     const body = "<p>Thanks for the update.</p>";
     expect(
       stripBrandingSignatures(
-        `${body}<div>Drafted by <a href="https://example.com">Inbox Zero</a>.</div><div>Sent with <a href="https://example.com">Inbox Zero</a></div>`,
+        `${body}<div>Drafted by <a href="https://example.com">Inbox Zero</a>.</div><div>Sent with <a href="https://example.com">${BRAND_NAME}</a></div>`,
       ),
     ).toBe(`${body}<div></div><div></div>`);
   });

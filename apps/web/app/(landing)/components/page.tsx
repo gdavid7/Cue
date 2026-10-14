@@ -184,21 +184,21 @@ function ComponentsDemo() {
               icon={<SparklesIcon className="size-5" />}
               title="Action Card (Green)"
               description="This is the default green variant of the ActionCard component."
-              action={<ShadButton variant="primaryBlack">Click Me</ShadButton>}
+              action={<ShadButton>Click Me</ShadButton>}
             />
             <ActionCard
               variant="blue"
               icon={<SparklesIcon className="size-5" />}
               title="Action Card (Blue)"
               description="This is the blue variant of the ActionCard component."
-              action={<ShadButton variant="primaryBlack">Click Me</ShadButton>}
+              action={<ShadButton>Click Me</ShadButton>}
             />
             <ActionCard
               variant="destructive"
               icon={<SparklesIcon className="size-5" />}
               title="Action Card (Destructive)"
               description="This is the destructive variant of the ActionCard component."
-              action={<ShadButton variant="primaryBlack">Click Me</ShadButton>}
+              action={<ShadButton>Click Me</ShadButton>}
             />
           </div>
         </div>

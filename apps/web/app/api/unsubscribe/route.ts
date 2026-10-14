@@ -4,6 +4,7 @@ import { withError } from "@/utils/middleware";
 import prisma from "@/utils/prisma";
 import { escapeHtml, trimToNonEmptyString } from "@/utils/string";
 import { getUnsubscribeAction } from "@/utils/unsubscribe";
+import { BRAND_NAME } from "@/utils/branding";
 
 export const GET = withError("unsubscribe", async (request) => {
   const token = getTokenFromSearchParams(request);
@@ -230,7 +231,7 @@ function renderConfirmationPage(token: string) {
   <body>
     <main>
       <h1>Confirm unsubscribe</h1>
-      <p>Click the button below to stop email updates like this from Inbox Zero.</p>
+      <p>Click the button below to stop email updates like this from ${escapeHtml(BRAND_NAME)}.</p>
       <form method="POST" action="/api/unsubscribe">
         <input type="hidden" name="token" value="${escapeHtml(token)}" />
         <button type="submit">Unsubscribe</button>

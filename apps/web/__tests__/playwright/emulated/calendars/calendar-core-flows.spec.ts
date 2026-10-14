@@ -61,7 +61,7 @@ test("persists the booking link and scheduling timezone", async ({ page }) => {
     .getByRole("button", { name: "Save" })
     .click();
   await expect(
-    page.getByText("Booking link updated!", { exact: true }).last(),
+    page.getByText("Booking link updated", { exact: true }).last(),
   ).toBeVisible({ timeout: 120_000 });
   await expect
     .poll(() => getCalendarTestState(), { timeout: 120_000 })
@@ -79,7 +79,7 @@ test("persists the booking link and scheduling timezone", async ({ page }) => {
     .getByRole("button", { name: "Save" })
     .click();
   await expect(
-    page.getByText("Timezone updated!", { exact: true }).last(),
+    page.getByText("Timezone updated", { exact: true }).last(),
   ).toBeVisible({ timeout: 120_000 });
   await expect
     .poll(() => getCalendarTestState(), { timeout: 120_000 })

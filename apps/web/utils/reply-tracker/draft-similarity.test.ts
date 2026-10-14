@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/utils/branding";
 import { describe, expect, it } from "vitest";
 import type { ParsedMessage } from "@/utils/types";
 import { getDraftSendLogSimilarityFields } from "./draft-similarity";
@@ -5,8 +6,8 @@ import { getDraftSendLogSimilarityFields } from "./draft-similarity";
 describe("getDraftSendLogSimilarityFields", () => {
   it.each([
     "",
-    "Sent with Inbox Zero",
-    "Drafted by Inbox Zero.\n\nSent with Inbox Zero",
+    `Sent with ${BRAND_NAME}`,
+    `Drafted by Inbox Zero.\n\nSent with ${BRAND_NAME}`,
   ])("ignores branding changes in recorded scores: %s", (footer) => {
     const body = "Thanks for the update.";
     const sentText = `${body}\n\n${footer}`;

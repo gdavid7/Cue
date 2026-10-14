@@ -280,7 +280,6 @@ function DetailsStep({
           <Button
             type="submit"
             loading={isSubmitting}
-            variant="primaryBlack"
             className="w-full shrink-0 sm:w-auto"
           >
             Confirm booking

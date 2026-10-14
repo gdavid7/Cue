@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/utils/branding";
 import {
   convertToModelMessages,
   readUIMessageStream,
@@ -63,7 +64,7 @@ export async function processSlackSlashCommand({
   if (!channel) {
     await postToSlackResponseUrl(responseUrl, {
       response_type: "ephemeral",
-      text: "Your Slack account isn't connected to Inbox Zero. Connect it from your Inbox Zero settings page.",
+      text: `Your Slack account isn't connected to ${BRAND_NAME}. Connect it from your ${BRAND_NAME} settings page.`,
     });
     return;
   }

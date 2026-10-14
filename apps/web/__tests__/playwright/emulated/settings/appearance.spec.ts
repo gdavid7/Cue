@@ -22,15 +22,17 @@ test("persists the global appearance across reloads", async ({ page }) => {
   await openSettings(page);
 
   previousTheme = await page.evaluate(() => localStorage.getItem("theme"));
-  const darkModeToggle = page.getByRole("switch", {
-    name: "Toggle dark mode",
-  });
-  await expect(darkModeToggle).toBeEnabled();
-  const enableDarkMode = !(await darkModeToggle.isChecked());
+  const themeSelect = page.getByRole("combobox", { name: "Theme" });
+  await expect(themeSelect).toBeEnabled();
+  const enableDarkMode = !(await page
+    .locator("html")
+    .evaluate((html) => html.classList.contains("dark")));
   const expectedTheme = enableDarkMode ? "dark" : "light";
+  const expectedLabel = enableDarkMode ? "Dark" : "Light";
 
-  await darkModeToggle.click();
-  await expect(darkModeToggle).toBeChecked({ checked: enableDarkMode });
+  await themeSelect.click();
+  await page.getByRole("option", { name: expectedLabel, exact: true }).click();
+  await expect(themeSelect).toHaveText(expectedLabel);
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("theme")))
     .toBe(expectedTheme);
@@ -40,9 +42,9 @@ test("persists the global appearance across reloads", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "Settings", exact: true }),
   ).toBeVisible({ timeout: 60_000 });
-  await expect(
-    page.getByRole("switch", { name: "Toggle dark mode" }),
-  ).toBeChecked({ checked: enableDarkMode });
+  await expect(page.getByRole("combobox", { name: "Theme" })).toHaveText(
+    expectedLabel,
+  );
   await expectThemeClass(page, enableDarkMode);
 });
 

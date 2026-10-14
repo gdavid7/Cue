@@ -105,51 +105,6 @@ const CardBasic = React.forwardRef<
 ));
 CardBasic.displayName = "CardBasic";
 
-const CardGreen = React.forwardRef<
-  HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement>
->(({ className, ...props }, ref) => (
-  <Card
-    ref={ref}
-    className={cn(
-      "border-green-100 bg-gradient-to-tr from-transparent via-green-50/80 to-green-500/15 dark:border-green-900 dark:from-green-950/50 dark:via-green-900/20 dark:to-green-800/10",
-      className,
-    )}
-    {...props}
-  />
-));
-CardGreen.displayName = "CardGreen";
-
-const CardBlue = React.forwardRef<
-  HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement>
->(({ className, ...props }, ref) => (
-  <Card
-    ref={ref}
-    className={cn(
-      "border-blue-100 bg-gradient-to-tr from-transparent via-blue-50/80 to-blue-500/15 dark:border-blue-900 dark:from-blue-950/50 dark:via-blue-900/20 dark:to-blue-800/10",
-      className,
-    )}
-    {...props}
-  />
-));
-CardBlue.displayName = "CardBlue";
-
-const CardRed = React.forwardRef<
-  HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement>
->(({ className, ...props }, ref) => (
-  <Card
-    ref={ref}
-    className={cn(
-      "border-red-100 bg-gradient-to-tr from-transparent via-red-50/80 to-red-500/15 dark:border-red-900 dark:from-red-950/50 dark:via-red-900/20 dark:to-red-800/10",
-      className,
-    )}
-    {...props}
-  />
-));
-CardRed.displayName = "CardRed";
-
 const ActionCard = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement> & {
@@ -172,22 +127,23 @@ const ActionCard = React.forwardRef<
     },
     ref,
   ) => {
-    const CardVariant =
-      variant === "blue"
-        ? CardBlue
-        : variant === "destructive"
-          ? CardRed
-          : CardGreen;
-    const iconColor =
-      variant === "blue"
-        ? "text-blue-600 dark:text-blue-400"
-        : variant === "destructive"
-          ? "text-red-600 dark:text-red-400"
-          : "text-green-600 dark:text-green-400";
+    const iconColor = {
+      green: "text-green-600 dark:text-green-400",
+      blue: "text-blue-600 dark:text-blue-400",
+      destructive: "text-red-600 dark:text-red-400",
+    }[variant];
 
     return (
-      <CardVariant ref={ref} className={cn("max-w-2xl", className)} {...props}>
-        <div className="flex items-center justify-between gap-4 p-6">
+      <Card
+        ref={ref}
+        className={cn(
+          "max-w-2xl",
+          variant === "destructive" && "border-destructive/40",
+          className,
+        )}
+        {...props}
+      >
+        <div className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">
             {icon && (
               <div className={cn("mt-0.5 flex-shrink-0", iconColor)}>
@@ -195,7 +151,7 @@ const ActionCard = React.forwardRef<
               </div>
             )}
             <div>
-              <h3 className="text-lg font-semibold">{title}</h3>
+              <h3 className="font-title text-lg">{title}</h3>
               <div className="mt-1 text-sm text-muted-foreground">
                 {description}
               </div>
@@ -203,7 +159,7 @@ const ActionCard = React.forwardRef<
           </div>
           {action && <div className="flex-shrink-0">{action}</div>}
         </div>
-      </CardVariant>
+      </Card>
     );
   },
 );
@@ -217,8 +173,5 @@ export {
   CardDescription,
   CardContent,
   CardBasic,
-  CardGreen,
-  CardBlue,
-  CardRed,
   ActionCard,
 };

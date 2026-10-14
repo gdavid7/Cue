@@ -28,7 +28,7 @@ export function GmailUrlConverter() {
     result,
   } = useAction(adminConvertGmailUrlAction, {
     onSuccess: () => {
-      toastSuccess({ description: "Message found!" });
+      toastSuccess({ description: "Message found" });
     },
     onError: ({ error }) => {
       toastError({

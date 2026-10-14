@@ -92,7 +92,7 @@ function ApiKeysForm({ mutate }: { mutate: () => void }) {
         }
 
         setSecretKey(result.data.secretKey);
-        toastSuccess({ description: "API key created!" });
+        toastSuccess({ description: "API key created" });
       },
       onError: (error) => {
         toastError({
@@ -246,7 +246,7 @@ export function ApiKeysDeactivateButton({
     deactivateApiKeyAction.bind(null, emailAccountId),
     {
       onSuccess: () => {
-        toastSuccess({ description: "API key deactivated!" });
+        toastSuccess({ description: "API key deactivated" });
       },
       onError: (error) => {
         toastError({

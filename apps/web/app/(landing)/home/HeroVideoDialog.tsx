@@ -11,6 +11,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { landingPageAnalytics } from "@/hooks/useAnalytics";
+import { BRAND_NAME } from "@/utils/branding";
 
 // Recorded on every hero video event so videos can be compared by video_id.
 const HERO_VIDEO_ID = "YeTrweHxCIM5tcBMXlvRbmDuPqL028lJrmJ3F6ZgwnDY";
@@ -18,7 +19,7 @@ const HERO_VIDEO_ID = "YeTrweHxCIM5tcBMXlvRbmDuPqL028lJrmJ3F6ZgwnDY";
 export function HeroVideoDialog({
   playbackId = HERO_VIDEO_ID,
   thumbnailTime,
-  title = "Inbox Zero product video",
+  title = `${BRAND_NAME} product video`,
 }: {
   playbackId?: string;
   thumbnailTime?: number;

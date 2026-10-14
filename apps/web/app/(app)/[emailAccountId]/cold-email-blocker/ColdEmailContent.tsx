@@ -1,54 +1,79 @@
 "use client";
 
+import Link from "next/link";
+import { useQueryState } from "nuqs";
 import { ColdEmailList } from "@/app/(app)/[emailAccountId]/cold-email-blocker/ColdEmailList";
-import { Card } from "@/components/ui/card";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ColdEmailRejected } from "@/app/(app)/[emailAccountId]/cold-email-blocker/ColdEmailRejected";
 import { ColdEmailTest } from "@/app/(app)/[emailAccountId]/cold-email-blocker/ColdEmailTest";
-import { Button } from "@/components/ui/button";
-import { prefixPath } from "@/utils/path";
-import { useAccount } from "@/providers/EmailAccountProvider";
-import Link from "next/link";
+import { TabSelect } from "@/components/TabSelect";
 import { MessageText } from "@/components/Typography";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { useAccount } from "@/providers/EmailAccountProvider";
+import { prefixPath } from "@/utils/path";
 
-export function ColdEmailContent({ searchParam }: { searchParam?: string }) {
+const coldEmailTabs = ["cold-emails", "rejected", "test", "settings"] as const;
+type ColdEmailTab = (typeof coldEmailTabs)[number];
+
+const defaultTab: ColdEmailTab = "cold-emails";
+
+const tabOptions = [
+  { id: "cold-emails", label: "Cold emails" },
+  { id: "rejected", label: "Marked not cold" },
+  { id: "test", label: "Test" },
+  { id: "settings", label: "Settings" },
+] satisfies { id: ColdEmailTab; label: string }[];
+
+export function ColdEmailContent() {
   const { emailAccountId } = useAccount();
+  const [tab, setTab] = useQueryState("tab", {
+    defaultValue: defaultTab,
+    history: "push",
+  });
+  const selectedTab = isColdEmailTab(tab) ? tab : defaultTab;
 
   return (
-    <Tabs defaultValue="cold-emails" searchParam={searchParam}>
-      <TabsList>
-        <TabsTrigger value="cold-emails">Cold Emails</TabsTrigger>
-        <TabsTrigger value="rejected">Marked Not Cold</TabsTrigger>
-        <TabsTrigger value="test">Test</TabsTrigger>
-        <TabsTrigger value="settings">Settings</TabsTrigger>
-      </TabsList>
+    <>
+      <div className="border-b border-border">
+        <TabSelect
+          options={tabOptions}
+          selected={selectedTab}
+          onSelect={(value: ColdEmailTab) =>
+            setTab(value === defaultTab ? null : value)
+          }
+        />
+      </div>
 
-      <TabsContent value="test" className="mb-10">
-        <ColdEmailTest />
-      </TabsContent>
-
-      <TabsContent value="cold-emails" className="mb-10">
-        <Card>
-          <ColdEmailList />
-        </Card>
-      </TabsContent>
-      <TabsContent value="rejected" className="mb-10">
-        <Card>
-          <ColdEmailRejected />
-        </Card>
-      </TabsContent>
-
-      <TabsContent value="settings" className="mb-10">
-        <MessageText className="my-4">
-          To manage cold email settings, go to the Assistant Rules tab and click
-          Edit on the Cold Email rule.
-        </MessageText>
-        <Button asChild variant="outline">
-          <Link href={prefixPath(emailAccountId, "/automation?tab=rules")}>
-            Go to Assistant Rules
-          </Link>
-        </Button>
-      </TabsContent>
-    </Tabs>
+      <div className="mt-4 mb-10">
+        {selectedTab === "cold-emails" && (
+          <Card>
+            <ColdEmailList />
+          </Card>
+        )}
+        {selectedTab === "rejected" && (
+          <Card>
+            <ColdEmailRejected />
+          </Card>
+        )}
+        {selectedTab === "test" && <ColdEmailTest />}
+        {selectedTab === "settings" && (
+          <>
+            <MessageText className="my-4">
+              To manage cold email settings, open the Rules tab and edit the
+              Cold Email rule.
+            </MessageText>
+            <Button asChild variant="outline">
+              <Link href={prefixPath(emailAccountId, "/automation?tab=rules")}>
+                Go to Rules
+              </Link>
+            </Button>
+          </>
+        )}
+      </div>
+    </>
   );
+}
+
+function isColdEmailTab(value: string | null): value is ColdEmailTab {
+  return coldEmailTabs.includes(value as ColdEmailTab);
 }

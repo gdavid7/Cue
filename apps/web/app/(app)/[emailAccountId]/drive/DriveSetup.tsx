@@ -219,7 +219,7 @@ export function DriveSetup() {
       }
 
       analytics.captureAction("auto_file_enabled");
-      toastSuccess({ description: "Auto-filing started!" });
+      toastSuccess({ description: "Auto-filing started" });
       await mutateEmail();
     } catch (error) {
       analytics.captureAction("auto_file_enable_failed", {

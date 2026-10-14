@@ -119,7 +119,7 @@ export function LoginForm({
               height={24}
               unoptimized
             />
-            <span className="ml-2">Sign in with Google</span>
+            <span className="ml-2">Continue with Google</span>
           </span>
         </Button>
       ) : null}
@@ -138,7 +138,7 @@ export function LoginForm({
               height={24}
               unoptimized
             />
-            <span className="ml-2">Sign in with Microsoft</span>
+            <span className="ml-2">Continue with Microsoft</span>
           </span>
         </Button>
       ) : null}

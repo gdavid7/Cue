@@ -41,7 +41,7 @@ export default function PermissionsConsentPage() {
   return (
     <div className="flex flex-col items-center justify-center sm:p-20 md:p-32">
       <PageHeading className="text-center">
-        We are missing permissions 😔
+        {BRAND_NAME} needs more permissions
       </PageHeading>
 
       <TypographyP className="mx-auto mt-4 max-w-prose text-center">
@@ -57,9 +57,16 @@ export default function PermissionsConsentPage() {
         </TypographyP>
       )}
       {!isMicrosoft && (
-        <TypographyP className="mx-auto mt-3 max-w-prose text-center text-muted-foreground">
-          Reconnect your account and approve every requested permission.
-        </TypographyP>
+        <>
+          <TypographyP className="mx-auto mt-3 max-w-prose text-center text-muted-foreground">
+            Reconnect your account and approve each of these:
+          </TypographyP>
+          <ul className="mx-auto mt-3 max-w-prose list-disc space-y-1 pl-5 text-left text-sm text-muted-foreground">
+            {GOOGLE_PERMISSIONS.map((permission) => (
+              <li key={permission}>{permission}</li>
+            ))}
+          </ul>
+        </>
       )}
 
       <Button
@@ -92,3 +99,10 @@ export default function PermissionsConsentPage() {
     </div>
   );
 }
+
+// Plain-language summary of REQUIRED_SCOPES in utils/gmail/scopes.ts.
+const GOOGLE_PERMISSIONS = [
+  "Your name and email address, to identify your account",
+  "Read, send, label and archive your email (gmail.modify)",
+  "Manage Gmail filters and your vacation responder (gmail.settings.basic)",
+];

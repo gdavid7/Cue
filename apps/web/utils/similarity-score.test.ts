@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/utils/branding";
 import { describe, it, expect, vi, beforeAll } from "vitest";
 import { calculateSimilarity } from "./similarity-score";
 
@@ -491,11 +492,11 @@ On Mon, Jan 1, 2024 wrote:
 describe("branding footer normalization", () => {
   it.each([
     "Drafted by Inbox Zero.",
-    "Sent with Inbox Zero",
+    `Sent with ${BRAND_NAME}`,
     'Drafted by <a href="https://example.com/?ref=test">Inbox Zero</a>.',
-    "Sent with Inbox Zero [https://example.com/?ref=test]",
+    `Sent with ${BRAND_NAME} [https://example.com/?ref=test]`,
     "Drafted by Inbox Zero [https://example.com/?ref=test].",
-    "Drafted by Inbox Zero.\n\nSent with Inbox Zero",
+    `Drafted by Inbox Zero.\n\nSent with ${BRAND_NAME}`,
   ])("ignores adding or deleting %s", (footer) => {
     const body = "Thanks for the update.";
     expect(calculateSimilarity(`${body}\n\n${footer}`, body)).toBe(1);
