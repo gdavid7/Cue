@@ -35,7 +35,7 @@ export function StepConnectCalendar({ onNext }: { onNext: () => void }) {
       <div className="flex flex-col items-center justify-center mt-8 gap-4">
         {hasCalendarConnected ? (
           <>
-            <div className="flex items-center gap-2 text-green-600 font-medium animate-in fade-in zoom-in duration-300">
+            <div className="flex items-center gap-2 text-green-600 dark:text-green-400 font-medium animate-in fade-in zoom-in duration-300">
               <CheckIcon className="h-5 w-5" />
               Calendar Connected!
             </div>

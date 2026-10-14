@@ -156,7 +156,7 @@ export function WebhookDocumentationLink() {
       <Button
         variant="link"
         size="xs"
-        className="h-auto p-0 text-xs text-blue-600 hover:text-blue-800"
+        className="h-auto p-0 text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
       >
         View payload structure
       </Button>

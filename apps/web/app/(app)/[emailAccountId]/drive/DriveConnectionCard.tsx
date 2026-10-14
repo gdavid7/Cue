@@ -83,7 +83,7 @@ export function DriveConnectionCard({
       <span>·</span>
       <span>{connection.email}</span>
       {!connection.isConnected && (
-        <div className="flex items-center gap-1 text-red-600">
+        <div className="flex items-center gap-1 text-red-600 dark:text-red-400">
           <XCircle className="h-3 w-3" />
           <span className="text-xs">Disconnected</span>
         </div>

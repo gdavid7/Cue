@@ -84,7 +84,7 @@ export function ResubscribeDialog({
           <div className="flex gap-4 p-4">
             <div className="flex size-7 shrink-0 items-center justify-center rounded-full border bg-muted text-sm font-medium">
               {unblockComplete ? (
-                <CheckIcon className="size-4 text-green-600" />
+                <CheckIcon className="size-4 text-green-600 dark:text-green-400" />
               ) : (
                 "1"
               )}
@@ -98,7 +98,7 @@ export function ResubscribeDialog({
                 </p>
               </div>
               {unblockComplete ? (
-                <p className="shrink-0 text-sm font-medium text-green-600">
+                <p className="shrink-0 text-sm font-medium text-green-600 dark:text-green-400">
                   Unblocked
                 </p>
               ) : (
@@ -123,7 +123,7 @@ export function ResubscribeDialog({
           <div className="flex gap-4 p-4">
             <div className="flex size-7 shrink-0 items-center justify-center rounded-full border bg-muted text-sm font-medium">
               {doneLoading ? (
-                <CheckIcon className="size-4 text-green-600" />
+                <CheckIcon className="size-4 text-green-600 dark:text-green-400" />
               ) : (
                 "2"
               )}

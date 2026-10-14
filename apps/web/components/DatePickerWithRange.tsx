@@ -79,7 +79,7 @@ export function DatePickerWithRange({
                 <span>Pick a date</span>
               ))}
           </div>
-          <ChevronDown className="ml-2 h-4 w-4 text-gray-400" />
+          <ChevronDown className="ml-2 h-4 w-4 text-muted-foreground" />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-auto max-h-[var(--radix-popover-content-available-height)] overflow-y-auto p-0">

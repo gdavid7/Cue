@@ -27,7 +27,7 @@ export function ButtonCheckbox({
         "w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all",
         checked || indeterminate
           ? "bg-blue-500 border-blue-500 text-white"
-          : "border-gray-300 hover:border-gray-400 dark:border-gray-600 dark:hover:border-gray-500",
+          : "border-input hover:border-muted-foreground",
       )}
     >
       {checked && <Check className="size-3.5" strokeWidth={3} />}

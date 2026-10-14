@@ -182,9 +182,9 @@ function SummaryCard({
             className={cn(
               "text-xs mt-1 flex items-center gap-1",
               comparison.percentChange < 0
-                ? "text-green-600"
+                ? "text-green-600 dark:text-green-400"
                 : comparison.percentChange > 0
-                  ? "text-red-600"
+                  ? "text-red-600 dark:text-red-400"
                   : "text-muted-foreground",
             )}
           >

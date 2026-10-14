@@ -87,7 +87,7 @@ export function AnnouncementDialog() {
                     <X className="h-5 w-5" />
                   </button>
 
-                  <div className="w-full max-w-md overflow-hidden rounded-xl bg-gray-100 shadow-2xl dark:bg-gray-900">
+                  <div className="w-full max-w-md overflow-hidden rounded-xl bg-muted shadow-2xl">
                     <ScrollArea className="max-h-[600px] [&>[data-radix-scroll-area-viewport]]:max-h-[600px]">
                       <div className="flex flex-col gap-4 p-4">
                         {announcements.map((announcement) => (
@@ -120,13 +120,13 @@ export function AnnouncementCard({
   onClose,
 }: AnnouncementCardProps) {
   return (
-    <div className="overflow-hidden rounded-xl bg-white dark:bg-gray-800">
+    <div className="overflow-hidden rounded-xl bg-card">
       <div className="p-5">
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100">
+          <h3 className="text-lg font-bold text-foreground">
             {announcement.title}
           </h3>
-          <span className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-400">
+          <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
             {new Date(announcement.publishedAt).toLocaleDateString("en-US", {
               month: "short",
               day: "numeric",
@@ -168,7 +168,7 @@ export function AnnouncementCard({
           {announcement.learnMoreLink && (
             <Link
               href={announcement.learnMoreLink}
-              className="flex flex-1 items-center justify-center rounded-lg bg-gray-100 px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+              className="flex flex-1 items-center justify-center rounded-lg bg-secondary px-4 py-2.5 text-sm font-medium text-secondary-foreground transition-colors hover:bg-accent"
             >
               Learn more
             </Link>
@@ -182,14 +182,14 @@ export function AnnouncementCard({
 function DetailItem({ detail }: { detail: AnnouncementDetail }) {
   return (
     <div className="flex items-start gap-3">
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-gray-200 dark:border-gray-700">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border">
         {detail.icon}
       </div>
       <div className="min-w-0 pt-0.5">
-        <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+        <div className="text-sm font-medium text-foreground">
           {detail.title}
         </div>
-        <div className="text-sm text-gray-500 dark:text-gray-400">
+        <div className="text-sm text-muted-foreground">
           {detail.description}
         </div>
       </div>

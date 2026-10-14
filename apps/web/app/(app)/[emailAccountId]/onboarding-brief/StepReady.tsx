@@ -110,7 +110,7 @@ export function StepReady() {
                     : "billed monthly"}
                 </p>
               </div>
-              <div className="rounded-full border border-green-200 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-700">
+              <div className="rounded-full border border-green-200 bg-green-50 px-3 py-1.5 text-sm font-semibold text-green-700 dark:border-green-900 dark:bg-green-950 dark:text-green-400">
                 7-day free trial
               </div>
             </div>
@@ -118,8 +118,8 @@ export function StepReady() {
             <div className="flex flex-col gap-2.5">
               {PRICING_FEATURES.map((feature) => (
                 <div key={feature} className="flex items-center gap-2.5">
-                  <div className="flex h-5 w-5 items-center justify-center rounded-full bg-green-50">
-                    <CheckIcon className="h-3 w-3 text-green-600" />
+                  <div className="flex h-5 w-5 items-center justify-center rounded-full bg-green-50 dark:bg-green-950">
+                    <CheckIcon className="h-3 w-3 text-green-600 dark:text-green-400" />
                   </div>
                   <span className="text-foreground">{feature}</span>
                 </div>

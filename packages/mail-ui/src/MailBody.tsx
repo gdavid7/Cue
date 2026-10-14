@@ -221,7 +221,7 @@ export function buildMailHtmlDocument({
       .dark {
         color-scheme: dark;
         --foreground: 220 8% 92%;
-        --muted-foreground: 220 5% 62%;
+        --muted-foreground: 220 5% 67%;
         --background: 220 7% 19%;
       }
 

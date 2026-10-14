@@ -325,8 +325,8 @@ export function BulkActions({
 
           {/* Selected Senders List */}
           {selectedNewsletters.length > 0 && (
-            <div className="max-h-[300px] overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700">
-              <div className="divide-y divide-gray-100 dark:divide-gray-800">
+            <div className="max-h-[300px] overflow-y-auto rounded-lg border">
+              <div className="divide-y divide-border">
                 {selectedNewsletters.map((newsletter) => (
                   <div
                     key={newsletter.name}
@@ -385,8 +385,8 @@ export function BulkActions({
 
           {/* Selected Senders List */}
           {selectedNewsletters.length > 0 && (
-            <div className="max-h-[300px] overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700">
-              <div className="divide-y divide-gray-100 dark:divide-gray-800">
+            <div className="max-h-[300px] overflow-y-auto rounded-lg border">
+              <div className="divide-y divide-border">
                 {selectedNewsletters.map((newsletter) => (
                   <div
                     key={newsletter.name}

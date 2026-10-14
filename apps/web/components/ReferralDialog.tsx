@@ -146,9 +146,9 @@ export function Referrals({ source }: { source: ReferralSurface }) {
         <CardContent>
           {codeData?.code ? (
             <div className="space-y-4">
-              <div className="rounded-lg border bg-gray-50 p-3 sm:p-4">
+              <div className="rounded-lg border bg-muted p-3 sm:p-4">
                 <div className="overflow-x-auto">
-                  <span className="font-mono text-sm sm:text-base lg:text-lg font-bold text-gray-900 break-all">
+                  <span className="font-mono text-sm sm:text-base lg:text-lg font-bold text-foreground break-all">
                     {link}
                   </span>
                 </div>
@@ -174,7 +174,9 @@ export function Referrals({ source }: { source: ReferralSurface }) {
               </div>
             </div>
           ) : (
-            <p className="text-gray-500">Unable to load referral code</p>
+            <p className="text-muted-foreground">
+              Unable to load referral code
+            </p>
           )}
         </CardContent>
       </Card>

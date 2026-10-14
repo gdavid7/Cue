@@ -699,7 +699,7 @@ function EmailActionResult({
           )}
         </div>
         {isConfirmed && (
-          <div className="flex items-center gap-1 text-xs font-medium text-green-600">
+          <div className="flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400">
             <CheckIcon className="size-3.5" />
             Sent
           </div>
@@ -769,7 +769,9 @@ function EmailActionResult({
               variant="ghost"
               size="sm"
               className={`h-8 gap-1.5 text-xs ${
-                copied ? "text-green-600" : "text-muted-foreground"
+                copied
+                  ? "text-green-600 dark:text-green-400"
+                  : "text-muted-foreground"
               }`}
               onClick={handleCopy}
             >
@@ -1120,7 +1122,7 @@ function PendingCreateRuleCardContent({
   return (
     <div className="space-y-3">
       <Alert variant="default" className="border-amber-500/40 bg-amber-500/5">
-        <AlertTriangleIcon className="size-4 text-amber-600" />
+        <AlertTriangleIcon className="size-4 text-amber-600 dark:text-amber-400" />
         <AlertTitle>Review before enabling</AlertTitle>
         <AlertDescription className="space-y-2 text-sm">
           <p>
@@ -1541,7 +1543,7 @@ export function PendingDeleteRuleToolCard({
             variant="default"
             className="border-amber-500/40 bg-amber-500/5"
           >
-            <AlertTriangleIcon className="size-4 text-amber-600" />
+            <AlertTriangleIcon className="size-4 text-amber-600 dark:text-amber-400" />
             <AlertTitle>Confirm rule deletion</AlertTitle>
             <AlertDescription className="text-sm text-muted-foreground">
               This will permanently delete the rule and its actions.
@@ -1605,7 +1607,7 @@ export function PendingDeleteRulePreviewCard({
             variant="default"
             className="border-amber-500/40 bg-amber-500/5"
           >
-            <AlertTriangleIcon className="size-4 text-amber-600" />
+            <AlertTriangleIcon className="size-4 text-amber-600 dark:text-amber-400" />
             <AlertTitle>Confirm rule deletion</AlertTitle>
             <AlertDescription className="text-sm text-muted-foreground">
               This will permanently delete the rule and its actions.

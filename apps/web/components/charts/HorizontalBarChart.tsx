@@ -48,12 +48,12 @@ export function HorizontalBarChart({
                           ? "noopener noreferrer"
                           : undefined
                       }
-                      className="text-sm text-gray-900 dark:text-gray-100 truncate block z-10 relative hover:underline"
+                      className="text-sm text-foreground truncate block z-10 relative hover:underline"
                     >
                       {item.name}
                     </a>
                   ) : (
-                    <span className="text-sm text-gray-900 truncate block z-10 relative">
+                    <span className="text-sm text-foreground truncate block z-10 relative">
                       {item.name}
                     </span>
                   )}
@@ -61,7 +61,7 @@ export function HorizontalBarChart({
               </div>
             </div>
             <div className="flex-shrink-0">
-              <span className="text-sm text-gray-600">
+              <span className="text-sm text-muted-foreground">
                 {item.value.toLocaleString()}
               </span>
             </div>

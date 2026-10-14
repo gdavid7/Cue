@@ -542,7 +542,7 @@ function EmailPreview({
   return (
     <div>
       <Label>Preview</Label>
-      <div className="mt-3 border rounded-lg overflow-hidden bg-slate-50">
+      <div className="mt-3 border rounded-lg overflow-hidden bg-muted">
         {selectedDigestNames.length > 0 && htmlContent ? (
           <iframe
             title="Digest preview"
@@ -551,7 +551,7 @@ function EmailPreview({
             srcDoc={htmlContent}
           />
         ) : (
-          <div className="text-center text-slate-500 py-8">
+          <div className="text-center text-muted-foreground py-8">
             <p>Select digest items to see a preview</p>
           </div>
         )}

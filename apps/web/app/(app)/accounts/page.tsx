@@ -89,7 +89,7 @@ function AccountItem({
       href={mailHref({ accountId: emailAccount.id })}
       className="block min-w-0"
     >
-      <Card className="cursor-pointer transition-colors hover:bg-slate-50 dark:hover:bg-slate-900">
+      <Card className="cursor-pointer transition-colors hover:bg-accent/50">
         <AccountHeader
           emailAccount={emailAccount}
           onAccountDeleted={onAccountDeleted}

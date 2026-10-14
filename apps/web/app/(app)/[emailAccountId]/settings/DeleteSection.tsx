@@ -120,7 +120,7 @@ export function DeleteSection() {
                             Subscription" above or going to the{" "}
                             <Link
                               href="/premium"
-                              className="text-blue-600 underline hover:text-blue-800"
+                              className="text-blue-600 underline hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
                               onClick={() => setIsDialogOpen(false)}
                             >
                               premium page
@@ -129,7 +129,7 @@ export function DeleteSection() {
                           </>
                         )}
                       </p>
-                      <p className="text-sm text-gray-600">
+                      <p className="text-sm text-muted-foreground">
                         Already cancelled your subscription? Click the button
                         below to proceed.
                       </p>

@@ -49,7 +49,7 @@ export function AvailableActionsPanel() {
   const notifyActionName = getNotifyActionName(messagingChannelsData);
 
   return (
-    <Card className="h-fit bg-slate-50 dark:bg-slate-900 hidden sm:block">
+    <Card className="h-fit bg-muted/50 hidden sm:block">
       <CardContent className="pt-4">
         <div className="grid gap-2">
           <ActionSection

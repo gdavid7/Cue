@@ -170,7 +170,7 @@ export function ComposeContactRecipientField({
     >
       <div
         className={cn(
-          "flex min-h-10 w-full flex-1 flex-wrap items-center gap-1.5 rounded-md text-sm disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-muted-foreground",
+          "flex min-h-10 w-full flex-1 flex-wrap items-center gap-1.5 rounded-md text-sm disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground",
           className,
         )}
       >

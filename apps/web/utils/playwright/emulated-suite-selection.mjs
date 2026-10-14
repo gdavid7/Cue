@@ -84,6 +84,14 @@ const sharedFeatureMappings = [
       "settings/settings-dialog.spec.ts",
     ],
   },
+  {
+    files: [
+      "components/theme-provider.tsx",
+      "components/theme-options.ts",
+      "components/ThemeSubmenu.tsx",
+    ],
+    targets: ["mail/theme.spec.ts", "settings/dark-mode.spec.ts"],
+  },
 ];
 
 const directSuiteMappings = [

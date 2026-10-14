@@ -64,7 +64,7 @@ export function EmailAnalytics(props: {
         {data && (
           <BarListCard
             icon={
-              <Mail className="size-4 text-neutral-500 translate-y-[-0.5px]" />
+              <Mail className="size-4 text-muted-foreground translate-y-[-0.5px]" />
             }
             title="Received"
             tabs={[
@@ -89,7 +89,7 @@ export function EmailAnalytics(props: {
       >
         {dataRecipients && (
           <BarListCard
-            icon={<Send className="size-4 text-neutral-500" />}
+            icon={<Send className="size-4 text-muted-foreground" />}
             title="Sent"
             tabs={[
               {

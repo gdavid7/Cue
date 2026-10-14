@@ -20,6 +20,7 @@ import {
   shouldPromptDesktopWebUpdate,
 } from "@/utils/desktop-app";
 import { BRAND_NAME } from "@/utils/branding";
+import { ThemeProvider } from "@/components/theme-provider";
 
 const DESKTOP_WEB_UPDATE_TOAST_ID = "desktop-web-update";
 const DESKTOP_WEB_UPDATE_PROMPT_GRACE_MS = 3000;
@@ -37,9 +38,11 @@ export function GlobalProviders(props: { children: React.ReactNode }) {
     >
       <ManageServiceWorker />
       <SignalDesktopReady />
-      <SWRConfig value={{ fetcher: swrFetcher }}>
-        <NuqsAdapter>{props.children}</NuqsAdapter>
-      </SWRConfig>
+      <ThemeProvider>
+        <SWRConfig value={{ fetcher: swrFetcher }}>
+          <NuqsAdapter>{props.children}</NuqsAdapter>
+        </SWRConfig>
+      </ThemeProvider>
     </SerwistProvider>
   );
 }

@@ -10,7 +10,7 @@ export interface ButtonProps
 }
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center whitespace-nowrap text-center font-semibold transition-transform hover:scale-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black disabled:cursor-default disabled:opacity-70",
+  "inline-flex items-center justify-center whitespace-nowrap text-center font-semibold transition-transform hover:scale-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black dark:focus-visible:outline-white disabled:cursor-default disabled:opacity-70",
   {
     variants: {
       size: {
@@ -28,10 +28,11 @@ const buttonVariants = cva(
         full: "rounded-full py-4 shadow-lg",
       },
       color: {
-        primary: "bg-gray-900 text-white hover:bg-gray-700 focus:ring-gray-900",
-        red: "bg-red-100 text-primary hover:bg-red-200 focus:ring-red-500",
+        primary:
+          "bg-gray-900 text-white hover:bg-gray-700 focus:ring-gray-900 dark:bg-foreground dark:text-background dark:hover:bg-foreground/90",
+        red: "bg-red-100 text-primary hover:bg-red-200 focus:ring-red-500 dark:bg-red-950 dark:text-red-200 dark:hover:bg-red-900",
         white:
-          "border border-muted bg-white text-gray-700 hover:bg-gray-50 focus:ring-gray-200",
+          "border border-muted bg-white text-gray-700 hover:bg-gray-50 focus:ring-gray-200 dark:border-border dark:bg-secondary dark:text-secondary-foreground dark:hover:bg-accent",
         blue: "bg-blue-600 text-white hover:bg-blue-500 focus:ring-blue-600",
         transparent: "",
       },

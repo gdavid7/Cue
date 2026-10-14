@@ -33,7 +33,7 @@
     --accent: 210 40% 96.1%; /* slate-100 */
     --accent-foreground: 222.2 47.4% 11.2%; /* slate-900 */
 
-    --destructive: 0 100% 50%;
+    --destructive: 0 72.2% 50.6%; /* red-600, 4.8:1 on white */
     --destructive-foreground: 210 40% 98%;
 
     --ring: 215.4 16.3% 46.9%; /* slate-500, 3:1+ focus contrast */
@@ -70,13 +70,16 @@
     --secondary: 220 7% 24%; /* #393C41 */
     --secondary-foreground: 220 8% 85%; /* #D6D8DC */
     --muted: 220 7% 21%; /* #323439 */
-    --muted-foreground: 220 5% 62%; /* #999CA3 */
+    --muted-foreground: 220 5% 67%; /* #A7A9AF, 4.5:1 even on --accent */
     --accent: 220 7% 24%; /* #393C41 */
     --accent-foreground: 220 8% 95%; /* #F1F2F3 */
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 85.7% 97.3%;
+    /* A light red so destructive text clears AA on charcoal; fills carry
+       dark text, as on the Mail screen */
+    --destructive: 0 90.6% 76%; /* #F98A8A, 4.5:1+ even on a highlighted --accent row */
+    --destructive-foreground: 220 7% 12%; /* #1C1E21 */
     --border: 220 6% 22%; /* #35373B */
-    --input: 220 6% 22%;
+    /* A step above --border so field outlines stay findable */
+    --input: 220 6% 28%; /* #43464C */
     --border-strong: 220 6% 28%; /* #43464C */
     --ring: 240 4.9% 83.9%;
     --chart-1: oklch(0.7 0.2 250);
@@ -157,9 +160,6 @@
        charcoal background clear WCAG AA contrast */
     --primary: 213.1 93.9% 67.8%; /* #60A5FA */
     --primary-foreground: 220 7% 12%; /* #1C1E21 */
-
-    --destructive: 0 90.6% 70.8%; /* #F87171 */
-    --destructive-foreground: 220 7% 12%;
 
     --ring: 213.1 93.9% 67.8%;
 

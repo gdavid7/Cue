@@ -15,7 +15,7 @@ const iconVariants = cva("relative flex items-center justify-center", {
 });
 
 const innerVariants = cva(
-  "relative flex items-center justify-center rounded-full bg-white shadow-sm",
+  "relative flex items-center justify-center rounded-full bg-background shadow-sm",
   {
     variants: {
       size: {
@@ -38,13 +38,13 @@ export const textVariants = cva("font-semibold", {
       lg: "text-base",
     },
     color: {
-      blue: "text-blue-600",
-      purple: "text-purple-600",
-      green: "text-green-600",
-      yellow: "text-yellow-600",
-      orange: "text-orange-600",
-      red: "text-red-600",
-      indigo: "text-indigo-600",
+      blue: "text-blue-600 dark:text-blue-400",
+      purple: "text-purple-600 dark:text-purple-400",
+      green: "text-green-600 dark:text-green-400",
+      yellow: "text-yellow-600 dark:text-yellow-400",
+      orange: "text-orange-600 dark:text-orange-400",
+      red: "text-red-600 dark:text-red-400",
+      indigo: "text-indigo-600 dark:text-indigo-400",
     },
   },
   defaultVariants: {

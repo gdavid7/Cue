@@ -176,7 +176,7 @@ export function CalendarConnectionCard({
               <CardDescription className="flex items-center gap-2">
                 <span className="truncate">{connection.email}</span>
                 {!connection.isConnected && (
-                  <div className="flex shrink-0 items-center gap-1 text-red-600">
+                  <div className="flex shrink-0 items-center gap-1 text-red-600 dark:text-red-400">
                     <XCircle className="h-3 w-3" />
                     <span className="text-xs">Disconnected</span>
                   </div>

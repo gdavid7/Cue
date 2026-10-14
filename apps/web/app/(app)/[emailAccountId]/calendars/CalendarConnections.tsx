@@ -29,14 +29,14 @@ export function CalendarConnections() {
                 </TypographyP>
 
                 <TypographyP className="text-sm flex items-center gap-2">
-                  <CalendarCheckIcon className="size-4 text-blue-600" />
+                  <CalendarCheckIcon className="size-4 text-blue-600 dark:text-blue-400" />
                   <span className="min-w-0">
                     AI replies based on your real availability
                   </span>
                 </TypographyP>
 
                 <TypographyP className="text-sm flex items-center gap-2">
-                  <FileTextIcon className="size-4 text-blue-600" />
+                  <FileTextIcon className="size-4 text-blue-600 dark:text-blue-400" />
                   <span className="min-w-0">
                     Meeting briefs before every call
                   </span>

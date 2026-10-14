@@ -390,7 +390,7 @@ function MemberCard({
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={() => onRemove(member.id)}
-                className="text-red-600 hover:!bg-red-50 hover:!text-red-600"
+                className="text-destructive hover:!bg-destructive/10 hover:!text-destructive"
               >
                 <TrashIcon className="mr-2 size-4" />
                 Remove
