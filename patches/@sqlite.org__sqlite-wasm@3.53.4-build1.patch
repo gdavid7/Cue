@@ -1,5 +1,36 @@
+diff --git a/dist/index.mjs b/dist/index.mjs
+index 5e6e43ba2a02c3c7a9d71aabb8134a929ffc94ca..1b06f70583545352b112b0399f425449bf78681d 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -16446,6 +16446,14 @@ async function sqlite3InitModule$1(moduleArg = {}) {
+ 				@see pauseVfs()
+ 				@see unpauseVfs()
+ 				*/
++				async releaseVfsAfterFailedInit() {
++					if (this.#cVfs.pointer) {
++						capi.sqlite3_vfs_unregister(this.#cVfs.pointer);
++						this.#cVfs.dispose();
++					}
++					delete initPromises[this.vfsName];
++					this.releaseAccessHandles();
++				}
+ 				async removeVfs() {
+ 					if (!this.#cVfs.pointer || !this.#dhOpaque) return false;
+ 					capi.sqlite3_vfs_unregister(this.#cVfs.pointer);
+@@ -16950,7 +16958,10 @@ async function sqlite3InitModule$1(moduleArg = {}) {
+ 						thePool.log("VFS initialized.");
+ 						return poolUtil;
+ 					}).catch(async (e) => {
+-						await thePool.removeVfs().catch(() => {});
++						// Patched: a failed init only lets go of the pool. removeVfs()
++						// deletes the pool's directory, and with it a healthy database
++						// whose handles merely failed to open this time.
++						await thePool.releaseVfsAfterFailedInit().catch(() => {});
+ 						throw e;
+ 					});
+ 				}).catch((err) => {
 diff --git a/dist/sqlite3-worker1.mjs b/dist/sqlite3-worker1.mjs
-index 55836559c280d5263be6258ba404bb3870081d86..e6b51ae8905bd267fa9182633e8e23ea09581ae1 100644
+index 55836559c280d5263be6258ba404bb3870081d86..873ffb6afc65f71404b9a901ad4f88bab3b871e6 100644
 --- a/dist/sqlite3-worker1.mjs
 +++ b/dist/sqlite3-worker1.mjs
 @@ -15634,7 +15634,11 @@ async function sqlite3InitModule(moduleArg = {}) {
@@ -15,3 +46,30 @@ index 55836559c280d5263be6258ba404bb3870081d86..e6b51ae8905bd267fa9182633e8e23ea
  						let zombieTimer = setTimeout(() => {
  							if (void 0 === promiseWasRejected) promiseReject(/* @__PURE__ */ new Error("Timeout while waiting for OPFS async proxy worker."));
  						}, 4e3);
+@@ -16521,6 +16525,14 @@ async function sqlite3InitModule(moduleArg = {}) {
+ 				@see pauseVfs()
+ 				@see unpauseVfs()
+ 				*/
++				async releaseVfsAfterFailedInit() {
++					if (this.#cVfs.pointer) {
++						capi.sqlite3_vfs_unregister(this.#cVfs.pointer);
++						this.#cVfs.dispose();
++					}
++					delete initPromises[this.vfsName];
++					this.releaseAccessHandles();
++				}
+ 				async removeVfs() {
+ 					if (!this.#cVfs.pointer || !this.#dhOpaque) return false;
+ 					capi.sqlite3_vfs_unregister(this.#cVfs.pointer);
+@@ -17025,7 +17037,10 @@ async function sqlite3InitModule(moduleArg = {}) {
+ 						thePool.log("VFS initialized.");
+ 						return poolUtil;
+ 					}).catch(async (e) => {
+-						await thePool.removeVfs().catch(() => {});
++						// Patched: a failed init only lets go of the pool. removeVfs()
++						// deletes the pool's directory, and with it a healthy database
++						// whose handles merely failed to open this time.
++						await thePool.releaseVfsAfterFailedInit().catch(() => {});
+ 						throw e;
+ 					});
+ 				}).catch((err) => {

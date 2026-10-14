@@ -42,6 +42,18 @@ export class MailboxCorruptError extends Error {
   }
 }
 
+const MAILBOX_UNAVAILABLE = "mailbox storage unavailable";
+
+/**
+ * Storage could not open the mailbox files, which were left as they are; a
+ * retry later may succeed.
+ */
+export class MailboxUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(`${MAILBOX_UNAVAILABLE}: ${errorText(cause)}`, { cause });
+    this.name = "MailboxUnavailableError";
+  }
+}
 const SQLITE_BUSY = 5;
 const SQLITE_LOCKED = 6;
 const SQLITE_IOERR = 10;
@@ -121,6 +133,8 @@ export function classifyMailboxError(
   // The OPFS SAH-pool VFS reports a full disk as an I/O error, not FULL.
   if (code === SQLITE_FULL || code === SQLITE_IOERR) return "unavailable";
   const text = errorText(error);
+  // Checked first: the cause it wraps can read like a held file.
+  if (text.includes(MAILBOX_UNAVAILABLE)) return "unavailable";
   if (
     text.includes("sqlite_corrupt") ||
     text.includes("sqlite_notadb") ||

@@ -33,7 +33,7 @@ packageExtensionsChecksum: sha256-PRbzx2viqV+1LR1E4uOlUjx+heWO2EvJ6w+FHgUvBZY=
 patchedDependencies:
   '@better-auth/oauth-provider@1.7.4': f3e7e8d12056b3b4c2a2a4154041f666a87ec5e12419a2e2dfa5b56d573b346e
   '@inbox-zero/emulate@0.13.0': 9eb919ed09cd6dc705636413bcb9e19d9860152e4c71e02dc367cc2c98f8216c
-  '@sqlite.org/sqlite-wasm@3.53.4-build1': 0d8786ef5c43372d91f393ee2e75e3ea352d98cfd0b43b9b729156a1497ae855
+  '@sqlite.org/sqlite-wasm@3.53.4-build1': 877a0e7ab02be271764a77936d3ababba53c79d52067fa2efc2556d688d08e5b
 
 importers:
 
@@ -435,7 +435,7 @@ importers:
         version: 7.15.2(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1)
       '@sqlite.org/sqlite-wasm':
         specifier: 3.53.4-build1
-        version: 3.53.4-build1(patch_hash=0d8786ef5c43372d91f393ee2e75e3ea352d98cfd0b43b9b729156a1497ae855)
+        version: 3.53.4-build1(patch_hash=877a0e7ab02be271764a77936d3ababba53c79d52067fa2efc2556d688d08e5b)
       '@stripe/stripe-js':
         specifier: 9.16.0
         version: 9.16.0
@@ -5946,6 +5946,7 @@ packages:
   '@sanity/ui@4.2.0':
     resolution: {integrity: sha512-O8orW8pfSgs+phecd+9xr8Ptr/1fWEdx37kZ+X8l/XJ4cguDKJhhMtVzE/+OSWrStVDTT/eXAZWjRWEVC41KFg==}
     engines: {node: '>=22.12'}
+    deprecated: Class names collide with @sanity/ui 4.4.4 (shipped in sanity@6.19.0) when both load on one page, breaking styles. Upgrade to @sanity/ui@^4.4.4.
     peerDependencies:
       react: ^19.2
       react-dom: ^19.2
@@ -16029,7 +16030,7 @@ snapshots:
   '@inquirer/external-editor@3.0.3(@types/node@24.10.1)':
     dependencies:
       chardet: 2.1.1
-      iconv-lite: 0.7.2
+      iconv-lite: 0.7.3
     optionalDependencies:
       '@types/node': 24.10.1
 
@@ -19492,7 +19493,7 @@ snapshots:
 
   '@speed-highlight/core@1.2.15': {}
 
-  '@sqlite.org/sqlite-wasm@3.53.4-build1(patch_hash=0d8786ef5c43372d91f393ee2e75e3ea352d98cfd0b43b9b729156a1497ae855)': {}
+  '@sqlite.org/sqlite-wasm@3.53.4-build1(patch_hash=877a0e7ab02be271764a77936d3ababba53c79d52067fa2efc2556d688d08e5b)': {}
 
   '@stablelib/base64@1.0.1': {}
 
@@ -24243,7 +24244,7 @@ snapshots:
       aws-ssl-profiles: 1.1.2
       denque: 2.1.0
       generate-function: 2.3.1
-      iconv-lite: 0.7.2
+      iconv-lite: 0.7.3
       long: 5.3.2
       lru.min: 1.1.4
       named-placeholders: 1.1.6

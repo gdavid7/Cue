@@ -10,6 +10,7 @@ import { archiveThenNewMailScenario } from "@inboxzero/mail-core/test-support/sc
 import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
 import type { SqliteDriver } from "@inboxzero/mail-sqlite/driver";
+import { classifyMailboxError } from "@inboxzero/mail-sqlite/recovery";
 import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
 import {
   MAIL_ENGINE_OPFS_DIRECTORY,
@@ -450,6 +451,24 @@ describe("createWasmMailStore", () => {
       generation: "g1",
     });
     await store.close();
+  });
+
+  it.each([
+    ["an OPFS handle that will not open", "UnknownError", "unavailable"],
+    ["a broken OPFS state", "InvalidStateError", "unavailable"],
+    ["files another context still holds", "NoModificationAllowedError", "busy"],
+  ])("reports %s (%s) while installing the pool as %s", async (_, name, kind) => {
+    vi.stubGlobal("navigator", { storage: { getDirectory: async () => ({}) } });
+    opfsPool.install = () => {
+      throw new DOMException("could not create a sync access handle", name);
+    };
+
+    const error = await createWasmMailStore({
+      ownedAccountIds: ["acc-1"],
+    }).catch((caught: unknown) => caught);
+
+    // Workers pass errors on as message text.
+    expect(classifyMailboxError(new Error(String(error)))).toBe(kind);
   });
 
   it("rebuilds an OPFS mailbox file that is not a database", async () => {

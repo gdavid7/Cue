@@ -6,6 +6,7 @@ import type {
   SqliteDriver,
 } from "@inboxzero/mail-sqlite/driver";
 import {
+  MailboxUnavailableError,
   openMailStoreWithRecovery,
   type DroppedMailWork,
 } from "@inboxzero/mail-sqlite/recovery";
@@ -44,11 +45,18 @@ export async function createWasmMailStore(input: {
   }
   const releaseFiles = await holdMailboxFiles();
   try {
-    const pool = await sqlite.installOpfsSAHPoolVfs({
-      name: "mail-engine",
-      directory: MAIL_ENGINE_OPFS_DIRECTORY,
-      initialCapacity: 8,
-    });
+    const pool = await sqlite
+      .installOpfsSAHPoolVfs({
+        name: "mail-engine",
+        directory: MAIL_ENGINE_OPFS_DIRECTORY,
+        initialCapacity: 8,
+      })
+      .catch((error: unknown) => {
+        // A file a closing context still holds clears on retry; any other
+        // handle failure will not, and the files are left for a later visit.
+        if (isHeldFileError(error)) throw error;
+        throw new MailboxUnavailableError(error);
+      });
     const store = await openMailStoreWithRecovery({
       async open() {
         if (pool.isPaused()) await pool.unpauseVfs();
@@ -228,6 +236,15 @@ function createTransaction(database: Database): SqlTransaction {
       return { changedRows: changed };
     },
   };
+}
+
+function isHeldFileError(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "NoModificationAllowedError"
+  );
 }
 
 function isMissingOpfsEntry(error: unknown) {
