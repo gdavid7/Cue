@@ -1,6 +1,7 @@
 import { type InferUITool, tool } from "ai";
 import { z } from "zod";
 import { createEmailProvider } from "@/utils/email/provider";
+import { describeProviderRateLimitError } from "@/utils/email/rate-limit";
 import type { Logger } from "@/utils/logger";
 import { posthogCaptureEvent } from "@/utils/posthog";
 import { searchContext } from "@/utils/thread-context/search-context";
@@ -55,7 +56,11 @@ Results have short snippets only: call readEmail with an email result's messageI
         return { results, count: results.length };
       } catch (error) {
         logger.error("Failed to search context", { error });
-        return { error: "Failed to search email and calendar" };
+        return {
+          error:
+            describeProviderRateLimitError(error, provider) ??
+            "Failed to search email and calendar",
+        };
       }
     },
   });

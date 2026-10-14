@@ -1,5 +1,10 @@
 import { SafeError } from "@/utils/error";
 import { getGoogleGmailApiRootUrl } from "@/utils/gmail/oauth";
+import {
+  gmailAccountForAccessToken,
+  gmailRequestCost,
+  meterGmailCall,
+} from "@/utils/gmail/quota";
 
 /**
  * Opens a Gmail resumable upload that replaces the whole draft message.
@@ -23,20 +28,28 @@ export async function startGmailDraftUploadSession({
     gmailRootUrl(),
   );
   url.searchParams.set("uploadType", "resumable");
-  const response = await fetch(url, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json; charset=UTF-8",
-      "X-Upload-Content-Type": "message/rfc822",
-      "X-Upload-Content-Length": String(totalBytes),
+  const response = await meterGmailCall(
+    {
+      emailAccountId: gmailAccountForAccessToken(accessToken),
+      cost: gmailRequestCost("PUT", url),
+      priority: "interactive",
     },
-    body: JSON.stringify({
-      id: draftId,
-      message: threadId ? { threadId } : {},
-    }),
-    signal: AbortSignal.timeout(30_000),
-  });
+    () =>
+      fetch(url, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json; charset=UTF-8",
+          "X-Upload-Content-Type": "message/rfc822",
+          "X-Upload-Content-Length": String(totalBytes),
+        },
+        body: JSON.stringify({
+          id: draftId,
+          message: threadId ? { threadId } : {},
+        }),
+        signal: AbortSignal.timeout(30_000),
+      }),
+  );
   if (response.status === 404)
     throw new SafeError(
       "This draft is no longer available in Gmail. Check Sent before trying again.",

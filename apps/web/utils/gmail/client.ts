@@ -1,4 +1,5 @@
 import { auth, gmail, type gmail_v1 } from "@googleapis/gmail";
+import type { GaxiosOptions } from "gaxios";
 import { people } from "@googleapis/people";
 import { saveTokens } from "@/utils/auth/save-tokens";
 import { cleanupInvalidTokens } from "@/utils/auth/cleanup-invalid-tokens";
@@ -12,6 +13,11 @@ import {
   getGoogleOauthClientOptions,
   getGooglePeopleApiRootUrl,
 } from "@/utils/gmail/oauth";
+import {
+  gmailRequestCost,
+  meterGmailCall,
+  rememberGmailAccessToken,
+} from "@/utils/gmail/quota";
 
 type AuthOptions = {
   accessToken?: string | null;
@@ -80,7 +86,21 @@ export const getGmailClientWithRefresh = async ({
 
   // we handle refresh ourselves so not passing in expiresAt
   const auth = getAuth({ accessToken, refreshToken });
-  const g = gmail({ version: "v1", auth, rootUrl: getGoogleGmailApiRootUrl() });
+  meterGmailRequests(auth, emailAccountId);
+  const g = gmail({
+    version: "v1",
+    auth,
+    rootUrl: getGoogleGmailApiRootUrl(),
+    // Gmail answers a spent quota with 429 too; retrying it within
+    // milliseconds only spends units that are not back yet.
+    retryConfig: {
+      statusCodesToRetry: [
+        [100, 199],
+        [408, 408],
+        [500, 599],
+      ],
+    },
+  });
 
   const expiryDate = expiresAt ? expiresAt : null;
   if (expiryDate && expiryDate > Date.now() + TOKEN_REFRESH_BUFFER_MS) {
@@ -164,9 +184,40 @@ export const getContactsClient = ({
 };
 
 export const getAccessTokenFromClient = (client: gmail_v1.Gmail): string => {
+  const authClient = client.context._options.auth;
   // biome-ignore lint/suspicious/noExplicitAny: existing loose external shape
-  const accessToken = (client.context._options.auth as any).credentials
-    .access_token;
+  const accessToken = (authClient as any).credentials.access_token;
   if (!accessToken) throw new Error("No access token");
+  const emailAccountId =
+    typeof authClient === "object"
+      ? meteredAccounts.get(authClient)
+      : undefined;
+  if (emailAccountId) rememberGmailAccessToken(accessToken, emailAccountId);
   return accessToken;
 };
+
+// Batch requests carry only the access token, so each metered auth client
+// remembers its account to let the batch path charge the same budget.
+const meteredAccounts = new WeakMap<object, string>();
+
+// Every REST call the Gmail client makes passes through the auth client's
+// `request`, so this is where each call is charged to the account's budget.
+// Token refreshes use the transporter directly and are not charged.
+function meterGmailRequests(
+  client: InstanceType<typeof auth.OAuth2>,
+  emailAccountId: string,
+) {
+  const request = client.request.bind(client) as (
+    options: GaxiosOptions,
+  ) => Promise<unknown>;
+  const metered = (options: GaxiosOptions) =>
+    meterGmailCall(
+      {
+        emailAccountId,
+        cost: gmailRequestCost(options.method ?? "GET", String(options.url)),
+      },
+      () => request(options),
+    );
+  client.request = metered as typeof client.request;
+  meteredAccounts.set(client, emailAccountId);
+}

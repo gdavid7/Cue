@@ -221,7 +221,7 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
         response: { headers: { "retry-after": "120" } },
       };
       await expect(
-        withLocalMailSyncBudget(input, async () => {
+        withLocalMailSyncBudget({ ...input, priority: "current" }, async () => {
           throw throttled;
         }),
       ).rejects.toBe(throttled);
@@ -236,6 +236,26 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       ).rejects.toMatchObject({ retryAfterMs: expect.any(Number) });
       expect(next).not.toHaveBeenCalled();
       expect(await command("ZCARD", "local-mail-budget:google:active")).toBe(0);
+    });
+
+    it("cools down a throttled backfill without account-wide rate-limit mode", async () => {
+      const throttled = {
+        status: 429,
+        response: { headers: { "retry-after": "120" } },
+      };
+      await expect(
+        withLocalMailSyncBudget(input, async () => {
+          throw throttled;
+        }),
+      ).rejects.toBe(throttled);
+      expect(
+        await command("GET", "email-provider-rate-limit:account-1"),
+      ).toBeNull();
+      const next = vi.fn();
+      await expect(
+        withLocalMailSyncBudget({ ...input, cost: 20 }, next),
+      ).rejects.toMatchObject({ retryAfterMs: expect.any(Number) });
+      expect(next).not.toHaveBeenCalled();
     });
   },
 );

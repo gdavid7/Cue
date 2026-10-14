@@ -2,6 +2,7 @@ import "server-only";
 import type { Logger } from "@/utils/logger";
 import {
   getProviderFromRateLimitApiErrorType,
+  getProviderRateLimitMessageLabel,
   type EmailProviderRateLimitProvider,
   isProviderRateLimitModeError,
   ProviderRateLimitModeError,
@@ -23,6 +24,10 @@ import {
   isRetryableError as isOutlookRetryableError,
 } from "@/utils/outlook/retry";
 import { getRetryAfterHeaderFromError } from "@/utils/retry/get-retry-after-header";
+import {
+  currentGmailQuotaContext,
+  getGmailCallDeferredError,
+} from "@/utils/gmail/quota";
 
 const DEFAULT_RATE_LIMIT_DELAY_MS = 30_000;
 // Gmail's weighted-units quota is a per-minute budget, so a retry within
@@ -226,6 +231,13 @@ export async function recordProviderRateLimitFromError({
   attemptNumber?: number;
 }): Promise<EmailProviderRateLimitState | null> {
   if (!isEmailProviderRateLimitRedisConfigured()) return null;
+  // A refused background call already paused background work at the Gmail
+  // quota gate; account-wide mode would also block the user's own reads.
+  if (
+    provider === "google" &&
+    currentGmailQuotaContext().priority === "background"
+  )
+    return null;
 
   const delayMs = getProviderRateLimitDelayMs({
     error,
@@ -284,6 +296,37 @@ export async function withRateLimitRecording<T>(
     }
     throw error;
   }
+}
+
+/**
+ * A sentence an assistant can repeat to the user when a provider call failed
+ * because the provider (or Cue's per-account budget for it) is limiting
+ * requests; null for any other failure.
+ */
+export function describeProviderRateLimitError(
+  error: unknown,
+  provider: string,
+): string | null {
+  const rateLimitProvider = toRateLimitProvider(provider);
+  if (!rateLimitProvider) return null;
+  let delayMs: number | null;
+  if (isProviderRateLimitModeError(error)) {
+    const retryAt = error.retryAt ? Date.parse(error.retryAt) : Number.NaN;
+    delayMs = Number.isNaN(retryAt)
+      ? DEFAULT_RATE_LIMIT_DELAY_MS
+      : retryAt - Date.now();
+  } else {
+    delayMs =
+      getGmailCallDeferredError(error)?.retryAfterMs ??
+      getProviderRateLimitDelayMs({
+        error,
+        provider: rateLimitProvider,
+        attemptNumber: 1,
+      });
+  }
+  if (delayMs === null) return null;
+  const seconds = Math.max(1, Math.ceil(delayMs / 1000));
+  return `${getProviderRateLimitMessageLabel(rateLimitProvider)} is temporarily limiting requests; try again in about ${seconds} ${seconds === 1 ? "second" : "seconds"}.`;
 }
 
 export function getProviderRateLimitDelayMs({

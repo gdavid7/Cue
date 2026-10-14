@@ -778,8 +778,9 @@ describe("createEmailProviderMailboxSource", () => {
       page: "{}",
       pageSize: 50,
     });
+    // A scan's first Gmail page is smaller so the inbox fills sooner.
     expect(getMessagesWithPagination).toHaveBeenCalledWith({
-      maxResults: 50,
+      maxResults: 25,
       pageToken: undefined,
       includeDrafts: true,
     });
