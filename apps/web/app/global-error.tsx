@@ -2,7 +2,6 @@
 
 import { useEffect } from "react";
 import { ErrorDisplay } from "@/components/ErrorDisplay";
-import { Button } from "@/components/ui/button";
 import { captureException } from "@/utils/error";
 import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 
@@ -21,11 +20,10 @@ export default function GlobalError({ error }: any) {
   return (
     <html lang="en">
       <body className="p-4">
-        <ErrorDisplay error={{ error: error?.message }} />
-
-        <div className="mt-4">
-          <Button onClick={() => window.location.reload()}>Reload Page</Button>
-        </div>
+        <ErrorDisplay
+          error={{ error: error?.message }}
+          onRetry={() => window.location.reload()}
+        />
       </body>
     </html>
   );

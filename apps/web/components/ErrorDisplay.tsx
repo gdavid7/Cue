@@ -1,10 +1,12 @@
 "use client";
 
 import Image from "next/image";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, RotateCcw } from "lucide-react";
+import { useSWRConfig } from "swr";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
+  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
@@ -13,49 +15,59 @@ import {
 import { logOut } from "@/utils/user";
 import { env } from "@/env";
 
-// TODO would be better to have a consistent definition here. didn't want to break things.
 export function ErrorDisplay(props: {
-  error: { info?: { error?: string | object }; error?: string | object };
+  error:
+    | {
+        info?: { error?: string | object; isKnownError?: boolean };
+        error?: string | object;
+      }
+    | undefined;
+  /** Defaults to revalidating the data on screen. */
+  onRetry?: () => void;
 }) {
+  const { mutate } = useSWRConfig();
+  if (!props.error) return null;
+
   const errorMessage =
-    safeErrorToString(props.error?.info?.error) ||
-    safeErrorToString(props.error?.error);
+    safeErrorToString(props.error.info?.error) ||
+    safeErrorToString(props.error.error);
+  // Known errors were written for the user; anything else is system detail.
+  const userMessage = props.error.info?.isKnownError ? errorMessage : null;
+  const retry = props.onRetry ?? (() => mutate(() => true));
 
-  if (errorMessage) {
-    return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyMedia variant="icon" className="bg-destructive/10">
-            <AlertCircle className="text-destructive" />
-          </EmptyMedia>
-          <EmptyTitle>There was an error</EmptyTitle>
-          <EmptyDescription>{errorMessage}</EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    );
-  }
-
-  if (props.error) {
-    return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyMedia variant="icon" className="bg-destructive/10">
-            <AlertCircle className="text-destructive" />
-          </EmptyMedia>
-          <EmptyTitle>There was an error</EmptyTitle>
-          <EmptyDescription>
-            Please refresh or contact support at{" "}
-            <a href={`mailto:${env.NEXT_PUBLIC_SUPPORT_EMAIL}`}>
-              {env.NEXT_PUBLIC_SUPPORT_EMAIL}
-            </a>{" "}
-            if the error persists.
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    );
-  }
-
-  return null;
+  return (
+    <Empty>
+      <EmptyHeader>
+        <EmptyMedia variant="icon" className="bg-destructive/10">
+          <AlertCircle className="text-destructive" />
+        </EmptyMedia>
+        <EmptyTitle>Couldn&apos;t load this</EmptyTitle>
+        <EmptyDescription>
+          {userMessage || (
+            <>
+              Check your connection and try again. If it keeps happening, email{" "}
+              <a href={`mailto:${env.NEXT_PUBLIC_SUPPORT_EMAIL}`}>
+                {env.NEXT_PUBLIC_SUPPORT_EMAIL}
+              </a>
+              .
+            </>
+          )}
+        </EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button variant="outline" size="sm" onClick={retry}>
+          <RotateCcw className="size-4" />
+          Try again
+        </Button>
+        {errorMessage && !userMessage ? (
+          <details className="max-w-full text-muted-foreground text-xs">
+            <summary className="cursor-pointer">Details</summary>
+            <p className="mt-1 break-words">{errorMessage}</p>
+          </details>
+        ) : null}
+      </EmptyContent>
+    </Empty>
+  );
 }
 
 export const NotLoggedIn = () => (

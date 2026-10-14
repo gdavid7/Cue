@@ -12,6 +12,8 @@ interface LoadingContentProps {
   errorComponent?: React.ReactNode;
   loading: boolean;
   loadingComponent?: React.ReactNode;
+  /** Defaults to revalidating the data on screen. */
+  onRetry?: () => void;
 }
 
 export function LoadingContent(props: LoadingContentProps) {
@@ -22,7 +24,7 @@ export function LoadingContent(props: LoadingContentProps) {
       props.errorComponent
     ) : (
       <div className="mt-4">
-        <ErrorDisplay error={props.error} />
+        <ErrorDisplay error={props.error} onRetry={props.onRetry} />
       </div>
     );
   }
