@@ -307,7 +307,8 @@ test("Command K opens a searchable account list and switches the mailbox", async
       .fill(secondAccount.name);
     await expect(palette.getByRole("option")).toHaveCount(1);
     await page.keyboard.press("Enter");
-    await expect(page).toHaveURL(new RegExp(`/${secondAccount.id}/mail$`));
+    // Accounts are numbered in the order they were connected.
+    await expect(page).toHaveURL(/\/mail\/u\/1\/inbox$/);
     await expect(
       page.getByRole("button", { name: new RegExp(secondAccount.name) }).last(),
     ).toBeVisible();

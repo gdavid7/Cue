@@ -11,12 +11,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { isGoogleProvider } from "@/utils/email/provider-types";
-import { prefixPath } from "@/utils/path";
+import { useMailHref } from "@/hooks/useMailHref";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { BRAND_NAME } from "@/utils/branding";
 
 export default function RequestAccessPage() {
   const { emailAccountId, provider } = useAccount();
+  const mailHref = useMailHref();
 
   return (
     <div className="container px-2 pt-2 sm:px-4 sm:pt-8">
@@ -32,9 +33,7 @@ export default function RequestAccessPage() {
           <CardContent>
             {emailAccountId ? (
               <Button asChild>
-                <Link href={prefixPath(emailAccountId, "/mail")}>
-                  Open Mail
-                </Link>
+                <Link href={mailHref()}>Open Mail</Link>
               </Button>
             ) : (
               <Button disabled>Open Mail</Button>

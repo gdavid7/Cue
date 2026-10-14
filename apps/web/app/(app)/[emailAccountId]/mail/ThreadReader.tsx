@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import dynamic from "next/dynamic";
-import { parseAsString, useQueryStates } from "nuqs";
+import { useMailRoute } from "@/app/(app)/[emailAccountId]/mail/use-mail-route";
 import { AlertCircleIcon, Loader2Icon, MailIcon } from "lucide-react";
 import { AddToCalendarButton } from "@/app/(app)/[emailAccountId]/mail/AddToCalendarButton";
 import { ReaderToolbar } from "@/app/(app)/[emailAccountId]/mail/ReaderToolbar";
@@ -149,7 +149,7 @@ export function ThreadReader({
   } | null>(null);
   const [readerRef, readerWidth] = useElementWidth();
   const isNarrow = readerWidth < INLINE_SIDE_PANEL_MIN_WIDTH;
-  const { emailAccountId, userEmail } = useAccount();
+  const { emailAccountId, userEmail, accountIds } = useAccount();
   // Related items help answer the newest message, so they show only while
   // it's someone else's: not once the user's reply, sent or sending, is newest.
   const newestIsIncoming =
@@ -160,12 +160,19 @@ export function ThreadReader({
       userEmail,
     ) &&
     !localAvailability?.outgoing.length;
-  const [, setOpenThread] = useQueryStates({
-    "thread-id": parseAsString,
-    "thread-account-id": parseAsString,
-  });
+  const { updateLocation } = useMailRoute();
   const openThread = (id: string) =>
-    setOpenThread({ "thread-id": id, "thread-account-id": emailAccountId });
+    updateLocation((current) => {
+      const threadAccountIndex = accountIds.indexOf(emailAccountId);
+      return {
+        ...current,
+        threadId: id,
+        threadAccountIndex:
+          current.allInboxes && threadAccountIndex >= 0
+            ? threadAccountIndex
+            : null,
+      };
+    });
   // Waits for keyboard navigation to settle before fetching.
   const canAssist = Boolean(
     detailSelectionSettled && emailAccountId && threadId,

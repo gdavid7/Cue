@@ -296,6 +296,9 @@ describe("desktop shell helpers", () => {
       ),
     ).toBe(`${origin}/account-1/mail?type=archive`);
     expect(
+      getDesktopSessionRestoreUrl(origin, `${origin}/mail/u/0/archive/t1`),
+    ).toBe(`${origin}/mail/u/0/archive/t1`);
+    expect(
       getDesktopSessionRestoreUrl(origin, `${origin}/account-1/automation`),
     ).toBeNull();
     expect(getDesktopSessionRestoreUrl(origin, `${origin}/login`)).toBeNull();
@@ -312,6 +315,9 @@ describe("desktop shell helpers", () => {
       getDesktopMailAccountId(`${origin}/account-1/mail?type=inbox`, origin),
     ).toBe("account-1");
     expect(getDesktopMailAccountId(`${origin}/mail`, origin)).toBeNull();
+    expect(
+      getDesktopMailAccountId(`${origin}/mail/u/1/label/receipts/t1`, origin),
+    ).toBe("u/1");
     expect(
       getDesktopMailAccountId("https://evil.test/account-1/mail", origin),
     ).toBeNull();

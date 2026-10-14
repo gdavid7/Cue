@@ -10,6 +10,7 @@ import {
 import { buildLoginRedirectUrl, buildRedirectUrl } from "@/utils/redirect";
 import { createScopedLogger } from "@/utils/logger";
 import { flushLoggerSafely } from "@/utils/logger-flush";
+import { getMailRedirectPath } from "@/utils/mail-url.server";
 
 const logger = createScopedLogger("account-redirect");
 
@@ -70,10 +71,13 @@ export async function redirectToEmailAccountPath(
     );
   }
 
-  const redirectUrl = buildRedirectUrl(
-    `/${emailAccountId}${path}`,
-    searchParams,
-  );
+  // Mail is addressed by account position (`/mail/u/{n}`), not by id.
+  const mailPath =
+    path === "/mail"
+      ? await getMailRedirectPath({ userId, emailAccountId, searchParams })
+      : null;
+  const redirectUrl =
+    mailPath ?? buildRedirectUrl(`/${emailAccountId}${path}`, searchParams);
 
   logRedirectTiming(timing, {
     outcome: "account-path",

@@ -9,6 +9,7 @@ import {
   openMail,
   openMailboxFromSidebar,
   readLatestMailMutation,
+  openThreadIdFromUrl,
 } from "./mail-test-helpers";
 
 const openExternalLabel =
@@ -49,7 +50,9 @@ test("opens a complete conversation and updates its read state", async ({
     page,
     "A second message proves the complete conversation is rendered.",
   );
-  await expect(page).toHaveURL(/thread-id=thr_playwright_reader/);
+  await expect
+    .poll(() => openThreadIdFromUrl(page.url()))
+    .toBe("thr_playwright_reader");
 
   const threadActions = page.getByRole("group", { name: "Thread actions" });
   const markUnread = threadActions.getByRole("button", {
@@ -81,7 +84,7 @@ test("opens a complete conversation and updates its read state", async ({
   await expect(conversations).toBeVisible();
   await expect(readerConversation).toBeVisible();
   await expect(page.getByText(/^\d+ of \d+$/)).toHaveCount(0);
-  await expect(page).not.toHaveURL(/thread-id=/);
+  await expect.poll(() => openThreadIdFromUrl(page.url())).toBeNull();
   await expect
     .poll(
       () =>
@@ -188,8 +191,8 @@ test("filters the mail list by state, category, and label", async ({
   await expect(conversations.getByRole("option")).toHaveCount(1);
   await expect(page).toHaveURL(
     playwrightMailProvider === "microsoft"
-      ? /labelId=Label_promotions/
-      : /type=CATEGORY_PROMOTIONS/,
+      ? /\/mail\/u\/\d+\/label\/promotions$/
+      : /\/mail\/u\/\d+\/category\/promotions$/,
   );
 
   await page.getByRole("link", { name: /^Project Alpha/ }).click();
@@ -197,7 +200,7 @@ test("filters the mail list by state, category, and label", async ({
     conversationWithSubject(page, conversations, "Project Label Message"),
   ).toBeVisible();
   await expect(conversations.getByRole("option")).toHaveCount(1);
-  await expect(page).toHaveURL(/labelId=Label_project/);
+  await expect(page).toHaveURL(/\/mail\/u\/\d+\/label\/project-alpha$/);
 });
 
 test("separates Outlook Focused and Other inbox conversations", async ({
@@ -220,13 +223,13 @@ test("separates Outlook Focused and Other inbox conversations", async ({
   await expect(focused).toBeVisible();
   await expect(other).toHaveCount(0);
   await expect(conversations.getByRole("option")).toHaveCount(1);
-  await expect(page).toHaveURL(/type=focused/);
+  await expect(page).toHaveURL(/\/mail\/u\/\d+\/focused$/);
 
   await page.getByRole("link", { name: "Other", exact: true }).click();
   await expect(other).toBeVisible();
   await expect(focused).toHaveCount(0);
   await expect(conversations.getByRole("option")).toHaveCount(1);
-  await expect(page).toHaveURL(/type=other/);
+  await expect(page).toHaveURL(/\/mail\/u\/\d+\/other$/);
 });
 
 test("navigates drafts and sent mail from the sidebar", async ({ page }) => {
@@ -389,7 +392,7 @@ test("creates and edits a label and shows every keyboard workflow", async ({
       .click();
     await expect(grandchild).toBeHidden();
     await page.getByRole("link", { name: /^Inbox(?:\s+\d+)?$/ }).click();
-    await expect(page).toHaveURL(/type=inbox/);
+    await expect(page).toHaveURL(/\/mail\/u\/\d+\/inbox$/);
     await expect(grandchild).toBeHidden();
     await page.goBack();
     await expect(page).toHaveURL(selectedLabelUrl);

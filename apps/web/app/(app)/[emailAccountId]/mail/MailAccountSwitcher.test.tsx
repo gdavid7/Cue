@@ -104,6 +104,7 @@ describe("MailAccountSwitcher", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseAccount.mockReturnValue({
+      accountIds: ["account-1", "account-2"],
       emailAccount: {
         id: "account-1",
         name: "Work",
@@ -162,7 +163,7 @@ describe("MailAccountSwitcher", () => {
     const item = await screen.findByRole("menuitem", { name: /personal/i });
     selectMenuItem(item, modifiers);
 
-    expect(mockOpenWindow).toHaveBeenCalledWith("/account-2/mail");
+    expect(mockOpenWindow).toHaveBeenCalledWith("/mail/u/1/inbox");
     expect(onSelectAccount).not.toHaveBeenCalled();
   });
 

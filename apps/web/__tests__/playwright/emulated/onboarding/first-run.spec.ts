@@ -64,7 +64,7 @@ test("a new user lands in mail, picks an inbox style, and gets the tour", async 
   if (!state) throw new Error("First-run state was not prepared");
 
   await page.goto("/welcome-redirect");
-  await expect(page).toHaveURL(new RegExp(`/${state.emailAccountId}/mail`), {
+  await expect(page).toHaveURL(/\/mail\/u\/0\/inbox/, {
     timeout: 60_000,
   });
 

@@ -10,6 +10,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useHome } from "@/hooks/useHome";
+import { useMailHref } from "@/hooks/useMailHref";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { cn } from "@/utils";
 import { markNoReplyNeededAction } from "@/utils/actions/rule-feedback";
@@ -34,9 +35,10 @@ export function HomeDashboard() {
   const { data, isLoading, error, mutate } = useHome(emailAccountId);
   const greetingText = useGreeting();
   const firstName = (emailAccount?.name || "").split(" ")[0];
+  const mailHref = useMailHref();
   const threadHref = (threadId: string) =>
     // from=today lets the reader return here rather than to the inbox.
-    `${prefixPath(emailAccountId, "/mail")}?thread-id=${encodeURIComponent(threadId)}&from=today`;
+    `${mailHref({ threadId })}?from=today`;
 
   // The row moves lanes at once; the server catches up behind it.
   const correct = async (
@@ -123,6 +125,7 @@ function HomeLanes({
   onCorrect: (thread: HomeThread, needsReply: boolean) => Promise<void>;
 }) {
   const { cue, stats } = data;
+  const mailHref = useMailHref();
   const notice = cueNotice(cue, emailAccountId);
   const canCheck = !notice;
   const caughtUp =
@@ -219,7 +222,9 @@ function HomeLanes({
               {index > 0 ? ", " : null}
               <Link
                 className="text-foreground underline-offset-2 hover:underline"
-                href={`${prefixPath(emailAccountId, "/mail")}?type=label&labelId=${encodeURIComponent(label.labelId)}`}
+                href={mailHref({
+                  view: { kind: "label", slug: label.labelId },
+                })}
               >
                 {label.name} {formatCount(label.count, label.capped)}
               </Link>
@@ -235,7 +240,7 @@ function HomeLanes({
           action={
             <Link
               className="font-sans text-muted-foreground text-sm underline-offset-2 hover:text-foreground hover:underline"
-              href={prefixPath(emailAccountId, "/mail")}
+              href={mailHref()}
             >
               Open inbox
             </Link>

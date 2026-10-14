@@ -14,8 +14,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { parseAsString, useQueryState, useQueryStates } from "nuqs";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { ListToolbar } from "@/app/(app)/[emailAccountId]/mail/ListToolbar";
 import { getMailSearchFolders } from "@/app/(app)/[emailAccountId]/mail/outlook-folder-list";
@@ -23,7 +22,6 @@ import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccou
 import { MailMobileNav } from "@/app/(app)/[emailAccountId]/mail/MailMobileNav";
 import {
   getMailboxName,
-  getMailNavPath,
   MAIL_SCHEDULED_TYPE,
   MAIL_SNOOZED_TYPE,
 } from "@/app/(app)/[emailAccountId]/mail/MailSidebar";
@@ -131,8 +129,21 @@ import {
 } from "@/utils/split-inbox/split-query";
 import { isInboxStyleLandingSplit } from "@/utils/split-inbox/inbox-styles";
 import { getActionErrorMessage } from "@/utils/error";
-import { prefixPath } from "@/utils/path";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
+import {
+  getMailNavView,
+  type MailSlugs,
+  useMailRoute,
+  useMailSlugs,
+} from "@/app/(app)/[emailAccountId]/mail/use-mail-route";
+import {
+  buildMailPath,
+  getSplitSlugs,
+  mailPathForAccount,
+  type MailUrlView,
+  resolveSlug,
+} from "@/utils/mail-url";
+import { prefixPath } from "@/utils/path";
 import { redirectToSafeUrl } from "@/utils/redirect";
 import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 import { LoadingContent } from "@/components/LoadingContent";
@@ -143,6 +154,8 @@ import type { ThreadsQuery } from "@/utils/threads/validation";
 // Module-level so an "empty" reader doesn't hand children a new array each render.
 const NO_MESSAGES: ThreadMessage[] = [];
 const NO_LABELS = {};
+const NO_SLUGS: MailSlugs = { labels: new Map(), folders: new Map() };
+const INBOX_VIEW: MailUrlView = { kind: "inbox" };
 
 /**
  * Owns the mail screen's URL, thread list, selection, and triage state, and
@@ -151,13 +164,18 @@ const NO_LABELS = {};
  * referentially stable and only the parts whose inputs changed re-render.
  */
 export function MailShell() {
-  const { emailAccount, emailAccountId, userEmail, provider } = useAccount();
+  const { emailAccount, emailAccountId, userEmail, provider, accountIds } =
+    useAccount();
   const { data: accountsData } = useAccounts();
   const isGoogle = isGoogleProvider(provider);
   const isOutlook = isMicrosoftProvider(provider);
   const { userLabels } = useEmailLabels();
-  const { userLabels: allLabels, mutate: mutateLabels } = useLabels();
-  const { folders } = useFolders(provider);
+  const {
+    userLabels: allLabels,
+    mutate: mutateLabels,
+    isLoading: labelsLoading,
+  } = useLabels();
+  const { folders, isLoading: foldersLoading } = useFolders(provider);
   const { data: settings, mutate: mutateSettings } = useMailSettings();
   const { toggleSidebar, setOpen: setSidebarOpen } = useSidebar();
   const { submitTextMessage, chatId, setNewChat } = useChat();
@@ -179,20 +197,64 @@ export function MailShell() {
   const { threadId: sidePanelThreadId } = useDisplayedEmail();
   const client = useOptionalMailClient();
 
-  const [openThreadQuery, setOpenThreadQuery] = useQueryStates({
-    "thread-id": parseAsString,
-    "thread-account-id": parseAsString,
-  });
-  const openThreadId = openThreadQuery["thread-id"];
-  const openThreadAccountId = openThreadQuery["thread-account-id"];
-  const [activeSplitId, setActiveSplitId] = useQueryState("split");
-  const [accountScope, setAccountScope] = useQueryState("accountScope");
-  const [scopeType, setScopeType] = useQueryState("type");
-  const [scopeLabelId, setScopeLabelId] = useQueryState("labelId");
-  const [scopeFolderId, setScopeFolderId] = useQueryState("folderId");
-  const [searchParam, setSearchParam] = useQueryState("q");
+  // The view lives in the address (`/mail/u/0/label/receipts/{threadId}`);
+  // slugs resolve to ids once the account's labels, folders and tabs load.
+  const { location: mailLocation, updateLocation } = useMailRoute();
+  const mailSlugs = useMailSlugs(allLabels, folders);
+  const splitSlugs = useMemo(
+    () => getSplitSlugs(settings?.splits ?? []),
+    [settings?.splits],
+  );
+  const routeView = mailLocation.view ?? INBOX_VIEW;
+  const openThreadId = mailLocation.threadId ?? null;
+  const openThreadAccountId =
+    mailLocation.threadAccountIndex == null
+      ? null
+      : (accountIds[mailLocation.threadAccountIndex] ?? null);
+  // Renaming the open label or tab changes its slug under the address; the
+  // last slug that resolved keeps pointing at it until the address catches up.
+  const [lastResolvedSlug, setLastResolvedSlug] = useState<{
+    kind: "label" | "folder" | "split";
+    slug: string;
+    id: string;
+  } | null>(null);
+  const resolveRouteSlug = (
+    kind: "label" | "folder" | "split",
+    slugs: ReadonlyMap<string, string>,
+  ) => {
+    if (routeView.kind !== kind) return null;
+    const id = resolveSlug(slugs, routeView.slug);
+    if (id) return id;
+    return lastResolvedSlug?.kind === kind &&
+      lastResolvedSlug.slug === routeView.slug &&
+      slugs.has(lastResolvedSlug.id)
+      ? lastResolvedSlug.id
+      : null;
+  };
+  const routeLabelId = resolveRouteSlug("label", mailSlugs.labels);
+  const routeFolderId = resolveRouteSlug("folder", mailSlugs.folders);
+  // A slug that never resolves is taken as a provider id, which is what links
+  // from before readable addresses carry.
+  const scopeLabelId =
+    routeView.kind === "label" ? (routeLabelId ?? routeView.slug) : null;
+  const scopeFolderId =
+    routeView.kind === "folder" ? (routeFolderId ?? routeView.slug) : null;
+  const scopeType =
+    routeView.kind === "type"
+      ? routeView.type
+      : routeView.kind === "label" || routeView.kind === "folder"
+        ? routeView.kind
+        : null;
+  const activeSplitId = resolveRouteSlug("split", splitSlugs);
+  const searchParam = routeView.kind === "search" ? routeView.q : null;
+  // Until names load, a slug can't be told from an id, so nothing is fetched.
+  const isResolvingRoute =
+    (routeView.kind === "label" && !routeLabelId && labelsLoading) ||
+    (routeView.kind === "folder" && !routeFolderId && foldersLoading) ||
+    (routeView.kind === "split" && !settings);
+  const viewBeforeSearchRef = useRef<MailUrlView | null>(null);
   // Set by Today's rows, so closing the conversation goes back there.
-  const [openedFrom, setOpenedFrom] = useQueryState("from");
+  const openedFrom = useSearchParams()?.get(OPENED_FROM_PARAM);
 
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [isDesktopApp, setIsDesktopApp] = useState(false);
@@ -218,18 +280,53 @@ export function MailShell() {
     setIsDesktopApp(Boolean(getInboxZeroDesktopApp()));
   }, []);
 
-  const isAllAccounts = accountScope === "all";
+  const isAllAccounts = Boolean(mailLocation.allInboxes);
   const setOpenThread = useCallback(
     (selection: ThreadSelection | null) => {
       setIsMenuOpen(false);
-      return setOpenThreadQuery({
-        "thread-id": selection?.threadId ?? null,
-        "thread-account-id":
-          isAllAccounts && selection ? selection.emailAccountId : null,
-      });
+      const threadAccountIndex =
+        isAllAccounts && selection
+          ? accountIds.indexOf(selection.emailAccountId)
+          : -1;
+      updateLocation((current) => ({
+        ...current,
+        threadId: selection?.threadId ?? null,
+        threadAccountIndex: threadAccountIndex >= 0 ? threadAccountIndex : null,
+      }));
+      return Promise.resolve();
     },
-    [isAllAccounts, setOpenThreadQuery],
+    [accountIds, isAllAccounts, updateLocation],
   );
+
+  // Old links carry a label's provider id, a just-created tab is addressed by
+  // id until its slug loads, and a rename changes the slug: in each case the
+  // address is swapped for the current slug once it's known.
+  const routeSlugId = routeLabelId ?? routeFolderId ?? activeSplitId;
+  useEffect(() => {
+    if (
+      !routeSlugId ||
+      (routeView.kind !== "label" &&
+        routeView.kind !== "folder" &&
+        routeView.kind !== "split")
+    )
+      return;
+    const kind = routeView.kind;
+    const slug = {
+      label: mailSlugs.labels,
+      folder: mailSlugs.folders,
+      split: splitSlugs,
+    }[kind].get(routeSlugId);
+    if (!slug) return;
+    setLastResolvedSlug((previous) =>
+      previous?.kind === kind &&
+      previous.slug === slug &&
+      previous.id === routeSlugId
+        ? previous
+        : { kind, slug, id: routeSlugId },
+    );
+    if (slug === routeView.slug) return;
+    updateLocation((current) => ({ ...current, view: { kind, slug } }));
+  }, [routeSlugId, routeView, mailSlugs, splitSlugs, updateLocation]);
   const combinedAccounts = useMemo(
     () => getAllInboxesAccounts(accountsData?.emailAccounts ?? []),
     [accountsData?.emailAccounts],
@@ -342,13 +439,27 @@ export function MailShell() {
     return () => clearTimeout(timeout);
   }, [searchQuery]);
   const searchSettled = !searchQuery || searchQuery === settledSearch;
+  // Search has its own address (`/mail/u/0/search?q=…`); clearing it returns
+  // to the view it was started from.
   const setSearch = useCallback(
     (value: string) => {
+      const q = value.trim() || null;
       setSearchDraft(undefined);
-      setSettledSearch(value.trim() || null);
-      return setSearchParam(value.trim() || null);
+      setSettledSearch(q);
+      updateLocation((current) => {
+        const view = current.view ?? INBOX_VIEW;
+        if (q) {
+          if (view.kind !== "search") viewBeforeSearchRef.current = view;
+          return { ...current, view: { kind: "search", q } };
+        }
+        if (view.kind !== "search") return current;
+        const previous = viewBeforeSearchRef.current ?? INBOX_VIEW;
+        viewBeforeSearchRef.current = null;
+        return { ...current, view: previous };
+      });
+      return Promise.resolve();
     },
-    [setSearchParam],
+    [updateLocation],
   );
   const onSearchChange = useCallback(
     (value: string) => setSearchDraft({ identity: searchEditIdentity, value }),
@@ -409,6 +520,24 @@ export function MailShell() {
     splits.find(isInboxStyleLandingSplit) ??
     splits[0];
   const displayedActiveSplitId = activeSplit?.id ?? null;
+  // The tab mail opens on reads as plain `/inbox`; the others by their slug.
+  const landingSplitId =
+    (splits.find(isInboxStyleLandingSplit) ?? splits[0])?.id ?? null;
+  const setActiveSplitId = useCallback(
+    (splitId: string | null) => {
+      // A tab created a moment ago has no slug until settings reload; its id
+      // holds the place and is swapped for the slug once it does.
+      const slug = splitId ? (splitSlugs.get(splitId) ?? splitId) : undefined;
+      updateLocation((current) => ({
+        ...current,
+        view:
+          slug && splitId !== landingSplitId
+            ? { kind: "split", slug }
+            : INBOX_VIEW,
+      }));
+    },
+    [landingSplitId, splitSlugs, updateLocation],
+  );
   const activeCombinedLabelNames = combinedLabelSplits.find(
     (split) => split.id === displayedActiveSplitId,
   )?.labelNames;
@@ -428,7 +557,11 @@ export function MailShell() {
     emailAccountId,
     query,
     enabled:
-      !isAllAccounts && searchSettled && !isScheduledView && !isSnoozedView,
+      !isAllAccounts &&
+      searchSettled &&
+      !isScheduledView &&
+      !isSnoozedView &&
+      !isResolvingRoute,
   });
   const combinedThreadState = useCombinedMailThreads({
     accounts: combinedAccounts,
@@ -801,12 +934,23 @@ export function MailShell() {
   const isOpenThreadUnread = isThreadUnread(readStateMessages);
 
   const labelHref = useCallback(
-    (labelId: string) =>
-      prefixPath(
-        openThreadSelection?.emailAccountId ?? emailAccountId,
-        getMailNavPath({ kind: "label", labelId }),
-      ),
-    [emailAccountId, openThreadSelection?.emailAccountId],
+    (labelId: string) => {
+      // In All Inboxes the open thread may belong to another account, whose
+      // label names aren't loaded here; its id resolves on arrival.
+      const accountId = openThreadSelection?.emailAccountId ?? emailAccountId;
+      return mailPathForAccount(accountIds, accountId, {
+        view: getMailNavView(
+          { kind: "label", labelId },
+          accountId === emailAccountId ? mailSlugs : NO_SLUGS,
+        ),
+      });
+    },
+    [
+      accountIds,
+      emailAccountId,
+      mailSlugs,
+      openThreadSelection?.emailAccountId,
+    ],
   );
 
   const getOpenThreadKey = useStableCallback(() => openThreadKey);
@@ -1150,44 +1294,43 @@ export function MailShell() {
     Boolean(labelPicker) ||
     (isMenuOpen && Boolean(openThreadId));
 
-  const selectAccount = useCallback((accountId: string) => {
-    redirectToSafeUrl(getMailAccountUrl(accountId, window.location.search));
-  }, []);
+  const selectAccount = useCallback(
+    (accountId: string) => {
+      redirectToSafeUrl(
+        getMailAccountUrl(accountIds, accountId, window.location),
+      );
+    },
+    [accountIds],
+  );
 
   const selectAllAccounts = useCallback(() => {
     setSearchDraft(undefined);
     selection.clear();
     setFocusedIndex(0);
-    setOpenThread(null);
-    setScopeType(null);
-    setScopeLabelId(null);
-    setScopeFolderId(null);
-    setSearchParam(null);
-    if (
-      !settings?.splits.some(
+    setIsMenuOpen(false);
+    // Only tabs every account can reproduce carry over to All Inboxes.
+    const keepSplit =
+      settings?.splits.some(
         (split) =>
           split.id === activeSplitId &&
           split.filters.every(
             (filter) => filter.kind === MailSplitFilterKind.UNREAD,
           ),
-      ) &&
-      !combinedLabelSplits.some((split) => split.id === activeSplitId)
-    ) {
-      setActiveSplitId(null);
-    }
-    setAccountScope("all");
+      ) || combinedLabelSplits.some((split) => split.id === activeSplitId);
+    const slug =
+      keepSplit && activeSplitId ? splitSlugs.get(activeSplitId) : undefined;
+    updateLocation((current) => ({
+      accountIndex: current.accountIndex,
+      allInboxes: true,
+      view: slug ? { kind: "split", slug } : INBOX_VIEW,
+    }));
   }, [
     activeSplitId,
     settings?.splits,
     combinedLabelSplits,
     selection.clear,
-    setAccountScope,
-    setActiveSplitId,
-    setOpenThread,
-    setScopeFolderId,
-    setScopeLabelId,
-    setScopeType,
-    setSearchParam,
+    splitSlugs,
+    updateLocation,
   ]);
 
   const openSnoozedThread = useCallback(
@@ -1312,7 +1455,7 @@ export function MailShell() {
             if (selection.hasSelection) selection.clear();
             // Searching stays in Mail, even for a conversation opened from Today.
             if (layout === "list" && openThreadId) {
-              setOpenedFrom(null);
+              forgetOpenedFrom();
               setOpenThread(null);
             }
             pendingSearchFocusRef.current = true;
@@ -1329,7 +1472,10 @@ export function MailShell() {
   // Same destination as the sidebar row, so the view starts fresh.
   function goToMailbox(type: string) {
     router.push(
-      prefixPath(emailAccountId, getMailNavPath({ kind: "type", type })),
+      buildMailPath({
+        accountIndex: mailLocation.accountIndex,
+        view: getMailNavView({ kind: "type", type }, mailSlugs),
+      }),
     );
   }
 
@@ -1388,16 +1534,14 @@ export function MailShell() {
                 filter.value === item.id,
             ),
         );
-      if (isActive) {
-        await Promise.all([
-          setOpenThread(null),
-          setScopeType("inbox"),
-          item.kind === "folder"
-            ? setScopeFolderId(null)
-            : setScopeLabelId(null),
-        ]);
+      if (isActive || deletedActiveSplit) {
+        setIsMenuOpen(false);
+        updateLocation((current) => ({
+          ...current,
+          view: INBOX_VIEW,
+          threadId: isActive ? null : current.threadId,
+        }));
       }
-      if (deletedActiveSplit) setActiveSplitId(null);
       if (item.kind === "label") await mutateSettings();
     },
     [
@@ -1405,12 +1549,8 @@ export function MailShell() {
       activeSplitId,
       scopeFolderId,
       scopeLabelId,
-      setActiveSplitId,
-      setOpenThread,
-      setScopeFolderId,
-      setScopeLabelId,
-      setScopeType,
       settings?.splits,
+      updateLocation,
     ],
   );
 
@@ -1948,4 +2088,15 @@ function focusOpenReply() {
       )
       ?.focus();
   });
+}
+
+// Today links a conversation with `?from=today`. It rides along as a page
+// parameter while the reader moves, until the user leaves the conversation.
+const OPENED_FROM_PARAM = "from";
+
+function forgetOpenedFrom() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has(OPENED_FROM_PARAM)) return;
+  url.searchParams.delete(OPENED_FROM_PARAM);
+  window.history.replaceState(null, "", url);
 }

@@ -1,4 +1,4 @@
-import MailLayout from "@/app/(app)/[emailAccountId]/mail/layout";
+import { MailScreenLayout } from "@/app/(app)/[emailAccountId]/mail/MailScreenLayout";
 
 // Today is a view of the mail app, so it shares mail's theme, sidebar width
 // and shortcuts.
@@ -7,5 +7,5 @@ export default function TodayLayout({
 }: {
   children: React.ReactNode;
 }) {
-  return <MailLayout>{children}</MailLayout>;
+  return <MailScreenLayout>{children}</MailScreenLayout>;
 }

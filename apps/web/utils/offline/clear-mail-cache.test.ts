@@ -48,37 +48,39 @@ describe("clearOfflineMailCacheForAccount", () => {
     vi.unstubAllGlobals();
   });
 
-  it("deletes one account's mail shell and leaves another account's copy", async () => {
-    await mailCache.put(`${origin}/account-1/mail`, new Response("one"));
-    await mailCache.put(`${origin}/account-2/mail`, new Response("two"));
+  it("deletes every saved mail shell, since removing an account renumbers the rest", async () => {
+    await mailCache.put(`${origin}/mail/u/0`, new Response("one"));
+    await mailCache.put(`${origin}/mail/u/1`, new Response("two"));
     await mailCache.put(
       `${origin}${ACCOUNT_PATH}`,
       Response.json({ emailAccounts: [{ id: "account-1" }] }),
     );
-    await siblingCache.put(`${origin}/account-2/mail`, new Response("keep"));
+    await mailCache.put(`${origin}/other`, new Response("keep"));
+    await siblingCache.put(`${origin}/mail/u/1`, new Response("keep"));
     await clearOfflineMailCacheForAccount("account-1");
-    expect(await mailCache.match(`${origin}/account-1/mail`)).toBeUndefined();
-    expect(
-      await (await mailCache.match(`${origin}/account-2/mail`))?.text(),
-    ).toBe("two");
+    expect(await mailCache.match(`${origin}/mail/u/0`)).toBeUndefined();
+    expect(await mailCache.match(`${origin}/mail/u/1`)).toBeUndefined();
     expect(await mailCache.match(`${origin}${ACCOUNT_PATH}`)).toBeUndefined();
-    expect(
-      await (await siblingCache.match(`${origin}/account-2/mail`))?.text(),
-    ).toBe("keep");
+    expect(await (await mailCache.match(`${origin}/other`))?.text()).toBe(
+      "keep",
+    );
+    expect(await (await siblingCache.match(`${origin}/mail/u/1`))?.text()).toBe(
+      "keep",
+    );
   });
 
   it("does not touch caches for an escaping account id", async () => {
-    await mailCache.put(`${origin}/account-1/mail`, new Response("one"));
+    await mailCache.put(`${origin}/mail/u/0/inbox`, new Response("one"));
     await clearOfflineMailCacheForAccount("..");
     await clearOfflineMailCacheForAccount("../account-1");
     await clearOfflineMailCacheForAccount("");
     expect(
-      await (await mailCache.match(`${origin}/account-1/mail`))?.text(),
+      await (await mailCache.match(`${origin}/mail/u/0/inbox`))?.text(),
     ).toBe("one");
   });
 
   it("still deletes every offline mail cache on logout", async () => {
-    await mailCache.put(`${origin}/account-2/mail`, new Response("two"));
+    await mailCache.put(`${origin}/mail/u/1/inbox`, new Response("two"));
     await siblingCache.put("other", new Response("keep"));
     await clearOfflineMailCache();
     expect(cachesByName.has(`${OFFLINE_MAIL_CACHE_PREFIX}current`)).toBe(false);

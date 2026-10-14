@@ -14,12 +14,16 @@ import {
 
 const navigation = vi.hoisted(() => ({
   emailAccountId: undefined as string | undefined,
+  accountIndex: undefined as string | undefined,
   replace: vi.fn(),
 }));
 const cookie = vi.hoisted(() => ({ setLastAccount: vi.fn() }));
 
 vi.mock("next/navigation", () => ({
-  useParams: () => ({ emailAccountId: navigation.emailAccountId }),
+  useParams: () => ({
+    emailAccountId: navigation.emailAccountId,
+    accountIndex: navigation.accountIndex,
+  }),
   useRouter: () => ({ replace: navigation.replace }),
 }));
 
@@ -32,6 +36,7 @@ describe("EmailAccountProvider", () => {
     vi.clearAllMocks();
     resetEmailAccountsInflight();
     navigation.emailAccountId = undefined;
+    navigation.accountIndex = undefined;
     cookie.setLastAccount.mockResolvedValue(undefined);
     window.history.replaceState(null, "", "/settings");
   });
@@ -54,6 +59,46 @@ describe("EmailAccountProvider", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(screen.getByText("ready without an account")).toBeTruthy();
+  });
+
+  it("resolves /mail/u/{n} to the user's nth account before accounts load", () => {
+    navigation.accountIndex = "1";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+
+    render(
+      <EmailAccountProvider accountIds={["account-1", "account-2"]}>
+        <AccountState />
+      </EmailAccountProvider>,
+    );
+
+    expect(screen.getByTestId("account-id").textContent).toBe("account-2");
+  });
+
+  it("remembers the account a /mail/u/{n} address opened", async () => {
+    navigation.accountIndex = "1";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => accountResponse("account-1"),
+      }),
+    );
+
+    render(
+      <EmailAccountProvider accountIds={["account-1", "account-2"]}>
+        <AccountState />
+      </EmailAccountProvider>,
+    );
+
+    await waitFor(() =>
+      expect(cookie.setLastAccount).toHaveBeenCalledWith({
+        emailAccountId: "account-2",
+      }),
+    );
+    expect(screen.getByTestId("account-id").textContent).toBe("account-2");
   });
 
   it("does not rewrite the last-account cookie when the route already matches", async () => {

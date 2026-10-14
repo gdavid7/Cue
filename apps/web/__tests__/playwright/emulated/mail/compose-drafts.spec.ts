@@ -9,6 +9,7 @@ import {
   openMail,
   openMailboxFromSidebar,
   waitForComposeOutboxSend,
+  openThreadIdFromUrl,
 } from "./mail-test-helpers";
 
 test("saves a closed new message with attachments in Drafts and discards it from the mailbox", async ({
@@ -58,8 +59,8 @@ test("saves a closed new message with attachments in Drafts and discards it from
     "new-message-in-mailbox-drafts",
   );
   await draft.click();
-  await expect(page).toHaveURL(/thread-id=/);
-  const threadId = new URL(page.url()).searchParams.get("thread-id");
+  await expect.poll(() => openThreadIdFromUrl(page.url())).not.toBeNull();
+  const threadId = openThreadIdFromUrl(page.url());
   const detailUrl = new URL(
     `/api/threads/${threadId}?includeDrafts=true`,
     page.url(),

@@ -23,10 +23,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAccounts } from "@/hooks/useAccounts";
+import { useMailHref } from "@/hooks/useMailHref";
 import { deleteEmailAccountAction } from "@/utils/actions/user";
 import { toastSuccess, toastError } from "@/components/Toast";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { prefixPath } from "@/utils/path";
 import { AddAccount } from "@/components/AddAccount";
 import { PageHeader } from "@/components/PageHeader";
 import { PageWrapper } from "@/components/PageWrapper";
@@ -83,8 +83,12 @@ function AccountItem({
   };
   onAccountDeleted: () => void;
 }) {
+  const mailHref = useMailHref();
   return (
-    <Link href={prefixPath(emailAccount.id, "/mail")} className="block min-w-0">
+    <Link
+      href={mailHref({ accountId: emailAccount.id })}
+      className="block min-w-0"
+    >
       <Card className="cursor-pointer transition-colors hover:bg-slate-50 dark:hover:bg-slate-900">
         <AccountHeader
           emailAccount={emailAccount}
@@ -152,6 +156,7 @@ function AccountOptionsDropdown({
   };
   onAccountDeleted: () => void;
 }) {
+  const mailHref = useMailHref();
   const { execute, isExecuting } = useAction(deleteEmailAccountAction, {
     onSuccess: async () => {
       toastSuccess({
@@ -196,7 +201,7 @@ function AccountOptionsDropdown({
       >
         <DropdownMenuItem asChild>
           <Link
-            href={prefixPath(emailAccount.id, "/mail")}
+            href={mailHref({ accountId: emailAccount.id })}
             className="flex items-center gap-2"
             onClick={(e: MouseEvent<HTMLAnchorElement>) => e.stopPropagation()}
           >

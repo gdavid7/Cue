@@ -45,7 +45,9 @@ test("starts a trial from the upgrade page and returns to mail", async ({
 
   await payOnStripeCheckout(page, STARTER_TIER);
 
-  await expect(page).toHaveURL(/\/mail(?:\?.*)?$/, { timeout: 60_000 });
+  await expect(page).toHaveURL(/\/mail\/u\/\d+\/inbox(?:\?.*)?$/, {
+    timeout: 60_000,
+  });
   await expect.poll(getPremiumBillingState, { timeout: 60_000 }).toMatchObject({
     stripeSubscriptionStatus: "trialing",
     tier: STARTER_ANNUALLY_TIER_COLUMN,

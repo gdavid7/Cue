@@ -36,6 +36,7 @@ import {
 } from "@/utils/mail-engine/engine-delivery";
 import { restoreUnsentReplyDraft } from "@/utils/mail-engine/reply-drafts";
 import { upcomingScheduledEmailsKey } from "@/hooks/useHiddenDraftMessageIds";
+import { useMailHref } from "@/hooks/useMailHref";
 
 export function ThreadDeliveryStatus({
   emailAccountId,
@@ -53,6 +54,10 @@ export function ThreadDeliveryStatus({
   canEditReply: boolean;
 }) {
   const client = useOptionalMailClient();
+  const sentHref = useMailHref()({
+    accountId: emailAccountId,
+    view: { kind: "type", type: "sent" },
+  });
   const { mutate: mutateCache } = useSWRConfig();
   const online = useSyncExternalStore(
     subscribeToConnectivity,
@@ -204,10 +209,7 @@ export function ThreadDeliveryStatus({
               {engineDeliveryLabel(row.status, online)}
             </p>
             {(row.status === "uncertain" || row.status === "failed") && (
-              <a
-                className="underline underline-offset-4"
-                href={`/${emailAccountId}/mail?type=sent`}
-              >
+              <a className="underline underline-offset-4" href={sentHref}>
                 Check Sent
               </a>
             )}
@@ -314,10 +316,7 @@ export function ThreadDeliveryStatus({
               </InlineActionButton>
             )}
             {row.status === "UNCERTAIN" && (
-              <a
-                className="underline underline-offset-4"
-                href={`/${emailAccountId}/mail?type=sent`}
-              >
+              <a className="underline underline-offset-4" href={sentHref}>
                 Check Sent
               </a>
             )}

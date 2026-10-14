@@ -1,38 +1,32 @@
-import { Suspense } from "react";
-import { MailFrame } from "@/app/(app)/[emailAccountId]/mail/MailFrame";
-import { MailListPlaceholder } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
-import { MailShell } from "@/app/(app)/[emailAccountId]/mail/MailShell";
-import { PermissionsCheck } from "@/app/(app)/[emailAccountId]/PermissionsCheck";
-import {
-  ConversionAnalyticsScript,
-  ConversionQueryParamEvents,
-} from "@/components/ConversionAnalytics";
-import { EmailLabelsProvider } from "@/providers/EmailLabelsProvider";
-import { MailEngineHost } from "@/utils/mail-engine/MailEngineHost";
+import { redirect } from "next/navigation";
+import { auth } from "@/utils/auth";
+import { buildLoginRedirectUrl, buildRedirectUrl } from "@/utils/redirect";
+import { getMailRedirectPath } from "@/utils/mail-url.server";
 
-export const maxDuration = 300;
+// The mail screen moved to `/mail/u/{n}/…`. Old links — bookmarks, emails,
+// notifications, installed apps — still arrive here and are translated.
+export default async function LegacyMailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ emailAccountId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const [{ emailAccountId }, query, session] = await Promise.all([
+    params,
+    searchParams,
+    auth(),
+  ]);
+  if (!session?.user) {
+    redirect(
+      buildLoginRedirectUrl(buildRedirectUrl(`/${emailAccountId}/mail`, query)),
+    );
+  }
 
-export default function Mail() {
-  return (
-    <EmailLabelsProvider>
-      {/* New accounts and checkout both land here, carrying conversion events. */}
-      <Suspense>
-        <ConversionQueryParamEvents />
-      </Suspense>
-      <ConversionAnalyticsScript />
-      {/* The frame paints at once; only the list waits for the engine. */}
-      <MailEngineHost
-        fallback={
-          <MailFrame activeType="inbox">
-            <MailListPlaceholder message="Opening your mailbox…" withChrome />
-          </MailFrame>
-        }
-      >
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <PermissionsCheck />
-          <MailShell />
-        </div>
-      </MailEngineHost>
-    </EmailLabelsProvider>
-  );
+  const path = await getMailRedirectPath({
+    userId: session.user.id,
+    emailAccountId,
+    searchParams: query,
+  });
+  redirect(path ?? "/connect-mailbox");
 }

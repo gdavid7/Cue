@@ -7,7 +7,9 @@ import {
 } from "./mail-cache";
 
 const origin = "https://app.example.com";
-const mailUrl = `${origin}/account-1/mail`;
+const mailUrl = `${origin}/mail/u/0/inbox`;
+// Every view of an account shares one saved shell.
+const mailKey = `${origin}/mail/u/0`;
 
 // Cache Storage is the browser boundary; requests and responses remain real.
 function createStorage() {
@@ -211,7 +213,7 @@ describe("offline mail cache", () => {
     ).toBe(false);
     expect(
       matchesOfflineMailRequest(
-        documentRequest("https://other.example.com/account-1/mail"),
+        documentRequest("https://other.example.com/mail/u/0/inbox"),
         origin,
       ),
     ).toBe(false);
@@ -379,17 +381,17 @@ describe("offline mail cache", () => {
     await Promise.all(pending);
     network.mockRejectedValue(new TypeError("Network unavailable"));
     await expect(
-      cache.handle(documentRequest(`${origin}/account-2/mail`), waitUntil),
+      cache.handle(documentRequest(`${origin}/mail/u/1/inbox`), waitUntil),
     ).rejects.toThrow();
   });
 
-  it("removes one account's saved mailbox without wiping another", async () => {
+  it("removes every saved mailbox when an account is removed, since later accounts move up", async () => {
     const cache = makeCache();
     network.mockResolvedValueOnce(html("Account 1 mailbox"));
     await cache.handle(documentRequest(), waitUntil);
     await Promise.all(pending);
     network.mockResolvedValueOnce(html("Account 2 mailbox"));
-    await cache.handle(documentRequest(`${origin}/account-2/mail`), waitUntil);
+    await cache.handle(documentRequest(`${origin}/mail/u/1/inbox`), waitUntil);
     await Promise.all(pending);
     network.mockResolvedValueOnce(
       Response.json({ emailAccounts: [{ id: "account-1" }] }),
@@ -402,24 +404,32 @@ describe("offline mail cache", () => {
     await cache.removeAccount("account-1");
     network.mockRejectedValue(new TypeError("Network unavailable"));
     await expect(cache.handle(documentRequest(), waitUntil)).rejects.toThrow();
-    expect(
-      await (
-        await cache.handle(
-          documentRequest(`${origin}/account-2/mail`),
-          waitUntil,
-        )
-      ).text(),
-    ).toBe("Account 2 mailbox");
+    await expect(
+      cache.handle(documentRequest(`${origin}/mail/u/1/inbox`), waitUntil),
+    ).rejects.toThrow();
     await expect(
       cache.handle(new Request(`${origin}/api/user/email-accounts`), waitUntil),
     ).rejects.toThrow();
   });
 
+  it("serves one saved copy for every view of an account", async () => {
+    const cache = makeCache();
+    network.mockResolvedValueOnce(html("Account 1 mailbox"));
+    await cache.handle(documentRequest(), waitUntil);
+    await Promise.all(pending);
+    network.mockRejectedValue(new TypeError("Network unavailable"));
+    expect(
+      await (
+        await cache.handle(
+          documentRequest(`${origin}/mail/u/0/label/receipts/thread-1`),
+          waitUntil,
+        )
+      ).text(),
+    ).toBe("Account 1 mailbox");
+  });
+
   it("does not let an in-flight save restore a removed account mailbox", async () => {
     const cache = makeCache();
-    network.mockResolvedValueOnce(html("Account 2 mailbox"));
-    await cache.handle(documentRequest(`${origin}/account-2/mail`), waitUntil);
-    await Promise.all(pending);
     let complete!: (response: Response) => void;
     network.mockImplementationOnce(
       () =>
@@ -434,21 +444,10 @@ describe("offline mail cache", () => {
     await Promise.all(pending);
     network.mockRejectedValue(new TypeError("Network unavailable"));
     await expect(cache.handle(documentRequest(), waitUntil)).rejects.toThrow();
-    expect(
-      await (
-        await cache.handle(
-          documentRequest(`${origin}/account-2/mail`),
-          waitUntil,
-        )
-      ).text(),
-    ).toBe("Account 2 mailbox");
   });
 
   it("does not let an in-flight account list restore a deleted mailbox", async () => {
     const cache = makeCache();
-    network.mockResolvedValueOnce(html("Account 2 mailbox"));
-    await cache.handle(documentRequest(`${origin}/account-2/mail`), waitUntil);
-    await Promise.all(pending);
     let complete!: (response: Response) => void;
     network.mockImplementationOnce(
       () =>
@@ -472,14 +471,6 @@ describe("offline mail cache", () => {
     await expect(
       cache.handle(new Request(`${origin}/api/user/email-accounts`), waitUntil),
     ).rejects.toThrow();
-    expect(
-      await (
-        await cache.handle(
-          documentRequest(`${origin}/account-2/mail`),
-          waitUntil,
-        )
-      ).text(),
-    ).toBe("Account 2 mailbox");
   });
 
   it("can recache the account list after removing an account", async () => {
@@ -538,7 +529,7 @@ describe("offline mail cache", () => {
     deletion.resolve([]);
     await clearing;
     await Promise.all(pending);
-    expect(await storage.match(mailUrl)).toBeUndefined();
+    expect(await storage.match(mailKey)).toBeUndefined();
   });
 
   it("allows a fresh save after clearing an unfinished save", async () => {
@@ -559,7 +550,7 @@ describe("offline mail cache", () => {
     newResponse.resolve(html("New mailbox"));
     await newSave;
     await Promise.all(pending);
-    expect(await (await storage.match(mailUrl))?.text()).toBe("New mailbox");
+    expect(await (await storage.match(mailKey))?.text()).toBe("New mailbox");
   });
 
   it("keeps slow saves coalesced after returning a cached fallback", async () => {
@@ -575,7 +566,7 @@ describe("offline mail cache", () => {
     expect(secondSave).toBe(firstSave);
     liveResponse.resolve(html("Refreshed mailbox"));
     await Promise.all([firstSave, secondSave]);
-    expect(await (await storage.match(mailUrl))?.text()).toBe(
+    expect(await (await storage.match(mailKey))?.text()).toBe(
       "Refreshed mailbox",
     );
     expect(network).toHaveBeenCalledTimes(2);

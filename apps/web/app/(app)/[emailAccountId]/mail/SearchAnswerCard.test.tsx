@@ -14,6 +14,9 @@ const swr = vi.hoisted(() => ({
 
 vi.mock("swr", () => ({ default: () => swr.result }));
 vi.mock("@/utils/swr", () => ({ getAccountScopedKey: (key: string) => key }));
+vi.mock("@/providers/EmailAccountProvider", () => ({
+  useAccount: () => ({ emailAccountId: "account", accountIds: ["account"] }),
+}));
 
 afterEach(() => {
   cleanup();

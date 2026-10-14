@@ -13,8 +13,8 @@ import {
 } from "@/components/ui/command";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useAccount } from "@/providers/EmailAccountProvider";
+import { parseMailPath } from "@/utils/mail-url";
 import { getAccountSwitchUrl } from "@/utils/account-switch-url";
-import { prefixPath } from "@/utils/path";
 import { redirectToSafeUrl } from "@/utils/redirect";
 
 export function AccountCommandList({
@@ -27,11 +27,13 @@ export function AccountCommandList({
   onBack: () => void;
 }) {
   const { data, isLoading, error } = useAccounts();
-  const { emailAccountId } = useAccount();
+  const { emailAccountId, accountIds } = useAccount();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const isMail = pathname.endsWith("/mail");
+  const mailView = parseMailPath(pathname, searchParams);
+  const isMail = mailView !== null;
+  const isAllInboxes = Boolean(mailView?.allInboxes);
   const query = search.trim().toLowerCase();
   const accounts = data?.emailAccounts.filter((account) =>
     `${account.email} ${account.name ?? ""}`.toLowerCase().includes(query),
@@ -50,14 +52,14 @@ export function AccountCommandList({
                 value={`account-${account.id}`}
                 onSelect={() => {
                   onClose();
-                  if (
-                    account.id === emailAccountId &&
-                    (!isMail || searchParams.get("accountScope") !== "all")
-                  )
-                    return;
+                  if (account.id === emailAccountId && !isAllInboxes) return;
                   if (isMail) {
                     redirectToSafeUrl(
-                      getMailAccountUrl(account.id, window.location.search),
+                      getMailAccountUrl(
+                        accountIds,
+                        account.id,
+                        window.location,
+                      ),
                     );
                   } else {
                     const isAccountRoute =
@@ -70,7 +72,7 @@ export function AccountCommandList({
                             targetAccountId: account.id,
                             tab: searchParams.get("tab"),
                           })
-                        : prefixPath(account.id, "/mail"),
+                        : getMailAccountUrl(accountIds, account.id),
                     );
                   }
                 }}
@@ -81,13 +83,12 @@ export function AccountCommandList({
                   className="mr-3 size-7 shrink-0"
                 />
                 <span className="min-w-0 flex-1 truncate">{account.email}</span>
-                {account.id === emailAccountId &&
-                  (!isMail || searchParams.get("accountScope") !== "all") && (
-                    <CheckIcon
-                      className="ml-2 size-4 shrink-0"
-                      aria-label="Current account"
-                    />
-                  )}
+                {account.id === emailAccountId && !isAllInboxes && (
+                  <CheckIcon
+                    className="ml-2 size-4 shrink-0"
+                    aria-label="Current account"
+                  />
+                )}
               </CommandItem>
             ))}
           </CommandGroup>

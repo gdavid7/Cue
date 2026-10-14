@@ -43,13 +43,14 @@ for (const view of ["mail", "settings"]) {
     page,
   }, testInfo) => {
     const { id: emailAccountId } = await getEmailAccount(page);
-    const pathname = view === "mail" ? `/${emailAccountId}/mail` : "/settings";
-    await page.goto(pathname);
+    await page.goto(view === "mail" ? `/${emailAccountId}/mail` : "/settings");
     await expect(
       view === "mail"
         ? page.getByRole("listbox", { name: "Conversations" })
         : page.getByRole("heading", { name: "Settings", exact: true }),
     ).toBeVisible({ timeout: 60_000 });
+    // The old mail address redirects to `/mail/u/{n}/inbox`.
+    const pathname = new URL(page.url()).pathname;
 
     const modifier = process.platform === "darwin" ? "Meta" : "Control";
     await page.keyboard.press(`${modifier}+KeyK`);
@@ -84,7 +85,7 @@ for (const view of ["mail", "settings"]) {
 }
 
 test("opens mail from Command K", async ({ page }, testInfo) => {
-  const { id: emailAccountId } = await getEmailAccount(page);
+  await getEmailAccount(page);
   await page.goto("/settings");
   await expect(
     page.getByRole("heading", { name: "Settings", exact: true }),
@@ -97,7 +98,7 @@ test("opens mail from Command K", async ({ page }, testInfo) => {
   await search.fill("go to inbox");
   await page.getByRole("option", { name: "Go to Inbox", exact: true }).click();
 
-  await expect(page).toHaveURL(new RegExp(`/${emailAccountId}/mail$`));
+  await expect(page).toHaveURL(/\/mail\/u\/\d+\/inbox$/);
   await expect(
     page.getByRole("listbox", { name: "Conversations" }),
   ).toBeVisible({ timeout: 60_000 });

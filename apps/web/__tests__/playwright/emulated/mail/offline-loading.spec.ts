@@ -191,8 +191,13 @@ test("opens saved mail offline, reconnects, and clears it on sign-out", async ({
           );
           if (!name) return false;
           const cache = await caches.open(name);
+          // One saved shell per account (`/mail/u/{n}`) serves every view.
+          const accountRoot = location.pathname
+            .split("/")
+            .slice(0, 4)
+            .join("/");
           return (
-            Boolean(await cache.match(location.origin + location.pathname)) &&
+            Boolean(await cache.match(location.origin + accountRoot)) &&
             Boolean(
               await cache.match(`${location.origin}/api/user/email-accounts`),
             )

@@ -43,9 +43,8 @@ async function getEmailAccounts({ userId }: { userId: string }) {
         },
       },
     },
-    orderBy: {
-      createdAt: "asc",
-    },
+    // Same order as getOrderedEmailAccountIds: position is the `/mail/u/{n}`.
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
 
   const accountsWithRateLimits = await Promise.all(

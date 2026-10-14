@@ -119,7 +119,7 @@ test("offers recovery for a failed scheduled reply and guards uncertain delivery
     ).toBeVisible();
     await expect(
       delivery.getByRole("link", { name: "Check Sent" }),
-    ).toHaveAttribute("href", `/${emailAccountId}/mail?type=sent`);
+    ).toHaveAttribute("href", /^\/mail\/u\/\d+\/sent$/);
     await expect(
       delivery.getByRole("button", { name: "Retry send" }),
     ).toHaveCount(0);

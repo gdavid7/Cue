@@ -1,3 +1,5 @@
+import { buildMailPath, parseMailPath } from "@/utils/mail-url";
+
 export const PRODUCT_ANALYTICS_EVENTS = {
   pageViewed: "app_page_viewed",
   navigationClicked: "app_navigation_clicked",
@@ -344,6 +346,27 @@ export function stripUntrackedUrlParams<
   return event;
 }
 
+/**
+ * The path a page view is keyed on. Mail addresses carry thread ids and the
+ * names of labels and split tabs; analytics keeps only the kind of view, so
+ * opening a thread or moving with J/K is not a new page either.
+ */
+export function getPageViewPathname(pathname: string): string {
+  const mail = parseMailPath(pathname);
+  if (!mail) return pathname;
+  const view = mail.view ?? { kind: "inbox" };
+  const viewPath =
+    view.kind === "type"
+      ? buildMailPath({ accountIndex: mail.accountIndex, view })
+          .split("/")
+          .slice(4)
+          .join("/")
+      : view.kind === "split"
+        ? "tab"
+        : view.kind;
+  return `/mail/u/${mail.accountIndex}${mail.allInboxes ? "/all-inboxes" : ""}/${viewPath}`;
+}
+
 export function getPageViewSearch(
   searchParams: Pick<URLSearchParams, "toString"> | null | undefined,
 ): string {
@@ -361,6 +384,7 @@ type StringLeaf<T> = T extends string
 function withoutUntrackedParams(value: string) {
   try {
     const url = new URL(value);
+    url.pathname = getPageViewPathname(url.pathname);
     for (const param of UNTRACKED_PAGE_VIEW_PARAMS)
       url.searchParams.delete(param);
     return url.toString();

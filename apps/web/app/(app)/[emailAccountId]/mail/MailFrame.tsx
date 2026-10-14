@@ -12,6 +12,7 @@ import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccou
 import { MailMobileNav } from "@/app/(app)/[emailAccountId]/mail/MailMobileNav";
 import { MailShellSidebar } from "@/app/(app)/[emailAccountId]/mail/MailShellSidebar";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
+import { useMailHref } from "@/hooks/useMailHref";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 import { prefixPath } from "@/utils/path";
@@ -29,7 +30,8 @@ export function MailFrame({
   activeType: string | null;
   children: ReactNode;
 }) {
-  const { emailAccountId } = useAccount();
+  const { accountIds } = useAccount();
+  const mailHref = useMailHref();
   const router = useRouter();
   const isDesktopApp = useSyncExternalStore(
     subscribeNever,
@@ -44,13 +46,13 @@ export function MailFrame({
       redirectToSafeUrl(
         isToday
           ? prefixPath(accountId, "/home")
-          : getMailAccountUrl(accountId, window.location.search),
+          : getMailAccountUrl(accountIds, accountId, window.location),
       ),
-    [isToday],
+    [accountIds, isToday],
   );
   const selectAllAccounts = useCallback(
-    () => router.push(prefixPath(emailAccountId, "/mail?accountScope=all")),
-    [emailAccountId, router],
+    () => router.push(mailHref({ allInboxes: true })),
+    [mailHref, router],
   );
 
   return (

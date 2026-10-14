@@ -2,8 +2,8 @@ import {
   CLEAR_OFFLINE_MAIL,
   CLEAR_OFFLINE_MAIL_ACCOUNT,
   isSafeOfflineMailAccountId,
+  isOfflineMailAccountKey,
   OFFLINE_MAIL_CACHE_PREFIX,
-  offlineMailAccountCacheKeys,
 } from "./mail-cache";
 
 export async function clearOfflineMailCache() {
@@ -28,17 +28,15 @@ export async function clearOfflineMailCacheForAccount(emailAccountId: string) {
   });
   if (typeof window === "undefined" || typeof caches === "undefined") return;
   const origin = window.location.origin;
-  const { mailKeys, accountsKey } = offlineMailAccountCacheKeys(
-    origin,
-    emailAccountId,
-  );
-  const keys = [...mailKeys, accountsKey];
   try {
     await Promise.all(
       (await caches.keys())
         .filter((name) => name.startsWith(OFFLINE_MAIL_CACHE_PREFIX))
         .map(async (name) => {
           const cache = await caches.open(name);
+          const keys = (await cache.keys())
+            .map((request) => request.url)
+            .filter((url) => isOfflineMailAccountKey(url, origin));
           await Promise.all(keys.map((key) => cache.delete(key)));
         }),
     );

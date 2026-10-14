@@ -1,4 +1,5 @@
-const MAIL_PATH = /^\/[^/]+\/mail\/?$/u;
+// `/mail/u/{n}` and every view under it (`/mail/u/0/sent/{threadId}`).
+const MAIL_PATH = /^\/mail\/u\/(\d+)(?:\/.*)?$/u;
 export const ACCOUNT_PATH = "/api/user/email-accounts";
 export const OFFLINE_MAIL_CACHE_PREFIX = "inbox-zero:offline-mail:";
 export const MAIL_ENGINE_STATIC_CACHE = "inbox-zero:mail-engine-static";
@@ -25,7 +26,6 @@ export function createOfflineMailCache({
   let activeClears = 0;
   let writes: Promise<unknown> = Promise.resolve();
   const saves = new Map<string, Promise<void>>();
-  const removedMailKeys = new Set<string>();
 
   function queueWrite(operation: (cache: Cache) => Promise<unknown>) {
     writes = writes
@@ -51,9 +51,10 @@ export function createOfflineMailCache({
     const startedAtGeneration = activeClears ? undefined : generation;
     const startedAccountsGeneration = accountsGeneration;
     const url = new URL(request.url);
-    // Mail's query parameters select client-side views of the same account.
-    const key = `${origin}${url.pathname}`;
     const isDocument = isOfflineMailPath(url.pathname);
+    // Every view of an account is the same shell, read from the address on
+    // the client, so one saved copy per account serves them all.
+    const key = `${origin}${isDocument ? offlineMailDocumentPath(url.pathname) : url.pathname}`;
     const controller = new AbortController();
     const abortRequest = () => controller.abort(request.signal.reason);
     request.signal.addEventListener("abort", abortRequest, { once: true });
@@ -102,8 +103,7 @@ export function createOfflineMailCache({
             // Logout can happen while opening Cache Storage or writing another entry.
             if (
               startedAtGeneration === generation &&
-              !removedMailKeys.has(key) &&
-              (key !== `${origin}${ACCOUNT_PATH}` ||
+              ((!isDocument && key !== `${origin}${ACCOUNT_PATH}`) ||
                 startedAccountsGeneration === accountsGeneration)
             ) {
               await cache.put(key, copy);
@@ -148,7 +148,7 @@ export function createOfflineMailCache({
       !isOfflineMailPath(parsed.pathname)
     )
       return Promise.resolve();
-    const key = parsed.pathname;
+    const key = offlineMailDocumentPath(parsed.pathname);
     const existing = saves.get(key);
     if (existing) return existing;
     const startedAtGeneration = generation;
@@ -187,18 +187,16 @@ export function createOfflineMailCache({
     return saving;
   }
 
+  // Mail is addressed by account position, so removing one account moves the
+  // ones after it: every saved mailbox goes, and is saved again on next visit.
   async function removeAccount(accountId: string) {
     if (!isSafeOfflineMailAccountId(accountId)) return;
-    const { mailKeys, accountsKey } = offlineMailAccountCacheKeys(
-      origin,
-      accountId,
-    );
-    for (const key of mailKeys) removedMailKeys.add(key);
     accountsGeneration += 1;
     await queueWrite(async (cache) => {
-      await Promise.all(
-        [...mailKeys, accountsKey].map((key) => cache.delete(key)),
-      );
+      const keys = (await cache.keys())
+        .map((request) => request.url)
+        .filter((url) => isOfflineMailAccountKey(url, origin));
+      await Promise.all(keys.map((key) => cache.delete(key)));
     });
   }
 
@@ -244,11 +242,19 @@ export function isSafeOfflineMailAccountId(accountId: string) {
   );
 }
 
-export function offlineMailAccountCacheKeys(origin: string, accountId: string) {
-  return {
-    mailKeys: [`${origin}/${accountId}/mail`, `${origin}/${accountId}/mail/`],
-    accountsKey: `${origin}${ACCOUNT_PATH}`,
-  };
+/** The one saved copy that serves every view of an account's mail. */
+export function offlineMailDocumentPath(pathname: string) {
+  const match = MAIL_PATH.exec(pathname);
+  return match ? `/mail/u/${match[1]}` : pathname;
+}
+
+/** A saved mailbox or the account list it was saved with. */
+export function isOfflineMailAccountKey(key: string, origin: string) {
+  const url = new URL(key);
+  return (
+    url.origin === origin &&
+    (isOfflineMailPath(url.pathname) || url.pathname === ACCOUNT_PATH)
+  );
 }
 
 export function clearsOfflineMailOnGet(request: Request, origin: string) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   getAppPageFromPathname,
+  getPageViewPathname,
   getPageViewSearch,
   stripUntrackedUrlParams,
 } from "@/utils/analytics/product";
@@ -59,5 +60,42 @@ describe("getAppPageFromPathname", () => {
       "shared_conversations",
     );
     expect(getAppPageFromPathname("/shared/activity")).toBe("shared_activity");
+  });
+});
+
+describe("getPageViewPathname", () => {
+  it("keeps thread ids and label or tab names out of mail page views", () => {
+    expect(getPageViewPathname("/mail/u/0/label/medical/thread-1")).toBe(
+      "/mail/u/0/label",
+    );
+    expect(getPageViewPathname("/mail/u/1/needs-reply/thread-1")).toBe(
+      "/mail/u/1/tab",
+    );
+    expect(getPageViewPathname("/mail/u/0/search")).toBe("/mail/u/0/inbox");
+    expect(getPageViewPathname("/mail/u/0/all-inboxes/inbox/t1")).toBe(
+      "/mail/u/0/all-inboxes/inbox",
+    );
+  });
+
+  it("keeps built-in views, which name nothing private", () => {
+    expect(getPageViewPathname("/mail/u/0/sent/t1")).toBe("/mail/u/0/sent");
+    expect(getPageViewPathname("/mail/u/0/category/social")).toBe(
+      "/mail/u/0/category/social",
+    );
+  });
+
+  it("leaves other pages alone", () => {
+    expect(getPageViewPathname("/abc/automation")).toBe("/abc/automation");
+  });
+
+  it("strips mail paths from URLs PostHog attaches to events", () => {
+    const event = stripUntrackedUrlParams({
+      properties: {
+        $current_url: "https://app.example.com/mail/u/0/label/medical/t1",
+      },
+    });
+    expect(event.properties?.$current_url).toBe(
+      "https://app.example.com/mail/u/0/label",
+    );
   });
 });

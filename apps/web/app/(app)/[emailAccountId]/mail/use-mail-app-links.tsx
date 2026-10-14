@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { type NavItem, useNavigation } from "@/components/SideNav";
+import { isMailPath } from "@/utils/mail-url";
 
 export type MailAppLink = { name: string; href: string; icon: React.ReactNode };
 
@@ -18,7 +19,9 @@ export function useMailAppLinks() {
       appLinks: manageItems
         .filter(
           (item) =>
-            !item.href.endsWith("/mail") && !item.href.endsWith("/home"),
+            !isMailPath(item.href) &&
+            !item.href.endsWith("/mail") &&
+            !item.href.endsWith("/home"),
         )
         .map(toMailAppLink),
       toolLinks: toolsItems.map(toMailAppLink),

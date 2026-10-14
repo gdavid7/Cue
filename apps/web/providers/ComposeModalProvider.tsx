@@ -19,6 +19,7 @@ import {
   useAccount,
 } from "@/providers/EmailAccountProvider";
 import { deleteDraftAction } from "@/utils/actions/mail";
+import { parseMailPath } from "@/utils/mail-url";
 import { getActiveMailClient } from "@/utils/mail-engine/active-client";
 import type { ReplyDraftMode } from "@/utils/mail-engine/reply-drafts";
 import { getActionErrorMessage } from "@/utils/error";
@@ -71,8 +72,9 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [composerKey, setComposerKey] = useState(0);
   const [poppedOutReply, setPoppedOutReply] = useState<PoppedOutReply>();
-  const isAllAccountsMailView =
-    pathname.endsWith("/mail") && searchParams.get("accountScope") === "all";
+  const isAllAccountsMailView = Boolean(
+    parseMailPath(pathname, searchParams)?.allInboxes,
+  );
   const { data: accountsData } = useAccounts(
     isAllAccountsMailView || isModalOpen,
   );

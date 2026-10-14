@@ -1,15 +1,32 @@
-export function getMailAccountUrl(accountId: string, search: string) {
-  const params = new URLSearchParams(search);
-  const hasAccountScopedFilter =
-    params.has("labelId") || params.has("folderId");
-  params.delete("accountScope");
-  params.delete("split");
-  params.delete("thread-id");
-  params.delete("thread-account-id");
-  params.delete("side-panel-thread-id");
-  params.delete("labelId");
-  params.delete("folderId");
-  if (hasAccountScopedFilter) params.delete("type");
-  const query = params.toString();
-  return `/${accountId}/mail${query ? `?${query}` : ""}`;
+import {
+  buildMailPath,
+  mailPathForAccount,
+  parseMailPath,
+  withPageParams,
+} from "@/utils/mail-url";
+
+/**
+ * Where switching to another account lands: the same built-in view or search
+ * when there is one, since labels, folders, split tabs and threads belong to
+ * the account being left. Unrelated query parameters ride along.
+ */
+export function getMailAccountUrl(
+  accountIds: readonly string[],
+  accountId: string,
+  current?: { pathname: string; search: string },
+) {
+  const accountIndex = accountIds.indexOf(accountId);
+  if (accountIndex < 0) return mailPathForAccount(accountIds, accountId);
+  const view = current
+    ? parseMailPath(current.pathname, current.search)?.view
+    : undefined;
+  return withPageParams(
+    buildMailPath({
+      accountIndex,
+      view: view?.kind === "type" || view?.kind === "search" ? view : undefined,
+    }),
+    current?.search ?? "",
+    // The side panel's thread belongs to the account being left too.
+    ["side-panel-thread-id"],
+  );
 }

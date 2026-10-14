@@ -6,6 +6,7 @@ import { test } from "../emulated/playwright-test";
 import {
   openMail,
   conversationWithSubject,
+  openThreadIdFromUrl,
 } from "../emulated/mail/mail-test-helpers";
 
 type Sample = {
@@ -106,8 +107,10 @@ test(`measures current client under ${profile}`, async ({
     for (const key of ["j", "j", "j", "k", "j", "j", "k"]) {
       await page.keyboard.press(key);
     }
-    await expect(page).toHaveURL(/thread-id=sim_thread_3(?:&|$)/);
-    const selectedId = new URL(page.url()).searchParams.get("thread-id");
+    await expect
+      .poll(() => openThreadIdFromUrl(page.url()))
+      .toBe("sim_thread_3");
+    const selectedId = openThreadIdFromUrl(page.url());
     const selectedThread = Number(selectedId?.replace("sim_thread_", ""));
     expect(
       Number.isFinite(selectedThread) && selectedId?.startsWith("sim_thread_"),
@@ -268,7 +271,7 @@ async function waitForBody(page: Page, thread: number) {
     await testInfo.attach(`body-timeout-${thread}.json`, {
       body: JSON.stringify({
         expectedThread: thread,
-        actualThread: new URL(page.url()).searchParams.get("thread-id"),
+        actualThread: openThreadIdFromUrl(page.url()),
         renderedMessages: await page
           .locator("li[data-thread-message-id]")
           .evaluateAll((elements) =>

@@ -47,6 +47,14 @@ vi.mock("@/hooks/useFolders", () => ({
   }),
 }));
 
+// Accounts are addressed by position: personal is /mail/u/0, work /mail/u/1.
+vi.mock("@/providers/EmailAccountProvider", () => ({
+  useAccount: () => ({
+    emailAccountId: "personal",
+    accountIds: ["personal", "work"],
+  }),
+}));
+
 vi.mock("@/hooks/useLabelCounts", () => ({
   useLabelCounts: () => ({ countsById: new Map(), mutate: vi.fn() }),
 }));
@@ -86,15 +94,11 @@ describe("AllInboxesSidebarSections", () => {
     const personal = screen.getByRole("region", {
       name: "personal@example.com",
     });
-    expect(link(personal, "Receipts")).toBe(
-      "/personal/mail?type=label&labelId=Label_7",
-    );
+    expect(link(personal, "Receipts")).toBe("/mail/u/0/label/receipts");
 
     const work = screen.getByRole("region", { name: "work@example.com" });
-    expect(link(work, "Projects")).toBe(
-      "/work/mail?type=folder&folderId=folder-1",
-    );
-    expect(link(work, "Clients")).toBe("/work/mail?type=label&labelId=cat-1");
+    expect(link(work, "Projects")).toBe("/mail/u/1/folder/projects");
+    expect(link(work, "Clients")).toBe("/mail/u/1/label/clients");
     expect(work.textContent).toContain("Categories");
   });
 
