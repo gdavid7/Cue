@@ -11,8 +11,9 @@ import { upsertSystemRule } from "@/utils/rule/rule";
 import { addCueTabs } from "@/utils/split-inbox/cue-tabs.server";
 import { createMailSplit } from "@/utils/split-inbox/splits.server";
 
-const { afterCallbacks } = vi.hoisted(() => ({
+const { afterCallbacks, emailProvider } = vi.hoisted(() => ({
   afterCallbacks: [] as Array<() => unknown>,
+  emailProvider: { getLabels: vi.fn(), createLabel: vi.fn() },
 }));
 
 vi.mock("@/utils/prisma");
@@ -20,13 +21,7 @@ vi.mock("next/server", () => ({
   after: (callback: () => unknown) => afterCallbacks.push(callback),
 }));
 vi.mock("@/utils/email/provider", () => ({
-  createEmailProvider: vi.fn(async () => ({})),
-}));
-vi.mock("@/utils/label/resolve-label", () => ({
-  resolveLabelNameAndId: vi.fn(async ({ label }: { label: string }) => ({
-    label,
-    labelId: `label-${label}`,
-  })),
+  createEmailProvider: vi.fn(async () => emailProvider),
 }));
 vi.mock("@/utils/rule/rule", () => ({ upsertSystemRule: vi.fn() }));
 vi.mock("@/utils/split-inbox/splits.server", () => ({
@@ -54,6 +49,12 @@ describe("addCueTabs", () => {
     vi.clearAllMocks();
     afterCallbacks.length = 0;
     prisma.rule.findMany.mockResolvedValue([]);
+    emailProvider.getLabels.mockResolvedValue([]);
+    emailProvider.createLabel.mockImplementation(async (name: string) => ({
+      id: `label-${name}`,
+      name,
+      type: "user",
+    }));
   });
 
   it("creates only the label rules and the two tabs that Needs reply and Reading read", async () => {
@@ -97,6 +98,57 @@ describe("addCueTabs", () => {
       },
     ]);
     expect(afterCallbacks).toHaveLength(1);
+  });
+
+  it("lists labels once, reuses the ones that exist and creates the rest", async () => {
+    emailProvider.getLabels.mockResolvedValue([
+      { id: "existing-newsletter", name: "newsletter", type: "user" },
+    ]);
+
+    await addCueTabs({ emailAccountId: "account", provider: "google", logger });
+
+    expect(emailProvider.getLabels).toHaveBeenCalledTimes(1);
+    expect(
+      emailProvider.createLabel.mock.calls.map(([name]) => name).sort(),
+    ).toEqual(
+      NEEDED_RULES.filter((type) => type !== SystemType.NEWSLETTER)
+        .map((type) => getRuleLabel(type))
+        .sort(),
+    );
+    const newsletterRule = vi
+      .mocked(upsertSystemRule)
+      .mock.calls.find(([rule]) => rule.systemType === SystemType.NEWSLETTER);
+    expect(newsletterRule?.[0].actions).toEqual([
+      {
+        type: ActionType.LABEL,
+        label: getRuleLabel(SystemType.NEWSLETTER),
+        labelId: "existing-newsletter",
+      },
+    ]);
+  });
+
+  it("still adds the rule, without a label id, when its label can't be created", async () => {
+    emailProvider.createLabel.mockImplementation(async (name: string) => {
+      if (name === getRuleLabel(SystemType.MARKETING))
+        throw new Error("create failed");
+      return { id: `label-${name}`, name, type: "user" };
+    });
+
+    await addCueTabs({ emailAccountId: "account", provider: "google", logger });
+
+    const marketingRule = vi
+      .mocked(upsertSystemRule)
+      .mock.calls.find(([rule]) => rule.systemType === SystemType.MARKETING);
+    expect(marketingRule?.[0].actions).toEqual([
+      {
+        type: ActionType.LABEL,
+        label: getRuleLabel(SystemType.MARKETING),
+        labelId: null,
+      },
+    ]);
+    expect(vi.mocked(createMailSplit).mock.calls.at(-1)?.[0].filters).toEqual([
+      { kind: MailSplitFilterKind.LABEL, value: "label-Newsletter" },
+    ]);
   });
 
   it("keeps rules the account already has and points the tabs at their labels", async () => {

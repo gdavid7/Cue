@@ -1688,6 +1688,7 @@ export function MailShell() {
                       isLoadingMore={isLoadingMore}
                       onLoadMore={loadMore}
                       rowActions={rowActions}
+                      insightsPaused={isFirstSync}
                       showSentOpenStatus={
                         scopeType === "sent" && !isAllAccounts
                       }

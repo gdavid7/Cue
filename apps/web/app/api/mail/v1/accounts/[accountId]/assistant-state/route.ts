@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { withEmailProvider } from "@/utils/middleware";
+import { withEmailAccount } from "@/utils/middleware";
 import { assistantStateResultSchema } from "@inboxzero/mail-core/protocol/mail-http";
 import {
   accountMismatchResponse,
@@ -8,7 +8,9 @@ import {
 } from "@/utils/mail-api/authorization";
 import { readAssistantStatePage } from "@/utils/mail-api/assistant-state";
 
-export const GET = withEmailProvider(
+// Reads only Cue's own records, so it skips the mailbox connection and keeps
+// answering while the provider is rate limiting the account.
+export const GET = withEmailAccount(
   "mail/v1/assistant-state",
   async (request, context) => {
     const params = await context.params;
