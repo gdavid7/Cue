@@ -7,8 +7,17 @@ import { LlmUseCase } from "@/utils/llms/use-cases";
 import { toolCallAgentStream } from "./index";
 import { INTERRUPTED_RESPONSE_NOTICE } from "./stream-fallback-model";
 
-const { mockGetModelForUseCase } = vi.hoisted(() => ({
-  mockGetModelForUseCase: vi.fn(),
+const { mockGetModelForUseCase, mockCreateBridgedClaudeCodeModel } = vi.hoisted(
+  () => ({
+    mockGetModelForUseCase: vi.fn(),
+    mockCreateBridgedClaudeCodeModel: vi.fn(),
+  }),
+);
+
+vi.mock("@/utils/llms/cli-provider", async (importActual) => ({
+  ...(await importActual<typeof import("@/utils/llms/cli-provider")>()),
+  createClaudeCodeLanguageModelWithBridgedTools:
+    mockCreateBridgedClaudeCodeModel,
 }));
 
 vi.mock("@/utils/llms/use-cases", async (importActual) => ({
@@ -195,6 +204,126 @@ describe("toolCallAgentStream model fallback", () => {
     expect(run.errorChunks).toHaveLength(1);
   });
 });
+
+describe("toolCallAgentStream with a single model candidate", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("streams a tool's input as it arrives when no fallback is configured", async () => {
+    const { model, release } = createGatedToolInputModel();
+    mockGetModelForUseCase.mockReturnValue({
+      provider: "google",
+      modelName: "primary-model",
+      model,
+      fallbackModels: [],
+      hasUserApiKey: false,
+    });
+
+    const result = await toolCallAgentStream({
+      ...BASE_AGENT_OPTIONS,
+      tools: { archive: archiveTool() },
+    });
+
+    expect(await toolInputStreamsBeforeCallEnds(result, release)).toBe(true);
+  });
+
+  it("streams a bridged Claude Code run's tool activity live even with fallbacks configured", async () => {
+    const { model, release } = createGatedToolInputModel();
+    mockCreateBridgedClaudeCodeModel.mockResolvedValue(model);
+    mockGetModelForUseCase.mockReturnValue({
+      provider: "claude-code",
+      modelName: "sonnet",
+      model: new MockLanguageModelV4(),
+      fallbackModels: [
+        {
+          provider: "google",
+          modelName: "fallback-model",
+          model: createScriptedModel("fallback", []),
+        },
+      ],
+      hasUserApiKey: false,
+    });
+
+    const result = await toolCallAgentStream({
+      ...BASE_AGENT_OPTIONS,
+      tools: { archive: archiveTool() },
+    });
+
+    expect(await toolInputStreamsBeforeCallEnds(result, release)).toBe(true);
+  });
+});
+
+const BASE_AGENT_OPTIONS = {
+  userAi: { aiProvider: null, aiModel: null, aiApiKey: null },
+  userEmail: "user@test.com",
+  emailAccountId: "email-account-id",
+  useCase: LlmUseCase.AssistantChat,
+  usageLabel: "test",
+  promptHardening: { trust: "untrusted", level: "full" },
+  messages: [{ role: "user", content: "Archive it" }],
+} as const;
+
+function archiveTool() {
+  return tool({ inputSchema: z.object({}), execute: async () => "archived" });
+}
+
+// The model's call streams a tool-input-start, then waits until released, as
+// a CLI run does while it executes a tool.
+function createGatedToolInputModel() {
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const model = new MockLanguageModelV4({
+    doStream: [
+      {
+        stream: new ReadableStream<LanguageModelV4StreamPart>({
+          async start(controller) {
+            controller.enqueue(STREAM_START);
+            controller.enqueue({
+              type: "tool-input-start",
+              id: "call-1",
+              toolName: "archive",
+            });
+            await gate;
+            controller.enqueue({
+              type: "tool-input-delta",
+              id: "call-1",
+              delta: "{}",
+            });
+            controller.enqueue({ type: "tool-input-end", id: "call-1" });
+            controller.enqueue(finish("stop"));
+            controller.close();
+          },
+        }),
+      },
+    ],
+  });
+  return { model, release: () => release() };
+}
+
+async function toolInputStreamsBeforeCallEnds(
+  result: Awaited<ReturnType<typeof toolCallAgentStream>>,
+  release: () => void,
+) {
+  let released = false;
+  const releaseOnce = () => {
+    released = true;
+    release();
+  };
+  // A held tool input only shows up once the call ends, so stop waiting.
+  const timeout = setTimeout(releaseOnce, 2000);
+  let seenWhileRunning = false;
+  for await (const chunk of result.toUIMessageStream()) {
+    if (chunk.type === "tool-input-start" && !released) {
+      seenWhileRunning = true;
+      releaseOnce();
+    }
+  }
+  clearTimeout(timeout);
+  return seenWhileRunning;
+}
 
 const STREAM_START: LanguageModelV4StreamPart = {
   type: "stream-start",

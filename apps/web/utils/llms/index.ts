@@ -977,34 +977,42 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
           .slice(1)
           .filter((candidate) => candidate.provider !== Provider.CLAUDE_CODE),
       ];
-  const model = createStreamFallbackModel({
-    candidates: runCandidates,
-    onFallback: ({ from, to, error }) => {
-      logger.warn("Tool-call stream failed, switching to fallback model", {
-        label,
-        provider: from.provider,
-        model: from.modelName,
-        fallbackProvider: to.provider,
-        fallbackModel: to.modelName,
-        failureCategory: getLlmFallbackFailureCategory(error),
-        error,
-      });
-      onModelResolved?.({
-        provider: to.provider,
-        modelName: to.modelName,
-        providerOptions: to.providerOptions,
-      });
-    },
-    onInterrupted: ({ candidate, error }) => {
-      logger.error("Tool-call stream interrupted after output", {
-        label,
-        provider: candidate.provider,
-        model: candidate.modelName,
-        error,
-      });
-      captureException(error, { userEmail, extra: { label } });
-    },
-  });
+  // With nothing to switch to, the model runs unwrapped: the wrapper's holding
+  // of tool parts would only delay them, and the AI SDK's own retries apply.
+  const fallbackModel =
+    runCandidates.length > 1
+      ? createStreamFallbackModel({
+          candidates: runCandidates,
+          onFallback: ({ from, to, error }) => {
+            logger.warn(
+              "Tool-call stream failed, switching to fallback model",
+              {
+                label,
+                provider: from.provider,
+                model: from.modelName,
+                fallbackProvider: to.provider,
+                fallbackModel: to.modelName,
+                failureCategory: getLlmFallbackFailureCategory(error),
+                error,
+              },
+            );
+            onModelResolved?.({
+              provider: to.provider,
+              modelName: to.modelName,
+              providerOptions: to.providerOptions,
+            });
+          },
+          onInterrupted: ({ candidate, error }) => {
+            logger.error("Tool-call stream interrupted after output", {
+              label,
+              provider: candidate.provider,
+              model: candidate.modelName,
+              error,
+            });
+            captureException(error, { userEmail, extra: { label } });
+          },
+        })
+      : undefined;
   onModelResolved?.({
     provider: primary.provider,
     modelName: primary.modelName,
@@ -1012,7 +1020,7 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
   });
 
   const agent = new ToolLoopAgent({
-    model,
+    model: fallbackModel ?? runCandidates[0].model,
     tools: bridgedAgent.tools,
     activeTools: bridgedAgent.bridged
       ? undefined
@@ -1033,7 +1041,8 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
     onEnd: async (result) => {
       // Usage goes to the model that finished the run, which after a fallback
       // also served the most steps.
-      const finalCandidate = model.getActiveCandidate();
+      const finalCandidate =
+        fallbackModel?.getActiveCandidate() ?? runCandidates[0];
       const usagePromise = saveUsageWithMetadata({
         result,
         usage: result.usage,
