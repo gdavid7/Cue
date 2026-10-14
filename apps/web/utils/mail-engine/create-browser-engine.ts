@@ -4,7 +4,10 @@ import {
   type MailEngine,
   type WorkAdmission,
 } from "@inboxzero/mail-core/engine";
-import { classifyMailboxError } from "@inboxzero/mail-sqlite/recovery";
+import {
+  classifyMailboxError,
+  type DroppedMailWork,
+} from "@inboxzero/mail-sqlite/recovery";
 import type {
   MailboxView,
   QueryHandle,
@@ -26,8 +29,11 @@ import {
 } from "@/utils/mail-engine/worker-protocol";
 import { browserStoragePressure } from "@/utils/mail-engine/storage-pressure";
 import { finishPendingLocalMailboxWipe } from "@/utils/mail-engine/wipe-local-mailbox";
+import { createClientLogger } from "@/utils/logger-client";
 
 export { browserMailEngineCapabilities };
+
+const logger = createClientLogger("mail-engine");
 
 // A closing tab's worker can hold the mailbox's OPFS handles for a moment
 // after its lock is released; these waits cover that without a dead end.
@@ -106,6 +112,7 @@ async function createInTabEngine(
     options: { maxPendingOperations: input.maxPendingOperations, runtime },
     ownedAccountIds: input.ownedAccountIds,
     onRebuild: hooks.onRebuild,
+    onDropped: logDroppedWork,
   });
   const ensureAccount: BrowserMailEngine["ensureAccount"] = async (account) => {
     await store.ensureAccount({
@@ -183,6 +190,10 @@ async function createWorkerOwnedEngine(
     const message = event.data;
     if (message.type === "rebuilding") {
       hooks.onRebuild?.();
+      return;
+    }
+    if (message.type === "dropped") {
+      logDroppedWork(message.drop);
       return;
     }
     if (message.type === "snapshot") {
@@ -360,6 +371,10 @@ function callWorker<T>(
     method,
     args,
   }) as Promise<T>;
+}
+
+function logDroppedWork(drop: DroppedMailWork) {
+  logger.warn("Mailbox rebuild left out carried work", drop);
 }
 
 function delay(ms: number) {

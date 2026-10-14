@@ -45,6 +45,9 @@ async function createWorkerEngine(
     onRebuild: () => {
       self.postMessage({ type: "rebuilding" } satisfies WorkerResponse);
     },
+    onDropped: (drop) => {
+      self.postMessage({ type: "dropped", drop } satisfies WorkerResponse);
+    },
   });
   const ensureAccount: BrowserMailEngine["ensureAccount"] = async (account) => {
     await store.ensureAccount({

@@ -20,6 +20,7 @@ describe("createBrowserMailEngine", () => {
     FakeWorker.startErrors = [];
     FakeWorker.rebuildOnStart = false;
     FakeWorker.startReplyDelayMs = 0;
+    FakeWorker.startMessages = [];
     wipe.finishPending.mockResolvedValue(undefined);
     vi.stubGlobal("Worker", FakeWorker);
   });
@@ -134,6 +135,24 @@ describe("createBrowserMailEngine", () => {
     expect(onRebuild).toHaveBeenCalledOnce();
   });
 
+  it("logs carried work a rebuild left out, without its content", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    FakeWorker.startMessages = [
+      {
+        type: "dropped",
+        drop: { table: "drafts", reason: "rejected", count: 2 },
+      },
+    ];
+
+    await startEngine();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("mail-engine"),
+      expect.any(String),
+      { table: "drafts", reason: "rejected", count: 2 },
+    );
+  });
+
   it("settles requests still waiting when the worker is terminated", async () => {
     const engine = await startEngine();
     FakeWorker.instances[0].silent.add("getDiagnostics");
@@ -162,6 +181,7 @@ class FakeWorker {
   static startErrors: string[] = [];
   static rebuildOnStart = false;
   static startReplyDelayMs = 0;
+  static startMessages: unknown[] = [];
   readonly silent = new Set<string>();
   terminated = false;
   private readonly sent: Message[] = [];
@@ -189,6 +209,7 @@ class FakeWorker {
           ...(message.type === "start" && FakeWorker.rebuildOnStart
             ? [{ type: "rebuilding" }]
             : []),
+          ...(message.type === "start" ? FakeWorker.startMessages : []),
           startError
             ? { id: message.id, type: "error", message: startError }
             : { id: message.id, type: "ok", value: undefined },

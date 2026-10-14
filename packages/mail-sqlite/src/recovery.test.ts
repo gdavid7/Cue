@@ -209,6 +209,43 @@ describe("openMailStoreWithRecovery", () => {
     await driver.close();
   });
 
+  it("reports carried rows it could not restore, without their content", async () => {
+    const work = await pendingWorkFrom(await seededMailbox());
+    const draft = work.drafts[0];
+    const path = await mailboxPath();
+    const stash = memoryStash();
+    await stash.write({
+      ...work,
+      accounts: [
+        ...work.accounts,
+        { accountId: "acc-imap", provider: "imap", generation: "g1" },
+      ],
+      drafts: [
+        { ...draft, draft_id: "d-damaged", content_json: null },
+        { ...draft, account_id: "acc-other-user" },
+      ],
+    });
+    const onDropped = vi.fn();
+
+    const store = await openMailStoreWithRecovery({
+      open: async () => createNodeSqliteDriver(path),
+      wipe: () => wipeNodeMailbox(path),
+      stash,
+      ownedAccountIds: ["acc-1", "acc-imap"],
+      onDropped,
+    });
+    await store.close();
+
+    expect(onDropped.mock.calls.map(([drop]) => drop)).toEqual(
+      expect.arrayContaining([
+        { table: "accounts", reason: "unsupported_provider", count: 1 },
+        { table: "drafts", reason: "rejected", count: 1 },
+        { table: "drafts", reason: "not_owned", count: 1 },
+      ]),
+    );
+    expect(onDropped).toHaveBeenCalledTimes(3);
+  });
+
   it("rebuilds a file that is not a database", async () => {
     const path = await mailboxPath();
     await writeFile(path, "this is not sqlite ".repeat(512));

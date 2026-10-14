@@ -25,6 +25,16 @@ export type PendingMailWorkStash = {
   clear(): Promise<void>;
 };
 
+/**
+ * Carried rows a restore left out, counted per table. Holds no row content,
+ * so it is safe to log.
+ */
+export type DroppedMailWork = {
+  table: string;
+  reason: "not_owned" | "unsupported_provider" | "rejected";
+  count: number;
+};
+
 export class MailboxCorruptError extends Error {
   constructor(message: string) {
     super(`SQLITE_CORRUPT: ${message}`);
@@ -165,9 +175,11 @@ export async function openMailStoreWithRecovery(input: {
   ownedAccountIds: readonly string[];
   options?: SqliteMailStoreOptions;
   onRebuild?: () => void;
+  onDropped?: (drop: DroppedMailWork) => void;
 }): Promise<MailStore> {
+  const drops = createDropCounter();
   const stashed = await input.stash.read().catch(() => null);
-  let carried = stashed && ownedWork(stashed, input.ownedAccountIds);
+  let carried = stashed && ownedWork(stashed, input.ownedAccountIds, drops);
   let opened: { driver: SqliteDriver; store: MailStore } | null = null;
   let failure: unknown = null;
   let driver: SqliteDriver | null = null;
@@ -189,7 +201,7 @@ export async function openMailStoreWithRecovery(input: {
       await driver.close().catch(() => undefined);
       carried = mergePendingWork(
         carried,
-        ownedWork(current, input.ownedAccountIds),
+        ownedWork(current, input.ownedAccountIds, drops),
         settled,
       );
     }
@@ -204,8 +216,9 @@ export async function openMailStoreWithRecovery(input: {
     };
   }
   if (carried) {
-    await restorePendingMailWork(opened.store, opened.driver, carried);
+    await restorePendingMailWork(opened.store, opened.driver, carried, drops);
   }
+  for (const drop of drops.list()) input.onDropped?.(drop);
   if (carried || stashed) {
     try {
       await input.stash.clear();
@@ -261,13 +274,15 @@ export async function readPendingMailWork(
  * Re-admits carried work into a freshly opened mailbox. Rows already present
  * are left alone, so restoring the same work twice admits it once.
  */
-export async function restorePendingMailWork(
+async function restorePendingMailWork(
   store: MailStore,
   driver: SqliteDriver,
   work: PendingMailWork,
+  drops: DropCounter,
 ): Promise<void> {
   for (const account of work.accounts) {
     if (account.provider !== "google" && account.provider !== "microsoft") {
+      drops.add("accounts", "unsupported_provider");
       continue;
     }
     const existing = await driver.read((tx) =>
@@ -284,18 +299,24 @@ export async function restorePendingMailWork(
   }
   await driver.write(async (tx) => {
     for (const row of work.drafts) {
-      await insertIgnoring(tx, "drafts", DRAFT_COLUMNS, row);
+      await insertIgnoring(tx, "drafts", DRAFT_COLUMNS, row, drops);
     }
     for (const row of work.operations) {
-      await insertIgnoring(tx, "operations", OPERATION_COLUMNS, {
-        ...row,
-        // The rebuilt mailbox has not seen the account connect yet, and a
-        // ready connection is what would release a blocked command.
-        status: row.status === "blocked_auth" ? "retry_wait" : row.status,
-      });
+      await insertIgnoring(
+        tx,
+        "operations",
+        OPERATION_COLUMNS,
+        {
+          ...row,
+          // The rebuilt mailbox has not seen the account connect yet, and a
+          // ready connection is what would release a blocked command.
+          status: row.status === "blocked_auth" ? "retry_wait" : row.status,
+        },
+        drops,
+      );
     }
     for (const row of work.operationTargets) {
-      await insertIgnoring(tx, "operation_targets", TARGET_COLUMNS, row);
+      await insertIgnoring(tx, "operation_targets", TARGET_COLUMNS, row, drops);
     }
     for (const row of work.operationConversations) {
       await insertIgnoring(
@@ -303,6 +324,7 @@ export async function restorePendingMailWork(
         "operation_conversations",
         CONVERSATION_COLUMNS,
         row,
+        drops,
       );
     }
   });
@@ -336,15 +358,19 @@ async function insertIgnoring(
   table: string,
   columns: string[],
   row: SqlRow,
+  drops: DropCounter,
 ) {
   try {
+    // Only a row already present is skipped; any other constraint failure
+    // throws, so the drop is counted.
     await tx.execute(
-      `INSERT OR IGNORE INTO ${table}(${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+      `INSERT INTO ${table}(${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")}) ON CONFLICT DO NOTHING`,
       columns.map((column) => row[column] ?? null),
     );
   } catch {
     // A row damaged past its constraints is dropped rather than blocking
     // the rest of the user's work.
+    drops.add(table, "rejected");
   }
 }
 
@@ -428,15 +454,44 @@ function highestDraftRevisions(drafts: SqlRow[]) {
 function ownedWork(
   work: PendingMailWork,
   ownedAccountIds: readonly string[],
+  drops: DropCounter,
 ): PendingMailWork {
   const owned = new Set(ownedAccountIds);
-  const ownedRow = (row: SqlRow) => owned.has(String(row.account_id));
+  function keep<T>(table: string, rows: T[], accountOf: (row: T) => string) {
+    const kept = rows.filter((row) => owned.has(accountOf(row)));
+    drops.add(table, "not_owned", rows.length - kept.length);
+    return kept;
+  }
+  const rowAccount = (row: SqlRow) => String(row.account_id);
   return {
-    accounts: work.accounts.filter((account) => owned.has(account.accountId)),
-    drafts: work.drafts.filter(ownedRow),
-    operations: work.operations.filter(ownedRow),
-    operationTargets: work.operationTargets.filter(ownedRow),
-    operationConversations: work.operationConversations.filter(ownedRow),
+    accounts: keep("accounts", work.accounts, (account) => account.accountId),
+    drafts: keep("drafts", work.drafts, rowAccount),
+    operations: keep("operations", work.operations, rowAccount),
+    operationTargets: keep(
+      "operation_targets",
+      work.operationTargets,
+      rowAccount,
+    ),
+    operationConversations: keep(
+      "operation_conversations",
+      work.operationConversations,
+      rowAccount,
+    ),
+  };
+}
+
+type DropCounter = ReturnType<typeof createDropCounter>;
+
+function createDropCounter() {
+  const counts = new Map<string, DroppedMailWork>();
+  return {
+    add(table: string, reason: DroppedMailWork["reason"], count = 1) {
+      if (count <= 0) return;
+      const key = `${table}:${reason}`;
+      const current = counts.get(key);
+      counts.set(key, { table, reason, count: (current?.count ?? 0) + count });
+    },
+    list: () => [...counts.values()],
   };
 }
 

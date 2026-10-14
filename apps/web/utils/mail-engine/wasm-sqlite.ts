@@ -5,7 +5,10 @@ import type {
   SqlValue,
   SqliteDriver,
 } from "@inboxzero/mail-sqlite/driver";
-import { openMailStoreWithRecovery } from "@inboxzero/mail-sqlite/recovery";
+import {
+  openMailStoreWithRecovery,
+  type DroppedMailWork,
+} from "@inboxzero/mail-sqlite/recovery";
 import {
   createSqliteMailStore,
   type SqliteMailStoreOptions,
@@ -47,6 +50,7 @@ export async function createWasmMailStore(input: {
   ownedAccountIds: string[];
   options?: SqliteMailStoreOptions;
   onRebuild?: () => void;
+  onDropped?: (drop: DroppedMailWork) => void;
 }): Promise<MailStore> {
   const sqlite = await initSqlite();
   if (!canPersist(input.persist)) {
@@ -83,6 +87,7 @@ export async function createWasmMailStore(input: {
       ownedAccountIds: input.ownedAccountIds,
       options: input.options,
       onRebuild: input.onRebuild,
+      onDropped: input.onDropped,
     });
     const closeStore = store.close.bind(store);
     return Object.assign(store, {
