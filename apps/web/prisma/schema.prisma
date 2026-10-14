@@ -181,6 +181,7 @@ model EmailAccount {
   draftReplyConfidence      DraftReplyConfidence @default(ALL_EMAILS)
   draftCleanupDays          Int?                 @default(14)
   allowHiddenAiDraftLinks   Boolean              @default(false)
+  webLookupEnabled          Boolean              @default(true)
   rulesRevision             Int                  @default(0)
 
   mailLayout          MailLayout @default(LIST)

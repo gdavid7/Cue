@@ -124,7 +124,7 @@ export async function suggestReply({
   threadId,
   emailProvider,
   logger,
-  searchWeb = false,
+  searchWeb: searchWebRequested = false,
   now = new Date(),
 }: {
   emailAccountId: string;
@@ -150,18 +150,22 @@ export async function suggestReply({
     return { status: "already-replied" };
   }
 
-  // Turning off "Auto draft replies" stops every AI-written reply, cached
-  // ones included.
-  const toReplyRule = await prisma.rule.findUnique({
-    where: {
-      emailAccountId_systemType: {
-        emailAccountId,
-        systemType: SystemType.TO_REPLY,
+  const settings = await prisma.emailAccount.findUnique({
+    where: { id: emailAccountId },
+    select: {
+      webLookupEnabled: true,
+      rules: {
+        where: { systemType: SystemType.TO_REPLY },
+        select: { enabled: true, actions: { select: { type: true } } },
       },
     },
-    select: { enabled: true, actions: { select: { type: true } } },
   });
-  if (!isDraftRepliesEnabled(toReplyRule)) return { status: "unavailable" };
+  // Turning off "Auto draft replies" stops every AI-written reply, cached
+  // ones included.
+  if (!isDraftRepliesEnabled(settings?.rules[0])) {
+    return { status: "unavailable" };
+  }
+  const searchWeb = searchWebRequested && Boolean(settings?.webLookupEnabled);
 
   // A new message changes the key, so a cached suggestion is never stale.
   const keyFor = { emailAccountId, threadId, messageId: latest.id };

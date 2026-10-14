@@ -14,6 +14,7 @@ import { SnippetsSetting } from "@/app/(app)/[emailAccountId]/assistant/settings
 import { MultiRuleSetting } from "@/app/(app)/[emailAccountId]/assistant/settings/MultiRuleSetting";
 import { SyncToExtensionSetting } from "@/app/(app)/[emailAccountId]/assistant/settings/SyncToExtensionSetting";
 import { WritingStyleSetting } from "@/app/(app)/[emailAccountId]/assistant/settings/WritingStyleSetting";
+import { WebLookupSetting } from "@/app/(app)/[emailAccountId]/assistant/settings/WebLookupSetting";
 import { SectionHeader } from "@/components/Typography";
 import { env } from "@/env";
 
@@ -61,6 +62,7 @@ export function SettingsTab() {
         {!env.NEXT_PUBLIC_SENSITIVE_DATA_POLICY_LOCKED && (
           <SensitiveDataPolicySetting />
         )}
+        <WebLookupSetting />
       </div>
     </div>
   );

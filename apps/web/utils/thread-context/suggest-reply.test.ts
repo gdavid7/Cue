@@ -280,9 +280,9 @@ describe("suggestReply when auto draft replies are off", () => {
       reply: "Sure, Friday works.",
       citations: [],
     });
-    prisma.rule.findUnique.mockResolvedValue({
-      enabled: true,
-      actions: [{ type: ActionType.LABEL }],
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      webLookupEnabled: true,
+      rules: [{ enabled: true, actions: [{ type: ActionType.LABEL }] }],
     } as never);
 
     const result = await suggestReply({
@@ -307,9 +307,9 @@ describe("suggestReply when auto draft replies are off", () => {
       thread: { id: "t2", messages: [latest], snippet: "" },
       items: [],
     });
-    prisma.rule.findUnique.mockResolvedValue({
-      enabled: false,
-      actions: [{ type: ActionType.DRAFT_EMAIL }],
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      webLookupEnabled: true,
+      rules: [{ enabled: false, actions: [{ type: ActionType.DRAFT_EMAIL }] }],
     } as never);
 
     const result = await suggestReply({
@@ -321,5 +321,42 @@ describe("suggestReply when auto draft replies are off", () => {
     });
 
     expect(result).toEqual({ status: "unavailable" });
+  });
+});
+
+describe("suggestReply when web lookup is off", () => {
+  it("answers from mail and calendar only, without searching the web", async () => {
+    const latest = getMockMessage({
+      id: "m3",
+      threadId: "t3",
+      from: "sarah@example.com",
+    });
+    collectThreadContext.mockResolvedValue({
+      thread: { id: "t3", messages: [latest], snippet: "" },
+      items: [],
+    });
+    const plain = {
+      status: "insufficient",
+      missing: "The venue's opening hours.",
+      unsupported: [],
+      webQuery: "venue opening hours",
+    };
+    cache.set("suggested-reply:v2:a1:t3:m3", plain);
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      webLookupEnabled: false,
+      rules: [{ enabled: true, actions: [{ type: ActionType.DRAFT_EMAIL }] }],
+    } as never);
+
+    const result = await suggestReply({
+      emailAccountId: "a1",
+      userEmail: "me@example.com",
+      threadId: "t3",
+      emailProvider: {} as EmailProvider,
+      logger: createScopedLogger("suggest-reply-test"),
+      searchWeb: true,
+    });
+
+    expect(result).toEqual(plain);
+    expect(getEmailAccountWithAi).not.toHaveBeenCalled();
   });
 });
