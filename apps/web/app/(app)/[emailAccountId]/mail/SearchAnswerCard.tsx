@@ -30,29 +30,35 @@ export function SearchAnswerCard({
 }) {
   const { data, isLoading, error } = useSearchAnswer(emailAccountId, query);
 
+  // "Nothing matched" is known at once; the answer may take seconds, so it
+  // loads above the message rather than hiding it.
+  const noMatches = noResults ? (
+    <div className="flex flex-col items-center gap-1 px-4 py-10 text-center">
+      <p className="text-muted-foreground text-sm" role="status">
+        No emails match “{query}”.
+      </p>
+      <Button
+        onClick={() => onContinueInChat(query)}
+        size="sm"
+        type="button"
+        variant="ghost"
+      >
+        Ask Cue in chat →
+      </Button>
+    </div>
+  ) : null;
+
   if (isLoading) {
     return (
-      <div className="border-border border-b px-4 py-3" role="status">
-        <p className="text-muted-foreground text-sm">Reading your mail…</p>
-      </div>
+      <>
+        <div className="border-border border-b px-4 py-3" role="status">
+          <p className="text-muted-foreground text-sm">Reading your mail…</p>
+        </div>
+        {noMatches}
+      </>
     );
   }
-  if (error || !data) {
-    if (!noResults) return null;
-    return (
-      <div className="flex flex-col items-center gap-1 px-4 py-10 text-center">
-        <p className="text-muted-foreground text-sm">No emails match.</p>
-        <Button
-          onClick={() => onContinueInChat(query)}
-          size="sm"
-          type="button"
-          variant="ghost"
-        >
-          Ask Cue in chat →
-        </Button>
-      </div>
-    );
-  }
+  if (error || !data) return noMatches;
 
   return (
     <section

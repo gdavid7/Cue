@@ -15,7 +15,10 @@ const swr = vi.hoisted(() => ({
 vi.mock("swr", () => ({ default: () => swr.result }));
 vi.mock("@/utils/swr", () => ({ getAccountScopedKey: (key: string) => key }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  swr.result = { data: undefined, isLoading: false, error: undefined };
+});
 
 describe("SearchAnswerCard", () => {
   it("offers to ask in chat, with the search, when nothing matches", () => {
@@ -29,7 +32,9 @@ describe("SearchAnswerCard", () => {
       />,
     );
 
-    expect(screen.getByText("No emails match.")).toBeTruthy();
+    expect(
+      screen.getByText("No emails match “when is the offsite”."),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Ask Cue in chat →" }));
     expect(onContinueInChat).toHaveBeenCalledWith("when is the offsite");
   });
@@ -45,5 +50,20 @@ describe("SearchAnswerCard", () => {
     );
 
     expect(container.textContent).toBe("");
+  });
+
+  it("says nothing matched while the answer is still being read", () => {
+    swr.result = { data: undefined, isLoading: true, error: undefined };
+    render(
+      <SearchAnswerCard
+        emailAccountId="account"
+        noResults
+        onContinueInChat={vi.fn()}
+        query="offsite"
+      />,
+    );
+
+    expect(screen.getByText("No emails match “offsite”.")).toBeTruthy();
+    expect(screen.getByText("Reading your mail…")).toBeTruthy();
   });
 });
