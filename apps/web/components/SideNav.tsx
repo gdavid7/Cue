@@ -41,7 +41,6 @@ import { SideNavMenu } from "@/components/SideNavMenu";
 import { env } from "@/env";
 import {
   useCleanerEnabled,
-  useIntegrationsEnabled,
   useMeetingBriefsEnabled,
   useMeetingRecorderEnabled,
 } from "@/hooks/useFeatureFlags";
@@ -78,7 +77,6 @@ export const useNavigation = () => {
   const showCleaner = useCleanerEnabled();
   const showMeetingBriefs = useMeetingBriefsEnabled();
   const showMeetingRecorder = useMeetingRecorderEnabled();
-  const showIntegrations = useIntegrationsEnabled();
   const { emailAccount, emailAccountId, provider } = useAccount();
   const currentEmailAccountId = emailAccount?.id || emailAccountId;
   const inboxHref = useMailHref()({ accountId: currentEmailAccountId });
@@ -161,16 +159,12 @@ export const useNavigation = () => {
               new: false,
             },
           ]),
-      ...(showIntegrations
-        ? [
-            {
-              name: "Integrations",
-              href: prefixPath(currentEmailAccountId, "/integrations"),
-              icon: ZapIcon,
-              keywords: ["connectors", "apps", "connect"],
-            },
-          ]
-        : []),
+      {
+        name: "Integrations",
+        href: prefixPath(currentEmailAccountId, "/integrations"),
+        icon: ZapIcon,
+        keywords: ["connectors", "apps", "connect"],
+      },
       ...(showChannels
         ? [
             {
@@ -221,7 +215,6 @@ export const useNavigation = () => {
       provider,
       showChannels,
       showCleaner,
-      showIntegrations,
       showMeetingBriefs,
     ],
   );

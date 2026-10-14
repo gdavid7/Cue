@@ -1,7 +1,8 @@
 "use client";
 
-import { type KeyboardEvent, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useState } from "react";
 import { toast } from "sonner";
+import { usePostHog } from "posthog-js/react";
 import { toastSuccess } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -28,10 +29,15 @@ import {
   type InboxStyle,
 } from "@/utils/split-inbox/inbox-styles";
 import { cn } from "@/utils";
+import { ONBOARDING_ANALYTICS_EVENTS } from "@/utils/analytics/product";
 
 const TITLE = "How should Cue split your inbox?";
 const REASSURANCE =
   "Cue adds matching tabs. Nothing in your mailbox is labelled or moved.";
+// The first-run card leads with Cue's own tabs, the part that shows the work.
+const CARD_TITLE = "Let Cue find what needs you";
+const CARD_REASSURANCE =
+  "Cue adds tabs inside Cue. Nothing in your mailbox is labelled or moved.";
 
 const STYLE_COPY: Record<
   InboxStyle,
@@ -69,6 +75,7 @@ export function InboxStyleCard({
 }) {
   const { emailAccountId, provider } = useAccount();
   const { data: user, mutate: mutateUser } = useUser();
+  const posthog = usePostHog();
   const [chosen, setChosen] = useState<InboxStyle | null>(null);
   const [addCueTabs, setAddCueTabs] = useState(true);
   const [isClosed, setIsClosed] = useState(false);
@@ -97,6 +104,11 @@ export function InboxStyleCard({
   // "Not now" is not a decision: the card returns next session, and the
   // same choice stays in the split library meanwhile.
   function snooze() {
+    posthog?.capture(ONBOARDING_ANALYTICS_EVENTS.setupChoice, {
+      action: "not_now",
+      style,
+      cue_tabs: addCueTabs,
+    });
     setIsClosed(true);
     try {
       sessionStorage.setItem(hintId, "snoozed");
@@ -111,20 +123,24 @@ export function InboxStyleCard({
       className="mx-3 my-2 shrink-0 rounded-xl border border-border bg-card p-3 shadow-sm"
     >
       <h2 id="inbox-style-title" className="font-medium text-sm">
-        {TITLE}
+        {CARD_TITLE}
       </h2>
-      <p className="mt-0.5 text-muted-foreground text-xs">{REASSURANCE}</p>
+      <p className="mt-0.5 text-muted-foreground text-xs">{CARD_REASSURANCE}</p>
+      <CueTabsCheckbox
+        id="inbox-style-cue-tabs"
+        className="mt-3 rounded-lg border border-border p-2 text-sm"
+        checked={addCueTabs}
+        onCheckedChange={setAddCueTabs}
+        label="Needs reply and Reading tabs."
+      />
+      <h3 className="mt-3 text-muted-foreground text-xs">
+        Keep a familiar layout
+      </h3>
       <InboxStyleOptions
-        className="mt-3"
+        className="mt-1.5"
         options={options}
         value={style}
         onChange={setChosen}
-      />
-      <CueTabsCheckbox
-        id="inbox-style-cue-tabs"
-        className="mt-3"
-        checked={addCueTabs}
-        onCheckedChange={setAddCueTabs}
       />
       <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
         <Button
@@ -138,9 +154,16 @@ export function InboxStyleCard({
         <Button
           size="xs-2"
           loading={isApplying}
-          onClick={() => apply({ style, addCueTabs })}
+          onClick={() => {
+            posthog?.capture(ONBOARDING_ANALYTICS_EVENTS.setupChoice, {
+              action: "apply",
+              style,
+              cue_tabs: addCueTabs,
+            });
+            apply({ style, addCueTabs });
+          }}
         >
-          Use this
+          Set up my inbox
         </Button>
       </div>
       <RegistrationConversion />
@@ -180,8 +203,14 @@ export function InboxStyleDialog({
         />
         <CueTabsCheckbox
           id="inbox-style-dialog-cue-tabs"
+          className="text-xs"
           checked={addCueTabs}
           onCheckedChange={setAddCueTabs}
+          label={
+            <>
+              Also add &ldquo;Needs reply&rdquo; and &ldquo;Reading&rdquo; tabs.
+            </>
+          }
         />
         <DialogFooter>
           <Button
@@ -200,18 +229,20 @@ function CueTabsCheckbox({
   id,
   checked,
   onCheckedChange,
+  label,
   className,
 }: {
   id: string;
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
+  label: ReactNode;
   className?: string;
 }) {
   return (
     <label
       htmlFor={id}
       className={cn(
-        "flex cursor-pointer items-start gap-2 text-xs sm:max-w-md",
+        "flex cursor-pointer items-start gap-2 sm:max-w-md",
         className,
       )}
     >
@@ -222,8 +253,8 @@ function CueTabsCheckbox({
         onCheckedChange={(value) => onCheckedChange(value === true)}
       />
       <span>
-        Also add &ldquo;Needs reply&rdquo; and &ldquo;Reading&rdquo; tabs.{" "}
-        <span className="text-muted-foreground">
+        <span className="font-medium">{label}</span>{" "}
+        <span className="text-muted-foreground text-xs">
           Needs reply holds mail waiting on your answer; Reading holds
           newsletters and promotions. Cue sorts them itself.
         </span>
@@ -246,12 +277,7 @@ function useApplyInboxStyle(onApplied: () => void) {
       return;
     }
     await mutateSettings();
-    toastSuccess({
-      description:
-        STYLE_COPY[input.style].tabCount > 0 || input.addCueTabs
-          ? "Tabs added"
-          : "Saved. Your mail stays in one inbox.",
-    });
+    toastSuccess({ description: getAppliedMessage(input) });
     onApplied();
   };
 
@@ -372,6 +398,13 @@ const ARROW_STEPS: Record<string, number> = {
   ArrowLeft: -1,
   ArrowUp: -1,
 };
+
+function getAppliedMessage(input: ApplyInboxStyleBody) {
+  if (input.addCueTabs)
+    return "Tabs added. Needs reply fills in over the next minute.";
+  if (STYLE_COPY[input.style].tabCount > 0) return "Tabs added";
+  return "Saved. Your mail stays in one inbox.";
+}
 
 function isSnoozedThisSession(hintId: string) {
   try {

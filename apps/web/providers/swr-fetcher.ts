@@ -4,7 +4,7 @@ import {
   MICROSOFT_AUTH_EXPIRED_ERROR_CODE,
   NO_REFRESH_TOKEN_ERROR_CODE,
 } from "@/utils/config";
-import { prefixPath } from "@/utils/path";
+import { getPermissionsConsentPath } from "@/utils/permissions-consent";
 import {
   getSWRFetchErrorMessage,
   normalizeSWRFetchErrorData,
@@ -65,7 +65,9 @@ export const swrFetcher = async (
         });
 
         console.log(`${errorMessage}, redirecting to consent page...`);
-        const redirectUrl = prefixPath(emailAccountId, "/permissions/consent");
+        const redirectUrl = getPermissionsConsentPath(emailAccountId, {
+          expired: true,
+        });
         redirectToSafeUrl(redirectUrl);
         return;
       }

@@ -18,8 +18,13 @@ import {
 import prisma from "@/utils/__mocks__/prisma";
 import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
 
-const { mockAfter } = vi.hoisted(() => ({
+const { mockAfter, mockAssertSignUpAllowed } = vi.hoisted(() => ({
   mockAfter: vi.fn(),
+  mockAssertSignUpAllowed: vi.fn(),
+}));
+
+vi.mock("@/utils/access/policy", () => ({
+  assertSignUpAllowed: mockAssertSignUpAllowed,
 }));
 
 vi.mock("better-auth", () => {
@@ -154,6 +159,26 @@ describe("betterAuthConfig", () => {
           image: "data:image/jpeg;base64,AAAA",
         }),
       ).resolves.toEqual({ data: { image: null } });
+    });
+
+    // The policy refuses providers whose email claim doesn't prove the
+    // address, so the hook must say which provider is signing up.
+    it("tells the access gate which provider is signing up", async () => {
+      await userHooks().create.before(
+        {
+          email: "friend@gmail.com",
+          name: "Friend",
+          emailVerified: false,
+        },
+        { path: "/callback/:id", params: { id: "microsoft" } },
+      );
+
+      expect(mockAssertSignUpAllowed).toHaveBeenCalledWith({
+        email: "friend@gmail.com",
+        name: "Friend",
+        provider: "microsoft",
+        emailVerified: false,
+      });
     });
 
     it("keeps a remote image url", async () => {

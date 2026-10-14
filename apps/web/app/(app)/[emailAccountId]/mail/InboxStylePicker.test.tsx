@@ -34,7 +34,7 @@ vi.mock("@/hooks/useMailSettings", () => ({
 }));
 vi.mock("@/hooks/useSignupEvent", () => ({ useSignUpEvent: () => undefined }));
 
-const CARD = { name: "How should Cue split your inbox?" };
+const CARD = { name: "Let Cue find what needs you" };
 
 describe("InboxStyleCard", () => {
   afterEach(() => {
@@ -70,11 +70,29 @@ describe("InboxStyleCard", () => {
     const onDone = vi.fn();
     render(<InboxStyleCard ready onDone={onDone} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Use this" }));
+    fireEvent.click(screen.getByRole("button", { name: "Set up my inbox" }));
 
     await waitFor(() => expect(onDone).toHaveBeenCalledOnce());
-    expect(mocks.toastSuccess).toHaveBeenCalledOnce();
+    expect(mocks.applyInboxStyleAction).toHaveBeenCalledWith(
+      "account-1",
+      expect.objectContaining({ addCueTabs: true }),
+    );
+    expect(mocks.toastSuccess).toHaveBeenCalledWith({
+      description: "Tabs added. Needs reply fills in over the next minute.",
+    });
     expect(mocks.dismissHintAction).toHaveBeenCalledOnce();
+  });
+
+  it("leads with Cue's own tabs, before the familiar layouts", () => {
+    render(<InboxStyleCard ready onDone={vi.fn()} />);
+    const cueTabs = screen.getByRole("checkbox", { name: /Needs reply/ });
+    const [firstStyle] = screen.getAllByRole("radio");
+
+    expect(cueTabs.getAttribute("aria-checked")).toBe("true");
+    expect(
+      cueTabs.compareDocumentPosition(firstStyle) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("moves between styles with the arrow keys", () => {

@@ -20,7 +20,7 @@ test(`${playwrightMailProvider} emulator signs in and creates an app account`, a
     waitUntil: "domcontentloaded",
   });
   await expect(
-    page.getByRole("heading", { name: "Sign in or create an account" }),
+    page.getByRole("heading", { name: "The better email." }),
   ).toBeVisible();
 
   const signInPayload = await page.evaluate(async (provider) => {
@@ -101,10 +101,15 @@ async function markOnboardingComplete(email: string) {
           [email],
         );
         if (account.rowCount === 1) {
-          // The first-run "How should Cue split your inbox?" card and the "Remove
-          // Cue's labels" card (hint ids from getInboxStyleHintId and
-          // getCueLabelsHintId) would shift every mail spec's list down.
-          for (const prefix of ["inbox-style:", "cue-labels:"]) {
+          // The first-run "Let Cue find what needs you" card, the "Remove
+          // Cue's labels" card and the one-time pointer to Today (hint ids
+          // from getInboxStyleHintId, getCueLabelsHintId and
+          // getTodayIntroHintId) would shift every mail spec's list down.
+          for (const prefix of [
+            "inbox-style:",
+            "cue-labels:",
+            "today-intro:",
+          ]) {
             await client.query(
               `UPDATE "User" u
                SET "dismissedHints" = array_append(u."dismissedHints", $2::text || ea.id)

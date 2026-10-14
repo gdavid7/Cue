@@ -51,7 +51,7 @@ test("exposes engine diagnostics after metadata coverage", async ({
   expect(inspect.coverageComplete).toBe(true);
   await expect(
     page.getByRole("heading", {
-      name: "Reconnect this account to keep getting mail",
+      name: "Sign in again to reconnect Gmail",
     }),
   ).toHaveCount(0);
 });
@@ -153,7 +153,7 @@ test("opens account reconnect from blocked_auth catch-up", async ({
   });
   await expect(
     page.getByRole("heading", {
-      name: "Reconnect this account to keep getting mail",
+      name: "Sign in again to reconnect Gmail",
     }),
   ).toBeVisible({ timeout: 60_000 });
   expect(changeRequests).toBeGreaterThan(0);
@@ -185,7 +185,7 @@ test("opens account reconnect from blocked_auth catch-up", async ({
   await page.route("**/api/google/linking/auth-url**", fulfillReconnect);
   await page.route("**/api/outlook/linking/auth-url**", fulfillReconnect);
   await capturePlaywrightCheckpoint(page, testInfo, "mail-engine-blocked-auth");
-  await page.getByRole("button", { name: "Reconnect" }).click();
+  await page.getByRole("button", { name: "Sign in again" }).click();
   // The old address redirects to the readable one, keeping the query.
   await expect(page).toHaveURL(/\/mail\/u\/\d+\/inbox\?reconnect=blocked$/);
 });

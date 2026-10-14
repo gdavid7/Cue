@@ -82,6 +82,8 @@ const parsedEnv = createEnv({
           .map((entry) => entry.trim())
           .filter(Boolean),
       ),
+    // Closes sign-up to anyone not approved on /admin/access.
+    AUTH_WAITLIST_ENABLED: booleanString.optional().default(false),
     GOOGLE_CLIENT_ID: z.string().min(1),
     GOOGLE_CLIENT_SECRET: z.string().min(1),
     // Local Google emulation only; used for both OAuth and resource APIs.
@@ -505,7 +507,6 @@ const parsedEnv = createEnv({
     NEXT_PUBLIC_MEETING_RECORDER_ENABLED: booleanString.optional(),
     NEXT_PUBLIC_VOICE_ENABLED: booleanString.optional(),
     NEXT_PUBLIC_FOLLOW_UP_REMINDERS_ENABLED: booleanString.optional(),
-    NEXT_PUBLIC_INTEGRATIONS_ENABLED: booleanString.optional(),
     NEXT_PUBLIC_TEAMS_ENABLED: booleanString.optional(),
     NEXT_PUBLIC_SMART_FILING_ENABLED: booleanString.optional(),
     NEXT_PUBLIC_CLEANER_ENABLED: booleanString.optional(),
@@ -617,8 +618,6 @@ const parsedEnv = createEnv({
     NEXT_PUBLIC_VOICE_ENABLED: process.env.NEXT_PUBLIC_VOICE_ENABLED,
     NEXT_PUBLIC_FOLLOW_UP_REMINDERS_ENABLED:
       process.env.NEXT_PUBLIC_FOLLOW_UP_REMINDERS_ENABLED,
-    NEXT_PUBLIC_INTEGRATIONS_ENABLED:
-      process.env.NEXT_PUBLIC_INTEGRATIONS_ENABLED,
     NEXT_PUBLIC_TEAMS_ENABLED: process.env.NEXT_PUBLIC_TEAMS_ENABLED,
     NEXT_PUBLIC_SMART_FILING_ENABLED:
       process.env.NEXT_PUBLIC_SMART_FILING_ENABLED,

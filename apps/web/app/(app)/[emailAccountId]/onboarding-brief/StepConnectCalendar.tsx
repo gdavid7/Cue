@@ -25,7 +25,7 @@ export function StepConnectCalendar({ onNext }: { onNext: () => void }) {
       </div>
 
       <div className="text-center">
-        <PageHeading className="mt-4">Connect Your Calendar</PageHeading>
+        <PageHeading className="mt-4">Connect your calendar</PageHeading>
         <TypographyP className="mt-2 max-w-lg mx-auto">
           We'll automatically detect your upcoming meetings with external guests
           and prepare personalized briefings.
@@ -35,9 +35,9 @@ export function StepConnectCalendar({ onNext }: { onNext: () => void }) {
       <div className="flex flex-col items-center justify-center mt-8 gap-4">
         {hasCalendarConnected ? (
           <>
-            <div className="flex items-center gap-2 text-green-600 dark:text-green-400 font-medium animate-in fade-in zoom-in duration-300">
+            <div className="flex items-center gap-2 font-medium text-green-600 dark:text-green-400">
               <CheckIcon className="h-5 w-5" />
-              Calendar Connected!
+              Calendar connected
             </div>
             <Button onClick={onNext} className="mt-2">
               Continue

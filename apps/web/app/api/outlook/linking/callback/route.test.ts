@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
+import { env } from "@/env";
 
 const {
   mockValidateOAuthCallback,
@@ -301,6 +302,56 @@ describe("outlook linking callback route", () => {
       accountId: "account-123",
       logger: expect.anything(),
     });
+  });
+
+  // Parallel auth URLs all pass the check there, so each callback checks again
+  // right before it adds the mailbox.
+  it("refuses a new mailbox past the beta cap when the callback runs", async () => {
+    Object.assign(env, { AUTH_WAITLIST_ENABLED: true });
+    mockHandleAccountLinking.mockResolvedValue({ type: "continue_create" });
+    prisma.emailAccount.count.mockResolvedValue(3);
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            access_token: "access-token",
+            refresh_token: "refresh-token",
+            id_token: createIdToken({
+              oid: "entra-object-id",
+              sub: "better-auth-subject",
+            }),
+            scope: "Mail.ReadWrite Mail.Send MailboxSettings.ReadWrite",
+            token_type: "Bearer",
+            expires_in: 3600,
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            id: "provider-account-id",
+            userPrincipalName: "user@example.com",
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ sub: "better-auth-subject" }),
+        })
+        .mockResolvedValue({ ok: false }),
+    );
+
+    try {
+      const response = await GET(
+        createRequest("http://localhost:3000/api/outlook/linking/callback"),
+      );
+
+      expect(response.headers.get("location")).toContain("error=mailbox_limit");
+      expect(prisma.account.create).not.toHaveBeenCalled();
+    } finally {
+      Object.assign(env, { AUTH_WAITLIST_ENABLED: undefined });
+    }
   });
 
   it("redirects with admin_consent_required when Microsoft returns an AADSTS65001 callback error", async () => {

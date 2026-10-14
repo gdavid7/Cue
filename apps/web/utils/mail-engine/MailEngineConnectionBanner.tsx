@@ -19,7 +19,7 @@ export const MailEngineConnectionBanner = memo(
       "ready" | "offline" | "blocked_auth" | undefined
     >();
     const [reconnecting, setReconnecting] = useState(false);
-    const copy = mailEngineConnectionCopy(connection);
+    const copy = mailEngineConnectionCopy(connection, provider);
 
     useEffect(() => {
       if (!client || !emailAccountId) {

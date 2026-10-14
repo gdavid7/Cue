@@ -1,4 +1,6 @@
+import Link from "next/link";
 import { env } from "@/env";
+import { Button } from "@/components/ui/button";
 import { AdminScimCredentials } from "@/app/(app)/admin/AdminScimCredentials";
 import { AdminUpgradeUserForm } from "@/app/(app)/admin/AdminUpgradeUserForm";
 import { AdminUserControls } from "@/app/(app)/admin/AdminUserControls";
@@ -36,7 +38,12 @@ export default async function AdminPage() {
 
   return (
     <PageWrapper>
-      <PageHeader title="Admin" />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <PageHeader title="Admin" />
+        <Button asChild variant="outline" size="sm">
+          <Link href="/admin/access">Access requests</Link>
+        </Button>
+      </div>
 
       <div className="space-y-8 mt-4 mb-20">
         <AdminUpgradeUserForm />

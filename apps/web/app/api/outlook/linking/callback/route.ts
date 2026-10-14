@@ -11,6 +11,8 @@ import {
   handleAccountLinking,
 } from "@/utils/oauth/account-linking";
 import { isReconnectTargetMismatch } from "@/utils/oauth/reconnect-target";
+import { isOverMailboxLimit } from "@/utils/access/mailbox-limit";
+import { MAILBOX_LIMIT_ERROR } from "@/utils/access/config";
 import { createAccountLinkingRedirect } from "@/utils/oauth/account-linking-redirect";
 import { mergeAccount } from "@/utils/user/merge-account";
 import { handleOAuthCallbackError } from "@/utils/oauth/error-handler";
@@ -292,6 +294,16 @@ export const GET = withError("outlook/linking/callback", async (request) => {
     }
 
     if (linkingResult.type === "continue_create") {
+      if (await isOverMailboxLimit({ userId: targetUserId })) {
+        logger.warn("Mailbox link refused: beta mailbox limit reached", {
+          targetUserId,
+        });
+        return createAccountLinkingRedirect({
+          query: { error: MAILBOX_LIMIT_ERROR },
+          stateCookieName: OUTLOOK_LINKING_STATE_COOKIE_NAME,
+        });
+      }
+
       logger.info(
         "Creating new Microsoft account and linking to current user",
         {
@@ -429,6 +441,16 @@ export const GET = withError("outlook/linking/callback", async (request) => {
         logger,
         providerEmail,
         providerAccountId,
+      });
+    }
+
+    if (await isOverMailboxLimit({ userId: targetUserId })) {
+      logger.warn("Mailbox link refused: beta mailbox limit reached", {
+        targetUserId,
+      });
+      return createAccountLinkingRedirect({
+        query: { error: MAILBOX_LIMIT_ERROR },
+        stateCookieName: OUTLOOK_LINKING_STATE_COOKIE_NAME,
       });
     }
 

@@ -28,6 +28,8 @@ export type SplitTabsProps = {
   activeSplitId: string | null;
   /** Unread conversations in each split. Missing entries and zeros stay blank. */
   countsById?: ReadonlyMap<string, number>;
+  /** Every conversation in each split, read by the first-run tour. */
+  matchingById?: ReadonlyMap<string, number>;
   onSelect: (splitId: string) => void;
   onDelete: (splitId: string) => void;
   onEdit?: (splitId: string) => void;
@@ -44,6 +46,7 @@ export function SplitTabs({
   splits,
   activeSplitId,
   countsById,
+  matchingById,
   onSelect,
   onDelete,
   onEdit,
@@ -112,6 +115,7 @@ export function SplitTabs({
                     type="button"
                     ref={active ? activeTabRef : undefined}
                     data-split-tab
+                    data-split-matching={matchingById?.get(split.id)}
                     onClick={() => onSelect(split.id)}
                     // The count sits in this button, so innerText includes it.
                     // The accessible name stays the tab itself.

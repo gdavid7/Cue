@@ -1,6 +1,10 @@
 "use client";
 
 import { useAction } from "next-safe-action/hooks";
+import {
+  MAILBOX_LIMIT_ERROR,
+  MAILBOX_LIMIT_MESSAGE,
+} from "@/utils/access/config";
 import Link from "next/link";
 import { InboxIcon, Trash2, MoreVertical } from "lucide-react";
 import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
@@ -341,6 +345,11 @@ function getAccountErrorMessage(
         "You signed in with a different account than the one you were reconnecting. Sign out of that provider, or pick the original account, and try again.",
       toastDescription:
         "You signed in with a different account than the one you were reconnecting. Sign out of that provider, or pick the original account, and try again.",
+    },
+    [MAILBOX_LIMIT_ERROR]: {
+      title: "Mailbox limit reached",
+      description: MAILBOX_LIMIT_MESSAGE,
+      toastDescription: MAILBOX_LIMIT_MESSAGE,
     },
     already_linked_to_self: {
       title: "Account already linked",

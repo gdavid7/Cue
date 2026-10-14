@@ -2909,3 +2909,26 @@ model LoopsEmailSource {
   @@index([loopId])
   @@index([campaignId])
 }
+
+enum AccessRequestStatus {
+  PENDING
+  APPROVED
+  DECLINED
+}
+
+// The private-beta waitlist. Approval belongs to one email address, which
+// Google proves at sign-in, so there is nothing to pass on to someone else.
+model AccessRequest {
+  id         String              @id @default(cuid())
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+  email      String              @unique // trimmed and lowercased
+  name       String?
+  source     String // "form" | "google_sign_in" | "admin" | "existing_user"
+  status     AccessRequestStatus @default(PENDING)
+  decidedAt  DateTime?
+  decidedBy  String?
+  notifiedAt DateTime?
+
+  @@index([status, createdAt])
+}

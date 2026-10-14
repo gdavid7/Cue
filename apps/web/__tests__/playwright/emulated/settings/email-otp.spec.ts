@@ -39,7 +39,9 @@ test("an assistant signs in after owner opt-in and loses access when it is disab
       path: test.info().outputPath("login-options.png"),
       fullPage: true,
     });
-    await assistantPage.getByRole("link", { name: "Other options" }).click();
+    await assistantPage
+      .getByRole("link", { name: "Other sign-in options" })
+      .click();
     await expect(
       assistantPage.getByRole("link", {
         name: "Email code (existing accounts)",
@@ -139,7 +141,7 @@ test("email code login does not disclose account existence", async ({
 }) => {
   await page.context().clearCookies();
   await page.goto("/login");
-  await page.getByRole("link", { name: "Other options" }).click();
+  await page.getByRole("link", { name: "Other sign-in options" }).click();
   await page
     .getByRole("link", { name: "Email code (existing accounts)", exact: true })
     .click();

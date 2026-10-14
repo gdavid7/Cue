@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { usePostHog } from "posthog-js/react";
 import { useState } from "react";
-import { Button } from "@/components/Button";
 import { Button as UIButton } from "@/components/ui/button";
 import { signIn, signInWithSocialRedirect } from "@/utils/auth-client";
 import {
@@ -30,11 +29,15 @@ export function LoginForm({
   enabledProviders,
   useGoogleOauthEmulator,
   otherOptions = false,
+  emphasis = "primary",
 }: {
   enabledProviders: readonly LoginProvider[];
   useGoogleOauthEmulator: boolean;
   otherOptions?: boolean;
+  // "secondary" when requesting access is the main action on the page.
+  emphasis?: "primary" | "secondary";
 }) {
+  const providerButtonVariant = emphasis === "primary" ? "default" : "outline";
   const posthog = usePostHog();
   const searchParams = useSearchParams();
   const next = searchParams?.get("next");
@@ -108,39 +111,31 @@ export function LoginForm({
   };
 
   return (
-    <div className="flex flex-col justify-center gap-2 px-4">
+    <div className="flex flex-col justify-center gap-2">
       {showGoogleLogin ? (
-        <Button size="2xl" loading={loadingGoogle} onClick={handleGoogleSignIn}>
-          <span className="flex items-center justify-center">
-            <Image
-              src="/images/google.svg"
-              alt="Google"
-              width={24}
-              height={24}
-              unoptimized
-            />
-            <span className="ml-2">Continue with Google</span>
-          </span>
-        </Button>
+        <UIButton
+          size="lg"
+          variant={providerButtonVariant}
+          className="w-full px-4"
+          loading={loadingGoogle}
+          onClick={handleGoogleSignIn}
+        >
+          <ProviderIcon src="/images/google.svg" />
+          Continue with Google
+        </UIButton>
       ) : null}
 
       {showMicrosoftLogin ? (
-        <Button
-          size="2xl"
+        <UIButton
+          size="lg"
+          variant={providerButtonVariant}
+          className="w-full px-4"
           loading={loadingMicrosoft}
           onClick={handleMicrosoftSignIn}
         >
-          <span className="flex items-center justify-center">
-            <Image
-              src="/images/microsoft.svg"
-              alt="Microsoft"
-              width={24}
-              height={24}
-              unoptimized
-            />
-            <span className="ml-2">Continue with Microsoft</span>
-          </span>
-        </Button>
+          <ProviderIcon src="/images/microsoft.svg" />
+          Continue with Microsoft
+        </UIButton>
       ) : null}
 
       {showAppleLogin ? (
@@ -194,11 +189,19 @@ export function LoginForm({
           <Link
             href={buildRedirectUrl("/login/options", { next: callbackURL })}
           >
-            Other options
+            Other sign-in options
           </Link>
         </UIButton>
       )}
     </div>
+  );
+}
+
+function ProviderIcon({ src }: { src: string }) {
+  return (
+    <span className="mr-2 flex size-6 items-center justify-center rounded-full bg-white">
+      <Image src={src} alt="" width={18} height={18} unoptimized />
+    </span>
   );
 }
 

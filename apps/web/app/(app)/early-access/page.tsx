@@ -87,21 +87,6 @@ export default function RequestAccessPage() {
             </Card> */}
           </>
         )}
-        <Card>
-          <CardHeader>
-            <CardTitle>Early access</CardTitle>
-            <CardDescription>
-              Give us feedback on what features you want to see.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button asChild>
-              <Link href="/waitlist" target="_blank">
-                Feedback Form
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
       </div>
     </div>
   );
