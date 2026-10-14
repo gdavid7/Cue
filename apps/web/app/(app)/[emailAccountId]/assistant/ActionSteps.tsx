@@ -1626,7 +1626,7 @@ function VariableProTip() {
     <div className="mt-4 rounded-md bg-blue-50 p-3 dark:bg-blue-950/30">
       <div className="flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400">
         <span>
-          ✨ Use {"{{"}variables{"}}"} for personalized content
+          Use {"{{"}variables{"}}"} for personalized content
         </span>
         <VariableExamplesDialog />
       </div>
