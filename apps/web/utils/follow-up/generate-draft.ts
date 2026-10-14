@@ -100,7 +100,6 @@ export async function generateFollowUpDraft({
     const draftContent = await buildDraftReplyBody({
       text: result,
       emailAccountId: emailAccount.id,
-      userId: emailAccount.userId,
     });
 
     const { draftId } = await provider.draftEmail(

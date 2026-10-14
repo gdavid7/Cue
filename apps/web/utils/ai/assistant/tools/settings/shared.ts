@@ -239,7 +239,6 @@ export type AccountSettingsSnapshot = {
   filingPrompt: string | null;
   writingStyle: string | null;
   signature: string | null;
-  includeReferralSignature: boolean;
   followUpAwaitingReplyDays: number | null;
   followUpNeedsReplyDays: number | null;
   followUpAutoDraftEnabled: boolean;
@@ -318,7 +317,6 @@ const accountSettingsSnapshotRawSelect = {
   filingPrompt: true,
   writingStyle: true,
   signature: true,
-  includeReferralSignature: true,
   followUpAwaitingReplyDays: true,
   followUpNeedsReplyDays: true,
   followUpAutoDraftEnabled: true,
@@ -435,12 +433,6 @@ const readOnlyCapabilities = [
   {
     path: "assistant.signature",
     title: "Personal signature",
-    reason:
-      "Readable in chat, but writes are not yet exposed through updateAssistantSettings.",
-  },
-  {
-    path: "assistant.referralSignature.enabled",
-    title: "Referral signature",
     reason:
       "Readable in chat, but writes are not yet exposed through updateAssistantSettings.",
   },
@@ -920,8 +912,6 @@ function getReadOnlyValue({
       return snapshot.writingStyle;
     case "assistant.signature":
       return snapshot.signature;
-    case "assistant.referralSignature.enabled":
-      return snapshot.includeReferralSignature;
     case "assistant.followUp.awaitingReplyDays":
       return snapshot.followUpAwaitingReplyDays;
     case "assistant.followUp.needsReplyDays":
@@ -1186,7 +1176,6 @@ export async function loadAccountSettingsSnapshot(emailAccountId: string) {
     filingPrompt: emailAccount.filingPrompt,
     writingStyle: emailAccount.writingStyle,
     signature: emailAccount.signature,
-    includeReferralSignature: emailAccount.includeReferralSignature,
     followUpAwaitingReplyDays: emailAccount.followUpAwaitingReplyDays,
     followUpNeedsReplyDays: emailAccount.followUpNeedsReplyDays,
     followUpAutoDraftEnabled: emailAccount.followUpAutoDraftEnabled,

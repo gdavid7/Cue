@@ -115,7 +115,6 @@ describe.runIf(shouldRunEval)("Eval: assistant chat memory safety", () => {
       filingPrompt: null,
       writingStyle: null,
       signature: null,
-      includeReferralSignature: false,
       followUpAwaitingReplyDays: null,
       followUpNeedsReplyDays: null,
       followUpAutoDraftEnabled: false,

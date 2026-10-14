@@ -2,7 +2,9 @@ import { createMCPClient } from "@ai-sdk/mcp";
 import {
   CUSTOM_INTEGRATION_PREFIX,
   resolveMcpIntegration,
+  type ResolvedMcpIntegration,
 } from "@/utils/mcp/resolve-integration";
+import { syncMcpTools } from "@/utils/mcp/sync-tools";
 import prisma from "@/utils/prisma";
 import { createScopedLogger, type Logger } from "@/utils/logger";
 import { createMcpTransport } from "@/utils/mcp/transport";
@@ -21,6 +23,9 @@ const MCP_TOOL_CALL_TIMEOUT_MS = 15_000;
 // A list call (e.g. every record in a table) can be far bigger than the model
 // needs or its context fits.
 const MAX_TOOL_RESULT_CHARS = 20_000;
+
+// Connections with a tool re-sync under way in this process
+const resyncing = new Set<string>();
 
 export type MCPToolsResult = {
   tools: Record<string, unknown>;
@@ -54,11 +59,9 @@ export async function createMcpToolsForAgent(
             name: true,
           },
         },
+        // Every stored tool, so an out-of-date tool list can be noticed
         tools: {
-          where: { isEnabled: true, isWrite: false },
-          select: {
-            name: true,
-          },
+          select: { name: true, isEnabled: true, isWrite: true },
         },
       },
       orderBy: { createdAt: "asc" },
@@ -128,9 +131,25 @@ export async function createMcpToolsForAgent(
               const mcpTools = await mcpClient.tools();
 
               // Filter to only enabled tools
-              const enabledToolNames = connection.tools.map(
-                (tool) => tool.name,
-              );
+              const enabledToolNames = connection.tools
+                .filter((tool) => tool.isEnabled && !tool.isWrite)
+                .map((tool) => tool.name);
+
+              if (
+                isToolListOutdated(
+                  integrationConfig,
+                  Object.keys(mcpTools),
+                  connection.tools.map((tool) => tool.name),
+                )
+              ) {
+                resyncTools(
+                  connection.id,
+                  integration.name,
+                  connectionAccountId,
+                  logger,
+                );
+              }
+
               const filteredTools = Object.fromEntries(
                 Object.entries(mcpTools)
                   .filter(([toolName]) => enabledToolNames.includes(toolName))
@@ -320,6 +339,49 @@ function truncationNote(total: number) {
     type: "text",
     text: `[Result truncated: showing the first ${MAX_TOOL_RESULT_CHARS} of ${total} characters.]`,
   };
+}
+
+/**
+ * Tools are stored at connect time, so a later change to a curated allowlist
+ * would never reach existing connections. The server's live list shows when
+ * an allowed tool is missing from the stored ones, or a stored one is no
+ * longer allowed.
+ */
+function isToolListOutdated(
+  integration: ResolvedMcpIntegration,
+  liveToolNames: string[],
+  storedToolNames: string[],
+) {
+  if (integration.isCustom || !integration.allowedTools) return false;
+
+  const curated = new Set([
+    ...integration.allowedTools,
+    ...(integration.ruleActionWriteTools ?? []),
+  ]);
+  const stored = new Set(storedToolNames);
+  return (
+    liveToolNames.some((name) => curated.has(name) && !stored.has(name)) ||
+    storedToolNames.some((name) => !curated.has(name))
+  );
+}
+
+/**
+ * Refreshes the stored tools in the background, keeping the user's on/off
+ * choices; this run goes ahead with what is stored.
+ */
+function resyncTools(
+  connectionId: string,
+  integrationName: string,
+  emailAccountId: string,
+  logger: Logger,
+) {
+  if (resyncing.has(connectionId)) return;
+  resyncing.add(connectionId);
+
+  syncMcpTools(integrationName, emailAccountId, logger)
+    // syncMcpTools logs its own failure; the next run tries again
+    .catch(() => {})
+    .finally(() => resyncing.delete(connectionId));
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

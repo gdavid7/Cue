@@ -2,14 +2,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
 import { createMcpToolsForAgent } from "./mcp-tools";
 
-const { mockCreateMCPClient, mockGetAuthToken, mockCreateMcpTransport } =
-  vi.hoisted(() => ({
-    mockCreateMCPClient: vi.fn(),
-    mockGetAuthToken: vi.fn(),
-    mockCreateMcpTransport: vi.fn(),
-  }));
+const {
+  mockCreateMCPClient,
+  mockGetAuthToken,
+  mockCreateMcpTransport,
+  mockSyncMcpTools,
+} = vi.hoisted(() => ({
+  mockCreateMCPClient: vi.fn(),
+  mockGetAuthToken: vi.fn(),
+  mockCreateMcpTransport: vi.fn(),
+  mockSyncMcpTools: vi.fn(),
+}));
 
 vi.mock("@/utils/prisma");
+
+vi.mock("@/utils/mcp/sync-tools", () => ({
+  syncMcpTools: mockSyncMcpTools,
+}));
 
 vi.mock("@ai-sdk/mcp", () => ({
   createMCPClient: mockCreateMCPClient,
@@ -27,7 +36,7 @@ type ConnectionRow = {
   id: string;
   emailAccountId?: string;
   integration: { id: string; name: string };
-  tools: { name: string }[];
+  tools: { name: string; isEnabled?: boolean; isWrite?: boolean }[];
 };
 
 function mockConnections(connections: ConnectionRow[]) {
@@ -35,6 +44,11 @@ function mockConnections(connections: ConnectionRow[]) {
     connections.map((connection) => ({
       emailAccountId: "email-account-1",
       ...connection,
+      tools: connection.tools.map((tool) => ({
+        isEnabled: true,
+        isWrite: false,
+        ...tool,
+      })),
     })) as unknown as Awaited<ReturnType<typeof prisma.mcpConnection.findMany>>,
   );
 }
@@ -42,6 +56,7 @@ function mockConnections(connections: ConnectionRow[]) {
 describe("createMcpToolsForAgent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSyncMcpTools.mockResolvedValue({ success: true });
     mockGetAuthToken.mockResolvedValue("auth-token");
     mockCreateMcpTransport.mockReturnValue({});
     mockCreateMCPClient.mockResolvedValue({
@@ -92,19 +107,21 @@ describe("createMcpToolsForAgent", () => {
     expect(Object.keys(result.tools)).toEqual(["notion-search"]);
   });
 
-  it("only queries read tools and never exposes server write tools to the agent", async () => {
-    // The DB rows only contain read tools (query excludes isWrite), so a write
-    // tool advertised by the MCP server must be dropped by the name filter.
+  it("only exposes enabled read tools to the agent", async () => {
     mockConnections([
       {
         id: "connection-1",
         integration: { id: "integration-1", name: "notion" },
-        tools: [{ name: "notion-search" }],
+        tools: [
+          { name: "notion-search" },
+          { name: "notion-fetch", isWrite: true },
+        ],
       },
     ]);
     mockCreateMCPClient.mockResolvedValue({
       tools: vi.fn().mockResolvedValue({
         "notion-search": { description: "search" },
+        "notion-fetch": { description: "stored as a write tool" },
         "notion-create-pages": { description: "write tool" },
       }),
       close: vi.fn(),
@@ -117,13 +134,91 @@ describe("createMcpToolsForAgent", () => {
         where: expect.objectContaining({
           tools: { some: { isEnabled: true, isWrite: false } },
         }),
-        select: expect.objectContaining({
-          tools: expect.objectContaining({
-            where: { isEnabled: true, isWrite: false },
-          }),
-        }),
       }),
     );
+    expect(Object.keys(result.tools)).toEqual(["notion-search"]);
+  });
+
+  it("re-syncs a connection missing a newly allowed tool, keeping this run to its stored tools", async () => {
+    mockConnections([
+      {
+        id: "connection-1",
+        integration: { id: "integration-1", name: "notion" },
+        tools: [{ name: "notion-search" }],
+      },
+    ]);
+    mockCreateMCPClient.mockResolvedValue({
+      tools: vi.fn().mockResolvedValue({
+        "notion-search": { description: "search" },
+        "notion-fetch": { description: "fetch" },
+        "notion-create-pages": { description: "write tool" },
+      }),
+      close: vi.fn(),
+    });
+
+    const result = await createMcpToolsForAgent("email-account-1");
+
+    expect(mockSyncMcpTools).toHaveBeenCalledTimes(1);
+    expect(mockSyncMcpTools).toHaveBeenCalledWith(
+      "notion",
+      "email-account-1",
+      expect.anything(),
+    );
+    expect(Object.keys(result.tools)).toEqual(["notion-search"]);
+  });
+
+  it("re-syncs a connection that still stores a tool no longer allowed", async () => {
+    mockConnections([
+      {
+        id: "connection-1",
+        integration: { id: "integration-1", name: "notion" },
+        tools: [{ name: "notion-search" }, { name: "notion-retired" }],
+      },
+    ]);
+
+    await createMcpToolsForAgent("email-account-1");
+
+    expect(mockSyncMcpTools).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves an up-to-date connection alone, counting tools the user turned off", async () => {
+    mockConnections([
+      {
+        id: "connection-1",
+        integration: { id: "integration-1", name: "notion" },
+        tools: [
+          { name: "notion-search" },
+          { name: "notion-fetch", isEnabled: false },
+        ],
+      },
+    ]);
+    mockCreateMCPClient.mockResolvedValue({
+      tools: vi.fn().mockResolvedValue({
+        "notion-search": { description: "search" },
+        "notion-fetch": { description: "fetch" },
+        "notion-create-pages": { description: "write tool" },
+      }),
+      close: vi.fn(),
+    });
+
+    const result = await createMcpToolsForAgent("email-account-1");
+
+    expect(mockSyncMcpTools).not.toHaveBeenCalled();
+    expect(Object.keys(result.tools)).toEqual(["notion-search"]);
+  });
+
+  it("still returns tools when the re-sync fails", async () => {
+    mockSyncMcpTools.mockRejectedValue(new Error("server unavailable"));
+    mockConnections([
+      {
+        id: "connection-1",
+        integration: { id: "integration-1", name: "notion" },
+        tools: [{ name: "notion-search" }, { name: "notion-retired" }],
+      },
+    ]);
+
+    const result = await createMcpToolsForAgent("email-account-1");
+
     expect(Object.keys(result.tools)).toEqual(["notion-search"]);
   });
 

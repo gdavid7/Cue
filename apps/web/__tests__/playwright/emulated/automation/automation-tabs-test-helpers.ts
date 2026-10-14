@@ -12,7 +12,6 @@ type AutomationAccountSettings = {
   about: string | null;
   allowHiddenAiDraftLinks: boolean;
   draftReplyConfidence: string;
-  includeReferralSignature: boolean;
   multiRuleSelectionEnabled: boolean;
   sensitiveDataPolicy: string | null;
   signature: string | null;
@@ -193,7 +192,6 @@ export async function seedAutomationSettings(emailAccountId: string) {
       `SELECT about,
               "allowHiddenAiDraftLinks",
               "draftReplyConfidence"::text,
-              "includeReferralSignature",
               "multiRuleSelectionEnabled",
               "sensitiveDataPolicy",
               signature,
@@ -263,7 +261,6 @@ export async function seedAutomationSettings(emailAccountId: string) {
        SET about = NULL,
            "writingStyle" = 'Seeded writing style',
            signature = NULL,
-           "includeReferralSignature" = false,
            "multiRuleSelectionEnabled" = false,
            "sensitiveDataPolicy" = NULL,
            "draftReplyConfidence" = 'ALL_EMAILS',
@@ -327,11 +324,10 @@ export async function cleanupAutomationSettings({
        SET about = $2,
            "writingStyle" = $3,
            signature = $4,
-           "includeReferralSignature" = $5,
-           "multiRuleSelectionEnabled" = $6,
-           "sensitiveDataPolicy" = $7,
-           "draftReplyConfidence" = $8::"DraftReplyConfidence",
-           "allowHiddenAiDraftLinks" = $9,
+           "multiRuleSelectionEnabled" = $5,
+           "sensitiveDataPolicy" = $6,
+           "draftReplyConfidence" = $7::"DraftReplyConfidence",
+           "allowHiddenAiDraftLinks" = $8,
            "updatedAt" = CURRENT_TIMESTAMP
        WHERE id = $1`,
       [
@@ -339,7 +335,6 @@ export async function cleanupAutomationSettings({
         previousAccountSettings.about,
         previousAccountSettings.writingStyle,
         previousAccountSettings.signature,
-        previousAccountSettings.includeReferralSignature,
         previousAccountSettings.multiRuleSelectionEnabled,
         previousAccountSettings.sensitiveDataPolicy,
         previousAccountSettings.draftReplyConfidence,
@@ -355,7 +350,6 @@ export async function getAutomationSettingsState(emailAccountId: string) {
       about: string | null;
       allowHiddenAiDraftLinks: boolean;
       draftReplyConfidence: string;
-      includeReferralSignature: boolean;
       multiRuleSelectionEnabled: boolean;
       sensitiveDataPolicy: string | null;
       writingStyle: string | null;
@@ -363,7 +357,6 @@ export async function getAutomationSettingsState(emailAccountId: string) {
       `SELECT about,
               "allowHiddenAiDraftLinks",
               "draftReplyConfidence"::text,
-              "includeReferralSignature",
               "multiRuleSelectionEnabled",
               "sensitiveDataPolicy",
               "writingStyle"

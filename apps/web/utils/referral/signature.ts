@@ -1,8 +1,9 @@
 import { BRAND_NAME } from "@/utils/branding";
 
+// Drafts no longer get a "Drafted by" footer, but older drafts and sent mail
+// still carry one, under either name, and must still be recognized so they can
+// be stripped and compared against what was sent.
 const REFERRAL_SIGNATURE_PREFIX = "Drafted by";
-// Drafts written before the rename still carry the old name, and must still be
-// recognized so they can be stripped and compared against what was sent.
 const LEGACY_REFERRAL_SIGNATURE_PRODUCT = "Inbox Zero";
 
 const REFERRAL_SIGNATURE_PATTERNS = [
@@ -17,10 +18,6 @@ export function stripBrandingSignatures(value: string) {
   return stripReferralSignature(value)
     .replace(getSignaturePattern(value, SENT_WITH_SIGNATURE_PATTERN), "")
     .trim();
-}
-
-export function renderReferralSignatureHtml(referralLink: string) {
-  return `${REFERRAL_SIGNATURE_PREFIX} <a href="${referralLink}">${BRAND_NAME}</a>.`;
 }
 
 export function hasReferralSignature(value: string) {

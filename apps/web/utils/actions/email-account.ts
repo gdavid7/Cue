@@ -11,7 +11,6 @@ import { getEmailForLLM } from "@/utils/get-email-from-message";
 import { updateContactRole } from "@inboxzero/loops";
 import {
   updateHiddenAiDraftLinksBody,
-  updateReferralSignatureBody,
   updateSentWithSignatureBody,
   updateSentMessageOpenTrackingBody,
 } from "@/utils/actions/email-account.validation";
@@ -110,20 +109,6 @@ export const analyzePersonaAction = actionClient
 
     return personaAnalysis;
   });
-
-export const updateReferralSignatureAction = actionClient
-  .metadata({ name: "updateReferralSignature" })
-  .inputSchema(updateReferralSignatureBody)
-  .action(
-    async ({ ctx: { emailAccountId, logger }, parsedInput: { enabled } }) => {
-      logger.info("Updating referral signature", { enabled });
-
-      await prisma.emailAccount.update({
-        where: { id: emailAccountId },
-        data: { includeReferralSignature: enabled },
-      });
-    },
-  );
 
 export const updateSentWithSignatureAction = actionClient
   .metadata({ name: "updateSentWithSignature" })

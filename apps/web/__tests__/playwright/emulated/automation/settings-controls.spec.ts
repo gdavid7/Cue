@@ -43,7 +43,6 @@ test("persists personalization, drafting, and advanced settings", async ({
     "Learned patterns",
     "Sync to browser extension",
     "Multi-rule selection",
-    "Include referral signature",
     "Allow hidden links in AI drafts",
     "Sensitive data protection",
   ]) {
@@ -51,6 +50,9 @@ test("persists personalization, drafting, and advanced settings", async ({
       timeout: 60_000,
     });
   }
+  await expect(
+    page.getByRole("heading", { name: "Include referral signature" }),
+  ).toHaveCount(0);
 
   const personalInstructionsItem = getAutomationSettingsCard(
     page,
@@ -114,17 +116,6 @@ test("persists personalization, drafting, and advanced settings", async ({
     })
     .toMatchObject({ multiRuleSelectionEnabled: true });
 
-  const referralItem = getAutomationSettingsCard(
-    page,
-    "Include referral signature",
-  );
-  await referralItem.getByRole("switch").click();
-  await expect
-    .poll(() => getAutomationSettingsState(emailAccountId), {
-      timeout: 60_000,
-    })
-    .toMatchObject({ includeReferralSignature: true });
-
   const hiddenLinksItem = getAutomationSettingsCard(
     page,
     "Allow hidden links in AI drafts",
@@ -152,7 +143,6 @@ test("persists personalization, drafting, and advanced settings", async ({
     timeout: 60_000,
   });
   await expect(multiRuleItem.getByRole("switch")).toBeChecked();
-  await expect(referralItem.getByRole("switch")).toBeChecked();
   await expect(hiddenLinksItem.getByRole("switch")).toBeChecked();
   await expect(sensitiveData).toContainText("Block");
 

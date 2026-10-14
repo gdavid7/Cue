@@ -36,7 +36,6 @@ async function getEmailAccount({
       timezone: true,
       calendarBookingLink: true,
       signature: true,
-      includeReferralSignature: true,
       includeSentWithSignature: true,
       sentMessageOpenTrackingEnabled: true,
       writingStyle: true,
