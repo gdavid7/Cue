@@ -501,6 +501,9 @@ const parsedEnv = createEnv({
       .optional()
       .default(false),
     NEXT_PUBLIC_USE_AEONIK_FONT: booleanString.optional().default(false),
+    NEXT_PUBLIC_VERCEL_WEB_ANALYTICS_ENABLED: booleanString
+      .optional()
+      .default(false),
     NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS: booleanString.optional(),
     NEXT_PUBLIC_DIGEST_ENABLED: booleanString.optional(),
     NEXT_PUBLIC_MEETING_BRIEFS_ENABLED: booleanString.optional(),
@@ -608,6 +611,8 @@ const parsedEnv = createEnv({
     NEXT_PUBLIC_DISABLE_REFERRAL_SIGNATURE:
       process.env.NEXT_PUBLIC_DISABLE_REFERRAL_SIGNATURE,
     NEXT_PUBLIC_USE_AEONIK_FONT: process.env.NEXT_PUBLIC_USE_AEONIK_FONT,
+    NEXT_PUBLIC_VERCEL_WEB_ANALYTICS_ENABLED:
+      process.env.NEXT_PUBLIC_VERCEL_WEB_ANALYTICS_ENABLED,
     NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS:
       process.env.NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS,
     NEXT_PUBLIC_DIGEST_ENABLED: process.env.NEXT_PUBLIC_DIGEST_ENABLED,

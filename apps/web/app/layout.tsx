@@ -1,7 +1,6 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
 
-import { Analytics } from "@vercel/analytics/react";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { AxiomWebVitals } from "next-axiom";
 import { GoogleTagManager } from "@next/third-parties/google";
@@ -16,6 +15,7 @@ import { GlobalProviders } from "@/providers/GlobalProviders";
 import { UTM } from "@/app/utm";
 import { startupImage } from "@/app/startup-image";
 import { Toaster } from "@/components/Toast";
+import { VercelWebAnalytics } from "@/components/VercelWebAnalytics";
 import {
   CookieConsentBanner,
   WithCookieConsent,
@@ -162,7 +162,7 @@ export default async function RootLayout({
             <Toaster />
           </GlobalProviders>
         </PostHogProvider>
-        <Analytics />
+        <VercelWebAnalytics />
         <AxiomWebVitals />
         <UTM />
         <SpeedInsights />
