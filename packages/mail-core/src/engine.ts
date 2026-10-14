@@ -27,7 +27,10 @@ import type {
   MailStore,
   SyncStreamPosition,
 } from "./ports/mail-store";
-import type { OperationExecutor } from "./ports/operation-executor";
+import type {
+  ExecutionResult,
+  OperationExecutor,
+} from "./ports/operation-executor";
 import type { AssistantStateSource } from "./ports/assistant-source";
 import type { ScopeDescriptor } from "./ports/mailbox-source";
 import type { HostRuntime } from "./ports/runtime";
@@ -69,6 +72,8 @@ const LOW_PRIORITY_CATCH_UP_INTERVAL_MS = 10 * 60_000;
 // when they have not run recently, so a burst of pushes stays cheap.
 const LOW_PRIORITY_REQUESTED_MIN_INTERVAL_MS = 2 * 60_000;
 const MAX_MAILBOX_WINDOW_PAGES = 40;
+const COMMAND_REQUEST_RETRY_MIN_MS = 1000;
+const COMMAND_REQUEST_RETRY_MAX_MS = 30_000;
 const SEARCH_PAGE_SIZE = 50;
 // A provider search page costs Gmail about 1000 of its 6000 units a minute,
 // so one view's demand for rows never fetches more than this many pages.
@@ -177,6 +182,7 @@ export function createMailEngine(input: {
   const assistant = input.assistant;
   const queries = createQueryRegistry();
   let evictedForCurrentPressure = false;
+  let commandRequestFailures = 0;
   const idleCatchUpGates = new Map<string, IdleCatchUpGate>();
   const syncLanes = new Map<string, SyncLane>();
   const syncLaneRetries = new Map<
@@ -405,11 +411,13 @@ export function createMailEngine(input: {
           return;
         }
         if (work.kind === "command") {
-          const result = await executor.execute({
-            operation: work.operation,
-            attemptId: work.attemptId,
-            signal: signal ?? new AbortController().signal,
-          });
+          const result = await settleableExecution(() =>
+            executor.execute({
+              operation: work.operation,
+              attemptId: work.attemptId,
+              signal: signal ?? new AbortController().signal,
+            }),
+          );
           await store.settleAttempt({
             attemptId: work.attemptId,
             operation: work.operation,
@@ -419,11 +427,13 @@ export function createMailEngine(input: {
           continue;
         }
         if (work.kind === "inspect") {
-          const result = await executor.inspect({
-            operation: work.operation,
-            receiptId: work.receiptId,
-            signal: signal ?? new AbortController().signal,
-          });
+          const result = await settleableExecution(() =>
+            executor.inspect({
+              operation: work.operation,
+              receiptId: work.receiptId,
+              signal: signal ?? new AbortController().signal,
+            }),
+          );
           await store.settleAttempt({
             attemptId: work.attemptId,
             operation: work.operation,
@@ -729,6 +739,30 @@ export function createMailEngine(input: {
         page,
       })
       .catch(() => undefined);
+  }
+
+  // A request that fails mid-flight (the network dropped) may or may not have
+  // reached the server. Commands are idempotent by operation id, so it is
+  // retried soon, backing off while the network stays down, instead of
+  // waiting out the claim lease.
+  async function settleableExecution(
+    run: () => Promise<ExecutionResult>,
+  ): Promise<ExecutionResult> {
+    try {
+      const result = await run();
+      commandRequestFailures = 0;
+      return result;
+    } catch {
+      commandRequestFailures += 1;
+      return {
+        status: "not_dispatched",
+        reason: "unavailable",
+        retryAfterMs: Math.min(
+          COMMAND_REQUEST_RETRY_MIN_MS * 2 ** (commandRequestFailures - 1),
+          COMMAND_REQUEST_RETRY_MAX_MS,
+        ),
+      };
+    }
   }
 
   function retryAtFor(
