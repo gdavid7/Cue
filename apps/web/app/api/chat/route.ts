@@ -57,22 +57,8 @@ import {
 export const maxDuration = 300;
 
 export const POST = withEmailAccount("chat", async (request) => {
+  const requestStartedAt = Date.now();
   const emailAccountId = request.auth.emailAccountId;
-
-  const user = await getEmailAccountWithAi({ emailAccountId });
-
-  if (!user) {
-    return NextResponse.json(
-      { error: "Email account not found" },
-      { status: 404 },
-    );
-  }
-
-  const inboxStatsPromise = getInboxStatsForChatContext({
-    emailAccountId,
-    provider: user.account.provider,
-    logger: request.logger,
-  });
 
   const json = await request.json();
   const { data, error } = assistantInputSchema.safeParse(json);
@@ -112,8 +98,20 @@ export const POST = withEmailAccount("chat", async (request) => {
     );
   }
 
+  const [user, existingChat] = await Promise.all([
+    getEmailAccountWithAi({ emailAccountId }),
+    getChatWithCompactions(data.id),
+  ]);
+
+  if (!user) {
+    return NextResponse.json(
+      { error: "Email account not found" },
+      { status: 404 },
+    );
+  }
+
   const chat =
-    (await getChatWithCompactions(data.id)) ||
+    existingChat ||
     (await createNewChat({
       emailAccountId,
       chatId: data.id,
@@ -143,6 +141,18 @@ export const POST = withEmailAccount("chat", async (request) => {
 
   const chatHasHistory =
     chat.messages.length > 0 || chat.compactions.length > 0;
+  // The inbox snapshot only goes into a conversation's first turn, so later
+  // turns skip the provider call (and its wait of up to 2 s).
+  const isFirstUserTurn =
+    chat.compactions.length === 0 &&
+    !chat.messages.some((chatMessage) => chatMessage.role === "user");
+  const inboxStatsPromise = isFirstUserTurn
+    ? getInboxStatsForChatContext({
+        emailAccountId,
+        provider: user.account.provider,
+        logger: request.logger,
+      })
+    : Promise.resolve(null);
   const { message, context, inlineActions } = data;
   const chatRunId = crypto.randomUUID();
   const runStartedAt = Date.now();
@@ -285,23 +295,27 @@ export const POST = withEmailAccount("chat", async (request) => {
       }
     }
 
-    let memories: { content: string; date: string }[] = [];
-    try {
-      const recentMemories = await prisma.chatMemory.findMany({
-        where: { emailAccountId },
-        orderBy: { createdAt: "desc" },
-        take: 20,
-        select: { content: true, createdAt: true },
-      });
-      memories = recentMemories.map((m) => ({
-        content: m.content,
-        date: formatUtcDate(m.createdAt),
-      }));
-    } catch (error) {
-      request.logger.warn("Failed to load memories for chat", { error });
-    }
-
-    const inboxStats = await inboxStatsPromise;
+    const [memories, inboxStats] = await Promise.all([
+      prisma.chatMemory
+        .findMany({
+          where: { emailAccountId },
+          orderBy: { createdAt: "desc" },
+          take: 20,
+          select: { content: true, createdAt: true },
+        })
+        .then(
+          (recentMemories) =>
+            recentMemories.map((m) => ({
+              content: m.content,
+              date: formatUtcDate(m.createdAt),
+            })),
+          (error) => {
+            request.logger.warn("Failed to load memories for chat", { error });
+            return [];
+          },
+        ),
+      inboxStatsPromise,
+    ]);
     let seenRulesRevision: number | null = null;
     const assistantRun: AssistantChatRunMetadata = {
       runId: chatRunId,
@@ -346,6 +360,8 @@ export const POST = withEmailAccount("chat", async (request) => {
       abortSignal: chatRun.abortSignal,
       logger: runLogger,
     });
+    const modelStartedAfterMs = Date.now() - requestStartedAt;
+    let timeToFirstTokenMs: number | null = null;
 
     const stream = createUIMessageStream({
       generateId: () => streamId,
@@ -358,6 +374,9 @@ export const POST = withEmailAccount("chat", async (request) => {
             responseMessage = finishedResponseMessage;
           },
         })) {
+          if (timeToFirstTokenMs === null && chunk.type === "text-delta") {
+            timeToFirstTokenMs = Date.now() - requestStartedAt;
+          }
           writer.write(chunk);
         }
 
@@ -427,6 +446,8 @@ export const POST = withEmailAccount("chat", async (request) => {
             visibleTextProduced: assistantRun.visibleTextProduced,
             stopped: isAborted,
             durationMs: Date.now() - runStartedAt,
+            modelStartedAfterMs,
+            timeToFirstTokenMs,
             assistantMessageCount: messages.filter(
               (message) => message.role === "assistant",
             ).length,
