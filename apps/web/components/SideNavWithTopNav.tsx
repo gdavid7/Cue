@@ -46,6 +46,17 @@ function ContentWrapper({ children }: { children: React.ReactNode }) {
           // internally, so layout banners shrink it instead of overflowing
           isMailRoute && "h-svh",
         )}
+        // Mail's own sidebar is fixed over the left edge, so layout banners
+        // above the mail screen indent by its width to stay readable.
+        style={
+          isMailRoute
+            ? ({
+                "--mail-rail-width": state.includes("left-sidebar")
+                  ? "var(--sidebar-width)"
+                  : "var(--sidebar-width-icon)",
+              } as React.CSSProperties)
+            : undefined
+        }
       >
         {children}
       </SidebarInset>
