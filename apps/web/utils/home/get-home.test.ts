@@ -24,6 +24,48 @@ describe("getHomeData", () => {
     prisma.executedAction.findMany.mockResolvedValue([]);
     prisma.scheduledAction.findMany.mockResolvedValue([]);
     prisma.executedRule.findMany.mockResolvedValue([]);
+    prisma.executedRule.findFirst.mockResolvedValue({ id: "run-1" } as never);
+    prisma.threadTracker.findFirst.mockResolvedValue(null);
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      user: {
+        aiApiKey: null,
+        premium: {
+          stripeSubscriptionStatus: "active",
+          tier: "STARTER_MONTHLY",
+        },
+      },
+      rules: [{ enabled: true }],
+    } as never);
+  });
+
+  it("says Cue is checking replies once it has read mail and has AI access", async () => {
+    const home = await run(mockProvider({}));
+
+    expect(home.cue).toEqual({
+      aiAccess: true,
+      replyTracking: true,
+      hasReadMail: true,
+    });
+  });
+
+  it("knows when Cue hasn't read any mail yet, so empty isn't a verdict", async () => {
+    prisma.executedRule.findFirst.mockResolvedValue(null);
+    prisma.threadTracker.findFirst.mockResolvedValue(null);
+
+    const home = await run(mockProvider({}));
+
+    expect(home.cue.hasReadMail).toBe(false);
+  });
+
+  it("knows when nothing is checking for replies", async () => {
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      user: { aiApiKey: null, premium: null },
+      rules: [{ enabled: false }],
+    } as never);
+
+    const home = await run(mockProvider({}));
+
+    expect(home.cue).toMatchObject({ aiAccess: false, replyTracking: false });
   });
 
   it("sorts what needs a reply by priority and shows who it's from", async () => {
@@ -251,7 +293,12 @@ describe("getHomeData", () => {
     const home = await run(provider);
 
     expect(home.handledLabels).toEqual([
-      { labelId: "Label_Newsletter", name: "Newsletter", count: 1 },
+      {
+        labelId: "Label_Newsletter",
+        name: "Newsletter",
+        count: 1,
+        capped: false,
+      },
     ]);
   });
 });
