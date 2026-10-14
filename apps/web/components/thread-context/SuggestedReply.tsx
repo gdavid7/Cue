@@ -246,7 +246,7 @@ export function suggestionPhaseLabel(
   phase: ReturnType<typeof useReplySuggestion>["phase"],
 ) {
   return phase === "checking-web"
-    ? "Checking the web…"
+    ? "Searching public web pages…"
     : "Checking your mail and calendar…";
 }
 
