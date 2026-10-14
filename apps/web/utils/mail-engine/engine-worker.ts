@@ -2,13 +2,13 @@ import {
   createHostRuntime,
   createMailEngine,
 } from "@inboxzero/mail-core/engine";
-import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
 import { createMailHttpRequest } from "./http";
-import { createWasmSqliteDriver } from "./wasm-sqlite";
+import { createWasmMailStore } from "./wasm-sqlite";
 import {
   shouldReleaseDeferredOnStart,
   type BrowserEngineStart,
   type WorkerRequest,
+  type WorkerResponse,
 } from "./worker-protocol";
 import { browserStoragePressure } from "./storage-pressure";
 import { createMailWorkerHost } from "./worker-session";
@@ -35,13 +35,19 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
 async function createWorkerEngine(
   input: BrowserEngineStart,
 ): Promise<BrowserMailEngine> {
-  const driver = await createWasmSqliteDriver({ persist: input.persist });
   const runtime = createHostRuntime({
     storagePressure: browserStoragePressure,
   });
-  const store = await createSqliteMailStore(driver, {
-    maxPendingOperations: input.maxPendingOperations,
-    runtime,
+  const store = await createWasmMailStore({
+    persist: input.persist,
+    options: { maxPendingOperations: input.maxPendingOperations, runtime },
+    ownedAccountIds: input.ownedAccountIds,
+    onRebuild: () => {
+      self.postMessage({ type: "rebuilding" } satisfies WorkerResponse);
+    },
+    onDropped: (drop) => {
+      self.postMessage({ type: "dropped", drop } satisfies WorkerResponse);
+    },
   });
   const ensureAccount: BrowserMailEngine["ensureAccount"] = async (account) => {
     await store.ensureAccount({

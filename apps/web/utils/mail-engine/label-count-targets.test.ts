@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MAX_MAILBOX_COUNT_TARGETS } from "@inboxzero/mail-core/queries";
 import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
-import { createWasmSqliteDriver } from "./wasm-sqlite";
+import { createWasmMemoryDriver } from "./wasm-sqlite";
 import {
   mailboxCountTargets,
   MAX_MAILBOX_COUNT_LABELS,
@@ -96,9 +96,7 @@ describe("mailboxCountTargets", () => {
   });
 
   it("leaves drafts a pending send will deliver out of the Drafts count", async () => {
-    const store = await createSqliteMailStore(
-      await createWasmSqliteDriver({ persist: false }),
-    );
+    const store = await createSqliteMailStore(await createWasmMemoryDriver());
     try {
       await store.ensureAccount({
         accountId: "acc-1",

@@ -27,7 +27,10 @@ import type {
   MailStore,
   SyncStreamPosition,
 } from "./ports/mail-store";
-import type { OperationExecutor } from "./ports/operation-executor";
+import type {
+  ExecutionResult,
+  OperationExecutor,
+} from "./ports/operation-executor";
 import type { AssistantStateSource } from "./ports/assistant-source";
 import type { ScopeDescriptor } from "./ports/mailbox-source";
 import type { HostRuntime } from "./ports/runtime";
@@ -69,6 +72,8 @@ const LOW_PRIORITY_CATCH_UP_INTERVAL_MS = 10 * 60_000;
 // when they have not run recently, so a burst of pushes stays cheap.
 const LOW_PRIORITY_REQUESTED_MIN_INTERVAL_MS = 2 * 60_000;
 const MAX_MAILBOX_WINDOW_PAGES = 40;
+const COMMAND_REQUEST_RETRY_MIN_MS = 1000;
+const COMMAND_REQUEST_RETRY_MAX_MS = 30_000;
 const SEARCH_PAGE_SIZE = 50;
 // A provider search page costs Gmail about 1000 of its 6000 units a minute,
 // so one view's demand for rows never fetches more than this many pages.
@@ -177,6 +182,9 @@ export function createMailEngine(input: {
   const assistant = input.assistant;
   const queries = createQueryRegistry();
   let evictedForCurrentPressure = false;
+  // Keyed by operation, so one command stuck on a failing request does not
+  // slow the retry of every other command.
+  const commandRequestFailures = new Map<string, number>();
   const idleCatchUpGates = new Map<string, IdleCatchUpGate>();
   const syncLanes = new Map<string, SyncLane>();
   const syncLaneRetries = new Map<
@@ -405,11 +413,13 @@ export function createMailEngine(input: {
           return;
         }
         if (work.kind === "command") {
-          const result = await executor.execute({
-            operation: work.operation,
-            attemptId: work.attemptId,
-            signal: signal ?? new AbortController().signal,
-          });
+          const result = await retryOnRequestFailure(work.operation, () =>
+            executor.execute({
+              operation: work.operation,
+              attemptId: work.attemptId,
+              signal: signal ?? new AbortController().signal,
+            }),
+          );
           await store.settleAttempt({
             attemptId: work.attemptId,
             operation: work.operation,
@@ -419,11 +429,13 @@ export function createMailEngine(input: {
           continue;
         }
         if (work.kind === "inspect") {
-          const result = await executor.inspect({
-            operation: work.operation,
-            receiptId: work.receiptId,
-            signal: signal ?? new AbortController().signal,
-          });
+          const result = await retryOnRequestFailure(work.operation, () =>
+            executor.inspect({
+              operation: work.operation,
+              receiptId: work.receiptId,
+              signal: signal ?? new AbortController().signal,
+            }),
+          );
           await store.settleAttempt({
             attemptId: work.attemptId,
             operation: work.operation,
@@ -729,6 +741,35 @@ export function createMailEngine(input: {
         page,
       })
       .catch(() => undefined);
+  }
+
+  // A request that fails mid-flight (the network dropped) may or may not have
+  // reached the server. It is settled as not dispatched, which sends the same
+  // operation id again soon, backing off while this command's requests keep
+  // failing, instead of waiting out the claim lease. That resend is safe
+  // because commands are idempotent by operation id; settling it as
+  // uncertain would instead wait on an inspect with no receipt to look up.
+  async function retryOnRequestFailure(
+    operation: { key: { accountId: string; operationId: string } },
+    run: () => Promise<ExecutionResult>,
+  ): Promise<ExecutionResult> {
+    const key = `${operation.key.accountId}\u0000${operation.key.operationId}`;
+    try {
+      const result = await run();
+      commandRequestFailures.delete(key);
+      return result;
+    } catch {
+      const failures = (commandRequestFailures.get(key) ?? 0) + 1;
+      commandRequestFailures.set(key, failures);
+      return {
+        status: "not_dispatched",
+        reason: "unavailable",
+        retryAfterMs: Math.min(
+          COMMAND_REQUEST_RETRY_MIN_MS * 2 ** (failures - 1),
+          COMMAND_REQUEST_RETRY_MAX_MS,
+        ),
+      };
+    }
   }
 
   function retryAtFor(

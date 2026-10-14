@@ -4,7 +4,10 @@ import {
   type MailEngine,
   type WorkAdmission,
 } from "@inboxzero/mail-core/engine";
-import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
+import {
+  classifyMailboxError,
+  type DroppedMailWork,
+} from "@inboxzero/mail-sqlite/recovery";
 import type {
   MailboxView,
   QueryHandle,
@@ -12,7 +15,7 @@ import type {
 } from "@inboxzero/mail-core/queries";
 import { createMailHttpRequest } from "@/utils/mail-engine/http";
 import { createRoutedBackendAdapter } from "@inboxzero/mail-core/protocol/routed-backend-adapter";
-import { createWasmSqliteDriver } from "@/utils/mail-engine/wasm-sqlite";
+import { createWasmMailStore } from "@/utils/mail-engine/wasm-sqlite";
 import {
   browserMailEngineCapabilities,
   pageConnectivityOnline,
@@ -26,8 +29,23 @@ import {
 } from "@/utils/mail-engine/worker-protocol";
 import { browserStoragePressure } from "@/utils/mail-engine/storage-pressure";
 import { finishPendingLocalMailboxWipe } from "@/utils/mail-engine/wipe-local-mailbox";
+import { createClientLogger } from "@/utils/logger-client";
 
 export { browserMailEngineCapabilities };
+
+const logger = createClientLogger("mail-engine");
+
+// A closing tab's worker can hold the mailbox's OPFS handles for a moment
+// after its lock is released; these waits cover that without a dead end.
+const BUSY_START_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 4000];
+// A start can itself wait out another tab's file lock, so retries stop once
+// the whole start has taken this long rather than multiplying that wait.
+const BUSY_START_BUDGET_MS = 10_000;
+
+type BrowserEngineHooks = {
+  /** Called when a corrupt mailbox is being rebuilt during start. */
+  onRebuild?: () => void;
+};
 
 export type BrowserMailEngine = Omit<MailEngine, "ensureAccount"> & {
   ensureAccount(input: {
@@ -39,6 +57,7 @@ export type BrowserMailEngine = Omit<MailEngine, "ensureAccount"> & {
 
 export async function createBrowserMailEngine(
   input: BrowserEngineStart,
+  hooks: BrowserEngineHooks = {},
 ): Promise<BrowserMailEngine> {
   // The previous user's mailbox must be gone before this one opens it.
   await finishPendingLocalMailboxWipe();
@@ -47,26 +66,53 @@ export async function createBrowserMailEngine(
     maxPendingOperations:
       input.maxPendingOperations ?? readPageMaxPendingOperations(),
   };
+  const startedAt = Date.now();
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await startBrowserEngine(start, hooks);
+    } catch (error) {
+      const retryInMs = BUSY_START_RETRY_DELAYS_MS[attempt];
+      if (
+        classifyMailboxError(error) !== "busy" ||
+        retryInMs === undefined ||
+        Date.now() - startedAt + retryInMs > BUSY_START_BUDGET_MS
+      ) {
+        throw error;
+      }
+      await delay(retryInMs);
+    }
+  }
+}
+
+async function startBrowserEngine(
+  start: BrowserEngineStart,
+  hooks: BrowserEngineHooks,
+) {
   if (browserMailEngineCapabilities().worker) {
     try {
-      return await createWorkerOwnedEngine(start);
-    } catch {
+      return await createWorkerOwnedEngine(start, hooks);
+    } catch (error) {
+      // The tab would wait on the same held files, so retry the worker.
+      if (classifyMailboxError(error) === "busy") throw error;
       // Dedicated workers can fail in private mode or without module workers.
     }
   }
-  return createInTabEngine(start);
+  return createInTabEngine(start, hooks);
 }
 
 async function createInTabEngine(
   input: BrowserEngineStart,
+  hooks: BrowserEngineHooks,
 ): Promise<BrowserMailEngine> {
-  const driver = await createWasmSqliteDriver({ persist: input.persist });
   const runtime = createHostRuntime({
     storagePressure: browserStoragePressure,
   });
-  const store = await createSqliteMailStore(driver, {
-    maxPendingOperations: input.maxPendingOperations,
-    runtime,
+  const store = await createWasmMailStore({
+    persist: input.persist,
+    options: { maxPendingOperations: input.maxPendingOperations, runtime },
+    ownedAccountIds: input.ownedAccountIds,
+    onRebuild: hooks.onRebuild,
+    onDropped: logDroppedWork,
   });
   const ensureAccount: BrowserMailEngine["ensureAccount"] = async (account) => {
     await store.ensureAccount({
@@ -122,6 +168,7 @@ async function createInTabEngine(
 
 async function createWorkerOwnedEngine(
   input: BrowserEngineStart,
+  hooks: BrowserEngineHooks,
 ): Promise<BrowserMailEngine> {
   const worker = new Worker(new URL("./engine-worker.ts", import.meta.url), {
     type: "module",
@@ -141,6 +188,14 @@ async function createWorkerOwnedEngine(
 
   worker.addEventListener("message", (event: MessageEvent<WorkerResponse>) => {
     const message = event.data;
+    if (message.type === "rebuilding") {
+      hooks.onRebuild?.();
+      return;
+    }
+    if (message.type === "dropped") {
+      logDroppedWork(message.drop);
+      return;
+    }
     if (message.type === "snapshot") {
       const observation = observations.get(message.handleId);
       if (!observation) return;
@@ -316,6 +371,10 @@ function callWorker<T>(
     method,
     args,
   }) as Promise<T>;
+}
+
+function logDroppedWork(drop: DroppedMailWork) {
+  logger.warn("Mailbox rebuild left out carried work", drop);
 }
 
 function delay(ms: number) {

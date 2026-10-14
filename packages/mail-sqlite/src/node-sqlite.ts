@@ -5,6 +5,7 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
 import type { HostRuntime } from "@inboxzero/mail-core/ports/runtime";
 import type { SqlTransaction, SqlValue, SqliteDriver } from "./driver";
 import type { MessageBodyCodec } from "./message-body-codec";
+import { classifyMailboxError } from "./recovery";
 
 export function nodeMailCrypto(): Pick<HostRuntime, "randomId" | "sha256"> {
   return {
@@ -82,7 +83,7 @@ export async function openOrQuarantineNodeMailbox(path: string): Promise<{
     if (driver) {
       await driver.close().catch(() => undefined);
     }
-    if (!isCorruptSqliteError(error)) throw error;
+    if (classifyMailboxError(error) !== "corrupt") throw error;
     const quarantinedPaths = await quarantineMailboxFiles(path);
     return {
       driver: createNodeSqliteDriver(path),
@@ -178,17 +179,4 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-function isCorruptSqliteError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const errcode = "errcode" in error ? Number(error.errcode) : Number.NaN;
-  const message = "message" in error ? String(error.message).toLowerCase() : "";
-  return (
-    errcode === 11 ||
-    errcode === 26 ||
-    message.includes("not a database") ||
-    message.includes("database disk image is malformed") ||
-    message.includes("file is encrypted or is not a database")
-  );
 }

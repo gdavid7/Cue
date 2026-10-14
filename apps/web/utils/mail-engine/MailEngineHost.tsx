@@ -5,14 +5,17 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { usePathname } from "next/navigation";
+import { Loader2Icon } from "lucide-react";
 import type { MailClient } from "@inboxzero/mail-core/engine";
 import { MailEngineProvider } from "@inboxzero/mail-react/MailEngineProvider";
 import { LoadingContent } from "@/components/LoadingContent";
+import { Button } from "@/components/ui/button";
 import { env } from "@/env";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import {
@@ -48,7 +51,10 @@ type MailEngineRuntimeStatus = {
   client: MailClient | null;
   mounted: boolean;
   unavailable: boolean;
+  /** A corrupt local mailbox is being rebuilt before the engine can start. */
+  rebuilding: boolean;
   requestBrowserEngine: () => void;
+  retryStart: () => void;
 };
 
 type MailEngineInspectTransport = "browser" | "desktop-ipc";
@@ -57,7 +63,9 @@ const MailEngineRuntimeStatusContext = createContext<MailEngineRuntimeStatus>({
   client: null,
   mounted: false,
   unavailable: false,
+  rebuilding: false,
   requestBrowserEngine: () => {},
+  retryStart: () => {},
 });
 
 export function useMailEngineDemand() {
@@ -108,18 +116,20 @@ export function MailCoverageGate({
     opfs: browserMailEngineCapabilities().opfs,
   });
   if (status.unavailable || mode === "unavailable") {
-    return (
-      <div className="flex flex-1 items-center justify-center p-6 text-muted-foreground text-sm">
-        Mail needs persistent browser storage.
-      </div>
-    );
+    return <MailStorageUnavailable onRetry={status.retryStart} />;
   }
+  if (!status.client && status.rebuilding) return <MailboxRebuilding />;
   if (!status.client) return fallback;
   return children;
 }
 
 function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
-  const { emailAccountId, provider, isLoading } = useAccount();
+  const { accountIds, emailAccountId, provider, isLoading } = useAccount();
+  // Read at start, so connecting another account does not restart the engine.
+  const ownedAccountIds = useRef(accountIds);
+  useEffect(() => {
+    ownedAccountIds.current = accountIds;
+  }, [accountIds]);
   const pathname = usePathname();
   const desktopIpc = useSyncExternalStore(
     subscribeNever,
@@ -139,7 +149,14 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
   });
   const [client, setClient] = useState<MailClient | null>(null);
   const [unavailable, setUnavailable] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
+  const [startAttempt, setStartAttempt] = useState(0);
+  const retryStart = useCallback(
+    () => setStartAttempt((attempt) => attempt + 1),
+    [],
+  );
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: startAttempt is how Retry starts the engine again
   useEffect(() => {
     if (!emailAccountId || !enabled || !mailProvider) {
       setUnavailable(false);
@@ -171,6 +188,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
       published = next;
       publishMailEngineInspect(next, emailAccountId, role, transport);
       setActiveMailClient(next);
+      setRebuilding(false);
       setClient(next);
     }
 
@@ -250,11 +268,19 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
 
     async function start() {
       const create = async () => {
-        engine = await createBrowserMailEngine({
-          accountId: emailAccountId,
-          provider: engineProvider,
-          online: typeof navigator === "undefined" || navigator.onLine,
-        });
+        engine = await createBrowserMailEngine(
+          {
+            accountId: emailAccountId,
+            provider: engineProvider,
+            online: typeof navigator === "undefined" || navigator.onLine,
+            ownedAccountIds: [emailAccountId, ...ownedAccountIds.current],
+          },
+          {
+            onRebuild: () => {
+              if (!abort.signal.aborted) setRebuilding(true);
+            },
+          },
+        );
         if (abort.signal.aborted) {
           await engine.close();
           return;
@@ -282,7 +308,9 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
     }
 
     start().catch(() => {
-      if (!abort.signal.aborted) setUnavailable(true);
+      if (abort.signal.aborted) return;
+      setRebuilding(false);
+      setUnavailable(true);
     });
 
     const unsubscribeLogout = subscribeMailEngineLogout(() => {
@@ -300,9 +328,17 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
       setActiveMailClient(null);
       channel?.close();
       engine?.close().catch(() => undefined);
+      setRebuilding(false);
       setClient(null);
     };
-  }, [emailAccountId, mailProvider, enabled, desktopIpc, requestBrowserEngine]);
+  }, [
+    emailAccountId,
+    mailProvider,
+    enabled,
+    desktopIpc,
+    requestBrowserEngine,
+    startAttempt,
+  ]);
 
   useEffect(() => {
     if (!client || !emailAccountId) return;
@@ -347,10 +383,57 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
 
   return (
     <MailEngineRuntimeStatusContext.Provider
-      value={{ client, mounted: true, unavailable, requestBrowserEngine }}
+      value={{
+        client,
+        mounted: true,
+        unavailable,
+        rebuilding,
+        requestBrowserEngine,
+        retryStart,
+      }}
     >
       <MailEngineProvider client={client}>{children}</MailEngineProvider>
     </MailEngineRuntimeStatusContext.Provider>
+  );
+}
+
+function MailStorageUnavailable({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="flex flex-1 items-center justify-center p-6">
+      <div className="flex max-w-sm flex-col items-center gap-3 text-center">
+        <p className="font-medium text-sm">
+          Mail needs persistent browser storage.
+        </p>
+        <p className="text-muted-foreground text-sm">
+          Your mailbox is kept in this browser. Private browsing, a full disk,
+          or blocked site data can stop it from opening.
+        </p>
+        <Button variant="outline" size="sm" onClick={onRetry}>
+          Retry
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function MailboxRebuilding() {
+  return (
+    <div
+      className="flex flex-1 items-center justify-center p-6"
+      role="status"
+      aria-live="polite"
+    >
+      <div className="flex max-w-sm flex-col items-center gap-2 text-center">
+        <Loader2Icon
+          aria-hidden
+          className="size-5 text-muted-foreground motion-safe:animate-spin"
+        />
+        <p className="font-medium text-sm">Rebuilding your mailbox…</p>
+        <p className="text-muted-foreground text-sm">
+          Your drafts and unsent changes are kept.
+        </p>
+      </div>
+    </div>
   );
 }
 
