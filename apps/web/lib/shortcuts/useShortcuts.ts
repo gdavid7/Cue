@@ -163,11 +163,16 @@ function useShortcutBucket(
     // Hotkeys are matched on the typed character so they survive keyboard
     // layouts that move `#` or `?`.
     useKey: true,
-    enableOnFormTags: bucket.allowWhileTyping,
+    // react-hotkeys-hook treats any focused `role="option"` like a form field.
+    // A focused conversation row is where triage keys belong, so options are
+    // let through here and every option but a mail row is ignored below.
+    enableOnFormTags: bucket.allowWhileTyping ? true : ["option"],
     enableOnContentEditable: bucket.allowWhileTyping,
     delimiter: HOTKEYS_DELIMITER,
     eventListenerOptions: bucket.capture ? { capture: true } : undefined,
-    ignoreEventWhen: (event: KeyboardEvent) => event.defaultPrevented,
+    ignoreEventWhen: (event: KeyboardEvent) =>
+      event.defaultPrevented ||
+      (!bucket.allowWhileTyping && isNonMailOption(event.target)),
     preventDefault,
   });
 }
@@ -262,4 +267,12 @@ function resolveTarget(
     return;
   }
   return target;
+}
+
+function isNonMailOption(target: EventTarget | null) {
+  return (
+    target instanceof Element &&
+    target.getAttribute("role") === "option" &&
+    !target.hasAttribute("data-mail-thread-row")
+  );
 }

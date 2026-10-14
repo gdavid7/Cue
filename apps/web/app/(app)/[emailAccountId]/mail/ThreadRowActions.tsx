@@ -126,7 +126,7 @@ const BUTTON_CLASS =
 
 // The accessible name says "conversation" so it stays distinct from the
 // toolbar's button for the same action.
-function RowButton({
+export function RowButton({
   icon: Icon,
   label,
   ariaLabel,

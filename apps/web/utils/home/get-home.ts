@@ -66,6 +66,11 @@ export type HomeThread = {
   tag?: string;
   priority: Priority;
   unread: boolean;
+  /** The newest message that isn't a draft. */
+  messageId: string;
+  starred: boolean;
+  /** Waiting-on conversations can be archived; the other lanes are inbox mail. */
+  inInbox: boolean;
 };
 
 export type AgentTask = {
@@ -413,6 +418,9 @@ function toHomeThread(
       tag,
     }),
     unread,
+    messageId: latest.id,
+    starred: labelIds.has("STARRED"),
+    inInbox: labelIds.has("INBOX"),
   };
 }
 

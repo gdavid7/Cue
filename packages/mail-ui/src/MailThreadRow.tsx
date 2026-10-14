@@ -154,6 +154,9 @@ export function MailThreadRow({
         onOpen(index);
       }}
       ref={rowRef}
+      // Lets the app's mail shortcuts act while a row has focus, unlike
+      // other options such as a picker's.
+      data-mail-thread-row
       role="option"
       tabIndex={isFocused ? 0 : -1}
     >

@@ -8,11 +8,12 @@ import { toastUndo } from "@/components/Toast";
 import { getShortcutHint } from "@/lib/shortcuts/registry";
 import { randomUuid } from "@/utils/uuid";
 import {
+  type ActionableThread,
   getListThreadEmailAccountId,
   getListThreadKey,
   getListThreadMessageIds,
-  type ListThread,
 } from "./types";
+import { useStableCallback } from "./use-stable-callback";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import {
   mutationPayloadToChange,
@@ -43,12 +44,21 @@ export function useThreadActions({
   emailAccountId,
   readerTarget,
   threads,
+  onRestored,
 }: {
   emailAccountId: string;
   readerTarget?: ThreadActionTarget;
-  threads: ListThread[];
+  threads: ActionableThread[];
+  /**
+   * Called with the keys an undo brought back, for a list that hides removed
+   * rows itself rather than following the mail engine's views.
+   */
+  onRestored?: (threadKeys: string[]) => void;
 }) {
   const lastAction = useRef<UndoableBatch | null>(null);
+  const notifyRestored = useStableCallback((threadKeys: string[]) =>
+    onRestored?.(threadKeys),
+  );
   const retainedEmailAccountId = useRef(emailAccountId);
   const listTargetsByKey = useRef(new Map<string, ThreadActionTarget>());
   const activeReaderTarget = useRef<ThreadActionTarget | undefined>(undefined);
@@ -171,6 +181,7 @@ export function useThreadActions({
       const failedCount = batch.snapshots.length - restoredKeys.length;
 
       if (restoredKeys.length) {
+        notifyRestored(restoredKeys);
         toast.success(summarise("Restored", restoredKeys.length));
       }
       if (failedCount) {
@@ -186,7 +197,7 @@ export function useThreadActions({
       }
       return restoredKeys;
     },
-    [client],
+    [client, notifyRestored],
   );
 
   const undo = useCallback(async () => {

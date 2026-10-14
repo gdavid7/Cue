@@ -1,34 +1,55 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { CheckIcon, ReplyIcon } from "lucide-react";
+import { useRouter } from "next/navigation";
+import {
+  type FocusEvent,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useSetAtom } from "jotai";
+import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
+import { CheckIcon, FlagIcon } from "lucide-react";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
+import type { ActionableThread } from "@/app/(app)/[emailAccountId]/mail/types";
+import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
+import { useThreadActions } from "@/app/(app)/[emailAccountId]/mail/use-thread-actions";
 import { LoadingContent } from "@/components/LoadingContent";
-import { toastError, toastSuccess } from "@/components/Toast";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
+import { toastError, toastSuccess, undoLatestToast } from "@/components/Toast";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageHeading } from "@/components/Typography";
+import { useIsLargeScreen } from "@/hooks/use-mobile";
 import { useHome } from "@/hooks/useHome";
 import { useMailHref } from "@/hooks/useMailHref";
+import { useShortcuts } from "@/lib/shortcuts/useShortcuts";
 import { useAccount } from "@/providers/EmailAccountProvider";
-import { cn } from "@/utils";
+import { mailCommandContextAtom } from "@/store/command-palette";
 import { markNoReplyNeededAction } from "@/utils/actions/rule-feedback";
 import { markNeedsReplyAction } from "@/utils/actions/thread-assist";
-import type { AgentTask, HomeThread } from "@/utils/home/get-home";
 import { formatShortDate } from "@/utils/date";
-import { getInitials } from "@/utils/email";
 import { getActionErrorMessage } from "@/utils/error";
+import type { AgentTask, HomeThread } from "@/utils/home/get-home";
 import { prefixPath } from "@/utils/path";
-import { PageHeading } from "@/components/Typography";
 import { BeforeYourMeeting } from "./BeforeYourMeeting";
+import {
+  type TodayRowCorrection,
+  type TodayRowHandlers,
+  TodayThreadRow,
+} from "./TodayThreadRow";
 
 const ALSO_IN_INBOX_LIMIT = 5;
+const NO_THREADS: ReadonlySet<string> = new Set();
 
 /**
  * Today: what needs a reply, what Cue did for you, and who you're waiting
- * on. A row opens the conversation in the mail reader. An empty lane only
- * says "nothing here" once Cue is actually checking.
+ * on. Rows act like the inbox's: archive, delete, snooze and reply in place,
+ * with the same shortcuts and undo, through the same mail engine commands.
+ * An empty lane only says "nothing here" once Cue is actually checking.
  */
 export function HomeDashboard() {
   const { emailAccountId, emailAccount } = useAccount();
@@ -36,9 +57,225 @@ export function HomeDashboard() {
   const greetingText = useGreeting();
   const firstName = (emailAccount?.name || "").split(" ")[0];
   const mailHref = useMailHref();
-  const threadHref = (threadId: string) =>
-    // from=today lets the reader return here rather than to the inbox.
-    `${mailHref({ threadId })}?from=today`;
+  const router = useRouter();
+  const isLargeScreen = useIsLargeScreen();
+  const engineReady = Boolean(useOptionalMailClient());
+  const rootRef = useRef<HTMLDivElement>(null);
+  const pendingFocus = useRef<string | null | undefined>(undefined);
+  // Rows the user archived, deleted or snoozed. The lanes are a server
+  // snapshot, so they're hidden here until an undo brings them back.
+  const [hidden, setHidden] = useState(NO_THREADS);
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+
+  const lanes = useMemo(() => {
+    if (!data) return null;
+    const visible = (threads: HomeThread[]) =>
+      threads.filter((thread) => !hidden.has(thread.threadId));
+    return {
+      needsYou: visible(data.needsYou),
+      waiting: visible(data.waiting),
+      alsoInInbox: visible(data.alsoInInbox).slice(0, ALSO_IN_INBOX_LIMIT),
+    };
+  }, [data, hidden]);
+  // Keyboard order, top to bottom, as the lanes render.
+  const rows = useMemo(
+    () =>
+      lanes ? [...lanes.needsYou, ...lanes.waiting, ...lanes.alsoInInbox] : [],
+    [lanes],
+  );
+  const focused = rows.find((thread) => thread.threadId === focusedId);
+  const actionable = useMemo<ActionableThread[]>(
+    () =>
+      data
+        ? [...data.needsYou, ...data.waiting, ...data.alsoInInbox].map(
+            (thread) => ({
+              id: thread.threadId,
+              messageIds: [thread.messageId],
+            }),
+          )
+        : [],
+    [data],
+  );
+  const showThreads = useCallback((threadIds: string[]) => {
+    setHidden((current) => {
+      const next = new Set(current);
+      for (const threadId of threadIds) next.delete(threadId);
+      return next;
+    });
+  }, []);
+  const {
+    archive,
+    moveToInbox,
+    setReadState,
+    setStarredState,
+    snooze,
+    trash,
+    undo,
+  } = useThreadActions({
+    emailAccountId,
+    threads: actionable,
+    onRestored: showThreads,
+  });
+
+  const threadHref = useCallback(
+    (threadId: string, reply = false) =>
+      // from=today lets the reader return here rather than to the inbox.
+      `${mailHref({ threadId })}?from=today${reply ? "&reply=1" : ""}`,
+    [mailHref],
+  );
+
+  const focusRow = (threadId: string | null) => {
+    setFocusedId(threadId);
+    pendingFocus.current = threadId;
+  };
+
+  useLayoutEffect(() => {
+    const target = pendingFocus.current;
+    if (target === undefined) return;
+    pendingFocus.current = undefined;
+    // With the last row gone, focus stays on Today rather than the body.
+    const element = target
+      ? [
+          ...(rootRef.current?.querySelectorAll<HTMLElement>(
+            "[data-today-thread]",
+          ) ?? []),
+        ]
+          .find((row) => row.dataset.todayThread === target)
+          ?.querySelector<HTMLElement>('[role="option"]')
+      : rootRef.current;
+    element?.focus({ preventScroll: !target });
+  });
+
+  // Gone at once, with focus on its neighbour; back if the engine refuses it.
+  const removeRow = useStableCallback(
+    async (
+      threadId: string,
+      run: (threadKeys: string[]) => Promise<string[]>,
+    ) => {
+      const index = rows.findIndex((thread) => thread.threadId === threadId);
+      const neighbour = rows[index + 1] ?? rows[index - 1];
+      setHidden((current) => new Set(current).add(threadId));
+      focusRow(neighbour?.threadId ?? null);
+      const done = await run([threadId]);
+      if (!done.length) showThreads([threadId]);
+    },
+  );
+
+  // Flags change in place; the server snapshot catches up on its next load.
+  const patchRow = useStableCallback(
+    async (
+      threadId: string,
+      change: Partial<HomeThread>,
+      undo: Partial<HomeThread>,
+      run: (threadKeys: string[]) => Promise<string[]>,
+    ) => {
+      mutate((current) => current && patchThread(current, threadId, change), {
+        revalidate: false,
+      });
+      const done = await run([threadId]);
+      if (!done.length) {
+        mutate((current) => current && patchThread(current, threadId, undo), {
+          revalidate: false,
+        });
+      }
+    },
+  );
+
+  const handlers = useMemo<TodayRowHandlers>(
+    () => ({
+      archive: (id) => removeRow(id, archive),
+      trash: (id) => removeRow(id, trash),
+      snooze: (id, until) => removeRow(id, (keys) => snooze(keys, until)),
+      moveToInbox: (id) =>
+        patchRow(id, { inInbox: true }, { inInbox: false }, moveToInbox),
+      setRead: (id, read) =>
+        patchRow(id, { unread: !read }, { unread: read }, (keys) =>
+          setReadState(keys, read),
+        ),
+      setStarred: (id, starred) =>
+        patchRow(id, { starred }, { starred: !starred }, (keys) =>
+          setStarredState(keys, starred),
+        ),
+      open: (id) => router.push(threadHref(id)),
+      reply: (id) => router.push(threadHref(id, true)),
+    }),
+    [
+      archive,
+      moveToInbox,
+      patchRow,
+      removeRow,
+      router,
+      setReadState,
+      setStarredState,
+      snooze,
+      threadHref,
+      trash,
+    ],
+  );
+
+  const moveFocus = (step: number) => {
+    const index = rows.findIndex((thread) => thread.threadId === focusedId);
+    const next =
+      index === -1
+        ? rows[0]
+        : rows[Math.min(Math.max(index + step, 0), rows.length - 1)];
+    if (next) focusRow(next.threadId);
+  };
+
+  // Changes go through the mail engine, which starts with the page; until it
+  // has, rows only open and reply.
+  const target = engineReady ? focused : undefined;
+
+  // The inbox's triage keys act on the focused row. `h` (snooze) and ⌘K
+  // reach it through the command palette, as they do in Mail.
+  useShortcuts({
+    next: () => moveFocus(1),
+    previous: () => moveFocus(-1),
+    archive: target?.inInbox
+      ? () => handlers.archive(target.threadId)
+      : undefined,
+    delete: target ? () => handlers.trash(target.threadId) : undefined,
+    star: target
+      ? () => handlers.setStarred(target.threadId, !target.starred)
+      : undefined,
+    markRead: target?.unread
+      ? () => handlers.setRead(target.threadId, true)
+      : undefined,
+    markUnread:
+      target && !target.unread
+        ? () => handlers.setRead(target.threadId, false)
+        : undefined,
+    reply: focused ? () => handlers.reply(focused.threadId) : undefined,
+    undo: async () => {
+      if (await undoLatestToast()) return;
+      await undo();
+    },
+  });
+
+  const setMailCommandContext = useSetAtom(mailCommandContextAtom);
+  useEffect(() => {
+    if (!target) return;
+    const id = target.threadId;
+    setMailCommandContext({
+      actions: {
+        archive: () => handlers.archive(id),
+        moveToInbox: target.inInbox
+          ? undefined
+          : () => handlers.moveToInbox(id),
+        star: () => handlers.setStarred(id, !target.starred),
+        markRead: () => handlers.setRead(id, true),
+        markUnread: () => handlers.setRead(id, false),
+        snooze: (until) => handlers.snooze(id, until),
+        trash: () => handlers.trash(id),
+      },
+      allStarred: target.starred,
+      hasRead: !target.unread,
+      hasUnread: target.unread,
+      target: { emailAccountId, threadId: id },
+      targetCount: 1,
+    });
+    return () => setMailCommandContext(null);
+  }, [emailAccountId, target, handlers, setMailCommandContext]);
 
   // The row moves lanes at once; the server catches up behind it.
   const correct = async (
@@ -82,7 +319,19 @@ export function HomeDashboard() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-8 px-4 py-6 md:px-8">
+    <div
+      className="mx-auto w-full max-w-3xl space-y-8 px-4 py-6 outline-none md:px-8"
+      onFocus={(event: FocusEvent<HTMLDivElement>) => {
+        const target = event.target as HTMLElement;
+        if (target.getAttribute("role") !== "option") return;
+        const id = target
+          .closest("[data-today-thread]")
+          ?.getAttribute("data-today-thread");
+        if (id) setFocusedId(id);
+      }}
+      ref={rootRef}
+      tabIndex={-1}
+    >
       <header>
         <PageHeading>
           {greetingText}
@@ -100,10 +349,15 @@ export function HomeDashboard() {
         loading={isLoading}
         loadingComponent={<HomeSkeleton />}
       >
-        {data ? (
+        {data && lanes ? (
           <HomeLanes
             data={data}
+            lanes={lanes}
             emailAccountId={emailAccountId}
+            focusedId={focused ? focusedId : null}
+            handlers={handlers}
+            canChange={engineReady}
+            layout={isLargeScreen ? "list" : "split"}
             onCorrect={correct}
             threadHref={threadHref}
           />
@@ -115,12 +369,27 @@ export function HomeDashboard() {
 
 function HomeLanes({
   data,
+  lanes,
   emailAccountId,
+  focusedId,
+  handlers,
+  canChange,
+  layout,
   threadHref,
   onCorrect,
 }: {
   data: GetHomeResponse;
+  lanes: {
+    needsYou: HomeThread[];
+    waiting: HomeThread[];
+    alsoInInbox: HomeThread[];
+  };
   emailAccountId: string;
+  focusedId: string | null;
+  handlers: TodayRowHandlers;
+  /** Whether the mail engine is up to take archive, delete and the rest. */
+  canChange: boolean;
+  layout: "list" | "split";
   threadHref: (threadId: string) => string;
   onCorrect: (thread: HomeThread, needsReply: boolean) => Promise<void>;
 }) {
@@ -129,9 +398,26 @@ function HomeLanes({
   const notice = cueNotice(cue, emailAccountId);
   const canCheck = !notice;
   const caughtUp =
-    canCheck && data.needsYou.length === 0 && data.waiting.length === 0;
+    canCheck && lanes.needsYou.length === 0 && lanes.waiting.length === 0;
   const drafts = data.agentTasks.filter((task) => task.kind === "draft");
   const otherTasks = data.agentTasks.filter((task) => task.kind !== "draft");
+  const row = (
+    thread: HomeThread,
+    options: { waiting?: boolean; correction?: TodayRowCorrection } = {},
+  ) => (
+    <TodayThreadRow
+      canChange={canChange}
+      correction={options.correction}
+      handlers={handlers}
+      isFocused={thread.threadId === focusedId}
+      key={thread.threadId}
+      layout={layout}
+      thread={thread}
+      waiting={options.waiting}
+    />
+  );
+  const hasFocus = (threads: HomeThread[]) =>
+    threads.some((thread) => thread.threadId === focusedId);
 
   return (
     <>
@@ -161,24 +447,27 @@ function HomeLanes({
         </p>
       ) : null}
 
-      {data.needsYou.length > 0 || (canCheck && !caughtUp) ? (
+      {lanes.needsYou.length > 0 || (canCheck && !caughtUp) ? (
         <Section
           title="Needs reply"
-          count={formatCount(data.needsYou.length, stats.needsYouCapped)}
+          count={formatCount(lanes.needsYou.length, stats.needsYouCapped)}
           empty="Nothing needs a reply."
+          isEmpty={lanes.needsYou.length === 0}
         >
-          {data.needsYou.map((thread) => (
-            <ThreadRow
-              key={thread.threadId}
-              href={threadHref(thread.threadId)}
-              thread={thread}
-              correction={{
-                label: "No reply needed",
-                icon: CheckIcon,
-                onClick: () => onCorrect(thread, false),
-              }}
-            />
-          ))}
+          <ThreadList
+            hasFocusedRow={hasFocus(lanes.needsYou)}
+            label="Needs reply"
+          >
+            {lanes.needsYou.map((thread) =>
+              row(thread, {
+                correction: {
+                  label: "No reply needed",
+                  icon: CheckIcon,
+                  onClick: () => onCorrect(thread, false),
+                },
+              }),
+            )}
+          </ThreadList>
         </Section>
       ) : null}
 
@@ -186,31 +475,33 @@ function HomeLanes({
         <Section
           title={drafts.length ? "Drafts ready for you" : "Cue is working on"}
           count={formatCount(data.agentTasks.length, false)}
+          isEmpty={false}
         >
-          {[...drafts, ...otherTasks].map((task) => (
-            <TaskRow
-              href={threadHref(task.threadId)}
-              key={task.id}
-              task={task}
-            />
-          ))}
+          <div className="-mx-4 sm:mx-0 border-border/60 border-t">
+            {[...drafts, ...otherTasks].map((task) => (
+              <TaskRow
+                href={threadHref(task.threadId)}
+                key={task.id}
+                task={task}
+              />
+            ))}
+          </div>
         </Section>
       ) : null}
 
-      {data.waiting.length > 0 || (canCheck && !caughtUp) ? (
+      {lanes.waiting.length > 0 || (canCheck && !caughtUp) ? (
         <Section
           title="Waiting on"
-          count={formatCount(data.waiting.length, stats.waitingCapped)}
+          count={formatCount(lanes.waiting.length, stats.waitingCapped)}
           empty="You're not waiting on anyone."
+          isEmpty={lanes.waiting.length === 0}
         >
-          {data.waiting.map((thread) => (
-            <ThreadRow
-              waiting
-              key={thread.threadId}
-              href={threadHref(thread.threadId)}
-              thread={thread}
-            />
-          ))}
+          <ThreadList
+            hasFocusedRow={hasFocus(lanes.waiting)}
+            label="Waiting on"
+          >
+            {lanes.waiting.map((thread) => row(thread, { waiting: true }))}
+          </ThreadList>
         </Section>
       ) : null}
 
@@ -234,9 +525,10 @@ function HomeLanes({
         </p>
       ) : null}
 
-      {data.alsoInInbox.length > 0 ? (
+      {lanes.alsoInInbox.length > 0 ? (
         <Section
           title="Also in your inbox"
+          isEmpty={false}
           action={
             <Link
               className="font-sans text-muted-foreground text-sm underline-offset-2 hover:text-foreground hover:underline"
@@ -246,23 +538,22 @@ function HomeLanes({
             </Link>
           }
         >
-          {data.alsoInInbox.slice(0, ALSO_IN_INBOX_LIMIT).map((thread) => (
-            <ThreadRow
-              compact
-              key={thread.threadId}
-              href={threadHref(thread.threadId)}
-              thread={thread}
-              correction={
-                cue.aiAccess
+          <ThreadList
+            hasFocusedRow={hasFocus(lanes.alsoInInbox)}
+            label="Also in your inbox"
+          >
+            {lanes.alsoInInbox.map((thread) =>
+              row(thread, {
+                correction: cue.aiAccess
                   ? {
                       label: "Needs reply",
-                      icon: ReplyIcon,
+                      icon: FlagIcon,
                       onClick: () => onCorrect(thread, true),
                     }
-                  : undefined
-              }
-            />
-          ))}
+                  : undefined,
+              }),
+            )}
+          </ThreadList>
         </Section>
       ) : null}
     </>
@@ -301,19 +592,22 @@ function Section({
   title,
   count,
   empty,
+  isEmpty,
   action,
   children,
 }: {
   title: string;
   count?: string;
   empty?: string;
+  isEmpty: boolean;
   action?: React.ReactNode;
-  children: React.ReactNode[];
+  children: React.ReactNode;
 }) {
+  const headingId = useId();
   return (
-    <section>
+    <section aria-labelledby={headingId}>
       <h2 className="mb-2 flex items-center gap-2 font-title text-foreground text-lg">
-        {title}
+        <span id={headingId}>{title}</span>
         {count ? (
           <span className="rounded-full bg-muted px-2 py-0.5 font-sans text-muted-foreground text-xs">
             {count}
@@ -321,109 +615,43 @@ function Section({
         ) : null}
         {action ? <span className="ml-auto">{action}</span> : null}
       </h2>
-      {children.length ? (
-        // One flat list, like the inbox, rather than a stack of cards.
-        <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
-          {children}
-        </div>
-      ) : (
+      {isEmpty ? (
         <p className="text-muted-foreground text-sm">{empty}</p>
+      ) : (
+        children
       )}
     </section>
   );
 }
 
-function ThreadRow({
-  thread,
-  href,
-  waiting,
-  compact,
-  correction,
+/**
+ * A lane of conversations, flat like the inbox and edge to edge on phones.
+ * Rows take focus one at a time (j/k or arrows move it), so Tab moves between
+ * lanes: a lane without the focused row takes Tab and hands it to its first.
+ */
+function ThreadList({
+  label,
+  hasFocusedRow,
+  children,
 }: {
-  thread: HomeThread;
-  href: string;
-  /** Show how long the user has been waiting instead of the preview. */
-  waiting?: boolean;
-  /** One line, for the rest of the inbox. */
-  compact?: boolean;
-  /** Fix Cue's call on this conversation without opening it. */
-  correction?: {
-    label: string;
-    icon: React.ComponentType<{ className?: string }>;
-    onClick: () => Promise<void>;
-  };
+  label: string;
+  hasFocusedRow: boolean;
+  children: React.ReactNode;
 }) {
-  const small = waiting || compact;
-  const [pending, setPending] = useState(false);
-  const Icon = correction?.icon;
-
   return (
-    <div className="flex items-center transition-colors hover:bg-muted/50">
-      <Link
-        className={cn(
-          "flex min-w-0 flex-1 items-start gap-3 px-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-          small ? "py-2.5" : "py-3.5",
-        )}
-        href={href}
-      >
-        <Avatar className={cn("shrink-0", small ? "size-8" : "size-10")}>
-          <AvatarFallback className="font-medium text-sm">
-            {getInitials(thread.fromName)}
-          </AvatarFallback>
-        </Avatar>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span
-              className={cn(
-                "truncate text-sm",
-                thread.unread ? "font-semibold" : "font-medium",
-              )}
-            >
-              {thread.fromName}
-            </span>
-            {thread.tag ? (
-              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-muted-foreground text-xs">
-                {thread.tag}
-              </span>
-            ) : null}
-            <span className="ml-auto shrink-0 text-muted-foreground text-xs">
-              {waiting
-                ? waitingFor(thread.at)
-                : formatShortDate(new Date(thread.at))}
-            </span>
-          </div>
-          <div className="truncate text-foreground text-sm">
-            {thread.subject}
-          </div>
-          {small ? null : (
-            <p className="mt-0.5 line-clamp-1 text-muted-foreground text-sm">
-              {thread.preview}
-            </p>
-          )}
-        </div>
-      </Link>
-      {correction && Icon ? (
-        <Button
-          aria-label={`${correction.label}: ${thread.subject}`}
-          className="mr-2 shrink-0 text-muted-foreground hover:text-foreground"
-          disabled={pending}
-          onClick={async () => {
-            setPending(true);
-            try {
-              await correction.onClick();
-            } finally {
-              setPending(false);
-            }
-          }}
-          size="sm"
-          title={correction.label}
-          type="button"
-          variant="ghost"
-        >
-          <Icon className="size-4" />
-          <span className="hidden sm:inline">{correction.label}</span>
-        </Button>
-      ) : null}
+    <div
+      aria-label={label}
+      className="-mx-4 sm:mx-0 border-border/60 border-t outline-none"
+      onFocus={(event) => {
+        if (event.target !== event.currentTarget) return;
+        event.currentTarget
+          .querySelector<HTMLElement>('[role="option"]')
+          ?.focus();
+      }}
+      role="listbox"
+      tabIndex={hasFocusedRow ? -1 : 0}
+    >
+      {children}
     </div>
   );
 }
@@ -431,7 +659,7 @@ function ThreadRow({
 function TaskRow({ task, href }: { task: AgentTask; href: string }) {
   return (
     <Link
-      className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      className="flex w-full items-center gap-3 border-border/60 border-b bg-background px-3.5 py-2.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       href={href}
     >
       <div className="min-w-0 flex-1">
@@ -484,7 +712,19 @@ function formatCount(count: number, capped: boolean) {
   return capped ? `${count}+` : String(count);
 }
 
-function waitingFor(iso: string) {
-  const days = Math.floor((Date.now() - Date.parse(iso)) / 86_400_000);
-  return days < 1 ? "Today" : `Waiting ${days}d`;
+function patchThread(
+  data: GetHomeResponse,
+  threadId: string,
+  change: Partial<HomeThread>,
+): GetHomeResponse {
+  const patch = (threads: HomeThread[]) =>
+    threads.map((thread) =>
+      thread.threadId === threadId ? { ...thread, ...change } : thread,
+    );
+  return {
+    ...data,
+    needsYou: patch(data.needsYou),
+    waiting: patch(data.waiting),
+    alsoInInbox: patch(data.alsoInInbox),
+  };
 }

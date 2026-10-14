@@ -291,8 +291,10 @@ export function MailShell() {
     : resolveRouteSlug("split", splitSlugs);
   const searchParam = routeView.kind === "search" ? routeView.q : null;
   const viewBeforeSearchRef = useRef<MailUrlView | null>(null);
+  const searchParams = useSearchParams();
   // Set by Today's rows, so closing the conversation goes back there.
-  const openedFrom = useSearchParams()?.get(OPENED_FROM_PARAM);
+  const openedFrom = searchParams?.get(OPENED_FROM_PARAM);
+  const replyRequested = searchParams?.get(OPEN_REPLY_PARAM) === "1";
 
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [isDesktopApp, setIsDesktopApp] = useState(false);
@@ -923,6 +925,13 @@ export function MailShell() {
       };
     }
   }, [composeTargetMessageId, openReaderThreadKey]);
+
+  // Consumed once, so archiving on to the next conversation doesn't reply too.
+  useEffect(() => {
+    if (!replyRequested || !openReaderThreadKey) return;
+    forgetPageParam(OPEN_REPLY_PARAM);
+    requestReaderReply();
+  }, [replyRequested, openReaderThreadKey, requestReaderReply]);
 
   const requestReaderForward = useCallback(() => {
     const messageId = composeTargetMessageId;
@@ -2153,11 +2162,17 @@ function focusOpenReply() {
 // Today links a conversation with `?from=today`. It rides along as a page
 // parameter while the reader moves, until the user leaves the conversation.
 const OPENED_FROM_PARAM = "from";
+// Today's Reply adds `?reply=1`, which starts a reply once the conversation opens.
+const OPEN_REPLY_PARAM = "reply";
 
 function forgetOpenedFrom() {
+  forgetPageParam(OPENED_FROM_PARAM);
+}
+
+function forgetPageParam(name: string) {
   const url = new URL(window.location.href);
-  if (!url.searchParams.has(OPENED_FROM_PARAM)) return;
-  url.searchParams.delete(OPENED_FROM_PARAM);
+  if (!url.searchParams.has(name)) return;
+  url.searchParams.delete(name);
   window.history.replaceState(null, "", url);
 }
 
