@@ -51,6 +51,8 @@ export type EmailEditorProps = {
   preservedBlocks?: EmailEditorPreservedBlock[];
   placeholder?: string;
   autofocus?: boolean;
+  /** Follows changes, unlike the props read once when the editor loads. */
+  spellCheck?: boolean;
   onStateChange?: (state: EmailEditorState) => void;
   onImageFiles?: (files: File[]) => void;
   // A "/" typed at a line start or after whitespace.
@@ -81,6 +83,7 @@ export const EmailEditor = forwardRef<EmailEditorHandle, EmailEditorProps>(
       preservedBlocks = [],
       placeholder = "Write a message…",
       autofocus = true,
+      spellCheck = true,
       onStateChange,
       onImageFiles,
       onSlashKeyDown,
@@ -121,6 +124,7 @@ export const EmailEditor = forwardRef<EmailEditorHandle, EmailEditorProps>(
           placeholder={initialState.placeholder}
           preservedBlocks={initialState.preservedBlocks}
           resolveRemoteImages={resolveRemoteImages}
+          spellCheck={spellCheck}
         />
       </Suspense>
     );

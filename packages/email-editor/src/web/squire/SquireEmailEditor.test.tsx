@@ -546,6 +546,21 @@ describe("Squire email editor", () => {
   });
 });
 
+describe("spell checking", () => {
+  // Text the user didn't write shouldn't arrive covered in squiggles.
+  it("follows the spellCheck prop after the editor has loaded", async () => {
+    const view = render(<EmailEditor initialHtml="" spellCheck={false} />);
+    const textbox = await screen.findByRole("textbox", {
+      name: "Email message",
+    });
+    expect(textbox.getAttribute("spellcheck")).toBe("false");
+
+    view.rerender(<EmailEditor initialHtml="" spellCheck />);
+
+    expect(textbox.getAttribute("spellcheck")).toBe("true");
+  });
+});
+
 async function renderEditor(props: Partial<EmailEditorProps>) {
   const ref = createRef<EmailEditorHandle>();
   const onStateChange = vi.fn();

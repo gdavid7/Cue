@@ -49,6 +49,7 @@ type SquireEmailEditorProps = {
   initialMode: EmailBodyMode;
   placeholder: string;
   preservedBlocks: RenderedPreservedEmailBlock[];
+  spellCheck: boolean;
   onImageFiles?: (files: File[]) => void;
   onSlashKeyDown?: (event: KeyboardEvent) => boolean;
   onSlashTrigger?: (trigger: EmailEditorSlashTrigger | null) => void;
@@ -779,6 +780,7 @@ export const SquireEmailEditor = forwardRef<
             dir="auto"
             ref={rootRef}
             role="textbox"
+            spellCheck={props.spellCheck}
             style={
               {
                 "--email-editor-placeholder": JSON.stringify(placeholder),

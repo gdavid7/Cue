@@ -1681,6 +1681,9 @@ function ComposeEmailFormContent({
         placeholder={isInlineReply ? "" : undefined}
         appearance={isComposeWindow || isInlineReply ? "seamless" : "contained"}
         autofocus={autoFocus && !focusRecipientField}
+        // Cue's reply is full of course codes and times a dictionary flags.
+        // Checking comes back with the user's first edit.
+        spellCheck={!isCueSuggestion}
         onSlashKeyDown={onSlashKeyDown}
         onSlashTrigger={onSlashTrigger}
         ref={editorRef}
