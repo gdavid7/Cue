@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { after } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { captureException } from "@/utils/error";
 import {
@@ -40,18 +42,45 @@ describe("server actions and the Gmail quota gate", () => {
     expect(captureException).not.toHaveBeenCalled();
   });
 
-  it("charges a clicked action's Gmail calls as interactive and an action the app fires as background", async () => {
-    const priorityIn = (name: string) =>
-      actionClientUser
-        .metadata({ name })
-        .action(async () => currentGmailQuotaContext())();
+  it("charges an action's Gmail calls at the priority it declares, and a click when it declares none", async () => {
+    const clicked = await actionClientUser
+      .metadata({ name: "archiveThread" })
+      .action(async () => currentGmailQuotaContext())();
+    const bulk = await actionClientUser
+      .metadata({ name: "bulkArchive", gmailPriority: "sync" })
+      .action(async () => currentGmailQuotaContext())();
 
-    expect((await priorityIn("bulkArchive"))?.data).toEqual({
-      caller: "bulkArchive",
+    expect(clicked?.data).toEqual({
+      caller: "archiveThread",
       priority: "interactive",
     });
-    expect((await priorityIn("assessUser"))?.data).toEqual({
-      caller: "assessUser",
+    expect(bulk?.data).toEqual({ caller: "bulkArchive", priority: "sync" });
+  });
+
+  it("runs work an action leaves for after the response as background", async () => {
+    // Next runs after() callbacks in the context they were registered from.
+    const callbacks: Array<() => unknown> = [];
+    vi.mocked(after).mockImplementation((callback) => {
+      callbacks.push(AsyncLocalStorage.bind(callback as () => unknown));
+    });
+    let afterResponse: unknown = null;
+    const result = await actionClientUser
+      .metadata({ name: "cleanInbox" })
+      .action(async () => {
+        after(() => {
+          afterResponse = currentGmailQuotaContext();
+        });
+        return currentGmailQuotaContext();
+      })();
+
+    for (const callback of callbacks) await callback();
+
+    expect(result?.data).toEqual({
+      caller: "cleanInbox",
+      priority: "interactive",
+    });
+    expect(afterResponse).toEqual({
+      caller: "cleanInbox",
       priority: "background",
     });
   });

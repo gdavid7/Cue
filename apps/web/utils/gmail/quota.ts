@@ -35,7 +35,12 @@ const INITIAL_SYNC_REFRESH_MS = 30_000;
 const STORE_TIMEOUT_MS = 300;
 const BACKGROUND_PAUSE_MIN_MS = 30_000;
 
-export type GmailQuotaPriority = "interactive" | "sync" | "background";
+export const GMAIL_QUOTA_PRIORITIES = [
+  "interactive",
+  "sync",
+  "background",
+] as const;
+export type GmailQuotaPriority = (typeof GMAIL_QUOTA_PRIORITIES)[number];
 
 type GmailQuotaContext = { caller: string; priority: GmailQuotaPriority };
 
@@ -134,14 +139,6 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
 // Jobs nobody waits on; a durable send one delivers raises itself to
 // interactive.
 const BACKGROUND_NAMESPACES = ["cron/", "resend/"];
-// Server actions are a person's clicks, except these the app fires by itself
-// when a page loads.
-const BACKGROUND_ACTIONS = new Set([
-  "loadEmailStats",
-  "assessUser",
-  "analyzeWritingStyle",
-  "whitelistInboxZero",
-]);
 
 const quotaContext = new AsyncLocalStorage<GmailQuotaContext>();
 const logger = createScopedLogger("gmail-quota");
@@ -197,14 +194,26 @@ export function runWithGmailQuota<T>(
   );
 }
 
-/** The priority of a server action's Gmail calls: a click, unless the app fires it. */
-export function gmailQuotaPriorityForAction(name: string): GmailQuotaPriority {
-  return BACKGROUND_ACTIONS.has(name) ? "background" : "interactive";
+/**
+ * Runs a request's own work at `priority`. Nobody waits on what it leaves
+ * running once it settles, such as `after()` callbacks, so that drops to
+ * background and cannot hold the bucket down while sync and webhooks wait.
+ */
+export async function runGmailQuotaRequest<T>(
+  context: GmailQuotaContext,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const store: GmailQuotaContext = { ...context };
+  try {
+    return await quotaContext.run(store, operation);
+  } finally {
+    store.priority = "background";
+  }
 }
 
 export function currentGmailQuotaContext(): GmailQuotaContext {
   const explicit = quotaContext.getStore();
-  if (explicit) return explicit;
+  if (explicit) return { ...explicit };
   const caller = normalizeCaller(getAuditContext().source);
   return { caller, priority: priorityForCaller(caller) };
 }
@@ -458,10 +467,7 @@ export function gmailRequestCost(method: string, url: string | URL): number {
 function priorityForCaller(caller: string): GmailQuotaPriority {
   const routePriority = ROUTE_PRIORITY.get(caller);
   if (routePriority) return routePriority;
-  if (
-    BACKGROUND_ACTIONS.has(caller) ||
-    BACKGROUND_NAMESPACES.some((prefix) => caller.startsWith(prefix))
-  )
+  if (BACKGROUND_NAMESPACES.some((prefix) => caller.startsWith(prefix)))
     return "background";
   return "sync";
 }

@@ -58,7 +58,7 @@ export const updateEmailAccountRoleAction = actionClient
   );
 
 export const analyzePersonaAction = actionClient
-  .metadata({ name: "analyzePersona" })
+  .metadata({ name: "analyzePersona", gmailPriority: "background" })
   .action(async ({ ctx: { emailAccountId, provider, logger } }) => {
     const existingPersona = await prisma.emailAccount.findUnique({
       where: { id: emailAccountId },
@@ -168,7 +168,7 @@ export const updateSentMessageOpenTrackingAction = actionClient
   );
 
 export const fetchSignaturesFromProviderAction = actionClient
-  .metadata({ name: "fetchSignaturesFromProvider" })
+  .metadata({ name: "fetchSignaturesFromProvider", gmailPriority: "sync" })
   .action(async ({ ctx: { emailAccountId, provider, logger } }) => {
     const emailProvider = await createEmailProvider({
       emailAccountId,

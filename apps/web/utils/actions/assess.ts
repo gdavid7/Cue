@@ -15,7 +15,7 @@ const STYLE_SAMPLE_SIZE = 20;
 
 // to help with onboarding and provide the best flow to new users
 export const assessAction = actionClient
-  .metadata({ name: "assessUser" })
+  .metadata({ name: "assessUser", gmailPriority: "background" })
   .action(async ({ ctx: { emailAccountId, provider, logger } }) => {
     const emailProvider = await createEmailProvider({
       emailAccountId,
@@ -40,7 +40,7 @@ export const assessAction = actionClient
   });
 
 export const analyzeWritingStyleAction = actionClient
-  .metadata({ name: "analyzeWritingStyle" })
+  .metadata({ name: "analyzeWritingStyle", gmailPriority: "background" })
   .action(async ({ ctx: { emailAccountId, provider, logger } }) => {
     const emailAccount = await prisma.emailAccount.findUnique({
       where: { id: emailAccountId },

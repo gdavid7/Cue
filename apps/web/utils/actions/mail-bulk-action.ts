@@ -8,7 +8,7 @@ import {
 import { createEmailProvider } from "@/utils/email/provider";
 
 export const bulkArchiveThreadsAction = actionClient
-  .metadata({ name: "bulkArchiveThreads" })
+  .metadata({ name: "bulkArchiveThreads", gmailPriority: "sync" })
   .inputSchema(bulkArchiveThreadsActionSchema)
   .action(
     async ({
@@ -41,7 +41,7 @@ export const bulkArchiveThreadsAction = actionClient
   );
 
 export const bulkArchiveAction = actionClient
-  .metadata({ name: "bulkArchive" })
+  .metadata({ name: "bulkArchive", gmailPriority: "sync" })
   .inputSchema(bulkSenderActionSchema)
   .action(
     async ({
@@ -63,7 +63,7 @@ export const bulkArchiveAction = actionClient
   );
 
 export const bulkTrashAction = actionClient
-  .metadata({ name: "bulkTrash" })
+  .metadata({ name: "bulkTrash", gmailPriority: "sync" })
   .inputSchema(bulkSenderActionSchema)
   .action(
     async ({

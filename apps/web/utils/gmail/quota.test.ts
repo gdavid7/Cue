@@ -8,7 +8,6 @@ import { createScopedLogger } from "@/utils/logger";
 import {
   currentGmailQuotaContext,
   GmailCallDeferredError,
-  gmailQuotaPriorityForAction,
   gmailRequestCost,
   meterGmailCall,
   runWithGmailQuota,
@@ -316,19 +315,6 @@ describe("Gmail quota gate", () => {
       "user/stats-preview",
     ])
       expect([source, priorityOf(source)]).toEqual([source, "sync"]);
-  });
-
-  it("admits a server action a person clicked as interactive, and actions the app fires itself as background", () => {
-    expect(gmailQuotaPriorityForAction("bulkArchive")).toBe("interactive");
-    expect(gmailQuotaPriorityForAction("unsubscribeSender")).toBe(
-      "interactive",
-    );
-    expect(gmailQuotaPriorityForAction("sendEmail")).toBe("interactive");
-    expect(gmailQuotaPriorityForAction("loadEmailStats")).toBe("background");
-    expect(gmailQuotaPriorityForAction("assessUser")).toBe("background");
-    expect(gmailQuotaPriorityForAction("analyzeWritingStyle")).toBe(
-      "background",
-    );
   });
 
   it("never puts the account in rate-limit mode for the gate's own deferral", async () => {

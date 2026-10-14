@@ -51,7 +51,7 @@ export const updateFollowUpSettingsAction = actionClient
   );
 
 export const scanFollowUpRemindersAction = actionClient
-  .metadata({ name: "scanFollowUpReminders" })
+  .metadata({ name: "scanFollowUpReminders", gmailPriority: "sync" })
   .inputSchema(z.object({}))
   .action(async ({ ctx: { emailAccountId, logger } }) => {
     const emailAccount = await prisma.emailAccount.findUnique({
