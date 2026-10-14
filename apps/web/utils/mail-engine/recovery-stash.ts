@@ -12,7 +12,8 @@ const RECOVERY_DELETE_BLOCKED_WAIT_MS = 5000;
 
 /**
  * Holds drafts and unsent commands while a corrupt mailbox is rebuilt. Without
- * IndexedDB the work only lives as long as this page.
+ * IndexedDB the work only lives as long as this page; a write or clear that
+ * IndexedDB fails is reported, so the rebuild stops rather than lose work.
  */
 export function createMailRecoveryStash(): PendingMailWorkStash {
   let fallback: PendingMailWork | null = null;
@@ -29,10 +30,12 @@ export function createMailRecoveryStash(): PendingMailWorkStash {
     },
     async write(work) {
       fallback = work;
+      if (typeof indexedDB === "undefined") return;
       await withStore("readwrite", (store) => store.put(work, RECOVERY_KEY));
     },
     async clear() {
       fallback = null;
+      if (typeof indexedDB === "undefined") return;
       await withStore("readwrite", (store) => store.delete(RECOVERY_KEY));
     },
   };

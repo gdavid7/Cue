@@ -184,14 +184,18 @@ export async function openMailStoreWithRecovery(input: {
     }
     input.onRebuild?.();
     if (driver) {
+      const current = await readPendingMailWork(driver);
+      const settled = await readSettledCommandKeys(driver);
+      await driver.close().catch(() => undefined);
       carried = mergePendingWork(
         carried,
-        ownedWork(await readPendingMailWork(driver), input.ownedAccountIds),
+        ownedWork(current, input.ownedAccountIds),
+        settled,
       );
-      await driver.close().catch(() => undefined);
     }
-    // Written before the wipe so the work outlives a reload mid-rebuild.
-    if (carried) await input.stash.write(carried).catch(() => undefined);
+    // Written before the wipe so the work outlives a reload mid-rebuild; a
+    // mailbox whose work cannot be kept aside is left as it is.
+    if (carried) await input.stash.write(carried);
     await input.wipe();
     const fresh = await input.open();
     opened = {
@@ -202,7 +206,16 @@ export async function openMailStoreWithRecovery(input: {
   if (carried) {
     await restorePendingMailWork(opened.store, opened.driver, carried);
   }
-  if (carried || stashed) await input.stash.clear().catch(() => undefined);
+  if (carried || stashed) {
+    try {
+      await input.stash.clear();
+    } catch (error) {
+      // Work left in the stash would be restored again on a later open, after
+      // the engine sent the draft or finished the command.
+      await opened.store.close().catch(() => undefined);
+      throw error;
+    }
+  }
   return opened.store;
 }
 
@@ -335,30 +348,81 @@ async function insertIgnoring(
   }
 }
 
+/**
+ * Merges work stashed by an earlier rebuild with what the mailbox holds now.
+ * The mailbox's copy is newer: a draft keeps its highest revision, and a
+ * command the mailbox has since settled is not carried again.
+ */
 function mergePendingWork(
   earlier: PendingMailWork | null,
   later: PendingMailWork,
+  settledCommands: Set<string>,
 ): PendingMailWork | null {
-  const merged = earlier
-    ? {
-        accounts: [...earlier.accounts, ...later.accounts],
-        drafts: [...earlier.drafts, ...later.drafts],
-        operations: [...earlier.operations, ...later.operations],
-        operationTargets: [
-          ...earlier.operationTargets,
-          ...later.operationTargets,
-        ],
-        operationConversations: [
-          ...earlier.operationConversations,
-          ...later.operationConversations,
-        ],
-      }
-    : later;
+  let merged = later;
+  if (earlier) {
+    const operations = latestByKey(
+      [
+        ...earlier.operations.filter(
+          (row) => !settledCommands.has(commandKey(row)),
+        ),
+        ...later.operations,
+      ],
+      commandKey,
+    );
+    const kept = new Set(operations.map(commandKey));
+    const ofKeptCommand = (row: SqlRow) => kept.has(commandKey(row));
+    merged = {
+      accounts: latestByKey(
+        [...earlier.accounts, ...later.accounts],
+        (account) => account.accountId,
+      ),
+      drafts: highestDraftRevisions([...earlier.drafts, ...later.drafts]),
+      operations,
+      operationTargets: latestByKey(
+        [...earlier.operationTargets, ...later.operationTargets],
+        (row) => `${commandKey(row)}\u0000${String(row.message_id)}`,
+      ).filter(ofKeptCommand),
+      operationConversations: latestByKey(
+        [...earlier.operationConversations, ...later.operationConversations],
+        (row) => `${commandKey(row)}\u0000${String(row.conversation_id)}`,
+      ).filter(ofKeptCommand),
+    };
+  }
   const empty =
     merged.accounts.length === 0 &&
     merged.drafts.length === 0 &&
     merged.operations.length === 0;
   return empty ? null : merged;
+}
+
+async function readSettledCommandKeys(driver: SqliteDriver) {
+  const finished = FINISHED_OPERATION_STATUSES.map((status) => `'${status}'`);
+  const rows = await readRows(
+    driver,
+    `SELECT account_id, command_id FROM operations WHERE status IN (${finished.join(",")})`,
+  );
+  return new Set(rows.map(commandKey));
+}
+
+function commandKey(row: SqlRow) {
+  return `${String(row.account_id)}\u0000${String(row.command_id)}`;
+}
+
+/** Later rows replace earlier ones with the same key. */
+function latestByKey<T>(rows: T[], keyOf: (row: T) => string): T[] {
+  return [...new Map(rows.map((row) => [keyOf(row), row])).values()];
+}
+
+function highestDraftRevisions(drafts: SqlRow[]) {
+  const newest = new Map<string, SqlRow>();
+  for (const draft of drafts) {
+    const key = `${String(draft.account_id)}\u0000${String(draft.draft_id)}`;
+    const current = newest.get(key);
+    if (!current || Number(draft.revision) >= Number(current.revision)) {
+      newest.set(key, draft);
+    }
+  }
+  return [...newest.values()];
 }
 
 function ownedWork(

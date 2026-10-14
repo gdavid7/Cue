@@ -267,6 +267,102 @@ describe("openMailStoreWithRecovery", () => {
     await store.close();
   });
 
+  it("leaves a corrupt mailbox in place when its unsent work cannot be stashed", async () => {
+    const path = await seededMailbox();
+    const wipe = vi.fn(() => wipeNodeMailbox(path));
+    const stashFull = new DOMException("quota exceeded", "QuotaExceededError");
+
+    await expect(
+      openMailStoreWithRecovery({
+        open: async () => failingWrites(createNodeSqliteDriver(path)),
+        wipe,
+        stash: {
+          ...memoryStash(),
+          write: async () => {
+            throw stashFull;
+          },
+        },
+        ownedAccountIds: ["acc-1"],
+      }),
+    ).rejects.toBe(stashFull);
+
+    expect(wipe).not.toHaveBeenCalled();
+    expect((await pendingWorkFrom(path)).drafts).toHaveLength(1);
+  });
+
+  it("does not hand out a mailbox whose restored work is still stashed", async () => {
+    // Left in the stash, the work would be restored again on a later open,
+    // after the engine had sent the draft or finished the command.
+    const path = await seededMailbox();
+    const stash = memoryStash();
+    const clearFailed = new Error("stash clear failed");
+
+    await expect(
+      openMailStoreWithRecovery({
+        open: corruptOnFirstOpen(path),
+        wipe: () => wipeNodeMailbox(path),
+        stash: {
+          ...stash,
+          clear: async () => {
+            throw clearFailed;
+          },
+        },
+        ownedAccountIds: ["acc-1"],
+      }),
+    ).rejects.toBe(clearFailed);
+
+    const store = await openMailStoreWithRecovery({
+      open: async () => createNodeSqliteDriver(path),
+      wipe: () => wipeNodeMailbox(path),
+      stash,
+      ownedAccountIds: ["acc-1"],
+    });
+    expect(await stash.read()).toBeNull();
+    expect(await store.readDraft(DRAFT)).toMatchObject({ status: "found" });
+    await store.close();
+  });
+
+  it("keeps the newest copy of carried work when a stale stash meets the mailbox", async () => {
+    const path = await mailboxPath();
+    const stale = await seedThenAdvance(path);
+    const stash = memoryStash();
+    await stash.write(stale);
+    let opens = 0;
+
+    const store = await openMailStoreWithRecovery({
+      open: async () => {
+        opens += 1;
+        const driver = createNodeSqliteDriver(path);
+        return opens === 1 ? failingWrites(driver) : driver;
+      },
+      wipe: () => wipeNodeMailbox(path),
+      stash,
+      ownedAccountIds: ["acc-1"],
+    });
+
+    expect(await store.readDraft(DRAFT)).toMatchObject({
+      status: "found",
+      draftRevision: 2,
+      content: { editableHtml: "<p>Friday works.</p>" },
+    });
+    // done-1 succeeded after the stash was written; it must not run again.
+    const finished = await store.readOperation({
+      accountId: "acc-1",
+      operationId: "done-1",
+    });
+    expect(finished.operation).toBeNull();
+    await store.close();
+    const driver = createNodeSqliteDriver(path);
+    const [counts] = await driver.read((tx) =>
+      tx.query(
+        `SELECT (SELECT COUNT(*) FROM operations) AS operations,
+                (SELECT COUNT(*) FROM operation_targets) AS targets`,
+      ),
+    );
+    expect(counts).toEqual({ operations: 1, targets: 1 });
+    await driver.close();
+  });
+
   it("leaves a mailbox held elsewhere untouched for the caller to retry", async () => {
     const path = await mailboxPath();
     await seedPendingWork(path);
@@ -308,6 +404,50 @@ async function pendingWorkFrom(path: string) {
   return work;
 }
 
+/**
+ * Seeds pending work and returns a snapshot of it, then moves the mailbox on:
+ * the draft is saved again and done-1 succeeds.
+ */
+async function seedThenAdvance(path: string) {
+  const driver = createNodeSqliteDriver(path);
+  const store = await createSqliteMailStore(driver);
+  await store.ensureAccount({
+    accountId: "acc-1",
+    provider: "google",
+    generation: "g1",
+  });
+  const content = {
+    to: ["ada@example.com"],
+    cc: [],
+    bcc: [],
+    subject: "Re: Plans",
+    editableHtml: "<p>Thursday works.</p>",
+    quotedHtml: "",
+  };
+  await store.saveDraft({ key: DRAFT, expectedRevision: null, content });
+  for (const commandId of ["archive-1", "done-1"]) {
+    await store.admitMetadata({
+      accountId: "acc-1",
+      commandId,
+      targets: [{ accountId: "acc-1", messageId: `m-${commandId}` }],
+      change: { kind: "archive" },
+    });
+  }
+  const snapshot = await readPendingMailWork(driver);
+  await store.saveDraft({
+    key: DRAFT,
+    expectedRevision: 1,
+    content: { ...content, editableHtml: "<p>Friday works.</p>" },
+  });
+  await driver.write((tx) =>
+    tx.execute(
+      "UPDATE operations SET status = 'succeeded' WHERE command_id = 'done-1'",
+    ),
+  );
+  await store.close();
+  return snapshot;
+}
+
 async function seedPendingWork(path: string) {
   const driver = createNodeSqliteDriver(path);
   const store = await createSqliteMailStore(driver);
@@ -346,6 +486,15 @@ async function seedPendingWork(path: string) {
     ),
   );
   await store.close();
+}
+
+function corruptOnFirstOpen(path: string) {
+  let opens = 0;
+  return async () => {
+    opens += 1;
+    const driver = createNodeSqliteDriver(path);
+    return opens === 1 ? failingWrites(driver) : driver;
+  };
 }
 
 /** A mailbox whose migration fails: it still reads, but nothing commits. */
