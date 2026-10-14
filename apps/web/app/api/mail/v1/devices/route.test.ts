@@ -4,6 +4,7 @@ import {
   MobilePushPlatform,
   MobilePushTokenType,
 } from "@/generated/prisma/enums";
+import { Prisma } from "@/generated/prisma/client";
 import prisma from "@/utils/__mocks__/prisma";
 
 vi.mock("@/utils/prisma");
@@ -24,11 +25,11 @@ describe("/api/mail/v1/devices", () => {
     vi.clearAllMocks();
   });
 
-  it("registers an APNs token for the authenticated user, including one another user already has", async () => {
+  it("registers an APNs token for the authenticated user", async () => {
     const response = await POST(request("POST", deviceBody()), {} as never);
 
     expect(prisma.mobilePushToken.upsert).toHaveBeenCalledWith({
-      where: { token },
+      where: { token, userId: "user-1" },
       create: {
         token,
         platform: MobilePushPlatform.IOS,
@@ -45,6 +46,23 @@ describe("/api/mail/v1/devices", () => {
     });
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true });
+  });
+
+  it("refuses a token that is registered to another user", async () => {
+    prisma.mobilePushToken.upsert.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+        code: "P2002",
+        clientVersion: "test",
+        meta: { target: ["token"] },
+      }),
+    );
+
+    const response = await POST(request("POST", deviceBody()), {} as never);
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      isKnownError: true,
+    });
   });
 
   it("stores no app version when the client omits it", async () => {
