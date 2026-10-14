@@ -20,6 +20,7 @@ import {
   getAllInboxesAccounts,
 } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { ProfileImage } from "@/components/ProfileImage";
+import { ThemeSubmenu } from "@/components/ThemeSubmenu";
 import { Kbd } from "@/components/Kbd";
 import {
   Dialog,
@@ -278,6 +279,7 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
             <SettingsIcon className="size-4 text-muted-foreground" />
             Settings
           </DropdownMenuItem>
+          <ThemeSubmenu className={rowClassName} />
           {/* Phones have no keyboard to need the list. */}
           {variant === "sidebar" ? (
             <DropdownMenuItem

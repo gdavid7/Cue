@@ -34,7 +34,7 @@ export function BarListCard({ tabs, icon, title }: BarListCardProps) {
   return (
     <Card className="h-full bg-background relative overflow-x-hidden w-full max-w-full">
       <CardHeader className="p-0 overflow-x-hidden">
-        <div className="px-3 sm:px-5 flex items-center justify-between border-b border-neutral-200 min-w-0 gap-2">
+        <div className="px-3 sm:px-5 flex items-center justify-between border-b border-border min-w-0 gap-2">
           <div className="min-w-0 flex-1">
             <TabSelect
               options={tabs.map((d) => ({ id: d.id, label: d.label }))}
@@ -44,7 +44,7 @@ export function BarListCard({ tabs, icon, title }: BarListCardProps) {
           </div>
           <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
             {icon}
-            <p className="text-xs text-neutral-500 whitespace-nowrap">
+            <p className="text-xs text-muted-foreground whitespace-nowrap">
               {title.toUpperCase()}
             </p>
           </div>
@@ -82,10 +82,10 @@ export function BarListCard({ tabs, icon, title }: BarListCardProps) {
                     </Button>
                   </DialogTrigger>
                   <DialogContent className="max-w-2xl p-0 gap-0">
-                    <DialogHeader className="px-6 py-4 border-b border-neutral-200">
+                    <DialogHeader className="px-6 py-4 border-b border-border">
                       <div className="flex items-center gap-2">
                         {icon}
-                        <DialogTitle className="text-base text-neutral-900 font-medium">
+                        <DialogTitle className="text-base text-foreground font-medium">
                           {title}
                         </DialogTitle>
                       </div>

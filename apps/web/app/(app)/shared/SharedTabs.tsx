@@ -52,7 +52,7 @@ export function SharedTabs() {
           </Select>
         )}
       </div>
-      <div className="border-b border-neutral-200">
+      <div className="border-b border-border">
         <TabSelect
           options={[
             {

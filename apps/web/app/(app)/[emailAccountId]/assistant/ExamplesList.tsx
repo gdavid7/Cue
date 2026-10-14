@@ -154,6 +154,6 @@ function getIconColorClass(color: Color): string {
     case "indigo":
       return "text-indigo-600 dark:text-indigo-400";
     default:
-      return "text-gray-600 dark:text-gray-400";
+      return "text-muted-foreground";
   }
 }

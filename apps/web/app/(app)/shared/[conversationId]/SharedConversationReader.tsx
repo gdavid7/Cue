@@ -95,7 +95,10 @@ function AuthorizedReader({
         {messages.data?.status === "available" && (
           <div className="space-y-4">
             {!messages.data.complete && (
-              <p className="text-amber-700 text-sm" role="status">
+              <p
+                className="text-amber-700 dark:text-amber-400 text-sm"
+                role="status"
+              >
                 This email history is incomplete.
               </p>
             )}

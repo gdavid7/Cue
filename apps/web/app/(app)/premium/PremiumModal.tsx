@@ -10,17 +10,19 @@ const modalTiers = tiers.filter((tier) => tier.name !== "Enterprise");
 function PricingDialogHeader() {
   return (
     <div className="mb-4 text-center">
-      <h2 className="font-title text-2xl text-gray-900">Upgrade to Premium</h2>
+      <h2 className="font-title text-2xl text-foreground">
+        Upgrade to Premium
+      </h2>
     </div>
   );
 }
 
 function EnterpriseFooter() {
   return (
-    <div className="flex items-center justify-between rounded-3xl border border-gray-200 bg-white p-4">
+    <div className="flex items-center justify-between rounded-3xl border border-border bg-card p-4">
       <div>
-        <h3 className="font-semibold text-gray-900">Enterprise</h3>
-        <p className="text-sm text-gray-600">
+        <h3 className="font-semibold text-foreground">Enterprise</h3>
+        <p className="text-sm text-muted-foreground">
           SSO, SCIM, on-premise deployment, and dedicated support for large
           teams.
         </p>
@@ -41,7 +43,7 @@ export function usePremiumModal() {
     return (
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
         {/* premium upgrade doesn't support dark mode yet as it appears on homepage */}
-        <DialogContent className="max-w-6xl bg-white">
+        <DialogContent className="max-w-6xl">
           <Pricing
             header={<PricingDialogHeader />}
             displayTiers={modalTiers}

@@ -119,7 +119,7 @@ function ChooseJoinRule({
         <PageHeading>Which meetings should we join?</PageHeading>
 
         <MutedText className="flex flex-wrap items-center gap-x-2">
-          <CheckIcon className="size-4 shrink-0 text-green-600" />
+          <CheckIcon className="size-4 shrink-0 text-green-600 dark:text-green-400" />
           {userEmail} connected
           <TextLink href={`/${emailAccountId}/calendars`}>Change</TextLink>
         </MutedText>

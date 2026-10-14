@@ -198,7 +198,10 @@ export function FixWithChat({
                   aria-describedby="explanation-help"
                   autoFocus
                 />
-                <p id="explanation-help" className="mt-1 text-xs text-gray-500">
+                <p
+                  id="explanation-help"
+                  className="mt-1 text-xs text-muted-foreground"
+                >
                   An explanation helps Cue understand what you meant.
                 </p>
               </div>

@@ -59,8 +59,8 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
 
     if (items.length === 0) {
       return (
-        <div className="relative rounded-md border border-slate-200 bg-white px-2 py-2 text-sm shadow-md">
-          <div className="text-slate-500">
+        <div className="relative rounded-md border bg-popover px-2 py-2 text-sm text-popover-foreground shadow-md">
+          <div className="text-muted-foreground">
             No labels found. Type to create a new label.
           </div>
         </div>
@@ -68,14 +68,14 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
     }
 
     return (
-      <div className="relative max-h-60 overflow-auto rounded-md border border-slate-200 bg-white shadow-md">
+      <div className="relative max-h-60 overflow-auto rounded-md border bg-popover text-popover-foreground shadow-md">
         {items.map((item, index) => (
           <button
             key={item.id}
             type="button"
             className={cn(
-              "flex w-full items-center px-3 py-2 text-left text-sm hover:bg-slate-100",
-              index === selectedIndex && "bg-slate-100",
+              "flex w-full items-center px-3 py-2 text-left text-sm hover:bg-accent",
+              index === selectedIndex && "bg-accent",
             )}
             onClick={() => selectItem(index)}
           >
@@ -85,7 +85,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
                   <strong>Create label:</strong>{" "}
                   <span className="font-medium">{item.name}</span>
                 </span>
-                <span className="ml-2 text-xs text-slate-500">+</span>
+                <span className="ml-2 text-xs text-muted-foreground">+</span>
               </>
             ) : (
               <span className="flex-1 truncate">{item.name}</span>

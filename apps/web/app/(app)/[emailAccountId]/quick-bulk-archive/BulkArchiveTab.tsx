@@ -45,7 +45,7 @@ const confidenceConfig = {
     label: "Safe to Archive",
     description: "Marketing emails and newsletters you likely don't need",
     icon: MailXIcon,
-    color: "text-green-600",
+    color: "text-green-600 dark:text-green-400",
     bgColor: "bg-green-50 dark:bg-green-950/30",
     hoverBgColor: "hover:bg-green-100 dark:hover:bg-green-950/50",
     borderColor: "border-green-200 dark:border-green-900",
@@ -55,7 +55,7 @@ const confidenceConfig = {
     label: "Probably Safe",
     description: "Automated notifications and updates",
     icon: BellOffIcon,
-    color: "text-amber-600",
+    color: "text-amber-600 dark:text-amber-400",
     bgColor: "bg-amber-50 dark:bg-amber-950/30",
     hoverBgColor: "hover:bg-amber-100 dark:hover:bg-amber-950/50",
     borderColor: "border-amber-200 dark:border-amber-900",
@@ -65,7 +65,7 @@ const confidenceConfig = {
     label: "Review Recommended",
     description: "Senders that may need a closer look",
     icon: MailOpenIcon,
-    color: "text-blue-600",
+    color: "text-blue-600 dark:text-blue-400",
     bgColor: "bg-blue-50 dark:bg-blue-950/30",
     hoverBgColor: "hover:bg-blue-100 dark:hover:bg-blue-950/50",
     borderColor: "border-blue-200 dark:border-blue-900",
@@ -513,7 +513,7 @@ function ArchiveStatus({
       return <span className="text-sm text-muted-foreground">Queued</span>;
     case "processing":
       return (
-        <span className="text-sm text-blue-600">
+        <span className="text-sm text-blue-600 dark:text-blue-400">
           {status.threadsTotal
             ? `${status.threadsTotal - status.threadIds.length} / ${status.threadsTotal}`
             : "Archiving..."}
@@ -526,7 +526,9 @@ function ArchiveStatus({
         </span>
       );
     case "failed":
-      return <span className="text-sm text-red-600">Failed</span>;
+      return (
+        <span className="text-sm text-red-600 dark:text-red-400">Failed</span>
+      );
     default:
       return null;
   }

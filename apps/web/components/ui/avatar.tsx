@@ -39,7 +39,7 @@ const AvatarFallback = React.forwardRef<
   <AvatarPrimitive.Fallback
     ref={ref}
     className={cn(
-      "flex h-full w-full items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800",
+      "flex h-full w-full items-center justify-center rounded-full bg-muted",
       className,
     )}
     {...props}
@@ -58,13 +58,13 @@ const AvatarFallbackColor = React.forwardRef<
 >(({ content, className, ...props }, ref) => {
   const colors = [
     // "bg-gray-50 text-gray-600 ring-gray-500/10",
-    "bg-red-50 text-red-700 ring-red-600/10",
-    "bg-yellow-50 text-yellow-800 ring-yellow-600/20",
-    "bg-green-50 text-green-700 ring-green-600/10",
-    "bg-blue-50 text-blue-700 ring-blue-600/10",
-    "bg-indigo-50 text-indigo-700 ring-indigo-600/10",
-    "bg-purple-50 text-purple-700 ring-purple-600/10",
-    "bg-pink-50 text-pink-700 ring-pink-600/10",
+    "bg-red-50 text-red-700 ring-red-600/10 dark:bg-red-950 dark:text-red-300",
+    "bg-yellow-50 text-yellow-800 ring-yellow-600/20 dark:bg-yellow-950 dark:text-yellow-300",
+    "bg-green-50 text-green-700 ring-green-600/10 dark:bg-green-950 dark:text-green-300",
+    "bg-blue-50 text-blue-700 ring-blue-600/10 dark:bg-blue-950 dark:text-blue-300",
+    "bg-indigo-50 text-indigo-700 ring-indigo-600/10 dark:bg-indigo-950 dark:text-indigo-300",
+    "bg-purple-50 text-purple-700 ring-purple-600/10 dark:bg-purple-950 dark:text-purple-300",
+    "bg-pink-50 text-pink-700 ring-pink-600/10 dark:bg-pink-950 dark:text-pink-300",
   ];
 
   const charCode = content.toUpperCase().charCodeAt(0);

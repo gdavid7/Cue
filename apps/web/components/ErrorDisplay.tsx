@@ -72,7 +72,7 @@ export function ErrorDisplay(props: {
 
 export const NotLoggedIn = () => (
   <div className="flex flex-col items-center justify-center sm:p-20 md:p-32">
-    <div className="text-lg text-gray-700">You are not signed in 😞</div>
+    <div className="text-lg text-foreground">You are not signed in 😞</div>
     <Button variant="outline" className="mt-2" onClick={() => logOut("/login")}>
       Sign in
     </Button>

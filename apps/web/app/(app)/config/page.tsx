@@ -183,11 +183,11 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white">
-      <h2 className="border-b border-slate-200 px-4 py-3 font-semibold text-slate-900">
+    <div className="rounded-lg border border-border bg-card">
+      <h2 className="border-b border-border px-4 py-3 font-semibold text-foreground">
         {title}
       </h2>
-      <div className="divide-y divide-slate-100">{children}</div>
+      <div className="divide-y divide-border">{children}</div>
     </div>
   );
 }
@@ -198,8 +198,8 @@ function Row({ label, value }: { label: string; value: string | boolean }) {
 
   return (
     <div className="flex justify-between px-4 py-2">
-      <span className="text-slate-600">{label}</span>
-      <span className="font-mono text-sm text-slate-900">{displayValue}</span>
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-mono text-sm text-foreground">{displayValue}</span>
     </div>
   );
 }

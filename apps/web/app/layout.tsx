@@ -27,6 +27,7 @@ import {
   toAbsoluteUrl,
 } from "@/utils/branding";
 import { isIndexingAllowed } from "@/utils/indexing";
+import { THEME_COLOR } from "@/components/theme-options";
 
 const aeonikFont = localFont({
   src: "../styles/aeonik-medium.woff",
@@ -150,7 +151,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport = {
-  themeColor: "#FFF",
+  themeColor: THEME_COLOR,
 };
 
 export default async function RootLayout({

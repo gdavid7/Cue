@@ -26,6 +26,15 @@ vi.mock("nuqs/adapters/next/app", () => ({
   NuqsAdapter: ({ children }: { children: ReactNode }) => children,
 }));
 
+// jsdom has no matchMedia, which the theme provider reads to follow "System".
+window.matchMedia = (query: string) =>
+  ({
+    matches: false,
+    media: query,
+    addListener: () => {},
+    removeListener: () => {},
+  }) as unknown as MediaQueryList;
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();

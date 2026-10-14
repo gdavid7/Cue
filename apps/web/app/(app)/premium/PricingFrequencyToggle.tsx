@@ -34,7 +34,7 @@ export function PricingFrequencyToggle({
       <RadioGroup
         value={frequency}
         onChange={setFrequency}
-        className="grid grid-cols-2 gap-x-1 rounded-full p-1 text-center text-xs font-semibold leading-5 ring-1 ring-inset ring-gray-200"
+        className="grid grid-cols-2 gap-x-1 rounded-full p-1 text-center text-xs font-semibold leading-5 ring-1 ring-inset ring-border"
       >
         <Label className="sr-only">Payment frequency</Label>
         {frequencies.map((option) => (
@@ -43,7 +43,9 @@ export function PricingFrequencyToggle({
             value={option}
             className={({ checked }) =>
               cn(
-                checked ? "bg-black text-white" : "text-gray-500",
+                checked
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground",
                 "cursor-pointer rounded-full px-2.5 py-1",
               )
             }
@@ -59,7 +61,7 @@ export function PricingFrequencyToggle({
 
 export function DiscountBadge({ children }: { children: React.ReactNode }) {
   return (
-    <span className="rounded-full bg-blue-600/10 px-2.5 py-1 text-xs font-semibold leading-5 text-blue-600">
+    <span className="rounded-full bg-blue-600/10 px-2.5 py-1 text-xs font-semibold leading-5 text-blue-600 dark:text-blue-400">
       {children}
     </span>
   );

@@ -22,7 +22,7 @@ const tabSelectButtonVariants = cva("p-4 transition-colors duration-75", {
       default:
         "text-content-subtle data-[selected=true]:text-content-emphasis data-[selected=false]:hover:text-content-default",
       accent:
-        "text-content-subtle transition-[color,font-weight] data-[selected=true]:text-blue-600 data-[selected=false]:hover:text-content-default data-[selected=true]:font-medium",
+        "text-content-subtle transition-[color,font-weight] data-[selected=true]:text-blue-600 dark:data-[selected=true]:text-blue-400 data-[selected=false]:hover:text-content-default data-[selected=true]:font-medium",
     },
   },
   defaultVariants: {
@@ -34,7 +34,7 @@ const tabSelectIndicatorVariants = cva("absolute bottom-0 w-full", {
   variants: {
     variant: {
       default: "text-bg-inverted",
-      accent: "text-blue-600",
+      accent: "text-blue-600 dark:text-blue-400",
     },
   },
   defaultVariants: {
@@ -81,7 +81,7 @@ export function TabSelect<T extends string>({
                   target === "_blank" && "group flex items-center gap-1.5",
                   isSelected
                     ? ""
-                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 hover:dark:text-gray-300",
+                    : "text-muted-foreground hover:text-foreground",
                 )}
                 data-selected={isSelected}
               >

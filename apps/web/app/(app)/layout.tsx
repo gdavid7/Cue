@@ -27,6 +27,7 @@ import prisma from "@/utils/prisma";
 import { createScopedLogger } from "@/utils/logger";
 import { booleanString } from "@/utils/zod";
 import { getOrderedEmailAccountIds } from "@/utils/mail-url.server";
+import { THEME_COLOR } from "@/components/theme-options";
 
 const logger = createScopedLogger("AppLayout");
 
@@ -45,7 +46,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport = {
-  themeColor: "#FFF",
+  themeColor: THEME_COLOR,
   initialScale: 1,
   width: "device-width",
   height: "device-height",

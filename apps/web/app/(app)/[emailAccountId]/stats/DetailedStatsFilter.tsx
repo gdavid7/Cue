@@ -49,7 +49,7 @@ export function DetailedStatsFilter(props: {
         >
           {props.icon}
           {props.label}
-          <ChevronDown className="ml-2 h-4 w-4 text-gray-400" />
+          <ChevronDown className="ml-2 h-4 w-4 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent

@@ -12,7 +12,7 @@ export const Checkbox = forwardRef(
     <input
       type="checkbox"
       aria-label={props.label}
-      className="h-4 w-4 cursor-pointer rounded border-gray-300 text-black focus:ring-black"
+      className="h-4 w-4 cursor-pointer rounded border-input bg-background text-foreground focus:ring-ring"
       ref={ref}
       checked={props.checked}
       onChange={props.onChange}

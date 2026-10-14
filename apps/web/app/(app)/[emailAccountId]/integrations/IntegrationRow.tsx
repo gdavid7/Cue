@@ -289,7 +289,10 @@ export function IntegrationRow({
             <div className="flex items-center gap-2">
               {connected ? (
                 isActive ? (
-                  <span className="text-green-600 text-sm" title={viaTitle}>
+                  <span
+                    className="text-green-600 dark:text-green-400 text-sm"
+                    title={viaTitle}
+                  >
                     ✓ Connected
                   </span>
                 ) : (
@@ -316,7 +319,7 @@ export function IntegrationRow({
               )}
             </div>
           ) : (
-            <TypographyP className="text-sm text-gray-500">
+            <TypographyP className="text-sm text-muted-foreground">
               No Auth Required
             </TypographyP>
           )}
@@ -359,7 +362,7 @@ export function IntegrationRow({
                 <DropdownMenuItem
                   onClick={handleDisconnect}
                   disabled={disconnecting}
-                  className="text-red-600"
+                  className="text-destructive focus:text-destructive"
                 >
                   {getDisconnectLabel({ isCustom, disconnecting })}
                 </DropdownMenuItem>

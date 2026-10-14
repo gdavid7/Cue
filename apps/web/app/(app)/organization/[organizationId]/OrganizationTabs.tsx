@@ -60,7 +60,7 @@ export function OrganizationTabs({ organizationId }: OrganizationTabsProps) {
           <PageHeading className="mb-2">{organization.name}</PageHeading>
         )}
       </LoadingContent>
-      <div className="border-b border-neutral-200">
+      <div className="border-b border-border">
         <TabSelect options={tabs} selected={selected} />
       </div>
     </div>

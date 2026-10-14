@@ -2,15 +2,9 @@
 
 import { isThreadStarred } from "@/app/(app)/[emailAccountId]/mail/star-state";
 import * as React from "react";
-import {
-  Loader2Icon,
-  MessageSquarePlusIcon,
-  MonitorIcon,
-  MoonIcon,
-  SunIcon,
-  UsersIcon,
-} from "lucide-react";
+import { Loader2Icon, MessageSquarePlusIcon, UsersIcon } from "lucide-react";
 import { useTheme } from "next-themes";
+import { THEME_OPTIONS } from "@/components/theme-options";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { buildMailCommandPalette } from "@/app/(app)/[emailAccountId]/mail/mail-command-palette";
 import { buildSnoozeCommandPalette } from "@/app/(app)/[emailAccountId]/mail/snooze-command-palette";
@@ -308,18 +302,16 @@ function CommandPaletteContent({
           ),
         ]
       : shortcutCommands;
-    const themeCommands: Command[] = [
-      { theme: "dark", label: "Dark", icon: MoonIcon },
-      { theme: "light", label: "Light", icon: SunIcon },
-      { theme: "system", label: "System", icon: MonitorIcon },
-    ].map(({ theme, label, icon }) => ({
-      id: `theme-${theme}`,
-      label: `Set Theme: ${label}`,
-      icon,
-      section: "settings",
-      keywords: ["theme", "appearance", "mode", theme],
-      action: () => setTheme(theme),
-    }));
+    const themeCommands: Command[] = THEME_OPTIONS.map(
+      ({ value, label, icon }) => ({
+        id: `theme-${value}`,
+        label: `Set Theme: ${label}`,
+        icon,
+        section: "settings",
+        keywords: ["switch", "theme", "appearance", "mode", value],
+        action: () => setTheme(value),
+      }),
+    );
     allCommands = [
       ...actionCommands,
       {

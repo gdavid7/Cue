@@ -405,7 +405,7 @@ export function ConditionSteps({
                           text={getFilterTooltipText("from")}
                           side="right"
                           size="sm"
-                          className="text-gray-400"
+                          className="text-muted-foreground"
                         />
                       </div>
                     </div>
@@ -434,7 +434,7 @@ export function ConditionSteps({
                           text={getFilterTooltipText("to")}
                           side="right"
                           size="sm"
-                          className="text-gray-400"
+                          className="text-muted-foreground"
                         />
                       </div>
                     </div>
@@ -463,7 +463,7 @@ export function ConditionSteps({
                           text="Only apply this rule to emails with this subject. e.g. Receipt for your purchase"
                           side="right"
                           size="sm"
-                          className="text-gray-400"
+                          className="text-muted-foreground"
                         />
                       </div>
                     </div>

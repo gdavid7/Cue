@@ -15,12 +15,7 @@ import {
   ItemContent,
   ItemTitle,
 } from "@/components/ui/item";
-
-const THEME_OPTIONS = [
-  { value: "system", label: "System" },
-  { value: "light", label: "Light" },
-  { value: "dark", label: "Dark" },
-];
+import { THEME_OPTIONS } from "@/components/theme-options";
 
 export function AppearanceSection() {
   const { theme, setTheme } = useTheme();
@@ -38,7 +33,7 @@ export function AppearanceSection() {
       </ItemContent>
       <ItemActions>
         <Select
-          value={mounted ? (theme ?? "light") : undefined}
+          value={mounted ? (theme ?? "system") : undefined}
           onValueChange={setTheme}
           disabled={!mounted}
         >

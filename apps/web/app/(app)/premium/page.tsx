@@ -7,7 +7,7 @@ export default function Premium() {
   if (env.NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS) redirect("/settings");
 
   return (
-    <div className="bg-white pb-20">
+    <div className="bg-background pb-20">
       <AppPricingLazy showSkipUpgrade />
     </div>
   );

@@ -437,7 +437,7 @@ function ActionCard({
                       <TooltipExplanation
                         side="right"
                         text="When on, Cue writes this value when it processes the email. Put your instructions inside braces, like {{your prompt here}}."
-                        className="text-gray-400"
+                        className="text-muted-foreground"
                       />
                     </div>
                   </div>

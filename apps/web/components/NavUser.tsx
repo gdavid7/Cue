@@ -39,6 +39,7 @@ import { Referrals } from "@/components/ReferralDialog";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { AccountSwitcherMenuItems } from "@/components/AccountSwitcher";
 import { Kbd } from "@/components/Kbd";
+import { ThemeSubmenu } from "@/components/ThemeSubmenu";
 import {
   isSupportChatAvailable,
   openSupportChat,
@@ -127,6 +128,7 @@ export function NavUser() {
               <SettingsIcon className="mr-2 size-4" />
               Settings
             </DropdownMenuItem>
+            <ThemeSubmenu />
             {!hasOrganization && (
               <DropdownMenuItem asChild>
                 <Link

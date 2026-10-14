@@ -21,8 +21,8 @@ export function PersonWithLogo({
         />
       </div>
       <div className="text-left">
-        <p className="text-base font-medium text-gray-900">{name}</p>
-        <p className="text-sm text-gray-600">{title}</p>
+        <p className="text-base font-medium text-foreground">{name}</p>
+        <p className="text-sm text-muted-foreground">{title}</p>
       </div>
     </div>
   );
