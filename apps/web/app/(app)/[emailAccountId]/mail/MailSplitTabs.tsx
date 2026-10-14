@@ -2,6 +2,7 @@
 
 import { memo, type ReactNode, useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { toastUndo } from "@/components/Toast";
 import { InboxStyleDialog } from "@/app/(app)/[emailAccountId]/mail/InboxStylePicker";
 import { getMailCategories } from "@/app/(app)/[emailAccountId]/mail/MailSidebar";
 import {
@@ -199,8 +200,38 @@ export const MailSplitTabs = memo(function MailSplitTabs({
     [emailAccountId, mutateSettings],
   );
 
+  const restoreSplit = useCallback(
+    async (
+      removed: ExistingSplit,
+      orderedIds: string[],
+      wasActive: boolean,
+    ) => {
+      const created = await createMailSplitAction(emailAccountId, {
+        name: removed.name,
+        matchAll: removed.matchAll,
+        filters: removed.filters,
+      });
+      const restoredId = created?.data?.split?.id;
+      if (!restoredId) {
+        toast.error(getActionErrorMessage(created ?? {}));
+        return;
+      }
+      await reorderMailSplitsAction(emailAccountId, {
+        ids: orderedIds.map((id) => (id === removed.id ? restoredId : id)),
+      });
+      await mutateSettings();
+      if (wasActive) onSelectSplit(restoredId);
+    },
+    [emailAccountId, mutateSettings, onSelectSplit],
+  );
+
   const onDelete = useCallback(
     async (splitId: string) => {
+      const orderedIds = [...(settings?.splits ?? [])]
+        .sort((a, b) => a.order - b.order)
+        .map((split) => split.id);
+      const removed = savedSplits.find((split) => split.id === splitId);
+      const wasActive = activeSplitId === splitId;
       const result = await deleteMailSplitAction(emailAccountId, {
         id: splitId,
       });
@@ -208,11 +239,27 @@ export const MailSplitTabs = memo(function MailSplitTabs({
         toast.error(getActionErrorMessage(result));
         return false;
       }
-      if (activeSplitId === splitId) onSelectSplit(null);
+      if (wasActive) onSelectSplit(null);
       await mutateSettings();
+      // Removing a tab throws away its filters, so it stays one click away.
+      if (removed) {
+        toastUndo({
+          id: "undo-remove-tab",
+          message: `Removed the ${removed.name} tab`,
+          onUndo: () => restoreSplit(removed, orderedIds, wasActive),
+        });
+      }
       return true;
     },
-    [activeSplitId, emailAccountId, mutateSettings, onSelectSplit],
+    [
+      activeSplitId,
+      emailAccountId,
+      mutateSettings,
+      onSelectSplit,
+      restoreSplit,
+      savedSplits,
+      settings?.splits,
+    ],
   );
 
   const onToggleSystemType = useCallback(
