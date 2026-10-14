@@ -1,5 +1,8 @@
-import type { SWRResponse } from "swr";
-import useSWR from "swr";
+import useSWR, {
+  SWRConfig,
+  type SWRConfiguration,
+  type SWRResponse,
+} from "swr";
 import { EMAIL_ACCOUNT_ID_REQUIRED_ERROR } from "@/utils/config";
 import { useAccount } from "@/providers/EmailAccountProvider";
 
@@ -56,6 +59,27 @@ export function getDevSWRErrorRetryMs(
   if (error.status && error.status >= 400 && error.status < 500) return null;
   return 5000 * 2 ** retryCount;
 }
+
+// A provider rate limit lasts tens of seconds. SWR's default backoff starts at
+// five seconds, so each rate-limited request would retry into the same window,
+// spending quota the provider has not restored and keeping the account limited.
+const RATE_LIMITED_RETRY_MS = 60_000;
+
+export const onSWRErrorRetry: NonNullable<SWRConfiguration["onErrorRetry"]> = (
+  error,
+  key,
+  config,
+  revalidate,
+  opts,
+) => {
+  if (error?.status === 429) {
+    if (opts.retryCount <= 1) {
+      setTimeout(() => revalidate(opts), RATE_LIMITED_RETRY_MS);
+    }
+    return;
+  }
+  SWRConfig.defaultValue.onErrorRetry(error, key, config, revalidate, opts);
+};
 
 type NormalizedError = { error: string };
 

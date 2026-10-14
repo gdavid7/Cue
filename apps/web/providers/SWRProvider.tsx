@@ -22,6 +22,7 @@ import {
   shouldResetSwrCacheForAccountId,
   shouldRevalidateAllLiveSwrKeysForAccountId,
   getDevSWRErrorRetryMs,
+  onSWRErrorRetry,
 } from "@/utils/swr";
 
 interface Context {
@@ -81,6 +82,7 @@ export const SWRProvider = (props: { children: React.ReactNode }) => {
           fetcher: enhancedFetcher,
           provider: () => provider,
           onError: (error: unknown) => console.log("SWR error:", error),
+          onErrorRetry: onSWRErrorRetry,
           ...getDevOnlySWRConfig(),
         }}
       >

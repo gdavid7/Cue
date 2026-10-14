@@ -1810,6 +1810,16 @@ export async function createSqliteMailStore(
         );
       });
     },
+    async deferJob(input) {
+      await driver.write(async (tx) => {
+        await tx.execute(
+          `UPDATE sync_jobs
+           SET retry_at_ms = ?, claimed_by = NULL, claimed_until_ms = NULL
+           WHERE job_id = ? AND attempt_id = ?`,
+          [input.retryAtMs, input.jobId, input.attemptId],
+        );
+      });
+    },
     async recordConnection(input) {
       return driver.write(async (tx) => {
         // Every sync request reports its connection; only a change should

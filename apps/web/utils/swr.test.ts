@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { EMAIL_ACCOUNT_ID_REQUIRED_ERROR } from "@/utils/config";
 import {
   getAccountScopedKey,
   getDevSWRErrorRetryMs,
+  onSWRErrorRetry,
   shouldRevalidateAllLiveSwrKeysForAccountId,
   shouldResetSwrCacheForAccountId,
 } from "./swr";
@@ -103,5 +104,48 @@ describe("getDevSWRErrorRetryMs", () => {
   it("backs off server errors", () => {
     expect(getDevSWRErrorRetryMs({ status: 500 }, 0)).toBe(5000);
     expect(getDevSWRErrorRetryMs({ status: 500 }, 1)).toBe(10_000);
+  });
+});
+
+describe("onSWRErrorRetry", () => {
+  it("retries a rate-limited request once, after the limit's window", () => {
+    vi.useFakeTimers();
+    try {
+      const revalidate = vi.fn();
+      const config = { errorRetryInterval: 5000 } as never;
+      onSWRErrorRetry({ status: 429 }, "key", config, revalidate, {
+        retryCount: 1,
+      });
+      vi.advanceTimersByTime(30_000);
+      expect(revalidate).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(30_000);
+      expect(revalidate).toHaveBeenCalledTimes(1);
+
+      onSWRErrorRetry({ status: 429 }, "key", config, revalidate, {
+        retryCount: 2,
+      });
+      vi.advanceTimersByTime(10 * 60_000);
+      expect(revalidate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps SWR's backoff for other errors", () => {
+    vi.useFakeTimers();
+    try {
+      const revalidate = vi.fn();
+      onSWRErrorRetry(
+        { status: 500 },
+        "key",
+        { errorRetryInterval: 5000 } as never,
+        revalidate,
+        { retryCount: 1 },
+      );
+      vi.advanceTimersByTime(20_000);
+      expect(revalidate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

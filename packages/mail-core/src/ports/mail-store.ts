@@ -279,6 +279,12 @@ export interface MailStore {
   }): Promise<
     { status: "committed"; revision: LocalRevision } | { status: "stale" }
   >;
+  /** Releases a claimed job so it is not claimed again before `retryAtMs`. */
+  deferJob(input: {
+    jobId: string;
+    attemptId: string;
+    retryAtMs: number;
+  }): Promise<void>;
   deferPreparation(input: {
     accountId: string;
     commandId: string;

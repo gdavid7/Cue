@@ -467,6 +467,12 @@ export function createEmailProviderMailboxSource(input: {
             accountId,
             messageId: message.id,
           })),
+          // The search already fetched each match in full, so the client
+          // stores these instead of fetching every message again.
+          changes: matches.map((message) =>
+            parsedMessagePatch(accountId, provider.name, message),
+          ),
+          bodies: parsedMessageBodies(accountId, matches).bodies,
           nextPage: result.nextPageToken ?? null,
           semantics: "candidates_require_local_filter" as const,
         },

@@ -258,6 +258,8 @@ export const searchResultSchema = z.object({
   protocolVersion: mailProtocolVersionSchema,
   requestId: z.string(),
   matches: z.array(messageKeySchema),
+  changes: z.array(providerChangeSchema).max(1000).default([]),
+  bodies: z.array(bodyObservationSchema).max(1000).default([]),
   nextPage: z.string().nullable(),
   semantics: z.enum(["exact", "candidates_require_local_filter"]),
 });

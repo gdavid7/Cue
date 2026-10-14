@@ -150,6 +150,13 @@ export interface MailboxSource {
   ): Promise<
     | ReadResult<{
         matches: MessageKey[];
+        /**
+         * What the source already read for its matches, applied as-is so the
+         * engine does not fetch them again. Matches without a body here are
+         * hydrated.
+         */
+        changes?: ProviderChange[];
+        bodies?: BodyObservation[];
         nextPage: string | null;
         semantics: "exact" | "candidates_require_local_filter";
       }>

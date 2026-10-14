@@ -344,6 +344,8 @@ export function createBackendMailboxSource(input: {
         status: "ok",
         value: {
           matches: parsed.matches,
+          changes: parsed.changes,
+          bodies: parsed.bodies,
           nextPage: parsed.nextPage,
           semantics: parsed.semantics,
         },

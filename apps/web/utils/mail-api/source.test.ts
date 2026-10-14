@@ -1722,6 +1722,51 @@ describe("Gmail history expiry", () => {
 });
 
 describe("structured mailbox search", () => {
+  it("returns the messages and bodies it fetched so they are not fetched again", async () => {
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "a",
+      provider: {
+        name: "google",
+        searchMessages: async () => ({
+          messages: [
+            { ...searchMessage("with-body"), textPlain: "invoice total" },
+            { ...searchMessage("no-body"), textPlain: null, textHtml: null },
+          ],
+        }),
+        getMessage: async (id: string) => ({
+          ...searchMessage(id),
+          textPlain: null,
+          textHtml: null,
+        }),
+      } as unknown as EmailProvider,
+    });
+    const result = await source.search({
+      session: { accountId: "a", generation: "1" },
+      requestId: "search",
+      signal: new AbortController().signal,
+      page: null,
+      pageSize: 20,
+      predicate: {
+        kind: "text",
+        field: "any",
+        value: "invoice",
+        match: "term",
+      },
+    });
+    if (result.status !== "ok") throw new Error(result.status);
+    expect(result.value.changes?.map((change) => change.kind)).toEqual([
+      "message_patch",
+      "message_patch",
+    ]);
+    expect(result.value.bodies).toEqual([
+      expect.objectContaining({
+        key: { accountId: "a", messageId: "with-body" },
+        text: "invoice total",
+      }),
+    ]);
+  });
+
   it.each([
     "google",
     "microsoft",

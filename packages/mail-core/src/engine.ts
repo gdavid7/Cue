@@ -37,6 +37,7 @@ import type {
   ContactSuggestion,
   ContactSuggestionQuery,
   ConversationQuery,
+  MailPredicate,
   MailboxCountsQuery,
   MailboxCountsView,
   MailboxView,
@@ -68,6 +69,10 @@ const LOW_PRIORITY_CATCH_UP_INTERVAL_MS = 10 * 60_000;
 // when they have not run recently, so a burst of pushes stays cheap.
 const LOW_PRIORITY_REQUESTED_MIN_INTERVAL_MS = 2 * 60_000;
 const MAX_MAILBOX_WINDOW_PAGES = 40;
+const SEARCH_PAGE_SIZE = 50;
+// A provider search page costs Gmail about 1000 of its 6000 units a minute,
+// so one view's demand for rows never fetches more than this many pages.
+const MAX_SEARCH_PAGES_PER_DEMAND = 2;
 
 export type WorkAdmission =
   | { status: "scheduled" | "already_satisfied" }
@@ -182,6 +187,10 @@ export function createMailEngine(input: {
   let closed = false;
   let refreshGate: Promise<void> | null = null;
   let refreshQueued = false;
+  // Provider search runs only for views open in this engine, and only as far
+  // as they need rows; a page left in the store by an earlier session or a
+  // closed view is dropped instead of walking the whole result set.
+  const providerSearches = new Map<string, ProviderSearch>();
 
   async function refreshViews() {
     refreshQueued = true;
@@ -204,13 +213,20 @@ export function createMailEngine(input: {
       return store.readContactSuggestions(query);
     },
     observeMailbox(query) {
-      enqueueSearches(query);
-      return queries.observe(mailboxQueryKey(query), () =>
+      const searches = watchProviderSearches(query, query.pageSize);
+      const handle = queries.observe(mailboxQueryKey(query), () =>
         store.readMailboxView(query).then((result) => ({
           revision: result.revision,
           data: result.view,
         })),
       );
+      return {
+        ...handle,
+        close() {
+          searches.release();
+          handle.close();
+        },
+      };
     },
     observeMailboxCounts(query) {
       return queries.observe(mailboxCountsQueryKey(query), () =>
@@ -221,8 +237,8 @@ export function createMailEngine(input: {
       );
     },
     observeMailboxWindow(query, options) {
-      enqueueSearches(query);
       let pageCount = normalizePageCount(options?.pageCount);
+      const searches = watchProviderSearches(query, pageCount * query.pageSize);
       const key = `mailbox-pages:${runtime.randomId()}`;
       const handle = queries.observe(key, () =>
         store.readMailboxWindow(query, pageCount).then((result) => ({
@@ -237,7 +253,12 @@ export function createMailEngine(input: {
         ...handle,
         async loadMore() {
           pageCount += 1;
+          searches.want(pageCount * query.pageSize);
           await queries.refreshKey(key);
+        },
+        close() {
+          searches.release();
+          handle.close();
         },
       };
     },
@@ -431,7 +452,7 @@ export function createMailEngine(input: {
                   ? runtime.nowMs() + membership.retryAfterMs
                   : runtime.nowMs() + 60_000,
             });
-            await noteConnection(work.accountId, membership.status);
+            await noteConnection(work.accountId, membership);
             continue;
           }
           if (membership.value.status === "not_found") {
@@ -518,43 +539,74 @@ export function createMailEngine(input: {
               jobId: work.jobId,
               attemptId: work.attemptId,
             });
+          } else {
+            await store.deferJob({
+              jobId: work.jobId,
+              attemptId: work.attemptId,
+              retryAtMs: retryAtFor(hydrated),
+            });
           }
           continue;
         }
         if (work.kind === "search") {
+          const search = providerSearches.get(
+            providerSearchKey(work.accountId, work.predicate),
+          );
+          if (!search?.requestedPages.has(work.page)) {
+            await store.completeJob({
+              jobId: work.jobId,
+              attemptId: work.attemptId,
+            });
+            continue;
+          }
           const searched = await source.search({
             session: work.session,
             requestId: work.jobId,
             signal: signal ?? new AbortController().signal,
             predicate: work.predicate,
             page: work.page,
-            pageSize: 50,
+            pageSize: SEARCH_PAGE_SIZE,
           });
+          if (
+            searched.status === "paused" ||
+            searched.status === "blocked_auth"
+          ) {
+            await store.deferJob({
+              jobId: work.jobId,
+              attemptId: work.attemptId,
+              retryAtMs: retryAtFor(searched),
+            });
+            continue;
+          }
           if (searched.status === "ok") {
-            if (searched.value.matches.length > 0) {
+            const { matches, changes = [], bodies = [] } = searched.value;
+            if (changes.length > 0 || bodies.length > 0) {
+              await store.applyHydration({
+                session: work.session,
+                requestId: work.jobId,
+                changes,
+                bodies,
+              });
+            }
+            const fetched = new Set(bodies.map((body) => body.key.messageId));
+            const unfetched = matches.filter(
+              (match) => !fetched.has(match.messageId),
+            );
+            if (unfetched.length > 0) {
               await store.enqueueHydration({
-                keys: searched.value.matches,
+                keys: unfetched,
                 purpose: "body",
               });
             }
-            if (searched.value.nextPage) {
-              await store.enqueueSearch({
-                accountId: work.accountId,
-                predicate: work.predicate,
-                page: searched.value.nextPage,
-              });
-            }
+            search.matched += matches.length;
+            search.nextPage = searched.value.nextPage;
+            requestNextSearchPage(search);
             await refreshViews();
           }
-          if (
-            searched.status !== "paused" &&
-            searched.status !== "blocked_auth"
-          ) {
-            await store.completeJob({
-              jobId: work.jobId,
-              attemptId: work.attemptId,
-            });
-          }
+          await store.completeJob({
+            jobId: work.jobId,
+            attemptId: work.attemptId,
+          });
           continue;
         }
         const changes = await source.readChanges({
@@ -585,7 +637,7 @@ export function createMailEngine(input: {
             scopeId: changes.scopeId,
           });
         } else {
-          await noteConnection(work.session.accountId, changes.status);
+          await noteConnection(work.session.accountId, changes);
         }
       }
     },
@@ -602,14 +654,83 @@ export function createMailEngine(input: {
     },
   };
 
-  function enqueueSearches(query: ConversationQuery) {
+  function watchProviderSearches(query: ConversationQuery, wantedRows: number) {
+    const observer = Symbol("mailbox-view");
+    const watched: ProviderSearch[] = [];
     for (const accountId of query.accountIds) {
       for (const predicate of extractTextPredicates(query.predicate)) {
-        store
-          .enqueueSearch({ accountId, predicate, page: null })
-          .catch(() => undefined);
+        const key = providerSearchKey(accountId, predicate);
+        let search = providerSearches.get(key);
+        if (!search) {
+          search = {
+            key,
+            accountId,
+            predicate,
+            requestedPages: new Set([null]),
+            nextPage: null,
+            matched: 0,
+            pagesSinceDemand: 1,
+            wantedRows: new Map(),
+          };
+          providerSearches.set(key, search);
+          store
+            .enqueueSearch({ accountId, predicate, page: null })
+            .catch(() => undefined);
+        }
+        search.wantedRows.set(observer, wantedRows);
+        watched.push(search);
       }
     }
+    return {
+      want(rows: number) {
+        for (const search of watched) {
+          search.wantedRows.set(observer, rows);
+          search.pagesSinceDemand = 0;
+          requestNextSearchPage(search);
+        }
+      },
+      release() {
+        for (const search of watched) {
+          search.wantedRows.delete(observer);
+          if (
+            search.wantedRows.size === 0 &&
+            providerSearches.get(search.key) === search
+          ) {
+            providerSearches.delete(search.key);
+          }
+        }
+      },
+    };
+  }
+
+  // The next provider page is fetched only while an open view still has
+  // fewer rows than it shows, never to walk the whole result set.
+  function requestNextSearchPage(search: ProviderSearch) {
+    const page = search.nextPage;
+    if (!page || search.pagesSinceDemand >= MAX_SEARCH_PAGES_PER_DEMAND) return;
+    const wantedRows = Math.max(0, ...search.wantedRows.values());
+    if (search.matched >= wantedRows) return;
+    search.nextPage = null;
+    search.pagesSinceDemand += 1;
+    search.requestedPages.add(page);
+    store
+      .enqueueSearch({
+        accountId: search.accountId,
+        predicate: search.predicate,
+        page,
+      })
+      .catch(() => undefined);
+  }
+
+  function retryAtFor(
+    result:
+      | { status: "paused"; retryAfterMs: number }
+      | { status: "blocked_auth" },
+  ) {
+    return (
+      runtime.nowMs() +
+      (result.status === "paused" ? result.retryAfterMs : idleCatchUpIntervalMs)
+    );
   }
 
   async function ingestBootstrap(input: {
@@ -641,7 +762,7 @@ export function createMailEngine(input: {
         afterMs: null,
       });
       if (bootstrap.status !== "ok") {
-        await noteConnection(input.session.accountId, bootstrap.status);
+        await noteConnection(input.session.accountId, bootstrap);
         return;
       }
       const started = await store.startBootstrapScan({
@@ -701,14 +822,7 @@ export function createMailEngine(input: {
         });
       }
       if (enumerated.status !== "ok") {
-        // A throttled page is the source pacing a long scan, not lost
-        // connectivity, so it must not flag the account as waiting to sync.
-        if (
-          enumerated.status !== "paused" ||
-          enumerated.reason !== "throttled"
-        ) {
-          await noteConnection(input.session.accountId, enumerated.status);
-        }
+        await noteConnection(input.session.accountId, enumerated);
         break;
       }
       const catchUpFrom: SyncStreamPosition | null =
@@ -1085,7 +1199,7 @@ export function createMailEngine(input: {
         stream.streamId,
         runtime.nowMs() + streamCatchUpInterval(idleGate, stream.streamId),
       );
-      await noteConnection(session.accountId, changes.status);
+      await noteConnection(session.accountId, changes);
     }
   }
 
@@ -1191,7 +1305,7 @@ export function createMailEngine(input: {
       return discovered.value.scopes;
     }
     if (discovered.status !== "ok") {
-      await noteConnection(session.accountId, discovered.status);
+      await noteConnection(session.accountId, discovered);
       return null;
     }
     return [{ id: "primary", kind: "account", folderId: null }];
@@ -1286,7 +1400,17 @@ export function createMailEngine(input: {
     }
   }
 
-  async function noteConnection(accountId: string, status: string) {
+  async function noteConnection(
+    accountId: string,
+    result: string | { status: string; reason?: "throttled" | "unavailable" },
+  ) {
+    const { status, reason } =
+      typeof result === "string"
+        ? { status: result, reason: undefined }
+        : result;
+    // Throttling is the provider or the sync budget pacing requests, not lost
+    // connectivity, so it must not flag the account as waiting to sync.
+    if (status === "paused" && reason === "throttled") return;
     const connection = CONNECTION_BY_SOURCE_STATUS[status];
     if (!connection) return;
     if (await store.recordConnection({ accountId, connection })) {
@@ -1308,6 +1432,21 @@ type SyncLane = {
   abort: AbortController;
   done: Promise<void>;
 };
+
+type ProviderSearch = {
+  key: string;
+  accountId: string;
+  predicate: MailPredicate;
+  requestedPages: Set<string | null>;
+  nextPage: string | null;
+  matched: number;
+  pagesSinceDemand: number;
+  wantedRows: Map<symbol, number>;
+};
+
+function providerSearchKey(accountId: string, predicate: MailPredicate) {
+  return `${accountId}:${JSON.stringify(predicate)}`;
+}
 
 type IdleCatchUpGate = {
   activeBootstrapScopes: Map<string, ScopeDescriptor>;
