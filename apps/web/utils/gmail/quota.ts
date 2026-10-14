@@ -34,6 +34,9 @@ const INITIAL_SYNC_REFRESH_MS = 30_000;
 // this long lets the call through rather than stall every Gmail call.
 const STORE_TIMEOUT_MS = 300;
 const BACKGROUND_PAUSE_MIN_MS = 30_000;
+// Usage hashes expire five minutes after their last write, so a summary can
+// still claim the four minutes before the current one.
+const SUMMARY_LOOKBACK_MINUTES = 4;
 
 export const GMAIL_QUOTA_PRIORITIES = [
   "interactive",
@@ -157,7 +160,10 @@ const BACKGROUND_NAMESPACES = ["cron/", "resend/"];
 const quotaContext = new AsyncLocalStorage<GmailQuotaContext>();
 const logger = createScopedLogger("gmail-quota");
 const accountsByToken = new Map<string, string>();
-const summarizedMinute = new Map<string, number>();
+// Accounts this instance metered, with the latest minute it did so, kept
+// until that minute has ended and been summarized.
+const unsummarizedAccounts = new Map<string, number>();
+const summaryCheckedMinute = new Map<string, number>();
 const storeUnavailableLoggedMinute = new Map<string, number>();
 const initialSyncMarkedAt = new Map<string, number>();
 
@@ -326,6 +332,7 @@ export async function admitGmailCall({
   if (!emailAccountId || !isEmailProviderRateLimitRedisConfigured())
     return ticket;
 
+  rememberUnsummarizedAccount(emailAccountId);
   const keys = accountKeys(emailAccountId);
   const blockers =
     priority === "background" ? [keys.initialSync, keys.backgroundPause] : [];
@@ -359,10 +366,7 @@ export async function admitGmailCall({
       noteStoreUnavailable(emailAccountId, context.caller, error);
       return ticket;
     }
-    if (wait === 0) {
-      summarizeLastMinute(emailAccountId).catch(() => undefined);
-      return ticket;
-    }
+    if (wait === 0) return ticket;
     if (Date.now() + wait > deadline) {
       withinStoreTimeout(
         gmailQuotaStore.note({
@@ -462,6 +466,35 @@ export async function setGmailInitialSync(
 }
 
 /**
+ * Logs the "Gmail quota usage" summary of each account this instance metered,
+ * for every minute that has ended and that no instance has logged yet. Runs
+ * when a request flushes its logs: a serverless instance may never run again
+ * once its response is sent, so neither a timer nor the account's next Gmail
+ * call can be relied on to report a minute.
+ */
+export async function logGmailQuotaUsage() {
+  if (unsummarizedAccounts.size === 0) return;
+  const minute = minuteOf(Date.now());
+  await Promise.all(
+    [...unsummarizedAccounts].map(async ([emailAccountId, lastMinute]) => {
+      if (summaryCheckedMinute.get(emailAccountId) === minute) return;
+      summaryCheckedMinute.delete(emailAccountId);
+      summaryCheckedMinute.set(emailAccountId, minute);
+      trimOldest(summaryCheckedMinute);
+      if (lastMinute < minute) unsummarizedAccounts.delete(emailAccountId);
+      try {
+        await summarizeEndedMinutes(emailAccountId, minute);
+      } catch (error) {
+        logger.warn("Failed to summarize Gmail quota usage", {
+          emailAccountId,
+          error,
+        });
+      }
+    }),
+  );
+}
+
+/**
  * The documented quota cost of one Gmail REST call, from its HTTP method and
  * URL. Unknown calls are charged like a write so they are never undercounted.
  */
@@ -540,22 +573,35 @@ function normalizeCaller(source: string | undefined) {
   return caller.slice(0, 80);
 }
 
-async function summarizeLastMinute(emailAccountId: string) {
-  const minute = minuteOf(Date.now());
-  if (summarizedMinute.get(emailAccountId) === minute) return;
-  summarizedMinute.set(emailAccountId, minute);
-  if (summarizedMinute.size > 1000) {
-    const oldest = summarizedMinute.keys().next().value;
-    if (oldest) summarizedMinute.delete(oldest);
-  }
+async function summarizeEndedMinutes(
+  emailAccountId: string,
+  currentMinute: number,
+) {
   const keys = accountKeys(emailAccountId);
-  const usage = await withinStoreTimeout(
-    gmailQuotaStore.claimUsage({
-      usageKey: keys.usage(minute - 1),
-      claimKey: `${keys.usage(minute - 1)}:logged`,
-    }),
+  const minutes = Array.from(
+    { length: SUMMARY_LOOKBACK_MINUTES },
+    (_, index) => currentMinute - SUMMARY_LOOKBACK_MINUTES + index,
   );
-  if (!usage || Object.keys(usage).length === 0) return;
+  const usages = await withinStoreTimeout(
+    gmailQuotaStore.claimUsages(
+      minutes.map((minute) => ({
+        usageKey: keys.usage(minute),
+        claimKey: `${keys.usage(minute)}:logged`,
+      })),
+    ),
+  );
+  minutes.forEach((minute, index) => {
+    const usage = usages[index];
+    if (usage && Object.keys(usage).length > 0)
+      logMinuteUsage(emailAccountId, minute, usage);
+  });
+}
+
+function logMinuteUsage(
+  emailAccountId: string,
+  minute: number,
+  usage: Record<string, number>,
+) {
   const units: Record<string, number> = {};
   const deferred: Record<string, number> = {};
   const refused: Record<string, number> = {};
@@ -575,7 +621,7 @@ async function summarizeLastMinute(emailAccountId: string) {
   }
   logger.info("Gmail quota usage", {
     emailAccountId,
-    minute: new Date((minute - 1) * 60_000).toISOString(),
+    minute: new Date(minute * 60_000).toISOString(),
     totalUnits,
     limitUnits: GMAIL_USER_UNITS_PER_MINUTE,
     unitsByCaller: units,
@@ -585,6 +631,18 @@ async function summarizeLastMinute(emailAccountId: string) {
     storeUnavailableCalls,
     storeUnavailableByCaller: storeUnavailable,
   });
+}
+
+function rememberUnsummarizedAccount(emailAccountId: string) {
+  unsummarizedAccounts.delete(emailAccountId);
+  unsummarizedAccounts.set(emailAccountId, minuteOf(Date.now()));
+  trimOldest(unsummarizedAccounts);
+}
+
+function trimOldest(map: Map<string, unknown>) {
+  if (map.size <= 1000) return;
+  const oldest = map.keys().next().value;
+  if (oldest) map.delete(oldest);
 }
 
 /**

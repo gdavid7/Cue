@@ -2,7 +2,6 @@ google:
   users:
     - email: __PLAYWRIGHT_TEST_EMAIL__
       name: Smoke Test User
-      picture: "__PLAYWRIGHT_PROFILE_PICTURE__"
     - email: __PLAYWRIGHT_TEAM_B_EMAIL__
       name: Shared Teammate
     - email: __PLAYWRIGHT_TEAM_C_EMAIL__

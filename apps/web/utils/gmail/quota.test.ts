@@ -9,6 +9,7 @@ import {
   currentGmailQuotaContext,
   GmailCallDeferredError,
   gmailRequestCost,
+  logGmailQuotaUsage,
   meterGmailCall,
   runWithGmailQuota,
   setGmailInitialSync,
@@ -173,8 +174,7 @@ describe("Gmail quota gate", () => {
     await hung;
     await read();
     await vi.advanceTimersByTimeAsync(60_000);
-    await read();
-    await vi.advanceTimersByTimeAsync(0);
+    await logGmailQuotaUsage();
 
     // Logged once for the minute rather than on every call.
     expect(
@@ -187,9 +187,50 @@ describe("Gmail quota gate", () => {
       .find((line) => line.includes("Gmail quota usage"));
     expect(summary).toBeDefined();
     expect(JSON.parse(summary!.slice(summary!.indexOf("{")))).toMatchObject({
+      minute: "2026-10-14T12:00:00.000Z",
       storeUnavailableCalls: 2,
       storeUnavailableByCaller: { "mail/v1/conversation-membership": 2 },
     });
+  });
+
+  it("logs a burst's usage once its minute ends, at a request end with no further Gmail calls", async () => {
+    vi.setSystemTime(new Date("2026-10-14T13:00:20Z"));
+    const info = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const summaries = () =>
+      info.mock.calls
+        .map(([line]) => String(line))
+        .filter(
+          (line) =>
+            line.includes("Gmail quota usage") &&
+            line.includes("account-burst"),
+        )
+        .map((line) => JSON.parse(line.slice(line.indexOf("{"))));
+    for (let call = 0; call < 3; call++) {
+      await runWithGmailQuota(
+        { caller: "mail/v1/conversation-membership", priority: "interactive" },
+        () =>
+          meterGmailCall(
+            { emailAccountId: "account-burst", cost: 40 },
+            async () => "thread",
+          ),
+      );
+    }
+
+    // The burst's own request ends inside the minute it is still counting.
+    await logGmailQuotaUsage();
+    expect(summaries()).toEqual([]);
+
+    // Any later request end on the instance reports it, exactly once.
+    await vi.advanceTimersByTimeAsync(60_000);
+    await logGmailQuotaUsage();
+    await logGmailQuotaUsage();
+    expect(summaries()).toEqual([
+      expect.objectContaining({
+        minute: "2026-10-14T13:00:00.000Z",
+        totalUnits: 120,
+        unitsByCaller: { "interactive:mail/v1/conversation-membership": 120 },
+      }),
+    ]);
   });
 
   it("lets a call through when the quota store fails, since Gmail's own limit still applies", async () => {
