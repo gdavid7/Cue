@@ -288,14 +288,14 @@ describe("fetchConnectorCandidates with an unreadable app", () => {
       response_data: { secret: "salary numbers" },
     });
 
-    const candidates = await fetchConnectorCandidates({
+    const result = await fetchConnectorCandidates({
       emailAccountId: "school",
       keywords: ["milestone"],
       logger,
       now: NOW,
     });
 
-    expect(candidates).toEqual([]);
+    expect(result).toEqual({ candidates: [], complete: false });
     expect(warn).toHaveBeenCalledWith("Connected app search failed", {
       app: "slack",
       error: expect.any(Error),
