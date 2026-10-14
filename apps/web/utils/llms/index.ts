@@ -92,6 +92,13 @@ import { createStreamFallbackModel } from "./stream-fallback-model";
 
 const logger = createScopedLogger("llms");
 
+// smoothStream paces each word, which caps output at roughly 1000/delay words
+// per second and adds latency whenever the model streams faster than that.
+// The 10 ms default lagged a 400-word reply by 1.5-2.7 s at 150-250 words/s;
+// 5 ms keeps the steady flow (no empty 100 ms client frames on bursty
+// streams) while staying close to model speed.
+const SMOOTH_STREAM_WORD_DELAY_MS = 5;
+
 const MAX_LOG_LENGTH = 200;
 
 // The Claude Code CLI provider drops AI SDK tools at the LanguageModelV4
@@ -813,7 +820,10 @@ export async function chatCompletionStream(
           modelName: candidate.modelName,
         }),
         providerOptions: providerOptions,
-        experimental_transform: smoothStream({ chunking: "word" }),
+        experimental_transform: smoothStream({
+          chunking: "word",
+          delayInMs: SMOOTH_STREAM_WORD_DELAY_MS,
+        }),
         onStepEnd,
         onEnd: async (result) => {
           const usagePromise = saveUsageWithMetadata({
@@ -1062,7 +1072,10 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
   try {
     return await agent.stream({
       messages: protectedMessages as ModelMessage[],
-      experimental_transform: smoothStream({ chunking: "word" }),
+      experimental_transform: smoothStream({
+        chunking: "word",
+        delayInMs: SMOOTH_STREAM_WORD_DELAY_MS,
+      }),
       onStepEnd,
       abortSignal,
     });
