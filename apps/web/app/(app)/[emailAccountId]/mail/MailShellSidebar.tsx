@@ -16,7 +16,7 @@ import type {
   MailboxItem,
   MailboxItemEdit,
 } from "@/app/(app)/[emailAccountId]/mail/MailboxItemContextMenu";
-import { getRuleLabelIds } from "@/app/(app)/[emailAccountId]/mail/label-visibility";
+import { getSystemRuleLabelIds } from "@/app/(app)/[emailAccountId]/mail/label-visibility";
 import { MailSidebarResizeHandle } from "@/app/(app)/[emailAccountId]/mail/MailSidebarResizeHandle";
 import {
   MAIL_SIDEBAR_DEFAULT_WIDTH,
@@ -94,8 +94,8 @@ export const MailShellSidebar = memo(function MailShellSidebar({
   const sidebarLabels = useMemo(() => {
     if (rulesError) return allLabels;
     if (!rules) return NO_LABELS;
-    const ruleLabelIds = getRuleLabelIds(rules);
-    return allLabels.filter((label) => !ruleLabelIds.has(label.id));
+    const systemLabelIds = getSystemRuleLabelIds(rules);
+    return allLabels.filter((label) => !systemLabelIds.has(label.id));
   }, [allLabels, rules, rulesError]);
   const { folders, mutate: mutateFolders } = useFolders(provider);
   const { countsById, mutate: mutateCounts } = useLabelCounts({

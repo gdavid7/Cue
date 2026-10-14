@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MailboxLabelCount } from "@/utils/mail-engine/label-count-targets";
 import {
-  getRuleLabelIds,
+  getSystemRuleLabelIds,
   splitLabelsByListVisibility,
 } from "./label-visibility";
 
@@ -72,14 +72,27 @@ describe("splitLabelsByListVisibility", () => {
   });
 });
 
-describe("getRuleLabelIds", () => {
-  it("collects the labels rules apply, whatever they are named", () => {
-    const ids = getRuleLabelIds([
-      { actions: [{ labelId: "Label_1" }, { labelId: null }] },
-      { actions: [{ labelId: "Label_2" }] },
-      { actions: [] },
+describe("getSystemRuleLabelIds", () => {
+  it("collects the labels Cue's built-in rules apply, whatever they are named", () => {
+    const ids = getSystemRuleLabelIds([
+      {
+        systemType: "TO_REPLY",
+        actions: [{ labelId: "Label_1" }, { labelId: null }],
+      },
+      { systemType: "NEWSLETTER", actions: [{ labelId: "Label_2" }] },
+      { systemType: "FYI", actions: [] },
     ]);
 
     expect([...ids]).toEqual(["Label_1", "Label_2"]);
+  });
+
+  it("keeps labels from rules the user wrote", () => {
+    const ids = getSystemRuleLabelIds([
+      { systemType: null, actions: [{ labelId: "Label_clients" }] },
+      { systemType: "TO_REPLY", actions: [{ labelId: "Label_to_reply" }] },
+    ]);
+
+    expect(ids.has("Label_clients")).toBe(false);
+    expect(ids.has("Label_to_reply")).toBe(true);
   });
 });
