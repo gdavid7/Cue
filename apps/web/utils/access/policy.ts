@@ -8,6 +8,14 @@ import {
   createSignupNotAllowedError,
   isListedInAuthAllowlist,
 } from "@/utils/auth-signup-policy";
+import { GMAIL_DOMAINS } from "@/utils/access/config";
+
+/**
+ * Sign-in providers whose email claim proves the person owns the address.
+ * Microsoft's can be set by a tenant admin (see `trustedProviders` in
+ * utils/auth.ts), so it can't stand in for an approved Gmail address.
+ */
+const PROVIDERS_THAT_PROVE_EMAIL = new Set(["google", "apple"]);
 
 type AccessPolicy = {
   waitlistEnabled: boolean;
@@ -23,11 +31,30 @@ type AccessPolicy = {
  * gates sign-up as before, and also admits people approved on /admin/access.
  */
 export async function assertSignUpAllowed(
-  { email, name }: { email: string; name?: string | null },
+  {
+    email,
+    name,
+    provider,
+    emailVerified,
+  }: {
+    email: string;
+    name?: string | null;
+    /** The sign-in provider id, e.g. "google". */
+    provider?: string;
+    emailVerified?: boolean;
+  },
   policy: AccessPolicy = getAccessPolicy(),
 ) {
   if (!policy.waitlistEnabled && isAllowedAuthSignupEmail(email, policy))
     return;
+
+  // Approval belongs to an address, so only a sign-in that proves the address
+  // can use it. An unproven claim isn't recorded as that person's request.
+  const provesEmail =
+    !!provider &&
+    PROVIDERS_THAT_PROVE_EMAIL.has(provider) &&
+    emailVerified === true;
+  if (!provesEmail) throw createSignupNotAllowedError();
 
   if (await isApprovedForAccess(email, policy)) return;
 
@@ -54,16 +81,27 @@ export async function isApprovedForAccess(
 ) {
   const normalizedEmail = normalizeAccessEmail(email);
   if (!normalizedEmail) return false;
+  const isNamed = (listed: string) =>
+    normalizeAccessEmail(listed) === normalizedEmail;
+  if (policy.admins.some(isNamed)) return true;
+  if (policy.allowedEmails.some(isNamed)) return true;
+  // A domain list approves everyone at it, which the waitlist doesn't allow:
+  // with it on, each person is approved individually.
   if (
-    policy.admins.some(
-      (admin) => normalizeAccessEmail(admin) === normalizedEmail,
-    )
+    !policy.waitlistEnabled &&
+    isListedInAuthAllowlist(normalizedEmail, {
+      allowedDomains: policy.allowedDomains,
+    })
   )
     return true;
-  if (isListedInAuthAllowlist(normalizedEmail, policy)) return true;
 
-  const request = await prisma.accessRequest.findUnique({
-    where: { email: normalizedEmail },
+  const request = await prisma.accessRequest.findFirst({
+    where: {
+      // The plain lowercase form also matches rows stored before addresses
+      // were stored in canonical Gmail form.
+      email: { in: [...new Set([normalizedEmail, lowercaseEmail(email)])] },
+      status: "APPROVED",
+    },
     select: { status: true },
   });
   return request?.status === "APPROVED";
@@ -99,7 +137,21 @@ export async function recordAccessRequest({
   }
 }
 
+/**
+ * The form approvals are stored and matched in. Gmail ignores dots and
+ * "+tags" in the local part and treats googlemail.com as gmail.com, so
+ * "Jane.Doe+cue@googlemail.com" and "janedoe@gmail.com" are one address.
+ */
 export function normalizeAccessEmail(email: string) {
+  const lower = lowercaseEmail(email);
+  const at = lower.lastIndexOf("@");
+  if (at < 1) return lower;
+  if (!GMAIL_DOMAINS.includes(lower.slice(at + 1))) return lower;
+  const localPart = lower.slice(0, at).split("+")[0].replaceAll(".", "");
+  return `${localPart}@gmail.com`;
+}
+
+function lowercaseEmail(email: string) {
   return email.trim().toLowerCase();
 }
 

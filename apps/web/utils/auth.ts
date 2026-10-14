@@ -344,9 +344,14 @@ export const betterAuthConfig = betterAuth({
     },
     user: {
       create: {
-        before: async (user) => {
+        before: async (user, context) => {
           try {
-            await assertSignUpAllowed({ email: user.email, name: user.name });
+            await assertSignUpAllowed({
+              email: user.email,
+              name: user.name,
+              provider: getAuthProviderFromContext(context),
+              emailVerified: user.emailVerified,
+            });
           } catch (error) {
             if (error instanceof APIError) {
               logger.warn("Blocked sign-up of an unapproved email", {

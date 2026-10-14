@@ -3,6 +3,7 @@ import prisma from "@/utils/__mocks__/prisma";
 import {
   assertSignUpAllowed,
   isApprovedForAccess,
+  normalizeAccessEmail,
   recordAccessRequest,
 } from "@/utils/access/policy";
 
@@ -15,6 +16,24 @@ const closed = {
   allowedEmails: [],
   allowedDomains: [],
 };
+const google = { provider: "google", emailVerified: true } as const;
+
+describe("normalizeAccessEmail", () => {
+  it("matches Gmail addresses the way Gmail does", () => {
+    expect(normalizeAccessEmail(" Jane.Doe@Gmail.com ")).toBe(
+      "janedoe@gmail.com",
+    );
+    expect(normalizeAccessEmail("jane.doe+cue@googlemail.com")).toBe(
+      "janedoe@gmail.com",
+    );
+  });
+
+  it("leaves other domains' dots alone", () => {
+    expect(normalizeAccessEmail("Jane.Doe@School.edu")).toBe(
+      "jane.doe@school.edu",
+    );
+  });
+});
 
 describe("isApprovedForAccess", () => {
   beforeEach(() => {
@@ -22,55 +41,81 @@ describe("isApprovedForAccess", () => {
   });
 
   it("approves an approved request regardless of case", async () => {
-    prisma.accessRequest.findUnique.mockResolvedValue({
+    prisma.accessRequest.findFirst.mockResolvedValue({
       status: "APPROVED",
     } as never);
 
     await expect(
       isApprovedForAccess(" Friend@Gmail.com ", closed),
     ).resolves.toBe(true);
-    expect(prisma.accessRequest.findUnique).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { email: "friend@gmail.com" } }),
+    expect(prisma.accessRequest.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          email: { in: ["friend@gmail.com"] },
+          status: "APPROVED",
+        }),
+      }),
     );
   });
 
-  it.each([
-    "PENDING",
-    "DECLINED",
-  ] as const)("blocks a %s request", async (status) => {
-    prisma.accessRequest.findUnique.mockResolvedValue({ status } as never);
-    await expect(isApprovedForAccess("friend@gmail.com", closed)).resolves.toBe(
-      false,
+  it("matches an approval made with dots against a sign-in without them", async () => {
+    prisma.accessRequest.findFirst.mockResolvedValue({
+      status: "APPROVED",
+    } as never);
+
+    await expect(
+      isApprovedForAccess("jane.doe@googlemail.com", closed),
+    ).resolves.toBe(true);
+    expect(prisma.accessRequest.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          // The raw form also matches rows stored before canonical addresses.
+          email: { in: ["janedoe@gmail.com", "jane.doe@googlemail.com"] },
+        }),
+      }),
     );
   });
 
-  it("blocks an address with no request", async () => {
-    prisma.accessRequest.findUnique.mockResolvedValue(null);
+  it("blocks an address with no approved request", async () => {
+    prisma.accessRequest.findFirst.mockResolvedValue(null);
     await expect(
       isApprovedForAccess("stranger@gmail.com", closed),
     ).resolves.toBe(false);
   });
 
-  it("always lets admins in without a request", async () => {
+  it("always lets admins in without a request, dots or not", async () => {
     await expect(
-      isApprovedForAccess("founder@gmail.com", closed),
+      isApprovedForAccess("f.o.under@gmail.com", {
+        ...closed,
+        admins: ["founder@gmail.com"],
+      }),
     ).resolves.toBe(true);
-    expect(prisma.accessRequest.findUnique).not.toHaveBeenCalled();
+    expect(prisma.accessRequest.findFirst).not.toHaveBeenCalled();
   });
 
-  it("keeps everyone on the existing allow-lists approved", async () => {
-    const policy = {
-      ...closed,
-      allowedEmails: ["friend@gmail.com"],
-      allowedDomains: ["school.edu"],
-    };
-    await expect(isApprovedForAccess("Friend@gmail.com", policy)).resolves.toBe(
-      true,
-    );
+  it("keeps people on AUTH_ALLOWED_EMAILS approved", async () => {
+    const policy = { ...closed, allowedEmails: ["friend@gmail.com"] };
+    await expect(
+      isApprovedForAccess("Fri.end@gmail.com", policy),
+    ).resolves.toBe(true);
+    expect(prisma.accessRequest.findFirst).not.toHaveBeenCalled();
+  });
+
+  // A domain list auto-approves everyone at it; with the waitlist on, every
+  // person is approved individually.
+  it("ignores AUTH_ALLOWED_EMAIL_DOMAINS while the waitlist is on", async () => {
+    prisma.accessRequest.findFirst.mockResolvedValue(null);
+    const policy = { ...closed, allowedDomains: ["school.edu"] };
+
     await expect(
       isApprovedForAccess("student@school.edu", policy),
+    ).resolves.toBe(false);
+    await expect(
+      isApprovedForAccess("student@school.edu", {
+        ...policy,
+        waitlistEnabled: false,
+      }),
     ).resolves.toBe(true);
-    expect(prisma.accessRequest.findUnique).not.toHaveBeenCalled();
   });
 });
 
@@ -82,21 +127,22 @@ describe("assertSignUpAllowed", () => {
   it("keeps sign-up open with the waitlist off and no allow-list", async () => {
     await expect(
       assertSignUpAllowed(
-        { email: "anyone@gmail.com" },
+        { email: "anyone@outlook.com", provider: "microsoft" },
         { ...closed, waitlistEnabled: false },
       ),
     ).resolves.toBeUndefined();
-    expect(prisma.accessRequest.findUnique).not.toHaveBeenCalled();
+    expect(prisma.accessRequest.findFirst).not.toHaveBeenCalled();
     expect(prisma.accessRequest.create).not.toHaveBeenCalled();
   });
 
   it("with the waitlist off, an allow-list still blocks strangers and records their request", async () => {
+    prisma.accessRequest.findFirst.mockResolvedValue(null);
     prisma.accessRequest.findUnique.mockResolvedValue(null);
     prisma.accessRequest.create.mockResolvedValue({ id: "r1" } as never);
 
     await expect(
       assertSignUpAllowed(
-        { email: "stranger@gmail.com" },
+        { email: "stranger@gmail.com", ...google },
         { ...closed, waitlistEnabled: false, allowedEmails: ["a@gmail.com"] },
       ),
     ).rejects.toThrow("signup_not_allowed");
@@ -105,24 +151,28 @@ describe("assertSignUpAllowed", () => {
   });
 
   it("with the waitlist off, an allow-list still admits people approved on /admin/access", async () => {
-    prisma.accessRequest.findUnique.mockResolvedValue({
+    prisma.accessRequest.findFirst.mockResolvedValue({
       status: "APPROVED",
     } as never);
 
     await expect(
       assertSignUpAllowed(
-        { email: "friend@gmail.com" },
+        { email: "friend@gmail.com", ...google },
         { ...closed, waitlistEnabled: false, allowedEmails: ["a@gmail.com"] },
       ),
     ).resolves.toBeUndefined();
   });
 
   it("closes sign-up with the waitlist on, even with an empty allow-list", async () => {
+    prisma.accessRequest.findFirst.mockResolvedValue(null);
     prisma.accessRequest.findUnique.mockResolvedValue(null);
     prisma.accessRequest.create.mockResolvedValue({ id: "r1" } as never);
 
     await expect(
-      assertSignUpAllowed({ email: "Stranger@gmail.com", name: "S" }, closed),
+      assertSignUpAllowed(
+        { email: "Stranger@gmail.com", name: "S", ...google },
+        closed,
+      ),
     ).rejects.toThrow("signup_not_allowed");
     expect(prisma.accessRequest.create).toHaveBeenCalledTimes(1);
     expect(prisma.accessRequest.create).toHaveBeenCalledWith({
@@ -135,14 +185,49 @@ describe("assertSignUpAllowed", () => {
     });
   });
 
-  it("lets an approved person sign up", async () => {
-    prisma.accessRequest.findUnique.mockResolvedValue({
+  it("lets an approved Google account sign up", async () => {
+    prisma.accessRequest.findFirst.mockResolvedValue({
       status: "APPROVED",
     } as never);
 
     await expect(
-      assertSignUpAllowed({ email: "friend@gmail.com" }, closed),
+      assertSignUpAllowed({ email: "friend@gmail.com", ...google }, closed),
     ).resolves.toBeUndefined();
+    expect(prisma.accessRequest.create).not.toHaveBeenCalled();
+  });
+
+  it("lets an approved Apple account with a verified email sign up", async () => {
+    prisma.accessRequest.findFirst.mockResolvedValue({
+      status: "APPROVED",
+    } as never);
+
+    await expect(
+      assertSignUpAllowed(
+        { email: "friend@gmail.com", provider: "apple", emailVerified: true },
+        closed,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  // Microsoft's email claim can be set by the tenant, so it doesn't prove the
+  // person owns the approved address.
+  it.each([
+    { provider: "microsoft", emailVerified: true },
+    { provider: "sso", emailVerified: true },
+    { provider: undefined, emailVerified: true },
+    { provider: "google", emailVerified: false },
+  ])("refuses an approved address claimed by $provider (verified: $emailVerified)", async (identity) => {
+    prisma.accessRequest.findFirst.mockResolvedValue({
+      status: "APPROVED",
+    } as never);
+
+    await expect(
+      assertSignUpAllowed(
+        { email: "friend@gmail.com", ...identity },
+        { ...closed, admins: ["friend@gmail.com"] },
+      ),
+    ).rejects.toThrow("signup_not_allowed");
+    // An unproven claim isn't recorded as that person's request either.
     expect(prisma.accessRequest.create).not.toHaveBeenCalled();
   });
 });
@@ -160,5 +245,21 @@ describe("recordAccessRequest", () => {
     ).resolves.toEqual({ id: "r1", isRepeat: true });
     expect(prisma.accessRequest.create).not.toHaveBeenCalled();
     expect(prisma.accessRequest.update).not.toHaveBeenCalled();
+  });
+
+  it("stores Gmail addresses in their canonical form", async () => {
+    prisma.accessRequest.findUnique.mockResolvedValue(null);
+    prisma.accessRequest.create.mockResolvedValue({ id: "r2" } as never);
+
+    await recordAccessRequest({
+      email: "Jane.Doe@googlemail.com",
+      source: "form",
+    });
+
+    expect(prisma.accessRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ email: "janedoe@gmail.com" }),
+      }),
+    );
   });
 });

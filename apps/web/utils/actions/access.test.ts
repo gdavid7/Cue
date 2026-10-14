@@ -185,9 +185,38 @@ describe("requestAccessAction", () => {
     });
   });
 
+  // The form asks for the Gmail address people will sign in with.
+  it.each([
+    "someone@outlook.com",
+    "someone@school.edu",
+  ])("refuses a non-Gmail address (%s) without recording it", async (email) => {
+    const result = await requestAccessAction({ email });
+
+    expect(result?.validationErrors).toBeDefined();
+    expect(result?.data).toBeUndefined();
+    expect(prisma.accessRequest.create).not.toHaveBeenCalled();
+    expect(mockCheckRateLimit).not.toHaveBeenCalled();
+  });
+
+  it("takes googlemail.com addresses, stored as their Gmail form", async () => {
+    prisma.accessRequest.findUnique.mockResolvedValue(null);
+    prisma.accessRequest.create.mockResolvedValue({ id: "r3" } as never);
+
+    const result = await requestAccessAction({
+      email: "Jane.Doe@googlemail.com",
+    });
+
+    expect(result?.data).toEqual({ ok: true });
+    expect(prisma.accessRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ email: "janedoe@gmail.com" }),
+      }),
+    );
+  });
+
   it("silently drops submissions that fill the hidden field", async () => {
     const result = await requestAccessAction({
-      email: "bot@example.com",
+      email: "bot@gmail.com",
       website: "https://spam.example",
     });
 

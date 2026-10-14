@@ -32,7 +32,11 @@ describe.skipIf(!process.env.RUN_DB_TESTS)(
       for (let attempt = 0; attempt < 2; attempt++) {
         await expect(
           assertSignUpAllowed(
-            { email: ` ${email.toUpperCase()} ` },
+            {
+              email: ` ${email.toUpperCase()} `,
+              provider: "google",
+              emailVerified: true,
+            },
             waitlistOn,
           ),
         ).rejects.toThrow("signup_not_allowed");
@@ -63,7 +67,10 @@ describe.skipIf(!process.env.RUN_DB_TESTS)(
       expect(request.status).toBe("APPROVED");
       await expect(isApprovedForAccess(email, waitlistOn)).resolves.toBe(true);
       await expect(
-        assertSignUpAllowed({ email }, waitlistOn),
+        assertSignUpAllowed(
+          { email, provider: "google", emailVerified: true },
+          waitlistOn,
+        ),
       ).resolves.toBeUndefined();
     });
   },

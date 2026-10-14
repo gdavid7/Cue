@@ -50,6 +50,16 @@ export default async function AdminAccessPage() {
             : "The waitlist is off, so anyone can still sign up. Set AUTH_WAITLIST_ENABLED=true to require approval."
         }
       />
+      {env.AUTH_WAITLIST_ENABLED &&
+        (env.AUTH_ALLOWED_EMAIL_DOMAINS?.length ?? 0) > 0 && (
+          <AlertBasic
+            className="mt-6"
+            variant="blue"
+            icon={<InfoIcon className="size-4" aria-hidden />}
+            title="AUTH_ALLOWED_EMAIL_DOMAINS is ignored while the waitlist is on"
+            description="A domain would let in everyone at it without review. Approve people from those domains here, one at a time. People who already have an account keep it."
+          />
+        )}
       {GOOGLE_OAUTH_TESTING_MODE && (
         <AlertBasic
           className="mt-6"

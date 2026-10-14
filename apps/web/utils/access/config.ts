@@ -29,3 +29,6 @@ export const MAILBOX_LIMIT_ERROR = "mailbox_limit";
 export const GOOGLE_OAUTH_TESTING_MODE = true;
 export const GOOGLE_OAUTH_TEST_USERS_URL =
   "https://console.cloud.google.com/apis/credentials/consent";
+
+/** Domains that are Gmail; the request form only takes these addresses. */
+export const GMAIL_DOMAINS = ["gmail.com", "googlemail.com"];

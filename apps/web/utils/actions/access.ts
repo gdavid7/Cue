@@ -241,7 +241,7 @@ async function deliverApprovalEmail({
   if (ACCESS_APPROVAL_EMAIL_DELIVERY !== "founder-mailbox") return false;
 
   const mailbox = await prisma.emailAccount.findUnique({
-    where: { email: normalizeAccessEmail(admin.email) },
+    where: { email: admin.email.trim().toLowerCase() },
     select: { id: true, account: { select: { provider: true } } },
   });
   if (!mailbox) {
