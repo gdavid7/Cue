@@ -4,6 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { LlmUseCase } from "@/utils/llms/use-cases";
+import { saveAiUsage } from "@/utils/usage";
 import { toolCallAgentStream } from "./index";
 import { INTERRUPTED_RESPONSE_NOTICE } from "./stream-fallback-model";
 
@@ -101,6 +102,20 @@ describe("toolCallAgentStream model fallback", () => {
     expect(run.errorChunks).toHaveLength(0);
     expect(run.resolvedModels).toEqual(["primary-model", "fallback-model"]);
     expect(primary.doStreamCalls).toHaveLength(2);
+    expect(saveAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "fallback-model",
+        modelFallbacks: [
+          {
+            fromProvider: "google",
+            fromModel: "primary-model",
+            toProvider: "google",
+            toModel: "fallback-model",
+            reason: "server_error",
+          },
+        ],
+      }),
+    );
   });
 
   it("answers from the primary when its quick retry succeeds", async () => {
@@ -214,6 +229,13 @@ describe("toolCallAgentStream model fallback", () => {
     expect(run.errorChunks).toHaveLength(0);
     expect(fallback.doStreamCalls).toHaveLength(0);
     expect(run.finishReason).toBe("error");
+    // The interrupted call reports no usage, so the run's total is a floor.
+    expect(saveAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "primary-model",
+        usageIncomplete: true,
+      }),
+    );
   });
 
   it("continues on the fallback after a write tool ran without running it again", async () => {

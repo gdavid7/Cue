@@ -24,7 +24,7 @@ import {
 import type { LanguageModelV4 } from "@ai-sdk/provider";
 import { captureAiGeneration } from "@posthog/ai";
 import { jsonrepair } from "jsonrepair";
-import { saveAiUsage } from "@/utils/usage";
+import { type ModelFallbackRecord, saveAiUsage } from "@/utils/usage";
 import type { EmailAccountWithAI, UserAIFields } from "@/utils/llms/types";
 import {
   addUserErrorMessageWithNotification,
@@ -981,6 +981,8 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
           .slice(1)
           .filter((candidate) => candidate.provider !== Provider.CLAUDE_CODE),
       ];
+  const modelFallbacks: ModelFallbackRecord[] = [];
+  let usageIncomplete = false;
   // With nothing to switch to, the model runs unwrapped: the wrapper's holding
   // of tool parts would only delay them, and the AI SDK's own retries apply.
   const fallbackModel =
@@ -1000,6 +1002,13 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
             });
           },
           onFallback: ({ from, to, error }) => {
+            modelFallbacks.push({
+              fromProvider: from.provider,
+              fromModel: from.modelName,
+              toProvider: to.provider,
+              toModel: to.modelName,
+              reason: getLlmFallbackFailureCategory(error),
+            });
             logger.warn(
               "Tool-call stream failed, switching to fallback model",
               {
@@ -1019,6 +1028,7 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
             });
           },
           onInterrupted: ({ candidate, error }) => {
+            usageIncomplete = true;
             logger.error("Tool-call stream interrupted after output", {
               label,
               provider: candidate.provider,
@@ -1069,6 +1079,8 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
         model: finalCandidate.modelName,
         label,
         hasUserApiKey: modelOptions.hasUserApiKey,
+        modelFallbacks: modelFallbacks.length > 0 ? modelFallbacks : undefined,
+        usageIncomplete: usageIncomplete || undefined,
       });
 
       const finishPromise = onEnd?.(
@@ -1924,6 +1936,8 @@ async function saveUsageWithMetadata({
   model,
   label,
   hasUserApiKey,
+  modelFallbacks,
+  usageIncomplete,
 }: {
   result: unknown;
   usage: Parameters<typeof saveAiUsage>[0]["usage"];
@@ -1934,6 +1948,8 @@ async function saveUsageWithMetadata({
   model: string;
   label: string;
   hasUserApiKey: boolean;
+  modelFallbacks?: ModelFallbackRecord[];
+  usageIncomplete?: boolean;
 }) {
   const usageMetadata = getUsageMetadata(result);
 
@@ -1952,6 +1968,8 @@ async function saveUsageWithMetadata({
     providerRequestIds: usageMetadata.providerRequestIds,
     stepCount: usageMetadata.stepCount,
     toolCallCount: usageMetadata.toolCallCount,
+    modelFallbacks,
+    usageIncomplete,
   });
 }
 
