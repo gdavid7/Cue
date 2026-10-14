@@ -19,6 +19,7 @@ import type {
 } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
+import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import { getTrackedThreads } from "@/utils/reply-tracker/tracked-threads";
 import { getRuleLabel } from "@/utils/rule/consts";
 import {
@@ -114,6 +115,8 @@ export async function getHomeData({
       })
       .then((r) => r.threads)
       .catch((error) => {
+        // An empty lane would read as "nothing here"; the client retries.
+        if (isGmailCallDeferredError(error)) throw error;
         logger.warn("Failed to list home threads", { label, error });
         return [] as EmailThread[];
       });
@@ -132,6 +135,7 @@ export async function getHomeData({
       limit: LIST_LIMIT,
       inboxOnly,
     }).catch((error) => {
+      if (isGmailCallDeferredError(error)) throw error;
       logger.warn("Failed to list tracked home threads", { label, error });
       return [] as EmailThread[];
     });

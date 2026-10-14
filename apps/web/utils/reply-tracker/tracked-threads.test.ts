@@ -45,6 +45,27 @@ describe("getTrackedThreads", () => {
     );
   });
 
+  it("reads overfetched trackers only when the newest have left the inbox", async () => {
+    const threads = Array.from({ length: 6 }, (_, index) =>
+      thread(`open-${index}`, ["INBOX"]),
+    );
+    prisma.threadTracker.findMany.mockResolvedValue(
+      threads.map((t) => ({ threadId: t.id })) as never,
+    );
+    const emailProvider = provider(threads);
+
+    const result = await getTrackedThreads({
+      emailAccountId: "account",
+      emailProvider,
+      type: ThreadTrackerType.NEEDS_REPLY,
+      limit: 2,
+      inboxOnly: true,
+    });
+
+    expect(result.map((t) => t.id)).toEqual(["open-0", "open-1"]);
+    expect(emailProvider.getThread).toHaveBeenCalledTimes(2);
+  });
+
   it("loads conversations a few at a time and skips ones that fail", async () => {
     const threads = Array.from({ length: 12 }, (_, index) =>
       thread(`t${index}`, ["INBOX"]),

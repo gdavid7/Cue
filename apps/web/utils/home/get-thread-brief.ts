@@ -8,6 +8,7 @@ import type { Logger } from "@/utils/logger";
 import { parseReply } from "@/utils/mail";
 import { assertHasAiAccess } from "@/utils/premium/limits";
 import { redis } from "@/utils/redis";
+import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import type { ParsedMessage } from "@/utils/types";
 import { getEmailAccountWithAi } from "@/utils/user/get";
 
@@ -61,6 +62,7 @@ export async function getThreadBrief({
   logger: Logger;
 }): Promise<ThreadBrief | null> {
   const thread = await emailProvider.getThread(threadId).catch((error) => {
+    if (isGmailCallDeferredError(error)) throw error;
     logger.warn("Failed to load thread for brief", { error });
     return null;
   });

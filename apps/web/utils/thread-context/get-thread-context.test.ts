@@ -8,6 +8,9 @@ vi.mock("server-only", () => ({}));
 vi.mock("@/utils/calendar/fetch-events-in-window", () => ({
   fetchCalendarEventsInWindow: vi.fn(),
 }));
+vi.mock("@/utils/redis", () => ({
+  redis: { get: vi.fn(async () => null), set: vi.fn(async () => "OK") },
+}));
 
 const USER = "david@example.com";
 const NOW = new Date("2026-10-13T16:00:00Z");

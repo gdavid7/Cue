@@ -16,6 +16,7 @@ import {
 import type { Logger } from "@/utils/logger";
 import { assertHasAiAccess } from "@/utils/premium/limits";
 import { redis } from "@/utils/redis";
+import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import {
   getCachedSuggestedReply,
   getSuggestedReplySettings,
@@ -162,6 +163,7 @@ async function extractMissing({
     : false;
   const aiAccount = hasAi ? emailAccount : null;
 
+  let deferred: unknown = null;
   const results = await mapWithConcurrency(
     items,
     EXTRACT_CONCURRENCY,
@@ -191,11 +193,18 @@ async function extractMissing({
           .catch(() => null);
         return [messageId, entry] as const;
       } catch (error) {
+        if (isGmailCallDeferredError(error)) {
+          deferred ??= error;
+          return null;
+        }
         logger.warn("Failed to build inbox insight", { error });
         return null;
       }
     },
   );
+  // Insights wait for spare Gmail quota. Failing the request lets the client
+  // retry; what was built is cached, so the retry only reads what is missing.
+  if (deferred) throw deferred;
   return new Map(results.filter((r) => r !== null));
 }
 
