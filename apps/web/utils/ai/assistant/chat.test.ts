@@ -1,4 +1,4 @@
-import type { Tool } from "ai";
+import type { ModelMessage, Tool } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestLogger, getEmailAccount } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
@@ -326,5 +326,45 @@ describe("aiProcessAssistantChat setup", () => {
     await run;
 
     expect(toolCallAgentStream).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("aiProcessAssistantChat inbox snapshot", () => {
+  it("follows the caller's first-turn flag rather than counting user-role messages", async () => {
+    vi.clearAllMocks();
+    vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
+    const snapshotFor = async (
+      messages: ModelMessage[],
+      isFirstUserTurn: boolean,
+    ) => {
+      vi.mocked(toolCallAgentStream).mockClear();
+      await aiProcessAssistantChat({
+        messages,
+        emailAccountId: "email-account-id",
+        user: getEmailAccount(),
+        inboxStats: { total: 240, unread: 6 },
+        isFirstUserTurn,
+        logger: createTestLogger(),
+      });
+      const [options] = vi.mocked(toolCallAgentStream).mock.calls[0];
+      return JSON.stringify(options.messages).includes(
+        "Automated inbox snapshot",
+      );
+    };
+
+    // A hidden inline-action message is also user-role, so a first turn can
+    // carry two user messages.
+    expect(
+      await snapshotFor(
+        [
+          { role: "user", content: "archive these" },
+          { role: "user", content: "Hidden inline action context" },
+        ],
+        true,
+      ),
+    ).toBe(true);
+    expect(
+      await snapshotFor([{ role: "user", content: "and now?" }], false),
+    ).toBe(false);
   });
 });

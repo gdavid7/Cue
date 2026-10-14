@@ -4,6 +4,7 @@ import type {
   LanguageModelV4StreamPart,
   LanguageModelV4StreamResult,
 } from "@ai-sdk/provider";
+import { sleep } from "@/utils/sleep";
 
 export type StreamFallbackCandidate = {
   provider: string;
@@ -19,16 +20,30 @@ export const INTERRUPTED_RESPONSE_NOTICE =
 // level of a single model call. Each agent step is one call whose prompt
 // already holds the earlier steps' tool results, and the AI SDK only executes
 // a call's tool calls once that call finishes cleanly, so switching models
-// never re-runs a tool. A call switches only while none of its text has
-// streamed; after that it is ended with a notice rather than answered twice.
+// never re-runs a tool. A call switches only while the user has seen none of
+// its output; after that it is ended with a notice rather than answered twice.
 export function createStreamFallbackModel<
   TCandidate extends StreamFallbackCandidate,
 >({
   candidates,
+  shouldFallback,
+  getRetryDelayMs,
+  onRetry,
   onFallback,
   onInterrupted,
 }: {
   candidates: TCandidate[];
+  // Whether a failure is one another model could get past (rate limits,
+  // outages, refusals) rather than a request no model would accept.
+  shouldFallback: (error: unknown) => boolean;
+  // How long to wait before retrying the primary once, or undefined when a
+  // retry is not worth it. Bounded by the caller to keep the delay short.
+  getRetryDelayMs: (error: unknown) => number | undefined;
+  onRetry: (event: {
+    candidate: TCandidate;
+    error: unknown;
+    delayMs: number;
+  }) => void;
   onFallback: (event: {
     from: TCandidate;
     to: TCandidate;
@@ -41,17 +56,31 @@ export function createStreamFallbackModel<
   // Stays on the fallback for the rest of the run: the failing provider is
   // likely to fail the next step too.
   let activeIndex = 0;
+  let primaryRetried = false;
   const getActiveCandidate = () => candidates[activeIndex];
 
-  const switchToNextCandidate = (
+  // Called when a model call fails before the user has seen any of its
+  // output. Returns whether the call should be started again: once on the
+  // primary for a passing failure, then on the next candidate.
+  const recoverFrom = async (
     error: unknown,
     abortSignal: AbortSignal | undefined,
   ) => {
     if (abortSignal?.aborted || isAbortError(error)) return false;
 
+    if (activeIndex === 0 && !primaryRetried) {
+      const delayMs = getRetryDelayMs(error);
+      if (delayMs !== undefined) {
+        primaryRetried = true;
+        onRetry({ candidate: getActiveCandidate(), error, delayMs });
+        await sleep(delayMs);
+        return !abortSignal?.aborted;
+      }
+    }
+
     const from = candidates[activeIndex];
     const to = candidates[activeIndex + 1];
-    if (!to) return false;
+    if (!to || !shouldFallback(error)) return false;
 
     activeIndex += 1;
     onFallback({ from, to, error });
@@ -74,9 +103,7 @@ export function createStreamFallbackModel<
           getCallOptions(options),
         );
       } catch (error) {
-        // Nothing has been emitted yet, so any provider failure is safe to
-        // retry elsewhere: the next provider may accept what this one refused.
-        if (!switchToNextCandidate(error, options.abortSignal)) throw error;
+        if (!(await recoverFrom(error, options.abortSignal))) throw error;
       }
     }
   };
@@ -100,7 +127,7 @@ export function createStreamFallbackModel<
             getCallOptions(options),
           );
         } catch (error) {
-          if (!switchToNextCandidate(error, options.abortSignal)) throw error;
+          if (!(await recoverFrom(error, options.abortSignal))) throw error;
         }
       }
     },
@@ -118,11 +145,14 @@ export function createStreamFallbackModel<
     options: LanguageModelV4CallOptions,
   ) {
     let reader = initialStream.getReader();
-    let textStreamed = false;
+    // Set once the user has seen this call's output (text, or reasoning the
+    // chat shows). Until then every content part is held, so a call that fails
+    // leaves nothing behind: not in the UI, and not in the step content the
+    // next model is prompted with.
+    let outputStarted = false;
     let skipStreamStart = false;
-    // Tool parts (and anything after them) wait for the call to finish, and
-    // text scaffolding waits for the first text, so a failed call leaves no
-    // half-built tool or text part behind in the UI.
+    // Tool parts (and anything after them) wait for the call to finish, as the
+    // AI SDK runs a tool as soon as it sees the call.
     let held: LanguageModelV4StreamPart[] = [];
     const openTextIds = new Set<string>();
     const openReasoningIds = new Set<string>();
@@ -157,7 +187,7 @@ export function createStreamFallbackModel<
 
             const aborted =
               options.abortSignal?.aborted || isAbortError(part.error);
-            if (textStreamed && !aborted) {
+            if (outputStarted && !aborted) {
               onInterrupted({
                 candidate: getActiveCandidate(),
                 error: part.error,
@@ -174,7 +204,7 @@ export function createStreamFallbackModel<
               return;
             }
 
-            if (!switchToNextCandidate(part.error, options.abortSignal)) {
+            if (!(await recoverFrom(part.error, options.abortSignal))) {
               releaseHeld();
               emit(part);
               controller.close();
@@ -182,7 +212,6 @@ export function createStreamFallbackModel<
             }
 
             held = [];
-            closeOpenParts(controller, new Set(), openReasoningIds);
             try {
               reader = (await startStream(options)).stream.getReader();
               skipStreamStart = true;
@@ -205,18 +234,17 @@ export function createStreamFallbackModel<
             return;
           }
 
-          const holdsTools = held.some(isToolPart);
-          if (
-            holdsTools ||
-            isToolPart(part) ||
-            (!textStreamed && isTextScaffolding(part))
-          ) {
+          if (held.some(isToolPart) || isToolPart(part)) {
             held.push(part);
             continue;
           }
 
-          if (part.type === "text-delta") {
-            textStreamed = true;
+          if (!outputStarted && !isCallMetadata(part)) {
+            if (!isUserVisibleOutput(part)) {
+              held.push(part);
+              continue;
+            }
+            outputStarted = true;
             releaseHeld();
           }
           emit(part);
@@ -251,12 +279,21 @@ function isToolPart(part: LanguageModelV4StreamPart) {
   );
 }
 
-function isTextScaffolding(part: LanguageModelV4StreamPart) {
+function isCallMetadata(part: LanguageModelV4StreamPart) {
   return (
-    part.type === "text-start" ||
-    part.type === "text-end" ||
-    (part.type === "text-delta" && part.delta.length === 0)
+    part.type === "stream-start" ||
+    part.type === "response-metadata" ||
+    part.type === "raw"
   );
+}
+
+// Matches what the chat renders: it hides empty and redacted reasoning.
+function isUserVisibleOutput(part: LanguageModelV4StreamPart) {
+  if (part.type === "text-delta") return part.delta.length > 0;
+  if (part.type === "reasoning-delta") {
+    return part.delta.trim().length > 0 && part.delta !== "[REDACTED]";
+  }
+  return false;
 }
 
 function trackOpenParts(

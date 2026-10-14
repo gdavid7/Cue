@@ -32,6 +32,14 @@ export type AiUsageEvent = {
   totalTokens: number;
 };
 
+export type ModelFallbackRecord = {
+  fromProvider: string;
+  fromModel: string;
+  toProvider: string;
+  toModel: string;
+  reason: string;
+};
+
 type AiUsageListener = (event: AiUsageEvent) => void;
 
 const aiUsageListeners = new Set<AiUsageListener>();
@@ -58,6 +66,8 @@ export async function saveAiUsage({
   providerRequestIds,
   stepCount,
   toolCallCount,
+  modelFallbacks,
+  usageIncomplete,
 }: {
   userId?: string;
   email: string;
@@ -73,6 +83,12 @@ export async function saveAiUsage({
   providerRequestIds?: string[];
   stepCount?: number;
   toolCallCount?: number;
+  // Models the run switched away from mid-run; its usage is all recorded
+  // under the model it finished on.
+  modelFallbacks?: ModelFallbackRecord[];
+  // A call that failed after streaming output reports no usage, so the totals
+  // undercount it.
+  usageIncomplete?: boolean;
 }) {
   const estimatedCost = calculateUsageCost({ provider, model, usage });
   const isUserApiKey = !!hasUserApiKey;
@@ -112,6 +128,8 @@ export async function saveAiUsage({
     providerRequestIds,
     stepCount,
     toolCallCount,
+    modelFallbacks,
+    usageIncomplete,
   });
 
   notifyAiUsageListeners({
