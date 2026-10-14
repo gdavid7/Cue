@@ -133,14 +133,16 @@ jobs:
         id: report
         run: pnpm exec tsx scripts/qa/run-health-report.ts "$CUE_QA_RESULTS_FILE"
 
+      # The repository is public, so screenshots of the test inbox are only
+      # published when they are needed to debug a failure.
       - name: Upload screenshots and trace
-        if: always() && steps.config.outputs.robot == 'true'
+        if: failure() && steps.config.outputs.robot == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: prod-health-${{ github.run_id }}-${{ github.run_attempt }}
           path: apps/web/.tmp/qa-robot/
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 3
 
       - name: Verdict
         if: always()
