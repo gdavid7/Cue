@@ -30,6 +30,7 @@ import { CopyRulesSection } from "@/app/(app)/[emailAccountId]/settings/CopyRule
 import { RuleImportExportSetting } from "@/app/(app)/[emailAccountId]/assistant/settings/RuleImportExportSetting";
 import { ToggleAllRulesSection } from "@/app/(app)/[emailAccountId]/settings/ToggleAllRulesSection";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
+import { CueLabelsSetting } from "@/components/CueLabelsCleanup";
 import { LoadingContent } from "@/components/LoadingContent";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -240,6 +241,10 @@ function EmailAccountSettingsCard({
             allAccounts={allAccounts}
           />
           <CleanupDraftsSection emailAccountId={emailAccount.id} />
+          <CueLabelsSetting
+            emailAccountId={emailAccount.id}
+            provider={emailAccount.account.provider}
+          />
           <ResetAnalyticsSection emailAccountId={emailAccount.id} />
         </>
       )}

@@ -99,16 +99,19 @@ async function markOnboardingComplete(email: string) {
           [email],
         );
         if (account.rowCount === 1) {
-          // The first-run "Which looks like your inbox?" card (hint id from
-          // getInboxStyleHintId) would shift every mail spec's list down.
-          await client.query(
-            `UPDATE "User" u
-             SET "dismissedHints" = array_append(u."dismissedHints", 'inbox-style:' || ea.id)
-             FROM "EmailAccount" ea
-             WHERE ea."userId" = u.id AND ea.email = $1
-               AND NOT ('inbox-style:' || ea.id = ANY(u."dismissedHints"))`,
-            [email],
-          );
+          // The first-run "Which looks like your inbox?" card and the "Remove
+          // Cue's labels" card (hint ids from getInboxStyleHintId and
+          // getCueLabelsHintId) would shift every mail spec's list down.
+          for (const prefix of ["inbox-style:", "cue-labels:"]) {
+            await client.query(
+              `UPDATE "User" u
+               SET "dismissedHints" = array_append(u."dismissedHints", $2::text || ea.id)
+               FROM "EmailAccount" ea
+               WHERE ea."userId" = u.id AND ea.email = $1
+                 AND NOT ($2::text || ea.id = ANY(u."dismissedHints"))`,
+              [email, prefix],
+            );
+          }
           return;
         }
       }

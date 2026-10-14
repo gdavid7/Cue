@@ -43,6 +43,7 @@ import { extractEmailAddress } from "@/utils/email";
 import { LabelPickerDialog } from "@/app/(app)/[emailAccountId]/mail/LabelPickerDialog";
 import { ThreadList } from "@/app/(app)/[emailAccountId]/mail/ThreadList";
 import { InboxStyleCard } from "@/app/(app)/[emailAccountId]/mail/InboxStylePicker";
+import { CueLabelsCard } from "@/components/CueLabelsCleanup";
 import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
 import {
   MailListPlaceholder,
@@ -1623,6 +1624,7 @@ export function MailShell() {
               {showSplitTabs && !isAllAccounts && (
                 <InboxStyleCard onDone={() => setIsTourOpen(true)} />
               )}
+              {showSplitTabs && !isAllAccounts && <CueLabelsCard />}
               {isTourOpen && (
                 <WhatsNewTour onClose={() => setIsTourOpen(false)} />
               )}
