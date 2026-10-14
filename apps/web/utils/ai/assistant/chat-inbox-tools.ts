@@ -372,7 +372,9 @@ export const startSenderCategorizationTool = ({
 
         logger.error("Failed to start sender categorization", { error });
         return {
-          error: "Failed to start sender categorization",
+          error:
+            describeProviderRateLimitError(error, provider) ??
+            "Failed to start sender categorization",
         };
       }
     },
@@ -462,7 +464,9 @@ export const manageSenderCategoryTool = ({
       } catch (error) {
         logger.error("Failed to manage sender category", { error });
         return {
-          error: "Failed to manage sender category",
+          error:
+            describeProviderRateLimitError(error, provider) ??
+            "Failed to manage sender category",
         };
       }
     },
@@ -883,7 +887,11 @@ export const readAttachmentTool = ({
         };
       } catch (error) {
         logger.error("Failed to read attachment", { error });
-        return { error: "Failed to read attachment" };
+        return {
+          error:
+            describeProviderRateLimitError(error, provider) ??
+            "Failed to read attachment",
+        };
       }
     },
   });
@@ -1246,7 +1254,11 @@ const buildManageInboxTool = ({
         };
       } catch (error) {
         logger.error("Failed to run inbox action", { error });
-        return { error: "Failed to update emails" };
+        return {
+          error:
+            describeProviderRateLimitError(error, provider) ??
+            "Failed to update emails",
+        };
       }
     },
   });
@@ -1338,7 +1350,11 @@ export const replyEmailTool = ({
         );
       } catch (error) {
         logger.error("Failed to prepare reply from chat", { error });
-        return { error: "Failed to prepare reply" };
+        return {
+          error:
+            describeProviderRateLimitError(error, provider) ??
+            "Failed to prepare reply",
+        };
       }
     },
   });
@@ -1384,7 +1400,11 @@ export const forwardEmailTool = ({
         );
       } catch (error) {
         logger.error("Failed to prepare email forward from chat", { error });
-        return { error: "Failed to prepare email forward" };
+        return {
+          error:
+            describeProviderRateLimitError(error, provider) ??
+            "Failed to prepare email forward",
+        };
       }
     },
   });

@@ -2,6 +2,7 @@ import { type InferUITool, tool } from "ai";
 import { z } from "zod";
 import type { Logger } from "@/utils/logger";
 import { createEmailProvider } from "@/utils/email/provider";
+import { describeProviderRateLimitError } from "@/utils/email/rate-limit";
 import { findNestedLabelMatches } from "@/utils/label/find-nested-label-matches";
 import { normalizeLabelName } from "@/utils/label/normalize-label-name";
 import { posthogCaptureEvent } from "@/utils/posthog";
@@ -57,7 +58,9 @@ function buildListTool({
       } catch (error) {
         logger.error(`Failed to list ${terms.resourcePlural}`, { error });
         return {
-          error: `Failed to list ${terms.resourcePlural}`,
+          error:
+            describeProviderRateLimitError(error, provider) ??
+            `Failed to list ${terms.resourcePlural}`,
         };
       }
     },
@@ -154,7 +157,9 @@ function buildCreateOrGetTool({
       } catch (error) {
         logger.error(`Failed to create or get ${terms.resource}`, { error });
         return {
-          error: `Failed to create or get ${terms.resource}`,
+          error:
+            describeProviderRateLimitError(error, provider) ??
+            `Failed to create or get ${terms.resource}`,
         };
       }
     },

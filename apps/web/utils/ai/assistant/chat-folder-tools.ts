@@ -1,6 +1,7 @@
 import { type InferUITool, tool } from "ai";
 import { z } from "zod";
 import { createEmailProvider } from "@/utils/email/provider";
+import { describeProviderRateLimitError } from "@/utils/email/rate-limit";
 import type { Logger } from "@/utils/logger";
 import {
   FOLDER_SEPARATOR,
@@ -61,7 +62,9 @@ export const listFoldersTool = ({
       } catch (error) {
         logger.error("Failed to list folders", { error });
         return {
-          error: "Failed to list folders",
+          error:
+            describeProviderRateLimitError(error, provider) ??
+            "Failed to list folders",
         };
       }
     },
@@ -127,7 +130,9 @@ export const createOrGetFolderTool = ({
       } catch (error) {
         logger.error("Failed to create or get folder", { error });
         return {
-          error: "Failed to create or get folder",
+          error:
+            describeProviderRateLimitError(error, provider) ??
+            "Failed to create or get folder",
         };
       }
     },
@@ -202,7 +207,9 @@ export const moveThreadsToFolderTool = ({
       } catch (error) {
         logger.error("Failed to move threads to folder", { error });
         return {
-          error: "Failed to move threads to folder",
+          error:
+            describeProviderRateLimitError(error, provider) ??
+            "Failed to move threads to folder",
         };
       }
     },

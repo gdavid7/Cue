@@ -1,13 +1,35 @@
+import type { Tool } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestLogger, getEmailAccount } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
 import {
+  aiProcessAssistantChat,
   buildInboxSnapshotMessage,
   buildResolvedSystemPrompt,
   loadFreshRuleContext,
 } from "@/utils/ai/assistant/chat";
+import { runWithAuditContext } from "@/utils/audit/context";
+import { currentGmailQuotaContext } from "@/utils/gmail/quota";
+import { toolCallAgentStream } from "@/utils/llms";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
+vi.mock("@/utils/llms", () => ({ toolCallAgentStream: vi.fn() }));
+vi.mock("@/utils/integration-action.server", () => ({
+  isIntegrationActionEnabledForUserId: async () => false,
+}));
+vi.mock("@/utils/attachments/save-to-drive", () => ({
+  getConnectedDriveApps: async () => [],
+}));
+vi.mock("@/utils/exa/search", () => ({
+  isExaSearchEnabled: () => true,
+  searchExa: vi.fn(),
+}));
+vi.mock("@/utils/calendar/event-provider", () => ({
+  hasUsableCalendarConnection: async () => true,
+  createCalendarEventProviders: vi.fn(),
+}));
+vi.mock("@/utils/email/provider", () => ({ createEmailProvider: vi.fn() }));
 
 describe("buildResolvedSystemPrompt", () => {
   it("uses Outlook category wording instead of label wording", () => {
@@ -192,3 +214,75 @@ function buildPrompt(
     ...overrides,
   });
 }
+
+describe("aiProcessAssistantChat tools", () => {
+  it("run their provider calls as interactive Gmail traffic", async () => {
+    const seen: Record<string, unknown> = {};
+    const record = (tool: string) => () => {
+      seen[tool] = currentGmailQuotaContext();
+      throw new Error("stop after recording");
+    };
+    const { createEmailProvider } = await import("@/utils/email/provider");
+    const { searchExa } = await import("@/utils/exa/search");
+    const { createCalendarEventProviders } = await import(
+      "@/utils/calendar/event-provider"
+    );
+    let currentTool = "";
+    vi.mocked(createEmailProvider).mockImplementation(async () =>
+      record(currentTool)(),
+    );
+    vi.mocked(searchExa).mockImplementation(async () => record("searchWeb")());
+    vi.mocked(createCalendarEventProviders).mockImplementation(async () =>
+      record("getCalendarEvents")(),
+    );
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      email: "user@test.com",
+      timezone: "UTC",
+    } as never);
+    let tools: Record<string, Tool> = {};
+    vi.mocked(toolCallAgentStream).mockImplementation(async (options) => {
+      tools = options.tools as Record<string, Tool>;
+      return {} as never;
+    });
+
+    await runWithAuditContext({ source: "chat" }, () =>
+      aiProcessAssistantChat({
+        messages: [{ role: "user", content: "what's new with Acme?" }],
+        emailAccountId: "email-account-id",
+        user: getEmailAccount(),
+        logger: createTestLogger(),
+      }),
+    );
+
+    const inputs: Record<string, unknown> = {
+      searchInbox: { query: "acme" },
+      searchContext: { query: "acme" },
+      readEmail: { messageId: "message-1" },
+      readAttachment: {
+        messageId: "message-1",
+        attachmentId: "attachment-1",
+      },
+      searchWeb: { query: "Acme Corp" },
+      getCalendarEvents: {
+        startDate: "2026-10-14T00:00:00Z",
+        endDate: "2026-10-15T00:00:00Z",
+      },
+    };
+    for (const [name, input] of Object.entries(inputs)) {
+      currentTool = name;
+      await tools[name].execute?.(input, {
+        toolCallId: name,
+        messages: [],
+      } as never);
+    }
+
+    for (const name of Object.keys(inputs)) {
+      expect(seen[name], name).toEqual(
+        expect.objectContaining({
+          caller: `chat/${name}`,
+          priority: "interactive",
+        }),
+      );
+    }
+  });
+});

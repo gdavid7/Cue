@@ -333,7 +333,10 @@ describe("Gmail quota gate", () => {
       "mail/v1/conversation-membership",
       "mail/v1/operations",
       "mobile/all-inboxes/archive",
+      // The assistant's own route scopes, as their handlers name them.
+      "chat",
       "chat/stream",
+      "chat/confirm-email-action",
     ])
       expect([source, priorityOf(source)]).toEqual([source, "interactive"]);
     for (const source of [

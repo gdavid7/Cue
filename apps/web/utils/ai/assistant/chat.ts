@@ -1,5 +1,4 @@
-import type { JSONValue, ModelMessage, Tool } from "ai";
-import { runWithGmailQuota } from "@/utils/gmail/quota";
+import type { JSONValue, ModelMessage } from "ai";
 import type { Logger } from "@/utils/logger";
 import type { MessageContext } from "@/utils/ai/assistant/chat-context-validation";
 import { stringifyEmail } from "@/utils/stringify-email";
@@ -58,12 +57,15 @@ import { getAssistantChatProvider } from "./chat-provider-shared";
 import { LlmUseCase } from "@/utils/llms/use-cases";
 import { isIntegrationActionEnabledForUserId } from "@/utils/integration-action.server";
 import { trimStaleToolResults } from "@/utils/ai/assistant/trim-stale-tool-results";
+import { withChatToolRuntime } from "@/utils/ai/assistant/chat-tool-runtime";
 
 export const maxDuration = 300;
 // Increment when chat prompts, tools, or routing change so run quality remains attributable.
 export const ASSISTANT_CHAT_PIPELINE_VERSION = 18;
+// The web chat route is stopped at its 300s maxDuration; tools are switched off
+// with room left for the model to answer from what they found.
 const ASSISTANT_CHAT_TOOL_BUDGET_MS = {
-  web: 720_000,
+  web: 210_000,
   messaging: 60_000,
 } satisfies Record<"web" | "messaging", number>;
 
@@ -298,65 +300,72 @@ export async function aiProcessAssistantChat({
     stablePrefixEndIndex,
   );
 
-  const allTools = withInteractiveGmailQuota({
-    getAssistantCapabilities: getAssistantCapabilitiesTool(toolOptions),
-    getAccountOverview: getAccountOverviewTool(toolOptions),
-    getSenderCategoryOverview: getSenderCategoryOverviewTool(toolOptions),
-    startSenderCategorization: startSenderCategorizationTool(toolOptions),
-    getSenderCategorizationStatus:
-      getSenderCategorizationStatusTool(toolOptions),
-    manageSenderCategory: manageSenderCategoryTool(toolOptions),
-    searchInbox: searchInboxTool(toolOptions),
-    searchContext: searchContextTool(toolOptions),
-    ...(isExaSearchEnabled() ? { searchWeb: searchWebTool(toolOptions) } : {}),
-    readEmail: readEmailTool(toolOptions),
-    manageInbox: manageInboxTool(toolOptions),
-    getUserRulesAndSettings: getUserRulesAndSettingsTool(toolOptions),
-    getRuleExecutionForMessage: getRuleExecutionForMessageTool(toolOptions),
-    getLearnedPatterns: getLearnedPatternsTool(toolOptions),
-    createRule: createRuleTool(toolOptions),
-    updateRule: updateRuleTool(toolOptions),
-    deleteRule: deleteRuleTool(toolOptions),
-    updateLearnedPatterns: updateLearnedPatternsTool(toolOptions),
-    updatePersonalInstructions: updatePersonalInstructionsTool(toolOptions),
+  const allTools = withChatToolRuntime({
+    logger,
+    tools: {
+      getAssistantCapabilities: getAssistantCapabilitiesTool(toolOptions),
+      getAccountOverview: getAccountOverviewTool(toolOptions),
+      getSenderCategoryOverview: getSenderCategoryOverviewTool(toolOptions),
+      startSenderCategorization: startSenderCategorizationTool(toolOptions),
+      getSenderCategorizationStatus:
+        getSenderCategorizationStatusTool(toolOptions),
+      manageSenderCategory: manageSenderCategoryTool(toolOptions),
+      searchInbox: searchInboxTool(toolOptions),
+      searchContext: searchContextTool(toolOptions),
+      ...(isExaSearchEnabled()
+        ? { searchWeb: searchWebTool(toolOptions) }
+        : {}),
+      readEmail: readEmailTool(toolOptions),
+      manageInbox: manageInboxTool(toolOptions),
+      getUserRulesAndSettings: getUserRulesAndSettingsTool(toolOptions),
+      getRuleExecutionForMessage: getRuleExecutionForMessageTool(toolOptions),
+      getLearnedPatterns: getLearnedPatternsTool(toolOptions),
+      createRule: createRuleTool(toolOptions),
+      updateRule: updateRuleTool(toolOptions),
+      deleteRule: deleteRuleTool(toolOptions),
+      updateLearnedPatterns: updateLearnedPatternsTool(toolOptions),
+      updatePersonalInstructions: updatePersonalInstructionsTool(toolOptions),
 
-    // Email send tools (gated by env)
-    ...(emailSendToolsEnabled
-      ? {
-          sendEmail: sendEmailTool(toolOptions),
-          replyEmail: replyEmailTool(toolOptions),
-        }
-      : {}),
+      // Email send tools (gated by env)
+      ...(emailSendToolsEnabled
+        ? {
+            sendEmail: sendEmailTool(toolOptions),
+            replyEmail: replyEmailTool(toolOptions),
+          }
+        : {}),
 
-    // Progressive disclosure groups (registered but not active by default)
-    ...(calendarConnection.state === "connected"
-      ? {
-          getCalendarEvents: getCalendarEventsTool(toolOptions),
-          addToCalendar: addToCalendarTool({
-            ...toolOptions,
-            timezone: userTimezone,
-          }),
-        }
-      : {}),
-    // Attachments
-    readAttachment: readAttachmentTool(toolOptions),
-    ...(hasConnectedDrive ? { saveToDrive: saveToDriveTool(toolOptions) } : {}),
-    ...providerPolicy.getTaxonomyTools(toolOptions),
-    // Settings
-    updateAssistantSettings: updateAssistantSettingsTool(toolOptions),
-    // Memory
-    searchMemories: searchMemoriesTool(toolOptions),
-    saveMemory: saveMemoryTool({
-      ...toolOptions,
-      chatId,
-      conversationMessages: memoryConversationMessages,
-    }),
-    // Knowledge
-    addToKnowledgeBase: addToKnowledgeBaseTool(toolOptions),
-    // Forward
-    ...(emailSendToolsEnabled
-      ? { forwardEmail: forwardEmailTool(toolOptions) }
-      : {}),
+      // Progressive disclosure groups (registered but not active by default)
+      ...(calendarConnection.state === "connected"
+        ? {
+            getCalendarEvents: getCalendarEventsTool(toolOptions),
+            addToCalendar: addToCalendarTool({
+              ...toolOptions,
+              timezone: userTimezone,
+            }),
+          }
+        : {}),
+      // Attachments
+      readAttachment: readAttachmentTool(toolOptions),
+      ...(hasConnectedDrive
+        ? { saveToDrive: saveToDriveTool(toolOptions) }
+        : {}),
+      ...providerPolicy.getTaxonomyTools(toolOptions),
+      // Settings
+      updateAssistantSettings: updateAssistantSettingsTool(toolOptions),
+      // Memory
+      searchMemories: searchMemoriesTool(toolOptions),
+      saveMemory: saveMemoryTool({
+        ...toolOptions,
+        chatId,
+        conversationMessages: memoryConversationMessages,
+      }),
+      // Knowledge
+      addToKnowledgeBase: addToKnowledgeBaseTool(toolOptions),
+      // Forward
+      ...(emailSendToolsEnabled
+        ? { forwardEmail: forwardEmailTool(toolOptions) }
+        : {}),
+    },
   });
 
   logger.trace("Resolved system prompt", {
@@ -364,6 +373,7 @@ export async function aiProcessAssistantChat({
     systemPrompt: system,
   });
 
+  let lastStepEndedAt = Date.now();
   const result = toolCallAgentStream({
     userAi: user.user,
     userId: user.userId,
@@ -376,6 +386,20 @@ export async function aiProcessAssistantChat({
     messages: messagesWithCacheControl,
     sensitiveDataPolicy: user.sensitiveDataPolicy,
     onStepEnd: async (step) => {
+      const now = Date.now();
+      logger.info("Assistant chat step finished", {
+        stepNumber: step.stepNumber,
+        modelProvider: step.model.provider,
+        modelId: step.model.modelId,
+        stepDurationMs: now - lastStepEndedAt,
+        elapsedMs: now - startedAt,
+        finishReason: step.finishReason,
+        toolNames: step.toolCalls.map((call) => call.toolName),
+        inputTokens: step.usage?.inputTokens,
+        outputTokens: step.usage?.outputTokens,
+        reasoningTokens: step.usage?.outputTokenDetails?.reasoningTokens,
+      });
+      lastStepEndedAt = now;
       logger.trace("Step finished", {
         text: step.text,
         toolCalls: step.toolCalls,
@@ -950,28 +974,4 @@ Inline email cards:
 - The UI resolves sender, subject, and date from the threadId — don't repeat them.
 - Group <emails> blocks under markdown ## headers when triage has categories.
 - Only render email widgets when they add clarity, not for every search result.`;
-}
-
-// Someone is waiting on every assistant tool call, so their Gmail reads are
-// interactive and never queue behind background sync or analysis.
-function withInteractiveGmailQuota<T extends Record<string, Tool>>(
-  tools: T,
-): T {
-  return Object.fromEntries(
-    Object.entries(tools).map(([name, definition]) => {
-      const execute = definition.execute;
-      if (!execute) return [name, definition];
-      return [
-        name,
-        {
-          ...definition,
-          execute: (...args: Parameters<typeof execute>) =>
-            runWithGmailQuota(
-              { caller: `chat/${name}`, priority: "interactive" },
-              () => execute(...args),
-            ),
-        },
-      ];
-    }),
-  ) as T;
 }
