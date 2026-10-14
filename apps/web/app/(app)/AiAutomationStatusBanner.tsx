@@ -46,7 +46,7 @@ function NoAiAccessBanner() {
 
   return (
     <div
-      className="relative z-10 flex w-full items-center gap-3 border-border border-b bg-muted/60 px-4 py-2 text-foreground text-sm sm:px-6 md:pl-[calc(var(--mail-rail-width,0px)+1.5rem)]"
+      className="relative z-10 flex w-full items-center gap-3 border-border border-b bg-muted/60 px-4 py-2 text-foreground text-sm sm:px-6 lg:pl-[calc(var(--mail-rail-width,0px)+1.5rem)]"
       role="status"
     >
       <SparklesIcon className="size-4 shrink-0 text-muted-foreground" />

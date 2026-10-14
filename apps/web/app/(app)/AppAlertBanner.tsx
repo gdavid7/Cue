@@ -17,7 +17,7 @@ export function AppAlertBanner({
     <div
       role="alert"
       className={cn(
-        "relative z-10 flex w-full flex-col gap-4 border-red-200 border-y bg-red-50 px-4 py-4 text-red-950 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:px-6 md:pl-[calc(var(--mail-rail-width,0px)+1.5rem)] dark:border-red-900 dark:bg-red-950 dark:text-red-50",
+        "relative z-10 flex w-full flex-col gap-4 border-red-200 border-y bg-red-50 px-4 py-4 text-red-950 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:pl-[calc(var(--mail-rail-width,0px)+1.5rem)] dark:border-red-900 dark:bg-red-950 dark:text-red-50",
         className,
       )}
     >

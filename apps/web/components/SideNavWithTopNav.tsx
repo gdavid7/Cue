@@ -24,10 +24,12 @@ function ContentWrapper({ children }: { children: React.ReactNode }) {
   const isRightSidebarOpen =
     !isAssistantRoute && state.includes("chat-sidebar");
 
-  // The padding only exists to clear the fixed MobileHeader, which neither of
-  // these routes renders — on mail it showed up as a blank strip above the
-  // screen's own sidebar and toolbar.
-  const noTopPadding = isAssistantRoute || isMailRoute;
+  // The padding only exists to clear the fixed MobileHeader. Mail renders no
+  // MobileHeader, and the chat page lays out its own header around it; the
+  // rule editor pages under /assistant need the padding like any other page.
+  const isChatRoute =
+    pathname?.split("/").filter(Boolean).at(-1) === "assistant";
+  const noTopPadding = isChatRoute || isMailRoute;
 
   return (
     <div
@@ -40,8 +42,8 @@ function ContentWrapper({ children }: { children: React.ReactNode }) {
         className={cn(
           // clip, not hidden: hidden makes this a scroll container, which
           // stops sticky descendants from sticking to the page scroll
-          "overflow-clip bg-background pt-9 max-w-full",
-          noTopPadding && "pt-0",
+          "overflow-clip bg-background max-w-full",
+          !noTopPadding && "pt-10 md:pt-0",
           // The mail page fills the viewport and scrolls its thread list
           // internally, so layout banners shrink it instead of overflowing
           isMailRoute && "h-svh",
@@ -111,11 +113,11 @@ export function SideNavWithTopNav({
 
 function MobileHeader() {
   return (
-    <header className="pointer-events-none fixed top-0 left-0 right-0 z-50 h-9 md:hidden">
-      <div className="flex h-full items-center px-4">
+    <header className="pointer-events-none fixed top-0 left-0 right-0 z-50 h-10 md:hidden">
+      <div className="flex h-full items-center px-2">
         <SidebarTrigger
           name="left-sidebar"
-          className="pointer-events-auto size-6"
+          className="pointer-events-auto size-10"
         />
       </div>
     </header>
