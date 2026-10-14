@@ -2,6 +2,7 @@ import { expect } from "@playwright/test";
 import { test } from "../playwright-test";
 import {
   cleanUpSettingsFixture,
+  expandEmailAccountSettingsCard,
   getEmailAccountSettingsCard,
   getSettingsDatabaseState,
   openSettings,
@@ -29,7 +30,7 @@ test("persists draft cleanup settings and disables all account rules", async ({
 
   let accountCard = getEmailAccountSettingsCard(page, settingsFixture.email);
   await expect(accountCard.toggle).toBeVisible({ timeout: 60_000 });
-  await accountCard.toggle.click();
+  await expandEmailAccountSettingsCard(accountCard.toggle);
 
   await expect(
     accountCard.card.getByText("Read status", { exact: true }),
@@ -79,7 +80,7 @@ test("persists draft cleanup settings and disables all account rules", async ({
   ).toBeVisible({ timeout: 60_000 });
   accountCard = getEmailAccountSettingsCard(page, settingsFixture.email);
   await expect(accountCard.toggle).toBeVisible({ timeout: 60_000 });
-  await accountCard.toggle.click();
+  await expandEmailAccountSettingsCard(accountCard.toggle);
   cleanupDaysInput = accountCard.card.getByRole("spinbutton", {
     name: "Draft cleanup age in days",
   });
