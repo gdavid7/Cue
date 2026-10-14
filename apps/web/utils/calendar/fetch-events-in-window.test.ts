@@ -37,7 +37,24 @@ describe("fetchCalendarEventsInWindow", () => {
 
     const result = await fetchCalendarEventsInWindow(fetchParams);
 
-    expect(result).toEqual({ events: [], complete: false });
+    expect(result).toEqual({
+      events: [],
+      complete: false,
+      noCalendarConnected: false,
+    });
+  });
+
+  it("says when no calendar is connected at all", async () => {
+    vi.mocked(prisma.calendarConnection.count).mockResolvedValue(0);
+    vi.mocked(createCalendarEventProviders).mockResolvedValue([]);
+
+    const result = await fetchCalendarEventsInWindow(fetchParams);
+
+    expect(result).toEqual({
+      events: [],
+      complete: false,
+      noCalendarConnected: true,
+    });
   });
 
   it("reports incomplete when fewer providers were built than calendars are connected", async () => {

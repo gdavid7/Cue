@@ -11,6 +11,8 @@ export interface CalendarEventsInWindow {
    */
   complete: boolean;
   events: CalendarEvent[];
+  /** No calendar is connected, so there is nothing more to read. */
+  noCalendarConnected?: boolean;
 }
 
 /**
@@ -42,13 +44,20 @@ export async function fetchCalendarEventsInWindow({
   // error may already have flipped them disconnected. Reporting complete here
   // would let callers treat every booked meeting as deleted.
   if (providers.length === 0) {
+    const connectedCalendars = await prisma.calendarConnection.count({
+      where: { emailAccountId, isConnected: true },
+    });
     logger.info("Completed calendar event window fetch", {
       complete: false,
       eventCount: 0,
       failedProviders: 0,
       providerCount: 0,
     });
-    return { events: [], complete: false };
+    return {
+      events: [],
+      complete: false,
+      noCalendarConnected: connectedCalendars === 0,
+    };
   }
 
   const connectedCalendars = await prisma.calendarConnection.count({

@@ -49,6 +49,18 @@ describe("getThreadContext", () => {
     expect((options as { ex: number }).ex).toBeLessThanOrEqual(10 * 60);
   });
 
+  it("caches a result for someone with no calendar connected", async () => {
+    vi.mocked(fetchCalendarEventsInWindow).mockResolvedValue({
+      events: [],
+      complete: false,
+      noCalendarConnected: true,
+    });
+
+    await run(renewalProvider(), "renewal");
+
+    expect(redis.set).toHaveBeenCalledTimes(1);
+  });
+
   it("does not cache a result missing a source that failed", async () => {
     const failures: Array<[string, () => void]> = [
       [

@@ -168,7 +168,9 @@ export async function collectThreadContext({
         logger,
       })
         .then((result) => {
-          if (!result.complete) complete = false;
+          // Someone without a calendar has nothing more to read, so the
+          // result is as complete as it will get and is worth caching.
+          if (!result.complete && !result.noCalendarConnected) complete = false;
           return result.events;
         })
         .catch((error) => {
