@@ -27,6 +27,7 @@ import {
   toAbsoluteUrl,
 } from "@/utils/branding";
 import { isIndexingAllowed } from "@/utils/indexing";
+import { SITE_DESCRIPTION, SITE_TITLE } from "@/utils/site-metadata";
 
 const aeonikFont = localFont({
   src: "../styles/aeonik-medium.woff",
@@ -40,9 +41,8 @@ const geist = Geist({
   display: "swap",
 });
 
-const title = `${BRAND_NAME} | Automate and clean your inbox`;
-const description =
-  "Your AI executive assistant to reach inbox zero fast. Automate emails, bulk unsubscribe, block cold emails, and analytics. Open-source";
+const title = SITE_TITLE;
+const description = SITE_DESCRIPTION;
 
 const indexingAllowed = isIndexingAllowed(env.NEXT_PUBLIC_BASE_URL);
 
@@ -53,27 +53,13 @@ const jsonLd: WithContext<WebApplication> = {
   name: BRAND_NAME,
   url: env.NEXT_PUBLIC_BASE_URL,
   description,
-  applicationCategory: "ProductivityApplication",
+  applicationCategory: "CommunicationApplication",
   operatingSystem: "Web Browser",
-  offers: {
-    "@type": "Offer",
-    price: "20.00",
-    priceCurrency: "USD",
-    priceSpecification: {
-      "@type": "UnitPriceSpecification",
-      price: 20,
-      priceCurrency: "USD",
-      billingDuration: "P1M",
-    },
-    availability: "https://schema.org/InStock",
-  },
   featureList: [
-    "AI Email Assistant",
-    "Email Automation",
-    "Bulk Unsubscribe",
-    "Cold Email Blocking",
-    "Email Analytics",
-    "Newsletter Management",
+    "Knows which emails need your reply",
+    "Reply drafts that learn from your edits",
+    "Daily brief and meeting briefs",
+    "Answers questions about your email, calendar and connected apps",
   ],
   publisher: {
     "@type": "Organization",
@@ -84,10 +70,6 @@ const jsonLd: WithContext<WebApplication> = {
       "@type": "ImageObject",
       url: toAbsoluteUrl(BRAND_ICON_URL),
     },
-    sameAs: [
-      "https://x.com/inboxzero_ai",
-      "https://github.com/elie222/inbox-zero",
-    ],
     ...(SUPPORT_EMAIL
       ? {
           contactPoint: {
@@ -97,14 +79,6 @@ const jsonLd: WithContext<WebApplication> = {
           },
         }
       : {}),
-    address: {
-      "@type": "PostalAddress",
-      streetAddress: "131 Continental Dr, Suite 305",
-      addressLocality: "Newark",
-      addressRegion: "DE",
-      postalCode: "19713",
-      addressCountry: "US",
-    },
   },
 };
 
@@ -122,7 +96,6 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title,
     description,
-    creator: "@inboxzero_ai",
   },
   metadataBase: new URL(env.NEXT_PUBLIC_BASE_URL),
   // issues with robots.txt: https://github.com/vercel/next.js/issues/58615#issuecomment-1852457285

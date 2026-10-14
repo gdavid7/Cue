@@ -18,6 +18,7 @@ import { Loading } from "@/components/Loading";
 import { WELCOME_PATH } from "@/utils/config";
 import { CrispChatLoggedOutVisible } from "@/components/CrispChat";
 import { getAndClearAuthErrorCookie } from "@/utils/auth-cookies";
+import { BRAND_NAME } from "@/utils/branding";
 import {
   getPendingAuthProvider,
   trackAuthFailure,
@@ -30,9 +31,8 @@ const errorMessages: Record<string, { title: string; description: string }> = {
       "Your account is not authorized to access this application. This may be because your email is not part of the allowed organization. Please contact your administrator or try signing in with a different account.",
   },
   signup_not_allowed: {
-    title: "Sign-up restricted",
-    description:
-      "This deployment only allows sign-up from specific email addresses or domains. Please contact your administrator or try signing in with a different account.",
+    title: "You're not in yet",
+    description: `${BRAND_NAME} is in private beta. We've saved a request for this Google account and will email you when your spot opens. ${BRAND_NAME} didn't keep any access to your mail.`,
   },
   email_already_linked: {
     title: "Email already linked",
@@ -104,8 +104,11 @@ function LoginErrorContent() {
   const fallbackDescription = resolvedErrorCode
     ? `Please try signing in again. (Error code: ${resolvedErrorCode}) ${supportText}`
     : `Please try signing in again. ${supportText}`;
+  const isWaitlisted = resolvedErrorCode === "signup_not_allowed";
   const description = errorInfo?.description
-    ? `${errorInfo.description} ${supportText}`
+    ? isWaitlisted
+      ? errorInfo.description
+      : `${errorInfo.description} ${supportText}`
     : fallbackDescription;
 
   return (
@@ -114,9 +117,21 @@ function LoginErrorContent() {
         title={title}
         description={description}
         button={
-          <Button asChild>
-            <Link href="/login">Try another sign-in method</Link>
-          </Button>
+          isWaitlisted ? (
+            <div className="flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
+              <Button asChild>
+                <Link href="/login">Back to {BRAND_NAME}</Link>
+              </Button>
+              {/* Google shows its account chooser on the next attempt. */}
+              <Button asChild variant="ghost">
+                <Link href="/login">Use a different Google account</Link>
+              </Button>
+            </div>
+          ) : (
+            <Button asChild>
+              <Link href="/login">Try another sign-in method</Link>
+            </Button>
+          )
         }
       />
       {/* <AutoLogOut loggedIn={!!session?.user.email} /> */}

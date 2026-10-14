@@ -326,13 +326,14 @@ const nextConfig: NextConfig = {
         permanent: true,
         source: "/contact",
       },
+      // Cue's own waitlist is the request form on /login.
       {
-        destination: "https://go.getinboxzero.com/waitlist",
-        permanent: true,
+        destination: "/login",
+        permanent: false,
         source: "/waitlist",
       },
       {
-        destination: "https://go.getinboxzero.com/waitlist-other",
+        destination: "/login",
         permanent: false,
         source: "/waitlist-other",
       },
@@ -362,8 +363,8 @@ const nextConfig: NextConfig = {
         source: "/api-reference/cli",
       },
       {
-        destination: "/early-access",
-        permanent: true,
+        destination: "/login",
+        permanent: false,
         source: "/request-access",
       },
       {

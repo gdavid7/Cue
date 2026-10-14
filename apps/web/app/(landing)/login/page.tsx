@@ -2,7 +2,14 @@ import { Suspense } from "react";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import {
+  MailCheckIcon,
+  MessageCircleQuestionIcon,
+  PenLineIcon,
+  SunIcon,
+} from "lucide-react";
 import { LoginForm } from "@/app/(landing)/login/LoginForm";
+import { RequestAccessForm } from "@/app/(landing)/login/RequestAccessForm";
 import {
   getEmailAlreadyLinkedDescription,
   getRequiresReconsentDescription,
@@ -19,17 +26,38 @@ import { WELCOME_PATH } from "@/utils/config";
 import { CrispChatLoggedOutVisible } from "@/components/CrispChat";
 import { MutedText } from "@/components/Typography";
 import { normalizeInternalPath } from "@/utils/path";
-import {
-  BRAND_NAME,
-  getBrandTitle,
-  getPossessiveBrandName,
-} from "@/utils/branding";
+import { BRAND_NAME, getPossessiveBrandName } from "@/utils/branding";
+import { SITE_DESCRIPTION, SITE_TITLE } from "@/utils/site-metadata";
 
 export const metadata: Metadata = {
-  title: getBrandTitle("Log in"),
-  description: `Log in to ${BRAND_NAME}.`,
+  title: SITE_TITLE,
+  description: SITE_DESCRIPTION,
   alternates: { canonical: "/login" },
 };
+
+const CAPABILITIES = [
+  {
+    icon: MailCheckIcon,
+    title: "Knows what needs you",
+    description: "Needs reply and Reading sort themselves.",
+  },
+  {
+    icon: PenLineIcon,
+    title: "Has the reply ready",
+    description: "Drafts that learn from your edits.",
+  },
+  {
+    icon: SunIcon,
+    title: "Briefs you",
+    description: "Today, plus meeting briefs before every call.",
+  },
+  {
+    icon: MessageCircleQuestionIcon,
+    title: "Answers questions",
+    description:
+      "Ask about anything in your email, calendar and connected apps.",
+  },
+];
 
 export default async function AuthenticationPage(props: {
   searchParams?: Promise<Record<string, string>>;
@@ -44,58 +72,149 @@ export default async function AuthenticationPage(props: {
   }
 
   const enabledProviders = Array.from(getEnabledLoginProviders());
+  const waitlistEnabled = env.AUTH_WAITLIST_ENABLED;
+  const fromApproval = searchParams?.from === "approval";
+  const showRequestForm = waitlistEnabled && !fromApproval;
+
+  const loginForm = (
+    <Suspense>
+      <LoginForm
+        enabledProviders={enabledProviders}
+        useGoogleOauthEmulator={isGoogleOauthEmulationEnabled()}
+        emphasis={showRequestForm ? "secondary" : "primary"}
+      />
+    </Suspense>
+  );
 
   return (
-    <div className="flex min-h-screen flex-col justify-center py-10 text-foreground">
-      <div className="mx-auto flex w-full flex-col justify-center space-y-6 sm:w-[350px]">
-        <div className="flex flex-col items-center text-center">
-          <Logo className="mb-6 h-7" />
-          <h1 className="font-title text-2xl text-foreground">
-            Sign in or create an account
-          </h1>
-          <p className="mt-4 text-muted-foreground">
-            Every email, with the context to act on it.
+    <main className="min-h-screen bg-background px-4 py-8 text-foreground sm:px-6 sm:py-12 lg:flex lg:items-center lg:py-16">
+      <div className="mx-auto grid w-full max-w-md gap-y-8 lg:max-w-5xl lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-x-16 lg:gap-y-10">
+        <section aria-labelledby="pitch-heading" className="lg:col-start-1">
+          <Logo className="h-6 text-foreground" />
+          <p className="mt-8 font-medium text-muted-foreground text-sm lg:mt-12">
+            Next-generation email
           </p>
-        </div>
-        <div className="mt-4">
-          <Suspense>
-            <LoginForm
-              enabledProviders={enabledProviders}
-              useGoogleOauthEmulator={isGoogleOauthEmulationEnabled()}
-            />
-          </Suspense>
-        </div>
+          <h1
+            id="pitch-heading"
+            className="mt-2 font-title text-4xl text-foreground leading-tight tracking-tight sm:text-5xl"
+          >
+            The better email.
+          </h1>
+          <p className="mt-3 text-foreground/80 text-lg leading-snug">
+            {BRAND_NAME} reads your Gmail so you know what needs you, and has
+            the reply ready.
+          </p>
+          <p className="mt-4 text-muted-foreground leading-relaxed">
+            Email has worked the same way for over 50 years: a pile of messages,
+            and everything else is up to you.
+          </p>
+        </section>
 
-        {searchParams?.error && <ErrorAlert error={searchParams?.error} />}
+        <section
+          aria-label={showRequestForm ? "Request access" : "Sign in"}
+          className="lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:self-center"
+        >
+          <div className="space-y-5 rounded-xl border bg-card p-5 shadow-sm sm:p-6">
+            {searchParams?.error && <ErrorAlert error={searchParams.error} />}
 
-        {!isSelfHosted ? (
-          <MutedText className="px-8 pt-10 text-center">
-            By signing in, you agree to our{" "}
+            {showRequestForm ? (
+              <>
+                <RequestAccessForm />
+                <div className="flex items-center gap-3 text-muted-foreground text-xs">
+                  <span className="h-px flex-1 bg-border" />
+                  Already approved?
+                  <span className="h-px flex-1 bg-border" />
+                </div>
+                {loginForm}
+              </>
+            ) : (
+              <>
+                {fromApproval && (
+                  <div className="space-y-1">
+                    <h2 className="font-semibold text-foreground text-lg">
+                      Your spot is ready
+                    </h2>
+                    <p className="text-muted-foreground text-sm">
+                      Continue with the Google account we approved.
+                    </p>
+                  </div>
+                )}
+                {loginForm}
+              </>
+            )}
+
+            <p className="text-muted-foreground text-xs leading-relaxed">
+              Google will ask to let {BRAND_NAME} read and send mail and see
+              your calendar. That&apos;s how it knows what needs you, drafts
+              replies and prepares briefs. Nothing sends without you.
+            </p>
+
+            {fromApproval && waitlistEnabled && (
+              <p className="text-muted-foreground text-xs">
+                Not approved yet?{" "}
+                <Link
+                  href="/login"
+                  className="underline underline-offset-4 hover:text-foreground"
+                >
+                  Request access
+                </Link>
+              </p>
+            )}
+          </div>
+        </section>
+
+        <section
+          aria-label={`What ${BRAND_NAME} does`}
+          className="lg:col-start-1"
+        >
+          <ul className="space-y-4">
+            {CAPABILITIES.map((capability) => (
+              <li key={capability.title} className="flex gap-3">
+                <capability.icon
+                  className="mt-0.5 size-5 shrink-0 text-muted-foreground"
+                  aria-hidden
+                />
+                <p className="leading-snug">
+                  <span className="font-medium text-foreground">
+                    {capability.title}
+                  </span>
+                  <span className="sr-only"> — </span>
+                  <span className="block text-muted-foreground text-sm">
+                    {capability.description}
+                  </span>
+                </p>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <footer className="space-y-3 lg:col-span-2">
+          <nav
+            aria-label="Legal"
+            className="flex gap-4 text-muted-foreground text-sm"
+          >
             <Link
               href="/terms"
-              className="underline underline-offset-4 hover:text-foreground"
+              className="underline-offset-4 hover:text-foreground hover:underline"
             >
-              Terms of Service
-            </Link>{" "}
-            and{" "}
+              Terms
+            </Link>
             <Link
               href="/privacy"
-              className="underline underline-offset-4 hover:text-foreground"
+              className="underline-offset-4 hover:text-foreground hover:underline"
             >
-              Privacy Policy
+              Privacy
             </Link>
-            .
-          </MutedText>
-        ) : null}
-
-        <LoginFooter
-          isSelfHosted={isSelfHosted}
-          selfHostedLoginFooterText={
-            env.NEXT_PUBLIC_SELF_HOSTED_LOGIN_FOOTER_TEXT || undefined
-          }
-        />
+          </nav>
+          <LoginFooter
+            isSelfHosted={isSelfHosted}
+            selfHostedLoginFooterText={
+              env.NEXT_PUBLIC_SELF_HOSTED_LOGIN_FOOTER_TEXT || undefined
+            }
+          />
+        </footer>
       </div>
-    </div>
+    </main>
   );
 }
 
@@ -113,18 +232,14 @@ function LoginFooter({
     }
 
     return (
-      <MutedText className="whitespace-pre-line px-4 pt-10 text-center">
+      <MutedText className="whitespace-pre-line text-xs">
         {selfHostedLoginFooterText}
       </MutedText>
     );
   }
 
   return (
-    <MutedText
-      className={
-        isSelfHosted ? "px-4 pt-10 text-center" : "px-4 pt-4 text-center"
-      }
-    >
+    <MutedText className="max-w-2xl text-xs">
       {getPossessiveBrandName()} use and transfer of information received from
       Google APIs to any other app will adhere to{" "}
       <a
