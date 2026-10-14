@@ -15,7 +15,7 @@ test("expands unread messages when opening a thread", async ({
   );
 
   const headers = page.locator(
-    'li[data-thread-message-id] [role="button"][aria-expanded]',
+    "li[data-thread-message-id] [data-message-toggle][aria-expanded]",
   );
   await expect(headers).toHaveCount(4);
   await expect(headers.nth(0)).toHaveAttribute("aria-expanded", "false");
@@ -73,7 +73,7 @@ test("keeps arrow navigation inside the thread and expands from its toolbar", as
     .getByRole("button", { name: "Collapse all messages", exact: true })
     .click();
   await expect(
-    messages.first().locator('[role="button"][aria-expanded]'),
+    messages.first().locator("[data-message-toggle][aria-expanded]"),
   ).toHaveAttribute("aria-expanded", "false");
   await expect(expand).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
@@ -152,7 +152,7 @@ test("expands a collapsed message before Enter opens a reply", async ({
   );
 
   const message = page.locator("li[data-thread-message-id]").first();
-  const header = message.locator('[role="button"][aria-expanded]');
+  const header = message.locator("[data-message-toggle][aria-expanded]");
   const editor = message.getByRole("textbox", { name: "Email message" });
   await expect(header).toHaveAttribute("aria-expanded", "false");
 

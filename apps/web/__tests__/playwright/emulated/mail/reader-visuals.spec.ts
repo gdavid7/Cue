@@ -359,6 +359,14 @@ test("opens the sender profile beside the reader", async ({
   });
   await expect(subject).toBeVisible();
 
+  // The profile is one of the sender's details.
+  await page
+    .locator("li[data-thread-message-id]")
+    .filter({
+      has: page.getByRole("button", { name: "Morgan Example", exact: true }),
+    })
+    .getByRole("button", { name: "Show details", exact: true })
+    .click();
   await page
     .getByRole("button", {
       exact: true,

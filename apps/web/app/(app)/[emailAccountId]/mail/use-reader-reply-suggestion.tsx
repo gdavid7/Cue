@@ -1,7 +1,7 @@
 "use client";
 
-import { ReplyIcon } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useDraftReplies } from "@/app/(app)/[emailAccountId]/assistant/settings/DraftReplies";
 import type { ThreadMessage } from "@/components/email-list/types";
 import type { ReplyAssist } from "@/components/email-list/reply-assist";
 import {
@@ -9,7 +9,6 @@ import {
   CheckedAgainst,
   suggestionPhaseLabel,
 } from "@/components/thread-context/SuggestedReply";
-import { Button } from "@/components/ui/button";
 import { SystemType } from "@/generated/prisma/enums";
 import { useInboxInsights } from "@/hooks/useInboxInsights";
 import { useReplySuggestion } from "@/hooks/useReplySuggestion";
@@ -20,21 +19,17 @@ import { extractEmailAddress, isSameEmailAddress } from "@/utils/email";
 import { GmailLabel } from "@/utils/gmail/label";
 import { getRuleLabel } from "@/utils/rule/consts";
 
-/**
- * Write the suggested reply as soon as a conversation that needs one opens:
- * its newest message isn't from the user, it has no draft, and it is waiting
- * on a reply. The founder's rule: only if we have the context to reply, but
- * if we do, write it.
- */
-export const AUTO_SUGGEST = true;
-
 const TO_REPLY_LABEL = getRuleLabel(SystemType.TO_REPLY);
 
 /**
  * Cue's suggested reply for the open conversation, delivered where the user
  * would reply anyway: the reply composer, pre-filled, and only when every fact
- * in it is backed. Otherwise `idleReplyArea` says in one line why Cue left
- * the reply to the user, beside the normal Reply button.
+ * in it is backed. Otherwise `replyStatus` says in one line, under the usual
+ * reply actions, what Cue is doing or why it left the reply to the user.
+ *
+ * It writes one as soon as a conversation that needs one opens: its newest
+ * message isn't from the user, it has no draft, it is waiting on a reply, and
+ * the user has "Auto draft replies" on.
  */
 export function useReaderReplySuggestion({
   emailAccountId,
@@ -43,7 +38,6 @@ export function useReaderReplySuggestion({
   userLabels,
   enabled,
   onOpenThread,
-  onReply,
 }: {
   emailAccountId: string;
   threadId: string | null;
@@ -53,10 +47,9 @@ export function useReaderReplySuggestion({
   /** False while keyboard navigation is still moving through threads. */
   enabled: boolean;
   onOpenThread: (threadId: string) => void;
-  /** Opens an empty reply to the newest message. */
-  onReply: (messageId: string) => void;
 }) {
   const { userEmail } = useAccount();
+  const draftReplies = useDraftReplies();
   const latest = messages.findLast(
     (message) => !message.labelIds?.includes(GmailLabel.DRAFT),
   );
@@ -68,16 +61,17 @@ export function useReaderReplySuggestion({
     message.labelIds?.includes(GmailLabel.DRAFT),
   );
   // Decided once per newest message: the draft a suggestion saves must not
-  // turn the suggestion off.
+  // turn the suggestion off. It waits for the setting rather than reading a
+  // setting that is still loading as off.
   const [decision, setDecision] = useState<{
     id: string;
     eligible: boolean;
     run: boolean;
   }>();
-  if (latest && decision?.id !== latest.id) {
+  if (latest && decision?.id !== latest.id && !draftReplies.loading) {
     setDecision({
       id: latest.id,
-      eligible: AUTO_SUGGEST && !latestIsFromUser && !hasDraft,
+      eligible: draftReplies.enabled && !latestIsFromUser && !hasDraft,
       run: false,
     });
   }
@@ -140,46 +134,20 @@ export function useReaderReplySuggestion({
         }
       : null;
 
-  // Reply is there from the start: checking must never stand in the way of
-  // the user writing the reply themselves.
-  let idleReplyArea: React.ReactNode = null;
+  let replyStatus: React.ReactNode = null;
   if (latest && (phase === "checking-mail" || phase === "checking-web")) {
-    idleReplyArea = (
-      <ReplyArea onReply={() => onReply(latest.id)}>
-        <p className="text-muted-foreground text-xs" role="status">
-          {suggestionPhaseLabel(phase)}
-        </p>
-      </ReplyArea>
+    replyStatus = (
+      <p className="text-muted-foreground text-xs" role="status">
+        {suggestionPhaseLabel(phase)}
+      </p>
     );
   } else if (latest && suggestion?.status === "insufficient") {
-    idleReplyArea = (
-      <ReplyArea onReply={() => onReply(latest.id)}>
-        <p className="fade-in animate-in text-muted-foreground text-xs duration-150">
-          {abstentionLine(suggestion.missing)}
-        </p>
-      </ReplyArea>
+    replyStatus = (
+      <p className="fade-in animate-in text-muted-foreground text-xs duration-150">
+        {abstentionLine(suggestion.missing)}
+      </p>
     );
   }
 
-  return { assist, idleReplyArea };
-}
-
-function ReplyArea({
-  onReply,
-  children,
-}: {
-  onReply: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="px-2 pt-1 pb-4 sm:pr-5 sm:pl-14">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <Button onClick={onReply} size="sm" type="button" variant="outline">
-          <ReplyIcon className="mr-2 size-4" />
-          Reply
-        </Button>
-        {children}
-      </div>
-    </div>
-  );
+  return { assist, replyStatus };
 }

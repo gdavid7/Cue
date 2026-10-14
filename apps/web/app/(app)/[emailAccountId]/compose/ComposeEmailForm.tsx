@@ -35,6 +35,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import { type SubmitHandler, useForm } from "react-hook-form";
 import useSWR, { useSWRConfig } from "swr";
 import type { ScopedMutator } from "swr";
@@ -510,6 +511,16 @@ function ComposeEmailFormContent({
       bcc: replyingToEmail?.bcc,
     },
   });
+  // Cc and Bcc rows stay out of the way until asked for or already filled.
+  const [shownRecipientRows, setShownRecipientRows] = useState({
+    cc: false,
+    bcc: false,
+  });
+  const isRecipientRowShown = (field: ComposeRecipientField) =>
+    field === "to" ||
+    shownRecipientRows[field] ||
+    Boolean(watch(field)) ||
+    activeRecipientField === field;
   const {
     onSlashKeyDown,
     onSlashTrigger,
@@ -602,6 +613,12 @@ function ComposeEmailFormContent({
       isUneditedSuggestion(bodyHtml, suggestedReply),
     [bodyHtml, suggestedReply],
   );
+  // Editing Cue's text keeps the credit, and the evidence, visible.
+  const editedSuggestion =
+    suggestedReply !== undefined &&
+    Boolean(initialBodyHtml) &&
+    !storedDraft &&
+    !isCueSuggestion;
   // A reply reads as a draft once the mailbox holds a copy of it.
   const [isMailboxDraft, setIsMailboxDraft] = useState(
     Boolean(providerDraftMessageId || providerDraftId.current),
@@ -1221,10 +1238,7 @@ function ComposeEmailFormContent({
                 settled.status === "uncertain" &&
                 settled.ownsNotification
               ) {
-                toastError({
-                  description:
-                    "This reply may have been sent. Check Sent before retrying.",
-                });
+                toastError({ description: SEND_UNCONFIRMED_MESSAGE });
               }
             })
             .catch(() => {});
@@ -1234,11 +1248,14 @@ function ComposeEmailFormContent({
           showDraftAgain();
         await discardLocalDraft();
         if (outcome.status === "sent") {
-          if (!isInlineReply) toastSuccess({ description: "Email sent!" });
+          toastSuccess({
+            description: isInlineReply ? "Reply sent" : "Email sent",
+          });
           if (markDoneAfterSend) onMarkDone?.();
           onSuccess?.(outcome.messageId, outcome.threadId);
           refetch?.();
         } else if (outcome.status === "queued") {
+          // A queued reply's delivery status in the thread already says so.
           if (!isInlineReply)
             toastSuccess({
               description: getQueuedEmailDescription(outcome.reason),
@@ -1247,10 +1264,7 @@ function ComposeEmailFormContent({
           onClose?.();
         } else if (outcome.status === "uncertain") {
           if (outcome.ownsNotification) {
-            toastError({
-              description:
-                "This reply may have been sent. Check Sent before retrying.",
-            });
+            toastError({ description: SEND_UNCONFIRMED_MESSAGE });
           }
           onClose?.();
         } else if (outcome.status === "failed" && outcome.ownsNotification) {
@@ -1258,10 +1272,8 @@ function ComposeEmailFormContent({
         }
       } catch (error) {
         console.error(error);
-        setSubmissionError(
-          "Could not confirm delivery. Check the thread status before trying again.",
-        );
-        toastError({ description: "There was an error sending the email :(" });
+        setSubmissionError(SEND_UNCONFIRMED_MESSAGE);
+        toastError({ description: SEND_UNCONFIRMED_MESSAGE });
       } finally {
         if (!deliveryAccepted) resumeProviderAutosave();
       }
@@ -1547,7 +1559,13 @@ function ComposeEmailFormContent({
           "space-y-2 border-t border-border pt-4",
       )}
     >
-      <div className={cn(isComposeWindow ? "shrink-0 px-4 pt-3" : "contents")}>
+      <div
+        className={cn(
+          isComposeWindow
+            ? "shrink-0 border-border border-b px-4 pt-3 pb-2"
+            : "contents",
+        )}
+      >
         {!!fromAccounts?.length && !replyingToEmail && (
           <div className="flex min-h-7 items-center gap-2">
             <ComposeFieldLabel htmlFor="from-account" label="From" />
@@ -1612,65 +1630,102 @@ function ComposeEmailFormContent({
                 · Suggested by Cue
               </span>
             ) : null}
+            {editedSuggestion ? (
+              <span className="shrink-0 text-muted-foreground text-xs">
+                · Started from Cue's suggestion
+              </span>
+            ) : null}
             {popOutButton}
           </div>
         ) : (
           <div className="space-y-1 [&_input]:bg-transparent">
-            {(["to", "cc", "bcc"] as const).map((field) => (
-              <div key={field} className="flex min-h-7 items-center gap-2">
-                <ComposeFieldLabel
-                  htmlFor={field}
-                  label={RECIPIENT_LABELS[field]}
-                />
-                <div className="min-w-0 flex-1">
-                  {env.NEXT_PUBLIC_CONTACTS_ENABLED ||
-                  client?.queryContactSuggestions ? (
-                    <ComposeContactRecipientField
-                      {...recipientFieldProps}
-                      active={activeRecipientField === field}
-                      autoFocus={
-                        autoFocus && field === "to" && focusRecipientField
-                      }
-                      className="min-h-8"
-                      name={field}
-                      selectedRecipients={watch(field) ?? ""}
-                    />
-                  ) : (
-                    <Input
-                      type="text"
-                      name={field}
-                      registerProps={{
-                        ...register(field, { required: field === "to" }),
-                        autoFocus:
-                          autoFocus && field === "to" && focusRecipientField,
-                      }}
-                      error={errors[field]}
-                      className="h-7 rounded-none border-0 bg-transparent p-0 text-sm leading-5 shadow-none focus:border-transparent focus:ring-0 sm:text-sm"
-                    />
+            {(["to", "cc", "bcc"] as const)
+              .filter(isRecipientRowShown)
+              .map((field) => (
+                <div key={field} className="flex min-h-7 items-center gap-2">
+                  <ComposeFieldLabel
+                    htmlFor={field}
+                    label={RECIPIENT_LABELS[field]}
+                  />
+                  <div className="min-w-0 flex-1">
+                    {env.NEXT_PUBLIC_CONTACTS_ENABLED ||
+                    client?.queryContactSuggestions ? (
+                      <ComposeContactRecipientField
+                        {...recipientFieldProps}
+                        active={activeRecipientField === field}
+                        autoFocus={
+                          autoFocus && field === "to" && focusRecipientField
+                        }
+                        className="min-h-8"
+                        name={field}
+                        selectedRecipients={watch(field) ?? ""}
+                      />
+                    ) : (
+                      <Input
+                        type="text"
+                        name={field}
+                        registerProps={{
+                          ...register(field, { required: field === "to" }),
+                          autoFocus:
+                            autoFocus && field === "to" && focusRecipientField,
+                        }}
+                        error={errors[field]}
+                        className="h-7 rounded-none border-0 bg-transparent p-0 text-sm leading-5 shadow-none focus:border-transparent focus:ring-0 sm:text-sm"
+                      />
+                    )}
+                  </div>
+                  {field === "to" &&
+                    (["cc", "bcc"] as const)
+                      .filter((hidden) => !isRecipientRowShown(hidden))
+                      .map((hidden) => (
+                        <button
+                          aria-label={`Add ${RECIPIENT_LABELS[hidden]} recipients`}
+                          className="shrink-0 rounded-sm px-1 text-muted-foreground text-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                          key={hidden}
+                          onClick={(event) => {
+                            const form = event.currentTarget.form;
+                            flushSync(() =>
+                              setShownRecipientRows((shown) => ({
+                                ...shown,
+                                [hidden]: true,
+                              })),
+                            );
+                            form
+                              ?.querySelector<HTMLElement>(`#${hidden}`)
+                              ?.focus();
+                          }}
+                          type="button"
+                        >
+                          {RECIPIENT_LABELS[hidden]}
+                        </button>
+                      ))}
+                  {field === "to" && canCollapseInlineReplyFields && (
+                    <button
+                      type="button"
+                      aria-label="Hide recipients"
+                      ref={collapseInlineReplyFieldsButtonRef}
+                      onClick={closeInlineReplyFields}
+                      className="rounded-sm text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <ChevronDownIcon className="size-3 rotate-180" />
+                    </button>
                   )}
+                  {field === "to" && popOutButton}
                 </div>
-                {field === "to" && canCollapseInlineReplyFields && (
-                  <button
-                    type="button"
-                    aria-label="Hide recipients"
-                    ref={collapseInlineReplyFieldsButtonRef}
-                    onClick={closeInlineReplyFields}
-                    className="rounded-sm text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <ChevronDownIcon className="size-3 rotate-180" />
-                  </button>
-                )}
-                {field === "to" && popOutButton}
-              </div>
-            ))}
+              ))}
             <div className="pt-3">
               <Input
                 type="text"
                 name="subject"
-                registerProps={register("subject", { required: true })}
+                registerProps={{
+                  ...register("subject", { required: true }),
+                  "aria-label": "Subject",
+                }}
                 error={errors.subject}
                 placeholder="Subject"
-                className="h-8 rounded-none border-0 bg-transparent p-0 text-sm font-medium text-foreground shadow-none focus:border-transparent focus:ring-0 sm:text-sm"
+                // Borderless like the rest of the header, with a hairline in
+                // the focus colour so keyboard focus stays visible.
+                className="h-8 rounded-none border-0 border-transparent border-b bg-transparent p-0 text-sm font-medium text-foreground shadow-none focus:border-ring focus:ring-0 sm:text-sm"
               />
             </div>
           </div>
@@ -1868,7 +1923,16 @@ function ComposeEmailFormContent({
           )}
         </div>
       </div>
-      {isCueSuggestion && suggestion?.evidence}
+      {(isCueSuggestion || editedSuggestion) && suggestion?.evidence}
+      {/* Inline replies say "Draft" in their header instead. */}
+      {isComposeWindow && isMailboxDraft && !providerAutosave.error && (
+        <p
+          className="shrink-0 px-4 pb-2 text-muted-foreground text-xs"
+          role="status"
+        >
+          Saved to Drafts
+        </p>
+      )}
       {providerAutosave.error && (
         <p role="alert" className="text-xs text-destructive">
           {providerAutosave.error}
@@ -1966,6 +2030,9 @@ function formatFileSize(size: number) {
   if (size < 1024 * 1024) return `${Math.ceil(size / 1024)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+const SEND_UNCONFIRMED_MESSAGE =
+  "We couldn't confirm this was sent. Check Sent before trying again.";
 
 function getQueuedEmailDescription(
   reason: "offline" | "pending" | "blocked_auth",

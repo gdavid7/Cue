@@ -734,18 +734,100 @@ describe("EmailThread reading a conversation", () => {
     expect(screen.getByRole("textbox", { name: "Email message" })).toBeTruthy();
   });
 
-  it("leaves the reply area to Cue while it explains a reply it held back", () => {
+  // The reply actions keep their shape whatever Cue is doing about the reply.
+  it("keeps the reply actions while Cue explains a reply it held back", () => {
     render(
       <EmailThread
         messages={[createReaderMessage("latest", "1000")]}
         refetch={vi.fn()}
-        idleReplyArea={<p>Cue left this reply to you.</p>}
+        replyStatus={<p>Cue left this reply to you.</p>}
         showReplyButton
       />,
     );
 
     expect(screen.getByText("Cue left this reply to you.")).toBeTruthy();
-    expect(screen.queryByRole("group", { name: "Reply actions" })).toBeNull();
+    const bar = screen.getByRole("group", { name: "Reply actions" });
+    expect(within(bar).getByRole("button", { name: "Forward" })).toBeTruthy();
+  });
+
+  it("moves focus to the first revealed message when earlier ones unfold", () => {
+    render(
+      <EmailThread
+        messages={["1", "2", "3", "4", "5"].map((id) =>
+          createReaderMessage(`message-${id}`, `${id}000`),
+        )}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show 3 earlier messages" }),
+    );
+
+    expect(document.activeElement).toBe(
+      document.querySelector('[data-thread-message-id="message-2"]'),
+    );
+  });
+
+  it("loads unloaded older messages from the same row that unfolds the loaded ones", () => {
+    const onLoad = vi.fn();
+    render(
+      <EmailThread
+        earlierMessages={{ loading: false, onLoad }}
+        messages={["1", "2", "3"].map((id) =>
+          createReaderMessage(`message-${id}`, `${id}000`),
+        )}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+    expect(
+      Array.from(document.querySelectorAll("[data-thread-message-id]")).map(
+        (row) => row.getAttribute("data-thread-message-id"),
+      ),
+    ).toEqual(["message-3"]);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show earlier messages" }),
+    );
+
+    expect(onLoad).toHaveBeenCalledTimes(1);
+    expect(document.querySelectorAll("[data-thread-message-id]")).toHaveLength(
+      3,
+    );
+    expect(document.activeElement).toBe(
+      document.querySelector('[data-thread-message-id="message-1"]'),
+    );
+  });
+
+  it("opens and collapses a message from a real toggle button", () => {
+    render(
+      <EmailThread
+        messages={[
+          createReaderMessage("first", "1000"),
+          createReaderMessage("latest", "2000"),
+        ]}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+    const first = document.querySelector(
+      '[data-thread-message-id="first"]',
+    ) as HTMLElement;
+    const toggle = first.querySelector("[data-message-toggle]") as HTMLElement;
+    expect(toggle.tagName).toBe("BUTTON");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    // No button sits inside another control.
+    expect(first.querySelector('[role="button"]')).toBeNull();
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(
+      within(first).getByRole("button", { name: "Collapse message" }),
+    );
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("folds a long run of read messages into one row that reveals them", () => {
