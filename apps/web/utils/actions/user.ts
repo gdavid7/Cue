@@ -31,6 +31,7 @@ import {
 } from "@/utils/ai/draft-cleanup";
 import { isDuplicateError, isNotFoundError } from "@/utils/prisma-helpers";
 import type { Logger } from "@/utils/logger";
+import { invalidateAccountValidation } from "@/utils/redis/account-validation";
 import { prepareMemberRemovalNotifications } from "@/utils/team-comments/member-removal";
 import {
   DELETE_ACCOUNT_REQUIRES_OWNER_TRANSFER_ERROR,
@@ -351,6 +352,11 @@ async function runDeleteEmailAccountTransaction(
       "We couldn't delete this email account. Please contact support if this keeps happening.",
     );
   }
+
+  await invalidateAccountValidation({
+    userId,
+    emailAccountId: context.emailAccountId,
+  });
 }
 
 function getPrismaErrorCode(error: unknown) {

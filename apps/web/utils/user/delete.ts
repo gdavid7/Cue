@@ -14,6 +14,7 @@ import { stopWatchingEmailAccount } from "@/utils/email/watch-manager";
 import type { Logger } from "@/utils/logger";
 import { prepareMemberRemovalNotifications } from "@/utils/team-comments/member-removal";
 import { clearCachedResearchForUser } from "@/utils/redis/research-cache";
+import { invalidateAccountValidation } from "@/utils/redis/account-validation";
 import { releaseAccountRecordings } from "@/utils/meeting-recorder/delete-media";
 import {
   DELETE_ACCOUNT_REQUIRES_OWNER_TRANSFER_ERROR,
@@ -107,6 +108,12 @@ export async function deleteUser({
       if (failedRelease) throw failedRelease.reason;
 
       await deleteUserRows({ userId, emailAccountIds, logger });
+
+      await Promise.all(
+        emailAccountIds.map((emailAccountId) =>
+          invalidateAccountValidation({ userId, emailAccountId }),
+        ),
+      );
 
       await Promise.allSettled(
         emailAccounts.flatMap(({ email }) => [

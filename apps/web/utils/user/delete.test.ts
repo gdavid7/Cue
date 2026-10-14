@@ -8,6 +8,7 @@ import { deleteTinybirdEmailData } from "@inboxzero/tinybird";
 import { publishConversationChange } from "@/utils/team-comments/events";
 import { deleteContact as deleteLoopsContact } from "@inboxzero/loops";
 import { releaseAccountRecordings } from "@/utils/meeting-recorder/delete-media";
+import { invalidateAccountValidation } from "@/utils/redis/account-validation";
 
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/redis/thread-page-buffer", () => ({
@@ -38,6 +39,9 @@ vi.mock("@/utils/redis/research-cache", () => ({
 }));
 vi.mock("@/utils/meeting-recorder/delete-media", () => ({
   releaseAccountRecordings: vi.fn(() => Promise.resolve()),
+}));
+vi.mock("@/utils/redis/account-validation", () => ({
+  invalidateAccountValidation: vi.fn(() => Promise.resolve()),
 }));
 
 const logger = createTestLogger();
@@ -201,6 +205,40 @@ describe("deleteUser", () => {
     await deleteUser({ userId: "user-1", logger });
 
     expect(deleteLoopsContact).toHaveBeenCalledWith("user@example.com");
+  });
+
+  it("drops cached mailbox ownership for every deleted email account", async () => {
+    prisma.account.findMany.mockResolvedValue([
+      {
+        provider: "google",
+        emailAccount: {
+          id: "email-account-1",
+          email: "user@example.com",
+          watchEmailsSubscriptionId: null,
+        },
+      },
+      {
+        provider: "microsoft",
+        emailAccount: {
+          id: "email-account-2",
+          email: "user@example.org",
+          watchEmailsSubscriptionId: null,
+        },
+      },
+    ] as Awaited<ReturnType<typeof prisma.account.findMany>>);
+    prisma.executedRule.findMany.mockResolvedValue([]);
+    prisma.user.deleteMany.mockResolvedValue({ count: 1 } as any);
+
+    await deleteUser({ userId: "user-1", logger });
+
+    expect(invalidateAccountValidation).toHaveBeenCalledWith({
+      userId: "user-1",
+      emailAccountId: "email-account-1",
+    });
+    expect(invalidateAccountValidation).toHaveBeenCalledWith({
+      userId: "user-1",
+      emailAccountId: "email-account-2",
+    });
   });
 
   it("releases every mailbox's recordings before deleting the user", async () => {
