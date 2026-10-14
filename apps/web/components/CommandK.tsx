@@ -147,7 +147,7 @@ function CommandPaletteContent({
     useThread({ id: threadId });
   const { onOpen: onOpenComposeModal } = useComposeModal();
   const { commands, isLoading } = useCommandPaletteCommands({
-    enabled: !mailCommandContext,
+    includeRules: !mailCommandContext,
   });
 
   const shortcutHandlers: ShortcutHandlers = {
