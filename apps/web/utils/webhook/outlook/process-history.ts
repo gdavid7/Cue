@@ -125,9 +125,6 @@ export async function processHistoryForUser({
         if (!isInInbox && !isInSentItems) {
           logger.info("Skipping message not in inbox or sent items", {
             labelIds: message.labelIds,
-            from: message.headers.from,
-            to: message.headers.to,
-            subject: message.subject,
           });
           return NextResponse.json({ ok: true });
         }

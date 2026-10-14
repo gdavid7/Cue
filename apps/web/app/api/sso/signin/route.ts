@@ -24,7 +24,8 @@ export const GET = withError("sso/signin", async (request) => {
     organizationSlug: searchParams.get("organizationSlug"),
   });
 
-  request.logger.info("SSO sign-in requested", { email, organizationSlug });
+  request.logger.info("SSO sign-in requested", { organizationSlug });
+  request.logger.trace("SSO sign-in email", { email });
 
   if (!getEnabledLoginProviders().has("sso")) {
     throw new SafeError("SSO login is not enabled");
@@ -43,7 +44,6 @@ export const GET = withError("sso/signin", async (request) => {
 
   if (!provider) {
     request.logger.error("No SSO provider found for sign-in", {
-      email,
       organizationSlug,
     });
     throw new SafeError("No SSO provider found for this organization");

@@ -19,7 +19,8 @@ export async function checkSenderReplyHistory(
 ): Promise<{ hasReplied: boolean; receivedCount: number }> {
   const cleanSenderEmail = extractEmailAddress(senderEmail);
   if (!cleanSenderEmail) {
-    logger.warn("Could not extract email from sender", { senderEmail });
+    logger.warn("Could not extract email from sender");
+    logger.trace("Sender without an address", { senderEmail });
     // Default to assuming a reply might be needed if email is invalid
     return { hasReplied: true, receivedCount: 0 };
   }
@@ -30,16 +31,11 @@ export async function checkSenderReplyHistory(
       emailProvider.checkIfReplySent(cleanSenderEmail),
       emailProvider.countReceivedMessages(cleanSenderEmail, receivedThreshold),
     ]).catch((error) => {
-      logger.error("Timeout or error in parallel operations", {
-        error,
-        cleanSenderEmail,
-      });
+      logger.error("Timeout or error in parallel operations", { error });
       return [true, 0] as const; // Safe defaults
     });
 
     logger.info("Sender reply history check final result", {
-      senderEmail,
-      cleanSenderEmail,
       hasReplied,
       receivedCount,
     });
@@ -47,11 +43,7 @@ export async function checkSenderReplyHistory(
     return { hasReplied, receivedCount };
   } catch (error) {
     // Catch potential errors from Promise.all or other unexpected issues
-    logger.error("Overall error checking sender reply history", {
-      error,
-      senderEmail,
-      cleanSenderEmail,
-    });
+    logger.error("Overall error checking sender reply history", { error });
     // Default to assuming a reply might be needed on error
     return { hasReplied: true, receivedCount: 0 };
   }

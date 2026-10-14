@@ -194,7 +194,8 @@ async function buildSearchTools({
       description: "Search for information using Perplexity",
       inputSchema: searchInputSchema,
       execute: async ({ query, email, name }) => {
-        logger.info("Perplexity search", { query, email, name });
+        logger.info("Perplexity search");
+        logger.trace("Perplexity search details", { query, email, name });
 
         const cached = await getCachedResearch(
           emailAccount.userId,
@@ -203,7 +204,7 @@ async function buildSearchTools({
           name,
         );
         if (cached) {
-          logger.info("Using cached Perplexity result", { email });
+          logger.info("Using cached Perplexity result");
           return cached;
         }
 
@@ -322,7 +323,8 @@ function createWebSearchTool({
     description: "Search the web for information",
     inputSchema: searchInputSchema,
     execute: async ({ query, email, name }) => {
-      logger.info(`Web search (${providerName})`, { query, email, name });
+      logger.info(`Web search (${providerName})`);
+      logger.trace("Web search details", { query, email, name });
 
       const cached = await getCachedResearch(
         emailAccount.userId,
@@ -331,7 +333,7 @@ function createWebSearchTool({
         name,
       );
       if (cached) {
-        logger.info("Using cached web search result", { email });
+        logger.info("Using cached web search result");
         return cached;
       }
 

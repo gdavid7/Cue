@@ -75,10 +75,7 @@ export async function collectSenderReplyExamples({
         .join("\n\n"),
     };
   } catch (error) {
-    logger.warn("Failed to collect same-sender reply examples", {
-      error,
-      senderEmail: normalizedSenderEmail,
-    });
+    logger.warn("Failed to collect same-sender reply examples", { error });
     return null;
   }
 }

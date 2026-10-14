@@ -49,7 +49,8 @@ export async function processFilingReply({
   });
 
   if (!verifyUserSentEmail({ message, userEmail, provider: emailProvider })) {
-    logger.error("Unauthorized filing reply attempt", {
+    logger.error("Unauthorized filing reply attempt");
+    logger.trace("Unauthorized filing reply sender", {
       from: message.headers.from,
     });
     return;

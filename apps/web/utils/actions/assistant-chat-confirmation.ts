@@ -392,7 +392,7 @@ export async function confirmAssistantSaveMemoryForAccount({
         error: processingError,
       });
     });
-    logger.error("Failed to confirm assistant save memory", { error, content });
+    logger.error("Failed to confirm assistant save memory", { error });
     throw new SafeError("Failed to save memory");
   }
 
@@ -415,7 +415,6 @@ export async function confirmAssistantSaveMemoryForAccount({
   } catch (persistError) {
     logger.error("Failed to persist confirmed assistant save memory", {
       error: persistError,
-      content,
     });
     throw new SafeError(
       "Memory was saved but confirmation state could not be saved. Please refresh and try again.",

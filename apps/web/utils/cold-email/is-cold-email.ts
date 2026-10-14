@@ -102,7 +102,8 @@ export async function checkColdEmailGuards({
   }
 
   if (patternMatch && !patternMatch.exclude) {
-    logger.info("Known cold email sender", { from: email.from });
+    logger.info("Known cold email sender");
+    logger.trace("Known cold email sender details", { from: email.from });
     const { group, ...groupItem } = patternMatch;
     return {
       isColdEmail: true,
@@ -112,9 +113,8 @@ export async function checkColdEmailGuards({
   }
 
   if (patternMatch?.exclude) {
-    logger.info("Sender explicitly excluded from cold email blocker", {
-      from: email.from,
-    });
+    logger.info("Sender explicitly excluded from cold email blocker");
+    logger.trace("Excluded cold email sender details", { from: email.from });
     return { isColdEmail: false, reason: "excluded" };
   }
 
