@@ -46,10 +46,8 @@ export function useSplitCounts({
     [labelsByAccount, portableLabelSplits, stableAccountIds],
   );
   // Cue's sorting is per account; views spanning accounts don't show its splits.
-  const cueAccountId = stableAccountIds.length === 1 ? stableAccountIds[0] : "";
-  const cueMembership = useCueMembership(
-    cueAccountId,
-    enabled && splits.some(splitUsesCue),
+  const { membership: cueMembership } = useCueMembership(
+    enabled && stableAccountIds.length === 1 && splits.some(splitUsesCue),
   );
   const targets = useMemo(
     () => splitCountTargets({ splits, overrides, cueMembership }),

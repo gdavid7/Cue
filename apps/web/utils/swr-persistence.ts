@@ -7,6 +7,7 @@ export const PERSISTED_SWR_KEYS = [
   "/api/labels",
   "/api/user/folders",
   "/api/mail/settings",
+  "/api/user/mail-splits/cue-membership",
 ] as const;
 
 type SwrCacheState = {

@@ -1632,6 +1632,15 @@ export function MailShell() {
                   check their connections.
                 </div>
               ) : null}
+              {!isAllAccounts && accountThreadState.cueSortingUnavailable ? (
+                <p
+                  role="status"
+                  className="px-5 pt-3 text-muted-foreground text-xs"
+                >
+                  Cue&apos;s sorting couldn&apos;t load, so this tab may be
+                  missing mail for now. It catches up on its own.
+                </p>
+              ) : null}
               {allInboxesFirstSyncMessage && (threads.length || searchQuery) ? (
                 <MailLoadingNote message={allInboxesFirstSyncMessage} />
               ) : null}

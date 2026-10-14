@@ -23,7 +23,9 @@ export function useMailThreads({
 }) {
   const hiddenDraftMessageIds = useHiddenDraftMessageIds(emailAccountId);
   const usesCue = threadsQueryUsesCue(query);
-  const cueMembership = useCueMembership(emailAccountId, enabled && usesCue);
+  const { membership: cueMembership, unavailable } = useCueMembership(
+    enabled && usesCue,
+  );
   const waitingForCue = usesCue && !cueMembership;
   const predicate = useMemo<MailPredicate | undefined>(() => {
     if (usesCue) return threadsQueryToPredicate(query, cueMembership);
@@ -42,5 +44,10 @@ export function useMailThreads({
     predicate,
     enabled: enabled && !waitingForCue,
   });
-  return waitingForCue && enabled ? { ...threads, isLoading: true } : threads;
+  return {
+    ...threads,
+    isLoading: threads.isLoading || (enabled && waitingForCue),
+    /** Cue's own sorting couldn't load, so tabs that read it may be incomplete. */
+    cueSortingUnavailable: usesCue && unavailable,
+  };
 }

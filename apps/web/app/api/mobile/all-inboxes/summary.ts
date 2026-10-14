@@ -3,11 +3,9 @@ import { isIgnoredSender } from "@/utils/filter-ignored-senders";
 import type { Logger } from "@/utils/logger";
 import { mapWithConcurrency } from "@/utils/async";
 import { ThreadTrackerType } from "@/generated/prisma/enums";
-import prisma from "@/utils/prisma";
+import { getTrackedThreads } from "@/utils/reply-tracker/tracked-threads";
 
-const INBOX_LABEL_ID = "INBOX";
 const REPLIES_LIMIT = 20;
-const THREAD_CONCURRENCY = 5;
 const CATEGORY_LABELS = [
   { labelName: "Newsletter", displayName: "Newsletters" },
   { labelName: "Marketing", displayName: "Promotions" },
@@ -71,8 +69,15 @@ export async function loadAllInboxesSummary({
           );
           return label ? [{ ...category, label }] : [];
         });
+        // Cue's reply tracking rather than a mailbox label, while still in the inbox.
         const [repliesResult] = await Promise.allSettled([
-          loadNeedsReplyThreads(account.id, emailProvider),
+          getTrackedThreads({
+            emailAccountId: account.id,
+            emailProvider,
+            type: ThreadTrackerType.NEEDS_REPLY,
+            limit: REPLIES_LIMIT,
+            inboxOnly: true,
+          }),
         ]);
         const inboxThreads =
           inboxResult.status === "fulfilled"
@@ -142,39 +147,6 @@ export async function loadAllInboxesSummary({
       .filter((summary) => summary.status === "error")
       .map((summary) => summary.accountId),
   };
-}
-
-/**
- * Conversations still waiting on the user, from Cue's reply tracking rather
- * than a mailbox label, kept only while they're in the inbox.
- */
-async function loadNeedsReplyThreads(
-  emailAccountId: string,
-  emailProvider: EmailProvider,
-) {
-  const trackers = await prisma.threadTracker.findMany({
-    where: {
-      emailAccountId,
-      type: ThreadTrackerType.NEEDS_REPLY,
-      resolved: false,
-    },
-    select: { threadId: true },
-    orderBy: { sentAt: "desc" },
-    distinct: ["threadId"],
-    take: REPLIES_LIMIT,
-  });
-  const threads = await mapWithConcurrency(
-    trackers,
-    THREAD_CONCURRENCY,
-    ({ threadId }) => emailProvider.getThread(threadId).catch(() => null),
-  );
-  return threads.filter(
-    (thread): thread is EmailThread =>
-      !!thread &&
-      thread.messages.some((message) =>
-        message.labelIds?.includes(INBOX_LABEL_ID),
-      ),
-  );
 }
 
 function normalizeThreads(threads: EmailThread[]): EmailThread[] {

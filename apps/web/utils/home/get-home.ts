@@ -19,6 +19,7 @@ import type {
 } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
+import { getTrackedThreads } from "@/utils/reply-tracker/tracked-threads";
 import { getRuleLabel } from "@/utils/rule/consts";
 
 const LIST_LIMIT = 10;
@@ -113,38 +114,27 @@ export async function getHomeData({
 
   // Reply tracking lives in Cue's database, so these lanes don't depend on Cue
   // labelling anything in the mailbox.
-  const tracked = (type: ThreadTrackerType, label: string) =>
-    prisma.threadTracker
-      .findMany({
-        where: { emailAccountId, type, resolved: false },
-        select: { threadId: true },
-        orderBy: { sentAt: "desc" },
-        distinct: ["threadId"],
-        take: LIST_LIMIT,
-      })
-      .then((trackers) =>
-        Promise.all(
-          trackers.map(({ threadId }) =>
-            emailProvider.getThread(threadId).catch((error) => {
-              logger.warn("Failed to load tracked home thread", {
-                label,
-                error,
-              });
-              return null;
-            }),
-          ),
-        ),
-      )
-      .then((threads) => threads.filter(isDefined))
-      .catch((error) => {
-        logger.warn("Failed to list tracked home threads", { label, error });
-        return [] as EmailThread[];
-      });
+  const tracked = (
+    type: ThreadTrackerType,
+    label: string,
+    inboxOnly: boolean,
+  ) =>
+    getTrackedThreads({
+      emailAccountId,
+      emailProvider,
+      type,
+      limit: LIST_LIMIT,
+      inboxOnly,
+    }).catch((error) => {
+      logger.warn("Failed to list tracked home threads", { label, error });
+      return [] as EmailThread[];
+    });
 
-  const [needsYouTracked, waiting, handledByLabel, inbox, agentTasks] =
+  const [needsYou, waiting, handledByLabel, inbox, agentTasks] =
     await Promise.all([
-      tracked(ThreadTrackerType.NEEDS_REPLY, "needs-you"),
-      tracked(ThreadTrackerType.AWAITING, "waiting"),
+      // An archived conversation is off the user's plate even before they reply.
+      tracked(ThreadTrackerType.NEEDS_REPLY, "needs-you", true),
+      tracked(ThreadTrackerType.AWAITING, "waiting", false),
       // One query per label: the EmailProvider interface has no "any of these labels".
       Promise.all(
         handledIds.map((id) =>
@@ -155,10 +145,6 @@ export async function getHomeData({
       list({ labelIds: ["INBOX"] }, "inbox"),
       getAgentTasks({ emailAccountId, now }),
     ]);
-  // An archived conversation is off the user's plate even before they reply.
-  const needsYou = needsYouTracked.filter((thread) =>
-    thread.messages.some((message) => message.labelIds?.includes("INBOX")),
-  );
   const handled = uniqueByThreadId(handledByLabel.flat());
   // Each thread shows once on Today: sorted mail has its own section.
   const shownIds = new Set([...needsYou, ...handled].map((t) => t.id));
