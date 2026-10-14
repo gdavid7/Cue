@@ -237,6 +237,12 @@ main { max-width: 420px; padding: 40px; text-align: center; }
 h1 { font-size: 24px; letter-spacing: -.5px; } p { color: #52525b; line-height: 1.6; }
 a { display: inline-block; margin: 16px 0; padding: 12px 24px; background: #18181b; color: white; border-radius: 8px; text-decoration: none; }
 small { display: block; color: #71717a; }
+:root { color-scheme: light dark; }
+@media (prefers-color-scheme: dark) {
+  body { background: #26282c; color: #e9eaec; }
+  p, small { color: #a7a9af; }
+  a { background: #fafafa; color: #18181b; }
+}
 </style></head><body><main><h1>Connecting to Inbox Zero</h1>
 <p>We couldn't load your mailbox. Check your connection. We'll retry automatically.</p>
 <a href="${href}">Retry now</a><small>You can also use View → Reload.</small>

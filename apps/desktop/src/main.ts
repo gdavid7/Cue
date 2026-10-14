@@ -126,7 +126,8 @@ if (!gotTheLock) {
 
 function startDesktopApp() {
   initDesktopSentry();
-  nativeTheme.themeSource = "light";
+  // The app has a dark theme, so its "System" choice must see the OS one.
+  nativeTheme.themeSource = "system";
   app.setAppUserModelId("com.getinboxzero.desktop");
   if (shouldSmokeLocalMail()) app.disableHardwareAcceleration();
 
@@ -374,7 +375,10 @@ function createAppWindow(options?: {
     minWidth: MIN_DESKTOP_WINDOW_WIDTH,
     minHeight: MIN_DESKTOP_WINDOW_HEIGHT,
     title: "Inbox Zero",
-    ...getDesktopWindowChrome(),
+    ...getDesktopWindowChrome(
+      process.platform,
+      nativeTheme.shouldUseDarkColors,
+    ),
     webPreferences: {
       preload: path.join(import.meta.dirname, "preload.cjs"),
       partition: PARTITION,
