@@ -219,6 +219,6 @@ function getAccountActionRequiredMessage(
     case "mail_service_not_enabled":
       return `Gmail is not enabled for ${email}. Please enable Gmail for this account and reconnect it to resume automation.`;
     default:
-      return `The connection for ${email} was disconnected. Please reconnect your account to resume automation.`;
+      return `Sign in again to reconnect ${email}. Your mail and settings are still here.`;
   }
 }

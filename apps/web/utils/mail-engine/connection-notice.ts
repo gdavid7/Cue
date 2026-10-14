@@ -1,12 +1,17 @@
+import { isMicrosoftProvider } from "@/utils/email/provider-types";
+
 export function mailEngineConnectionCopy(
   connection: "ready" | "offline" | "blocked_auth" | undefined,
+  provider: string | undefined,
 ) {
   if (connection === "blocked_auth") {
+    // Usually an expired sign-in (routine while Google's OAuth app is in
+    // Testing), so this reads as a next step rather than an error.
+    const isMicrosoft = isMicrosoftProvider(provider);
     return {
-      title: "Reconnect this account to keep getting mail",
-      description:
-        "Cue lost access, so new mail is paused. Nothing in your mailbox has changed.",
-      action: "Reconnect",
+      title: `Sign in again to reconnect ${isMicrosoft ? "Outlook" : "Gmail"}`,
+      description: `${isMicrosoft ? "Microsoft" : "Google"} signed Cue out, so new mail is paused. Your mail and settings are still here.`,
+      action: "Sign in again",
     };
   }
   if (connection === "offline") {

@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { checkPermissionsAction } from "@/utils/actions/permissions";
 import { useAccount } from "@/providers/EmailAccountProvider";
-import { prefixPath } from "@/utils/path";
+import { getPermissionsConsentPath } from "@/utils/permissions-consent";
 import { useOrgAccess } from "@/hooks/useOrgAccess";
 
 const permissionsChecked: Record<string, boolean> = {};
@@ -22,11 +22,9 @@ export function PermissionsCheck() {
     permissionsChecked[emailAccountId] = true;
 
     checkPermissionsAction(emailAccountId).then((result) => {
-      if (
-        result?.data?.hasAllPermissions === false ||
-        result?.data?.hasRefreshToken === false
-      ) {
-        router.replace(prefixPath(emailAccountId, "/permissions/consent"));
+      const expired = result?.data?.hasRefreshToken === false;
+      if (expired || result?.data?.hasAllPermissions === false) {
+        router.replace(getPermissionsConsentPath(emailAccountId, { expired }));
       }
     });
   }, [router, emailAccountId, isAccountOwner]);

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import useSWR from "swr";
 import { useAction } from "next-safe-action/hooks";
 import { AppAlertBanner } from "@/app/(app)/AppAlertBanner";
@@ -11,6 +12,7 @@ import { clearUserErrorMessagesAction } from "@/utils/actions/error-messages";
 import type { GetErrorMessagesResponse } from "@/app/api/user/error-messages/route";
 
 export function ErrorMessages() {
+  const pathname = usePathname();
   const { data: errorMessages, mutate } = useSWR<GetErrorMessagesResponse>(
     "/api/user/error-messages",
   );
@@ -24,6 +26,8 @@ export function ErrorMessages() {
   );
 
   if (!errorMessages || Object.keys(errorMessages).length === 0) return null;
+  // The consent page is itself the fix, so the banner would only repeat it.
+  if (pathname?.endsWith("/permissions/consent")) return null;
 
   const errors = Object.values(errorMessages);
   const hasMultipleErrors = errors.length > 1;

@@ -2,17 +2,23 @@ import { describe, expect, it } from "vitest";
 import { mailEngineConnectionCopy } from "./connection-notice";
 
 describe("mailEngineConnectionCopy", () => {
-  it("asks the user to reconnect when auth is blocked", () => {
-    expect(mailEngineConnectionCopy("blocked_auth")).toEqual({
-      title: "Reconnect this account to keep getting mail",
+  it("offers a one-click sign-in when Gmail access has expired", () => {
+    expect(mailEngineConnectionCopy("blocked_auth", "google")).toEqual({
+      title: "Sign in again to reconnect Gmail",
       description:
-        "Cue lost access, so new mail is paused. Nothing in your mailbox has changed.",
-      action: "Reconnect",
+        "Google signed Cue out, so new mail is paused. Your mail and settings are still here.",
+      action: "Sign in again",
     });
   });
 
+  it("names the provider for other mailboxes", () => {
+    expect(mailEngineConnectionCopy("blocked_auth", "microsoft")?.title).toBe(
+      "Sign in again to reconnect Outlook",
+    );
+  });
+
   it("explains automatic retry while the mailbox is offline", () => {
-    expect(mailEngineConnectionCopy("offline")).toEqual({
+    expect(mailEngineConnectionCopy("offline", "google")).toEqual({
       title: "Can't reach your mailbox right now.",
       description:
         "Showing the mail Cue already has. It catches up on its own.",
@@ -20,7 +26,7 @@ describe("mailEngineConnectionCopy", () => {
   });
 
   it("is silent while the mailbox is ready", () => {
-    expect(mailEngineConnectionCopy("ready")).toBeUndefined();
-    expect(mailEngineConnectionCopy(undefined)).toBeUndefined();
+    expect(mailEngineConnectionCopy("ready", "google")).toBeUndefined();
+    expect(mailEngineConnectionCopy(undefined, "google")).toBeUndefined();
   });
 });

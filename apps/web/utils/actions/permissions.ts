@@ -33,7 +33,10 @@ export const checkPermissionsAction = actionClient
       });
 
       if (!tokens.refreshToken || !accessToken)
-        return { hasRefreshToken: true, hasAllPermissions: false };
+        return {
+          hasRefreshToken: Boolean(tokens.refreshToken),
+          hasAllPermissions: false,
+        };
 
       const { hasAllPermissions, error } = await handleGmailPermissionsCheck({
         accessToken,
