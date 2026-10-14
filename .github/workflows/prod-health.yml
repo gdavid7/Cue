@@ -1,0 +1,179 @@
+name: Production Health
+
+# An hourly synthetic user for https://cue-inbox.vercel.app plus an Axiom and
+# Sentry digest. Setup and secrets: apps/web/__tests__/playwright/prod/README.md
+#
+# Only schedule and manual dispatch trigger this workflow, so pull requests
+# (including ones from forks) never run it or see its secrets. The repository
+# is public: logs, the job summary and artifacts are readable by anyone, so
+# every step prints counts and statuses only, never secrets, addresses or mail.
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: "Seed the QA inbox with fixture mail before the run"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prod-health
+  cancel-in-progress: false
+
+jobs:
+  prod-health:
+    if: github.repository == 'gdavid7/Cue'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: apps/web
+    env:
+      CUE_QA_BASE_URL: https://cue-inbox.vercel.app
+      CUE_QA_EMAIL: ${{ secrets.CUE_QA_EMAIL }}
+      CUE_QA_IMAP_APP_PASSWORD: ${{ secrets.CUE_QA_IMAP_APP_PASSWORD }}
+      CUE_QA_RESULTS_FILE: ${{ github.workspace }}/apps/web/.tmp/qa-robot/results.json
+      CUE_QA_OUTPUT_DIR: ${{ github.workspace }}/apps/web/.tmp/qa-robot/output
+      CUE_QA_REPORT_DIR: ${{ github.workspace }}/apps/web/.tmp/qa-robot/report
+      HEALTH_REPORT_FILE: ${{ github.workspace }}/apps/web/.tmp/qa-robot/health-report.json
+      AXIOM_QUERY_TOKEN: ${{ secrets.AXIOM_QUERY_TOKEN }}
+      AXIOM_DATASET: ${{ secrets.AXIOM_DATASET }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_ORGANIZATION: ${{ secrets.SENTRY_ORGANIZATION }}
+      SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Check configuration
+        id: config
+        shell: bash
+        run: |
+          mkdir -p .tmp/qa-robot
+          check() {
+            local part="$1"; shift
+            local missing=()
+            for name in "$@"; do
+              [ -n "${!name}" ] || missing+=("$name")
+            done
+            if [ ${#missing[@]} -eq 0 ]; then
+              echo "$part: configured"
+              return 0
+            fi
+            echo "$part: NOT CONFIGURED (missing ${missing[*]}); skipping"
+            return 1
+          }
+          if check "Robot" CUE_QA_EMAIL CUE_QA_IMAP_APP_PASSWORD; then
+            echo "robot=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "robot=false" >> "$GITHUB_OUTPUT"
+          fi
+          check "Axiom" AXIOM_QUERY_TOKEN AXIOM_DATASET || true
+          check "Sentry" SENTRY_AUTH_TOKEN SENTRY_ORGANIZATION SENTRY_PROJECT || true
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      - name: Install dependencies
+        working-directory: .
+        run: bash scripts/pnpm-install-without-desktop.sh --frozen-lockfile
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Read Playwright version
+        if: steps.config.outputs.robot == 'true'
+        id: playwright
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright Chromium
+        if: steps.config.outputs.robot == 'true'
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-${{ steps.playwright.outputs.version }}
+
+      - name: Install Playwright Chromium
+        if: steps.config.outputs.robot == 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Install Chromium system dependencies
+        if: steps.config.outputs.robot == 'true' && steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+
+      - name: Seed QA inbox
+        if: steps.config.outputs.robot == 'true' && github.event_name == 'workflow_dispatch' && inputs.seed
+        run: pnpm exec tsx scripts/qa/seed-test-inbox.ts
+
+      - name: Run production robot
+        if: steps.config.outputs.robot == 'true'
+        id: robot
+        shell: bash
+        run: |
+          set +e
+          pnpm exec playwright test -c __tests__/playwright/prod/playwright.prod.config.ts
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Health report
+        if: always()
+        id: report
+        run: pnpm exec tsx scripts/qa/run-health-report.ts "$CUE_QA_RESULTS_FILE"
+
+      # The repository is public, so screenshots of the test inbox are only
+      # published when they are needed to debug a failure.
+      - name: Upload screenshots and trace
+        if: failure() && steps.config.outputs.robot == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: prod-health-${{ github.run_id }}-${{ github.run_attempt }}
+          path: apps/web/.tmp/qa-robot/
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: Verdict
+        if: always()
+        shell: bash
+        env:
+          ROBOT_ENABLED: ${{ steps.config.outputs.robot }}
+          ROBOT_EXIT: ${{ steps.robot.outputs.exit_code }}
+          ROBOT_OUTCOME: ${{ steps.report.outputs.robot_outcome }}
+          REPORT_STATUS: ${{ steps.report.outcome }}
+        run: |
+          if [ "$REPORT_STATUS" != "success" ]; then
+            echo "::error title=Health report failed::The health report step did not complete; see its log."
+            exit 1
+          fi
+          if [ "$ROBOT_ENABLED" != "true" ]; then
+            echo "Robot NOT CONFIGURED; the report above covers Axiom and Sentry only."
+            exit 0
+          fi
+          case "$ROBOT_OUTCOME" in
+            passed)
+              echo "Robot passed." ;;
+            needs_reconnect)
+              echo "Robot skipped Gmail checks: the QA account needs reconnecting (see warning)." ;;
+            sign_in_failed)
+              echo "::error title=Robot could not sign in::See the health report's problems list."
+              exit 1 ;;
+            *)
+              echo "::error title=Production robot failed::Outcome '${ROBOT_OUTCOME:-unknown}', Playwright exit ${ROBOT_EXIT:-none}. See the health report and artifacts."
+              exit 1 ;;
+          esac
+          if [ "${ROBOT_EXIT:-1}" != "0" ]; then
+            echo "::error title=Production robot failed::Playwright exited ${ROBOT_EXIT:-without a code}."
+            exit 1
+          fi
