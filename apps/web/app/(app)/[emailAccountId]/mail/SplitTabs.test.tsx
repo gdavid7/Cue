@@ -39,12 +39,11 @@ describe("SplitTabs", () => {
       name: "Options for the Promos tab",
     });
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    // Deleting is immediate: the tab comes back with Undo, so no confirm.
     fireEvent.click(
-      await screen.findByRole("menuitem", { name: "Delete tab…" }),
+      await screen.findByRole("menuitem", { name: "Delete tab" }),
     );
 
-    expect(onDelete).not.toHaveBeenCalled();
-    fireEvent.click(await screen.findByRole("button", { name: "Delete tab" }));
     expect(onDelete).toHaveBeenCalledWith("promos");
   });
 

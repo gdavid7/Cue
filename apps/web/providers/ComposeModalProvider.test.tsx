@@ -64,10 +64,22 @@ describe("ComposeModalProvider popped-out reply", () => {
   beforeEach(() => {
     navigation.pathname = "/account-a/mail";
     navigation.search = "";
+    // jsdom has no matchMedia; the provider reads it to pick the phone layout.
+    vi.stubGlobal(
+      "matchMedia",
+      (query: string) =>
+        ({
+          matches: false,
+          media: query,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+        }) as unknown as MediaQueryList,
+    );
   });
 
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
   });
 
   it("composes a reply from the account that received it in All inboxes", async () => {

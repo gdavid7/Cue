@@ -1,17 +1,7 @@
 "use client";
 
 import { MoreHorizontalIcon, PlusIcon } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { type ReactNode, useEffect, useRef } from "react";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -64,7 +54,6 @@ export function SplitTabs({
 }: SplitTabsProps) {
   const tabsRef = useRef<HTMLDivElement>(null);
   const activeTabRef = useRef<HTMLButtonElement>(null);
-  const [deleting, setDeleting] = useState<MailSplitTab | null>(null);
 
   useEffect(() => {
     const tabs = tabsRef.current;
@@ -145,9 +134,9 @@ export function SplitTabs({
                 )}
                 <ContextMenuItem
                   className="text-destructive focus:text-destructive"
-                  onSelect={() => setDeleting(split)}
+                  onSelect={() => onDelete(split.id)}
                 >
-                  Delete tab…
+                  Delete tab
                 </ContextMenuItem>
               </ContextMenuContent>
             </ContextMenu>
@@ -171,9 +160,9 @@ export function SplitTabs({
                   )}
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive"
-                    onSelect={() => setDeleting(split)}
+                    onSelect={() => onDelete(split.id)}
                   >
-                    Delete tab…
+                    Delete tab
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -192,37 +181,6 @@ export function SplitTabs({
           <PlusIcon className="size-3.5" />
         </button>
       )}
-
-      <AlertDialog
-        open={deleting !== null}
-        onOpenChange={(open) => {
-          if (!open) setDeleting(null);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Delete the “{deleting?.name}” tab?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              Its mail stays in your inbox. You can add the tab again from New
-              tab.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => {
-                if (deleting) onDelete(deleting.id);
-                setDeleting(null);
-              }}
-            >
-              Delete tab
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

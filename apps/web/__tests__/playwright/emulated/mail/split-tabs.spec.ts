@@ -84,7 +84,7 @@ test("restores a deleted All tab and protects it from removal", async ({
   await expect(allTab).toBeVisible();
   await allTab.click({ button: "right" });
   await expect(
-    page.getByRole("menuitem", { name: "Delete tab…" }),
+    page.getByRole("menuitem", { name: "Delete tab", exact: true }),
   ).toBeHidden();
   await capturePlaywrightCheckpoint(page, testInfo, "mail-protected-all-split");
   await page.getByRole("button", { name: "New tab", exact: true }).click();
@@ -214,8 +214,7 @@ test("builds a split from conditions and shows only matching mail", async ({
   await expect(promosSplit).toBeVisible();
 
   await promosSplit.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete tab…" }).click();
-  await page.getByRole("button", { name: "Delete tab", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Delete tab", exact: true }).click();
   await expect(promosSplit).toHaveCount(0);
 });
 
@@ -264,8 +263,7 @@ test("turns a prepared split on from the library", async ({
   );
 
   await templateSplit.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete tab…" }).click();
-  await page.getByRole("button", { name: "Delete tab", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Delete tab", exact: true }).click();
   await expect(templateSplit).toHaveCount(0);
 });
 
@@ -313,8 +311,7 @@ test("Other excludes enabled splits and restores mail when a split is disabled",
   await page
     .getByRole("button", { name: "Unread", exact: true })
     .click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete tab…" }).click();
-  await page.getByRole("button", { name: "Delete tab", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Delete tab", exact: true }).click();
   // With All as the only tab, Other would just repeat it.
   await expect(
     page.getByRole("button", { name: "Other", exact: true }),
@@ -363,8 +360,7 @@ test("Other excludes enabled splits and restores mail when a split is disabled",
   await page
     .getByRole("button", { name: "Promos", exact: true })
     .click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete tab…" }).click();
-  await page.getByRole("button", { name: "Delete tab", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Delete tab", exact: true }).click();
   await page.getByRole("button", { name: "Other", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Other", exact: true }),

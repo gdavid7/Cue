@@ -95,7 +95,9 @@ describe("MailSplitTabs removing a tab", () => {
     );
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Work" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: /turn off/i }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Delete tab" }),
+    );
 
     await vi.waitFor(() => expect(mocks.toastUndo).toHaveBeenCalledOnce());
     expect(mocks.deleteMailSplitAction).toHaveBeenCalledWith("account-1", {
