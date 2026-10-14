@@ -5,6 +5,8 @@ Playwright tests are separated by their dependency boundary:
 - `emulated/` contains self-contained browser tests. These use seeded local
   emulators and test infrastructure, must not require third-party credentials,
   and are safe to run in CI with `pnpm test:playwright:emulated`.
+- `prod/` is the hourly production robot: it signs in to the live app as a
+  dedicated QA Gmail account with its own config. See `prod/README.md`.
 - Real-provider tests live outside this Playwright harness in `../e2e/`.
   Production-path scenarios against Gmail or Outlook live in `../e2e/flows/`
   and must not use emulator or database shortcuts.
