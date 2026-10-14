@@ -46,6 +46,10 @@ vi.mock("@/utils/auth", () => ({
 
 vi.mock("@/utils/prisma");
 
+// The sign-out link reaches a server action whose Gmail quota gate imports
+// Redis; the browser only ever gets a reference to that action.
+vi.mock("@/utils/redis", () => ({ redis: {} }));
+
 describe("ActionAttachmentsField", () => {
   beforeEach(() => {
     vi.clearAllMocks();
