@@ -45,13 +45,10 @@ export const metadata: Metadata = {
 
 export const viewport = {
   themeColor: "#FFF",
-  // safe area for iOS PWA
-  userScalable: false,
   initialScale: 1,
-  maximumScale: 1,
-  minimumScale: 1,
   width: "device-width",
   height: "device-height",
+  // safe area for iOS PWA
   viewportFit: "cover",
 };
 
