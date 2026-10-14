@@ -1459,13 +1459,8 @@ export class GmailProvider implements EmailProvider {
       pageToken: options.pageToken || undefined,
     });
 
-    const messages = response.messages || [];
-    const messagePromises = messages.map((message) =>
-      this.getMessage(message.id!),
-    );
-
     return {
-      messages: await Promise.all(messagePromises),
+      messages: await this.getListedMessages(response.messages),
       nextPageToken: response.nextPageToken || undefined,
     };
   }
@@ -1508,15 +1503,25 @@ export class GmailProvider implements EmailProvider {
         ),
     });
 
-    const messages = response.messages || [];
-    const messagePromises = messages.map((message) =>
-      this.getMessage(message.id!),
-    );
-
     return {
-      messages: await Promise.all(messagePromises),
+      messages: await this.getListedMessages(response.messages),
       nextPageToken: response.nextPageToken || undefined,
     };
+  }
+
+  // One request per listed message fans a page out into dozens of parallel
+  // calls that trip Gmail's per-user concurrency and quota limits.
+  private async getListedMessages(
+    listed: gmail_v1.Schema$Message[] | undefined,
+  ): Promise<ParsedMessage[]> {
+    const ids = (listed ?? []).flatMap((message) =>
+      message.id ? [message.id] : [],
+    );
+    const messages: ParsedMessage[] = [];
+    for (const idsChunk of chunk(ids, 100)) {
+      messages.push(...(await this.getMessagesBatch(idsChunk)));
+    }
+    return messages;
   }
 
   async getMessagesWithAttachments(options: {

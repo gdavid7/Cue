@@ -5,7 +5,9 @@ import type {
   ScopeDescriptor,
 } from "@inboxzero/mail-core/ports/mailbox-source";
 import type { BodyObservation, SyncPosition } from "@inboxzero/mail-core/sync";
+import type { MessageKey } from "@inboxzero/mail-core/identities";
 import {
+  decodeMailboxSyncCursor,
   encodeMailboxSyncCursor,
   InvalidMailboxSyncCursorError,
 } from "@/utils/email/mailbox-sync";
@@ -16,6 +18,18 @@ import {
   parsedMessagePatch,
 } from "@/utils/mail-api/observations";
 import { isProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
+import {
+  getProviderRateLimitDelayMs,
+  recordProviderRateLimitFromError,
+} from "@/utils/email/rate-limit";
+import {
+  gmailMailSyncCosts,
+  LocalMailSyncPausedError,
+  normalizeThrottleHeaders,
+  withLocalMailSyncBudget,
+} from "@/utils/email/local-mail-sync-budget";
+import { isEmailProviderRateLimitRedisConfigured } from "@/utils/redis/email-provider-rate-limit";
+import type { Logger } from "@/utils/logger";
 import { extractErrorInfo as extractGmailErrorInfo } from "@/utils/gmail/retry";
 import { extractErrorInfo as extractOutlookErrorInfo } from "@/utils/outlook/retry";
 import type { ParsedMessage } from "@/utils/types";
@@ -25,6 +39,19 @@ import { convertEmailHtmlToText } from "@/utils/mail";
 // Outlook allows four concurrent Graph requests per mailbox, shared with
 // webhook processing, so batched folder reads stay below that.
 const CHANGES_BATCH_CONCURRENCY = 3;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Gmail's first scan covers only recent mail so the inbox fills and live
+// catch-up starts within seconds; older mail backfills in its own scope.
+const GMAIL_RECENT_WINDOW_MS = 3 * DAY_MS;
+const GMAIL_HISTORY_SCOPE_ID = "history";
+// The two scans start at different times, so the backfill reaches into the
+// recent window to leave no gap at the boundary between them.
+const GMAIL_HISTORY_OVERLAP_MS = DAY_MS;
+// Live changes for every message arrive through the primary stream, so the
+// finished backfill scope only needs a checkpoint that marks it done.
+const GMAIL_HISTORY_COMPLETE_CHECKPOINT = "history-complete";
+const GMAIL_THREAD_COST = 40;
 
 const SUPPORTED_CHANGES = [
   "archive",
@@ -50,15 +77,19 @@ type BootstrapToken = {
   catchUpFrom?: SyncPosition | null;
   folderId?: string | null;
   pageToken?: string;
+  receivedAfterMs?: number;
+  receivedBeforeMs?: number;
   scopeId?: string;
 };
 
 export function createEmailProviderMailboxSource(input: {
   provider: EmailProvider;
   accountId: string;
+  logger: Logger;
 }): MailboxSource & Required<Pick<MailboxSource, "readChangesBatch">> {
-  const { provider, accountId } = input;
+  const { provider, accountId, logger } = input;
   const maxPageSize = provider.name === "microsoft" ? 20 : 50;
+  const isGmail = provider.name === "google";
   const source: MailboxSource = {
     async describe() {
       return {
@@ -88,17 +119,49 @@ export function createEmailProviderMailboxSource(input: {
       return {
         status: "ok",
         value: {
-          scopes: [{ id: "primary", kind: "account", folderId: null }],
+          scopes: [
+            { id: "primary", kind: "account", folderId: null },
+            {
+              id: GMAIL_HISTORY_SCOPE_ID,
+              kind: "account",
+              folderId: null,
+              priority: "low",
+            },
+          ],
           nextPage: null,
         },
       };
     },
     async beginBootstrap({ afterMs, scope, session }) {
+      if (isGmail && scope.id === GMAIL_HISTORY_SCOPE_ID) {
+        const catchUpFrom: SyncPosition = {
+          streamId: GMAIL_HISTORY_SCOPE_ID,
+          generation: session.generation,
+          checkpoint: GMAIL_HISTORY_COMPLETE_CHECKPOINT,
+        };
+        const token: BootstrapToken = {
+          scopeId: GMAIL_HISTORY_SCOPE_ID,
+          receivedBeforeMs:
+            Date.now() - GMAIL_RECENT_WINDOW_MS + GMAIL_HISTORY_OVERLAP_MS,
+          catchUpFrom,
+        };
+        return {
+          status: "ok" as const,
+          value: {
+            bootstrapId: "mailbox",
+            enumerationToken: JSON.stringify(token),
+            catchUpFrom,
+          },
+        };
+      }
       try {
         const token: BootstrapToken = {
           afterMs: afterMs ?? 0,
           scopeId: scope.id,
           folderId: scopedFolderId(provider, scope),
+          receivedAfterMs: isGmail
+            ? Date.now() - GMAIL_RECENT_WINDOW_MS
+            : undefined,
         };
         const catchUpFrom: SyncPosition = {
           streamId: token.scopeId ?? "primary",
@@ -126,12 +189,33 @@ export function createEmailProviderMailboxSource(input: {
     async enumerate({ page, session, pageSize }) {
       try {
         const token = JSON.parse(page) as BootstrapToken;
-        const syncPage = await provider.getMessagesWithPagination({
-          maxResults: Math.min(pageSize, maxPageSize),
-          folderId: token.folderId ?? undefined,
-          pageToken: token.pageToken,
-          includeDrafts: true,
-        });
+        const maxResults = Math.min(pageSize, maxPageSize);
+        const listPage = () =>
+          provider.getMessagesWithPagination({
+            maxResults,
+            folderId: token.folderId ?? undefined,
+            pageToken: token.pageToken,
+            includeDrafts: true,
+            ...(token.receivedAfterMs != null && {
+              after: new Date(token.receivedAfterMs),
+            }),
+            ...(token.receivedBeforeMs != null && {
+              before: new Date(token.receivedBeforeMs),
+            }),
+          });
+        const syncPage = isGmail
+          ? await withGmailSyncBudget(
+              {
+                emailAccountId: accountId,
+                priority:
+                  token.scopeId === GMAIL_HISTORY_SCOPE_ID
+                    ? "backfill"
+                    : "current",
+                cost: gmailPageCost(maxResults),
+              },
+              listPage,
+            )
+          : await listPage();
         const changes = syncPage.messages.map((message) =>
           parsedMessagePatch(accountId, provider.name, message),
         );
@@ -153,6 +237,8 @@ export function createEmailProviderMailboxSource(input: {
                 catchUpFrom: token.catchUpFrom ?? null,
                 folderId: token.folderId ?? null,
                 pageToken: syncPage.nextPageToken,
+                receivedAfterMs: token.receivedAfterMs,
+                receivedBeforeMs: token.receivedBeforeMs,
                 scopeId: token.scopeId ?? "primary",
               }),
               catchUpFrom: null,
@@ -184,6 +270,20 @@ export function createEmailProviderMailboxSource(input: {
       }
     },
     async readChanges({ position, session, requestId, pageSize }) {
+      if (isGmail && position.streamId === GMAIL_HISTORY_SCOPE_ID) {
+        return {
+          status: "page" as const,
+          page: {
+            session,
+            requestId,
+            from: position,
+            to: position,
+            changes: [],
+            requiredHydration: [],
+            roundComplete: true,
+          },
+        };
+      }
       try {
         const page = await provider.getMailboxSyncPage({
           cursor: position.checkpoint || undefined,
@@ -241,17 +341,13 @@ export function createEmailProviderMailboxSource(input: {
       }
     },
     async hydrate({ keys, purpose }) {
+      const debited = debitForegroundUsage(
+        keys.length * gmailMailSyncCosts.message,
+      );
       try {
-        const messages = [];
-        const unresolved = [];
-        for (const key of keys) {
-          try {
-            messages.push(await provider.getMessage(key.messageId));
-          } catch (error) {
-            if (!isMissingProviderResource(error)) throw error;
-            unresolved.push({ key, reason: "not_found" as const });
-          }
-        }
+        const { messages, unresolved } = isGmail
+          ? await batchedMessages(provider, keys)
+          : await sequentialMessages(provider, keys);
         return {
           status: "ok" as const,
           value: {
@@ -265,6 +361,8 @@ export function createEmailProviderMailboxSource(input: {
         };
       } catch (error) {
         return mapProviderError(error);
+      } finally {
+        await debited;
       }
     },
     async readConversationMembership({
@@ -273,6 +371,7 @@ export function createEmailProviderMailboxSource(input: {
       page,
       pageSize,
     }) {
+      const debited = debitForegroundUsage(GMAIL_THREAD_COST);
       try {
         const thread = await provider.getThread(conversation.conversationId, {
           complete: true,
@@ -308,12 +407,17 @@ export function createEmailProviderMailboxSource(input: {
       } catch (error) {
         if (!isMissingProviderResource(error)) return mapProviderError(error);
         return { status: "ok", value: { status: "not_found" } };
+      } finally {
+        await debited;
       }
     },
     async search({ predicate, page, pageSize }) {
       const compiled = compileMailboxSearch(predicate);
       if (!compiled) return { status: "unsupported" };
       let result: Awaited<ReturnType<EmailProvider["searchMessages"]>>;
+      const debited = debitForegroundUsage(
+        gmailPageCost(Math.min(pageSize, maxPageSize)),
+      );
       try {
         result = await provider.searchMessages({
           query: "",
@@ -326,6 +430,8 @@ export function createEmailProviderMailboxSource(input: {
         // must drop it rather than retry it.
         if (isRejectedProviderRequest(error)) return { status: "unsupported" };
         return mapProviderError(error);
+      } finally {
+        await debited;
       }
       const candidates = await mapWithConcurrency(
         result.messages,
@@ -385,6 +491,75 @@ export function createEmailProviderMailboxSource(input: {
       }
     },
   };
+  // Foreground reads are never held back by the sync budget, but they draw
+  // from it so background scans slow down while someone uses the mailbox.
+  function debitForegroundUsage(cost: number) {
+    if (!isGmail || !isEmailProviderRateLimitRedisConfigured()) {
+      return Promise.resolve();
+    }
+    return withLocalMailSyncBudget(
+      {
+        emailAccountId: accountId,
+        provider: "google",
+        priority: "current",
+        cost: Math.max(1, Math.min(cost, gmailPageCost(maxPageSize))),
+      },
+      async () => undefined,
+    ).catch(() => undefined);
+  }
+
+  async function mapProviderError(error: unknown) {
+    if (error instanceof LocalMailSyncPausedError) {
+      return throttled(error.retryAfterMs);
+    }
+    if (isProviderRateLimitModeError(error)) {
+      const retryAtMs = error.retryAt ? Date.parse(error.retryAt) : Number.NaN;
+      return throttled(
+        Number.isNaN(retryAtMs) ? 15_000 : retryAtMs - Date.now(),
+      );
+    }
+    const rateLimitProvider = isGmail ? "google" : "microsoft";
+    const providerError = normalizeThrottleHeaders(error);
+    const rateLimitDelayMs = getProviderRateLimitDelayMs({
+      error: providerError,
+      provider: rateLimitProvider,
+      attemptNumber: 1,
+    });
+    if (rateLimitDelayMs !== null) {
+      // Recording the mode makes every route for this account wait out the
+      // window instead of spending quota the provider has not restored yet.
+      try {
+        await recordProviderRateLimitFromError({
+          error: providerError,
+          emailAccountId: accountId,
+          provider: rateLimitProvider,
+          logger,
+          source: "mail-api",
+        });
+      } catch (recordError) {
+        logger.warn("Failed to record provider rate-limit state", {
+          error: recordError,
+        });
+      }
+      return throttled(rateLimitDelayMs);
+    }
+    const message = error instanceof Error ? error.message : "";
+    const lowered = message.toLowerCase();
+    if (
+      message.includes("401") ||
+      lowered.includes("unauthorized") ||
+      lowered.includes("invalid_grant") ||
+      lowered.includes("invalid access token")
+    ) {
+      return { status: "blocked_auth" as const };
+    }
+    return {
+      status: "paused" as const,
+      retryAfterMs: 1000,
+      reason: "unavailable" as const,
+    };
+  }
+
   return {
     ...source,
     async readChangesBatch({ session, reads, pageSize, signal }) {
@@ -449,7 +624,11 @@ async function catchUpCheckpoint(
       folderId,
       limit: 1,
     });
-    if (page.cursor) return page.cursor;
+    if (page.cursor) {
+      return provider.name === "google"
+        ? gmailHistoryCursor(page.cursor)
+        : page.cursor;
+    }
   } catch (error) {
     if (provider.name === "microsoft") throw error;
     // Fall back to the newest numeric Gmail history id we already fetched.
@@ -509,6 +688,21 @@ function flattenFolderScopes(folders: FolderScopeNode[]) {
   return scopes;
 }
 
+// A fresh Gmail cursor resumes a whole-mailbox snapshot listing. Bootstrap
+// enumerates the mailbox itself, so catch-up only needs the history from when
+// the scan began; resuming the snapshot would fetch every message again.
+function gmailHistoryCursor(cursor: string) {
+  const decoded = decodeMailboxSyncCursor(cursor, "google");
+  if (decoded.phase !== "snapshot") return cursor;
+  return encodeMailboxSyncCursor({
+    version: 1,
+    provider: "google",
+    phase: "delta",
+    historyId: decoded.historyId,
+    after: decoded.after,
+  });
+}
+
 function encodedGmailCursorFromMessages(
   messages: ParsedMessage[],
 ): string | null {
@@ -540,29 +734,63 @@ function isRejectedProviderRequest(error: unknown) {
   );
 }
 
-function mapProviderError(error: unknown) {
-  if (isProviderRateLimitModeError(error)) {
-    return {
-      status: "paused" as const,
-      retryAfterMs: 15_000,
-      reason: "throttled" as const,
-    };
-  }
-  const message = error instanceof Error ? error.message : "";
-  const lowered = message.toLowerCase();
-  if (
-    message.includes("401") ||
-    lowered.includes("unauthorized") ||
-    lowered.includes("invalid_grant")
-  ) {
-    return { status: "blocked_auth" as const };
-  }
+function throttled(retryAfterMs: number) {
   return {
     status: "paused" as const,
-    retryAfterMs: 1000,
-    reason: "unavailable" as const,
+    retryAfterMs: Math.max(1000, Math.ceil(retryAfterMs)),
+    reason: "throttled" as const,
   };
 }
+
+function gmailPageCost(pageSize: number) {
+  return gmailMailSyncCosts.list + pageSize * gmailMailSyncCosts.message;
+}
+
+// Without Redis there is no shared budget to draw from, so scans fall back to
+// the provider's own throttling instead of stalling forever.
+function withGmailSyncBudget<T>(
+  input: {
+    emailAccountId: string;
+    priority: "backfill" | "current";
+    cost: number;
+  },
+  operation: () => Promise<T>,
+) {
+  if (!isEmailProviderRateLimitRedisConfigured()) return operation();
+  return withLocalMailSyncBudget({ ...input, provider: "google" }, operation);
+}
+
+async function batchedMessages(provider: EmailProvider, keys: MessageKey[]) {
+  const fetched = await provider.getMessagesBatch(
+    keys.map((key) => key.messageId),
+  );
+  const byId = new Map(fetched.map((message) => [message.id, message]));
+  const messages: ParsedMessage[] = [];
+  const unresolved: HydrationUnresolved[] = [];
+  for (const key of keys) {
+    const message = byId.get(key.messageId);
+    // The batch path drops parts that failed for good, such as deleted mail.
+    if (message) messages.push(message);
+    else unresolved.push({ key, reason: "not_found" });
+  }
+  return { messages, unresolved };
+}
+
+async function sequentialMessages(provider: EmailProvider, keys: MessageKey[]) {
+  const messages: ParsedMessage[] = [];
+  const unresolved: HydrationUnresolved[] = [];
+  for (const key of keys) {
+    try {
+      messages.push(await provider.getMessage(key.messageId));
+    } catch (error) {
+      if (!isMissingProviderResource(error)) throw error;
+      unresolved.push({ key, reason: "not_found" });
+    }
+  }
+  return { messages, unresolved };
+}
+
+type HydrationUnresolved = { key: MessageKey; reason: "not_found" };
 
 function compileMailboxSearch(
   predicate: MailPredicate,

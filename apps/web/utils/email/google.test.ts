@@ -14,6 +14,7 @@ const {
   gmailDraftMock,
   gmailSignatureMock,
   bulkActionTrackingMock,
+  gmailMessageBatchMock,
 } = vi.hoisted(() => ({
   envMock: {
     NEXT_PUBLIC_AUTO_DRAFT_DISABLED: false,
@@ -39,6 +40,7 @@ const {
     publishBulkActionToTinybird: vi.fn().mockResolvedValue(undefined),
     updateEmailMessagesForSender: vi.fn().mockResolvedValue(undefined),
   },
+  gmailMessageBatchMock: { getMessagesBatch: vi.fn() },
 }));
 
 vi.mock("@/env", () => ({
@@ -48,6 +50,11 @@ vi.mock("@/env", () => ({
 vi.mock("@/utils/gmail/mail", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/utils/gmail/mail")>();
   return { ...actual, ...gmailMailMock };
+});
+
+vi.mock("@/utils/gmail/message", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/utils/gmail/message")>();
+  return { ...actual, ...gmailMessageBatchMock };
 });
 
 vi.mock("@/utils/gmail/draft", () => gmailDraftMock);
@@ -100,6 +107,36 @@ describe("GmailProvider.countMessages", () => {
     await expect(
       provider.countMessages({ labelId: "label-1" }),
     ).rejects.toThrow("exact message count");
+  });
+});
+
+describe("GmailProvider.getMessagesWithPagination", () => {
+  it("reads a listed page through batched requests instead of one request per message", async () => {
+    const ids = Array.from({ length: 150 }, (_, index) => `m${index}`);
+    const list = vi.fn().mockResolvedValue({
+      data: {
+        messages: ids.map((id) => ({ id, threadId: `t-${id}` })),
+        nextPageToken: "next",
+      },
+    });
+    const get = vi.fn();
+    gmailMessageBatchMock.getMessagesBatch.mockImplementation(
+      async ({ messageIds }: { messageIds: string[] }) =>
+        messageIds.map((id) => ({ id, threadId: `t-${id}` })),
+    );
+    const provider = new GmailProvider({
+      ...createGmailClient({ list, get }),
+      context: { _options: { auth: { credentials: { access_token: "t" } } } },
+    } as unknown as gmail_v1.Gmail);
+
+    const page = await provider.getMessagesWithPagination({ maxResults: 150 });
+
+    expect(page.messages.map((message) => message.id)).toEqual(ids);
+    expect(page.nextPageToken).toBe("next");
+    expect(get).not.toHaveBeenCalled();
+    for (const [input] of gmailMessageBatchMock.getMessagesBatch.mock.calls) {
+      expect(input.messageIds.length).toBeLessThanOrEqual(100);
+    }
   });
 });
 

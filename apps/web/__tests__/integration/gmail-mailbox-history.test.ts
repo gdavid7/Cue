@@ -5,8 +5,11 @@ import {
   encodeMailboxSyncCursor,
 } from "@/utils/email/mailbox-sync";
 import { createEmailProviderMailboxSource } from "@/utils/mail-api/source";
+import { createTestLogger } from "@/__tests__/helpers";
 
 vi.mock("server-only", () => ({}));
+
+const logger = createTestLogger();
 
 const RUN_INTEGRATION_TESTS = process.env.RUN_INTEGRATION_TESTS;
 const EMAIL = "gmail-history@example.com";
@@ -90,6 +93,7 @@ describe.skipIf(!RUN_INTEGRATION_TESTS)(
       ).not.toBe(EXPIRED_HISTORY_ID);
 
       const source = createEmailProviderMailboxSource({
+        logger,
         accountId: "gmail-history",
         provider: harness.provider,
       });
@@ -112,6 +116,7 @@ describe.skipIf(!RUN_INTEGRATION_TESTS)(
 
     it("requests a rebuild when the mailbox sync cursor is invalid", async () => {
       const source = createEmailProviderMailboxSource({
+        logger,
         accountId: "gmail-history",
         provider: harness.provider,
       });

@@ -701,7 +701,14 @@ export function createMailEngine(input: {
         });
       }
       if (enumerated.status !== "ok") {
-        await noteConnection(input.session.accountId, enumerated.status);
+        // A throttled page is the source pacing a long scan, not lost
+        // connectivity, so it must not flag the account as waiting to sync.
+        if (
+          enumerated.status !== "paused" ||
+          enumerated.reason !== "throttled"
+        ) {
+          await noteConnection(input.session.accountId, enumerated.status);
+        }
         break;
       }
       const catchUpFrom: SyncStreamPosition | null =
