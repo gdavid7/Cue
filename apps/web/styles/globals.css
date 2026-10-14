@@ -36,7 +36,7 @@
     --destructive: 0 100% 50%;
     --destructive-foreground: 210 40% 98%;
 
-    --ring: 215 20.2% 65.1%; /* slate-400 */
+    --ring: 215.4 16.3% 46.9%; /* slate-500, 3:1+ focus contrast */
 
     --radius: 0.5rem;
 
@@ -113,7 +113,7 @@
     --foreground: 0 0% 14.1%; /* #242424 */
 
     --muted: 0 0% 96.5%; /* #F6F6F6 */
-    --muted-foreground: 0 0% 51.8%; /* #848484 */
+    --muted-foreground: 0 0% 45%; /* #737373, 4.7:1 on white (WCAG AA) */
 
     --popover: 0 0% 100%; /* #FFFFFF */
     --popover-foreground: 0 0% 14.1%;
