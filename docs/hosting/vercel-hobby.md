@@ -105,6 +105,7 @@ Variables that start with `NEXT_PUBLIC_` are baked in at build time. After you c
 | `GOOGLE_PUBSUB_TOPIC_NAME` | `projects/<project-id>/topics/cue-gmail` | step 5. The build fails without it. If you skip push notifications, use any placeholder like `projects/none/topics/none`. |
 | `GOOGLE_PUBSUB_VERIFICATION_TOKEN` | 64 hex characters | `openssl rand -hex 32`, step 5. Leave it unset only if you skip Pub/Sub. |
 | `AUTH_ALLOWED_EMAILS` | `you@gmail.com,friend1@gmail.com,friend2@outlook.com` | Only these addresses can create an account. Comma-separated, case-insensitive. |
+| `NEXT_PUBLIC_BRAND_NAME` | `Cue` | The app name shown on the sign-in page, page titles and emails. Without it, the app shows "Inbox Zero". |
 | `NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS` | `true` | Turns off Stripe and Lemon Squeezy billing, paywalls, and upgrade prompts. Everyone gets every feature. |
 | `DEFAULT_LLMS` | see [AI provider](#ai-provider-free) | |
 | `GOOGLE_API_KEY` | `AIza…` | Gemini key from AI Studio |
