@@ -99,7 +99,7 @@ async function markOnboardingComplete(email: string) {
           [email],
         );
         if (account.rowCount === 1) {
-          // The first-run "Which looks like your inbox?" card and the "Remove
+          // The first-run "How should Cue split your inbox?" card and the "Remove
           // Cue's labels" card (hint ids from getInboxStyleHintId and
           // getCueLabelsHintId) would shift every mail spec's list down.
           for (const prefix of ["inbox-style:", "cue-labels:"]) {

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { type KeyboardEvent, useState } from "react";
 import { toast } from "sonner";
+import { toastSuccess } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -19,7 +20,6 @@ import { useAccount } from "@/providers/EmailAccountProvider";
 import { dismissHintAction } from "@/utils/actions/hints";
 import { applyInboxStyleAction } from "@/utils/actions/mail-split";
 import type { ApplyInboxStyleBody } from "@/utils/actions/mail-split.validation";
-import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import { getActionErrorMessage } from "@/utils/error";
 import {
   getDefaultInboxStyle,
@@ -29,8 +29,9 @@ import {
 } from "@/utils/split-inbox/inbox-styles";
 import { cn } from "@/utils";
 
-const TITLE = "Which looks like your inbox?";
-const REASSURANCE = "Cue adds matching tabs. Nothing in your mailbox is moved.";
+const TITLE = "How should Cue split your inbox?";
+const REASSURANCE =
+  "Cue adds matching tabs. Nothing in your mailbox is labelled or moved.";
 
 const STYLE_COPY: Record<
   InboxStyle,
@@ -57,32 +58,51 @@ const STYLE_COPY: Record<
  * Shown once per mailbox above the list, not as a dialog, so first-time mail
  * stays usable (and clickable) while the person decides.
  */
-export function InboxStyleCard({ onDone }: { onDone: () => void }) {
+export function InboxStyleCard({
+  ready,
+  onDone,
+}: {
+  /** False while the first page of mail is still loading. */
+  ready: boolean;
+  /** Called once a style is applied, to start the tour. */
+  onDone: () => void;
+}) {
   const { emailAccountId, provider } = useAccount();
   const { data: user, mutate: mutateUser } = useUser();
   const [chosen, setChosen] = useState<InboxStyle | null>(null);
   const [addCueTabs, setAddCueTabs] = useState(true);
-  // Hides the card at once; the hint saved below keeps it hidden next visit.
   const [isClosed, setIsClosed] = useState(false);
-  const { apply, isApplying } = useApplyInboxStyle(() => close());
-
   const hintId = getInboxStyleHintId(emailAccountId);
+  const { apply, isApplying } = useApplyInboxStyle(() => {
+    setIsClosed(true);
+    // The saved hint keeps the card hidden for good once a style is chosen.
+    dismissHintAction({ hintId }).then(() => mutateUser());
+    onDone();
+  });
+
   const options = getInboxStyleOptions(provider);
   if (
+    !ready ||
     isClosed ||
     !user ||
     options.length < 2 ||
-    user.dismissedHints.includes(hintId)
+    user.dismissedHints.includes(hintId) ||
+    isSnoozedThisSession(hintId)
   ) {
     return null;
   }
 
   const style = chosen ?? getDefaultInboxStyle(provider);
 
-  function close() {
+  // "Not now" is not a decision: the card returns next session, and the
+  // same choice stays in the split library meanwhile.
+  function snooze() {
     setIsClosed(true);
-    dismissHintAction({ hintId }).then(() => mutateUser());
-    onDone();
+    try {
+      sessionStorage.setItem(hintId, "snoozed");
+    } catch {
+      // Private mode or blocked storage: closing for this view is enough.
+    }
   }
 
   return (
@@ -111,7 +131,7 @@ export function InboxStyleCard({ onDone }: { onDone: () => void }) {
           size="xs-2"
           variant="ghost"
           disabled={isApplying}
-          onClick={close}
+          onClick={snooze}
         >
           Not now
         </Button>
@@ -187,7 +207,6 @@ function CueTabsCheckbox({
   onCheckedChange: (checked: boolean) => void;
   className?: string;
 }) {
-  const { provider } = useAccount();
   return (
     <label
       htmlFor={id}
@@ -205,9 +224,8 @@ function CueTabsCheckbox({
       <span>
         Also add &ldquo;Needs reply&rdquo; and &ldquo;Reading&rdquo; tabs.{" "}
         <span className="text-muted-foreground">
-          Cue sorts this mail inside Cue. Nothing changes in{" "}
-          {isMicrosoftProvider(provider) ? "Outlook" : "Gmail"}: no labels, no
-          moved emails.
+          Needs reply holds mail waiting on your answer; Reading holds
+          newsletters and promotions. Cue sorts them itself.
         </span>
       </span>
     </label>
@@ -228,6 +246,12 @@ function useApplyInboxStyle(onApplied: () => void) {
       return;
     }
     await mutateSettings();
+    toastSuccess({
+      description:
+        STYLE_COPY[input.style].tabCount > 0 || input.addCueTabs
+          ? "Tabs added"
+          : "Saved. Your mail stays in one inbox.",
+    });
     onApplied();
   };
 
@@ -254,10 +278,24 @@ function InboxStyleOptions({
   onChange: (style: InboxStyle) => void;
   className?: string;
 }) {
+  // Arrow keys move the choice, as in any radio group; Tab leaves the group.
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const step = ARROW_STEPS[event.key];
+    if (!step) return;
+    event.preventDefault();
+    const index = options.indexOf(value);
+    const next = options[(index + step + options.length) % options.length];
+    onChange(next);
+    event.currentTarget
+      .querySelector<HTMLButtonElement>(`[data-inbox-style="${next}"]`)
+      ?.focus();
+  };
+
   return (
     <div
       role="radiogroup"
       aria-label="Inbox style"
+      onKeyDown={onKeyDown}
       className={cn("grid grid-cols-2 gap-2 sm:max-w-md", className)}
     >
       {options.map((style) => {
@@ -269,6 +307,8 @@ function InboxStyleOptions({
             type="button"
             role="radio"
             aria-checked={checked}
+            tabIndex={checked ? 0 : -1}
+            data-inbox-style={style}
             onClick={() => onChange(style)}
             className={cn(
               "flex flex-col gap-2 rounded-lg border p-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -324,4 +364,19 @@ function StyleThumbnail({ tabCount }: { tabCount: number }) {
         ))}
     </span>
   );
+}
+
+const ARROW_STEPS: Record<string, number> = {
+  ArrowRight: 1,
+  ArrowDown: 1,
+  ArrowLeft: -1,
+  ArrowUp: -1,
+};
+
+function isSnoozedThisSession(hintId: string) {
+  try {
+    return sessionStorage.getItem(hintId) === "snoozed";
+  } catch {
+    return false;
+  }
 }

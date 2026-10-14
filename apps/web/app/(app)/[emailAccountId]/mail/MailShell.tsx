@@ -1622,7 +1622,10 @@ export function MailShell() {
                 />
               )}
               {showSplitTabs && !isAllAccounts && (
-                <InboxStyleCard onDone={() => setIsTourOpen(true)} />
+                <InboxStyleCard
+                  ready={threads.length > 0 || (!isLoading && !isFirstSync)}
+                  onDone={() => setIsTourOpen(true)}
+                />
               )}
               {showSplitTabs && !isAllAccounts && <CueLabelsCard />}
               {isTourOpen && (

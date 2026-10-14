@@ -69,7 +69,7 @@ test("a new user lands in mail, picks an inbox style, and gets the tour", async 
   });
 
   const card = page.getByRole("region", {
-    name: "Which looks like your inbox?",
+    name: "How should Cue split your inbox?",
   });
   await expect(card).toBeVisible({ timeout: 60_000 });
   const cueTabs = card.getByRole("checkbox", { name: /Needs reply/ });
