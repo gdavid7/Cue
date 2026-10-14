@@ -1,4 +1,5 @@
 import { isMicrosoftProvider } from "@/utils/email/provider-types";
+import { isMailPath } from "@/utils/mail-url";
 
 export type MailEngineRuntimeMode = "desktop-ipc" | "browser" | "unavailable";
 
@@ -17,6 +18,7 @@ export function shouldStartMailEngine(input: {
   desktopIpc: boolean;
 }): boolean {
   if (input.desktopIpc || input.browserRequested) return true;
+  if (input.pathname && isMailPath(input.pathname)) return true;
   const segments = input.pathname?.split("/").filter(Boolean) ?? [];
   if (segments.length === 2) {
     return [
