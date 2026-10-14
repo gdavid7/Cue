@@ -527,11 +527,20 @@ export function createMailEngine(input: {
             purpose: work.purpose,
           });
           if (hydrated.status === "ok") {
+            // A message the provider no longer has was deleted after the
+            // last sync that saw it; keeping it leaves a row that never loads.
+            const gone = hydrated.value.unresolved
+              .filter((item) => item.reason === "not_found")
+              .map((item) => ({
+                kind: "message_deleted" as const,
+                key: item.key,
+                evidence: `hydrate_not_found:${work.jobId}`.slice(0, 1024),
+              }));
             await store.applyHydration({
               session: work.session,
               requestId: work.jobId,
               attemptId: work.attemptId,
-              changes: hydrated.value.changes,
+              changes: [...hydrated.value.changes, ...gone],
               bodies: hydrated.value.bodies,
             });
             await refreshViews();
