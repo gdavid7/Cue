@@ -24,6 +24,8 @@ import {
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useCalendars } from "@/hooks/useCalendars";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { toastError, toastSuccess } from "@/components/Toast";
+import { getActionErrorMessage } from "@/utils/error";
 import { useState } from "react";
 import type { GetCalendarsResponse } from "@/app/api/user/calendars/route";
 import { TypographyP } from "@/components/Typography";
@@ -83,7 +85,18 @@ export function CalendarConnectionCard({
   });
 
   const { execute: executeDisconnect, isExecuting: isDisconnecting } =
-    useAction(disconnectCalendarAction.bind(null, emailAccountId));
+    useAction(disconnectCalendarAction.bind(null, emailAccountId), {
+      onSuccess: () => {
+        toastSuccess({ description: "Calendar disconnected" });
+        mutate();
+      },
+      onError: (error) => {
+        toastError({
+          title: "Couldn't disconnect calendar",
+          description: getActionErrorMessage(error.error),
+        });
+      },
+    });
   const { execute: executeToggle } = useAction(
     toggleCalendarAction.bind(null, emailAccountId),
   );
@@ -98,7 +111,6 @@ export function CalendarConnectionCard({
       })
     ) {
       executeDisconnect({ connectionId: connection.id });
-      mutate();
     }
   };
 
@@ -190,9 +202,9 @@ export function CalendarConnectionCard({
                   onSelect={() => {
                     handleDisconnect();
                   }}
-                  className="text-destructive focus:text-destructive"
+                  variant="destructive"
                 >
-                  <Trash2Icon className="mr-2 size-4" />
+                  <Trash2Icon />
                   Disconnect
                 </DropdownMenuItem>
               </DropdownMenuContent>

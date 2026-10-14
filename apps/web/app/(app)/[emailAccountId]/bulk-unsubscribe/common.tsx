@@ -543,7 +543,7 @@ export function MoreDropdown<T extends Row>({
           <DropdownMenuSeparator />
 
           <DropdownMenuItem
-            className="text-destructive focus:text-destructive"
+            variant="destructive"
             onClick={async () => {
               const yes = await confirm({
                 title: `Delete all emails from ${item.fromName || item.name}?`,

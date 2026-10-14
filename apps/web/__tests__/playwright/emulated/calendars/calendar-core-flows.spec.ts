@@ -1,6 +1,7 @@
 import { expect } from "@playwright/test";
 import { test } from "../playwright-test";
 import {
+  getCalendarConnectionCount,
   getCalendarTestState,
   openCalendars,
   PLAYWRIGHT_TEST_EMAIL,
@@ -48,6 +49,41 @@ test("changes which Google calendar is used for availability", async ({
       name: "0 of 1 calendars selected for availability",
     }),
   ).toBeVisible({ timeout: 120_000 });
+});
+
+test("disconnects a calendar after confirming from the options menu", async ({
+  page,
+}) => {
+  test.setTimeout(360_000);
+  await openCalendars(page);
+
+  const options = page.getByRole("button", { name: "Calendar options" });
+  await expect(options).toBeVisible({ timeout: 60_000 });
+  await options.click();
+  await page.getByRole("menuitem", { name: "Disconnect" }).click();
+
+  const confirmation = page.getByRole("alertdialog");
+  await expect(confirmation).toBeVisible();
+
+  // A slow disconnect must still refresh the list once it lands, rather than
+  // refetching before the connection is deleted.
+  await page.route(
+    (url) => url.pathname.endsWith("/calendars"),
+    async (route) => {
+      if (route.request().headers()["next-action"]) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+      await route.continue();
+    },
+  );
+  await confirmation.getByRole("button", { name: "Disconnect" }).click();
+
+  await expect(confirmation).toBeHidden();
+  await expect
+    .poll(() => getCalendarConnectionCount(), { timeout: 60_000 })
+    .toBe(0);
+  await expect(options).toBeHidden({ timeout: 20_000 });
+  await expect(page.getByText("Calendar disconnected")).toBeVisible();
 });
 
 test("persists the booking link and scheduling timezone", async ({ page }) => {

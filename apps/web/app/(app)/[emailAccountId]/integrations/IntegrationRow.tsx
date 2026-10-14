@@ -359,7 +359,7 @@ export function IntegrationRow({
                 <DropdownMenuItem
                   onClick={handleDisconnect}
                   disabled={disconnecting}
-                  className="text-red-600"
+                  variant="destructive"
                 >
                   {getDisconnectLabel({ isCustom, disconnecting })}
                 </DropdownMenuItem>

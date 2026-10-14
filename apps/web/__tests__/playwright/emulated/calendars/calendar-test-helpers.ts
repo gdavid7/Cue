@@ -119,6 +119,23 @@ export async function getCalendarTestState() {
   }
 }
 
+export async function getCalendarConnectionCount() {
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
+  try {
+    const result = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count
+       FROM "CalendarConnection" connection
+       JOIN "EmailAccount" ea ON ea.id = connection."emailAccountId"
+       WHERE ea.email = $1`,
+      [PLAYWRIGHT_TEST_EMAIL],
+    );
+    return result.rows[0]?.count ?? 0;
+  } finally {
+    await client.end();
+  }
+}
+
 async function resetCalendarState(client: Client) {
   await client.query(
     `DELETE FROM "CalendarConnection"
