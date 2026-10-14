@@ -165,7 +165,7 @@ function AccountOptionsDropdown({
       });
       onAccountDeleted();
       if (emailAccount.isPrimary) {
-        await logOut("/login");
+        await logOut();
       } else {
         try {
           await clearLocalMailAccountState(emailAccount.id);

@@ -9,7 +9,7 @@ export function WelcomeUpgradeNav() {
       <div className="flex justify-end">
         <Button
           onClick={() => {
-            logOut("/");
+            logOut();
           }}
           variant="ghostMuted"
           size="sm"

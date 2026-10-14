@@ -432,7 +432,25 @@ describe("wipeOpfsMailEngine", () => {
         }),
       },
     });
-    await expect(wipeOpfsMailEngine()).resolves.toBeUndefined();
+    await expect(wipeOpfsMailEngine()).resolves.toBe(true);
+  });
+
+  it("reports a directory that stays locked through every retry", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", {
+      storage: {
+        getDirectory: async () => ({
+          removeEntry: async () => {
+            throw Object.assign(new Error("busy"), {
+              name: "InvalidStateError",
+            });
+          },
+        }),
+      },
+    });
+    const done = wipeOpfsMailEngine();
+    await vi.runAllTimersAsync();
+    await expect(done).resolves.toBe(false);
   });
 
   it("retries removeEntry while the SAHPool still holds the directory", async () => {

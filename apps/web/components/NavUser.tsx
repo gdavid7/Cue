@@ -257,7 +257,7 @@ export function NavUser() {
           <DropdownMenuItem
             onSelect={() => {
               closeMobileSidebar("left-sidebar");
-              logOut(window.location.origin);
+              logOut();
             }}
           >
             <LogOutIcon className="mr-2 size-4" />

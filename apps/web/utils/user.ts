@@ -1,30 +1,37 @@
 "use client";
 
-import { clearOfflineMailCache } from "@/utils/offline/clear-mail-cache";
+import { toastLoading } from "@/components/Toast";
 import { signOut } from "@/utils/auth-client";
 import { clearLastEmailAccountAction } from "@/utils/actions/email-account-cookie";
 import { redirectToSafeUrl } from "@/utils/redirect";
-import { closeActiveMailEngine } from "@/utils/mail-engine/active-client";
 import { wipeLocalMailbox } from "@/utils/mail-engine/wipe-local-mailbox";
 import { clearLocalReplyDrafts } from "@/utils/mail-engine/reply-drafts";
 import { clearPersistedSwrCache } from "@/utils/swr-persistence";
 
-export async function logOut(callbackUrl?: string) {
-  await closeActiveMailEngine();
-  clearLastEmailAccountAction();
+// Enough for a normal wipe to finish before leaving. A slower one stays marked
+// and the next mail engine finishes it before opening.
+const LOCAL_WIPE_WAIT_MS = 1500;
+
+let signingOut: Promise<void> | undefined;
+
+/** Calls made while a sign-out is under way join it instead of starting over. */
+export function logOut(callbackUrl = "/login") {
+  signingOut ??= signOutAndLeave(callbackUrl);
+  return signingOut;
+}
+
+async function signOutAndLeave(callbackUrl: string) {
+  toastLoading("Signing out…");
   clearPersistedSwrCache();
   clearLocalReplyDrafts();
-  await clearOfflineMailCache();
-  await wipeLocalMailbox();
+  const localWipe = wipeLocalMailbox();
+  clearLastEmailAccountAction();
+  // Leaving before the session cookie is cleared would land back in the app.
+  await signOut().catch(() => undefined);
+  await Promise.race([localWipe, delay(LOCAL_WIPE_WAIT_MS)]);
+  redirectToSafeUrl(callbackUrl);
+}
 
-  await signOut({
-    fetchOptions: {
-      onSuccess: () => {
-        redirectToSafeUrl(callbackUrl);
-      },
-      onError: () => {
-        redirectToSafeUrl(callbackUrl);
-      },
-    },
-  });
+function delay(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }

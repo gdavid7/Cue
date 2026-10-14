@@ -202,7 +202,7 @@ describe("MailAccountSwitcher", () => {
     expect(mockOpenSettings).toHaveBeenCalled();
 
     selectMenuItem(screen.getByRole("menuitem", { name: "Sign out" }));
-    expect(mockLogOut).toHaveBeenCalledWith(window.location.origin);
+    expect(mockLogOut).toHaveBeenCalledTimes(1);
   });
 
   it.each([
