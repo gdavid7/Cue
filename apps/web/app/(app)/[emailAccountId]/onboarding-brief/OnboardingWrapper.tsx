@@ -10,7 +10,7 @@ export function OnboardingWrapper({
   return (
     <div
       className={cn(
-        "flex flex-col justify-center sm:px-6 sm:py-20 text-gray-900 bg-slate-50 min-h-svh",
+        "flex flex-col justify-center sm:px-6 sm:py-20 text-foreground bg-muted/40 min-h-svh",
         className,
       )}
     >
