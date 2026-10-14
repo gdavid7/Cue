@@ -137,7 +137,7 @@ export function useCommandPaletteCommands({
         section: "settings",
         priority: 6,
         keywords: ["log out", "logout", "sign out", "exit"],
-        action: () => logOut(window.location.origin),
+        action: () => logOut(),
       },
     ];
 

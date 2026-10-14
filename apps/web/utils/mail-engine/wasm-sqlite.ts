@@ -105,30 +105,33 @@ function createTransaction(database: Database): SqlTransaction {
   };
 }
 
-export async function wipeOpfsMailEngine() {
+/** Resolves false when the mailbox is still on disk after every retry. */
+export async function wipeOpfsMailEngine(): Promise<boolean> {
   if (
     typeof navigator === "undefined" ||
     !("storage" in navigator) ||
     !("getDirectory" in navigator.storage)
   ) {
-    return;
+    return true;
   }
   let root: FileSystemDirectoryHandle;
   try {
     root = await navigator.storage.getDirectory();
   } catch {
-    return;
+    // Without OPFS access the engine could not have stored anything either.
+    return true;
   }
   for (let attempt = 0; attempt < 8; attempt++) {
     try {
       await root.removeEntry(MAIL_ENGINE_OPFS_DIRECTORY, { recursive: true });
-      return;
+      return true;
     } catch (error) {
-      if (isMissingOpfsEntry(error)) return;
-      if (attempt === 7) return;
+      if (isMissingOpfsEntry(error)) return true;
+      if (attempt === 7) return false;
       await new Promise((resolve) => setTimeout(resolve, 25 * 2 ** attempt));
     }
   }
+  return false;
 }
 
 function isMissingOpfsEntry(error: unknown) {

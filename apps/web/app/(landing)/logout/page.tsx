@@ -7,7 +7,7 @@ import { SignInLayout } from "@/components/layouts/SignInLayout";
 
 export default function LogoutPage() {
   useEffect(() => {
-    logOut("/login");
+    logOut();
   }, []);
 
   return (

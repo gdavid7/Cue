@@ -25,6 +25,7 @@ import {
   type WorkerResponse,
 } from "@/utils/mail-engine/worker-protocol";
 import { browserStoragePressure } from "@/utils/mail-engine/storage-pressure";
+import { finishPendingLocalMailboxWipe } from "@/utils/mail-engine/wipe-local-mailbox";
 
 export { browserMailEngineCapabilities };
 
@@ -39,6 +40,8 @@ export type BrowserMailEngine = Omit<MailEngine, "ensureAccount"> & {
 export async function createBrowserMailEngine(
   input: BrowserEngineStart,
 ): Promise<BrowserMailEngine> {
+  // The previous user's mailbox must be gone before this one opens it.
+  await finishPendingLocalMailboxWipe();
   const start: BrowserEngineStart = {
     ...input,
     maxPendingOperations:
@@ -134,6 +137,7 @@ async function createWorkerOwnedEngine(
       listeners: Set<() => void>;
     }
   >();
+  let closing: Promise<void> | undefined;
 
   worker.addEventListener("message", (event: MessageEvent<WorkerResponse>) => {
     const message = event.data;
@@ -250,17 +254,28 @@ async function createWorkerOwnedEngine(
     inspect: () => callWorker(worker, pending, "inspect", []),
     runUntil: (deadlineMs) =>
       callWorker(worker, pending, "runUntil", [deadlineMs]),
-    async close() {
-      try {
-        await request(worker, pending, {
-          id: crypto.randomUUID(),
-          type: "close",
-        });
-      } finally {
-        // SAHPool keeps OPFS handles until the worker is gone, even if the
-        // graceful close RPC fails.
-        worker.terminate();
-      }
+    // Sign-out closes the engine from the host and through the active client
+    // at once; both callers must share one close or one waits forever on a
+    // worker the other terminated.
+    close() {
+      closing ??= (async () => {
+        try {
+          await request(worker, pending, {
+            id: crypto.randomUUID(),
+            type: "close",
+          });
+        } finally {
+          // SAHPool keeps OPFS handles until the worker is gone, even if the
+          // graceful close RPC fails.
+          worker.terminate();
+          // A terminated worker never answers, so settle whatever still waits.
+          for (const waiter of pending.values()) {
+            waiter.reject(new Error("mail engine worker closed"));
+          }
+          pending.clear();
+        }
+      })();
+      return closing;
     },
   };
 }

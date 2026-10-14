@@ -58,7 +58,7 @@ export function DeleteSection() {
     toast.promise(
       async () => {
         const result = await executeDeleteAccount();
-        await logOut("/");
+        await logOut();
         if (result?.serverError) throw new Error(result.serverError);
       },
       {

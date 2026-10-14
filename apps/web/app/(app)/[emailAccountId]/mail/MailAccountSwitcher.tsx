@@ -291,10 +291,7 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
               <Kbd className="ml-auto">{getShortcutHint("help")}</Kbd>
             </DropdownMenuItem>
           ) : null}
-          <DropdownMenuItem
-            className={rowClassName}
-            onSelect={() => logOut(window.location.origin)}
-          >
+          <DropdownMenuItem className={rowClassName} onSelect={() => logOut()}>
             <LogOutIcon className="size-4 text-muted-foreground" />
             Sign out
           </DropdownMenuItem>

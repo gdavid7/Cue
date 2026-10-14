@@ -165,11 +165,7 @@ export function SettingsContent() {
               <ItemTitle>Sign out</ItemTitle>
             </ItemContent>
             <ItemActions>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => logOut(window.location.origin)}
-              >
+              <Button variant="outline" size="sm" onClick={() => logOut()}>
                 Sign out
               </Button>
             </ItemActions>

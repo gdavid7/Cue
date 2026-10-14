@@ -375,11 +375,7 @@ function MobileSheetFooter({ onClose }: { onClose: () => void }) {
         <SettingsIcon className="size-4 shrink-0 text-muted-foreground" />
         Settings
       </button>
-      <button
-        type="button"
-        className={rowClassName}
-        onClick={() => logOut(window.location.origin)}
-      >
+      <button type="button" className={rowClassName} onClick={() => logOut()}>
         <LogOutIcon className="size-4 shrink-0 text-muted-foreground" />
         Sign out
       </button>
