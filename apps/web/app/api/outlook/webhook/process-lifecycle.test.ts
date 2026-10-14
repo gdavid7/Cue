@@ -10,7 +10,10 @@ import {
 import { createTestLogger } from "@/__tests__/helpers";
 import prisma from "@/utils/prisma";
 import { getWebhookEmailAccount } from "@/utils/webhook/validate-webhook-account";
-import { createManagedOutlookSubscription } from "@/utils/outlook/subscription-manager";
+import {
+  createManagedOutlookSubscription,
+  renewManagedOutlookSubscription,
+} from "@/utils/outlook/subscription-manager";
 import { backfillRecentOutlookMessages } from "@/utils/outlook/backfill-recent-messages";
 import { processOutlookLifecycleNotification } from "@/app/api/outlook/webhook/process-lifecycle";
 
@@ -29,6 +32,7 @@ vi.mock("@/utils/webhook/validate-webhook-account", () => ({
 }));
 vi.mock("@/utils/outlook/subscription-manager", () => ({
   createManagedOutlookSubscription: vi.fn(),
+  renewManagedOutlookSubscription: vi.fn(),
 }));
 vi.mock("@/utils/outlook/backfill-recent-messages", () => ({
   backfillRecentOutlookMessages: vi.fn(),
@@ -80,12 +84,16 @@ describe("processOutlookLifecycleNotification", () => {
     expect(createManagedOutlookSubscription).not.toHaveBeenCalled();
   });
 
-  it("force refreshes the subscription when reauthorization is required", async () => {
+  it("renews the subscription in place when reauthorization is required", async () => {
     vi.mocked(getWebhookEmailAccount).mockResolvedValue({
       id: "email-account-id",
       email: "user@example.com",
       watchEmailsSubscriptionId: "current-subscription-id",
     } as any);
+    vi.mocked(renewManagedOutlookSubscription).mockResolvedValue({
+      status: "renewed",
+      subscriptionId: "current-subscription-id",
+    });
 
     await processOutlookLifecycleNotification({
       notification: {
@@ -95,12 +103,38 @@ describe("processOutlookLifecycleNotification", () => {
       logger,
     });
 
-    expect(createManagedOutlookSubscription).toHaveBeenCalledWith({
+    expect(renewManagedOutlookSubscription).toHaveBeenCalledWith({
       emailAccountId: "email-account-id",
+      subscriptionId: "current-subscription-id",
       logger: expect.anything(),
-      forceRefresh: true,
     });
+    expect(createManagedOutlookSubscription).not.toHaveBeenCalled();
     expect(backfillRecentOutlookMessages).not.toHaveBeenCalled();
+  });
+
+  it("backfills when reauthorization had to replace a subscription that was gone", async () => {
+    vi.mocked(getWebhookEmailAccount).mockResolvedValue({
+      id: "email-account-id",
+      email: "user@example.com",
+      watchEmailsSubscriptionId: "current-subscription-id",
+    } as any);
+    vi.mocked(prisma.emailMessage.findFirst).mockResolvedValue(null);
+    vi.mocked(renewManagedOutlookSubscription).mockResolvedValue({
+      status: "recreated",
+      subscriptionId: "new-subscription-id",
+    });
+
+    await processOutlookLifecycleNotification({
+      notification: {
+        subscriptionId: "current-subscription-id",
+        lifecycleEvent: "reauthorizationRequired",
+      } as any,
+      logger,
+    });
+
+    expect(backfillRecentOutlookMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ subscriptionId: "new-subscription-id" }),
+    );
   });
 
   it("recreates the subscription and backfills after subscriptionRemoved", async () => {

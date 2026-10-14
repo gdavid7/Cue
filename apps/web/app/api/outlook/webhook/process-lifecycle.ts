@@ -1,4 +1,7 @@
-import { createManagedOutlookSubscription } from "@/utils/outlook/subscription-manager";
+import {
+  createManagedOutlookSubscription,
+  renewManagedOutlookSubscription,
+} from "@/utils/outlook/subscription-manager";
 import { backfillRecentOutlookMessages } from "@/utils/outlook/backfill-recent-messages";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
@@ -78,11 +81,22 @@ export async function processOutlookLifecycleNotification({
       log.warn(
         "Received Outlook lifecycle reauthorization required notification",
       );
-      await createManagedOutlookSubscription({
+      const renewal = await renewManagedOutlookSubscription({
         emailAccountId: emailAccount.id,
+        subscriptionId:
+          emailAccount.watchEmailsSubscriptionId || notification.subscriptionId,
         logger: log,
-        forceRefresh: true,
       });
+      if (renewal.status === "recreated") {
+        await backfillRecentOutlookMessages({
+          emailAccountId: emailAccount.id,
+          emailAddress: emailAccount.email,
+          subscriptionId: renewal.subscriptionId,
+          after: await getLifecycleReconcileStartDate(emailAccount.id),
+          maxMessages: OUTLOOK_LIFECYCLE_RECONCILE_MAX_MESSAGES,
+          logger: log,
+        });
+      }
       return;
     }
 

@@ -34,6 +34,29 @@ export async function watchOutlook(client: Client, logger: Logger) {
   };
 }
 
+/**
+ * Extends an existing subscription, which Microsoft recommends over deleting
+ * and recreating it (e.g. on reauthorizationRequired).
+ */
+export async function renewOutlookWatch(
+  client: Client,
+  subscriptionId: string,
+  logger: Logger,
+) {
+  const subscription: Subscription = await withMicrosoftGraphWriteRetry(
+    () =>
+      client.api(`/subscriptions/${subscriptionId}`).patch({
+        expirationDateTime: addDays(new Date(), 3).toISOString(),
+      }),
+    logger,
+  );
+
+  return {
+    id: subscription.id ?? subscriptionId,
+    expirationDateTime: subscription.expirationDateTime,
+  };
+}
+
 export async function unwatchOutlook(
   client: Client,
   subscriptionId: string,
