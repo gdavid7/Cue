@@ -21,7 +21,7 @@ export function LearnedPatternsSetting() {
   return (
     <SettingCard
       title="Learned patterns"
-      description="View the patterns the assistant has learned from your email history."
+      description="View the patterns Cue has learned from your email history."
       right={
         <Dialog>
           <DialogTrigger asChild>
@@ -34,12 +34,12 @@ export function LearnedPatternsSetting() {
             <DialogHeader>
               <DialogTitle>Learned patterns</DialogTitle>
               <DialogDescription>
-                When the AI processes your emails, it learns which senders or
-                email types consistently match the same rules. For example, it
-                might learn that emails from newsletter@example.com always match
-                your "Newsletter" rule. These learned patterns help the AI make
-                faster, more accurate decisions over time. You can view, edit,
-                or remove patterns that have been learned.
+                As Cue processes your emails, it learns which senders or email
+                types consistently match the same rules. For example, it might
+                learn that emails from newsletter@example.com always match your
+                "Newsletter" rule. These learned patterns help Cue make faster,
+                more accurate decisions over time. You can view, edit, or remove
+                patterns that have been learned.
               </DialogDescription>
             </DialogHeader>
             <div className="min-w-0 overflow-y-auto">

@@ -224,7 +224,7 @@ export function Chat({
       <PromptInputTextarea
         data-testid="chat-input"
         value={input}
-        placeholder="Ask me anything"
+        placeholder="Ask Cue about your mail, or tell it what to do"
         onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
           setInput(e.currentTarget.value)
         }
@@ -322,7 +322,6 @@ export function Chat({
           messages={messages}
           persistedMessageIds={persistedMessageIds}
           setMessages={setMessages}
-          setInput={setInput}
           regenerate={regenerate}
           context={context}
           setContext={setContext}
@@ -353,7 +352,6 @@ function ChatMessagesView({
   messages,
   persistedMessageIds,
   setMessages,
-  setInput,
   regenerate,
   context,
   setContext,
@@ -363,7 +361,6 @@ function ChatMessagesView({
   messages: ChatMessage[];
   persistedMessageIds: Set<string>;
   setMessages: UseChatHelpers<ChatMessage>["setMessages"];
-  setInput: (input: string) => void;
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
   context: MessageContext | null;
   setContext: (context: MessageContext | null) => void;
@@ -377,7 +374,6 @@ function ChatMessagesView({
         messages={messages}
         persistedMessageIds={persistedMessageIds}
         setMessages={setMessages}
-        setInput={setInput}
         regenerate={regenerate}
         isArtifactVisible={false}
         footer={
@@ -407,7 +403,12 @@ function ChatMessagesView({
   );
 }
 
-const CHAT_EXAMPLES = ["Help me handle my inbox today"];
+const CHAT_EXAMPLES = [
+  "Help me handle my inbox today",
+  "What still needs my reply?",
+  "What's on my calendar this week?",
+  "Show me my rules and what they do",
+];
 
 function NewChatView({
   firstName,

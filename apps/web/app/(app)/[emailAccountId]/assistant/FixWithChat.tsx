@@ -157,7 +157,7 @@ export function FixWithChat({
 
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Improve Rules</DialogTitle>
+          <DialogTitle>Fix how Cue sorted this</DialogTitle>
         </DialogHeader>
 
         <LoadingContent loading={isLoading} error={error}>
@@ -173,9 +173,9 @@ export function FixWithChat({
                 <span className="text-sm font-medium">Selected rule:</span>
                 <Badge variant="secondary">
                   {selectedRuleId === NEW_RULE_ID
-                    ? "✨ New rule"
+                    ? "New rule"
                     : selectedRuleId === NONE_RULE_ID
-                      ? "❌ None"
+                      ? "None"
                       : data.find((r) => r.id === selectedRuleId)?.name ||
                         "Unknown"}
                 </Badge>
@@ -199,8 +199,7 @@ export function FixWithChat({
                   autoFocus
                 />
                 <p id="explanation-help" className="mt-1 text-xs text-gray-500">
-                  Providing an explanation helps the AI understand your intent
-                  better
+                  An explanation helps Cue understand what you meant.
                 </p>
               </div>
 
@@ -247,10 +246,10 @@ function RuleMismatch({
       <div className="mt-4">
         <ButtonList
           title="Which rule did you expect it to match?"
-          emptyMessage="You haven't created any rules yet!"
+          emptyMessage="You don't have any rules yet."
           items={[
-            { id: NONE_RULE_ID, name: "❌ None" },
-            { id: NEW_RULE_ID, name: "✨ New rule" },
+            { id: NONE_RULE_ID, name: "None" },
+            { id: NEW_RULE_ID, name: "New rule" },
             ...rules,
           ]}
           onSelect={onSelectExpectedRuleId}

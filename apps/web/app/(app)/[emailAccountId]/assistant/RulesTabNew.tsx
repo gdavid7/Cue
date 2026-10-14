@@ -8,8 +8,8 @@ export function RulesTab() {
     <div>
       <div className="flex items-center mb-2 justify-between gap-2">
         <MutedText className="hidden sm:block">
-          Your assistant automatically organizes incoming emails using these
-          rules.
+          Cue checks each new email against these rules. Some sort mail into
+          Cue's tabs; others act on it, like labeling or archiving.
         </MutedText>
 
         <div className="flex shrink-0 items-center gap-2">

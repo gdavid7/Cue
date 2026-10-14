@@ -19,7 +19,7 @@ export function AboutSetting() {
   return (
     <SettingCard
       title="Personal instructions"
-      description="Tell the AI about yourself and how you'd like it to handle your emails."
+      description="Tell Cue about yourself and how you'd like it to handle your email."
       right={
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
@@ -31,8 +31,8 @@ export function AboutSetting() {
             <DialogHeader>
               <DialogTitle>Personal instructions</DialogTitle>
               <DialogDescription>
-                Tell the AI about yourself and how you'd like it to handle your
-                emails.
+                Tell Cue about yourself and how you'd like it to handle your
+                email.
               </DialogDescription>
             </DialogHeader>
 

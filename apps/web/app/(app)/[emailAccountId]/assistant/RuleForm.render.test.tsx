@@ -206,6 +206,26 @@ describe("RuleForm", () => {
     expect(screen.getAllByDisplayValue(/@?example\.com/)).toHaveLength(4);
   });
 
+  it("doesn't greet a blank new rule with a missing-condition error", async () => {
+    render(
+      <RuleForm
+        alwaysEditMode
+        rule={{
+          name: "",
+          actions: [],
+          conditions: [],
+          runOnThreads: true,
+        }}
+      />,
+    );
+
+    // Validation runs on mount; the error must wait for the user.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByText("You must have at least one condition")).toBe(
+      null,
+    );
+  });
+
   function renderLabelRuleAndOpenActionTypeDropdown() {
     render(
       <RuleForm

@@ -195,8 +195,8 @@ export function ActionAttachmentsField({
             value={attachmentSources}
             onChange={onAttachmentSourcesChange}
             triggerLabel="Select sources for AI"
-            title="Select sources for AI to search"
-            description="Choose files or folders the AI can search after you save."
+            title="Select sources for Cue to search"
+            description="Choose files or folders Cue can search after you save."
             allowFolderSelection
           />
         </div>

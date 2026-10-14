@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useRouter } from "next/navigation";
@@ -322,12 +323,16 @@ export function RuleForm({
     ],
   );
 
+  // Re-check conditions as the user edits them, but not on mount: a blank
+  // new rule shouldn't open with an error the user hasn't caused yet.
   const conditions = watch("conditions");
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: needed
+  const conditionsKey = JSON.stringify(conditions);
+  const initialConditionsKey = useRef(conditionsKey);
   useEffect(() => {
+    if (conditionsKey === initialConditionsKey.current) return;
+    initialConditionsKey.current = "";
     trigger("conditions");
-  }, [conditions]);
+  }, [conditionsKey, trigger]);
 
   const actionErrors = useMemo(() => {
     const actionErrors: string[] = [];
@@ -708,14 +713,24 @@ function NotifyChannelRow({
   const selectValue = selectedChannelIsConnected ? (value ?? "off") : "off";
 
   const channelsPath = prefixPath(emailAccountId, "/channels");
+  // Name the real app: "chat" alone reads as Cue's own Chat.
+  const appNames = [
+    ...new Set(
+      (hasChannels
+        ? connectedChannels.map((channel) => channel.provider)
+        : availableProviders
+      ).map(getMessagingProviderName),
+    ),
+  ].join(" or ");
+  const title = `Notify in ${appNames}`;
   const draftsNote = hasDraftToChat
-    ? "Drafts also go to chat — configured in actions above."
+    ? `Drafts also go to ${appNames} — configured in actions above.`
     : undefined;
 
   if (!hasChannels) {
     return (
       <AdvancedRow
-        title="Notify in chat"
+        title={title}
         description="Send a message when this rule matches."
         note={draftsNote}
       >
@@ -739,7 +754,7 @@ function NotifyChannelRow({
 
   return (
     <AdvancedRow
-      title="Notify in chat"
+      title={title}
       description="Send a message when this rule matches."
       note={draftsNote}
     >

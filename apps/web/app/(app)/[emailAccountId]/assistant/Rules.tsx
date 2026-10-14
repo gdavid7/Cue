@@ -266,11 +266,18 @@ export function Rules({
                         />
                       </TableCell>
                       <TableCell className="p-2 sm:p-4">
-                        <ActionBadges
-                          actions={rule.actions}
-                          provider={provider}
-                          labels={userLabels}
-                        />
+                        {rule.actions.length ? (
+                          <ActionBadges
+                            actions={rule.actions}
+                            provider={provider}
+                            labels={userLabels}
+                          />
+                        ) : (
+                          // These rules only sort mail into Cue's own tabs.
+                          <span className="text-muted-foreground text-xs">
+                            Sorts in Cue only
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell className="w-fit whitespace-nowrap text-center px-1 py-2">
                         {!isPlaceholder && (

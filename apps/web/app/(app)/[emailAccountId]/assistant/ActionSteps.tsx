@@ -436,7 +436,7 @@ function ActionCard({
                     <div className="absolute right-2 top-1/2 -translate-y-1/2">
                       <TooltipExplanation
                         side="right"
-                        text="When enabled our AI will generate a value when processing the email. Put the prompt inside braces like so: {{your prompt here}}."
+                        text="When on, Cue writes this value when it processes the email. Put your instructions inside braces, like {{your prompt here}}."
                         className="text-gray-400"
                       />
                     </div>
@@ -798,8 +798,7 @@ function ActionCard({
         <Card className="p-4 space-y-4">
           {isDraftEmailWithoutManualContent ? (
             <MutedText className="px-1">
-              Our AI generates a draft reply from your email history and
-              knowledge base.
+              Cue drafts the reply from your email history and knowledge base.
             </MutedText>
           ) : (
             <>
