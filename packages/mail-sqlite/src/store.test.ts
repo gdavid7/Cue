@@ -2786,6 +2786,49 @@ describe("drafts, freeze, and uncertain settlement", () => {
     await store.close();
   });
 
+  it("lets a reopened store fetch content the closed engine was still fetching", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mail-sqlite-"));
+    const path = join(directory, "mailbox.sqlite");
+    const store = await createSqliteMailStore(createNodeSqliteDriver(path));
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    await store.enqueueHydration({
+      keys: [{ accountId: "acc-1", messageId: "m1" }],
+      purpose: "body",
+    });
+    const orphaned = await store.claimWork({
+      ownerId: "browser-worker",
+      nowMs: Date.now(),
+      leaseMs: 30_000,
+    });
+    if (orphaned?.kind !== "hydrate") throw new Error("expected hydrate");
+    // The page reloads while that fetch is in flight.
+    await store.close();
+
+    const reopened = await createSqliteMailStore(createNodeSqliteDriver(path));
+    const retried = await reopened.claimWork({
+      ownerId: "browser-worker",
+      nowMs: Date.now(),
+      leaseMs: 30_000,
+    });
+    expect(retried).toMatchObject({ kind: "hydrate", jobId: orphaned.jobId });
+    if (retried?.kind !== "hydrate") throw new Error("expected hydrate");
+    expect(retried.attemptId).not.toBe(orphaned.attemptId);
+    const lateApply = await reopened.applyHydration({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: orphaned.jobId,
+      attemptId: orphaned.attemptId,
+      changes: [messagePatch("m1", "c1", 1000, ["draft"])],
+      bodies: [],
+    });
+    expect(lateApply.status).toBe("stale");
+    await reopened.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+
   it("does not let a stale sync-job attempt complete a reclaimed hydration job", async () => {
     const store = await createSqliteMailStore(createNodeSqliteDriver());
     await store.ensureAccount({

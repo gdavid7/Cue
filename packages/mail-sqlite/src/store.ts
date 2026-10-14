@@ -121,6 +121,15 @@ export async function createSqliteMailStore(
   const bodyCodec = options.bodyCodec ?? streamBodyCodec;
   await driver.write(async (tx) => {
     await migrateMailbox(tx, runtime.randomId());
+    // A content fetch claimed by the engine that last had this store open (a
+    // tab that reloaded or closed) never finishes. Waiting out its lease keeps
+    // that message's cached body stale, such as a draft just saved in place,
+    // and swallows new requests for it. A late result from that attempt no
+    // longer matches the job, so the store drops it.
+    await tx.execute(
+      `UPDATE sync_jobs SET claimed_by = NULL, claimed_until_ms = NULL, attempt_id = NULL
+       WHERE kind = 'hydrate' AND claimed_by IS NOT NULL`,
+    );
   });
   await migrateCompressedMessageBodies(driver, bodyCodec);
   const capabilities = await probeSqliteCapabilities(driver);
