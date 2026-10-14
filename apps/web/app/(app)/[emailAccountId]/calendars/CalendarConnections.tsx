@@ -9,7 +9,7 @@ import { CalendarConnectionCard } from "./CalendarConnectionCard";
 import { Card, CardContent } from "@/components/ui/card";
 import { ConnectCalendar } from "@/app/(app)/[emailAccountId]/calendars/ConnectCalendar";
 import { TypographyP } from "@/components/Typography";
-import { toastError } from "@/components/Toast";
+import { toastError, toastSuccess } from "@/components/Toast";
 import { useProductAnalytics } from "@/hooks/useProductAnalytics";
 
 export function CalendarConnections() {
@@ -72,6 +72,12 @@ function useCalendarNotifications() {
   const analytics = useProductAnalytics("calendars");
 
   useEffect(() => {
+    if (searchParams.get("message") === "calendar_connected") {
+      toastSuccess({ description: "Calendar connected" });
+      router.replace(pathname);
+      return;
+    }
+
     const errorParam = searchParams.get("error");
     if (!errorParam) return;
 

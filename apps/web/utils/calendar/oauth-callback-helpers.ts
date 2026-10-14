@@ -212,6 +212,26 @@ export async function createCalendarConnection(params: {
   });
 }
 
+/**
+ * Give an existing calendar connection fresh tokens and mark it connected
+ */
+export async function reconnectCalendarConnection(params: {
+  connectionId: string;
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: Date | null;
+}) {
+  return await prisma.calendarConnection.update({
+    where: { id: params.connectionId },
+    data: {
+      accessToken: params.accessToken,
+      refreshToken: params.refreshToken,
+      expiresAt: params.expiresAt,
+      isConnected: true,
+    },
+  });
+}
+
 export function extractAadstsCode(
   errorDescription: string | null,
 ): string | null {

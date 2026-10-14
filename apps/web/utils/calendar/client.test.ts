@@ -3,6 +3,7 @@ import { auth, calendar } from "@googleapis/calendar";
 import { createTestLogger } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
 import { getCalendarClientWithRefresh } from "@/utils/calendar/client";
+import { SafeError } from "@/utils/error";
 import {
   getGoogleApiRootUrl,
   getGoogleOauthClientOptions,
@@ -145,6 +146,50 @@ describe("google calendar client", () => {
 
     expect(prisma.calendarConnection.update).not.toHaveBeenCalled();
     expect(prisma.calendarConnection.updateMany).toHaveBeenCalledOnce();
+  });
+
+  it("marks the connection disconnected and asks for a reconnect when Google revoked it", async () => {
+    refreshAccessToken.mockRejectedValue(new Error("invalid_grant"));
+
+    const error = await getCalendarClientWithRefresh({
+      accessToken: "stale-access-token",
+      refreshToken: "dead-refresh-token",
+      expiresAt: Date.now() - 1000,
+      emailAccountId: "email-account-id",
+      connectionId: "google-connection-id",
+      logger,
+    }).catch((e) => e);
+
+    expect(error).toBeInstanceOf(SafeError);
+    expect(error.message).toContain("reconnect your calendar");
+    expect(prisma.calendarConnection.updateMany).toHaveBeenCalledWith({
+      where: { id: "google-connection-id", isConnected: true },
+      data: { isConnected: false },
+    });
+  });
+
+  it("finds the revoked connection by its refresh token when no id is given", async () => {
+    refreshAccessToken.mockRejectedValue(new Error("invalid_grant"));
+    prisma.calendarConnection.findMany.mockResolvedValue([
+      { id: "other", refreshToken: "live-refresh-token" },
+      { id: "dead", refreshToken: "dead-refresh-token" },
+    ] as never);
+
+    await expect(
+      getCalendarClientWithRefresh({
+        accessToken: "stale-access-token",
+        refreshToken: "dead-refresh-token",
+        expiresAt: Date.now() - 1000,
+        emailAccountId: "email-account-id",
+        logger,
+      }),
+    ).rejects.toBeInstanceOf(SafeError);
+
+    expect(prisma.calendarConnection.updateMany).toHaveBeenCalledTimes(1);
+    expect(prisma.calendarConnection.updateMany).toHaveBeenCalledWith({
+      where: { id: "dead", isConnected: true },
+      data: { isConnected: false },
+    });
   });
 
   it("uses emulator-aware OAuth and Calendar API options", async () => {

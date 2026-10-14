@@ -25,9 +25,12 @@ import { useAccount } from "@/providers/EmailAccountProvider";
 import { useCalendars } from "@/hooks/useCalendars";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { toastError, toastSuccess } from "@/components/Toast";
-import { getActionErrorMessage } from "@/utils/error";
+import { captureException, getActionErrorMessage } from "@/utils/error";
 import { useState } from "react";
+import type { GetCalendarAuthUrlResponse } from "@/app/api/google/calendar/auth-url/route";
 import type { GetCalendarsResponse } from "@/app/api/user/calendars/route";
+import { fetchWithAccount } from "@/utils/fetch";
+import { redirectToSafeUrl } from "@/utils/redirect";
 import { TypographyP } from "@/components/Typography";
 import {
   Collapsible,
@@ -75,6 +78,7 @@ export function CalendarConnectionCard({
     Record<string, boolean>
   >({});
   const [isOpen, setIsOpen] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
 
   const providerInfo = getProviderInfo(connection.provider);
 
@@ -111,6 +115,34 @@ export function CalendarConnectionCard({
       })
     ) {
       executeDisconnect({ connectionId: connection.id });
+    }
+  };
+
+  // Connecting the same calendar again gives the existing connection fresh
+  // tokens.
+  const handleReconnect = async () => {
+    setIsReconnecting(true);
+    try {
+      const response = await fetchWithAccount({
+        url:
+          connection.provider === "microsoft"
+            ? "/api/outlook/calendar/auth-url"
+            : "/api/google/calendar/auth-url",
+        emailAccountId,
+        init: { headers: { "Content-Type": "application/json" } },
+      });
+      if (!response.ok) throw new Error("Failed to start calendar reconnect");
+      const { url }: GetCalendarAuthUrlResponse = await response.json();
+      redirectToSafeUrl(url, { allowExternal: true });
+    } catch (error) {
+      captureException(error, {
+        extra: { context: "Calendar reconnect initiation" },
+      });
+      toastError({
+        title: `Couldn't reconnect ${providerInfo.name}`,
+        description: "Please try again or contact support",
+      });
+      setIsReconnecting(false);
     }
   };
 
@@ -185,6 +217,17 @@ export function CalendarConnectionCard({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {!connection.isConnected && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={handleReconnect}
+                disabled={isReconnecting}
+              >
+                {isReconnecting ? "Reconnecting..." : "Reconnect"}
+              </Button>
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
