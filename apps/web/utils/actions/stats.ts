@@ -8,7 +8,7 @@ import { SafeError } from "@/utils/error";
 import { loadEmails } from "@/utils/actions/stats-loading";
 
 export const loadEmailStatsAction = actionClient
-  .metadata({ name: "loadEmailStats" })
+  .metadata({ name: "loadEmailStats", gmailPriority: "background" })
   .inputSchema(z.object({ loadBefore: z.boolean() }))
   .action(
     async ({

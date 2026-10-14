@@ -21,7 +21,7 @@ import { actionClient } from "@/utils/actions/safe-action";
 import { prefixPath } from "@/utils/path";
 
 export const bulkCategorizeSendersAction = actionClient
-  .metadata({ name: "bulkCategorizeSenders" })
+  .metadata({ name: "bulkCategorizeSenders", gmailPriority: "sync" })
   .action(async ({ ctx: { emailAccountId, logger, provider } }) => {
     await validateUserAndAiAccess({ emailAccountId });
 

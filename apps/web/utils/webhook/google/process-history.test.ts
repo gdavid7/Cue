@@ -12,6 +12,7 @@ import { createTestLogger } from "@/__tests__/helpers";
 import { captureException } from "@/utils/error";
 import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import { processHistoryItem } from "@/utils/webhook/google/process-history-item";
+import { publishToQstashAt } from "@/utils/upstash";
 import {
   clearGmailHistoryCatchUp,
   getGmailHistoryCatchUp,
@@ -71,6 +72,10 @@ vi.mock("@/utils/redis/gmail-history-catch-up", () => ({
 
 vi.mock("@/utils/webhook/google/process-history-item", () => ({
   processHistoryItem: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("@/utils/upstash", () => ({
+  publishToQstashAt: vi.fn().mockResolvedValue(true),
 }));
 
 describe("processHistoryForUser - 404 Handling", () => {
@@ -508,6 +513,70 @@ describe("processHistoryForUser - 404 Handling", () => {
       "account-123",
       expect.anything(),
     );
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/google/webhook/catch-up",
+        body: { emailAccountId: "account-123", historyId: "1200" },
+      }),
+    );
+    expect(captureException).not.toHaveBeenCalled();
+  });
+
+  it("schedules one catch-up a minute or two out for pushes the gate defers together", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-14T12:00:10Z"));
+    const email = "user@test.com";
+    const emailAccount = {
+      id: "account-123",
+      email,
+      lastSyncedHistoryId: "1000",
+    };
+    vi.mocked(getWebhookEmailAccount).mockResolvedValue(emailAccount as any);
+    vi.mocked(validateWebhookAccount).mockResolvedValue({
+      success: true,
+      data: {
+        emailAccount: {
+          ...emailAccount,
+          account: {
+            access_token: "token",
+            refresh_token: "refresh",
+            expires_at: new Date(Date.now() + 3_600_000),
+          },
+          rules: [],
+        },
+        hasAutomationRules: true,
+        hasAiAccess: true,
+      },
+    } as any);
+    vi.mocked(getHistory).mockRejectedValue(
+      Object.assign(new Error("request failed"), {
+        cause: new GmailCallDeferredError(15_000, "sync"),
+      }),
+    );
+
+    try {
+      await processHistoryForUser(
+        { emailAddress: email, historyId: 1200 },
+        {},
+        logger,
+      );
+      vi.setSystemTime(new Date("2026-10-14T12:00:40Z"));
+      await processHistoryForUser(
+        { emailAddress: email, historyId: 1300 },
+        {},
+        logger,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const scheduled = vi
+      .mocked(publishToQstashAt)
+      .mock.calls.map(([input]) => input);
+    expect(scheduled).toHaveLength(2);
+    expect(scheduled[0]?.notBefore).toEqual(new Date("2026-10-14T12:01:40Z"));
+    expect(scheduled[1]?.deduplicationId).toBe(scheduled[0]?.deduplicationId);
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
     expect(captureException).not.toHaveBeenCalled();
   });
 

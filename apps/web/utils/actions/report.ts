@@ -20,7 +20,7 @@ import { getGmailSignatures } from "@/utils/gmail/signature-settings";
 export type EmailReportData = Awaited<ReturnType<typeof getEmailReportData>>;
 
 export const generateReportAction = actionClient
-  .metadata({ name: "generateReport" })
+  .metadata({ name: "generateReport", gmailPriority: "sync" })
   .inputSchema(z.object({}))
   .action(async ({ ctx: { emailAccountId, logger } }) =>
     getEmailReportData({ emailAccountId, logger }),

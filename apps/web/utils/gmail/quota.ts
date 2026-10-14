@@ -35,7 +35,12 @@ const INITIAL_SYNC_REFRESH_MS = 30_000;
 const STORE_TIMEOUT_MS = 300;
 const BACKGROUND_PAUSE_MIN_MS = 30_000;
 
-export type GmailQuotaPriority = "interactive" | "sync" | "background";
+export const GMAIL_QUOTA_PRIORITIES = [
+  "interactive",
+  "sync",
+  "background",
+] as const;
+export type GmailQuotaPriority = (typeof GMAIL_QUOTA_PRIORITIES)[number];
 
 type GmailQuotaContext = { caller: string; priority: GmailQuotaPriority };
 
@@ -134,19 +139,12 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
 // Jobs nobody waits on; a durable send one delivers raises itself to
 // interactive.
 const BACKGROUND_NAMESPACES = ["cron/", "resend/"];
-// Server actions are a person's clicks, except these the app fires by itself
-// when a page loads.
-const BACKGROUND_ACTIONS = new Set([
-  "loadEmailStats",
-  "assessUser",
-  "analyzeWritingStyle",
-  "whitelistInboxZero",
-]);
 
 const quotaContext = new AsyncLocalStorage<GmailQuotaContext>();
 const logger = createScopedLogger("gmail-quota");
 const accountsByToken = new Map<string, string>();
 const summarizedMinute = new Map<string, number>();
+const storeUnavailableLoggedMinute = new Map<string, number>();
 const initialSyncMarkedAt = new Map<string, number>();
 
 export class GmailCallDeferredError extends Error {
@@ -197,14 +195,26 @@ export function runWithGmailQuota<T>(
   );
 }
 
-/** The priority of a server action's Gmail calls: a click, unless the app fires it. */
-export function gmailQuotaPriorityForAction(name: string): GmailQuotaPriority {
-  return BACKGROUND_ACTIONS.has(name) ? "background" : "interactive";
+/**
+ * Runs a request's own work at `priority`. Nobody waits on what it leaves
+ * running once it settles, such as `after()` callbacks, so that drops to
+ * background and cannot hold the bucket down while sync and webhooks wait.
+ */
+export async function runGmailQuotaRequest<T>(
+  context: GmailQuotaContext,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const store: GmailQuotaContext = { ...context };
+  try {
+    return await quotaContext.run(store, operation);
+  } finally {
+    store.priority = "background";
+  }
 }
 
 export function currentGmailQuotaContext(): GmailQuotaContext {
   const explicit = quotaContext.getStore();
-  if (explicit) return explicit;
+  if (explicit) return { ...explicit };
   const caller = normalizeCaller(getAuditContext().source);
   return { caller, priority: priorityForCaller(caller) };
 }
@@ -302,7 +312,7 @@ export async function admitGmailCall({
     } catch (error) {
       // Without the shared store nothing can be coordinated; Gmail's own
       // limit still protects the account, so the call goes ahead.
-      logger.warn("Gmail quota store unavailable", { error });
+      noteStoreUnavailable(emailAccountId, context.caller, error);
       return ticket;
     }
     if (wait === 0) {
@@ -458,10 +468,7 @@ export function gmailRequestCost(method: string, url: string | URL): number {
 function priorityForCaller(caller: string): GmailQuotaPriority {
   const routePriority = ROUTE_PRIORITY.get(caller);
   if (routePriority) return routePriority;
-  if (
-    BACKGROUND_ACTIONS.has(caller) ||
-    BACKGROUND_NAMESPACES.some((prefix) => caller.startsWith(prefix))
-  )
+  if (BACKGROUND_NAMESPACES.some((prefix) => caller.startsWith(prefix)))
     return "background";
   return "sync";
 }
@@ -503,11 +510,16 @@ async function summarizeLastMinute(emailAccountId: string) {
   const units: Record<string, number> = {};
   const deferred: Record<string, number> = {};
   const refused: Record<string, number> = {};
+  const storeUnavailable: Record<string, number> = {};
   let totalUnits = 0;
+  let storeUnavailableCalls = 0;
   for (const [field, value] of Object.entries(usage)) {
     if (field.startsWith("deferred:")) deferred[field.slice(9)] = value;
     else if (field.startsWith("refused:")) refused[field.slice(8)] = value;
-    else {
+    else if (field.startsWith("unavailable:")) {
+      storeUnavailable[field.slice(12)] = value;
+      storeUnavailableCalls += value;
+    } else {
       units[field] = value;
       totalUnits += value;
     }
@@ -520,7 +532,41 @@ async function summarizeLastMinute(emailAccountId: string) {
     unitsByCaller: units,
     deferredByCaller: deferred,
     refusedByCaller: refused,
+    // Calls admitted without the gate because its store failed or was slow.
+    storeUnavailableCalls,
+    storeUnavailableByCaller: storeUnavailable,
   });
+}
+
+/**
+ * A call the gate let through without its store. Warned once a minute per
+ * account on each instance, and counted into the account's usage summary so a
+ * store that keeps timing out shows up instead of silently switching the gate
+ * off. The count usually still lands: a slow store finishes the write after
+ * the gate stopped waiting.
+ */
+function noteStoreUnavailable(
+  emailAccountId: string,
+  caller: string,
+  error: unknown,
+) {
+  const minute = minuteOf(Date.now());
+  if (storeUnavailableLoggedMinute.get(emailAccountId) !== minute) {
+    storeUnavailableLoggedMinute.delete(emailAccountId);
+    storeUnavailableLoggedMinute.set(emailAccountId, minute);
+    if (storeUnavailableLoggedMinute.size > 1000) {
+      const oldest = storeUnavailableLoggedMinute.keys().next().value;
+      if (oldest) storeUnavailableLoggedMinute.delete(oldest);
+    }
+    logger.warn("Gmail quota store unavailable", { emailAccountId, error });
+  }
+  gmailQuotaStore
+    .note({
+      usageKey: accountKeys(emailAccountId).usage(minute),
+      field: `unavailable:${caller}`,
+      amount: 1,
+    })
+    .catch(() => undefined);
 }
 
 function rememberInitialSyncMark(emailAccountId: string) {

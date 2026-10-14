@@ -15,9 +15,14 @@ import { getInboxInsights } from "@/utils/inbox-insights/get-inbox-insights";
 import { loadEmails } from "@/utils/actions/stats-loading";
 import { createScopedLogger } from "@/utils/logger";
 import { gmailQuotaStore } from "@/utils/gmail/quota-store";
-import { GMAIL_USER_UNITS_PER_MINUTE } from "@/utils/gmail/quota";
+import {
+  GMAIL_USER_UNITS_PER_MINUTE,
+  runWithGmailQuota,
+} from "@/utils/gmail/quota";
 import { getHomeData } from "@/utils/home/get-home";
 import prisma from "@/utils/prisma";
+import { bulkArchiveAction } from "@/utils/actions/mail-bulk-action";
+import { createEmailProvider } from "@/utils/email/provider";
 
 const memory = vi.hoisted(() => {
   const values = new Map<string, { value: unknown; expiresAt: number }>();
@@ -65,6 +70,17 @@ const memory = vi.hoisted(() => {
 });
 
 vi.mock("@/utils/prisma");
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  after: () => undefined,
+}));
+vi.mock("@/utils/auth", () => ({
+  auth: async () => ({ user: { id: "user-1", email: "me@example.com" } }),
+}));
+vi.mock("@/utils/email/provider", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  createEmailProvider: vi.fn(),
+}));
 vi.mock("@/utils/gmail/quota-store", async () => {
   const { createMemoryGmailQuotaStore } = await import(
     "@/__tests__/mocks/gmail-quota-store.mock"
@@ -248,9 +264,12 @@ describe("Gmail quota on a first load", () => {
       at(1500, () => route("user/labels", () => provider.getLabels())),
       at(2000, () =>
         retried("loadEmailStats", () =>
-          loadEmails(
-            { emailAccountId: ACCOUNT, emailProvider: provider, logger },
-            { loadBefore: false },
+          // The stats action declares its Gmail calls background.
+          runWithGmailQuota({ priority: "background" }, () =>
+            loadEmails(
+              { emailAccountId: ACCOUNT, emailProvider: provider, logger },
+              { loadBefore: false },
+            ),
           ),
         ),
       ),
@@ -347,6 +366,68 @@ describe("Gmail quota on a first load", () => {
       ] ?? 0;
     expect(backfill).toBeGreaterThanOrEqual(
       (spareUnitsPerSecond * (STEADY_MS - 60_000)) / 1000 / 2,
+    );
+  }, 60_000);
+
+  it("keeps webhooks flowing while a bulk sender archive runs for minutes", async () => {
+    const { gmail, client, provider, route, sleep, rateLimitModes } =
+      await startReplay(STEADY_MS);
+    vi.mocked(createEmailProvider).mockResolvedValue(provider);
+    vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue({
+      email: "me@example.com",
+      account: { userId: "user-1", provider: "google" },
+    } as never);
+    // Each sender costs a search and a batch modify; 200 of them is about
+    // three minutes of the account's whole budget.
+    const froms = Array.from(
+      { length: 200 },
+      (_, i) => `sender${i}@example.com`,
+    );
+    const webhooks: Array<{ at: number; ms: number; ok: boolean }> = [];
+    const pushes = async () => {
+      for (let at = 10_000; at < STEADY_MS; at += 20_000) {
+        await sleep(at - (Date.now() - start));
+        const receivedAt = Date.now();
+        const result = await route("google/webhook", async () => {
+          await client.users.history.list({
+            userId: "me",
+            startHistoryId: "1",
+          });
+          await provider.getMessage("m0");
+        });
+        webhooks.push({
+          at: receivedAt - start,
+          ms: Date.now() - receivedAt,
+          ok: result.ok,
+        });
+      }
+    };
+    let done = false;
+    const actors = Promise.all([
+      bulkArchiveAction(ACCOUNT, { froms }),
+      pushes(),
+    ]).finally(() => {
+      done = true;
+    });
+
+    while (!done) await vi.advanceTimersByTimeAsync(100);
+    const [archived] = await actors;
+
+    expect(archived?.serverError).toBeUndefined();
+
+    expect(gmail.limitedCalls()).toEqual([]);
+    expect(rateLimitModes).toEqual([]);
+    // The archive keeps going on what the pushes leave.
+    expect(
+      gmail.unitsByCaller(start, start + STEADY_MS).bulkArchive,
+    ).toBeGreaterThan(5000);
+    // Every push is processed within a few seconds rather than deferred
+    // until the archive is done.
+    expect(webhooks.map((webhook) => webhook.ok)).toEqual(
+      new Array(9).fill(true),
+    );
+    expect(Math.max(...webhooks.map((webhook) => webhook.ms))).toBeLessThan(
+      5000,
     );
   }, 60_000);
 });

@@ -39,7 +39,7 @@ import {
 } from "@/utils/stats/response-time/controller";
 
 export const adminProcessHistoryAction = adminActionClient
-  .metadata({ name: "adminProcessHistory" })
+  .metadata({ name: "adminProcessHistory", gmailPriority: "sync" })
   .inputSchema(
     z.object({
       emailAddress: z.string(),
@@ -677,7 +677,7 @@ export const adminDisableAllRulesAction = adminActionClient
   });
 
 export const adminCleanupDraftsAction = adminActionClient
-  .metadata({ name: "adminCleanupDrafts" })
+  .metadata({ name: "adminCleanupDrafts", gmailPriority: "sync" })
   .inputSchema(cleanupDraftsBody)
   .action(async ({ parsedInput: { email }, ctx: { logger } }) => {
     const emailAccounts = await prisma.emailAccount.findMany({

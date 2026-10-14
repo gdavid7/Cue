@@ -103,7 +103,7 @@ export const deleteAccountAction = actionClientUser
   });
 
 export const cleanupAIDraftsAction = actionClient
-  .metadata({ name: "cleanupAIDrafts" })
+  .metadata({ name: "cleanupAIDrafts", gmailPriority: "sync" })
   .action(async ({ ctx: { emailAccountId, provider, logger } }) => {
     const cleanupDays = await getConfiguredDraftCleanupDays(emailAccountId);
     return cleanupAIDraftsForAccount({

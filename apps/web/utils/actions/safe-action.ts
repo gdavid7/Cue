@@ -19,14 +19,21 @@ import { env } from "@/env";
 import { runWithAuditContext, setAuditContext } from "@/utils/audit/context";
 import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
 import {
+  GMAIL_QUOTA_PRIORITIES,
   getGmailCallDeferredError,
-  gmailQuotaPriorityForAction,
-  runWithGmailQuota,
+  runGmailQuotaRequest,
 } from "@/utils/gmail/quota";
 
 const baseClient = createSafeActionClient({
   defineMetadataSchema() {
-    return z.object({ name: z.string() });
+    return z.object({
+      name: z.string(),
+      // How the action's Gmail calls queue for the account's shared budget.
+      // A click on one thing is interactive; a loop over many messages,
+      // senders or settings is sync, so it cannot starve sync and webhooks;
+      // work the app fires by itself is background.
+      gmailPriority: z.enum(GMAIL_QUOTA_PRIORITIES).optional(),
+    });
   },
   defaultValidationErrorsShape: "flattened",
   handleServerError(error, { metadata, ctx, bindArgsClientInputs }) {
@@ -114,10 +121,10 @@ const baseClient = createSafeActionClient({
       source: metadata.name,
     },
     () =>
-      runWithGmailQuota(
+      runGmailQuotaRequest(
         {
           caller: metadata.name,
-          priority: gmailQuotaPriorityForAction(metadata.name),
+          priority: metadata.gmailPriority ?? "interactive",
         },
         async () => {
           after(async () => {

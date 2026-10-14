@@ -30,6 +30,7 @@ import {
 import type { Logger } from "@/utils/logger";
 import type { gmail_v1 } from "@googleapis/gmail";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
+import { scheduleGmailHistoryCatchUp } from "@/utils/webhook/google/history-catch-up";
 
 const MAX_GMAIL_HISTORY_ID_GAP = 3000;
 // History skipped while Gmail rate limited the account is mail the user is
@@ -262,6 +263,11 @@ export async function processHistoryForUser(
 
     if (isGmailCallDeferredError(error)) {
       logger.info("Webhook history deferred by the account's Gmail budget");
+      await scheduleGmailHistoryCatchUp({
+        emailAccountId: validatedEmailAccount.id,
+        historyId,
+        logger,
+      });
       return NextResponse.json({ ok: true });
     }
 
