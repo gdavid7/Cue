@@ -15,6 +15,13 @@ import {
 
 type MCPClient = Awaited<ReturnType<typeof createMCPClient>>;
 
+// Connected apps add context; they shouldn't hold up a draft or a brief.
+const MCP_CONNECT_TIMEOUT_MS = 8000;
+const MCP_TOOL_CALL_TIMEOUT_MS = 15_000;
+// A list call (e.g. every record in a table) can be far bigger than the model
+// needs or its context fits.
+const MAX_TOOL_RESULT_CHARS = 20_000;
+
 export type MCPToolsResult = {
   tools: Record<string, unknown>;
   cleanup: () => Promise<void>;
@@ -66,82 +73,111 @@ export async function createMcpToolsForAgent(
     }
 
     const clients: MCPClient[] = [];
+    let closed = false;
+    const closeClient = async (client: MCPClient) => {
+      try {
+        await client.close();
+      } catch (error) {
+        logger.warn("Error closing MCP client", { error });
+      }
+    };
 
     const toolsByIntegration: Map<
       string,
       { toolPrefix: string; tools: Record<string, unknown> }
     > = new Map();
 
-    for (const connection of connections) {
-      const integration = connection.integration;
-      // The app's provider and stored credentials know the connection by the
-      // account it was made from
-      const connectionAccountId = connection.emailAccountId;
-      if (!connectionAccountId) continue;
-      const integrationConfig = await resolveMcpIntegration({
-        name: integration.name,
-        emailAccountId: connectionAccountId,
-      });
+    // Apps are independent, so they connect side by side, and one that is
+    // slow to answer is left out rather than holding up the rest.
+    await Promise.all(
+      connections.map(async (connection) => {
+        const integration = connection.integration;
+        // The app's provider and stored credentials know the connection by
+        // the account it was made from
+        const connectionAccountId = connection.emailAccountId;
+        if (!connectionAccountId) return;
 
-      if (!integrationConfig) {
-        logger.warn("Integration config not found", {
-          integration: integration.name,
-        });
-        continue;
-      }
+        try {
+          await withTimeout(
+            (async () => {
+              const integrationConfig = await resolveMcpIntegration({
+                name: integration.name,
+                emailAccountId: connectionAccountId,
+              });
+              if (!integrationConfig) {
+                logger.warn("Integration config not found", {
+                  integration: integration.name,
+                });
+                return;
+              }
 
-      try {
-        const transport = createMcpTransport(
-          await getMcpServerConnection(integrationConfig, connectionAccountId),
-        );
+              const transport = createMcpTransport(
+                await getMcpServerConnection(
+                  integrationConfig,
+                  connectionAccountId,
+                ),
+              );
+              const mcpClient = await createMCPClient({ transport });
+              // Cleanup may have run while this one was still connecting
+              if (closed) {
+                await closeClient(mcpClient);
+                return;
+              }
+              clients.push(mcpClient);
 
-        const mcpClient = await createMCPClient({ transport });
-        clients.push(mcpClient);
+              const mcpTools = await mcpClient.tools();
 
-        const mcpTools = await mcpClient.tools();
+              // Filter to only enabled tools
+              const enabledToolNames = connection.tools.map(
+                (tool) => tool.name,
+              );
+              const filteredTools = Object.fromEntries(
+                Object.entries(mcpTools)
+                  .filter(([toolName]) => enabledToolNames.includes(toolName))
+                  .map(([toolName, toolDef]) => [
+                    toolName,
+                    withCallLimits(toolDef),
+                  ]),
+              );
 
-        // Filter to only enabled tools
-        const enabledToolNames = connection.tools.map((tool) => tool.name);
-        const filteredTools = Object.fromEntries(
-          Object.entries(mcpTools).filter(([toolName]) =>
-            enabledToolNames.includes(toolName),
-          ),
-        );
-
-        toolsByIntegration.set(integration.id, {
-          // Custom names carry a 32-char id; a short slice keeps prefixed tool
-          // names within provider length limits
-          toolPrefix: integrationConfig.isCustom
-            ? integration.name.slice(0, CUSTOM_INTEGRATION_PREFIX.length + 8)
-            : integration.name,
-          tools: filteredTools,
-        });
-      } catch (error) {
-        logger.error("Failed to create MCP client for integration", {
-          error,
-          integration: integration.name,
-        });
-        // Continue with other integrations
-      }
-    }
-
-    const allTools = mergeToolsWithConflictResolution(
-      toolsByIntegration,
-      logger,
+              toolsByIntegration.set(integration.id, {
+                // Custom names carry a 32-char id; a short slice keeps
+                // prefixed tool names within provider length limits
+                toolPrefix: integrationConfig.isCustom
+                  ? integration.name.slice(
+                      0,
+                      CUSTOM_INTEGRATION_PREFIX.length + 8,
+                    )
+                  : integration.name,
+                tools: filteredTools,
+              });
+            })(),
+            MCP_CONNECT_TIMEOUT_MS,
+          );
+        } catch (error) {
+          logger.error("Failed to create MCP client for integration", {
+            error,
+            integration: integration.name,
+          });
+          // Continue with other integrations
+        }
+      }),
     );
+
+    // Order by connection, not by which app answered first
+    const orderedTools = new Map(
+      connections.flatMap((connection) => {
+        const entry = toolsByIntegration.get(connection.integration.id);
+        return entry ? [[connection.integration.id, entry] as const] : [];
+      }),
+    );
+    const allTools = mergeToolsWithConflictResolution(orderedTools, logger);
 
     return {
       tools: allTools,
       cleanup: async () => {
-        await Promise.all(
-          clients.map(async (client) => {
-            try {
-              await client.close();
-            } catch (error) {
-              logger.warn("Error closing MCP client", { error });
-            }
-          }),
-        );
+        closed = true;
+        await Promise.all(clients.map(closeClient));
       },
     };
   } catch (error) {
@@ -204,4 +240,97 @@ function mergeToolsWithConflictResolution(
   }
 
   return allTools;
+}
+
+type ToolExecute = (
+  args: unknown,
+  options: { abortSignal?: AbortSignal } & Record<string, unknown>,
+) => Promise<unknown>;
+
+/** Bounds each call's time and the size of what it hands the model. */
+function withCallLimits(toolDef: unknown): unknown {
+  const execute = (toolDef as { execute?: ToolExecute }).execute;
+  if (typeof execute !== "function") return toolDef;
+  return {
+    ...(toolDef as object),
+    execute: async (
+      args: unknown,
+      options: Parameters<ToolExecute>[1] = {},
+    ) => {
+      const timeout = AbortSignal.timeout(MCP_TOOL_CALL_TIMEOUT_MS);
+      const abortSignal = options.abortSignal
+        ? AbortSignal.any([options.abortSignal, timeout])
+        : timeout;
+      return capToolResult(await execute(args, { ...options, abortSignal }));
+    },
+  };
+}
+
+/**
+ * Cuts an MCP result to MAX_TOOL_RESULT_CHARS, keeping the MCP content shape
+ * the model output is built from, with a note that it was cut.
+ */
+function capToolResult(result: unknown): unknown {
+  const content = (result as { content?: unknown })?.content;
+  if (Array.isArray(content)) {
+    const total = content.reduce<number>(
+      (sum, part) => sum + partText(part).length,
+      0,
+    );
+    if (total <= MAX_TOOL_RESULT_CHARS) return result;
+
+    let remaining = MAX_TOOL_RESULT_CHARS;
+    const kept: unknown[] = [];
+    for (const part of content) {
+      if (remaining <= 0) break;
+      const text = partText(part);
+      if (text.length <= remaining) {
+        kept.push(part);
+      } else {
+        kept.push({ type: "text", text: text.slice(0, remaining) });
+      }
+      remaining -= text.length;
+    }
+    return {
+      ...(result as object),
+      content: [...kept, truncationNote(total)],
+      structuredContent: undefined,
+    };
+  }
+
+  const json = JSON.stringify(result) ?? "";
+  if (json.length <= MAX_TOOL_RESULT_CHARS) return result;
+  return {
+    content: [
+      { type: "text", text: json.slice(0, MAX_TOOL_RESULT_CHARS) },
+      truncationNote(json.length),
+    ],
+  };
+}
+
+function partText(part: unknown): string {
+  const { type, text } = (part ?? {}) as { type?: string; text?: unknown };
+  return type === "text" && typeof text === "string"
+    ? text
+    : (JSON.stringify(part) ?? "");
+}
+
+function truncationNote(total: number) {
+  return {
+    type: "text",
+    text: `[Result truncated: showing the first ${MAX_TOOL_RESULT_CHARS} of ${total} characters.]`,
+  };
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Timed out after ${ms}ms`)),
+        ms,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
 }

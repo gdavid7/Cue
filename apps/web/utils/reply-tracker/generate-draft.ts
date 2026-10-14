@@ -320,7 +320,11 @@ async function generateDraftContent(
       where: { id: emailAccount.id },
       select: { learnedWritingStyle: true, signature: true },
     }),
-    mcpAgent({ emailAccount, messages }),
+    // Connected-app research is optional; the draft goes ahead without it.
+    mcpAgent({ emailAccount, messages }).catch((error) => {
+      logger.warn("Connected app research failed", { error });
+      return null;
+    }),
     getMeetingContext({
       emailAccountId: emailAccount.id,
       recipientEmail: senderEmail,

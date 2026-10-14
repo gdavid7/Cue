@@ -155,6 +155,85 @@ describe("createMcpToolsForAgent", () => {
     expect(Object.keys(result.tools)).toEqual(["notion-search"]);
   });
 
+  it("leaves out an app that doesn't answer in time without waiting on it for the rest", async () => {
+    vi.useFakeTimers();
+    try {
+      mockConnections([
+        {
+          id: "connection-1",
+          integration: { id: "integration-1", name: "pipedream" },
+          tools: [{ name: "app-list-items" }],
+        },
+        {
+          id: "connection-2",
+          integration: { id: "integration-2", name: "notion" },
+          tools: [{ name: "notion-search" }],
+        },
+      ]);
+      const hung = { tools: vi.fn(), close: vi.fn() };
+      hung.tools.mockReturnValue(new Promise(() => {}));
+      mockCreateMcpTransport.mockImplementation(({ url }) => ({ url }));
+      mockCreateMCPClient.mockImplementation(
+        async ({ transport }: { transport: { url: string } }) =>
+          transport.url.includes("notion")
+            ? {
+                tools: vi.fn().mockResolvedValue({
+                  "notion-search": { description: "search" },
+                }),
+                close: vi.fn(),
+              }
+            : hung,
+      );
+
+      const pending = createMcpToolsForAgent("email-account-1");
+      await vi.advanceTimersByTimeAsync(10_000);
+      const result = await pending;
+
+      expect(Object.keys(result.tools)).toEqual(["notion-search"]);
+      await result.cleanup();
+      expect(hung.close).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cuts a tool result too large for the model, saying so", async () => {
+    mockConnections([
+      {
+        id: "connection-1",
+        integration: { id: "integration-1", name: "notion" },
+        tools: [{ name: "notion-search" }],
+      },
+    ]);
+    const huge = "x".repeat(200_000);
+    mockCreateMCPClient.mockResolvedValue({
+      tools: vi.fn().mockResolvedValue({
+        "notion-search": {
+          description: "search",
+          execute: vi.fn(async () => ({
+            content: [{ type: "text", text: huge }],
+          })),
+        },
+      }),
+      close: vi.fn(),
+    });
+
+    const result = await createMcpToolsForAgent("email-account-1");
+    const search = result.tools["notion-search"] as {
+      execute: (args: unknown, options: unknown) => Promise<unknown>;
+    };
+    const output = (await search.execute(
+      {},
+      { toolCallId: "1", messages: [] },
+    )) as {
+      content: { type: string; text: string }[];
+    };
+
+    const text = output.content.map((part) => part.text).join("");
+    expect(text.length).toBeLessThan(25_000);
+    expect(text).toContain("truncated");
+  });
+
   it("keeps conflicting custom server tools within provider name limits", async () => {
     const firstServer = `custom_${"a".repeat(32)}`;
     const secondServer = `custom_${"b".repeat(32)}`;
