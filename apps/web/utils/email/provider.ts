@@ -10,6 +10,7 @@ import { toRateLimitProvider } from "@/utils/email/rate-limit-mode-error";
 import { recordEmailAccountProviderIssue } from "@/utils/email/provider-health";
 import type { Logger } from "@/utils/logger";
 import { flushLoggerSafely } from "@/utils/logger-flush";
+import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 
 export async function createEmailProvider({
   emailAccountId,
@@ -102,6 +103,8 @@ function withProviderFailureLogging(
           if (!isPromiseLike(result)) return result;
 
           return result.catch(async (error: unknown) => {
+            // Waiting for the account's own Gmail budget is not a failure.
+            if (isGmailCallDeferredError(error)) throw error;
             await logProviderOperationFailureSafely({
               error,
               failedAccessToken,

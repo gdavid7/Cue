@@ -1,4 +1,5 @@
-import type { JSONValue, ModelMessage } from "ai";
+import type { JSONValue, ModelMessage, Tool } from "ai";
+import { runWithGmailQuota } from "@/utils/gmail/quota";
 import type { Logger } from "@/utils/logger";
 import type { MessageContext } from "@/utils/ai/assistant/chat-context-validation";
 import { stringifyEmail } from "@/utils/stringify-email";
@@ -297,7 +298,7 @@ export async function aiProcessAssistantChat({
     stablePrefixEndIndex,
   );
 
-  const allTools = {
+  const allTools = withInteractiveGmailQuota({
     getAssistantCapabilities: getAssistantCapabilitiesTool(toolOptions),
     getAccountOverview: getAccountOverviewTool(toolOptions),
     getSenderCategoryOverview: getSenderCategoryOverviewTool(toolOptions),
@@ -356,7 +357,7 @@ export async function aiProcessAssistantChat({
     ...(emailSendToolsEnabled
       ? { forwardEmail: forwardEmailTool(toolOptions) }
       : {}),
-  };
+  });
 
   logger.trace("Resolved system prompt", {
     systemPromptLength: system.length,
@@ -949,4 +950,28 @@ Inline email cards:
 - The UI resolves sender, subject, and date from the threadId — don't repeat them.
 - Group <emails> blocks under markdown ## headers when triage has categories.
 - Only render email widgets when they add clarity, not for every search result.`;
+}
+
+// Someone is waiting on every assistant tool call, so their Gmail reads are
+// interactive and never queue behind background sync or analysis.
+function withInteractiveGmailQuota<T extends Record<string, Tool>>(
+  tools: T,
+): T {
+  return Object.fromEntries(
+    Object.entries(tools).map(([name, definition]) => {
+      const execute = definition.execute;
+      if (!execute) return [name, definition];
+      return [
+        name,
+        {
+          ...definition,
+          execute: (...args: Parameters<typeof execute>) =>
+            runWithGmailQuota(
+              { caller: `chat/${name}`, priority: "interactive" },
+              () => execute(...args),
+            ),
+        },
+      ];
+    }),
+  ) as T;
 }

@@ -47,6 +47,7 @@ vi.mock("@googleapis/gmail", () => ({
       return {
         setCredentials,
         refreshAccessToken,
+        request: vi.fn(),
       };
     }),
   },
@@ -145,11 +146,13 @@ describe("gmail oauth client configuration", () => {
     });
 
     expect(getGoogleGmailApiRootUrl).toHaveBeenCalledWith();
-    expect(gmail).toHaveBeenCalledWith({
-      version: "v1",
-      auth: expect.any(Object),
-      rootUrl: "http://localhost:4444",
-    });
+    expect(gmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        version: "v1",
+        auth: expect.any(Object),
+        rootUrl: "http://localhost:4444",
+      }),
+    );
   });
 
   it("saves refreshed Gmail tokens with optimistic concurrency", async () => {

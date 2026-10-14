@@ -4,8 +4,11 @@ import { getBatch } from "@/utils/gmail/batch";
 import { isRetryableError } from "@/utils/gmail/retry";
 import { sleep } from "@/utils/sleep";
 import type { Logger } from "@/utils/logger";
+import { gmailRequestCost } from "@/utils/gmail/quota";
 
-const GMAIL_BATCH_SIZE = 25;
+// Each batch is admitted against the account's Gmail budget as one debit, so
+// keep it to 500 units: 25 messages or 12 threads.
+const MAX_BATCH_UNITS = 500;
 const RATE_LIMIT_RETRY_BATCH_SIZE = 10;
 const MAX_BATCH_RETRIES = 3;
 const MAX_RETRY_JITTER_MS = 1000;
@@ -34,7 +37,7 @@ export async function getBatchWithRetry<TRaw, TParsed>({
   if (!accessToken) throw new Error("No access token");
 
   const results: TParsed[] = [];
-  for (const idsChunk of chunk(ids, GMAIL_BATCH_SIZE)) {
+  for (const idsChunk of chunk(ids, batchSizeFor(endpoint))) {
     const chunkResults = await getBatchChunkWithRetry<TRaw, TParsed>({
       ids: idsChunk,
       endpoint,
@@ -161,7 +164,7 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
       (id) => !rateLimitedIds.has(id),
     );
     const retryChunks = [
-      ...chunk(nonRateLimitedIds, GMAIL_BATCH_SIZE),
+      ...chunk(nonRateLimitedIds, batchSizeFor(endpoint)),
       ...chunk(Array.from(rateLimitedIds), RATE_LIMIT_RETRY_BATCH_SIZE),
     ];
     const refetched: TParsed[] = [];
@@ -182,6 +185,13 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
   }
 
   return parsed;
+}
+
+function batchSizeFor(endpoint: string) {
+  return Math.max(
+    1,
+    Math.floor(MAX_BATCH_UNITS / gmailRequestCost("GET", `${endpoint}/id`)),
+  );
 }
 
 function throwBatchRetryLimit({

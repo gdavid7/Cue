@@ -22,14 +22,17 @@ import type { Logger } from "@/utils/logger";
 import { parseReply } from "@/utils/mail";
 import { fetchConnectorCandidates } from "@/utils/thread-context/connector-context";
 import { fetchLinkedPages } from "@/utils/thread-context/linked-pages";
+import { redis } from "@/utils/redis";
+import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import type { ParsedMessage } from "@/utils/types";
 
-// Each thread open costs about 1 + 3 × 2 + 1 provider calls, so keep the
-// fan-out small: the panel shows four items at most.
+// Every related thread is a Gmail threads.get at 40 quota units, so one open
+// costs about 40 + 3 × (10 + 3 × 40) + (10 + 5 × 40) = 640 units of the
+// account's 6,000 per minute. Keep the fan-out small and cache the result.
 const MAX_PARTICIPANTS = 3;
 const THREADS_PER_PARTICIPANT = 3;
 const PARTICIPANT_CONCURRENCY = 2;
-const TOPIC_THREADS = 10;
+const TOPIC_THREADS = 5;
 const TOPIC_KEYWORDS = 6;
 const CALENDAR_WINDOW_DAYS = 30;
 const MAX_MESSAGE_TEXT = 600;
@@ -37,6 +40,9 @@ const SNIPPET_LENGTH = 180;
 // Suggested replies are checked against these same items, so a short list
 // hides evidence the reply needs; the ranker still drops weak matches.
 const CONTEXT_LIMIT = 8;
+// The reader panel and the suggested reply both ask for the same thread's
+// context; a new message changes the key, so a cached result is never stale.
+const CONTEXT_CACHE_TTL_SECONDS = 60 * 60;
 
 export type ThreadContextItem = {
   /** For emails, the thread id, so the panel can open that conversation. */
@@ -107,10 +113,19 @@ export async function collectThreadContext({
 }> {
   // The reader can hold a thread the provider hasn't synced yet.
   const thread = await emailProvider.getThread(threadId).catch((error) => {
+    // Context waits for spare Gmail quota rather than caching a partial
+    // result; the caller retries.
+    if (isGmailCallDeferredError(error)) throw error;
     logger.warn("Failed to load thread for context", { error });
     return null;
   });
   if (!thread?.messages.length) return { thread: null, items: [] };
+
+  const cacheKey = `thread-context:${emailAccountId}:${threadId}:${thread.messages.at(-1)!.id}`;
+  const cached = await redis
+    .get<(ThreadContextItem & { text: string })[]>(cacheKey)
+    .catch(() => null);
+  if (cached) return { thread, items: cached };
 
   const focus = toFocus(thread);
   const participants = focus.people
@@ -129,6 +144,7 @@ export async function collectThreadContext({
             maxThreads: THREADS_PER_PARTICIPANT,
           })
           .catch((error) => {
+            if (isGmailCallDeferredError(error)) throw error;
             logger.warn("Failed to fetch threads with participant", { error });
             return [];
           }),
@@ -173,20 +189,21 @@ export async function collectThreadContext({
     limit: CONTEXT_LIMIT,
   });
 
-  return {
-    thread,
-    items: ranked.map(({ candidate, reasons }) => ({
-      id: candidate.id,
-      kind: candidate.kind,
-      title: candidate.title,
-      snippet: truncate(candidate.snippet ?? candidate.text, SNIPPET_LENGTH),
-      text: candidate.text,
-      at: candidate.at,
-      url: candidate.url,
-      source: candidate.source,
-      reasons,
-    })),
-  };
+  const items = ranked.map(({ candidate, reasons }) => ({
+    id: candidate.id,
+    kind: candidate.kind,
+    title: candidate.title,
+    snippet: truncate(candidate.snippet ?? candidate.text, SNIPPET_LENGTH),
+    text: candidate.text,
+    at: candidate.at,
+    url: candidate.url,
+    source: candidate.source,
+    reasons,
+  }));
+  await redis
+    .set(cacheKey, items, { ex: CONTEXT_CACHE_TTL_SECONDS })
+    .catch(() => null);
+  return { thread, items };
 }
 
 async function findTopicThreads({
@@ -209,6 +226,7 @@ async function findTopicThreads({
     });
     return threads;
   } catch (error) {
+    if (isGmailCallDeferredError(error)) throw error;
     logger.warn("Failed to search threads by topic", { error });
     return [];
   }

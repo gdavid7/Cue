@@ -17,6 +17,7 @@ import { getEmailAccount } from "@/utils/redis/account-validation";
 import { getCallerEmailAccount } from "@/utils/organizations/access";
 import { recordRateLimitFromApiError } from "@/utils/email/rate-limit";
 import { isProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
+import { getGmailCallDeferredError } from "@/utils/gmail/quota";
 import {
   EMAIL_ACCOUNT_HEADER,
   EMAIL_ACCOUNT_ID_REQUIRED_ERROR,
@@ -200,6 +201,31 @@ function withMiddleware<T extends NextRequest>(
             return NextResponse.json(
               { error: { issues: error.issues }, isKnownError: true },
               { status: 400 },
+            );
+          }
+
+          const deferred = getGmailCallDeferredError(error);
+          if (deferred) {
+            reqLogger.info(
+              "Gmail call deferred by the account's quota budget",
+              {
+                priority: deferred.priority,
+                retryAfterMs: deferred.retryAfterMs,
+              },
+            );
+            return NextResponse.json(
+              {
+                error: "Gmail is busy for this account. Try again shortly.",
+                isKnownError: true,
+              },
+              {
+                status: 503,
+                headers: {
+                  "Retry-After": String(
+                    Math.ceil(deferred.retryAfterMs / 1000),
+                  ),
+                },
+              },
             );
           }
 

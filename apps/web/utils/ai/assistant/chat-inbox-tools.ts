@@ -4,6 +4,7 @@ import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { posthogCaptureEvent } from "@/utils/posthog";
 import { createEmailProvider } from "@/utils/email/provider";
+import { describeProviderRateLimitError } from "@/utils/email/rate-limit";
 import { isGoogleProvider } from "@/utils/email/provider-types";
 import {
   extractEmailAddress,
@@ -599,7 +600,9 @@ const gmailSearchInboxTool = ({
         const { retryable } = isGmailRetryableError(errorInfo);
         return {
           queryUsed: query,
-          error: "Failed to search inbox",
+          error:
+            describeProviderRateLimitError(error, provider) ??
+            "Failed to search inbox",
           searchFeedback: {
             status: errorInfo.status,
             message: (
@@ -755,7 +758,11 @@ export const readEmailTool = ({
         };
       } catch (error) {
         logger.error("Failed to read email", { error });
-        return { error: "Failed to read email" };
+        return {
+          error:
+            describeProviderRateLimitError(error, provider) ??
+            "Failed to read email",
+        };
       }
     },
   });

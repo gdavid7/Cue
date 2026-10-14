@@ -35,6 +35,11 @@ import { extractErrorInfo as extractOutlookErrorInfo } from "@/utils/outlook/ret
 import type { ParsedMessage } from "@/utils/types";
 import { mapWithConcurrency } from "@/utils/async";
 import { convertEmailHtmlToText } from "@/utils/mail";
+import {
+  getGmailCallDeferredError,
+  runWithGmailQuota,
+  setGmailInitialSync,
+} from "@/utils/gmail/quota";
 
 // Outlook allows four concurrent Graph requests per mailbox, shared with
 // webhook processing, so batched folder reads stay below that.
@@ -49,6 +54,9 @@ const GMAIL_HISTORY_SCOPE_ID = "history";
 // recent window to leave no gap at the boundary between them.
 const GMAIL_HISTORY_OVERLAP_MS = DAY_MS;
 const GMAIL_THREAD_COST = 40;
+// The first page of a scan is what the inbox shows first; a smaller one fills
+// it sooner and spends less of the minute's Gmail quota before it does.
+const GMAIL_FIRST_PAGE_SIZE = 25;
 
 const SUPPORTED_CHANGES = [
   "archive",
@@ -172,7 +180,13 @@ export function createEmailProviderMailboxSource(input: {
       try {
         const token = JSON.parse(page) as BootstrapToken;
         isBackfill = isGmail && token.scopeId === GMAIL_HISTORY_SCOPE_ID;
-        const maxResults = Math.min(pageSize, maxPageSize);
+        const isPrimaryGmailScan = isGmail && !isBackfill;
+        if (isPrimaryGmailScan) await setGmailInitialSync(accountId, true);
+        const maxResults = Math.min(
+          pageSize,
+          maxPageSize,
+          isGmail && !token.pageToken ? GMAIL_FIRST_PAGE_SIZE : maxPageSize,
+        );
         const listPage = () =>
           provider.getMessagesWithPagination({
             maxResults,
@@ -186,16 +200,24 @@ export function createEmailProviderMailboxSource(input: {
               before: new Date(token.receivedBeforeMs),
             }),
           });
+        // The backfill only fills in older mail, so it yields to everything
+        // else; the primary scan fills the inbox the user is waiting on.
         const syncPage = isGmail
-          ? await withGmailSyncBudget(
-              {
-                emailAccountId: accountId,
-                priority: isBackfill ? "backfill" : "current",
-                cost: gmailPageCost(maxResults),
-              },
-              listPage,
+          ? await runWithGmailQuota(
+              { priority: isBackfill ? "background" : "sync" },
+              () =>
+                withGmailSyncBudget(
+                  {
+                    emailAccountId: accountId,
+                    priority: isBackfill ? "backfill" : "current",
+                    cost: gmailPageCost(maxResults),
+                  },
+                  listPage,
+                ),
             )
           : await listPage();
+        if (isPrimaryGmailScan && !syncPage.nextPageToken)
+          await setGmailInitialSync(accountId, false);
         const changes = syncPage.messages.map((message) =>
           parsedMessagePatch(accountId, provider.name, message),
         );
@@ -348,8 +370,14 @@ export function createEmailProviderMailboxSource(input: {
         keys.length * gmailMailSyncCosts.message,
       );
       try {
+        // Opening a message asks for its body alone; sync pages ask for the
+        // bodies they lacked in batches, which can wait their turn.
+        const isMessageOpen = purpose === "body" && keys.length === 1;
         const { messages, unresolved } = isGmail
-          ? await batchedMessages(provider, keys)
+          ? await runWithGmailQuota(
+              { priority: isMessageOpen ? "interactive" : "sync" },
+              () => batchedMessages(provider, keys),
+            )
           : await sequentialMessages(provider, keys);
         return {
           status: "ok" as const,
@@ -524,6 +552,8 @@ export function createEmailProviderMailboxSource(input: {
     if (error instanceof LocalMailSyncPausedError) {
       return throttled(error.retryAfterMs);
     }
+    const deferred = getGmailCallDeferredError(error);
+    if (deferred) return throttled(deferred.retryAfterMs);
     if (isProviderRateLimitModeError(error)) {
       const retryAtMs = error.retryAt ? Date.parse(error.retryAt) : Number.NaN;
       return throttled(

@@ -1212,7 +1212,9 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
       limit: 20,
     });
 
-    expect(result.error).toBe("Failed to search inbox");
+    expect(result.error).toMatch(
+      /^Gmail is temporarily limiting requests; try again in about \d+ seconds?\.$/,
+    );
     expect(result.searchFeedback).toMatchObject({
       status: 429,
       message: "Rate limit exceeded",

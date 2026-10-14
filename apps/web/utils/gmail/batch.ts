@@ -1,6 +1,13 @@
-import { isDefined } from "@/utils/types";
+import { isBatchError, isDefined } from "@/utils/types";
 import { getGoogleGmailBatchUrl } from "@/utils/gmail/oauth";
 import { createScopedLogger } from "@/utils/logger";
+import {
+  admitGmailCall,
+  gmailAccountForAccessToken,
+  gmailRequestCost,
+  noteGmailQuotaRefusal,
+} from "@/utils/gmail/quota";
+import { isRetryableError } from "@/utils/gmail/retry";
 
 const logger = createScopedLogger("gmail/batch");
 
@@ -28,6 +35,11 @@ export async function getBatch(
   }
   batchRequestBody += "--batch_boundary--";
 
+  // Gmail charges every request inside a batch at its own method's cost.
+  const ticket = await admitGmailCall({
+    emailAccountId: gmailAccountForAccessToken(accessToken),
+    cost: ids.length * gmailRequestCost("GET", `${endpoint}/id`),
+  });
   const res = await fetch(getGoogleGmailBatchUrl(), {
     method: "POST",
     headers: {
@@ -42,8 +54,22 @@ export async function getBatch(
   const textRes = await res.text();
 
   const batch = parseBatchResponse(textRes, res.headers.get("Content-Type"));
+  if (batch.some(isQuotaRefusal)) await noteGmailQuotaRefusal(ticket);
 
   return batch;
+}
+
+function isQuotaRefusal(item: unknown) {
+  if (!isBatchError(item)) return false;
+  const { code, message, errors } = item.error;
+  return (
+    (code === 403 || code === 429) &&
+    isRetryableError({
+      status: code,
+      reason: errors?.[0]?.reason,
+      errorMessage: message,
+    }).isRateLimit
+  );
 }
 
 function parseBatchResponse(batchResponse: string, contentType: string | null) {

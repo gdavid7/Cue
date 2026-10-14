@@ -14,7 +14,13 @@ import chunk from "lodash/chunk";
 import type { Attachment as MailAttachment } from "nodemailer/lib/mailer";
 import { mapWithConcurrency } from "@/utils/async";
 import { toMailerAttachments } from "@/utils/types/mail";
-import type { MessageWithPayload, ParsedMessage } from "@/utils/types";
+import {
+  isDefined,
+  type MessageWithPayload,
+  type ParsedMessage,
+  type ThreadWithPayloadMessages,
+} from "@/utils/types";
+import { redis } from "@/utils/redis";
 import { parseMessage } from "@/utils/gmail/message";
 import {
   getMessage,
@@ -149,6 +155,7 @@ import {
 import { isGoogleOauthEmulationEnabled } from "@/utils/gmail/oauth";
 
 const GMAIL_MESSAGE_WRITE_CONCURRENCY = 5;
+const THREAD_METADATA_CACHE_SECONDS = 15 * 60;
 
 export class GmailProvider implements EmailProvider {
   readonly name = "google";
@@ -2066,10 +2073,32 @@ export class GmailProvider implements EmailProvider {
     messageFormat?: "full" | "metadata",
     includeSpamTrash?: boolean,
   ): Promise<EmailThread[]> {
-    const threadIds =
-      gmailThreads?.map((t) => t.id).filter((id): id is string => !!id) || [];
-    const threads = await getThreadsBatch(
-      threadIds,
+    const listed = (gmailThreads ?? []).filter(
+      (t): t is gmail_v1.Schema$Thread & { id: string } => !!t.id,
+    );
+    // A thread's historyId changes with any change to it, so a cached copy
+    // under the listed historyId is current. Only headers-only copies are
+    // kept: every threads.get costs 40 of the account's Gmail units, and
+    // views like Today re-list the same threads on every load.
+    const cacheKeys =
+      messageFormat === "metadata" && this.emailAccountId
+        ? listed.map((t) =>
+            t.historyId
+              ? `gmail-thread-metadata:${this.emailAccountId}:${t.id}:${t.historyId}`
+              : null,
+          )
+        : [];
+    const cacheable = cacheKeys.filter((key): key is string => !!key);
+    const cached = cacheable.length
+      ? await redis
+          .mget<(ThreadWithPayloadMessages | null)[]>(...cacheable)
+          .catch(() => [] as (ThreadWithPayloadMessages | null)[])
+      : [];
+    const cachedById = new Map(
+      cached.filter(isDefined).map((thread) => [thread.id, thread]),
+    );
+    const fetched = await getThreadsBatch(
+      listed.map((t) => t.id).filter((id) => !cachedById.has(id)),
       getAccessTokenFromClient(this.client),
       this.logger,
       messageFormat === "metadata" || includeSpamTrash
@@ -2081,6 +2110,19 @@ export class GmailProvider implements EmailProvider {
           }
         : undefined,
     );
+    if (cacheKeys.length && fetched.length) {
+      const pipeline = redis.pipeline();
+      for (const thread of fetched) {
+        const key = cacheKeys[listed.findIndex((t) => t.id === thread.id)];
+        if (key && thread.historyId)
+          pipeline.set(key, thread, { ex: THREAD_METADATA_CACHE_SECONDS });
+      }
+      await pipeline.exec().catch(() => null);
+    }
+    const fetchedById = new Map(fetched.map((thread) => [thread.id, thread]));
+    const threads = listed
+      .map((t) => cachedById.get(t.id) ?? fetchedById.get(t.id))
+      .filter(isDefined);
 
     return threads
       .map((thread) => {

@@ -59,6 +59,24 @@ vi.mock("@/utils/gmail/message", async (importOriginal) => {
 
 vi.mock("@/utils/gmail/draft", () => gmailDraftMock);
 
+const redisValues = vi.hoisted(() => new Map<string, unknown>());
+vi.mock("@/utils/redis", () => ({
+  redis: {
+    mget: async (...keys: string[]) =>
+      keys.map((key) => redisValues.get(key) ?? null),
+    pipeline: () => {
+      const pipeline = {
+        set: (key: string, value: unknown) => {
+          redisValues.set(key, value);
+          return pipeline;
+        },
+        exec: async () => [],
+      };
+      return pipeline;
+    },
+  },
+}));
+
 vi.mock("@/utils/gmail/signature-settings", () => gmailSignatureMock);
 vi.mock("@/utils/email/bulk-action-tracking", () => bulkActionTrackingMock);
 vi.mock("@/utils/gmail/oauth", () => ({
@@ -767,6 +785,61 @@ describe("GmailProvider.getThreadsWithQuery", () => {
 
     expect(getThreadsBatch).toHaveBeenCalledWith(
       ["thread-1"],
+      "access-token",
+      expect.anything(),
+      { format: "metadata" },
+    );
+  });
+
+  it("reads a listed thread again only when its historyId has changed", async () => {
+    redisValues.clear();
+    const listed = vi.spyOn(gmailThreadModule, "getThreadsWithNextPageToken");
+    const getThreadsBatch = vi
+      .spyOn(gmailThreadModule, "getThreadsBatch")
+      .mockImplementation(async (ids) =>
+        ids.map((id) => ({
+          id,
+          historyId: id === "thread-2" ? "8" : "5",
+          messages: [],
+        })),
+      );
+    const provider = new GmailProvider(
+      {
+        context: {
+          _options: {
+            auth: { credentials: { access_token: "access-token" } },
+          },
+        },
+      } as any,
+      undefined,
+      "account-1",
+    );
+
+    listed.mockResolvedValueOnce({
+      threads: [
+        { id: "thread-1", historyId: "5" },
+        { id: "thread-2", historyId: "5" },
+      ],
+      nextPageToken: undefined,
+    });
+    await provider.getThreadsWithQuery({ messageFormat: "metadata" });
+    listed.mockResolvedValueOnce({
+      threads: [
+        { id: "thread-1", historyId: "5" },
+        { id: "thread-2", historyId: "8" },
+      ],
+      nextPageToken: undefined,
+    });
+    const { threads } = await provider.getThreadsWithQuery({
+      messageFormat: "metadata",
+    });
+
+    expect(threads.map((thread) => thread.id)).toEqual([
+      "thread-1",
+      "thread-2",
+    ]);
+    expect(getThreadsBatch).toHaveBeenLastCalledWith(
+      ["thread-2"],
       "access-token",
       expect.anything(),
       { format: "metadata" },

@@ -2,6 +2,7 @@ import type { ThreadTrackerType } from "@/generated/prisma/enums";
 import { mapWithConcurrency } from "@/utils/async";
 import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import prisma from "@/utils/prisma";
+import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 
 const THREAD_CONCURRENCY = 5;
 // Archiving a conversation doesn't resolve its tracker, so some of the newest
@@ -33,18 +34,31 @@ export async function getTrackedThreads({
     distinct: ["threadId"],
     take: inboxOnly ? limit * OVERFETCH_FACTOR : limit,
   });
-  const threads = await mapWithConcurrency(
-    trackers,
-    THREAD_CONCURRENCY,
-    ({ threadId }) =>
-      emailProvider.getThread(threadId).catch((): EmailThread | null => null),
-  );
-  return threads
-    .filter(
-      (thread): thread is EmailThread =>
-        !!thread && (!inboxOnly || isInInbox(thread)),
-    )
-    .slice(0, limit);
+  // Each read is a 40-unit Gmail threads.get, so the overfetch is only read
+  // when the newest trackers' conversations have left the inbox.
+  const found: EmailThread[] = [];
+  let next = 0;
+  while (next < trackers.length && found.length < limit) {
+    const page = trackers.slice(next, next + limit - found.length);
+    next += page.length;
+    const threads = await mapWithConcurrency(
+      page,
+      THREAD_CONCURRENCY,
+      ({ threadId }) =>
+        emailProvider.getThread(threadId).catch((error): EmailThread | null => {
+          // Waiting for the account's Gmail budget is not a missing thread.
+          if (isGmailCallDeferredError(error)) throw error;
+          return null;
+        }),
+    );
+    found.push(
+      ...threads.filter(
+        (thread): thread is EmailThread =>
+          !!thread && (!inboxOnly || isInInbox(thread)),
+      ),
+    );
+  }
+  return found;
 }
 
 function isInInbox(thread: EmailThread) {

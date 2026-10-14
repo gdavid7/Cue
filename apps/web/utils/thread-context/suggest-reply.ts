@@ -15,6 +15,7 @@ import { parseReply } from "@/utils/mail";
 import { assertHasAiAccess } from "@/utils/premium/limits";
 import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";
+import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import { collectThreadContext } from "@/utils/thread-context/get-thread-context";
 import type { ParsedMessage } from "@/utils/types";
 import { isExaSearchEnabled, searchExa } from "@/utils/exa/search";
@@ -431,6 +432,8 @@ async function contextSources({
         };
       }
       const full = await emailProvider.getThread(item.id).catch((error) => {
+        // A cached reply must not rest on evidence skipped for quota.
+        if (isGmailCallDeferredError(error)) throw error;
         logger.warn("Failed to load related thread", { error });
         return null;
       });

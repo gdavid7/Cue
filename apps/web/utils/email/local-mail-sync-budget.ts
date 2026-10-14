@@ -98,16 +98,20 @@ for i = 1, 2 do
 end
 return 1
 `;
+// A throttled backfill only cools down the local scan; account-wide
+// rate-limit mode (KEYS[1]) is for current work, since it also blocks the
+// user's own reads.
 const cooldownScript = `
 redis.call('SET', KEYS[3], '1', 'PX', 300000)
+local previous = tonumber(redis.call('GET', KEYS[2])) or 0
+if tonumber(ARGV[4]) > previous then redis.call('SET', KEYS[2], ARGV[4], 'PX', ARGV[3]) end
+if ARGV[5] ~= '1' then return 1 end
 local existing = redis.call('GET', KEYS[1])
 if existing then
   local ok, decoded = pcall(cjson.decode, existing)
   if ok and decoded.retryAt and decoded.retryAt > ARGV[1] then return 0 end
 end
 redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])
-local previous = tonumber(redis.call('GET', KEYS[2])) or 0
-if tonumber(ARGV[4]) > previous then redis.call('SET', KEYS[2], ARGV[4], 'PX', ARGV[3]) end
 return 1
 `;
 
@@ -215,6 +219,7 @@ export async function withLocalMailSyncBudget<T>(
             }),
             String(Math.max(1000, delay) + 5000),
             String(now + Math.max(1000, delay)),
+            input.priority === "current" ? "1" : "0",
           ],
         );
       } catch {
