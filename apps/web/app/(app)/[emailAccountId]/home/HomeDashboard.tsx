@@ -34,7 +34,8 @@ export function HomeDashboard() {
   const greetingText = useGreeting();
   const firstName = (emailAccount?.name || "").split(" ")[0];
   const threadHref = (threadId: string) =>
-    `${prefixPath(emailAccountId, "/mail")}?thread-id=${encodeURIComponent(threadId)}`;
+    // from=today lets the reader return here rather than to the inbox.
+    `${prefixPath(emailAccountId, "/mail")}?thread-id=${encodeURIComponent(threadId)}&from=today`;
 
   // The row moves lanes at once; the server catches up behind it.
   const correct = async (
@@ -315,7 +316,10 @@ function Section({
         {action ? <span className="ml-auto">{action}</span> : null}
       </h2>
       {children.length ? (
-        <div className="space-y-1.5">{children}</div>
+        // One flat list, like the inbox, rather than a stack of cards.
+        <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
+          {children}
+        </div>
       ) : (
         <p className="text-muted-foreground text-sm">{empty}</p>
       )}
@@ -348,10 +352,10 @@ function ThreadRow({
   const Icon = correction?.icon;
 
   return (
-    <div className="flex items-center rounded-xl border border-border bg-card transition-colors hover:bg-muted/50">
+    <div className="flex items-center transition-colors hover:bg-muted/50">
       <Link
         className={cn(
-          "flex min-w-0 flex-1 items-start gap-3 rounded-xl px-4 text-left",
+          "flex min-w-0 flex-1 items-start gap-3 px-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
           small ? "py-2.5" : "py-3.5",
         )}
         href={href}
@@ -421,7 +425,7 @@ function ThreadRow({
 function TaskRow({ task, href }: { task: AgentTask; href: string }) {
   return (
     <Link
-      className="flex w-full items-center gap-3 rounded-xl border border-border bg-card px-4 py-2.5 text-left transition-colors hover:bg-muted/50"
+      className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       href={href}
     >
       <div className="min-w-0 flex-1">
