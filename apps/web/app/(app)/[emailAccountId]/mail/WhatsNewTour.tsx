@@ -33,7 +33,7 @@ type TourStep = {
 const STEPS: TourStep[] = [
   {
     title: "The line under each email",
-    body: "What it asks of you, any deadline, and “Reply ready” when a reply is waiting for you.",
+    body: "What it asks of you, any deadline, and “Draft ready” when Cue has drafted your reply.",
     findTarget: () => document.querySelector(INSIGHT_SELECTOR),
     waitForTargetMs: INSIGHT_WAIT_MS,
     waitingMessage:

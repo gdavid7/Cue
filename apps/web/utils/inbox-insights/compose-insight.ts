@@ -66,7 +66,7 @@ export function composeInsight({
   // The reply's state leads, so "ready", "blocked" and "to do" don't look alike.
   if (data?.reply === "ready") {
     tone = "ready";
-    parts.push("Reply ready");
+    parts.push("Draft ready");
   } else if (data?.reply === "needs-info") {
     tone = "pending";
     parts.push("Needs info to reply");
@@ -82,7 +82,7 @@ export function composeInsight({
     names.has(getRuleLabel(SystemType.TO_REPLY))
   ) {
     tone = "action";
-    parts.push("Needs your reply");
+    parts.push("Needs reply");
   } else if (
     userWroteLast &&
     names.has(getRuleLabel(SystemType.AWAITING_REPLY))

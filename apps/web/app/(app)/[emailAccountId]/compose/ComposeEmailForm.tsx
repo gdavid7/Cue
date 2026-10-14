@@ -2116,7 +2116,7 @@ function ReplyStatus({
   // Red marks words the user wrote and hasn't sent. Cue's untouched reply is
   // waiting on a decision, not on unfinished writing.
   if (isCueSuggestion)
-    return <span className="text-muted-foreground">Reply ready</span>;
+    return <span className="text-muted-foreground">Draft ready</span>;
   if (isMailboxDraft)
     return <span className="text-red-600 dark:text-red-400">Draft</span>;
   return <span>Reply</span>;

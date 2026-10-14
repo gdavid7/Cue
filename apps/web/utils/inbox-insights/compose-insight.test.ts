@@ -45,7 +45,7 @@ describe("composeInsight", () => {
   it("falls back to the reply label when there's no AI insight", () => {
     expect(
       compose({ from: "Mom <mom@x.org>", labels: ["Label_To Reply"] }),
-    ).toEqual({ tone: "action", parts: ["Needs your reply"] });
+    ).toEqual({ tone: "action", parts: ["Needs reply"] });
   });
 
   it("shows who you're waiting on when you wrote last", () => {
@@ -94,7 +94,7 @@ describe("composeInsight", () => {
       }),
     ).toEqual({
       tone: "ready",
-      parts: ["Reply ready", "Meeting with Sarah Fri 10 AM"],
+      parts: ["Draft ready", "Meeting with Sarah Fri 10 AM"],
     });
   });
 
@@ -144,7 +144,7 @@ describe("composeInsight with a draft", () => {
         data: undefined,
         now: NOW,
       }),
-    ).toEqual({ tone: "action", parts: ["Needs your reply"] });
+    ).toEqual({ tone: "action", parts: ["Needs reply"] });
   });
 });
 

@@ -99,7 +99,7 @@ export async function getInboxInsights({
       ? upcomingEvents({ emailAccountId, now, logger })
       : [],
     // The same answer the reader shows: a reply Cue verified, maybe saved
-    // as a draft, reads "Reply ready" here too.
+    // as a draft, reads "Draft ready" here too.
     Promise.all(
       items.map((item) =>
         getCachedSuggestedReply({

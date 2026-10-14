@@ -92,7 +92,7 @@ export function ThreadActionsMenu({
   const { execute: markNeedsReply } = useAction(
     markNeedsReplyAction.bind(null, emailAccountId),
     {
-      onSuccess: () => toastSuccess({ description: "Moved to Needs you" }),
+      onSuccess: () => toastSuccess({ description: "Moved to Needs reply" }),
       onError: (error) =>
         toastError({
           description: getActionErrorMessage(error.error, {
