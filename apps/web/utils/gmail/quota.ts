@@ -27,8 +27,12 @@ const MAX_WAIT_MS: Record<GmailQuotaPriority, number> = {
   sync: 15_000,
   background: 15_000,
 };
-// Refreshed by every page of a primary scan, so a scan that stops clears it.
+// Refreshed while a primary scan pages through, so a scan that stops clears it.
 const INITIAL_SYNC_TTL_MS = 90_000;
+const INITIAL_SYNC_REFRESH_MS = 30_000;
+// The REST client retries for seconds; a gate that cannot coordinate within
+// this long lets the call through rather than stall every Gmail call.
+const STORE_TIMEOUT_MS = 300;
 const BACKGROUND_PAUSE_MIN_MS = 30_000;
 
 export type GmailQuotaPriority = "interactive" | "sync" | "background";
@@ -143,6 +147,7 @@ const quotaContext = new AsyncLocalStorage<GmailQuotaContext>();
 const logger = createScopedLogger("gmail-quota");
 const accountsByToken = new Map<string, string>();
 const summarizedMinute = new Map<string, number>();
+const initialSyncMarkedAt = new Map<string, number>();
 
 export class GmailCallDeferredError extends Error {
   readonly code = "GMAIL_CALL_DEFERRED";
@@ -282,16 +287,18 @@ export async function admitGmailCall({
   for (;;) {
     let wait: number;
     try {
-      wait = await gmailQuotaStore.take({
-        bucketKey: keys.bucket,
-        usageKey: keys.usage(minuteOf(Date.now())),
-        usageField: `${priority}:${context.caller}`,
-        blockers,
-        cost,
-        capacity: BUCKET.capacity,
-        perMinute: BUCKET.perMinute,
-        floor: FLOOR[priority],
-      });
+      wait = await withinStoreTimeout(
+        gmailQuotaStore.take({
+          bucketKey: keys.bucket,
+          usageKey: keys.usage(minuteOf(Date.now())),
+          usageField: `${priority}:${context.caller}`,
+          blockers,
+          cost,
+          capacity: BUCKET.capacity,
+          perMinute: BUCKET.perMinute,
+          floor: FLOOR[priority],
+        }),
+      );
     } catch (error) {
       // Without the shared store nothing can be coordinated; Gmail's own
       // limit still protects the account, so the call goes ahead.
@@ -303,13 +310,13 @@ export async function admitGmailCall({
       return ticket;
     }
     if (Date.now() + wait > deadline) {
-      gmailQuotaStore
-        .note({
+      withinStoreTimeout(
+        gmailQuotaStore.note({
           usageKey: keys.usage(minuteOf(Date.now())),
           field: `deferred:${context.caller}`,
           amount: 1,
-        })
-        .catch(() => undefined);
+        }),
+      ).catch(() => undefined);
       throw new GmailCallDeferredError(wait, priority);
     }
     await sleep(Math.min(wait, deadline - Date.now()));
@@ -333,17 +340,21 @@ export async function noteGmailQuotaRefusal(
     retryAfterFromMessage(error) ?? 0,
   );
   try {
-    await gmailQuotaStore.block({
-      key: keys.backgroundPause,
-      ms: retryAfterMs,
-      drainBucketKey:
-        ticket.priority === "background" ? undefined : keys.bucket,
-    });
-    await gmailQuotaStore.note({
-      usageKey: keys.usage(minuteOf(Date.now())),
-      field: `refused:${ticket.caller}`,
-      amount: 1,
-    });
+    await withinStoreTimeout(
+      gmailQuotaStore.block({
+        key: keys.backgroundPause,
+        ms: retryAfterMs,
+        drainBucketKey:
+          ticket.priority === "background" ? undefined : keys.bucket,
+      }),
+    );
+    await withinStoreTimeout(
+      gmailQuotaStore.note({
+        usageKey: keys.usage(minuteOf(Date.now())),
+        field: `refused:${ticket.caller}`,
+        amount: 1,
+      }),
+    );
   } catch (storeError) {
     logger.warn("Failed to record Gmail quota refusal", { error: storeError });
   }
@@ -360,7 +371,8 @@ export function isGmailQuotaRefusal(error: unknown) {
 
 /**
  * Marks a primary scan in progress. Background callers wait until it ends so
- * the inbox fills before anything spends quota on analysis.
+ * the inbox fills before anything spends quota on analysis. Every page of a
+ * scan calls this; the marker is only written when it is due for a refresh.
  */
 export async function setGmailInitialSync(
   emailAccountId: string,
@@ -368,13 +380,23 @@ export async function setGmailInitialSync(
 ) {
   if (!isEmailProviderRateLimitRedisConfigured()) return;
   const { initialSync } = accountKeys(emailAccountId);
+  const markedAt = initialSyncMarkedAt.get(emailAccountId);
+  if (
+    active &&
+    markedAt !== undefined &&
+    Date.now() - markedAt < INITIAL_SYNC_REFRESH_MS
+  )
+    return;
   try {
-    if (active)
-      await gmailQuotaStore.block({
-        key: initialSync,
-        ms: INITIAL_SYNC_TTL_MS,
-      });
-    else await gmailQuotaStore.clear(initialSync);
+    if (active) {
+      await withinStoreTimeout(
+        gmailQuotaStore.block({ key: initialSync, ms: INITIAL_SYNC_TTL_MS }),
+      );
+      rememberInitialSyncMark(emailAccountId);
+    } else {
+      initialSyncMarkedAt.delete(emailAccountId);
+      await withinStoreTimeout(gmailQuotaStore.clear(initialSync));
+    }
   } catch (error) {
     logger.warn("Failed to update Gmail initial sync state", { error });
   }
@@ -471,10 +493,12 @@ async function summarizeLastMinute(emailAccountId: string) {
     if (oldest) summarizedMinute.delete(oldest);
   }
   const keys = accountKeys(emailAccountId);
-  const usage = await gmailQuotaStore.claimUsage({
-    usageKey: keys.usage(minute - 1),
-    claimKey: `${keys.usage(minute - 1)}:logged`,
-  });
+  const usage = await withinStoreTimeout(
+    gmailQuotaStore.claimUsage({
+      usageKey: keys.usage(minute - 1),
+      claimKey: `${keys.usage(minute - 1)}:logged`,
+    }),
+  );
   if (!usage || Object.keys(usage).length === 0) return;
   const units: Record<string, number> = {};
   const deferred: Record<string, number> = {};
@@ -497,6 +521,32 @@ async function summarizeLastMinute(emailAccountId: string) {
     deferredByCaller: deferred,
     refusedByCaller: refused,
   });
+}
+
+function rememberInitialSyncMark(emailAccountId: string) {
+  initialSyncMarkedAt.delete(emailAccountId);
+  initialSyncMarkedAt.set(emailAccountId, Date.now());
+  if (initialSyncMarkedAt.size > 1000) {
+    const oldest = initialSyncMarkedAt.keys().next().value;
+    if (oldest) initialSyncMarkedAt.delete(oldest);
+  }
+}
+
+async function withinStoreTimeout<T>(operation: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Gmail quota store timed out")),
+          STORE_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function retryAfterFromMessage(error: unknown) {

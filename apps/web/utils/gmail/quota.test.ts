@@ -43,6 +43,7 @@ describe("Gmail quota gate", () => {
     (gmailQuotaStore as unknown as { reset(): void }).reset();
   });
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -149,6 +150,126 @@ describe("Gmail quota gate", () => {
           ),
       ),
     ).resolves.toBe("page");
+  });
+
+  it("lets a call through when the quota store fails, since Gmail's own limit still applies", async () => {
+    vi.spyOn(gmailQuotaStore, "take").mockRejectedValueOnce(
+      new Error("Redis unavailable"),
+    );
+    const read = vi.fn(async () => "thread");
+
+    await expect(
+      runWithGmailQuota(
+        { caller: "user/inbox-insights", priority: "background" },
+        () => meterGmailCall({ emailAccountId: ACCOUNT, cost: 40 }, read),
+      ),
+    ).resolves.toBe("thread");
+  });
+
+  it("does not let a hung quota store hold a Gmail call for more than a moment", async () => {
+    vi.spyOn(gmailQuotaStore, "take").mockReturnValueOnce(
+      new Promise(() => undefined),
+    );
+    let result: string | null = null;
+    runWithGmailQuota(
+      { caller: "mail/v1/conversation-membership", priority: "interactive" },
+      () =>
+        meterGmailCall(
+          { emailAccountId: ACCOUNT, cost: 40 },
+          async () => "thread",
+        ),
+    ).then((value) => {
+      result = value;
+    });
+
+    await vi.advanceTimersByTimeAsync(300);
+    expect(result).toBe("thread");
+  });
+
+  it("does not let a hung quota store hold up recording a Gmail refusal", async () => {
+    vi.spyOn(gmailQuotaStore, "block").mockReturnValueOnce(
+      new Promise(() => undefined),
+    );
+    let settled = false;
+    runWithGmailQuota(
+      { caller: "mail/v1/conversation-membership", priority: "interactive" },
+      () =>
+        meterGmailCall({ emailAccountId: ACCOUNT, cost: 40 }, async () => {
+          throw quotaRefusal;
+        }),
+    ).catch(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(300);
+    expect(settled).toBe(true);
+  });
+
+  it("writes the first-sync marker once while a scan pages through, and clears it at the end", async () => {
+    const block = vi.spyOn(gmailQuotaStore, "block");
+    for (let page = 0; page < 10; page++) {
+      await setGmailInitialSync("account-scan", true);
+      await vi.advanceTimersByTimeAsync(2000);
+    }
+    expect(block).toHaveBeenCalledTimes(1);
+
+    // A long scan refreshes the marker before it expires.
+    await vi.advanceTimersByTimeAsync(30_000);
+    await setGmailInitialSync("account-scan", true);
+    expect(block).toHaveBeenCalledTimes(2);
+
+    await setGmailInitialSync("account-scan", false);
+    await expect(
+      runWithGmailQuota(
+        { caller: "user/inbox-insights", priority: "background" },
+        () =>
+          meterGmailCall(
+            { emailAccountId: "account-scan", cost: 20 },
+            async () => "x",
+          ),
+      ),
+    ).resolves.toBe("x");
+    // The next scan marks the account again.
+    await setGmailInitialSync("account-scan", true);
+    expect(block).toHaveBeenCalledTimes(3);
+  });
+
+  it("makes every caller wait out Gmail's minute after a refusal outside background work", async () => {
+    await expect(
+      runWithGmailQuota(
+        { caller: "mail/v1/conversation-membership", priority: "interactive" },
+        () =>
+          meterGmailCall({ emailAccountId: ACCOUNT, cost: 40 }, async () => {
+            throw quotaRefusal;
+          }),
+      ),
+    ).rejects.toBe(quotaRefusal);
+
+    // The bucket is empty: a sync page waits for it to refill.
+    let page = false;
+    runWithGmailQuota({ caller: "mail/v1/enumeration", priority: "sync" }, () =>
+      meterGmailCall(
+        { emailAccountId: ACCOUNT, cost: 100 },
+        async () => "page",
+      ),
+    ).then(() => {
+      page = true;
+    });
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(page).toBe(false);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(page).toBe(true);
+    // Background work stays out until the pause ends.
+    await expect(
+      runWithGmailQuota(
+        { caller: "user/inbox-insights", priority: "background" },
+        () =>
+          meterGmailCall(
+            { emailAccountId: ACCOUNT, cost: 20 },
+            async () => "x",
+          ),
+      ),
+    ).rejects.toBeInstanceOf(GmailCallDeferredError);
   });
 
   it("treats what a person clicked, typed or opened as interactive and only enrichment as background", () => {
