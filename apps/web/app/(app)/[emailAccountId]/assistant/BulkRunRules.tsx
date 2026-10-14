@@ -1,7 +1,12 @@
 "use client";
 
 import { useReducer, useRef, useState } from "react";
-import { PauseIcon, PlayIcon, SquareIcon } from "lucide-react";
+import {
+  AlertTriangleIcon,
+  PauseIcon,
+  PlayIcon,
+  SquareIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SectionDescription } from "@/components/Typography";
 import { LoadingContent } from "@/components/LoadingContent";
@@ -43,6 +48,8 @@ import {
 import { EndTrialButton } from "@/components/EndTrialButton";
 import { onRun } from "@/app/(app)/[emailAccountId]/assistant/bulk-run";
 import { useAiAutomationStatus } from "@/hooks/useAiAutomationStatus";
+import { useRules } from "@/hooks/useRules";
+import { summarizeBulkRun } from "@/app/(app)/[emailAccountId]/assistant/bulk-run-summary";
 
 const TRIAL_BULK_PROCESS_EMAIL_LIMIT = 200;
 
@@ -62,6 +69,7 @@ export function BulkRunRules() {
     tier,
   } = usePremium();
   const { data: aiAutomationStatus } = useAiAutomationStatus();
+  const { data: rules } = useRules();
 
   const isBusinessPlusTier = hasTierAccess({
     tier: tier || null,
@@ -85,6 +93,10 @@ export function BulkRunRules() {
 
   const abortRef = useRef<() => void>(undefined);
 
+  const summary = rules
+    ? summarizeBulkRun(rules, { generateDraftReplies })
+    : null;
+
   // Derived state
   const remaining = new Set(
     [...state.processedThreadIds].filter((id) => queue.has(id)),
@@ -106,13 +118,14 @@ export function BulkRunRules() {
     dispatch({ type: "START" });
 
     if (!startDate) {
-      toastError({ description: "Please select a start date" });
+      toastError({ description: "Choose a start date first." });
       dispatch({ type: "RESET" });
       return;
     }
     if (!emailAccountId) {
       toastError({
-        description: "Email account ID is missing. Please refresh the page.",
+        description:
+          "Cue couldn't tell which account to use. Refresh the page and try again.",
       });
       dispatch({ type: "RESET" });
       return;
@@ -147,8 +160,9 @@ export function BulkRunRules() {
     } catch (error) {
       console.error("Failed to start bulk processing:", error);
       toastError({
-        title: "Failed to start",
-        description: "An error occurred. Please try again.",
+        title: "Couldn't start the run",
+        description:
+          "Nothing was changed. Check your connection and try again.",
       });
       dispatch({ type: "RESET" });
     }
@@ -176,14 +190,15 @@ export function BulkRunRules() {
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
         <DialogTrigger asChild>
           <Button type="button" variant="outline" size="sm">
-            Process Past Emails
+            Run rules on past mail…
           </Button>
         </DialogTrigger>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Bulk Process Emails</DialogTitle>
+            <DialogTitle>Run rules on past mail</DialogTitle>
             <DialogDescription>
-              Run your rules on emails already in your inbox.
+              Cue checks emails already in your inbox against your rules and
+              applies them, as if they had just arrived.
             </DialogDescription>
           </DialogHeader>
           {progressMessage && (
@@ -273,18 +288,22 @@ export function BulkRunRules() {
 
               {(state.status === "idle" || state.status === "stopped") &&
                 !isProcessing && (
-                  <Button
-                    type="button"
-                    disabled={
-                      !startDate ||
-                      !emailAccountId ||
-                      !hasAiAccess ||
-                      trialAiLimitMessage !== null
-                    }
-                    onClick={handleStart}
-                  >
-                    Process Emails
-                  </Button>
+                  <>
+                    {summary && <RunSummary summary={summary} />}
+                    <Button
+                      type="button"
+                      disabled={
+                        !startDate ||
+                        !emailAccountId ||
+                        !hasAiAccess ||
+                        trialAiLimitMessage !== null ||
+                        summary?.ruleCount === 0
+                      }
+                      onClick={handleStart}
+                    >
+                      Run rules
+                    </Button>
+                  </>
                 )}
               {isBusy && (
                 <div className="flex justify-end gap-2">
@@ -370,6 +389,71 @@ function ToggleRow({
       </ItemActions>
     </Item>
   );
+}
+
+/** What the run will do, stated before it starts, like Deep Clean's confirmation. */
+function RunSummary({
+  summary,
+}: {
+  summary: ReturnType<typeof summarizeBulkRun>;
+}) {
+  if (!summary.ruleCount) {
+    return (
+      <p className="text-muted-foreground text-sm">
+        No rules are turned on, so there is nothing to run. Turn on a rule
+        first.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-2 text-sm">
+      <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+        <li>
+          Cue checks each email in the date range against your{" "}
+          {summary.ruleCount === 1
+            ? "1 enabled rule"
+            : `${summary.ruleCount} enabled rules`}
+          .
+        </li>
+        {summary.actions.length > 0 && (
+          <li>
+            Matching emails can get these actions:{" "}
+            <span className="text-foreground">
+              {summary.actions.join(", ")}
+            </span>
+            .
+          </li>
+        )}
+        {!summary.deletes && (
+          <li>No emails are deleted. Archived mail stays in search.</li>
+        )}
+        <li>You can pause or stop the run at any time.</li>
+      </ul>
+      {(summary.sendingRules.length > 0 || summary.deletes) && (
+        <div
+          className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+          role="note"
+        >
+          <AlertTriangleIcon className="mt-0.5 size-4 shrink-0" />
+          <p>
+            {summary.sendingRules.length > 0 &&
+              `${formatRuleNames(summary.sendingRules)} ${
+                summary.sendingRules.length === 1 ? "sends" : "send"
+              } email on your behalf, and will do so for matching past mail too. `}
+            {summary.deletes && "Some rules delete matching emails. "}
+            This can't be undone.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatRuleNames(names: string[]) {
+  const quoted = names.map((name) => `“${name}”`);
+  if (quoted.length <= 2) return quoted.join(" and ");
+  return `${quoted.slice(0, 2).join(", ")} and ${quoted.length - 2} more`;
 }
 
 function describeTargetedEmails({
