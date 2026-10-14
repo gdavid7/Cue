@@ -17,14 +17,14 @@ export function BeforeYourMeeting({
   if (!data?.meetings.length) return null;
 
   return (
-    <div className="grid gap-3 md:grid-cols-2">
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
       {data.meetings.map((meeting) => (
         <section
-          className="rounded-xl border border-border bg-card p-4"
+          className="min-w-0 rounded-xl border border-border bg-card p-4"
           key={meeting.eventId}
         >
           <h2 className="flex items-center gap-2 font-medium text-sm">
-            <NewspaperIcon className="size-4 text-primary" />
+            <NewspaperIcon className="size-4 shrink-0 text-primary" />
             Before your meeting
           </h2>
           <p className="mt-1 truncate text-muted-foreground text-xs">
@@ -43,7 +43,7 @@ export function BeforeYourMeeting({
                   <div className="line-clamp-1 text-foreground text-sm">
                     {item.title}
                   </div>
-                  <div className="text-muted-foreground text-xs">
+                  <div className="truncate text-muted-foreground text-xs">
                     {item.domain}
                     {item.publishedDate
                       ? ` · ${formatNewsDate(item.publishedDate)}`

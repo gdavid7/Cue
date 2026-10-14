@@ -104,6 +104,65 @@ test("Today's rows match the inbox in both themes and on phones", async ({
   }
 });
 
+test("Before your meeting stays inside a phone-width Today in both themes", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(480_000);
+  // News comes from a search provider the emulated app has no key for.
+  await page.route("**/api/user/meeting-news*", (route) =>
+    route.fulfill({ json: { meetings: [LONG_MEETING_NEWS] } }),
+  );
+  for (const theme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: theme });
+    await page.addInitScript((value) => {
+      localStorage.setItem("theme", value);
+    }, theme);
+    await openToday(page);
+    const card = page.locator("section").filter({
+      has: page.getByRole("heading", { name: "Before your meeting" }),
+    });
+    for (const size of [
+      { width: 1280, height: 800 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(size);
+      await expect(card).toBeVisible();
+      const box = await card.boundingBox();
+      expect(box?.x ?? -1).toBeGreaterThanOrEqual(0);
+      expect(
+        (box?.x ?? 0) + (box?.width ?? Number.POSITIVE_INFINITY),
+      ).toBeLessThanOrEqual(size.width);
+      await capturePlaywrightCheckpoint(
+        page,
+        testInfo,
+        `today-meeting-news-${theme}-${size.width}`,
+      );
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
+  }
+});
+
+const LONG_MEETING_NEWS = {
+  eventId: "playwright-meeting-news",
+  title: "Quarterly partnership review with the regional operations leadership",
+  startTime: new Date(Date.now() + 86_400_000).toISOString(),
+  organization: "Northwind Traders International Holdings",
+  news: [
+    {
+      title:
+        "Northwind Traders International Holdings announces a sweeping reorganization of its European logistics division",
+      url: "https://news.example.com/northwind-reorganization",
+      domain: "news.international-business-reporting-network.example.com",
+      publishedDate: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+    },
+    {
+      title: "Northwind-Traders-International-Holdings-Q3-earnings-call-recap",
+      url: "https://markets.example.com/northwind-q3",
+      domain: "markets.example.com",
+    },
+  ],
+};
+
 async function openToday(page: Page) {
   const emailAccountId = await getEmailAccountId(page);
   await page.goto(`/${emailAccountId}/home`, {

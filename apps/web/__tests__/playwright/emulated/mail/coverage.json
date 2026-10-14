@@ -2,7 +2,12 @@
   "today.spec.ts": [
     "app/(app)/[emailAccountId]/home/HomeDashboard.tsx",
     "app/(app)/[emailAccountId]/home/TodayThreadRow.tsx",
-    "utils/home/get-home.ts"
+    "utils/home/get-home.ts",
+    "app/(app)/[emailAccountId]/home/BeforeYourMeeting.tsx"
+  ],
+  "hydration.spec.ts": [
+    "components/theme-provider.tsx",
+    "app/(landing)/login/LoginForm.tsx"
   ],
   "account-selection.spec.ts": [
     "app/(app)/[emailAccountId]/mail/MailSidebar.tsx",
