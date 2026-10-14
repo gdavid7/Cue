@@ -8,6 +8,7 @@ import {
 import { mapWithConcurrency } from "@/utils/async";
 import { fetchCalendarEventsInWindow } from "@/utils/calendar/fetch-events-in-window";
 import { isSameEmailAddress } from "@/utils/email";
+import { describeProviderRateLimitError } from "@/utils/email/rate-limit";
 import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
 import {
@@ -67,6 +68,15 @@ export async function searchContext({
   const terms = queryTerms(query);
   if (!terms.length) return { results: [] };
 
+  const startedAt = Date.now();
+  const timing = {
+    emailMs: 0,
+    calendarMs: 0,
+    connectorsMs: 0,
+    participantsMs: 0,
+  };
+  let emailFailed = false;
+  let calendarFailed = false;
   const [hits, events, connectors] = await Promise.all([
     emailProvider
       .searchThreads({
@@ -76,8 +86,16 @@ export async function searchContext({
       })
       .then((r) => r.threads)
       .catch((error) => {
+        // Empty results would read as "nothing about this"; a limited mailbox
+        // has to be reported so the assistant can say to try again.
+        if (describeProviderRateLimitError(error, emailProvider.name))
+          throw error;
         logger.warn("Context search failed", { error });
+        emailFailed = true;
         return [] as EmailThread[];
+      })
+      .finally(() => {
+        timing.emailMs = Date.now() - startedAt;
       }),
     fetchCalendarEventsInWindow({
       emailAccountId,
@@ -89,9 +107,20 @@ export async function searchContext({
       .then((r) => r.events)
       .catch((error) => {
         logger.warn("Failed to fetch calendar events for search", { error });
+        calendarFailed = true;
         return [];
+      })
+      .finally(() => {
+        timing.calendarMs = Date.now() - startedAt;
       }),
-    fetchConnectorCandidates({ emailAccountId, keywords: terms, logger, now }),
+    fetchConnectorCandidates({
+      emailAccountId,
+      keywords: terms,
+      logger,
+      now,
+    }).finally(() => {
+      timing.connectorsMs = Date.now() - startedAt;
+    }),
   ]);
 
   const hitCandidates = hits.map(threadToCandidate);
@@ -100,6 +129,7 @@ export async function searchContext({
     candidates: [...hitCandidates, ...events.map(eventToCandidate)],
     userEmail,
   });
+  const participantsStartedAt = Date.now();
   const theirThreads = await mapWithConcurrency(people, MAX_PEOPLE, (p) =>
     emailProvider
       .getThreadsWithParticipant({
@@ -111,6 +141,8 @@ export async function searchContext({
         return [] as EmailThread[];
       }),
   );
+
+  timing.participantsMs = Date.now() - participantsStartedAt;
 
   const threads = new Map(
     [...hits, ...theirThreads.flat()].map((t) => [t.id, t]),
@@ -132,6 +164,19 @@ export async function searchContext({
     now: now.toISOString(),
     limit: RESULT_LIMIT,
     maxPerKind: MAX_PER_KIND,
+  });
+
+  logger.info("Context search finished", {
+    ...timing,
+    durationMs: Date.now() - startedAt,
+    emailFailed,
+    calendarFailed,
+    connectorsComplete: connectors.complete,
+    emailHits: hits.length,
+    eventCount: events.length,
+    connectorCount: connectors.candidates.length,
+    peopleFollowed: people.length,
+    resultCount: ranked.length,
   });
 
   return {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestLogger, getMockMessage } from "@/__tests__/helpers";
 import type { EmailProvider, EmailThread } from "@/utils/email/types";
+import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import { searchContext } from "./search-context";
 
 vi.mock("server-only", () => ({}));
@@ -75,6 +76,49 @@ describe("searchContext", () => {
 
     expect(results.map((r) => r.id)).toEqual(["t1"]);
     expect(provider.getThreadsWithParticipant).not.toHaveBeenCalled();
+  });
+
+  it("reports a mailbox Gmail is limiting instead of finding nothing", async () => {
+    const deferred = new GmailCallDeferredError(12_000, "interactive");
+    const provider = {
+      name: "google",
+      searchThreads: vi.fn(async () => {
+        throw deferred;
+      }),
+      getThreadsWithParticipant: vi.fn(async () => []),
+    } as unknown as EmailProvider;
+
+    await expect(
+      searchContext({
+        emailAccountId: "account-1",
+        userEmail: USER,
+        query: "acme",
+        emailProvider: provider,
+        logger: createTestLogger(),
+        now: NOW,
+      }),
+    ).rejects.toBe(deferred);
+  });
+
+  it("still answers from the calendar and apps when the mail search breaks", async () => {
+    const provider = {
+      name: "google",
+      searchThreads: vi.fn(async () => {
+        throw new Error("socket hang up");
+      }),
+      getThreadsWithParticipant: vi.fn(async () => []),
+    } as unknown as EmailProvider;
+
+    await expect(
+      searchContext({
+        emailAccountId: "account-1",
+        userEmail: USER,
+        query: "acme",
+        emailProvider: provider,
+        logger: createTestLogger(),
+        now: NOW,
+      }),
+    ).resolves.toEqual({ results: [] });
   });
 });
 
