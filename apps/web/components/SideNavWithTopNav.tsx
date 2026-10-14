@@ -1,7 +1,5 @@
 "use client";
 
-import { Suspense } from "react";
-import dynamic from "next/dynamic";
 import { usePathname } from "next/navigation";
 import {
   SidebarInset,
@@ -13,8 +11,6 @@ import { SideNav } from "@/components/SideNav";
 import { SidebarRight } from "@/components/SidebarRight";
 import { cn } from "@/utils";
 import { isMailShellPath } from "@/utils/path";
-
-const CrispWithNoSSR = dynamic(() => import("@/components/CrispChat"));
 
 function ContentWrapper({ children }: { children: React.ReactNode }) {
   const { state } = useSidebar();
@@ -62,9 +58,6 @@ function ContentWrapper({ children }: { children: React.ReactNode }) {
       >
         {children}
       </SidebarInset>
-      <Suspense>
-        <CrispWithNoSSR />
-      </Suspense>
     </div>
   );
 }

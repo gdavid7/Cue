@@ -1,49 +1,29 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Crisp } from "crisp-sdk-web";
-import { usePathname } from "next/navigation";
 import { env } from "@/env";
-import { useSidebar } from "@/components/ui/sidebar";
-import { useAccount } from "@/providers/EmailAccountProvider";
-import { isMailShellPath } from "@/utils/path";
 
-const CrispChat = () => {
-  const { state } = useSidebar();
-  const pathname = usePathname();
+let isSupportChatConfigured = false;
 
-  const [isConfigured, setIsConfigured] = useState(false);
-  const isChatOpen = state.includes("chat-sidebar");
-  const isMailRoute = pathname ? isMailShellPath(pathname) : false;
+export const isSupportChatAvailable = Boolean(env.NEXT_PUBLIC_CRISP_WEBSITE_ID);
 
-  useEffect(() => {
-    if (!env.NEXT_PUBLIC_CRISP_WEBSITE_ID) return;
-
+/**
+ * Loads the support chat only when someone asks for it, so its third-party
+ * script and socket stay off every other page load. The launcher bubble hides
+ * again once the chat is closed.
+ */
+export function openSupportChat(userEmail?: string | null) {
+  if (!env.NEXT_PUBLIC_CRISP_WEBSITE_ID) return;
+  if (!isSupportChatConfigured) {
     Crisp.configure(env.NEXT_PUBLIC_CRISP_WEBSITE_ID);
-    Crisp.setHideOnMobile(true);
-    setIsConfigured(true);
-  }, []);
-
-  const { userEmail } = useAccount();
-
-  useEffect(() => {
-    if (!env.NEXT_PUBLIC_CRISP_WEBSITE_ID || !isConfigured) return;
-
-    if (userEmail) Crisp.user.setEmail(userEmail);
-  }, [userEmail, isConfigured]);
-
-  useEffect(() => {
-    if (!env.NEXT_PUBLIC_CRISP_WEBSITE_ID || !isConfigured) return;
-
-    if (isChatOpen || isMailRoute) {
-      Crisp.chat.hide();
-    } else {
-      Crisp.chat.show();
-    }
-  }, [isConfigured, isChatOpen, isMailRoute]);
-
-  return null;
-};
+    Crisp.chat.onChatClosed(() => Crisp.chat.hide());
+    isSupportChatConfigured = true;
+  }
+  if (userEmail) Crisp.user.setEmail(userEmail);
+  Crisp.chat.show();
+  Crisp.chat.open();
+}
 
 // This is used to show the Crisp chat when the user is logged out, and auto opens to help the user
 export const CrispChatLoggedOutVisible = () => {
@@ -54,5 +34,3 @@ export const CrispChatLoggedOutVisible = () => {
 
   return null;
 };
-
-export default CrispChat;

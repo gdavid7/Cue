@@ -7,6 +7,7 @@ import {
   ChevronsUpDownIcon,
   KeyboardIcon,
   LightbulbIcon,
+  MessageCircleIcon,
   ShieldCheckIcon,
   LogOutIcon,
   Building2Icon,
@@ -38,6 +39,10 @@ import { Referrals } from "@/components/ReferralDialog";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { AccountSwitcherMenuItems } from "@/components/AccountSwitcher";
 import { Kbd } from "@/components/Kbd";
+import {
+  isSupportChatAvailable,
+  openSupportChat,
+} from "@/components/CrispChat";
 import { getShortcutHint } from "@/lib/shortcuts/registry";
 import { shortcutsDialogOpenAtom } from "@/store/command-palette";
 import { useSetAtom } from "jotai";
@@ -206,6 +211,17 @@ export function NavUser() {
                 Help Center
               </Link>
             </DropdownMenuItem>
+            {isSupportChatAvailable && (
+              <DropdownMenuItem
+                onSelect={() => {
+                  closeMobileSidebar("left-sidebar");
+                  openSupportChat(emailAccount?.email);
+                }}
+              >
+                <MessageCircleIcon className="mr-2 size-4" />
+                Chat with support
+              </DropdownMenuItem>
+            )}
             {isMobile ? null : (
               <DropdownMenuItem onSelect={() => setShortcutsOpen(true)}>
                 <KeyboardIcon className="mr-2 size-4" />
