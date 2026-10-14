@@ -86,9 +86,10 @@ describe("toolCallAgentStream model fallback", () => {
     vi.clearAllMocks();
   });
 
-  it("answers from the fallback when the primary errors mid-stream before any output", async () => {
+  it("answers from the fallback when the primary still fails after one quick retry", async () => {
     const primary = createScriptedModel("primary", [
-      [STREAM_START, { type: "error", error: overloadedError() }],
+      failedCall(),
+      failedCall(),
     ]);
     const fallback = createScriptedModel("fallback", [
       [STREAM_START, ...textParts("Fallback answer"), finish("stop")],
@@ -99,6 +100,84 @@ describe("toolCallAgentStream model fallback", () => {
     expect(run.text).toBe("Fallback answer");
     expect(run.errorChunks).toHaveLength(0);
     expect(run.resolvedModels).toEqual(["primary-model", "fallback-model"]);
+    expect(primary.doStreamCalls).toHaveLength(2);
+  });
+
+  it("answers from the primary when its quick retry succeeds", async () => {
+    const primary = createScriptedModel("primary", [
+      failedCall(),
+      [STREAM_START, ...textParts("Primary answer"), finish("stop")],
+    ]);
+    const fallback = createScriptedModel("fallback", [
+      [STREAM_START, ...textParts("Should not run"), finish("stop")],
+    ]);
+
+    const startedAt = Date.now();
+    const run = await runAgent({ primary, fallback });
+
+    expect(run.text).toBe("Primary answer");
+    expect(run.resolvedModels).toEqual(["primary-model"]);
+    expect(fallback.doStreamCalls).toHaveLength(0);
+    expect(Date.now() - startedAt).toBeLessThan(1500);
+  });
+
+  it("falls back without retrying when the provider asks for a longer wait", async () => {
+    const primary = createScriptedModel("primary", [
+      [STREAM_START, { type: "error", error: rateLimitError("30") }],
+    ]);
+    const fallback = createScriptedModel("fallback", [
+      [STREAM_START, ...textParts("Fallback answer"), finish("stop")],
+    ]);
+
+    const run = await runAgent({ primary, fallback });
+
+    expect(run.text).toBe("Fallback answer");
+    expect(primary.doStreamCalls).toHaveLength(1);
+  });
+
+  it("falls back when the primary is overloaded", async () => {
+    const overloaded = new APICallError({
+      message: "Overloaded",
+      url: "https://example.test",
+      requestBodyValues: {},
+      statusCode: 529,
+      responseBody:
+        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      isRetryable: true,
+    });
+    const primary = createScriptedModel("primary", [
+      [STREAM_START, { type: "error", error: overloaded }],
+      [STREAM_START, { type: "error", error: overloaded }],
+    ]);
+    const fallback = createScriptedModel("fallback", [
+      [STREAM_START, ...textParts("Fallback answer"), finish("stop")],
+    ]);
+
+    const run = await runAgent({ primary, fallback });
+
+    expect(run.text).toBe("Fallback answer");
+  });
+
+  it("surfaces a request error the fallback would not fix instead of switching", async () => {
+    const badRequest = new APICallError({
+      message: "messages: text content blocks must be non-empty",
+      url: "https://example.test",
+      requestBodyValues: {},
+      statusCode: 400,
+      isRetryable: false,
+    });
+    const primary = createScriptedModel("primary", [
+      [STREAM_START, { type: "error", error: badRequest }],
+    ]);
+    const fallback = createScriptedModel("fallback", [
+      [STREAM_START, ...textParts("Should not run"), finish("stop")],
+    ]);
+
+    const run = await runAgent({ primary, fallback });
+
+    expect(run.errorChunks).toHaveLength(1);
+    expect(fallback.doStreamCalls).toHaveLength(0);
+    expect(primary.doStreamCalls).toHaveLength(1);
   });
 
   it("answers from the fallback when the primary call is rejected outright", async () => {
@@ -141,7 +220,8 @@ describe("toolCallAgentStream model fallback", () => {
     const archive = vi.fn(async () => "archived");
     const primary = createScriptedModel("primary", [
       [STREAM_START, toolCall("call-1", "archive"), finish("tool-calls")],
-      [STREAM_START, { type: "error", error: overloadedError() }],
+      failedCall(),
+      failedCall(),
     ]);
     const fallback = createScriptedModel("fallback", [
       [STREAM_START, ...textParts("Archived it."), finish("stop")],
@@ -165,6 +245,7 @@ describe("toolCallAgentStream model fallback", () => {
         toolCall("call-1", "archive"),
         { type: "error", error: overloadedError() },
       ],
+      failedCall(),
     ]);
     const fallback = createScriptedModel("fallback", [
       [STREAM_START, toolCall("call-2", "archive"), finish("tool-calls")],
@@ -223,6 +304,7 @@ describe("toolCallAgentStream model fallback", () => {
         },
         { type: "error", error: overloadedError() },
       ],
+      failedCall(),
     ]);
     const fallback = createScriptedModel("fallback", [
       [STREAM_START, ...textParts("Fallback answer"), finish("stop")],
@@ -251,6 +333,7 @@ describe("toolCallAgentStream model fallback", () => {
         },
         { type: "error", error: overloadedError() },
       ],
+      failedCall(),
     ]);
     const fallback = createScriptedModel("fallback", [
       [STREAM_START, toolCall("call-2", "archive"), finish("tool-calls")],
@@ -526,6 +609,21 @@ function finish(unified: "stop" | "tool-calls"): LanguageModelV4StreamPart {
       outputTokens: { total: 1, text: 1, reasoning: undefined },
     },
   };
+}
+
+function failedCall(): LanguageModelV4StreamPart[] {
+  return [STREAM_START, { type: "error", error: overloadedError() }];
+}
+
+function rateLimitError(retryAfterSeconds: string) {
+  return new APICallError({
+    message: "Rate limit exceeded",
+    url: "https://example.test",
+    requestBodyValues: {},
+    statusCode: 429,
+    responseHeaders: { "retry-after": retryAfterSeconds },
+    isRetryable: true,
+  });
 }
 
 function overloadedError() {

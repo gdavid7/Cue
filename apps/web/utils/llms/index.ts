@@ -98,6 +98,10 @@ const logger = createScopedLogger("llms");
 // 5 ms keeps the steady flow (no empty 100 ms client frames on bursty
 // streams) while staying close to model speed.
 const SMOOTH_STREAM_WORD_DELAY_MS = 5;
+// A chat run with a fallback model retries its primary once, briefly, before
+// switching; a provider asking for a longer wait goes straight to the fallback.
+const QUICK_RETRY_DELAY_MS = 1000;
+const MAX_QUICK_RETRY_DELAY_MS = 1500;
 
 const MAX_LOG_LENGTH = 200;
 
@@ -983,6 +987,18 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
     runCandidates.length > 1
       ? createStreamFallbackModel({
           candidates: runCandidates,
+          shouldFallback: shouldFallbackToNextModel,
+          getRetryDelayMs: getQuickRetryDelayMs,
+          onRetry: ({ candidate, error, delayMs }) => {
+            logger.warn("Tool-call stream failed, retrying primary model", {
+              label,
+              provider: candidate.provider,
+              model: candidate.modelName,
+              delayMs,
+              failureCategory: getLlmFallbackFailureCategory(error),
+              error,
+            });
+          },
           onFallback: ({ from, to, error }) => {
             logger.warn(
               "Tool-call stream failed, switching to fallback model",
@@ -1489,6 +1505,14 @@ function getLlmFallbackFailureCategory(
   if (errorInfo.retryable) return "server_error";
 
   return "unknown";
+}
+
+function getQuickRetryDelayMs(error: unknown): number | undefined {
+  const { retryable, retryAfterMs } = extractLLMErrorInfo(error);
+  if (!retryable) return;
+
+  const delayMs = retryAfterMs ?? QUICK_RETRY_DELAY_MS;
+  return delayMs <= MAX_QUICK_RETRY_DELAY_MS ? delayMs : undefined;
 }
 
 function shouldFallbackToNextModel(error: unknown): boolean {

@@ -4,6 +4,7 @@ import type {
   LanguageModelV4StreamPart,
   LanguageModelV4StreamResult,
 } from "@ai-sdk/provider";
+import { sleep } from "@/utils/sleep";
 
 export type StreamFallbackCandidate = {
   provider: string;
@@ -25,10 +26,24 @@ export function createStreamFallbackModel<
   TCandidate extends StreamFallbackCandidate,
 >({
   candidates,
+  shouldFallback,
+  getRetryDelayMs,
+  onRetry,
   onFallback,
   onInterrupted,
 }: {
   candidates: TCandidate[];
+  // Whether a failure is one another model could get past (rate limits,
+  // outages, refusals) rather than a request no model would accept.
+  shouldFallback: (error: unknown) => boolean;
+  // How long to wait before retrying the primary once, or undefined when a
+  // retry is not worth it. Bounded by the caller to keep the delay short.
+  getRetryDelayMs: (error: unknown) => number | undefined;
+  onRetry: (event: {
+    candidate: TCandidate;
+    error: unknown;
+    delayMs: number;
+  }) => void;
   onFallback: (event: {
     from: TCandidate;
     to: TCandidate;
@@ -41,17 +56,31 @@ export function createStreamFallbackModel<
   // Stays on the fallback for the rest of the run: the failing provider is
   // likely to fail the next step too.
   let activeIndex = 0;
+  let primaryRetried = false;
   const getActiveCandidate = () => candidates[activeIndex];
 
-  const switchToNextCandidate = (
+  // Called when a model call fails before the user has seen any of its
+  // output. Returns whether the call should be started again: once on the
+  // primary for a passing failure, then on the next candidate.
+  const recoverFrom = async (
     error: unknown,
     abortSignal: AbortSignal | undefined,
   ) => {
     if (abortSignal?.aborted || isAbortError(error)) return false;
 
+    if (activeIndex === 0 && !primaryRetried) {
+      const delayMs = getRetryDelayMs(error);
+      if (delayMs !== undefined) {
+        primaryRetried = true;
+        onRetry({ candidate: getActiveCandidate(), error, delayMs });
+        await sleep(delayMs);
+        return !abortSignal?.aborted;
+      }
+    }
+
     const from = candidates[activeIndex];
     const to = candidates[activeIndex + 1];
-    if (!to) return false;
+    if (!to || !shouldFallback(error)) return false;
 
     activeIndex += 1;
     onFallback({ from, to, error });
@@ -74,9 +103,7 @@ export function createStreamFallbackModel<
           getCallOptions(options),
         );
       } catch (error) {
-        // Nothing has been emitted yet, so any provider failure is safe to
-        // retry elsewhere: the next provider may accept what this one refused.
-        if (!switchToNextCandidate(error, options.abortSignal)) throw error;
+        if (!(await recoverFrom(error, options.abortSignal))) throw error;
       }
     }
   };
@@ -100,7 +127,7 @@ export function createStreamFallbackModel<
             getCallOptions(options),
           );
         } catch (error) {
-          if (!switchToNextCandidate(error, options.abortSignal)) throw error;
+          if (!(await recoverFrom(error, options.abortSignal))) throw error;
         }
       }
     },
@@ -177,7 +204,7 @@ export function createStreamFallbackModel<
               return;
             }
 
-            if (!switchToNextCandidate(part.error, options.abortSignal)) {
+            if (!(await recoverFrom(part.error, options.abortSignal))) {
               releaseHeld();
               emit(part);
               controller.close();

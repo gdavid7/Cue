@@ -188,6 +188,8 @@ export function extractLLMErrorInfo(error: unknown): LLMErrorInfo {
     status === 502 ||
     status === 503 ||
     status === 504 ||
+    status === 529 || // Anthropic overloaded
+    /overloaded/i.test(message) ||
     /internal.?error/i.test(message) ||
     /server.?error/i.test(message);
 

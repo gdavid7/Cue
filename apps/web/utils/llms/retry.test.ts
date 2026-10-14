@@ -118,6 +118,16 @@ describe("extractLLMErrorInfo", () => {
 
       expect(result.retryable).toBe(true);
     });
+
+    it("detects an overloaded provider as a server error", () => {
+      expect(
+        extractLLMErrorInfo({ statusCode: 529, message: "Overloaded" })
+          .retryable,
+      ).toBe(true);
+      expect(
+        extractLLMErrorInfo({ message: "The model is overloaded" }).retryable,
+      ).toBe(true);
+    });
   });
 
   describe("non-retryable errors", () => {
