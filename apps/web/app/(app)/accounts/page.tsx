@@ -84,7 +84,7 @@ function AccountItem({
   onAccountDeleted: () => void;
 }) {
   return (
-    <Link href={prefixPath(emailAccount.id, "/mail")} className="block">
+    <Link href={prefixPath(emailAccount.id, "/mail")} className="block min-w-0">
       <Card className="cursor-pointer transition-colors hover:bg-slate-50 dark:hover:bg-slate-900">
         <AccountHeader
           emailAccount={emailAccount}
@@ -116,11 +116,14 @@ function AccountHeader({
           {emailAccount.name?.[0] || emailAccount.email?.[0]}
         </AvatarFallback>
       </Avatar>
-      <div className="flex flex-col space-y-1.5 flex-1">
-        <CardTitle>{emailAccount.name}</CardTitle>
-        <CardDescription>{emailAccount.email}</CardDescription>
+      <div className="flex min-w-0 flex-1 flex-col space-y-1.5">
+        <CardTitle className="truncate">{emailAccount.name}</CardTitle>
+        <CardDescription className="truncate" title={emailAccount.email}>
+          {emailAccount.email}
+        </CardDescription>
       </div>
       <div
+        className="shrink-0"
         onClick={(e: MouseEvent<HTMLDivElement>) => e.stopPropagation()}
         onMouseDown={(e: MouseEvent<HTMLDivElement>) => e.stopPropagation()}
         onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => {
