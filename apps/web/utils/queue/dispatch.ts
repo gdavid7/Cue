@@ -5,7 +5,10 @@ import {
   publishToInternalApiInBackground,
   publishToQstashQueue,
 } from "@/utils/upstash";
-import { isVercelQueueDispatchEnabled } from "@/utils/queue/vercel";
+import {
+  hasDeployedVercelQueueConsumer,
+  isVercelQueueDispatchEnabled,
+} from "@/utils/queue/vercel";
 import { enqueueBullmqHttpJob } from "@/utils/queue/bullmq";
 import { getQueueBackend } from "@/utils/queue/backend";
 
@@ -32,6 +35,14 @@ export async function enqueueBackgroundJob<T>({
   logger: Logger;
 }) {
   if (isVercelQueueDispatchEnabled()) {
+    // Features whose consumer is not deployed are off on this Vercel project.
+    if (!hasDeployedVercelQueueConsumer(topic)) {
+      logger.trace("Skipping job for topic without a deployed consumer", {
+        topic,
+      });
+      return "skipped";
+    }
+
     try {
       await send(topic, body, { delaySeconds: vercel?.delaySeconds });
       return "vercel";
