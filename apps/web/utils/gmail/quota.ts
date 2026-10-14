@@ -35,41 +35,109 @@ export type GmailQuotaPriority = "interactive" | "sync" | "background";
 
 type GmailQuotaContext = { caller: string; priority: GmailQuotaPriority };
 
-// Routes and actions whose Gmail reads only enrich or analyze mail the user
-// already has, so they wait for capacity nobody else needs.
-const BACKGROUND_CALLERS = [
-  "user/inbox-insights",
-  "user/thread-context",
-  "user/suggested-reply",
-  "user/thread-brief",
-  "user/thread-plans",
-  "user/meeting-briefs",
-  "user/meeting-news",
-  "user/stats",
-  "user/senders",
-  "user/trial-preview",
-  "user/search-answer",
+// Route scopes, matched exactly so a route added under a background path is
+// never held back by accident. Interactive: someone is waiting on it, for a
+// thread they opened, a message they send, a search they typed, a bulk action
+// they clicked or a question they asked the assistant. Background: it only
+// enriches or analyzes mail the user already has. Any other route, the sync
+// engine's scans, Today and webhooks among them, is sync.
+const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
+  ...withPriority("interactive", [
+    "mail/v1/conversation-membership",
+    "mail/v1/search",
+    "mail/v1/attachment-content",
+    "mail/v1/operations",
+    "mail/v1/operations/cancel",
+    "mail/v1/operations/inspect",
+    "messages",
+    "messages/attachment",
+    "messages/batch",
+    "messages/calendar-invitation",
+    "messages/forward",
+    "messages/raw",
+    "messages/send",
+    "threads",
+    "threads/all",
+    "threads/archive",
+    "threads/basic",
+    "threads/batch",
+    "threads/detail",
+    "threads/trash",
+    "threads/unarchive",
+    "threads/untrash",
+    "chat",
+    "chat/confirm-email-action",
+    "chat/stream",
+    "slack/commands",
+    "slack/events",
+    "teams/events",
+    "telegram/events",
+    "voice/live/session",
+    "mobile/all-inboxes",
+    "mobile/all-inboxes/archive",
+    "mobile/otps",
+    "mobile/threads/batch",
+    "user/senders/bulk",
+    "user/senders/status",
+    "user/senders/unsubscribe",
+    "v1/senders/unsubscribe",
+    "user/search-answer",
+    "user/drafts",
+    "user/drafts/attachments/add",
+    "user/drafts/attachments/list",
+    "user/drafts/attachments/remove",
+    "user/drafts/attachments/upload-chunk",
+    "user/drafts/attachments/upload-start",
+    "user/drafts/discard",
+    "user/drafts/read",
+    "user/drafts/read-for-message",
+    "user/drafts/update",
+    "user/scheduled-emails/cancel",
+    "user/scheduled-emails/reminder",
+    "user/scheduled-emails/retry",
+    "user/snoozed-threads/create",
+    "user/snoozed-threads/delete",
+  ]),
+  ...withPriority("background", [
+    "user/inbox-insights",
+    "user/thread-context",
+    "user/suggested-reply",
+    "user/thread-brief",
+    "user/thread-plans",
+    "user/meeting-briefs",
+    "user/meeting-briefs/history",
+    "user/meeting-news",
+    "user/stats/load",
+    "user/stats/newsletters",
+    "user/stats/recipients",
+    "user/stats/sender-emails",
+    "user/stats/senders",
+    "user/trial-preview",
+    "user/categorize/senders/batch",
+    "user/categorize/senders/batch/simple",
+    "response-time-stats",
+    "v1/stats/by-period",
+    "v1/stats/response-time",
+    "clean/gmail",
+    "clean/history",
+    "follow-up-reminders",
+    "follow-up-reminders/account",
+    "meeting-briefs",
+    "automation-jobs/execute",
+    "mail/v1/assistant-state",
+  ]),
+]);
+// Jobs nobody waits on; a durable send one delivers raises itself to
+// interactive.
+const BACKGROUND_NAMESPACES = ["cron/", "resend/"];
+// Server actions are a person's clicks, except these the app fires by itself
+// when a page loads.
+const BACKGROUND_ACTIONS = new Set([
   "loadEmailStats",
-  "response-time-stats",
-  "clean/",
-  "cron/",
-  "resend/",
-  "follow-up-reminders",
-  "meeting-briefs",
-  "mail/v1/assistant-state",
-];
-// Someone is waiting on these: a thread they opened, a message they send,
-// a search they typed, a question they asked the assistant.
-const INTERACTIVE_CALLERS = [
-  "mail/v1/conversation-membership",
-  "mail/v1/search",
-  "mail/v1/attachment-content",
-  "mail/v1/operations",
-  "messages/",
-  "threads/",
-  "chat",
-  "mobile/",
-];
+  "assessUser",
+  "analyzeWritingStyle",
+  "whitelistInboxZero",
+]);
 
 const quotaContext = new AsyncLocalStorage<GmailQuotaContext>();
 const logger = createScopedLogger("gmail-quota");
@@ -122,6 +190,11 @@ export function runWithGmailQuota<T>(
     },
     operation,
   );
+}
+
+/** The priority of a server action's Gmail calls: a click, unless the app fires it. */
+export function gmailQuotaPriorityForAction(name: string): GmailQuotaPriority {
+  return BACKGROUND_ACTIONS.has(name) ? "background" : "interactive";
 }
 
 export function currentGmailQuotaContext(): GmailQuotaContext {
@@ -361,11 +434,18 @@ export function gmailRequestCost(method: string, url: string | URL): number {
 }
 
 function priorityForCaller(caller: string): GmailQuotaPriority {
-  if (BACKGROUND_CALLERS.some((prefix) => caller.startsWith(prefix)))
+  const routePriority = ROUTE_PRIORITY.get(caller);
+  if (routePriority) return routePriority;
+  if (
+    BACKGROUND_ACTIONS.has(caller) ||
+    BACKGROUND_NAMESPACES.some((prefix) => caller.startsWith(prefix))
+  )
     return "background";
-  if (INTERACTIVE_CALLERS.some((prefix) => caller.startsWith(prefix)))
-    return "interactive";
   return "sync";
+}
+
+function withPriority(priority: GmailQuotaPriority, callers: string[]) {
+  return callers.map((caller) => [caller, priority] as const);
 }
 
 // Route scopes and action names are fixed strings; a bare path can carry ids.

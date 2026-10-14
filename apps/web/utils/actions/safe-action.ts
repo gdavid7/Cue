@@ -18,6 +18,11 @@ import {
 import { env } from "@/env";
 import { runWithAuditContext, setAuditContext } from "@/utils/audit/context";
 import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
+import {
+  getGmailCallDeferredError,
+  gmailQuotaPriorityForAction,
+  runWithGmailQuota,
+} from "@/utils/gmail/quota";
 
 const baseClient = createSafeActionClient({
   defineMetadataSchema() {
@@ -48,10 +53,12 @@ const baseClient = createSafeActionClient({
       error,
       provider: context?.provider,
     });
+    // The account's own Gmail budget held the call back; nothing failed.
+    const deferred = getGmailCallDeferredError(error);
 
     // Expected user-facing rejections are shown to the client and never sent
     // to Sentry.
-    if (error instanceof SafeError || isProviderRateLimit) {
+    if (error instanceof SafeError || isProviderRateLimit || deferred) {
       logger.warn("Server action error:", {
         metadata,
         bindArgsClientInputs,
@@ -75,6 +82,10 @@ const baseClient = createSafeActionClient({
     if (env.NODE_ENV !== "production") {
       // biome-ignore lint/suspicious/noConsole: helpful for debugging
       console.error("Error in server action", error);
+    }
+    if (deferred) {
+      const seconds = Math.ceil(deferred.retryAfterMs / 1000);
+      return `Gmail is busy for this account. Try again in about ${seconds} ${seconds === 1 ? "second" : "seconds"}.`;
     }
     if (isProviderRateLimit) return EMAIL_PROVIDER_RATE_LIMIT_MESSAGE;
     if (error instanceof SafeError) return error.message;
@@ -102,25 +113,32 @@ const baseClient = createSafeActionClient({
       requestId,
       source: metadata.name,
     },
-    async () => {
-      after(async () => {
-        await flushLoggerSafely(logger, {
-          action: metadata.name,
-          requestId,
-        });
-      });
+    () =>
+      runWithGmailQuota(
+        {
+          caller: metadata.name,
+          priority: gmailQuotaPriorityForAction(metadata.name),
+        },
+        async () => {
+          after(async () => {
+            await flushLoggerSafely(logger, {
+              action: metadata.name,
+              requestId,
+            });
+          });
 
-      const result = await next({ ctx: { logger, requestId } });
+          const result = await next({ ctx: { logger, requestId } });
 
-      if (result.validationErrors) {
-        logger.warn("Action validation error", {
-          action: metadata.name,
-          validationErrors: result.validationErrors,
-        });
-      }
+          if (result.validationErrors) {
+            logger.warn("Action validation error", {
+              action: metadata.name,
+              validationErrors: result.validationErrors,
+            });
+          }
 
-      return result;
-    },
+          return result;
+        },
+      ),
   );
 });
 
