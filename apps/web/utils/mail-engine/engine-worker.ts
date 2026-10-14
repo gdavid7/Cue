@@ -41,6 +41,7 @@ async function createWorkerEngine(
   const store = await createWasmMailStore({
     persist: input.persist,
     options: { maxPendingOperations: input.maxPendingOperations, runtime },
+    ownedAccountIds: input.ownedAccountIds,
     onRebuild: () => {
       self.postMessage({ type: "rebuilding" } satisfies WorkerResponse);
     },

@@ -9,6 +9,7 @@ import { createNodeSqliteDriver, wipeNodeMailbox } from "./node-sqlite";
 import {
   classifyMailboxError,
   openMailStoreWithRecovery,
+  readPendingMailWork,
   type PendingMailWork,
   type PendingMailWorkStash,
 } from "./recovery";
@@ -103,6 +104,7 @@ describe("openMailStoreWithRecovery", () => {
       },
       wipe: () => wipeNodeMailbox(path),
       stash,
+      ownedAccountIds: ["acc-1"],
       onRebuild,
     });
 
@@ -143,6 +145,7 @@ describe("openMailStoreWithRecovery", () => {
         open: async () => failingWrites(createNodeSqliteDriver(path)),
         wipe: () => wipeNodeMailbox(path),
         stash,
+        ownedAccountIds: ["acc-1"],
       }),
     ).rejects.toThrow();
     // The page went away after the wipe; the stash outlived it.
@@ -154,6 +157,7 @@ describe("openMailStoreWithRecovery", () => {
         open: async () => createNodeSqliteDriver(path),
         wipe: () => wipeNodeMailbox(path),
         stash: { ...stash, clear: async () => undefined },
+        ownedAccountIds: ["acc-1"],
       });
       await store.close();
     }
@@ -177,6 +181,34 @@ describe("openMailStoreWithRecovery", () => {
     await driver.close();
   });
 
+  it("drops carried work belonging to accounts the signed-in user does not own", async () => {
+    // A rebuild still running when user A signed out left A's work behind.
+    const previousUser = await pendingWorkFrom(await seededMailbox());
+    const path = await mailboxPath();
+    const stash = memoryStash();
+    await stash.write(previousUser);
+
+    const store = await openMailStoreWithRecovery({
+      open: async () => createNodeSqliteDriver(path),
+      wipe: () => wipeNodeMailbox(path),
+      stash,
+      ownedAccountIds: ["acc-user-b"],
+    });
+
+    expect(await store.readDraft(DRAFT)).toMatchObject({ status: "missing" });
+    expect(await stash.read()).toBeNull();
+    await store.close();
+    const driver = createNodeSqliteDriver(path);
+    const rows = await driver.read((tx) =>
+      tx.query(
+        `SELECT (SELECT COUNT(*) FROM accounts) AS accounts,
+                (SELECT COUNT(*) FROM operations) AS operations`,
+      ),
+    );
+    expect(rows[0]).toEqual({ accounts: 0, operations: 0 });
+    await driver.close();
+  });
+
   it("rebuilds a file that is not a database", async () => {
     const path = await mailboxPath();
     await writeFile(path, "this is not sqlite ".repeat(512));
@@ -186,6 +218,7 @@ describe("openMailStoreWithRecovery", () => {
       open: async () => createNodeSqliteDriver(path),
       wipe: () => wipeNodeMailbox(path),
       stash: memoryStash(),
+      ownedAccountIds: ["acc-1"],
       onRebuild,
     });
 
@@ -221,6 +254,7 @@ describe("openMailStoreWithRecovery", () => {
         open: async () => failingWrites(createNodeSqliteDriver(path), error),
         wipe,
         stash,
+        ownedAccountIds: ["acc-1"],
         onRebuild,
       }),
     ).rejects.toBe(error);
@@ -247,6 +281,7 @@ describe("openMailStoreWithRecovery", () => {
           ),
         wipe,
         stash: memoryStash(),
+        ownedAccountIds: ["acc-1"],
       }),
     ).rejects.toThrow("database is locked");
 
@@ -258,6 +293,19 @@ async function mailboxPath() {
   const directory = await mkdtemp(join(tmpdir(), "mail-sqlite-recovery-"));
   directories.push(directory);
   return join(directory, "mailbox.sqlite");
+}
+
+async function seededMailbox() {
+  const path = await mailboxPath();
+  await seedPendingWork(path);
+  return path;
+}
+
+async function pendingWorkFrom(path: string) {
+  const driver = createNodeSqliteDriver(path);
+  const work = await readPendingMailWork(driver);
+  await driver.close();
+  return work;
 }
 
 async function seedPendingWork(path: string) {

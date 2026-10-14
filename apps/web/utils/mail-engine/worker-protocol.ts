@@ -4,6 +4,8 @@ import type { QuerySnapshot } from "@inboxzero/mail-core/queries";
 export type BrowserEngineStart = {
   accountId: string;
   provider: "google" | "microsoft";
+  /** The signed-in user's accounts, whose carried-over work a rebuild may restore. */
+  ownedAccountIds: string[];
   generation?: string;
   persist?: boolean;
   maxPendingOperations?: number;

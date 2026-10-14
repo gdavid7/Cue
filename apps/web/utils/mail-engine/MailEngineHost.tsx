@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -123,7 +124,12 @@ export function MailCoverageGate({
 }
 
 function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
-  const { emailAccountId, provider, isLoading } = useAccount();
+  const { accountIds, emailAccountId, provider, isLoading } = useAccount();
+  // Read at start, so connecting another account does not restart the engine.
+  const ownedAccountIds = useRef(accountIds);
+  useEffect(() => {
+    ownedAccountIds.current = accountIds;
+  }, [accountIds]);
   const pathname = usePathname();
   const desktopIpc = useSyncExternalStore(
     subscribeNever,
@@ -267,6 +273,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
             accountId: emailAccountId,
             provider: engineProvider,
             online: typeof navigator === "undefined" || navigator.onLine,
+            ownedAccountIds: [emailAccountId, ...ownedAccountIds.current],
           },
           {
             onRebuild: () => {

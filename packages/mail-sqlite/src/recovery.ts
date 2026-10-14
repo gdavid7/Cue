@@ -157,10 +157,17 @@ export async function openMailStoreWithRecovery(input: {
   /** Deletes the mailbox files; called with no connection open. */
   wipe: () => Promise<void>;
   stash: PendingMailWorkStash;
+  /**
+   * The signed-in user's accounts. The stash outlives sign-out when a rebuild
+   * was still running, so work for any other account is dropped, never
+   * admitted into this user's mailbox.
+   */
+  ownedAccountIds: readonly string[];
   options?: SqliteMailStoreOptions;
   onRebuild?: () => void;
 }): Promise<MailStore> {
-  let carried = await input.stash.read().catch(() => null);
+  const stashed = await input.stash.read().catch(() => null);
+  let carried = stashed && ownedWork(stashed, input.ownedAccountIds);
   let opened: { driver: SqliteDriver; store: MailStore } | null = null;
   let failure: unknown = null;
   let driver: SqliteDriver | null = null;
@@ -177,7 +184,10 @@ export async function openMailStoreWithRecovery(input: {
     }
     input.onRebuild?.();
     if (driver) {
-      carried = mergePendingWork(carried, await readPendingMailWork(driver));
+      carried = mergePendingWork(
+        carried,
+        ownedWork(await readPendingMailWork(driver), input.ownedAccountIds),
+      );
       await driver.close().catch(() => undefined);
     }
     // Written before the wipe so the work outlives a reload mid-rebuild.
@@ -191,8 +201,8 @@ export async function openMailStoreWithRecovery(input: {
   }
   if (carried) {
     await restorePendingMailWork(opened.store, opened.driver, carried);
-    await input.stash.clear().catch(() => undefined);
   }
+  if (carried || stashed) await input.stash.clear().catch(() => undefined);
   return opened.store;
 }
 
@@ -349,6 +359,21 @@ function mergePendingWork(
     merged.drafts.length === 0 &&
     merged.operations.length === 0;
   return empty ? null : merged;
+}
+
+function ownedWork(
+  work: PendingMailWork,
+  ownedAccountIds: readonly string[],
+): PendingMailWork {
+  const owned = new Set(ownedAccountIds);
+  const ownedRow = (row: SqlRow) => owned.has(String(row.account_id));
+  return {
+    accounts: work.accounts.filter((account) => owned.has(account.accountId)),
+    drafts: work.drafts.filter(ownedRow),
+    operations: work.operations.filter(ownedRow),
+    operationTargets: work.operationTargets.filter(ownedRow),
+    operationConversations: work.operationConversations.filter(ownedRow),
+  };
 }
 
 function pick(row: SqlRow, columns: string[]): SqlRow {

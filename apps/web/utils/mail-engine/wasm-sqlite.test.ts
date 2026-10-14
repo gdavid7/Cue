@@ -437,7 +437,10 @@ describe("createWasmMailStore", () => {
     opfsPool.install = pool.install;
     const onRebuild = vi.fn();
 
-    const store = await createWasmMailStore({ onRebuild });
+    const store = await createWasmMailStore({
+      ownedAccountIds: ["acc-1"],
+      onRebuild,
+    });
 
     expect(onRebuild).toHaveBeenCalledOnce();
     expect(pool.wipes).toBe(1);
@@ -455,7 +458,10 @@ describe("createWasmMailStore", () => {
     opfsPool.install = pool.install;
     const onRebuild = vi.fn();
 
-    const store = await createWasmMailStore({ onRebuild });
+    const store = await createWasmMailStore({
+      ownedAccountIds: ["acc-1"],
+      onRebuild,
+    });
 
     expect(onRebuild).toHaveBeenCalledOnce();
     expect(pool.wipes).toBe(1);

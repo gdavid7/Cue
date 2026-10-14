@@ -96,6 +96,7 @@ async function createInTabEngine(
   const store = await createWasmMailStore({
     persist: input.persist,
     options: { maxPendingOperations: input.maxPendingOperations, runtime },
+    ownedAccountIds: input.ownedAccountIds,
     onRebuild: hooks.onRebuild,
   });
   const ensureAccount: BrowserMailEngine["ensureAccount"] = async (account) => {

@@ -44,6 +44,7 @@ export async function createWasmSqliteDriver(input?: {
  */
 export async function createWasmMailStore(input: {
   persist?: boolean;
+  ownedAccountIds: string[];
   options?: SqliteMailStoreOptions;
   onRebuild?: () => void;
 }): Promise<MailStore> {
@@ -79,6 +80,7 @@ export async function createWasmMailStore(input: {
         await pool.wipeFiles();
       },
       stash: createMailRecoveryStash(),
+      ownedAccountIds: input.ownedAccountIds,
       options: input.options,
       onRebuild: input.onRebuild,
     });

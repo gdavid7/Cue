@@ -106,7 +106,12 @@ describe("createBrowserMailEngine", () => {
     const onRebuild = vi.fn();
 
     await createBrowserMailEngine(
-      { accountId: "account-1", provider: "google", online: false },
+      {
+        accountId: "account-1",
+        provider: "google",
+        online: false,
+        ownedAccountIds: ["account-1"],
+      },
       { onRebuild },
     );
 
@@ -129,6 +134,7 @@ function startEngine() {
     accountId: "account-1",
     provider: "google",
     online: false,
+    ownedAccountIds: ["account-1"],
   });
 }
 

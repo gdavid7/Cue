@@ -23,12 +23,20 @@ describe("mail worker account fencing", () => {
     const first = host.handle({
       id: "start-1",
       type: "start",
-      input: { accountId: "acc-1", provider: "google" },
+      input: {
+        accountId: "acc-1",
+        provider: "google",
+        ownedAccountIds: ["acc-1"],
+      },
     });
     const second = host.handle({
       id: "start-2",
       type: "start",
-      input: { accountId: "acc-2", provider: "microsoft" },
+      input: {
+        accountId: "acc-2",
+        provider: "microsoft",
+        ownedAccountIds: ["acc-2"],
+      },
     });
     release();
     await Promise.all([first, second]);
@@ -54,12 +62,20 @@ describe("mail worker account fencing", () => {
     await host.handle({
       id: "start-1",
       type: "start",
-      input: { accountId: "acc-1", provider: "google" },
+      input: {
+        accountId: "acc-1",
+        provider: "google",
+        ownedAccountIds: ["acc-1"],
+      },
     });
     await host.handle({
       id: "start-1b",
       type: "start",
-      input: { accountId: "acc-1", provider: "google" },
+      input: {
+        accountId: "acc-1",
+        provider: "google",
+        ownedAccountIds: ["acc-1"],
+      },
     });
 
     expect(createCount).toBe(1);
@@ -83,13 +99,21 @@ describe("mail worker account fencing", () => {
     await host.handle({
       id: "start-1",
       type: "start",
-      input: { accountId: "acc-1", provider: "google" },
+      input: {
+        accountId: "acc-1",
+        provider: "google",
+        ownedAccountIds: ["acc-1"],
+      },
     });
     await host.handle({ id: "close-1", type: "close" });
     await host.handle({
       id: "start-2",
       type: "start",
-      input: { accountId: "acc-2", provider: "microsoft" },
+      input: {
+        accountId: "acc-2",
+        provider: "microsoft",
+        ownedAccountIds: ["acc-2"],
+      },
     });
 
     expect(created).toEqual(["acc-1", "acc-2"]);

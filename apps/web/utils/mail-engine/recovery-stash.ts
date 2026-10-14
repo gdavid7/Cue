@@ -8,6 +8,7 @@ import type {
 const RECOVERY_DATABASE = "inbox-zero-mail-recovery";
 const RECOVERY_STORE = "pending";
 const RECOVERY_KEY = "work";
+const RECOVERY_DELETE_BLOCKED_WAIT_MS = 5000;
 
 /**
  * Holds drafts and unsent commands while a corrupt mailbox is rebuilt. Without
@@ -37,14 +38,26 @@ export function createMailRecoveryStash(): PendingMailWorkStash {
   };
 }
 
-/** Sign-out removes the carried work along with the mailbox it came from. */
-export function deleteMailRecoveryStash(): Promise<void> {
-  if (typeof indexedDB === "undefined") return Promise.resolve();
+/**
+ * Sign-out removes the carried work along with the mailbox it came from.
+ * Resolves false while the stash is still there, so the wipe stays pending.
+ */
+export function deleteMailRecoveryStash(): Promise<boolean> {
+  if (typeof indexedDB === "undefined") return Promise.resolve(true);
   return new Promise((resolve) => {
     const request = indexedDB.deleteDatabase(RECOVERY_DATABASE);
-    request.onsuccess = () => resolve();
-    request.onerror = () => resolve();
-    request.onblocked = () => resolve();
+    // A blocked delete still completes once the open connection closes; one
+    // that never does is finished by the next engine start instead.
+    const giveUp = setTimeout(
+      () => resolve(false),
+      RECOVERY_DELETE_BLOCKED_WAIT_MS,
+    );
+    const settle = (deleted: boolean) => {
+      clearTimeout(giveUp);
+      resolve(deleted);
+    };
+    request.onsuccess = () => settle(true);
+    request.onerror = () => settle(false);
   });
 }
 

@@ -42,6 +42,7 @@ describe("wipeLocalMailbox", () => {
   beforeEach(() => {
     engine.close.mockResolvedValue(undefined);
     offlineCache.clear.mockResolvedValue(undefined);
+    recoveryStash.delete.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -81,6 +82,19 @@ describe("wipeLocalMailbox", () => {
     await wipeLocalMailbox();
 
     expect(recoveryStash.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the wipe pending until the kept-aside drafts are deleted", async () => {
+    // A rebuild running at sign-out holds the stash open, blocking its delete.
+    opfs.wipe.mockResolvedValue(true);
+    recoveryStash.delete.mockResolvedValue(false);
+    await wipeLocalMailbox();
+    recoveryStash.delete.mockResolvedValue(true);
+
+    await finishPendingLocalMailboxWipe();
+    await finishPendingLocalMailboxWipe();
+
+    expect(recoveryStash.delete).toHaveBeenCalledTimes(2);
   });
 
   it("leaves nothing for the next engine once the wipe succeeds", async () => {
