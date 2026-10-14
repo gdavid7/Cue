@@ -11,7 +11,7 @@ export type GetThreadBriefResponse = {
   brief: Awaited<ReturnType<typeof getThreadBrief>>;
 };
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export const GET = withEmailProvider("user/thread-brief", async (request) => {
   const { threadId } = threadBriefQuery.parse({

@@ -11,7 +11,7 @@ import {
   transcribeVoiceBody,
 } from "@/utils/voice/validation";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export type TranscribeVoiceResponse = { text: string };
 

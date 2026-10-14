@@ -28,7 +28,7 @@ import {
   renewDigestClaim,
 } from "@/utils/digest/claim-pending-digests";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 type SendEmailResult = {
   success: boolean;

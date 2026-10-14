@@ -20,7 +20,7 @@ export type GetSuggestedReplyResponse = {
   canSearchWeb: boolean;
 };
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export const GET = withEmailProvider(
   "user/suggested-reply",

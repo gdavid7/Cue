@@ -10,7 +10,7 @@ import { runWithBoundedConcurrency } from "@/utils/async";
 
 // The mail sidebar fills counts in after first paint, so this must degrade
 // rather than hang: a slow provider is worth less than an empty sidebar.
-export const maxDuration = 15;
+export const maxDuration = 30;
 
 const CACHE_KEY_PREFIX = "label-counts";
 const CACHE_TTL_SECONDS = 60;

@@ -80,7 +80,7 @@ import {
   type ActivityLogEntry,
 } from "@/app/(app)/[emailAccountId]/assistant/BulkProcessActivityLog";
 
-export const maxDuration = 3;
+export const maxDuration = 30;
 
 export default function Components() {
   return (

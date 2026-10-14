@@ -11,7 +11,7 @@ export type BulkSenderActionsResponse = {
   results: BulkSenderActionResult[];
 };
 
-export const maxDuration = 180;
+export const maxDuration = 300;
 
 /**
  * Applies unsubscribe and sender-status changes for many senders.

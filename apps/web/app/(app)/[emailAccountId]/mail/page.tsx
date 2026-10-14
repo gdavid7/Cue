@@ -10,7 +10,7 @@ import {
 import { EmailLabelsProvider } from "@/providers/EmailLabelsProvider";
 import { MailEngineHost } from "@/utils/mail-engine/MailEngineHost";
 
-export const maxDuration = 180;
+export const maxDuration = 300;
 
 export default function Mail() {
   return (

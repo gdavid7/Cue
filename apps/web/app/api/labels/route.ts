@@ -17,7 +17,7 @@ export type LabelsResponse = {
   labels: UnifiedLabel[];
 };
 
-export const maxDuration = 15;
+export const maxDuration = 30;
 
 export const GET = withEmailProvider(
   "labels",

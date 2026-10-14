@@ -29,61 +29,6 @@
           "retryAfterSeconds": 60
         }
       ]
-    },
-    "app/api/meeting-recorder/transcript/queue/route.ts": {
-      "experimentalTriggers": [
-        {
-          "type": "queue/v2beta",
-          "topic": "meeting-recorder-transcript",
-          "retryAfterSeconds": 60
-        }
-      ]
-    },
-    "app/api/meeting-recorder/process/queue/route.ts": {
-      "experimentalTriggers": [
-        {
-          "type": "queue/v2beta",
-          "topic": "meeting-recorder-process",
-          "retryAfterSeconds": 60
-        }
-      ]
-    },
-    "app/api/resend/digest/queue/route.ts": {
-      "experimentalTriggers": [
-        {
-          "type": "queue/v2beta",
-          "topic": "resend-digest",
-          "retryAfterSeconds": 60
-        }
-      ]
-    },
-    "app/api/resend/summary/queue/route.ts": {
-      "experimentalTriggers": [
-        {
-          "type": "queue/v2beta",
-          "topic": "resend-summary",
-          "retryAfterSeconds": 60,
-          "maxDeliveries": 5
-        }
-      ]
-    },
-    "app/api/stripe/invoice-email/queue/route.ts": {
-      "experimentalTriggers": [
-        {
-          "type": "queue/v2beta",
-          "topic": "stripe-invoice-email",
-          "retryAfterSeconds": 60
-        }
-      ]
-    },
-    "app/api/resend/inbox-health/queue/route.ts": {
-      "experimentalTriggers": [
-        {
-          "type": "queue/v2beta",
-          "topic": "resend-inbox-health",
-          "retryAfterSeconds": 60
-        }
-      ]
     }
   },
   "crons": [

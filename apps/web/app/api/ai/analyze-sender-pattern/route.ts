@@ -17,7 +17,7 @@ import { createEmailProvider } from "@/utils/email/provider";
 import type { EmailProvider } from "@/utils/email/types";
 import { upsertSenderRecord } from "@/utils/senders/record";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const THRESHOLD_THREADS = 3;
 const MAX_RESULTS = 10;

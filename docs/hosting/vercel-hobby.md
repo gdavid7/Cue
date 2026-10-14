@@ -295,7 +295,7 @@ At every 5 minutes that's about 8,600 short invocations a month, well inside Hob
 
 ### Background jobs
 
-Cue sends background jobs (digest items, automation runs, follow-up batches) through **Vercel Queues**. They are declared under `functions` in `apps/web/vercel.json` and available on Hobby, with 1,000,000 operations a month included. You don't need to set anything up.
+Cue sends background jobs (digest items, automation runs, follow-up batches) through **Vercel Queues**. They are declared under `functions` in `apps/web/vercel.json` and available on Hobby, with 1,000,000 operations a month included. The meeting-recorder, Resend and Stripe queues are left out because those features are off on Hobby and each queue counts toward the 12-function limit. You don't need to set anything up.
 
 ---
 
@@ -317,6 +317,7 @@ Cue sends background jobs (digest items, automation runs, follow-up batches) thr
 | Build: `Invalid environment variables` | One of the required variables in step 3 is missing for that environment (Production vs Preview). |
 | Build: `Either AUTH_SECRET or NEXTAUTH_SECRET…` | Set `AUTH_SECRET`. |
 | Build: `MICROSOFT_WEBHOOK_CLIENT_STATE…` | You set `MICROSOFT_CLIENT_ID` without the client state. |
+| Deploy: `No more than 12 Serverless Functions can be added to a Deployment on the Hobby plan` | Vercel bundles routes into one function only when their settings match. Keep every route's `maxDuration` at 30 or 300, and keep only the three queue routes in `apps/web/vercel.json`. Each queue route is its own function. |
 | Build: `JavaScript heap out of memory` or the build is killed | Hobby's build machine has 8 GB. Add the env var `SKIP_TYPE_CHECK=true` to skip the type-check pass, which is the largest memory user. Type-check in CI or locally instead. |
 | Build: `P1001` / can't reach database during `prisma migrate deploy` | Neon isn't connected to that environment. Fix it under Storage → your DB → Projects. |
 | Google: `Error 400: redirect_uri_mismatch` | The URI in step 4.6 must match `NEXT_PUBLIC_BASE_URL` exactly: https, no trailing slash, same domain. |

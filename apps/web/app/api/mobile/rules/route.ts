@@ -10,7 +10,7 @@ import { aiPromptToRules } from "@/utils/ai/rule/prompt-to-rules";
 import { getEmailAccountWithAi } from "@/utils/user/get";
 import { toCreateRuleBodyFromAiRule } from "@/utils/rule/mobile-rule";
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const bodySchema = z.discriminatedUnion("source", [
   z.object({

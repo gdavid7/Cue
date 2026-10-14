@@ -4,7 +4,7 @@ import { env } from "@/env";
 import { withError, type RequestWithLogger } from "@/utils/middleware";
 
 export const runtime = "nodejs";
-export const maxDuration = 15;
+export const maxDuration = 30;
 
 export const GET = withError("image-proxy", async (request) =>
   handleProxyRequest(request),

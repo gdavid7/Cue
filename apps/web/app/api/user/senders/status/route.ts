@@ -21,7 +21,7 @@ export type SetSenderStatusResponse = Awaited<
  * inbox rows, are archived after the response (`archiveExisting: "queued"`).
  * These mail actions do not use AI credits.
  */
-export const maxDuration = 180;
+export const maxDuration = 300;
 
 export const POST = withEmailProvider(
   "user/senders/status",

@@ -16,7 +16,7 @@ import {
 } from "@/utils/redis/draft-attachment-upload";
 import { readRequestBytes } from "@/utils/request-body";
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 export type UploadDraftMessageChunkResponse =
   | { status: "incomplete"; nextOffset: number }

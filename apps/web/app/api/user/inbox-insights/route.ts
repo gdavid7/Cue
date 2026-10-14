@@ -22,7 +22,7 @@ export type GetInboxInsightsResponse = Awaited<
   ReturnType<typeof getInboxInsights>
 >;
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 /** `?items=threadId:messageId,...` — each thread with its latest message. */
 export const GET = withEmailProvider("user/inbox-insights", async (request) => {
