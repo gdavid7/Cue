@@ -1,12 +1,13 @@
 import { BRAND_NAME } from "@/utils/branding";
 
 const REFERRAL_SIGNATURE_PREFIX = "Drafted by";
-const REFERRAL_SIGNATURE_PRODUCT = "Inbox Zero";
+// Drafts written before the rename still carry the old name, and must still be
+// recognized so they can be stripped and compared against what was sent.
+const LEGACY_REFERRAL_SIGNATURE_PRODUCT = "Inbox Zero";
 
-const REFERRAL_SIGNATURE_PATTERN = createSignaturePatterns(
-  REFERRAL_SIGNATURE_PREFIX,
-  REFERRAL_SIGNATURE_PRODUCT,
-);
+const REFERRAL_SIGNATURE_PATTERNS = [
+  ...new Set([BRAND_NAME, LEGACY_REFERRAL_SIGNATURE_PRODUCT]),
+].map((product) => createSignaturePatterns(REFERRAL_SIGNATURE_PREFIX, product));
 const SENT_WITH_SIGNATURE_PATTERN = createSignaturePatterns(
   "Sent with",
   BRAND_NAME,
@@ -19,19 +20,21 @@ export function stripBrandingSignatures(value: string) {
 }
 
 export function renderReferralSignatureHtml(referralLink: string) {
-  return `${REFERRAL_SIGNATURE_PREFIX} <a href="${referralLink}">${REFERRAL_SIGNATURE_PRODUCT}</a>.`;
+  return `${REFERRAL_SIGNATURE_PREFIX} <a href="${referralLink}">${BRAND_NAME}</a>.`;
 }
 
 export function hasReferralSignature(value: string) {
-  return (
-    value.search(getSignaturePattern(value, REFERRAL_SIGNATURE_PATTERN)) !== -1
+  return REFERRAL_SIGNATURE_PATTERNS.some(
+    (patterns) => value.search(getSignaturePattern(value, patterns)) !== -1,
   );
 }
 
 export function stripReferralSignature(value: string) {
-  return value
-    .replace(getSignaturePattern(value, REFERRAL_SIGNATURE_PATTERN), "")
-    .trim();
+  return REFERRAL_SIGNATURE_PATTERNS.reduce(
+    (stripped, patterns) =>
+      stripped.replace(getSignaturePattern(stripped, patterns), ""),
+    value,
+  ).trim();
 }
 
 function getSignaturePattern(
