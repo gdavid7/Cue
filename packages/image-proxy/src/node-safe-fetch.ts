@@ -43,6 +43,7 @@ async function fetchWithPinnedLookup(
         headers: toNodeHeaders(init?.headers),
         lookup: resolvedUrl.lookup,
         method,
+        signal: init?.signal ?? undefined,
         servername:
           resolvedUrl.url.protocol === "https:"
             ? resolvedUrl.url.hostname

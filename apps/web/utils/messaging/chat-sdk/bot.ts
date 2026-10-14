@@ -27,6 +27,7 @@ import {
   type Thread,
 } from "chat";
 import { load } from "cheerio";
+import { createSafeImageProxyFetch } from "@inboxzero/image-proxy/node-safe-fetch";
 import { env } from "@/env";
 import type { Prisma } from "@/generated/prisma/client";
 import {
@@ -2464,7 +2465,9 @@ async function extractImagePartsFromMessage({
       } else if (attachment.fetchData) {
         buffer = await attachment.fetchData();
       } else if (attachment.url) {
-        const response = await fetch(attachment.url, {
+        // Attachment URLs come from the chat platform payload, so pin DNS to
+        // public addresses and never follow redirects.
+        const response = await createSafeImageProxyFetch(attachment.url, {
           signal: AbortSignal.timeout(15_000),
         });
         if (!response.ok) continue;
