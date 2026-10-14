@@ -311,7 +311,6 @@ export function MailSidebar({
       >
         {collapsed ? (
           <Button
-            variant="gradient"
             size="icon"
             onClick={onCompose}
             aria-label="Compose"
@@ -321,7 +320,6 @@ export function MailSidebar({
           </Button>
         ) : (
           <Button
-            variant="gradient"
             onClick={onCompose}
             className="mb-3.5 w-full shrink-0 justify-start gap-2 rounded-xl px-3"
           >
@@ -776,12 +774,7 @@ export function MailboxGroups({
                 autoFocus
                 className="h-7 min-w-0 flex-1 px-2 text-xs"
               />
-              <Button
-                type="submit"
-                variant="gradient"
-                size="xs-2"
-                disabled={!newLabelName.trim()}
-              >
+              <Button type="submit" size="xs-2" disabled={!newLabelName.trim()}>
                 Add
               </Button>
             </form>

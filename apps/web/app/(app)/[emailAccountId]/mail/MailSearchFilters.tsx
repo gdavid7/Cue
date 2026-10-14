@@ -267,7 +267,7 @@ export function MailSearchFiltersForm({
       ) : null}
 
       <div className="flex justify-end pt-1">
-        <Button type="submit" variant="gradient" size="sm">
+        <Button type="submit" size="sm">
           Search
         </Button>
       </div>

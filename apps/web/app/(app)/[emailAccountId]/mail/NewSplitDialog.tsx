@@ -678,7 +678,6 @@ export function NewSplitDialog({
               <>
                 <div className="flex-1" />
                 <Button
-                  variant="gradient"
                   size="sm"
                   disabled={isBusy}
                   onClick={() => {
@@ -719,7 +718,6 @@ export function NewSplitDialog({
                 />
                 <div className="flex-1" />
                 <Button
-                  variant="gradient"
                   size="sm"
                   disabled={!conditions.length || isBusy}
                   onClick={save}
@@ -731,7 +729,6 @@ export function NewSplitDialog({
               <>
                 <div className="flex-1" />
                 <Button
-                  variant="gradient"
                   size="sm"
                   disabled={!prompt.trim() || isBusy}
                   onClick={describe}

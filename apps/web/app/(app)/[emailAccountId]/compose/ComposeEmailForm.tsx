@@ -1826,7 +1826,7 @@ function ComposeEmailFormContent({
           <Tooltip
             shortcuts={onMarkDone ? ["send", "sendAndMarkDone"] : ["send"]}
           >
-            <Button disabled={isSubmitting} type="submit" variant="gradient">
+            <Button disabled={isSubmitting} type="submit">
               {isSubmitting && <ButtonLoader />}
               Send
             </Button>
