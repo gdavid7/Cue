@@ -25,31 +25,31 @@ import {
 
 const errorMessages: Record<string, { title: string; description: string }> = {
   email_not_found: {
-    title: "Account Not Authorized",
+    title: "Account not authorized",
     description:
       "Your account is not authorized to access this application. This may be because your email is not part of the allowed organization. Please contact your administrator or try signing in with a different account.",
   },
   signup_not_allowed: {
-    title: "Sign-up Restricted",
+    title: "Sign-up restricted",
     description:
       "This deployment only allows sign-up from specific email addresses or domains. Please contact your administrator or try signing in with a different account.",
   },
   email_already_linked: {
-    title: "Email Already Linked",
+    title: "Email already linked",
     description: getEmailAlreadyLinkedDescription(),
   },
   account_not_linked: {
-    title: "Sign-in Method Doesn't Match",
+    title: "Sign-in method doesn't match",
     description:
       "An account already exists for this email, but it was created with a different sign-in method or a different provider account. Sign in the way you originally signed up, or contact support so we can reconnect the two.",
   },
   org_invite_invalid_code: {
-    title: "Organization Invite Sign-in Failed",
+    title: "Organization invite sign-in failed",
     description:
       "We couldn't complete sign-in while joining this organization. Please start from the invitation link again. If it still fails, sign in with the original account for this mailbox, then accept the invite again.",
   },
   invalid_code: {
-    title: "Sign-in Session Expired",
+    title: "Sign-in session expired",
     description:
       "Your sign-in link is no longer valid. This can happen if the login flow was opened twice, timed out, or already used. Please start sign-in again from the login page.",
   },
@@ -99,7 +99,7 @@ function LoginErrorContent() {
   if (data?.id) return <Loading />;
 
   const errorInfo = resolvedErrorCode ? errorMessages[resolvedErrorCode] : null;
-  const title = errorInfo?.title || "Error Logging In";
+  const title = errorInfo?.title || "Couldn't sign you in";
   const supportText = getSignInSupportText();
   const fallbackDescription = resolvedErrorCode
     ? `Please try signing in again. (Error code: ${resolvedErrorCode}) ${supportText}`
@@ -115,7 +115,7 @@ function LoginErrorContent() {
         description={description}
         button={
           <Button asChild>
-            <Link href="/login">Log In</Link>
+            <Link href="/login">Try another sign-in method</Link>
           </Button>
         }
       />

@@ -58,7 +58,7 @@ test("an assistant signs in after owner opt-in and loses access when it is disab
       .click();
     await expect(assistantPage).toHaveURL(/\/login\/email\?next=/);
     await expect(
-      assistantPage.getByRole("button", { name: "Sign in with Google" }),
+      assistantPage.getByRole("button", { name: "Continue with Google" }),
     ).toHaveCount(0);
     await assistantPage.screenshot({
       path: test.info().outputPath("email-code-login.png"),
