@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { EmailSendOperationStatus } from "@/generated/prisma/enums";
 import { classifyEmailAccountProviderIssue } from "@/utils/email/provider-health";
 import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
+import {
+  isGmailCallDeferredError,
+  runWithGmailQuota,
+} from "@/utils/gmail/quota";
 import type { EmailProvider } from "@/utils/email/types";
 import { MAIL_MUTATION_RETRY_WINDOW_MS } from "@/utils/email/send-operation-policy";
 import { SafeError } from "@/utils/error";
@@ -81,13 +85,17 @@ export async function executeDurableEmailSend({
   try {
     const emailProvider = await getEmailProvider();
     stage = "send";
-    const result = await sendHtmlEmailWithOpenTracking({
-      emailAccountId,
-      threadId: input.threadId,
-      email: input.email,
-      emailProvider,
-      logger,
-    });
+    // A send is something a person asked for, even when a cron job delivers
+    // it later, so it never waits behind background Gmail work.
+    const result = await runWithGmailQuota({ priority: "interactive" }, () =>
+      sendHtmlEmailWithOpenTracking({
+        emailAccountId,
+        threadId: input.threadId,
+        email: input.email,
+        emailProvider,
+        logger,
+      }),
+    );
     stage = "persist_result";
     await prisma.emailSendOperation.update({
       where: { id: existing.id },
@@ -96,9 +104,12 @@ export async function executeDurableEmailSend({
     return { status: "applied" as const, result };
   } catch (error) {
     logger.error("Email send operation failed", { error, stage });
+    // The quota gate defers a Gmail call before sending it, so a deferral
+    // means nothing went out.
     if (
       stage !== "persist_result" &&
-      isEmailProviderRateLimitError({ error, provider })
+      (isEmailProviderRateLimitError({ error, provider }) ||
+        isGmailCallDeferredError(error))
     ) {
       await prisma.emailSendOperation.deleteMany({
         where: { id: existing.id },

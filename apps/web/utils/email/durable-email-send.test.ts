@@ -4,6 +4,12 @@ import { createMockEmailProvider } from "@/utils/__mocks__/email-provider";
 import { EmailSendOperationStatus } from "@/generated/prisma/enums";
 import { createScopedLogger } from "@/utils/logger";
 import { SafeError } from "@/utils/error";
+import { runWithAuditContext } from "@/utils/audit/context";
+import {
+  GmailCallDeferredError,
+  meterGmailCall,
+  setGmailInitialSync,
+} from "@/utils/gmail/quota";
 import { executeDurableEmailSend } from "./durable-email-send";
 import type { sendHtmlEmailWithOpenTracking } from "./sent-message-open/sent-message-open.server";
 
@@ -14,6 +20,16 @@ vi.mock("@/utils/email/sent-message-open/sent-message-open.server", () => ({
     emailProvider,
   }: Parameters<typeof sendHtmlEmailWithOpenTracking>[0]) =>
     emailProvider.sendEmailWithHtml(email),
+}));
+
+vi.mock("@/utils/gmail/quota-store", async () => {
+  const { createMemoryGmailQuotaStore } = await import(
+    "@/__tests__/mocks/gmail-quota-store.mock"
+  );
+  return { gmailQuotaStore: createMemoryGmailQuotaStore() };
+});
+vi.mock("@/utils/redis/email-provider-rate-limit", () => ({
+  isEmailProviderRateLimitRedisConfigured: () => true,
 }));
 
 const input = {
@@ -127,5 +143,56 @@ describe("executeDurableEmailSend", () => {
       data: { status: EmailSendOperationStatus.UNCERTAIN },
     });
     expect(prisma.emailSendOperation.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("releases a send the Gmail quota gate held back so it is retried, not marked uncertain", async () => {
+    // Gaxios wraps errors thrown below it, as the gate's deferral is.
+    const deferred = Object.assign(new Error("request failed"), {
+      cause: new GmailCallDeferredError(12_000, "interactive"),
+    });
+    const provider = createMockEmailProvider({
+      sendEmailWithHtml: vi.fn().mockRejectedValue(deferred),
+    });
+
+    const outcome = await executeDurableEmailSend({
+      logger: createScopedLogger("test"),
+      emailAccountId: "account",
+      getEmailProvider: async () => provider,
+      input,
+      provider: "google",
+    });
+
+    expect(outcome).toEqual({ status: "retry" });
+    expect(prisma.emailSendOperation.deleteMany).toHaveBeenCalledWith({
+      where: { id: "operation" },
+    });
+    expect(prisma.emailSendOperation.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("sends a scheduled email from a cron job ahead of background Gmail work", async () => {
+    // A first sync holds every background Gmail call for over a minute.
+    await setGmailInitialSync("account", true);
+    const provider = createMockEmailProvider({
+      sendEmailWithHtml: vi.fn(() =>
+        meterGmailCall({ emailAccountId: "account", cost: 100 }, async () => ({
+          messageId: "sent",
+          threadId: "thread",
+        })),
+      ),
+    });
+
+    const outcome = await runWithAuditContext(
+      { source: "cron/scheduled-actions" },
+      () =>
+        executeDurableEmailSend({
+          logger: createScopedLogger("test"),
+          emailAccountId: "account",
+          getEmailProvider: async () => provider,
+          input,
+          provider: "google",
+        }),
+    );
+
+    expect(outcome).toMatchObject({ status: "applied" });
   });
 });
