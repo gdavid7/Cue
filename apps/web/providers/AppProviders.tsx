@@ -2,6 +2,7 @@
 
 import type React from "react";
 import { Provider } from "jotai";
+import { MotionConfig } from "motion/react";
 import { ComposeModalProvider } from "@/providers/ComposeModalProvider";
 import { jotaiStore } from "@/store";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -13,20 +14,25 @@ import { MailEngineRuntime } from "@/utils/mail-engine/MailEngineHost";
 
 export function AppProviders(props: { children: React.ReactNode }) {
   return (
-    <ThemeProvider attribute="class" defaultTheme="light">
-      <Provider store={jotaiStore}>
-        <EmailAccountProvider>
-          <SWRProvider>
-            <StatLoaderProvider>
-              <ChatProvider>
-                <MailEngineRuntime>
-                  <ComposeModalProvider>{props.children}</ComposeModalProvider>
-                </MailEngineRuntime>
-              </ChatProvider>
-            </StatLoaderProvider>
-          </SWRProvider>
-        </EmailAccountProvider>
-      </Provider>
-    </ThemeProvider>
+    // JS-driven animations follow the OS "reduce motion" setting, as CSS does.
+    <MotionConfig reducedMotion="user">
+      <ThemeProvider attribute="class" defaultTheme="light">
+        <Provider store={jotaiStore}>
+          <EmailAccountProvider>
+            <SWRProvider>
+              <StatLoaderProvider>
+                <ChatProvider>
+                  <MailEngineRuntime>
+                    <ComposeModalProvider>
+                      {props.children}
+                    </ComposeModalProvider>
+                  </MailEngineRuntime>
+                </ChatProvider>
+              </StatLoaderProvider>
+            </SWRProvider>
+          </EmailAccountProvider>
+        </Provider>
+      </ThemeProvider>
+    </MotionConfig>
   );
 }
