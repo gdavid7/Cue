@@ -2,7 +2,7 @@ import { clearRecentSearchHistory } from "@/store/mail-search-history";
 import { clearStoredSenderQueues } from "@/store/sender-queue";
 import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 import { closeActiveMailEngine } from "@/utils/mail-engine/active-client";
-import { wipeOpfsMailEngine } from "@/utils/mail-engine/wasm-sqlite";
+import { wipeOpfsMailEngine } from "@/utils/mail-engine/opfs-mailbox";
 import { clearOfflineMailCache } from "@/utils/offline/clear-mail-cache";
 
 // Sign-out leaves the page before a slow wipe can finish, so the marker

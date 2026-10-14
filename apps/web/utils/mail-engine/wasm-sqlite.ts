@@ -4,8 +4,7 @@ import type {
   SqlValue,
   SqliteDriver,
 } from "@inboxzero/mail-sqlite/driver";
-
-export const MAIL_ENGINE_OPFS_DIRECTORY = ".mail-engine";
+import { MAIL_ENGINE_OPFS_DIRECTORY } from "./opfs-mailbox";
 
 export async function createWasmSqliteDriver(input?: {
   name?: string;
@@ -27,6 +26,10 @@ export async function createWasmSqliteDriver(input?: {
     });
     await pool.unpauseVfs();
     database = new pool.OpfsSAHPoolDb("/mailbox.sqlite");
+    // Each archive or star commits a transaction. Keeping the rollback
+    // journal between them, instead of creating and deleting a pool file for
+    // every one, saves the pool's own header writes and flushes per commit.
+    database.exec("PRAGMA journal_mode=PERSIST");
     release = async () => {
       database.close();
       await pool.pauseVfs();
@@ -103,42 +106,4 @@ function createTransaction(database: Database): SqlTransaction {
       return { changedRows: changed };
     },
   };
-}
-
-/** Resolves false when the mailbox is still on disk after every retry. */
-export async function wipeOpfsMailEngine(): Promise<boolean> {
-  if (
-    typeof navigator === "undefined" ||
-    !("storage" in navigator) ||
-    !("getDirectory" in navigator.storage)
-  ) {
-    return true;
-  }
-  let root: FileSystemDirectoryHandle;
-  try {
-    root = await navigator.storage.getDirectory();
-  } catch {
-    // Without OPFS access the engine could not have stored anything either.
-    return true;
-  }
-  for (let attempt = 0; attempt < 8; attempt++) {
-    try {
-      await root.removeEntry(MAIL_ENGINE_OPFS_DIRECTORY, { recursive: true });
-      return true;
-    } catch (error) {
-      if (isMissingOpfsEntry(error)) return true;
-      if (attempt === 7) return false;
-      await new Promise((resolve) => setTimeout(resolve, 25 * 2 ** attempt));
-    }
-  }
-  return false;
-}
-
-function isMissingOpfsEntry(error: unknown) {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "name" in error &&
-    error.name === "NotFoundError"
-  );
 }

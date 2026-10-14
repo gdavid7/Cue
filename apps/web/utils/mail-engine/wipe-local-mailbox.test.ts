@@ -18,7 +18,7 @@ const searchHistory = vi.hoisted(() => ({ clear: vi.fn() }));
 vi.mock("@/utils/desktop-app", () => ({
   getInboxZeroDesktopApp: () => desktop.app,
 }));
-vi.mock("@/utils/mail-engine/wasm-sqlite", () => ({
+vi.mock("@/utils/mail-engine/opfs-mailbox", () => ({
   wipeOpfsMailEngine: () => opfs.wipe(),
 }));
 vi.mock("@/utils/mail-engine/active-client", () => ({
