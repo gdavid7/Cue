@@ -178,6 +178,11 @@ export interface EmailProvider {
     draftId: string,
     attachment: DraftAttachmentMetadata & { content: Buffer },
   ): Promise<DraftAttachmentsResult & { attachmentId: string }>;
+  /**
+   * Moves an account-history cursor to the mailbox's current position without
+   * reading the changes in between. Null when the cursor's history expired.
+   */
+  advanceMailboxSyncCursor?(cursor: string): Promise<string | null>;
   archiveMessage(messageId: string): Promise<void>;
   archiveMessages(messageIds: string[], labelId?: string): Promise<void>;
   archiveThread(threadId: string, ownerEmail: string): Promise<void>;

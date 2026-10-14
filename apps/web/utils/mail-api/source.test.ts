@@ -11,6 +11,12 @@ import { createEmailProviderMailboxSource } from "./source";
 import type { EmailProvider } from "@/utils/email/types";
 import type { ParsedMessage } from "@/utils/types";
 import { createTestLogger } from "@/__tests__/helpers";
+import {
+  createHostRuntime,
+  createMailEngine,
+} from "@inboxzero/mail-core/engine";
+import { createNodeSqliteDriver } from "@inboxzero/mail-sqlite/node";
+import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
 import { redis } from "@/utils/redis";
 import {
   LocalMailSyncPausedError,
@@ -1210,6 +1216,33 @@ describe("createEmailProviderMailboxSource", () => {
     );
   });
 
+  it("leaves account-wide rate-limit mode alone when only the backfill is throttled", async () => {
+    vi.mocked(redis.set).mockClear();
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        async getMessagesWithPagination() {
+          throw Object.assign(new Error("Rate limit exceeded"), {
+            status: 429,
+          });
+        },
+      } as unknown as EmailProvider,
+    });
+    await expect(
+      source.enumerate({
+        session: { accountId: "acc-1", generation: "g1" },
+        requestId: "r1",
+        signal: new AbortController().signal,
+        bootstrapId: "mailbox",
+        page: JSON.stringify({ scopeId: "history" }),
+        pageSize: 50,
+      }),
+    ).resolves.toMatchObject({ status: "paused", reason: "throttled" });
+    expect(redis.set).not.toHaveBeenCalled();
+  });
+
   it("returns the sync budget's wait as a throttled pause", async () => {
     vi.mocked(withLocalMailSyncBudget).mockRejectedValueOnce(
       new LocalMailSyncPausedError(12_000),
@@ -1258,6 +1291,7 @@ describe("createEmailProviderMailboxSource", () => {
       deletedMessageIds: [],
       hasMore: false,
     }));
+    const advanceMailboxSyncCursor = vi.fn(async (cursor: string) => cursor);
     const source = createEmailProviderMailboxSource({
       logger,
       accountId: "acc-1",
@@ -1265,6 +1299,7 @@ describe("createEmailProviderMailboxSource", () => {
         name: "google",
         getMessagesWithPagination,
         getMailboxSyncPage,
+        advanceMailboxSyncCursor,
       } as unknown as EmailProvider,
     });
     const discovered = await source.discoverScopes({
@@ -1311,9 +1346,6 @@ describe("createEmailProviderMailboxSource", () => {
     expect(recentFrom).toBeLessThan(now);
     // Overlapping windows leave no unsynced gap between the two scans.
     expect(historyTo).toBeGreaterThan(recentFrom);
-    // The backfill only reads its own provider pages; catch-up for every
-    // message runs through the primary stream.
-    expect(getMailboxSyncPage).toHaveBeenCalledTimes(1);
     expect(withLocalMailSyncBudget).toHaveBeenCalledWith(
       expect.objectContaining({ priority: "backfill" }),
       expect.any(Function),
@@ -1325,7 +1357,7 @@ describe("createEmailProviderMailboxSource", () => {
       position: {
         streamId: "history",
         generation: "g1",
-        checkpoint: "history-complete",
+        checkpoint: "history-cursor",
       },
       pageSize: 50,
       signal: new AbortController().signal,
@@ -1334,7 +1366,10 @@ describe("createEmailProviderMailboxSource", () => {
       status: "page",
       page: { changes: [], roundComplete: true },
     });
-    expect(getMailboxSyncPage).toHaveBeenCalledTimes(1);
+    // Catch-up for every message runs through the primary stream; the
+    // backfill scope only checks that its history is still held.
+    expect(getMailboxSyncPage).toHaveBeenCalledTimes(2);
+    expect(advanceMailboxSyncCursor).toHaveBeenCalledWith("history-cursor");
   });
 
   it("starts Gmail catch-up from history rather than resuming a full mailbox snapshot", async () => {
@@ -1571,6 +1606,120 @@ function searchMessage(id: string, labelIds: string[] = []) {
     internalDate: "1767225600000",
   };
 }
+
+describe("Gmail history expiry", () => {
+  it("re-syncs older mail when Gmail no longer holds the mailbox history", async () => {
+    const day = 24 * 60 * 60 * 1000;
+    const mailbox = new Map<string, ParsedMessage>([
+      ["recent", gmailMessage("recent", Date.now() - day)],
+      ["old", gmailMessage("old", Date.now() - 30 * day)],
+    ]);
+    let historyExpired = false;
+    const cursor = encodeMailboxSyncCursor({
+      version: 1,
+      provider: "google",
+      phase: "delta",
+      historyId: "100",
+      after: "1970-01-01T00:00:00.000Z",
+    });
+    const provider = {
+      name: "google",
+      async getMessagesWithPagination(options: {
+        after?: Date;
+        before?: Date;
+      }) {
+        return {
+          messages: [...mailbox.values()].filter((message) => {
+            const at = Number(message.internalDate);
+            return (
+              (!options.after || at >= options.after.getTime()) &&
+              (!options.before || at < options.before.getTime())
+            );
+          }),
+        };
+      },
+      async getMailboxSyncPage(options: { cursor?: string }) {
+        if (options.cursor && historyExpired) {
+          return {
+            cursor,
+            reset: true,
+            upsertedMessages: [],
+            deletedMessageIds: [],
+            hasMore: true,
+          };
+        }
+        return {
+          cursor,
+          reset: !options.cursor,
+          upsertedMessages: [],
+          deletedMessageIds: [],
+          hasMore: false,
+        };
+      },
+      async advanceMailboxSyncCursor(current: string) {
+        return historyExpired ? null : current;
+      },
+    } as unknown as EmailProvider;
+    let now = 1_000_000;
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    const engine = createMailEngine({
+      store,
+      source: createEmailProviderMailboxSource({
+        logger,
+        provider,
+        accountId: "acc-1",
+      }),
+      executor: {
+        async execute() {
+          return { status: "uncertain", receiptId: null };
+        },
+        async inspect() {
+          return { status: "uncertain", receiptId: null };
+        },
+      },
+      runtime: createHostRuntime({ nowMs: () => now }),
+    });
+    const starredMessageIds = async () => {
+      const { view } = await store.readMailboxView({
+        accountIds: ["acc-1"],
+        predicate: { kind: "starred", value: true },
+        order: "newest_first",
+        pageSize: 25,
+        after: null,
+      });
+      return view.conversations.map((conversation) => conversation.key);
+    };
+    const runFor = async (rounds: number) => {
+      for (let round = 0; round < rounds; round++) {
+        await engine.runUntil(now + 20);
+      }
+    };
+
+    await engine.requestSync(["acc-1"]);
+    await runFor(5);
+    expect(await starredMessageIds()).toEqual([]);
+
+    // Offline past Gmail's history retention: changes to old mail are gone
+    // from history, so only a fresh scan can bring them in.
+    historyExpired = true;
+    mailbox.set("old", gmailMessage("old", Date.now() - 30 * day, ["STARRED"]));
+    now += 11 * 60_000;
+    await runFor(5);
+    historyExpired = false;
+    now += 11 * 60_000;
+    await runFor(10);
+
+    expect(await starredMessageIds()).toEqual([
+      { accountId: "acc-1", conversationId: "t-old" },
+    ]);
+    await engine.close();
+  });
+});
 
 describe("structured mailbox search", () => {
   it.each([
@@ -1874,3 +2023,28 @@ describe("structured mailbox search", () => {
     });
   });
 });
+
+function gmailMessage(
+  id: string,
+  receivedAtMs: number,
+  extraLabels: string[] = [],
+): ParsedMessage {
+  return {
+    id,
+    threadId: `t-${id}`,
+    historyId: extraLabels.length ? "2" : "1",
+    internalDate: String(receivedAtMs),
+    date: new Date(receivedAtMs).toISOString(),
+    subject: id,
+    snippet: id,
+    headers: {
+      from: "ada@example.com",
+      to: "me@example.com",
+      subject: id,
+      date: new Date(receivedAtMs).toISOString(),
+    },
+    labelIds: ["INBOX", ...extraLabels],
+    textPlain: id,
+    inline: [],
+  } as unknown as ParsedMessage;
+}

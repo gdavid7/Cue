@@ -142,7 +142,10 @@ import { withRateLimitRecording } from "@/utils/email/rate-limit";
 import { shouldSkipAutoDraft } from "@/utils/auto-draft";
 import { extractUniqueEmailAddresses } from "@/utils/email";
 import { requireSentMessageId } from "@/utils/email/sent-message-id";
-import { getGmailMailboxSyncPage } from "@/utils/gmail/mailbox-sync";
+import {
+  advanceGmailMailboxSyncCursor,
+  getGmailMailboxSyncPage,
+} from "@/utils/gmail/mailbox-sync";
 import { isGoogleOauthEmulationEnabled } from "@/utils/gmail/oauth";
 
 const GMAIL_MESSAGE_WRITE_CONCURRENCY = 5;
@@ -1747,6 +1750,14 @@ export class GmailProvider implements EmailProvider {
       accessToken: getAccessTokenFromClient(this.client),
       logger: this.logger,
       ...options,
+    });
+  }
+
+  async advanceMailboxSyncCursor(cursor: string) {
+    return advanceGmailMailboxSyncCursor({
+      gmail: this.client,
+      logger: this.logger,
+      cursor,
     });
   }
 

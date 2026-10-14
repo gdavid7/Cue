@@ -48,9 +48,6 @@ const GMAIL_HISTORY_SCOPE_ID = "history";
 // The two scans start at different times, so the backfill reaches into the
 // recent window to leave no gap at the boundary between them.
 const GMAIL_HISTORY_OVERLAP_MS = DAY_MS;
-// Live changes for every message arrive through the primary stream, so the
-// finished backfill scope only needs a checkpoint that marks it done.
-const GMAIL_HISTORY_COMPLETE_CHECKPOINT = "history-complete";
 const GMAIL_THREAD_COST = 40;
 
 const SUPPORTED_CHANGES = [
@@ -133,34 +130,18 @@ export function createEmailProviderMailboxSource(input: {
       };
     },
     async beginBootstrap({ afterMs, scope, session }) {
-      if (isGmail && scope.id === GMAIL_HISTORY_SCOPE_ID) {
-        const catchUpFrom: SyncPosition = {
-          streamId: GMAIL_HISTORY_SCOPE_ID,
-          generation: session.generation,
-          checkpoint: GMAIL_HISTORY_COMPLETE_CHECKPOINT,
-        };
-        const token: BootstrapToken = {
-          scopeId: GMAIL_HISTORY_SCOPE_ID,
-          receivedBeforeMs:
-            Date.now() - GMAIL_RECENT_WINDOW_MS + GMAIL_HISTORY_OVERLAP_MS,
-          catchUpFrom,
-        };
-        return {
-          status: "ok" as const,
-          value: {
-            bootstrapId: "mailbox",
-            enumerationToken: JSON.stringify(token),
-            catchUpFrom,
-          },
-        };
-      }
       try {
+        const isHistory = isGmail && scope.id === GMAIL_HISTORY_SCOPE_ID;
         const token: BootstrapToken = {
           afterMs: afterMs ?? 0,
           scopeId: scope.id,
           folderId: scopedFolderId(provider, scope),
-          receivedAfterMs: isGmail
-            ? Date.now() - GMAIL_RECENT_WINDOW_MS
+          receivedAfterMs:
+            isGmail && !isHistory
+              ? Date.now() - GMAIL_RECENT_WINDOW_MS
+              : undefined,
+          receivedBeforeMs: isHistory
+            ? Date.now() - GMAIL_RECENT_WINDOW_MS + GMAIL_HISTORY_OVERLAP_MS
             : undefined,
         };
         const catchUpFrom: SyncPosition = {
@@ -187,8 +168,10 @@ export function createEmailProviderMailboxSource(input: {
       }
     },
     async enumerate({ page, session, pageSize }) {
+      let isBackfill = false;
       try {
         const token = JSON.parse(page) as BootstrapToken;
+        isBackfill = isGmail && token.scopeId === GMAIL_HISTORY_SCOPE_ID;
         const maxResults = Math.min(pageSize, maxPageSize);
         const listPage = () =>
           provider.getMessagesWithPagination({
@@ -207,10 +190,7 @@ export function createEmailProviderMailboxSource(input: {
           ? await withGmailSyncBudget(
               {
                 emailAccountId: accountId,
-                priority:
-                  token.scopeId === GMAIL_HISTORY_SCOPE_ID
-                    ? "backfill"
-                    : "current",
+                priority: isBackfill ? "backfill" : "current",
                 cost: gmailPageCost(maxResults),
               },
               listPage,
@@ -266,23 +246,46 @@ export function createEmailProviderMailboxSource(input: {
         if (error instanceof InvalidMailboxSyncCursorError) {
           return { status: "reset_required", scopeId: "primary" };
         }
-        return mapProviderError(error);
+        // The budget's own cooldown paces a throttled backfill; account-wide
+        // rate-limit mode would also stop webhooks and automation.
+        return mapProviderError(error, { recordRateLimit: !isBackfill });
       }
     },
     async readChanges({ position, session, requestId, pageSize }) {
-      if (isGmail && position.streamId === GMAIL_HISTORY_SCOPE_ID) {
-        return {
-          status: "page" as const,
-          page: {
-            session,
-            requestId,
-            from: position,
-            to: position,
-            changes: [],
-            requiredHydration: [],
-            roundComplete: true,
-          },
-        };
+      if (
+        isGmail &&
+        position.streamId === GMAIL_HISTORY_SCOPE_ID &&
+        provider.advanceMailboxSyncCursor
+      ) {
+        // Live changes reach every message through the primary stream, so the
+        // backfill's cursor only tracks whether Gmail still holds the history
+        // since it finished. Once that expires, changes to older mail are lost
+        // and the backfill must run again alongside the primary resync.
+        try {
+          const checkpoint = position.checkpoint
+            ? await provider.advanceMailboxSyncCursor(position.checkpoint)
+            : null;
+          if (!checkpoint) {
+            return { status: "reset_required", scopeId: position.streamId };
+          }
+          return {
+            status: "page" as const,
+            page: {
+              session,
+              requestId,
+              from: position,
+              to: { ...position, checkpoint },
+              changes: [],
+              requiredHydration: [],
+              roundComplete: true,
+            },
+          };
+        } catch (error) {
+          if (error instanceof InvalidMailboxSyncCursorError) {
+            return { status: "reset_required", scopeId: position.streamId };
+          }
+          return mapProviderError(error);
+        }
       }
       try {
         const page = await provider.getMailboxSyncPage({
@@ -508,7 +511,10 @@ export function createEmailProviderMailboxSource(input: {
     ).catch(() => undefined);
   }
 
-  async function mapProviderError(error: unknown) {
+  async function mapProviderError(
+    error: unknown,
+    { recordRateLimit = true }: { recordRateLimit?: boolean } = {},
+  ) {
     if (error instanceof LocalMailSyncPausedError) {
       return throttled(error.retryAfterMs);
     }
@@ -525,7 +531,7 @@ export function createEmailProviderMailboxSource(input: {
       provider: rateLimitProvider,
       attemptNumber: 1,
     });
-    if (rateLimitDelayMs !== null) {
+    if (rateLimitDelayMs !== null && recordRateLimit) {
       // Recording the mode makes every route for this account wait out the
       // window instead of spending quota the provider has not restored yet.
       try {
@@ -541,8 +547,8 @@ export function createEmailProviderMailboxSource(input: {
           error: recordError,
         });
       }
-      return throttled(rateLimitDelayMs);
     }
+    if (rateLimitDelayMs !== null) return throttled(rateLimitDelayMs);
     const message = error instanceof Error ? error.message : "";
     const lowered = message.toLowerCase();
     if (

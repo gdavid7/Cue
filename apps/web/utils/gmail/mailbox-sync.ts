@@ -123,6 +123,35 @@ export async function getGmailMailboxSyncPage({
   }
 }
 
+export async function advanceGmailMailboxSyncCursor({
+  gmail,
+  logger,
+  cursor,
+}: {
+  gmail: gmail_v1.Gmail;
+  logger: Logger;
+  cursor: string;
+}): Promise<string | null> {
+  const decoded = decodeMailboxSyncCursor(cursor, "google");
+  try {
+    const response = await getHistory(
+      gmail,
+      { startHistoryId: decoded.historyId, maxResults: 1 },
+      logger,
+    );
+    return encodeMailboxSyncCursor({
+      version: 1,
+      provider: "google",
+      phase: "delta",
+      historyId: response.historyId ?? decoded.historyId,
+      after: decoded.after,
+    });
+  } catch (error) {
+    if (extractErrorInfo(error).status !== 404) throw error;
+    return null;
+  }
+}
+
 export function getGmailMailboxChangeIds(history: gmail_v1.Schema$History[]): {
   upsertIds: string[];
   deletedIds: Set<string>;
