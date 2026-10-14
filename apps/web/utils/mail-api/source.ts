@@ -30,6 +30,7 @@ import {
 } from "@/utils/email/local-mail-sync-budget";
 import { isEmailProviderRateLimitRedisConfigured } from "@/utils/redis/email-provider-rate-limit";
 import type { Logger } from "@/utils/logger";
+import { isInvalidGrantError } from "@/utils/error";
 import { extractErrorInfo as extractGmailErrorInfo } from "@/utils/gmail/retry";
 import { extractErrorInfo as extractOutlookErrorInfo } from "@/utils/outlook/retry";
 import type { ParsedMessage } from "@/utils/types";
@@ -588,9 +589,12 @@ export function createEmailProviderMailboxSource(input: {
     const message = error instanceof Error ? error.message : "";
     const lowered = message.toLowerCase();
     if (
+      extractGmailErrorInfo(error).status === 401 ||
+      extractOutlookErrorInfo(error).status === 401 ||
+      isInvalidGrantError(error) ||
+      message === "No refresh token" ||
       message.includes("401") ||
       lowered.includes("unauthorized") ||
-      lowered.includes("invalid_grant") ||
       lowered.includes("invalid access token")
     ) {
       return { status: "blocked_auth" as const };
