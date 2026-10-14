@@ -27,6 +27,7 @@ import { getRetryAfterHeaderFromError } from "@/utils/retry/get-retry-after-head
 import {
   currentGmailQuotaContext,
   getGmailCallDeferredError,
+  noteRateLimitModeSkip,
 } from "@/utils/gmail/quota";
 
 const DEFAULT_RATE_LIMIT_DELAY_MS = 30_000;
@@ -201,6 +202,7 @@ export async function assertProviderNotRateLimited({
   });
   if (!state || state.provider !== provider) return;
 
+  noteRateLimitModeSkip();
   logger?.warn("Skipping provider call while rate-limit mode is active", {
     emailAccountId,
     provider,

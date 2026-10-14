@@ -37,7 +37,21 @@ const BACKGROUND_PAUSE_MIN_MS = 30_000;
 
 export type GmailQuotaPriority = "interactive" | "sync" | "background";
 
-type GmailQuotaContext = { caller: string; priority: GmailQuotaPriority };
+/** What one unit of work (such as an assistant tool call) met at the gate. */
+export type GmailQuotaStats = {
+  waitMs: number;
+  deferred: number;
+  refused: number;
+  rateLimitMode: number;
+};
+
+type GmailQuotaContext = {
+  caller: string;
+  priority: GmailQuotaPriority;
+  stats?: GmailQuotaStats;
+  /** Caps the gate waits of every call in this context together. */
+  maxTotalWaitMs?: number;
+};
 
 // Route scopes, matched exactly so a route added under a background path is
 // never held back by accident. Interactive: someone is waiting on it, for a
@@ -183,18 +197,40 @@ export function getGmailCallDeferredError(error: unknown) {
   return null;
 }
 
-/** Runs `operation` with its Gmail calls charged to `caller` at `priority`. */
+/**
+ * Runs `operation` with its Gmail calls charged to `caller` at `priority`.
+ * With `stats`, what the calls met at the gate is added to it; with
+ * `maxTotalWaitMs`, the calls share that much waiting before they defer.
+ */
 export function runWithGmailQuota<T>(
-  context: { caller?: string; priority: GmailQuotaPriority },
+  context: {
+    caller?: string;
+    priority: GmailQuotaPriority;
+    stats?: GmailQuotaStats;
+    maxTotalWaitMs?: number;
+  },
   operation: () => T,
 ): T {
+  const current = currentGmailQuotaContext();
   return quotaContext.run(
     {
-      caller: context.caller ?? currentGmailQuotaContext().caller,
+      caller: context.caller ?? current.caller,
       priority: context.priority,
+      stats: context.stats ?? current.stats,
+      maxTotalWaitMs: context.maxTotalWaitMs ?? current.maxTotalWaitMs,
     },
     operation,
   );
+}
+
+export function createGmailQuotaStats(): GmailQuotaStats {
+  return { waitMs: 0, deferred: 0, refused: 0, rateLimitMode: 0 };
+}
+
+/** Counts a call skipped because the account is in provider rate-limit mode. */
+export function noteRateLimitModeSkip() {
+  const stats = quotaContext.getStore()?.stats;
+  if (stats) stats.rateLimitMode += 1;
 }
 
 /** The priority of a server action's Gmail calls: a click, unless the app fires it. */
@@ -283,7 +319,15 @@ export async function admitGmailCall({
   const keys = accountKeys(emailAccountId);
   const blockers =
     priority === "background" ? [keys.initialSync, keys.backgroundPause] : [];
-  const deadline = Date.now() + MAX_WAIT_MS[priority];
+  const { stats, maxTotalWaitMs } = context;
+  const deadline =
+    Date.now() +
+    Math.min(
+      MAX_WAIT_MS[priority],
+      maxTotalWaitMs === undefined
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, maxTotalWaitMs - (stats?.waitMs ?? 0)),
+    );
   for (;;) {
     let wait: number;
     try {
@@ -317,9 +361,12 @@ export async function admitGmailCall({
           amount: 1,
         }),
       ).catch(() => undefined);
+      if (stats) stats.deferred += 1;
       throw new GmailCallDeferredError(wait, priority);
     }
-    await sleep(Math.min(wait, deadline - Date.now()));
+    const sleepMs = Math.min(wait, deadline - Date.now());
+    await sleep(sleepMs);
+    if (stats) stats.waitMs += sleepMs;
   }
 }
 
@@ -332,6 +379,8 @@ export async function noteGmailQuotaRefusal(
   ticket: GmailQuotaTicket,
   error?: unknown,
 ) {
+  const stats = quotaContext.getStore()?.stats;
+  if (stats) stats.refused += 1;
   if (!ticket.emailAccountId || !isEmailProviderRateLimitRedisConfigured())
     return;
   const keys = accountKeys(ticket.emailAccountId);

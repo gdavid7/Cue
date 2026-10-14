@@ -11,19 +11,27 @@ export function getToolFailureWarning(
     | null
     | undefined,
 ) {
-  const parts = message?.parts;
-  if (!parts?.length) return null;
+  return getFailedToolNames(message).length ? TOOL_FAILURE_WARNING : null;
+}
 
-  return parts.some((part) => {
-    if (!isRecord(part)) return false;
+/** The tools whose failure the user is shown, one entry per failed call. */
+export function getFailedToolNames(
+  message:
+    | {
+        parts?: unknown[];
+      }
+    | null
+    | undefined,
+) {
+  return (message?.parts ?? []).flatMap((part) => {
+    if (!isRecord(part)) return [];
     if (typeof part.type !== "string" || !part.type.startsWith("tool-")) {
-      return false;
+      return [];
     }
-
-    return Boolean(getUserVisibleToolFailureMessage(part.output));
-  })
-    ? TOOL_FAILURE_WARNING
-    : null;
+    return getUserVisibleToolFailureMessage(part.output)
+      ? [part.type.slice("tool-".length)]
+      : [];
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

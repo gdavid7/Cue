@@ -42,7 +42,10 @@ import {
   mergeSeenRulesRevision,
   saveLastSeenRulesRevision,
 } from "@/utils/ai/assistant/chat-seen-rules-revision";
-import { getToolFailureWarning } from "@/utils/ai/assistant/chat-response-guard";
+import {
+  getFailedToolNames,
+  getToolFailureWarning,
+} from "@/utils/ai/assistant/chat-response-guard";
 import { flushLoggerSafely } from "@/utils/logger-flush";
 import {
   claimActiveStream,
@@ -142,6 +145,7 @@ export const POST = withEmailAccount("chat", async (request) => {
     chat.messages.length > 0 || chat.compactions.length > 0;
   const { message, context, inlineActions } = data;
   const chatRunId = crypto.randomUUID();
+  const runStartedAt = Date.now();
   const runLogger = request.logger.with({ chatId: chat.id, chatRunId });
 
   // The reply's message id doubles as its stream id, so a client can name the
@@ -362,7 +366,9 @@ export const POST = withEmailAccount("chat", async (request) => {
         const warning = getToolFailureWarning(responseMessage);
         if (!warning) return;
 
-        runLogger.warn("Assistant chat completed with tool failures");
+        runLogger.warn("Assistant chat completed with tool failures", {
+          failedTools: getFailedToolNames(responseMessage),
+        });
 
         const warningPartId = crypto.randomUUID();
         writer.write({ type: "text-start", id: warningPartId });
@@ -420,6 +426,7 @@ export const POST = withEmailAccount("chat", async (request) => {
             toolCallCount: assistantRun.toolCallCount,
             visibleTextProduced: assistantRun.visibleTextProduced,
             stopped: isAborted,
+            durationMs: Date.now() - runStartedAt,
             assistantMessageCount: messages.filter(
               (message) => message.role === "assistant",
             ).length,
