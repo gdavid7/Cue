@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ExecutedRuleStatus } from "@/generated/prisma/enums";
 import type { ParsedMessage } from "@/utils/types";
+import { BRAND_NAME } from "@/utils/branding";
 
 type FixWithChatResults = ComponentProps<typeof FixWithChat>["results"];
 
@@ -59,34 +60,11 @@ export function MessageActionsMenu({
         onKeyDown={(event) => event.stopPropagation()}
         onEscapeKeyDown={(event) => event.stopPropagation()}
       >
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>
-            <SparklesIcon className="mr-2 size-4" />
-            Matched reason
-          </DropdownMenuSubTrigger>
-          <DropdownMenuPortal>
-            <DropdownMenuSubContent
-              className="max-h-[var(--radix-dropdown-menu-content-available-height)] w-[min(24rem,calc(100vw-1rem))] overflow-y-auto p-0"
-              onClick={(event) => event.stopPropagation()}
-              onKeyDown={(event) => event.stopPropagation()}
-            >
-              {messagePlans.length ? (
-                messagePlans.map((plan) => (
-                  <RuleAttribution
-                    key={plan.id}
-                    message={message}
-                    plan={plan}
-                    showFixWithChat={showFixWithChat}
-                  />
-                ))
-              ) : (
-                <p className="p-3 text-muted-foreground text-xs">
-                  No matched rules for this message.
-                </p>
-              )}
-            </DropdownMenuSubContent>
-          </DropdownMenuPortal>
-        </DropdownMenuSub>
+        <SortReasonSubmenu
+          message={message}
+          plans={messagePlans}
+          showFixWithChat={showFixWithChat}
+        />
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
           <a
@@ -106,6 +84,51 @@ export function MessageActionsMenu({
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * The rules that matched, with their reasons and a way to correct them.
+ * `message` gets the Fix control; plans for other messages show without it.
+ */
+export function SortReasonSubmenu({
+  message,
+  plans,
+  showFixWithChat,
+}: {
+  message: ParsedMessage | null;
+  plans: ThreadPlan[];
+  showFixWithChat: boolean;
+}) {
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <SparklesIcon className="mr-2 size-4" />
+        Why {BRAND_NAME} sorted this
+      </DropdownMenuSubTrigger>
+      <DropdownMenuPortal>
+        <DropdownMenuSubContent
+          className="max-h-[var(--radix-dropdown-menu-content-available-height)] w-[min(24rem,calc(100vw-1rem))] overflow-y-auto p-0"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          {plans.length ? (
+            plans.map((plan) => (
+              <RuleAttribution
+                key={plan.id}
+                message={plan.messageId === message?.id ? message : null}
+                plan={plan}
+                showFixWithChat={showFixWithChat}
+              />
+            ))
+          ) : (
+            <p className="p-3 text-muted-foreground text-xs">
+              No rules matched.
+            </p>
+          )}
+        </DropdownMenuSubContent>
+      </DropdownMenuPortal>
+    </DropdownMenuSub>
   );
 }
 

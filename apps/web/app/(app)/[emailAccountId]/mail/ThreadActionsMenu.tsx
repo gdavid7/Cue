@@ -22,7 +22,7 @@ import {
   TagIcon,
 } from "lucide-react";
 import { useAction } from "next-safe-action/hooks";
-import { useRef } from "react";
+import { type ReactNode, useRef } from "react";
 import { useSenderCommands } from "@/app/(app)/[emailAccountId]/mail/use-sender-commands";
 import { getEmailMessageCellActions } from "@/components/EmailMessageCellActions";
 import { Kbd } from "@/components/Kbd";
@@ -61,6 +61,8 @@ export type ThreadActionsMenuProps = {
   onTranslate?: () => void;
   onComment?: () => void;
   onPrint?: () => void;
+  /** Why the AI filed this conversation: a submenu, shown first. */
+  sortReason?: ReactNode;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 };
@@ -81,6 +83,7 @@ export function ThreadActionsMenu({
   onTranslate,
   onComment,
   onPrint,
+  sortReason,
   open,
   onOpenChange,
 }: ThreadActionsMenuProps) {
@@ -147,6 +150,13 @@ export function ThreadActionsMenu({
           }}
           onEscapeKeyDown={(event) => event.stopPropagation()}
         >
+          {sortReason ? (
+            <>
+              {sortReason}
+              <DropdownMenuSeparator />
+            </>
+          ) : null}
+
           {onLabel && (
             <DropdownMenuItem onSelect={onLabel}>
               <TagIcon className="mr-2 size-4" />

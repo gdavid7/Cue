@@ -3,7 +3,10 @@
 import { type ComponentProps, memo, useCallback } from "react";
 import { BufferedThreadReader } from "@/app/(app)/[emailAccountId]/mail/BufferedThreadReader";
 import { MailPanelErrorBoundary } from "@/app/(app)/[emailAccountId]/mail/MailPanelErrorBoundary";
-import { MessageActionsMenu } from "@/app/(app)/[emailAccountId]/mail/MessageActionsMenu";
+import {
+  MessageActionsMenu,
+  SortReasonSubmenu,
+} from "@/app/(app)/[emailAccountId]/mail/MessageActionsMenu";
 import { ThreadActionsMenu } from "@/app/(app)/[emailAccountId]/mail/ThreadActionsMenu";
 import {
   ThreadReader,
@@ -132,6 +135,13 @@ export const MailReaderPane = memo(function MailReaderPane({
                 onTranslate={onTranslate}
                 onComment={onComment}
                 onPrint={onPrint}
+                sortReason={
+                  <SortReasonSubmenu
+                    message={lastMessage}
+                    plans={plans}
+                    showFixWithChat={showFixWithChat}
+                  />
+                }
                 open={isMenuOpen}
                 onOpenChange={onMenuOpenChange}
               />

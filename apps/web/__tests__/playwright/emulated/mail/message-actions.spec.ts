@@ -53,7 +53,9 @@ test("shows matched reasons only for the selected message", async ({
       await message
         .getByRole("button", { name: "More message actions", exact: true })
         .click();
-      await page.getByRole("menuitem", { name: "Matched reason" }).click();
+      await page
+        .getByRole("menuitem", { name: /^Why .+ sorted this$/ })
+        .click();
       await expect(page.getByText(reason, { exact: true })).toBeVisible({
         timeout: 60_000,
       });
