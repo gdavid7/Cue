@@ -13,9 +13,14 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
 }));
 vi.mock("@/utils/error", () => ({ captureException: vi.fn() }));
 vi.mock("next/navigation", () => ({ usePathname: () => "/welcome-upgrade" }));
+const serwistState = vi.hoisted(() => ({
+  serwist: undefined as { register: () => Promise<undefined> } | undefined,
+}));
+const { toastInfo } = vi.hoisted(() => ({ toastInfo: vi.fn() }));
+vi.mock("sonner", () => ({ toast: { info: toastInfo } }));
 vi.mock("@serwist/next/react", () => ({
   SerwistProvider: ({ children }: { children: ReactNode }) => children,
-  useSerwist: () => ({ serwist: undefined }),
+  useSerwist: () => serwistState,
 }));
 vi.mock("nuqs/adapters/next/app", () => ({
   NuqsAdapter: ({ children }: { children: ReactNode }) => children,
@@ -24,6 +29,8 @@ vi.mock("nuqs/adapters/next/app", () => ({
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  serwistState.serwist = undefined;
 });
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -146,5 +153,34 @@ describe("global user-data fetching", () => {
     vi.stubGlobal("fetch", fetch);
     renderHook(() => useUser(false), { wrapper });
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("service worker updates", () => {
+  // QA-110: a new worker taking over (as can happen right after reconnecting)
+  // reloaded the desktop page by itself, losing whatever was on screen.
+  it("offers a reload instead of reloading when a new worker takes over", () => {
+    const serviceWorker = Object.assign(new EventTarget(), {
+      controller: {},
+      getRegistration: vi.fn(async () => undefined),
+    });
+    vi.stubGlobal(
+      "navigator",
+      Object.assign(Object.create(navigator), { serviceWorker }),
+    );
+    vi.stubGlobal("inboxZeroDesktop", {});
+    serwistState.serwist = { register: () => new Promise(() => {}) };
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+
+    render(<GlobalProviders>{null}</GlobalProviders>);
+    now.mockReturnValue(1_000_000 + 60_000);
+    serviceWorker.dispatchEvent(new Event("controllerchange"));
+
+    expect(toastInfo).toHaveBeenCalledWith(
+      "Update available",
+      expect.objectContaining({
+        action: expect.objectContaining({ label: "Reload" }),
+      }),
+    );
   });
 });

@@ -22,7 +22,7 @@ import {
 import { BRAND_NAME } from "@/utils/branding";
 
 const DESKTOP_WEB_UPDATE_TOAST_ID = "desktop-web-update";
-const DESKTOP_WEB_UPDATE_RELOAD_GRACE_MS = 3000;
+const DESKTOP_WEB_UPDATE_PROMPT_GRACE_MS = 3000;
 
 export function GlobalProviders(props: { children: React.ReactNode }) {
   return (
@@ -80,6 +80,20 @@ function ManageServiceWorker() {
       reloadForUpdate();
     };
 
+    // Never reloads by itself: the page may hold a half-written reply, and a
+    // worker can take over at any moment, such as right after reconnecting.
+    const offerReload = (onReload: () => void) => {
+      toast.info("Update available", {
+        action: {
+          label: "Reload",
+          onClick: onReload,
+        },
+        description: `Reload ${BRAND_NAME} to use the latest version.`,
+        duration: Number.POSITIVE_INFINITY,
+        id: DESKTOP_WEB_UPDATE_TOAST_ID,
+      });
+    };
+
     const notifyAboutWaitingUpdate = () => {
       const now = Date.now();
       if (
@@ -96,15 +110,7 @@ function ManageServiceWorker() {
 
       lastPromptedAt = now;
       writeDesktopWebUpdateLastPromptedAt(now);
-      toast.info("Update available", {
-        action: {
-          label: "Reload",
-          onClick: activateWaitingWorker,
-        },
-        description: `Reload ${BRAND_NAME} to use the latest version.`,
-        duration: Number.POSITIVE_INFINITY,
-        id: DESKTOP_WEB_UPDATE_TOAST_ID,
-      });
+      offerReload(activateWaitingWorker);
     };
 
     const handleWaitingWorker = () => {
@@ -141,11 +147,12 @@ function ManageServiceWorker() {
     const onControllerChange = () => {
       saveOfflineMail();
       if (
+        !refreshing &&
         hadController &&
         isDesktopApp &&
-        Date.now() - pageLoadedAt >= DESKTOP_WEB_UPDATE_RELOAD_GRACE_MS
+        Date.now() - pageLoadedAt >= DESKTOP_WEB_UPDATE_PROMPT_GRACE_MS
       ) {
-        reloadForUpdate();
+        offerReload(reloadForUpdate);
       }
       hadController = true;
     };
