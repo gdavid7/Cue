@@ -6,6 +6,7 @@ import { ErrorPage } from "@/components/ErrorPage";
 import { PageWrapper } from "@/components/PageWrapper";
 import { PageHeader } from "@/components/PageHeader";
 import { AccessRequests } from "@/app/(app)/admin/access/AccessRequests";
+import { InfoIcon } from "lucide-react";
 import { AlertBasic } from "@/components/Alert";
 import {
   GOOGLE_OAUTH_TEST_USERS_URL,
@@ -52,19 +53,21 @@ export default async function AdminAccessPage() {
       {GOOGLE_OAUTH_TESTING_MODE && (
         <AlertBasic
           className="mt-6"
+          variant="blue"
+          icon={<InfoIcon className="size-4" aria-hidden />}
           title="Also add each approved address as a Google test user"
           description={
             <>
               Cue&apos;s Google app is in Testing, so Google only lets listed
               test users sign in. After approving someone here, add that exact
-              address in{" "}
+              address under Audience → Test users in{" "}
               <a
                 href={GOOGLE_OAUTH_TEST_USERS_URL}
                 target="_blank"
                 rel="noreferrer"
                 className="font-medium underline underline-offset-4"
               >
-                Google Cloud Console → OAuth consent screen → Test users
+                Google Cloud Console
               </a>
               .
             </>
