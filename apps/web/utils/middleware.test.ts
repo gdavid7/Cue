@@ -196,6 +196,22 @@ describe("Middleware", () => {
       });
     });
 
+    it("answers a revoked Gmail grant with the reconnect 401, not a 500 or a Sentry event", async () => {
+      const revoked = Object.assign(new SafeError("No refresh token"), {
+        cause: new Error("invalid_grant: Token has been expired or revoked."),
+      });
+      const handler = vi.fn().mockRejectedValue(revoked);
+      const wrappedHandler = withError(handler);
+
+      const response = await wrappedHandler(mockReq, mockContext);
+      const responseBody = await response.json();
+
+      expect(response.status).toBe(401);
+      expect(responseBody).toMatchObject({ isKnownError: true });
+      expect(responseBody.errorCode).toBeTruthy();
+      expect(mockCaptureException).not.toHaveBeenCalled();
+    });
+
     it("should return structured JSON errors for public API SafeError responses", async () => {
       mockReq = createMockRequest("GET", "http://localhost/api/v1/rules");
       const safeError = new SafeError("Missing API key", 401);

@@ -4,6 +4,7 @@ import { auth } from "@googleapis/gmail";
 import { saveTokens } from "@/utils/auth/save-tokens";
 import { cleanupInvalidTokens } from "@/utils/auth/cleanup-invalid-tokens";
 import { createTestLogger } from "@/__tests__/helpers";
+import { isInvalidGrantError, SafeError } from "@/utils/error";
 import {
   getContactsClient,
   getGmailClientWithRefresh,
@@ -228,16 +229,19 @@ describe("gmail oauth client configuration", () => {
       new Error("invalid_grant: token has been expired or revoked"),
     );
 
-    await expect(
-      getGmailClientWithRefresh({
-        accessToken: "stale-access-token",
-        refreshToken: "refresh-token",
-        expiresAt: Date.now() - 1000,
-        emailAccountId: "email-account-id",
-        logger,
-      }),
-    ).rejects.toThrow("invalid_grant");
+    const error = await getGmailClientWithRefresh({
+      accessToken: "stale-access-token",
+      refreshToken: "refresh-token",
+      expiresAt: Date.now() - 1000,
+      emailAccountId: "email-account-id",
+      logger,
+    }).catch((e) => e);
 
+    // The reconnect state API routes answer with a 401, not a 500
+    expect(error).toBeInstanceOf(SafeError);
+    expect(error.message).toBe("No refresh token");
+    // Callers that branch on a revoked grant still recognize it
+    expect(isInvalidGrantError(error)).toBe(true);
     expect(cleanupInvalidTokens).toHaveBeenCalledTimes(1);
     expect(cleanupInvalidTokens).toHaveBeenCalledWith({
       emailAccountId: "email-account-id",
@@ -285,7 +289,7 @@ describe("gmail oauth client configuration", () => {
         emailAccountId: "email-account-id",
         logger,
       }),
-    ).rejects.toThrow("invalid_grant");
+    ).rejects.toThrow("No refresh token");
     expect(cleanupInvalidTokens).toHaveBeenCalledWith(
       expect.objectContaining({
         failedAccessToken: undefined,
