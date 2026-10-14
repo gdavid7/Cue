@@ -1,13 +1,8 @@
-import { stripeInvoiceEmailBody } from "@/ee/billing/stripe/invoice-email";
-import { createForwardingQueueHandler } from "@/utils/queue/create-forwarding-queue-handler";
-
 export const maxDuration = 300;
 
-export const POST = createForwardingQueueHandler({
-  loggerScope: "stripe/invoice-email/queue",
-  schema: stripeInvoiceEmailBody,
-  path: "/api/stripe/invoice-email",
-  invalidPayloadMessage: "Invalid Stripe invoice email queue payload",
-  visibilityTimeoutSeconds: 55,
-  getLoggerContext: ({ invoiceId }) => ({ invoiceId }),
-});
+// Vercel keeps a queue consumer private only while vercel.json declares its
+// trigger. The "stripe-invoice-email" trigger is off, so a consumer here would
+// accept forged messages from anyone. Restore the trigger and consumer together.
+export function POST() {
+  return new Response(null, { status: 404 });
+}

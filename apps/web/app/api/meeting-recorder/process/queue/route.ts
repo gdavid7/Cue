@@ -1,13 +1,9 @@
-import { createForwardingQueueHandler } from "@/utils/queue/create-forwarding-queue-handler";
-import { meetingRecorderProcessBody } from "../validation";
-
 export const maxDuration = 300;
 
-export const POST = createForwardingQueueHandler({
-  loggerScope: "meeting-recorder/process/queue",
-  schema: meetingRecorderProcessBody,
-  path: "/api/meeting-recorder/process",
-  invalidPayloadMessage: "Invalid meeting recorder process queue payload",
-  visibilityTimeoutSeconds: 55,
-  getLoggerContext: (payload) => ({ meetingId: payload.meetingId }),
-});
+// Vercel keeps a queue consumer private only while vercel.json declares its
+// trigger. The "meeting-recorder-process" trigger is off, so a consumer here
+// would accept forged messages from anyone. Restore the trigger and consumer
+// together.
+export function POST() {
+  return new Response(null, { status: 404 });
+}
