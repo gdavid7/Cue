@@ -69,6 +69,8 @@ export type ShortcutEntry = {
   allowWhileTyping?: boolean;
   /** Only available in the Electron shell, never in a browser tab. */
   desktopOnly?: boolean;
+  /** Bound, but left out of the shortcuts sheet. */
+  hideFromHelp?: boolean;
   /** Handles the key before rich text editors can consume it. */
   capture?: boolean;
   /** Present means the entry shows in ⌘K once a handler is registered. */
@@ -363,6 +365,8 @@ const SHORTCUT_DEFINITIONS = [
     scope: "mail",
     group: "View",
     label: "Comment for your team",
+    // Team comments are for shared workspaces, not someone's own inbox.
+    hideFromHelp: true,
   },
   {
     id: "undo",
@@ -523,7 +527,9 @@ export function getShortcutGroups(
   scopes: readonly ShortcutScope[],
   options: { isDesktopApp?: boolean } = {},
 ): { group: ShortcutGroup; shortcuts: ShortcutEntry[] }[] {
-  const entries = getShortcutsForScopes(scopes, options);
+  const entries = getShortcutsForScopes(scopes, options).filter(
+    (entry) => !entry.hideFromHelp,
+  );
 
   return SHORTCUT_GROUPS.map((group) => ({
     group,

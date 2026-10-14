@@ -407,11 +407,7 @@ function ChatMessagesView({
   );
 }
 
-const CHAT_EXAMPLES = [
-  "Help me handle my inbox today",
-  "Clean up my inbox",
-  "Suggest rules I should add",
-];
+const CHAT_EXAMPLES = ["Help me handle my inbox today"];
 
 function NewChatView({
   firstName,

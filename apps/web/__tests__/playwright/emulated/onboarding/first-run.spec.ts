@@ -84,7 +84,7 @@ test("a new user lands in mail, picks an inbox style, and gets the tour", async 
   await expect(card).toBeHidden({ timeout: 30_000 });
 
   const tour = page.getByLabel("What's new in Cue");
-  await expect(tour.getByText("Same inbox. Nothing moved.")).toBeVisible({
+  await expect(tour.getByRole("button", { name: "Skip tour" })).toBeVisible({
     timeout: 30_000,
   });
   await capturePlaywrightCheckpoint(page, testInfo, "first-run-tour");

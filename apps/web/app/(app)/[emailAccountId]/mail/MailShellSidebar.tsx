@@ -232,7 +232,6 @@ export const MailShellSidebar = memo(function MailShellSidebar({
           collapsibleCategories={!isOutlook}
           labelsHeading={terminology.label.pluralCapitalized}
           labelSingular={terminology.label.singular}
-          backToAppHref={prefixPath(emailAccountId, "/home")}
           onCompose={openCompose}
           onCreateLabel={onCreateLabel}
           onEditMailboxItem={onEditMailboxItem}

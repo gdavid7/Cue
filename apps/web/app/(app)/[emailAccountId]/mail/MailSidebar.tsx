@@ -11,7 +11,6 @@ import Link from "next/link";
 import { getMailSidebarRowPresentation } from "@inboxzero/mail-ui/MailSidebarRow";
 import {
   ArchiveIcon,
-  ArrowLeftIcon,
   BellIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -62,7 +61,6 @@ import {
   type MailboxItem,
   type MailboxItemEdit,
 } from "./MailboxItemContextMenu";
-import { BRAND_NAME } from "@/utils/branding";
 
 /** Where a sidebar row navigates. Mirrors the mail page's `?type=` query shape. */
 export type MailNavTarget =
@@ -87,7 +85,6 @@ export type MailSidebarProps = {
   categoryHeading: string;
   labelsHeading: string;
   labelSingular: string;
-  backToAppHref: string;
   onCompose: () => void;
   onCreateLabel: (name: string) => void;
   onEditMailboxItem: (edit: MailboxItemEdit) => Promise<boolean>;
@@ -210,7 +207,6 @@ export function MailSidebar({
   categoryHeading,
   labelsHeading,
   labelSingular,
-  backToAppHref,
   onCompose,
   onCreateLabel,
   onEditMailboxItem,
@@ -270,17 +266,7 @@ export function MailSidebar({
       {collapsed ? (
         <div data-desktop-mac-titlebar-spacer className="shrink-0" />
       ) : (
-        <div className="mb-2.5 flex shrink-0 items-center gap-1">
-          <Link
-            href={backToAppHref}
-            data-desktop-mac-end
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-muted-foreground text-xs hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <ArrowLeftIcon className="size-3.5 shrink-0" />
-            <span className="flex-1 truncate" data-hide-on-desktop-mac>
-              {BRAND_NAME}
-            </span>
-          </Link>
+        <div className="mb-2.5 flex shrink-0 items-center justify-end">
           <SidebarTrigger
             name="left-sidebar"
             className="size-6 shrink-0 text-muted-foreground"

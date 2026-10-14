@@ -38,7 +38,6 @@ function sidebar(overrides: Partial<MailSidebarProps> = {}) {
       categoryHeading="Categories"
       labelsHeading="Labels"
       labelSingular="label"
-      backToAppHref="/automation"
       onCompose={vi.fn()}
       onCreateLabel={vi.fn()}
       onEditMailboxItem={vi.fn()}
