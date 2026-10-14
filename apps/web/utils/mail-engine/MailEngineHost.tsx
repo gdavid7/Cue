@@ -145,6 +145,8 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
       setUnavailable(false);
       return;
     }
+    // Narrowed copy: TypeScript drops the null check inside the async callbacks below.
+    const engineProvider = mailProvider;
     // Keep queued sends and undo working after the initiating page or composer closes.
     if (!desktopIpc) requestBrowserEngine();
     setUnavailable(false);
@@ -174,7 +176,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
 
     if (mode === "desktop-ipc") {
       const client = createDesktopIpcMailClient({
-        provider: mailProvider,
+        provider: engineProvider,
       });
       publishClient(client, "owner", "desktop-ipc").catch(() => {
         if (!abort.signal.aborted) setUnavailable(true);
@@ -206,7 +208,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
           bus.post({
             type: "hello",
             accountId: emailAccountId,
-            provider: mailProvider,
+            provider: engineProvider,
           });
           return;
         }
@@ -221,7 +223,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
         publishClient(
           createTabFollowerClient({
             accountId: emailAccountId,
-            provider: mailProvider,
+            provider: engineProvider,
             bus,
           }),
           "follower",
@@ -231,7 +233,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
       bus.post({
         type: "hello",
         accountId: emailAccountId,
-        provider: mailProvider,
+        provider: engineProvider,
       });
     }
 
@@ -250,7 +252,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
       const create = async () => {
         engine = await createBrowserMailEngine({
           accountId: emailAccountId,
-          provider: mailProvider,
+          provider: engineProvider,
           online: typeof navigator === "undefined" || navigator.onLine,
         });
         if (abort.signal.aborted) {
