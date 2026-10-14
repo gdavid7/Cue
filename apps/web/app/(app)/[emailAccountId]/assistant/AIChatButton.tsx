@@ -14,7 +14,7 @@ export function AIChatButton() {
       onClick={() => toggleSidebar(["chat-sidebar"])}
     >
       <MessageCircleIcon className="mr-2 size-4" />
-      AI Chat
+      Chat with Cue
     </Button>
   );
 }

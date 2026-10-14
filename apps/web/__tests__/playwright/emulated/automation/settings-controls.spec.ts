@@ -84,7 +84,7 @@ test("persists personalization, drafting, and advanced settings", async ({
     .fill("Use short paragraphs, a warm tone, and direct recommendations.");
   await writingStyleDialog.getByRole("button", { name: "Save" }).click();
   await expect(
-    page.getByText("Writing style saved!", { exact: true }),
+    page.getByText("Writing style saved", { exact: true }),
   ).toBeVisible({ timeout: 60_000 });
   await expect
     .poll(() => getAutomationSettingsState(emailAccountId), {

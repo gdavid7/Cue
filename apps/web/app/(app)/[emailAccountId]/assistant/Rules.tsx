@@ -11,7 +11,7 @@ import {
   SparklesIcon,
   CopyIcon,
 } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { LoadingContent } from "@/components/LoadingContent";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader } from "@/components/ui/card";
@@ -36,7 +36,17 @@ import { setMemberOrganizationRuleEnabledAction } from "@/utils/actions/organiza
 import { Badge } from "@/components/Badge";
 import { Tooltip } from "@/components/Tooltip";
 import { getActionColor } from "@/components/PlanBadge";
-import { toastError } from "@/components/Toast";
+import { toastError, toastSuccess } from "@/components/Toast";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useRules } from "@/hooks/useRules";
 import { LogicalOperator } from "@/generated/prisma/enums";
 import type { ActionType, MessagingProvider } from "@/generated/prisma/client";
@@ -79,6 +89,7 @@ export function Rules({
     duplicateRule?: RulesResponse[number];
   }>();
   const onCreateRule = () => ruleDialog.onOpen();
+  const [ruleToDelete, setRuleToDelete] = useState<RulesResponse[number]>();
 
   const { emailAccountId, provider } = useAccount();
   const { executeAsync: toggleRule } = useAction(
@@ -120,11 +131,49 @@ export function Rules({
 
     if (result?.serverError) {
       toastError({
-        description: `There was an error ${enabled ? "enabling" : "disabling"} the rule. ${result.serverError || ""}`,
+        description: `Couldn't turn ${enabled ? "on" : "off"} “${rule.name}”. ${result.serverError || ""}`,
+      });
+    } else {
+      toastSuccess({
+        description: `“${rule.name}” turned ${enabled ? "on" : "off"}`,
       });
     }
 
     mutate();
+  };
+
+  const deleteRule = (rule: RulesResponse[number]) => {
+    toast.promise(
+      async () => {
+        const res = await deleteRuleAction(emailAccountId, { id: rule.id });
+
+        if (res?.serverError || res?.validationErrors) {
+          throw new Error(
+            res?.serverError || "There was an error deleting your rule",
+          );
+        }
+
+        mutate(
+          (currentRules) =>
+            currentRules?.filter((currentRule) => currentRule.id !== rule.id),
+          { revalidate: false },
+        );
+        mutate();
+      },
+      {
+        loading: "Deleting rule...",
+        success: "Rule deleted",
+        error: (error: unknown) =>
+          `Couldn't delete the rule. ${
+            error instanceof Error
+              ? error.message
+              : "There was an error deleting your rule"
+          }`,
+        finally: () => {
+          mutate();
+        },
+      },
+    );
   };
 
   const rules: RulesResponse = useMemo(() => {
@@ -238,6 +287,7 @@ export function Rules({
                         >
                           <span>
                             <Switch
+                              aria-label={`Enable ${rule.name}`}
                               size="sm"
                               checked={rule.enabled}
                               disabled={isDisabledByOrg}
@@ -250,7 +300,25 @@ export function Rules({
                       </TableCell>
                       <TableCell className="font-medium p-2 sm:p-4">
                         <div className="flex items-center gap-2">
-                          {rule.name}
+                          {isPlaceholder || isOrgManaged ? (
+                            rule.name
+                          ) : (
+                            // The row also opens on click; this makes it
+                            // reachable by keyboard and screen readers.
+                            <button
+                              className="rounded-sm text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                ruleDialog.onOpen({
+                                  ruleId: rule.id,
+                                  editMode: false,
+                                });
+                              }}
+                              type="button"
+                            >
+                              {rule.name}
+                            </button>
+                          )}
                           {isOrgManaged && (
                             <Tooltip content="Managed by Organization">
                               <Badge color="blue">Org</Badge>
@@ -290,7 +358,9 @@ export function Rules({
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 <MoreHorizontalIcon className="size-4" />
-                                <span className="sr-only">Toggle menu</span>
+                                <span className="sr-only">
+                                  Actions for {rule.name}
+                                </span>
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent
@@ -352,54 +422,7 @@ export function Rules({
                                   <DropdownMenuSeparator />
 
                                   <DropdownMenuItem
-                                    onClick={async () => {
-                                      const yes = confirm(
-                                        `Are you sure you want to delete the rule "${rule.name}"?`,
-                                      );
-                                      if (yes) {
-                                        toast.promise(
-                                          async () => {
-                                            const res = await deleteRuleAction(
-                                              emailAccountId,
-                                              { id: rule.id },
-                                            );
-
-                                            if (
-                                              res?.serverError ||
-                                              res?.validationErrors
-                                            ) {
-                                              throw new Error(
-                                                res?.serverError ||
-                                                  "There was an error deleting your rule",
-                                              );
-                                            }
-
-                                            mutate(
-                                              (currentRules) =>
-                                                currentRules?.filter(
-                                                  (currentRule) =>
-                                                    currentRule.id !== rule.id,
-                                                ),
-                                              { revalidate: false },
-                                            );
-                                            mutate();
-                                          },
-                                          {
-                                            loading: "Deleting rule...",
-                                            success: "Rule deleted",
-                                            error: (error: unknown) =>
-                                              `Error deleting rule. ${
-                                                error instanceof Error
-                                                  ? error.message
-                                                  : "There was an error deleting your rule"
-                                              }`,
-                                            finally: () => {
-                                              mutate();
-                                            },
-                                          },
-                                        );
-                                      }
-                                    }}
+                                    onClick={() => setRuleToDelete(rule)}
                                   >
                                     <Trash2Icon className="mr-2 size-4" />
                                     Delete
@@ -420,6 +443,33 @@ export function Rules({
           )}
         </LoadingContent>
       </Card>
+
+      <AlertDialog
+        open={!!ruleToDelete}
+        onOpenChange={(open) => {
+          if (!open) setRuleToDelete(undefined);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete “{ruleToDelete?.name}”?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Cue stops applying this rule to new mail. Mail it already handled
+              stays as it is. This can't be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (ruleToDelete) deleteRule(ruleToDelete);
+              }}
+            >
+              Delete rule
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <RuleDialog
         ruleId={ruleDialog.data?.ruleId}

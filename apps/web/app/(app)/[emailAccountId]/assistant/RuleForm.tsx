@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import { useRouter } from "next/navigation";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { type SubmitHandler, useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { usePostHog } from "posthog-js/react";
@@ -250,7 +251,7 @@ export function RuleForm({
             ruleId: res.data.rule.id,
             attachmentSources,
             shouldSave: hasDraftAction,
-            successMessage: "Saved!",
+            successMessage: "Rule saved",
             partialErrorMessage:
               "Rule saved, but draft attachment sources could not be updated.",
           });
@@ -288,7 +289,7 @@ export function RuleForm({
             ruleId: res.data.rule.id,
             attachmentSources,
             shouldSave: hasDraftAction,
-            successMessage: "Created!",
+            successMessage: "Rule created",
             partialErrorMessage:
               "Rule created, but draft attachment sources could not be saved.",
           });
@@ -600,57 +601,47 @@ export function RuleForm({
                     title="Delete rule"
                     description="Permanently remove this rule."
                   >
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      Icon={TrashIcon}
-                      loading={isDeleting}
-                      disabled={isSubmitting}
-                      onClick={async () => {
-                        const yes = confirm(
-                          "Are you sure you want to delete this rule?",
-                        );
-                        if (yes) {
-                          try {
-                            setIsDeleting(true);
-                            const result = await deleteRuleAction(
-                              emailAccountId,
-                              {
-                                id: rule.id!,
-                              },
-                            );
-                            if (result?.serverError) {
-                              toastError({
-                                description: result.serverError,
-                              });
-                            } else {
-                              toastSuccess({
-                                description: "The rule has been deleted.",
-                              });
-
-                              if (isDialog && onSuccess) {
-                                onSuccess();
-                              }
-
-                              router.push(
-                                prefixPath(
-                                  emailAccountId,
-                                  "/automation?tab=rules",
-                                ),
-                              );
-                            }
-                          } catch {
-                            toastError({
-                              description: "Failed to delete rule.",
-                            });
-                          } finally {
-                            setIsDeleting(false);
+                    <ConfirmDialog
+                      title={`Delete “${rule.name || "this rule"}”?`}
+                      description="Cue stops applying this rule to new mail. Mail it already handled stays as it is. This can't be undone."
+                      confirmText="Delete rule"
+                      onConfirm={async () => {
+                        try {
+                          setIsDeleting(true);
+                          const result = await deleteRuleAction(
+                            emailAccountId,
+                            { id: rule.id! },
+                          );
+                          if (result?.serverError) {
+                            toastError({ description: result.serverError });
+                            return;
                           }
+                          toastSuccess({ description: "Rule deleted" });
+                          if (isDialog && onSuccess) onSuccess();
+                          router.push(
+                            prefixPath(emailAccountId, "/automation?tab=rules"),
+                          );
+                        } catch {
+                          toastError({
+                            description:
+                              "Couldn't delete the rule. Check your connection and try again.",
+                          });
+                        } finally {
+                          setIsDeleting(false);
                         }
                       }}
-                    >
-                      Delete
-                    </Button>
+                      trigger={
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          Icon={TrashIcon}
+                          loading={isDeleting}
+                          disabled={isSubmitting}
+                        >
+                          Delete
+                        </Button>
+                      }
+                    />
                   </AdvancedRow>
                 )}
               </div>

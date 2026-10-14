@@ -28,7 +28,6 @@ import {
   PromptInputTextarea,
   PromptInputSubmit,
 } from "@/components/ai-elements/prompt-input";
-import { useSession } from "@/utils/auth-client";
 import type { UseChatHelpers } from "@ai-sdk/react";
 import type { ChatMessage } from "@/components/assistant-chat/types";
 import type { MessageContext } from "@/utils/ai/assistant/chat-context-validation";
@@ -179,8 +178,6 @@ export function Chat({
     [processIncomingFiles],
   );
 
-  const { data: session } = useSession();
-  const firstName = session?.user?.name?.split(" ")[0];
   const hasMessages = messages.length > 0;
   const hasContent =
     input.trim().length > 0 || attachments.length > 0 || !!context;
@@ -329,7 +326,6 @@ export function Chat({
         />
       ) : (
         <NewChatView
-          firstName={firstName}
           inputArea={inputArea}
           onSuggestionClick={(text) => {
             analytics.captureAction("chat_suggestion_clicked", {
@@ -411,11 +407,9 @@ const CHAT_EXAMPLES = [
 ];
 
 function NewChatView({
-  firstName,
   inputArea,
   onSuggestionClick,
 }: {
-  firstName: string | undefined;
   inputArea: React.ReactNode;
   onSuggestionClick: (text: string) => void;
 }) {
@@ -423,7 +417,7 @@ function NewChatView({
     <div className="flex flex-1 flex-col items-center justify-center px-[var(--chat-px)]">
       <div className="w-full max-w-[var(--chat-max-w)]">
         <h1 className="mb-6 text-center text-2xl sm:text-3xl md:text-4xl font-extralight tracking-tight">
-          {getGreeting(firstName)}
+          Chat with Cue
         </h1>
         {inputArea}
         <div className="mt-3 flex flex-wrap justify-center gap-2">
@@ -597,15 +591,6 @@ function ChatHistoryDropdown() {
       />
     </>
   );
-}
-
-function getGreeting(firstName: string | undefined): string {
-  const hour = new Date().getHours();
-  const name = firstName ? `, ${firstName}` : "";
-  if (hour < 5) return `Hey there${name}`;
-  if (hour < 12) return `Good morning${name}`;
-  if (hour < 18) return `Good afternoon${name}`;
-  return `Good evening${name}`;
 }
 
 const DRAFT_INPUT_STORAGE_KEY = "input";

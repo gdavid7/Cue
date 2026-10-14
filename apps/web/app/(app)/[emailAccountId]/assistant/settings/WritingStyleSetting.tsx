@@ -79,7 +79,7 @@ function WritingStyleDialog({
     {
       onSuccess: () => {
         toastSuccess({
-          description: "Writing style saved!",
+          description: "Writing style saved",
         });
         setOpen(false);
       },

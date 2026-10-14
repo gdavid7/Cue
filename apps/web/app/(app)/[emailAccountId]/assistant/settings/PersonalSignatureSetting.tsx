@@ -78,7 +78,7 @@ function SignatureDialog({
     {
       onSuccess: () => {
         toastSuccess({
-          description: "Signature saved!",
+          description: "Signature saved",
         });
         setOpen(false);
       },
