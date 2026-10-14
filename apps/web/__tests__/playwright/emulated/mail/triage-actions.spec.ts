@@ -9,6 +9,7 @@ import {
   openMailboxFromSidebar,
   readLatestMailMutation,
   toggleMailLayout,
+  openThreadIdFromUrl,
 } from "./mail-test-helpers";
 
 const commandModifier = process.platform === "darwin" ? "Meta" : "Control";
@@ -151,12 +152,10 @@ test("deletes an open conversation and restores it from Trash", async ({
   let advancedThreadId: string | null = null;
   try {
     await expect
-      .poll(() => new URL(page.url()).searchParams.get("thread-id"))
+      .poll(() => openThreadIdFromUrl(page.url()))
       .not.toBe(DELETE_THREAD);
-    await expect
-      .poll(() => new URL(page.url()).searchParams.get("thread-id"))
-      .not.toBeNull();
-    advancedThreadId = new URL(page.url()).searchParams.get("thread-id");
+    await expect.poll(() => openThreadIdFromUrl(page.url())).not.toBeNull();
+    advancedThreadId = openThreadIdFromUrl(page.url());
     await expect(deletedConversation).toHaveCount(0);
     await expectEngineMutation(page, emailAccountId, "trash", DELETE_THREAD);
 
@@ -253,11 +252,9 @@ test("advances the split reader after archiving an open conversation", async ({
 
     await expect(conversations).toBeVisible();
     await expect
-      .poll(() => new URL(page.url()).searchParams.get("thread-id"))
+      .poll(() => openThreadIdFromUrl(page.url()))
       .not.toBe("thr_playwright_3");
-    await expect
-      .poll(() => new URL(page.url()).searchParams.get("thread-id"))
-      .not.toBeNull();
+    await expect.poll(() => openThreadIdFromUrl(page.url())).not.toBeNull();
     await expect(page.getByRole("button", { name: /^Archive/ })).toBeVisible();
     await capturePlaywrightCheckpoint(
       page,
@@ -323,7 +320,7 @@ test("selects ranges and opens conversations with the keyboard", async ({
 
   await page.keyboard.press("j");
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/thread-id=/);
+  await expect.poll(() => openThreadIdFromUrl(page.url())).not.toBeNull();
   await page.keyboard.press("Escape");
   await expect(conversations).toBeVisible();
 });

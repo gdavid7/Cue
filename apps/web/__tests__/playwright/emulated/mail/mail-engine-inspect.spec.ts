@@ -186,9 +186,8 @@ test("opens account reconnect from blocked_auth catch-up", async ({
   await page.route("**/api/outlook/linking/auth-url**", fulfillReconnect);
   await capturePlaywrightCheckpoint(page, testInfo, "mail-engine-blocked-auth");
   await page.getByRole("button", { name: "Reconnect" }).click();
-  await expect(page).toHaveURL(
-    new RegExp(`${emailAccountId}/mail\\?reconnect=blocked`),
-  );
+  // The old address redirects to the readable one, keeping the query.
+  await expect(page).toHaveURL(/\/mail\/u\/\d+\/inbox\?reconnect=blocked$/);
 });
 
 test("serves two accounts through one owner and takes over when that owner leaves", async ({

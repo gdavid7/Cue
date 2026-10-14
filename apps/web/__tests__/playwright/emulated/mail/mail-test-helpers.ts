@@ -10,6 +10,7 @@ import {
   inspectCommandToMutation,
   type InspectCommand,
 } from "@/utils/playwright/mail-inspect-command";
+import { parseMailPath } from "@/utils/mail-url";
 
 // A send goes out once its 30-second undo window closes.
 export const UNDO_WINDOW_SEND_TIMEOUT_MS = 60_000;
@@ -27,6 +28,12 @@ export async function openMail(page: Page) {
   await expect(conversations).toBeVisible({ timeout: 60_000 });
 
   return { conversations, emailAccountId };
+}
+
+/** The open thread in a `/mail/u/{n}/{view}/{threadId}` address. */
+export function openThreadIdFromUrl(url: string) {
+  const { pathname, search } = new URL(url);
+  return parseMailPath(pathname, search)?.threadId ?? null;
 }
 
 // These specs share an emulator account, while each case starts with fresh

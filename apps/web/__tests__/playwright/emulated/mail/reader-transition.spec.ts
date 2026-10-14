@@ -1,7 +1,7 @@
 import { expect } from "@playwright/test";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
-import { openMail } from "./mail-test-helpers";
+import { openMail, openThreadIdFromUrl } from "./mail-test-helpers";
 import { isMicrosoftPlaywright } from "../mail-provider";
 
 test("never paints an empty reader when moving between loaded HTML threads", async ({
@@ -54,7 +54,7 @@ test("never paints an empty reader when moving between loaded HTML threads", asy
     if (key === "j") await expect(page).not.toHaveURL(initialUrl);
     else await expect(page).toHaveURL(initialUrl);
     await expect(page.getByRole("menu")).toHaveCount(0);
-    const threadId = new URL(page.url()).searchParams.get("thread-id");
+    const threadId = openThreadIdFromUrl(page.url());
     await expect(
       page
         .frameLocator('iframe[title="Email content preview"]:visible')
@@ -69,9 +69,7 @@ test("never paints an empty reader when moving between loaded HTML threads", asy
     page
       .frameLocator('iframe[title="Email content preview"]:visible')
       .last()
-      .getByText(
-        `Navigation body for ${new URL(initialUrl).searchParams.get("thread-id")}`,
-      ),
+      .getByText(`Navigation body for ${openThreadIdFromUrl(initialUrl)}`),
   ).toBeVisible();
   const samples = await page.evaluate(() => {
     Object.assign(window, { stopReaderPaintSamples: true });
@@ -138,7 +136,7 @@ test("never paints an empty reader when moving between loaded HTML threads", asy
   });
   await page.keyboard.press("j");
   await expect(page).not.toHaveURL(initialUrl);
-  const nextThreadId = new URL(page.url()).searchParams.get("thread-id");
+  const nextThreadId = openThreadIdFromUrl(page.url());
   await expect(
     page
       .frameLocator('iframe[title="Email content preview"]:visible')

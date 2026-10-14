@@ -18,6 +18,7 @@ import {
   waitForComposeOutboxSend,
   watchReplyHandoff,
   withClient,
+  openThreadIdFromUrl,
 } from "./mail-test-helpers";
 
 test.beforeEach(async ({ page }) => {
@@ -662,7 +663,9 @@ test("keeps a sent forward in the thread it came from", async ({
       { timeout: UNDO_WINDOW_SEND_TIMEOUT_MS },
     )
     .toMatchObject({ status: "succeeded" });
-  await expect(page).toHaveURL(/thread-id=thr_playwright_reply/);
+  await expect
+    .poll(() => openThreadIdFromUrl(page.url()))
+    .toBe("thr_playwright_reply");
   await expect(sourceMessage).toBeVisible();
   // Messages sent earlier in this shared thread can still be settling when the
   // test starts, so find this forward by its unique recipient rather than a
