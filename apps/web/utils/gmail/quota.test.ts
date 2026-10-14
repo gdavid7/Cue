@@ -149,6 +149,22 @@ describe("Gmail quota gate", () => {
     ).resolves.toBe("page");
   });
 
+  it("never puts the account in rate-limit mode for the gate's own deferral", async () => {
+    const deferred = Object.assign(new Error("request failed"), {
+      cause: new GmailCallDeferredError(15_000, "sync"),
+    });
+    await expect(
+      runWithAuditContext({ source: "google/webhook" }, () =>
+        recordProviderRateLimitFromError({
+          error: deferred,
+          emailAccountId: ACCOUNT,
+          provider: "google",
+          logger,
+        }),
+      ),
+    ).resolves.toBeNull();
+  });
+
   it("tells the assistant when Gmail is limiting requests", () => {
     expect(
       describeProviderRateLimitError(

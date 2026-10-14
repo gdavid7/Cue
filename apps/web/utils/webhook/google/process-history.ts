@@ -29,6 +29,7 @@ import {
 } from "@/utils/redis/gmail-history-catch-up";
 import type { Logger } from "@/utils/logger";
 import type { gmail_v1 } from "@googleapis/gmail";
+import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 
 const MAX_GMAIL_HISTORY_ID_GAP = 3000;
 // History skipped while Gmail rate limited the account is mail the user is
@@ -129,9 +130,12 @@ export async function processHistoryForUser(
         logger,
         source: "google/webhook",
         onRateLimitRecorded: async (state, error) => {
+          // A deferral by the account's own quota gate is not Gmail limiting
+          // the account, so it only marks the skipped history for catch-up.
           if (
             state ||
-            isEmailProviderRateLimitError({ error, provider: "google" })
+            isEmailProviderRateLimitError({ error, provider: "google" }) ||
+            isGmailCallDeferredError(error)
           ) {
             await markGmailHistoryCatchUp(validatedEmailAccount.id, logger);
           }
@@ -256,6 +260,11 @@ export async function processHistoryForUser(
       return NextResponse.json({ ok: true });
     }
 
+    if (isGmailCallDeferredError(error)) {
+      logger.info("Webhook history deferred by the account's Gmail budget");
+      return NextResponse.json({ ok: true });
+    }
+
     captureException(error, { userEmail: email, extra: { decodedData } });
     logger.error("Error processing webhook", {
       error:
@@ -324,9 +333,12 @@ async function processHistory(options: ProcessHistoryOptions, logger: Logger) {
       try {
         await processHistoryItem(event, options, log);
       } catch (error) {
-        // Stop before the cursor passes mail Gmail refused to serve, so the
-        // catch-up after the rate limit picks it up again.
-        if (isEmailProviderRateLimitError({ error, provider: "google" })) {
+        // Stop before the cursor passes mail Gmail refused (or the quota gate
+        // held back), so the catch-up picks it up again.
+        if (
+          isEmailProviderRateLimitError({ error, provider: "google" }) ||
+          isGmailCallDeferredError(error)
+        ) {
           throw error;
         }
         captureException(error, {

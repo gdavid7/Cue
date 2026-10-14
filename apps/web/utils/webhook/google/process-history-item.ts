@@ -5,8 +5,13 @@ import { createEmailProvider } from "@/utils/email/provider";
 import { handleLabelRemovedEvent } from "@/utils/webhook/google/process-label-removed-event";
 import { handleLabelAddedEvent } from "@/utils/webhook/google/process-label-added-event";
 import { processHistoryItem as processHistoryItemShared } from "@/utils/webhook/process-history-item";
-import { markMessageAsProcessing } from "@/utils/redis/message-processing";
+import {
+  clearMessageProcessing,
+  markMessageAsProcessing,
+} from "@/utils/redis/message-processing";
 import { GmailLabel } from "@/utils/gmail/label";
+import { isGmailCallDeferredError } from "@/utils/gmail/quota";
+import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
 import type { Logger } from "@/utils/logger";
 
 export async function processHistoryItem(
@@ -57,18 +62,37 @@ export async function processHistoryItem(
 
     logger.info("Gmail lock acquired, calling shared processor");
 
-    return processHistoryItemShared(
-      { messageId, threadId },
-      {
-        provider,
-        isNewMessage: type === HistoryEventType.MESSAGE_ADDED,
-        emailAccount,
-        hasAutomationRules,
-        hasAiAccess,
-        rules,
-        logger,
-      },
-    );
+    try {
+      return await processHistoryItemShared(
+        { messageId, threadId },
+        {
+          provider,
+          isNewMessage: type === HistoryEventType.MESSAGE_ADDED,
+          emailAccount,
+          hasAutomationRules,
+          hasAiAccess,
+          rules,
+          logger,
+        },
+      );
+    } catch (error) {
+      // The history cursor stays before this message so a catch-up retries
+      // it; the lock would make that catch-up skip it.
+      if (
+        isGmailCallDeferredError(error) ||
+        isEmailProviderRateLimitError({ error, provider: "google" })
+      ) {
+        await clearMessageProcessing({
+          userEmail: emailAccount.email,
+          messageId,
+        }).catch((clearError) =>
+          logger.warn("Failed to release message processing lock", {
+            error: clearError,
+          }),
+        );
+      }
+      throw error;
+    }
   };
 
   // Handle Google-specific label events

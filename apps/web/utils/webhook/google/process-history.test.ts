@@ -9,6 +9,8 @@ import {
 import prisma from "@/utils/prisma";
 import { getEmailProviderRateLimitState } from "@/utils/email/rate-limit";
 import { createTestLogger } from "@/__tests__/helpers";
+import { captureException } from "@/utils/error";
+import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import { processHistoryItem } from "@/utils/webhook/google/process-history-item";
 import {
   clearGmailHistoryCatchUp,
@@ -442,6 +444,71 @@ describe("processHistoryForUser - 404 Handling", () => {
       "account-123",
       expect.anything(),
     );
+  });
+
+  it("keeps the cursor before history the Gmail quota gate deferred and catches up later", async () => {
+    const email = "user@test.com";
+    const emailAccount = {
+      id: "account-123",
+      email,
+      lastSyncedHistoryId: "1000",
+    };
+
+    vi.mocked(getWebhookEmailAccount).mockResolvedValue(emailAccount as any);
+    vi.mocked(validateWebhookAccount).mockResolvedValue({
+      success: true,
+      data: {
+        emailAccount: {
+          ...emailAccount,
+          account: {
+            access_token: "token",
+            refresh_token: "refresh",
+            expires_at: new Date(Date.now() + 3_600_000),
+          },
+          rules: [],
+        },
+        hasAutomationRules: true,
+        hasAiAccess: true,
+      },
+    } as any);
+    vi.mocked(getHistory).mockResolvedValue({
+      history: [
+        {
+          id: "1100",
+          messagesAdded: [
+            { message: { id: "m1", threadId: "t1", labelIds: ["INBOX"] } },
+          ],
+        },
+        {
+          id: "1200",
+          messagesAdded: [
+            { message: { id: "m2", threadId: "t2", labelIds: ["INBOX"] } },
+          ],
+        },
+      ],
+    } as any);
+    vi.mocked(processHistoryItem)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(
+        // Gaxios wraps errors thrown below it, as the gate's deferral is.
+        Object.assign(new Error("request failed"), {
+          cause: new GmailCallDeferredError(15_000, "sync"),
+        }),
+      );
+
+    await processHistoryForUser(
+      { emailAddress: email, historyId: 1200 },
+      {},
+      logger,
+    );
+
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(prisma.$executeRaw).mock.calls[0]).toContain("1100");
+    expect(markGmailHistoryCatchUp).toHaveBeenCalledWith(
+      "account-123",
+      expect.anything(),
+    );
+    expect(captureException).not.toHaveBeenCalled();
   });
 
   it("uses BigInt math for large Gmail history IDs", async () => {

@@ -6,7 +6,11 @@ import {
   NewsletterStatus,
 } from "@/generated/prisma/enums";
 import type { gmail_v1 } from "@googleapis/gmail";
-import { markMessageAsProcessing } from "@/utils/redis/message-processing";
+import {
+  clearMessageProcessing,
+  markMessageAsProcessing,
+} from "@/utils/redis/message-processing";
+import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import { GmailLabel } from "@/utils/gmail/label";
 import { getEmailAccount, createTestLogger } from "@/__tests__/helpers";
 import { createEmailProvider } from "@/utils/email/provider";
@@ -19,6 +23,7 @@ vi.mock("@/utils/prisma");
 vi.mock("@/utils/redis/message-processing", () => ({
   acquireOutboundMessageLock: vi.fn().mockResolvedValue("lock-token-1"),
   clearOutboundMessageLock: vi.fn().mockResolvedValue(true),
+  clearMessageProcessing: vi.fn().mockResolvedValue(undefined),
   markMessageAsProcessing: vi.fn().mockResolvedValue(true),
   markOutboundMessageProcessed: vi.fn().mockResolvedValue(true),
 }));
@@ -172,6 +177,27 @@ describe("processHistoryItem", () => {
     };
 
     await processHistoryItem(createHistoryItem(), options, logger);
+  });
+
+  it("releases a message the Gmail quota gate deferred so the catch-up can process it", async () => {
+    const deferred = new GmailCallDeferredError(15_000, "sync");
+    vi.mocked(createEmailProvider).mockResolvedValueOnce({
+      getMessage: vi.fn().mockRejectedValue(deferred),
+      isSentMessage: vi.fn().mockReturnValue(false),
+    } as any);
+    const emailAccount = getDefaultEmailAccount();
+
+    await expect(
+      processHistoryItem(
+        createHistoryItem(),
+        { ...defaultOptions, emailAccount },
+        logger,
+      ),
+    ).rejects.toBe(deferred);
+    expect(clearMessageProcessing).toHaveBeenCalledWith({
+      userEmail: emailAccount.email,
+      messageId: "123",
+    });
   });
 
   it("handles outbound message-added events", async () => {

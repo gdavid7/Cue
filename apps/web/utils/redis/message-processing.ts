@@ -39,6 +39,16 @@ export async function markMessageAsProcessing({
   return result === "OK";
 }
 
+export async function clearMessageProcessing({
+  userEmail,
+  messageId,
+}: {
+  userEmail: string;
+  messageId: string;
+}) {
+  await redis.del(getProcessingKey({ userEmail, messageId }));
+}
+
 type OutboundMessageKey = {
   emailAccountId: string;
   messageId: string;
