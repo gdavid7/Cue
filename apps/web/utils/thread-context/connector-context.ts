@@ -17,6 +17,11 @@ const MAX_TEXT = 600;
 const ASSIGNMENT_PAST_DAYS = 7;
 const ASSIGNMENT_FUTURE_DAYS = 30;
 const CANVAS_USER_CACHE_SECONDS = 7 * 24 * 60 * 60;
+// Enrollments change at term boundaries; a few hours is fresh enough.
+const CANVAS_COURSES_CACHE_SECONDS = 6 * 60 * 60;
+// Canvas accepts at most 10 context codes per calendar request.
+const CANVAS_MAX_CONTEXT_CODES = 10;
+const DRIVE_FOLDER_MIME_TYPE = "application/vnd.google-apps.folder";
 
 type Execute = (
   tool: string,
@@ -119,17 +124,23 @@ export async function searchGoogleDrive(
   const terms = keywords
     .map((k) => `fullText contains '${k.replace(/['\\]/g, "\\$&")}'`)
     .join(" or ");
-  const data = driveFilesSchema.parse(
+  // Drive refuses to sort a fullText query (it ranks by relevance), so no
+  // orderBy; the ranker weighs recency itself.
+  const data = parseToolResult(
+    "GOOGLEDRIVE_FIND_FILE",
+    driveFilesSchema,
     await execute("GOOGLEDRIVE_FIND_FILE", {
-      q: `(${terms}) and trashed = false`,
+      q: `(${terms}) and trashed = false and mimeType != '${DRIVE_FOLDER_MIME_TYPE}'`,
       fields:
         "files(id,name,mimeType,modifiedTime,webViewLink,owners(displayName,emailAddress))",
       pageSize: RESULTS_PER_SOURCE,
-      orderBy: "modifiedTime desc",
+      corpora: "allDrives",
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
     }),
   );
   return data.files
-    .filter((file) => !file.mimeType?.endsWith(".folder"))
+    .filter((file) => file.mimeType !== DRIVE_FOLDER_MIME_TYPE)
     .map((file) => ({
       id: `googledrive:${file.id}`,
       kind: "file" as const,
@@ -155,7 +166,9 @@ export async function searchOneDrive(
   execute: Execute,
   { keywords }: Search,
 ): Promise<ContextCandidate[]> {
-  const data = oneDriveItemsSchema.parse(
+  const data = parseToolResult(
+    "ONE_DRIVE_SEARCH_ITEMS",
+    oneDriveItemsSchema,
     await execute("ONE_DRIVE_SEARCH_ITEMS", {
       // Graph search ranks by every word; the top few are distinctive enough.
       q: keywords.slice(0, 3).join(" "),
@@ -184,16 +197,30 @@ export async function searchCanvas(
   execute: Execute,
   { emailAccountId, now }: Search,
 ): Promise<ContextCandidate[]> {
-  const userId = await canvasUserId(execute, emailAccountId);
-  const data = canvasEventsSchema.parse(
+  const [userId, contextCodes] = await Promise.all([
+    canvasUserId(execute, emailAccountId),
+    canvasCourseContextCodes(execute, emailAccountId),
+  ]);
+  // Without context codes Canvas lists only the personal calendar, which has
+  // no assignments.
+  if (!contextCodes.length) return [];
+  const data = parseToolResult(
+    "CANVAS_LIST_CALENDAR_EVENTS_FOR_USER",
+    canvasEventsSchema,
     await execute("CANVAS_LIST_CALENDAR_EVENTS_FOR_USER", {
       user_id: userId,
       type: "assignment",
+      context_codes: contextCodes,
       start_date: isoDate(addDays(now, -ASSIGNMENT_PAST_DAYS)),
       end_date: isoDate(addDays(now, ASSIGNMENT_FUTURE_DAYS)),
     }),
   );
-  return data.response_data.map((event) => {
+  // One odd event shouldn't hide the rest.
+  const events = data.response_data.flatMap((item) => {
+    const event = canvasEventSchema.safeParse(item);
+    return event.success ? [event.data] : [];
+  });
+  return events.map((event) => {
     const description = stripHtml(
       event.assignment?.description ?? event.description ?? "",
     );
@@ -222,15 +249,23 @@ export async function searchSlack(
   execute: Execute,
   { keywords }: Search,
 ): Promise<ContextCandidate[]> {
-  const data = slackSearchSchema.parse(
-    await execute("SLACK_SEARCH_MESSAGES", {
-      // Slack matches every word, so two distinctive ones keep it from missing.
-      query: keywords.slice(0, 2).join(" "),
-      count: RESULTS_PER_SOURCE,
-      sort: "timestamp",
-    }),
+  const result = await execute("SLACK_SEARCH_MESSAGES", {
+    // Slack matches every word, so two distinctive ones keep it from missing.
+    query: keywords.slice(0, 2).join(" "),
+    count: RESULTS_PER_SOURCE,
+    sort: "timestamp",
+  });
+  // Slack reports a refusal (e.g. missing_scope) in the body, not the status.
+  const refusal = slackErrorSchema.safeParse(result);
+  if (refusal.success) {
+    throw new Error(`SLACK_SEARCH_MESSAGES refused: ${refusal.data.error}`);
+  }
+  const data = parseToolResult(
+    "SLACK_SEARCH_MESSAGES",
+    slackSearchSchema,
+    result,
   );
-  return (data.messages?.matches ?? []).map((match) => ({
+  return data.messages.matches.map((match) => ({
     id: `slack:${match.channel?.id ?? ""}:${match.ts}`,
     kind: "chat" as const,
     source: "Slack",
@@ -251,13 +286,61 @@ async function canvasUserId(execute: Execute, emailAccountId: string) {
   const key = `canvas-user-id:${emailAccountId}`;
   const cached = await redis.get<number>(key).catch(() => null);
   if (cached) return cached;
-  const { response_data } = canvasUserSchema.parse(
+  const { response_data } = parseToolResult(
+    "CANVAS_GET_CURRENT_USER",
+    canvasUserSchema,
     await execute("CANVAS_GET_CURRENT_USER", {}),
   );
   await redis
     .set(key, response_data.id, { ex: CANVAS_USER_CACHE_SECONDS })
     .catch(() => null);
   return response_data.id;
+}
+
+/** `course_<id>` for the student's active courses, newest first. */
+async function canvasCourseContextCodes(
+  execute: Execute,
+  emailAccountId: string,
+): Promise<string[]> {
+  const key = `canvas-course-codes:${emailAccountId}`;
+  const cached = await redis.get<string[]>(key).catch(() => null);
+  if (cached) return cached;
+  const { response_data } = parseToolResult(
+    "CANVAS_LIST_COURSES",
+    canvasCoursesSchema,
+    await execute("CANVAS_LIST_COURSES", { enrollment_state: "active" }),
+  );
+  const codes = response_data
+    .map((course) => course.id)
+    .sort((a, b) => b - a)
+    .slice(0, CANVAS_MAX_CONTEXT_CODES)
+    .map((id) => `course_${id}`);
+  await redis
+    .set(key, codes, { ex: CANVAS_COURSES_CACHE_SECONDS })
+    .catch(() => null);
+  return codes;
+}
+
+/**
+ * Checks an app's answer against the fields used here. A mismatch (an error
+ * body, or a wrapper we don't know) fails the source so it is logged, naming
+ * only the fields, never the content.
+ */
+function parseToolResult<T>(
+  tool: string,
+  schema: z.ZodType<T>,
+  data: unknown,
+): T {
+  const result = schema.safeParse(data);
+  if (result.success) return result.data;
+  const fields = [
+    ...new Set(
+      result.error.issues.map((issue) => issue.path.join(".") || "(root)"),
+    ),
+  ];
+  throw new Error(
+    `${tool} returned an unexpected response: ${fields.join(", ")}`,
+  );
 }
 
 function personFrom(
@@ -344,41 +427,43 @@ const canvasUserSchema = z.object({
   response_data: z.object({ id: z.number() }),
 });
 
-const canvasEventsSchema = z.object({
-  response_data: z.array(
-    z.object({
-      id: z.union([z.string(), z.number()]),
-      title: z.string(),
-      description: z.string().nullish(),
-      start_at: z.string().nullish(),
-      end_at: z.string().nullish(),
-      html_url: z.string().nullish(),
-      context_name: z.string().nullish(),
-      assignment: z
-        .object({
-          due_at: z.string().nullish(),
-          description: z.string().nullish(),
-          html_url: z.string().nullish(),
-        })
-        .nullish(),
-    }),
-  ),
+const canvasCoursesSchema = z.object({
+  response_data: z.array(z.object({ id: z.number() })),
 });
 
-const slackSearchSchema = z.object({
-  messages: z
+const canvasEventsSchema = z.object({ response_data: z.array(z.unknown()) });
+
+const canvasEventSchema = z.object({
+  id: z.union([z.string(), z.number()]),
+  title: z.string(),
+  description: z.string().nullish(),
+  start_at: z.string().nullish(),
+  end_at: z.string().nullish(),
+  html_url: z.string().nullish(),
+  context_name: z.string().nullish(),
+  assignment: z
     .object({
-      matches: z.array(
-        z.object({
-          text: z.string(),
-          ts: z.string(),
-          username: z.string().nullish(),
-          permalink: z.string().nullish(),
-          channel: z
-            .object({ id: z.string().nullish(), name: z.string().nullish() })
-            .nullish(),
-        }),
-      ),
+      due_at: z.string().nullish(),
+      description: z.string().nullish(),
+      html_url: z.string().nullish(),
     })
     .nullish(),
+});
+
+const slackErrorSchema = z.object({ ok: z.literal(false), error: z.string() });
+
+const slackSearchSchema = z.object({
+  messages: z.object({
+    matches: z.array(
+      z.object({
+        text: z.string(),
+        ts: z.string(),
+        username: z.string().nullish(),
+        permalink: z.string().nullish(),
+        channel: z
+          .object({ id: z.string().nullish(), name: z.string().nullish() })
+          .nullish(),
+      }),
+    ),
+  }),
 });

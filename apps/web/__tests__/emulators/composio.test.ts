@@ -28,7 +28,18 @@ const ACCOUNT = "demo-account";
 let emulator: ComposioEmulator;
 
 beforeAll(async () => {
-  emulator = await createComposioEmulator(buildCueDemoConnectorData(NOW));
+  emulator = await createComposioEmulator({
+    ...buildCueDemoConnectorData(NOW),
+    slackMessages: [
+      {
+        text: "I'll make the plots for milestone 2 tonight",
+        ts: "1791900000.000100",
+        username: "kevin",
+        permalink: "https://ucsd-cse.slack.com/archives/C1/p1791900000000100",
+        channel: { id: "C1", name: "cse151b" },
+      },
+    ],
+  });
   env.COMPOSIO_API_KEY = emulator.apiKey;
   env.COMPOSIO_API_URL = emulator.url;
 });
@@ -104,13 +115,25 @@ describe("Composio emulator with the Cue demo data", () => {
     ]);
   });
 
-  it("answers OneDrive and Slack searches with no results", async () => {
+  it("answers a OneDrive search with no results", async () => {
     await expect(
       searchOneDrive(executor("one_drive"), search(["pricing"])),
     ).resolves.toEqual([]);
-    await expect(
-      searchSlack(executor("slack"), search(["pricing"])),
-    ).resolves.toEqual([]);
+  });
+
+  it("finds the Slack message that mentions the thread's words", async () => {
+    const items = await searchSlack(
+      executor("slack"),
+      search(["milestone", "plots", "pricing"]),
+    );
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        kind: "chat",
+        title: "#cse151b · kevin",
+        url: "https://ucsd-cse.slack.com/archives/C1/p1791900000000100",
+      }),
+    ]);
   });
 
   it("stops answering for an app once it is disconnected", async () => {

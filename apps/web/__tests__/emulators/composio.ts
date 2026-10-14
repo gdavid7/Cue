@@ -15,6 +15,10 @@ import type { AddressInfo } from "node:net";
  * record the connection on its own side. Disconnecting deletes the account,
  * and connecting with credentials creates a new one, as Composio does.
  *
+ * Tools enforce the argument rules the apps document where Cue has tripped on
+ * them: Drive refuses to sort a full-text search, and Canvas lists only the
+ * personal calendar unless it is given course context codes (at most 10).
+ *
  * Fidelity caveat: tool results are the shapes Cue's parsers read, seeded by
  * the caller, so this catches regressions in Cue's own code, not a misreading
  * of the apps' APIs.
@@ -22,6 +26,7 @@ import type { AddressInfo } from "node:net";
 
 const DEFAULT_API_KEY = "emulator-composio-key";
 const CANVAS_USER_ID = 4211;
+const DRIVE_FOLDER = "application/vnd.google-apps.folder";
 
 export type ComposioEmulatorDriveFile = {
   id: string;
@@ -40,15 +45,32 @@ export type ComposioEmulatorCanvasEvent = {
   start_at: string;
   end_at: string;
   html_url: string;
+  /** The course it belongs to, as `course_<id>`. */
+  context_code: string;
   context_name: string;
   assignment: { due_at: string; description: string; html_url: string };
+};
+
+/** A match from Slack's `search.messages`. */
+export type ComposioEmulatorSlackMessage = {
+  text: string;
+  ts: string;
+  username: string;
+  permalink: string;
+  channel: { id: string; name: string };
 };
 
 export interface ComposioEmulatorOptions {
   apiKey?: string;
   canvasEvents?: ComposioEmulatorCanvasEvent[];
   driveFiles?: ComposioEmulatorDriveFile[];
+  /**
+   * Tools that answer as Composio does once the app's token is revoked:
+   * unsuccessful, with the app's auth error.
+   */
+  failingTools?: string[];
   port?: number;
+  slackMessages?: ComposioEmulatorSlackMessage[];
 }
 
 export interface ComposioEmulator {
@@ -81,6 +103,8 @@ export async function createComposioEmulator(
   const apiKey = options.apiKey ?? DEFAULT_API_KEY;
   const driveFiles = options.driveFiles ?? [];
   const canvasEvents = options.canvasEvents ?? [];
+  const slackMessages = options.slackMessages ?? [];
+  const failingTools = new Set(options.failingTools ?? []);
 
   const authConfigs: {
     id: string;
@@ -108,17 +132,46 @@ export async function createComposioEmulator(
   }
 
   const tools: Record<string, (args: Record<string, unknown>) => unknown> = {
-    GOOGLEDRIVE_FIND_FILE: (args) => ({
-      files: searchDriveFiles(driveFiles, String(args.q ?? "")),
-    }),
+    GOOGLEDRIVE_FIND_FILE: (args) => {
+      const query = String(args.q ?? "");
+      // Drive answers 403 to this, and Composio's FIND_FILE docs say orderBy
+      // "cannot be used when query (q) contains fullText search terms".
+      if (args.orderBy && query.includes("fullText")) {
+        throw new ToolFailure(
+          "403: Sorting is not supported for queries with fullText terms. Results are always in descending relevance order.",
+        );
+      }
+      return { files: searchDriveFiles(driveFiles, query) };
+    },
     ONE_DRIVE_SEARCH_ITEMS: () => ({ value: [] }),
     CANVAS_GET_CURRENT_USER: () => ({
       response_data: { id: CANVAS_USER_ID, name: "Emulated student" },
     }),
-    CANVAS_LIST_CALENDAR_EVENTS_FOR_USER: () => ({
-      response_data: canvasEvents,
+    CANVAS_LIST_COURSES: () => ({
+      response_data: canvasCourses(canvasEvents),
     }),
-    SLACK_SEARCH_MESSAGES: () => ({ messages: { matches: [] } }),
+    // Canvas docs: context_codes "if not specified, defaults to the current
+    // user (i.e personal calendar, no course/group events)"; at most 10.
+    CANVAS_LIST_CALENDAR_EVENTS_FOR_USER: (args) => {
+      const codes = Array.isArray(args.context_codes)
+        ? args.context_codes.map(String)
+        : [];
+      if (codes.length > 10) {
+        throw new ToolFailure("400: at most 10 context_codes are allowed");
+      }
+      return {
+        response_data: canvasEvents.filter((event) =>
+          codes.includes(event.context_code),
+        ),
+      };
+    },
+    SLACK_SEARCH_MESSAGES: (args) => ({
+      ok: true,
+      query: String(args.query ?? ""),
+      messages: {
+        matches: searchSlackMessages(slackMessages, String(args.query ?? "")),
+      },
+    }),
     // A saved file joins the drive, so it can turn up as context afterwards.
     GOOGLEDRIVE_UPLOAD_FILE: (args) => {
       const file = uploadedFile(args.file_to_upload, "drive");
@@ -246,12 +299,28 @@ export async function createComposioEmulator(
           error: "Connected account not found",
         });
       }
-      if (tool) {
+      if (tool && failingTools.has(toolMatch[1])) {
         return respondJson(response, 200, {
-          data: tool(body.arguments ?? {}),
-          successful: true,
-          error: null,
+          data: {},
+          successful: false,
+          error: "401 Unauthorized: invalid_grant",
         });
+      }
+      if (tool) {
+        try {
+          return respondJson(response, 200, {
+            data: tool(body.arguments ?? {}),
+            successful: true,
+            error: null,
+          });
+        } catch (error) {
+          if (!(error instanceof ToolFailure)) throw error;
+          return respondJson(response, 200, {
+            data: {},
+            successful: false,
+            error: error.message,
+          });
+        }
       }
     }
 
@@ -274,6 +343,31 @@ export async function createComposioEmulator(
   };
 }
 
+/** A call the app itself rejected, which Composio reports as unsuccessful. */
+class ToolFailure extends Error {}
+
+/** The courses the seeded assignments belong to. */
+function canvasCourses(events: ComposioEmulatorCanvasEvent[]) {
+  const courses = new Map<number, { id: number; name: string }>();
+  for (const event of events) {
+    const id = Number(event.context_code.replace(/^course_/, ""));
+    courses.set(id, { id, name: event.context_name });
+  }
+  return [...courses.values()];
+}
+
+/** Slack matches every word of the query. */
+function searchSlackMessages(
+  messages: ComposioEmulatorSlackMessage[],
+  query: string,
+) {
+  const terms = words(query);
+  return messages.filter((message) => {
+    const text = words(message.text);
+    return terms.every((term) => text.includes(term));
+  });
+}
+
 function uploadedFile(value: unknown, prefix: string) {
   const file = (value ?? {}) as { name?: string; mimetype?: string };
   return {
@@ -283,13 +377,19 @@ function uploadedFile(value: unknown, prefix: string) {
   };
 }
 
-/** Files whose name shares a word with any `fullText contains '...'` term. */
+/**
+ * Files whose name shares a word with any `fullText contains '...'` term,
+ * without folders when the query leaves them out.
+ */
 function searchDriveFiles(files: ComposioEmulatorDriveFile[], query: string) {
+  const noFolders = query.includes(`mimeType != '${DRIVE_FOLDER}'`);
   const terms = [...query.matchAll(/contains '((?:[^'\\]|\\.)*)'/g)].flatMap(
     ([, term]) => words(term.replace(/\\(.)/g, "$1")),
   );
-  return files.filter((file) =>
-    words(file.name).some((word) => terms.includes(word)),
+  return files.filter(
+    (file) =>
+      !(noFolders && file.mimeType === DRIVE_FOLDER) &&
+      words(file.name).some((word) => terms.includes(word)),
   );
 }
 
