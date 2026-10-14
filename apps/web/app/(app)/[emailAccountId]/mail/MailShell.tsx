@@ -144,6 +144,7 @@ import {
   resolveSlug,
 } from "@/utils/mail-url";
 import { prefixPath } from "@/utils/path";
+import { getRouteResolution } from "@/app/(app)/[emailAccountId]/mail/route-resolution";
 import { redirectToSafeUrl } from "@/utils/redirect";
 import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 import { LoadingContent } from "@/components/LoadingContent";
@@ -174,9 +175,18 @@ export function MailShell() {
     userLabels: allLabels,
     mutate: mutateLabels,
     isLoading: labelsLoading,
+    error: labelsError,
   } = useLabels();
-  const { folders, isLoading: foldersLoading } = useFolders(provider);
-  const { data: settings, mutate: mutateSettings } = useMailSettings();
+  const {
+    folders,
+    isLoading: foldersLoading,
+    error: foldersError,
+  } = useFolders(provider);
+  const {
+    data: settings,
+    error: settingsError,
+    mutate: mutateSettings,
+  } = useMailSettings();
   const { toggleSidebar, setOpen: setSidebarOpen } = useSidebar();
   const { submitTextMessage, chatId, setNewChat } = useChat();
   // A question waits for a conversation to exist; sent before one, it's dropped.
@@ -233,25 +243,52 @@ export function MailShell() {
   };
   const routeLabelId = resolveRouteSlug("label", mailSlugs.labels);
   const routeFolderId = resolveRouteSlug("folder", mailSlugs.folders);
+  // Until names load, a slug can't be told from an id, so nothing is fetched.
+  // If they fail to load, the slug can't be resolved at all: the inbox shows
+  // instead, with a note, rather than a placeholder that never fills.
+  const routeResolution =
+    routeView.kind === "label"
+      ? getRouteResolution({
+          resolved: Boolean(routeLabelId),
+          loading: labelsLoading,
+          failed: Boolean(labelsError),
+        })
+      : routeView.kind === "folder"
+        ? getRouteResolution({
+            resolved: Boolean(routeFolderId),
+            loading: foldersLoading,
+            failed: Boolean(foldersError),
+          })
+        : routeView.kind === "split"
+          ? getRouteResolution({
+              resolved: Boolean(settings),
+              loading: !settings,
+              failed: Boolean(settingsError),
+            })
+          : "ready";
+  const isResolvingRoute = routeResolution === "resolving";
+  const routeFailed = routeResolution === "failed";
   // A slug that never resolves is taken as a provider id, which is what links
   // from before readable addresses carry.
   const scopeLabelId =
-    routeView.kind === "label" ? (routeLabelId ?? routeView.slug) : null;
+    routeView.kind === "label" && !routeFailed
+      ? (routeLabelId ?? routeView.slug)
+      : null;
   const scopeFolderId =
-    routeView.kind === "folder" ? (routeFolderId ?? routeView.slug) : null;
-  const scopeType =
-    routeView.kind === "type"
+    routeView.kind === "folder" && !routeFailed
+      ? (routeFolderId ?? routeView.slug)
+      : null;
+  const scopeType = routeFailed
+    ? null
+    : routeView.kind === "type"
       ? routeView.type
       : routeView.kind === "label" || routeView.kind === "folder"
         ? routeView.kind
         : null;
-  const activeSplitId = resolveRouteSlug("split", splitSlugs);
+  const activeSplitId = routeFailed
+    ? null
+    : resolveRouteSlug("split", splitSlugs);
   const searchParam = routeView.kind === "search" ? routeView.q : null;
-  // Until names load, a slug can't be told from an id, so nothing is fetched.
-  const isResolvingRoute =
-    (routeView.kind === "label" && !routeLabelId && labelsLoading) ||
-    (routeView.kind === "folder" && !routeFolderId && foldersLoading) ||
-    (routeView.kind === "split" && !settings);
   const viewBeforeSearchRef = useRef<MailUrlView | null>(null);
   // Set by Today's rows, so closing the conversation goes back there.
   const openedFrom = useSearchParams()?.get(OPENED_FROM_PARAM);
@@ -1834,6 +1871,16 @@ export function MailShell() {
               {isTourOpen && (
                 <WhatsNewTour onClose={() => setIsTourOpen(false)} />
               )}
+              {routeFailed ? (
+                <p
+                  role="status"
+                  className="border-border border-b bg-amber-50 px-3 py-2 text-amber-900 text-xs dark:bg-amber-950/30 dark:text-amber-200"
+                >
+                  This {ROUTE_KIND_NAMES[routeView.kind] ?? "view"}{" "}
+                  couldn&apos;t be loaded, so your inbox is showing instead.
+                  Reload to try again.
+                </p>
+              ) : null}
               {isAllAccounts ? (
                 <AllInboxesFailedNotice
                   accounts={combinedAccounts}
@@ -2100,3 +2147,9 @@ function forgetOpenedFrom() {
   url.searchParams.delete(OPENED_FROM_PARAM);
   window.history.replaceState(null, "", url);
 }
+
+const ROUTE_KIND_NAMES: Partial<Record<MailUrlView["kind"], string>> = {
+  label: "label",
+  folder: "folder",
+  split: "tab",
+};
