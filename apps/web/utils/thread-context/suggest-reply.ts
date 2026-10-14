@@ -1,7 +1,10 @@
+import { ReplyMemoryScopeType } from "@/generated/prisma/enums";
+import type { ReplyMemory } from "@/generated/prisma/client";
 import he from "he";
 import { z } from "zod";
 import { getTodayForLLM, getWritingStylePrompt } from "@/utils/ai/helpers";
-import { isSameEmailAddress } from "@/utils/email";
+import { getReplyMemoriesForPrompt } from "@/utils/ai/reply/reply-memory";
+import { extractEmailAddress, isSameEmailAddress } from "@/utils/email";
 import { getMessageTimestamp } from "@/utils/email/message-timestamp";
 import type { EmailProvider } from "@/utils/email/types";
 import { createGenerateObject } from "@/utils/llms";
@@ -73,7 +76,15 @@ const suggestionSchema = z.object({
 
 export type Source = {
   id: string;
-  kind: "message" | "email" | "event" | "file" | "assignment" | "chat" | "web";
+  kind:
+    | "message"
+    | "email"
+    | "event"
+    | "file"
+    | "assignment"
+    | "chat"
+    | "web"
+    | "memory";
   title: string;
   text: string;
   /** For related emails, so the user can open them. */
@@ -161,23 +172,32 @@ export async function suggestReply({
     timezone: emailAccount.timezone,
     logger,
   });
+  const [style, replyMemories] = await Promise.all([
+    prisma.emailAccount.findUnique({
+      where: { id: emailAccountId },
+      select: { writingStyle: true, learnedWritingStyle: true },
+    }),
+    getReplyMemoriesForPrompt({
+      emailAccount,
+      senderEmail: extractEmailAddress(latest.headers.from),
+      emailContent: messageText(latest, emailAccount.timezone),
+      logger,
+    }),
+  ]);
   const sources = [
     ...thread.messages
       .slice(-MAX_THREAD_MESSAGES)
       .map((m, i) => messageSource(m, i, emailAccount.timezone)),
     ...context,
+    ...replyMemories.selectedMemories.map(memorySource),
   ];
 
-  const { writingStyle } =
-    (await prisma.emailAccount.findUnique({
-      where: { id: emailAccountId },
-      select: { writingStyle: true },
-    })) ?? {};
   const suggest = (extra: Source[]) =>
     aiSuggestReply({
       emailAccount,
       sources: [...sources, ...extra],
-      writingStyle,
+      writingStyle: style?.writingStyle,
+      learnedWritingStyle: style?.learnedWritingStyle,
       now,
     });
 
@@ -249,11 +269,13 @@ export async function aiSuggestReply({
   emailAccount,
   sources,
   writingStyle,
+  learnedWritingStyle,
   now = new Date(),
 }: {
   emailAccount: EmailAccountWithAI & { name: string | null };
   sources: Source[];
   writingStyle?: string | null;
+  learnedWritingStyle?: string | null;
   now?: Date;
 }): Promise<SuggestedReply> {
   const modelOptions = getModelForUseCase(
@@ -267,15 +289,27 @@ export async function aiSuggestReply({
     promptHardening: { trust: "untrusted", level: "compact" },
   });
 
+  // A style the user wrote wins; the one learned from their edits then only advises.
+  const advisoryStylePrompt =
+    writingStyle && learnedWritingStyle
+      ? `
+Learned writing style from the user's edits to earlier replies. Lower priority than the writing style above.
+
+<learned_writing_style>
+${learnedWritingStyle}
+</learned_writing_style>`
+      : "";
+
   const result = await generateObject({
     ...modelOptions,
     instructions: `You suggest a reply to the latest message in an email conversation, on behalf of ${emailAccount.name || emailAccount.email}.
-The sources are the conversation's messages (m1, m2, ...) and related items (c1, c2, ...): emails, meetings, files and messages from the user's connected apps, and public web pages.
+The sources are the conversation's messages (m1, m2, ...), related items (c1, c2, ...): emails, meetings, files and messages from the user's connected apps, and public web pages, and reply memories (r1, r2, ...): facts and procedures the user taught by editing earlier replies.
+Follow a reply memory only when this message matches it; ignore memories that don't fit.
 Suggest a reply only if the sources state every fact the reply needs. A reply that commits the user to something, gives a number, date, price, time or decision, or answers a question needs a source that states it. Never fill a gap with a plausible guess.
 If the sources don't settle what the user should say, set enoughEvidence to false and say what is missing instead.
 For each fact in the reply, cite the source and copy the exact words that state it.
 Keep the reply short and in the user's voice.
-${getWritingStylePrompt(writingStyle)}`,
+${getWritingStylePrompt(writingStyle || learnedWritingStyle)}${advisoryStylePrompt}`,
     prompt: `${getTodayForLLM(now)}
 
 <sources>
@@ -415,6 +449,22 @@ function messageSource(
     kind: "message",
     title: `${m.headers.from}, ${formatTime(new Date(getMessageTimestamp(m)).toISOString(), timezone)}`,
     text: messageText(m, timezone),
+  };
+}
+
+function memorySource(
+  memory: Pick<ReplyMemory, "scopeType" | "scopeValue" | "content">,
+  index: number,
+): Source {
+  const scope =
+    memory.scopeType === ReplyMemoryScopeType.GLOBAL
+      ? "all replies"
+      : `${memory.scopeType.toLowerCase()} ${memory.scopeValue}`;
+  return {
+    id: `r${index + 1}`,
+    kind: "memory",
+    title: `Learned from your edits (${scope})`,
+    text: `Reply memory (${scope}): ${memory.content}`,
   };
 }
 

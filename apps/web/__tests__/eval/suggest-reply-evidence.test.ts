@@ -52,6 +52,20 @@ const TRIP_CONFIRMATION: Source = {
   text: "Subject: Your trip confirmation: SAN to SFO\nFrom: United Airlines <unitedairlines@united.com>\n\nConfirmation PX7Q2M for David Lin. Departing Wednesday, November 25: flight UA 2231, SAN 5:05 PM to SFO 6:35 PM.",
 };
 
+const PRICE_MEMORY: Source = {
+  id: "r1",
+  kind: "memory",
+  title: "Learned from your edits (domain acme.com)",
+  text: "Reply memory (domain acme.com): Acme's renewal price on a 3-year term is $42,000 per year.",
+};
+
+const UNRELATED_MEMORY: Source = {
+  id: "r1",
+  kind: "memory",
+  title: "Learned from your edits (all replies)",
+  text: "Reply memory (all replies): When someone asks for a product demo, ask how many seats they need before offering times.",
+};
+
 // The web query leaves Cue for a search API, so it may carry public names
 // and topic words only.
 const PRIVATE_WEB_QUERY = {
@@ -64,6 +78,8 @@ const CASES: {
   name: string;
   sources: Source[];
   expected: "suggested" | "insufficient";
+  /** The source a suggestion must cite. */
+  cites?: string;
 }[] = [
   {
     name: "abstains when no source states the price",
@@ -78,6 +94,17 @@ const CASES: {
   {
     name: "abstains on the terminal, with a public web query",
     sources: [ASK_FOR_TERMINAL, TRIP_CONFIRMATION],
+    expected: "insufficient",
+  },
+  {
+    name: "suggests a reply from a memory learned from the user's edits",
+    sources: [ASK_FOR_PRICE, PRICE_MEMORY],
+    expected: "suggested",
+    cites: "r1",
+  },
+  {
+    name: "abstains when the only memory doesn't fit the message",
+    sources: [ASK_FOR_PRICE, UNRELATED_MEMORY],
     expected: "insufficient",
   },
 ];
@@ -98,7 +125,7 @@ describe.runIf(isAiTest)("Eval: evidence-gated reply suggestions", () => {
             now: NOW,
           });
 
-          // A suggestion must rest on the email that has the price, and the
+          // A suggestion must rest on the source that has the price, and the
           // quote check must have passed for every fact it states.
           const privacy =
             result.status === "insufficient" && result.webQuery
@@ -111,7 +138,9 @@ describe.runIf(isAiTest)("Eval: evidence-gated reply suggestions", () => {
           const pass =
             result.status === testCase.expected &&
             (result.status !== "suggested" ||
-              result.citations.some((c) => c.source.id === "c1")) &&
+              result.citations.some(
+                (c) => c.source.id === (testCase.cites ?? "c1"),
+              )) &&
             privacy?.pass !== false;
           evalReporter.record({
             testName: testCase.name,

@@ -151,7 +151,9 @@ export async function getReplyMemoriesForPrompt({
   logger: Logger;
 }): Promise<{
   content: string | null;
-  selectedMemories: Array<Pick<ReplyMemory, "id" | "kind" | "scopeType">>;
+  selectedMemories: Array<
+    Pick<ReplyMemory, "id" | "kind" | "scopeType" | "scopeValue" | "content">
+  >;
 }> {
   const emailAccountId = emailAccount.id;
 
@@ -246,6 +248,8 @@ export async function getReplyMemoriesForPrompt({
         id: memory.id,
         kind: memory.kind,
         scopeType: memory.scopeType,
+        scopeValue: memory.scopeValue,
+        content: memory.content,
       })),
     };
   } catch (error) {

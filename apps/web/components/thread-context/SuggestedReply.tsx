@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  BrainIcon,
   CalendarIcon,
   CheckIcon,
   CopyIcon,
@@ -40,6 +41,7 @@ const SOURCE_ICON: Record<Citation["source"]["kind"], LucideIcon> = {
   assignment: GraduationCapIcon,
   chat: MessagesSquareIcon,
   web: GlobeIcon,
+  memory: BrainIcon,
 };
 
 /**
@@ -309,6 +311,7 @@ const SOURCE_PLACE: Record<Citation["source"]["kind"], string> = {
   assignment: "your courses",
   chat: "your chats",
   web: "the web",
+  memory: "your past edits",
 };
 
 function sourceLabel(source: Citation["source"]) {

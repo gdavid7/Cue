@@ -222,21 +222,21 @@ describe("reply-memory", () => {
     expect(result.selectedMemories).toHaveLength(3);
     expect(result.selectedMemories).toEqual(
       expect.arrayContaining([
-        {
+        expect.objectContaining({
           id: "sender-memory",
           kind: ReplyMemoryKind.FACT,
           scopeType: ReplyMemoryScopeType.SENDER,
-        },
-        {
+        }),
+        expect.objectContaining({
           id: "global-memory",
           kind: ReplyMemoryKind.PROCEDURE,
           scopeType: ReplyMemoryScopeType.GLOBAL,
-        },
-        {
+        }),
+        expect.objectContaining({
           id: "topic-memory",
           kind: ReplyMemoryKind.FACT,
           scopeType: ReplyMemoryScopeType.TOPIC,
-        },
+        }),
       ]),
     );
   });
