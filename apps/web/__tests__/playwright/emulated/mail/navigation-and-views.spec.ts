@@ -269,7 +269,7 @@ test("leads from the mail screen to Rules, Settings and Sign out", async ({
   await expect(page.getByRole("menuitem", { name: "Sign out" })).toBeVisible();
   await capturePlaywrightCheckpoint(page, testInfo, "mail-account-menu");
 
-  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
   await expect(page).toHaveURL(/settings=open/);
   await expect(
     page.getByRole("heading", { name: "Settings", exact: true }),
