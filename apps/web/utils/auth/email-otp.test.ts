@@ -13,10 +13,20 @@ import {
 } from "@/utils/auth/email-otp";
 import prisma from "@/utils/__mocks__/prisma";
 
-const { pending } = vi.hoisted(() => ({
+const { pending, rateLimitCounts } = vi.hoisted(() => ({
   pending: [] as (() => Promise<void>)[],
+  rateLimitCounts: new Map<string, number>(),
 }));
 vi.mock("@/utils/prisma");
+vi.mock("@/utils/redis", () => ({
+  redis: {
+    eval: async (_script: string, [key]: string[]) => {
+      const count = (rateLimitCounts.get(key) ?? 0) + 1;
+      rateLimitCounts.set(key, count);
+      return count;
+    },
+  },
+}));
 vi.mock("next/server", () => ({
   after: (work: () => Promise<void>) => pending.push(work),
 }));
@@ -30,6 +40,7 @@ describe("email code authentication", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pending.length = 0;
+    rateLimitCounts.clear();
     prisma.user.findUnique.mockResolvedValue({
       emailOtpEnabled: true,
       emailOtpVersion: 0,
@@ -203,6 +214,25 @@ describe("email code authentication", () => {
     expect(
       (await request("/sign-in/email-otp", { email, otp: code })).status,
     ).not.toBe(200);
+  });
+
+  it("caps sign-in guesses per address across fresh codes", async () => {
+    const { request, database } = setup();
+    for (let attempt = 0; attempt < 20; attempt++)
+      await request("/sign-in/email-otp", { email, otp: "not-a-code" });
+
+    await request("/email-otp/send-verification-otp", {
+      email,
+      type: "sign-in",
+    });
+    await flushEmails();
+    const response = await request("/sign-in/email-otp", {
+      email,
+      otp: sentCode(),
+    });
+
+    expect(response.status).toBe(429);
+    expect(database.session).toHaveLength(0);
   });
 
   it.each([
