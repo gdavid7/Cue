@@ -15,54 +15,68 @@ import { MultiRuleSetting } from "@/app/(app)/[emailAccountId]/assistant/setting
 import { SyncToExtensionSetting } from "@/app/(app)/[emailAccountId]/assistant/settings/SyncToExtensionSetting";
 import { WritingStyleSetting } from "@/app/(app)/[emailAccountId]/assistant/settings/WritingStyleSetting";
 import { WebLookupSetting } from "@/app/(app)/[emailAccountId]/assistant/settings/WebLookupSetting";
+import { SettingCardGroup } from "@/components/SettingCard";
 import { SectionHeader } from "@/components/Typography";
 import { env } from "@/env";
 
 const autoDraftDisabled = env.NEXT_PUBLIC_AUTO_DRAFT_DISABLED;
 
+// A group whose settings all render nothing hides, heading included.
+const GROUP_CLASS = "space-y-2 [&:has([data-setting-group]:empty)]:hidden";
+
 export function SettingsTab() {
   return (
     <div className="max-w-4xl space-y-6">
       {!autoDraftDisabled && (
-        <div className="space-y-2">
-          <DraftReplies />
-          <DraftConfidenceSetting />
+        <div className={GROUP_CLASS}>
+          <SettingCardGroup>
+            <DraftReplies />
+            <DraftConfidenceSetting />
+          </SettingCardGroup>
         </div>
       )}
 
-      <div className="space-y-2">
+      <div className={GROUP_CLASS}>
         <SectionHeader>Updates</SectionHeader>
-        <FollowUpRemindersSetting />
-        {env.NEXT_PUBLIC_DIGEST_ENABLED && <DigestSetting />}
+        <SettingCardGroup>
+          <FollowUpRemindersSetting />
+          {env.NEXT_PUBLIC_DIGEST_ENABLED && <DigestSetting />}
+        </SettingCardGroup>
       </div>
 
-      <div className="space-y-2">
+      <div className={GROUP_CLASS}>
         <SectionHeader>Your voice</SectionHeader>
-        <WritingStyleSetting />
-        <AboutSetting />
-        <PersonalSignatureSetting />
-        <SnippetsSetting />
-        <SentWithSignatureSetting />
+        <SettingCardGroup>
+          <WritingStyleSetting />
+          <AboutSetting />
+          <PersonalSignatureSetting />
+          <SnippetsSetting />
+          <SentWithSignatureSetting />
+        </SettingCardGroup>
       </div>
 
       {!autoDraftDisabled && (
-        <div className="space-y-2">
+        <div className={GROUP_CLASS}>
           <SectionHeader>Knowledge</SectionHeader>
-          <DraftKnowledgeSetting />
-          <LearnedPatternsSetting />
+          <SettingCardGroup>
+            <DraftKnowledgeSetting />
+            <LearnedPatternsSetting />
+          </SettingCardGroup>
         </div>
       )}
 
-      <div className="space-y-2">
+      <div className={GROUP_CLASS}>
         <SectionHeader>Advanced</SectionHeader>
-        <SyncToExtensionSetting />
-        <MultiRuleSetting />
-        <ReferralSignatureSetting />
-        <HiddenAiDraftLinksSetting />
-        {!env.NEXT_PUBLIC_SENSITIVE_DATA_POLICY_LOCKED && (
-          <SensitiveDataPolicySetting />
-        )}
-        <WebLookupSetting />
+        <SettingCardGroup>
+          <SyncToExtensionSetting />
+          <MultiRuleSetting />
+          <ReferralSignatureSetting />
+          <HiddenAiDraftLinksSetting />
+          {!env.NEXT_PUBLIC_SENSITIVE_DATA_POLICY_LOCKED && (
+            <SensitiveDataPolicySetting />
+          )}
+          <WebLookupSetting />
+        </SettingCardGroup>
       </div>
     </div>
   );

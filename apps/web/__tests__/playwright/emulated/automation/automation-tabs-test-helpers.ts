@@ -65,7 +65,7 @@ export async function markAutomationOnboardingViewed(page: Page) {
 export function getAutomationSettingsCard(page: Page, name: string) {
   return page
     .getByRole("heading", { name, exact: true })
-    .locator("xpath=ancestor::div[contains(@class, 'group/card')][1]");
+    .locator("xpath=ancestor::*[@data-setting-card][1]");
 }
 
 export async function expectVisibleAfterTransientFetch(
