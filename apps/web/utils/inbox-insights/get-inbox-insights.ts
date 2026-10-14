@@ -16,7 +16,10 @@ import {
 import type { Logger } from "@/utils/logger";
 import { assertHasAiAccess } from "@/utils/premium/limits";
 import { redis } from "@/utils/redis";
-import type { SuggestedReply } from "@/utils/thread-context/suggest-reply";
+import {
+  getCachedSuggestedReply,
+  type SuggestedReply,
+} from "@/utils/thread-context/suggest-reply";
 import type { ParsedMessage } from "@/utils/types";
 import { getEmailAccountWithAi } from "@/utils/user/get";
 
@@ -95,12 +98,15 @@ export async function getInboxInsights({
     [...byThread.values()].some((m) => m?.people.length)
       ? upcomingEvents({ emailAccountId, now, logger })
       : [],
+    // The same answer the reader shows: a reply Cue verified, maybe saved
+    // as a draft, reads "Reply ready" here too.
     Promise.all(
       items.map((item) =>
-        redis
-          .get<SuggestedReply>(
-            `suggested-reply:${emailAccountId}:${item.threadId}:${item.messageId}`,
-          )
+        getCachedSuggestedReply({
+          emailAccountId,
+          threadId: item.threadId,
+          messageId: item.messageId,
+        })
           .then((s) => replyState(s))
           .catch(() => null),
       ),

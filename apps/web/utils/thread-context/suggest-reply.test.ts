@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   checkSuggestion,
+  getCachedSuggestedReply,
   renderSource,
   type Source,
   webSearchQuery,
@@ -8,6 +9,10 @@ import {
 } from "./suggest-reply";
 
 vi.mock("server-only", () => ({}));
+const { cache } = vi.hoisted(() => ({ cache: new Map<string, unknown>() }));
+vi.mock("@/utils/redis", () => ({
+  redis: { get: async (key: string) => cache.get(key) ?? null },
+}));
 
 const SOURCES: Source[] = [
   {
@@ -196,5 +201,46 @@ describe("webSearchQuery", () => {
 
   it("skips the web when nothing public would settle it", () => {
     expect(webSearchQuery({ webQuery: "  " })).toBe("");
+  });
+});
+
+describe("getCachedSuggestedReply", () => {
+  const key = { emailAccountId: "a1", threadId: "t1", messageId: "m1" };
+
+  // The reader shows the web pass's answer when there was one, so the
+  // inbox row must agree with it.
+  it("prefers the answer from the web pass", async () => {
+    cache.clear();
+    cache.set("suggested-reply:v2:a1:t1:m1", {
+      status: "insufficient",
+      missing: "Flight time",
+      unsupported: [],
+      webQuery: "",
+    });
+    cache.set("suggested-reply-web:v2:a1:t1:m1", {
+      status: "suggested",
+      reply: "Landing at 6:35 PM.",
+      citations: [],
+    });
+
+    expect(await getCachedSuggestedReply(key)).toMatchObject({
+      status: "suggested",
+    });
+  });
+
+  it("falls back to the first answer, and to nothing for a new message", async () => {
+    cache.clear();
+    cache.set("suggested-reply:v2:a1:t1:m1", {
+      status: "suggested",
+      reply: "Yes.",
+      citations: [],
+    });
+
+    expect(await getCachedSuggestedReply(key)).toMatchObject({
+      status: "suggested",
+    });
+    expect(
+      await getCachedSuggestedReply({ ...key, messageId: "m2" }),
+    ).toBeNull();
   });
 });

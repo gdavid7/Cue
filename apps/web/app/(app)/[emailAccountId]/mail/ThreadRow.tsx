@@ -90,7 +90,12 @@ export const ThreadRow = memo(function ThreadRow({
   accountColorClassName,
   rowActions,
 }: ThreadRowProps) {
-  const message = thread.messages.at(-1);
+  // Like Gmail, an unsent draft is marked on the row but doesn't stand in for
+  // the message the user received.
+  const message =
+    thread.messages.findLast(
+      (message) => !message.labelIds?.includes(GmailLabel.DRAFT),
+    ) ?? thread.messages.at(-1);
   const labels = useMemo(
     () =>
       getEmailThreadLabels({
@@ -218,7 +223,12 @@ export const ThreadRow = memo(function ThreadRow({
       )}
       rowRef={rowRef}
       selectionEnabled={selectionEnabled}
-      snippet={decodeSnippet(thread.snippet || message.snippet)}
+      snippet={decodeSnippet(
+        // The provider's thread snippet follows the newest message, a draft too.
+        isDraft
+          ? message.snippet || thread.snippet
+          : thread.snippet || message.snippet,
+      )}
       subject={message.headers.subject}
     />
   );

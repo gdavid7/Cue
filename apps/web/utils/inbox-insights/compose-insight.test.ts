@@ -120,6 +120,34 @@ describe("composeInsight", () => {
   });
 });
 
+describe("composeInsight with a draft", () => {
+  // The user's unsent draft is newest, but the sender is still waiting.
+  it("reads the latest received message, not the user's draft", () => {
+    expect(
+      composeInsight({
+        thread: {
+          messages: [
+            {
+              labelIds: ["INBOX", "Label_To Reply"],
+              internalDate: String(NOW.getTime()),
+              headers: { from: "Mom <mom@x.org>", to: USER },
+            },
+            {
+              labelIds: ["DRAFT"],
+              internalDate: String(NOW.getTime() + 60_000),
+              headers: { from: USER, to: "Mom <mom@x.org>" },
+            },
+          ],
+        },
+        labelNames: (id) => LABELS[id],
+        userEmail: USER,
+        data: undefined,
+        now: NOW,
+      }),
+    ).toEqual({ tone: "action", parts: ["Needs your reply"] });
+  });
+});
+
 describe("formatWhen", () => {
   it("reads a bare date as that day where the user is", () => {
     expect(formatWhen("2026-10-13", NOW)).toBe("today");

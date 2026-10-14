@@ -1,6 +1,7 @@
 import { SystemType } from "@/generated/prisma/enums";
 import { extractEmailAddress, extractNameFromEmail } from "@/utils/email";
 import type { ThreadInsightData } from "@/utils/inbox-insights/get-inbox-insights";
+import { GmailLabel } from "@/utils/gmail/label";
 import { getRuleLabel } from "@/utils/rule/consts";
 
 const MAX_PARTS = 3;
@@ -42,7 +43,11 @@ export function composeInsight({
   data: ThreadInsightData | undefined;
   now?: Date;
 }): InsightLine | null {
-  const latest = thread.messages.at(-1);
+  // The user's unsent draft doesn't change whose move it is.
+  const latest =
+    thread.messages.findLast(
+      (message) => !message.labelIds?.includes(GmailLabel.DRAFT),
+    ) ?? thread.messages.at(-1);
   if (!latest) return null;
   const names = new Set(
     thread.messages.flatMap((m) =>
