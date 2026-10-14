@@ -1,6 +1,7 @@
 import type { gmail_v1 } from "@googleapis/gmail";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createLabel } from "./label";
+import { BRAND_NAME } from "@/utils/branding";
+import { createLabel, getOrCreateInboxZeroLabel } from "./label";
 
 describe("createLabel conflict handling", () => {
   beforeEach(() => {
@@ -121,6 +122,40 @@ describe("createLabel conflict handling", () => {
     ).rejects.toThrow(
       "Label conflict but not found: Reference/Political activism",
     );
+  });
+});
+
+describe("getOrCreateInboxZeroLabel", () => {
+  it("keeps using a label created under the old Inbox Zero name", async () => {
+    const list = vi.fn().mockResolvedValue(
+      labelsResponse([
+        { id: "parent", name: "Inbox Zero", type: "user" },
+        { id: "legacy", name: "Inbox Zero/Archived", type: "user" },
+      ]),
+    );
+    const create = vi.fn();
+
+    const label = await getOrCreateInboxZeroLabel({
+      gmail: gmailClient({ create, list }),
+      key: "archived",
+    });
+
+    expect(label?.id).toBe("legacy");
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("creates new labels under the current brand", async () => {
+    const list = vi.fn().mockResolvedValue(labelsResponse([]));
+    const create = vi.fn().mockImplementation(({ requestBody }) => ({
+      data: { id: requestBody.name, name: requestBody.name },
+    }));
+
+    const label = await getOrCreateInboxZeroLabel({
+      gmail: gmailClient({ create, list }),
+      key: "archived",
+    });
+
+    expect(label?.name).toBe(`${BRAND_NAME}/Archived`);
   });
 });
 

@@ -2,6 +2,7 @@ import type { gmail_v1 } from "@googleapis/gmail";
 import { publishArchive, type TinybirdEmailAction } from "@inboxzero/tinybird";
 import {
   getLabelColor,
+  getInboxZeroLabelNames,
   inboxZeroLabels,
   PARENT_LABEL,
   type InboxZeroLabel,
@@ -387,6 +388,11 @@ export async function getOrCreateInboxZeroLabel({
   const { name, color, messageListVisibility } = inboxZeroLabels[key];
   const labels = await getLabels(gmail);
 
+  for (const existingName of getInboxZeroLabelNames(key)) {
+    const label = labels?.find((label) => label.name === existingName);
+    if (label) return label;
+  }
+
   // Create parent label if it doesn't exist
   const parentLabel = labels?.find((label) => PARENT_LABEL === label.name);
   if (!parentLabel) {
@@ -396,10 +402,6 @@ export async function getOrCreateInboxZeroLabel({
       logger.warn("Parent label already exists", { name: PARENT_LABEL });
     }
   }
-
-  // Return child label if it exists
-  const label = labels?.find((label) => label.name === name);
-  if (label) return label;
 
   // Create child label if it doesn't exist
   const createdLabel = await createLabel({

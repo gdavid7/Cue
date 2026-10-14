@@ -1,8 +1,12 @@
 import { messageVisibility } from "@/utils/gmail/constants";
 import { getRuleLabel } from "@/utils/rule/consts";
 import { SystemType } from "@/generated/prisma/enums";
+import { BRAND_NAME } from "@/utils/branding";
 
-export const PARENT_LABEL = "Inbox Zero";
+export const PARENT_LABEL = BRAND_NAME;
+// Mailboxes set up before the rename already hold these labels under the old
+// parent, and keep using them so one mailbox never ends up with two copies.
+const LEGACY_PARENT_LABEL = "Inbox Zero";
 
 const blue = "#b6cff5";
 const cyan = "#98d7e4";
@@ -63,6 +67,13 @@ export const inboxZeroLabels = {
 } as const;
 
 export type InboxZeroLabel = keyof typeof inboxZeroLabels;
+
+/** Every name the label may have in a mailbox: the current one first. */
+export function getInboxZeroLabelNames(key: InboxZeroLabel): string[] {
+  const { name } = inboxZeroLabels[key];
+  const legacyName = `${LEGACY_PARENT_LABEL}${name.slice(PARENT_LABEL.length)}`;
+  return [...new Set([name, legacyName])];
+}
 
 export const FOLLOW_UP_LABEL = "Follow-up";
 

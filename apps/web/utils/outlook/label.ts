@@ -13,7 +13,11 @@ import {
   processThreadMessagesFallback,
   runThreadMessageMutation,
 } from "@/utils/outlook/thread-helpers";
-import { inboxZeroLabels, type InboxZeroLabel } from "@/utils/label";
+import {
+  getInboxZeroLabelNames,
+  inboxZeroLabels,
+  type InboxZeroLabel,
+} from "@/utils/label";
 import {
   normalizeOutlookCategoryName,
   sanitizeOutlookCategoryName,
@@ -769,9 +773,10 @@ export async function getOrCreateInboxZeroLabel({
   const { name } = inboxZeroLabels[key];
   const labels = await getLabels(client);
 
-  // Return label if it exists
-  const label = labels?.find((label) => label.displayName === name);
-  if (label) return label;
+  for (const existingName of getInboxZeroLabelNames(key)) {
+    const label = labels?.find((label) => label.displayName === existingName);
+    if (label) return label;
+  }
 
   // Create label if it doesn't exist
   const createdLabel = await createLabel({ client, name, logger });
