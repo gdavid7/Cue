@@ -111,6 +111,7 @@ import {
 } from "@/utils/meeting-recorder/reply-context";
 import prisma from "@/utils/prisma";
 import { getReplyWithConfidence, saveReply } from "@/utils/redis/reply";
+import { mcpAgent } from "@/utils/ai/mcp/mcp-agent";
 
 const logger = createTestLogger();
 
@@ -990,6 +991,38 @@ describe("fetchMessagesAndGenerateDraftWithConfidenceThreshold", () => {
           ids: ["memory-1"],
         }),
       }),
+    );
+  });
+
+  it("drafts without connected-app context when the app research fails", async () => {
+    vi.mocked(aiDraftReplyWithConfidence).mockResolvedValue({
+      reply: "Fresh draft",
+      confidence: DraftReplyConfidence.HIGH_CONFIDENCE,
+      attribution: {
+        provider: "anthropic",
+        modelName: "claude-sonnet-4-5",
+        pipelineVersion: DRAFT_PIPELINE_VERSION,
+      },
+    });
+    vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue(
+      createMockEmailAccountSettings(),
+    );
+    vi.mocked(mcpAgent).mockRejectedValueOnce(
+      new Error("Invalid schema for function 'HUBSPOT_SEARCH'"),
+    );
+
+    const result = await fetchMessagesAndGenerateDraftWithConfidenceThreshold(
+      createMockEmailAccount(),
+      "thread-1",
+      createMockClient(),
+      createMockMessage(),
+      logger,
+      DraftReplyConfidence.STANDARD,
+    );
+
+    expect(result).toMatchObject({ draft: "Fresh draft" });
+    expect(aiDraftReplyWithConfidence).toHaveBeenCalledWith(
+      expect.objectContaining({ mcpContext: null }),
     );
   });
 

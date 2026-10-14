@@ -115,11 +115,56 @@ export const getCalendarClientWithRefresh = async ({
           }
         ).response?.data?.error_description,
       });
+      await markGoogleCalendarDisconnected({
+        connectionId,
+        emailAccountId,
+        refreshToken,
+        logger,
+      });
+      throw new SafeError(
+        "Your Google calendar authorization has expired. Please reconnect your calendar.",
+      );
     }
 
     throw error;
   }
 };
+
+// A revoked refresh token never works again, so the connection shows as
+// disconnected and offers Reconnect.
+async function markGoogleCalendarDisconnected({
+  connectionId,
+  emailAccountId,
+  refreshToken,
+  logger,
+}: {
+  connectionId?: string | null;
+  emailAccountId: string;
+  refreshToken: string;
+  logger: Logger;
+}) {
+  try {
+    let ids = connectionId ? [connectionId] : [];
+    if (!connectionId) {
+      // Tokens are encrypted at rest, so match on the decrypted value.
+      const connections = await prisma.calendarConnection.findMany({
+        where: { emailAccountId, provider: "google", isConnected: true },
+        select: { id: true, refreshToken: true },
+      });
+      ids = connections
+        .filter((connection) => connection.refreshToken === refreshToken)
+        .map((connection) => connection.id);
+    }
+    for (const id of ids) {
+      await prisma.calendarConnection.updateMany({
+        where: { id, isConnected: true },
+        data: { isConnected: false },
+      });
+    }
+  } catch (error) {
+    logger.error("Failed to mark Google calendar disconnected", { error });
+  }
+}
 
 export async function fetchGoogleCalendars(
   calendarClient: calendar_v3.Calendar,

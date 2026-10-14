@@ -288,7 +288,17 @@ export function IntegrationRow({
           ) : connected || integration.authType !== "none" ? (
             <div className="flex items-center gap-2">
               {connected ? (
-                isActive ? (
+                isActive && conn.needsReconnect ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleConnect}
+                    disabled={connecting}
+                    title={`${integration.displayName} stopped accepting Cue's access. Reconnect to keep using it.`}
+                  >
+                    {connecting ? "Reconnecting..." : "Reconnect"}
+                  </Button>
+                ) : isActive ? (
                   <span
                     className="text-green-600 dark:text-green-400 text-sm"
                     title={viaTitle}
@@ -355,6 +365,11 @@ export function IntegrationRow({
                         disabled={connecting}
                       >
                         {connecting ? "Reconnecting..." : "Reconnect"}
+                      </DropdownMenuItem>
+                    )}
+                    {!!integration.credentialFields?.length && (
+                      <DropdownMenuItem onClick={handleConnect}>
+                        Update key
                       </DropdownMenuItem>
                     )}
                   </>

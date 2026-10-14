@@ -21,6 +21,8 @@ import type { Logger } from "@/utils/logger";
 
 export interface GoogleCalendarConnectionParams {
   accessToken: string | null;
+  /** Calendars to read events from; the primary calendar when empty. */
+  calendarIds?: string[];
   connectionId: string;
   emailAccountId: string;
   expiresAt: number | null;
@@ -60,8 +62,7 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
   }): Promise<CalendarEvent[]> {
     const client = await this.getClient();
 
-    const response = await client.events.list({
-      calendarId: "primary",
+    const events = await this.listEvents(client, {
       timeMin: timeMin.toISOString(),
       timeMax: timeMax.toISOString(),
       maxResults,
@@ -70,8 +71,6 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
       q: attendeeEmail,
     });
 
-    const events = response.data.items || [];
-
     // Filter to events that actually have this attendee
     return events
       .filter((event) =>
@@ -79,7 +78,48 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
           (a) => a.email?.toLowerCase() === attendeeEmail.toLowerCase(),
         ),
       )
-      .map((event) => this.parseEvent(event));
+      .map((event) => this.parseEvent(event))
+      .slice(0, maxResults);
+  }
+
+  /**
+   * Events from each of the user's selected calendars, merged in start order.
+   * An event on several of them (e.g. a shared calendar) is kept once.
+   */
+  private async listEvents(
+    client: calendar_v3.Calendar,
+    params: Omit<calendar_v3.Params$Resource$Events$List, "calendarId">,
+  ): Promise<calendar_v3.Schema$Event[]> {
+    const calendarIds = this.connection.calendarIds?.length
+      ? this.connection.calendarIds
+      : ["primary"];
+    const lists = await Promise.all(
+      calendarIds.map(async (calendarId) => {
+        try {
+          const response = await client.events.list({ ...params, calendarId });
+          return response.data.items || [];
+        } catch (error) {
+          // A calendar removed or unshared since it was synced has no events.
+          if (isGoneError(error)) {
+            this.logger.warn("Skipping a calendar that no longer exists");
+            return [];
+          }
+          throw error;
+        }
+      }),
+    );
+    if (lists.length === 1) return lists[0];
+
+    const seen = new Set<string>();
+    return lists
+      .flat()
+      .filter((event) => {
+        const key = `${event.iCalUID ?? event.id}|${event.start?.dateTime ?? event.start?.date}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => eventStart(a) - eventStart(b));
   }
 
   async fetchEvents({
@@ -96,21 +136,20 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
     this.logger.info("Completed Google calendar client setup");
 
     this.logger.info("Starting Google calendar events request");
-    const response = await client.events.list({
-      calendarId: "primary",
+    const events = await this.listEvents(client, {
       timeMin: timeMin?.toISOString(),
       timeMax: timeMax?.toISOString(),
       maxResults: maxResults || 10,
       singleEvents: true,
       orderBy: "startTime",
     });
-
-    const events = response.data.items || [];
     this.logger.info("Completed Google calendar events request", {
       eventCount: events.length,
     });
 
-    return events.map((event) => this.parseEvent(event));
+    return events
+      .slice(0, maxResults || 10)
+      .map((event) => this.parseEvent(event));
   }
 
   // Google Calendar keeps the organizer's UID, so it does not need the mailbox
@@ -258,7 +297,9 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
     });
   }
 
-  private parseEvent(event: calendar_v3.Schema$Event) {
+  private parseEvent(event: calendar_v3.Schema$Event): CalendarEvent {
+    // An all-day item has only dates, which name days in no particular zone.
+    const allDay = !event.start?.dateTime && !!event.start?.date;
     const startTime = new Date(
       event.start?.dateTime || event.start?.date || Date.now(),
     );
@@ -287,6 +328,7 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
       videoConferenceLink,
       startTime,
       endTime,
+      ...(allDay ? { allDay } : {}),
       organizerEmail: event.organizer?.email ?? undefined,
       isOrganizer: event.organizer?.self ?? undefined,
       attendees:
@@ -301,4 +343,15 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
 
 function toIsoDate(date: Date) {
   return date.toISOString().slice(0, 10);
+}
+
+function eventStart(event: calendar_v3.Schema$Event) {
+  return new Date(event.start?.dateTime || event.start?.date || 0).getTime();
+}
+
+function isGoneError(error: unknown) {
+  const status =
+    (error as { status?: number; code?: number })?.status ??
+    (error as { code?: number })?.code;
+  return status === 404 || status === 410;
 }

@@ -3,6 +3,9 @@ import { captureException } from "@/utils/error";
 import type { EmailProvider } from "@/utils/email/types";
 import { createEmailProvider } from "@/utils/email/provider";
 import type { Logger } from "@/utils/logger";
+import { getOutlookClientForEmailId } from "@/utils/email-account-client";
+import { extractErrorInfo } from "@/utils/outlook/retry";
+import { renewOutlookWatch } from "@/utils/outlook/watch";
 import {
   parseSubscriptionHistory,
   cleanupOldHistoryEntries,
@@ -34,6 +37,7 @@ export class OutlookSubscriptionManager {
     changed: boolean;
   } | null> {
     const forceRefresh = options?.forceRefresh === true;
+    let cancelledSubscriptionId: string | null = null;
     try {
       const existing = await this.getExistingSubscription();
 
@@ -80,25 +84,56 @@ export class OutlookSubscriptionManager {
         this.logger.info("No existing subscription found; creating new");
       }
 
-      await this.cancelSubscription(existing?.subscriptionId);
+      if (await this.cancelSubscription(existing?.subscriptionId)) {
+        cancelledSubscriptionId = existing?.subscriptionId ?? null;
+      }
 
       const subscription = await this.client.watchEmails();
 
+      if (!subscription) {
+        await this.forgetCancelledSubscription(cancelledSubscriptionId);
+        return null;
+      }
+
       this.logger.info("Successfully created new subscription", {
-        subscriptionId: subscription?.subscriptionId,
+        subscriptionId: subscription.subscriptionId,
       });
 
-      return subscription
-        ? {
-            expirationDate: subscription.expirationDate,
-            subscriptionId: subscription.subscriptionId,
-            changed: true,
-          }
-        : null;
+      return {
+        expirationDate: subscription.expirationDate,
+        subscriptionId: subscription.subscriptionId,
+        changed: true,
+      };
     } catch (error) {
       this.logger.error("Failed to create subscription", { error });
       captureException(error, { emailAccountId: this.emailAccountId });
+      await this.forgetCancelledSubscription(cancelledSubscriptionId);
       return null;
+    }
+  }
+
+  /**
+   * A cancelled subscription that nothing replaced must not stay recorded as
+   * current, or it looks valid until it would have expired and push stays off.
+   */
+  private async forgetCancelledSubscription(subscriptionId: string | null) {
+    if (!subscriptionId) return;
+    try {
+      await prisma.emailAccount.updateMany({
+        where: {
+          id: this.emailAccountId,
+          watchEmailsSubscriptionId: subscriptionId,
+        },
+        data: {
+          watchEmailsSubscriptionId: null,
+          watchEmailsExpirationDate: null,
+        },
+      });
+    } catch (error) {
+      this.logger.error("Failed to clear cancelled subscription", {
+        subscriptionId,
+        error,
+      });
     }
   }
 
@@ -147,18 +182,22 @@ export class OutlookSubscriptionManager {
     };
   }
 
-  private async cancelSubscription(subscriptionId: string | null | undefined) {
-    if (!subscriptionId) return;
+  private async cancelSubscription(
+    subscriptionId: string | null | undefined,
+  ): Promise<boolean> {
+    if (!subscriptionId) return false;
 
     try {
       await this.client.unwatchEmails(subscriptionId);
       this.logger.info("Canceled existing subscription", { subscriptionId });
+      return true;
     } catch (error) {
       // The subscription might already be expired/invalid
       this.logger.warn(
         "Failed to cancel existing subscription (may already be expired)",
         { subscriptionId, error },
       );
+      return false;
     }
   }
 
@@ -293,6 +332,56 @@ function shouldRenewAgedSubscription(expirationDate: Date, now: Date) {
   const subscriptionAgeMs = now.getTime() - subscriptionStartedAt.getTime();
 
   return subscriptionAgeMs >= OUTLOOK_MAX_REUSE_AGE_MS;
+}
+
+/**
+ * Renews the account's subscription in place. Only a subscription Microsoft
+ * no longer has is replaced, and then the caller should backfill the gap.
+ */
+export async function renewManagedOutlookSubscription({
+  emailAccountId,
+  subscriptionId,
+  logger,
+}: {
+  emailAccountId: string;
+  subscriptionId: string;
+  logger: Logger;
+}): Promise<{
+  status: "renewed" | "recreated";
+  subscriptionId: string | undefined;
+}> {
+  const outlook = await getOutlookClientForEmailId({ emailAccountId, logger });
+  try {
+    const renewed = await renewOutlookWatch(
+      outlook.getClient(),
+      subscriptionId,
+      logger,
+    );
+    if (renewed.expirationDateTime) {
+      await prisma.emailAccount.updateMany({
+        where: {
+          id: emailAccountId,
+          watchEmailsSubscriptionId: subscriptionId,
+        },
+        data: {
+          watchEmailsExpirationDate: new Date(renewed.expirationDateTime),
+        },
+      });
+    }
+    logger.info("Renewed Outlook subscription", { subscriptionId });
+    return { status: "renewed", subscriptionId };
+  } catch (error) {
+    if (extractErrorInfo(error).status !== 404) throw error;
+    logger.warn("Outlook subscription is gone; creating a new one", {
+      subscriptionId,
+    });
+    const created = await createManagedOutlookSubscription({
+      emailAccountId,
+      logger,
+      forceRefresh: true,
+    });
+    return { status: "recreated", subscriptionId: created?.subscriptionId };
+  }
 }
 
 export async function createManagedOutlookSubscription({

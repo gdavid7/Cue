@@ -160,6 +160,16 @@ export const getGmailClientWithRefresh = async ({
             cleanupError,
           },
         );
+        throw error;
+      }
+
+      // The grant is gone and cleaned up: the same reconnect state as a
+      // missing token (a 401 for API routes, not a 500 and a Sentry event).
+      // The cause keeps it recognizable as invalid_grant.
+      if (issue.reason === "invalid_grant") {
+        throw Object.assign(new SafeError("No refresh token"), {
+          cause: error,
+        });
       }
     }
 

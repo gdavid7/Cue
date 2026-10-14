@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { OutlookSubscriptionManager } from "@/utils/outlook/subscription-manager";
+import {
+  OutlookSubscriptionManager,
+  renewManagedOutlookSubscription,
+} from "@/utils/outlook/subscription-manager";
+import { createEmailProvider } from "@/utils/email/provider";
 import prisma from "@/utils/prisma";
 import type { EmailProvider } from "@/utils/email/types";
 import type { SubscriptionHistoryEntry } from "@/utils/outlook/subscription-history";
@@ -13,6 +17,7 @@ vi.mock("@/utils/prisma", () => ({
     emailAccount: {
       findUnique: vi.fn(),
       update: vi.fn(),
+      updateMany: vi.fn(),
     },
     $executeRaw: vi.fn(),
   },
@@ -21,6 +26,14 @@ vi.mock("@/utils/prisma", () => ({
 vi.mock("@/utils/error", () => ({
   captureException: vi.fn(),
 }));
+
+const graph = vi.hoisted(() => ({ api: vi.fn(), patch: vi.fn() }));
+vi.mock("@/utils/email-account-client", () => ({
+  getOutlookClientForEmailId: vi.fn(async () => ({
+    getClient: () => ({ api: graph.api }),
+  })),
+}));
+vi.mock("@/utils/email/provider", () => ({ createEmailProvider: vi.fn() }));
 
 describe("OutlookSubscriptionManager", () => {
   let mockProvider: EmailProvider;
@@ -117,6 +130,48 @@ describe("OutlookSubscriptionManager", () => {
       expect(result).toEqual(
         expect.objectContaining({ ...newSubscription, changed: true }),
       );
+    });
+
+    it("forgets a cancelled subscription when its replacement can't be created", async () => {
+      vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue({
+        watchEmailsSubscriptionId: "old-subscription-id",
+        watchEmailsExpirationDate: new Date(Date.now() + 60_000),
+      } as any);
+      vi.mocked(mockProvider.unwatchEmails).mockResolvedValue();
+      vi.mocked(mockProvider.watchEmails).mockRejectedValue(
+        new Error("Graph unavailable"),
+      );
+
+      const result = await manager.createSubscription({ forceRefresh: true });
+
+      expect(result).toBeNull();
+      // The deleted id must not look valid to the renewal cron.
+      expect(prisma.emailAccount.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: emailAccountId,
+          watchEmailsSubscriptionId: "old-subscription-id",
+        },
+        data: {
+          watchEmailsSubscriptionId: null,
+          watchEmailsExpirationDate: null,
+        },
+      });
+    });
+
+    it("keeps the subscription id when cancelling it failed and nothing replaced it", async () => {
+      vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue({
+        watchEmailsSubscriptionId: "old-subscription-id",
+      } as any);
+      vi.mocked(mockProvider.unwatchEmails).mockRejectedValue(
+        new Error("Network error"),
+      );
+      vi.mocked(mockProvider.watchEmails).mockRejectedValue(
+        new Error("Network error"),
+      );
+
+      await manager.createSubscription({ forceRefresh: true });
+
+      expect(prisma.emailAccount.updateMany).not.toHaveBeenCalled();
     });
 
     it("should return null if creating new subscription fails", async () => {
@@ -386,5 +441,85 @@ describe("OutlookSubscriptionManager", () => {
       const updateCall = vi.mocked(prisma.emailAccount.update).mock.calls[0][0];
       expect(updateCall.data.watchEmailsSubscriptionHistory).toHaveLength(0);
     });
+  });
+});
+
+describe("renewManagedOutlookSubscription", () => {
+  const emailAccountId = "test-account-id";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    graph.api.mockReturnValue({ patch: graph.patch });
+  });
+
+  it("extends the existing subscription instead of replacing it", async () => {
+    graph.patch.mockResolvedValue({
+      id: "current-subscription-id",
+      expirationDateTime: "2026-10-17T12:00:00Z",
+    });
+
+    const result = await renewManagedOutlookSubscription({
+      emailAccountId,
+      subscriptionId: "current-subscription-id",
+      logger,
+    });
+
+    expect(result).toEqual({
+      status: "renewed",
+      subscriptionId: "current-subscription-id",
+    });
+    expect(graph.api).toHaveBeenCalledWith(
+      "/subscriptions/current-subscription-id",
+    );
+    expect(prisma.emailAccount.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: emailAccountId,
+        watchEmailsSubscriptionId: "current-subscription-id",
+      },
+      data: { watchEmailsExpirationDate: new Date("2026-10-17T12:00:00Z") },
+    });
+    expect(prisma.emailAccount.update).not.toHaveBeenCalled();
+  });
+
+  it("creates a new subscription only when Microsoft no longer has the old one", async () => {
+    graph.patch.mockRejectedValue(
+      Object.assign(new Error("Not found"), { statusCode: 404 }),
+    );
+    const provider = {
+      watchEmails: vi.fn(async () => ({
+        subscriptionId: "new-subscription-id",
+        expirationDate: new Date("2026-10-17T12:00:00Z"),
+      })),
+      unwatchEmails: vi.fn(),
+    };
+    vi.mocked(createEmailProvider).mockResolvedValue(provider as never);
+    vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue({
+      watchEmailsSubscriptionId: "current-subscription-id",
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+    } as any);
+
+    const result = await renewManagedOutlookSubscription({
+      emailAccountId,
+      subscriptionId: "current-subscription-id",
+      logger,
+    });
+
+    expect(result.status).toBe("recreated");
+    expect(provider.watchEmails).toHaveBeenCalled();
+  });
+
+  it("does not replace the subscription when renewal fails for another reason", async () => {
+    graph.patch.mockRejectedValue(
+      Object.assign(new Error("Forbidden"), { statusCode: 403 }),
+    );
+
+    await expect(
+      renewManagedOutlookSubscription({
+        emailAccountId,
+        subscriptionId: "current-subscription-id",
+        logger,
+      }),
+    ).rejects.toThrow("Forbidden");
+    expect(createEmailProvider).not.toHaveBeenCalled();
   });
 });

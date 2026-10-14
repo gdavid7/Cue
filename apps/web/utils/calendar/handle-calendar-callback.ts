@@ -6,6 +6,7 @@ import {
   validateOAuthCallback,
   checkExistingConnection,
   createCalendarConnection,
+  reconnectCalendarConnection,
 } from "./oauth-callback-helpers";
 import {
   RedirectError,
@@ -83,37 +84,30 @@ export async function handleCalendarCallback(
     const { accessToken, refreshToken, expiresAt, email } =
       await provider.exchangeCodeForTokens(code);
 
-    // Step 6: Check if connection already exists
+    // Step 6: Connecting a calendar that's already there is how a lapsed one
+    // is repaired, so it takes the fresh tokens.
     const existingConnection = await checkExistingConnection(
       emailAccountId,
       provider.name,
       email,
     );
 
-    if (existingConnection) {
-      logger.info("Calendar connection already exists", {
-        emailAccountId,
-        email,
-        provider: provider.name,
-      });
-      // Cache the result for duplicate requests
-      await setOAuthCodeResult(code, { message: "calendar_already_connected" });
-      return redirectWithMessage(
-        finalRedirectUrl,
-        "calendar_already_connected",
-        redirectHeaders,
-      );
-    }
-
-    // Step 7: Create calendar connection
-    const connection = await createCalendarConnection({
-      provider: provider.name,
-      email,
-      emailAccountId,
-      accessToken,
-      refreshToken,
-      expiresAt,
-    });
+    // Step 7: Create or repair the calendar connection
+    const connection = existingConnection
+      ? await reconnectCalendarConnection({
+          connectionId: existingConnection.id,
+          accessToken,
+          refreshToken,
+          expiresAt,
+        })
+      : await createCalendarConnection({
+          provider: provider.name,
+          email,
+          emailAccountId,
+          accessToken,
+          refreshToken,
+          expiresAt,
+        });
 
     // Step 8: Sync calendars
     await provider.syncCalendars(
@@ -124,12 +118,17 @@ export async function handleCalendarCallback(
       expiresAt,
     );
 
-    logger.info("Calendar connected successfully", {
-      emailAccountId,
-      email,
-      provider: provider.name,
-      connectionId: connection.id,
-    });
+    logger.info(
+      existingConnection
+        ? "Calendar reconnected successfully"
+        : "Calendar connected successfully",
+      {
+        emailAccountId,
+        email,
+        provider: provider.name,
+        connectionId: connection.id,
+      },
+    );
 
     // Cache the successful result
     await setOAuthCodeResult(code, { message: "calendar_connected" });

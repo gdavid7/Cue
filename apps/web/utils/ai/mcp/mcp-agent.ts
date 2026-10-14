@@ -24,10 +24,13 @@ type McpAgentResponse = {
 };
 
 const NO_RELEVANT_INFO_FOUND = "NO_RELEVANT_INFO_FOUND";
+// The draft waits on this research; past the budget it goes without it.
+const MCP_AGENT_TIMEOUT_MS = 20_000;
 
 async function runMcpAgent(
   options: McpAgentOptions,
   mcpTools: ToolSet,
+  abortSignal: AbortSignal,
 ): Promise<McpAgentResponse> {
   const { emailAccount, messages } = options;
 
@@ -73,6 +76,7 @@ ${getEmailListPrompt({ messages, messageMaxLength: 1000, maxMessages: 5 })}
     instructions: system,
     prompt,
     stopWhen: isStepCount(10),
+    abortSignal,
     onStepEnd: async ({ text, toolCalls }) => {
       logger.trace("Step finished", { text, toolCalls });
     },
@@ -116,13 +120,14 @@ export async function mcpAgent(
 
   if (!messages || messages.length === 0) return null;
 
+  const abortSignal = AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS);
   const { tools, cleanup } = await createMcpToolsForAgent(emailAccount.id);
   const hasTools = Object.keys(tools).length > 0;
 
   if (!hasTools) return null;
 
   try {
-    return await runMcpAgent(options, tools as ToolSet);
+    return await runMcpAgent(options, tools as ToolSet, abortSignal);
   } finally {
     await cleanup();
   }

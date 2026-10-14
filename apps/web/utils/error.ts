@@ -190,9 +190,16 @@ const INVALID_GRANT_ERROR_MARKERS = ["invalid_grant", "AADSTS50173"] as const;
 
 export function isInvalidGrantError(error: unknown): boolean {
   const message = getErrorMessage(error);
-  if (!message) return false;
+  if (
+    message &&
+    INVALID_GRANT_ERROR_MARKERS.some((marker) => message.includes(marker))
+  ) {
+    return true;
+  }
 
-  return INVALID_GRANT_ERROR_MARKERS.some((marker) => message.includes(marker));
+  // A refresh failure may be rethrown as a reconnect error wrapping it.
+  const cause = error instanceof Error ? error.cause : undefined;
+  return cause !== undefined && cause !== error && isInvalidGrantError(cause);
 }
 
 export function isGmailInsufficientPermissionsError(error: unknown): boolean {

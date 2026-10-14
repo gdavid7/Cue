@@ -424,6 +424,7 @@ export function buildCueDemoConnectorData(now = new Date()): {
         start_at: dueAt,
         end_at: dueAt,
         html_url: assignmentUrl,
+        context_code: "course_61234",
         context_name: "CSE 151B",
         assignment: { due_at: dueAt, description, html_url: assignmentUrl },
       },

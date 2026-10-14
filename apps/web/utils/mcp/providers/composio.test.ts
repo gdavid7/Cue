@@ -13,6 +13,14 @@ vi.mock("@/env", () => ({
   },
 }));
 
+vi.mock("@/utils/redis", () => ({
+  redis: {
+    get: vi.fn(async () => null),
+    set: vi.fn(async () => "OK"),
+    del: vi.fn(async () => 1),
+  },
+}));
+
 // The provider memoizes per app for the life of the process, so each test uses
 // its own app name.
 describe("composioProvider", () => {

@@ -19,10 +19,15 @@ export type IntegrationProvider = {
       verifyTool: string;
     },
   ): Promise<void>;
-  // Runs one tool for the account's connection to the app, outside a chat
+  // Runs one tool for the account's connection to the app, outside a chat.
+  // Throws ConnectionExpiredError when the app's authorization has lapsed.
   executeTool(
     args: ProviderAppArgs & { tool: string; args: Record<string, unknown> },
   ): Promise<unknown>;
+  // Whether the provider still holds a working authorization for the app
+  getConnectionStatus(
+    args: ProviderAppArgs,
+  ): Promise<"active" | "needs_reconnect">;
   disconnect(args: ProviderAppArgs): Promise<void>;
   getMcpServer(
     args: ProviderAppArgs & { allowedTools: string[] },
@@ -39,3 +44,14 @@ type ProviderAppArgs = {
 };
 
 export class CredentialsRejectedError extends Error {}
+
+// The app's authorization expired or was revoked; only reconnecting fixes it.
+export class ConnectionExpiredError extends Error {
+  readonly app: string;
+
+  constructor(app: string, message: string) {
+    super(message);
+    this.name = "ConnectionExpiredError";
+    this.app = app;
+  }
+}

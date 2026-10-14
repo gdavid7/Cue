@@ -4,6 +4,7 @@ import {
   composioProvider,
   uploadComposioFile,
 } from "@/utils/mcp/providers/composio";
+import { ConnectionExpiredError } from "@/utils/mcp/providers/types";
 import {
   searchCanvas,
   searchGoogleDrive,
@@ -18,7 +19,11 @@ vi.mock("server-only", () => ({}));
 vi.mock("@/env", () => ({ env }));
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/redis", () => ({
-  redis: { get: vi.fn(async () => null), set: vi.fn(async () => "OK") },
+  redis: {
+    get: vi.fn(async () => null),
+    set: vi.fn(async () => "OK"),
+    del: vi.fn(async () => 1),
+  },
 }));
 
 // A Tuesday; the coming Friday is Oct 16.
@@ -28,7 +33,18 @@ const ACCOUNT = "demo-account";
 let emulator: ComposioEmulator;
 
 beforeAll(async () => {
-  emulator = await createComposioEmulator(buildCueDemoConnectorData(NOW));
+  emulator = await createComposioEmulator({
+    ...buildCueDemoConnectorData(NOW),
+    slackMessages: [
+      {
+        text: "I'll make the plots for milestone 2 tonight",
+        ts: "1791900000.000100",
+        username: "kevin",
+        permalink: "https://ucsd-cse.slack.com/archives/C1/p1791900000000100",
+        channel: { id: "C1", name: "cse151b" },
+      },
+    ],
+  });
   env.COMPOSIO_API_KEY = emulator.apiKey;
   env.COMPOSIO_API_URL = emulator.url;
 });
@@ -104,13 +120,25 @@ describe("Composio emulator with the Cue demo data", () => {
     ]);
   });
 
-  it("answers OneDrive and Slack searches with no results", async () => {
+  it("answers a OneDrive search with no results", async () => {
     await expect(
       searchOneDrive(executor("one_drive"), search(["pricing"])),
     ).resolves.toEqual([]);
-    await expect(
-      searchSlack(executor("slack"), search(["pricing"])),
-    ).resolves.toEqual([]);
+  });
+
+  it("finds the Slack message that mentions the thread's words", async () => {
+    const items = await searchSlack(
+      executor("slack"),
+      search(["milestone", "plots", "pricing"]),
+    );
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        kind: "chat",
+        title: "#cse151b · kevin",
+        url: "https://ucsd-cse.slack.com/archives/C1/p1791900000000100",
+      }),
+    ]);
   });
 
   it("stops answering for an app once it is disconnected", async () => {
@@ -148,5 +176,111 @@ describe("Composio emulator file uploads", () => {
       search(["rubric"]),
     );
     expect(found.map((item) => item.title)).toContain("Milestone 2 rubric.pdf");
+  });
+});
+
+describe("Composio emulator connection health", () => {
+  const canvasKey = { full: "https://canvas.ucsd.edu", generic_api_key: "k" };
+
+  it("keeps no half-made Canvas account when the key check errors", async () => {
+    const user = "key-check-errors";
+    // The first listing gives the user the emulator's default connection.
+    await expect(
+      composioProvider.getConnectionStatus({
+        app: "canvas",
+        authScheme: "API_KEY",
+        emailAccountId: user,
+      }),
+    ).resolves.toBe("active");
+    emulator.failTool("CANVAS_LIST_COURSES", "server_error");
+
+    try {
+      await expect(
+        composioProvider.connectWithCredentials({
+          app: "canvas",
+          authScheme: "API_KEY",
+          emailAccountId: user,
+          credentials: canvasKey,
+          verifyTool: "CANVAS_LIST_COURSES",
+        }),
+      ).rejects.toThrow();
+    } finally {
+      emulator.failTool("CANVAS_LIST_COURSES", null);
+    }
+
+    expect(emulator.connectedAccounts(user)).toHaveLength(1);
+  });
+
+  it("runs tools on the user's newest active connection", async () => {
+    const user = "two-connections";
+    await composioProvider.getConnectionStatus({
+      app: "canvas",
+      authScheme: "API_KEY",
+      emailAccountId: user,
+    });
+    const [older] = emulator.connectedAccounts(user);
+    // A second connection, e.g. a reconnect whose cleanup hasn't run yet.
+    await fetch(`${emulator.url}/connected_accounts`, {
+      method: "POST",
+      headers: {
+        "x-api-key": emulator.apiKey,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        auth_config: { id: older.auth_config_id },
+        connection: { user_id: user },
+      }),
+    });
+    const newer = emulator.connectedAccounts(user)[1];
+
+    await composioProvider.executeTool({
+      app: "canvas",
+      authScheme: "API_KEY",
+      emailAccountId: user,
+      tool: "CANVAS_GET_CURRENT_USER",
+      args: {},
+    });
+
+    expect(emulator.toolCalls.at(-1)?.connectedAccountId).toBe(newer.id);
+  });
+
+  it("asks the user to reconnect once Composio marks the connection expired", async () => {
+    const user = "expired-drive";
+    await composioProvider.getConnectionStatus({
+      app: "googledrive",
+      emailAccountId: user,
+    });
+    emulator.expireConnections(user);
+
+    await expect(
+      composioProvider.getConnectionStatus({
+        app: "googledrive",
+        emailAccountId: user,
+      }),
+    ).resolves.toBe("needs_reconnect");
+    await expect(
+      composioProvider.executeTool({
+        app: "googledrive",
+        emailAccountId: user,
+        tool: "GOOGLEDRIVE_FIND_FILE",
+        args: { q: "name contains 'x'" },
+      }),
+    ).rejects.toBeInstanceOf(ConnectionExpiredError);
+  });
+
+  it("asks the user to reconnect when the app revoked the token", async () => {
+    emulator.failTool("GOOGLEDRIVE_UPLOAD_FILE", "revoked");
+    try {
+      await expect(
+        composioProvider.executeTool({
+          app: "googledrive",
+          emailAccountId: "revoked-drive",
+          tool: "GOOGLEDRIVE_UPLOAD_FILE",
+          args: {},
+        }),
+      ).rejects.toBeInstanceOf(ConnectionExpiredError);
+    } finally {
+      emulator.failTool("GOOGLEDRIVE_UPLOAD_FILE", null);
+    }
   });
 });

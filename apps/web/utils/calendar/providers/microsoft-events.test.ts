@@ -555,10 +555,95 @@ describe("MicrosoftCalendarEventProvider all-day items", () => {
   });
 });
 
-function createProvider() {
+describe("MicrosoftCalendarEventProvider reading calendars", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    graphMocks.api.mockReturnValue({ query: graphMocks.query });
+    graphMocks.query.mockReturnValue({ top: graphMocks.top });
+    graphMocks.top.mockReturnValue({ orderby: graphMocks.orderby });
+    graphMocks.orderby.mockReturnValue({ get: graphMocks.get });
+  });
+
+  it("reads each selected calendar and keeps Graph's UTC times in UTC", async () => {
+    graphMocks.get
+      .mockResolvedValueOnce({
+        value: [
+          {
+            id: "a",
+            iCalUId: "standup",
+            subject: "Standup",
+            start: { dateTime: "2026-10-15T16:00:00.0000000" },
+            end: { dateTime: "2026-10-15T16:15:00.0000000" },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        value: [
+          {
+            id: "b",
+            iCalUId: "standup",
+            subject: "Standup",
+            start: { dateTime: "2026-10-15T16:00:00.0000000" },
+            end: { dateTime: "2026-10-15T16:15:00.0000000" },
+          },
+          {
+            id: "c",
+            subject: "Lab",
+            start: { dateTime: "2026-10-15T15:00:00.0000000" },
+            end: { dateTime: "2026-10-15T16:00:00.0000000" },
+          },
+        ],
+      });
+
+    const events = await createProvider({
+      calendarIds: ["cal-1", "cal-2"],
+    }).fetchEvents({
+      timeMin: new Date("2026-10-15T00:00:00Z"),
+      timeMax: new Date("2026-10-16T00:00:00Z"),
+    });
+
+    expect(graphMocks.api.mock.calls.map(([path]) => path)).toEqual([
+      "/me/calendars/cal-1/calendarView",
+      "/me/calendars/cal-2/calendarView",
+    ]);
+    expect(
+      events.map((event) => [event.title, event.startTime.toISOString()]),
+    ).toEqual([
+      ["Lab", "2026-10-15T15:00:00.000Z"],
+      ["Standup", "2026-10-15T16:00:00.000Z"],
+    ]);
+  });
+
+  it("keeps an all-day item on its own date", async () => {
+    graphMocks.get.mockResolvedValue({
+      value: [
+        {
+          id: "hw3",
+          subject: "HW 3 due",
+          isAllDay: true,
+          start: { dateTime: "2026-10-20T00:00:00.0000000" },
+          end: { dateTime: "2026-10-21T00:00:00.0000000" },
+        },
+      ],
+    });
+
+    const [event] = await createProvider().fetchEvents({
+      timeMin: new Date("2026-10-20T00:00:00Z"),
+    });
+
+    expect(event).toMatchObject({
+      allDay: true,
+      startTime: new Date("2026-10-20T00:00:00Z"),
+      endTime: new Date("2026-10-21T00:00:00Z"),
+    });
+  });
+});
+
+function createProvider({ calendarIds }: { calendarIds?: string[] } = {}) {
   return new MicrosoftCalendarEventProvider(
     {
       accessToken: "access-token",
+      calendarIds,
       emailAccountId: "email-account-id",
       expiresAt: null,
       refreshToken: "refresh-token",
