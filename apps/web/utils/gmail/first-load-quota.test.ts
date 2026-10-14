@@ -73,14 +73,14 @@ vi.mock("@/utils/gmail/quota-store", async () => {
 });
 vi.mock("@/utils/redis", () => ({ redis: memory.redis }));
 vi.mock("@/utils/calendar/fetch-events-in-window", () => ({
-  fetchCalendarEventsInWindow: async () => ({ events: [] }),
+  fetchCalendarEventsInWindow: async () => ({ events: [], complete: true }),
 }));
 vi.mock("@/utils/thread-context/connector-context", () => ({
-  fetchConnectorCandidates: async () => [],
+  fetchConnectorCandidates: async () => ({ candidates: [], complete: true }),
 }));
 vi.mock("@/utils/thread-context/linked-pages", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  fetchLinkedPages: async () => [],
+  fetchLinkedPages: async () => ({ candidates: [], complete: true }),
 }));
 vi.mock("@/utils/user/get", () => ({
   getEmailAccountWithAi: async () => null,

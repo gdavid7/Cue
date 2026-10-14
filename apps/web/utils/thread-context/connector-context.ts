@@ -36,7 +36,7 @@ type Search = {
  * connected them, that may relate to a thread or a question: files from Drive
  * and OneDrive, assignments from Canvas, messages from Slack. Each app is asked in its own way and turned into candidates the
  * ranker treats like emails and meetings; an app that fails or is slow is
- * left out.
+ * left out, and `complete` is false so the result is not kept.
  */
 export async function fetchConnectorCandidates({
   emailAccountId,
@@ -48,8 +48,9 @@ export async function fetchConnectorCandidates({
   emailAccountId: string;
   logger: Logger;
   now?: Date;
-}): Promise<ContextCandidate[]> {
-  if (!keywords.length) return [];
+}): Promise<{ candidates: ContextCandidate[]; complete: boolean }> {
+  if (!keywords.length) return { candidates: [], complete: true };
+  let complete = true;
   const connections = await prisma.mcpConnection
     .findMany({
       where: {
@@ -65,6 +66,7 @@ export async function fetchConnectorCandidates({
     })
     .catch((error) => {
       logger.warn("Failed to load connected apps", { error });
+      complete = false;
       return [];
     });
 
@@ -95,11 +97,12 @@ export async function fetchConnectorCandidates({
         );
       } catch (error) {
         logger.warn("Connected app search failed", { app: name, error });
+        complete = false;
         return [];
       }
     }),
   );
-  return results.flat();
+  return { candidates: results.flat(), complete };
 }
 
 const SOURCES: Record<

@@ -53,7 +53,7 @@ describe("fetchConnectorCandidates", () => {
           },
     );
 
-    const candidates = await fetchConnectorCandidates({
+    const { candidates } = await fetchConnectorCandidates({
       emailAccountId: "school",
       keywords: ["milestone"],
       logger,

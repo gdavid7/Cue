@@ -41,8 +41,9 @@ const SNIPPET_LENGTH = 180;
 // hides evidence the reply needs; the ranker still drops weak matches.
 const CONTEXT_LIMIT = 8;
 // The reader panel and the suggested reply both ask for the same thread's
-// context; a new message changes the key, so a cached result is never stale.
-const CONTEXT_CACHE_TTL_SECONDS = 60 * 60;
+// context. A new message in this thread changes the key, but related threads
+// and meetings change too, so the result is kept only for a few minutes.
+const CONTEXT_CACHE_TTL_SECONDS = 10 * 60;
 
 export type ThreadContextItem = {
   /** For emails, the thread id, so the panel can open that conversation. */
@@ -135,7 +136,10 @@ export async function collectThreadContext({
     )
     .slice(0, MAX_PARTICIPANTS);
 
-  const [peopleThreads, topicThreads, events, connectorItems, linkedPages] =
+  // Each source is optional, but a result missing one is not cached: the
+  // next open asks again instead of showing the gap for minutes.
+  let complete = true;
+  const [peopleThreads, topicThreads, events, connectors, linkedPages] =
     await Promise.all([
       mapWithConcurrency(participants, PARTICIPANT_CONCURRENCY, (p) =>
         emailProvider
@@ -146,10 +150,16 @@ export async function collectThreadContext({
           .catch((error) => {
             if (isGmailCallDeferredError(error)) throw error;
             logger.warn("Failed to fetch threads with participant", { error });
+            complete = false;
             return [];
           }),
       ),
-      findTopicThreads({ focus, emailProvider, logger }),
+      findTopicThreads({ focus, emailProvider }).catch((error) => {
+        if (isGmailCallDeferredError(error)) throw error;
+        logger.warn("Failed to search threads by topic", { error });
+        complete = false;
+        return [];
+      }),
       fetchCalendarEventsInWindow({
         emailAccountId,
         timeMin: addDays(now, -CALENDAR_WINDOW_DAYS),
@@ -157,9 +167,13 @@ export async function collectThreadContext({
         maxResultsPerProvider: 50,
         logger,
       })
-        .then((result) => result.events)
+        .then((result) => {
+          if (!result.complete) complete = false;
+          return result.events;
+        })
         .catch((error) => {
           logger.warn("Failed to fetch calendar events for context", { error });
+          complete = false;
           return [];
         }),
       fetchConnectorCandidates({
@@ -181,8 +195,8 @@ export async function collectThreadContext({
     candidates: [
       ...otherThreads.map(threadToCandidate),
       ...events.map(eventToCandidate),
-      ...connectorItems,
-      ...linkedPages,
+      ...connectors.candidates,
+      ...linkedPages.candidates,
     ],
     selfEmails: [userEmail],
     now: now.toISOString(),
@@ -200,36 +214,29 @@ export async function collectThreadContext({
     source: candidate.source,
     reasons,
   }));
-  await redis
-    .set(cacheKey, items, { ex: CONTEXT_CACHE_TTL_SECONDS })
-    .catch(() => null);
+  if (complete && connectors.complete && linkedPages.complete)
+    await redis
+      .set(cacheKey, items, { ex: CONTEXT_CACHE_TTL_SECONDS })
+      .catch(() => null);
   return { thread, items };
 }
 
 async function findTopicThreads({
   focus,
   emailProvider,
-  logger,
 }: {
   focus: FocusThread;
   emailProvider: EmailProvider;
-  logger: Logger;
 }): Promise<EmailThread[]> {
   const keywords = focusKeywords(focus, TOPIC_KEYWORDS);
   if (!keywords.length) return [];
-  try {
-    const { threads } = await emailProvider.searchThreads({
-      query: keywords.join(" OR "),
-      maxResults: TOPIC_THREADS,
-      // Headers and snippets are enough to rank, and much cheaper than bodies.
-      messageFormat: "metadata",
-    });
-    return threads;
-  } catch (error) {
-    if (isGmailCallDeferredError(error)) throw error;
-    logger.warn("Failed to search threads by topic", { error });
-    return [];
-  }
+  const { threads } = await emailProvider.searchThreads({
+    query: keywords.join(" OR "),
+    maxResults: TOPIC_THREADS,
+    // Headers and snippets are enough to rank, and much cheaper than bodies.
+    messageFormat: "metadata",
+  });
+  return threads;
 }
 
 function toFocus(thread: EmailThread): FocusThread {

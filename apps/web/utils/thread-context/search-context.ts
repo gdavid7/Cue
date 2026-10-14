@@ -67,7 +67,7 @@ export async function searchContext({
   const terms = queryTerms(query);
   if (!terms.length) return { results: [] };
 
-  const [hits, events, connectorItems] = await Promise.all([
+  const [hits, events, connectors] = await Promise.all([
     emailProvider
       .searchThreads({
         query: terms.join(" OR "),
@@ -126,7 +126,7 @@ export async function searchContext({
     candidates: [
       ...[...threads.values()].map(threadToCandidate),
       ...events.map(eventToCandidate),
-      ...connectorItems,
+      ...connectors.candidates,
     ],
     selfEmails: [userEmail],
     now: now.toISOString(),

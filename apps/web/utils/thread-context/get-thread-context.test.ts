@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestLogger, getMockMessage } from "@/__tests__/helpers";
 import { fetchCalendarEventsInWindow } from "@/utils/calendar/fetch-events-in-window";
 import type { EmailProvider, EmailThread } from "@/utils/email/types";
+import { redis } from "@/utils/redis";
+import { fetchConnectorCandidates } from "@/utils/thread-context/connector-context";
+import { fetchLinkedPages } from "@/utils/thread-context/linked-pages";
 import { getThreadContext } from "./get-thread-context";
 
 vi.mock("server-only", () => ({}));
@@ -10,6 +13,12 @@ vi.mock("@/utils/calendar/fetch-events-in-window", () => ({
 }));
 vi.mock("@/utils/redis", () => ({
   redis: { get: vi.fn(async () => null), set: vi.fn(async () => "OK") },
+}));
+vi.mock("@/utils/thread-context/connector-context", () => ({
+  fetchConnectorCandidates: vi.fn(),
+}));
+vi.mock("@/utils/thread-context/linked-pages", () => ({
+  fetchLinkedPages: vi.fn(),
 }));
 
 const USER = "david@example.com";
@@ -22,6 +31,97 @@ describe("getThreadContext", () => {
       events: [],
       complete: true,
     });
+    vi.mocked(fetchConnectorCandidates).mockResolvedValue({
+      candidates: [],
+      complete: true,
+    });
+    vi.mocked(fetchLinkedPages).mockResolvedValue({
+      candidates: [],
+      complete: true,
+    });
+  });
+
+  it("caches a complete result for minutes, not an hour", async () => {
+    await run(renewalProvider(), "renewal");
+
+    expect(redis.set).toHaveBeenCalledTimes(1);
+    const [, , options] = vi.mocked(redis.set).mock.calls[0]!;
+    expect((options as { ex: number }).ex).toBeLessThanOrEqual(10 * 60);
+  });
+
+  it("does not cache a result missing a source that failed", async () => {
+    const failures: Array<[string, () => void]> = [
+      [
+        "mail search",
+        () => {
+          const provider = renewalProvider();
+          vi.mocked(provider.searchThreads).mockRejectedValue(
+            new Error("search down"),
+          );
+          return provider;
+        },
+      ],
+      [
+        "threads with a participant",
+        () => {
+          const provider = renewalProvider();
+          vi.mocked(provider.getThreadsWithParticipant).mockRejectedValue(
+            new Error("down"),
+          );
+          return provider;
+        },
+      ],
+      [
+        "calendar error",
+        () => {
+          vi.mocked(fetchCalendarEventsInWindow).mockRejectedValueOnce(
+            new Error("calendar down"),
+          );
+          return renewalProvider();
+        },
+      ],
+      [
+        "calendar partly read",
+        () => {
+          vi.mocked(fetchCalendarEventsInWindow).mockResolvedValueOnce({
+            events: [],
+            complete: false,
+          });
+          return renewalProvider();
+        },
+      ],
+      [
+        "connected app",
+        () => {
+          vi.mocked(fetchConnectorCandidates).mockResolvedValueOnce({
+            candidates: [],
+            complete: false,
+          });
+          return renewalProvider();
+        },
+      ],
+      [
+        "linked page",
+        () => {
+          vi.mocked(fetchLinkedPages).mockResolvedValueOnce({
+            candidates: [],
+            complete: false,
+          });
+          return renewalProvider();
+        },
+      ],
+    ] as never;
+    for (const [source, setUp] of failures) {
+      vi.mocked(redis.set).mockClear();
+      const provider = setUp() as unknown as EmailProvider;
+
+      await run(provider, "renewal");
+
+      expect([source, vi.mocked(redis.set).mock.calls.length]).toEqual([
+        source,
+        0,
+      ]);
+    }
   });
 
   it("finds other conversations with the people on the thread, never the thread itself", async () => {
@@ -242,6 +342,31 @@ function run(emailProvider: EmailProvider, threadId: string) {
     emailProvider,
     logger: createTestLogger(),
     now: NOW,
+  });
+}
+
+function renewalProvider() {
+  return mockProvider({
+    threads: {
+      renewal: thread("renewal", [
+        message({
+          threadId: "renewal",
+          from: "Nora Patel <nora@northwind.com>",
+          subject: "Renewal terms",
+        }),
+      ]),
+    },
+    withParticipant: {
+      "nora@northwind.com": [
+        thread("pricing", [
+          message({
+            threadId: "pricing",
+            from: "Nora Patel <nora@northwind.com>",
+            subject: "Pricing sheet",
+          }),
+        ]),
+      ],
+    },
   });
 }
 

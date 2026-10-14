@@ -67,6 +67,7 @@ type LinkedPage = { title: string; text: string };
  * The public pages the latest message links to, read with Exa, as context
  * candidates: an event page, a job posting, a public doc. Cached by URL, so
  * each page is fetched about once a day however often the thread is opened.
+ * `complete` is false when a page could not be read this time.
  */
 export async function fetchLinkedPages({
   message,
@@ -74,14 +75,16 @@ export async function fetchLinkedPages({
 }: {
   message: ParsedMessage;
   logger: Logger;
-}): Promise<ContextCandidate[]> {
-  if (!isExaSearchEnabled()) return [];
+}): Promise<{ candidates: ContextCandidate[]; complete: boolean }> {
+  if (!isExaSearchEnabled()) return { candidates: [], complete: true };
   const urls = extractMainLinks(message);
   const at = new Date(getMessageTimestamp(message)).toISOString();
 
+  let complete = true;
   const pages = await Promise.all(
     urls.map(async (url) => {
       const page = await readPage(url, logger);
+      if (!page) complete = false;
       if (!page?.text) return null;
       const domain = domainOf(url);
       return {
@@ -96,7 +99,7 @@ export async function fetchLinkedPages({
       };
     }),
   );
-  return pages.filter((page) => page !== null);
+  return { candidates: pages.filter((page) => page !== null), complete };
 }
 
 /**
