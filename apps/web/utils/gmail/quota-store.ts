@@ -35,11 +35,13 @@ export type GmailQuotaStore = {
     field: string;
     amount: number;
   }): Promise<void>;
-  /** Returns the usage hash once per key: the first caller claims it. */
-  claimUsage(input: {
-    usageKey: string;
-    claimKey: string;
-  }): Promise<Record<string, number> | null>;
+  /**
+   * Returns each usage hash once: the first caller claims it. A hash already
+   * claimed, or with no usage, comes back as null.
+   */
+  claimUsages(
+    input: { usageKey: string; claimKey: string }[],
+  ): Promise<(Record<string, number> | null)[]>;
 };
 
 const takeScript = `
@@ -93,8 +95,15 @@ return 1
 `;
 
 const claimScript = `
-if not redis.call('SET', KEYS[2], '1', 'NX', 'PX', 300000) then return nil end
-return redis.call('HGETALL', KEYS[1])
+local claimed = {}
+for i = 1, #KEYS, 2 do
+  if redis.call('EXISTS', KEYS[i]) == 1 and redis.call('SET', KEYS[i + 1], '1', 'NX', 'PX', 300000) then
+    claimed[#claimed + 1] = redis.call('HGETALL', KEYS[i])
+  else
+    claimed[#claimed + 1] = {}
+  end
+end
+return claimed
 `;
 
 export const gmailQuotaStore: GmailQuotaStore = {
@@ -127,17 +136,20 @@ export const gmailQuotaStore: GmailQuotaStore = {
   async note({ usageKey, field, amount }) {
     await redis.eval(noteScript, [usageKey], [field, String(amount)]);
   },
-  async claimUsage({ usageKey, claimKey }) {
-    const flat = await redis.eval<string[], (string | number)[] | null>(
+  async claimUsages(input) {
+    const claimed = await redis.eval<string[], (string | number)[][] | null>(
       claimScript,
-      [usageKey, claimKey],
+      input.flatMap(({ usageKey, claimKey }) => [usageKey, claimKey]),
       [],
     );
-    if (!Array.isArray(flat)) return null;
-    const usage: Record<string, number> = {};
-    for (let i = 0; i + 1 < flat.length; i += 2) {
-      usage[String(flat[i])] = Number(flat[i + 1]) || 0;
-    }
-    return usage;
+    return input.map((_, index) => {
+      const flat = Array.isArray(claimed) ? claimed[index] : null;
+      if (!Array.isArray(flat) || flat.length === 0) return null;
+      const usage: Record<string, number> = {};
+      for (let i = 0; i + 1 < flat.length; i += 2) {
+        usage[String(flat[i])] = Number(flat[i + 1]) || 0;
+      }
+      return usage;
+    });
   },
 };

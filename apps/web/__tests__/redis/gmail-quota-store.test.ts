@@ -180,12 +180,20 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       });
       expect(await take({ cost: 40, floor: -200, usageField: "chat" })).toBe(0);
       const claim = () =>
-        gmailQuotaStore.claimUsage({
-          usageKey: keys.usage,
-          claimKey: `${keys.usage}:logged`,
-        });
-      expect(await claim()).toEqual({ "deferred:user/stats": 2, chat: 40 });
-      expect(await claim()).toBeNull();
+        gmailQuotaStore.claimUsages([
+          { usageKey: keys.usage, claimKey: `${keys.usage}:logged` },
+          {
+            usageKey: "gmail-quota:test:usage:2",
+            claimKey: "gmail-quota:test:usage:2:logged",
+          },
+        ]);
+      expect(await claim()).toEqual([
+        { "deferred:user/stats": 2, chat: 40 },
+        null,
+      ]);
+      expect(await claim()).toEqual([null, null]);
+      // A minute with no usage is not marked claimed.
+      expect(await redis!.exists("gmail-quota:test:usage:2:logged")).toBe(0);
     });
 
     it("runs the gate end to end: a first sync holds background work but not a thread open", async () => {

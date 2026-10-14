@@ -53,10 +53,13 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
       fields[field] = (fields[field] ?? 0) + amount;
       usage.set(usageKey, fields);
     },
-    async claimUsage({ usageKey, claimKey }) {
-      if (claimed.has(claimKey)) return null;
-      claimed.add(claimKey);
-      return usage.get(usageKey) ?? {};
+    async claimUsages(input) {
+      return input.map(({ usageKey, claimKey }) => {
+        const fields = usage.get(usageKey);
+        if (!fields || claimed.has(claimKey)) return null;
+        claimed.add(claimKey);
+        return { ...fields };
+      });
     },
     reset() {
       buckets.clear();
