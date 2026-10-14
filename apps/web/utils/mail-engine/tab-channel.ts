@@ -163,15 +163,23 @@ export function createTabFollowerClient(input: {
   provider?: "google" | "microsoft";
   bus: TabMailBus;
 }): MailClient {
+  // Each waiter keeps its request so a new owner can answer it. Commands
+  // carry their own ids, so the store admits a resent one only once.
   const pending = new Map<
     string,
-    { resolve: (value: unknown) => void; reject: (error: Error) => void }
+    {
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+      request?: TabMailMessage;
+    }
   >();
   const observations = new Map<
     string,
     {
       snapshot: QuerySnapshot<unknown>;
       listeners: Set<() => void>;
+      kind: WorkerObserveKind;
+      args: unknown[];
     }
   >();
   const announce = () =>
@@ -182,7 +190,22 @@ export function createTabFollowerClient(input: {
     });
   const unsubscribe = input.bus.subscribe((message) => {
     if (message.type === "ready") {
+      // A new owner took over (the previous owner tab closed). It knows none
+      // of this tab's views or the calls the old owner never answered.
       announce();
+      for (const [handleId, observation] of observations) {
+        input.bus.post({
+          type: "observe",
+          id: crypto.randomUUID(),
+          accountId: input.accountId,
+          handleId,
+          kind: observation.kind,
+          args: observation.args,
+        });
+      }
+      for (const waiter of pending.values()) {
+        if (waiter.request) input.bus.post(waiter.request);
+      }
       return;
     }
     if (message.type === "snapshot") {
@@ -212,27 +235,25 @@ export function createTabFollowerClient(input: {
 
   function call(method: string, args: unknown[]) {
     const id = crypto.randomUUID();
+    const request: TabMailMessage = {
+      type: "call",
+      id,
+      accountId: input.accountId,
+      method,
+      args,
+    };
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-      input.bus.post({
-        type: "call",
-        id,
-        accountId: input.accountId,
-        method,
-        args,
-      });
+      pending.set(id, { resolve, reject, request });
+      input.bus.post(request);
     });
   }
 
   function loadMoreRemote(handleId: string) {
     const id = crypto.randomUUID();
+    const request: TabMailMessage = { type: "loadMore", id, handleId };
     return new Promise<void>((resolve, reject) => {
-      pending.set(id, { resolve: () => resolve(), reject });
-      input.bus.post({
-        type: "loadMore",
-        id,
-        handleId,
-      });
+      pending.set(id, { resolve: () => resolve(), reject, request });
+      input.bus.post(request);
     });
   }
 
@@ -250,6 +271,8 @@ export function createTabFollowerClient(input: {
         error: null,
       } satisfies QuerySnapshot<unknown>,
       listeners: new Set<() => void>(),
+      kind,
+      args,
     };
     observations.set(handleId, observation);
     const id = crypto.randomUUID();

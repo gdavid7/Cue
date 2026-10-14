@@ -129,6 +129,49 @@ describe("mail engine tab channel", () => {
     });
   });
 
+  it("moves a follower's views and unanswered calls to the tab that takes over as owner", async () => {
+    const bus = createMemoryTabBus();
+    const firstOwner = stubClient({ matchingConversations: 1 });
+    const unbindFirst = bindTabMailOwner({ client: firstOwner, bus });
+    const follower = createTabFollowerClient({ accountId: "acc-1", bus });
+    const handle = follower.observeMailbox({
+      accountIds: ["acc-1"],
+      predicate: { kind: "role", role: "inbox" },
+      order: "newest_first",
+      pageSize: 25,
+      after: null,
+    });
+    await waitFor(() => handle.getSnapshot().status === "ready");
+    expect(handle.getSnapshot().data?.counts.matchingConversations).toBe(1);
+
+    // The owner tab closes; an archive sent meanwhile has no one to answer it.
+    unbindFirst();
+    const submitted: string[] = [];
+    const admission = follower.submitMetadata({
+      accountId: "acc-1",
+      commandId: "archive-during-handoff",
+      targets: [{ accountId: "acc-1", messageId: "m1" }],
+      change: { kind: "archive" },
+    });
+
+    bindTabMailOwner({
+      client: stubClient({
+        matchingConversations: 2,
+        onSubmit: (commandId) => submitted.push(commandId),
+      }),
+      bus,
+    });
+    bus.post({ type: "ready" });
+
+    await expect(admission).resolves.toMatchObject({ status: "queued" });
+    expect(submitted).toEqual(["archive-during-handoff"]);
+    await waitFor(
+      () => handle.getSnapshot().data?.counts.matchingConversations === 2,
+    );
+    expect(handle.getSnapshot().data?.counts.matchingConversations).toBe(2);
+    disposeTabFollowerClient(follower);
+  });
+
   it("does not ask the owner to release deferred sends while offline", async () => {
     const bus = createMemoryTabBus();
     const syncs: string[][] = [];
@@ -151,6 +194,7 @@ describe("mail engine tab channel", () => {
 function stubClient(input: {
   onSubmit?: (commandId: string) => void;
   onRequestSync?: (accountIds: string[]) => void;
+  matchingConversations?: number;
 }): MailClient {
   const snapshot: QuerySnapshot<{
     conversations: unknown[];
@@ -162,7 +206,10 @@ function stubClient(input: {
     revision: { databaseEpoch: "e", sequence: 1 },
     data: {
       conversations: [],
-      counts: { matchingConversations: 1, unreadConversations: 1 },
+      counts: {
+        matchingConversations: input.matchingConversations ?? 1,
+        unreadConversations: 1,
+      },
       coverage: [],
       nextPage: null,
     },
