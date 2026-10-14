@@ -12,21 +12,31 @@ import { runWithAuditContext } from "@/utils/audit/context";
 import { currentGmailQuotaContext } from "@/utils/gmail/quota";
 import { toolCallAgentStream } from "@/utils/llms";
 
+const {
+  mockIsIntegrationActionEnabledForUserId,
+  mockGetConnectedDriveApps,
+  mockHasUsableCalendarConnection,
+} = vi.hoisted(() => ({
+  mockIsIntegrationActionEnabledForUserId: vi.fn(async () => false),
+  mockGetConnectedDriveApps: vi.fn(async () => []),
+  mockHasUsableCalendarConnection: vi.fn(async () => true),
+}));
+
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/llms", () => ({ toolCallAgentStream: vi.fn() }));
 vi.mock("@/utils/integration-action.server", () => ({
-  isIntegrationActionEnabledForUserId: async () => false,
+  isIntegrationActionEnabledForUserId: mockIsIntegrationActionEnabledForUserId,
 }));
 vi.mock("@/utils/attachments/save-to-drive", () => ({
-  getConnectedDriveApps: async () => [],
+  getConnectedDriveApps: mockGetConnectedDriveApps,
 }));
 vi.mock("@/utils/exa/search", () => ({
   isExaSearchEnabled: () => true,
   searchExa: vi.fn(),
 }));
 vi.mock("@/utils/calendar/event-provider", () => ({
-  hasUsableCalendarConnection: async () => true,
+  hasUsableCalendarConnection: mockHasUsableCalendarConnection,
   createCalendarEventProviders: vi.fn(),
 }));
 vi.mock("@/utils/email/provider", () => ({ createEmailProvider: vi.fn() }));
@@ -284,5 +294,37 @@ describe("aiProcessAssistantChat tools", () => {
         }),
       );
     }
+  });
+});
+
+describe("aiProcessAssistantChat setup", () => {
+  it("runs its account lookups together before starting the model", async () => {
+    vi.clearAllMocks();
+    let finishIntegrationCheck: (enabled: boolean) => void = () => {};
+    mockIsIntegrationActionEnabledForUserId.mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        finishIntegrationCheck = resolve;
+      }),
+    );
+    vi.mocked(toolCallAgentStream).mockClear();
+    vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
+
+    const run = aiProcessAssistantChat({
+      messages: [{ role: "user", content: "what's new?" }],
+      emailAccountId: "email-account-id",
+      user: getEmailAccount(),
+      logger: createTestLogger(),
+    });
+
+    await vi.waitFor(() => {
+      expect(mockHasUsableCalendarConnection).toHaveBeenCalled();
+      expect(mockGetConnectedDriveApps).toHaveBeenCalled();
+    });
+    expect(toolCallAgentStream).not.toHaveBeenCalled();
+
+    finishIntegrationCheck(false);
+    await run;
+
+    expect(toolCallAgentStream).toHaveBeenCalledTimes(1);
   });
 });

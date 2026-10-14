@@ -136,37 +136,62 @@ export async function aiProcessAssistantChat({
   const draftReplyActionsEnabled = !env.NEXT_PUBLIC_AUTO_DRAFT_DISABLED;
   const webhookActionsEnabled =
     env.NEXT_PUBLIC_WEBHOOK_ACTION_ENABLED !== false;
-  const integrationActionsEnabled = await isIntegrationActionEnabledForUserId(
-    user.userId,
-  );
+  const hasConversationStatusInResults =
+    context?.type === "fix-rule"
+      ? context.results.some((result) =>
+          isConversationStatusType(result.systemType),
+        )
+      : false;
+  // Independent lookups that all gate the first model call, so run them
+  // together instead of paying for each round trip in turn.
+  const [
+    integrationActionsEnabled,
+    calendarConnection,
+    hasConnectedDrive,
+    freshRuleState,
+    expectedFixSystemType,
+  ] = await Promise.all([
+    isIntegrationActionEnabledForUserId(user.userId),
+    hasUsableCalendarConnection(emailAccountId).then(
+      (connected): CalendarConnectionStatus =>
+        connected ? { state: "connected" } : { state: "disconnected" },
+      (error): CalendarConnectionStatus => {
+        logger.error("Failed to check calendar connection for chat tools", {
+          error,
+        });
+        return { state: "failed", message: describeCalendarLookupError(error) };
+      },
+    ),
+    getConnectedDriveApps(emailAccountId).then(
+      (apps) => apps.length > 0,
+      (error) => {
+        logger.warn("Failed to check drive connections for chat tools", {
+          error,
+        });
+        return false;
+      },
+    ),
+    loadFreshRuleContext({
+      emailAccountId,
+      chatLastSeenRulesRevision,
+      chatHasHistory: chatHasHistory ?? false,
+    }).catch((error) => {
+      logger.warn("Failed to load fresh rule state for chat", { error });
+      return null;
+    }),
+    context && context.type === "fix-rule" && !hasConversationStatusInResults
+      ? getExpectedFixContextSystemTypeSafe({
+          context,
+          emailAccountId,
+          logger,
+        })
+      : null,
+  ]);
   let ruleReadState: RuleReadState | null = null;
   const pendingRuleDeletionNames = new Set<string>();
   const memoryConversationMessages = conversationMessagesForMemory ?? messages;
   const userTimezone = user.timezone || "UTC";
   const currentTimestamp = new Date().toISOString();
-  let calendarConnection: CalendarConnectionStatus;
-  try {
-    calendarConnection = (await hasUsableCalendarConnection(emailAccountId))
-      ? { state: "connected" }
-      : { state: "disconnected" };
-  } catch (error) {
-    logger.error("Failed to check calendar connection for chat tools", {
-      error,
-    });
-    calendarConnection = {
-      state: "failed",
-      message: describeCalendarLookupError(error),
-    };
-  }
-  const hasConnectedDrive = await getConnectedDriveApps(emailAccountId).then(
-    (apps) => apps.length > 0,
-    (error) => {
-      logger.warn("Failed to check drive connections for chat tools", {
-        error,
-      });
-      return false;
-    },
-  );
   const system = buildResolvedSystemPrompt({
     emailSendToolsEnabled,
     draftReplyActionsEnabled,
@@ -201,41 +226,15 @@ export async function aiProcessAssistantChat({
 
   let freshRuleContextMessage: ModelMessage[] = [];
 
-  try {
-    const freshRuleState = await loadFreshRuleContext({
-      emailAccountId,
-      chatLastSeenRulesRevision,
-      chatHasHistory: chatHasHistory ?? false,
-    });
-
-    if (freshRuleState) {
-      ruleReadState = freshRuleState.ruleReadState;
-      if (freshRuleState.hasNewRuleState) {
-        onRulesStateExposed?.(freshRuleState.snapshot.rulesRevision);
-        freshRuleContextMessage = [
-          buildFreshRuleContextMessage(freshRuleState.snapshot),
-        ];
-      }
+  if (freshRuleState) {
+    ruleReadState = freshRuleState.ruleReadState;
+    if (freshRuleState.hasNewRuleState) {
+      onRulesStateExposed?.(freshRuleState.snapshot.rulesRevision);
+      freshRuleContextMessage = [
+        buildFreshRuleContextMessage(freshRuleState.snapshot),
+      ];
     }
-  } catch (error) {
-    logger.warn("Failed to load fresh rule state for chat", { error });
   }
-
-  const hasConversationStatusInResults =
-    context?.type === "fix-rule"
-      ? context.results.some((result) =>
-          isConversationStatusType(result.systemType),
-        )
-      : false;
-
-  const expectedFixSystemType =
-    context && context.type === "fix-rule" && !hasConversationStatusInResults
-      ? await getExpectedFixContextSystemTypeSafe({
-          context,
-          emailAccountId,
-          logger,
-        })
-      : null;
 
   const isFirstMessage = messages.filter((m) => m.role === "user").length <= 1;
 
@@ -393,6 +392,8 @@ export async function aiProcessAssistantChat({
         modelId: step.model.modelId,
         stepDurationMs: now - lastStepEndedAt,
         elapsedMs: now - startedAt,
+        timeToFirstOutputMs: step.performance?.timeToFirstOutputMs,
+        modelResponseMs: step.performance?.responseTimeMs,
         finishReason: step.finishReason,
         toolNames: step.toolCalls.map((call) => call.toolName),
         inputTokens: step.usage?.inputTokens,

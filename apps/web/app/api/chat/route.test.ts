@@ -465,6 +465,39 @@ describe("chat route rule freshness persistence", () => {
     );
   });
 
+  it("fetches the inbox snapshot only for a conversation's first turn", async () => {
+    mockGetInboxStatsForChatContext.mockResolvedValue({ total: 10, unread: 2 });
+
+    await POST(createRequest());
+
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ inboxStats: { total: 10, unread: 2 } }),
+    );
+
+    mockGetInboxStatsForChatContext.mockClear();
+    prisma.chat.findUnique.mockResolvedValueOnce({
+      id: "chat-1",
+      emailAccountId: "email-account-id",
+      lastSeenRulesRevision: 2,
+      messages: [
+        {
+          id: "user-message-0",
+          role: "user",
+          parts: [{ type: "text", text: "Earlier question" }],
+          createdAt: new Date("2026-03-27T10:00:00.000Z"),
+        },
+      ],
+      compactions: [],
+    });
+
+    await POST(createRequest());
+
+    expect(mockGetInboxStatsForChatContext).not.toHaveBeenCalled();
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ inboxStats: null }),
+    );
+  });
+
   it("replays stored compactions as untrusted historical context", async () => {
     prisma.chat.findUnique.mockResolvedValueOnce({
       id: "chat-1",
