@@ -191,6 +191,8 @@ export function MailShell() {
   const [scopeLabelId, setScopeLabelId] = useQueryState("labelId");
   const [scopeFolderId, setScopeFolderId] = useQueryState("folderId");
   const [searchParam, setSearchParam] = useQueryState("q");
+  // Set by Today's rows, so closing the conversation goes back there.
+  const [openedFrom, setOpenedFrom] = useQueryState("from");
 
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [isDesktopApp, setIsDesktopApp] = useState(false);
@@ -1194,8 +1196,12 @@ export function MailShell() {
   );
 
   const closeReader = useCallback(() => {
+    if (openedFrom === "today") {
+      router.push(prefixPath(emailAccountId, "/home"));
+      return;
+    }
     setOpenThread(null);
-  }, [setOpenThread]);
+  }, [openedFrom, router, emailAccountId, setOpenThread]);
 
   const senderCommands =
     senderCommandContext?.emailAccountId ===
@@ -1304,7 +1310,11 @@ export function MailShell() {
         ? undefined
         : () => {
             if (selection.hasSelection) selection.clear();
-            if (layout === "list" && openThreadId) closeReader();
+            // Searching stays in Mail, even for a conversation opened from Today.
+            if (layout === "list" && openThreadId) {
+              setOpenedFrom(null);
+              setOpenThread(null);
+            }
             pendingSearchFocusRef.current = true;
             const input = searchInputRef.current;
             if (input) {
