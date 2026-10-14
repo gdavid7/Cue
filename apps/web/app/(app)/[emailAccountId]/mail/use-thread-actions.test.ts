@@ -193,6 +193,29 @@ describe("useThreadActions", () => {
       operationId: expect.any(String),
     });
   });
+
+  // Today lists conversations from the server, not the engine's views, so it
+  // needs to hear which rows an undo brought back.
+  it("acts on a conversation listed outside the mailbox and reports what undo restored", async () => {
+    const onRestored = vi.fn();
+    const { result } = renderHook(() =>
+      useThreadActions({
+        emailAccountId: "account",
+        threads: [{ id: "today-thread", messageIds: ["today-message"] }],
+        onRestored,
+      }),
+    );
+    await act(() => result.current.archive(["today-thread"]));
+    expect(mail.client.submitConversations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversations: [
+          { accountId: "account", conversationId: "today-thread" },
+        ],
+      }),
+    );
+    await act(() => result.current.undo());
+    expect(onRestored).toHaveBeenCalledWith(["today-thread"]);
+  });
 });
 
 function renderActions({

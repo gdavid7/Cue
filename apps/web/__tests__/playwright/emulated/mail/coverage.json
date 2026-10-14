@@ -1,4 +1,9 @@
 {
+  "today.spec.ts": [
+    "app/(app)/[emailAccountId]/home/HomeDashboard.tsx",
+    "app/(app)/[emailAccountId]/home/TodayThreadRow.tsx",
+    "utils/home/get-home.ts"
+  ],
   "account-selection.spec.ts": [
     "app/(app)/[emailAccountId]/mail/MailSidebar.tsx",
     "app/(app)/[emailAccountId]/mail/use-combined-mail-threads.ts"

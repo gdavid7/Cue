@@ -28,28 +28,32 @@ export function isCombinedListThread(
   return "account" in thread;
 }
 
-export function getListThreadKey(thread: ListThread) {
-  return isCombinedListThread(thread)
-    ? `${thread.account.id}:${thread.id}`
-    : thread.id;
+/**
+ * What thread actions need to know about a conversation, so a list outside the
+ * mailbox, such as Today, can use them. Only combined-inbox rows carry `account`.
+ */
+export type ActionableThread = {
+  id: string;
+  account?: { id: string };
+  messageIds?: string[];
+  messages?: Array<{ id: string }>;
+};
+
+export function getListThreadKey(thread: ActionableThread) {
+  return thread.account ? `${thread.account.id}:${thread.id}` : thread.id;
 }
 
-export function getListThreadMessageIds(thread: {
-  messageIds?: string[];
-  messages: Array<{ id: string }>;
-}) {
+export function getListThreadMessageIds(thread: ActionableThread) {
   return thread.messageIds?.length
     ? thread.messageIds
-    : thread.messages.map((message) => message.id);
+    : (thread.messages?.map((message) => message.id) ?? []);
 }
 
 export function getListThreadEmailAccountId(
-  thread: ListThread,
+  thread: ActionableThread,
   currentEmailAccountId: string,
 ) {
-  return isCombinedListThread(thread)
-    ? thread.account.id
-    : currentEmailAccountId;
+  return thread.account?.id ?? currentEmailAccountId;
 }
 
 export function getListThreadSelection(
