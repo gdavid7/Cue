@@ -18,6 +18,8 @@ import type { AddressInfo } from "node:net";
  * Tools enforce the argument rules the apps document where Cue has tripped on
  * them: Drive refuses to sort a full-text search, and Canvas lists only the
  * personal calendar unless it is given course context codes (at most 10).
+ * Other tools in COMPOSIO_TOOL_CATALOG answer with no data; any other slug is
+ * unknown, as a retired one is to Composio.
  *
  * Fidelity caveat: tool results are the shapes Cue's parsers read, seeded by
  * the caller, so this catches regressions in Cue's own code, not a misreading
@@ -25,6 +27,119 @@ import type { AddressInfo } from "node:net";
  */
 
 const DEFAULT_API_KEY = "emulator-composio-key";
+
+/**
+ * Read-only tool slugs Composio publishes for the apps Cue connects, checked
+ * by hand against docs.composio.dev/toolkits/<app> (2026-10-14). Composio
+ * renames and retires slugs, and a missing one silently drops the tool, so
+ * the registry's allowlists are tested against this snapshot.
+ */
+export const COMPOSIO_TOOL_CATALOG: Record<string, string[]> = {
+  airtable: [
+    "AIRTABLE_GET_BASE_SCHEMA",
+    "AIRTABLE_GET_RECORD",
+    "AIRTABLE_LIST_BASES",
+    "AIRTABLE_LIST_RECORDS",
+  ],
+  asana: [
+    "ASANA_GET_A_TASK",
+    "ASANA_GET_A_USER_TASK_LIST",
+    "ASANA_GET_MULTIPLE_WORKSPACES",
+    "ASANA_GET_TASKS_FOR_USER_TASK_LIST",
+    "ASANA_GET_TASKS_FROM_A_PROJECT",
+    "ASANA_GET_WORKSPACE_PROJECTS",
+    "ASANA_SEARCH_TASKS_IN_WORKSPACE",
+  ],
+  calendly: [
+    "CALENDLY_GET_EVENT",
+    "CALENDLY_GET_EVENT_INVITEE",
+    "CALENDLY_GET_USER",
+    "CALENDLY_LIST_EVENT_INVITEES",
+    "CALENDLY_LIST_SCHEDULED_EVENTS",
+  ],
+  canvas: [
+    "CANVAS_GET_ALL_ASSIGNMENTS",
+    "CANVAS_GET_CURRENT_USER",
+    "CANVAS_LIST_CALENDAR_EVENTS_FOR_USER",
+    "CANVAS_LIST_COURSES",
+    "CANVAS_LIST_DISCUSSION_TOPICS",
+  ],
+  clickup: [
+    "CLICKUP_GET_AUTHORIZED_TEAMS_WORKSPACES",
+    "CLICKUP_GET_FILTERED_TEAM_TASKS",
+    "CLICKUP_GET_TASK",
+    "CLICKUP_GET_TASK_COMMENTS",
+  ],
+  googledrive: ["GOOGLEDRIVE_FIND_FILE", "GOOGLEDRIVE_GET_FILE_METADATA"],
+  googlesheets: [
+    "GOOGLESHEETS_BATCH_GET",
+    "GOOGLESHEETS_GET_SPREADSHEET_INFO",
+    "GOOGLESHEETS_LOOKUP_SPREADSHEET_ROW",
+    "GOOGLESHEETS_SEARCH_SPREADSHEETS",
+  ],
+  hubspot: [
+    "HUBSPOT_GET_COMPANY",
+    "HUBSPOT_GET_DEAL",
+    "HUBSPOT_GET_TICKET",
+    "HUBSPOT_READ_CONTACT",
+    "HUBSPOT_SEARCH_COMPANIES",
+    "HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA",
+    "HUBSPOT_SEARCH_DEALS",
+    "HUBSPOT_SEARCH_TICKETS",
+  ],
+  jira: [
+    "JIRA_GET_ALL_PROJECTS",
+    "JIRA_GET_ISSUE",
+    "JIRA_LIST_ISSUE_COMMENTS",
+    "JIRA_SEARCH_ISSUES",
+  ],
+  microsoft_teams: [
+    "MICROSOFT_TEAMS_CHATS_GET_ALL_CHATS",
+    // Deprecated by Composio for LIST_USER_CHAT_MESSAGES, which documents
+    // only an id or UPN for the user, not "me"
+    "MICROSOFT_TEAMS_CHATS_GET_ALL_MESSAGES",
+    "MICROSOFT_TEAMS_GET_CHAT_MESSAGE",
+  ],
+  one_drive: [
+    "ONE_DRIVE_DOWNLOAD_FILE",
+    "ONE_DRIVE_GET_ITEM",
+    "ONE_DRIVE_SEARCH_ITEMS",
+  ],
+  quickbooks: [
+    "QUICKBOOKS_CUSTOMER_BALANCE_REPORT",
+    "QUICKBOOKS_QUERY_CUSTOMERS",
+    "QUICKBOOKS_QUERY_INVOICES",
+    "QUICKBOOKS_READ_CUSTOMER",
+  ],
+  salesforce: [
+    "SALESFORCE_GET_ACCOUNT",
+    "SALESFORCE_GET_CONTACT",
+    "SALESFORCE_GET_LEAD",
+    "SALESFORCE_GET_OPPORTUNITY",
+    "SALESFORCE_SEARCH_ACCOUNTS",
+    "SALESFORCE_SEARCH_CONTACTS",
+    "SALESFORCE_SEARCH_LEADS",
+    "SALESFORCE_SEARCH_OPPORTUNITIES",
+  ],
+  slack: [
+    "SLACK_FETCH_MESSAGE_THREAD_FROM_A_CONVERSATION",
+    "SLACK_FIND_CHANNELS",
+    "SLACK_FIND_USER_BY_EMAIL_ADDRESS",
+    "SLACK_SEARCH_MESSAGES",
+  ],
+  zendesk: [
+    "ZENDESK_GET_REQUEST_COMMENTS",
+    "ZENDESK_GET_REQUESTS_SEARCH",
+    "ZENDESK_GET_TICKET_COMMENTS",
+    "ZENDESK_GET_USERS_REQUESTED_TICKETS",
+    "ZENDESK_GET_USERS_REQUESTS",
+    "ZENDESK_GET_ZENDESK_ORGANIZATION",
+    "ZENDESK_GET_ZENDESK_TICKET_BY_ID",
+    "ZENDESK_SEARCH_ZENDESK",
+    "ZENDESK_SEARCH_ZENDESK_USERS",
+  ],
+};
+const CATALOGUED_TOOLS = new Set(Object.values(COMPOSIO_TOOL_CATALOG).flat());
 const CANVAS_USER_ID = 4211;
 const DRIVE_FOLDER = "application/vnd.google-apps.folder";
 
@@ -306,7 +421,9 @@ export async function createComposioEmulator(
 
     const toolMatch = /^\/tools\/execute\/([^/]+)$/.exec(path);
     if (toolMatch && method === "POST") {
-      const tool = tools[toolMatch[1]] as (typeof tools)[string] | undefined;
+      const tool =
+        (tools[toolMatch[1]] as (typeof tools)[string] | undefined) ??
+        (CATALOGUED_TOOLS.has(toolMatch[1]) ? () => ({}) : undefined);
       const connectedAccountId = String(body.connected_account_id);
       toolCalls.push({ tool: toolMatch[1], connectedAccountId });
       const account = accounts.get(connectedAccountId);
