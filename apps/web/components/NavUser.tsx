@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   CircleHelpIcon,
   ChevronsUpDownIcon,
+  KeyboardIcon,
   LightbulbIcon,
   ShieldCheckIcon,
   LogOutIcon,
@@ -19,6 +20,7 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -34,12 +36,19 @@ import { useCurrentOrganization } from "@/hooks/useCurrentOrganization";
 import { env } from "@/env";
 import { Referrals } from "@/components/ReferralDialog";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
+import { AccountSwitcherMenuItems } from "@/components/AccountSwitcher";
+import { Kbd } from "@/components/Kbd";
+import { getShortcutHint } from "@/lib/shortcuts/registry";
+import { shortcutsDialogOpenAtom } from "@/store/command-palette";
+import { useSetAtom } from "jotai";
 
 export function NavUser() {
   const { emailAccountId, emailAccount, provider } = useAccount();
   const { closeMobileSidebar, isMobile, state } = useSidebar();
   const [isReferralDialogOpen, setIsReferralDialogOpen] = useState(false);
   const { openSettings } = useSettingsDialog();
+  const setShortcutsOpen = useSetAtom(shortcutsDialogOpenAtom);
+  const accountName = emailAccount?.name || emailAccount?.email;
 
   const currentEmailAccountId = emailAccount?.id || emailAccountId;
   const organization = useCurrentOrganization();
@@ -54,6 +63,11 @@ export function NavUser() {
         <DropdownMenuTrigger asChild>
           <SidebarMenuButton
             size="lg"
+            aria-label={
+              accountName
+                ? `Account and settings, ${accountName}`
+                : "Account and settings"
+            }
             className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
           >
             <Avatar className="h-8 w-8 rounded-lg">
@@ -87,6 +101,17 @@ export function NavUser() {
           align={isExpandedSidebar ? "start" : "end"}
           sideOffset={4}
         >
+          {emailAccount ? (
+            <DropdownMenuLabel className="font-normal text-muted-foreground text-xs">
+              Signed in as{" "}
+              <span className="font-medium text-foreground">
+                {emailAccount.email}
+              </span>
+            </DropdownMenuLabel>
+          ) : null}
+          <AccountSwitcherMenuItems
+            onNavigate={() => closeMobileSidebar("left-sidebar")}
+          />
           <DropdownMenuGroup>
             <DropdownMenuItem
               onSelect={() => {
@@ -181,6 +206,13 @@ export function NavUser() {
                 Help Center
               </Link>
             </DropdownMenuItem>
+            {isMobile ? null : (
+              <DropdownMenuItem onSelect={() => setShortcutsOpen(true)}>
+                <KeyboardIcon className="mr-2 size-4" />
+                Keyboard shortcuts
+                <Kbd className="ml-auto">{getShortcutHint("help")}</Kbd>
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem asChild>
               <Link
                 href="/feature-requests"

@@ -64,7 +64,7 @@ export type ThreadListProps = {
 
 export const ThreadList = memo(function ThreadList({
   threads,
-  emptyMessage = "No emails in this view",
+  emptyMessage = "Nothing here right now.",
   layout,
   expandedPreview,
   userEmail,

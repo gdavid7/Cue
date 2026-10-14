@@ -319,6 +319,42 @@ describe("useShortcuts", () => {
     expect(star).not.toHaveBeenCalled();
   });
 
+  it("runs each go-to sequence while every other sequence is bound too", () => {
+    // The mail screen binds all of these at once; a single shared sequence
+    // buffer used to let only one of them ever complete.
+    const handlers = {
+      goToInbox: vi.fn(),
+      goToStarred: vi.fn(),
+      goToSent: vi.fn(),
+      goToDrafts: vi.fn(),
+      goToAllMail: vi.fn(),
+      openExternal: vi.fn(),
+      star: vi.fn(),
+      replyAll: vi.fn(),
+    };
+    renderShortcuts(handlers);
+
+    for (const [key, code] of [
+      ["s", "KeyS"],
+      ["t", "KeyT"],
+      ["d", "KeyD"],
+      ["a", "KeyA"],
+      ["i", "KeyI"],
+    ]) {
+      press({ key: "g", code: "KeyG" });
+      press({ key, code });
+    }
+
+    expect(handlers.goToStarred).toHaveBeenCalledOnce();
+    expect(handlers.goToSent).toHaveBeenCalledOnce();
+    expect(handlers.goToDrafts).toHaveBeenCalledOnce();
+    expect(handlers.goToAllMail).toHaveBeenCalledOnce();
+    expect(handlers.goToInbox).toHaveBeenCalledOnce();
+    expect(handlers.star).not.toHaveBeenCalled();
+    expect(handlers.replyAll).not.toHaveBeenCalled();
+    expect(handlers.openExternal).not.toHaveBeenCalled();
+  });
+
   it("marks as read with shift+I", () => {
     const markRead = vi.fn();
     renderShortcuts({ markRead });

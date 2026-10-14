@@ -3,51 +3,73 @@
 import { useMemo } from "react";
 import { useRouter } from "next/navigation";
 import {
-  HomeIcon,
-  SparklesIcon,
+  LogOutIcon,
   BarChartBigIcon,
   SettingsIcon,
+  SlidersHorizontalIcon,
   UserIcon,
   ScrollTextIcon,
   UsersIcon,
   ShieldCheckIcon,
-  CalendarIcon,
-  FileTextIcon,
-  BrushIcon,
-  ZapIcon,
-  InboxIcon,
-  MailsIcon,
 } from "lucide-react";
 import type { Command } from "@/lib/commands/types";
+import { useNavigation } from "@/components/SideNav";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { useRules } from "@/hooks/useRules";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { prefixPath } from "@/utils/path";
-import {
-  useCleanerEnabled,
-  useIntegrationsEnabled,
-  useMeetingBriefsEnabled,
-} from "@/hooks/useFeatureFlags";
 import { isGoogleProvider } from "@/utils/email/provider-types";
+import { logOut } from "@/utils/user";
 
+/**
+ * The palette's places and settings. Navigation comes from `useNavigation`,
+ * the same list the sidebars draw, so the three can't drift apart.
+ */
 export function useCommandPaletteCommands({
-  enabled = true,
+  includeRules = true,
 }: {
-  enabled?: boolean;
+  /** Off while mail actions lead the palette: rules would bury them. */
+  includeRules?: boolean;
 } = {}) {
   const router = useRouter();
   const { openSettings } = useSettingsDialog();
   const { emailAccountId, provider } = useAccount();
+  const { manageItems, toolsItems } = useNavigation();
   const { data: rulesData, isLoading: rulesLoading } = useRules(
     undefined,
-    enabled,
+    includeRules,
   );
-  const showCleaner = useCleanerEnabled();
-  const showMeetingBriefs = useMeetingBriefsEnabled();
-  const showIntegrations = useIntegrationsEnabled();
 
   const commands = useMemo<Command[]>(() => {
-    const generalSettingsCommands: Command[] = [
+    const navigationItems = [
+      ...manageItems,
+      ...toolsItems,
+      // Lives in the account menu rather than the sidebar, for the provider
+      // whose rule it wraps.
+      ...(isGoogleProvider(provider)
+        ? [
+            {
+              name: "Cold Email Blocker",
+              href: prefixPath(emailAccountId, "/cold-email-blocker"),
+              icon: ShieldCheckIcon,
+              keywords: ["block", "cold", "spam", "filter"],
+            },
+          ]
+        : []),
+    ];
+    const navigationCommands: Command[] = navigationItems.map(
+      (item, index) => ({
+        id: `nav-${item.name.toLowerCase().replace(/[^a-z]+/g, "-")}`,
+        label: `Go to ${item.name}`,
+        icon: item.icon,
+        section: "navigation",
+        priority: index + 10,
+        keywords: [item.name.toLowerCase(), ...(item.keywords ?? [])],
+        action: () => router.push(item.href),
+      }),
+    );
+
+    const settingsCommands: Command[] = [
       {
         id: "settings-general",
         label: "Settings",
@@ -60,106 +82,23 @@ export function useCommandPaletteCommands({
           openSettings();
         },
       },
-    ];
-    if (!enabled) return generalSettingsCommands;
-
-    const navigationItems = [
       {
-        name: "Inbox",
-        href: prefixPath(emailAccountId, "/mail"),
-        icon: InboxIcon,
-        keywords: ["mail", "inbox", "email"],
-      },
-      {
-        name: "Today",
-        href: prefixPath(emailAccountId, "/home"),
-        icon: HomeIcon,
-        keywords: ["home", "today", "dashboard"],
-      },
-      {
-        name: "Rules",
-        href: prefixPath(emailAccountId, "/automation"),
-        icon: SparklesIcon,
-        keywords: ["ai", "assistant", "rules", "auto"],
-      },
-      {
-        name: "Bulk Unsubscribe",
-        href: prefixPath(emailAccountId, "/bulk-unsubscribe"),
-        icon: MailsIcon,
-        keywords: ["unsubscribe", "newsletters", "spam"],
-      },
-      {
-        name: "Analytics",
-        href: prefixPath(emailAccountId, "/stats"),
-        icon: BarChartBigIcon,
-        keywords: ["statistics", "charts", "data"],
-      },
-      {
-        name: "Calendars",
-        href: prefixPath(emailAccountId, "/calendars"),
-        icon: CalendarIcon,
-        keywords: ["calendar", "scheduling", "meetings"],
-      },
-      ...(showIntegrations
-        ? [
-            {
-              name: "Integrations",
-              href: prefixPath(emailAccountId, "/integrations"),
-              icon: ZapIcon,
-              keywords: ["integrations", "apps", "connect"],
-            },
-          ]
-        : []),
-      ...(showMeetingBriefs
-        ? [
-            {
-              name: "Meeting Briefs",
-              href: prefixPath(emailAccountId, "/briefs"),
-              icon: FileTextIcon,
-              keywords: ["briefs", "meeting", "summaries"],
-            },
-          ]
-        : []),
-      ...(isGoogleProvider(provider) && showCleaner
-        ? [
-            {
-              name: "Deep Clean",
-              href: prefixPath(emailAccountId, "/clean"),
-              icon: BrushIcon,
-              keywords: ["clean", "organize", "tidy"],
-            },
-          ]
-        : []),
-      {
-        name: "Cold Email Blocker",
-        href: prefixPath(emailAccountId, "/cold-email-blocker"),
-        icon: ShieldCheckIcon,
-        keywords: ["block", "cold", "spam", "filter"],
-      },
-    ];
-    const navigationCommands: Command[] = navigationItems.map(
-      (item, index) => ({
-        id: `nav-${item.name.toLowerCase().replace(/\s+/g, "-")}`,
-        label: `Go to ${item.name}`,
-        icon: item.icon,
-        section: "navigation",
-        priority: index + 10,
-        keywords: [item.name.toLowerCase(), ...item.keywords],
-        action: () => router.push(item.href),
-      }),
-    );
-
-    const settingsCommands: Command[] = [
-      {
-        id: "settings-assistant",
-        label: "Assistant Settings",
-        description: "Configure AI assistant behavior",
-        icon: SparklesIcon,
+        id: "settings-rules",
+        label: "Rules settings",
+        description: "Signature, snippets and writing style",
+        icon: SlidersHorizontalIcon,
         section: "settings",
         priority: 2,
-        keywords: ["ai", "assistant", "automation"],
+        keywords: [
+          "ai",
+          "assistant",
+          "automation",
+          "signature",
+          "snippets",
+          "writing style",
+        ],
         action: () =>
-          router.push(prefixPath(emailAccountId, "/assistant/settings")),
+          router.push(prefixPath(emailAccountId, "/automation?tab=settings")),
       },
       {
         id: "settings-usage",
@@ -191,40 +130,47 @@ export function useCommandPaletteCommands({
         keywords: ["accounts", "email", "switch"],
         action: () => router.push("/accounts"),
       },
+      {
+        id: "sign-out",
+        label: "Sign out",
+        icon: LogOutIcon,
+        section: "settings",
+        priority: 6,
+        keywords: ["log out", "logout", "sign out", "exit"],
+        action: () => logOut(window.location.origin),
+      },
     ];
 
-    const ruleCommands: Command[] = (rulesData ?? []).map((rule, index) => ({
-      id: `rule-${rule.id}`,
-      label: rule.name,
-      description: rule.instructions || "View rule",
-      icon: ScrollTextIcon,
-      section: "rules" as const,
-      priority: index + 1,
-      keywords: ["rule", rule.name.toLowerCase()],
-      action: () =>
-        router.push(prefixPath(emailAccountId, `/assistant/rule/${rule.id}`)),
-    }));
+    const ruleCommands: Command[] = includeRules
+      ? (rulesData ?? []).map((rule, index) => ({
+          id: `rule-${rule.id}`,
+          label: rule.name,
+          description: rule.instructions || "View rule",
+          icon: ScrollTextIcon,
+          section: "rules" as const,
+          priority: index + 1,
+          keywords: ["rule", rule.name.toLowerCase()],
+          action: () =>
+            router.push(
+              prefixPath(emailAccountId, `/assistant/rule/${rule.id}`),
+            ),
+        }))
+      : [];
 
-    return [
-      ...navigationCommands,
-      ...generalSettingsCommands,
-      ...settingsCommands,
-      ...ruleCommands,
-    ];
+    return [...navigationCommands, ...settingsCommands, ...ruleCommands];
   }, [
     emailAccountId,
-    enabled,
-    provider,
+    includeRules,
+    manageItems,
     openSettings,
+    provider,
     router,
     rulesData,
-    showCleaner,
-    showIntegrations,
-    showMeetingBriefs,
+    toolsItems,
   ]);
 
   return {
     commands,
-    isLoading: enabled && rulesLoading,
+    isLoading: includeRules && rulesLoading,
   };
 }

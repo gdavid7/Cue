@@ -25,7 +25,6 @@ import {
   StarIcon,
   StarOffIcon,
   TagIcon,
-  TextIcon,
   Trash2Icon,
   XIcon,
 } from "lucide-react";
@@ -45,6 +44,18 @@ import { parseMailSearchQuery } from "@/app/(app)/[emailAccountId]/mail/mail-sea
 import { parseOutlookSearchQuery } from "@/app/(app)/[emailAccountId]/mail/outlook-search-query";
 import type { MailLayoutMode } from "@/app/(app)/[emailAccountId]/mail/types";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { getShortcutHint } from "@/lib/shortcuts/registry";
 import { Tooltip } from "@/components/Tooltip";
 import {
   Popover,
@@ -58,6 +69,8 @@ import { cn } from "@/utils";
 export type ListToolbarProps = {
   layout: MailLayoutMode;
   isDesktopApp: boolean;
+  /** Names the view when it isn't the inbox, e.g. "Sent" or "Search results". */
+  viewTitle?: string | null;
   showLayoutToggle?: boolean;
   expandedPreview: boolean;
   /** Committed search query. */
@@ -95,6 +108,7 @@ export type ListToolbarProps = {
 export const ListToolbar = memo(function ListToolbar({
   layout,
   isDesktopApp,
+  viewTitle,
   showLayoutToggle = true,
   expandedPreview,
   searchQuery = "",
@@ -127,6 +141,11 @@ export const ListToolbar = memo(function ListToolbar({
     <MailListToolbarSurface>
       <MailTitlebarNav showHistory={isDesktopApp} />
       {selectAll}
+      {viewTitle && selectedCount === 0 ? (
+        <h1 className="max-w-[40%] shrink-0 truncate font-semibold text-sm">
+          {viewTitle}
+        </h1>
+      ) : null}
 
       {/* Selection swaps the toolbar's controls in place so the list never
           shifts down to make room for a new row. */}
@@ -143,7 +162,7 @@ export const ListToolbar = memo(function ListToolbar({
                 type="button"
                 onClick={onMoveToInboxSelected}
                 aria-label="Move to inbox"
-                className={cn(toolbarButton, "w-8 justify-center px-0")}
+                className={selectionButton}
               >
                 <ArchiveRestoreIcon className="size-3.5" />
               </button>
@@ -154,7 +173,7 @@ export const ListToolbar = memo(function ListToolbar({
                 type="button"
                 onClick={onArchiveSelected}
                 aria-label="Archive"
-                className={cn(toolbarButton, "w-8 justify-center px-0")}
+                className={selectionButton}
               >
                 <ArchiveIcon className="size-3.5" />
               </button>
@@ -171,7 +190,7 @@ export const ListToolbar = memo(function ListToolbar({
                 isUnreadSelected ? onMarkReadSelected : onMarkUnreadSelected
               }
               aria-label={isUnreadSelected ? "Mark as read" : "Mark as unread"}
-              className={cn(toolbarButton, "w-8 justify-center px-0")}
+              className={selectionButton}
             >
               {isUnreadSelected ? (
                 <MailOpenIcon className="size-3.5" />
@@ -186,7 +205,7 @@ export const ListToolbar = memo(function ListToolbar({
               type="button"
               onClick={onStarSelected}
               aria-label={isStarredSelected ? "Unstar" : "Star"}
-              className={cn(toolbarButton, "w-8 justify-center px-0")}
+              className={selectionButton}
             >
               {isStarredSelected ? (
                 <StarOffIcon className="size-3.5" />
@@ -202,8 +221,8 @@ export const ListToolbar = memo(function ListToolbar({
               onClick={onDeleteSelected}
               aria-label="Delete"
               className={cn(
-                toolbarButton,
-                "w-8 justify-center px-0 hover:bg-destructive/10 hover:text-destructive",
+                selectionButton,
+                "hover:bg-destructive/10 hover:text-destructive",
               )}
             >
               <Trash2Icon className="size-3.5" />
@@ -216,7 +235,7 @@ export const ListToolbar = memo(function ListToolbar({
                 type="button"
                 onClick={onLabelSelected}
                 aria-label="Label"
-                className={cn(toolbarButton, "w-8 justify-center px-0")}
+                className={selectionButton}
               >
                 <TagIcon className="size-3.5" />
               </button>
@@ -228,7 +247,7 @@ export const ListToolbar = memo(function ListToolbar({
               type="button"
               onClick={onClearSelection}
               aria-label="Clear selection"
-              className={cn(toolbarButton, "w-8 justify-center px-0")}
+              className={selectionButton}
             >
               <XIcon className="size-3.5" />
             </button>
@@ -249,62 +268,81 @@ export const ListToolbar = memo(function ListToolbar({
         />
       )}
 
+      {/* How the list looks is a desk-sized choice: phones always get the
+          plain list, so the menu stays out of their way. */}
       {selectedCount === 0 ? (
-        <Tooltip
-          shortcuts={[
-            {
-              id: "togglePreview",
-              label: expandedPreview
-                ? "Shorten preview text"
-                : "Expand preview text",
-            },
-          ]}
-        >
-          <button
-            type="button"
-            onClick={onTogglePreview}
-            aria-label="Expand or shorten preview text"
-            aria-pressed={expandedPreview}
-            className={cn(
-              toolbarButton,
-              "w-8 justify-center px-0",
-              expandedPreview && "bg-muted text-foreground",
-            )}
-          >
-            <TextIcon className="size-3.5" />
-          </button>
-        </Tooltip>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              aria-label="View options"
+              className="hidden h-8 gap-1.5 px-2 text-muted-foreground lg:inline-flex"
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              <LayoutIcon className="size-3.5" />
+              {layout === "list" ? "View" : null}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-52">
+            <DropdownMenuCheckboxItem
+              checked={expandedPreview}
+              onCheckedChange={onTogglePreview}
+            >
+              Longer previews
+              <DropdownMenuShortcut>
+                {getShortcutHint("togglePreview")}
+              </DropdownMenuShortcut>
+            </DropdownMenuCheckboxItem>
+            {showLayoutToggle ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel className="font-normal text-muted-foreground text-xs">
+                  Layout
+                </DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={layout}
+                  onValueChange={(value) => {
+                    if (value !== layout) onToggleLayout();
+                  }}
+                >
+                  <DropdownMenuRadioItem value="list">
+                    List
+                    <DropdownMenuShortcut>
+                      {layout === "split"
+                        ? getShortcutHint("toggleLayout")
+                        : null}
+                    </DropdownMenuShortcut>
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="split">
+                    Split
+                    <DropdownMenuShortcut>
+                      {layout === "list"
+                        ? getShortcutHint("toggleLayout")
+                        : null}
+                    </DropdownMenuShortcut>
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
       ) : null}
 
-      {showLayoutToggle && selectedCount === 0 ? (
-        <Tooltip
-          shortcuts={[
-            { id: "toggleLayout", label: "Switch list / split view" },
-          ]}
-        >
-          <button
-            type="button"
-            onClick={onToggleLayout}
-            aria-label="Switch list or split view"
-            className={cn(toolbarButton, "w-8 justify-center px-0")}
-          >
-            <LayoutIcon className="size-3.5" />
-          </button>
-        </Tooltip>
-      ) : null}
-
       {selectedCount === 0 ? (
-        <Tooltip content="Chat with Cue">
-          <Button
-            aria-label="Chat with Cue"
-            onClick={onToggleAssistant}
-            size="iconSm"
-            type="button"
-            variant="ghostMuted"
-          >
-            <SparklesIcon className="size-3.5" />
-          </Button>
-        </Tooltip>
+        <Button
+          aria-label="Ask Cue"
+          className="h-8 gap-1.5 px-2 text-muted-foreground max-sm:w-8 max-sm:px-0"
+          onClick={onToggleAssistant}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          <SparklesIcon className="size-3.5" />
+          {layout === "list" ? (
+            <span className="max-sm:sr-only">Ask Cue</span>
+          ) : null}
+        </Button>
       ) : null}
     </MailListToolbarSurface>
   );
@@ -554,3 +592,9 @@ function AdvancedSearchForm({
 
 const toolbarButton =
   "flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-background px-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+// Touch-sized below `lg`, where selection is how a phone triages.
+const selectionButton = cn(
+  toolbarButton,
+  "w-8 justify-center px-0 max-lg:size-11",
+);

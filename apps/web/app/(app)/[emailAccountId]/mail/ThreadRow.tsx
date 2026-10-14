@@ -1,7 +1,14 @@
 "use client";
 
 import { PaperclipIcon } from "lucide-react";
-import { memo, useMemo, type Ref } from "react";
+import {
+  memo,
+  type MouseEvent,
+  type PointerEvent,
+  type Ref,
+  useMemo,
+  useRef,
+} from "react";
 import { MailThreadRow } from "@inboxzero/mail-ui/MailThreadRow";
 import { isThreadStarred } from "@/app/(app)/[emailAccountId]/mail/star-state";
 import { MailLabelChip } from "@/app/(app)/[emailAccountId]/mail/MailLabelChip";
@@ -115,6 +122,10 @@ export const ThreadRow = memo(function ThreadRow({
     [thread.messages, thread.participantMessages, accountEmail],
   );
 
+  const longPress = useLongPressToSelect(() => {
+    if (selectionEnabled) onToggleSelect(index);
+  });
+
   const insight = useMemo(
     () =>
       composeInsight({
@@ -141,96 +152,105 @@ export const ThreadRow = memo(function ThreadRow({
   );
 
   return (
-    <MailThreadRow
-      accountAvatar={
-        account ? (
-          <AccountMarker
-            account={account}
-            colorClassName={accountColorClassName}
-          />
-        ) : null
-      }
-      compact={compact}
-      date={
-        <div className="relative flex items-center justify-end">
-          <div
-            className={cn(
-              "flex items-center justify-end gap-1.5",
-              showActions && "group-hover:invisible",
-            )}
-          >
-            {thread.hasAttachments ? (
-              <PaperclipIcon
-                aria-label="Has attachments"
-                className="size-3.5 shrink-0 text-muted-foreground"
-              />
-            ) : null}
-            {sentMessageOpen ? (
-              <SentMessageOpenStatus compact open={sentMessageOpen} />
-            ) : null}
-            <EmailDate
-              className="font-normal text-xs"
-              date={internalDateToDate(message.internalDate)}
+    // Touch has no hover or Shift, so holding a row selects it, as in the
+    // platform mail apps. `contents` keeps the row the listbox's own child.
+    <div className="contents" {...longPress}>
+      <MailThreadRow
+        accountAvatar={
+          account ? (
+            <AccountMarker
+              account={account}
+              colorClassName={accountColorClassName}
             />
-          </div>
-          {showActions && rowActions ? (
-            <div className="-translate-y-1/2 absolute top-1/2 right-0 hidden rounded-md bg-background shadow-sm group-hover:flex">
-              <ThreadRowActions
-                handlers={rowActions}
-                isArchived={isThreadArchived(thread.messages)}
-                isStarred={isThreadStarred(thread.messages)}
-                isUnread={isThreadUnread(thread.messages)}
-                threadKey={getListThreadKey(thread)}
+          ) : null
+        }
+        compact={compact}
+        date={
+          <div className="relative flex items-center justify-end">
+            <div
+              className={cn(
+                "flex items-center justify-end gap-1.5",
+                showActions && "group-hover:invisible",
+              )}
+            >
+              {thread.hasAttachments ? (
+                <PaperclipIcon
+                  aria-label="Has attachments"
+                  className="size-3.5 shrink-0 text-muted-foreground"
+                />
+              ) : null}
+              {sentMessageOpen ? (
+                <SentMessageOpenStatus compact open={sentMessageOpen} />
+              ) : null}
+              <EmailDate
+                className="font-normal text-xs"
+                date={internalDateToDate(message.internalDate)}
               />
             </div>
-          ) : null}
-        </div>
-      }
-      expandedPreview={expandedPreview}
-      hasAnySelection={hasAnySelection}
-      index={index}
-      insight={insight ? <InsightText line={insight} /> : null}
-      isDraft={isDraft}
-      isFocused={isFocused}
-      isSelected={isSelected}
-      isStarred={isThreadStarred(thread.messages)}
-      isUnread={isThreadUnread(thread.messages)}
-      labels={chips.map((label) => (
-        <MailLabelChip color={label.color} key={label.id} name={label.name} />
-      ))}
-      layout={layout}
-      messageCount={thread.messages.length}
-      onOpen={onOpen}
-      onSelectRangeTo={onSelectRangeTo}
-      onToggleSelect={onToggleSelect}
-      participantSummary={participantSummary}
-      renderSelectionControl={({ ariaLabel, checked, onClick, visible }) => (
-        // Opening above would cover the select-all checkbox for the first row.
-        <Tooltip shortcuts={["select"]} side="right">
-          <Checkbox
-            aria-label={ariaLabel}
-            checked={checked}
-            className={cn(
-              mailCheckboxClassName,
-              "transition-opacity",
-              visible
-                ? "opacity-100"
-                : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100",
-            )}
-            onClick={onClick}
-          />
-        </Tooltip>
-      )}
-      rowRef={rowRef}
-      selectionEnabled={selectionEnabled}
-      snippet={decodeSnippet(
-        // The provider's thread snippet follows the newest message, a draft too.
-        isDraft
-          ? message.snippet || thread.snippet
-          : thread.snippet || message.snippet,
-      )}
-      subject={message.headers.subject}
-    />
+            {showActions && rowActions ? (
+              <div className="-translate-y-1/2 absolute top-1/2 right-0 hidden rounded-md bg-background shadow-sm group-hover:flex">
+                <ThreadRowActions
+                  handlers={rowActions}
+                  isArchived={isThreadArchived(thread.messages)}
+                  isStarred={isThreadStarred(thread.messages)}
+                  isUnread={isThreadUnread(thread.messages)}
+                  threadKey={getListThreadKey(thread)}
+                />
+              </div>
+            ) : null}
+          </div>
+        }
+        expandedPreview={expandedPreview}
+        hasAnySelection={hasAnySelection}
+        index={index}
+        insight={insight ? <InsightText line={insight} /> : null}
+        isDraft={isDraft}
+        isFocused={isFocused}
+        isSelected={isSelected}
+        isStarred={isThreadStarred(thread.messages)}
+        isUnread={isThreadUnread(thread.messages)}
+        labels={chips.map((label) => (
+          <MailLabelChip color={label.color} key={label.id} name={label.name} />
+        ))}
+        layout={layout}
+        messageCount={thread.messages.length}
+        onOpen={onOpen}
+        onSelectRangeTo={onSelectRangeTo}
+        onToggleSelect={onToggleSelect}
+        participantSummary={participantSummary}
+        renderSelectionControl={({ ariaLabel, checked, onClick, visible }) => (
+          // Opening above would cover the select-all checkbox for the first row.
+          <Tooltip shortcuts={["select"]} side="right">
+            <Checkbox
+              aria-label={ariaLabel}
+              checked={checked}
+              className={cn(
+                mailCheckboxClassName,
+                // Below `lg` there's no hover to reveal it, and a finger needs
+                // a 44px target around the small box.
+                "relative transition-opacity max-lg:before:absolute max-lg:before:-inset-[15px] max-lg:before:content-['']",
+                visible
+                  ? "opacity-100"
+                  : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 max-lg:opacity-100",
+              )}
+              onClick={onClick}
+              // The listbox moves focus between rows; `x` and Shift+click select,
+              // so a tab stop per row would only bury the rest of the page.
+              tabIndex={-1}
+            />
+          </Tooltip>
+        )}
+        rowRef={rowRef}
+        selectionEnabled={selectionEnabled}
+        snippet={decodeSnippet(
+          // The provider's thread snippet follows the newest message, a draft too.
+          isDraft
+            ? message.snippet || thread.snippet
+            : thread.snippet || message.snippet,
+        )}
+        subject={message.headers.subject}
+      />
+    </div>
   );
 });
 
@@ -287,4 +307,57 @@ function AccountMarker({
       {initial}
     </span>
   );
+}
+
+const LONG_PRESS_MS = 450;
+const LONG_PRESS_SLOP_PX = 10;
+
+/**
+ * Selects on a touch hold, then swallows the click that ends it so the row
+ * doesn't also open. Moving the finger (a scroll) cancels the hold.
+ */
+function useLongPressToSelect(onLongPress: () => void) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const start = useRef<{ x: number; y: number } | null>(null);
+  const fired = useRef(false);
+
+  const cancel = () => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    start.current = null;
+  };
+
+  return {
+    onPointerDown: (event: PointerEvent) => {
+      fired.current = false;
+      if (event.pointerType !== "touch") return;
+      start.current = { x: event.clientX, y: event.clientY };
+      timer.current = setTimeout(() => {
+        fired.current = true;
+        timer.current = null;
+        navigator.vibrate?.(10);
+        onLongPress();
+      }, LONG_PRESS_MS);
+    },
+    onPointerMove: (event: PointerEvent) => {
+      if (!start.current) return;
+      if (
+        Math.abs(event.clientX - start.current.x) > LONG_PRESS_SLOP_PX ||
+        Math.abs(event.clientY - start.current.y) > LONG_PRESS_SLOP_PX
+      )
+        cancel();
+    },
+    onPointerUp: cancel,
+    onPointerCancel: cancel,
+    onContextMenu: (event: MouseEvent) => {
+      // A held finger opens the browser's own menu otherwise.
+      if (fired.current || timer.current) event.preventDefault();
+    },
+    onClickCapture: (event: MouseEvent) => {
+      if (!fired.current) return;
+      fired.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+  };
 }

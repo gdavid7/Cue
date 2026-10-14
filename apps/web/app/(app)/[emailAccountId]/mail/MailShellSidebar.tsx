@@ -1,7 +1,14 @@
 "use client";
 
 import { ConnectorsList } from "@/components/connectors/ConnectorsList";
-import { type CSSProperties, memo, useCallback, useMemo } from "react";
+import { LogOutIcon, SettingsIcon } from "lucide-react";
+import {
+  type CSSProperties,
+  memo,
+  type ReactNode,
+  useCallback,
+  useMemo,
+} from "react";
 import { toast } from "sonner";
 import { AllInboxesSidebarSections } from "@/app/(app)/[emailAccountId]/mail/AllInboxesSidebarSections";
 import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
@@ -24,7 +31,10 @@ import {
 } from "@/app/(app)/[emailAccountId]/mail/sidebar-width";
 import { getAllInboxesAccounts } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { useMailAppLinks } from "@/app/(app)/[emailAccountId]/mail/use-mail-app-links";
+import { useHasConnectedApp } from "@/components/SideNav";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Sidebar, useSidebar } from "@/components/ui/sidebar";
+import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useFolders } from "@/hooks/useFolders";
 import { useLabelCounts } from "@/hooks/useLabelCounts";
@@ -49,6 +59,7 @@ import type { MailboxLabelCount } from "@/utils/mail-engine/label-count-targets"
 import { OUTLOOK_CATEGORY_COLORS } from "@/utils/outlook/category-colors";
 import { prefixPath } from "@/utils/path";
 import { getEmailTerminology } from "@/utils/terminology";
+import { logOut } from "@/utils/user";
 
 const OUTLOOK_LABEL_COLOR_OPTIONS = OUTLOOK_CATEGORY_COLORS.map((option) => ({
   name: option.name,
@@ -74,6 +85,8 @@ export const MailShellSidebar = memo(function MailShellSidebar({
   onSelectAccount,
   onSelectAllAccounts,
   onMailboxItemDeleted,
+  mobileOpen = false,
+  onMobileOpenChange,
 }: {
   activeType: string | null;
   activeLabelId: string | null;
@@ -84,6 +97,9 @@ export const MailShellSidebar = memo(function MailShellSidebar({
   onSelectAllAccounts: () => void;
   /** Leaves a view or split that the deleted label or folder defined. */
   onMailboxItemDeleted: (item: MailboxItem) => Promise<unknown>;
+  /** Below `lg` the sidebar opens as a sheet from the phone's tab bar. */
+  mobileOpen?: boolean;
+  onMobileOpenChange?: (open: boolean) => void;
 }) {
   const { emailAccountId, provider } = useAccount();
   const isGoogle = isGoogleProvider(provider);
@@ -108,7 +124,8 @@ export const MailShellSidebar = memo(function MailShellSidebar({
   const { data: accountsData } = useAccounts();
   const hasAllInboxes =
     getAllInboxesAccounts(accountsData?.emailAccounts ?? []).length > 1;
-  const appLinks = useMailAppLinks();
+  const { appLinks, toolLinks } = useMailAppLinks();
+  const hasConnectedApp = useHasConnectedApp();
   const { state: openSidebars } = useSidebar();
   const isMailSidebarOpen = openSidebars.includes("left-sidebar");
 
@@ -203,85 +220,168 @@ export const MailShellSidebar = memo(function MailShellSidebar({
     ],
   );
 
-  return (
-    <div
-      className="hidden lg:contents"
-      data-mail-sidebar={isMailSidebarOpen ? "open" : "rail"}
-      style={
-        {
-          "--sidebar-width": `var(--mail-sidebar-width, ${MAIL_SIDEBAR_DEFAULT_WIDTH}px)`,
-          "--sidebar-width-icon": `${MAIL_SIDEBAR_RAIL_WIDTH}px`,
-        } as CSSProperties
+  const renderSidebar = ({
+    collapsed,
+    className,
+    footer,
+    showSidebarToggle,
+  }: {
+    collapsed: boolean;
+    className: string;
+    footer: ReactNode;
+    showSidebarToggle: boolean;
+  }) => (
+    <MailSidebar
+      className={className}
+      collapsed={collapsed}
+      showSidebarToggle={showSidebarToggle}
+      activeType={activeType}
+      activeLabelId={activeLabelId}
+      activeFolderId={activeFolderId}
+      hrefFor={hrefFor}
+      labels={isAllAccounts ? NO_LABELS : sidebarLabels}
+      folders={isAllAccounts || !isOutlook ? NO_FOLDERS : folders}
+      countsById={isAllAccounts ? NO_COUNTS : countsById}
+      categories={
+        isAllAccounts
+          ? NO_CATEGORIES
+          : getMailCategories({ isGoogle, isOutlook })
       }
-    >
-      <Sidebar name="left-sidebar" collapsible="icon">
-        <MailSidebar
-          className="h-full w-full border-r-0"
-          collapsed={!isMailSidebarOpen}
-          activeType={activeType}
-          activeLabelId={activeLabelId}
-          activeFolderId={activeFolderId}
-          hrefFor={hrefFor}
-          labels={isAllAccounts ? NO_LABELS : sidebarLabels}
-          folders={isAllAccounts || !isOutlook ? NO_FOLDERS : folders}
-          countsById={isAllAccounts ? NO_COUNTS : countsById}
-          categories={
-            isAllAccounts
-              ? NO_CATEGORIES
-              : getMailCategories({ isGoogle, isOutlook })
-          }
-          categoryHeading={isOutlook ? "Inbox" : "Categories"}
-          collapsibleCategories={!isOutlook}
-          labelsHeading={terminology.label.pluralCapitalized}
-          labelSingular={terminology.label.singular}
-          onCompose={openCompose}
-          onCreateLabel={onCreateLabel}
-          onEditMailboxItem={onEditMailboxItem}
-          onDeleteMailboxItem={onDeleteMailboxItem}
-          labelEditMode={isOutlook ? "color" : "name-and-color"}
-          supportsLabelVisibility={isGoogle}
-          supportsImportant={isGoogle}
-          labelColorOptions={
-            isOutlook ? OUTLOOK_LABEL_COLOR_OPTIONS : GMAIL_LABEL_COLORS
-          }
-          unified={isAllAccounts}
-          accountSections={
-            isAllAccounts ? (
-              <AllInboxesSidebarSections
-                emailAccounts={accountsData?.emailAccounts ?? []}
-              />
-            ) : undefined
-          }
-          todayHref={prefixPath(emailAccountId, "/home")}
-          appLinks={appLinks}
-          allInboxesHref={
-            hasAllInboxes
-              ? prefixPath(emailAccountId, "/mail?accountScope=all")
-              : undefined
-          }
-          connectors={
-            isAllAccounts ? undefined : (
-              <ConnectorsList
+      categoryHeading={isOutlook ? "Inbox" : "Categories"}
+      collapsibleCategories={!isOutlook}
+      labelsHeading={terminology.label.pluralCapitalized}
+      labelSingular={terminology.label.singular}
+      onCompose={openCompose}
+      onCreateLabel={onCreateLabel}
+      onEditMailboxItem={onEditMailboxItem}
+      onDeleteMailboxItem={onDeleteMailboxItem}
+      labelEditMode={isOutlook ? "color" : "name-and-color"}
+      supportsLabelVisibility={isGoogle}
+      supportsImportant={isGoogle}
+      labelColorOptions={
+        isOutlook ? OUTLOOK_LABEL_COLOR_OPTIONS : GMAIL_LABEL_COLORS
+      }
+      unified={isAllAccounts}
+      accountSections={
+        isAllAccounts ? (
+          <AllInboxesSidebarSections
+            emailAccounts={accountsData?.emailAccounts ?? []}
+          />
+        ) : undefined
+      }
+      todayHref={prefixPath(emailAccountId, "/home")}
+      appLinks={appLinks}
+      toolLinks={toolLinks}
+      allInboxesHref={
+        hasAllInboxes
+          ? prefixPath(emailAccountId, "/mail?accountScope=all")
+          : undefined
+      }
+      // Until an app is connected, Tools › Integrations is the way to one.
+      connectors={
+        isAllAccounts || !hasConnectedApp ? undefined : (
+          <ConnectorsList
+            collapsed={collapsed}
+            emailAccountId={emailAccountId}
+          />
+        )
+      }
+      footer={footer}
+    />
+  );
+
+  return (
+    <>
+      <div
+        className="hidden lg:contents"
+        data-mail-sidebar={isMailSidebarOpen ? "open" : "rail"}
+        style={
+          {
+            "--sidebar-width": `var(--mail-sidebar-width, ${MAIL_SIDEBAR_DEFAULT_WIDTH}px)`,
+            "--sidebar-width-icon": `${MAIL_SIDEBAR_RAIL_WIDTH}px`,
+          } as CSSProperties
+        }
+      >
+        <Sidebar name="left-sidebar" collapsible="icon">
+          {renderSidebar({
+            className: "h-full w-full border-r-0",
+            collapsed: !isMailSidebarOpen,
+            showSidebarToggle: true,
+            footer: (
+              <MailAccountSwitcher
+                isDesktopApp={isDesktopApp}
+                isAllAccounts={isAllAccounts}
+                onSelectAccount={onSelectAccount}
+                onSelectAll={onSelectAllAccounts}
+                variant="sidebar"
                 collapsed={!isMailSidebarOpen}
-                emailAccountId={emailAccountId}
               />
-            )
-          }
-          footer={
-            <MailAccountSwitcher
-              isDesktopApp={isDesktopApp}
-              isAllAccounts={isAllAccounts}
-              onSelectAccount={onSelectAccount}
-              onSelectAll={onSelectAllAccounts}
-              variant="sidebar"
-              collapsed={!isMailSidebarOpen}
-            />
-          }
-        />
-        {isMailSidebarOpen ? (
-          <MailSidebarResizeHandle onResize={setSidebarWidth} />
-        ) : null}
-      </Sidebar>
-    </div>
+            ),
+          })}
+          {isMailSidebarOpen ? (
+            <MailSidebarResizeHandle onResize={setSidebarWidth} />
+          ) : null}
+        </Sidebar>
+      </div>
+      {onMobileOpenChange ? (
+        <Sheet open={mobileOpen} onOpenChange={onMobileOpenChange}>
+          <SheetContent
+            side="left"
+            aria-describedby={undefined}
+            className="flex w-[min(20rem,85vw)] flex-col p-0 lg:hidden"
+            // Every row is a link, so following one is leaving the sheet.
+            onClickCapture={(event) => {
+              if (
+                event.target instanceof Element &&
+                event.target.closest("a[href]")
+              )
+                onMobileOpenChange(false);
+            }}
+          >
+            <SheetTitle className="sr-only">Mailboxes</SheetTitle>
+            {renderSidebar({
+              className:
+                "min-h-0 w-full flex-1 border-r-0 pt-12 pb-[max(0.625rem,env(safe-area-inset-bottom))]",
+              collapsed: false,
+              showSidebarToggle: false,
+              footer: (
+                <MobileSheetFooter onClose={() => onMobileOpenChange(false)} />
+              ),
+            })}
+          </SheetContent>
+        </Sheet>
+      ) : null}
+    </>
   );
 });
+
+/** The phone has no sidebar footer, so the sheet carries Settings and Sign out. */
+function MobileSheetFooter({ onClose }: { onClose: () => void }) {
+  const { openSettings } = useSettingsDialog();
+  const rowClassName =
+    "flex min-h-11 items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-muted active:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+  return (
+    <div className="mt-2 flex shrink-0 flex-col gap-px border-border border-t pt-2">
+      <button
+        type="button"
+        className={rowClassName}
+        onClick={() => {
+          onClose();
+          openSettings();
+        }}
+      >
+        <SettingsIcon className="size-4 shrink-0 text-muted-foreground" />
+        Settings
+      </button>
+      <button
+        type="button"
+        className={rowClassName}
+        onClick={() => logOut(window.location.origin)}
+      >
+        <LogOutIcon className="size-4 shrink-0 text-muted-foreground" />
+        Sign out
+      </button>
+    </div>
+  );
+}

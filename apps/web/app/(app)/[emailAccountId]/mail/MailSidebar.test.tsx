@@ -20,7 +20,10 @@ vi.mock("@/components/ui/sidebar", () => ({
   SidebarTrigger: () => null,
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.localStorage.clear();
+});
 
 function sidebar(overrides: Partial<MailSidebarProps> = {}) {
   return (
@@ -54,20 +57,20 @@ function renderSidebar(overrides: Partial<MailSidebarProps> = {}) {
 }
 
 describe("MailSidebar", () => {
-  it("leaves the inbox out in the open and everything else behind Mail", () => {
+  it("keeps Drafts and Sent beside the inbox and the rarer views behind More", () => {
     renderSidebar();
 
-    expect(screen.getByText("Inbox").closest("a")?.getAttribute("href")).toBe(
-      "/mail?type=inbox",
-    );
-    expect(screen.queryByText("Sent")).toBeNull();
+    expect(
+      ["Inbox", "Drafts", "Sent"].map((name) =>
+        screen.getByText(name).closest("a")?.getAttribute("href"),
+      ),
+    ).toEqual(["/mail?type=inbox", "/mail?type=draft", "/mail?type=sent"]);
+    expect(screen.queryByText("Archived")).toBeNull();
 
-    fireEvent.click(screen.getByText("Mail"));
+    fireEvent.click(screen.getByText("More"));
 
     expect(
       [
-        "Drafts",
-        "Sent",
         "Archived",
         "Starred",
         "Snoozed",
@@ -79,8 +82,6 @@ describe("MailSidebar", () => {
         screen.getByText(name).closest("a")?.getAttribute("href"),
       ),
     ).toEqual([
-      "/mail?type=draft",
-      "/mail?type=sent",
       "/mail?type=archive",
       "/mail?type=starred",
       "/mail?type=snoozed",
@@ -92,17 +93,46 @@ describe("MailSidebar", () => {
     expect(screen.queryByText("Important")).toBeNull();
   });
 
+  it("remembers an opened More group on the next visit", () => {
+    renderSidebar();
+    fireEvent.click(screen.getByText("More"));
+    cleanup();
+
+    renderSidebar();
+
+    expect(screen.getByText("Trash")).toBeDefined();
+  });
+
+  it("lists the app's tools behind Tools", () => {
+    renderSidebar({
+      toolLinks: [
+        {
+          name: "Unsubscribe",
+          href: "/account-1/bulk-unsubscribe",
+          icon: null,
+        },
+      ],
+    });
+    expect(screen.queryByText("Unsubscribe")).toBeNull();
+
+    fireEvent.click(screen.getByText("Tools"));
+
+    expect(
+      screen.getByText("Unsubscribe").closest("a")?.getAttribute("href"),
+    ).toBe("/account-1/bulk-unsubscribe");
+  });
+
   it("offers the Important view only where the provider has one", () => {
     renderSidebar({ supportsImportant: true });
 
-    fireEvent.click(screen.getByText("Mail"));
+    fireEvent.click(screen.getByText("More"));
 
     expect(
       screen.getByText("Important").closest("a")?.getAttribute("href"),
     ).toBe("/mail?type=important");
   });
 
-  it("opens the Mail group when one of its views is showing", () => {
+  it("opens the More group when one of its views is showing", () => {
     renderSidebar({ activeType: "trash" });
 
     expect(
@@ -118,7 +148,7 @@ describe("MailSidebar", () => {
     );
   });
 
-  it("leaves the Mail group out of the icon rail for other views", () => {
+  it("leaves the More group out of the icon rail for other views", () => {
     // Nothing in the rail can toggle the group, so a row only earns its space
     // there while its own view is open.
     renderSidebar({ activeType: "inbox", collapsed: true });
@@ -126,7 +156,7 @@ describe("MailSidebar", () => {
     expect(screen.queryByText("Trash")).toBeNull();
   });
 
-  it("closes the Mail group in the rail once its view is left behind", () => {
+  it("closes the More group in the rail once its view is left behind", () => {
     const { rerender } = renderSidebar({
       activeType: "trash",
       collapsed: true,
@@ -140,7 +170,7 @@ describe("MailSidebar", () => {
     expect(screen.queryByText("Trash")).toBeNull();
   });
 
-  it("keeps a chosen Mail group open across navigation when expanded", () => {
+  it("keeps a chosen More group open across navigation when expanded", () => {
     const { rerender } = renderSidebar({ activeType: "trash" });
 
     rerender(sidebar({ activeType: "inbox" }));
@@ -176,7 +206,8 @@ describe("MailSidebar", () => {
   it("leaves the extra views out of the combined inbox", () => {
     renderSidebar({ unified: true });
 
-    expect(screen.queryByText("Mail")).toBeNull();
+    expect(screen.queryByText("More")).toBeNull();
+    expect(screen.queryByText("Drafts")).toBeNull();
     expect(screen.getByText("All inboxes")).toBeDefined();
   });
 

@@ -4,7 +4,8 @@ import { MailAccountSwitcherTrigger } from "@inboxzero/mail-ui/MailAccountSwitch
 import { memo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
-  ChevronsUpDownIcon,
+  EllipsisVerticalIcon,
+  KeyboardIcon,
   LogOutIcon,
   PlusIcon,
   Settings2Icon,
@@ -31,15 +32,11 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { RailTooltip } from "@/app/(app)/[emailAccountId]/mail/MailSidebar";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useAccounts } from "@/hooks/useAccounts";
 import {
@@ -49,10 +46,17 @@ import {
 } from "@/lib/shortcuts/registry";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
 import { useMailAppLinks } from "@/app/(app)/[emailAccountId]/mail/use-mail-app-links";
+
+import { shortcutsDialogOpenAtom } from "@/store/command-palette";
+import { useSetAtom } from "jotai";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { logOut } from "@/utils/user";
 import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 import { cn } from "@/utils";
+
+/** One tab of the phone's bottom bar; `MailMobileNav` draws the others. */
+export const barItemClassName =
+  "flex min-h-11 min-w-11 flex-col items-center justify-center gap-0.5 rounded-lg px-2 py-1 text-xs active:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 const SWITCHER_WRAPPER: Record<"compact" | "sidebar" | "bar", string> = {
   compact:
@@ -82,8 +86,16 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
   const { emailAccount } = useAccount();
   const [isSelectionOpen, setIsSelectionOpen] = useState(false);
   const [isAddAccountOpen, setIsAddAccountOpen] = useState(false);
-  const appLinks = useMailAppLinks();
+  const { appLinks } = useMailAppLinks();
   const { openSettings } = useSettingsDialog();
+  const setShortcutsOpen = useSetAtom(shortcutsDialogOpenAtom);
+  // A dialog opened from a menu row must keep focus: the menu handing it back
+  // to its trigger as it closes would dismiss the dialog straight away.
+  const isOpeningDialog = useRef(false);
+  const openFromMenu = (open: () => void) => {
+    isOpeningDialog.current = true;
+    open();
+  };
 
   if (!data) return null;
 
@@ -115,24 +127,60 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
     );
   }
 
+  // The menu holds Settings and Sign out as well as accounts, so its name says so.
+  const triggerLabel = ["Account and settings", activeLabel, activeEmail]
+    .filter(Boolean)
+    .join(", ");
+  const rowClassName = cn(
+    "gap-3 rounded-xl px-3",
+    variant === "sidebar" ? "py-2" : "py-3",
+  );
+
   return (
     <div className={SWITCHER_WRAPPER[variant]}>
       <DropdownMenu>
         <RailTooltip label={collapsed ? activeLabel : null}>
           <DropdownMenuTrigger asChild>
-            <MailAccountSwitcherTrigger
-              icon={activeIcon}
-              indicator={
-                <ChevronsUpDownIcon className="size-4 text-muted-foreground" />
-              }
-              label={activeLabel}
-              email={activeEmail}
-              collapsed={collapsed || variant === "bar"}
-              compact={variant !== "sidebar"}
-            />
+            {variant === "bar" ? (
+              <button
+                type="button"
+                aria-label={triggerLabel}
+                className={cn(barItemClassName, "text-muted-foreground")}
+              >
+                {emailAccount && !isAllAccounts ? (
+                  <ProfileImage
+                    className="size-5"
+                    image={emailAccount.image}
+                    label={emailAccount.name || emailAccount.email}
+                  />
+                ) : (
+                  <span className="flex size-5 items-center justify-center [&>span]:size-5">
+                    {activeIcon}
+                  </span>
+                )}
+                Account
+              </button>
+            ) : (
+              <MailAccountSwitcherTrigger
+                aria-label={triggerLabel}
+                icon={activeIcon}
+                indicator={
+                  <EllipsisVerticalIcon className="size-4 text-muted-foreground" />
+                }
+                label={activeLabel}
+                email={activeEmail}
+                collapsed={collapsed}
+                compact={variant !== "sidebar"}
+              />
+            )}
           </DropdownMenuTrigger>
         </RailTooltip>
         <DropdownMenuContent
+          onCloseAutoFocus={(event) => {
+            if (!isOpeningDialog.current) return;
+            isOpeningDialog.current = false;
+            event.preventDefault();
+          }}
           align="start"
           className={cn(
             "rounded-2xl p-2 shadow-xl",
@@ -143,6 +191,14 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
           side="top"
           sideOffset={8}
         >
+          {emailAccount ? (
+            <DropdownMenuLabel className="px-3 font-normal text-muted-foreground text-xs">
+              Signed in as{" "}
+              <span className="font-medium text-foreground">
+                {emailAccount.email}
+              </span>
+            </DropdownMenuLabel>
+          ) : null}
           {data.emailAccounts.length > 1 ? (
             <>
               <div className="flex items-stretch gap-1">
@@ -158,18 +214,14 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
                     </Kbd>
                   )}
                 </DropdownMenuItem>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <DropdownMenuItem
-                      aria-label="Choose accounts"
-                      className="w-10 justify-center rounded-xl p-0 text-muted-foreground"
-                      onSelect={() => setIsSelectionOpen(true)}
-                    >
-                      <SlidersHorizontalIcon />
-                    </DropdownMenuItem>
-                  </TooltipTrigger>
-                  <TooltipContent side="right">Choose accounts</TooltipContent>
-                </Tooltip>
+                <DropdownMenuItem
+                  aria-label="Choose accounts"
+                  title="Choose accounts"
+                  className="w-10 justify-center rounded-xl p-0 text-muted-foreground"
+                  onSelect={() => openFromMenu(() => setIsSelectionOpen(true))}
+                >
+                  <SlidersHorizontalIcon />
+                </DropdownMenuItem>
               </div>
               <DropdownMenuSeparator />
             </>
@@ -191,14 +243,14 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
           <DropdownMenuSeparator />
           <DropdownMenuItem
             className="gap-3 rounded-xl p-3"
-            onSelect={() => setIsAddAccountOpen(true)}
+            onSelect={() => openFromMenu(() => setIsAddAccountOpen(true))}
           >
             <span className="flex size-8 items-center justify-center rounded-full bg-muted">
               <PlusIcon className="size-4" />
             </span>
             <span className="font-medium">Add another account</span>
           </DropdownMenuItem>
-          <DropdownMenuItem asChild className="gap-3 rounded-xl px-3 py-2">
+          <DropdownMenuItem asChild className={rowClassName}>
             <Link href="/accounts">
               <Settings2Icon className="size-4 text-muted-foreground" />
               Manage accounts
@@ -210,7 +262,7 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
             appLinks.map((link) => (
               <DropdownMenuItem
                 asChild
-                className="gap-3 rounded-xl px-3 py-2 [&_svg]:text-muted-foreground"
+                className={cn(rowClassName, "[&_svg]:text-muted-foreground")}
                 key={link.href}
               >
                 <Link href={link.href}>
@@ -220,14 +272,25 @@ export const MailAccountSwitcher = memo(function MailAccountSwitcher({
               </DropdownMenuItem>
             ))}
           <DropdownMenuItem
-            className="gap-3 rounded-xl px-3 py-2"
-            onSelect={openSettings}
+            className={rowClassName}
+            onSelect={() => openFromMenu(openSettings)}
           >
             <SettingsIcon className="size-4 text-muted-foreground" />
             Settings
           </DropdownMenuItem>
+          {/* Phones have no keyboard to need the list. */}
+          {variant === "sidebar" ? (
+            <DropdownMenuItem
+              className={rowClassName}
+              onSelect={() => openFromMenu(() => setShortcutsOpen(true))}
+            >
+              <KeyboardIcon className="size-4 text-muted-foreground" />
+              Keyboard shortcuts
+              <Kbd className="ml-auto">{getShortcutHint("help")}</Kbd>
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuItem
-            className="gap-3 rounded-xl px-3 py-2"
+            className={rowClassName}
             onSelect={() => logOut(window.location.origin)}
           >
             <LogOutIcon className="size-4 text-muted-foreground" />

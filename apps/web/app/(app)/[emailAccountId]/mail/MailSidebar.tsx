@@ -4,8 +4,10 @@ import {
   type ComponentProps,
   type FormEvent,
   type ReactNode,
+  useCallback,
   useEffect,
   useState,
+  useSyncExternalStore,
 } from "react";
 import Link from "next/link";
 import { getMailSidebarRowPresentation } from "@inboxzero/mail-ui/MailSidebarRow";
@@ -19,7 +21,6 @@ import {
   FileIcon,
   FlagIcon,
   FolderIcon,
-  HomeIcon,
   InboxIcon,
   LayersIcon,
   type LucideIcon,
@@ -32,6 +33,7 @@ import {
   ShieldAlertIcon,
   SparklesIcon,
   StarIcon,
+  SunIcon,
   TagIcon,
   Trash2Icon,
   UserIcon,
@@ -109,6 +111,10 @@ export type MailSidebarProps = {
   todayHref?: string;
   /** The app's other places, such as Chat and Rules, above the footer. */
   appLinks?: { name: string; href: string; icon: ReactNode }[];
+  /** The app's rarer tools, such as Unsubscribe, behind a Tools toggle. */
+  toolLinks?: { name: string; href: string; icon: ReactNode }[];
+  /** False where something else opens and closes the sidebar, like a sheet. */
+  showSidebarToggle?: boolean;
   /** Each account's own labels and folders, shown in their place in All inboxes. */
   accountSections?: ReactNode;
   className?: string;
@@ -127,10 +133,14 @@ type SystemItem = {
 export const MAIL_SCHEDULED_TYPE = "scheduled";
 export const MAIL_SNOOZED_TYPE = "snoozed";
 
-/** Everything the inbox isn't. Visited rarely enough to stay behind a toggle. */
-const MAILBOX_ITEMS: SystemItem[] = [
+/** Visited often enough to sit beside the inbox. */
+const PRIMARY_MAILBOX_ITEMS: SystemItem[] = [
   { name: "Drafts", type: "draft", countId: "DRAFT", Icon: FileIcon },
   { name: "Sent", type: "sent", countId: null, Icon: SendIcon },
+];
+
+/** The rest of the mailbox. Visited rarely enough to stay behind More. */
+const MORE_MAILBOX_ITEMS: SystemItem[] = [
   { name: "Archived", type: "archive", countId: null, Icon: ArchiveIcon },
   { name: "Starred", type: "starred", countId: null, Icon: StarIcon },
   {
@@ -156,6 +166,16 @@ const MAILBOX_ITEMS: SystemItem[] = [
   { name: "Spam", type: "spam", countId: null, Icon: ShieldAlertIcon },
   { name: "Trash", type: "trash", countId: null, Icon: Trash2Icon },
 ];
+
+/** The display name of a `?type=` mailbox view, such as "Sent" for `sent`. */
+export function getMailboxName(type: string): string | undefined {
+  return [
+    ...PRIMARY_MAILBOX_ITEMS,
+    ...MORE_MAILBOX_ITEMS,
+    ...MAIL_CATEGORIES,
+    ...OUTLOOK_INBOX_SECTIONS,
+  ].find((item) => item.type === type)?.name;
+}
 
 export type MailCategory = {
   name: string;
@@ -225,6 +245,8 @@ export function MailSidebar({
   allInboxesHref,
   todayHref,
   appLinks,
+  toolLinks,
+  showSidebarToggle = true,
   accountSections,
   className,
 }: MailSidebarProps) {
@@ -239,23 +261,29 @@ export function MailSidebar({
   const showCategoryRows =
     !collapsibleCategories || (collapsed ? isCategoryActive : showCategories);
 
-  const mailboxItems = MAILBOX_ITEMS.filter(
+  const isTypeActive = (type: string) =>
+    !activeLabelId && !activeFolderId && activeType === type;
+  const moreMailboxItems = MORE_MAILBOX_ITEMS.filter(
     (item) => supportsImportant || !item.importantOnly,
   );
-  const isMailboxActive =
-    !activeLabelId &&
-    !activeFolderId &&
-    mailboxItems.some((item) => item.type === activeType);
-  const [showMailboxes, setShowMailboxes] = useState(isMailboxActive);
-  const showMailboxRows = collapsed ? isMailboxActive : showMailboxes;
+  const isMoreActive = moreMailboxItems.some((item) => isTypeActive(item.type));
+  const [storedShowMailboxes, setShowMailboxes] = useStoredDisclosure(
+    "cue.mail-sidebar.more-open",
+  );
+  // The open view's own row is never hidden behind a closed group.
+  const showMailboxes = storedShowMailboxes || isMoreActive;
+  const showMailboxRows = collapsed ? isMoreActive : showMailboxes;
+  const [showTools, setShowTools] = useStoredDisclosure(
+    "cue.mail-sidebar.tools-open",
+  );
 
   useEffect(() => {
     if (isCategoryActive) setShowCategories(true);
   }, [isCategoryActive]);
 
   useEffect(() => {
-    if (isMailboxActive) setShowMailboxes(true);
-  }, [isMailboxActive]);
+    if (isMoreActive) setShowMailboxes(true);
+  }, [isMoreActive, setShowMailboxes]);
 
   return (
     <aside
@@ -266,7 +294,7 @@ export function MailSidebar({
       )}
     >
       {/* Collapsed, the toggle moves beside the traffic lights (`MailTitlebarNav`). */}
-      {collapsed ? (
+      {!showSidebarToggle ? null : collapsed ? (
         <div data-desktop-mac-titlebar-spacer className="shrink-0" />
       ) : (
         <div className="mb-2.5 flex shrink-0 items-center justify-end">
@@ -305,8 +333,11 @@ export function MailSidebar({
 
       {/* The negative margin lets the scrollbar sit in the sidebar's own
           padding, so a platform-width bar can't crowd the unread counts. */}
-      <div className="-mr-1.5 flex min-h-0 flex-1 flex-col overflow-y-auto pr-1.5 scrollbar-thin">
-        <nav className="flex flex-col gap-px">
+      <nav
+        aria-label="Mailboxes"
+        className="-mr-1.5 flex min-h-0 flex-1 flex-col overflow-y-auto pr-1.5 scrollbar-thin"
+      >
+        <div className="flex flex-col gap-px">
           {unified || allInboxesHref ? (
             <NavRow
               href={unified ? undefined : allInboxesHref}
@@ -334,32 +365,47 @@ export function MailSidebar({
             <NavRow
               href={todayHref}
               active={activeType === "today"}
-              icon={<HomeIcon className="size-4 shrink-0" />}
+              icon={<SunIcon className="size-4 shrink-0" />}
               name="Today"
               count={null}
               collapsed={collapsed}
             />
           ) : null}
-        </nav>
+          {unified
+            ? null
+            : PRIMARY_MAILBOX_ITEMS.map(({ name, type, countId, Icon }) => (
+                <NavRow
+                  key={type}
+                  href={hrefFor({ kind: "type", type })}
+                  active={isTypeActive(type)}
+                  icon={<Icon className="size-4 shrink-0" />}
+                  name={name}
+                  count={countId ? displayCount(countsById.get(countId)) : null}
+                  collapsed={collapsed}
+                />
+              ))}
+        </div>
 
         {!unified && (!collapsed || showMailboxRows) && (
           <>
             <GroupHeading
               collapsed={collapsed}
               expanded={showMailboxes}
-              onToggle={() => setShowMailboxes((open) => !open)}
+              onToggle={() => setShowMailboxes(!showMailboxes)}
             >
-              Mail
+              More
             </GroupHeading>
             {showMailboxRows && (
-              <nav className="flex flex-col gap-px">
-                {mailboxItems.map(({ name, type, countId, Icon }) => (
+              <div
+                role="group"
+                aria-label="More mailboxes"
+                className="flex flex-col gap-px"
+              >
+                {moreMailboxItems.map(({ name, type, countId, Icon }) => (
                   <NavRow
                     key={type}
                     href={hrefFor({ kind: "type", type })}
-                    active={
-                      !activeLabelId && !activeFolderId && activeType === type
-                    }
+                    active={isTypeActive(type)}
                     icon={<Icon className="size-4 shrink-0" />}
                     name={name}
                     count={
@@ -368,7 +414,7 @@ export function MailSidebar({
                     collapsed={collapsed}
                   />
                 ))}
-              </nav>
+              </div>
             )}
           </>
         )}
@@ -391,7 +437,11 @@ export function MailSidebar({
                 {categoryHeading}
               </GroupHeading>
               {showCategoryRows && (
-                <nav className="flex flex-col gap-px">
+                <div
+                  role="group"
+                  aria-label={categoryHeading}
+                  className="flex flex-col gap-px"
+                >
                   {categories.map(({ name, type, Icon }) => (
                     <NavRow
                       key={type}
@@ -405,7 +455,7 @@ export function MailSidebar({
                       collapsed={collapsed}
                     />
                   ))}
-                </nav>
+                </div>
               )}
             </>
           )}
@@ -440,7 +490,37 @@ export function MailSidebar({
             {connectors}
           </>
         ) : null}
-      </div>
+
+        {/* Like More, the rail has no toggle, so it lists no tools. */}
+        {toolLinks?.length && !collapsed ? (
+          <>
+            <GroupHeading
+              expanded={showTools}
+              onToggle={() => setShowTools(!showTools)}
+            >
+              Tools
+            </GroupHeading>
+            {showTools && (
+              <div
+                role="group"
+                aria-label="Tools"
+                className="flex flex-col gap-px"
+              >
+                {toolLinks.map((link) => (
+                  <NavRow
+                    key={link.href}
+                    href={link.href}
+                    active={false}
+                    icon={link.icon}
+                    name={link.name}
+                    count={null}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        ) : null}
+      </nav>
       {appLinks?.length ? (
         // Pinned outside the scrolling mailboxes, so the way to the rest of
         // the app never scrolls out of view.
@@ -561,7 +641,11 @@ export function MailboxGroups({
       {sidebarFolders.length > 0 && (
         <>
           <GroupHeading collapsed={collapsed}>Folders</GroupHeading>
-          <nav className="flex flex-col gap-px">
+          <div
+            role="group"
+            aria-label="Folders"
+            className="flex flex-col gap-px"
+          >
             {sidebarFolders.map((folder) => (
               <EditableMailboxItem
                 key={folder.id}
@@ -594,7 +678,7 @@ export function MailboxGroups({
                 />
               </EditableMailboxItem>
             ))}
-          </nav>
+          </div>
         </>
       )}
 
@@ -624,7 +708,11 @@ export function MailboxGroups({
             {labelsHeading}
           </GroupHeading>
           {showLabels && (
-            <nav className="flex flex-col gap-px">
+            <div
+              role="group"
+              aria-label={labelsHeading}
+              className="flex flex-col gap-px"
+            >
               {labelTree.map((node) => (
                 <LabelBranch
                   key={node.label.id}
@@ -634,7 +722,7 @@ export function MailboxGroups({
                   {...rowProps}
                 />
               ))}
-            </nav>
+            </div>
           )}
 
           {showLabels && hiddenLabelNodes.length > 0 && !collapsed && (
@@ -653,7 +741,11 @@ export function MailboxGroups({
                 More
               </button>
               {showHiddenLabels && (
-                <nav className="flex flex-col gap-px">
+                <div
+                  role="group"
+                  aria-label={`More ${labelsHeading.toLowerCase()}`}
+                  className="flex flex-col gap-px"
+                >
                   {hiddenLabelNodes.map((node) => (
                     <LabelBranch
                       key={node.label.id}
@@ -663,7 +755,7 @@ export function MailboxGroups({
                       {...rowProps}
                     />
                   ))}
-                </nav>
+                </div>
               )}
             </>
           )}
@@ -1001,4 +1093,49 @@ function containsLabel(node: SidebarLabel, labelId: string | null): boolean {
     node.label.id === labelId ||
     node.children.some((child) => containsLabel(child, labelId))
   );
+}
+
+/**
+ * A sidebar group's open state, kept in this browser so the group stays the
+ * way the user left it. When storage is unavailable (a private window, blocked
+ * site data) the choice lasts for this page load instead.
+ */
+function useStoredDisclosure(key: string) {
+  const open = useSyncExternalStore(
+    subscribeToStoredDisclosures,
+    () => readStoredDisclosure(key),
+    () => false,
+  );
+  const setOpen = useCallback(
+    (next: boolean) => {
+      try {
+        window.localStorage.setItem(key, next ? "1" : "0");
+      } catch {
+        storedDisclosureFallback.set(key, next);
+      }
+      for (const listener of storedDisclosureListeners) listener();
+    },
+    [key],
+  );
+  return [open, setOpen] as const;
+}
+
+const storedDisclosureListeners = new Set<() => void>();
+const storedDisclosureFallback = new Map<string, boolean>();
+
+function subscribeToStoredDisclosures(listener: () => void) {
+  storedDisclosureListeners.add(listener);
+  window.addEventListener("storage", listener);
+  return () => {
+    storedDisclosureListeners.delete(listener);
+    window.removeEventListener("storage", listener);
+  };
+}
+
+function readStoredDisclosure(key: string) {
+  try {
+    return window.localStorage.getItem(key) === "1";
+  } catch {
+    return storedDisclosureFallback.get(key) ?? false;
+  }
 }

@@ -1,32 +1,40 @@
 "use client";
 
 import { useMemo } from "react";
-import { useNavigation } from "@/components/SideNav";
+import { type NavItem, useNavigation } from "@/components/SideNav";
+
+export type MailAppLink = { name: string; href: string; icon: React.ReactNode };
 
 /**
- * The app's main places beyond the mailbox and Today, named as the app's own
- * navigation names them. The mail screen hides that navigation, so it lists
- * these itself.
+ * The app's places beyond the mailbox and Today, read from the app's own
+ * navigation so the mail screen, which hides that navigation, can't drift
+ * from it. `toolLinks` are the rarer tools the app sidebar keeps under Tools.
  */
 export function useMailAppLinks() {
-  const { manageItems } = useNavigation();
+  const { manageItems, toolsItems } = useNavigation();
 
   return useMemo(
-    () =>
-      manageItems
+    () => ({
+      appLinks: manageItems
         .filter(
           (item) =>
             !item.href.endsWith("/mail") && !item.href.endsWith("/home"),
         )
-        .map((item) => ({
-          name: item.name,
-          href: item.href,
-          icon: (
-            <span className="flex shrink-0 [&>svg]:size-4">
-              <item.icon />
-            </span>
-          ),
-        })),
-    [manageItems],
+        .map(toMailAppLink),
+      toolLinks: toolsItems.map(toMailAppLink),
+    }),
+    [manageItems, toolsItems],
   );
+}
+
+function toMailAppLink(item: NavItem): MailAppLink {
+  return {
+    name: item.name,
+    href: item.href,
+    icon: (
+      <span className="flex shrink-0 [&>svg]:size-4">
+        <item.icon />
+      </span>
+    ),
+  };
 }

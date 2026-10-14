@@ -19,3 +19,23 @@ export function useIsMobile() {
 
   return !!isMobile;
 }
+
+const LARGE_SCREEN_QUERY = "(min-width: 1024px)";
+
+/**
+ * Tailwind's `lg` and up, where the mail sidebar and the split reader fit.
+ * Before hydration it assumes a large screen, the layout most sessions use.
+ */
+export function useIsLargeScreen() {
+  return React.useSyncExternalStore(
+    subscribeToLargeScreen,
+    () => window.matchMedia?.(LARGE_SCREEN_QUERY).matches ?? true,
+    () => true,
+  );
+}
+
+function subscribeToLargeScreen(onChange: () => void) {
+  const mql = window.matchMedia?.(LARGE_SCREEN_QUERY);
+  mql?.addEventListener("change", onChange);
+  return () => mql?.removeEventListener("change", onChange);
+}

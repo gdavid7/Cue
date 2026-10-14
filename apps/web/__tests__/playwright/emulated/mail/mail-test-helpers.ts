@@ -92,15 +92,26 @@ export async function setSentWithFooter(enabled: boolean) {
 }
 
 /**
- * Mailboxes other than the inbox sit behind the collapsed "Mail" group, which
- * stays open once a view inside it is showing.
+ * Inbox, Drafts and Sent sit at the top of the sidebar; the rarer mailboxes
+ * sit behind the "More" group, which stays open once a view inside it shows.
  */
 export async function openMailboxFromSidebar(page: Page, name: string) {
   const link = page.getByRole("link", { name: new RegExp(`^${name}`) });
   if (!(await link.isVisible())) {
-    await page.getByRole("button", { name: "Mail", exact: true }).click();
+    await page.getByRole("button", { name: "More", exact: true }).click();
   }
   await link.click();
+}
+
+/** Switches between the list and split layouts from the toolbar's View menu. */
+export async function toggleMailLayout(page: Page) {
+  await page.getByRole("button", { name: "View options" }).click();
+  const split = page.getByRole("menuitemradio", { name: /^Split/ });
+  const target =
+    (await split.getAttribute("aria-checked")) === "true"
+      ? page.getByRole("menuitemradio", { name: /^List/ })
+      : split;
+  await target.click();
 }
 
 export function conversationWithSubject(
