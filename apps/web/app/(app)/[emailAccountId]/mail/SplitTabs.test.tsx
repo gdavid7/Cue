@@ -18,7 +18,7 @@ class MockResizeObserver {
 afterEach(cleanup);
 
 describe("SplitTabs", () => {
-  it("deletes the open tab from its visible menu only after confirming", async () => {
+  it("deletes the open tab from its visible menu", async () => {
     const onDelete = vi.fn();
     render(
       <SplitTabs
