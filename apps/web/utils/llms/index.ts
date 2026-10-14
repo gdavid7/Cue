@@ -88,6 +88,7 @@ import {
   withNetworkRetry,
   withLLMRetry,
 } from "./retry";
+import { createStreamFallbackModel } from "./stream-fallback-model";
 
 const logger = createScopedLogger("llms");
 
@@ -926,10 +927,11 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
     emailAccountId,
   }).messages;
 
-  for (let index = 0; index < modelCandidates.length; index++) {
-    const candidate = modelCandidates[index];
-    const nextCandidate = modelCandidates[index + 1];
-    const providerOptions = buildProviderOptions({
+  const candidates = modelCandidates.map((candidate) => ({
+    provider: candidate.provider,
+    modelName: candidate.modelName,
+    model: candidate.model,
+    providerOptions: buildProviderOptions({
       provider: candidate.provider,
       modelProviderOptions: candidate.providerOptions as
         | LLMProviderOptions
@@ -938,116 +940,144 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
       userId,
       label,
       emailAccountId,
-    });
-    const candidateTools = wrapToolsWithSensitiveDataPolicy({
-      tools: skipToolsAfterAbort(tools, abortSignal),
-      policy: sensitiveDataPolicy,
-      label,
-      userId,
-      emailAccountId,
-    });
-    const bridgedAgent = await bridgeClaudeCodeToolsIfNeeded({
-      provider: candidate.provider,
-      modelName: candidate.modelName,
-      model: candidate.model,
-      tools: candidateTools,
-      activeTools,
-    });
-    onModelResolved?.({
-      provider: candidate.provider,
-      modelName: candidate.modelName,
-      providerOptions,
-    });
-
-    const agent = new ToolLoopAgent({
-      model: bridgedAgent.model,
-      tools: bridgedAgent.tools,
-      activeTools: bridgedAgent.bridged
-        ? undefined
-        : (activeTools as Array<keyof typeof candidateTools> | undefined),
-      prepareStep,
-      stopWhen: stopWhen ?? (maxSteps ? isStepCount(maxSteps) : undefined),
-      temperature,
-      ...commonOptions,
-      telemetry: buildLlmTelemetry({
-        userEmail,
-        userId,
-        emailAccountId,
+    }),
+  }));
+  const [primary] = candidates;
+  const agentTools = wrapToolsWithSensitiveDataPolicy({
+    tools: skipToolsAfterAbort(tools, abortSignal),
+    policy: sensitiveDataPolicy,
+    label,
+    userId,
+    emailAccountId,
+  });
+  const bridgedAgent = await bridgeClaudeCodeToolsIfNeeded({
+    provider: primary.provider,
+    modelName: primary.modelName,
+    model: primary.model,
+    tools: agentTools,
+    activeTools,
+  });
+  // A bridged CLI model runs the tools itself, so no other model can take over
+  // its run; Claude Code fallbacks would need their own bridge mid-run.
+  const runCandidates = bridgedAgent.bridged
+    ? [{ ...primary, model: bridgedAgent.model }]
+    : [
+        primary,
+        ...candidates
+          .slice(1)
+          .filter((candidate) => candidate.provider !== Provider.CLAUDE_CODE),
+      ];
+  const model = createStreamFallbackModel({
+    candidates: runCandidates,
+    onFallback: ({ from, to, error }) => {
+      logger.warn("Tool-call stream failed, switching to fallback model", {
         label,
-        provider: candidate.provider,
-        modelName: candidate.modelName,
-      }),
-      providerOptions,
-      onEnd: async (result) => {
-        const usagePromise = saveUsageWithMetadata({
-          result,
-          usage: result.usage,
-          userId,
-          email: userEmail,
-          emailAccountId,
-          provider: candidate.provider,
-          model: candidate.modelName,
-          label,
-          hasUserApiKey: modelOptions.hasUserApiKey,
-        });
-
-        const finishPromise = onEnd?.(
-          result as Parameters<
-            NonNullable<StreamTextOnEndCallback<Record<string, Tool>>>
-          >[0],
-        );
-
-        try {
-          await Promise.all([usagePromise, finishPromise]);
-        } catch (error) {
-          logger.error("Error in onEnd callback", {
-            label,
-            userEmail,
-            error,
-          });
-          logger.trace("Result", { result });
-          captureException(error, {
-            userEmail,
-            extra: { label },
-          });
-        }
-      },
-    });
-
-    try {
-      return await agent.stream({
-        messages: protectedMessages as ModelMessage[],
-        experimental_transform: smoothStream({ chunking: "word" }),
-        onStepEnd,
-        abortSignal,
-      });
-    } catch (error) {
-      if (nextCandidate && shouldFallbackToNextModel(error)) {
-        logger.warn("Tool-call stream failed, trying fallback model", {
-          label,
-          provider: candidate.provider,
-          model: candidate.modelName,
-          fallbackProvider: nextCandidate.provider,
-          fallbackModel: nextCandidate.modelName,
-          error,
-        });
-        continue;
-      }
-
-      logger.error("Error in chat completion stream", {
-        label,
-        userEmail,
+        provider: from.provider,
+        model: from.modelName,
+        fallbackProvider: to.provider,
+        fallbackModel: to.modelName,
+        failureCategory: getLlmFallbackFailureCategory(error),
         error,
       });
-      captureException(error, {
-        userEmail,
-        extra: { label },
+      onModelResolved?.({
+        provider: to.provider,
+        modelName: to.modelName,
+        providerOptions: to.providerOptions,
       });
-      throw error;
-    }
-  }
+    },
+    onInterrupted: ({ candidate, error }) => {
+      logger.error("Tool-call stream interrupted after output", {
+        label,
+        provider: candidate.provider,
+        model: candidate.modelName,
+        error,
+      });
+      captureException(error, { userEmail, extra: { label } });
+    },
+  });
+  onModelResolved?.({
+    provider: primary.provider,
+    modelName: primary.modelName,
+    providerOptions: primary.providerOptions,
+  });
 
-  throw new Error("No models available for tool-call stream");
+  const agent = new ToolLoopAgent({
+    model,
+    tools: bridgedAgent.tools,
+    activeTools: bridgedAgent.bridged
+      ? undefined
+      : (activeTools as Array<keyof typeof agentTools> | undefined),
+    prepareStep,
+    stopWhen: stopWhen ?? (maxSteps ? isStepCount(maxSteps) : undefined),
+    temperature,
+    ...commonOptions,
+    telemetry: buildLlmTelemetry({
+      userEmail,
+      userId,
+      emailAccountId,
+      label,
+      provider: primary.provider,
+      modelName: primary.modelName,
+    }),
+    providerOptions: primary.providerOptions,
+    onEnd: async (result) => {
+      // Usage goes to the model that finished the run, which after a fallback
+      // also served the most steps.
+      const finalCandidate = model.getActiveCandidate();
+      const usagePromise = saveUsageWithMetadata({
+        result,
+        usage: result.usage,
+        userId,
+        email: userEmail,
+        emailAccountId,
+        provider: finalCandidate.provider,
+        model: finalCandidate.modelName,
+        label,
+        hasUserApiKey: modelOptions.hasUserApiKey,
+      });
+
+      const finishPromise = onEnd?.(
+        result as Parameters<
+          NonNullable<StreamTextOnEndCallback<Record<string, Tool>>>
+        >[0],
+      );
+
+      try {
+        await Promise.all([usagePromise, finishPromise]);
+      } catch (error) {
+        logger.error("Error in onEnd callback", {
+          label,
+          userEmail,
+          error,
+        });
+        logger.trace("Result", { result });
+        captureException(error, {
+          userEmail,
+          extra: { label },
+        });
+      }
+    },
+  });
+
+  try {
+    return await agent.stream({
+      messages: protectedMessages as ModelMessage[],
+      experimental_transform: smoothStream({ chunking: "word" }),
+      onStepEnd,
+      abortSignal,
+    });
+  } catch (error) {
+    logger.error("Error in chat completion stream", {
+      label,
+      userEmail,
+      error,
+    });
+    captureException(error, {
+      userEmail,
+      extra: { label },
+    });
+    throw error;
+  }
 }
 
 function getModelOptionsForRoute({
