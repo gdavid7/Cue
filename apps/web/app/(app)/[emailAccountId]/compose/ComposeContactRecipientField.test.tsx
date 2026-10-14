@@ -101,6 +101,23 @@ describe("compose contact suggestions", () => {
     ).toBeTruthy();
   });
 
+  it("commits a typed address on comma and when leaving the field", async () => {
+    env.NEXT_PUBLIC_CONTACTS_ENABLED = false;
+    render(<Harness />);
+    const input = screen.getByRole("combobox", { name: "To" });
+    fireEvent.change(input, { target: { value: "first@example.com" } });
+    fireEvent.keyDown(input, { key: "," });
+    expect(
+      await screen.findByRole("button", { name: "Remove first@example.com" }),
+    ).toBeTruthy();
+
+    fireEvent.change(input, { target: { value: "second@example.com" } });
+    fireEvent.blur(input);
+    expect(
+      await screen.findByRole("button", { name: "Remove second@example.com" }),
+    ).toBeTruthy();
+  });
+
   it("keeps local suggestions available alongside the API reconnect-required prompt", async () => {
     env.NEXT_PUBLIC_CONTACTS_ENABLED = true;
     render(<Harness reconnectRequired />);

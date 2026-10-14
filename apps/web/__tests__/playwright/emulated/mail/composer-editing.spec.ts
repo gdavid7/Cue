@@ -29,8 +29,8 @@ test("keeps keyboard focus in the composer and follows the message field order",
   await expect(toField).toBeFocused();
 
   for (const field of [
-    dialog.getByRole("combobox", { exact: true, name: "Cc" }),
-    dialog.getByRole("combobox", { exact: true, name: "Bcc" }),
+    dialog.getByRole("button", { exact: true, name: "Add Cc recipients" }),
+    dialog.getByRole("button", { exact: true, name: "Add Bcc recipients" }),
     dialog.getByPlaceholder("Subject"),
     dialog.getByRole("textbox", { name: "Email message" }),
     dialog.getByRole("button", { name: "Show signature" }),
