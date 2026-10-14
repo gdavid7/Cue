@@ -1567,6 +1567,8 @@ export function MailShell() {
                     ? moveToInboxTargets
                     : undefined,
                   onReply: () => openReply(false),
+                  onSnooze:
+                    targetsTrashed || targetsSpam ? undefined : snoozeTargets,
                   onDelete: trashTargets,
                   onMore: () => setIsMenuOpen(true),
                 }

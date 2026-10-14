@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import {
   CalendarDaysIcon,
   ChevronLeftIcon,
@@ -25,8 +25,11 @@ import {
  */
 export function SnoozeButton({
   onSnooze,
+  trigger,
 }: {
   onSnooze: (until: Date) => void;
+  /** Replaces the toolbar icon button; must be a single focusable element. */
+  trigger?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [showCustom, setShowCustom] = useState(false);
@@ -51,13 +54,17 @@ export function SnoozeButton({
 
   return (
     <Popover onOpenChange={onOpenChange} open={open}>
-      <Tooltip shortcuts={["snooze"]}>
-        <PopoverTrigger asChild>
-          <Button aria-label="Snooze" size="iconXs" variant="outline">
-            <Clock3Icon className="size-3.5" />
-          </Button>
-        </PopoverTrigger>
-      </Tooltip>
+      {trigger ? (
+        <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      ) : (
+        <Tooltip shortcuts={["snooze"]}>
+          <PopoverTrigger asChild>
+            <Button aria-label="Snooze" size="iconXs" variant="outline">
+              <Clock3Icon className="size-3.5" />
+            </Button>
+          </PopoverTrigger>
+        </Tooltip>
+      )}
       <PopoverContent
         align="end"
         aria-label="Snooze until"

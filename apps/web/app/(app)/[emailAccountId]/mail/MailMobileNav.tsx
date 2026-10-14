@@ -4,10 +4,11 @@ import {
   ArchiveIcon,
   ArchiveRestoreIcon,
   ArrowLeftIcon,
+  Clock3Icon,
   EllipsisIcon,
   InboxIcon,
   MenuIcon,
-  PenIcon,
+  PenLineIcon,
   ReplyIcon,
   SunIcon,
   Trash2Icon,
@@ -17,6 +18,7 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
 import { barItemClassName } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
+import { SnoozeButton } from "@/app/(app)/[emailAccountId]/mail/SnoozeButton";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useComposeModal } from "@/providers/ComposeModalProvider";
 import { cn } from "@/utils";
@@ -29,6 +31,8 @@ export type MailMobileReaderActions = {
   /** Set for an archived conversation; takes Archive's place. */
   onMoveToInbox?: () => void;
   onReply: () => void;
+  /** Absent where snoozing doesn't apply (Trash, Spam). */
+  onSnooze?: (until: Date) => void;
   onDelete: () => void;
   onMore: () => void;
 };
@@ -95,6 +99,20 @@ export function MailMobileNav({
           label="Reply"
           onClick={readerActions.onReply}
         />
+        {readerActions.onSnooze ? (
+          <SnoozeButton
+            onSnooze={readerActions.onSnooze}
+            trigger={
+              <button
+                type="button"
+                className={cn(barItemClassName, "text-foreground")}
+              >
+                <Clock3Icon className="size-5" />
+                Snooze
+              </button>
+            }
+          />
+        ) : null}
         <BarButton
           current
           icon={Trash2Icon}
@@ -138,7 +156,7 @@ export function MailMobileNav({
         onClick={openCompose}
         type="button"
       >
-        <PenIcon className="size-5" />
+        <PenLineIcon className="size-5" />
       </button>
       <Link
         aria-current={isToday ? "page" : undefined}
