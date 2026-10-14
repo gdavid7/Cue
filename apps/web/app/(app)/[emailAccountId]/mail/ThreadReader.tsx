@@ -30,7 +30,12 @@ import { Button } from "@/components/ui/button";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useHiddenDraftMessageIds } from "@/hooks/useHiddenDraftMessageIds";
-import { extractEmailAddress, extractNameFromEmail } from "@/utils/email";
+import {
+  extractEmailAddress,
+  extractNameFromEmail,
+  isSameEmailAddress,
+} from "@/utils/email";
+import { GmailLabel } from "@/utils/gmail/label";
 import { PublisherDiscussion } from "@/components/team-comments/PublisherDiscussion";
 import type { OutgoingThreadMessage } from "@/utils/mail-engine/conversation-thread";
 
@@ -135,9 +140,10 @@ export function ThreadReader({
   menu,
   renderMessageMenu,
 }: ThreadReaderProps) {
-  const lastReceivedId = messages.findLast(
-    (message) => !message.labelIds?.includes("DRAFT"),
-  )?.id;
+  const lastReceived = messages.findLast(
+    (message) => !message.labelIds?.includes(GmailLabel.DRAFT),
+  );
+  const lastReceivedId = lastReceived?.id;
   const [senderContext, setSenderContext] = useState<{
     messageId: string;
     senderEmail: string;
@@ -147,7 +153,17 @@ export function ThreadReader({
   const isNarrow = readerWidth < INLINE_SIDE_PANEL_MIN_WIDTH;
   // Until the reader is measured its width reads as 0, which isn't a phone.
   const isPhone = readerWidth > 0 && readerWidth < PHONE_READER_MAX_WIDTH;
-  const { emailAccountId } = useAccount();
+  const { emailAccountId, userEmail } = useAccount();
+  // Related items help answer the newest message, so they show only while
+  // it's someone else's: not once the user's reply, sent or sending, is newest.
+  const newestIsIncoming =
+    Boolean(lastReceived) &&
+    !lastReceived?.labelIds?.includes(GmailLabel.SENT) &&
+    !isSameEmailAddress(
+      extractEmailAddress(lastReceived?.headers.from ?? ""),
+      userEmail,
+    ) &&
+    !localAvailability?.outgoing.length;
   const [, setOpenThread] = useQueryStates({
     "thread-id": parseAsString,
     "thread-account-id": parseAsString,
@@ -297,7 +313,7 @@ export function ThreadReader({
               autoOpenReplyForMessageId ?? replyRequestedFor,
             )}
             afterLatestMessage={
-              canAssist && emailAccountId && threadId ? (
+              canAssist && newestIsIncoming && emailAccountId && threadId ? (
                 <div className="mt-4 -mx-2">
                   <ThreadContextList
                     emailAccountId={emailAccountId}

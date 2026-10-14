@@ -21,8 +21,21 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/ReaderToolbar", () => ({
   ReaderToolbar: ({ subject }: { subject: string }) => <h1>{subject}</h1>,
 }));
 vi.mock("@/components/email-list/EmailThread", () => ({
-  EmailThread: ({ renderToolbar }: { renderToolbar: () => ReactNode }) =>
-    renderToolbar(),
+  EmailThread: ({
+    renderToolbar,
+    afterLatestMessage,
+  }: {
+    renderToolbar: () => ReactNode;
+    afterLatestMessage?: ReactNode;
+  }) => (
+    <>
+      {renderToolbar()}
+      {afterLatestMessage}
+    </>
+  ),
+}));
+vi.mock("@/components/thread-context/ThreadContextList", () => ({
+  ThreadContextList: () => <section aria-label="Related" />,
 }));
 vi.mock("@/components/team-comments/PublisherDiscussion", () => ({
   PublisherDiscussion: () => null,
@@ -79,6 +92,31 @@ describe("ThreadReader", () => {
     } finally {
       showDraftAgain();
     }
+  });
+
+  it("shows related items under a message the user received", () => {
+    renderReader({
+      refetch: vi.fn(),
+      messages: [createMessage("message-1", "Office hours", ["INBOX"])],
+    });
+
+    expect(screen.getByRole("region", { name: "Related" })).toBeTruthy();
+  });
+
+  // They help answer a message, and there is nothing to answer in your own.
+  it("leaves related items out once the user's reply is newest", () => {
+    renderReader({
+      refetch: vi.fn(),
+      messages: [
+        createMessage("message-1", "Office hours", ["INBOX"]),
+        {
+          ...createMessage("reply-1", "Re: Office hours", ["SENT"]),
+          headers: { subject: "Re: Office hours", from: "user@example.com" },
+        } as ThreadMessage,
+      ],
+    });
+
+    expect(screen.queryByRole("region", { name: "Related" })).toBeNull();
   });
 });
 
