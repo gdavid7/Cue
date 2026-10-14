@@ -33,12 +33,22 @@ import { SectionHeader } from "@/components/Typography";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ItemCard, ItemSeparator } from "@/components/ui/item";
+import {
+  Item,
+  ItemActions,
+  ItemCard,
+  ItemContent,
+  ItemDescription,
+  ItemSeparator,
+  ItemTitle,
+} from "@/components/ui/item";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useMessagingChannels } from "@/hooks/useMessagingChannels";
 import { usePremium } from "@/hooks/usePremium";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { cn } from "@/utils";
+import { prefixPath } from "@/utils/path";
+import { logOut } from "@/utils/user";
 import { env } from "@/env";
 
 export function SettingsContent() {
@@ -125,8 +135,46 @@ export function SettingsContent() {
           <EmailOtpSection hasMultipleAccounts={emailAccounts.length > 1} />
           <ItemSeparator />
           <AppearanceSection />
+          {activeEmailAccountId && (
+            <>
+              <ItemSeparator />
+              <Item size="sm" asChild>
+                <Link
+                  href={prefixPath(
+                    activeEmailAccountId,
+                    "/automation?tab=settings",
+                  )}
+                >
+                  <ItemContent>
+                    <ItemTitle>Email &amp; AI preferences</ItemTitle>
+                    <ItemDescription>
+                      Signature, snippets and writing style
+                    </ItemDescription>
+                  </ItemContent>
+                  <ItemActions>
+                    <ChevronRightIcon className="size-4 text-muted-foreground" />
+                  </ItemActions>
+                </Link>
+              </Item>
+            </>
+          )}
         </ItemCard>
         <ItemCard>
+          <Item size="sm">
+            <ItemContent>
+              <ItemTitle>Sign out</ItemTitle>
+            </ItemContent>
+            <ItemActions>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => logOut(window.location.origin)}
+              >
+                Sign out
+              </Button>
+            </ItemActions>
+          </Item>
+          <ItemSeparator />
           <DeleteSection />
         </ItemCard>
       </SettingsGroup>
@@ -220,7 +268,7 @@ function EmailAccountSettingsCard({
               className="gap-1 text-xs font-normal cursor-pointer hover:bg-muted"
             >
               <PlugIcon className="size-3" />
-              Connect Apps
+              Slack &amp; Teams
             </Badge>
           </Link>
         )}
