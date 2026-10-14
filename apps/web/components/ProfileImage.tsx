@@ -1,4 +1,5 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { getInitials } from "@/utils/email";
 
 export function ProfileImage({
   image,
@@ -14,7 +15,9 @@ export function ProfileImage({
   return (
     <Avatar className={className}>
       <AvatarImage src={image || undefined} width={size} height={size} />
-      <AvatarFallback>{label.at(0)?.toUpperCase()}</AvatarFallback>
+      <AvatarFallback className="text-[0.625rem] font-medium">
+        {getInitials(label)}
+      </AvatarFallback>
     </Avatar>
   );
 }

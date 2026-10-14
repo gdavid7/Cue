@@ -45,6 +45,7 @@ import {
   openSupportChat,
 } from "@/components/CrispChat";
 import { getShortcutHint } from "@/lib/shortcuts/registry";
+import { getInitials } from "@/utils/email";
 import { shortcutsDialogOpenAtom } from "@/store/command-palette";
 import { useSetAtom } from "jotai";
 
@@ -81,9 +82,8 @@ export function NavUser() {
                 src={emailAccount?.image || ""}
                 alt={emailAccount?.name || emailAccount?.email}
               />
-              <AvatarFallback className="rounded-lg">
-                {emailAccount?.name?.charAt(0) ||
-                  emailAccount?.email?.charAt(0)}
+              <AvatarFallback className="rounded-lg text-xs font-medium">
+                {getInitials(emailAccount?.name || emailAccount?.email || "")}
               </AvatarFallback>
             </Avatar>
             {emailAccount ? (

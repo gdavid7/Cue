@@ -374,10 +374,6 @@ function writeEmulateSeed({
     .replaceAll("__PLAYWRIGHT_MEETING_START__", meetingStart.toISOString())
     .replaceAll("__PLAYWRIGHT_MEETING_END__", meetingEnd.toISOString())
     .replaceAll(
-      "__PLAYWRIGHT_PROFILE_PICTURE__",
-      `data:image/png;base64,${profileImage.toString("base64")}`,
-    )
-    .replaceAll(
       "__PLAYWRIGHT_READER_VISUAL_RAW__",
       createReaderVisualMessage({
         attachment: profileImage,
