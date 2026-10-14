@@ -2,7 +2,11 @@
 
 import { useEffect, type PropsWithChildren } from "react";
 import { usePathname } from "next/navigation";
-import { ThemeProvider as NextThemesProvider, useTheme } from "next-themes";
+import {
+  ThemeProvider as NextThemesProvider,
+  type ThemeProviderProps,
+  useTheme,
+} from "next-themes";
 import { getForcedTheme } from "@/components/theme-options";
 
 /**
@@ -14,18 +18,21 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   const pathname = usePathname();
   const forcedTheme = getForcedTheme(pathname);
 
-  return (
-    <NextThemesProvider
-      attribute="class"
-      defaultTheme="system"
-      enableSystem
-      disableTransitionOnChange
-      forcedTheme={forcedTheme}
-    >
-      <ThemeColorSync forcedTheme={forcedTheme} pathname={pathname} />
-      {children}
-    </NextThemesProvider>
-  );
+  const props: PropsWithChildren<ThemeProviderProps> = {
+    attribute: "class",
+    defaultTheme: "system",
+    enableSystem: true,
+    disableTransitionOnChange: true,
+    forcedTheme,
+    children: (
+      <>
+        <ThemeColorSync forcedTheme={forcedTheme} pathname={pathname} />
+        {children}
+      </>
+    ),
+  };
+
+  return <NextThemesProvider {...props} />;
 }
 
 // The browser and installed-app title bars read `theme-color`. The server
