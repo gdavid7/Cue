@@ -279,7 +279,7 @@ function slugify(name: string) {
     .replace(/^-+|-+$/g, "");
 }
 
-function parseAccountIndex(value: string | undefined): number | null {
+export function parseAccountIndex(value: string | undefined): number | null {
   if (!value || !/^\d{1,3}$/.test(value)) return null;
   return Number(value);
 }

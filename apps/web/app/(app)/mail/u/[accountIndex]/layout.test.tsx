@@ -51,6 +51,7 @@ describe("MailRouteLayout", () => {
     "99",
     "abc",
     "-1",
+    "0001",
   ])("sends /mail/u/%s, which names no account of theirs, to the first inbox", async (accountIndex) => {
     await expect(renderAt(accountIndex)).rejects.toThrow(
       "redirect:/mail/u/0/inbox",
@@ -59,7 +60,9 @@ describe("MailRouteLayout", () => {
 
   it("asks a signed-out visitor to log in", async () => {
     mocks.auth.mockResolvedValue(null);
-    await expect(renderAt("0")).rejects.toThrow("redirect:/login");
+    await expect(renderAt("0")).rejects.toThrow(
+      "redirect:/login?next=%2Fmail%2Fu%2F0",
+    );
   });
 
   it("sends a user without a mailbox to connect one", async () => {

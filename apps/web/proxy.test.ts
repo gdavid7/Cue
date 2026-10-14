@@ -17,6 +17,38 @@ describe("proxy matcher", () => {
     expect(matchesProxy("/missing-page")).toBe(false);
     expect(matchesProxy("/api/v1/rules")).toBe(false);
   });
+
+  it("runs for mail links, to keep them through login", () => {
+    expect(matchesProxy("/mail/u/0/inbox")).toBe(true);
+    expect(matchesProxy("/mail/u/1/label/receipts/thread-1")).toBe(true);
+  });
+});
+
+describe("proxy mail links", () => {
+  it("sends a signed-out visitor to log in, then back to the same mail", () => {
+    const response = proxy(
+      new NextRequest(
+        "https://www.getinboxzero.com/mail/u/0/needs-reply/t1?q=x",
+      ),
+    );
+
+    expect(response.status).toBe(307);
+    const location = new URL(response.headers.get("location") ?? "");
+    expect(location.pathname).toBe("/login");
+    expect(location.searchParams.get("next")).toBe(
+      "/mail/u/0/needs-reply/t1?q=x",
+    );
+  });
+
+  it("lets a request with a session through to the app's own checks", () => {
+    const response = proxy(
+      new NextRequest("https://www.getinboxzero.com/mail/u/0/inbox", {
+        headers: { cookie: "better-auth.session_token=abc.def" },
+      }),
+    );
+
+    expect(response.headers.get("location")).toBeNull();
+  });
 });
 
 describe("proxy content negotiation", () => {
