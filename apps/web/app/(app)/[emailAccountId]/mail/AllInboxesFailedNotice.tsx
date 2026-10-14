@@ -5,9 +5,11 @@ import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-in
 export function AllInboxesFailedNotice({
   accounts,
   failedAccountIds,
+  onRetry,
 }: {
   accounts: AllInboxesAccount[];
   failedAccountIds: string[];
+  onRetry: () => void;
 }) {
   if (!failedAccountIds.length) return null;
   const emails = accounts
@@ -21,8 +23,15 @@ export function AllInboxesFailedNotice({
       className="border-border border-b bg-amber-50 px-3 py-2 text-amber-900 text-xs dark:bg-amber-950/30 dark:text-amber-200"
     >
       {missing} couldn&apos;t be loaded, so{" "}
-      {emails.length === 1 ? "its" : "their"} mail is missing here. Try again in
-      a moment, or{" "}
+      {emails.length === 1 ? "its" : "their"} mail is missing here.{" "}
+      <button
+        type="button"
+        onClick={onRetry}
+        className="font-medium underline underline-offset-2"
+      >
+        Try again
+      </button>
+      , or{" "}
       <Link
         href="/accounts"
         className="font-medium underline underline-offset-2"

@@ -1698,6 +1698,9 @@ export function MailShell() {
                 <AllInboxesFailedNotice
                   accounts={combinedAccounts}
                   failedAccountIds={combinedThreadState.failedAccountIds}
+                  onRetry={() => {
+                    combinedThreadState.refetch().catch(() => undefined);
+                  }}
                 />
               ) : null}
               {!isAllAccounts && accountThreadState.cueSortingUnavailable ? (
