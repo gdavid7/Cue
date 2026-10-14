@@ -3,7 +3,10 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAIL_ENGINE_OPFS_DIRECTORY } from "./wasm-sqlite";
+import {
+  MAIL_ENGINE_OPFS_DIRECTORY,
+  MAIL_ENGINE_SAH_POOL_RETRY,
+} from "./wasm-sqlite";
 
 // Exercises the installed @sqlite.org/sqlite-wasm, including its pnpm patch.
 describe("OPFS SAH pool install", () => {
@@ -39,6 +42,38 @@ describe("OPFS SAH pool install", () => {
     expect(root.entries.has(MAIL_ENGINE_OPFS_DIRECTORY)).toBe(true);
     expect([...opaque.entries.keys()]).toEqual(["slot-1"]);
   });
+
+  it("installs again in the same context once the handle opens", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sqlite = await initBrowserSqlite();
+    const root = new FakeDirectory("");
+    const opaque = root
+      .directory(MAIL_ENGINE_OPFS_DIRECTORY)
+      .directory(".opaque");
+    const slot = new FakeFile("slot-1", true);
+    opaque.entries.set("slot-1", slot);
+    vi.stubGlobal("FileSystemHandle", FakeHandle);
+    vi.stubGlobal("FileSystemDirectoryHandle", FakeDirectory);
+    vi.stubGlobal("FileSystemFileHandle", FakeFile);
+    vi.stubGlobal("navigator", {
+      storage: { getDirectory: async () => root },
+    });
+    const options = {
+      name: `mail-engine-${crypto.randomUUID()}`,
+      directory: MAIL_ENGINE_OPFS_DIRECTORY,
+      ...MAIL_ENGINE_SAH_POOL_RETRY,
+    };
+    await expect(sqlite.installOpfsSAHPoolVfs(options)).rejects.toThrow(
+      "UnknownError",
+    );
+    slot.failsToOpen = false;
+
+    const pool = await sqlite.installOpfsSAHPoolVfs(options);
+
+    expect(pool.getCapacity()).toBe(1);
+    expect([...opaque.entries.keys()]).toEqual(["slot-1"]);
+  });
 });
 
 /**
@@ -69,7 +104,7 @@ class FakeHandle {
 
 class FakeFile extends FakeHandle {
   readonly kind = "file";
-  private readonly failsToOpen: boolean;
+  failsToOpen: boolean;
   constructor(name: string, failsToOpen = false) {
     super(name);
     this.failsToOpen = failsToOpen;

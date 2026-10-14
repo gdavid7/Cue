@@ -22,6 +22,14 @@ export const MAIL_ENGINE_OPFS_DIRECTORY = ".mail-engine";
 const MAILBOX_FILES_LOCK = "inbox-zero:mailbox-files";
 const MAILBOX_FILES_LOCK_WAIT_MS = 10_000;
 const MAILBOX_PATH = "/mailbox.sqlite";
+/**
+ * sqlite-wasm caches a failed pool install for the whole context, so Retry
+ * in the same tab would fail without trying. Re-initializing is safe because
+ * the patched sqlite-wasm only releases handles when an install fails.
+ */
+export const MAIL_ENGINE_SAH_POOL_RETRY = {
+  forceReinitIfPreviouslyFailed: true,
+};
 
 /** An in-memory mailbox database, for hosts that cannot persist one. */
 export async function createWasmMemoryDriver(): Promise<SqliteDriver> {
@@ -50,6 +58,7 @@ export async function createWasmMailStore(input: {
         name: "mail-engine",
         directory: MAIL_ENGINE_OPFS_DIRECTORY,
         initialCapacity: 8,
+        ...MAIL_ENGINE_SAH_POOL_RETRY,
       })
       .catch((error: unknown) => {
         // A file a closing context still holds clears on retry; any other
