@@ -25,6 +25,7 @@ describe("GET /api/mobile/all-inboxes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getThreadsMock.mockResolvedValue({ threads: [] });
+    prisma.threadTracker.findMany.mockResolvedValue([]);
     createEmailProviderMock.mockResolvedValue({
       getLabels: vi.fn().mockResolvedValue([]),
       getThreadsWithQuery: getThreadsMock,

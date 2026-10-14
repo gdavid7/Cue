@@ -28,7 +28,7 @@ describe("getHomeData", () => {
 
   it("sorts what needs a reply by priority and shows who it's from", async () => {
     const provider = mockProvider({
-      "To Reply": [
+      NEEDS_REPLY: [
         thread("mom", {
           from: "Mom <mom@example.org>",
           subject: "Dinner?",
@@ -58,7 +58,7 @@ describe("getHomeData", () => {
 
   it("shows the person you're waiting on, not yourself, when you wrote last", async () => {
     const provider = mockProvider({
-      "Awaiting Reply": [
+      AWAITING: [
         thread("superday", {
           from: `David <${USER}>`,
           to: "Alex Kim <akim@ctc.com>",
@@ -74,6 +74,39 @@ describe("getHomeData", () => {
       fromName: "Alex Kim",
       subject: "Superday",
     });
+  });
+
+  it("reads what needs a reply from Cue's records, only while it's in the inbox", async () => {
+    const provider = mockProvider({
+      NEEDS_REPLY: [
+        thread("open", {
+          from: "Ana <ana@example.org>",
+          subject: "Question",
+          labels: ["INBOX"],
+        }),
+        thread("archived", {
+          from: "Ben <ben@example.org>",
+          subject: "Old",
+          labels: [],
+        }),
+      ],
+    });
+
+    const home = await run(provider);
+
+    expect(home.needsYou.map((t) => t.threadId)).toEqual(["open"]);
+    expect(prisma.threadTracker.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          emailAccountId: "account-1",
+          type: "NEEDS_REPLY",
+          resolved: false,
+        },
+      }),
+    );
+    for (const [{ query }] of provider.getThreadsWithQuery.mock.calls) {
+      expect(query.labelIds).not.toContain("Label_To Reply");
+    }
   });
 
   it("ignores an unsent draft when showing who and when", async () => {
@@ -94,7 +127,7 @@ describe("getHomeData", () => {
       internalDate: String(NOW.getTime() + 60_000),
     });
 
-    const home = await run(mockProvider({ "To Reply": [mom] }));
+    const home = await run(mockProvider({ NEEDS_REPLY: [mom] }));
 
     expect(home.needsYou[0]).toMatchObject({
       fromName: "Mom",
@@ -178,7 +211,7 @@ describe("getHomeData", () => {
       labels: ["INBOX"],
     });
     const provider = mockProvider({
-      "To Reply": [sarah],
+      NEEDS_REPLY: [sarah],
       INBOX: [sarah, dentist],
     });
 
@@ -288,10 +321,31 @@ function thread(
   };
 }
 
-/** Returns the threads for whichever label a query asks for. */
+/**
+ * Returns the threads for whichever label a query asks for. NEEDS_REPLY and
+ * AWAITING are Cue's open reply trackers rather than labels.
+ */
 function mockProvider(threadsByLabel: Record<string, EmailThread[]>) {
   const nameById = new Map(LABELS.map((l) => [l.id, l.name]));
+  const threadsById = new Map(
+    Object.values(threadsByLabel)
+      .flat()
+      .map((t) => [t.id, t]),
+  );
+  prisma.threadTracker.findMany.mockImplementation((async ({
+    where,
+  }: {
+    where: { type: string };
+  }) =>
+    (threadsByLabel[where.type] ?? []).map((t) => ({
+      threadId: t.id,
+    }))) as never);
   return {
+    getThread: vi.fn(async (threadId: string) => {
+      const found = threadsById.get(threadId);
+      if (!found) throw new Error("Not found");
+      return found;
+    }),
     getLabels: vi.fn(async () => LABELS),
     getThreadsWithQuery: vi.fn(
       async ({ query }: { query: { labelIds?: string[] } }) => {

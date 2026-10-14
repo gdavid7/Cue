@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { fetchThreadsPage } from "@/utils/threads/fetch-page";
+import { getCueMembership } from "@/utils/split-inbox/cue-membership.server";
 
 vi.mock("@/utils/redis/thread-page-buffer", () => ({
   createPageBuffer: vi.fn(() => undefined),
+}));
+vi.mock("@/utils/split-inbox/cue-membership.server", () => ({
+  getCueMembership: vi.fn(),
 }));
 
 describe("fetchThreadsPage", () => {
@@ -144,5 +148,75 @@ describe("Other pagination", () => {
     expect(result.threads).toEqual([]);
     expect(result.nextPageToken).toBe("5");
     expect(emailProvider.getThreadsWithQuery).toHaveBeenCalledTimes(5);
+  });
+});
+
+describe("Cue-sorted pages", () => {
+  const thread = (id: string, messageId: string) => ({
+    id,
+    messages: [{ id: messageId, labelIds: ["INBOX"] }],
+  });
+
+  it("scans the inbox for conversations Cue sorted, without asking the provider for a label", async () => {
+    vi.mocked(getCueMembership).mockResolvedValue({
+      TO_REPLY: ["reply-1"],
+      NEWSLETTER: [],
+      MARKETING: [],
+    });
+    const emailProvider = {
+      name: "microsoft",
+      getThreadsWithQuery: vi
+        .fn()
+        .mockResolvedValueOnce({
+          threads: [thread("other", "other-1")],
+          nextPageToken: "second",
+        })
+        .mockResolvedValueOnce({ threads: [thread("reply", "reply-1")] }),
+    };
+
+    const result = await fetchThreadsPage({
+      query: { labelIds: ["INBOX"], cue: ["TO_REPLY"] },
+      emailProvider: emailProvider as never,
+      emailAccountId: "account",
+      maxResults: 1,
+      messageFormat: "metadata",
+    });
+
+    expect(result.threads.map(({ id }) => id)).toEqual(["reply"]);
+    expect(getCueMembership).toHaveBeenCalledWith({
+      emailAccountId: "account",
+    });
+    for (const [{ query }] of emailProvider.getThreadsWithQuery.mock.calls) {
+      expect(query).toEqual({ labelIds: ["INBOX"] });
+    }
+  });
+
+  it("keeps Cue-sorted conversations out of Other", async () => {
+    vi.mocked(getCueMembership).mockResolvedValue({
+      TO_REPLY: [],
+      NEWSLETTER: ["news-1"],
+      MARKETING: [],
+    });
+    const emailProvider = {
+      name: "google",
+      getThreadsWithQuery: vi.fn().mockResolvedValue({
+        threads: [thread("news", "news-1"), thread("kept", "kept-1")],
+      }),
+    };
+
+    const result = await fetchThreadsPage({
+      query: {
+        type: "inbox",
+        excludeSplits: [
+          { matchAll: true, filters: [{ kind: "CUE", value: "NEWSLETTER" }] },
+        ],
+      },
+      emailProvider: emailProvider as never,
+      emailAccountId: "account",
+      maxResults: 10,
+      messageFormat: "metadata",
+    });
+
+    expect(result.threads.map(({ id }) => id)).toEqual(["kept"]);
   });
 });

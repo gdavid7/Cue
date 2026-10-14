@@ -1,4 +1,5 @@
 import { internalDateToDate } from "@/utils/date";
+import type { CueMembership } from "@/utils/split-inbox/cue-filter";
 import { matchesSenderFilter } from "@/utils/split-inbox/sender-filter";
 import type { ParsedMessage } from "@/utils/types";
 import { mailSplitToThreadsQuery } from "@/utils/split-inbox/split-query";
@@ -9,45 +10,65 @@ import type {
 
 type SplitMessage = Pick<
   ParsedMessage,
-  "labelIds" | "headers" | "internalDate"
+  "id" | "labelIds" | "headers" | "internalDate"
 >;
+type SplitThread = { messages: SplitMessage[] };
 
 export function createOtherSplitFilter(
   splits: NonNullable<ThreadsQuery["excludeSplits"]>,
   now: Date = new Date(),
+  cueMembership?: CueMembership,
 ) {
-  const queries = splits
+  const matchers = splits
     .filter((split) => split.filters.length)
     .map((split) =>
-      mailSplitToThreadsQuery(
-        {
-          ...split,
-          filters: split.filters.map((filter) => ({
-            ...filter,
-            value: filter.value ?? null,
-          })),
-        },
-        now,
+      createThreadsQueryFilter(
+        mailSplitToThreadsQuery(
+          {
+            ...split,
+            filters: split.filters.map((filter) => ({
+              ...filter,
+              value: filter.value ?? null,
+            })),
+          },
+          now,
+        ),
+        cueMembership,
       ),
     );
-  // Gmail matches all AND conditions on the same message. Inspect the full
-  // conversation so mixed-label threads cannot also leak into Other.
-  return (thread: { messages: SplitMessage[] }): boolean =>
-    !queries.some((query) =>
-      thread.messages.some(
-        (message) =>
-          matchesMessage(message, query) &&
-          (!query.anyOf?.length ||
-            query.anyOf.some((condition) =>
-              matchesMessage(message, condition),
-            )),
-      ),
+  return (thread: SplitThread): boolean =>
+    !matchers.some((matches) => matches(thread));
+}
+
+/**
+ * Evaluates a split's query against loaded conversations, for conditions the
+ * provider can't answer itself. Gmail matches all AND conditions on the same
+ * message, so the full conversation is inspected one message at a time.
+ */
+export function createThreadsQueryFilter(
+  query: ThreadsQuery,
+  cueMembership?: CueMembership,
+) {
+  const cueSets = cueMembership && {
+    TO_REPLY: new Set(cueMembership.TO_REPLY),
+    NEWSLETTER: new Set(cueMembership.NEWSLETTER),
+    MARKETING: new Set(cueMembership.MARKETING),
+  };
+  return (thread: SplitThread): boolean =>
+    thread.messages.some(
+      (message) =>
+        matchesMessage(message, query, cueSets) &&
+        (!query.anyOf?.length ||
+          query.anyOf.some((condition) =>
+            matchesMessage(message, condition, cueSets),
+          )),
     );
 }
 
 function matchesMessage(
   message: SplitMessage,
   query: ThreadsQuery | ThreadsQueryLeaf,
+  cueSets: Record<keyof CueMembership, Set<string>> | undefined,
 ): boolean {
   const labels = message.labelIds ?? [];
   if (
@@ -72,5 +93,8 @@ function matchesMessage(
     )
       return false;
   }
+  const cueValues = typeof query.cue === "string" ? [query.cue] : query.cue;
+  if (cueValues?.some((value) => !cueSets?.[value].has(message.id)))
+    return false;
   return true;
 }

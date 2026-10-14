@@ -2,9 +2,12 @@ import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import { isIgnoredSender } from "@/utils/filter-ignored-senders";
 import type { Logger } from "@/utils/logger";
 import { mapWithConcurrency } from "@/utils/async";
+import { ThreadTrackerType } from "@/generated/prisma/enums";
+import prisma from "@/utils/prisma";
 
 const INBOX_LABEL_ID = "INBOX";
-const TO_REPLY_LABEL_NAME = "To Reply";
+const REPLIES_LIMIT = 20;
+const THREAD_CONCURRENCY = 5;
 const CATEGORY_LABELS = [
   { labelName: "Newsletter", displayName: "Newsletters" },
   { labelName: "Marketing", displayName: "Promotions" },
@@ -61,10 +64,6 @@ export async function loadAllInboxesSummary({
           throw labelsResult.reason;
         }
         const labels = labelsResult.value;
-        const toReplyLabel = labels.find(
-          (label) =>
-            label.name.toLowerCase() === TO_REPLY_LABEL_NAME.toLowerCase(),
-        );
         const categoryLabels = CATEGORY_LABELS.flatMap((category) => {
           const label = labels.find(
             (item) =>
@@ -72,23 +71,16 @@ export async function loadAllInboxesSummary({
           );
           return label ? [{ ...category, label }] : [];
         });
-        const repliesPromise = toReplyLabel
-          ? emailProvider.getThreadsWithQuery({
-              query: {
-                labelIds: [toReplyLabel.id, INBOX_LABEL_ID],
-              },
-              maxResults: 20,
-            })
-          : Promise.resolve({ threads: [] as EmailThread[] });
-
-        const [repliesResult] = await Promise.allSettled([repliesPromise]);
+        const [repliesResult] = await Promise.allSettled([
+          loadNeedsReplyThreads(account.id, emailProvider),
+        ]);
         const inboxThreads =
           inboxResult.status === "fulfilled"
             ? normalizeThreads(inboxResult.value.threads)
             : [];
         const replies =
           repliesResult.status === "fulfilled"
-            ? normalizeThreads(repliesResult.value.threads)
+            ? normalizeThreads(repliesResult.value)
             : [];
 
         if (inboxResult.status === "rejected") {
@@ -150,6 +142,39 @@ export async function loadAllInboxesSummary({
       .filter((summary) => summary.status === "error")
       .map((summary) => summary.accountId),
   };
+}
+
+/**
+ * Conversations still waiting on the user, from Cue's reply tracking rather
+ * than a mailbox label, kept only while they're in the inbox.
+ */
+async function loadNeedsReplyThreads(
+  emailAccountId: string,
+  emailProvider: EmailProvider,
+) {
+  const trackers = await prisma.threadTracker.findMany({
+    where: {
+      emailAccountId,
+      type: ThreadTrackerType.NEEDS_REPLY,
+      resolved: false,
+    },
+    select: { threadId: true },
+    orderBy: { sentAt: "desc" },
+    distinct: ["threadId"],
+    take: REPLIES_LIMIT,
+  });
+  const threads = await mapWithConcurrency(
+    trackers,
+    THREAD_CONCURRENCY,
+    ({ threadId }) => emailProvider.getThread(threadId).catch(() => null),
+  );
+  return threads.filter(
+    (thread): thread is EmailThread =>
+      !!thread &&
+      thread.messages.some((message) =>
+        message.labelIds?.includes(INBOX_LABEL_ID),
+      ),
+  );
 }
 
 function normalizeThreads(threads: EmailThread[]): EmailThread[] {

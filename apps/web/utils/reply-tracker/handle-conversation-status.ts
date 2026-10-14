@@ -164,7 +164,8 @@ export async function updateThreadTrackers({
           messageId,
         },
       },
-      update: {},
+      // All of the thread's trackers were just resolved, this one included.
+      update: { resolved: false, type: trackerType },
       create: {
         emailAccountId,
         threadId,

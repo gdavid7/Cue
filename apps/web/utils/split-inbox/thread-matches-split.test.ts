@@ -4,7 +4,10 @@ import {
   otherMailSplitQuery,
   type MailSplit,
 } from "@/utils/split-inbox/split-query";
-import { createOtherSplitFilter } from "@/utils/split-inbox/thread-matches-split";
+import {
+  createOtherSplitFilter,
+  createThreadsQueryFilter,
+} from "@/utils/split-inbox/thread-matches-split";
 
 const now = new Date("2026-01-10T12:00:00Z");
 const important: MailSplit = {
@@ -101,6 +104,46 @@ describe("Other inbox membership", () => {
     expect(threadMatchesSplit(conversation, split, now)).toBe(true);
     conversation.messages[0].internalDate = String(now.getTime());
     expect(threadMatchesSplit(conversation, split, now)).toBe(false);
+  });
+});
+
+describe("Cue-sorted conversations", () => {
+  const membership = {
+    TO_REPLY: ["0"],
+    NEWSLETTER: [],
+    MARKETING: ["1"],
+  };
+
+  it("matches a conversation when any of its messages is in Cue's records", () => {
+    const matches = createThreadsQueryFilter(
+      { anyOf: [{ cue: "NEWSLETTER" }, { cue: "MARKETING" }] },
+      membership,
+    );
+    expect(matches(thread(["INBOX"], ["INBOX"]))).toBe(true);
+    expect(matches(thread(["INBOX"]))).toBe(false);
+    expect(
+      createThreadsQueryFilter(
+        { cue: ["TO_REPLY"] },
+        membership,
+      )(thread(["INBOX"])),
+    ).toBe(true);
+  });
+
+  it("keeps conversations Cue sorted out of Other", () => {
+    const isOther = createOtherSplitFilter(
+      [{ matchAll: true, filters: [{ kind: "CUE", value: "TO_REPLY" }] }],
+      now,
+      membership,
+    );
+    expect(isOther(thread(["INBOX"]))).toBe(false);
+    expect(isOther(thread(["INBOX"], ["INBOX"]))).toBe(false);
+    expect(
+      createOtherSplitFilter(
+        [{ matchAll: true, filters: [{ kind: "CUE", value: "NEWSLETTER" }] }],
+        now,
+        membership,
+      )(thread(["INBOX"])),
+    ).toBe(true);
   });
 });
 

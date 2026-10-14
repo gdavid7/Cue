@@ -1,11 +1,57 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestLogger } from "@/__tests__/helpers";
+import prisma from "@/utils/__mocks__/prisma";
 import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import { loadAllInboxesSummary } from "./summary";
 
+vi.mock("@/utils/prisma");
+
 const logger = createTestLogger();
+/** Open reply trackers per account, as Cue's database holds them. */
+let trackedReplies: Record<string, EmailThread[]> = {};
 
 describe("loadAllInboxesSummary", () => {
+  beforeEach(() => {
+    trackedReplies = {};
+    prisma.threadTracker.findMany.mockImplementation((async ({
+      where,
+    }: {
+      where: { emailAccountId: string };
+    }) =>
+      (trackedReplies[where.emailAccountId] ?? []).map((t) => ({
+        threadId: t.id,
+      }))) as never);
+  });
+
+  it("lists replies from Cue's reply tracking, only while they're in the inbox", async () => {
+    const replies = [
+      thread("open-reply", ["INBOX"]),
+      thread("archived-reply", []),
+    ];
+    trackedReplies["account-1"] = replies;
+    const provider = createProvider({ replies });
+
+    const result = await loadAllInboxesSummary({
+      accounts: [
+        { id: "account-1", email: "one@example.com", provider: "google" },
+      ],
+      after: new Date("2026-07-23T00:00:00.000Z"),
+      createProvider: vi.fn().mockResolvedValue(provider),
+      logger,
+    });
+
+    expect(result.accounts[0].replies.map((t) => t.id)).toEqual(["open-reply"]);
+    expect(prisma.threadTracker.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          emailAccountId: "account-1",
+          type: "NEEDS_REPLY",
+          resolved: false,
+        },
+      }),
+    );
+  });
+
   it("keeps account results isolated and returns useful partial data", async () => {
     const accountOneProvider = createProvider({
       inbox: [
@@ -18,6 +64,8 @@ describe("loadAllInboxesSummary", () => {
       inboxError: new Error("Inbox unavailable"),
       replies: [thread("second-reply", ["INBOX", "reply-label"])],
     });
+    trackedReplies["account-1"] = [thread("reply-thread", ["INBOX"])];
+    trackedReplies["account-2"] = [thread("second-reply", ["INBOX"])];
 
     const result = await loadAllInboxesSummary({
       accounts: [
@@ -160,6 +208,7 @@ describe("loadAllInboxesSummary", () => {
         ),
       ],
     });
+    trackedReplies["account-1"] = [thread("ignored-thread", ["INBOX"])];
 
     const result = await loadAllInboxesSummary({
       accounts: [
@@ -185,15 +234,16 @@ function createProvider({
 }) {
   return {
     getLabels: vi.fn(async () => [
-      { id: "reply-label", name: "To Reply", type: "user" },
       { id: "newsletter-label", name: "Newsletter", type: "user" },
     ]),
-    getThreadsWithQuery: vi.fn(async ({ query }) => {
-      if (query?.type === "inbox") {
-        if (inboxError) throw inboxError;
-        return { threads: inbox };
-      }
-      return { threads: replies };
+    getThreadsWithQuery: vi.fn(async () => {
+      if (inboxError) throw inboxError;
+      return { threads: inbox };
+    }),
+    getThread: vi.fn(async (threadId: string) => {
+      const found = replies.find((reply) => reply.id === threadId);
+      if (!found) throw new Error("Not found");
+      return found;
     }),
   } as unknown as EmailProvider;
 }

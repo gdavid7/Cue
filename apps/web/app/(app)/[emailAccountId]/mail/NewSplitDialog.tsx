@@ -27,6 +27,10 @@ import {
   MAX_SPLIT_FILTERS,
   type MailSplitFilterDraft,
 } from "@/utils/split-inbox/split-filters";
+import {
+  CUE_FILTER_NAMES,
+  CUE_FILTER_VALUES,
+} from "@/utils/split-inbox/cue-filter";
 import { OLDER_THAN_OPTIONS } from "@/utils/split-inbox/split-query";
 import {
   availableLibraryFilters,
@@ -47,7 +51,14 @@ const FIELDS = [
   { kind: MailSplitFilterKind.UNREAD, name: "Is unread" },
   { kind: MailSplitFilterKind.STARRED, name: "Is starred" },
   { kind: MailSplitFilterKind.OLDER_THAN, name: "Older than" },
+  { kind: MailSplitFilterKind.CUE, name: "Sorted by Cue" },
 ] as const;
+
+const CUE_CHOICES: SplitChoice[] = CUE_FILTER_VALUES.map((value) => ({
+  id: value,
+  name: CUE_FILTER_NAMES[value],
+  value,
+}));
 
 export type SplitChoice = { id: string; name: string; value: string };
 
@@ -171,6 +182,7 @@ export function NewSplitDialog({
     (kind: MailSplitFilterKind): SplitChoice[] => {
       if (kind === MailSplitFilterKind.LABEL) return labels;
       if (kind === MailSplitFilterKind.CATEGORY) return categories;
+      if (kind === MailSplitFilterKind.CUE) return CUE_CHOICES;
       if (kind === MailSplitFilterKind.OLDER_THAN) {
         return OLDER_THAN_OPTIONS.map((option) => ({
           id: option.value,
@@ -992,6 +1004,11 @@ function conditionLabel(
       return (
         categories.find((category) => category.value === condition.value)
           ?.name ?? "Category"
+      );
+    case MailSplitFilterKind.CUE:
+      return (
+        CUE_CHOICES.find((choice) => choice.value === condition.value)?.name ??
+        "Sorted by Cue"
       );
   }
 }

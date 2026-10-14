@@ -19,6 +19,7 @@ import { useAccount } from "@/providers/EmailAccountProvider";
 import { dismissHintAction } from "@/utils/actions/hints";
 import { applyInboxStyleAction } from "@/utils/actions/mail-split";
 import type { ApplyInboxStyleBody } from "@/utils/actions/mail-split.validation";
+import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import { getActionErrorMessage } from "@/utils/error";
 import {
   getDefaultInboxStyle,
@@ -112,8 +113,9 @@ export function InboxStyleCard({ onDone }: { onDone: () => void }) {
         <span>
           Also add &ldquo;Needs reply&rdquo; and &ldquo;Reading&rdquo; tabs.{" "}
           <span className="text-muted-foreground">
-            Cue adds labels such as &ldquo;To Reply&rdquo; and
-            &ldquo;Newsletter&rdquo; in your mailbox; it never moves emails.
+            Cue sorts this mail inside Cue. Nothing changes in{" "}
+            {isMicrosoftProvider(provider) ? "Outlook" : "Gmail"}: no labels, no
+            moved emails.
           </span>
         </span>
       </label>

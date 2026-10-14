@@ -4,6 +4,10 @@ import type {
   ThreadsQueryLeaf,
 } from "@/utils/threads/validation";
 import { isOutlookInboxSection } from "@/utils/outlook/inbox-sections";
+import {
+  type CueFilterValue,
+  isCueFilterValue,
+} from "@/utils/split-inbox/cue-filter";
 
 export type MailSplitFilter = {
   kind: MailSplitFilterKind;
@@ -140,6 +144,9 @@ function matchAllQuery(split: QuerySplit, now: Date): ThreadsQuery {
         if (!query.before || before < query.before) query.before = before;
         break;
       }
+      case MailSplitFilterKind.CUE:
+        query.cue = [...(query.cue ?? []), cueValue(filter, split)];
+        break;
     }
   }
 
@@ -175,6 +182,8 @@ function matchAnyQuery(split: QuerySplit, now: Date): ThreadsQuery {
         return {
           before: olderThanDate(requireValue(filter, split, "age"), split, now),
         };
+      case MailSplitFilterKind.CUE:
+        return { cue: cueValue(filter, split) };
     }
   });
 
@@ -189,6 +198,15 @@ function requireValue(
   if (!filter.value)
     throw new Error(`Split "${split.name ?? "Other"}" has no ${what}`);
   return filter.value;
+}
+
+function cueValue(filter: MailSplitFilter, split: QuerySplit): CueFilterValue {
+  const value = requireValue(filter, split, "Cue sorting");
+  if (!isCueFilterValue(value))
+    throw new Error(
+      `Split "${split.name ?? "Other"}" has an unknown Cue sorting`,
+    );
+  return value;
 }
 
 function olderThanDate(token: string, split: QuerySplit, now: Date): Date {

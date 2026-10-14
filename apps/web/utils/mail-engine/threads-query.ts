@@ -4,8 +4,16 @@ import {
   type MailPredicate,
 } from "@inboxzero/mail-core/queries";
 import { isOutlookInboxSection } from "@/utils/outlook/inbox-sections";
+import {
+  type CueMembership,
+  isCueFilterValue,
+  splitUsesCue,
+} from "@/utils/split-inbox/cue-filter";
 import { parseBooleanSearchValue } from "@/utils/tokenize-search-query";
-import type { ThreadsQuery } from "@/utils/threads/validation";
+import type {
+  ThreadsQuery,
+  ThreadsQueryLeaf,
+} from "@/utils/threads/validation";
 
 export function threadsQueryToConversationQuery(input: {
   accountIds: string[];
@@ -46,7 +54,23 @@ export function withoutHiddenDrafts(
   };
 }
 
-export function threadsQueryToPredicate(query: ThreadsQuery): MailPredicate {
+export function threadsQueryUsesCue(query: ThreadsQuery) {
+  return Boolean(
+    query.cue?.length ||
+      query.anyOf?.some((leaf) => leaf.cue) ||
+      query.excludeSplits?.some(splitUsesCue),
+  );
+}
+
+/**
+ * `cueMembership` backs conditions on mail Cue sorted itself. Without it those
+ * conditions match nothing, so a tab never widens to the whole inbox while its
+ * membership loads.
+ */
+export function threadsQueryToPredicate(
+  query: ThreadsQuery,
+  cueMembership?: CueMembership,
+): MailPredicate {
   const clauses: MailPredicate[] = [];
   if (query.q) {
     clauses.push(...textQueryPredicates(query.q));
@@ -123,10 +147,15 @@ export function threadsQueryToPredicate(query: ThreadsQuery): MailPredicate {
       beforeMs: query.before ? query.before.getTime() : null,
     });
   }
+  for (const value of query.cue ?? []) {
+    clauses.push(cuePredicate(value, cueMembership));
+  }
   if (query.anyOf?.length) {
     clauses.push({
       kind: "any",
-      predicates: query.anyOf.map(leafToPredicate),
+      predicates: query.anyOf.map((leaf) =>
+        leafToPredicate(leaf, cueMembership),
+      ),
     });
   }
   if (query.excludeSplits?.length) {
@@ -136,7 +165,9 @@ export function threadsQueryToPredicate(query: ThreadsQuery): MailPredicate {
         kind: "any",
         predicates: query.excludeSplits.map((split) => ({
           kind: split.matchAll ? "all" : "any",
-          predicates: split.filters.map(splitFilterToPredicate),
+          predicates: split.filters.map((filter) =>
+            splitFilterToPredicate(filter, cueMembership),
+          ),
         })),
       },
     });
@@ -146,12 +177,11 @@ export function threadsQueryToPredicate(query: ThreadsQuery): MailPredicate {
   return { kind: "all", predicates: clauses };
 }
 
-function leafToPredicate(leaf: {
-  labelId?: string | null;
-  fromEmail?: string | null;
-  isUnread?: true | null;
-  inboxSection?: "focused" | "other" | null;
-}): MailPredicate {
+function leafToPredicate(
+  leaf: ThreadsQueryLeaf,
+  cueMembership: CueMembership | undefined,
+): MailPredicate {
+  if (leaf.cue) return cuePredicate(leaf.cue, cueMembership);
   if (leaf.inboxSection) {
     return { kind: "inbox_section", section: leaf.inboxSection };
   }
@@ -317,10 +347,15 @@ function stripGroupingParens(input: string) {
   return output.trim();
 }
 
-function splitFilterToPredicate(filter: {
-  kind: string;
-  value?: string | null;
-}): MailPredicate {
+function splitFilterToPredicate(
+  filter: { kind: string; value?: string | null },
+  cueMembership: CueMembership | undefined,
+): MailPredicate {
+  if (filter.kind === "CUE") {
+    return isCueFilterValue(filter.value)
+      ? cuePredicate(filter.value, cueMembership)
+      : { kind: "message", ids: [] };
+  }
   if (filter.kind === "UNREAD") return { kind: "read", value: false };
   if (filter.kind === "STARRED") return { kind: "starred", value: true };
   if (filter.kind === "FROM" && filter.value) {
@@ -353,4 +388,14 @@ function gmailTokenToPredicate(id: string): MailPredicate {
     return { kind: "membership", membership: "category", id };
   }
   return { kind: "membership", membership: "label", id };
+}
+
+function cuePredicate(
+  value: keyof CueMembership,
+  cueMembership: CueMembership | undefined,
+): MailPredicate {
+  return {
+    kind: "message",
+    ids: (cueMembership?.[value] ?? []).slice(0, MAX_MESSAGE_PREDICATE_IDS),
+  };
 }

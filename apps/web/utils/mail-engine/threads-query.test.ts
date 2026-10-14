@@ -111,6 +111,90 @@ describe("threadsQueryToPredicate", () => {
     });
   });
 
+  it("matches mail Cue sorted by the message ids Cue recorded for it", () => {
+    const membership = {
+      TO_REPLY: ["m-reply"],
+      NEWSLETTER: ["m-news"],
+      MARKETING: ["m-promo"],
+    };
+
+    expect(
+      threadsQueryToPredicate(
+        { labelIds: ["INBOX"], cue: ["TO_REPLY"] },
+        membership,
+      ),
+    ).toEqual({
+      kind: "all",
+      predicates: [
+        { kind: "role", role: "inbox" },
+        { kind: "message", ids: ["m-reply"] },
+      ],
+    });
+
+    expect(
+      threadsQueryToPredicate(
+        {
+          labelIds: ["INBOX"],
+          anyOf: [{ cue: "NEWSLETTER" }, { cue: "MARKETING" }],
+        },
+        membership,
+      ),
+    ).toEqual({
+      kind: "all",
+      predicates: [
+        { kind: "role", role: "inbox" },
+        {
+          kind: "any",
+          predicates: [
+            { kind: "message", ids: ["m-news"] },
+            { kind: "message", ids: ["m-promo"] },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      threadsQueryToPredicate(
+        {
+          type: "inbox",
+          excludeSplits: [
+            { matchAll: true, filters: [{ kind: "CUE", value: "TO_REPLY" }] },
+          ],
+        },
+        membership,
+      ),
+    ).toEqual({
+      kind: "all",
+      predicates: [
+        { kind: "mailbox", mailbox: "inbox" },
+        {
+          kind: "not",
+          predicate: {
+            kind: "any",
+            predicates: [
+              {
+                kind: "all",
+                predicates: [{ kind: "message", ids: ["m-reply"] }],
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("matches nothing for Cue sorting it hasn't loaded, rather than the whole inbox", () => {
+    expect(
+      threadsQueryToPredicate({ labelIds: ["INBOX"], cue: ["TO_REPLY"] }),
+    ).toEqual({
+      kind: "all",
+      predicates: [
+        { kind: "role", role: "inbox" },
+        { kind: "message", ids: [] },
+      ],
+    });
+  });
+
   it("excludes Gmail category splits from Other using category membership", () => {
     expect(
       threadsQueryToPredicate({

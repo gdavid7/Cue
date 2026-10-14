@@ -143,6 +143,43 @@ describe("mailSplitToThreadsQuery", () => {
     );
   });
 
+  it("keeps mail Cue sorted itself on Cue's own records, not a mailbox label", () => {
+    expect(
+      mailSplitToThreadsQuery(
+        split([
+          { kind: MailSplitFilterKind.CUE, value: "TO_REPLY" },
+          { kind: MailSplitFilterKind.UNREAD },
+        ]),
+        NOW,
+      ),
+    ).toEqual({ labelIds: ["INBOX"], cue: ["TO_REPLY"], isUnread: true });
+
+    expect(
+      mailSplitToThreadsQuery(
+        split(
+          [
+            { kind: MailSplitFilterKind.CUE, value: "NEWSLETTER" },
+            { kind: MailSplitFilterKind.CUE, value: "MARKETING" },
+          ],
+          false,
+        ),
+        NOW,
+      ),
+    ).toEqual({
+      labelIds: ["INBOX"],
+      anyOf: [{ cue: "NEWSLETTER" }, { cue: "MARKETING" }],
+    });
+  });
+
+  it("throws rather than guessing when a Cue sorting is unknown", () => {
+    expect(() =>
+      mailSplitToThreadsQuery(
+        split([{ kind: MailSplitFilterKind.CUE, value: "COLD_EMAIL" }]),
+        NOW,
+      ),
+    ).toThrow(/unknown Cue sorting/);
+  });
+
   it("throws rather than guessing when the age token is unknown", () => {
     expect(() =>
       mailSplitToThreadsQuery(

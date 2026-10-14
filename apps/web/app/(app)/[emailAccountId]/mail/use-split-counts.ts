@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import type { MailPredicate } from "@inboxzero/mail-core/queries";
 import { labelNamesToAccountScopedPredicate } from "@/app/(app)/[emailAccountId]/mail/use-combined-mail-threads";
+import { useCueMembership } from "@/hooks/useCueMembership";
 import type { EmailLabels } from "@/providers/email-label-types";
+import { splitUsesCue } from "@/utils/split-inbox/cue-filter";
 import { splitCountTargets } from "@/utils/split-inbox/split-counts";
 import type {
   MailSplit,
@@ -43,9 +45,15 @@ export function useSplitCounts({
         : undefined,
     [labelsByAccount, portableLabelSplits, stableAccountIds],
   );
+  // Cue's sorting is per account; views spanning accounts don't show its splits.
+  const cueAccountId = stableAccountIds.length === 1 ? stableAccountIds[0] : "";
+  const cueMembership = useCueMembership(
+    cueAccountId,
+    enabled && splits.some(splitUsesCue),
+  );
   const targets = useMemo(
-    () => splitCountTargets({ splits, overrides }),
-    [overrides, splits],
+    () => splitCountTargets({ splits, overrides, cueMembership }),
+    [cueMembership, overrides, splits],
   );
   const [countsById, setCountsById] = useState(EMPTY_COUNTS);
 

@@ -1,6 +1,10 @@
 import type { MailPredicate } from "@inboxzero/mail-core/queries";
 import { threadsQueryToPredicate } from "@/utils/mail-engine/threads-query";
 import {
+  type CueMembership,
+  splitUsesCue,
+} from "@/utils/split-inbox/cue-filter";
+import {
   OTHER_SPLIT_ID,
   mailSplitToThreadsQuery,
   otherMailSplitQuery,
@@ -15,11 +19,14 @@ export function splitCountTargets({
   splits,
   now = new Date(),
   overrides,
+  cueMembership,
 }: {
   splits: MailSplit[];
   now?: Date;
   /** `null` means the split's predicate is not ready, so it is left uncounted. */
   overrides?: ReadonlyMap<string, MailPredicate | null>;
+  /** Until it loads, splits that read Cue's own sorting are left uncounted. */
+  cueMembership?: CueMembership;
 }): Array<{ id: string; predicate: MailPredicate }> {
   const targets: Array<{ id: string; predicate: MailPredicate }> = [];
 
@@ -30,10 +37,16 @@ export function splitCountTargets({
       continue;
     }
 
+    const readsCue =
+      split.id === OTHER_SPLIT_ID
+        ? splits.some(splitUsesCue)
+        : splitUsesCue(split);
+    if (readsCue && !cueMembership) continue;
+
     try {
       targets.push({
         id: split.id,
-        predicate: predicateForSplit(split, splits, now),
+        predicate: predicateForSplit(split, splits, now, cueMembership),
       });
     } catch {
       // The list query throws for a split that is missing a required value.
@@ -48,10 +61,11 @@ function predicateForSplit(
   split: MailSplit,
   splits: MailSplit[],
   now: Date,
+  cueMembership: CueMembership | undefined,
 ): MailPredicate {
   const query =
     split.id === OTHER_SPLIT_ID
       ? otherMailSplitQuery(splits)
       : mailSplitToThreadsQuery(split, now);
-  return threadsQueryToPredicate(query);
+  return threadsQueryToPredicate(query, cueMembership);
 }

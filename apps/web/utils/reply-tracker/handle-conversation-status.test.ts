@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { determineConversationStatus } from "@/utils/reply-tracker/handle-conversation-status";
+import {
+  determineConversationStatus,
+  updateThreadTrackers,
+} from "@/utils/reply-tracker/handle-conversation-status";
 import { aiDetermineThreadStatus } from "@/utils/ai/reply/determine-thread-status";
 import { getEmailAccount, getMockMessage } from "@/__tests__/helpers";
-import { SystemType } from "@/generated/prisma/enums";
+import { SystemType, ThreadTrackerType } from "@/generated/prisma/enums";
+import prisma from "@/utils/__mocks__/prisma";
 
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/ai/reply/determine-thread-status");
@@ -93,5 +97,25 @@ describe("determineConversationStatus", () => {
 
     expect(aiDetermineThreadStatus).not.toHaveBeenCalled();
     expect(result.rule).toBeNull();
+  });
+});
+
+describe("updateThreadTrackers", () => {
+  it("reopens a message's tracker when it needs a reply again", async () => {
+    // Needs reply reads open trackers, so a message marked again after its
+    // tracker was resolved must come back rather than stay resolved.
+    await updateThreadTrackers({
+      emailAccountId: "account",
+      threadId: "thread",
+      messageId: "message",
+      sentAt: new Date("2026-10-14T12:00:00Z"),
+      status: SystemType.TO_REPLY,
+    });
+
+    expect(prisma.threadTracker.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: { resolved: false, type: ThreadTrackerType.NEEDS_REPLY },
+      }),
+    );
   });
 });

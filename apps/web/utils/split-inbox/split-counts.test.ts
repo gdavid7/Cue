@@ -48,6 +48,36 @@ describe("splitCountTargets", () => {
     );
   });
 
+  it("waits for Cue's records before counting splits that read them", () => {
+    const splits = [
+      split("unread", [{ kind: MailSplitFilterKind.UNREAD }]),
+      split("needs-reply", [
+        { kind: MailSplitFilterKind.CUE, value: "TO_REPLY" },
+      ]),
+      split(OTHER_SPLIT_ID, []),
+    ];
+
+    expect(
+      splitCountTargets({ splits, now: NOW }).map((target) => target.id),
+    ).toEqual(["unread"]);
+
+    const cueMembership = {
+      TO_REPLY: ["m1"],
+      NEWSLETTER: [],
+      MARKETING: [],
+    };
+    expect(
+      splitCountTargets({ splits, now: NOW, cueMembership }).find(
+        (target) => target.id === "needs-reply",
+      )?.predicate,
+    ).toEqual(
+      threadsQueryToPredicate(
+        mailSplitToThreadsQuery(splits[1], NOW),
+        cueMembership,
+      ),
+    );
+  });
+
   it("uses a ready override and skips splits that cannot be counted yet", () => {
     const predicate: MailPredicate = { kind: "role", role: "inbox" };
     const splits = [

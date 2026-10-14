@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isCueFilterValue } from "@/utils/split-inbox/cue-filter";
 import { senderFilterSchema } from "@/utils/split-inbox/sender-filter";
 import { MailSplitFilterKind } from "@/generated/prisma/enums";
 import { OLDER_THAN_OPTIONS } from "@/utils/split-inbox/split-query";
@@ -9,6 +10,7 @@ const KINDS_REQUIRING_VALUE = new Set<MailSplitFilterKind>([
   MailSplitFilterKind.CATEGORY,
   MailSplitFilterKind.FROM,
   MailSplitFilterKind.OLDER_THAN,
+  MailSplitFilterKind.CUE,
 ]);
 
 const OLDER_THAN_VALUES = OLDER_THAN_OPTIONS.map((option) => option.value);
@@ -39,6 +41,11 @@ export const mailSplitFilterSchema = z
       filter.kind !== MailSplitFilterKind.OLDER_THAN ||
       OLDER_THAN_VALUES.includes(filter.value ?? ""),
     { message: "Unknown age", path: ["value"] },
+  )
+  .refine(
+    (filter) =>
+      filter.kind !== MailSplitFilterKind.CUE || isCueFilterValue(filter.value),
+    { message: "Unknown Cue sorting", path: ["value"] },
   );
 
 export type MailSplitFilterDraft = z.infer<typeof mailSplitFilterSchema>;

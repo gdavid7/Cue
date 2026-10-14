@@ -36,6 +36,7 @@ export const GET = withEmailProvider(
         .filter(Boolean);
     const labelIds = readLabelIds("labelIds");
     const anyLabelIds = readLabelIds("anyLabelIds");
+    const cue = readLabelIds("cue");
     const after = searchParams.get("after");
     const before = searchParams.get("before");
     const isUnread = searchParams.get("isUnread");
@@ -55,6 +56,7 @@ export const GET = withEmailProvider(
       labelId,
       labelIds: labelIds.length ? labelIds : undefined,
       anyLabelIds: anyLabelIds.length ? anyLabelIds : undefined,
+      cue: cue.length ? cue : undefined,
       after,
       before,
       isUnread,

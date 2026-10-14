@@ -2199,6 +2199,9 @@ enum MailSplitFilterKind {
   CATEGORY
   FROM
   OLDER_THAN
+  // Mail Cue sorted itself, kept in Cue's database instead of as a mailbox
+  // label. The value is the SystemType that sorted it.
+  CUE
 }
 
 enum DraftReplyConfidence {

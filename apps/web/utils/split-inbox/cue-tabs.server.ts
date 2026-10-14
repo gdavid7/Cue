@@ -1,43 +1,49 @@
 import { after } from "next/server";
-import {
-  ActionType,
-  MailSplitFilterKind,
-  SystemType,
-} from "@/generated/prisma/enums";
+import { MailSplitFilterKind, SystemType } from "@/generated/prisma/enums";
 import { bulkProcessInboxEmails } from "@/utils/ai/choose-rule/bulk-process-emails";
 import { ONBOARDING_PROCESS_EMAILS_COUNT } from "@/utils/config";
-import { createEmailProvider } from "@/utils/email/provider";
 import { SafeError } from "@/utils/error";
-import type { EmailProvider } from "@/utils/email/types";
-import { findLabelByName } from "@/utils/label/find-label-by-name";
-import { normalizeLabelName } from "@/utils/label/normalize-label-name";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { CONVERSATION_STATUS_TYPES } from "@/utils/reply-tracker/conversation-status-config";
 import { getRuleConfig } from "@/utils/rule/consts";
 import { upsertSystemRule } from "@/utils/rule/rule";
 import { MAX_MAIL_SPLITS } from "@/utils/split-inbox/split-constants";
-import { createMailSplit } from "@/utils/split-inbox/splits.server";
+import {
+  createMailSplit,
+  updateMailSplit,
+} from "@/utils/split-inbox/splits.server";
 import { getEmailAccountForRuleExecution } from "@/utils/user/get";
 
-const READING_SYSTEM_TYPES = [SystemType.NEWSLETTER, SystemType.MARKETING];
-
 /**
- * "Needs reply" shows the To Reply label, but it takes every conversation
- * status rule to keep that label honest: once the person replies, reply
- * tracking relabels the thread with the status the AI picks, and it only does
- * so when that status's rule is on.
+ * "Needs reply" reads reply tracking, which takes every conversation status
+ * rule: once the person replies, the status the AI picks only resolves the
+ * conversation when that status's rule is on.
  */
 const CUE_TAB_SYSTEM_TYPES = [
   ...CONVERSATION_STATUS_TYPES,
-  ...READING_SYSTEM_TYPES,
+  SystemType.NEWSLETTER,
+  SystemType.MARKETING,
+];
+
+const CUE_TABS = [
+  {
+    name: "Needs reply",
+    matchAll: true,
+    values: [SystemType.TO_REPLY],
+  },
+  {
+    name: "Reading",
+    matchAll: false,
+    values: [SystemType.NEWSLETTER, SystemType.MARKETING],
+  },
 ];
 
 /**
- * The opt-in "Needs reply" and "Reading" tabs. Creates only the label rules
- * those two tabs read, each of which labels mail and leaves it where it is: no
- * archiving, no moving, no drafts. Rules the account already has are kept as
- * they are.
+ * The opt-in "Needs reply" and "Reading" tabs. They read what Cue's rules
+ * decided from Cue's own database, so the rules they need are added with no
+ * actions: nothing is labelled, archived, moved or drafted in the mailbox.
+ * Rules the account already has are kept as they are.
  */
 export async function addCueTabs({
   emailAccountId,
@@ -50,83 +56,49 @@ export async function addCueTabs({
 }) {
   const existingRules = await prisma.rule.findMany({
     where: { emailAccountId, systemType: { in: CUE_TAB_SYSTEM_TYPES } },
-    select: {
-      systemType: true,
-      actions: { select: { type: true, labelId: true } },
-    },
+    select: { systemType: true },
   });
-  const labelIds = new Map<SystemType, string>();
-  for (const rule of existingRules) {
-    const labelId = rule.actions.find(
-      (action) => action.type === ActionType.LABEL && action.labelId,
-    )?.labelId;
-    if (rule.systemType && labelId) labelIds.set(rule.systemType, labelId);
-  }
-
   const missing = CUE_TAB_SYSTEM_TYPES.filter(
     (systemType) =>
       !existingRules.some((rule) => rule.systemType === systemType),
   );
-  if (missing.length) {
-    const emailProvider = await createEmailProvider({
+  for (const systemType of missing) {
+    const config = getRuleConfig(systemType);
+    await upsertSystemRule({
+      name: config.name,
+      instructions: config.instructions,
+      actions: [],
       emailAccountId,
-      provider,
+      systemType,
+      runOnThreads: config.runOnThreads,
+      enabled: true,
       logger,
     });
-    const resolvedLabelIds = await getOrCreateLabelIds({
-      emailProvider,
-      names: missing.map((systemType) => getRuleConfig(systemType).label),
-      logger,
-    });
-    for (const systemType of missing) {
-      const config = getRuleConfig(systemType);
-      const labelId = resolvedLabelIds.get(config.label) ?? null;
-      await upsertSystemRule({
-        name: config.name,
-        instructions: config.instructions,
-        actions: [{ type: ActionType.LABEL, label: config.label, labelId }],
-        emailAccountId,
-        systemType,
-        runOnThreads: config.runOnThreads,
-        enabled: true,
-        logger,
-      });
-      if (labelId) labelIds.set(systemType, labelId);
-    }
   }
 
-  const needsReplyLabelId = labelIds.get(SystemType.TO_REPLY);
-  const readingLabelIds = READING_SYSTEM_TYPES.flatMap((systemType) => {
-    const labelId = labelIds.get(systemType);
-    return labelId ? [labelId] : [];
-  });
-  const splits = [
-    ...(needsReplyLabelId
-      ? [{ name: "Needs reply", matchAll: true, labelIds: [needsReplyLabelId] }]
-      : []),
-    ...(readingLabelIds.length
-      ? [{ name: "Reading", matchAll: false, labelIds: readingLabelIds }]
-      : []),
-  ];
-  for (const split of splits) {
-    const result = await createMailSplit({
+  for (const tab of CUE_TABS) {
+    const split = {
       emailAccountId,
-      name: split.name,
-      matchAll: split.matchAll,
-      filters: split.labelIds.map((value) => ({
-        kind: MailSplitFilterKind.LABEL,
+      name: tab.name,
+      matchAll: tab.matchAll,
+      filters: tab.values.map((value) => ({
+        kind: MailSplitFilterKind.CUE,
         value,
       })),
-    });
+    };
+    const result = await createMailSplit(split);
     if (result?.status === "limit") {
       throw new SafeError(
         `You can only have ${MAX_MAIL_SPLITS} splits. Turn one off and try again.`,
       );
     }
+    if (result?.status === "duplicate") {
+      await repointLabelTab(split);
+    }
   }
 
-  // New rules only label mail as it arrives, so the tabs would sit empty until
-  // then. Labeling the latest inbox mail fills them now.
+  // New rules only sort mail as it arrives, so the tabs would sit empty until
+  // then. Sorting the latest inbox mail fills them now.
   if (missing.length) {
     after(async () => {
       const emailAccount = await getEmailAccountForRuleExecution({
@@ -145,46 +117,25 @@ export async function addCueTabs({
 }
 
 /**
- * One label listing for every tab label, then the missing ones created side by
- * side: looking each up on its own lists every label again, and the provider
- * rations calls per minute. A label that can't be resolved maps to nothing, so
- * its rule is still added and resolves the label when it runs.
+ * Earlier versions backed these tabs with mailbox labels Cue created. A tab of
+ * the same name that still only reads labels is that tab, so it moves to Cue's
+ * own sorting; one the person built themselves is left alone.
  */
-async function getOrCreateLabelIds({
-  emailProvider,
-  names,
-  logger,
-}: {
-  emailProvider: EmailProvider;
-  names: string[];
-  logger: Logger;
+async function repointLabelTab(split: {
+  emailAccountId: string;
+  name: string;
+  matchAll: boolean;
+  filters: { kind: MailSplitFilterKind; value: string }[];
 }) {
-  const labels = await emailProvider
-    .getLabels({ includeHidden: true })
-    .catch((error) => {
-      logger.warn("Failed to list labels for Cue tabs", { error });
-      return [];
-    });
-  const entries = await Promise.all(
-    names.map(async (name) => {
-      const existing = findLabelByName({
-        labels,
-        name,
-        getLabelName: (label) => label.name,
-        normalize: normalizeLabelName,
-      });
-      if (existing) return [name, existing.id] as const;
-      try {
-        const created = await emailProvider.createLabel(name);
-        return [name, created.id] as const;
-      } catch (error) {
-        logger.error("Failed to create Cue tab label", {
-          labelName: name,
-          error,
-        });
-        return null;
-      }
-    }),
-  );
-  return new Map(entries.filter((entry) => entry !== null));
+  const existing = await prisma.mailSplit.findFirst({
+    where: { emailAccountId: split.emailAccountId, name: split.name },
+    select: { id: true, filters: { select: { kind: true } } },
+  });
+  const isLabelTab =
+    !!existing?.filters.length &&
+    existing.filters.every(
+      (filter) => filter.kind === MailSplitFilterKind.LABEL,
+    );
+  if (!existing || !isLabelTab) return;
+  await updateMailSplit({ ...split, id: existing.id });
 }

@@ -10,13 +10,16 @@ import { getRuleLabel } from "@/utils/rule/consts";
 import { labelMessageAndSync } from "@/utils/label.server";
 import { logReplyTrackerError } from "./error-logging";
 
-export type LabelIds = Record<
-  ConversationStatus,
-  {
-    labelId: string | null;
-    label: string | null;
-  }
->;
+type StatusLabel = {
+  labelId: string | null;
+  label: string | null;
+};
+
+/**
+ * `null` means that status's rule has no label action. Cue then tracks the
+ * status in its own database only and never touches mailbox labels for it.
+ */
+export type LabelIds = Record<ConversationStatus, StatusLabel | null>;
 
 export async function removeConflictingThreadStatusLabels({
   emailAccountId,
@@ -35,20 +38,22 @@ export async function removeConflictingThreadStatusLabels({
   providerLabels?: EmailLabel[];
   logger: Logger;
 }): Promise<boolean> {
-  const [dbLabels, providerLabels] = await fetchThreadStatusLabels({
-    emailAccountId,
-    provider,
-    dbLabels: providedDbLabels,
-    providerLabels: providedProviderLabels,
+  const dbLabels = providedDbLabels ?? (await getLabelsFromDb(emailAccountId));
+  const conflicting = CONVERSATION_STATUS_TYPES.flatMap((type) => {
+    const label = dbLabels[type as ConversationStatus];
+    return type !== systemType && label ? [{ type, label }] : [];
   });
+  if (!conflicting.length) return true;
+
+  const providerLabels =
+    providedProviderLabels ??
+    (await provider.getLabels({ includeHidden: true }));
 
   const removeLabelIds: string[] = [];
   const providerLabelIds = new Set(providerLabels.map((l) => l.id));
 
-  for (const type of CONVERSATION_STATUS_TYPES) {
-    if (type === systemType) continue;
-
-    let label = dbLabels[type as ConversationStatus];
+  for (const { type, label: dbLabel } of conflicting) {
+    let label = dbLabel;
 
     // provider.getLabels() may omit hidden Gmail labels, so verify by ID before
     // treating a DB label as stale.
@@ -119,6 +124,7 @@ export async function removeConflictingThreadStatusLabels({
  * 1. Removes other mutually exclusive thread status labels from the thread
  * 2. Adds the new label
  *
+ * Only statuses whose rule has a label action are written to the mailbox.
  * Used primarily for outbound reply tracking where we both remove and add.
  */
 export async function applyThreadStatusLabel({
@@ -136,13 +142,19 @@ export async function applyThreadStatusLabel({
   provider: EmailProvider;
   logger: Logger;
 }): Promise<void> {
-  const [dbLabels, providerLabels] = await fetchThreadStatusLabels({
-    emailAccountId,
-    provider,
-  });
+  const dbLabels = await getLabelsFromDb(emailAccountId);
+  if (
+    !CONVERSATION_STATUS_TYPES.some(
+      (type) => dbLabels[type as ConversationStatus],
+    )
+  ) {
+    logger.info("No conversation status rule labels mail, skipping labels");
+    return;
+  }
+  const providerLabels = await provider.getLabels({ includeHidden: true });
 
-  const addLabel = async (): Promise<boolean> => {
-    let targetLabel = dbLabels[systemType];
+  const addLabel = async (dbLabel: StatusLabel): Promise<boolean> => {
+    let targetLabel = dbLabel;
 
     // If we don't have labelId from DB, fetch/create it
     if (!targetLabel.labelId) {
@@ -204,7 +216,8 @@ export async function applyThreadStatusLabel({
     providerLabels,
     logger,
   });
-  const addedTargetLabel = await addLabel();
+  const targetDbLabel = dbLabels[systemType];
+  const addedTargetLabel = targetDbLabel ? await addLabel(targetDbLabel) : true;
 
   if (!removedConflicts || !addedTargetLabel) {
     logger.warn("Thread status label application completed with errors", {
@@ -235,16 +248,16 @@ export async function getLabelsFromDb(
   });
 
   const dbLabels: LabelIds = {
-    TO_REPLY: { labelId: null, label: null },
-    AWAITING_REPLY: { labelId: null, label: null },
-    FYI: { labelId: null, label: null },
-    ACTIONED: { labelId: null, label: null },
+    TO_REPLY: null,
+    AWAITING_REPLY: null,
+    FYI: null,
+    ACTIONED: null,
   };
 
   for (const rule of rules) {
     if (!rule.systemType) continue;
     const labelAction = rule.actions.find((a) => a.type === ActionType.LABEL);
-    if (labelAction?.labelId || labelAction?.label) {
+    if (labelAction) {
       dbLabels[rule.systemType as ConversationStatus] = {
         labelId: labelAction.labelId,
         label: labelAction.label,
@@ -253,21 +266,4 @@ export async function getLabelsFromDb(
   }
 
   return dbLabels;
-}
-
-async function fetchThreadStatusLabels({
-  emailAccountId,
-  provider,
-  dbLabels,
-  providerLabels,
-}: {
-  emailAccountId: string;
-  provider: EmailProvider;
-  dbLabels?: LabelIds;
-  providerLabels?: EmailLabel[];
-}): Promise<[LabelIds, EmailLabel[]]> {
-  return Promise.all([
-    dbLabels ?? getLabelsFromDb(emailAccountId),
-    providerLabels ?? provider.getLabels({ includeHidden: true }),
-  ]);
 }

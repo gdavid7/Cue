@@ -7,6 +7,7 @@ import {
   MAX_MAIL_SPLITS,
   MAX_SPLIT_LABELS,
 } from "@/utils/split-inbox/split-constants";
+import { cueFilterValueSchema } from "@/utils/split-inbox/cue-filter";
 import { microsoftGraphPageTokenSchema } from "@/utils/outlook/page-token";
 import { createSearchParams } from "@/utils/url";
 
@@ -21,6 +22,7 @@ const threadsQueryLeaf = z
     isUnread: z.literal(true).nullish(),
     before: z.coerce.date().nullish(),
     inboxSection: z.enum(["focused", "other"]).nullish(),
+    cue: cueFilterValueSchema.nullish(),
   })
   .refine(
     (leaf) =>
@@ -71,6 +73,8 @@ export const threadsQuery = z
     after: z.coerce.date().nullish(),
     before: z.coerce.date().nullish(),
     isUnread: z.coerce.boolean().nullish(),
+    /** Mail Cue sorted itself, all of which have to match. Read from Cue's database. */
+    cue: z.array(cueFilterValueSchema).max(MAX_SPLIT_FILTERS).nullish(),
     /**
      * Match any one of these, ANDed with the rest of the query. Travels over the
      * wire as JSON, since a list of objects has no natural query-string form.
@@ -92,6 +96,7 @@ export const threadsQuery = z
         !query.after &&
         !query.before &&
         !query.isUnread &&
+        !query.cue?.length &&
         !query.folderId &&
         !query.inboxSection &&
         !query.category &&

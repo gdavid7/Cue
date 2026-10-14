@@ -245,7 +245,14 @@ describe("applyThreadStatusLabel", () => {
           { id: "action-2", type: "LABEL", labelId: "label-awaiting-reply" },
         ],
       },
-      // FYI is missing from DB
+      // FYI labels mail, but its label id was never saved
+      {
+        id: "rule-3",
+        systemType: "FYI",
+        actions: [
+          { id: "action-3", type: "LABEL", labelId: null, label: null },
+        ],
+      },
       {
         id: "rule-4",
         systemType: "ACTIONED",
@@ -330,8 +337,14 @@ describe("applyThreadStatusLabel", () => {
   });
 
   test("creates label when not found in DB or provider labels", async () => {
-    // Mock prisma to return empty rules for target label
     vi.mocked(prisma.rule.findMany).mockResolvedValue([
+      {
+        id: "rule-1",
+        systemType: "TO_REPLY",
+        actions: [
+          { id: "action-1", type: "LABEL", labelId: null, label: null },
+        ],
+      },
       {
         id: "rule-2",
         systemType: "AWAITING_REPLY",
@@ -393,8 +406,15 @@ describe("applyThreadStatusLabel", () => {
   });
 
   test("handles label creation failure gracefully", async () => {
-    // Mock prisma to return empty rules for target label
-    vi.mocked(prisma.rule.findMany).mockResolvedValue([] as any);
+    vi.mocked(prisma.rule.findMany).mockResolvedValue([
+      {
+        id: "rule-1",
+        systemType: "TO_REPLY",
+        actions: [
+          { id: "action-1", type: "LABEL", labelId: null, label: null },
+        ],
+      },
+    ] as any);
 
     // Mock provider labels to be empty (no conflicting labels to remove)
     vi.mocked(mockProvider.getLabels).mockResolvedValue([]);
@@ -415,6 +435,57 @@ describe("applyThreadStatusLabel", () => {
     expect(mockProvider.removeThreadLabels).not.toHaveBeenCalled();
 
     // Should not call labelMessage since label creation failed
+    expect(mockProvider.labelMessage).not.toHaveBeenCalled();
+  });
+
+  test("leaves the mailbox alone when no status rule labels mail", async () => {
+    vi.mocked(prisma.rule.findMany).mockResolvedValue(
+      ["TO_REPLY", "AWAITING_REPLY", "FYI", "ACTIONED"].map((systemType) => ({
+        id: `rule-${systemType}`,
+        systemType,
+        actions: [],
+      })) as any,
+    );
+
+    await applyThreadStatusLabel({
+      emailAccountId,
+      threadId,
+      messageId,
+      systemType: "TO_REPLY",
+      provider: mockProvider,
+      logger,
+    });
+
+    expect(mockProvider.getLabels).not.toHaveBeenCalled();
+    expect(mockProvider.createLabel).not.toHaveBeenCalled();
+    expect(mockProvider.labelMessage).not.toHaveBeenCalled();
+    expect(mockProvider.removeThreadLabels).not.toHaveBeenCalled();
+  });
+
+  test("only touches the labels of statuses whose rule labels mail", async () => {
+    vi.mocked(prisma.rule.findMany).mockResolvedValue([
+      { id: "rule-1", systemType: "TO_REPLY", actions: [] },
+      { id: "rule-2", systemType: "AWAITING_REPLY", actions: [] },
+      {
+        id: "rule-3",
+        systemType: "FYI",
+        actions: [{ id: "action-3", type: "LABEL", labelId: "label-fyi" }],
+      },
+    ] as any);
+
+    await applyThreadStatusLabel({
+      emailAccountId,
+      threadId,
+      messageId,
+      systemType: "TO_REPLY",
+      provider: mockProvider,
+      logger,
+    });
+
+    expect(mockProvider.removeThreadLabels).toHaveBeenCalledWith(threadId, [
+      "label-fyi",
+    ]);
+    expect(mockProvider.createLabel).not.toHaveBeenCalled();
     expect(mockProvider.labelMessage).not.toHaveBeenCalled();
   });
 

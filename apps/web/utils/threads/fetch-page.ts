@@ -6,7 +6,11 @@ import { createPageBuffer } from "@/utils/redis/thread-page-buffer";
 import { getThreadTimestamp } from "@/utils/threads/sort";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 
-import { createOtherSplitFilter } from "@/utils/split-inbox/thread-matches-split";
+import { getCueMembership } from "@/utils/split-inbox/cue-membership.server";
+import {
+  createOtherSplitFilter,
+  createThreadsQueryFilter,
+} from "@/utils/split-inbox/thread-matches-split";
 
 const LABEL_CONCURRENCY = 4;
 
@@ -34,25 +38,41 @@ export async function fetchThreadsPage({
     if (emailProvider.name !== "google")
       throw new Error("Other split exclusions are only supported for Gmail");
     const { excludeSplits, ...base } = query;
-    const isOther = createOtherSplitFilter(excludeSplits);
-    const threads: EmailThread[] = [];
-    let nextPageToken = pageToken;
-    // Bound sparse-inbox scans per request. Returning the continuation, even
-    // with an empty page, lets the reader keep going without losing messages.
-    for (let page = 0; page < 5; page++) {
-      const result = await fetchThreadsPage({
-        query: base,
-        emailProvider,
-        emailAccountId,
-        maxResults: maxResults - threads.length,
-        pageToken: nextPageToken,
-        messageFormat,
-      });
-      threads.push(...result.threads.filter(isOther));
-      nextPageToken = result.nextPageToken;
-      if (!nextPageToken || threads.length >= maxResults) break;
-    }
-    return { threads, nextPageToken };
+    const usesCue = excludeSplits.some((split) =>
+      split.filters.some((filter) => filter.kind === "CUE"),
+    );
+    const cueMembership = usesCue
+      ? await getCueMembership({ emailAccountId })
+      : undefined;
+    return fetchFilteredPages({
+      query: base,
+      matches: createOtherSplitFilter(excludeSplits, new Date(), cueMembership),
+      emailProvider,
+      emailAccountId,
+      maxResults,
+      pageToken,
+      messageFormat,
+    });
+  }
+
+  // Mail Cue sorted itself has no mailbox label to query, so the provider
+  // lists the rest of the query and Cue's own records narrow it.
+  const anyOfUsesCue = query.anyOf?.some((leaf) => leaf.cue) ?? false;
+  if (query.cue?.length || anyOfUsesCue) {
+    const { cue, anyOf, ...rest } = query;
+    const cueMembership = await getCueMembership({ emailAccountId });
+    return fetchFilteredPages({
+      query: anyOfUsesCue ? rest : { ...rest, anyOf },
+      matches: createThreadsQueryFilter(
+        { cue, anyOf: anyOfUsesCue ? anyOf : undefined },
+        cueMembership,
+      ),
+      emailProvider,
+      emailAccountId,
+      maxResults,
+      pageToken,
+      messageFormat,
+    });
   }
 
   if (query.q) {
@@ -91,7 +111,8 @@ export async function fetchThreadsPage({
       dedupeItemKey: (thread) => thread.id,
       loadPage: async ({ source, pageToken }) => {
         const { anyOf: _anyOf, ...base } = query;
-        const { labelId, ...condition } = source.condition;
+        // Cue-sorted branches never reach the provider; they're handled above.
+        const { labelId, cue: _cue, ...condition } = source.condition;
         let requiredLabelIds = ["INBOX"];
         if (base.labelIds?.length) requiredLabelIds = base.labelIds;
         else if (base.labelId) requiredLabelIds = [base.labelId];
@@ -183,4 +204,43 @@ function spamTrashFolder(query: ThreadsQuery): "spam" | "trash" | undefined {
   const labels = [query.labelId, ...(query.labelIds ?? [])];
   if (labels.includes(GmailLabel.SPAM)) return "spam";
   if (labels.includes(GmailLabel.TRASH)) return "trash";
+}
+
+/**
+ * Bounds sparse scans per request. Returning the continuation, even with an
+ * empty page, lets the reader keep going without losing messages.
+ */
+async function fetchFilteredPages({
+  query,
+  matches,
+  emailProvider,
+  emailAccountId,
+  maxResults,
+  pageToken,
+  messageFormat,
+}: {
+  query: ThreadsQuery;
+  matches: (thread: EmailThread) => boolean;
+  emailProvider: EmailProvider;
+  emailAccountId: string;
+  maxResults: number;
+  pageToken?: string;
+  messageFormat: "full" | "metadata";
+}): Promise<{ threads: EmailThread[]; nextPageToken?: string }> {
+  const threads: EmailThread[] = [];
+  let nextPageToken = pageToken;
+  for (let page = 0; page < 5; page++) {
+    const result = await fetchThreadsPage({
+      query,
+      emailProvider,
+      emailAccountId,
+      maxResults: maxResults - threads.length,
+      pageToken: nextPageToken,
+      messageFormat,
+    });
+    threads.push(...result.threads.filter(matches));
+    nextPageToken = result.nextPageToken;
+    if (!nextPageToken || threads.length >= maxResults) break;
+  }
+  return { threads, nextPageToken };
 }
