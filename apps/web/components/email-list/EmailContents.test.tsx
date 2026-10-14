@@ -119,42 +119,50 @@ describe("HtmlEmail", () => {
     expect(document.body.classList.contains("dark")).toBe(true);
   });
 
-  it("does not put designed html emails into the app dark color scheme", () => {
+  it("renders designed html with its own dark styles in dark mode", () => {
     mockTheme.theme = "dark";
     mockTheme.resolvedTheme = "dark";
-    const html = `<html><head><style>
-      .card { background: #f8f9fa; color: #202124; }
-      @media (prefers-color-scheme: dark) {
-        .card { background: #202124; color: #e8eaed; }
-      }
-    </style></head><body>
-      <div class="card" style="background:#f8f9fa;font-family:Arial,sans-serif;font-size:16px">
-        Finish setup
-      </div>
-      <pre>prefers-color-scheme: dark</pre>
-    </body></html>`;
     const { getByTitle } = render(
-      <HtmlEmail html={html} messageId="designed-theme" />,
+      <HtmlEmail html={DESIGNED_WITH_DARK_STYLES} messageId="designed-theme" />,
     );
     const iframe = getByTitle("Email content preview") as HTMLIFrameElement;
     const document = new DOMParser().parseFromString(
       iframe.srcdoc,
       "text/html",
     );
-    expect(iframe.style.colorScheme).toBe("light");
+    expect(iframe.style.colorScheme).toBe("dark");
+    // The app's plain-email palette stays off; the sender's styles color it.
     expect(document.documentElement.classList.contains("dark")).toBe(false);
-    expect(document.body.classList.contains("dark")).toBe(false);
     expect(
       document
         .querySelector('meta[name="color-scheme"]')
         ?.getAttribute("content"),
-    ).toBe("light");
-    expect(iframe.srcdoc).toContain(
-      "prefers-color-scheme: inbox-zero-authored",
-    );
+    ).toBe("dark");
+    expect(iframe.srcdoc).toContain("@media (min-width: 0px)");
     expect(document.querySelector("pre")?.textContent).toBe(
       "prefers-color-scheme: dark",
     );
+  });
+
+  it("shows designed html as sent for a sender whose original colors were chosen", () => {
+    mockTheme.theme = "dark";
+    mockTheme.resolvedTheme = "dark";
+    localStorage.setItem(
+      "cue.dark-emails.senders:account-1",
+      JSON.stringify({ "news@shop.example": "original" }),
+    );
+    const { getByTitle } = render(
+      <HtmlEmail
+        emailAccountId="account-1"
+        html={DESIGNED_WITH_DARK_STYLES}
+        messageId="designed-original"
+        sender="News@Shop.example"
+      />,
+    );
+    const iframe = getByTitle("Email content preview") as HTMLIFrameElement;
+    expect(iframe.style.colorScheme).toBe("light");
+    expect(iframe.srcdoc).toContain("@media (max-width: 0px)");
+    localStorage.clear();
   });
 
   it("treats uppercase designed markup as authored html", () => {
@@ -174,10 +182,8 @@ describe("HtmlEmail", () => {
       <HtmlEmail html={html} messageId="designed-theme-uppercase" />,
     );
     const iframe = getByTitle("Email content preview") as HTMLIFrameElement;
-    expect(iframe.style.colorScheme).toBe("light");
-    expect(iframe.srcdoc).toContain(
-      "prefers-color-scheme: inbox-zero-authored",
-    );
+    expect(iframe.style.colorScheme).toBe("dark");
+    expect(iframe.srcdoc).toContain("@media (min-width: 0px)");
   });
 
   it.each([
@@ -706,3 +712,15 @@ function measureEmailFrame(iframe: HTMLIFrameElement, height: number) {
   addEmailDocumentMarker(iframe, iframe.contentDocument);
   fireEvent.load(iframe);
 }
+
+const DESIGNED_WITH_DARK_STYLES = `<html><head><style>
+  .card { background: #f8f9fa; color: #202124; }
+  @media (prefers-color-scheme: dark) {
+    .card { background: #202124; color: #e8eaed; }
+  }
+</style></head><body>
+  <div class="card" style="background:#f8f9fa;font-family:Arial,sans-serif;font-size:16px">
+    Finish setup
+  </div>
+  <pre>prefers-color-scheme: dark</pre>
+</body></html>`;
