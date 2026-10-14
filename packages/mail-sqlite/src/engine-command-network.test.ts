@@ -53,6 +53,34 @@ describe("engine command network failures", () => {
     expect(delays[2]).toBeGreaterThan(delays[1] ?? 0);
     await engine.close();
   });
+
+  it("backs off each command on its own failures, not another command's", async () => {
+    const { engine, store, executor, driver } = await commandHarness();
+    executor.execute.mockRejectedValue(new TypeError("Failed to fetch"));
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await driver.write((tx) =>
+        tx.execute("UPDATE operations SET next_attempt_at_ms = NULL"),
+      );
+      await engine.runUntil(Date.now() + 200);
+    }
+    await engine.submitMetadata({
+      accountId: "acc-1",
+      commandId: "archive-2",
+      targets: [{ accountId: "acc-1", messageId: "m2" }],
+      change: { kind: "archive" },
+    });
+    const before = Date.now();
+
+    await engine.runUntil(Date.now() + 200);
+
+    const { operation } = await store.readOperation({
+      accountId: "acc-1",
+      operationId: "archive-2",
+    });
+    expect(operation?.status).toBe("retry_wait");
+    expect((operation?.nextAttemptAtMs ?? 0) - before).toBeLessThan(2000);
+    await engine.close();
+  });
 });
 
 async function commandHarness() {
