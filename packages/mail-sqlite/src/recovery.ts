@@ -4,8 +4,8 @@ import { createSqliteMailStore, type SqliteMailStoreOptions } from "./store";
 
 /**
  * Why a mailbox could not be opened: `busy` clears once another holder lets
- * go of the files, `corrupt` needs a rebuild, `unavailable` means this
- * browser cannot keep a mailbox at all (no OPFS, no quota).
+ * go of the files, `corrupt` needs a rebuild, `unavailable` means storage
+ * cannot hold the mailbox right now (no OPFS, a full disk, an I/O error).
  */
 export type MailboxOpenFailure = "corrupt" | "busy" | "unavailable";
 
@@ -34,6 +34,7 @@ export class MailboxCorruptError extends Error {
 
 const SQLITE_BUSY = 5;
 const SQLITE_LOCKED = 6;
+const SQLITE_IOERR = 10;
 const SQLITE_CORRUPT = 11;
 const SQLITE_FULL = 13;
 const SQLITE_NOTADB = 26;
@@ -107,7 +108,8 @@ export function classifyMailboxError(
   const code = readResultCode(error);
   if (code === SQLITE_CORRUPT || code === SQLITE_NOTADB) return "corrupt";
   if (code === SQLITE_BUSY || code === SQLITE_LOCKED) return "busy";
-  if (code === SQLITE_FULL) return "unavailable";
+  // The OPFS SAH-pool VFS reports a full disk as an I/O error, not FULL.
+  if (code === SQLITE_FULL || code === SQLITE_IOERR) return "unavailable";
   const text = errorText(error);
   if (
     text.includes("sqlite_corrupt") ||
@@ -133,6 +135,8 @@ export function classifyMailboxError(
     text.includes("quota") ||
     text.includes("sqlite_full") ||
     text.includes("disk is full") ||
+    text.includes("sqlite_ioerr") ||
+    text.includes("disk i/o error") ||
     text.includes("securityerror")
   ) {
     return "unavailable";
@@ -141,11 +145,12 @@ export function classifyMailboxError(
 }
 
 /**
- * Opens the mailbox store. A corrupt mailbox, or one whose migration fails,
- * is rebuilt empty for a fresh sync, and the user's drafts and unsent
- * commands are carried over through `stash` so a reload mid-rebuild loses
- * nothing. Busy and unavailable failures are thrown for the caller to retry
- * or report.
+ * Opens the mailbox store. Only a mailbox SQLite reports as corrupt is
+ * rebuilt empty for a fresh sync, with the user's drafts and unsent commands
+ * carried over through `stash` so a reload mid-rebuild loses nothing. Every
+ * other failure (a held or full disk, a failed migration, a wasm trap) is
+ * thrown with the mailbox untouched: wiping on those would resync every
+ * affected mailbox from scratch and still fail the same way.
  */
 export async function openMailStoreWithRecovery(input: {
   open: () => Promise<SqliteDriver>;
@@ -166,9 +171,7 @@ export async function openMailStoreWithRecovery(input: {
     failure = error;
   }
   if (!opened) {
-    const kind = classifyMailboxError(failure);
-    // A driver that never opened says nothing about the file itself.
-    if (kind === "busy" || kind === "unavailable" || (!driver && !kind)) {
+    if (classifyMailboxError(failure) !== "corrupt") {
       await driver?.close().catch(() => undefined);
       throw failure;
     }

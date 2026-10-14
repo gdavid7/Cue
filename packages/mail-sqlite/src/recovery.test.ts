@@ -69,6 +69,22 @@ describe("classifyMailboxError", () => {
     ).toBe("unavailable");
     expect(classifyMailboxError(new Error("unexpected"))).toBeNull();
   });
+
+  it("reads an I/O error, which a full OPFS disk reports, as unavailable storage", () => {
+    // SQLITE_IOERR_WRITE: the primary code 10 in the low byte.
+    expect(
+      classifyMailboxError(
+        Object.assign(new Error("disk I/O error"), { resultCode: 778 }),
+      ),
+    ).toBe("unavailable");
+    expect(
+      classifyMailboxError(
+        new Error(
+          "SQLITE_IOERR_WRITE: sqlite3 result code 778: disk I/O error",
+        ),
+      ),
+    ).toBe("unavailable");
+  });
 });
 
 describe("openMailStoreWithRecovery", () => {
@@ -179,6 +195,41 @@ describe("openMailStoreWithRecovery", () => {
       provider: "google",
       generation: "g1",
     });
+    await store.close();
+  });
+
+  it.each([
+    [
+      "a full disk",
+      Object.assign(new Error("disk I/O error"), { errcode: 778 }),
+    ],
+    ["a failed migration", new Error("migration 12 failed: no such column")],
+    [
+      "a missing capability",
+      new Error("SQLite savepoints are required for mailbox migrations"),
+    ],
+    ["a wasm trap", new Error("RuntimeError: memory access out of bounds")],
+  ])("keeps a healthy mailbox that fails to open after %s", async (_, error) => {
+    const path = await mailboxPath();
+    await seedPendingWork(path);
+    const wipe = vi.fn(() => wipeNodeMailbox(path));
+    const onRebuild = vi.fn();
+    const stash = memoryStash();
+
+    await expect(
+      openMailStoreWithRecovery({
+        open: async () => failingWrites(createNodeSqliteDriver(path), error),
+        wipe,
+        stash,
+        onRebuild,
+      }),
+    ).rejects.toBe(error);
+
+    expect(wipe).not.toHaveBeenCalled();
+    expect(onRebuild).not.toHaveBeenCalled();
+    expect(await stash.read()).toBeNull();
+    const store = await createSqliteMailStore(createNodeSqliteDriver(path));
+    expect(await store.readDraft(DRAFT)).toMatchObject({ status: "found" });
     await store.close();
   });
 
