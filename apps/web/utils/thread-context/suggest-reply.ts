@@ -1,4 +1,4 @@
-import { ReplyMemoryScopeType } from "@/generated/prisma/enums";
+import { ReplyMemoryScopeType, SystemType } from "@/generated/prisma/enums";
 import type { ReplyMemory } from "@/generated/prisma/client";
 import he from "he";
 import { z } from "zod";
@@ -20,6 +20,7 @@ import type { ParsedMessage } from "@/utils/types";
 import { isExaSearchEnabled, searchExa } from "@/utils/exa/search";
 import { domainOf } from "@/utils/thread-context/linked-pages";
 import { getEmailAccountWithAi } from "@/utils/user/get";
+import { isDraftRepliesEnabled } from "@/utils/rule/draft-replies-enabled";
 
 const MAX_THREAD_MESSAGES = 6;
 const CONNECTOR_SOURCE_LABEL = {
@@ -148,6 +149,19 @@ export async function suggestReply({
   if (isSameEmailAddress(latest.headers.from, userEmail)) {
     return { status: "already-replied" };
   }
+
+  // Turning off "Auto draft replies" stops every AI-written reply, cached
+  // ones included.
+  const toReplyRule = await prisma.rule.findUnique({
+    where: {
+      emailAccountId_systemType: {
+        emailAccountId,
+        systemType: SystemType.TO_REPLY,
+      },
+    },
+    select: { enabled: true, actions: { select: { type: true } } },
+  });
+  if (!isDraftRepliesEnabled(toReplyRule)) return { status: "unavailable" };
 
   // A new message changes the key, so a cached suggestion is never stale.
   const keyFor = { emailAccountId, threadId, messageId: latest.id };

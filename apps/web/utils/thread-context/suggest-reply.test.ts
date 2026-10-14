@@ -1,18 +1,35 @@
 import { describe, expect, it, vi } from "vitest";
+import { ActionType } from "@/generated/prisma/enums";
+import prisma from "@/utils/__mocks__/prisma";
+import { getMockMessage } from "@/__tests__/helpers";
+import { createScopedLogger } from "@/utils/logger";
+import type { EmailProvider } from "@/utils/email/types";
 import {
   checkSuggestion,
   getCachedSuggestedReply,
   renderSource,
   type Source,
+  suggestReply,
   webSearchQuery,
   webSource,
 } from "./suggest-reply";
 
 vi.mock("server-only", () => ({}));
-const { cache } = vi.hoisted(() => ({ cache: new Map<string, unknown>() }));
+vi.mock("@/utils/prisma");
+const { cache, collectThreadContext, getEmailAccountWithAi } = vi.hoisted(
+  () => ({
+    cache: new Map<string, unknown>(),
+    collectThreadContext: vi.fn(),
+    getEmailAccountWithAi: vi.fn(),
+  }),
+);
 vi.mock("@/utils/redis", () => ({
   redis: { get: async (key: string) => cache.get(key) ?? null },
 }));
+vi.mock("@/utils/thread-context/get-thread-context", () => ({
+  collectThreadContext,
+}));
+vi.mock("@/utils/user/get", () => ({ getEmailAccountWithAi }));
 
 const SOURCES: Source[] = [
   {
@@ -242,5 +259,67 @@ describe("getCachedSuggestedReply", () => {
     expect(
       await getCachedSuggestedReply({ ...key, messageId: "m2" }),
     ).toBeNull();
+  });
+});
+
+describe("suggestReply when auto draft replies are off", () => {
+  const logger = createScopedLogger("suggest-reply-test");
+
+  it("suggests nothing, even when a suggestion is cached", async () => {
+    const latest = getMockMessage({
+      id: "m1",
+      threadId: "t1",
+      from: "sarah@example.com",
+    });
+    collectThreadContext.mockResolvedValue({
+      thread: { id: "t1", messages: [latest], snippet: "" },
+      items: [],
+    });
+    cache.set("suggested-reply:v2:a1:t1:m1", {
+      status: "suggested",
+      reply: "Sure, Friday works.",
+      citations: [],
+    });
+    prisma.rule.findUnique.mockResolvedValue({
+      enabled: true,
+      actions: [{ type: ActionType.LABEL }],
+    } as never);
+
+    const result = await suggestReply({
+      emailAccountId: "a1",
+      userEmail: "me@example.com",
+      threadId: "t1",
+      emailProvider: {} as EmailProvider,
+      logger,
+    });
+
+    expect(result).toEqual({ status: "unavailable" });
+    expect(getEmailAccountWithAi).not.toHaveBeenCalled();
+  });
+
+  it("suggests nothing when the To Reply rule is turned off", async () => {
+    const latest = getMockMessage({
+      id: "m2",
+      threadId: "t2",
+      from: "sarah@example.com",
+    });
+    collectThreadContext.mockResolvedValue({
+      thread: { id: "t2", messages: [latest], snippet: "" },
+      items: [],
+    });
+    prisma.rule.findUnique.mockResolvedValue({
+      enabled: false,
+      actions: [{ type: ActionType.DRAFT_EMAIL }],
+    } as never);
+
+    const result = await suggestReply({
+      emailAccountId: "a1",
+      userEmail: "me@example.com",
+      threadId: "t2",
+      emailProvider: {} as EmailProvider,
+      logger,
+    });
+
+    expect(result).toEqual({ status: "unavailable" });
   });
 });
