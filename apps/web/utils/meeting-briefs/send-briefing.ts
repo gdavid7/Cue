@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/utils/branding";
 import { render } from "@react-email/render";
 import { env } from "@/env";
 import { sendNotificationEmail } from "@/utils/email/send-notification-email";
@@ -372,7 +373,7 @@ function formatMeetingBriefingText({
   }
 
   sections.push(
-    "AI-generated briefing from Inbox Zero. May contain inaccuracies.",
+    `AI-generated briefing from ${BRAND_NAME}. May contain inaccuracies.`,
   );
 
   return sections.join("\n\n");

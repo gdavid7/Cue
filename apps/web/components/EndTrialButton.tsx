@@ -22,6 +22,7 @@ import type { GetTrialPreviewResponse } from "@/app/api/user/trial-preview/route
 import { endStripeTrialAction } from "@/utils/actions/premium";
 import { formatDateSimple } from "@/utils/date";
 import { formatStripeAmount } from "@/utils/stripe-amount";
+import { BRAND_NAME } from "@/utils/branding";
 
 export function EndTrialButton({
   variant,
@@ -94,10 +95,10 @@ export function EndTrialButton({
                   </p>
                   {preview.trialEnd && (
                     <p>
-                      You do not need to do this to keep using Inbox Zero. Your
-                      trial already includes every paid feature and runs free
-                      until {formatDateSimple(new Date(preview.trialEnd))}, when
-                      the same charge happens automatically.
+                      You do not need to do this to keep using {BRAND_NAME}.
+                      Your trial already includes every paid feature and runs
+                      free until {formatDateSimple(new Date(preview.trialEnd))},
+                      when the same charge happens automatically.
                     </p>
                   )}
                   <p>

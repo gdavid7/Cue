@@ -1,5 +1,6 @@
 import { NEXT_ACTION_NOT_FOUND_HEADER } from "next/dist/client/components/app-router-headers";
 import { toast } from "sonner";
+import { BRAND_NAME } from "@/utils/branding";
 
 const RELOADED_AT_KEY = "stale-deployment-reloaded-at";
 const RELOAD_COOLDOWN_MS = 5 * 60 * 1000;
@@ -40,7 +41,7 @@ function handleStaleDeployment() {
     window.location.reload();
     return;
   }
-  toast.info("Inbox Zero was updated", {
+  toast.info(`${BRAND_NAME} was updated`, {
     id: TOAST_ID,
     description: "Reload to keep using the latest version.",
     duration: Number.POSITIVE_INFINITY,

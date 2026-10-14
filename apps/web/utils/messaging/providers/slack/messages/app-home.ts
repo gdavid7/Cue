@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/utils/branding";
 import type { KnownBlock, Block } from "@slack/types";
 
 type AppHomeView = {
@@ -13,7 +14,7 @@ export function buildAppHomeBlocks(): AppHomeView {
         type: "header",
         text: {
           type: "plain_text",
-          text: "Welcome to Inbox Zero",
+          text: `Welcome to ${BRAND_NAME}`,
           emoji: true,
         },
       },
@@ -67,7 +68,7 @@ export function buildAppHomeBlocks(): AppHomeView {
         type: "header",
         text: {
           type: "plain_text",
-          text: "Chat with Inbox Zero",
+          text: `Chat with ${BRAND_NAME}`,
           emoji: true,
         },
       },
@@ -91,7 +92,7 @@ export function buildAppHomeBlocks(): AppHomeView {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: "*Meeting Briefs* — Get a briefing on attendees before your meetings, delivered to your chosen Slack channel.\n\n*Attachment Filing* — Inbox Zero can auto-file attachments to Google Drive and notify you here.\n\n*AI Automation* — Set up rules to auto-label, archive, or draft replies. Configure at <https://www.getinboxzero.com|getinboxzero.com>.",
+          text: `*Meeting Briefs* — Get a briefing on attendees before your meetings, delivered to your chosen Slack channel.\n\n*Attachment Filing* — ${BRAND_NAME} can auto-file attachments to Google Drive and notify you here.\n\n*AI Automation* — Set up rules to auto-label, archive, or draft replies. Configure at <https://www.getinboxzero.com|getinboxzero.com>.`,
         },
       },
       { type: "divider" },

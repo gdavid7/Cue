@@ -44,6 +44,7 @@ import { lookupSlackUserByEmail } from "@/utils/messaging/providers/slack/users"
 import { callTelegramBotApi } from "@/utils/messaging/providers/telegram/api";
 import { isTeamsBotConfigured } from "@/utils/messaging/chat-sdk/teams-config";
 import { assertCanUseDigests } from "@/utils/premium/server";
+import { BRAND_NAME } from "@/utils/branding";
 
 export const updateSlackRouteAction = actionClient
   .metadata({ name: "updateSlackRoute" })
@@ -259,7 +260,7 @@ export const linkSlackWorkspaceAction = actionClient
 
       if (!slackUser) {
         throw new SafeError(
-          "Could not find your Slack account. Your Inbox Zero email may not match your Slack profile email.",
+          `Could not find your Slack account. Your ${BRAND_NAME} email may not match your Slack profile email.`,
         );
       }
 
