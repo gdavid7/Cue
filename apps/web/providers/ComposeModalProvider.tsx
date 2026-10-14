@@ -6,6 +6,7 @@ import {
   useContext,
   useMemo,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { Maximize2Icon, Minimize2Icon, XIcon } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -56,7 +57,14 @@ const ComposeModalContext = createContext<Context>({
 
 export const useComposeModal = () => useContext(ComposeModalContext);
 
+const PHONE_QUERY = "(max-width: 639px)";
+
 export function ComposeModalProvider(props: { children: React.ReactNode }) {
+  const isPhone = useSyncExternalStore(
+    subscribeToPhoneQuery,
+    () => window.matchMedia(PHONE_QUERY).matches,
+    () => false,
+  );
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { emailAccountId } = useAccount();
@@ -156,7 +164,9 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
     <ComposeModalContext.Provider value={contextValue}>
       {props.children}
       <Dialog
-        modal={false}
+        // A phone shows compose full screen, so the inbox behind it must not
+        // take taps or focus. Wider screens keep it beside the mail.
+        modal={isPhone}
         open={isOpen}
         onOpenChange={(open) => {
           if (open) return;
@@ -169,7 +179,7 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
             "fixed z-50 flex max-h-none max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden bg-background p-0",
             isExpanded
               ? "inset-0 h-dvh w-screen rounded-none border-0 shadow-none"
-              : "bottom-3 left-auto right-3 top-auto h-[min(42rem,calc(100dvh-1.5rem))] w-[calc(100vw-1.5rem)] rounded-xl border border-border shadow-2xl sm:bottom-4 sm:right-4 sm:w-[38rem]",
+              : "inset-0 h-dvh w-screen sm:inset-auto sm:right-4 sm:bottom-4 sm:h-[min(42rem,calc(100dvh-1.5rem))] sm:w-[38rem] sm:rounded-xl sm:border sm:border-border sm:shadow-2xl",
           )}
           data-compose-expanded={isExpanded}
           hideCloseButton
@@ -190,6 +200,7 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
             className={cn(
               "flex h-12 shrink-0 items-center justify-between px-3",
               isExpanded ? "mx-auto h-20 w-full max-w-6xl px-6" : "border-b",
+              "max-sm:h-14",
             )}
           >
             <DialogTitle
@@ -203,6 +214,8 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
             <div className="flex items-center gap-0.5">
               <Button
                 aria-label={isExpanded ? "Restore compose" : "Expand compose"}
+                // Already full screen on a phone.
+                className="max-sm:hidden"
                 onClick={() => setIsExpanded((expanded) => !expanded)}
                 size="iconSm"
                 title={isExpanded ? "Restore compose" : "Expand compose"}
@@ -217,6 +230,7 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
               <DialogClose asChild>
                 <Button
                   aria-label="Close compose"
+                  className="max-sm:size-10"
                   size="iconSm"
                   title="Close compose"
                   variant="ghost"
@@ -226,7 +240,7 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
               </DialogClose>
             </div>
           </header>
-          <main
+          <div
             className={cn(
               "min-h-0 flex-1",
               isExpanded && "mx-auto w-full max-w-6xl px-6 pb-6",
@@ -273,9 +287,15 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
                 />
               )}
             </div>
-          </main>
+          </div>
         </DialogContent>
       </Dialog>
     </ComposeModalContext.Provider>
   );
+}
+
+function subscribeToPhoneQuery(onChange: () => void) {
+  const query = window.matchMedia(PHONE_QUERY);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
 }

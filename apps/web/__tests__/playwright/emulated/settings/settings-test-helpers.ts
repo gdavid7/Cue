@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { Client } from "pg";
 import { getEmailAccount } from "../account-test-helpers";
 
@@ -141,7 +141,7 @@ export async function openSettings(page: Page) {
 
 export function getEmailAccountSettingsCard(page: Page, email: string) {
   const emailAccountsSection = page.locator("section").filter({
-    has: page.getByRole("heading", { name: "Email Accounts", exact: true }),
+    has: page.getByRole("heading", { name: "Email accounts", exact: true }),
   });
   const toggle = emailAccountsSection
     .getByRole("button")
@@ -150,6 +150,14 @@ export function getEmailAccountSettingsCard(page: Page, email: string) {
     card: toggle.locator("xpath=.."),
     toggle,
   };
+}
+
+// The current account starts expanded, so only click when it is collapsed.
+export async function expandEmailAccountSettingsCard(toggle: Locator) {
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+    await toggle.click();
+  }
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
 }
 
 async function withClient<T>(callback: (client: Client) => Promise<T>) {

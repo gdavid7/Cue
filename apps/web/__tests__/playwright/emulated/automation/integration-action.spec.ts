@@ -27,7 +27,7 @@ test("configures and persists a Todoist rule action", async ({ page }) => {
   await page.goto(`/${emailAccountId}/automation`);
   await expectVisibleAfterTransientFetch(
     page,
-    page.getByRole("heading", { name: "AI Assistant", exact: true }),
+    page.getByRole("heading", { name: "Rules", exact: true }),
   );
   const integrationsResponse = await page.request.get("/api/mcp/integrations", {
     headers: { "x-email-account-id": emailAccountId },
@@ -94,7 +94,7 @@ test("configures and persists a Todoist rule action", async ({ page }) => {
   await page.reload();
   const ruleRow = page.getByRole("row").filter({ hasText: RULE_NAME });
   await expect(ruleRow).toBeVisible({ timeout: 60_000 });
-  await ruleRow.getByRole("button", { name: "Toggle menu" }).click();
+  await ruleRow.getByRole("button", { name: /^Actions for / }).click();
   await page.getByRole("menuitem", { name: "Edit manually" }).click();
 
   const editDialog = page.getByRole("dialog", { name: "Edit Rule" });

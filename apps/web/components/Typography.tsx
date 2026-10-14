@@ -9,7 +9,7 @@ const PageHeading = forwardRef<
   <h1
     ref={ref}
     className={cn(
-      "font-title text-2xl leading-7 text-primary dark:text-foreground sm:truncate lg:text-3xl",
+      "font-title text-2xl leading-tight text-foreground sm:truncate lg:text-3xl",
       className,
     )}
     {...props}
@@ -33,9 +33,9 @@ const SectionHeader = forwardRef<
   HTMLHeadingElement,
   React.HTMLAttributes<HTMLHeadingElement>
 >(({ className, ...props }, ref) => (
-  <h4
+  <h2
     ref={ref}
-    className={cn("font-title text-base leading-7 text-foreground", className)}
+    className={cn("font-title text-lg leading-7 text-foreground", className)}
     {...props}
   />
 ));
@@ -47,10 +47,7 @@ const SectionDescription = forwardRef<
 >(({ className, ...props }, ref) => (
   <p
     ref={ref}
-    className={cn(
-      "mt-1 text-sm leading-6 text-slate-700 dark:text-foreground",
-      className,
-    )}
+    className={cn("mt-1 text-sm leading-6 text-muted-foreground", className)}
     {...props}
   />
 ));
@@ -62,7 +59,7 @@ const MessageText = forwardRef<
 >(({ className, ...props }, ref) => (
   <p
     ref={ref}
-    className={cn("text-sm text-slate-700 dark:text-foreground", className)}
+    className={cn("text-sm text-muted-foreground", className)}
     {...props}
   />
 ));
@@ -74,7 +71,7 @@ const TypographyH3 = forwardRef<
 >(({ className, ...props }, ref) => (
   <h3
     ref={ref}
-    className={cn("scroll-m-20 font-title text-2xl", className)}
+    className={cn("scroll-m-20 font-title text-xl", className)}
     {...props}
   />
 ));

@@ -6,6 +6,7 @@ import {
   updateRuleBody,
   enableDraftRepliesBody,
   enableMultiRuleSelectionBody,
+  enableWebLookupBody,
   updateDraftReplyConfidenceBody,
   deleteRuleBody,
   toggleRuleBody,
@@ -230,6 +231,16 @@ export const enableMultiRuleSelectionAction = actionClient
     await prisma.emailAccount.update({
       where: { id: emailAccountId },
       data: { multiRuleSelectionEnabled: enable },
+    });
+  });
+
+export const enableWebLookupAction = actionClient
+  .metadata({ name: "enableWebLookup" })
+  .inputSchema(enableWebLookupBody)
+  .action(async ({ ctx: { emailAccountId }, parsedInput: { enable } }) => {
+    await prisma.emailAccount.update({
+      where: { id: emailAccountId },
+      data: { webLookupEnabled: enable },
     });
   });
 

@@ -26,8 +26,11 @@ import {
 import { hasActiveAppleSubscription } from "@/utils/premium";
 import { getActionErrorMessage } from "@/utils/error";
 import { updateStripeInvoiceEmailsAction } from "@/utils/actions/premium";
+import { useAccount } from "@/providers/EmailAccountProvider";
+import { prefixPath } from "@/utils/path";
 
 export function BillingSection() {
+  const { emailAccountId } = useAccount();
   const {
     data,
     premium,
@@ -114,6 +117,27 @@ export function BillingSection() {
             </Button>
           </ItemActions>
         </Item>
+      )}
+
+      {emailAccountId && (
+        <>
+          <ItemSeparator />
+          <Item size="sm">
+            <ItemContent>
+              <ItemTitle>Usage</ItemTitle>
+              <ItemDescription>
+                Unsubscribe credits and AI usage for this account.
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions>
+              <Button asChild variant="outline" size="sm">
+                <Link href={prefixPath(emailAccountId, "/usage")}>
+                  See usage
+                </Link>
+              </Button>
+            </ItemActions>
+          </Item>
+        </>
       )}
 
       {premium?.stripeCustomerId && (

@@ -57,7 +57,7 @@ export function FeedbackDialog() {
 
   const { execute, isExecuting } = useAction(submitFeedbackAction, {
     onSuccess: () => {
-      toastSuccess({ description: "Thanks for your feedback!" });
+      toastSuccess({ description: "Thanks for your feedback" });
       reset();
       setOpen(false);
     },

@@ -10,6 +10,7 @@ import {
   FlagOffIcon,
   FolderInputIcon,
   LanguagesIcon,
+  Loader2Icon,
   MailXIcon,
   MessageSquareIcon,
   MoreHorizontalIcon,
@@ -21,6 +22,7 @@ import {
   TagIcon,
 } from "lucide-react";
 import { useAction } from "next-safe-action/hooks";
+import { useRef } from "react";
 import { useSenderCommands } from "@/app/(app)/[emailAccountId]/mail/use-sender-commands";
 import { getEmailMessageCellActions } from "@/components/EmailMessageCellActions";
 import { Kbd } from "@/components/Kbd";
@@ -107,6 +109,12 @@ export function ThreadActionsMenu({
     onUnsubscribe,
     PremiumModal,
   } = useSenderCommands(message);
+  // The team comment box takes focus, so it opens once the menu has closed:
+  // while open, the menu keeps focus inside itself, and on closing it hands
+  // focus back to its trigger.
+  const commentOnClose = useRef(false);
+  const senderStatusLoading =
+    isAutoArchiveStatusLoading || isUpdatingAutoArchive;
   const openUrl = message
     ? getEmailMessageCellActions({
         externalUrl: message.externalUrl,
@@ -131,6 +139,12 @@ export function ThreadActionsMenu({
         <DropdownMenuContent
           align="end"
           className="w-80 max-w-[calc(100vw-1rem)]"
+          onCloseAutoFocus={(event) => {
+            if (!commentOnClose.current) return;
+            commentOnClose.current = false;
+            event.preventDefault();
+            onComment?.();
+          }}
           onEscapeKeyDown={(event) => event.stopPropagation()}
         >
           {onLabel && (
@@ -193,12 +207,16 @@ export function ThreadActionsMenu({
             <MenuShortcut id="markSpam" />
           </DropdownMenuItem>
 
-          {canManageAutoArchive ? (
+          {/* Hidden when it can't apply; a spinner while that's still unknown. */}
+          {canManageAutoArchive &&
+          (!isUnsubscribeDisabled || senderStatusLoading) ? (
             <DropdownMenuItem
               disabled={isUnsubscribeDisabled}
               onSelect={onUnsubscribe}
             >
-              <MailXIcon className="mr-2 size-4" />
+              <MenuItemIcon loading={isUnsubscribeDisabled}>
+                <MailXIcon className="mr-2 size-4" />
+              </MenuItemIcon>
               {unsubscribeLabel}
               <MenuShortcut id="unsubscribe" />
             </DropdownMenuItem>
@@ -224,7 +242,11 @@ export function ThreadActionsMenu({
           )}
 
           {onComment && (
-            <DropdownMenuItem onSelect={onComment}>
+            <DropdownMenuItem
+              onSelect={() => {
+                commentOnClose.current = true;
+              }}
+            >
               <MessageSquareIcon className="mr-2 size-4" />
               Comment
               <MenuShortcut id="openTeamComments" />
@@ -233,14 +255,16 @@ export function ThreadActionsMenu({
 
           {canManageAutoArchive ? (
             <DropdownMenuItem
-              disabled={isAutoArchiveStatusLoading || isUpdatingAutoArchive}
+              disabled={senderStatusLoading}
               onSelect={onToggleAutoArchive}
             >
-              {isAutoArchived ? (
-                <ArchiveRestoreIcon className="mr-2 size-4" />
-              ) : (
-                <ArchiveIcon className="mr-2 size-4" />
-              )}
+              <MenuItemIcon loading={senderStatusLoading}>
+                {isAutoArchived ? (
+                  <ArchiveRestoreIcon className="mr-2 size-4" />
+                ) : (
+                  <ArchiveIcon className="mr-2 size-4" />
+                )}
+              </MenuItemIcon>
               {isAutoArchived
                 ? "Show this sender in inbox again"
                 : "Skip inbox for this sender"}
@@ -264,6 +288,19 @@ export function ThreadActionsMenu({
 
       <PremiumModal />
     </>
+  );
+}
+
+function MenuItemIcon({
+  loading,
+  children,
+}: {
+  loading: boolean;
+  children: React.ReactNode;
+}) {
+  if (!loading) return children;
+  return (
+    <Loader2Icon aria-label="Loading" className="mr-2 size-4 animate-spin" />
   );
 }
 

@@ -84,10 +84,10 @@ test("restores a deleted All tab and protects it from removal", async ({
   await expect(allTab).toBeVisible();
   await allTab.click({ button: "right" });
   await expect(
-    page.getByRole("menuitem", { name: "Turn off split" }),
+    page.getByRole("menuitem", { name: "Delete tab…" }),
   ).toBeHidden();
   await capturePlaywrightCheckpoint(page, testInfo, "mail-protected-all-split");
-  await page.getByRole("button", { name: "New split", exact: true }).click();
+  await page.getByRole("button", { name: "New tab", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Move All down", exact: true }),
   ).toBeDisabled();
@@ -139,17 +139,17 @@ test("creates and edits a domain sender condition", async ({
   page,
 }, testInfo) => {
   await openMail(page);
-  await page.getByRole("button", { name: "New split" }).click();
+  await page.getByRole("button", { name: "New tab" }).click();
   await page.getByRole("button", { name: "Build your own" }).click();
   await page.getByLabel("Condition field").first().selectOption("FROM");
   await page.getByLabel("Sender", { exact: true }).fill("@example.com");
-  await page.getByLabel("Split name").fill("Example domain");
+  await page.getByLabel("Tab name").fill("Example domain");
   await capturePlaywrightCheckpoint(
     page,
     testInfo,
     "mail-domain-split-builder",
   );
-  await page.getByRole("button", { name: "Add split", exact: true }).click();
+  await page.getByRole("button", { name: "Add tab", exact: true }).click();
   const tab = page.getByRole("button", { name: "Example domain", exact: true });
   await expect(tab).toBeVisible();
   await tab.click({ button: "right" });
@@ -165,8 +165,10 @@ test("builds a split from conditions and shows only matching mail", async ({
 }, testInfo) => {
   const { conversations } = await openMail(page);
 
-  await page.getByRole("button", { name: "New split" }).click();
-  await expect(page.getByText("New split inbox")).toBeVisible();
+  await page.getByRole("button", { name: "New tab" }).click();
+  await expect(
+    page.getByRole("dialog").getByText("New tab", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText(/Compiling/)).toBeHidden();
   await hideDevIndicator(page);
   await capturePlaywrightCheckpoint(page, testInfo, "mail-new-split-library");
@@ -181,10 +183,10 @@ test("builds a split from conditions and shows only matching mail", async ({
   await page.getByLabel("Condition value").first().selectOption({
     label: "Promotions",
   });
-  await page.getByLabel("Split name").fill("Promos");
+  await page.getByLabel("Tab name").fill("Promos");
   await capturePlaywrightCheckpoint(page, testInfo, "mail-new-split-builder");
 
-  await page.getByRole("button", { name: "Add split" }).click();
+  await page.getByRole("button", { name: "Add tab" }).click();
 
   const promosSplit = page.getByRole("button", { name: "Promos", exact: true });
   await expect(promosSplit).toBeVisible();
@@ -199,7 +201,7 @@ test("builds a split from conditions and shows only matching mail", async ({
   // The tab's own menu edits the split rather than sending you back to the list.
   await promosSplit.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Edit filters and name" }).click();
-  await expect(page.getByText("Edit split")).toBeVisible();
+  await expect(page.getByText("Edit tab")).toBeVisible();
   await expect(page.getByLabel("Condition value").first()).toHaveValue(
     isMicrosoft ? "Label_promotions" : "CATEGORY_PROMOTIONS",
   );
@@ -212,7 +214,8 @@ test("builds a split from conditions and shows only matching mail", async ({
   await expect(promosSplit).toBeVisible();
 
   await promosSplit.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Turn off split" }).click();
+  await page.getByRole("menuitem", { name: "Delete tab…" }).click();
+  await page.getByRole("button", { name: "Delete tab", exact: true }).click();
   await expect(promosSplit).toHaveCount(0);
 });
 
@@ -224,19 +227,19 @@ test("turns a prepared split on from the library", async ({
   defaultSplitEmailAccountId = emailAccountId;
   await openMail(page);
 
-  await page.getByRole("button", { name: "New split" }).click();
+  await page.getByRole("button", { name: "New tab" }).click();
   await page.getByRole("button", { name: "General", exact: true }).click();
 
   const templateName = isMicrosoft ? "GitHub" : "Starred";
   // OTP is opt-in: offer it even when the account does not already have the label.
   await expect(
-    page.getByRole("button", { name: "Turn on the OTP split" }),
+    page.getByRole("button", { name: "Turn on the OTP tab" }),
   ).toBeVisible();
   if (isMicrosoft) {
     await page.getByRole("button", { name: "Apps", exact: true }).click();
   }
   const templateTile = page.getByRole("button", {
-    name: `Turn on the ${templateName} split`,
+    name: `Turn on the ${templateName} tab`,
   });
   await expect(templateTile).toBeVisible();
   await hideDevIndicator(page);
@@ -244,7 +247,7 @@ test("turns a prepared split on from the library", async ({
 
   await templateTile.click();
   await expect(
-    page.getByRole("button", { name: `Turn off the ${templateName} split` }),
+    page.getByRole("button", { name: `Turn off the ${templateName} tab` }),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "Close" }).click();
@@ -261,7 +264,8 @@ test("turns a prepared split on from the library", async ({
   );
 
   await templateSplit.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Turn off split" }).click();
+  await page.getByRole("menuitem", { name: "Delete tab…" }).click();
+  await page.getByRole("button", { name: "Delete tab", exact: true }).click();
   await expect(templateSplit).toHaveCount(0);
 });
 
@@ -272,8 +276,8 @@ test("reorders splits with arrows and dragging and persists tab order", async ({
   const tabs = page.locator("[data-split-name]");
   const original = await tabs.allTextContents();
   expect(original.length).toBeGreaterThan(1);
-  await page.getByRole("button", { name: "New split", exact: true }).click();
-  const list = page.getByRole("list", { name: "Split order" });
+  await page.getByRole("button", { name: "New tab", exact: true }).click();
+  const list = page.getByRole("list", { name: "Tab order" });
   await page
     .getByRole("button", { name: `Move ${original[0]} down`, exact: true })
     .click();
@@ -281,14 +285,14 @@ test("reorders splits with arrows and dragging and persists tab order", async ({
   const expected = [original[1], original[0], ...original.slice(2)];
   await expect(tabs).toHaveText(expected);
   await expect(
-    page.getByRole("button", { name: "Turn off the All split", exact: true }),
+    page.getByRole("button", { name: "Turn off the All tab", exact: true }),
   ).toBeDisabled();
   await hideDevIndicator(page);
   await capturePlaywrightCheckpoint(page, testInfo, "mail-sortable-splits");
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await page.reload();
   await expect(tabs).toHaveText(expected);
-  await page.getByRole("button", { name: "New split", exact: true }).click();
+  await page.getByRole("button", { name: "New tab", exact: true }).click();
   const rows = list.getByRole("listitem");
   await rows.nth(0).locator("[data-drag-split]").dragTo(rows.nth(1));
   await expect(tabs).toHaveText(original);
@@ -309,7 +313,8 @@ test("Other excludes enabled splits and restores mail when a split is disabled",
   await page
     .getByRole("button", { name: "Unread", exact: true })
     .click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Turn off split" }).click();
+  await page.getByRole("menuitem", { name: "Delete tab…" }).click();
+  await page.getByRole("button", { name: "Delete tab", exact: true }).click();
   await page.getByRole("button", { name: "Other", exact: true }).click();
   const promotion = conversationWithSubject(
     page,
@@ -318,14 +323,14 @@ test("Other excludes enabled splits and restores mail when a split is disabled",
   );
   await expect(promotion).toBeVisible();
 
-  await page.getByRole("button", { name: "New split" }).click();
+  await page.getByRole("button", { name: "New tab" }).click();
   await page.getByRole("button", { name: "General", exact: true }).click();
   await page
-    .getByRole("button", { name: "Turn on the Important split", exact: true })
+    .getByRole("button", { name: "Turn on the Important tab", exact: true })
     .click();
   await expect(
     page.getByRole("button", {
-      name: "Turn off the Important split",
+      name: "Turn off the Important tab",
       exact: true,
     }),
   ).toBeVisible();
@@ -334,15 +339,15 @@ test("Other excludes enabled splits and restores mail when a split is disabled",
     page.getByRole("button", { name: "Important", exact: true }),
   ).toBeVisible();
 
-  await page.getByRole("button", { name: "New split" }).click();
+  await page.getByRole("button", { name: "New tab" }).click();
   await page.getByRole("button", { name: "Build your own" }).click();
   await page.getByLabel("Condition field").first().selectOption("CATEGORY");
   await page
     .getByLabel("Condition value")
     .first()
     .selectOption({ label: "Promotions" });
-  await page.getByLabel("Split name").fill("Promos");
-  await page.getByRole("button", { name: "Add split" }).click();
+  await page.getByLabel("Tab name").fill("Promos");
+  await page.getByRole("button", { name: "Add tab" }).click();
   await expect(promotion).toBeVisible();
   await page.getByRole("button", { name: "Other", exact: true }).click();
   await expect(promotion).toHaveCount(0);
@@ -355,18 +360,19 @@ test("Other excludes enabled splits and restores mail when a split is disabled",
   await page
     .getByRole("button", { name: "Promos", exact: true })
     .click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Turn off split" }).click();
+  await page.getByRole("menuitem", { name: "Delete tab…" }).click();
+  await page.getByRole("button", { name: "Delete tab", exact: true }).click();
   await page.getByRole("button", { name: "Other", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Other", exact: true }),
   ).toHaveAttribute("aria-current", "true");
   await expect(promotion).toBeVisible();
 
-  await page.getByRole("button", { name: "New split" }).click();
+  await page.getByRole("button", { name: "New tab" }).click();
   await page.getByRole("button", { name: "Build your own" }).click();
   await page.getByLabel("Condition field").first().selectOption("STARRED");
-  await page.getByLabel("Split name").fill("Other");
-  await page.getByRole("button", { name: "Add split" }).click();
+  await page.getByLabel("Tab name").fill("Other");
+  await page.getByRole("button", { name: "Add tab" }).click();
   await expect(
     page.getByRole("button", { name: "Other (custom)", exact: true }),
   ).toBeVisible();

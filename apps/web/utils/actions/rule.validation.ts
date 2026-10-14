@@ -299,6 +299,8 @@ export type EnableMultiRuleSelectionBody = z.infer<
   typeof enableMultiRuleSelectionBody
 >;
 
+export const enableWebLookupBody = z.object({ enable: z.boolean() });
+
 export const updateDraftReplyConfidenceBody = z.object({
   confidence: z.nativeEnum(DraftReplyConfidence),
 });

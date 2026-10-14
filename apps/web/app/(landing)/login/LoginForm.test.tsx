@@ -89,7 +89,7 @@ describe("LoginForm", () => {
 
     expect(
       screen.getAllByRole("button").map((button) => button.textContent),
-    ).toEqual(["Sign in with Google", "Sign in with Microsoft"]);
+    ).toEqual(["Continue with Google", "Continue with Microsoft"]);
   });
 
   it("starts Apple sign-in directly when no primary provider is configured", async () => {
@@ -147,7 +147,7 @@ describe("LoginForm", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: /sign in with microsoft/i }),
+      screen.getByRole("button", { name: /continue with microsoft/i }),
     );
 
     await waitFor(() => {
@@ -171,7 +171,7 @@ describe("LoginForm", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: /sign in with google/i }),
+      screen.getByRole("button", { name: /continue with google/i }),
     );
 
     await waitFor(() => {
@@ -190,7 +190,7 @@ describe("LoginForm", () => {
     render(<LoginForm enabledProviders={["google"]} useGoogleOauthEmulator />);
 
     fireEvent.click(
-      screen.getByRole("button", { name: /sign in with google/i }),
+      screen.getByRole("button", { name: /continue with google/i }),
     );
 
     await waitFor(() => {

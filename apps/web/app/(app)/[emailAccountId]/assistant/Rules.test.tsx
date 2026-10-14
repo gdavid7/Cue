@@ -18,6 +18,7 @@ const mockUseDialogState = vi.fn();
 const mockSetOpen = vi.fn();
 const mockSetInput = vi.fn();
 const mockExecuteAsync = vi.fn();
+const mockDeleteRuleAction = vi.fn();
 
 (globalThis as { React?: typeof React }).React = React;
 
@@ -70,6 +71,11 @@ vi.mock("@/components/ui/sidebar", () => ({
 
 vi.mock("next-safe-action/hooks", () => ({
   useAction: () => ({ executeAsync: mockExecuteAsync }),
+}));
+
+vi.mock("@/utils/actions/rule", () => ({
+  deleteRuleAction: (...args: unknown[]) => mockDeleteRuleAction(...args),
+  toggleRuleAction: vi.fn(),
 }));
 
 vi.mock("./RuleDialog", () => ({
@@ -159,7 +165,7 @@ describe("Rules", () => {
 
     fireEvent.pointerDown(
       within(newsletterRow as HTMLElement).getByRole("button", {
-        name: "Toggle menu",
+        name: "Actions for Newsletter",
       }),
       { button: 0, ctrlKey: false },
     );
@@ -175,11 +181,28 @@ describe("Rules", () => {
 
     fireEvent.pointerDown(
       within(customRuleRow as HTMLElement).getByRole("button", {
-        name: "Toggle menu",
+        name: "Actions for Custom rule",
       }),
       { button: 0, ctrlKey: false },
     );
 
     expect(screen.getByText("Delete")).toBeTruthy();
+  });
+
+  it("asks before deleting a rule", () => {
+    render(<Rules />);
+
+    const customRuleRow = screen.getByText("Custom rule").closest("tr");
+    fireEvent.pointerDown(
+      within(customRuleRow as HTMLElement).getByRole("button", {
+        name: "Actions for Custom rule",
+      }),
+      { button: 0, ctrlKey: false },
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+
+    const dialog = screen.getByRole("alertdialog");
+    expect(within(dialog).getByText("Delete “Custom rule”?")).toBeTruthy();
+    expect(mockDeleteRuleAction).not.toHaveBeenCalled();
   });
 });

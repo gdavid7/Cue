@@ -6,12 +6,15 @@ import { Button } from "@/components/ui/button";
 import { toastError } from "@/components/Toast";
 import Image from "next/image";
 import { MutedText } from "@/components/Typography";
+import { env } from "@/env";
 import { getAccountLinkingUrl } from "@/utils/account-linking";
 import { isGoogleProvider } from "@/utils/email/provider-types";
 import { redirectToSafeUrl } from "@/utils/redirect";
 
 export function AddAccount({
-  helperText = "You will be billed for each account.",
+  helperText = env.NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS
+    ? undefined
+    : "You will be billed for each account.",
 }: {
   helperText?: ReactNode;
 }) {
@@ -77,7 +80,7 @@ export function AddAccount({
         </Button>
       </div>
 
-      <MutedText>{helperText}</MutedText>
+      {helperText ? <MutedText>{helperText}</MutedText> : null}
     </div>
   );
 }

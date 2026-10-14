@@ -26,15 +26,21 @@ for (const tier of ["PLUS_MONTHLY", "PROFESSIONAL_MONTHLY"] as const) {
     });
 
     await page.goto(`/${emailAccountId}/automation`);
-    const dialog = page.getByRole("dialog", { name: "Bulk Process Emails" });
+    const dialog = page.getByRole("dialog", {
+      name: "Run rules on past mail",
+    });
     await expect(async () => {
       if (!(await dialog.isVisible())) {
-        await page.getByRole("button", { name: "Process Past Emails" }).click();
+        await page
+          .getByRole("button", { name: "Run rules on past mail" })
+          .click();
       }
       await expect(dialog).toBeVisible({ timeout: 2000 });
     }).toPass({ timeout: 30_000 });
     await expect(
-      dialog.getByText("Run your rules on emails already in your inbox."),
+      dialog.getByText(
+        "Cue checks emails already in your inbox against your rules",
+      ),
     ).toBeVisible();
     const generateDraftReplies = dialog.getByRole("switch", {
       name: "Generate draft replies",

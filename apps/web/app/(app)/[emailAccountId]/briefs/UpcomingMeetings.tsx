@@ -46,7 +46,7 @@ export function UpcomingMeetings({
   const { execute } = useAction(sendBriefAction.bind(null, emailAccountId), {
     onSuccess: ({ data: result }) => {
       toastSuccess({
-        description: result.message || "Test brief sent!",
+        description: result.message || "Test brief sent",
       });
     },
     onError: ({ error }) => {

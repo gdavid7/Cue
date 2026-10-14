@@ -85,7 +85,10 @@ function AccountItem({
 }) {
   const mailHref = useMailHref();
   return (
-    <Link href={mailHref({ accountId: emailAccount.id })} className="block">
+    <Link
+      href={mailHref({ accountId: emailAccount.id })}
+      className="block min-w-0"
+    >
       <Card className="cursor-pointer transition-colors hover:bg-slate-50 dark:hover:bg-slate-900">
         <AccountHeader
           emailAccount={emailAccount}
@@ -117,11 +120,14 @@ function AccountHeader({
           {emailAccount.name?.[0] || emailAccount.email?.[0]}
         </AvatarFallback>
       </Avatar>
-      <div className="flex flex-col space-y-1.5 flex-1">
-        <CardTitle>{emailAccount.name}</CardTitle>
-        <CardDescription>{emailAccount.email}</CardDescription>
+      <div className="flex min-w-0 flex-1 flex-col space-y-1.5">
+        <CardTitle className="truncate">{emailAccount.name}</CardTitle>
+        <CardDescription className="truncate" title={emailAccount.email}>
+          {emailAccount.email}
+        </CardDescription>
       </div>
       <div
+        className="shrink-0"
         onClick={(e: MouseEvent<HTMLDivElement>) => e.stopPropagation()}
         onMouseDown={(e: MouseEvent<HTMLDivElement>) => e.stopPropagation()}
         onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => {
@@ -269,15 +275,15 @@ function useAccountNotifications() {
         { title: string; description: string }
       > = {
         account_merged: {
-          title: "Account merged successfully!",
+          title: "Accounts merged",
           description: "Your accounts have been merged.",
         },
         account_created_and_linked: {
-          title: "Account added successfully!",
+          title: "Account added",
           description: "Your new account has been linked.",
         },
         tokens_updated: {
-          title: "Account reconnected successfully!",
+          title: "Account reconnected",
           description: "Your account permissions were refreshed.",
         },
       };

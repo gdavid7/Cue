@@ -33,7 +33,7 @@ test("creates, edits, toggles, and deletes a manual automation rule", async ({
   await page.goto(`/${emailAccountId}/automation`);
   await expectVisibleAfterTransientFetch(
     page,
-    page.getByRole("heading", { name: "AI Assistant", exact: true }),
+    page.getByRole("heading", { name: "Rules", exact: true }),
   );
 
   const createDialog = page.getByRole("dialog", { name: "Create Rule" });
@@ -76,7 +76,7 @@ test("creates, edits, toggles, and deletes a manual automation rule", async ({
   const ruleRow = page.getByRole("row").filter({ hasText: RULE_NAME });
   await expect(ruleRow).toBeVisible({ timeout: 60_000 });
 
-  await ruleRow.getByRole("button", { name: "Toggle menu" }).click();
+  await ruleRow.getByRole("button", { name: /^Actions for / }).click();
   await page.getByRole("menuitem", { name: "Edit manually" }).click();
   const editDialog = page.getByRole("dialog", { name: "Edit Rule" });
   await editDialog
@@ -104,9 +104,12 @@ test("creates, edits, toggles, and deletes a manual automation rule", async ({
       name: UPDATED_RULE_NAME,
     });
 
-  page.once("dialog", (dialog) => dialog.accept());
-  await updatedRuleRow.getByRole("button", { name: "Toggle menu" }).click();
+  await updatedRuleRow.getByRole("button", { name: /^Actions for / }).click();
   await page.getByRole("menuitem", { name: "Delete" }).click();
+  await page
+    .getByRole("alertdialog")
+    .getByRole("button", { name: "Delete rule" })
+    .click();
   await expect(page.getByText("Rule deleted", { exact: true })).toBeVisible();
   await expect(updatedRuleRow).toHaveCount(0);
   await expect

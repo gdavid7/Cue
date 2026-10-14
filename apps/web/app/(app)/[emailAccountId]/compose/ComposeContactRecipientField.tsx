@@ -136,6 +136,18 @@ export function ComposeContactRecipientField({
     onSearchQueryChange(name, query);
   };
 
+  const commitTypedRecipients = () => {
+    if (!isValidComposeRecipientList(searchQuery.trim())) return;
+    onSelectedRecipientsChange(
+      name,
+      resolveComposeRecipients({
+        selectedRecipients,
+        pendingRecipient: searchQuery,
+      }),
+    );
+    updateSearchQuery("");
+  };
+
   const removeSelectedEmail = (emailAddress: string) => {
     onSelectedRecipientsChange(
       name,
@@ -177,10 +189,12 @@ export function ComposeContactRecipientField({
             </button>
             <button
               aria-label={`Remove ${emailAddress}`}
+              // A finger-sized target around the small glyph.
+              className="-my-1 -mr-1.5 ml-0.5 rounded-sm p-1.5 hover:bg-muted"
               onClick={() => removeSelectedEmail(emailAddress)}
               type="button"
             >
-              <XIcon className="ml-1.5 size-3" />
+              <XIcon className="size-3" />
             </button>
           </Badge>
         ))}
@@ -193,19 +207,25 @@ export function ComposeContactRecipientField({
             id={name}
             onChange={(event) => updateSearchQuery(event.target.value)}
             onFocus={() => onActivate(name)}
+            onBlur={commitTypedRecipients}
+            onKeyDown={(event) => {
+              // A comma ends an address, unless it's inside a quoted name.
+              if (event.key !== "," || !searchQuery.trim()) return;
+              if (!isValidComposeRecipientList(searchQuery.trim())) return;
+              event.preventDefault();
+              commitTypedRecipients();
+            }}
             onKeyUp={(event) => {
               if (event.key !== "Enter") return;
               event.preventDefault();
-              if (!isValidComposeRecipientList(searchQuery.trim())) return;
-              onSelectedRecipientsChange(
-                name,
-                resolveComposeRecipients({
-                  selectedRecipients,
-                  pendingRecipient: searchQuery,
-                }),
-              );
-              updateSearchQuery("");
+              commitTypedRecipients();
             }}
+            // An address, not prose: no capitals, corrections or spellcheck.
+            autoCapitalize="off"
+            autoComplete="off"
+            autoCorrect="off"
+            inputMode="email"
+            spellCheck={false}
             value={searchQuery}
           />
 

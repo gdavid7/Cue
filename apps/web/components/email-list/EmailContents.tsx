@@ -43,7 +43,10 @@ export function HtmlEmail({
   onForwardMessage,
   onNavigateMessage,
   onFocusMessage,
+  label,
 }: {
+  /** Names the message's frame for screen readers, e.g. sender and date. */
+  label?: string;
   html: string;
   messageId: string;
   emailAccountId?: string;
@@ -171,6 +174,7 @@ export function HtmlEmail({
         documentKey={documentKey}
         isDarkMode={applyDarkTheme}
         callbacks={callbacks}
+        label={label}
       />
       {hasQuotedContent && (
         <button
@@ -191,6 +195,7 @@ export function HtmlEmail({
           documentKey={quotedDocumentKey}
           isDarkMode={applyQuotedDarkTheme}
           callbacks={callbacks}
+          label={label && `Quoted text in ${label}`}
         />
       )}
     </div>

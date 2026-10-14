@@ -14,7 +14,7 @@ export default async function RulePage(props: {
     <div>
       {searchParams.new === "true" && (
         <TopSection
-          title="Here are your rule settings!"
+          title="Rule settings"
           descriptionComponent={
             <p>
               These rules were AI generated, feel free to adjust them to your

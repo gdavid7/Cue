@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/utils/branding";
 import type { KnownBlock, Block } from "@slack/types";
 
 import type { BriefingContent } from "@inboxzero/transactional-email/emails/meeting-briefing";
@@ -104,7 +105,7 @@ export function buildMeetingBriefingBlocks({
     elements: [
       {
         type: "mrkdwn",
-        text: "_AI-generated briefing from Inbox Zero • May contain inaccuracies_",
+        text: `_AI-generated briefing from ${BRAND_NAME} • May contain inaccuracies_`,
       },
     ],
   });

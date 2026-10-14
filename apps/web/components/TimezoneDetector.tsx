@@ -44,7 +44,7 @@ export function TimezoneDetector() {
     updateEmailAccountTimezoneAction.bind(null, emailAccountId),
     {
       onSuccess: () => {
-        toastSuccess({ description: "Timezone updated!" });
+        toastSuccess({ description: "Timezone updated" });
         closeDialog();
       },
       onSettled: () => {

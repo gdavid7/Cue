@@ -78,9 +78,9 @@ export function LearnedPatternsDialog({
         <DialogHeader>
           <DialogTitle>Learned patterns</DialogTitle>
           <DialogDescription>
-            Learned patterns are patterns that the AI has learned from your
-            email history. When a learned pattern is matched other rules
-            conditions are skipped and this rule is automatically selected.
+            Learned patterns are senders and email types Cue has learned from
+            your email history. When one matches, Cue picks this rule without
+            checking its other conditions.
           </DialogDescription>
         </DialogHeader>
 

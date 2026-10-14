@@ -23,7 +23,7 @@ export function ReferralSignatureSetting() {
     {
       onSuccess: () => {
         toastSuccess({
-          description: "Referral signature setting updated!",
+          description: "Referral signature setting updated",
         });
       },
       onError: createSettingActionErrorHandler({

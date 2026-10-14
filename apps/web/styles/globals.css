@@ -36,7 +36,7 @@
     --destructive: 0 100% 50%;
     --destructive-foreground: 210 40% 98%;
 
-    --ring: 215 20.2% 65.1%; /* slate-400 */
+    --ring: 215.4 16.3% 46.9%; /* slate-500, 3:1+ focus contrast */
 
     --radius: 0.5rem;
 
@@ -113,7 +113,7 @@
     --foreground: 0 0% 14.1%; /* #242424 */
 
     --muted: 0 0% 96.5%; /* #F6F6F6 */
-    --muted-foreground: 0 0% 51.8%; /* #848484 */
+    --muted-foreground: 0 0% 45%; /* #737373, 4.7:1 on white (WCAG AA) */
 
     --popover: 0 0% 100%; /* #FFFFFF */
     --popover-foreground: 0 0% 14.1%;
@@ -166,18 +166,6 @@
     --sidebar-primary: 213.1 93.9% 67.8%;
     --sidebar-primary-foreground: 220 7% 12%;
     --sidebar-ring: 213.1 93.9% 67.8%;
-  }
-}
-
-@layer base {
-  /*
-   * The gradient button reads identically in every theme, so its values live
-   * outside the theme blocks rather than being redefined per palette.
-   */
-  :root {
-    --button-gradient: linear-gradient(180deg, #2965ec, #5c89f8);
-    --button-gradient-border: 220.9 83.4% 64.5%; /* #5989F0 */
-    --button-gradient-shadow: 221.1 97.8% 64.3%; /* #4B83FD */
   }
 }
 

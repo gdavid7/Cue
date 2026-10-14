@@ -119,11 +119,10 @@ export function MailReaderToolbar({
         role="group"
       >
         {messageExpansion?.canExpand
-          ? renderButton({
+          ? actionButton({
               action: expansionAction,
               ariaLabel: expansionLabel,
-              title: expansionLabel,
-              variant: "ghost",
+              variant: "outline",
               icon: icons?.[expansionAction],
               onClick: messageExpansion.onToggleAll,
             })

@@ -5,14 +5,11 @@ import type { MouseEvent } from "react";
 import { useCallback, useMemo, useState } from "react";
 import {
   ChevronRightIcon,
-  CreditCardIcon,
-  MailIcon,
   MessageCircleIcon,
   MessagesSquareIcon,
   PlugIcon,
+  PlusIcon,
   SendIcon,
-  UserIcon,
-  WebhookIcon,
 } from "lucide-react";
 import { ApiKeysSection } from "@/app/(app)/[emailAccountId]/settings/ApiKeysSection";
 import { McpSection } from "@/app/(app)/[emailAccountId]/settings/McpSection";
@@ -32,6 +29,7 @@ import { ToggleAllRulesSection } from "@/app/(app)/[emailAccountId]/settings/Tog
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
 import { CueLabelsSetting } from "@/components/CueLabelsCleanup";
 import { LoadingContent } from "@/components/LoadingContent";
+import { SectionHeader } from "@/components/Typography";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -47,9 +45,14 @@ export function SettingsContent() {
   const { emailAccountId: activeEmailAccountId } = useAccount();
   const { data, isLoading, error } = useAccounts();
   const { canManageBilling } = usePremium();
-  const [expandedAccountId, setExpandedAccountId] = useState<string | null>(
-    null,
-  );
+  // Undefined until the user toggles a card: the current account starts open.
+  const [toggledAccountId, setExpandedAccountId] = useState<
+    string | null | undefined
+  >(undefined);
+  const expandedAccountId =
+    toggledAccountId === undefined
+      ? activeEmailAccountId || null
+      : toggledAccountId;
 
   const handleSlackConnected = useCallback(
     (connectedEmailAccountId: string | null) => {
@@ -76,10 +79,7 @@ export function SettingsContent() {
 
   return (
     <div className="space-y-10">
-      <SettingsGroup
-        icon={<MailIcon className="size-5" />}
-        title="Email Accounts"
-      >
+      <SettingsGroup title="Email accounts">
         <LoadingContent loading={isLoading} error={error}>
           {emailAccounts.length > 0 && (
             <div className="space-y-4">
@@ -88,10 +88,13 @@ export function SettingsContent() {
                   key={emailAccount.id}
                   emailAccount={emailAccount}
                   allAccounts={emailAccounts}
+                  isCurrent={emailAccount.id === activeEmailAccountId}
                   expanded={expandedAccountId === emailAccount.id}
                   onToggle={() =>
-                    setExpandedAccountId((current) =>
-                      current === emailAccount.id ? null : emailAccount.id,
+                    setExpandedAccountId(
+                      expandedAccountId === emailAccount.id
+                        ? null
+                        : emailAccount.id,
                     )
                   }
                 />
@@ -99,8 +102,8 @@ export function SettingsContent() {
 
               <Button asChild variant="outline">
                 <Link href="/accounts">
-                  <MailIcon className="mr-2 size-4" />
-                  Add Account
+                  <PlusIcon className="mr-2 size-4" />
+                  Add account
                 </Link>
               </Button>
             </div>
@@ -109,17 +112,14 @@ export function SettingsContent() {
       </SettingsGroup>
 
       {!env.NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS && canManageBilling && (
-        <SettingsGroup
-          icon={<CreditCardIcon className="size-5" />}
-          title="Billing"
-        >
+        <SettingsGroup title="Billing">
           <ItemCard>
             <BillingSection />
           </ItemCard>
         </SettingsGroup>
       )}
 
-      <SettingsGroup icon={<UserIcon className="size-5" />} title="Account">
+      <SettingsGroup title="Account">
         <ItemCard>
           {env.NEXT_PUBLIC_EXTERNAL_API_ENABLED && <McpSection />}
           <EmailOtpSection hasMultipleAccounts={emailAccounts.length > 1} />
@@ -132,10 +132,7 @@ export function SettingsContent() {
       </SettingsGroup>
 
       {env.NEXT_PUBLIC_EXTERNAL_API_ENABLED && (
-        <SettingsGroup
-          icon={<WebhookIcon className="size-5" />}
-          title="Developer"
-        >
+        <SettingsGroup title="Developer">
           <ItemCard>
             <ApiKeysSection />
           </ItemCard>
@@ -148,11 +145,13 @@ export function SettingsContent() {
 function EmailAccountSettingsCard({
   emailAccount,
   allAccounts,
+  isCurrent,
   expanded,
   onToggle,
 }: {
   emailAccount: GetEmailAccountsResponse["emailAccounts"][number];
   allAccounts: GetEmailAccountsResponse["emailAccounts"];
+  isCurrent: boolean;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -174,6 +173,7 @@ function EmailAccountSettingsCard({
       <div
         role="button"
         tabIndex={0}
+        aria-expanded={expanded}
         className="flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left"
         onClick={onToggle}
         onKeyDown={(e) => {
@@ -192,7 +192,14 @@ function EmailAccountSettingsCard({
             {emailAccount.name?.charAt(0) || emailAccount.email?.charAt(0)}
           </AvatarFallback>
         </Avatar>
-        <span className="flex-1 text-sm font-medium">{emailAccount.email}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">
+          {emailAccount.email}
+        </span>
+        {isCurrent && (
+          <Badge variant="secondary" className="text-xs font-normal">
+            Current
+          </Badge>
+        )}
         {connectedProviders.map((provider) => (
           <Badge
             key={provider}
@@ -278,24 +285,15 @@ function ProviderIcon({
 }
 
 function SettingsGroup({
-  icon,
   title,
   children,
 }: {
-  icon?: React.ReactNode;
-  title?: string;
+  title: string;
   children: React.ReactNode;
 }) {
   return (
     <section className="space-y-4">
-      {title && (
-        <div className="flex items-center gap-2 text-muted-foreground">
-          {icon}
-          <h2 className="text-sm font-medium uppercase tracking-wide">
-            {title}
-          </h2>
-        </div>
-      )}
+      <SectionHeader>{title}</SectionHeader>
       {children}
     </section>
   );

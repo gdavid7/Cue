@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
 import { NextRequest } from "next/server";
 import { config, proxy } from "./proxy";
+import { BRAND_NAME } from "@/utils/branding";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -31,7 +32,7 @@ describe("proxy content negotiation", () => {
       "text/markdown; charset=utf-8",
     );
     expect(response.headers.get("vary")).toBe("Accept");
-    await expect(response.text()).resolves.toContain("# Inbox Zero");
+    await expect(response.text()).resolves.toContain(`# ${BRAND_NAME}`);
   });
 
   it("passes browser requests through and advertises negotiation", () => {

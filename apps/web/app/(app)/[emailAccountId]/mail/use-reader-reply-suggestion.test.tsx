@@ -1,12 +1,6 @@
 // @vitest-environment jsdom
 
-import {
-  cleanup,
-  fireEvent,
-  render,
-  renderHook,
-  screen,
-} from "@testing-library/react";
+import { cleanup, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useReaderReplySuggestion } from "@/app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion";
 import type { ThreadMessage } from "@/components/email-list/types";
@@ -17,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   useReplySuggestion: vi.fn(),
   useSuggestedReply: vi.fn(),
   insights: undefined as Record<string, ThreadInsightData> | undefined,
+  draftReplies: { enabled: true, loading: false },
 }));
 
 vi.mock("@/hooks/useReplySuggestion", () => ({
@@ -24,6 +19,9 @@ vi.mock("@/hooks/useReplySuggestion", () => ({
 }));
 vi.mock("@/hooks/useSuggestedReply", () => ({
   useSuggestedReply: mocks.useSuggestedReply,
+}));
+vi.mock("@/app/(app)/[emailAccountId]/assistant/settings/DraftReplies", () => ({
+  useDraftReplies: () => mocks.draftReplies,
 }));
 vi.mock("@/hooks/useInboxInsights", () => ({
   useInboxInsights: () => ({ data: mocks.insights }),
@@ -49,6 +47,7 @@ describe("useReaderReplySuggestion", () => {
     });
     mocks.useSuggestedReply.mockReturnValue({ data: undefined });
     mocks.insights = undefined;
+    mocks.draftReplies = { enabled: true, loading: false };
   });
   afterEach(cleanup);
 
@@ -115,25 +114,44 @@ describe("useReaderReplySuggestion", () => {
     });
   });
 
-  it("offers Reply while Cue is still checking", () => {
+  it("says what Cue is doing while it checks", () => {
     mocks.useReplySuggestion.mockReturnValue({
       phase: "checking-mail",
       suggestion: undefined,
     });
-    const onReply = vi.fn();
-    const { result } = renderSuggestion(
-      [incoming("ask", ["INBOX", "Label_to_reply"])],
-      onReply,
-    );
+    const { result } = renderSuggestion([
+      incoming("ask", ["INBOX", "Label_to_reply"]),
+    ]);
 
-    render(<div>{result.current.idleReplyArea}</div>);
-    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    render(<div>{result.current.replyStatus}</div>);
 
-    expect(onReply).toHaveBeenCalledWith("ask");
+    expect(screen.getByRole("status")).toBeTruthy();
+  });
+
+  // "Auto draft replies" off means Cue doesn't write replies in the reader either.
+  it("doesn't write a reply while Auto draft replies is off", () => {
+    mocks.draftReplies = { enabled: false, loading: false };
+
+    renderSuggestion([incoming("ask", ["INBOX", "Label_to_reply"])]);
+
+    expect(lastEnabled()).toBe(false);
+  });
+
+  it("waits for the Auto draft replies setting before deciding", () => {
+    mocks.draftReplies = { enabled: false, loading: true };
+    const { rerender } = renderSuggestion([
+      incoming("ask", ["INBOX", "Label_to_reply"]),
+    ]);
+    expect(lastEnabled()).toBe(false);
+
+    mocks.draftReplies = { enabled: true, loading: false };
+    rerender();
+
+    expect(lastEnabled()).toBe(true);
   });
 });
 
-function renderSuggestion(messages: ThreadMessage[], onReply = vi.fn()) {
+function renderSuggestion(messages: ThreadMessage[]) {
   return renderHook(() =>
     useReaderReplySuggestion({
       emailAccountId: "account-1",
@@ -142,7 +160,6 @@ function renderSuggestion(messages: ThreadMessage[], onReply = vi.fn()) {
       userLabels: LABELS,
       enabled: true,
       onOpenThread: vi.fn(),
-      onReply,
     }),
   );
 }

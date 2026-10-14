@@ -10,6 +10,7 @@ import { ActionType, SystemType } from "@/generated/prisma/enums";
 import { LoadingContent } from "@/components/LoadingContent";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SettingCard } from "@/components/SettingCard";
+import { isDraftRepliesEnabled } from "@/utils/rule/draft-replies-enabled";
 
 export function DraftReplies() {
   const { enabled, toggleDraftReplies, loading, error } = useDraftReplies();
@@ -30,7 +31,7 @@ export function DraftReplies() {
   return (
     <SettingCard
       title="Auto draft replies"
-      description="Automatically draft replies written in your tone to emails needing a reply."
+      description="Cue drafts a reply in your tone for mail that needs one, and pre-fills it when you open the email. Turn this off and Cue leaves every reply to you."
       right={
         <LoadingContent
           loading={loading}
@@ -55,9 +56,6 @@ export function useDraftReplies() {
   const toReplyRule = data?.find(
     (rule) => rule.systemType === SystemType.TO_REPLY,
   );
-  const isEnabled = toReplyRule?.actions.some(
-    (action) => action.type === ActionType.DRAFT_EMAIL,
-  );
 
   const toggleDraftReplies = useCallback(
     async (enable: boolean) => {
@@ -67,6 +65,8 @@ export function useDraftReplies() {
         if (rule.systemType === SystemType.TO_REPLY) {
           return {
             ...rule,
+            // The action turns the whole To Reply rule on or off with drafting.
+            enabled: enable,
             actions: enable
               ? rule.actions.some(
                   (action) => action.type === ActionType.DRAFT_EMAIL,
@@ -132,7 +132,7 @@ export function useDraftReplies() {
   );
 
   return {
-    enabled: isEnabled ?? false,
+    enabled: isDraftRepliesEnabled(toReplyRule),
     toggleDraftReplies,
     loading: isLoading,
     error,

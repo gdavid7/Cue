@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import Image from "next/image";
 import { PlayIcon, X } from "lucide-react";
-import { CardGreen } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { MutedText } from "@/components/Typography";
@@ -104,32 +104,33 @@ const VideoCard = React.forwardRef<
     };
 
     return (
-      <CardGreen ref={ref} className={className} {...props}>
+      <Card ref={ref} className={className} {...props}>
         <div className="relative">
           {onClose && (
             <button
               type="button"
               onClick={onClose}
               aria-label="Close"
-              className="absolute top-3 right-3 z-10 p-1.5 rounded-full hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors duration-200"
+              className="absolute top-3 right-3 z-10 p-1.5 rounded-full hover:bg-muted transition-colors duration-200"
             >
-              <X className="w-4 h-4 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200" />
+              <X className="w-4 h-4 text-muted-foreground hover:text-foreground" />
             </button>
           )}
           <div className="flex items-center justify-between gap-6 p-6 pr-12">
             <div className="flex items-start gap-3">
               {icon && (
-                <div className="mt-0.5 flex-shrink-0 text-green-600 dark:text-green-400">
+                <div className="mt-0.5 flex-shrink-0 text-muted-foreground">
                   {icon}
                 </div>
               )}
               <div className="flex-1">
-                <h3 className="text-lg font-semibold">{title}</h3>
+                <h3 className="font-title text-lg">{title}</h3>
                 <MutedText className="mt-1">{description}</MutedText>
+                {/* Desktop opens from the thumbnail; one entry point per layout. */}
                 <Button
-                  className="mt-3"
+                  className="mt-3 md:hidden"
                   size="sm"
-                  variant="primaryBlack"
+                  variant="outline"
                   onClick={() => openVideo("button")}
                   Icon={PlayIcon}
                 >
@@ -145,7 +146,7 @@ const VideoCard = React.forwardRef<
                     type="button"
                     aria-label="Play video"
                     onClick={() => openVideo("thumbnail")}
-                    className="group relative cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500 focus-visible:ring-offset-2 rounded-lg overflow-hidden"
+                    className="group relative cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-lg overflow-hidden"
                   >
                     <div className="relative w-32 h-20 rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-800">
                       <Image
@@ -175,7 +176,7 @@ const VideoCard = React.forwardRef<
             </div>
           </div>
         </div>
-      </CardGreen>
+      </Card>
     );
   },
 );

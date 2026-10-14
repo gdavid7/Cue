@@ -42,7 +42,7 @@ import {
 } from "@/utils/split-inbox/split-library";
 import { cn } from "@/utils";
 
-const YOUR_SPLITS = "Your splits";
+const YOUR_SPLITS = "Your tabs";
 
 const FIELDS = [
   { kind: MailSplitFilterKind.LABEL, name: "Has label" },
@@ -338,11 +338,11 @@ export function NewSplitDialog({
   const title =
     mode === "build"
       ? editing
-        ? "Edit split"
-        : "Build a split"
+        ? "Edit tab"
+        : "Build a tab"
       : mode === "describe"
-        ? "Describe this split"
-        : "New split inbox";
+        ? "Describe this tab"
+        : "New tab";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -352,6 +352,8 @@ export function NewSplitDialog({
           // The dialog primitive sets `md:w-full` and `sm:rounded-lg`; those
           // responsive variants outrank an unprefixed override in tailwind-merge.
           "rounded-2xl sm:rounded-2xl md:w-[620px]",
+          // A phone gets the whole screen, so the panes can stack.
+          "max-sm:top-0 max-sm:h-dvh max-sm:max-h-none max-sm:w-screen max-sm:max-w-none max-sm:rounded-none",
         )}
         hideCloseButton
       >
@@ -393,9 +395,9 @@ export function NewSplitDialog({
         {detail ? (
           <LibraryDetail entry={detail} />
         ) : mode === "library" ? (
-          <div className="flex min-h-0 flex-1 overflow-hidden">
-            <div className="flex w-[142px] shrink-0 flex-col gap-0.5 overflow-y-auto border-border border-r bg-sidebar p-2 scrollbar-thin">
-              <div className="px-2 pt-0.5 pb-1.5 font-medium text-[11px] text-muted-foreground">
+          <div className="flex min-h-0 flex-1 overflow-hidden max-sm:flex-col">
+            <div className="flex w-[142px] shrink-0 flex-col gap-0.5 overflow-y-auto border-border border-r bg-sidebar p-2 scrollbar-thin max-sm:w-full max-sm:flex-row max-sm:overflow-x-auto max-sm:border-r-0 max-sm:border-b">
+              <div className="px-2 pt-0.5 pb-1.5 font-medium text-[11px] text-muted-foreground max-sm:hidden">
                 Category
               </div>
               {[YOUR_SPLITS, ...SPLIT_LIBRARY_CATEGORIES].map((option) => (
@@ -405,7 +407,7 @@ export function NewSplitDialog({
                   onClick={() => setCategory(option)}
                   aria-current={option === category ? "true" : undefined}
                   className={cn(
-                    "rounded-lg px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    "rounded-lg px-2 py-1.5 text-left text-xs max-sm:shrink-0 max-sm:whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     option === category
                       ? "bg-card font-medium text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.04),0_0_0_1px_rgba(17,24,39,0.05)]"
                       : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
@@ -451,7 +453,7 @@ export function NewSplitDialog({
                 existingSplits.length ? (
                   <ul
                     className="space-y-1"
-                    aria-label="Split order"
+                    aria-label="Tab order"
                     aria-busy={isBusy}
                   >
                     {existingSplits.map((split, index) => (
@@ -504,7 +506,7 @@ export function NewSplitDialog({
                         <button
                           type="button"
                           disabled={isBusy || !split.filters.length}
-                          aria-label={`Edit the ${split.name} split`}
+                          aria-label={`Edit the ${split.name} tab`}
                           onClick={() => onEdit(split.id)}
                           className="min-w-0 flex-1 truncate rounded text-left font-medium text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         >
@@ -545,7 +547,7 @@ export function NewSplitDialog({
                           variant="ghostMuted"
                           size="iconXs"
                           disabled={isBusy || !split.filters.length}
-                          aria-label={`Turn off the ${split.name} split`}
+                          aria-label={`Turn off the ${split.name} tab`}
                           onClick={() => removeSplit(split.id)}
                         >
                           <XIcon className="size-3.5" />
@@ -555,7 +557,7 @@ export function NewSplitDialog({
                   </ul>
                 ) : (
                   <p className="text-muted-foreground text-xs leading-relaxed">
-                    Splits you build yourself land here.
+                    Tabs you build yourself land here.
                   </p>
                 )
               ) : (
@@ -572,7 +574,7 @@ export function NewSplitDialog({
                   ))}
                   {!libraryEntries.length && (
                     <p className="col-span-2 text-muted-foreground text-xs leading-relaxed">
-                      Nothing here yet — these splits need labels this account
+                      Nothing here yet — these tabs need labels this account
                       doesn&apos;t have.
                     </p>
                   )}
@@ -651,7 +653,7 @@ export function NewSplitDialog({
               rows={3}
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
-              placeholder="Describe what should land in this split…"
+              placeholder="Describe what should land in this tab…"
               maxLength={300}
               className="resize-none rounded-xl text-[13.5px]"
             />
@@ -693,17 +695,17 @@ export function NewSplitDialog({
                     detail,
                     libraryFiltersFor(detail, labels, categories) ?? [],
                   )
-                    ? "Turn off split"
-                    : "Turn on split"}
+                    ? "Turn off tab"
+                    : "Turn on tab"}
                 </Button>
               </>
             ) : mode === "build" ? (
               <>
                 <span className="shrink-0 text-muted-foreground text-xs">
-                  Split name
+                  Tab name
                 </span>
                 <Input
-                  aria-label="Split name"
+                  aria-label="Tab name"
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                   onKeyDown={(event) => {
@@ -711,7 +713,7 @@ export function NewSplitDialog({
                     event.preventDefault();
                     save();
                   }}
-                  placeholder={describedName || "Name this split"}
+                  placeholder={describedName || "Name this tab"}
                   maxLength={60}
                   className="h-8 w-[190px] shrink-0 text-xs"
                 />
@@ -722,7 +724,7 @@ export function NewSplitDialog({
                   disabled={!conditions.length || isBusy}
                   onClick={save}
                 >
-                  {editing ? "Save changes" : "Add split"}
+                  {editing ? "Save changes" : "Add tab"}
                 </Button>
               </>
             ) : mode === "describe" ? (
@@ -814,7 +816,7 @@ function LibraryTile({
       </button>
       <button
         type="button"
-        aria-label={`What the ${entry.name} split does`}
+        aria-label={`What the ${entry.name} tab does`}
         onClick={onInfo}
         className="hidden size-4.5 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-focus-within:flex group-hover:flex"
       >
@@ -824,8 +826,8 @@ function LibraryTile({
         type="button"
         aria-label={
           on
-            ? `Turn off the ${entry.name} split`
-            : `Turn on the ${entry.name} split`
+            ? `Turn off the ${entry.name} tab`
+            : `Turn on the ${entry.name} tab`
         }
         onClick={onToggle}
         disabled={disabled}

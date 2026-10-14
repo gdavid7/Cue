@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { BRAND_NAME } from "@/utils/branding";
 import {
   PROMPT_COMMANDS,
   expandPromptCommand,
@@ -64,7 +65,7 @@ describe("getHelpText", () => {
     const helpText = getHelpText("teams", HELP_OPTIONS);
     expect(helpText).toContain("Commands:");
     expect(helpText).toContain("Microsoft Teams");
-    expect(helpText).toContain("An active Inbox Zero account is required.");
+    expect(helpText).toContain(`An active ${BRAND_NAME} account is required.`);
     expect(helpText).toContain("https://example.com/channels");
     expect(helpText).toContain("support@example.com");
 

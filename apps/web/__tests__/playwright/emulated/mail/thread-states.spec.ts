@@ -201,7 +201,7 @@ test("captures thread reading and reply states", async ({ page }, testInfo) => {
   );
   await capturePlaywrightCheckpoint(page, testInfo, "01-collapsed-history");
   const collapsed = page
-    .locator('[role="button"][aria-expanded="false"]')
+    .locator('[data-message-toggle][aria-expanded="false"]')
     .filter({ hasText: "Dana Example" });
   if (await collapsed.count()) await collapsed.click();
   await expectThreadReaderBody(
@@ -220,7 +220,7 @@ test("captures thread reading and reply states", async ({ page }, testInfo) => {
     '[data-thread-message-id="msg_playwright_reply"]',
   );
   const collapsedReply = replyMessage.locator(
-    '[role="button"][aria-expanded="false"]',
+    '[data-message-toggle][aria-expanded="false"]',
   );
   await expect(replyMessage).toBeVisible();
   if (await collapsedReply.count()) await collapsedReply.click();
@@ -249,7 +249,7 @@ test("captures thread reading and reply states", async ({ page }, testInfo) => {
   await capturePlaywrightCheckpoint(page, testInfo, "06-populated-reply");
   await page.getByRole("button", { name: /^(Reply|Draft) to Leslie/ }).click();
   await expect(
-    page.getByRole("combobox", { name: "Cc", exact: true }),
+    page.getByRole("button", { name: "Add Cc recipients", exact: true }),
   ).toBeVisible();
   await capturePlaywrightCheckpoint(page, testInfo, "07-reply-recipients");
   await page
@@ -305,7 +305,7 @@ test("captures a longer thread and draft collapse", async ({
   const header = page
     .locator("li[data-thread-message-id]")
     .last()
-    .locator('[role="button"][aria-expanded]')
+    .locator("[data-message-toggle][aria-expanded]")
     .first();
   await expect(header).toHaveAttribute("aria-expanded", "true");
   await header.click();
@@ -328,7 +328,9 @@ async function openSeededWorkflowReplyEditor(page: Page) {
   const message = page.locator(
     '[data-thread-message-id="msg_playwright_reply"]',
   );
-  const collapsed = message.locator('[role="button"][aria-expanded="false"]');
+  const collapsed = message.locator(
+    '[data-message-toggle][aria-expanded="false"]',
+  );
   if (await collapsed.count()) await collapsed.click();
   const editor = page.getByRole("textbox", { name: "Email message" });
   if (!(await editor.count()) || !(await editor.first().isVisible())) {

@@ -29,7 +29,7 @@ export function OrgAnalyticsConsentSection({
     updateAnalyticsConsentAction.bind(null, emailAccountId),
     {
       onSuccess: () => {
-        toastSuccess({ description: "Settings updated!" });
+        toastSuccess({ description: "Settings updated" });
       },
       onError: (error) => {
         mutate();

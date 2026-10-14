@@ -73,7 +73,7 @@ export function useSplitCounts({
     const apply = () => {
       const next = new Map<string, number>();
       for (const count of handle.getSnapshot().data?.counts ?? []) {
-        next.set(count.id, count.matchingConversations);
+        next.set(count.id, count.unreadConversations);
       }
       setCountsById((current) => (sameCounts(current, next) ? current : next));
     };

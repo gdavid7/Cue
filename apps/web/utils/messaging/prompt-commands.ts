@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/utils/branding";
 import type { MessagingPlatform } from "@/utils/messaging/platforms";
 
 const SLASH_COMMAND_REGEX = /^\/([a-z0-9_]+)(?:@[A-Za-z0-9_]+)?(?:\s+.*)?$/i;
@@ -12,7 +13,7 @@ export const PROMPT_COMMANDS: Record<string, string> = {
 };
 
 const ACCOUNT_COMMAND_LINES = [
-  "/connect <code> - Link your Inbox Zero account",
+  `/connect <code> - Link your ${BRAND_NAME} account`,
   "/switch - List linked accounts",
   "/switch <number> - Switch active account",
 ];
@@ -73,7 +74,7 @@ export function getHelpText(
 
   return [
     PLATFORM_INTRO[platform],
-    "An active Inbox Zero account is required.",
+    `An active ${BRAND_NAME} account is required.`,
     `Get started: ${normalizedBaseUrl}/channels`,
     `Help: ${normalizedBaseUrl}/docs/essentials/channels`,
     `Contact support: ${supportEmail}`,

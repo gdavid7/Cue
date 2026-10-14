@@ -50,7 +50,9 @@ export default async function AuthenticationPage(props: {
       <div className="mx-auto flex w-full flex-col justify-center space-y-6 sm:w-[350px]">
         <div className="flex flex-col items-center text-center">
           <Logo className="mb-6 h-7" />
-          <h1 className="font-title text-2xl text-foreground">Sign In</h1>
+          <h1 className="font-title text-2xl text-foreground">
+            Sign in or create an account
+          </h1>
           <p className="mt-4 text-muted-foreground">
             Every email, with the context to act on it.
           </p>
@@ -68,7 +70,7 @@ export default async function AuthenticationPage(props: {
 
         {!isSelfHosted ? (
           <MutedText className="px-8 pt-10 text-center">
-            By clicking continue, you agree to our{" "}
+            By signing in, you agree to our{" "}
             <Link
               href="/terms"
               className="underline underline-offset-4 hover:text-foreground"

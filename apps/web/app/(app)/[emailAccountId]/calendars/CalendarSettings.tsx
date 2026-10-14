@@ -51,7 +51,7 @@ export function CalendarSettings() {
         analytics.captureAction("calendar_timezone_saved", {
           had_existing_timezone: Boolean(timezone),
         });
-        toastSuccess({ description: "Timezone updated!" });
+        toastSuccess({ description: "Timezone updated" });
         try {
           await mutate();
         } finally {

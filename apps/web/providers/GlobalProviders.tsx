@@ -19,6 +19,7 @@ import {
   shouldCheckForDesktopWebUpdate,
   shouldPromptDesktopWebUpdate,
 } from "@/utils/desktop-app";
+import { BRAND_NAME } from "@/utils/branding";
 
 const DESKTOP_WEB_UPDATE_TOAST_ID = "desktop-web-update";
 const DESKTOP_WEB_UPDATE_RELOAD_GRACE_MS = 3000;
@@ -100,7 +101,7 @@ function ManageServiceWorker() {
           label: "Reload",
           onClick: activateWaitingWorker,
         },
-        description: "Reload Inbox Zero to use the latest version.",
+        description: `Reload ${BRAND_NAME} to use the latest version.`,
         duration: Number.POSITIVE_INFINITY,
         id: DESKTOP_WEB_UPDATE_TOAST_ID,
       });

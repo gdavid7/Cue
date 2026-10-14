@@ -5,7 +5,7 @@ import { parseAsBoolean, useQueryState } from "nuqs";
 import { toastError } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
 import {
-  CardGreen,
+  Card,
   CardContent,
   CardDescription,
   CardHeader,
@@ -48,7 +48,7 @@ export function PreviewBatch({ job }: { job: CleanupJob }) {
   };
 
   return (
-    <CardGreen className="mb-4">
+    <Card className="mb-4">
       <CardHeader>
         <CardTitle>Preview run</CardTitle>
         {/* <CardDescription>
@@ -75,6 +75,6 @@ export function PreviewBatch({ job }: { job: CleanupJob }) {
           </CardDescription>
         )} */}
       </CardContent>
-    </CardGreen>
+    </Card>
   );
 }

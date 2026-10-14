@@ -221,7 +221,7 @@ function TimeField({
       type="time"
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className="w-[110px] rounded-md border border-input bg-background px-2.5 py-1.5 text-center text-sm tabular-nums outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      className="w-auto min-w-[8rem] rounded-md border border-input bg-background px-2.5 py-1.5 text-center text-sm tabular-nums outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
     />
   );
 }
