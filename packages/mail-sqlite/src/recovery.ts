@@ -195,9 +195,11 @@ export async function openMailStoreWithRecovery(input: {
   onDropped?: (drop: DroppedMailWork) => void;
 }): Promise<MailStore> {
   const drops = createDropCounter();
-  let stashUnreadable: unknown = null;
+  let stashReadFailed = false;
+  let stashReadError: unknown;
   const stashed = await input.stash.read().catch((error: unknown) => {
-    stashUnreadable = error;
+    stashReadFailed = true;
+    stashReadError = error;
     return null;
   });
   let carried = stashed && ownedWork(stashed, input.ownedAccountIds, drops);
@@ -211,13 +213,15 @@ export async function openMailStoreWithRecovery(input: {
     failure = error;
   }
   if (!opened) {
+    if (classifyMailboxError(failure) !== "corrupt") {
+      await driver?.close().catch(() => undefined);
+      throw failure;
+    }
     // A stash that could not be read may hold earlier work that the write
     // below would replace.
-    const blocker =
-      classifyMailboxError(failure) === "corrupt" ? stashUnreadable : failure;
-    if (blocker) {
+    if (stashReadFailed) {
       await driver?.close().catch(() => undefined);
-      throw blocker;
+      throw stashReadError ?? new Error("recovery stash could not be read");
     }
     input.onRebuild?.();
     if (driver) {

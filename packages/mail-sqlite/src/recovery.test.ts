@@ -362,6 +362,26 @@ describe("openMailStoreWithRecovery", () => {
     expect(wipe).not.toHaveBeenCalled();
   });
 
+  it("does not rebuild when the stash read rejects without an error", async () => {
+    // IndexedDB can reject with a null transaction.error.
+    const path = await seededMailbox();
+    const wipe = vi.fn(() => wipeNodeMailbox(path));
+
+    await expect(
+      openMailStoreWithRecovery({
+        open: corruptOnFirstOpen(path),
+        wipe,
+        stash: {
+          ...memoryStash(),
+          read: () => Promise.reject(undefined),
+        },
+        ownedAccountIds: ["acc-1"],
+      }),
+    ).rejects.toThrow();
+
+    expect(wipe).not.toHaveBeenCalled();
+  });
+
   it("does not rebuild when the damaged mailbox fails to read for another reason", async () => {
     const path = await seededMailbox();
     const wipe = vi.fn(() => wipeNodeMailbox(path));
