@@ -19,6 +19,7 @@ describe("createBrowserMailEngine", () => {
     FakeWorker.onCreate = undefined;
     FakeWorker.startErrors = [];
     FakeWorker.rebuildOnStart = false;
+    FakeWorker.startReplyDelayMs = 0;
     wipe.finishPending.mockResolvedValue(undefined);
     vi.stubGlobal("Worker", FakeWorker);
   });
@@ -92,6 +93,21 @@ describe("createBrowserMailEngine", () => {
     expect(FakeWorker.instances.length).toBeLessThan(20);
   });
 
+  it("gives up on a mailbox another tab holds within about ten seconds", async () => {
+    vi.useFakeTimers();
+    // Each start waits out the other tab's file lock before reporting busy.
+    FakeWorker.startReplyDelayMs = 10_000;
+    FakeWorker.startErrors = Array.from({ length: 20 }, () => BUSY);
+    const startedAt = Date.now();
+
+    const started = startEngine();
+    const settled = expect(started).rejects.toThrow("Access Handles");
+    await vi.runAllTimersAsync();
+
+    await settled;
+    expect(Date.now() - startedAt).toBeLessThanOrEqual(12_000);
+  });
+
   it("reports storage that cannot hold a mailbox without retrying", async () => {
     FakeWorker.startErrors = ["QuotaExceededError: quota exceeded"];
     sqlite.createStore.mockRejectedValue(new Error("QuotaExceededError"));
@@ -145,6 +161,7 @@ class FakeWorker {
   static onCreate: (() => void) | undefined;
   static startErrors: string[] = [];
   static rebuildOnStart = false;
+  static startReplyDelayMs = 0;
   readonly silent = new Set<string>();
   terminated = false;
   private readonly sent: Message[] = [];
@@ -163,22 +180,25 @@ class FakeWorker {
     this.sent.push(message);
     if (message.method && this.silent.has(message.method)) return;
     // A real worker answers on a later task and never after it is terminated.
-    setTimeout(() => {
-      if (this.terminated || !message.id) return;
-      const startError =
-        message.type === "start" ? FakeWorker.startErrors.shift() : undefined;
-      const replies: unknown[] = [
-        ...(message.type === "start" && FakeWorker.rebuildOnStart
-          ? [{ type: "rebuilding" }]
-          : []),
-        startError
-          ? { id: message.id, type: "error", message: startError }
-          : { id: message.id, type: "ok", value: undefined },
-      ];
-      for (const data of replies) {
-        for (const listener of this.listeners) listener({ data });
-      }
-    }, 0);
+    setTimeout(
+      () => {
+        if (this.terminated || !message.id) return;
+        const startError =
+          message.type === "start" ? FakeWorker.startErrors.shift() : undefined;
+        const replies: unknown[] = [
+          ...(message.type === "start" && FakeWorker.rebuildOnStart
+            ? [{ type: "rebuilding" }]
+            : []),
+          startError
+            ? { id: message.id, type: "error", message: startError }
+            : { id: message.id, type: "ok", value: undefined },
+        ];
+        for (const data of replies) {
+          for (const listener of this.listeners) listener({ data });
+        }
+      },
+      message.type === "start" ? FakeWorker.startReplyDelayMs : 0,
+    );
   }
 
   terminate() {

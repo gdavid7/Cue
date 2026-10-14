@@ -32,6 +32,9 @@ export { browserMailEngineCapabilities };
 // A closing tab's worker can hold the mailbox's OPFS handles for a moment
 // after its lock is released; these waits cover that without a dead end.
 const BUSY_START_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 4000];
+// A start can itself wait out another tab's file lock, so retries stop once
+// the whole start has taken this long rather than multiplying that wait.
+const BUSY_START_BUDGET_MS = 10_000;
 
 type BrowserEngineHooks = {
   /** Called when a corrupt mailbox is being rebuilt during start. */
@@ -57,12 +60,17 @@ export async function createBrowserMailEngine(
     maxPendingOperations:
       input.maxPendingOperations ?? readPageMaxPendingOperations(),
   };
+  const startedAt = Date.now();
   for (let attempt = 0; ; attempt++) {
     try {
       return await startBrowserEngine(start, hooks);
     } catch (error) {
       const retryInMs = BUSY_START_RETRY_DELAYS_MS[attempt];
-      if (classifyMailboxError(error) !== "busy" || retryInMs === undefined) {
+      if (
+        classifyMailboxError(error) !== "busy" ||
+        retryInMs === undefined ||
+        Date.now() - startedAt + retryInMs > BUSY_START_BUDGET_MS
+      ) {
         throw error;
       }
       await delay(retryInMs);
