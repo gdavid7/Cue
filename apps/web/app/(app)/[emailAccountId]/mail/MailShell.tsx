@@ -368,7 +368,11 @@ export function MailShell() {
               ? `${split.name} (custom)`
               : split.name,
         })),
-        ...(isGoogle && !isAllAccounts
+        // "Other" is the inbox minus the other tabs, so on its own it would
+        // only repeat All.
+        ...(isGoogle &&
+        !isAllAccounts &&
+        settings?.splits.some((split) => split.filters.length > 0)
           ? [
               {
                 id: OTHER_SPLIT_ID,
@@ -496,7 +500,8 @@ export function MailShell() {
   );
   const isSearchCommitted = !!searchParam && searchQuery === searchParam.trim();
   let emptySearchMessage: string | undefined;
-  if (searchFoundNothing) emptySearchMessage = "No emails in this view";
+  if (searchFoundNothing)
+    emptySearchMessage = `No emails match “${searchQuery}”.`;
   // A committed search's card above speaks for it: the answer leads to the
   // mail, and with no answer it offers to ask in chat instead.
   if ((searchAnswer || searchFoundNothing) && isSearchCommitted)

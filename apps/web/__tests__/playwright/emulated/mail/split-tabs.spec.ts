@@ -315,7 +315,10 @@ test("Other excludes enabled splits and restores mail when a split is disabled",
     .click({ button: "right" });
   await page.getByRole("menuitem", { name: "Delete tab…" }).click();
   await page.getByRole("button", { name: "Delete tab", exact: true }).click();
-  await page.getByRole("button", { name: "Other", exact: true }).click();
+  // With All as the only tab, Other would just repeat it.
+  await expect(
+    page.getByRole("button", { name: "Other", exact: true }),
+  ).toHaveCount(0);
   const promotion = conversationWithSubject(
     page,
     conversations,
