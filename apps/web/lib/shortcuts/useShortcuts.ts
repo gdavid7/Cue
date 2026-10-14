@@ -13,7 +13,6 @@ import {
   createSequencePrefixTracker,
   isTypingTarget,
   SEQUENCE_SPLIT_KEY,
-  SEQUENCE_TIMEOUT_MS,
   type ShortcutEntry,
   type ShortcutHandlers,
   type ShortcutId,
@@ -30,7 +29,9 @@ const HOTKEYS_DELIMITER = "|";
 
 type ShortcutTarget =
   | { type: "entry"; entry: ShortcutEntry }
-  | { type: "prefix"; key: string };
+  | { type: "prefix"; key: string }
+  /** The last key of a sequence, listened for only to complete it. */
+  | { type: "sequenceEnd" };
 
 type ShortcutBucket = {
   scope: ShortcutScope;
@@ -39,6 +40,9 @@ type ShortcutBucket = {
   /** Kept as entries so the comma key is distinct from the list delimiter. */
   keys: string[];
   targets: Map<string, ShortcutTarget>;
+  /** `g>s` and the like. Matched here, not by react-hotkeys-hook: its one
+   * sequence buffer per hook breaks once a hook holds two sequences. */
+  sequences: Map<string, ShortcutEntry>;
 };
 
 // react-hotkeys-hook takes scope and typing behaviour per hook, so bindings are
@@ -76,70 +80,81 @@ export function useShortcuts(
 
   const signature = activeShortcutIds(handlers, isDesktopApp).join(",");
   const buckets = useMemo(() => buildBuckets(signature), [signature]);
+  const allSequences = useMemo(
+    () => new Set(buckets.flatMap((bucket) => [...bucket.sequences.keys()])),
+    [buckets],
+  );
 
-  useShortcutBucket(buckets[0], handlersRef, sequence);
-  useShortcutBucket(buckets[1], handlersRef, sequence);
-  useShortcutBucket(buckets[2], handlersRef, sequence);
-  useShortcutBucket(buckets[3], handlersRef, sequence);
-  useShortcutBucket(buckets[4], handlersRef, sequence);
-  useShortcutBucket(buckets[5], handlersRef, sequence);
-  useShortcutBucket(buckets[6], handlersRef, sequence);
-  useShortcutBucket(buckets[7], handlersRef, sequence);
+  useShortcutBucket(buckets[0], handlersRef, sequence, allSequences);
+  useShortcutBucket(buckets[1], handlersRef, sequence, allSequences);
+  useShortcutBucket(buckets[2], handlersRef, sequence, allSequences);
+  useShortcutBucket(buckets[3], handlersRef, sequence, allSequences);
+  useShortcutBucket(buckets[4], handlersRef, sequence, allSequences);
+  useShortcutBucket(buckets[5], handlersRef, sequence, allSequences);
+  useShortcutBucket(buckets[6], handlersRef, sequence, allSequences);
+  useShortcutBucket(buckets[7], handlersRef, sequence, allSequences);
 }
 
 function useShortcutBucket(
   bucket: ShortcutBucket,
   handlersRef: RefObject<ShortcutHandlers>,
   sequence: SequenceTracker,
+  /** Every bucket's sequences: the one completing a press may be another's. */
+  allSequences: Set<string>,
 ) {
   const onHotkey = useCallback<HotkeyCallback>(
     (event, hotkeysEvent) => {
       const target = resolveTarget(bucket, event, hotkeysEvent);
       if (!target) return;
+      const key = hotkeysEvent.hotkey;
+
+      // Every bucket hears the same keydown; one completing a sequence with
+      // it means it isn't also a plain shortcut: `a` after `g` isn't reply all.
+      if (sequence.wasResolvedBy(event)) return;
+
+      const pendingPrefix = sequence.pendingPrefix();
+      if (pendingPrefix) {
+        const sequenceKey = `${pendingPrefix}${SEQUENCE_SPLIT_KEY}${key}`;
+        const sequenceEntry = bucket.sequences.get(sequenceKey);
+        if (sequenceEntry) {
+          sequence.resolve(event);
+          event.preventDefault();
+          runEntry(handlersRef, sequenceEntry, event, sequenceKey);
+          return;
+        }
+        // Another bucket owns this sequence and will complete it.
+        if (allSequences.has(sequenceKey)) return;
+        // An abandoned prefix must not eat the next key: after `g`, a `j`
+        // still moves.
+        sequence.clear();
+      }
 
       if (target.type === "prefix") {
         sequence.start(target.key);
         return;
       }
+      if (target.type === "sequenceEnd") return;
 
-      const pendingPrefix = sequence.pendingPrefix();
-      if (isSequence(hotkeysEvent)) {
-        sequence.resolve(event);
-      } else if (sequence.wasResolvedBy(event)) {
-        // A sequence owns this press: `a` belongs to `g>a`, not to reply all.
-        sequence.clear();
-        return;
-      } else if (pendingPrefix) {
-        // An abandoned prefix must not eat the next key: after `g`, a `j` still
-        // moves. Only suppress when the press really does complete a sequence,
-        // since then the `g>a` hotkey fires for the same keydown.
-        const completesSequence = bucket.targets.has(
-          `${pendingPrefix}${SEQUENCE_SPLIT_KEY}${hotkeysEvent.hotkey}`,
-        );
-        sequence.clear();
-        if (completesSequence) return;
-      }
-
-      const { entry } = target;
-      const handler =
-        handlersRef.current[entry.id as ShortcutId] ?? entry.action;
-      if (!handler) return;
-      handler(event);
-      trackMailAction({
-        action: entry.id,
-        source: "shortcut",
-        shortcut: hotkeysEvent.hotkey,
-      });
+      runEntry(handlersRef, target.entry, event, key);
     },
-    [bucket, handlersRef, sequence],
+    [allSequences, bucket, handlersRef, sequence],
   );
 
   const preventDefault = useCallback(
     (event: KeyboardEvent, hotkeysEvent: HotkeysEvent) => {
       const target = resolveTarget(bucket, event, hotkeysEvent);
-      return !!target && target.type === "entry";
+      if (target?.type !== "entry") return false;
+      // A press that completes a sequence is left for the sequence's own
+      // bucket, which skips events another listener has already claimed.
+      const pendingPrefix = sequence.pendingPrefix();
+      return !(
+        pendingPrefix &&
+        allSequences.has(
+          `${pendingPrefix}${SEQUENCE_SPLIT_KEY}${hotkeysEvent.hotkey}`,
+        )
+      );
     },
-    [bucket],
+    [allSequences, bucket, sequence],
   );
 
   useHotkeys(bucket.keys, onHotkey, {
@@ -152,10 +167,21 @@ function useShortcutBucket(
     enableOnContentEditable: bucket.allowWhileTyping,
     delimiter: HOTKEYS_DELIMITER,
     eventListenerOptions: bucket.capture ? { capture: true } : undefined,
-    sequenceTimeoutMs: SEQUENCE_TIMEOUT_MS,
     ignoreEventWhen: (event: KeyboardEvent) => event.defaultPrevented,
     preventDefault,
   });
+}
+
+function runEntry(
+  handlersRef: RefObject<ShortcutHandlers>,
+  entry: ShortcutEntry,
+  event: KeyboardEvent,
+  key: string,
+) {
+  const handler = handlersRef.current[entry.id as ShortcutId] ?? entry.action;
+  if (!handler) return;
+  handler(event);
+  trackMailAction({ action: entry.id, source: "shortcut", shortcut: key });
 }
 
 function activeShortcutIds(
@@ -174,6 +200,8 @@ function buildBuckets(signature: string): ShortcutBucket[] {
 
   return BUCKET_SPECS.map((spec) => {
     const targets = new Map<string, ShortcutTarget>();
+    const sequences = new Map<string, ShortcutEntry>();
+    const sequenceEnds = new Set<string>();
 
     for (const entry of SHORTCUTS) {
       if (!activeIds.has(entry.id)) continue;
@@ -182,13 +210,21 @@ function buildBuckets(signature: string): ShortcutBucket[] {
       if (!!entry.capture !== spec.capture) continue;
 
       for (const key of entry.keys) {
-        targets.set(key, { type: "entry", entry });
-
-        const [prefix] = key.split(SEQUENCE_SPLIT_KEY);
-        if (prefix !== key && !targets.has(prefix)) {
+        const [prefix, last] = key.split(SEQUENCE_SPLIT_KEY);
+        if (last === undefined) {
+          targets.set(key, { type: "entry", entry });
+          continue;
+        }
+        sequences.set(key, entry);
+        sequenceEnds.add(last);
+        if (targets.get(prefix)?.type !== "entry") {
           targets.set(prefix, { type: "prefix", key: prefix });
         }
       }
+    }
+
+    for (const last of sequenceEnds) {
+      if (!targets.has(last)) targets.set(last, { type: "sequenceEnd" });
     }
 
     return {
@@ -197,6 +233,7 @@ function buildBuckets(signature: string): ShortcutBucket[] {
       capture: spec.capture,
       keys: [...targets.keys()],
       targets,
+      sequences,
     };
   });
 }
@@ -225,8 +262,4 @@ function resolveTarget(
     return;
   }
   return target;
-}
-
-function isSequence(hotkeysEvent: HotkeysEvent): boolean {
-  return hotkeysEvent.hotkey.includes(SEQUENCE_SPLIT_KEY);
 }
