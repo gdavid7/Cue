@@ -110,6 +110,7 @@ import { useLabels } from "@/hooks/useLabels";
 import { useFolders } from "@/hooks/useFolders";
 import { useMailSettings } from "@/hooks/useMailSettings";
 import { useAccounts } from "@/hooks/useAccounts";
+import { AllInboxesFailedNotice } from "@/app/(app)/[emailAccountId]/mail/AllInboxesFailedNotice";
 import { useThread } from "@/hooks/useThread";
 import { useShortcuts } from "@/lib/shortcuts/useShortcuts";
 import type { ShortcutHandlers } from "@/lib/shortcuts/registry";
@@ -1631,11 +1632,11 @@ export function MailShell() {
               {isTourOpen && (
                 <WhatsNewTour onClose={() => setIsTourOpen(false)} />
               )}
-              {isAllAccounts && combinedThreadState.failedAccountIds.length ? (
-                <div className="border-border border-b bg-amber-50 px-3 py-2 text-amber-900 text-xs dark:bg-amber-950/30 dark:text-amber-200">
-                  Some inboxes couldn&apos;t be loaded. Try again shortly or
-                  check their connections.
-                </div>
+              {isAllAccounts ? (
+                <AllInboxesFailedNotice
+                  accounts={combinedAccounts}
+                  failedAccountIds={combinedThreadState.failedAccountIds}
+                />
               ) : null}
               {!isAllAccounts && accountThreadState.cueSortingUnavailable ? (
                 <p
