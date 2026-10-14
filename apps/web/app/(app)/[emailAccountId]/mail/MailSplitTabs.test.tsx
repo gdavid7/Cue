@@ -39,7 +39,7 @@ vi.mock("@/hooks/useMailSettings", () => ({
   }),
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/use-split-counts", () => ({
-  useSplitCounts: () => new Map(),
+  useSplitCounts: () => ({ countsById: new Map(), matchingById: new Map() }),
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/NewSplitDialog", () => ({
   NewSplitDialog: () => null,

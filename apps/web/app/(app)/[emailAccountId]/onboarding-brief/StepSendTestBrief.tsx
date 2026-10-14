@@ -69,7 +69,7 @@ export function StepSendTestBrief({ onNext }: { onNext: () => void }) {
       </div>
 
       <div className="text-center">
-        <PageHeading className="mt-4">Send a Test Brief</PageHeading>
+        <PageHeading className="mt-4">Send a test brief</PageHeading>
         <TypographyP className="mt-2 max-w-lg mx-auto">
           Pick an upcoming meeting and we'll send you a sample brief so you can
           see exactly what you'll receive.

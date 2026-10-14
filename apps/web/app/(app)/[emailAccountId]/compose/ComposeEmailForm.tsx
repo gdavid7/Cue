@@ -48,6 +48,7 @@ import { LoadingContent } from "@/components/LoadingContent";
 import { Tooltip } from "@/components/Tooltip";
 import { threadScheduledEmailsKey } from "@/components/email-list/ThreadDeliveryStatus";
 import { isUneditedSuggestion } from "@/components/email-list/reply-assist";
+import { useFirstSuggestedReplySent } from "@/app/(app)/[emailAccountId]/compose/use-first-suggested-reply-sent";
 import {
   hideSendingDraftMessages,
   upcomingScheduledEmailsKey,
@@ -619,6 +620,10 @@ function ComposeEmailFormContent({
     Boolean(initialBodyHtml) &&
     !storedDraft &&
     !isCueSuggestion;
+  const startedFromSuggestion = isCueSuggestion || editedSuggestion;
+  const noteSuggestedReplySent = useFirstSuggestedReplySent(
+    selectedEmailAccountId,
+  );
   // A reply reads as a draft once the mailbox holds a copy of it.
   const [isMailboxDraft, setIsMailboxDraft] = useState(
     Boolean(providerDraftMessageId || providerDraftId.current),
@@ -1227,6 +1232,8 @@ function ComposeEmailFormContent({
               if (settled.status === "cancelled") return;
               await discardLocalDraft();
               if (settled.status === "sent") {
+                if (startedFromSuggestion)
+                  noteSuggestedReplySent({ edited: editedSuggestion });
                 if (markDoneAfterSend) onMarkDone?.();
                 onSuccess?.(settled.messageId, settled.threadId);
                 refetch?.();
@@ -1248,9 +1255,15 @@ function ComposeEmailFormContent({
           showDraftAgain();
         await discardLocalDraft();
         if (outcome.status === "sent") {
-          toastSuccess({
-            description: isInlineReply ? "Reply sent" : "Email sent",
-          });
+          if (
+            !(
+              startedFromSuggestion &&
+              noteSuggestedReplySent({ edited: editedSuggestion })
+            )
+          )
+            toastSuccess({
+              description: isInlineReply ? "Reply sent" : "Email sent",
+            });
           if (markDoneAfterSend) onMarkDone?.();
           onSuccess?.(outcome.messageId, outcome.threadId);
           refetch?.();
@@ -1303,11 +1316,14 @@ function ComposeEmailFormContent({
       onRestore,
       onMarkDone,
       onSuccess,
+      noteSuggestedReplySent,
       preservedBlocks,
       providerDraftMessageId,
       refetch,
       replyingToEmail,
       selectedEmailAccountId,
+      startedFromSuggestion,
+      editedSuggestion,
     ],
   );
 

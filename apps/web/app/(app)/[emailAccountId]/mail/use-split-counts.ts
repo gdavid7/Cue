@@ -14,6 +14,10 @@ import type {
 } from "@/utils/split-inbox/split-query";
 
 const EMPTY_COUNTS = new Map<string, number>();
+const EMPTY_SPLIT_COUNTS = {
+  countsById: EMPTY_COUNTS,
+  matchingById: EMPTY_COUNTS,
+};
 
 export function useSplitCounts({
   accountIds,
@@ -53,7 +57,9 @@ export function useSplitCounts({
     () => splitCountTargets({ splits, overrides, cueMembership }),
     [cueMembership, overrides, splits],
   );
-  const [countsById, setCountsById] = useState(EMPTY_COUNTS);
+  // Unread drives the tab badges; matching is the full count, which the
+  // first-run tour reads to say how many emails need a reply.
+  const [splitCounts, setSplitCounts] = useState(EMPTY_SPLIT_COUNTS);
 
   useEffect(() => {
     if (
@@ -62,7 +68,11 @@ export function useSplitCounts({
       stableAccountIds.length === 0 ||
       targets.length === 0
     ) {
-      setCountsById((current) => (current.size === 0 ? current : EMPTY_COUNTS));
+      setSplitCounts((current) =>
+        current.countsById.size === 0 && current.matchingById.size === 0
+          ? current
+          : EMPTY_SPLIT_COUNTS,
+      );
       return;
     }
 
@@ -71,11 +81,18 @@ export function useSplitCounts({
       targets,
     });
     const apply = () => {
-      const next = new Map<string, number>();
+      const unread = new Map<string, number>();
+      const matching = new Map<string, number>();
       for (const count of handle.getSnapshot().data?.counts ?? []) {
-        next.set(count.id, count.unreadConversations);
+        unread.set(count.id, count.unreadConversations);
+        matching.set(count.id, count.matchingConversations);
       }
-      setCountsById((current) => (sameCounts(current, next) ? current : next));
+      setSplitCounts((current) =>
+        sameCounts(current.countsById, unread) &&
+        sameCounts(current.matchingById, matching)
+          ? current
+          : { countsById: unread, matchingById: matching },
+      );
     };
     const unsubscribe = handle.subscribe(apply);
     apply();
@@ -85,7 +102,7 @@ export function useSplitCounts({
     };
   }, [client, enabled, stableAccountIds, targets]);
 
-  return countsById;
+  return splitCounts;
 }
 
 function portableSplitCountOverrides({

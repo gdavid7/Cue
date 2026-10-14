@@ -47,6 +47,7 @@ import { ThreadList } from "@/app/(app)/[emailAccountId]/mail/ThreadList";
 import { InboxStyleCard } from "@/app/(app)/[emailAccountId]/mail/InboxStylePicker";
 import { CueLabelsCard } from "@/components/CueLabelsCleanup";
 import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
+import { TodayIntroLine } from "@/app/(app)/[emailAccountId]/mail/TodayIntroLine";
 import {
   MailListPlaceholder,
   MailLoadingNote,
@@ -644,9 +645,12 @@ export function MailShell() {
   const isFirstSync = isAllAccounts
     ? Boolean(allInboxesFirstSyncMessage)
     : accountThreadState.isFirstSync;
-  const listPlaceholderMessage = isAllAccounts
-    ? (allInboxesFirstSyncMessage ?? "Loading your mail…")
-    : `Loading your mail from ${isOutlook ? "Outlook" : "Gmail"}…`;
+  const listPlaceholderMessage = getListPlaceholderMessage({
+    isAllAccounts,
+    allInboxesFirstSyncMessage,
+    isFirstSync,
+    isOutlook,
+  });
   const searchViewIdentity = JSON.stringify([
     emailAccountId,
     isAllAccounts,
@@ -1871,6 +1875,11 @@ export function MailShell() {
               {isTourOpen && (
                 <WhatsNewTour onClose={() => setIsTourOpen(false)} />
               )}
+              {!isAllAccounts && (
+                <TodayIntroLine
+                  ready={!isTourOpen && !isFirstSync && threads.length > 0}
+                />
+              )}
               {routeFailed ? (
                 <p
                   role="status"
@@ -1901,6 +1910,12 @@ export function MailShell() {
               ) : null}
               {allInboxesFirstSyncMessage && (threads.length || searchQuery) ? (
                 <MailLoadingNote message={allInboxesFirstSyncMessage} />
+              ) : null}
+              {!isAllAccounts &&
+              isFirstSync &&
+              threads.length > 0 &&
+              !searchQuery ? (
+                <MailLoadingNote message="Older mail is still arriving. Everything here works already." />
               ) : null}
               {searchParam && emailAccountId ? (
                 <SearchAnswerCard
@@ -2153,3 +2168,22 @@ const ROUTE_KIND_NAMES: Partial<Record<MailUrlView["kind"], string>> = {
   folder: "folder",
   split: "tab",
 };
+
+// A first sync fetches the last few days before backfilling (see
+// utils/mail-api/source.ts), so the first wait says what's coming first.
+function getListPlaceholderMessage({
+  isAllAccounts,
+  allInboxesFirstSyncMessage,
+  isFirstSync,
+  isOutlook,
+}: {
+  isAllAccounts: boolean;
+  allInboxesFirstSyncMessage: string | null;
+  isFirstSync: boolean;
+  isOutlook: boolean;
+}) {
+  if (isAllAccounts) return allInboxesFirstSyncMessage ?? "Loading your mail…";
+  if (isFirstSync && !isOutlook)
+    return "Getting your last 3 days of mail first…";
+  return `Loading your mail from ${isOutlook ? "Outlook" : "Gmail"}…`;
+}

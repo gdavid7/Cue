@@ -77,7 +77,7 @@ export const MailSplitTabs = memo(function MailSplitTabs({
   const [isInboxStyleOpen, setIsInboxStyleOpen] = useState(false);
   const [editingSplitId, setEditingSplitId] = useState<string | null>(null);
   const canMatchInbox = getInboxStyleOptions(provider).length > 1;
-  const countsById = useSplitCounts({
+  const { countsById, matchingById } = useSplitCounts({
     accountIds: countAccountIds,
     splits,
     enabled: true,
@@ -283,6 +283,7 @@ export const MailSplitTabs = memo(function MailSplitTabs({
       <SplitTabs
         splits={splits}
         countsById={countsById}
+        matchingById={matchingById}
         leading={leading}
         activeSplitId={activeSplitId}
         onSelect={onSelectSplit}

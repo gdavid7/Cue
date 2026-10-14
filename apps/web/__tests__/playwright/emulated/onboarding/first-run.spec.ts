@@ -69,7 +69,7 @@ test("a new user lands in mail, picks an inbox style, and gets the tour", async 
   });
 
   const card = page.getByRole("region", {
-    name: "How should Cue split your inbox?",
+    name: "Let Cue find what needs you",
   });
   await expect(card).toBeVisible({ timeout: 60_000 });
   const cueTabs = card.getByRole("checkbox", { name: /Needs reply/ });
@@ -80,10 +80,10 @@ test("a new user lands in mail, picks an inbox style, and gets the tour", async 
   await cueTabs.click();
   await expect(cueTabs).not.toBeChecked();
   await card.getByRole("radio", { name: /One inbox/ }).click();
-  await card.getByRole("button", { name: "Use this" }).click();
+  await card.getByRole("button", { name: "Set up my inbox" }).click();
   await expect(card).toBeHidden({ timeout: 30_000 });
 
-  const tour = page.getByLabel("What's new in Cue");
+  const tour = page.getByLabel("Getting started");
   await expect(tour.getByRole("button", { name: "Skip tour" })).toBeVisible({
     timeout: 30_000,
   });

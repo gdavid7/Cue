@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { usePostHog } from "posthog-js/react";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -10,6 +11,10 @@ import {
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
 import { cn } from "@/utils";
+import {
+  getCountBucket,
+  ONBOARDING_ANALYTICS_EVENTS,
+} from "@/utils/analytics/product";
 
 /** The list, or its placeholder while the first sync is still running. */
 const LIST_SELECTOR =
@@ -19,12 +24,20 @@ const POLL_MS = 500;
 /** Insights are written in the background; give up on them after a minute. */
 export const INSIGHT_WAIT_MS = 60_000;
 
+/** Cue's sorting fills Needs reply over the first minute after setup. */
+const NEEDS_REPLY_WAIT_MS = 20_000;
+const NEEDS_REPLY_TAB_NAME = "Needs reply";
+const TOUR_LABEL = "Getting started";
+
+type TourStepContent = { title: string; body: string; showTab?: boolean };
+
 type TourStep = {
-  title: string;
-  body: string;
+  getContent: (target: Element) => TourStepContent;
   findTarget: () => Element | null;
   /** How long the step waits for its target before it is skipped. */
   waitForTargetMs: number;
+  /** Shown instead of skipping once the wait runs out, if it exists. */
+  findFallbackTarget?: () => Element | null;
   /** Shown on the list while waiting, so the wait isn't silent. */
   waitingMessage?: string;
 };
@@ -32,22 +45,66 @@ type TourStep = {
 /** Each step appears only once the thing it points at is on screen. */
 const STEPS: TourStep[] = [
   {
-    title: "The line under each email",
-    body: "What it asks of you, any deadline, and “Draft ready” when Cue has drafted your reply.",
+    getContent: () => ({
+      title: "The line under each email",
+      body: "What it asks of you, any deadline, and “Draft ready” when Cue has written your reply.",
+    }),
     findTarget: () => document.querySelector(INSIGHT_SELECTOR),
     waitForTargetMs: INSIGHT_WAIT_MS,
     waitingMessage:
-      "Cue is reading your recent mail. Notes appear under emails in a minute.",
+      "Cue is reading your recent mail. Notes appear under emails in about a minute.",
   },
   {
-    title: "Relevant context and suggested replies",
-    body: "Open an email to see related mail, meetings and files, and a reply when Cue can back every fact.",
+    getContent: () => ({
+      title: "Open it for context and a reply",
+      body: "Related mail, meetings and files, and a suggested reply when Cue can back every fact.",
+    }),
     findTarget: () =>
       document.querySelector(INSIGHT_SELECTOR)?.closest('[role="option"]') ??
       null,
     waitForTargetMs: 0,
   },
+  {
+    // The payoff: how many emails are waiting on the person, from the count
+    // the tab strip already loads. Without Cue's tabs there's no tab, so the
+    // step is skipped.
+    getContent: (target) =>
+      getNeedsReplyStepCopy(
+        Number(target.getAttribute("data-split-matching") ?? 0),
+      ),
+    findTarget: () => findNeedsReplyTab({ withReplies: true }),
+    waitForTargetMs: NEEDS_REPLY_WAIT_MS,
+    findFallbackTarget: () => findNeedsReplyTab({ withReplies: false }),
+    waitingMessage: "Cue is finding what needs your reply…",
+  },
 ];
+
+export function getNeedsReplyStepCopy(count: number): TourStepContent {
+  if (count <= 0) {
+    return {
+      title: "Nothing in your last few days needs a reply.",
+      body: "Cue will flag new mail as it arrives.",
+      showTab: false,
+    };
+  }
+  return {
+    title:
+      count === 1
+        ? "Cue found 1 email that needs your reply."
+        : `Cue found ${count.toLocaleString("en-US")} emails that need your reply.`,
+    body: "Start there; the ones marked Draft ready already have a reply waiting.",
+    showTab: true,
+  };
+}
+
+export function findNeedsReplyTab({ withReplies }: { withReplies: boolean }) {
+  const tab = document.querySelector<HTMLElement>(
+    `[data-split-tab][aria-label="${NEEDS_REPLY_TAB_NAME}"]`,
+  );
+  if (!tab) return null;
+  if (!withReplies) return tab;
+  return Number(tab.dataset.splitMatching ?? 0) > 0 ? tab : null;
+}
 
 export type TourStepView = "show" | "wait" | "skip";
 
@@ -64,16 +121,37 @@ export function getTourStepView({
   return waitedMs < waitForTargetMs ? "wait" : "skip";
 }
 
-export function WhatsNewTour({ onClose }: { onClose: () => void }) {
+export function WhatsNewTour({ onClose: closeTour }: { onClose: () => void }) {
+  const posthog = usePostHog();
   const [stepIndex, setStepIndex] = useState(0);
   const [view, setView] = useState<TourStepView>("wait");
   const isMobile = useIsMobile();
   const step = STEPS[stepIndex];
-  const isLast = stepIndex === STEPS.length - 1;
+  const availableSteps = STEPS.filter(isStepAvailable);
+  const isLast = !STEPS.slice(stepIndex + 1).some(isStepAvailable);
+
+  const trackStep = useStableCallback(
+    (index: number, outcome: "shown" | "skipped" | "closed" | "show_me") => {
+      const current = STEPS[index];
+      const target = current?.findTarget() ?? current?.findFallbackTarget?.();
+      const count = target?.getAttribute("data-split-matching");
+      posthog?.capture(ONBOARDING_ANALYTICS_EVENTS.tourStep, {
+        step: index + 1,
+        outcome,
+        ...(count == null
+          ? {}
+          : { needs_reply_count_bucket: getCountBucket(Number(count)) }),
+      });
+    },
+  );
+  const onClose = () => {
+    trackStep(stepIndex, "closed");
+    closeTour();
+  };
 
   const goToStep = useStableCallback((index: number) => {
     if (index >= STEPS.length) {
-      onClose();
+      closeTour();
       return;
     }
     setView("wait");
@@ -93,53 +171,81 @@ export function WhatsNewTour({ onClose }: { onClose: () => void }) {
       });
       if (next === "wait") return;
       clearInterval(interval);
-      if (next === "skip") goToStep(stepIndex + 1);
-      else setView("show");
+      if (next === "skip" && !current.findFallbackTarget?.()) {
+        trackStep(stepIndex, "skipped");
+        goToStep(stepIndex + 1);
+      } else {
+        trackStep(stepIndex, "shown");
+        setView("show");
+      }
     };
     const interval = setInterval(check, POLL_MS);
     check();
     return () => clearInterval(interval);
-  }, [stepIndex, goToStep]);
+  }, [stepIndex, goToStep, trackStep]);
 
   if (view === "wait" && !step.waitingMessage) return null;
 
   const isWaiting = view === "wait";
-  const content = isWaiting ? (
-    <>
-      <p className="text-muted-foreground text-xs leading-5">
-        {step.waitingMessage}
-      </p>
-      <div className="mt-3 flex justify-end">
-        <Button size="xs-2" variant="ghost" onClick={onClose}>
-          Skip tour
-        </Button>
-      </div>
-    </>
-  ) : (
-    <>
-      <p className="text-[11px] text-muted-foreground">
-        {stepIndex + 1} of {STEPS.length}
-      </p>
-      <h3 className="mt-1 font-medium text-sm">{step.title}</h3>
-      <p className="mt-1 text-muted-foreground text-xs leading-5">
-        {step.body}
-      </p>
-      <div className="mt-3 flex items-center justify-end gap-2">
-        {!isLast && (
+  const findStepTarget = () =>
+    step.findTarget() ?? step.findFallbackTarget?.() ?? null;
+  const target = isWaiting ? null : findStepTarget();
+  const stepContent = target ? step.getContent(target) : null;
+  const content =
+    isWaiting || !stepContent ? (
+      <>
+        <p className="text-muted-foreground text-xs leading-5">
+          {step.waitingMessage}
+        </p>
+        <div className="mt-3 flex justify-end">
           <Button size="xs-2" variant="ghost" onClick={onClose}>
             Skip tour
           </Button>
-        )}
-        <Button
-          size="xs-2"
-          onClick={() => (isLast ? onClose() : goToStep(stepIndex + 1))}
-        >
-          {isLast ? "Done" : "Next"}
-        </Button>
-      </div>
-    </>
-  );
-  const findTarget = isWaiting ? findList : step.findTarget;
+        </div>
+      </>
+    ) : (
+      <>
+        <p className="text-[11px] text-muted-foreground">
+          {availableSteps.indexOf(step) + 1} of {availableSteps.length}
+        </p>
+        <h3 className="mt-1 font-medium text-sm">{stepContent.title}</h3>
+        <p className="mt-1 text-muted-foreground text-xs leading-5">
+          {stepContent.body}
+        </p>
+        <div className="mt-3 flex items-center justify-end gap-2">
+          {!isLast && (
+            <Button size="xs-2" variant="ghost" onClick={onClose}>
+              Skip tour
+            </Button>
+          )}
+          {isLast && stepContent.showTab ? (
+            <>
+              <Button size="xs-2" variant="ghost" onClick={onClose}>
+                Done
+              </Button>
+              <Button
+                size="xs-2"
+                onClick={() => {
+                  trackStep(stepIndex, "show_me");
+                  (findStepTarget() as HTMLElement | null)?.click();
+                  closeTour();
+                }}
+              >
+                Show me
+              </Button>
+            </>
+          ) : (
+            <Button
+              size="xs-2"
+              onClick={() => (isLast ? onClose() : goToStep(stepIndex + 1))}
+            >
+              {isLast ? "Done" : "Next"}
+            </Button>
+          )}
+        </div>
+      </>
+    );
+  const findTarget = isWaiting ? findList : findStepTarget;
 
   if (isMobile) {
     return (
@@ -203,7 +309,7 @@ function DesktopTourPopover({
         side="bottom"
         align="start"
         collisionPadding={16}
-        aria-label="What's new in Cue"
+        aria-label={TOUR_LABEL}
         className="w-80"
         // Clicking around the mail shouldn't end the tour on the first step.
         onInteractOutside={(event) => event.preventDefault()}
@@ -236,7 +342,7 @@ function PhoneTourCard({
 
   return (
     <section
-      aria-label="What's new in Cue"
+      aria-label={TOUR_LABEL}
       className={cn(
         "fixed inset-x-3 z-50 rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg",
         dock === "top"
@@ -251,4 +357,10 @@ function PhoneTourCard({
 
 function findList() {
   return document.querySelector(LIST_SELECTOR);
+}
+
+/** A step that needs a target which can never appear is left out of the count. */
+function isStepAvailable(step: TourStep) {
+  if (!step.findFallbackTarget) return true;
+  return Boolean(step.findTarget() ?? step.findFallbackTarget());
 }
