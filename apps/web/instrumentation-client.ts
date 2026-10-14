@@ -13,6 +13,8 @@ import {
 
 const REPLAY_SESSION_SAMPLE_RATE = 0.1;
 
+type Replay = ReturnType<typeof Sentry.replayIntegration>;
+
 Sentry.init({
   dsn: env.NEXT_PUBLIC_SENTRY_DSN,
 
@@ -32,14 +34,11 @@ Sentry.init({
   replaysSessionSampleRate: canUseTrackingCookies()
     ? REPLAY_SESSION_SAMPLE_RATE
     : 0,
-
-  integrations: [
-    Sentry.replayIntegration({
-      maskAllText: true,
-      blockAllMedia: true,
-    }),
-  ],
 });
+
+// Replay is a large part of Sentry's bundle and nothing on the first screen
+// needs it, so it joins once the page has loaded.
+const replayReady = loadReplayAfterPageLoad();
 
 if (!canUseTrackingCookies()) {
   const unsubscribe = subscribeToCookieConsent(() => {
@@ -48,12 +47,39 @@ if (!canUseTrackingCookies()) {
     unsubscribe();
     // Mirrors the sampling Sentry applies when consent exists at page load:
     // some sessions are recorded in full, the rest only around errors.
-    const replay = Sentry.getReplay();
-    if (Math.random() < REPLAY_SESSION_SAMPLE_RATE) replay?.start();
-    else replay?.startBuffering();
+    replayReady.then((replay) => {
+      if (Math.random() < REPLAY_SESSION_SAMPLE_RATE) replay?.start();
+      else replay?.startBuffering();
+    });
   });
 }
 
 installStaleDeploymentReload();
 
 export const onRouterTransitionStart = Sentry.captureRouterTransitionStart;
+
+function loadReplayAfterPageLoad() {
+  return new Promise<Replay | undefined>((resolve) => {
+    const load = () => {
+      import("@sentry/nextjs")
+        .then(({ replayIntegration }) => {
+          const replay = replayIntegration({
+            maskAllText: true,
+            blockAllMedia: true,
+          });
+          Sentry.addIntegration(replay);
+          resolve(replay);
+        })
+        .catch(() => resolve(undefined));
+    };
+    const schedule = () => {
+      if (typeof window.requestIdleCallback === "function") {
+        window.requestIdleCallback(load, { timeout: 5000 });
+      } else {
+        setTimeout(load, 1000);
+      }
+    };
+    if (document.readyState === "complete") schedule();
+    else window.addEventListener("load", schedule, { once: true });
+  });
+}

@@ -1,18 +1,21 @@
 import { format } from "date-fns";
-import * as chrono from "chrono-node";
 import type { Command } from "@/lib/commands/types";
+import type { SnoozeDateParser } from "@/app/(app)/[emailAccountId]/mail/snooze-date-parse";
 
 export function buildSnoozeCommandPalette({
   now = new Date(),
   onSnooze,
+  parseDate,
   query,
 }: {
   now?: Date;
   onSnooze: (until: Date) => void;
+  /** Null while the parser loads; typed times show once it has. */
+  parseDate: SnoozeDateParser | null;
   query: string;
 }): Command[] {
-  const naturalLanguageDate = parseSnoozeDate(query, now);
   if (query.trim()) {
+    const naturalLanguageDate = parseDate?.(query, now);
     if (!naturalLanguageDate) return [];
 
     return [
@@ -36,19 +39,6 @@ export function buildSnoozeCommandPalette({
     keywords: ["snooze", "later", "remind", preset.id, preset.label],
     action: () => onSnooze(preset.until),
   }));
-}
-
-export function parseSnoozeDate(input: string, now = new Date()) {
-  const result = chrono.casual.parse(input.trim(), now, {
-    forwardDate: true,
-  })[0];
-  if (!result) return null;
-
-  const date = result.start.date();
-  if (!result.start.isCertain("hour")) date.setHours(9, 0, 0, 0);
-  if (date <= now) return null;
-
-  return date;
 }
 
 const MORNING_HOUR = 9;

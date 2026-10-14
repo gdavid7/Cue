@@ -2,7 +2,8 @@ import {
   captureException as sentryCaptureException,
   setUser,
 } from "@sentry/nextjs";
-import { APICallError, NoObjectGeneratedError, RetryError } from "ai";
+import { AISDKError, APICallError } from "@ai-sdk/provider";
+import type { NoObjectGeneratedError, RetryError } from "ai";
 import type { FlattenedValidationErrors } from "next-safe-action";
 import {
   type EmailProviderRateLimitProvider,
@@ -290,7 +291,7 @@ export function isInsufficientCreditsError(error: APICallError): boolean {
 // Retries wrap the provider's error, which carries the status and body.
 export function getAIApiCallError(error: unknown): APICallError | null {
   if (APICallError.isInstance(error)) return error;
-  if (RetryError.isInstance(error) && APICallError.isInstance(error.lastError))
+  if (isRetryError(error) && APICallError.isInstance(error.lastError))
     return error.lastError;
   return null;
 }
@@ -385,7 +386,7 @@ export function isKnownOutlookError(error: unknown): boolean {
 export function isContentFilterRefusal(error: unknown): boolean {
   const unwrapped = (error as { error?: unknown })?.error ?? error;
   return (
-    NoObjectGeneratedError.isInstance(unwrapped) &&
+    isNoObjectGeneratedError(unwrapped) &&
     unwrapped.finishReason === "content-filter"
   );
 }
@@ -404,7 +405,7 @@ export function isKnownApiError(error: unknown): boolean {
         isInvalidAIModelError(error) ||
         isAPIKeyDeactivatedError(error) ||
         isAnthropicInsufficientBalanceError(error))) ||
-    (RetryError.isInstance(error) && isAiQuotaExceededError(error)) ||
+    (isRetryError(error) && isAiQuotaExceededError(error)) ||
     (error instanceof Error && isKnownAIErrorMessage(error.message))
   );
 }
@@ -484,7 +485,7 @@ export function checkCommonErrors(
     };
   }
 
-  if (RetryError.isInstance(error) && isAiQuotaExceededError(error)) {
+  if (isRetryError(error) && isAiQuotaExceededError(error)) {
     logger.warn("AI quota exceeded for url", { url });
     return {
       type: "AI Quota Exceeded",
@@ -654,6 +655,25 @@ function isKnownAIErrorMessage(message: string): boolean {
     "model not found",
   ];
   return patterns.some((p) => message.includes(p));
+}
+
+// Every page imports this module to report errors, and importing any value
+// from `ai` brings the whole SDK into the browser bundle. Its errors carry the
+// markers its own isInstance checks read, so check those here instead.
+class AiSdkErrorMarker extends AISDKError {
+  static matches(error: unknown, name: string) {
+    return AISDKError.hasMarker(error, `vercel.ai.error.${name}`);
+  }
+}
+
+function isRetryError(error: unknown): error is RetryError {
+  return AiSdkErrorMarker.matches(error, "AI_RetryError");
+}
+
+function isNoObjectGeneratedError(
+  error: unknown,
+): error is NoObjectGeneratedError {
+  return AiSdkErrorMarker.matches(error, "AI_NoObjectGeneratedError");
 }
 
 function getProviderErrorType(error: APICallError): string | undefined {
