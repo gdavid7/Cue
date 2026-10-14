@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 import { BRAND_ICON_URL, BRAND_NAME } from "@/utils/branding";
+import { buildMailPath } from "@/utils/mail-url";
 
 type ManifestIcon = NonNullable<MetadataRoute.Manifest["icons"]>[number];
 
@@ -29,7 +30,10 @@ export default function manifest(): MetadataRoute.Manifest {
     icons: [...customIcon, ...defaultIcons],
     theme_color: "#FFFFFF",
     background_color: "#FFFFFF",
-    start_url: "/",
+    // `id` pins the app's identity to the old start_url, so changing where
+    // it opens doesn't make browsers treat installs as a different app.
+    id: "/",
+    start_url: buildMailPath({ accountIndex: 0 }),
     display: "standalone",
     orientation: "portrait",
   };

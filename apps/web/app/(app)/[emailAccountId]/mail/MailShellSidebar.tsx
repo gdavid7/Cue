@@ -14,7 +14,6 @@ import { AllInboxesSidebarSections } from "@/app/(app)/[emailAccountId]/mail/All
 import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
 import {
   getMailCategories,
-  getMailNavPath,
   type MailCategory,
   MailSidebar,
   type MailNavTarget,
@@ -31,6 +30,11 @@ import {
 } from "@/app/(app)/[emailAccountId]/mail/sidebar-width";
 import { getAllInboxesAccounts } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { useMailAppLinks } from "@/app/(app)/[emailAccountId]/mail/use-mail-app-links";
+import {
+  getMailNavView,
+  useMailSlugs,
+} from "@/app/(app)/[emailAccountId]/mail/use-mail-route";
+import { useMailHref } from "@/hooks/useMailHref";
 import { useHasConnectedApp } from "@/components/SideNav";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Sidebar, useSidebar } from "@/components/ui/sidebar";
@@ -139,10 +143,12 @@ export const MailShellSidebar = memo(function MailShellSidebar({
     );
   }, []);
 
+  const mailHref = useMailHref();
+  const mailSlugs = useMailSlugs(allLabels, folders);
   const hrefFor = useCallback(
     (target: MailNavTarget) =>
-      prefixPath(emailAccountId, getMailNavPath(target)),
-    [emailAccountId],
+      mailHref({ view: getMailNavView(target, mailSlugs) }),
+    [mailHref, mailSlugs],
   );
 
   const onCreateLabel = useCallback(
@@ -273,9 +279,7 @@ export const MailShellSidebar = memo(function MailShellSidebar({
       appLinks={appLinks}
       toolLinks={toolLinks}
       allInboxesHref={
-        hasAllInboxes
-          ? prefixPath(emailAccountId, "/mail?accountScope=all")
-          : undefined
+        hasAllInboxes ? mailHref({ allInboxes: true }) : undefined
       }
       // Until an app is connected, Tools › Integrations is the way to one.
       connectors={

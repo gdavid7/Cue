@@ -15,6 +15,7 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
   useAccount: () => ({
     emailAccountId: "account-1",
     userEmail: "user@example.com",
+    accountIds: ["account-1"],
   }),
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/ReaderToolbar", () => ({

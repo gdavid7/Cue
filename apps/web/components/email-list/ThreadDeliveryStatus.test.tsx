@@ -30,7 +30,11 @@ vi.mock("@/utils/actions/scheduled-email", () => ({
   retryScheduledEmailAction: vi.fn(),
 }));
 vi.mock("@/providers/EmailAccountProvider", () => ({
-  useAccount: () => ({ userEmail: "user@example.com" }),
+  useAccount: () => ({
+    userEmail: "user@example.com",
+    emailAccountId: "account-1",
+    accountIds: ["account-1"],
+  }),
 }));
 vi.mock("./EmailMessage", () => ({ EmailMessage: () => null }));
 

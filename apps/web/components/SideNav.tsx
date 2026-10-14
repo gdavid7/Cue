@@ -51,6 +51,7 @@ import {
 import { useCurrentOrganization } from "@/hooks/useCurrentOrganization";
 import { useIntegrations } from "@/hooks/useIntegrations";
 import { useMessagingChannels } from "@/hooks/useMessagingChannels";
+import { useMailHref } from "@/hooks/useMailHref";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { prefixPath } from "@/utils/path";
 import { isGoogleProvider } from "@/utils/email/provider-types";
@@ -84,6 +85,7 @@ export const useNavigation = () => {
   const showIntegrations = useIntegrationsEnabled();
   const { emailAccount, emailAccountId, provider } = useAccount();
   const currentEmailAccountId = emailAccount?.id || emailAccountId;
+  const inboxHref = useMailHref()({ accountId: currentEmailAccountId });
   const { data: channelsData } = useMessagingChannels(
     currentEmailAccountId || null,
   );
@@ -96,7 +98,7 @@ export const useNavigation = () => {
       // Today is an optional briefing over it, not a replacement.
       {
         name: "Inbox",
-        href: prefixPath(currentEmailAccountId, "/mail"),
+        href: inboxHref,
         icon: InboxIcon,
         keywords: ["mail", "email"],
       },
@@ -129,7 +131,7 @@ export const useNavigation = () => {
           ]
         : []),
     ],
-    [currentEmailAccountId, showMeetingRecorder],
+    [currentEmailAccountId, inboxHref, showMeetingRecorder],
   );
 
   // Mailbox tools sit under Tools: Cue never archives in bulk on its own, so
@@ -229,7 +231,7 @@ export const useNavigation = () => {
   );
 
   return {
-    homeHref: prefixPath(currentEmailAccountId, "/mail"),
+    homeHref: inboxHref,
     manageItems,
     toolsItems,
   };

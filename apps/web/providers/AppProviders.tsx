@@ -11,11 +11,14 @@ import { StatLoaderProvider } from "@/providers/StatLoaderProvider";
 import { SWRProvider } from "@/providers/SWRProvider";
 import { MailEngineRuntime } from "@/utils/mail-engine/MailEngineHost";
 
-export function AppProviders(props: { children: React.ReactNode }) {
+export function AppProviders(props: {
+  children: React.ReactNode;
+  accountIds: string[];
+}) {
   return (
     <ThemeProvider attribute="class" defaultTheme="light">
       <Provider store={jotaiStore}>
-        <EmailAccountProvider>
+        <EmailAccountProvider accountIds={props.accountIds}>
           <SWRProvider>
             <StatLoaderProvider>
               <ChatProvider>

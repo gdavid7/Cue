@@ -7,7 +7,8 @@ import {
 import { ShortcutsProvider } from "@/lib/shortcuts/ShortcutsProvider";
 import { MAIL_SHORTCUT_SCOPES } from "@/lib/shortcuts/registry";
 
-export default async function MailLayout({
+/** Mail and Today share the theme, sidebar width and shortcuts. */
+export async function MailScreenLayout({
   children,
 }: {
   children: React.ReactNode;

@@ -71,7 +71,7 @@ describe("ComposeModalProvider popped-out reply", () => {
   });
 
   it("composes a reply from the account that received it in All inboxes", async () => {
-    navigation.search = "accountScope=all";
+    navigation.pathname = "/mail/u/0/all-inboxes";
     renderProvider();
 
     fireEvent.click(await screen.findByRole("button", { name: "Pop out" }));

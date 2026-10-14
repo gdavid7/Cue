@@ -9,6 +9,7 @@ import { env } from "@/env";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import {
   getAppPageViewProperties,
+  getPageViewPathname,
   getPageViewSearch,
   stripUntrackedUrlParams,
   PRODUCT_ANALYTICS_EVENTS,
@@ -30,23 +31,24 @@ export function PostHogPageview() {
   const searchParams = useSearchParams();
 
   const pageViewSearch = getPageViewSearch(searchParams);
+  const pageViewPathname = pathname ? getPageViewPathname(pathname) : null;
 
   useEffect(() => {
-    if (!pathname) return;
+    if (!pageViewPathname) return;
 
     const query = pageViewSearch ? `?${pageViewSearch}` : "";
     posthog.capture("$pageview", {
-      $current_url: `${window.origin}${pathname}${query}`,
+      $current_url: `${window.origin}${pageViewPathname}${query}`,
     });
 
     const appPageProperties = getAppPageViewProperties({
-      pathname,
+      pathname: pageViewPathname,
       searchParams: new URLSearchParams(pageViewSearch),
     });
     if (appPageProperties) {
       posthog.capture(PRODUCT_ANALYTICS_EVENTS.pageViewed, appPageProperties);
     }
-  }, [pathname, pageViewSearch]);
+  }, [pageViewPathname, pageViewSearch]);
 
   return null;
 }

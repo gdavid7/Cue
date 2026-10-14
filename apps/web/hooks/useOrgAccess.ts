@@ -1,12 +1,20 @@
 import { useSession } from "@/utils/auth-client";
 import { useParams } from "next/navigation";
 import { useOrgSWR } from "@/hooks/useOrgSWR";
+import { useAccount } from "@/providers/EmailAccountProvider";
 import type { EmailAccountFullResponse } from "@/app/api/user/email-account/route";
 
 export function useOrgAccess() {
   const { data: session } = useSession();
-  const params = useParams<{ emailAccountId: string | undefined }>();
-  const emailAccountId = params.emailAccountId;
+  const params = useParams<{
+    emailAccountId: string | undefined;
+    accountIndex: string | undefined;
+  }>();
+  const { emailAccountId: contextEmailAccountId } = useAccount();
+  // `/mail/u/{n}` only ever names the user's own accounts, resolved in context.
+  const emailAccountId =
+    params.emailAccountId ??
+    (params.accountIndex === undefined ? undefined : contextEmailAccountId);
 
   const {
     data: emailAccount,

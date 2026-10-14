@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
   cookies: vi.fn(),
   findFirst: vi.fn(),
+  findMany: vi.fn(),
   flushLoggerSafely: vi.fn(),
   after: vi.fn(),
   env: {
@@ -46,6 +47,8 @@ vi.mock("@/utils/prisma", () => ({
     emailAccount: {
       findFirst: (...args: Parameters<typeof mocks.findFirst>) =>
         mocks.findFirst(...args),
+      findMany: (...args: Parameters<typeof mocks.findMany>) =>
+        mocks.findMany(...args),
     },
   },
 }));
@@ -121,10 +124,10 @@ describe("redirectToEmailAccountPath", () => {
     mocks.findFirst.mockResolvedValue({ id: "account_456" });
 
     await expect(
-      redirectToEmailAccountPath("/mail", undefined, {
+      redirectToEmailAccountPath("/setup", undefined, {
         user: { id: "user_456" },
       } as Parameters<typeof redirectToEmailAccountPath>[2]),
-    ).rejects.toThrow("redirect:/account_456/mail");
+    ).rejects.toThrow("redirect:/account_456/setup");
 
     expect(mocks.auth).not.toHaveBeenCalled();
     expect(mocks.findFirst).toHaveBeenCalledWith(
@@ -179,8 +182,10 @@ describe("redirectToEmailAccountPath", () => {
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ id: "account_remaining" });
 
+    mocks.findMany.mockResolvedValue([{ id: "account_remaining" }]);
+
     await expect(redirectToEmailAccountPath("/mail")).rejects.toThrow(
-      "redirect:/account_remaining/mail",
+      "redirect:/mail/u/0/inbox",
     );
 
     expect(mocks.findFirst).toHaveBeenNthCalledWith(1, {
@@ -201,6 +206,32 @@ describe("redirectToEmailAccountPath", () => {
         foundEmailAccount: true,
       }),
     );
+  });
+
+  it("addresses mail by the account's position among the user's accounts", async () => {
+    mocks.findFirst.mockResolvedValue({ id: "account_second" });
+    mocks.findMany.mockResolvedValue([
+      { id: "account_first" },
+      { id: "account_second" },
+    ]);
+
+    await expect(redirectToEmailAccountPath("/mail")).rejects.toThrow(
+      "redirect:/mail/u/1/inbox",
+    );
+    expect(mocks.findMany).toHaveBeenCalledWith({
+      where: { userId: "user_123" },
+      select: { id: true },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+  });
+
+  it("keeps a mail view and unrelated params when redirecting to mail", async () => {
+    mocks.findFirst.mockResolvedValue({ id: "account_123" });
+    mocks.findMany.mockResolvedValue([{ id: "account_123" }]);
+
+    await expect(
+      redirectToEmailAccountPath("/mail", { type: "sent", checkout: "done" }),
+    ).rejects.toThrow("redirect:/mail/u/0/sent?checkout=done");
   });
 });
 

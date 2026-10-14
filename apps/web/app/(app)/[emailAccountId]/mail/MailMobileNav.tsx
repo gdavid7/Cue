@@ -17,9 +17,11 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
 import { barItemClassName } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
+import { useMailHref } from "@/hooks/useMailHref";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useComposeModal } from "@/providers/ComposeModalProvider";
 import { cn } from "@/utils";
+import { parseMailPath } from "@/utils/mail-url";
 import { prefixPath } from "@/utils/path";
 
 export type MailMobileReaderActions = {
@@ -50,16 +52,19 @@ export function MailMobileNav({
   readerActions?: MailMobileReaderActions | null;
 }) {
   const { emailAccountId } = useAccount();
+  const mailHref = useMailHref();
   const { onOpen: openCompose } = useComposeModal();
-  const isToday = usePathname()?.endsWith("/home") ?? false;
+  const pathname = usePathname() ?? "";
+  const isToday = pathname.endsWith("/home");
   const searchParams = useSearchParams();
-  // Inbox is current only on the inbox itself, not on Sent, a label or a search.
+  // Inbox is current only on the inbox itself (any of its tabs), not on Sent,
+  // a label, a search or All Inboxes.
+  const mailView = parseMailPath(pathname, searchParams);
   const isInbox =
     !isToday &&
-    !["q", "labelId", "folderId", "accountScope"].some((key) =>
-      searchParams?.get(key),
-    ) &&
-    (searchParams?.get("type") ?? "inbox") === "inbox";
+    (!mailView ||
+      (!mailView.allInboxes &&
+        (mailView.view?.kind === "inbox" || mailView.view?.kind === "split")));
 
   if (readerActions) {
     return (
@@ -127,7 +132,7 @@ export function MailMobileNav({
           barItemClassName,
           isInbox ? "text-foreground" : "text-muted-foreground",
         )}
-        href={prefixPath(emailAccountId, "/mail")}
+        href={mailHref()}
       >
         <InboxIcon className="size-5" />
         Inbox

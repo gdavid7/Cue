@@ -12,6 +12,11 @@ import {
 } from "@/utils/fetch-email-accounts";
 
 type Context = {
+  /**
+   * The user's account ids in connection order: an account's position is the
+   * `n` in its `/mail/u/{n}` address.
+   */
+  accountIds: readonly string[];
   emailAccount: GetEmailAccountsResponse["emailAccounts"][number] | undefined;
   emailAccountId: string;
   userEmail: string;
@@ -24,9 +29,12 @@ type Context = {
 
 type EmailAccount = GetEmailAccountsResponse["emailAccounts"][number];
 
+const NO_ACCOUNT_IDS: string[] = [];
+
 const EmailAccountContext = createContext<Context | undefined>(undefined);
 
 const previewContextValue: Context = {
+  accountIds: [],
   emailAccount: undefined,
   emailAccountId: "",
   userEmail: "",
@@ -37,17 +45,31 @@ const previewContextValue: Context = {
 
 export function EmailAccountProvider({
   children,
+  accountIds: serverAccountIds = NO_ACCOUNT_IDS,
 }: {
   children: React.ReactNode;
+  /** Rendered on the server, so `/mail/u/{n}` resolves before accounts load. */
+  accountIds?: string[];
 }) {
-  const params = useParams<{ emailAccountId: string | undefined }>();
+  const params = useParams<{
+    emailAccountId: string | undefined;
+    accountIndex: string | undefined;
+  }>();
   const emailAccountId = params.emailAccountId;
   const router = useRouter();
   const [data, setData] = useState<GetEmailAccountsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const accountIds = data?.emailAccounts.map((account) => account.id) ?? [];
+  const loadedAccountIds = useMemo(
+    () => data?.emailAccounts.map((account) => account.id),
+    [data],
+  );
+  const accountIds = loadedAccountIds ?? serverAccountIds;
+  const indexedAccountId =
+    params.accountIndex === undefined
+      ? undefined
+      : accountIds[Number(params.accountIndex)];
   const ownedRouteId = ownedLastEmailAccountId(
-    emailAccountId ?? null,
+    emailAccountId ?? indexedAccountId ?? null,
     accountIds,
   );
   const lastKnownEmailAccountId = ownedLastEmailAccountId(
@@ -69,12 +91,15 @@ export function EmailAccountProvider({
   }, []);
 
   useEffect(() => {
+    // The server's id list owns the route before accounts load, but only the
+    // loaded list says which account the cookie already remembers.
+    if (!data) return;
     if (ownedRouteId && ownedRouteId !== lastKnownEmailAccountId) {
       setLastEmailAccountAction({ emailAccountId: ownedRouteId }).catch(
         () => {},
       );
     }
-  }, [ownedRouteId, lastKnownEmailAccountId]);
+  }, [data, ownedRouteId, lastKnownEmailAccountId]);
 
   const emailAccount = useMemo(() => {
     if (!data?.emailAccounts.length) return;
@@ -107,6 +132,7 @@ export function EmailAccountProvider({
   return (
     <EmailAccountContext.Provider
       value={{
+        accountIds,
         emailAccount,
         isLoading,
         emailAccountId: resolvedEmailAccountId,
@@ -150,6 +176,7 @@ export function EmailAccountScopeProvider({
     () =>
       emailAccount
         ? {
+            accountIds: parent.accountIds,
             emailAccount,
             emailAccountId: emailAccount.id,
             userEmail: emailAccount.email,

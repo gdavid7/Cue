@@ -9,22 +9,25 @@ import {
   isAccountSectionOpen,
 } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import {
-  getMailNavPath,
   MailboxGroups,
   type MailNavTarget,
 } from "@/app/(app)/[emailAccountId]/mail/MailSidebar";
 import { getMailSidebarFolders } from "@/app/(app)/[emailAccountId]/mail/outlook-folder-list";
+import {
+  getMailNavView,
+  useMailSlugs,
+} from "@/app/(app)/[emailAccountId]/mail/use-mail-route";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
 import { LoadingContent } from "@/components/LoadingContent";
 import { useFolders } from "@/hooks/useFolders";
 import { useLabelCounts } from "@/hooks/useLabelCounts";
 import { useLabels } from "@/hooks/useLabels";
+import { useMailHref } from "@/hooks/useMailHref";
 import { cn } from "@/utils";
 import {
   isGoogleProvider,
   isMicrosoftProvider,
 } from "@/utils/email/provider-types";
-import { prefixPath } from "@/utils/path";
 import { getEmailTerminology } from "@/utils/terminology";
 
 type EmailAccount = GetEmailAccountsResponse["emailAccounts"][number];
@@ -131,8 +134,10 @@ function AccountMailboxes({
     labels: labelsState.userLabels,
     folders: foldersState.folders,
   });
+  const mailHref = useMailHref();
+  const mailSlugs = useMailSlugs(labelsState.userLabels, foldersState.folders);
   const hrefFor = (target: MailNavTarget) =>
-    prefixPath(accountId, getMailNavPath(target));
+    mailHref({ accountId, view: getMailNavView(target, mailSlugs) });
   const isEmpty =
     labelsState.userLabels.length === 0 &&
     getMailSidebarFolders(foldersState.folders).length === 0;

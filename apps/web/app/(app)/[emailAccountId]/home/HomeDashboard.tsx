@@ -6,12 +6,12 @@ import { LoadingContent } from "@/components/LoadingContent";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useHome } from "@/hooks/useHome";
+import { useMailHref } from "@/hooks/useMailHref";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { cn } from "@/utils";
 import type { HomeThread } from "@/utils/home/get-home";
 import { formatShortDate } from "@/utils/date";
 import { getInitials } from "@/utils/email";
-import { prefixPath } from "@/utils/path";
 import { BeforeYourMeeting } from "./BeforeYourMeeting";
 
 /**
@@ -23,8 +23,8 @@ export function HomeDashboard() {
   const { data, isLoading, error } = useHome(emailAccountId);
   const greetingText = useGreeting();
   const firstName = (emailAccount?.name || "").split(" ")[0];
-  const threadHref = (threadId: string) =>
-    `${prefixPath(emailAccountId, "/mail")}?thread-id=${encodeURIComponent(threadId)}`;
+  const mailHref = useMailHref();
+  const threadHref = (threadId: string) => mailHref({ threadId });
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-8 px-4 py-6 md:px-8">

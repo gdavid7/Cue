@@ -14,6 +14,8 @@ import { useAccount } from "@/providers/EmailAccountProvider";
 import { setLastEmailAccountAction } from "@/utils/actions/email-account-cookie";
 import { ProfileImage } from "@/components/ProfileImage";
 import { getAccountSwitchUrl } from "@/utils/account-switch-url";
+import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
+import { isMailPath } from "@/utils/mail-url";
 import { redirectToSafeUrl } from "@/utils/redirect";
 
 /**
@@ -27,14 +29,18 @@ export function AccountSwitcherMenuItems({
   onNavigate?: () => void;
 }) {
   const { data: accountsData } = useAccounts();
-  const { emailAccountId: activeEmailAccountId } = useAccount();
+  const { emailAccountId: activeEmailAccountId, accountIds } = useAccount();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const params = useParams<{ emailAccountId?: string }>();
 
   const getHref = useCallback(
     (emailAccountId: string) => {
-      if (!activeEmailAccountId) return `/${emailAccountId}/mail`;
+      if (!activeEmailAccountId || isMailPath(pathname))
+        return getMailAccountUrl(accountIds, emailAccountId, {
+          pathname,
+          search: searchParams.toString(),
+        });
 
       return getAccountSwitchUrl({
         pathname,
@@ -43,7 +49,13 @@ export function AccountSwitcherMenuItems({
         tab: searchParams.get("tab"),
       });
     },
-    [pathname, activeEmailAccountId, params.emailAccountId, searchParams],
+    [
+      pathname,
+      activeEmailAccountId,
+      accountIds,
+      params.emailAccountId,
+      searchParams,
+    ],
   );
 
   const handleSelect = useCallback(

@@ -11,7 +11,7 @@ import {
 } from "@/utils/actions/scheduled-email";
 import { getActionErrorMessage } from "@/utils/error";
 import { useAccount } from "@/providers/EmailAccountProvider";
-import { prefixPath } from "@/utils/path";
+import { useMailHref } from "@/hooks/useMailHref";
 import { useUpcomingScheduledEmails } from "@/hooks/useHiddenDraftMessageIds";
 
 type ScheduledEmail =
@@ -19,6 +19,7 @@ type ScheduledEmail =
 
 export function ScheduledEmailList() {
   const { emailAccountId } = useAccount();
+  const mailHref = useMailHref();
   const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState(false);
   const { data, isLoading, error, mutate } =
@@ -111,7 +112,9 @@ export function ScheduledEmailList() {
                       // this is the only way to resolve one.
                       <a
                         className="text-xs underline underline-offset-4"
-                        href={prefixPath(emailAccountId, "/mail?type=sent")}
+                        href={mailHref({
+                          view: { kind: "type", type: "sent" },
+                        })}
                       >
                         Check Sent
                       </a>

@@ -4,7 +4,7 @@ import Link from "next/link";
 import useSWR from "swr";
 import type { GetSearchAnswerResponse } from "@/app/api/user/search-answer/route";
 import { Button } from "@/components/ui/button";
-import { prefixPath } from "@/utils/path";
+import { useMailHref } from "@/hooks/useMailHref";
 import { getAccountScopedKey } from "@/utils/swr";
 
 /** Answer a committed search that reads as a question, above the results. */
@@ -29,6 +29,7 @@ export function SearchAnswerCard({
   onContinueInChat: (question: string) => void;
 }) {
   const { data, isLoading, error } = useSearchAnswer(emailAccountId, query);
+  const mailHref = useMailHref();
 
   // "Nothing matched" is known at once; the answer may take seconds, so it
   // loads above the message rather than hiding it.
@@ -70,10 +71,7 @@ export function SearchAnswerCard({
         {data.sources.map((source) => {
           const href =
             source.kind === "email"
-              ? prefixPath(
-                  emailAccountId,
-                  `/mail?thread-id=${encodeURIComponent(source.id)}&thread-account-id=${emailAccountId}`,
-                )
+              ? mailHref({ accountId: emailAccountId, threadId: source.id })
               : source.url;
           const className = "text-muted-foreground text-xs";
           return (

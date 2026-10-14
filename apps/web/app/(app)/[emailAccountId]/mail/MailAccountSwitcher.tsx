@@ -334,6 +334,7 @@ function AccountItem({
   onSelect: (accountId: string) => void;
   shortcutKey: string | undefined;
 }) {
+  const { accountIds } = useAccount();
   // Radix onSelect receives a CustomEvent without metaKey/ctrlKey.
   const openInNewWindow = useRef(false);
 
@@ -356,7 +357,9 @@ function AccountItem({
         if (shouldOpenWindow) {
           const openWindow = getInboxZeroDesktopApp()?.openWindow;
           if (openWindow) {
-            openWindow(getMailAccountUrl(account.id, "")).catch(() => {});
+            openWindow(getMailAccountUrl(accountIds, account.id)).catch(
+              () => {},
+            );
             return;
           }
         }

@@ -26,6 +26,7 @@ import { captureException } from "@/utils/error";
 import prisma from "@/utils/prisma";
 import { createScopedLogger } from "@/utils/logger";
 import { booleanString } from "@/utils/zod";
+import { getOrderedEmailAccountIds } from "@/utils/mail-url.server";
 
 const logger = createScopedLogger("AppLayout");
 
@@ -64,7 +65,10 @@ export default async function AppLayout({
 
   if (!session?.user.email) redirect("/login");
 
-  const cookieStore = await cookies();
+  const [cookieStore, accountIds] = await Promise.all([
+    cookies(),
+    getOrderedEmailAccountIds(session.user.id),
+  ]);
   const isClosed = cookieStore.get("left-sidebar:state")?.value === "false";
   const bypassPremiumChecks =
     booleanString.parse(process.env.NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS) ?? false;
@@ -87,7 +91,7 @@ export default async function AppLayout({
   return (
     <div className={inter.variable}>
       <div className="font-inter">
-        <AppProviders>
+        <AppProviders accountIds={accountIds}>
           <MailEngineRuntime>
             <SideNavWithTopNav
               defaultOpen={!isClosed}
