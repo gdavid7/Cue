@@ -1675,7 +1675,10 @@ export function MailShell() {
                     }
                     loadingComponent={
                       searchQuery ? undefined : (
-                        <MailListPlaceholder message={listPlaceholderMessage} />
+                        <MailListPlaceholder
+                          message={listPlaceholderMessage}
+                          layout={layout}
+                        />
                       )
                     }
                     error={searchQuery ? undefined : error}

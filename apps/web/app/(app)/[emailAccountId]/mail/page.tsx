@@ -24,7 +24,7 @@ export default function Mail() {
       <MailEngineHost
         fallback={
           <MailFrame activeType="inbox">
-            <MailListPlaceholder />
+            <MailListPlaceholder message="Opening your mailbox…" withChrome />
           </MailFrame>
         }
       >
