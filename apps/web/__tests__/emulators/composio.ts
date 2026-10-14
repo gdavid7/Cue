@@ -306,7 +306,7 @@ export async function createComposioEmulator(
 
     const toolMatch = /^\/tools\/execute\/([^/]+)$/.exec(path);
     if (toolMatch && method === "POST") {
-      const tool = tools[toolMatch[1]];
+      const tool = tools[toolMatch[1]] as (typeof tools)[string] | undefined;
       const connectedAccountId = String(body.connected_account_id);
       toolCalls.push({ tool: toolMatch[1], connectedAccountId });
       const account = accounts.get(connectedAccountId);
@@ -431,7 +431,7 @@ function searchDriveFiles(files: ComposioEmulatorDriveFile[], query: string) {
   );
 }
 
-function words(text: string) {
+function words(text: string): string[] {
   return text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
 }
 

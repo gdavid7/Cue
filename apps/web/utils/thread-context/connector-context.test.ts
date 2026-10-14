@@ -300,8 +300,7 @@ describe("fetchConnectorCandidates with an unreadable app", () => {
       app: "slack",
       error: expect.any(Error),
     });
-    expect(JSON.stringify(String(warn.mock.calls[0][1]?.error))).not.toContain(
-      "salary",
-    );
+    const [, fields] = warn.mock.calls[0] as [string, { error: Error }];
+    expect(fields.error.message).not.toContain("salary");
   });
 });

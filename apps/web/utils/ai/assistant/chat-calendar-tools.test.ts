@@ -107,7 +107,7 @@ async function run(input: { startDate: string; endDate: string }) {
   return (await tool.execute!(input, {
     toolCallId: "1",
     messages: [],
-  })) as {
+  } as never)) as {
     error?: string;
     events?: unknown[];
   };
