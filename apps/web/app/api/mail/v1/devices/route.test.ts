@@ -23,6 +23,9 @@ const token = "a".repeat(64);
 describe("/api/mail/v1/devices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    prisma.mobilePushToken.upsert.mockResolvedValue({
+      id: "push-token-1",
+    } as never);
   });
 
   it("registers an APNs token for the authenticated user", async () => {
@@ -48,7 +51,19 @@ describe("/api/mail/v1/devices", () => {
     await expect(response.json()).resolves.toEqual({ ok: true });
   });
 
+  // Postgres resolves a user-scoped upsert on another user's token to null.
   it("refuses a token that is registered to another user", async () => {
+    prisma.mobilePushToken.upsert.mockResolvedValueOnce(null as never);
+
+    const response = await POST(request("POST", deviceBody()), {} as never);
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      isKnownError: true,
+    });
+  });
+
+  it("refuses a token that another user registers concurrently", async () => {
     prisma.mobilePushToken.upsert.mockRejectedValueOnce(
       new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
         code: "P2002",

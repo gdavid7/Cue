@@ -30,11 +30,12 @@ export const POST = withAuth("mail/v1/devices/register", async (request) => {
   if (!json.ok) return json.response;
   const device = registerDeviceSchema.parse(json.value);
 
-  // Scoping the upsert to this user means a token owned by someone else falls
-  // through to create and hits the unique constraint, so a caller who knows
-  // another device's token cannot take over its notifications.
+  // Scoped to this user, so a caller who knows another device's token cannot
+  // take over its notifications. On Postgres a token owned by someone else
+  // makes the upsert change nothing and return null rather than throw.
+  let registered: unknown;
   try {
-    await prisma.mobilePushToken.upsert({
+    registered = await prisma.mobilePushToken.upsert({
       where: { token: device.token, userId: request.auth.userId },
       create: {
         token: device.token,
@@ -52,6 +53,10 @@ export const POST = withAuth("mail/v1/devices/register", async (request) => {
     });
   } catch (error) {
     if (!isDuplicateError(error, "token")) throw error;
+    registered = null;
+  }
+
+  if (!registered) {
     return NextResponse.json(
       {
         error: "This device is registered to another account",
