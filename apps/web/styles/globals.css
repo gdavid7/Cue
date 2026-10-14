@@ -169,18 +169,6 @@
   }
 }
 
-@layer base {
-  /*
-   * The gradient button reads identically in every theme, so its values live
-   * outside the theme blocks rather than being redefined per palette.
-   */
-  :root {
-    --button-gradient: linear-gradient(180deg, #2965ec, #5c89f8);
-    --button-gradient-border: 220.9 83.4% 64.5%; /* #5989F0 */
-    --button-gradient-shadow: 221.1 97.8% 64.3%; /* #4B83FD */
-  }
-}
-
 .content-container {
   @apply px-2 sm:px-6;
 }

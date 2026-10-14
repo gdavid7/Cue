@@ -36,7 +36,7 @@ export function PremiumAiAssistantAlert({
           icon={<CrownIcon className="h-5 w-5" />}
           title="Active Subscription Required"
           description="This feature is not available during the free trial. Start your paid plan to use it."
-          action={<EndTrialButton variant="primaryBlack" />}
+          action={<EndTrialButton />}
         />
       </div>
     );
@@ -49,11 +49,7 @@ export function PremiumAiAssistantAlert({
           icon={<CrownIcon className="h-5 w-5" />}
           title={`${starterTierName} Plan Required`}
           description={`Switch to the ${starterTierName} plan to use this feature.`}
-          action={
-            <Button variant="primaryBlack" onClick={openModal}>
-              Switch Plan
-            </Button>
-          }
+          action={<Button onClick={openModal}>Switch Plan</Button>}
         />
       ) : showSetApiKey ? (
         <ActionCard
@@ -61,7 +57,7 @@ export function PremiumAiAssistantAlert({
           title="API Key Required"
           description="You need to set an AI API key to use this feature."
           action={
-            <Button variant="primaryBlack" asChild>
+            <Button asChild>
               <Link href="/settings">Set API Key</Link>
             </Button>
           }
@@ -71,11 +67,7 @@ export function PremiumAiAssistantAlert({
           icon={<CrownIcon className="h-5 w-5" />}
           title="Premium Feature"
           description={`This is a premium feature. Upgrade to the ${starterTierName} plan.`}
-          action={
-            <Button variant="primaryBlack" onClick={openModal}>
-              Upgrade
-            </Button>
-          }
+          action={<Button onClick={openModal}>Upgrade</Button>}
         />
       )}
       <PremiumModal />

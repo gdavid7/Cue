@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardBlue, CardContent } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Collapsible,
   CollapsibleContent,
@@ -245,7 +245,7 @@ export function MeetingDetail({
           )}
 
           {data?.followUpDraftId && (
-            <CardBlue>
+            <Card>
               <CardContent className="space-y-3 p-4">
                 <div className="flex items-center gap-2">
                   <MailPlusIcon className="size-4 text-blue-600 dark:text-blue-400" />
@@ -272,7 +272,7 @@ export function MeetingDetail({
                   </a>
                 </Button>
               </CardContent>
-            </CardBlue>
+            </Card>
           )}
 
           {!!transcript?.length && (
