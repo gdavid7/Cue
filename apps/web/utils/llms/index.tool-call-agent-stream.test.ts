@@ -203,6 +203,89 @@ describe("toolCallAgentStream model fallback", () => {
 
     expect(run.errorChunks).toHaveLength(1);
   });
+
+  it("drops the failed primary's hidden reasoning and files so neither the user nor the fallback sees them", async () => {
+    const primary = createScriptedModel("primary", [
+      [
+        STREAM_START,
+        { type: "reasoning-start", id: "r1" },
+        {
+          type: "reasoning-delta",
+          id: "r1",
+          delta: "",
+          providerMetadata: { anthropic: { redactedData: "primary-secret" } },
+        },
+        { type: "reasoning-end", id: "r1" },
+        {
+          type: "file",
+          mediaType: "image/png",
+          data: { type: "data", data: "cHJpbWFyeQ==" },
+        },
+        { type: "error", error: overloadedError() },
+      ],
+    ]);
+    const fallback = createScriptedModel("fallback", [
+      [STREAM_START, ...textParts("Fallback answer"), finish("stop")],
+    ]);
+
+    const run = await runAgent({ primary, fallback });
+
+    expect(run.text).toBe("Fallback answer");
+    expect(run.chunkTypes).not.toContain("reasoning-start");
+    expect(run.chunkTypes).not.toContain("file");
+    expect(run.errorChunks).toHaveLength(0);
+  });
+
+  it("does not hand the failed primary's reasoning to the fallback on a later step", async () => {
+    const archive = vi.fn(async () => "archived");
+    const primary = createScriptedModel("primary", [
+      [STREAM_START, toolCall("call-1", "archive"), finish("tool-calls")],
+      [
+        STREAM_START,
+        { type: "reasoning-start", id: "r1" },
+        {
+          type: "reasoning-delta",
+          id: "r1",
+          delta: "",
+          providerMetadata: { anthropic: { signature: "primary-signature" } },
+        },
+        { type: "error", error: overloadedError() },
+      ],
+    ]);
+    const fallback = createScriptedModel("fallback", [
+      [STREAM_START, toolCall("call-2", "archive"), finish("tool-calls")],
+      [STREAM_START, ...textParts("Archived both."), finish("stop")],
+    ]);
+
+    const run = await runAgent({ primary, fallback, tools: { archive } });
+
+    expect(run.text).toBe("Archived both.");
+    expect(JSON.stringify(fallback.doStreamCalls[1].prompt)).not.toContain(
+      "primary-signature",
+    );
+    expect(run.chunkTypes).not.toContain("reasoning-start");
+  });
+
+  it("keeps visible reasoning and ends with a notice instead of re-answering on the fallback", async () => {
+    const primary = createScriptedModel("primary", [
+      [
+        STREAM_START,
+        { type: "reasoning-start", id: "r1" },
+        { type: "reasoning-delta", id: "r1", delta: "Looking at the inbox" },
+        { type: "error", error: overloadedError() },
+      ],
+    ]);
+    const fallback = createScriptedModel("fallback", [
+      [STREAM_START, ...textParts("Should not run"), finish("stop")],
+    ]);
+
+    const run = await runAgent({ primary, fallback });
+
+    expect(run.reasoning).toBe("Looking at the inbox");
+    expect(run.text).toBe(`\n\n${INTERRUPTED_RESPONSE_NOTICE}`);
+    expect(fallback.doStreamCalls).toHaveLength(0);
+    expect(run.errorChunks).toHaveLength(0);
+  });
 });
 
 describe("toolCallAgentStream with a single model candidate", () => {
@@ -376,17 +459,29 @@ async function runAgent({
   });
 
   let text = "";
+  let reasoning = "";
   const errorChunks: unknown[] = [];
   const toolCallIds: string[] = [];
+  const chunkTypes: string[] = [];
   for await (const chunk of result.toUIMessageStream()) {
+    chunkTypes.push(chunk.type);
     if (chunk.type === "text-delta") text += chunk.delta;
+    if (chunk.type === "reasoning-delta") reasoning += chunk.delta;
     if (chunk.type === "error") errorChunks.push(chunk);
     if (chunk.type === "tool-input-available") {
       toolCallIds.push(chunk.toolCallId);
     }
   }
 
-  return { text, errorChunks, toolCallIds, resolvedModels, finishReason };
+  return {
+    text,
+    reasoning,
+    errorChunks,
+    toolCallIds,
+    chunkTypes,
+    resolvedModels,
+    finishReason,
+  };
 }
 
 function createScriptedModel(

@@ -19,8 +19,8 @@ export const INTERRUPTED_RESPONSE_NOTICE =
 // level of a single model call. Each agent step is one call whose prompt
 // already holds the earlier steps' tool results, and the AI SDK only executes
 // a call's tool calls once that call finishes cleanly, so switching models
-// never re-runs a tool. A call switches only while none of its text has
-// streamed; after that it is ended with a notice rather than answered twice.
+// never re-runs a tool. A call switches only while the user has seen none of
+// its output; after that it is ended with a notice rather than answered twice.
 export function createStreamFallbackModel<
   TCandidate extends StreamFallbackCandidate,
 >({
@@ -118,11 +118,14 @@ export function createStreamFallbackModel<
     options: LanguageModelV4CallOptions,
   ) {
     let reader = initialStream.getReader();
-    let textStreamed = false;
+    // Set once the user has seen this call's output (text, or reasoning the
+    // chat shows). Until then every content part is held, so a call that fails
+    // leaves nothing behind: not in the UI, and not in the step content the
+    // next model is prompted with.
+    let outputStarted = false;
     let skipStreamStart = false;
-    // Tool parts (and anything after them) wait for the call to finish, and
-    // text scaffolding waits for the first text, so a failed call leaves no
-    // half-built tool or text part behind in the UI.
+    // Tool parts (and anything after them) wait for the call to finish, as the
+    // AI SDK runs a tool as soon as it sees the call.
     let held: LanguageModelV4StreamPart[] = [];
     const openTextIds = new Set<string>();
     const openReasoningIds = new Set<string>();
@@ -157,7 +160,7 @@ export function createStreamFallbackModel<
 
             const aborted =
               options.abortSignal?.aborted || isAbortError(part.error);
-            if (textStreamed && !aborted) {
+            if (outputStarted && !aborted) {
               onInterrupted({
                 candidate: getActiveCandidate(),
                 error: part.error,
@@ -182,7 +185,6 @@ export function createStreamFallbackModel<
             }
 
             held = [];
-            closeOpenParts(controller, new Set(), openReasoningIds);
             try {
               reader = (await startStream(options)).stream.getReader();
               skipStreamStart = true;
@@ -205,18 +207,17 @@ export function createStreamFallbackModel<
             return;
           }
 
-          const holdsTools = held.some(isToolPart);
-          if (
-            holdsTools ||
-            isToolPart(part) ||
-            (!textStreamed && isTextScaffolding(part))
-          ) {
+          if (held.some(isToolPart) || isToolPart(part)) {
             held.push(part);
             continue;
           }
 
-          if (part.type === "text-delta") {
-            textStreamed = true;
+          if (!outputStarted && !isCallMetadata(part)) {
+            if (!isUserVisibleOutput(part)) {
+              held.push(part);
+              continue;
+            }
+            outputStarted = true;
             releaseHeld();
           }
           emit(part);
@@ -251,12 +252,21 @@ function isToolPart(part: LanguageModelV4StreamPart) {
   );
 }
 
-function isTextScaffolding(part: LanguageModelV4StreamPart) {
+function isCallMetadata(part: LanguageModelV4StreamPart) {
   return (
-    part.type === "text-start" ||
-    part.type === "text-end" ||
-    (part.type === "text-delta" && part.delta.length === 0)
+    part.type === "stream-start" ||
+    part.type === "response-metadata" ||
+    part.type === "raw"
   );
+}
+
+// Matches what the chat renders: it hides empty and redacted reasoning.
+function isUserVisibleOutput(part: LanguageModelV4StreamPart) {
+  if (part.type === "text-delta") return part.delta.length > 0;
+  if (part.type === "reasoning-delta") {
+    return part.delta.trim().length > 0 && part.delta !== "[REDACTED]";
+  }
+  return false;
 }
 
 function trackOpenParts(
