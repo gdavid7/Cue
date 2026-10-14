@@ -132,9 +132,12 @@ export function BufferedMailHtmlFrame({
   documentKey,
   isDarkMode,
   callbacks,
+  label,
 }: MailHtmlDocument & {
   isDarkMode: boolean;
   callbacks: MailHtmlFrameCallbacks;
+  /** The frame's accessible name, such as who sent the message and when. */
+  label?: string;
 }) {
   const [visibleDocument, setVisibleDocument] = useState<MailHtmlDocument>(
     () => ({
@@ -161,6 +164,7 @@ export function BufferedMailHtmlFrame({
           isDarkMode={isDarkMode}
           onReady={setVisibleDocument}
           callbacks={callbacks}
+          label={label}
         />
       ))}
     </div>
@@ -327,9 +331,11 @@ function MailHtmlFrame({
   isDarkMode,
   onReady,
   callbacks,
+  label,
 }: {
   document: MailHtmlDocument;
   pending: boolean;
+  label?: string;
   isDarkMode: boolean;
   onReady: (document: MailHtmlDocument) => void;
   callbacks: MailHtmlFrameCallbacks;
@@ -360,6 +366,8 @@ function MailHtmlFrame({
         colorScheme: isDarkMode ? "dark" : "light",
       }}
       aria-hidden={pending || undefined}
+      // Names each message's frame apart; the title stays generic.
+      aria-label={label}
       title={
         pending ? "Preparing email content preview" : "Email content preview"
       }

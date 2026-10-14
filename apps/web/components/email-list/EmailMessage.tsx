@@ -501,6 +501,7 @@ export function EmailMessage({
                 onNavigateMessage={onNavigateMessage}
                 onFocusMessage={onSelect}
                 emailAccountId={emailAccountId}
+                label={`Message from ${senderNameOf(message)}, ${formatShortDate(new Date(message.headers.date))}`}
                 html={message.textHtml}
                 inlineAttachments={message.inline}
                 messageId={message.id}
