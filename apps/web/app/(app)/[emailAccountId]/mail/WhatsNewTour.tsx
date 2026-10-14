@@ -82,8 +82,8 @@ const STEPS: TourStep[] = [
 export function getNeedsReplyStepCopy(count: number): TourStepContent {
   if (count <= 0) {
     return {
-      title: "Nothing in your last few days needs a reply.",
-      body: "Cue will flag new mail as it arrives.",
+      title: "Needs reply fills in as Cue reads your mail.",
+      body: "Mail waiting on your answer lands here, with a draft when Cue can write one.",
       showTab: false,
     };
   }
@@ -125,9 +125,14 @@ export function WhatsNewTour({ onClose: closeTour }: { onClose: () => void }) {
   const posthog = usePostHog();
   const [stepIndex, setStepIndex] = useState(0);
   const [view, setView] = useState<TourStepView>("wait");
+  // Skipped steps leave the count, so a lone step reads "1 of 1".
+  const [skippedSteps, setSkippedSteps] = useState<number[]>([]);
   const isMobile = useIsMobile();
   const step = STEPS[stepIndex];
-  const availableSteps = STEPS.filter(isStepAvailable);
+  const availableSteps = STEPS.filter(
+    (candidate, index) =>
+      !skippedSteps.includes(index) && isStepAvailable(candidate),
+  );
   const isLast = !STEPS.slice(stepIndex + 1).some(isStepAvailable);
 
   const trackStep = useStableCallback(
@@ -173,6 +178,7 @@ export function WhatsNewTour({ onClose: closeTour }: { onClose: () => void }) {
       clearInterval(interval);
       if (next === "skip" && !current.findFallbackTarget?.()) {
         trackStep(stepIndex, "skipped");
+        setSkippedSteps((current) => [...current, stepIndex]);
         goToStep(stepIndex + 1);
       } else {
         trackStep(stepIndex, "shown");

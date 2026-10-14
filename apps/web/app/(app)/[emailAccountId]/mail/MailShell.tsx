@@ -1876,9 +1876,7 @@ export function MailShell() {
                 <WhatsNewTour onClose={() => setIsTourOpen(false)} />
               )}
               {!isAllAccounts && (
-                <TodayIntroLine
-                  ready={!isTourOpen && !isFirstSync && threads.length > 0}
-                />
+                <TodayIntroLine ready={!isTourOpen && !isFirstSync} />
               )}
               {routeFailed ? (
                 <p

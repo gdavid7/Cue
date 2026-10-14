@@ -62,10 +62,12 @@ describe("the Needs reply step", () => {
     );
   });
 
-  it("says so plainly when nothing needs a reply", () => {
+  // An empty tab can mean sorting is still running or the AI is off, so the
+  // step must not claim that nothing needs a reply.
+  it("points at the tab without claiming nothing needs a reply", () => {
     expect(getNeedsReplyStepCopy(0)).toEqual({
-      title: "Nothing in your last few days needs a reply.",
-      body: "Cue will flag new mail as it arrives.",
+      title: "Needs reply fills in as Cue reads your mail.",
+      body: "Mail waiting on your answer lands here, with a draft when Cue can write one.",
       showTab: false,
     });
   });
