@@ -187,18 +187,27 @@ export const ThreadRow = memo(function ThreadRow({
                 date={internalDateToDate(message.internalDate)}
               />
             </div>
-            {showActions && rowActions ? (
-              <div className="-translate-y-1/2 absolute top-1/2 right-0 hidden rounded-md bg-background shadow-sm group-hover:flex">
-                <ThreadRowActions
-                  handlers={rowActions}
-                  isArchived={isThreadArchived(thread.messages)}
-                  isStarred={isThreadStarred(thread.messages)}
-                  isUnread={isThreadUnread(thread.messages)}
-                  threadKey={getListThreadKey(thread)}
-                />
-              </div>
-            ) : null}
           </div>
+        }
+        actions={
+          showActions && rowActions ? (
+            // Over the date column, which the row hides on hover.
+            <div
+              className={cn(
+                "absolute hidden rounded-md bg-background shadow-sm group-hover:flex",
+                layout === "list" ? "right-5" : "right-3.5",
+                expandedPreview ? "top-2" : "-translate-y-1/2 top-1/2",
+              )}
+            >
+              <ThreadRowActions
+                handlers={rowActions}
+                isArchived={isThreadArchived(thread.messages)}
+                isStarred={isThreadStarred(thread.messages)}
+                isUnread={isThreadUnread(thread.messages)}
+                threadKey={getListThreadKey(thread)}
+              />
+            </div>
+          ) : null
         }
         expandedPreview={expandedPreview}
         hasAnySelection={hasAnySelection}

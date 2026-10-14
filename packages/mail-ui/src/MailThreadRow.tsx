@@ -17,6 +17,11 @@ export type MailThreadRowProps = {
   date: ReactNode;
   labels?: ReactNode[];
   accountAvatar?: ReactNode;
+  /**
+   * Rendered beside the row, not inside it: children of `role="option"` are
+   * presentational, so buttons there have no role or name for assistive tech.
+   * Position it against the row wrapper (`relative`, and the hover `group`).
+   */
   actions?: ReactNode;
   /** A short line under the row: what the email asks, or what's worth knowing. */
   insight?: ReactNode;
@@ -80,7 +85,7 @@ export function MailThreadRow({
         })
       : null;
   const draftMarker = isDraft ? (
-    <span className="shrink-0 text-red-600 text-sm dark:text-red-400">
+    <span className="shrink-0 font-medium text-muted-foreground text-sm">
       Draft
     </span>
   ) : null;
@@ -95,7 +100,7 @@ export function MailThreadRow({
       <span
         className={cx(
           "min-w-0 truncate text-foreground text-sm",
-          isUnread && "font-semibold",
+          isUnread ? "font-semibold" : !isWide && "font-medium",
         )}
       >
         {participantSummary}
@@ -123,11 +128,12 @@ export function MailThreadRow({
     </>
   );
 
-  return (
+  const row = (
     <div
       aria-selected={isSelected}
       className={cx(
-        "group relative flex cursor-pointer border-b border-border/60 outline-none",
+        "relative flex cursor-pointer border-b border-border/60 outline-none",
+        !actions && "group",
         isWide
           ? cx(
               "gap-2.5 py-2.5 pr-5 pl-3",
@@ -217,7 +223,7 @@ export function MailThreadRow({
               "truncate text-sm",
               isUnread
                 ? "font-semibold text-foreground"
-                : "font-normal text-foreground",
+                : "font-normal text-foreground/90",
             )}
             data-mail-thread-subject
           >
@@ -238,7 +244,14 @@ export function MailThreadRow({
           ) : null}
         </div>
       )}
-      {actions ? <div className="ml-auto shrink-0">{actions}</div> : null}
+    </div>
+  );
+
+  if (!actions) return row;
+  return (
+    <div className="group relative flex">
+      <div className="min-w-0 flex-1">{row}</div>
+      {actions}
     </div>
   );
 }

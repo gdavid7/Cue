@@ -105,7 +105,7 @@ export function MailReaderToolbar({
                 title="Starred conversation"
               />
             )}
-            <h1 className="font-title font-medium text-2xl text-foreground leading-tight tracking-tight">
+            <h1 className="line-clamp-2 font-title font-medium text-2xl text-foreground leading-tight tracking-tight max-sm:text-lg">
               {subject}
             </h1>
           </div>

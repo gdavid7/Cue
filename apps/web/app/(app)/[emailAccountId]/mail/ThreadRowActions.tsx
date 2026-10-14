@@ -31,9 +31,10 @@ export type ThreadRowActionHandlers = {
 /**
  * Gmail's hover actions for one row: archive (or back to the inbox), delete,
  * read state, star and snooze, without opening or selecting the thread.
- * A mouse shortcut only: the same actions are in the toolbar and on the
- * keyboard, so these stay out of the tab order and the accessibility tree
- * rather than repeat every toolbar button on every row.
+ * A mouse shortcut: the same actions are in the toolbar and on the keyboard,
+ * so these stay out of the tab order rather than add five tab stops per row.
+ * They sit beside the row's `role="option"`, so assistive tech still finds
+ * them as named buttons.
  */
 export function ThreadRowActions({
   threadKey,
@@ -61,36 +62,43 @@ export function ThreadRowActions({
         <RowButton
           icon={InboxIcon}
           label="Move to inbox"
+          ariaLabel="Move conversation to inbox"
           onClick={() => handlers.moveToInbox(threadKey)}
         />
       ) : (
         <RowButton
           icon={ArchiveIcon}
           label="Archive"
+          ariaLabel="Archive conversation"
           onClick={() => handlers.archive(threadKey)}
         />
       )}
       <RowButton
         icon={Trash2Icon}
         label="Delete"
+        ariaLabel="Delete conversation"
         onClick={() => handlers.trash(threadKey)}
       />
       <RowButton
         icon={isUnread ? MailOpenIcon : MailIcon}
         label={isUnread ? "Mark as read" : "Mark as unread"}
+        ariaLabel={
+          isUnread ? "Mark conversation as read" : "Mark conversation as unread"
+        }
         onClick={() => handlers.setRead(threadKey, isUnread)}
       />
       <RowButton
         active={isStarred}
         icon={StarIcon}
         label={isStarred ? "Unstar" : "Star"}
+        ariaLabel={isStarred ? "Unstar conversation" : "Star conversation"}
         onClick={() => handlers.setStarred(threadKey, !isStarred)}
       />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
             className={BUTTON_CLASS}
-            aria-label="Snooze"
+            aria-label="Snooze conversation"
             tabIndex={-1}
             title="Snooze"
             type="button"
@@ -116,21 +124,25 @@ export function ThreadRowActions({
 const BUTTON_CLASS =
   "flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
 
+// The accessible name says "conversation" so it stays distinct from the
+// toolbar's button for the same action.
 function RowButton({
   icon: Icon,
   label,
+  ariaLabel,
   onClick,
   active,
 }: {
   icon: LucideIcon;
   label: string;
+  ariaLabel: string;
   onClick: () => void;
   active?: boolean;
 }) {
   return (
     <button
       className={BUTTON_CLASS}
-      aria-label={label}
+      aria-label={ariaLabel}
       onClick={onClick}
       tabIndex={-1}
       title={label}

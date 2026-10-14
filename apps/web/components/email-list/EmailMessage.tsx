@@ -629,9 +629,7 @@ function CollapsedDraft({
       }}
       type="button"
     >
-      <span className="shrink-0 font-medium text-red-600 dark:text-red-400">
-        Draft
-      </span>
+      <span className="shrink-0 font-medium text-muted-foreground">Draft</span>
       <span className="min-w-0 truncate text-muted-foreground">
         {snippet || "(no text)"}
       </span>
@@ -795,7 +793,7 @@ function MessageHeader({
 
       {hasDraft &&
         (!expanded || message.labelIds?.includes(GmailLabel.DRAFT)) && (
-          <span className="shrink-0 text-red-600 text-xs dark:text-red-400">
+          <span className="shrink-0 font-medium text-muted-foreground text-xs">
             Draft
           </span>
         )}

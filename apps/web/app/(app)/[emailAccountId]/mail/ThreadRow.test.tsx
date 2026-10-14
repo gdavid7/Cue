@@ -54,6 +54,39 @@ describe("ThreadRow", () => {
     expect(screen.getByRole("checkbox").getAttribute("tabindex")).toBe("-1");
   });
 
+  // Children of role="option" are presentational, so buttons inside it have
+  // no role or name for assistive tech.
+  it("exposes the row's hover actions as named buttons outside the option", () => {
+    render(
+      <ThreadRow
+        hasAnySelection={false}
+        index={0}
+        isFocused={false}
+        isSelected={false}
+        layout="list"
+        onOpen={vi.fn()}
+        onSelectRangeTo={vi.fn()}
+        onToggleSelect={vi.fn()}
+        rowActions={{
+          archive: vi.fn(),
+          moveToInbox: vi.fn(),
+          trash: vi.fn(),
+          setRead: vi.fn(),
+          setStarred: vi.fn(),
+          snooze: vi.fn(),
+        }}
+        thread={thread()}
+        userEmail="david@example.com"
+        userLabels={{}}
+      />,
+    );
+
+    const archive = screen.getByRole("button", {
+      name: "Archive conversation",
+    });
+    expect(screen.getByRole("option").contains(archive)).toBe(false);
+  });
+
   it("announces an unread conversation, not only by weight", () => {
     renderRow({ unread: true });
 
