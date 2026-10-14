@@ -70,6 +70,7 @@ describe("Logger", () => {
       error: { message: "Bad Gateway", status: 502, config: { data: { raw } } },
     });
     expect(JSON.stringify(vi.mocked(log.error).mock.calls)).not.toContain(raw);
+    expect(JSON.stringify(consoleErrorSpy.mock.calls)).not.toContain(raw);
     expect(log.error).toHaveBeenCalledWith(
       "Send failed",
       expect.objectContaining({
@@ -92,7 +93,19 @@ describe("Logger", () => {
       "Server log",
       expect.objectContaining({ scope: "test", foo: "bar" }),
     );
-    expect(consoleLogSpy).not.toHaveBeenCalled();
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[test]: Server log"),
+    );
+  });
+
+  it("keeps request context on the console copy of Axiom logs", () => {
+    mockedEnv.AXIOM_TOKEN = "server-token";
+
+    createScopedLogger("test").with({ requestId: "req_1" }).info("Scoped log");
+
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      expect.stringContaining("req_1"),
+    );
   });
 
   it("logs one serialized production error to Axiom without errorFull", () => {

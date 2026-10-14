@@ -31,10 +31,14 @@ const colors = {
 
 export function createScopedLogger(scope: string) {
   if (typeof window === "undefined" && env.AXIOM_TOKEN)
-    return createAxiomLogger(scope);
+    return createAxiomLogger(scope, createConsoleLogger(scope));
   if (env.NEXT_PUBLIC_LOG_SCOPES && !env.NEXT_PUBLIC_LOG_SCOPES.includes(scope))
     return createNullLogger();
 
+  return createConsoleLogger(scope);
+}
+
+function createConsoleLogger(scope: string) {
   const createLogger = (fields: Record<string, unknown> = {}) => {
     const formatMessage = (
       level: LogLevel,
@@ -96,23 +100,37 @@ export function createScopedLogger(scope: string) {
   return createLogger();
 }
 
-function createAxiomLogger(scope: string) {
-  const createLogger = (fields: Record<string, unknown> = {}) => ({
-    info: (message: string, args?: Record<string, unknown>) =>
+// Axiom keeps logs searchable for weeks; the console copy keeps the platform's
+// live runtime logs useful, since next-axiom stops printing once it is configured.
+function createAxiomLogger(
+  scope: string,
+  consoleLogger: ReturnType<typeof createConsoleLogger>,
+) {
+  const createLogger = (
+    fields: Record<string, unknown> = {},
+    mirror = consoleLogger,
+  ) => ({
+    info: (message: string, args?: Record<string, unknown>) => {
+      mirror.info(message, ...(args ? [args] : []));
       log.info(
         message,
         hashSensitiveFields({ scope, ...fields, ...formatError(args) }),
-      ),
-    error: (message: string, args?: Record<string, unknown>) =>
+      );
+    },
+    error: (message: string, args?: Record<string, unknown>) => {
+      mirror.error(message, ...(args ? [args] : []));
       log.error(
         message,
         hashSensitiveFields({ scope, ...fields, ...formatError(args) }),
-      ),
-    warn: (message: string, args?: Record<string, unknown>) =>
+      );
+    },
+    warn: (message: string, args?: Record<string, unknown>) => {
+      mirror.warn(message, ...(args ? [args] : []));
       log.warn(
         message,
         hashSensitiveFields({ scope, ...fields, ...formatError(args) }),
-      ),
+      );
+    },
     trace: (
       message: string,
       args?: Record<string, unknown> | (() => Record<string, unknown>),
@@ -125,7 +143,7 @@ function createAxiomLogger(scope: string) {
       );
     },
     with: (newFields: Record<string, unknown>) =>
-      createLogger({ ...fields, ...newFields }),
+      createLogger({ ...fields, ...newFields }, mirror.with(newFields)),
     flush: () => log.flush(),
   });
 
