@@ -70,11 +70,7 @@ export async function syncReplyMemoriesFromDraftSendLogs({
     where: {
       createdAt: { lte: retentionCutoff },
       replyMemorySentText: { not: null },
-      executedAction: {
-        executedRule: {
-          emailAccountId,
-        },
-      },
+      OR: draftSendLogAccountFilter(emailAccountId),
     },
     data: {
       replyMemorySentText: null,
@@ -92,11 +88,7 @@ export async function syncReplyMemoriesFromDraftSendLogs({
       },
       replyMemoryProcessedAt: null,
       replyMemorySentText: { not: null },
-      executedAction: {
-        executedRule: {
-          emailAccountId,
-        },
-      },
+      OR: draftSendLogAccountFilter(emailAccountId),
     },
     include: draftSendLogReplyMemoryInclude,
     orderBy: [{ replyMemoryAttemptCount: "asc" }, { createdAt: "asc" }],
@@ -115,7 +107,6 @@ export async function syncReplyMemoriesFromDraftSendLogs({
       logger.error("Failed to process reply memory draft send log", {
         error,
         draftSendLogId: draftSendLog.id,
-        executedActionId: draftSendLog.executedAction.id,
       });
 
       try {
@@ -306,10 +297,12 @@ async function processReplyMemoryDraftSendLog({
   provider: EmailProvider;
   logger: Logger;
 }) {
-  const sourceMessageId = draftSendLog.executedAction.executedRule.messageId;
-  const emailAccountId =
-    draftSendLog.executedAction.executedRule.emailAccountId;
-  const draftText = draftSendLog.executedAction.content ?? "";
+  const draft = getDraftSendLogDraft(draftSendLog);
+  if (!draft) {
+    await markDraftSendLogReplyMemoryProcessed(draftSendLog.id);
+    return;
+  }
+  const { sourceMessageId, emailAccountId, draftText } = draft;
   const sentText = stripForwardedContent(
     draftSendLog.replyMemorySentText ?? "",
   );
@@ -819,6 +812,14 @@ const draftSendLogReplyMemoryInclude = {
       },
     },
   },
+  suggestedReplyDraft: {
+    select: {
+      id: true,
+      content: true,
+      messageId: true,
+      emailAccountId: true,
+    },
+  },
 } satisfies Prisma.DraftSendLogInclude;
 
 type DraftSendLogReplyMemoryPayload = Prisma.DraftSendLogGetPayload<{
@@ -835,6 +836,11 @@ const preferenceWritingEvidenceInclude = {
     select: {
       replyMemorySentText: true,
       executedAction: {
+        select: {
+          content: true,
+        },
+      },
+      suggestedReplyDraft: {
         select: {
           content: true,
         },
@@ -905,7 +911,11 @@ function formatPreferenceMemoryEvidence(
 ) {
   return preferenceEvidence
     .map((evidence, index) => {
-      const draftText = evidence.draftSendLog.executedAction.content ?? "";
+      const draftText =
+        (
+          evidence.draftSendLog.executedAction ??
+          evidence.draftSendLog.suggestedReplyDraft
+        )?.content ?? "";
       const sentText = evidence.draftSendLog.replyMemorySentText ?? "";
 
       return `${index + 1}. ${evidence.replyMemory.content}
@@ -921,4 +931,33 @@ function truncatePreferenceEvidenceText(value: string) {
   return normalized.length > 280
     ? `${normalized.slice(0, 277).trimEnd()}...`
     : normalized;
+}
+
+// A send log compares against either a rule's draft or a saved suggested reply.
+function draftSendLogAccountFilter(
+  emailAccountId: string,
+): Prisma.DraftSendLogWhereInput[] {
+  return [
+    { executedAction: { executedRule: { emailAccountId } } },
+    { suggestedReplyDraft: { emailAccountId } },
+  ];
+}
+
+function getDraftSendLogDraft(draftSendLog: DraftSendLogReplyMemoryPayload) {
+  const { executedAction, suggestedReplyDraft } = draftSendLog;
+  if (executedAction) {
+    return {
+      sourceMessageId: executedAction.executedRule.messageId,
+      emailAccountId: executedAction.executedRule.emailAccountId,
+      draftText: executedAction.content ?? "",
+    };
+  }
+  if (suggestedReplyDraft) {
+    return {
+      sourceMessageId: suggestedReplyDraft.messageId,
+      emailAccountId: suggestedReplyDraft.emailAccountId,
+      draftText: suggestedReplyDraft.content,
+    };
+  }
+  return null;
 }

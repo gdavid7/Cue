@@ -14,8 +14,10 @@ import { SafeError } from "@/utils/error";
 import { createReplyContent } from "@/utils/gmail/reply";
 import { GmailLabel } from "@/utils/gmail/label";
 import { HANDLED_LABELS } from "@/utils/home/get-home";
+import prisma from "@/utils/prisma";
 import { updateThreadTrackers } from "@/utils/reply-tracker/handle-conversation-status";
 import { applyThreadStatusLabel } from "@/utils/reply-tracker/label-helpers";
+import { getCachedSuggestedReply } from "@/utils/thread-context/suggest-reply";
 import type { ParsedMessage } from "@/utils/types";
 
 /**
@@ -115,6 +117,7 @@ export const saveSuggestedReplyAction = actionClient
       const existingDraft =
         existing &&
         (await emailProvider.getDraftReferenceForMessage(existing.id));
+      let draftId: string;
       if (existingDraft) {
         await emailProvider.updateDraft(existingDraft.id, {
           messageHtml: createReplyContent({
@@ -122,16 +125,46 @@ export const saveSuggestedReplyAction = actionClient
             message: replyTo,
           }).html,
         });
-        return { draftId: existingDraft.id };
+        draftId = existingDraft.id;
+      } else {
+        const created = await emailProvider.draftEmail(
+          replyTo,
+          { content: body },
+          emailAccount.email,
+        );
+        if (!created.draftId)
+          throw new SafeError("Drafts are turned off on this server.");
+        draftId = created.draftId;
       }
 
-      const { draftId } = await emailProvider.draftEmail(
-        replyTo,
-        { content: body },
-        emailAccount.email,
-      );
-      if (!draftId)
-        throw new SafeError("Drafts are turned off on this server.");
+      // Remember the suggestion as Cue wrote it, not the edited text, so edits
+      // made here and later in the mail app both teach reply memories when
+      // the draft is sent. Without the cached original there is nothing to
+      // compare against, so the draft is saved without being remembered.
+      const suggestion = await getCachedSuggestedReply({
+        emailAccountId,
+        threadId,
+        messageId: replyTo.id,
+      });
+      if (suggestion?.status === "suggested") {
+        try {
+          await prisma.suggestedReplyDraft.upsert({
+            where: { emailAccountId_draftId: { emailAccountId, draftId } },
+            create: {
+              emailAccountId,
+              threadId,
+              messageId: replyTo.id,
+              draftId,
+              content: suggestion.reply,
+            },
+            update: { messageId: replyTo.id, content: suggestion.reply },
+          });
+        } catch (error) {
+          // The draft is saved; only learning from its edits is lost.
+          logger.error("Failed to record saved suggested reply", { error });
+        }
+      }
+
       return { draftId };
     },
   );

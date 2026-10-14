@@ -11,9 +11,15 @@ vi.mock("@/utils/auth", () => ({
   })),
 }));
 
-const mocks = vi.hoisted(() => ({ createEmailProvider: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  createEmailProvider: vi.fn(),
+  getCachedSuggestedReply: vi.fn(),
+}));
 vi.mock("@/utils/email/provider", () => ({
   createEmailProvider: mocks.createEmailProvider,
+}));
+vi.mock("@/utils/thread-context/suggest-reply", () => ({
+  getCachedSuggestedReply: mocks.getCachedSuggestedReply,
 }));
 vi.mock("@/utils/email/reply-body", () => ({
   buildDraftReplyBody: async ({ text }: { text: string }) => text,
@@ -34,6 +40,11 @@ describe("saveSuggestedReplyAction", () => {
     );
     mailbox = createMailbox();
     mocks.createEmailProvider.mockResolvedValue(mailbox.provider);
+    mocks.getCachedSuggestedReply.mockResolvedValue({
+      status: "suggested",
+      reply: "Wednesday works.",
+      citations: [],
+    });
   });
 
   it("leaves one reply draft in the conversation when saved twice", async () => {
@@ -50,6 +61,47 @@ describe("saveSuggestedReplyAction", () => {
     expect(mailbox.drafts).toHaveLength(1);
     expect(mailbox.drafts[0].html).toContain("Wednesday at 3 works.");
     expect(mailbox.drafts[0].html).not.toContain("Wednesday works.");
+  });
+
+  it("remembers the suggestion as Cue wrote it, not as the user edited it", async () => {
+    const result = await saveSuggestedReplyAction(EMAIL_ACCOUNT_ID, {
+      threadId: "thread-1",
+      content: "Wednesday at 3 works.",
+    });
+
+    expect(mocks.getCachedSuggestedReply).toHaveBeenCalledWith({
+      emailAccountId: EMAIL_ACCOUNT_ID,
+      threadId: "thread-1",
+      messageId: "m1",
+    });
+    expect(prisma.suggestedReplyDraft.upsert).toHaveBeenCalledWith({
+      where: {
+        emailAccountId_draftId: {
+          emailAccountId: EMAIL_ACCOUNT_ID,
+          draftId: result?.data?.draftId,
+        },
+      },
+      create: {
+        emailAccountId: EMAIL_ACCOUNT_ID,
+        threadId: "thread-1",
+        messageId: "m1",
+        draftId: result?.data?.draftId,
+        content: "Wednesday works.",
+      },
+      update: { messageId: "m1", content: "Wednesday works." },
+    });
+  });
+
+  it("saves the draft without remembering it when the suggestion is gone", async () => {
+    mocks.getCachedSuggestedReply.mockResolvedValue(null);
+
+    const result = await saveSuggestedReplyAction(EMAIL_ACCOUNT_ID, {
+      threadId: "thread-1",
+      content: "Wednesday at 3 works.",
+    });
+
+    expect(result?.data?.draftId).toBe("draft-1");
+    expect(prisma.suggestedReplyDraft.upsert).not.toHaveBeenCalled();
   });
 });
 

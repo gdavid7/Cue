@@ -25,7 +25,8 @@ import { logReplyTrackerError } from "./error-logging";
 
 const DRAFT_SENT_SIMILARITY_THRESHOLD = 0.7;
 /**
- * Checks if a sent message originated from an AI draft and logs its similarity.
+ * Checks if a sent message originated from an AI draft (a rule's draft or a
+ * suggested reply the user saved) and logs its similarity.
  */
 export async function trackSentDraftStatus({
   emailAccountId,
@@ -47,91 +48,103 @@ export async function trackSentDraftStatus({
     return;
   }
 
-  // Find the most recently created draft for this thread
-  const executedAction = await prisma.executedAction.findFirst({
-    where: {
-      executedRule: {
-        emailAccountId,
-        threadId: threadId,
+  const [executedAction, suggestedReplyDraft] = await Promise.all([
+    // Find the most recently created draft for this thread
+    prisma.executedAction.findFirst({
+      where: {
+        executedRule: {
+          emailAccountId,
+          threadId: threadId,
+        },
+        type: ActionType.DRAFT_EMAIL,
+        draftId: { not: null },
+        draftSendLog: null,
       },
-      type: ActionType.DRAFT_EMAIL,
-      draftId: { not: null },
-      draftSendLog: null,
-    },
-    orderBy: {
-      createdAt: "desc",
-    },
-    select: {
-      id: true,
-      content: true,
-      draftId: true,
-      executedRuleId: true,
-      executedRule: {
-        select: {
-          messageId: true,
-          emailAccount: {
-            select: {
-              signature: true,
+      orderBy: {
+        createdAt: "desc",
+      },
+      select: {
+        id: true,
+        createdAt: true,
+        content: true,
+        draftId: true,
+        executedRuleId: true,
+        executedRule: {
+          select: {
+            messageId: true,
+            emailAccount: {
+              select: {
+                signature: true,
+              },
             },
           },
         },
       },
-    },
-  });
+    }),
+    prisma.suggestedReplyDraft.findFirst({
+      where: { emailAccountId, threadId, draftSendLog: null },
+      orderBy: { updatedAt: "desc" },
+      select: {
+        id: true,
+        updatedAt: true,
+        draftId: true,
+        messageId: true,
+        content: true,
+        emailAccount: { select: { signature: true } },
+      },
+    }),
+  ]);
+
+  // Saving a suggested reply rewrites the thread's existing draft, rule draft
+  // included, so whichever was written last is what the user started from.
+  if (
+    suggestedReplyDraft &&
+    (!executedAction?.draftId ||
+      suggestedReplyDraft.updatedAt > executedAction.createdAt)
+  ) {
+    await trackSentSuggestedReplyDraft({
+      emailAccountId,
+      sentMessageId,
+      suggestedReplyDraft,
+      message,
+      provider,
+      logger,
+    });
+    return;
+  }
 
   if (!executedAction?.draftId) {
     logger.info("No corresponding AI draft action with draftId found");
     return;
   }
 
-  const [draftExists, sourceMessage] = await Promise.all([
-    provider.getDraft(executedAction.draftId),
-    provider
-      .getMessage(executedAction.executedRule.messageId)
-      .catch((error) => {
-        logger.warn("Failed to load source message for sent draft tracking", {
-          error,
-          executedActionId: executedAction.id,
-        });
-        return null;
-      }),
-  ]);
-
   const executedActionId = executedAction.id;
 
-  // Calculate similarity between sent message and AI draft content
-  // Pass full message to properly handle Outlook HTML content
-  const accountSignature = executedAction.executedRule.emailAccount?.signature;
-  const similarityScore = calculateSimilarity(executedAction.content, message, {
-    excludedSignatures: accountSignature ? [accountSignature] : [],
-  });
-  const sentMessageRepliesToSource =
-    sourceMessage &&
-    messageRepliesToSourceSender({
-      sentMessage: message,
-      sourceMessage,
-    });
-  const sentText = getSentReplyText(message);
-  const similarityFields = getDraftSendLogSimilarityFields({
-    draftText: executedAction.content,
-    sentMessage: message,
-    sentText,
-    accountSignature,
-    draftExists: !!draftExists,
+  const {
+    draftExists,
     sentMessageRepliesToSource,
+    similarityScore,
+    sentText,
+    draftSendLogData,
+  } = await compareSentReplyWithDraft({
+    draftId: executedAction.draftId,
+    draftText: executedAction.content,
+    sourceMessageId: executedAction.executedRule.messageId,
+    accountSignature: executedAction.executedRule.emailAccount?.signature,
+    sentMessageId,
+    message,
+    provider,
+    logger,
   });
   const createDraftSendLogData = () => ({
     executedActionId: executedActionId,
-    sentMessageId: sentMessageId,
-    similarityScore: similarityScore,
-    sentText,
-    ...similarityFields,
+    ...draftSendLogData,
   });
 
   logger.info("Calculated similarity score", {
     executedActionId,
     similarityScore,
-    draftExists: !!draftExists,
+    draftExists,
     sentMessageRepliesToSource,
   });
 
@@ -140,7 +153,7 @@ export async function trackSentDraftStatus({
       executedActionId: executedAction.id,
       draftId: executedAction.draftId,
       similarityScore,
-      draftExists: !!draftExists,
+      draftExists,
       sentMessageRepliesToSource,
     });
 
@@ -172,7 +185,6 @@ export async function trackSentDraftStatus({
     if (sentMessageRepliesToSource !== false) {
       queueReplyMemoryLearning({
         emailAccountId,
-        executedActionId,
         draftSendLogId: draftSendLog.id,
         draftText: executedAction.content,
         sentText,
@@ -243,7 +255,6 @@ export async function trackSentDraftStatus({
 
   queueReplyMemoryLearning({
     emailAccountId,
-    executedActionId,
     draftSendLogId: draftSendLog.id,
     draftText: executedAction.content,
     sentText,
@@ -476,7 +487,6 @@ export async function cleanupThreadAIDrafts({
 
 function queueReplyMemoryLearning({
   emailAccountId,
-  executedActionId,
   draftSendLogId,
   draftText,
   sentText,
@@ -485,7 +495,6 @@ function queueReplyMemoryLearning({
   logger,
 }: {
   emailAccountId: string;
-  executedActionId: string;
   draftSendLogId: string;
   draftText?: string | null;
   sentText: string | null;
@@ -521,10 +530,141 @@ function queueReplyMemoryLearning({
     } catch (error) {
       logger.error("Failed to learn reply memories from draft edit", {
         error,
-        executedActionId,
+        draftSendLogId,
       });
     }
   });
+}
+
+async function trackSentSuggestedReplyDraft({
+  emailAccountId,
+  sentMessageId,
+  suggestedReplyDraft,
+  message,
+  provider,
+  logger,
+}: {
+  emailAccountId: string;
+  sentMessageId: string;
+  suggestedReplyDraft: {
+    id: string;
+    draftId: string;
+    messageId: string;
+    content: string;
+    emailAccount: { signature: string | null };
+  };
+  message: ParsedMessage;
+  provider: EmailProvider;
+  logger: Logger;
+}) {
+  const suggestedReplyDraftId = suggestedReplyDraft.id;
+  const {
+    draftExists,
+    sentMessageRepliesToSource,
+    similarityScore,
+    sentText,
+    draftSendLogData,
+  } = await compareSentReplyWithDraft({
+    draftId: suggestedReplyDraft.draftId,
+    draftText: suggestedReplyDraft.content,
+    sourceMessageId: suggestedReplyDraft.messageId,
+    accountSignature: suggestedReplyDraft.emailAccount.signature,
+    sentMessageId,
+    message,
+    provider,
+    logger,
+  });
+
+  const draftSendLog = await withPrismaRetry(
+    () =>
+      prisma.draftSendLog.create({
+        data: { suggestedReplyDraftId, ...draftSendLogData },
+      }),
+    { logger },
+  );
+
+  logger.info("Created draft send log for saved suggested reply", {
+    suggestedReplyDraftId,
+    similarityScore,
+    draftExists,
+    sentMessageRepliesToSource,
+  });
+
+  if (sentMessageRepliesToSource === false) return;
+
+  queueReplyMemoryLearning({
+    emailAccountId,
+    draftSendLogId: draftSendLog.id,
+    draftText: suggestedReplyDraft.content,
+    sentText,
+    similarityScore,
+    provider,
+    logger,
+  });
+}
+
+async function compareSentReplyWithDraft({
+  draftId,
+  draftText,
+  sourceMessageId,
+  accountSignature,
+  sentMessageId,
+  message,
+  provider,
+  logger,
+}: {
+  draftId: string;
+  draftText: string | null;
+  sourceMessageId: string;
+  accountSignature: string | null | undefined;
+  sentMessageId: string;
+  message: ParsedMessage;
+  provider: EmailProvider;
+  logger: Logger;
+}) {
+  const [draft, sourceMessage] = await Promise.all([
+    provider.getDraft(draftId),
+    provider.getMessage(sourceMessageId).catch((error) => {
+      logger.warn("Failed to load source message for sent draft tracking", {
+        error,
+        draftId,
+      });
+      return null;
+    }),
+  ]);
+
+  // Pass full message to properly handle Outlook HTML content
+  const similarityScore = calculateSimilarity(draftText, message, {
+    excludedSignatures: accountSignature ? [accountSignature] : [],
+  });
+  const sentMessageRepliesToSource =
+    sourceMessage &&
+    messageRepliesToSourceSender({
+      sentMessage: message,
+      sourceMessage,
+    });
+  const sentText = getSentReplyText(message);
+  const similarityFields = getDraftSendLogSimilarityFields({
+    draftText,
+    sentMessage: message,
+    sentText,
+    accountSignature,
+    draftExists: !!draft,
+    sentMessageRepliesToSource,
+  });
+
+  return {
+    draftExists: !!draft,
+    sentMessageRepliesToSource,
+    similarityScore,
+    sentText,
+    draftSendLogData: {
+      sentMessageId,
+      similarityScore,
+      sentText,
+      ...similarityFields,
+    },
+  };
 }
 
 function getSentReplyText(message: ParsedMessage): string | null {

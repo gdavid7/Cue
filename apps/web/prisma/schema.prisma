@@ -88,15 +88,15 @@ model User {
   surveyImprovements String? // open text: what user wants to improve
 
   // settings
-  mcpServerEnabled  Boolean  @default(false)
-  mcpTokenVersion   Int      @default(0)
-  emailOtpEnabled   Boolean  @default(false)
-  emailOtpVersion   Int      @default(0)
-  aiProvider        String?
-  aiModel           String?
-  aiApiKey          String?
+  mcpServerEnabled     Boolean  @default(false)
+  mcpTokenVersion      Int      @default(0)
+  emailOtpEnabled      Boolean  @default(false)
+  emailOtpVersion      Int      @default(0)
+  aiProvider           String?
+  aiModel              String?
+  aiApiKey             String?
   decisionModelEnabled Boolean? // null follows DEFAULT_DECISION_MODEL_ENABLED
-  webhookSecret     String?
+  webhookSecret        String?
 
   // referral system
   referralCode String? @unique // User's own referral code
@@ -214,31 +214,32 @@ model EmailAccount {
   accountId String  @unique
   account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
-  labels              Label[]
-  rules               Rule[]
-  executedRules       ExecutedRule[]
-  newsletters         Newsletter[]
-  coldEmails          ColdEmail[] // @deprecated - kept for backward compatibility during migration
-  groups              Group[]
-  categories          Category[]
-  threadTrackers      ThreadTracker[]
-  cleanupJobs         CleanupJob[]
-  cleanupThreads      CleanupThread[]
-  emailMessages       EmailMessage[]
-  emailTokens         EmailToken[]
-  knowledge           Knowledge[]
-  snippets            Snippet[]
-  replyMemories       ReplyMemory[]
-  chats               Chat[]
-  chatMemories        ChatMemory[]
-  digests             Digest[]
-  scheduledActions    ScheduledAction[]
-  snoozedThreads      SnoozedThread[]
-  emailSendOperations EmailSendOperation[]
-  sentMessageOpens    SentMessageOpen[]
-  scheduledEmails     ScheduledEmail[]
-  responseTimes       ResponseTime[]
-  actions             Action[]
+  labels               Label[]
+  rules                Rule[]
+  executedRules        ExecutedRule[]
+  newsletters          Newsletter[]
+  coldEmails           ColdEmail[] // @deprecated - kept for backward compatibility during migration
+  groups               Group[]
+  categories           Category[]
+  threadTrackers       ThreadTracker[]
+  cleanupJobs          CleanupJob[]
+  cleanupThreads       CleanupThread[]
+  emailMessages        EmailMessage[]
+  emailTokens          EmailToken[]
+  knowledge            Knowledge[]
+  snippets             Snippet[]
+  replyMemories        ReplyMemory[]
+  suggestedReplyDrafts SuggestedReplyDraft[]
+  chats                Chat[]
+  chatMemories         ChatMemory[]
+  digests              Digest[]
+  scheduledActions     ScheduledAction[]
+  snoozedThreads       SnoozedThread[]
+  emailSendOperations  EmailSendOperation[]
+  sentMessageOpens     SentMessageOpen[]
+  scheduledEmails      ScheduledEmail[]
+  responseTimes        ResponseTime[]
+  actions              Action[]
 
   members                Member[]
   invitations            Invitation[]
@@ -1403,8 +1404,12 @@ model DraftSendLog {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
 
-  executedActionId String         @unique
-  executedAction   ExecutedAction @relation(fields: [executedActionId], references: [id], onDelete: Cascade)
+  // Exactly one is set (DB check constraint): the draft came from a rule or
+  // from a suggested reply the user saved.
+  executedActionId      String?              @unique
+  executedAction        ExecutedAction?      @relation(fields: [executedActionId], references: [id], onDelete: Cascade)
+  suggestedReplyDraftId String?              @unique
+  suggestedReplyDraft   SuggestedReplyDraft? @relation(fields: [suggestedReplyDraftId], references: [id], onDelete: Cascade)
 
   sentMessageId           String
   similarityScore         Float // Similarity score (0.0 to 1.0) between original draft and sent message
@@ -1421,6 +1426,26 @@ model DraftSendLog {
   @@index([replyMemoryProcessedAt, replyMemoryAttemptCount, createdAt])
 }
 
+// A suggested reply the user saved as a draft, so edits to it before sending
+// teach reply memories the same way edits to rule drafts do.
+model SuggestedReplyDraft {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  threadId  String
+  messageId String // The message the suggestion replies to
+  draftId   String
+  content   String // The suggestion as Cue wrote it, before the user's edits
+
+  emailAccountId String
+  emailAccount   EmailAccount  @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+  draftSendLog   DraftSendLog?
+
+  @@unique([emailAccountId, draftId])
+  @@index([emailAccountId, threadId])
+}
+
 model Chat {
   id        String    @id @default(cuid())
   createdAt DateTime  @default(now())
@@ -1429,7 +1454,7 @@ model Chat {
 
   name String?
 
-  compactionCount       Int     @default(0)
+  compactionCount       Int       @default(0)
   lastSeenRulesRevision Int?
   activeStreamId        String?
   activeStreamStartedAt DateTime?

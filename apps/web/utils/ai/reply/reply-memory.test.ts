@@ -508,6 +508,70 @@ describe("reply-memory", () => {
     });
   });
 
+  it("learns from edits to a saved suggested reply", async () => {
+    vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
+      count: 0,
+    });
+    vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
+      createSuggestedReplyDraftSendLog({
+        draftText: "Happy to help with pricing.",
+        sourceMessageId: "source-2",
+        replyMemorySentText: "Happy to help. Pricing depends on seat count.",
+      }),
+    ] as any);
+    vi.mocked(prisma.replyMemory.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.replyMemory.upsert).mockResolvedValue(
+      createReplyMemory({}) as any,
+    );
+    vi.mocked(prisma.draftSendLog.update).mockResolvedValue({} as any);
+    mockGenerateObject.mockResolvedValue({
+      object: {
+        memories: [
+          newReplyMemoryDecision({
+            content: "Mention that pricing depends on seat count.",
+            kind: ReplyMemoryKind.FACT,
+            scopeType: ReplyMemoryScopeType.TOPIC,
+            scopeValue: "pricing",
+          }),
+        ],
+      },
+    });
+
+    const provider = createReplyMemoryProvider();
+
+    await syncReplyMemoriesFromDraftSendLogs({
+      emailAccountId: "account-1",
+      provider: provider as any,
+      logger,
+    });
+
+    expect(prisma.draftSendLog.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: expect.arrayContaining([
+            { suggestedReplyDraft: { emailAccountId: "account-1" } },
+          ]),
+        }),
+      }),
+    );
+    expect(provider.getMessage).toHaveBeenCalledWith("source-2");
+    expect(JSON.stringify(mockGenerateObject.mock.calls)).toContain(
+      "Happy to help with pricing.",
+    );
+    expect(prisma.replyMemorySource.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: {
+          replyMemoryId: "GLOBAL::memory",
+          draftSendLogId: "draft-send-log-1",
+        },
+      }),
+    );
+    expect(prisma.draftSendLog.update).toHaveBeenCalledWith({
+      where: { id: "draft-send-log-1" },
+      data: { replyMemoryProcessedAt: expect.any(Date) },
+    });
+  });
+
   it("skips queued draft learning when the sent message did not reply to the source sender", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
       count: 0,
@@ -1930,6 +1994,21 @@ function createDraftSendLog(
         emailAccountId: overrides.emailAccountId ?? "account-1",
         messageId: overrides.sourceMessageId ?? "source-1",
       },
+    },
+  };
+}
+
+function createSuggestedReplyDraftSendLog(
+  overrides: Parameters<typeof createDraftSendLog>[0] = {},
+) {
+  return {
+    ...createDraftSendLog(overrides),
+    executedAction: null,
+    suggestedReplyDraft: {
+      id: "suggested-reply-draft-1",
+      content: overrides.draftText ?? "Thanks for reaching out.",
+      messageId: overrides.sourceMessageId ?? "source-1",
+      emailAccountId: overrides.emailAccountId ?? "account-1",
     },
   };
 }
