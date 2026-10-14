@@ -8,6 +8,7 @@ import {
   contrastRatio,
   DARK_MAIL_SURFACE,
   hasAuthoredDarkSupport,
+  needsLightBacking,
   parseCssColor,
   relativeLuminance,
   type Rgb,
@@ -83,6 +84,36 @@ describe("adaptTextColor", () => {
   it("leaves text that already reads on the new background", () => {
     expect(adaptTextColor(hex("#ffffff"), surface)).toBeNull();
     expect(adaptTextColor(hex("#e8eaed"), surface)).toBeNull();
+  });
+});
+
+describe("needsLightBacking", () => {
+  it.each([
+    "data:image/svg+xml;base64,PHN2Zy8+",
+    "data:image/png;base64,iVBORw0KGgo=",
+    "https://cdn.example.com/brand/logo.png",
+    "https://cdn.example.com/logo.svg?v=3",
+    "https://proxy.example.com/image?u=https%3A%2F%2Fx.example%2Flogo.gif&e=1&s=2",
+    "blob:https://app.example.com/2b1c",
+  ])("backs a small image that may be transparent: %s", (src) => {
+    expect(needsLightBacking({ src, width: 140, height: 36 })).toBe(true);
+  });
+
+  it("leaves formats that cannot be transparent alone", () => {
+    expect(
+      needsLightBacking({
+        src: "https://cdn.example.com/logo.jpg",
+        width: 140,
+        height: 36,
+      }),
+    ).toBe(false);
+  });
+
+  it("leaves photos and banners alone, and images whose size is unknown", () => {
+    const src = "data:image/png;base64,iVBORw0KGgo=";
+    expect(needsLightBacking({ src, width: 512, height: 180 })).toBe(false);
+    expect(needsLightBacking({ src, width: 600, height: 80 })).toBe(false);
+    expect(needsLightBacking({ src, width: 0, height: 0 })).toBe(false);
   });
 });
 

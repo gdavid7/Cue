@@ -1,4 +1,9 @@
-import { expect, type FrameLocator, type Page } from "@playwright/test";
+import {
+  expect,
+  type FrameLocator,
+  type Page,
+  type TestInfo,
+} from "@playwright/test";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
 import { openMail } from "./mail-test-helpers";
@@ -6,6 +11,34 @@ import { openMail } from "./mail-test-helpers";
 // The reader's dark card tone, #2D2F34.
 const DARK_SURFACE = "rgb(45, 47, 52)";
 const WHITE = "rgb(255, 255, 255)";
+const LOGO_BACKING = "rgb(241, 242, 244)";
+const FIXTURES = {
+  newsletter: {
+    threadId: "thr_playwright_dark_newsletter",
+    subject: "Field Notes Issue 42",
+    text: "Five trails nobody talks about",
+  },
+  followup: {
+    threadId: "thr_playwright_dark_followup",
+    subject: "Field Notes Mailbag",
+    text: "Your questions about the quiet trails, answered.",
+  },
+  receipt: {
+    threadId: "thr_playwright_dark_receipt",
+    subject: "Lumen Coffee Receipt",
+    text: "Thanks for your order",
+  },
+  authored: {
+    threadId: "thr_playwright_dark_authored",
+    subject: "Aurora October Recap",
+    text: "You logged 31 clear nights",
+  },
+  plain: {
+    threadId: "thr_playwright_theme_system",
+    subject: "System Theme Message",
+    text: "A simple message in the system theme.",
+  },
+};
 
 test.beforeEach(async ({ page }) => {
   await page.emulateMedia({ colorScheme: "dark" });
@@ -41,6 +74,10 @@ test("adapts a white newsletter and remembers Show original for its sender", asy
   await expect(
     frame.getByRole("img", { name: "Mountain trail at dawn" }),
   ).not.toHaveAttribute("style", /background|color/);
+  await expect(frame.getByRole("img", { name: "Field Notes" })).toHaveCSS(
+    "background-color",
+    LOGO_BACKING,
+  );
   await expect(frame.getByText("Member pick:")).toHaveCSS("color", WHITE);
   for (const name of ["Read the full guide", "Unsubscribe"]) {
     expect(await contrastAgainstBackdrop(frame, name)).toBeGreaterThanOrEqual(
@@ -80,7 +117,7 @@ test("adapts a white newsletter and remembers Show original for its sender", asy
   );
 });
 
-test("adapts a receipt without touching its logo", async ({
+test("adapts a receipt and puts its dark logo on a light backing", async ({
   page,
 }, testInfo) => {
   const { emailAccountId } = await openMail(page);
@@ -90,9 +127,11 @@ test("adapts a receipt without touching its logo", async ({
     text: "Thanks for your order",
   });
 
-  await expect(
-    frame.getByRole("img", { name: "Lumen Coffee" }),
-  ).not.toHaveAttribute("style", /./);
+  // The wordmark is dark artwork on a transparent background.
+  await expect(frame.getByRole("img", { name: "Lumen Coffee" })).toHaveCSS(
+    "background-color",
+    LOGO_BACKING,
+  );
   await expect(frame.getByText("Flat white, oat")).toHaveCSS(
     "color",
     "rgb(233, 234, 236)",
@@ -190,6 +229,45 @@ test("shows designed emails as sent when Appearance says so", async ({
   await capturePlaywrightCheckpoint(page, testInfo, "dark-appearance-settings");
 });
 
+test("keeps every recolored text node at AA contrast", async ({ page }) => {
+  const { emailAccountId } = await openMail(page);
+
+  for (const fixture of [
+    FIXTURES.newsletter,
+    FIXTURES.followup,
+    FIXTURES.receipt,
+  ]) {
+    const adapted = await lowContrastText(
+      await openThread(page, emailAccountId, fixture),
+    );
+    await page.getByRole("button", { name: "Show original" }).click();
+    await expect(emailFrame(page).locator("html")).toHaveCSS(
+      "background-color",
+      WHITE,
+    );
+    const original = await textBackgrounds(emailFrame(page));
+    await page.getByRole("button", { name: "Adapt to dark mode" }).click();
+    await expect(emailFrame(page).locator("html")).toHaveCSS(
+      "background-color",
+      DARK_SURFACE,
+    );
+
+    // Anything still below AA sits on a fill the sender chose and the
+    // adaptation kept, such as white text on a brand banner.
+    const recolored = adapted.filter(
+      ({ text, background }) => original[text] !== background,
+    );
+    expect(recolored, fixture.subject).toEqual([]);
+  }
+
+  for (const fixture of [FIXTURES.authored, FIXTURES.plain]) {
+    expect(
+      await lowContrastText(await openThread(page, emailAccountId, fixture)),
+      fixture.subject,
+    ).toEqual([]);
+  }
+});
+
 async function openAppearanceMenu(page: Page) {
   await page
     .getByRole("button", { name: /^Account and settings/ })
@@ -259,5 +337,79 @@ function contrastAgainstBackdrop(frame: FrameLocator, linkName: string) {
     const text = luminance(parse(view.getComputedStyle(link).color));
     const back = luminance(background);
     return (Math.max(text, back) + 0.05) / (Math.min(text, back) + 0.05);
+  });
+}
+
+type TextSample = { text: string; ratio: number; background: string };
+
+/** Visible text below 4.5:1 against the nearest painted background. */
+async function lowContrastText(frame: FrameLocator) {
+  const samples = await sampleText(frame);
+  return samples.filter(({ ratio }) => ratio < 4.5);
+}
+
+async function textBackgrounds(frame: FrameLocator) {
+  const samples = await sampleText(frame);
+  return Object.fromEntries(
+    samples.map(({ text, background }) => [text, background]),
+  );
+}
+
+function sampleText(frame: FrameLocator): Promise<TextSample[]> {
+  return frame.locator("body").evaluate((body) => {
+    const view = body.ownerDocument.defaultView!;
+    const parse = (value: string) => (value.match(/[\d.]+/g) ?? []).map(Number);
+    const luminance = ([r, g, b]: number[]) => {
+      const channel = (value: number) => {
+        const normalized = value / 255;
+        return normalized <= 0.039_28
+          ? normalized / 12.92
+          : ((normalized + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * channel(r!) + 0.7152 * channel(g!) + 0.0722 * channel(b!);
+    };
+    const samples: TextSample[] = [];
+    const walker = body.ownerDocument.createTreeWalker(
+      body,
+      NodeFilter.SHOW_TEXT,
+    );
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const text = node.textContent?.trim();
+      const parent = node.parentElement;
+      if (!text || !parent?.checkVisibility()) continue;
+      let background: string | null = null;
+      let overImage = false;
+      for (
+        let element: Element | null = parent;
+        element;
+        element = element.parentElement
+      ) {
+        const style = view.getComputedStyle(element);
+        if (style.backgroundImage !== "none") {
+          overImage = true;
+          break;
+        }
+        const fill = parse(style.backgroundColor);
+        if (fill.length === 3 || (fill.length === 4 && fill[3]! > 0)) {
+          background = style.backgroundColor;
+          break;
+        }
+      }
+      // Text over a picture is measured against the picture, not a color.
+      if (overImage) continue;
+      background ??= "rgb(255, 255, 255)";
+      const front = luminance(parse(view.getComputedStyle(parent).color));
+      const back = luminance(parse(background));
+      samples.push({
+        text,
+        background,
+        ratio:
+          Math.round(
+            ((Math.max(front, back) + 0.05) / (Math.min(front, back) + 0.05)) *
+              100,
+          ) / 100,
+      });
+    }
+    return samples;
   });
 }

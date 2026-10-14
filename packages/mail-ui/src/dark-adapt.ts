@@ -34,6 +34,17 @@ const SKIPPED_ELEMENTS = new Set([
   "WBR",
 ]);
 const BORDER_SIDES = ["top", "right", "bottom", "left"] as const;
+const LOGO_MAX_WIDTH = 400;
+const LOGO_MAX_HEIGHT = 160;
+const TRANSPARENT_IMAGE_SOURCE =
+  /^data:image\/(?:svg\+xml|png|gif|webp)|^blob:|\.(?:svg|png|gif|webp)(?:[?#&%]|$)/i;
+// A card the size of the image plus a few pixels, drawn without changing the
+// layout: the fill sits behind transparent pixels and the spread shadow pads it.
+const IMAGE_BACKING: [string, string][] = [
+  ["background-color", "rgb(241, 242, 244)"],
+  ["box-shadow", "0 0 0 6px rgb(241, 242, 244)"],
+  ["border-radius", "3px"],
+];
 
 /**
  * The fill an element should get on the dark surface, or null to keep it.
@@ -95,6 +106,26 @@ export function hasAuthoredDarkSupport(html: string) {
     if (/\bdark\b/i.test(content?.slice(1).join(" ") ?? "")) return true;
   }
   return false;
+}
+
+/**
+ * Whether an image should sit on a small light backing once the area behind it
+ * turns dark. Logos and wordmarks are often dark artwork on a transparent
+ * background and would vanish on the dark surface; photos and banners are
+ * opaque and too large to be one, and JPEGs cannot be transparent at all.
+ */
+export function needsLightBacking({
+  src,
+  width,
+  height,
+}: {
+  src: string;
+  width: number;
+  height: number;
+}) {
+  if (!width || !height) return false;
+  if (width > LOGO_MAX_WIDTH || height > LOGO_MAX_HEIGHT) return false;
+  return TRANSPARENT_IMAGE_SOURCE.test(src);
 }
 
 /**
@@ -182,8 +213,21 @@ export function adaptMailDocumentForDarkMode(
 
     for (let index = element.children.length - 1; index >= 0; index -= 1) {
       const child = element.children[index]!;
-      if (!SKIPPED_ELEMENTS.has(child.tagName.toUpperCase()))
-        stack.push([child, backdrop]);
+      const tagName = child.tagName.toUpperCase();
+      if (tagName === "IMG" && backdrop.adapted) {
+        const image = child as HTMLImageElement;
+        const { width, height } = image.getBoundingClientRect();
+        if (
+          needsLightBacking({
+            src: image.currentSrc || image.src,
+            width,
+            height,
+          })
+        )
+          for (const [property, value] of IMAGE_BACKING)
+            writes.push([image, property, value]);
+      }
+      if (!SKIPPED_ELEMENTS.has(tagName)) stack.push([child, backdrop]);
     }
   }
 

@@ -570,7 +570,7 @@ function createDesignedThemeHtml() {
 // a vivid brand banner and button, a pastel callout, an image and a footer.
 function createDarkModeNewsletterHtml() {
   const logo = svgDataUri(
-    '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="28"><rect width="28" height="28" rx="6" fill="#ff5a1f"/><text x="36" y="20" font-family="Arial" font-size="16" font-weight="700" fill="#111827">Field Notes</text></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg" width="140" height="28"><rect width="28" height="28" rx="6" fill="#ff5a1f"/><text x="36" y="20" font-family="Arial" font-size="16" font-weight="700" fill="#111827">Field Notes</text></svg>',
   );
   const photo = svgDataUri(
     '<svg xmlns="http://www.w3.org/2000/svg" width="520" height="180"><defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#7dd3fc"/><stop offset="1" stop-color="#fde68a"/></linearGradient></defs><rect width="520" height="180" fill="url(#g)"/><circle cx="420" cy="60" r="28" fill="#fff7ed"/><path d="M0 180 L140 90 L260 160 L360 110 L520 180 Z" fill="#166534"/></svg>',
@@ -582,7 +582,7 @@ function createDarkModeNewsletterHtml() {
   <body style="margin:0;background:#f2f3f5;font-family:Arial,sans-serif">
     <table width="100%" bgcolor="#f2f3f5" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 12px">
       <table width="560" bgcolor="#ffffff" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:8px">
-        <tr><td style="padding:20px 24px"><img src="${logo}" width="120" height="28" alt="Field Notes"></td></tr>
+        <tr><td style="padding:20px 24px"><img src="${logo}" width="140" height="28" alt="Field Notes"></td></tr>
         <tr><td style="background:#ff5a1f;color:#ffffff;padding:14px 24px;font-size:15px;font-weight:bold">Issue 42 · The quiet trails edition</td></tr>
         <tr><td style="padding:20px 24px 0"><img src="${photo}" width="512" alt="Mountain trail at dawn" style="display:block;border-radius:6px"></td></tr>
         <tr><td style="padding:20px 24px;color:#333333;font-size:15px;line-height:1.6">
@@ -635,13 +635,13 @@ function createDarkModeAuthoredHtml() {
 // A receipt with a dark-on-transparent logo, line items and a totals table.
 function createDarkModeReceiptHtml() {
   const logo = svgDataUri(
-    '<svg xmlns="http://www.w3.org/2000/svg" width="140" height="36"><circle cx="18" cy="18" r="16" fill="#3f2a1d"/><text x="42" y="24" font-family="Georgia" font-size="18" fill="#3f2a1d">Lumen Coffee</text></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg" width="172" height="36"><circle cx="18" cy="18" r="16" fill="#3f2a1d"/><text x="42" y="24" font-family="Georgia" font-size="18" fill="#3f2a1d">Lumen Coffee</text></svg>',
   );
   const row = (item, price) =>
     `<tr><td style="padding:8px 0;border-bottom:1px solid #eeeeee">${item}</td><td align="right" style="padding:8px 0;border-bottom:1px solid #eeeeee">${price}</td></tr>`;
   return `<html><body style="margin:0;font-family:Helvetica,Arial,sans-serif;color:#000000">
     <table width="100%" cellpadding="0" cellspacing="0" bgcolor="#ffffff"><tr><td style="padding:24px">
-      <img src="${logo}" width="140" height="36" alt="Lumen Coffee">
+      <img src="${logo}" width="172" height="36" alt="Lumen Coffee">
       <h2 style="margin:16px 0 4px;font-size:20px">Thanks for your order</h2>
       <p style="margin:0 0 16px;color:#555555;font-size:13px">Order #LC-20931 · Pickup at Market Street</p>
       <table width="100%" cellpadding="0" cellspacing="0" style="font-size:14px">
