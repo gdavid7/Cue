@@ -5,6 +5,7 @@ import {
   conversationWithSubject,
   expectThreadReaderBody,
   openMail,
+  toggleMailLayout,
 } from "./mail-test-helpers";
 import type { MailSettingsResponse } from "@/app/api/mail/settings/route";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
@@ -57,7 +58,7 @@ test("switches between list and split reading layouts", async ({
   await expect(emptyReader).toBeHidden();
   await capturePlaywrightCheckpoint(page, testInfo, "mail-list-layout");
 
-  await page.getByRole("button", { name: "Switch list or split view" }).click();
+  await toggleMailLayout(page);
   await expect(emptyReader).toBeVisible();
   await expect(conversations).toBeVisible();
   await capturePlaywrightCheckpoint(page, testInfo, "mail-split-layout");
@@ -84,7 +85,7 @@ test("switches between list and split reading layouts", async ({
   await expect(page.getByRole("button", { name: /Focus mode/i })).toHaveCount(
     0,
   );
-  await page.getByRole("button", { name: "Switch list or split view" }).click();
+  await toggleMailLayout(page);
   await page.keyboard.press("Escape");
   await expect(conversations).toBeVisible();
 });
@@ -99,21 +100,26 @@ test("expands and shortens the conversation preview text", async ({
     page.getByText("Nothing selected", { exact: true }),
   ).toBeHidden();
 
-  const toggle = page.getByRole("button", {
-    name: "Expand or shorten preview text",
+  const viewMenu = page.getByRole("button", { name: "View options" });
+  const longerPreviews = page.getByRole("menuitemcheckbox", {
+    name: /^Longer previews/,
   });
+  const setLongerPreviews = async (on: boolean) => {
+    await viewMenu.click();
+    if ((await longerPreviews.getAttribute("aria-checked")) !== String(on)) {
+      await longerPreviews.click();
+    } else {
+      await page.keyboard.press("Escape");
+    }
+  };
   // Both preferences outlive a test, so start from short rather than assume it.
-  if ((await toggle.getAttribute("aria-pressed")) === "true") {
-    await toggle.click();
-    await expect(toggle).toHaveAttribute("aria-pressed", "false");
-  }
+  await setLongerPreviews(false);
   await expectStoredPreview(page, emailAccountId, false);
 
   const row = conversations.getByRole("option").first();
   const shortHeight = await rowHeight(row);
 
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await setLongerPreviews(true);
   await expect
     .poll(async () => await rowHeight(row))
     .toBeGreaterThan(shortHeight);
@@ -122,10 +128,9 @@ test("expands and shortens the conversation preview text", async ({
   // The preference is stored per account, so a reload has to keep it on.
   await expectStoredPreview(page, emailAccountId, true);
   await page.reload({ waitUntil: "domcontentloaded" });
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
-
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await viewMenu.click();
+  await expect(longerPreviews).toHaveAttribute("aria-checked", "true");
+  await longerPreviews.click();
   await expect.poll(async () => await rowHeight(row)).toBe(shortHeight);
   await expectStoredPreview(page, emailAccountId, false);
 });

@@ -2,7 +2,12 @@
 
 import { MailProductFrame } from "@inboxzero/mail-ui/MailProductFrame";
 import { useRouter } from "next/navigation";
-import { type ReactNode, useCallback, useSyncExternalStore } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
 import { MailMobileNav } from "@/app/(app)/[emailAccountId]/mail/MailMobileNav";
 import { MailShellSidebar } from "@/app/(app)/[emailAccountId]/mail/MailShellSidebar";
@@ -32,6 +37,7 @@ export function MailFrame({
     () => false,
   );
   const isToday = activeType === "today";
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   // Switching accounts keeps you where you are.
   const selectAccount = useCallback(
     (accountId: string) =>
@@ -51,6 +57,7 @@ export function MailFrame({
     <MailProductFrame
       accountSwitcher={
         <MailMobileNav
+          onOpenMailboxes={() => setIsMobileSidebarOpen(true)}
           accountSwitcher={
             <MailAccountSwitcher
               isDesktopApp={isDesktopApp}
@@ -72,6 +79,8 @@ export function MailFrame({
         onSelectAccount={selectAccount}
         onSelectAllAccounts={selectAllAccounts}
         onMailboxItemDeleted={noMailboxScope}
+        mobileOpen={isMobileSidebarOpen}
+        onMobileOpenChange={setIsMobileSidebarOpen}
       />
       {children}
     </MailProductFrame>

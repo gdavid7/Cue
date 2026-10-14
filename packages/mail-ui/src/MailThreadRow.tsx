@@ -151,6 +151,7 @@ export function MailThreadRow({
       role="option"
       tabIndex={isFocused ? 0 : -1}
     >
+      {isUnread && <span className="sr-only">Unread,</span>}
       {isStarred && <span className="sr-only">Starred conversation</span>}
       <span
         className={cx(

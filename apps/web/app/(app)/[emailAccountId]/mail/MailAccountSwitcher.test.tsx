@@ -28,10 +28,13 @@ vi.mock("@/hooks/useSettingsDialog", () => ({
 }));
 
 vi.mock("./use-mail-app-links", () => ({
-  useMailAppLinks: () => [
-    { name: "Chat", href: "/account-1/assistant", icon: null },
-    { name: "Rules", href: "/account-1/automation", icon: null },
-  ],
+  useMailAppLinks: () => ({
+    appLinks: [
+      { name: "Chat", href: "/account-1/assistant", icon: null },
+      { name: "Rules", href: "/account-1/automation", icon: null },
+    ],
+    toolLinks: [],
+  }),
 }));
 
 vi.mock("next/link", () => ({
@@ -200,12 +203,40 @@ describe("MailAccountSwitcher", () => {
     selectMenuItem(screen.getByRole("menuitem", { name: "Sign out" }));
     expect(mockLogOut).toHaveBeenCalledWith(window.location.origin);
   });
+
+  it.each([
+    "bar",
+    "sidebar",
+  ] as const)("names its %s trigger for what the menu holds, not just the account", (variant) => {
+    renderSwitcher({ onSelectAccount: vi.fn(), variant });
+
+    expect(
+      screen.getByRole("button", {
+        name: "Account and settings, Work, work@example.com",
+      }),
+    ).toBeDefined();
+    expect(screen.getByText(/Signed in as/).textContent).toContain(
+      "work@example.com",
+    );
+  });
+
+  it("captions the phone's account tab", () => {
+    renderSwitcher({ onSelectAccount: vi.fn(), variant: "bar" });
+
+    expect(
+      screen.getByRole("button", {
+        name: "Account and settings, Work, work@example.com",
+      }).textContent,
+    ).toContain("Account");
+  });
 });
 
 function renderSwitcher({
   onSelectAccount,
+  variant = "compact",
 }: {
   onSelectAccount: (accountId: string) => void;
+  variant?: "compact" | "sidebar" | "bar";
 }) {
   return render(
     <MailAccountSwitcher
@@ -213,7 +244,7 @@ function renderSwitcher({
       isDesktopApp
       onSelectAccount={onSelectAccount}
       onSelectAll={vi.fn()}
-      variant="compact"
+      variant={variant}
     />,
   );
 }

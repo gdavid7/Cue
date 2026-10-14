@@ -10,7 +10,6 @@ import {
   StarIcon,
   Trash2Icon,
 } from "lucide-react";
-import type { MouseEvent } from "react";
 import { getSnoozePresets } from "@/app/(app)/[emailAccountId]/mail/snooze-command-palette";
 import {
   DropdownMenu,
@@ -52,10 +51,11 @@ export function ThreadRowActions({
   return (
     // Stops clicks from reaching the row, which would open the thread.
     <div
-      aria-hidden
       className="flex items-center gap-0.5"
       data-testid="thread-row-actions"
       onClick={stop}
+      // Enter on an action is that action, not "open the conversation".
+      onKeyDown={stop}
     >
       {isArchived ? (
         <RowButton
@@ -90,6 +90,7 @@ export function ThreadRowActions({
         <DropdownMenuTrigger asChild>
           <button
             className={BUTTON_CLASS}
+            aria-label="Snooze"
             tabIndex={-1}
             title="Snooze"
             type="button"
@@ -129,6 +130,7 @@ function RowButton({
   return (
     <button
       className={BUTTON_CLASS}
+      aria-label={label}
       onClick={onClick}
       tabIndex={-1}
       title={label}
@@ -141,6 +143,6 @@ function RowButton({
   );
 }
 
-function stop(event: MouseEvent) {
+function stop(event: { stopPropagation: () => void }) {
   event.stopPropagation();
 }

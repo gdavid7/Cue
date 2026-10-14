@@ -22,10 +22,14 @@ import { getMailSearchFolders } from "@/app/(app)/[emailAccountId]/mail/outlook-
 import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
 import { MailMobileNav } from "@/app/(app)/[emailAccountId]/mail/MailMobileNav";
 import {
+  getMailboxName,
   getMailNavPath,
   MAIL_SCHEDULED_TYPE,
   MAIL_SNOOZED_TYPE,
 } from "@/app/(app)/[emailAccountId]/mail/MailSidebar";
+import { getMailSidebarFolders } from "@/app/(app)/[emailAccountId]/mail/outlook-folder-list";
+import { useIsLargeScreen } from "@/hooks/use-mobile";
+import { getEmailTerminology } from "@/utils/terminology";
 import { MailShellSidebar } from "@/app/(app)/[emailAccountId]/mail/MailShellSidebar";
 import { MailSplitTabs } from "@/app/(app)/[emailAccountId]/mail/MailSplitTabs";
 import { SelectAllCheckbox } from "@/app/(app)/[emailAccountId]/mail/SelectAllCheckbox";
@@ -191,6 +195,8 @@ export function MailShell() {
   const [isDesktopApp, setIsDesktopApp] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isTourOpen, setIsTourOpen] = useState(false);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const isLargeScreen = useIsLargeScreen();
   const [labelPicker, setLabelPicker] = useState<{
     mode: "label" | "move";
     targets: ThreadSelection[];
@@ -234,7 +240,10 @@ export function MailShell() {
   );
   const accountLayout: MailLayoutMode =
     settings?.layout === MailLayout.SPLIT ? "split" : "list";
-  const layout = isAllAccounts ? "list" : accountLayout;
+  // A split reader needs the room `lg` gives it; below that the saved choice
+  // waits, rather than leaving a phone a reader a hundred pixels wide.
+  const canSplit = !isAllAccounts && isLargeScreen;
+  const layout = canSplit ? accountLayout : "list";
   const expandedPreview = settings?.expandedPreview ?? false;
 
   // Written through the SWR cache rather than mirrored in local state, so the
@@ -1282,7 +1291,7 @@ export function MailShell() {
         if (await undoLatestToast()) return;
         await undo();
       },
-      toggleLayout: isAllAccounts ? undefined : toggleLayout,
+      toggleLayout: canSplit ? toggleLayout : undefined,
       togglePreview,
       help: () => setIsHelpOpen(true),
       search: isMailOverlayOpen
@@ -1457,6 +1466,24 @@ export function MailShell() {
     [folders, isAllAccounts, isOutlook],
   );
   const showSplitTabs = !isScoped && !searchQuery;
+  const viewTitle = getMailViewTitle({
+    isAllAccounts,
+    searchQuery,
+    scopeType,
+    labelName: scopeLabelId
+      ? allLabels.find((label) => label.id === scopeLabelId)?.name
+      : undefined,
+    folderName: scopeFolderId
+      ? getMailSidebarFolders(folders).find(
+          (folder) => folder.id === scopeFolderId,
+        )?.displayName
+      : undefined,
+    labelTerm: getEmailTerminology(provider).label.singularCapitalized,
+  });
+  const emptyViewMessage = getEmptyViewMessage({
+    viewTitle,
+    isInbox: !isScoped && !searchQuery && !activeSplitId,
+  });
   const threadCount = threads.length;
   const { selectedCount, selectAll, clear: clearSelection } = selection;
   // Only offered once something is selected, so the tabs sit flush otherwise.
@@ -1529,6 +1556,21 @@ export function MailShell() {
     <MailProductFrame
       accountSwitcher={
         <MailMobileNav
+          onOpenMailboxes={() => setIsMobileSidebarOpen(true)}
+          readerActions={
+            openThreadSelection && !isLargeScreen
+              ? {
+                  onBack: closeReader,
+                  onArchive: targetsArchived ? undefined : archiveTargets,
+                  onMoveToInbox: targetsArchived
+                    ? moveToInboxTargets
+                    : undefined,
+                  onReply: () => openReply(false),
+                  onDelete: trashTargets,
+                  onMore: () => setIsMenuOpen(true),
+                }
+              : null
+          }
           accountSwitcher={
             <MailAccountSwitcher
               isDesktopApp={isDesktopApp}
@@ -1554,6 +1596,8 @@ export function MailShell() {
         onSelectAccount={selectAccount}
         onSelectAllAccounts={selectAllAccounts}
         onMailboxItemDeleted={onMailboxItemDeleted}
+        mobileOpen={isMobileSidebarOpen && !isLargeScreen}
+        onMobileOpenChange={setIsMobileSidebarOpen}
       />
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -1588,7 +1632,8 @@ export function MailShell() {
                 expandedPreview={expandedPreview}
                 onTogglePreview={togglePreview}
                 onToggleAssistant={onToggleAssistant}
-                showLayoutToggle={!isAllAccounts}
+                showLayoutToggle={canSplit}
+                viewTitle={viewTitle}
                 selectAll={showSplitTabs ? null : selectAllCheckbox}
                 selectedCount={selection.selectedCount}
                 onArchiveSelected={archiveTargets}
@@ -1682,7 +1727,7 @@ export function MailShell() {
                   >
                     <ThreadList
                       threads={threads}
-                      emptyMessage={emptySearchMessage}
+                      emptyMessage={emptySearchMessage ?? emptyViewMessage}
                       layout={layout}
                       expandedPreview={expandedPreview}
                       userEmail={userEmail}
@@ -1823,6 +1868,44 @@ function useStableOrderedIds(threads: ListThread[]) {
     if (!unchanged) previous.current = ids;
     return previous.current;
   }, [threads]);
+}
+
+/** Names any view but the inbox, so a phone without a sidebar says where it is. */
+function getMailViewTitle({
+  isAllAccounts,
+  searchQuery,
+  scopeType,
+  labelName,
+  folderName,
+  labelTerm,
+}: {
+  isAllAccounts: boolean;
+  searchQuery: string | null;
+  scopeType: string | null;
+  labelName: string | undefined;
+  folderName: string | undefined;
+  labelTerm: string;
+}): string | null {
+  if (searchQuery) return "Search results";
+  if (isAllAccounts) return null;
+  if (labelName) return `${labelTerm}: ${labelName}`;
+  if (folderName) return folderName;
+  if (scopeType && scopeType !== "inbox")
+    return getMailboxName(scopeType) ?? null;
+  return null;
+}
+
+function getEmptyViewMessage({
+  viewTitle,
+  isInbox,
+}: {
+  viewTitle: string | null;
+  isInbox: boolean;
+}) {
+  // An empty inbox is the goal, not a gap.
+  if (isInbox) return "You're all caught up.";
+  if (viewTitle) return `Nothing in ${viewTitle}.`;
+  return "Nothing here right now.";
 }
 
 const EMPTY_SEARCH_THREADS: ListThread[] = [];
