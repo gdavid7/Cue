@@ -19,6 +19,7 @@ import { formatShortDate } from "@/utils/date";
 import { getInitials } from "@/utils/email";
 import { getActionErrorMessage } from "@/utils/error";
 import { prefixPath } from "@/utils/path";
+import { PageHeading } from "@/components/Typography";
 import { BeforeYourMeeting } from "./BeforeYourMeeting";
 
 const ALSO_IN_INBOX_LIMIT = 5;
@@ -81,10 +82,10 @@ export function HomeDashboard() {
   return (
     <div className="mx-auto w-full max-w-3xl space-y-8 px-4 py-6 md:px-8">
       <header>
-        <h1 className="font-title text-2xl text-foreground">
+        <PageHeading>
           {greetingText}
           {firstName ? `, ${firstName}` : ""}
-        </h1>
+        </PageHeading>
         <p className="mt-1 text-muted-foreground text-sm">
           What needs a reply, and what Cue handled for you.
         </p>

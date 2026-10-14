@@ -42,6 +42,7 @@ import { DeleteChatDialog } from "@/components/assistant-chat/DeleteChatDialog";
 import { randomUuid } from "@/utils/uuid";
 import { VoiceInput } from "@/components/voice/VoiceInput";
 import { liveHistoryFromUiMessages } from "@/utils/voice/live-history";
+import { PageHeading } from "@/components/Typography";
 
 const MAX_FILE_SIZE = 4 * 1024 * 1024; // 4MB
 const MAX_FILES = 5;
@@ -416,9 +417,7 @@ function NewChatView({
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-[var(--chat-px)]">
       <div className="w-full max-w-[var(--chat-max-w)]">
-        <h1 className="mb-6 text-center text-2xl sm:text-3xl md:text-4xl font-extralight tracking-tight">
-          Chat with Cue
-        </h1>
+        <PageHeading className="mb-6 text-center">Chat with Cue</PageHeading>
         {inputArea}
         <div className="mt-3 flex flex-wrap justify-center gap-2">
           {CHAT_EXAMPLES.map((example) => (

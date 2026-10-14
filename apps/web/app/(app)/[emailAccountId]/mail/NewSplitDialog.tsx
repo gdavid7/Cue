@@ -375,7 +375,7 @@ export function NewSplitDialog({
               <ChevronLeftIcon className="size-3.5" />
             </Button>
           )}
-          <DialogTitle className="min-w-0 flex-1 truncate font-medium text-[15px] tracking-tight">
+          <DialogTitle className="min-w-0 flex-1 truncate font-medium text-base tracking-tight">
             {detail ? detail.name : title}
           </DialogTitle>
           <DialogDescription className="sr-only">
@@ -397,7 +397,7 @@ export function NewSplitDialog({
         ) : mode === "library" ? (
           <div className="flex min-h-0 flex-1 overflow-hidden max-sm:flex-col">
             <div className="flex w-[142px] shrink-0 flex-col gap-0.5 overflow-y-auto border-border border-r bg-sidebar p-2 scrollbar-thin max-sm:w-full max-sm:flex-row max-sm:overflow-x-auto max-sm:border-r-0 max-sm:border-b">
-              <div className="px-2 pt-0.5 pb-1.5 font-medium text-[11px] text-muted-foreground max-sm:hidden">
+              <div className="px-2 pt-0.5 pb-1.5 font-medium text-xs text-muted-foreground max-sm:hidden">
                 Category
               </div>
               {[YOUR_SPLITS, ...SPLIT_LIBRARY_CATEGORIES].map((option) => (
@@ -445,7 +445,7 @@ export function NewSplitDialog({
                 )}
               </div>
 
-              <div className="mb-2 font-medium text-[11px] text-muted-foreground">
+              <div className="mb-2 font-medium text-xs text-muted-foreground">
                 {category}
               </div>
 
@@ -508,7 +508,7 @@ export function NewSplitDialog({
                           disabled={isBusy || !split.filters.length}
                           aria-label={`Edit the ${split.name} tab`}
                           onClick={() => onEdit(split.id)}
-                          className="min-w-0 flex-1 truncate rounded text-left font-medium text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          className="min-w-0 flex-1 truncate rounded text-left font-medium text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         >
                           {split.name}
                         </button>
@@ -655,7 +655,7 @@ export function NewSplitDialog({
               onChange={(event) => setPrompt(event.target.value)}
               placeholder="Describe what should land in this tab…"
               maxLength={300}
-              className="resize-none rounded-xl text-[13.5px]"
+              className="resize-none rounded-xl text-sm"
             />
             <div className="mt-3 flex flex-wrap gap-1.5">
               {EXAMPLES.map((example) => (
@@ -663,7 +663,7 @@ export function NewSplitDialog({
                   key={example}
                   type="button"
                   onClick={() => setPrompt(example)}
-                  className="rounded-full border border-border bg-muted px-2.5 py-1 text-[11.5px] text-muted-foreground hover:border-primary/25 hover:bg-primary/5 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="rounded-full border border-border bg-muted px-2.5 py-1 text-xs text-muted-foreground hover:border-primary/25 hover:bg-primary/5 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {example}
                 </button>
@@ -774,7 +774,7 @@ function RouteCard({
       <span className="flex size-4.5 shrink-0 items-center justify-center text-primary">
         {icon}
       </span>
-      <span className="min-w-0 flex-1 truncate font-medium text-[12.5px] text-primary">
+      <span className="min-w-0 flex-1 truncate font-medium text-sm text-primary">
         {label}
       </span>
     </button>
@@ -807,7 +807,7 @@ function LibraryTile({
         type="button"
         onClick={onToggle}
         disabled={disabled}
-        className="min-w-0 flex-1 truncate text-left font-medium text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="min-w-0 flex-1 truncate text-left font-medium text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {entry.name}
       </button>
@@ -847,7 +847,7 @@ function LibraryDetail({ entry }: { entry: SplitLibraryEntry }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
       <div className="p-4">
-        <div className="mb-2 font-medium text-[11px] text-muted-foreground">
+        <div className="mb-2 font-medium text-xs text-muted-foreground">
           Definition
         </div>
         <div className="flex flex-col gap-1.5">
@@ -856,10 +856,10 @@ function LibraryDetail({ entry }: { entry: SplitLibraryEntry }) {
               key={`${row.key}:${row.value}`}
               className="flex items-center gap-2.5 rounded-lg border border-border bg-muted px-3 py-2"
             >
-              <span className="w-12 shrink-0 text-[11.5px] text-muted-foreground">
+              <span className="w-12 shrink-0 text-xs text-muted-foreground">
                 {row.key}
               </span>
-              <span className="truncate font-mono text-[12px] text-foreground">
+              <span className="truncate font-mono text-xs text-foreground">
                 {row.value}
               </span>
             </div>
