@@ -104,9 +104,11 @@ describe("withChatToolRuntime", () => {
     });
 
     let output: unknown;
-    tools.searchContext.execute?.({}, toolCallOptions).then((result) => {
-      output = result;
-    });
+    Promise.resolve(tools.searchContext.execute?.({}, toolCallOptions)).then(
+      (result: unknown) => {
+        output = result;
+      },
+    );
     await vi.advanceTimersByTimeAsync(CHAT_TOOL_GMAIL_WAIT_BUDGET_MS);
 
     expect(output).toEqual({
@@ -136,7 +138,7 @@ describe("withChatToolRuntime", () => {
       tools: {
         readEmail: tool({
           inputSchema: z.object({}),
-          execute: async () => {
+          execute: async (): Promise<{ ok: true }> => {
             throw failure;
           },
         }),
