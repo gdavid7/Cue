@@ -29,7 +29,10 @@ type Context = {
 
 type EmailAccount = GetEmailAccountsResponse["emailAccounts"][number];
 
-const NO_ACCOUNT_IDS: string[] = [];
+/** An account as the server lists it, in connection order. */
+export type ServerEmailAccount = { id: string; provider: string };
+
+const NO_ACCOUNTS: ServerEmailAccount[] = [];
 
 const EmailAccountContext = createContext<Context | undefined>(undefined);
 
@@ -45,11 +48,14 @@ const previewContextValue: Context = {
 
 export function EmailAccountProvider({
   children,
-  accountIds: serverAccountIds = NO_ACCOUNT_IDS,
+  accounts: serverAccounts = NO_ACCOUNTS,
 }: {
   children: React.ReactNode;
-  /** Rendered on the server, so `/mail/u/{n}` resolves before accounts load. */
-  accountIds?: string[];
+  /**
+   * Rendered on the server, so `/mail/u/{n}` resolves and the mail engine
+   * can start before the full account list loads.
+   */
+  accounts?: ServerEmailAccount[];
 }) {
   const params = useParams<{
     emailAccountId: string | undefined;
@@ -62,6 +68,10 @@ export function EmailAccountProvider({
   const loadedAccountIds = useMemo(
     () => data?.emailAccounts.map((account) => account.id),
     [data],
+  );
+  const serverAccountIds = useMemo(
+    () => serverAccounts.map((account) => account.id),
+    [serverAccounts],
   );
   const accountIds = loadedAccountIds ?? serverAccountIds;
   const indexedAccountId =
@@ -137,7 +147,12 @@ export function EmailAccountProvider({
         isLoading,
         emailAccountId: resolvedEmailAccountId,
         userEmail: emailAccount?.email ?? "",
-        provider: emailAccount?.account?.provider ?? "",
+        provider:
+          emailAccount?.account?.provider ??
+          serverAccounts.find(
+            (account) => account.id === resolvedEmailAccountId,
+          )?.provider ??
+          "",
         providerRateLimit: emailAccount?.providerRateLimit ?? null,
       }}
     >
