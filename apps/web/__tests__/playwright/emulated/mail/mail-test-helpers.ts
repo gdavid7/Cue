@@ -62,23 +62,33 @@ export async function expectThreadReaderBody(
   timeout = 60_000,
 ) {
   await expect
-    .poll(
-      async () => {
-        if (
-          (await page.getByTestId("thread-reader").getByText(text).count()) > 0
-        )
-          return true;
-        const frames = page.locator('iframe[title="Email content preview"]');
-        const n = await frames.count();
-        for (let i = 0; i < n; i += 1) {
-          if ((await frames.nth(i).contentFrame().getByText(text).count()) > 0)
-            return true;
-        }
-        return false;
-      },
-      { timeout },
-    )
+    .poll(() => threadReaderBodyHasText(page, text), { timeout })
     .toBe(true);
+}
+
+/** Whether the open thread shows `text`, in the reader or a message frame. */
+export async function threadReaderBodyHasText(page: Page, text: string) {
+  if ((await page.getByTestId("thread-reader").getByText(text).count()) > 0)
+    return true;
+  const frames = page.locator('iframe[title="Email content preview"]');
+  const n = await frames.count();
+  for (let i = 0; i < n; i += 1) {
+    if ((await frames.nth(i).contentFrame().getByText(text).count()) > 0)
+      return true;
+  }
+  return false;
+}
+
+/**
+ * The "Sent with" footer is opt-in. Specs that exercise the signature it rides
+ * in turn it on for every account and back off afterwards.
+ */
+export async function setSentWithFooter(enabled: boolean) {
+  await withClient((client) =>
+    client.query(`UPDATE "EmailAccount" SET "includeSentWithSignature" = $1`, [
+      enabled,
+    ]),
+  );
 }
 
 /**

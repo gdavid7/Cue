@@ -11,13 +11,13 @@ import {
 const notifications = vi.hoisted(() => ({
   dismiss: vi.fn(),
   toastError: vi.fn(),
-  toastUndo: vi.fn(),
+  toastSending: vi.fn(),
+  toastSendFailed: vi.fn(),
+  toastSendUndone: vi.fn(),
+  toastSent: vi.fn(),
 }));
 
-vi.mock("@/components/Toast", () => ({
-  toastError: notifications.toastError,
-  toastUndo: notifications.toastUndo,
-}));
+vi.mock("@/components/Toast", () => notifications);
 vi.mock("sonner", () => ({
   toast: { dismiss: notifications.dismiss },
 }));
@@ -31,7 +31,7 @@ describe("undo send", () => {
     vi.clearAllMocks();
   });
 
-  it("holds online sends for 30 seconds and skips the delay when offline", () => {
+  it("holds online sends for 10 seconds and skips the delay when offline", () => {
     expect(getUndoSendHoldUntil(false, 1000)).toBeUndefined();
     expect(getUndoSendHoldUntil(true, 1000)).toBe(11_000);
   });
@@ -48,23 +48,26 @@ describe("undo send", () => {
       restoreComposer,
     });
 
-    const toast = notifications.toastUndo.mock.calls[0]?.[0];
+    const toast = notifications.toastSending.mock.calls[0]?.[0];
     expect(toast).toEqual({
-      duration: expect.any(Number),
       id: "undo-send:mutation",
-      message: "Email sent!",
-      onUndo: expect.any(Function),
-      shortcut: "z",
+      hold: {
+        durationMs: expect.any(Number),
+        onUndo: expect.any(Function),
+        shortcut: "z",
+      },
     });
-    expect(toast.duration).toBeGreaterThan(0);
-    expect(toast.duration).toBeLessThanOrEqual(UNDO_SEND_DELAY_MS);
+    expect(toast.hold.durationMs).toBeGreaterThan(0);
+    expect(toast.hold.durationMs).toBeLessThanOrEqual(UNDO_SEND_DELAY_MS);
     await expect(undoPendingSend()).resolves.toBe(true);
     expect(client.cancelOperation).toHaveBeenCalledWith({
       accountId: "account",
       operationId: "mutation",
     });
     expect(restoreComposer).toHaveBeenCalledOnce();
-    expect(notifications.dismiss).toHaveBeenCalledWith("undo-send:mutation");
+    expect(notifications.toastSendUndone).toHaveBeenCalledWith(
+      "undo-send:mutation",
+    );
     expect(handle.close).toHaveBeenCalled();
     await expect(undoPendingSend()).resolves.toBe(false);
   });
@@ -78,7 +81,7 @@ describe("undo send", () => {
       restoreComposer: vi.fn(),
     });
 
-    expect(notifications.toastUndo).not.toHaveBeenCalled();
+    expect(notifications.toastSending).not.toHaveBeenCalled();
   });
 
   it("keeps undo open while the server holds the send", async () => {
@@ -101,7 +104,7 @@ describe("undo send", () => {
     expect(restoreComposer).toHaveBeenCalledOnce();
   });
 
-  it("dismisses undo once the send has gone out", async () => {
+  it("reports the send once it has gone out", async () => {
     const restoreComposer = vi.fn();
     const { client, handle } = createClient();
     beginUndoSend({
@@ -114,7 +117,8 @@ describe("undo send", () => {
 
     handle.set("succeeded");
 
-    expect(notifications.dismiss).toHaveBeenCalledWith("undo-send:mutation");
+    expect(notifications.toastSent).toHaveBeenCalledWith("undo-send:mutation");
+    expect(notifications.dismiss).not.toHaveBeenCalled();
     expect(handle.close).toHaveBeenCalled();
     await expect(undoPendingSend()).resolves.toBe(false);
     expect(client.cancelOperation).not.toHaveBeenCalled();
@@ -122,7 +126,28 @@ describe("undo send", () => {
     expect(notifications.toastError).not.toHaveBeenCalled();
   });
 
-  it("drops undo when the hold elapses even if the toast stays open", async () => {
+  it("keeps a failed send open with a way back to the draft", () => {
+    const restoreComposer = vi.fn();
+    const { client, handle } = createClient();
+    beginUndoSend({
+      client,
+      operationId: "mutation",
+      emailAccountId: "account",
+      holdUntil: Date.now() + UNDO_SEND_DELAY_MS,
+      restoreComposer,
+    });
+
+    handle.set("failed");
+
+    expect(notifications.toastSendFailed).toHaveBeenCalledWith({
+      id: "undo-send:mutation",
+      onRetry: restoreComposer,
+    });
+    expect(notifications.dismiss).not.toHaveBeenCalled();
+    expect(handle.close).toHaveBeenCalled();
+  });
+
+  it("drops undo when the hold elapses and reports the send after it", async () => {
     vi.useFakeTimers();
     const now = 1_000_000;
     vi.setSystemTime(now);
@@ -137,10 +162,15 @@ describe("undo send", () => {
 
     await vi.advanceTimersByTimeAsync(UNDO_SEND_DELAY_MS);
 
-    expect(notifications.dismiss).toHaveBeenCalledWith("undo-send:mutation");
-    expect(handle.close).toHaveBeenCalled();
+    expect(notifications.toastSending).toHaveBeenLastCalledWith({
+      id: "undo-send:mutation",
+    });
     await expect(undoPendingSend()).resolves.toBe(false);
     expect(client.cancelOperation).not.toHaveBeenCalled();
+
+    handle.set("succeeded");
+    expect(notifications.toastSent).toHaveBeenCalledWith("undo-send:mutation");
+    expect(handle.close).toHaveBeenCalled();
     vi.useRealTimers();
   });
 
@@ -168,7 +198,7 @@ describe("undo send", () => {
     });
     expect(first.handle.close).toHaveBeenCalled();
     expect(notifications.dismiss).toHaveBeenCalledWith("undo-send:first");
-    expect(notifications.toastUndo.mock.calls[1]?.[0]?.id).toBe(
+    expect(notifications.toastSending.mock.calls[1]?.[0]?.id).toBe(
       "undo-send:second",
     );
     notifications.dismiss.mockClear();
@@ -177,7 +207,7 @@ describe("undo send", () => {
     expect(notifications.dismiss).not.toHaveBeenCalled();
     expect(second.handle.close).not.toHaveBeenCalled();
 
-    await notifications.toastUndo.mock.calls[0]?.[0]?.onUndo();
+    await notifications.toastSending.mock.calls[0]?.[0]?.hold.onUndo();
     expect(second.client.cancelOperation).not.toHaveBeenCalled();
 
     await expect(undoPendingSend()).resolves.toBe(true);
@@ -218,6 +248,8 @@ describe("undo send", () => {
       holdUntil: Date.now() + UNDO_SEND_DELAY_MS,
       restoreComposer,
     });
+    // Starting a send replaces whatever toast an earlier test left open.
+    notifications.dismiss.mockClear();
 
     await expect(undoPendingSend()).resolves.toBe(false);
     expect(notifications.dismiss).not.toHaveBeenCalled();

@@ -123,6 +123,7 @@ import {
   mailSplitToThreadsQuery,
   mailTypeToThreadsQuery,
 } from "@/utils/split-inbox/split-query";
+import { isInboxStyleLandingSplit } from "@/utils/split-inbox/inbox-styles";
 import { getActionErrorMessage } from "@/utils/error";
 import { prefixPath } from "@/utils/path";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
@@ -384,8 +385,12 @@ export function MailShell() {
       })),
     [splits],
   );
+  // With an inbox style chosen, mail opens on its Primary or Focused tab
+  // rather than All, which shows the same mail and more.
   const activeSplit =
-    splits.find((split) => split.id === activeSplitId) ?? splits[0];
+    splits.find((split) => split.id === activeSplitId) ??
+    splits.find(isInboxStyleLandingSplit) ??
+    splits[0];
   const displayedActiveSplitId = activeSplit?.id ?? null;
   const activeCombinedLabelNames = combinedLabelSplits.find(
     (split) => split.id === displayedActiveSplitId,
@@ -475,12 +480,16 @@ export function MailShell() {
     if (next.index !== focusedIndex) setFocusedIndex(next.index);
   }, [orderedIds, focusedIndex, searchQuery, searchViewIdentity]);
   const { data: searchAnswer } = useSearchAnswer(emailAccountId, searchParam);
+  const searchFoundNothing = Boolean(
+    searchQuery && hasProviderResponse && !threads.length,
+  );
+  const isSearchCommitted = !!searchParam && searchQuery === searchParam.trim();
   let emptySearchMessage: string | undefined;
-  if (searchQuery && hasProviderResponse && !threads.length) {
-    emptySearchMessage = "No emails in this view";
-  }
-  // The answer above already leads to the mail; "no emails" would contradict it.
-  if (searchAnswer && searchParam) emptySearchMessage = "";
+  if (searchFoundNothing) emptySearchMessage = "No emails in this view";
+  // A committed search's card above speaks for it: the answer leads to the
+  // mail, and with no answer it offers to ask in chat instead.
+  if ((searchAnswer || searchFoundNothing) && isSearchCommitted)
+    emptySearchMessage = "";
 
   const selection = useThreadSelection(orderedIds);
 
@@ -1630,6 +1639,7 @@ export function MailShell() {
                 <SearchAnswerCard
                   emailAccountId={emailAccountId}
                   key={searchParam}
+                  noResults={searchFoundNothing && isSearchCommitted}
                   onContinueInChat={onContinueInChat}
                   query={searchParam}
                 />

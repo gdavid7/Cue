@@ -42,6 +42,7 @@ describe("shouldStartMailEngine", () => {
   it.each([
     "/account/mail",
     "/account/mail/",
+    "/account/home",
     "/account/compose",
     "/account/bulk-archive",
     "/account/quick-bulk-archive",

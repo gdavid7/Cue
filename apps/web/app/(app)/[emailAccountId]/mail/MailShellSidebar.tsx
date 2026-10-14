@@ -1,7 +1,7 @@
 "use client";
 
 import { ConnectorsList } from "@/components/connectors/ConnectorsList";
-import { type CSSProperties, memo, useCallback, useRef } from "react";
+import { type CSSProperties, memo, useCallback, useMemo } from "react";
 import { toast } from "sonner";
 import { AllInboxesSidebarSections } from "@/app/(app)/[emailAccountId]/mail/AllInboxesSidebarSections";
 import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
@@ -16,6 +16,7 @@ import type {
   MailboxItem,
   MailboxItemEdit,
 } from "@/app/(app)/[emailAccountId]/mail/MailboxItemContextMenu";
+import { getSystemRuleLabelIds } from "@/app/(app)/[emailAccountId]/mail/label-visibility";
 import { MailSidebarResizeHandle } from "@/app/(app)/[emailAccountId]/mail/MailSidebarResizeHandle";
 import {
   MAIL_SIDEBAR_DEFAULT_WIDTH,
@@ -27,6 +28,7 @@ import { useAccounts } from "@/hooks/useAccounts";
 import { useFolders } from "@/hooks/useFolders";
 import { useLabelCounts } from "@/hooks/useLabelCounts";
 import { useLabels } from "@/hooks/useLabels";
+import { useRules } from "@/hooks/useRules";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useComposeModal } from "@/providers/ComposeModalProvider";
 import type { EmailLabel } from "@/providers/email-label-types";
@@ -87,6 +89,14 @@ export const MailShellSidebar = memo(function MailShellSidebar({
   const isOutlook = isMicrosoftProvider(provider);
   const terminology = getEmailTerminology(provider);
   const { userLabels: allLabels, mutate: mutateLabels } = useLabels();
+  const { data: rules, error: rulesError } = useRules();
+  // Held back until the rules arrive, so Cue's own labels never flash in.
+  const sidebarLabels = useMemo(() => {
+    if (rulesError) return allLabels;
+    if (!rules) return NO_LABELS;
+    const systemLabelIds = getSystemRuleLabelIds(rules);
+    return allLabels.filter((label) => !systemLabelIds.has(label.id));
+  }, [allLabels, rules, rulesError]);
   const { folders, mutate: mutateFolders } = useFolders(provider);
   const { countsById, mutate: mutateCounts } = useLabelCounts({
     emailAccountId,
@@ -101,10 +111,13 @@ export const MailShellSidebar = memo(function MailShellSidebar({
   const isMailSidebarOpen = openSidebars.includes("left-sidebar");
 
   // Dragging writes straight to the CSS variable: re-rendering on every
-  // pointer move would make the sidebar edge lag behind the cursor.
-  const sidebarScopeRef = useRef<HTMLDivElement>(null);
+  // pointer move would make the sidebar edge lag behind the cursor. It lives
+  // on the root so toasts can clear the sidebar too.
   const setSidebarWidth = useCallback((width: number) => {
-    sidebarScopeRef.current?.style.setProperty("--sidebar-width", `${width}px`);
+    document.documentElement.style.setProperty(
+      "--mail-sidebar-width",
+      `${width}px`,
+    );
   }, []);
 
   const hrefFor = useCallback(
@@ -190,8 +203,8 @@ export const MailShellSidebar = memo(function MailShellSidebar({
 
   return (
     <div
-      ref={sidebarScopeRef}
       className="hidden lg:contents"
+      data-mail-sidebar={isMailSidebarOpen ? "open" : "rail"}
       style={
         {
           "--sidebar-width": `var(--mail-sidebar-width, ${MAIL_SIDEBAR_DEFAULT_WIDTH}px)`,
@@ -207,7 +220,7 @@ export const MailShellSidebar = memo(function MailShellSidebar({
           activeLabelId={activeLabelId}
           activeFolderId={activeFolderId}
           hrefFor={hrefFor}
-          labels={isAllAccounts ? NO_LABELS : allLabels}
+          labels={isAllAccounts ? NO_LABELS : sidebarLabels}
           folders={isAllAccounts || !isOutlook ? NO_FOLDERS : folders}
           countsById={isAllAccounts ? NO_COUNTS : countsById}
           categories={
@@ -219,7 +232,6 @@ export const MailShellSidebar = memo(function MailShellSidebar({
           collapsibleCategories={!isOutlook}
           labelsHeading={terminology.label.pluralCapitalized}
           labelSingular={terminology.label.singular}
-          backToAppHref={prefixPath(emailAccountId, "/home")}
           onCompose={openCompose}
           onCreateLabel={onCreateLabel}
           onEditMailboxItem={onEditMailboxItem}

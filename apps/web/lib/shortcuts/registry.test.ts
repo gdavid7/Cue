@@ -28,11 +28,11 @@ describe("shortcut registry", () => {
     const grouped = getShortcutGroups(["global", "mail"], {
       isDesktopApp: true,
     }).flatMap(({ shortcuts }) => shortcuts);
+    const listed = SHORTCUTS.filter((entry) => !entry.hideFromHelp);
 
-    expect(grouped).toHaveLength(SHORTCUTS.length);
-    expect(new Set(grouped.map((entry) => entry.id)).size).toBe(
-      SHORTCUTS.length,
-    );
+    expect(grouped).toHaveLength(listed.length);
+    expect(new Set(grouped.map((entry) => entry.id)).size).toBe(listed.length);
+    expect(grouped.map((entry) => entry.id)).not.toContain("openTeamComments");
   });
 
   it("only lists account switching shortcuts in the desktop app", () => {

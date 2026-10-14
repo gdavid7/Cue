@@ -32,12 +32,6 @@ type TourStep = {
 /** Each step appears only once the thing it points at is on screen. */
 const STEPS: TourStep[] = [
   {
-    title: "Same inbox. Nothing moved.",
-    body: "Every email is still here, in order. Cue only adds to it.",
-    findTarget: findList,
-    waitForTargetMs: 10_000,
-  },
-  {
     title: "The line under each email",
     body: "What it asks of you, any deadline, and “Reply ready” when a reply is waiting for you.",
     findTarget: () => document.querySelector(INSIGHT_SELECTOR),

@@ -9,8 +9,14 @@ import {
   conversationWithSubject,
   openMail,
   openMailboxFromSidebar,
+  setSentWithFooter,
   waitForComposeOutboxSend,
 } from "./mail-test-helpers";
+
+// These specs edit the signature, and the opt-in "Sent with" footer gives
+// every account one to edit.
+test.beforeAll(() => setSentWithFooter(true));
+test.afterAll(() => setSentWithFooter(false));
 
 test("keeps keyboard focus in the composer and follows the message field order", async ({
   page,
@@ -31,7 +37,6 @@ test("keeps keyboard focus in the composer and follows the message field order",
     dialog.getByRole("button", { exact: true, name: "Send" }),
     dialog.getByRole("button", { name: "Send later" }),
     dialog.getByRole("button", { name: "Remind me" }),
-    dialog.getByRole("button", { name: "Insert snippet" }),
     dialog.getByRole("button", { name: "Attach files" }),
     dialog.getByRole("button", { name: "Insert inline images" }),
     dialog.getByRole("button", { name: "Discard draft" }),
@@ -441,7 +446,11 @@ test("does not add a line break for the send shortcut", async ({
   await editor.press("ControlOrMeta+Enter");
 
   await expect(dialog).toBeHidden();
-  await expect(page.getByText("Email sent!", { exact: true })).toBeVisible();
+  await expect(
+    page
+      .getByRole("region", { name: "Notifications alt+T" })
+      .getByText("Sending…", { exact: true }),
+  ).toBeVisible();
   await openMailboxFromSidebar(page, "Sent");
   await waitForComposeOutboxSend(page, emailAccountId);
   const sentConversation = conversationWithSubject(

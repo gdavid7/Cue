@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { env } from "@/env";
 import { useSidebar } from "@/components/ui/sidebar";
 import { useAccount } from "@/providers/EmailAccountProvider";
+import { isMailShellPath } from "@/utils/path";
 
 const CrispChat = () => {
   const { state } = useSidebar();
@@ -13,7 +14,7 @@ const CrispChat = () => {
 
   const [isConfigured, setIsConfigured] = useState(false);
   const isChatOpen = state.includes("chat-sidebar");
-  const isMailRoute = pathname?.includes("/mail");
+  const isMailRoute = pathname ? isMailShellPath(pathname) : false;
 
   useEffect(() => {
     if (!env.NEXT_PUBLIC_CRISP_WEBSITE_ID) return;

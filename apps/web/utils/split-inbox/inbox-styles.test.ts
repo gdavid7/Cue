@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { MailSplitFilterKind } from "@/generated/prisma/enums";
 import { createMailSplitBody } from "@/utils/actions/mail-split.validation";
 import {
   getDefaultInboxStyle,
   getInboxStyleOptions,
   getInboxStyleSplits,
   INBOX_STYLES,
+  isInboxStyleLandingSplit,
   orderSplitsForInboxStyle,
 } from "@/utils/split-inbox/inbox-styles";
 import { mailSplitToThreadsQuery } from "@/utils/split-inbox/split-query";
@@ -79,5 +81,25 @@ describe("orderSplitsForInboxStyle", () => {
     expect(orderSplitsForInboxStyle(splits, ["primary", "promotions"])).toEqual(
       ["all", "primary", "promotions", "unread", "needs-reply"],
     );
+  });
+});
+
+describe("isInboxStyleLandingSplit", () => {
+  it("opens on Primary or Focused, never on All or another tab", () => {
+    const [primary, promotions] = getInboxStyleSplits("tabs");
+    const [focused, other] = getInboxStyleSplits("focused-other");
+    expect(isInboxStyleLandingSplit(primary)).toBe(true);
+    expect(isInboxStyleLandingSplit(focused)).toBe(true);
+    expect(isInboxStyleLandingSplit(promotions)).toBe(false);
+    expect(isInboxStyleLandingSplit(other)).toBe(false);
+    expect(isInboxStyleLandingSplit({ filters: [] })).toBe(false);
+    expect(
+      isInboxStyleLandingSplit({
+        filters: [
+          ...primary.filters,
+          { kind: MailSplitFilterKind.UNREAD, value: null },
+        ],
+      }),
+    ).toBe(false);
   });
 });

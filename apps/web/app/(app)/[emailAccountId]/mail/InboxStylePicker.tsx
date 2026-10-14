@@ -19,7 +19,6 @@ import { useAccount } from "@/providers/EmailAccountProvider";
 import { dismissHintAction } from "@/utils/actions/hints";
 import { applyInboxStyleAction } from "@/utils/actions/mail-split";
 import type { ApplyInboxStyleBody } from "@/utils/actions/mail-split.validation";
-import { isGoogleProvider } from "@/utils/email/provider-types";
 import { getActionErrorMessage } from "@/utils/error";
 import {
   getDefaultInboxStyle,
@@ -119,11 +118,6 @@ export function InboxStyleCard({ onDone }: { onDone: () => void }) {
         </span>
       </label>
       <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-        {isGoogleProvider(provider) && (
-          <p className="mr-auto text-muted-foreground text-xs">
-            Use Gmail&apos;s Multiple Inboxes? Add each section as a tab with +.
-          </p>
-        )}
         <Button
           size="xs-2"
           variant="ghost"

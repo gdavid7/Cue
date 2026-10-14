@@ -224,6 +224,36 @@
   --ease-leave: cubic-bezier(0.4, 0, 1, 1);
 }
 
+/* Toasts sit clear of the mail chrome: past the sidebar on desktop so the
+   account switcher stays reachable, and above the tab bar on phones. */
+:root {
+  --toast-offset-left: 24px;
+  --toast-offset-bottom: 24px;
+}
+@media (max-width: 1023px) {
+  :root:has([data-mail-mobile-nav]) {
+    --toast-offset-left: 16px;
+    --toast-offset-bottom: calc(72px + env(safe-area-inset-bottom));
+  }
+}
+@media (min-width: 1024px) {
+  :root:has([data-mail-sidebar="open"]) {
+    --toast-offset-left: calc(var(--mail-sidebar-width, 236px) + 16px);
+  }
+  :root:has([data-mail-sidebar="rail"]) {
+    --toast-offset-left: 88px;
+  }
+}
+
+@keyframes toast-drain {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
 /* Matches state variants too (`data-[state=open]:animate-in`). */
 [class*="animate-in"] {
   animation-timing-function: var(--ease-spring);

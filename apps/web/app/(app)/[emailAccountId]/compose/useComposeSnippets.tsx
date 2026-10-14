@@ -2,7 +2,6 @@
 
 import { useCallback, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { BracesIcon } from "lucide-react";
 import type {
   EmailEditorHandle,
   EmailEditorSlashTrigger,
@@ -12,7 +11,6 @@ import {
   SnippetPicker,
   type SnippetPickerRef,
 } from "@/components/snippets/SnippetPicker";
-import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -20,12 +18,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import { Tooltip } from "@/components/Tooltip";
 import { useSnippets } from "@/hooks/useSnippets";
 import {
   snippetContentToHtml,
@@ -50,8 +42,6 @@ export function useComposeSnippets({
   const snippets = data?.snippets ?? EMPTY_SNIPPETS;
   const toRef = useRef(to);
   toRef.current = to;
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [pickerQuery, setPickerQuery] = useState("");
   const [formState, setFormState] = useState<{
     defaults?: Partial<CreateSnippetBody>;
     insertOnCreate: boolean;
@@ -85,7 +75,6 @@ export function useComposeSnippets({
       defaults?: Partial<CreateSnippetBody>,
       options?: { insertOnCreate?: boolean },
     ) => {
-      setPickerOpen(false);
       setFormState({
         defaults: {
           content:
@@ -133,47 +122,6 @@ export function useComposeSnippets({
           </div>,
           document.body,
         )}
-      <Popover
-        onOpenChange={(open) => {
-          setPickerOpen(open);
-          if (!open) setPickerQuery("");
-        }}
-        open={pickerOpen}
-      >
-        <Tooltip content="Insert snippet">
-          <PopoverTrigger asChild>
-            <Button
-              aria-label="Insert snippet"
-              className="hover:bg-transparent"
-              size="icon"
-              type="button"
-              variant="ghostMuted"
-            >
-              <BracesIcon className="size-4" />
-            </Button>
-          </PopoverTrigger>
-        </Tooltip>
-        <PopoverContent
-          align="end"
-          className="w-auto border-0 bg-transparent p-0 shadow-none"
-          data-snippet-picker=""
-        >
-          <SnippetPicker
-            onQueryChange={setPickerQuery}
-            onSelectCreate={() => {
-              openCreate({
-                content: editorRef.current?.getSelectedText() ?? "",
-              });
-            }}
-            onSelectSnippet={(snippet) => {
-              setPickerOpen(false);
-              insertSnippet(snippet);
-            }}
-            query={pickerQuery}
-            snippets={snippets}
-          />
-        </PopoverContent>
-      </Popover>
       <Dialog
         onOpenChange={(open) => {
           if (!open) closeForm();

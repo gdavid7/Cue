@@ -12,17 +12,20 @@ export const SEARCH_ANSWERS = true;
 
 /**
  * What the user's mail says in answer to a search, when it reads as a
- * question and the mail answers it. Nothing otherwise: a plain search, no
- * answer, or a failure all leave just the results.
+ * question and the mail answers it. A plain search, no answer, or a failure
+ * leave just the results, or, when there are none, a way to ask in chat.
  */
 export function SearchAnswerCard({
   emailAccountId,
   query,
+  noResults,
   onContinueInChat,
 }: {
   emailAccountId: string;
   /** The search as committed with Enter, never the text being typed. */
   query: string;
+  /** The search found no mail. */
+  noResults: boolean;
   onContinueInChat: (question: string) => void;
 }) {
   const { data, isLoading, error } = useSearchAnswer(emailAccountId, query);
@@ -34,7 +37,22 @@ export function SearchAnswerCard({
       </div>
     );
   }
-  if (error || !data) return null;
+  if (error || !data) {
+    if (!noResults) return null;
+    return (
+      <div className="flex flex-col items-center gap-1 px-4 py-10 text-center">
+        <p className="text-muted-foreground text-sm">No emails match.</p>
+        <Button
+          onClick={() => onContinueInChat(query)}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >
+          Ask Cue in chat →
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <section

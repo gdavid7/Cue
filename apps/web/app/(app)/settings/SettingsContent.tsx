@@ -11,27 +11,21 @@ import {
   MessagesSquareIcon,
   PlugIcon,
   SendIcon,
-  SparklesIcon,
   UserIcon,
-  UsersIcon,
   WebhookIcon,
 } from "lucide-react";
 import { ApiKeysSection } from "@/app/(app)/[emailAccountId]/settings/ApiKeysSection";
 import { McpSection } from "@/app/(app)/[emailAccountId]/settings/McpSection";
 import { EmailOtpSection } from "@/app/(app)/settings/EmailOtpSection";
 import { AppearanceSection } from "@/app/(app)/settings/AppearanceSection";
-import { TeamSection } from "@/app/(app)/settings/TeamSection";
 import { BillingSection } from "@/app/(app)/[emailAccountId]/settings/BillingSection";
 import { CleanupDraftsSection } from "@/app/(app)/[emailAccountId]/settings/CleanupDraftsSection";
 import { SentMessageOpenTrackingSetting } from "@/app/(app)/[emailAccountId]/settings/SentMessageOpenTrackingSetting";
 import { VacationResponderSetting } from "@/app/(app)/[emailAccountId]/settings/VacationResponderSetting";
 import { useSlackNotifications } from "@/app/(app)/[emailAccountId]/settings/ConnectedAppsSection";
 import { DeleteSection } from "@/app/(app)/[emailAccountId]/settings/DeleteSection";
-import { ModelSection } from "@/app/(app)/[emailAccountId]/settings/ModelSection";
-import { DecisionModelSection } from "@/app/(app)/[emailAccountId]/settings/DecisionModelSection";
 import { OrgAnalyticsConsentSection } from "@/app/(app)/[emailAccountId]/settings/OrgAnalyticsConsentSection";
 import { ResetAnalyticsSection } from "@/app/(app)/[emailAccountId]/settings/ResetAnalyticsSection";
-import { WebhookSection } from "@/app/(app)/[emailAccountId]/settings/WebhookSection";
 import { CopyRulesSection } from "@/app/(app)/[emailAccountId]/settings/CopyRulesSection";
 import { RuleImportExportSetting } from "@/app/(app)/[emailAccountId]/assistant/settings/RuleImportExportSetting";
 import { ToggleAllRulesSection } from "@/app/(app)/[emailAccountId]/settings/ToggleAllRulesSection";
@@ -40,41 +34,21 @@ import { LoadingContent } from "@/components/LoadingContent";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import {
-  Item,
-  ItemCard,
-  ItemContent,
-  ItemSeparator,
-  ItemTitle,
-  ItemActions,
-} from "@/components/ui/item";
+import { ItemCard, ItemSeparator } from "@/components/ui/item";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useMessagingChannels } from "@/hooks/useMessagingChannels";
 import { usePremium } from "@/hooks/usePremium";
-import { useUser } from "@/hooks/useUser";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { cn } from "@/utils";
 import { env } from "@/env";
-import { hasOrganizationAdminRole } from "@/utils/organizations/roles";
 
 export function SettingsContent() {
   const { emailAccountId: activeEmailAccountId } = useAccount();
   const { data, isLoading, error } = useAccounts();
   const { canManageBilling } = usePremium();
-  const { data: user } = useUser();
   const [expandedAccountId, setExpandedAccountId] = useState<string | null>(
     null,
   );
-
-  const organizationMembership = user?.members?.find(
-    (member) => member.emailAccountId === activeEmailAccountId,
-  );
-  // No membership means no organization yet — the invite modal then creates one.
-  const canInviteMembers =
-    !!user &&
-    !!activeEmailAccountId &&
-    (!organizationMembership ||
-      hasOrganizationAdminRole(organizationMembership.role));
 
   const handleSlackConnected = useCallback(
     (connectedEmailAccountId: string | null) => {
@@ -144,68 +118,25 @@ export function SettingsContent() {
         </SettingsGroup>
       )}
 
-      {canInviteMembers && (
-        <SettingsGroup icon={<UsersIcon className="size-5" />} title="Team">
-          <ItemCard>
-            <TeamSection
-              organizationId={organizationMembership?.organizationId}
-            />
-          </ItemCard>
-        </SettingsGroup>
-      )}
-
-      {!env.NEXT_PUBLIC_AI_MODEL_SETTINGS_DISABLED && (
-        <SettingsGroup
-          icon={<SparklesIcon className="size-5" />}
-          title="AI Model"
-        >
-          <ItemCard className="p-4">
-            <ModelSection />
-          </ItemCard>
-          {user?.isDecisionModelAvailable && (
-            <ItemCard>
-              <DecisionModelSection />
-            </ItemCard>
-          )}
-        </SettingsGroup>
-      )}
-
       <SettingsGroup icon={<UserIcon className="size-5" />} title="Account">
         <ItemCard>
           {env.NEXT_PUBLIC_EXTERNAL_API_ENABLED && <McpSection />}
           <EmailOtpSection hasMultipleAccounts={emailAccounts.length > 1} />
           <ItemSeparator />
           <AppearanceSection />
-          <ItemSeparator />
-          <Item size="sm">
-            <ItemContent>
-              <ItemTitle>Beta Features</ItemTitle>
-            </ItemContent>
-            <ItemActions>
-              <Button asChild size="sm" variant="outline">
-                <Link href="/early-access">Open</Link>
-              </Button>
-            </ItemActions>
-          </Item>
         </ItemCard>
         <ItemCard>
           <DeleteSection />
         </ItemCard>
       </SettingsGroup>
 
-      {(env.NEXT_PUBLIC_WEBHOOK_ACTION_ENABLED !== false ||
-        env.NEXT_PUBLIC_EXTERNAL_API_ENABLED) && (
+      {env.NEXT_PUBLIC_EXTERNAL_API_ENABLED && (
         <SettingsGroup
           icon={<WebhookIcon className="size-5" />}
           title="Developer"
         >
           <ItemCard>
-            {env.NEXT_PUBLIC_WEBHOOK_ACTION_ENABLED !== false && (
-              <WebhookSection />
-            )}
-            {env.NEXT_PUBLIC_WEBHOOK_ACTION_ENABLED !== false &&
-              env.NEXT_PUBLIC_EXTERNAL_API_ENABLED && <ItemSeparator />}
-            {env.NEXT_PUBLIC_EXTERNAL_API_ENABLED && <ApiKeysSection />}
+            <ApiKeysSection />
           </ItemCard>
         </SettingsGroup>
       )}

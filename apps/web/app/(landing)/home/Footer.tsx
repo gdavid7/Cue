@@ -219,17 +219,6 @@ export function Footer() {
             ))}
             <CookieSettingsButton className="text-sm leading-6 text-gray-600 hover:text-gray-900" />
           </div>
-          <p className="mt-6 text-center text-xs leading-5 text-gray-500">
-            Powered by{" "}
-            <Link
-              href="https://getinboxzero.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-gray-900"
-            >
-              Inbox Zero
-            </Link>
-          </p>
         </div>
       </footer>
     );
