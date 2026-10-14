@@ -22,23 +22,9 @@ const MAILBOX_FILES_LOCK = "inbox-zero:mailbox-files";
 const MAILBOX_FILES_LOCK_WAIT_MS = 10_000;
 const MAILBOX_PATH = "/mailbox.sqlite";
 
-export async function createWasmSqliteDriver(input?: {
-  name?: string;
-  persist?: boolean;
-}): Promise<SqliteDriver> {
-  const sqlite = await initSqlite();
-  if (!canPersist(input?.persist)) return createMemoryDriver(sqlite);
-  const pool = await sqlite.installOpfsSAHPoolVfs({
-    name: input?.name ?? "mail-engine",
-    directory: MAIL_ENGINE_OPFS_DIRECTORY,
-    initialCapacity: 8,
-  });
-  await pool.unpauseVfs();
-  const database = new pool.OpfsSAHPoolDb(MAILBOX_PATH);
-  return createDatabaseDriver(database, async () => {
-    database.close();
-    await pool.pauseVfs();
-  });
+/** An in-memory mailbox database, for hosts that cannot persist one. */
+export async function createWasmMemoryDriver(): Promise<SqliteDriver> {
+  return createMemoryDriver(await initSqlite());
 }
 
 /**

@@ -14,7 +14,7 @@ import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
 import {
   MAIL_ENGINE_OPFS_DIRECTORY,
   createWasmMailStore,
-  createWasmSqliteDriver,
+  createWasmMemoryDriver,
   wipeOpfsMailEngine,
 } from "./wasm-sqlite";
 
@@ -50,7 +50,7 @@ const inboxQuery = {
 
 describe("browser wasm sqlite driver", () => {
   it("runs the shared store on an in-memory sqlite-wasm database", async () => {
-    const driver = await createWasmSqliteDriver({ persist: false });
+    const driver = await createWasmMemoryDriver();
     const store = await createSqliteMailStore(driver);
     await store.ensureAccount({
       accountId: "acc-1",
@@ -63,7 +63,7 @@ describe("browser wasm sqlite driver", () => {
   });
 
   it("keeps archive and new-mail counts aligned on the wasm driver", async () => {
-    const driver = await createWasmSqliteDriver({ persist: false });
+    const driver = await createWasmMemoryDriver();
     const store = await createSqliteMailStore(driver);
     await store.ensureAccount({
       accountId: "acc-1",
@@ -121,7 +121,7 @@ describe("browser wasm sqlite driver", () => {
   });
 
   it("matches the shared archive-then-new-mail fixture on sqlite-wasm", async () => {
-    const driver = await createWasmSqliteDriver({ persist: false });
+    const driver = await createWasmMemoryDriver();
     const store = await createSqliteMailStore(driver);
     await store.ensureAccount({
       accountId: "a1",
@@ -230,7 +230,7 @@ describe("browser wasm sqlite driver", () => {
   });
 
   it("rebuilds a legacy search index without its text copy on sqlite-wasm", async () => {
-    const driver = await createWasmSqliteDriver({ persist: false });
+    const driver = await createWasmMemoryDriver();
     const store = await createSqliteMailStore(driver);
     await store.ensureAccount({
       accountId: "acc-1",
@@ -304,7 +304,7 @@ describe("browser wasm sqlite driver", () => {
   });
 
   it("compresses stored bodies on sqlite-wasm and converts rows written before compression on open", async () => {
-    const driver = await createWasmSqliteDriver({ persist: false });
+    const driver = await createWasmMemoryDriver();
     const store = await createSqliteMailStore(driver);
     await store.ensureAccount({
       accountId: "acc-1",
