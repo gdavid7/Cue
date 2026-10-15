@@ -46,6 +46,8 @@ export type ContextCandidate = {
    * sender's own record (`sender`). Such an item matters however old it is.
    */
   linkedBy?: "url" | "sender";
+  /** For an item a link points at: the id of the message the link is in. */
+  linkedFrom?: string;
 };
 
 export type FocusThread = {

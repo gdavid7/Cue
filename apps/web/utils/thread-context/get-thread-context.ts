@@ -58,6 +58,8 @@ export type ThreadContextItem = {
   url?: string;
   /** The app it came from, for items that aren't email or calendar. */
   source?: string;
+  /** For an item a link in the thread points at: the message the link is in. */
+  linkedFrom?: string;
   reasons: ContextReason[];
 };
 
@@ -218,6 +220,7 @@ export async function collectThreadContext({
     at: candidate.at,
     url: candidate.url,
     source: candidate.source,
+    linkedFrom: candidate.linkedFrom,
     reasons,
   }));
   if (complete && connectors.complete && linkedPages.complete)
@@ -338,11 +341,14 @@ export function threadSignals(
   thread: EmailThread,
   userEmail: string,
 ): ThreadSignals {
-  const links = [
-    ...new Set(
-      thread.messages.flatMap((m) => linksIn(m).map((link) => link.href)),
-    ),
-  ];
+  // A link quoted in later replies stays with the message that first sent it.
+  const byUrl = new Map<string, ThreadSignals["links"][number]>();
+  for (const m of thread.messages) {
+    for (const { href } of linksIn(m)) {
+      if (!byUrl.has(href)) byUrl.set(href, { url: href, messageId: m.id });
+    }
+  }
+  const links = [...byUrl.values()];
   const sender = latestSenderMessage(thread, userEmail);
   return sender
     ? {

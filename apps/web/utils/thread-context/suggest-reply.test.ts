@@ -11,6 +11,7 @@ import {
   renderSource,
   type Source,
   suggestReply,
+  trustedMessageIds,
   webSearchQuery,
   webSource,
 } from "./suggest-reply";
@@ -309,26 +310,37 @@ describe("contextSources", () => {
     kind: "file" | "task" | "contact",
     title: string,
     source: string,
+    linkedFrom?: string,
   ) => ({
-    id: `${kind}:1`,
+    id: `${kind}:${title}`,
     kind,
     title,
     snippet: "",
     text: `${title}\nIn Progress`,
     at: "2026-10-12T00:00:00.000Z",
     source,
+    linkedFrom,
     reasons: [],
   });
   const items = [
-    item("task", "OPS-12 Rotate staging keys", "Jira"),
+    item("task", "OPS-12 Rotate staging keys", "Jira", "m1"),
     item("contact", "Nora Patel", "HubSpot"),
-    item("file", "Milestone 2 write-up", "Google Drive"),
+    item("file", "Milestone 2 write-up", "Google Drive", "m1"),
   ];
 
-  function sourcesFor(senderAuthenticated: boolean) {
+  function sourcesFor({
+    senderAuthenticated,
+    trusted,
+    from = items,
+  }: {
+    senderAuthenticated: boolean;
+    trusted: string[];
+    from?: ReturnType<typeof item>[];
+  }) {
     return contextSources({
-      items,
+      items: from,
       senderAuthenticated,
+      trustedMessageIds: new Set(trusted),
       emailProvider: {} as EmailProvider,
       timezone: null,
       logger: createScopedLogger("suggest-reply-test"),
@@ -336,7 +348,10 @@ describe("contextSources", () => {
   }
 
   it("backs a reply with linked tasks and the authenticated sender's record, labelled as such", async () => {
-    const sources = await sourcesFor(true);
+    const sources = await sourcesFor({
+      senderAuthenticated: true,
+      trusted: ["m1"],
+    });
 
     expect(sources.map((s) => [s.id, s.kind, s.text])).toEqual([
       [
@@ -357,12 +372,63 @@ describe("contextSources", () => {
     ]);
   });
 
-  // Anyone can forge From: to pull in the record of whoever they impersonate,
-  // or send a link to a guessed task id; neither backs a reply unchecked.
-  it("leaves out tasks and the sender's record when the sender's address wasn't authenticated", async () => {
-    const sources = await sourcesFor(false);
+  // Anyone can forge From: to pull in the record of whoever they impersonate.
+  it("leaves out the sender's record when the sender's address wasn't authenticated", async () => {
+    const sources = await sourcesFor({
+      senderAuthenticated: false,
+      trusted: ["m1"],
+    });
 
-    expect(sources.map((s) => s.kind)).toEqual(["file"]);
+    expect(sources.map((s) => s.kind)).toEqual(["task", "file"]);
+  });
+
+  // Anyone can send a link to a guessed task id; what counts is who sent
+  // the message the link is in, not who wrote last.
+  it("uses a task only when the message that links to it was authenticated", async () => {
+    const sources = await sourcesFor({
+      senderAuthenticated: true,
+      trusted: ["m2"],
+      from: [
+        item("task", "OPS-12 from m1", "Jira", "m1"),
+        item("task", "OPS-13 from m2", "Jira", "m2"),
+        item("task", "OPS-14 from nowhere", "Jira"),
+      ],
+    });
+
+    expect(sources.map((s) => s.title)).toEqual(["OPS-13 from m2"]);
+  });
+});
+
+describe("trustedMessageIds", () => {
+  it("trusts messages from authenticated senders and the user's own sent mail", () => {
+    const authenticated = {
+      ...getMockMessage({ id: "m1", from: "nora@northwind.com" }),
+      headers: {
+        ...getMockMessage().headers,
+        from: "nora@northwind.com",
+        "authentication-results":
+          "mx.google.com; dmarc=pass header.from=northwind.com",
+      },
+    };
+    const forged = getMockMessage({ id: "m2", from: "nora@northwind.com" });
+    const sent = getMockMessage({
+      id: "m3",
+      from: "me@example.com",
+      labelIds: ["SENT"],
+    });
+    // Mail claiming to be from the user that the user didn't send.
+    const spoofed = getMockMessage({ id: "m4", from: "me@example.com" });
+
+    expect([
+      ...trustedMessageIds(
+        {
+          id: "t",
+          snippet: "",
+          messages: [authenticated, forged, sent, spoofed],
+        },
+        "me@example.com",
+      ),
+    ]).toEqual(["m1", "m3"]);
   });
 });
 

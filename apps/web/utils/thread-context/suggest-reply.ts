@@ -6,7 +6,8 @@ import { getTodayForLLM, getWritingStylePrompt } from "@/utils/ai/helpers";
 import { getReplyMemoriesForPrompt } from "@/utils/ai/reply/reply-memory";
 import { extractEmailAddress, isSameEmailAddress } from "@/utils/email";
 import { getMessageTimestamp } from "@/utils/email/message-timestamp";
-import type { EmailProvider } from "@/utils/email/types";
+import type { EmailProvider, EmailThread } from "@/utils/email/types";
+import { GmailLabel } from "@/utils/gmail/label";
 import { createGenerateObject } from "@/utils/llms";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
@@ -190,6 +191,7 @@ export async function suggestReply({
   const context = await contextSources({
     items,
     senderAuthenticated: !!sender && isAuthenticatedSender(sender),
+    trustedMessageIds: trustedMessageIds(thread, userEmail),
     emailProvider,
     timezone: emailAccount.timezone,
     logger,
@@ -400,9 +402,30 @@ function normalize(text: string) {
     .trim();
 }
 
+/**
+ * Messages whose sender is vouched for: Gmail authenticated the From domain,
+ * or the user sent it (Gmail's SENT label, which no one else can set).
+ */
+export function trustedMessageIds(
+  thread: EmailThread,
+  userEmail: string,
+): Set<string> {
+  return new Set(
+    thread.messages
+      .filter(
+        (m) =>
+          isAuthenticatedSender(m) ||
+          (m.labelIds?.includes(GmailLabel.SENT) &&
+            isSameEmailAddress(m.headers.from, userEmail)),
+      )
+      .map((m) => m.id),
+  );
+}
+
 export async function contextSources({
   items,
   senderAuthenticated,
+  trustedMessageIds,
   emailProvider,
   timezone,
   logger,
@@ -410,20 +433,23 @@ export async function contextSources({
   items: Awaited<ReturnType<typeof collectThreadContext>>["items"];
   /** Whether the thread's latest sender passed DMARC, or aligned DKIM, at Gmail. */
   senderAuthenticated: boolean;
+  /** Messages whose sender is vouched for; see `trustedMessageIds`. */
+  trustedMessageIds: ReadonlySet<string>;
   emailProvider: EmailProvider;
   timezone: string | null;
   logger: Logger;
 }): Promise<Source[]> {
   // A contact is looked up by the From address, which anyone can forge to
   // pull in the record of whoever they impersonate, and a task by a link,
-  // whose id can be guessed. Either backs a reply only from a sender whose
-  // address was authenticated.
+  // whose id can be guessed. A contact backs a reply only when the sender was
+  // authenticated, a task only when the message that links to it was.
   const evidence = items
-    .filter(
-      (item) =>
-        (item.kind !== "contact" && item.kind !== "task") ||
-        senderAuthenticated,
-    )
+    .filter((item) => {
+      if (item.kind === "contact") return senderAuthenticated;
+      if (item.kind === "task")
+        return !!item.linkedFrom && trustedMessageIds.has(item.linkedFrom);
+      return true;
+    })
     .slice(0, MAX_CONTEXT_SOURCES);
   // Ranking ran on headers and snippets; the reply needs what was actually said.
   return Promise.all(

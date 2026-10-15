@@ -337,11 +337,23 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
     return mockExecuteTool.mock.calls.map(([call]) => [call.tool, call.args]);
   }
 
-  function lookup(signals: { links?: string[]; senderEmail?: string }) {
+  /** Links as written in message m1, unless given with their message. */
+  function lookup({
+    links = [],
+    senderEmail,
+  }: {
+    links?: (string | { url: string; messageId: string })[];
+    senderEmail?: string;
+  }) {
     return fetchConnectorCandidates({
       emailAccountId: "school",
       keywords: [],
-      signals: { links: [], ...signals },
+      signals: {
+        links: links.map((link) =>
+          typeof link === "string" ? { url: link, messageId: "m1" } : link,
+        ),
+        ...(senderEmail ? { senderEmail } : {}),
+      },
       logger,
       now: NOW,
     });
@@ -393,6 +405,7 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
         url: "https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/edit",
         people: [{ email: "kruiz@ucsd.edu", name: "Kevin Ruiz" }],
         linkedBy: "url",
+        linkedFrom: "m1",
       },
     ]);
   });
@@ -413,7 +426,12 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
       emailAccountId: "school",
       keywords: ["milestone"],
       signals: {
-        links: [`https://docs.google.com/document/d/${file.id}/edit`],
+        links: [
+          {
+            url: `https://docs.google.com/document/d/${file.id}/edit`,
+            messageId: "m2",
+          },
+        ],
       },
       logger,
       now: NOW,
@@ -423,6 +441,7 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
       expect.objectContaining({
         id: `googledrive:${file.id}`,
         linkedBy: "url",
+        linkedFrom: "m2",
       }),
     ]);
   });
@@ -474,6 +493,7 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
         url: "https://acme.atlassian.net/browse/OPS-12",
         people: [{ email: "nora@acme.com", name: "Nora Patel" }],
         linkedBy: "url",
+        linkedFrom: "m1",
       },
     ]);
   });
@@ -672,6 +692,7 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
         url: "https://app.clickup.com/t/86abc123",
         people: [{ email: "kruiz@ucsd.edu", name: "Kevin Ruiz" }],
         linkedBy: "url",
+        linkedFrom: "m1",
       },
     ]);
   });

@@ -58,7 +58,8 @@ type SenderLookup = {
 
 /** What a thread points at directly, read from its links and headers. */
 export type ThreadSignals = {
-  links: string[];
+  /** Each link with the message it is in, which vouches for it or doesn't. */
+  links: { url: string; messageId: string }[];
   /** The latest sender other than the user, unless automated; lowercase. */
   senderEmail?: string;
 };
@@ -87,8 +88,8 @@ export async function fetchConnectorCandidates({
   now?: Date;
 }): Promise<{ candidates: ContextCandidate[]; complete: boolean }> {
   const links = signals.links.flatMap((link) => {
-    const url = parseUrl(link);
-    return url ? [url] : [];
+    const url = parseUrl(link.url);
+    return url ? [{ url, messageId: link.messageId }] : [];
   });
   const apps = new Set([
     ...(keywords.length ? Object.keys(SOURCES) : []),
@@ -173,15 +174,23 @@ export async function fetchConnectorCandidates({
       const linkSource = LINK_SOURCES[name];
       const linked = linkSource
         ? uniqueBy(
-            links.flatMap((url) => {
+            links.flatMap(({ url, messageId }) => {
               const key = linkSource.match(url);
-              return key ? [{ key, url }] : [];
+              return key ? [{ key, url, messageId }] : [];
             }),
             (link) => link.key,
           )
             .slice(0, LINKS_PER_APP)
             .map((link) =>
-              lookup(() => linkSource.fetch(execute, link.key, link.url, now)),
+              lookup(async () => {
+                const item = await linkSource.fetch(
+                  execute,
+                  link.key,
+                  link.url,
+                  now,
+                );
+                return item && { ...item, linkedFrom: link.messageId };
+              }),
             )
         : [];
       const senderSource = SENDER_SOURCES[name];

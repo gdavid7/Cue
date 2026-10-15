@@ -182,8 +182,14 @@ describe("searchContext", () => {
           keywords: ["status"],
           signals: {
             links: [
-              "https://acme.atlassian.net/browse/OPS-12",
-              "https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/edit",
+              {
+                url: "https://acme.atlassian.net/browse/OPS-12",
+                messageId: "open-msg",
+              },
+              {
+                url: "https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/edit",
+                messageId: "open-msg",
+              },
             ],
             senderEmail: "nora@northwind.com",
           },

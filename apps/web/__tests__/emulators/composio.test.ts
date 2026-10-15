@@ -249,7 +249,7 @@ describe("Composio emulator with links and the sender in a thread", () => {
           "https://acme.atlassian.net/browse/OPS-12",
           "https://app.asana.com/0/1199999999999999/1200000000000001/f",
           "https://app.clickup.com/t/86abc123",
-        ],
+        ].map((url) => ({ url, messageId: "m1" })),
       },
       logger,
       now: NOW,
