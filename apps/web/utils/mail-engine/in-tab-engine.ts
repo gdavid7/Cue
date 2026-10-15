@@ -8,6 +8,7 @@ import {
   type BrowserEngineHooks,
   type BrowserMailEngine,
 } from "@/utils/mail-engine/create-browser-engine";
+import { startEngineLoop } from "@/utils/mail-engine/engine-loop";
 import { createMailHttpRequest } from "@/utils/mail-engine/http";
 import { browserStoragePressure } from "@/utils/mail-engine/storage-pressure";
 import { createWasmMailStore } from "@/utils/mail-engine/wasm-sqlite";
@@ -55,17 +56,7 @@ export async function createInTabEngine(
   if (shouldReleaseDeferredOnStart(input.online)) {
     await engine.requestSync([input.accountId]);
   }
-  let stopped = false;
-  const loop = (async () => {
-    while (!stopped) {
-      try {
-        await engine.runUntil(Date.now() + 2000);
-      } catch {
-        await delay(1000);
-      }
-      await delay(250);
-    }
-  })();
+  const loop = startEngineLoop(engine);
   const originalClose = engine.close.bind(engine);
   const originalRequestSync = engine.requestSync.bind(engine);
   return {
@@ -78,13 +69,10 @@ export async function createInTabEngine(
         originalRequestSync(accountIds),
       ),
     async close() {
-      stopped = true;
+      // The loop stops first, so its turn neither waits out its deadline nor
+      // fails against the closed store and pauses before noticing.
+      await loop.stop();
       await originalClose();
-      await loop;
     },
   };
-}
-
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
