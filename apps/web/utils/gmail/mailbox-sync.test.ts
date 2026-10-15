@@ -307,6 +307,48 @@ describe("getGmailMailboxSyncPage", () => {
     expect(second.cursor.length).toBeLessThanOrEqual(16_384);
   });
 
+  it("spreads a backlog of more than 1000 deletions over pages a sync page can hold", async () => {
+    // Emptying Trash while Cue is closed: one deletion per record.
+    const deleted = Array.from({ length: 1500 }, (_, index) => `d${index}`);
+    vi.mocked(getHistory).mockImplementation(async (_gmail, options) => {
+      const eligible = deleted
+        .map((id, index) => ({ id, historyId: 101 + index }))
+        .filter((record) => record.historyId > Number(options.startHistoryId));
+      const offset = Number(options.pageToken ?? 0);
+      const slice = eligible.slice(
+        offset,
+        offset + (options.maxResults ?? 100),
+      );
+      const end = offset + slice.length;
+      return {
+        history: slice.map((record) => ({
+          id: String(record.historyId),
+          messagesDeleted: [{ message: { id: record.id, threadId: "t" } }],
+        })),
+        historyId: String(100 + deleted.length),
+        nextPageToken: end < eligible.length ? String(end) : undefined,
+      };
+    });
+    vi.mocked(getMessagesBatch).mockResolvedValue([]);
+    const read = (cursor: string) =>
+      getGmailMailboxSyncPage({
+        gmail: {} as never,
+        accessToken: "access-token",
+        logger,
+        cursor,
+        limit: 50,
+      });
+
+    const pages = await readUntilCaughtUp(read, startCursor());
+
+    for (const page of pages) {
+      expect(page.deletedMessageIds.length).toBeLessThanOrEqual(1000);
+    }
+    expect(new Set(pages.flatMap((page) => page.deletedMessageIds))).toEqual(
+      new Set(deleted),
+    );
+  });
+
   it("catches up a short backlog in one history read", async () => {
     const gmail = fakeGmailHistory(3, 2);
 

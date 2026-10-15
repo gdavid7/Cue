@@ -29,6 +29,9 @@ const HISTORY_SCAN_PAGE_SIZE = 500;
 const HISTORY_SCAN_MAX_CALLS = 10;
 // About 200 units, which the quota gate admits within a second or so.
 const PREVIEW_SIZE = 10;
+// A backlog this small is applied whole in one page, well inside the 1000
+// changes a sync page may carry.
+const SHORT_CATCH_UP_MAX_CHANGES = 500;
 
 type GmailDeltaCursor = Extract<MailboxSyncCursor, { provider: "google" }>;
 
@@ -159,7 +162,9 @@ async function getGmailDeltaPage({
   if (
     !marker &&
     preview.historyId &&
-    preview.changes.upsertIds.length <= PREVIEW_SIZE
+    preview.changes.upsertIds.length <= PREVIEW_SIZE &&
+    preview.changes.upsertIds.length + preview.changes.deletedIds.size <=
+      SHORT_CATCH_UP_MAX_CHANGES
   ) {
     // The preview holds the whole backlog, so it is the catch-up.
     return fetchDeltaPage({
@@ -181,13 +186,16 @@ async function getGmailDeltaPage({
         through: preview.historyId,
       }
     : await newestGmailMessages({ gmail, logger, after: cursor.after });
+  // A preview carries only its few newest messages. Deletions, which can number
+  // thousands after Trash is emptied, wait for the replay's bounded pages.
   if (!marker) {
     return fetchDeltaPage({
       gmail,
       accessToken,
       logger,
-      ...preview.changes,
       upsertIds: previewed.upsertIds,
+      deletedIds: new Set(),
+      changedThreadIds: new Set(),
       cursor: { ...cursor, previewedThrough: previewed.through },
     });
   }
@@ -203,10 +211,7 @@ async function getGmailDeltaPage({
     logger,
   );
   const replay = getGmailMailboxChangeIds(response.history ?? []);
-  const deletedIds = new Set([
-    ...preview.changes.deletedIds,
-    ...replay.deletedIds,
-  ]);
+  const deletedIds = replay.deletedIds;
   const pageToken = response.nextPageToken ?? undefined;
   return fetchDeltaPage({
     gmail,
@@ -216,10 +221,7 @@ async function getGmailDeltaPage({
       ...new Set([...previewed.upsertIds, ...replay.upsertIds]),
     ].filter((id) => !deletedIds.has(id)),
     deletedIds,
-    changedThreadIds: new Set([
-      ...preview.changes.changedThreadIds,
-      ...replay.changedThreadIds,
-    ]),
+    changedThreadIds: replay.changedThreadIds,
     // The replay's end is the mailbox's current history, past the preview.
     cursor: pageToken
       ? { ...cursor, pageToken, previewedThrough: previewed.through }
