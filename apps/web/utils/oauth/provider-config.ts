@@ -25,6 +25,15 @@ export function hasMicrosoftOauthConfig() {
   );
 }
 
+export type MailboxProvider = "google" | "microsoft";
+
+export function getEnabledMailboxProviders(): MailboxProvider[] {
+  const providers: MailboxProvider[] = [];
+  if (hasGoogleOauthConfig()) providers.push("google");
+  if (hasMicrosoftOauthConfig()) providers.push("microsoft");
+  return providers;
+}
+
 export function hasAppleOauthConfig() {
   return (
     isConfiguredValue(env.APPLE_CLIENT_ID) &&

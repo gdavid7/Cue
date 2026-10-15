@@ -12,27 +12,36 @@ import {
 } from "@/providers/EmailAccountProvider";
 import { StatLoaderProvider } from "@/providers/StatLoaderProvider";
 import { SWRProvider } from "@/providers/SWRProvider";
+import { MailboxProvidersProvider } from "@/providers/MailboxProvidersProvider";
+import type { MailboxProvider } from "@/utils/oauth/provider-config";
 import { MailEngineRuntime } from "@/utils/mail-engine/MailEngineHost";
 
 export function AppProviders(props: {
   children: React.ReactNode;
   accounts: ServerEmailAccount[];
+  enabledMailboxProviders: readonly MailboxProvider[];
 }) {
   return (
     // JS-driven animations follow the OS "reduce motion" setting, as CSS does.
     <MotionConfig reducedMotion="user">
       <Provider store={jotaiStore}>
-        <EmailAccountProvider accounts={props.accounts}>
-          <SWRProvider>
-            <StatLoaderProvider>
-              <ChatProvider>
-                <MailEngineRuntime>
-                  <ComposeModalProvider>{props.children}</ComposeModalProvider>
-                </MailEngineRuntime>
-              </ChatProvider>
-            </StatLoaderProvider>
-          </SWRProvider>
-        </EmailAccountProvider>
+        <MailboxProvidersProvider
+          enabledProviders={props.enabledMailboxProviders}
+        >
+          <EmailAccountProvider accounts={props.accounts}>
+            <SWRProvider>
+              <StatLoaderProvider>
+                <ChatProvider>
+                  <MailEngineRuntime>
+                    <ComposeModalProvider>
+                      {props.children}
+                    </ComposeModalProvider>
+                  </MailEngineRuntime>
+                </ChatProvider>
+              </StatLoaderProvider>
+            </SWRProvider>
+          </EmailAccountProvider>
+        </MailboxProvidersProvider>
       </Provider>
     </MotionConfig>
   );

@@ -26,6 +26,7 @@ import { captureException } from "@/utils/error";
 import prisma from "@/utils/prisma";
 import { createScopedLogger } from "@/utils/logger";
 import { booleanString } from "@/utils/zod";
+import { getEnabledMailboxProviders } from "@/utils/oauth/provider-config";
 import { getOrderedEmailAccounts } from "@/utils/mail-url.server";
 import { THEME_COLOR } from "@/components/theme-options";
 import { premiumEntitlementSelect } from "@/utils/premium";
@@ -97,7 +98,10 @@ export default async function AppLayout({
   return (
     <div className={inter.variable}>
       <div className="font-inter">
-        <AppProviders accounts={accounts}>
+        <AppProviders
+          accounts={accounts}
+          enabledMailboxProviders={getEnabledMailboxProviders()}
+        >
           <MailEngineRuntime>
             <SideNavWithTopNav
               defaultOpen={!isClosed}
