@@ -52,6 +52,7 @@ import {
   splitDraftText,
 } from "./assist";
 import { attachMarkdownShortcuts } from "./markdown-shortcuts";
+import { closestWithin } from "./dom";
 import { placePopover, visibleBounds } from "./placement";
 import { findSlashTrigger, type SlashTriggerMatch } from "./slash-trigger";
 
@@ -1084,12 +1085,6 @@ function rangeAnchor(range: Range) {
 // Squire needs at least one block to place the caret in.
 function ensureBlock(editor: Squire, root: HTMLElement) {
   if (!root.firstElementChild) root.append(editor.createDefaultBlock());
-}
-
-function closestWithin(node: Node, selector: string, root: HTMLElement) {
-  const element = node instanceof Element ? node : node.parentElement;
-  const match = element?.closest(selector);
-  return match && root.contains(match) ? match : null;
 }
 
 function escapeHtml(value: string) {

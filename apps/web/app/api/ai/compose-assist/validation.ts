@@ -1,9 +1,15 @@
 import { z } from "zod";
 
-const MAX_DRAFT_PART = 20_000;
-const MAX_INSTRUCTION = 2000;
+export const COMPOSE_ASSIST_LIMITS = {
+  // The most draft text a request carries in any one part.
+  text: 20_000,
+  instruction: 2000,
+  // How much of the draft around an edit the model reads.
+  contextBefore: 6000,
+  contextAfter: 2000,
+};
 
-export const COMPOSE_ASSIST_ACTIONS = [
+const COMPOSE_ASSIST_ACTIONS = [
   "improve",
   "shorter",
   "formal",
@@ -20,17 +26,21 @@ export const composeAssistBody = z
     action: z.enum(COMPOSE_ASSIST_ACTIONS).optional(),
     language: z.string().trim().min(1).max(60).optional(),
     // What the user typed: the request for write, or a custom rewrite.
-    instruction: z.string().trim().max(MAX_INSTRUCTION).optional(),
+    instruction: z
+      .string()
+      .trim()
+      .max(COMPOSE_ASSIST_LIMITS.instruction)
+      .optional(),
     // Follow-ups typed after seeing a suggestion, oldest first.
     refinements: z
-      .array(z.string().trim().min(1).max(MAX_INSTRUCTION))
+      .array(z.string().trim().min(1).max(COMPOSE_ASSIST_LIMITS.instruction))
       .max(5)
       .default([]),
     // The draft as text, split at the selection or the caret. For
     // expand-notes, text is the whole body.
-    before: z.string().max(MAX_DRAFT_PART).default(""),
-    text: z.string().max(MAX_DRAFT_PART).default(""),
-    after: z.string().max(MAX_DRAFT_PART).default(""),
+    before: z.string().max(COMPOSE_ASSIST_LIMITS.text).default(""),
+    text: z.string().max(COMPOSE_ASSIST_LIMITS.text).default(""),
+    after: z.string().max(COMPOSE_ASSIST_LIMITS.text).default(""),
     threadId: z.string().trim().min(1).max(512).optional(),
     to: z.string().max(2000).optional(),
     subject: z.string().max(1000).optional(),

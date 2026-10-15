@@ -5,6 +5,7 @@ import {
 } from "../../core/email-profile";
 import { EMAIL_ELEMENT_STYLES } from "../../core/email-styles";
 import { normalizeLinkHref } from "../link-panel";
+import { closestWithin } from "./dom";
 
 type MarkdownSquire = Squire & { saveEditUndoState: () => void };
 
@@ -131,7 +132,7 @@ function convertBlockMarker(editor: MarkdownSquire) {
   )?.[1];
   if (!marker) return false;
   // A list can't hold another list item's marker as a new list.
-  if (marker === "-" && closestWithin(context.block, "li", editor)) {
+  if (marker === "-" && closestWithin(context.block, "li", editor.getRoot())) {
     return false;
   }
 
@@ -284,7 +285,9 @@ function caretContext(editor: Squire) {
   const root = editor.getRoot();
   const caret = editor.getSelection();
   if (!caret.collapsed || !root.contains(caret.startContainer)) return null;
-  if (closestWithin(caret.startContainer, EXCLUDED_CONTAINERS, editor)) {
+  if (
+    closestWithin(caret.startContainer, EXCLUDED_CONTAINERS, editor.getRoot())
+  ) {
     return null;
   }
   let node: Node | null = caret.startContainer;
@@ -339,10 +342,4 @@ function rangeOf(
 // Same length as the input, so character offsets still line up.
 function cleanText(text: string) {
   return text.replace(/\u00a0/gu, " ");
-}
-
-function closestWithin(node: Node, selector: string, editor: Squire) {
-  const element = node instanceof Element ? node : node.parentElement;
-  const match = element?.closest(selector);
-  return match && editor.getRoot().contains(match) ? match : null;
 }

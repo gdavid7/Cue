@@ -1,5 +1,8 @@
 import type { z } from "zod";
-import type { composeAssistBody } from "@/app/api/ai/compose-assist/validation";
+import {
+  COMPOSE_ASSIST_LIMITS,
+  type composeAssistBody,
+} from "@/app/api/ai/compose-assist/validation";
 import { getTodayForLLM, getWritingStylePrompt } from "@/utils/ai/helpers";
 import { getReplyMemoriesForPrompt } from "@/utils/ai/reply/reply-memory";
 import { extractEmailAddress, isSameEmailAddress } from "@/utils/email";
@@ -29,8 +32,6 @@ export type ComposeAssistContext = {
 
 const MAX_THREAD_MESSAGES = 4;
 const MAX_MESSAGE_TEXT = 2000;
-const MAX_DRAFT_BEFORE = 6000;
-const MAX_DRAFT_AFTER = 2000;
 
 const REWRITE_INSTRUCTIONS = {
   improve: "make it clearer and better written, without changing what it says.",
@@ -192,8 +193,8 @@ function buildTask({
   context: ComposeAssistContext;
   now: Date;
 }) {
-  const before = request.before.slice(-MAX_DRAFT_BEFORE);
-  const after = request.after.slice(0, MAX_DRAFT_AFTER);
+  const before = request.before.slice(-COMPOSE_ASSIST_LIMITS.contextBefore);
+  const after = request.after.slice(0, COMPOSE_ASSIST_LIMITS.contextAfter);
   const header = [
     getTodayForLLM(now),
     request.to || request.subject
