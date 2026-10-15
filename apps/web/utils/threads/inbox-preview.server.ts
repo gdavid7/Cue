@@ -56,6 +56,8 @@ export async function loadInboxPreview({
       const { messages } = await emailProvider.getMessagesWithPagination({
         inboxOnly: true,
         maxResults: PREVIEW_MESSAGES,
+        format: "metadata",
+        allowPartial: true,
       });
       return toListThreads(
         await attachThreadPlans({

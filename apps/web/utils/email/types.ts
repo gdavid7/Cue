@@ -351,6 +351,13 @@ export interface EmailProvider {
     inboxOnly?: boolean;
     unreadOnly?: boolean;
     includeDrafts?: boolean;
+    /** Headers only, where the provider can leave bodies out. */
+    format?: "metadata";
+    /**
+     * Return the messages that loaded when the provider keeps refusing the
+     * rest, instead of failing.
+     */
+    allowPartial?: boolean;
   }): Promise<{
     messages: ParsedMessage[];
     nextPageToken?: string;

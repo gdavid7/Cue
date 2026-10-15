@@ -46,6 +46,10 @@ describe("loadInboxPreview", () => {
     expect(mocks.getMessagesWithPagination).toHaveBeenCalledWith({
       inboxOnly: true,
       maxResults: 10,
+      // Headers are all a row shows, and a batch Gmail stops short still
+      // shows what loaded.
+      format: "metadata",
+      allowPartial: true,
     });
     expect(mocks.getThreadsWithQuery).not.toHaveBeenCalled();
     expect(mocks.quotaContexts).toEqual([
