@@ -54,10 +54,10 @@ describe("markdown shortcuts at the start of a line", () => {
     await editor.type("After");
 
     const rule = editor.textbox().querySelector("hr");
-    expect(rule).toBeTruthy();
+    if (!rule) throw new Error("No horizontal rule was inserted");
     expect(editor.text()).toBe("After");
     expect(
-      rule?.compareDocumentPosition(screenText(editor.textbox(), "After")) &
+      rule.compareDocumentPosition(screenText(editor.textbox(), "After")) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
@@ -121,6 +121,35 @@ describe("inline markdown shortcuts", () => {
     expect(link?.textContent).toBe("the doc");
     expect(link?.getAttribute("href")).toBe("https://example.com/doc");
     expect(editor.text()).toBe("Read the doc");
+  });
+
+  it.each([
+    [
+      "an address with a scheme",
+      "[docs](https://example.com)",
+      "https://example.com",
+    ],
+    ["an email address", "[Ada](ada@example.com)", "mailto:ada@example.com"],
+  ])("links %s", async (_name, typed, href) => {
+    const editor = await renderEditor();
+
+    await editor.type(typed);
+
+    expect(editor.textbox().querySelector("a")?.getAttribute("href")).toBe(
+      href,
+    );
+  });
+
+  it.each([
+    ["a word", "[a](b)"],
+    ["a footnote-style aside", "see [1](note)"],
+  ])("leaves %s in brackets as typed", async (_name, typed) => {
+    const editor = await renderEditor();
+
+    await editor.type(typed);
+
+    expect(editor.textbox().querySelector("a")).toBeNull();
+    expect(editor.text()).toBe(typed);
   });
 
   it("refuses links the composer would not allow", async () => {
@@ -325,7 +354,13 @@ async function renderEditor(props: Partial<EmailEditorProps> = {}) {
   const ref = createRef<EmailEditorHandle>();
   render(<EmailEditor initialHtml="" ref={ref} {...props} />);
   // The Squire engine is loaded lazily.
-  await screen.findByRole("textbox", { name: "Email message" });
+  // The Squire engine loads lazily, which is slow the first time on a busy
+  // machine.
+  await screen.findByRole(
+    "textbox",
+    { name: "Email message" },
+    { timeout: 10_000 },
+  );
   const textbox = () => screen.getByRole("textbox", { name: "Email message" });
   const handle = () => {
     if (!ref.current) throw new Error("Editor handle is not ready");

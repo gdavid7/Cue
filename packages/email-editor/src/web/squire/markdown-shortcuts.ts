@@ -264,7 +264,11 @@ function matchFormat(text: string) {
 function matchLink(text: string) {
   const match = LINK.exec(text);
   if (!match) return null;
-  const href = normalizeLinkHref(match[2]);
+  // "[a](b)" in prose is an aside, not a link: only something that reads as
+  // an address (a scheme, a domain or an email address) becomes one.
+  const target = match[2].trim();
+  if (!/^[a-z][a-z\d+.-]*:|\.|@/iu.test(target)) return null;
+  const href = normalizeLinkHref(target);
   if (!href || !isSafeEmailUrl(href)) return null;
   const start = text.length - match[0].length;
   return {
