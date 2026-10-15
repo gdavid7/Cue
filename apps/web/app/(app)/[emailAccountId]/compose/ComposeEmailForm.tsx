@@ -1835,7 +1835,8 @@ function ComposeEmailFormContent({
       <div
         className={cn(
           "flex flex-wrap items-center justify-between gap-2",
-          isComposeWindow && "shrink-0 px-4 py-2",
+          isComposeWindow &&
+            "shrink-0 px-4 py-2 max-sm:pb-[max(0.5rem,env(safe-area-inset-bottom))]",
         )}
       >
         <div className="flex flex-wrap items-center gap-1">

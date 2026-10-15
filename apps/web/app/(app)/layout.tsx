@@ -49,9 +49,11 @@ export const viewport = {
   themeColor: THEME_COLOR,
   initialScale: 1,
   width: "device-width",
-  height: "device-height",
   // safe area for iOS PWA
   viewportFit: "cover",
+  // Android shrinks the layout (and `dvh`) for the keyboard, so bottom
+  // controls like compose's Send stay above it.
+  interactiveWidget: "resizes-content",
 };
 
 export default async function AppLayout({
