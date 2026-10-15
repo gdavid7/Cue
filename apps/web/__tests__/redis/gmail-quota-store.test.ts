@@ -50,7 +50,13 @@ const keys = {
 const take = (input: {
   cost: number;
   floor: number;
-  blockers?: { key: string; pollMs?: number }[];
+  blockers?: { key: string; deferMs?: number }[];
+  usageField?: string;
+}) => admit(input).then(({ waitMs }) => waitMs);
+const admit = (input: {
+  cost: number;
+  floor: number;
+  blockers?: { key: string; deferMs?: number }[];
   usageField?: string;
 }) =>
   gmailQuotaStore.take({
@@ -158,12 +164,18 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       ).toBe(0);
     });
 
-    it("asks callers behind a blocker that lifts early to come back within its poll interval", async () => {
+    it("defers callers behind a blocker that lifts early, asking them back soon", async () => {
       await gmailQuotaStore.block({ key: keys.pause, ms: 90_000 });
-      const blockers = [{ key: keys.pause, pollMs: 5000 }];
-      expect(await take({ cost: 10, floor: 500, blockers })).toBe(5000);
+      const blockers = [{ key: keys.pause, deferMs: 5000 }];
+      expect(await admit({ cost: 10, floor: 500, blockers })).toEqual({
+        waitMs: 5000,
+        defer: true,
+      });
       await gmailQuotaStore.clear(keys.pause);
-      expect(await take({ cost: 10, floor: 500, blockers })).toBe(0);
+      expect(await admit({ cost: 10, floor: 500, blockers })).toEqual({
+        waitMs: 0,
+        defer: false,
+      });
     });
 
     it("empties the bucket when a refusal drains it, and keeps an overdraft", async () => {

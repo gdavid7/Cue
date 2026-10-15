@@ -31,9 +31,11 @@ const MAX_WAIT_MS: Record<GmailQuotaPriority, number> = {
 const INITIAL_SYNC_TTL_MS = 90_000;
 const INITIAL_SYNC_REFRESH_MS = 30_000;
 // The scan clears the marker the moment it ends, long before it expires, so
-// callers held behind it, the history backfill among them, ask again this
-// often instead of waiting out the expiry.
-const INITIAL_SYNC_POLL_MS = 5000;
+// callers held behind it, the history backfill among them, come back this
+// soon instead of waiting out the expiry. They never wait inside the gate:
+// the engine's lane would sit on the request while the scan that clears the
+// marker waits behind it.
+const INITIAL_SYNC_RETRY_MS = 5000;
 // The REST client retries for seconds; a gate that cannot coordinate within
 // this long lets the call through rather than stall every Gmail call.
 const STORE_TIMEOUT_MS = 300;
@@ -343,7 +345,7 @@ export async function admitGmailCall({
   const blockers =
     priority === "background"
       ? [
-          { key: keys.initialSync, pollMs: INITIAL_SYNC_POLL_MS },
+          { key: keys.initialSync, deferMs: INITIAL_SYNC_RETRY_MS },
           { key: keys.backgroundPause },
         ]
       : [];
@@ -357,9 +359,9 @@ export async function admitGmailCall({
         : Math.max(0, maxTotalWaitMs - (stats?.waitMs ?? 0)),
     );
   for (;;) {
-    let wait: number;
+    let admission: { waitMs: number; defer: boolean };
     try {
-      wait = await withinStoreTimeout(
+      admission = await withinStoreTimeout(
         gmailQuotaStore.take({
           bucketKey: keys.bucket,
           usageKey: keys.usage(minuteOf(Date.now())),
@@ -377,8 +379,9 @@ export async function admitGmailCall({
       noteStoreUnavailable(emailAccountId, context.caller, error);
       return ticket;
     }
+    const wait = admission.waitMs;
     if (wait === 0) return ticket;
-    if (Date.now() + wait > deadline) {
+    if (admission.defer || Date.now() + wait > deadline) {
       withinStoreTimeout(
         gmailQuotaStore.note({
           usageKey: keys.usage(minuteOf(Date.now())),

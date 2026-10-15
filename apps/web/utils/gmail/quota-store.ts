@@ -9,20 +9,22 @@ export type GmailQuotaStore = {
   /**
    * Debits `cost` when the bucket keeps at least `floor` tokens afterwards
    * (a request larger than the bucket only needs the bucket above `floor`)
-   * and no `blockers` key exists. Returns 0 when admitted, otherwise the
-   * milliseconds to wait before asking again. A blocker with `pollMs` can be
-   * cleared before it expires, so it asks for at most that long a wait.
+   * and no `blockers` key exists. Returns `waitMs` 0 when admitted,
+   * otherwise the milliseconds to wait before asking again. A blocker with
+   * `deferMs` is lifted explicitly, usually long before it expires, so a
+   * caller it holds is told to come back in `deferMs` (`defer`) rather than
+   * wait it out.
    */
   take(input: {
     bucketKey: string;
     usageKey: string;
     usageField: string;
-    blockers: { key: string; pollMs?: number }[];
+    blockers: { key: string; deferMs?: number }[];
     cost: number;
     capacity: number;
     perMinute: number;
     floor: number;
-  }): Promise<number>;
+  }): Promise<{ waitMs: number; defer: boolean }>;
   /** Sets `key` for `ms` unless it is already set for longer; optionally empties the bucket. */
   block(input: {
     key: string;
@@ -53,10 +55,14 @@ local capacity = tonumber(ARGV[2])
 local rate = tonumber(ARGV[3]) / 60000
 local floor = tonumber(ARGV[4])
 local wait = 0
+local defer = 0
 for i = 3, #KEYS do
   local ttl = redis.call('PTTL', KEYS[i])
-  local poll = tonumber(ARGV[i + 3])
-  if poll and poll > 0 and ttl > poll then ttl = poll end
+  local deferMs = tonumber(ARGV[i + 3])
+  if ttl > 0 and deferMs and deferMs > 0 then
+    ttl = deferMs
+    defer = 1
+  end
   if ttl > wait then wait = ttl end
 end
 local stored = redis.call('HMGET', KEYS[1], 'tokens', 'at')
@@ -67,12 +73,12 @@ local need = floor + math.min(cost, capacity - floor)
 if tokens < need then
   wait = math.max(wait, math.ceil((need - tokens) / rate))
 end
-if wait > 0 then return wait end
+if wait > 0 then return {wait, defer} end
 redis.call('HSET', KEYS[1], 'tokens', tostring(tokens - cost), 'at', tostring(now))
 redis.call('PEXPIRE', KEYS[1], 300000)
 redis.call('HINCRBY', KEYS[2], ARGV[5], cost)
 redis.call('PEXPIRE', KEYS[2], 300000)
-return 0
+return {0, 0}
 `;
 
 const blockScript = `
@@ -111,7 +117,7 @@ return claimed
 
 export const gmailQuotaStore: GmailQuotaStore = {
   async take(input) {
-    const wait = await redis.eval<string[], number>(
+    const result = await redis.eval<string[], [number, number] | null>(
       takeScript,
       [
         input.bucketKey,
@@ -124,12 +130,13 @@ export const gmailQuotaStore: GmailQuotaStore = {
         String(input.perMinute),
         String(input.floor),
         input.usageField,
-        ...input.blockers.map((blocker) => String(blocker.pollMs ?? 0)),
+        ...input.blockers.map((blocker) => String(blocker.deferMs ?? 0)),
       ],
     );
-    return typeof wait === "number" && Number.isFinite(wait) && wait > 0
-      ? wait
-      : 0;
+    const waitMs = Number(result?.[0]);
+    if (!Number.isFinite(waitMs) || waitMs <= 0)
+      return { waitMs: 0, defer: false };
+    return { waitMs, defer: Number(result?.[1]) === 1 };
   },
   async block({ key, ms, drainBucketKey }) {
     await redis.eval(

@@ -16,11 +16,11 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
   return {
     async take(input) {
       const now = Date.now();
+      const held = input.blockers.filter(({ key }) => ttl(key) > 0);
+      const defer = held.some(({ deferMs }) => deferMs);
       let wait = Math.max(
         0,
-        ...input.blockers.map(({ key, pollMs }) =>
-          pollMs ? Math.min(ttl(key), pollMs) : ttl(key),
-        ),
+        ...held.map(({ key, deferMs }) => deferMs || ttl(key)),
       );
       const rate = input.perMinute / 60_000;
       const stored = buckets.get(input.bucketKey);
@@ -33,12 +33,12 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
         input.floor + Math.min(input.cost, input.capacity - input.floor);
       if (tokens < need)
         wait = Math.max(wait, Math.ceil((need - tokens) / rate));
-      if (wait > 0) return wait;
+      if (wait > 0) return { waitMs: wait, defer };
       buckets.set(input.bucketKey, { tokens: tokens - input.cost, at: now });
       const fields = usage.get(input.usageKey) ?? {};
       fields[input.usageField] = (fields[input.usageField] ?? 0) + input.cost;
       usage.set(input.usageKey, fields);
-      return 0;
+      return { waitMs: 0, defer: false };
     },
     async block({ key, ms, drainBucketKey }) {
       if (ttl(key) < ms) blocks.set(key, Date.now() + ms);

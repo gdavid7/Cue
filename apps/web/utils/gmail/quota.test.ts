@@ -66,17 +66,17 @@ describe("Gmail quota gate", () => {
     await setGmailInitialSync(ACCOUNT, true);
     const read = vi.fn(async () => "thread");
 
-    const insights = runWithGmailQuota(
-      { caller: "user/inbox-insights", priority: "background" },
-      () => meterGmailCall({ emailAccountId: ACCOUNT, cost: 20 }, read),
-    ).catch((error: unknown) => error);
+    await expect(
+      runWithGmailQuota(
+        { caller: "user/inbox-insights", priority: "background" },
+        () => meterGmailCall({ emailAccountId: ACCOUNT, cost: 20 }, read),
+      ),
+    ).rejects.toBeInstanceOf(GmailCallDeferredError);
     await expect(
       runWithAuditContext({ source: "mail/v1/conversation-membership" }, () =>
         meterGmailCall({ emailAccountId: ACCOUNT, cost: 40 }, read),
       ),
     ).resolves.toBe("thread");
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(await insights).toBeInstanceOf(GmailCallDeferredError);
     expect(read).toHaveBeenCalledTimes(1);
   });
 
@@ -331,27 +331,29 @@ describe("Gmail quota gate", () => {
           ),
       );
 
-    // A scan that outlasts the gate's wait only defers the backfill briefly.
-    const deferred = backfillPage().catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(20_000);
-    const error = await deferred;
-    expect(error).toBeInstanceOf(GmailCallDeferredError);
-    expect((error as GmailCallDeferredError).retryAfterMs).toBeLessThanOrEqual(
-      5000,
+    // The engine runs its scopes one request at a time, so a backfill request
+    // held at the gate would also hold up the scan that clears the marker.
+    // It is turned away at once and asked back within seconds.
+    let settled: unknown = null;
+    backfillPage().then(
+      (value) => {
+        settled = value;
+      },
+      (error: unknown) => {
+        settled = error;
+      },
     );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBeInstanceOf(GmailCallDeferredError);
+    const retryAfterMs = (settled as GmailCallDeferredError).retryAfterMs;
+    expect(retryAfterMs).toBeLessThanOrEqual(5000);
 
-    // The primary scan's last page lands a moment later; the next attempt is
-    // admitted within a few seconds, not after the marker's 90 s expiry.
-    let admitted: number | null = null;
-    const startedAt = Date.now();
-    backfillPage().then(() => {
-      admitted = Date.now() - startedAt;
-    });
+    // The primary scan's last page lands a moment later, so the backfill's
+    // next attempt is admitted rather than waiting out the marker's expiry.
     await vi.advanceTimersByTimeAsync(1000);
     await setGmailInitialSync(BACKFILL_ACCOUNT, false);
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(admitted).not.toBeNull();
-    expect(admitted).toBeLessThanOrEqual(5000);
+    await vi.advanceTimersByTimeAsync(retryAfterMs - 1000);
+    await expect(backfillPage()).resolves.toBe("page");
   });
 
   it("makes every caller wait out Gmail's minute after a refusal outside background work", async () => {
