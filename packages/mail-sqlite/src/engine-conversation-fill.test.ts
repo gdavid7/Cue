@@ -443,6 +443,98 @@ describe("opening a conversation a first sync has not fully reached", () => {
     expect(held.order).toEqual(["a", "b"]);
   });
 
+  it("shares the membership read of a command already preparing the conversation", async () => {
+    let release: () => void = () => undefined;
+    let first = true;
+    const source = firstSyncSource({
+      firstPage: replies,
+      async readMembership(answer) {
+        if (first) {
+          first = false;
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        }
+        return answer();
+      },
+    });
+    const { engine } = await startFirstSync(source);
+    // Opening an unread conversation marks it read, which prepares it too.
+    expect((await markRead(engine, "read-1")).status).toBe("preparing");
+    const running = engine.runUntil(Date.now() + 1000);
+    while (source.membershipReads === 0) await settle();
+
+    const filling = engine.ensureConversationMessages(thread);
+    await settle();
+    release();
+
+    await expect(filling).resolves.toEqual({ status: "complete" });
+    await running;
+    expect(source.membershipReads).toBe(1);
+    await engine.close();
+  });
+
+  it("lets a command admitted during the fill use the fill's read", async () => {
+    let release: () => void = () => undefined;
+    let first = true;
+    const source = firstSyncSource({
+      firstPage: replies,
+      async readMembership(answer) {
+        if (first) {
+          first = false;
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        }
+        return answer();
+      },
+    });
+    const { engine } = await startFirstSync(source);
+    const filling = engine.ensureConversationMessages(thread);
+    while (source.membershipReads === 0) await settle();
+
+    expect((await markRead(engine, "read-1")).status).toBe("preparing");
+    await engine.runUntil(Date.now() + 200);
+    release();
+
+    await expect(filling).resolves.toEqual({ status: "complete" });
+    expect(source.membershipReads).toBe(1);
+    const inspection = await engine.inspect();
+    expect(
+      inspection.operations.find((op) => op.key.operationId === "read-1")
+        ?.status,
+    ).toBe("queued");
+    await engine.close();
+  });
+
+  it("fills the conversation itself when the command's read was put off", async () => {
+    let paused = true;
+    const source = firstSyncSource({
+      firstPage: replies,
+      async readMembership(answer) {
+        if (!paused) return answer();
+        paused = false;
+        return { status: "paused", retryAfterMs: 60_000, reason: "throttled" };
+      },
+    });
+    const { engine } = await startFirstSync(source);
+    await markRead(engine, "read-1");
+    await engine.runUntil(Date.now() + 500);
+    expect(source.membershipReads).toBe(1);
+
+    await expect(engine.ensureConversationMessages(thread)).resolves.toEqual({
+      status: "complete",
+    });
+
+    expect(source.membershipReads).toBe(2);
+    const inspection = await engine.inspect();
+    expect(
+      inspection.operations.find((op) => op.key.operationId === "read-1")
+        ?.status,
+    ).toBe("queued");
+    await engine.close();
+  });
+
   it("asks again right away for an account purged and added back", async () => {
     let paused = true;
     const source = firstSyncSource({
@@ -501,6 +593,16 @@ async function isDeleted(engine: MailEngine, messageId: string) {
   const inspection = await engine.inspect();
   return inspection.messages.find((row) => row.messageId === messageId)
     ?.deleted;
+}
+
+async function markRead(engine: MailEngine, commandId: string) {
+  return engine.submitConversations({
+    accountId: "acc-1",
+    commandId,
+    conversations: [thread],
+    change: { kind: "set_read", read: true },
+    observedRevision: (await engine.inspect()).revision,
+  });
 }
 
 async function archive(engine: MailEngine, commandId: string) {

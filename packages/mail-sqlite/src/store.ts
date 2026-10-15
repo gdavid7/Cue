@@ -851,6 +851,7 @@ export async function createSqliteMailStore(
           await applyChange(tx, change);
         }
         await recomputeTargets(tx, newTargets);
+        const preparedCommandIds: string[] = [];
         if (!input.page.nextPage) {
           await tx.execute(
             `INSERT INTO conversation_completeness(account_id, conversation_id, complete)
@@ -858,9 +859,31 @@ export async function createSqliteMailStore(
              ON CONFLICT(account_id, conversation_id) DO UPDATE SET complete = 1`,
             [accountId, conversationId],
           );
+          // The commands now target every message, so this read resolves
+          // their membership too and they skip their own.
+          for (const row of preparing) {
+            const commandId = String(row.command_id);
+            await tx.execute(
+              `UPDATE operation_conversations SET next_page = NULL, complete = 1
+               WHERE account_id = ? AND command_id = ? AND conversation_id = ?`,
+              [accountId, commandId, conversationId],
+            );
+            await tx.execute(
+              `UPDATE operations
+               SET claimed_by = NULL, claimed_until_ms = NULL, attempt_id = NULL, next_attempt_at_ms = NULL
+               WHERE account_id = ? AND command_id = ? AND status = 'preparing'`,
+              [accountId, commandId],
+            );
+            const remaining = await tx.query(
+              `SELECT 1 AS n FROM operation_conversations
+               WHERE account_id = ? AND command_id = ? AND complete = 0`,
+              [accountId, commandId],
+            );
+            if (remaining.length === 0) preparedCommandIds.push(commandId);
+          }
         }
         const revision = await bumpRevision(tx);
-        return { status: "committed" as const, revision };
+        return { status: "committed" as const, revision, preparedCommandIds };
       });
     },
     async settleAttempt(input) {
@@ -1390,17 +1413,30 @@ export async function createSqliteMailStore(
         };
       });
     },
-    async readConversationComplete(key) {
+    async readConversationMembershipState(key, nowMs) {
       return driver.read(async (tx) => {
         const coverage = await readCoverage(tx, [key.accountId]);
         if (coverage.every((scope) => scope.metadata === "complete")) {
-          return true;
+          return "complete" as const;
         }
         const flag = await tx.query(
           "SELECT complete FROM conversation_completeness WHERE account_id = ? AND conversation_id = ?",
           [key.accountId, key.conversationId],
         );
-        return Number(flag[0]?.complete) === 1;
+        if (Number(flag[0]?.complete) === 1) return "complete" as const;
+        const preparing = await tx.query(
+          `SELECT 1 AS n FROM operation_conversations c
+           JOIN operations o
+             ON o.account_id = c.account_id AND o.command_id = c.command_id
+           WHERE c.account_id = ? AND c.conversation_id = ? AND c.complete = 0
+             AND o.status = 'preparing'
+             AND (o.next_attempt_at_ms IS NULL OR o.next_attempt_at_ms <= ?)
+           LIMIT 1`,
+          [key.accountId, key.conversationId, nowMs],
+        );
+        return preparing.length > 0
+          ? ("preparing" as const)
+          : ("incomplete" as const);
       });
     },
     async readOperation(key) {

@@ -227,13 +227,20 @@ export interface MailStore {
   >;
   /**
    * Merges one page of a conversation's membership read outside any command,
-   * as when a reader opens it. The last page marks the conversation complete.
+   * as when a reader opens it. The last page marks the conversation complete
+   * and settles the membership of commands preparing it; `preparedCommandIds`
+   * names those now ready for `finishPreparation`.
    */
   applyConversationMembership(input: {
     session: AccountSession;
     page: ConversationMembershipPage;
   }): Promise<
-    { status: "committed"; revision: LocalRevision } | { status: "stale" }
+    | {
+        status: "committed";
+        revision: LocalRevision;
+        preparedCommandIds: string[];
+      }
+    | { status: "stale" }
   >;
   applyHydration(input: {
     session: AccountSession;
@@ -374,10 +381,14 @@ export interface MailStore {
     page: { after: string | null; pageSize: number },
   ): Promise<{ revision: LocalRevision; view: ConversationView }>;
   /**
-   * Whether every message of the conversation is local: sync has covered the
-   * whole mailbox, or its membership was merged.
+   * `complete` when every message of the conversation is local (sync covered
+   * the whole mailbox, or its membership was merged); `preparing` when a
+   * command's preparation is due by `nowMs` to read its membership.
    */
-  readConversationComplete(key: ConversationKey): Promise<boolean>;
+  readConversationMembershipState(
+    key: ConversationKey,
+    nowMs: number,
+  ): Promise<"complete" | "preparing" | "incomplete">;
   readDraft(key: DraftKey): Promise<DraftReadResult>;
   /**
    * A send already handed to the server to deliver at its `sendAtMs`, which

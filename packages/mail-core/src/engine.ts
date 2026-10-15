@@ -52,7 +52,7 @@ import {
   mailboxQueryKey,
 } from "./subscriptions";
 import type { SyncPage } from "./sync";
-import type { ConversationView } from "./ports/mail-store";
+import type { ClaimedWork, ConversationView } from "./ports/mail-store";
 
 const MAX_BOOTSTRAP_PAGES_PER_RUN = 25;
 const NON_ADVANCING_BOOTSTRAP_RETRY_MS = 60_000;
@@ -232,6 +232,7 @@ export function createMailEngine(input: {
   // conversation the provider doesn't have never is.
   const conversationFetchRetryAt = new Map<string, number>();
   const conversationFetchAborts = new Map<string, AbortController>();
+  const preparationWatchers = new Map<string, Set<() => void>>();
   let runningConversationFetches = 0;
   // Served newest first: the conversation open now matters more than ones
   // the reader passed on its way to it.
@@ -538,82 +539,11 @@ export function createMailEngine(input: {
           continue;
         }
         if (work.kind === "prepare") {
-          const membership = await source.readConversationMembership({
-            session: work.session,
-            requestId: work.resolutionId,
-            signal: signal ?? new AbortController().signal,
-            conversation: work.conversation,
-            resolutionId: work.resolutionId,
-            page: work.page,
-            pageSize: 100,
-          });
-          if (membership.status !== "ok") {
-            await store.deferPreparation({
-              accountId: work.accountId,
-              commandId: work.commandId,
-              attemptId: work.attemptId,
-              nextAttemptAtMs:
-                membership.status === "paused"
-                  ? runtime.nowMs() + membership.retryAfterMs
-                  : runtime.nowMs() + 60_000,
-            });
-            await noteConnection(work.accountId, membership);
-            continue;
+          try {
+            await prepareConversation(work, signal);
+          } finally {
+            notifyPreparationWatchers(conversationFetchKey(work.conversation));
           }
-          if (membership.value.status === "not_found") {
-            await store.failPreparation({
-              accountId: work.accountId,
-              commandId: work.commandId,
-              attemptId: work.attemptId,
-              session: work.session,
-              code: "conversation_not_found",
-            });
-            await refreshViews();
-            continue;
-          }
-          if (
-            membership.value.status === "unsupported" ||
-            membership.value.status === "restart_required"
-          ) {
-            if (membership.value.status === "unsupported") {
-              await store.failPreparation({
-                accountId: work.accountId,
-                commandId: work.commandId,
-                attemptId: work.attemptId,
-                session: work.session,
-                code: "membership_unsupported",
-              });
-              await refreshViews();
-            } else {
-              await store.deferPreparation({
-                accountId: work.accountId,
-                commandId: work.commandId,
-                attemptId: work.attemptId,
-                nextAttemptAtMs: runtime.nowMs() + 1000,
-              });
-            }
-            continue;
-          }
-          if (membership.value.status === "page") {
-            const prepared = await store.applyPreparationPage({
-              accountId: work.accountId,
-              commandId: work.commandId,
-              attemptId: work.attemptId,
-              session: work.session,
-              previousPage: work.page,
-              page: membership.value.page,
-            });
-            if (
-              prepared.status !== "stale" &&
-              !membership.value.page.nextPage
-            ) {
-              await store.finishPreparation({
-                accountId: work.accountId,
-                commandId: work.commandId,
-              });
-            }
-          }
-          await refreshViews();
           continue;
         }
         if (work.kind === "hydrate") {
@@ -770,12 +700,119 @@ export function createMailEngine(input: {
     },
   };
 
+  async function prepareConversation(
+    work: Extract<ClaimedWork, { kind: "prepare" }>,
+    signal?: AbortSignal,
+  ) {
+    // A fill already reading this conversation resolves this command's
+    // membership too, so one open makes one provider read.
+    if (conversationFetchAborts.has(conversationFetchKey(work.conversation))) {
+      await store.deferPreparation({
+        accountId: work.accountId,
+        commandId: work.commandId,
+        attemptId: work.attemptId,
+        nextAttemptAtMs: runtime.nowMs() + 1000,
+      });
+      return;
+    }
+    const membership = await source.readConversationMembership({
+      session: work.session,
+      requestId: work.resolutionId,
+      signal: signal ?? new AbortController().signal,
+      conversation: work.conversation,
+      resolutionId: work.resolutionId,
+      page: work.page,
+      pageSize: 100,
+    });
+    if (membership.status !== "ok") {
+      await store.deferPreparation({
+        accountId: work.accountId,
+        commandId: work.commandId,
+        attemptId: work.attemptId,
+        nextAttemptAtMs:
+          membership.status === "paused"
+            ? runtime.nowMs() + membership.retryAfterMs
+            : runtime.nowMs() + 60_000,
+      });
+      await noteConnection(work.accountId, membership);
+      return;
+    }
+    if (membership.value.status === "not_found") {
+      await store.failPreparation({
+        accountId: work.accountId,
+        commandId: work.commandId,
+        attemptId: work.attemptId,
+        session: work.session,
+        code: "conversation_not_found",
+      });
+      await refreshViews();
+      return;
+    }
+    if (
+      membership.value.status === "unsupported" ||
+      membership.value.status === "restart_required"
+    ) {
+      if (membership.value.status === "unsupported") {
+        await store.failPreparation({
+          accountId: work.accountId,
+          commandId: work.commandId,
+          attemptId: work.attemptId,
+          session: work.session,
+          code: "membership_unsupported",
+        });
+        await refreshViews();
+      } else {
+        await store.deferPreparation({
+          accountId: work.accountId,
+          commandId: work.commandId,
+          attemptId: work.attemptId,
+          nextAttemptAtMs: runtime.nowMs() + 1000,
+        });
+      }
+      return;
+    }
+    if (membership.value.status === "page") {
+      const prepared = await store.applyPreparationPage({
+        accountId: work.accountId,
+        commandId: work.commandId,
+        attemptId: work.attemptId,
+        session: work.session,
+        previousPage: work.page,
+        page: membership.value.page,
+      });
+      if (prepared.status !== "stale" && !membership.value.page.nextPage) {
+        await store.finishPreparation({
+          accountId: work.accountId,
+          commandId: work.commandId,
+        });
+      }
+    }
+    await refreshViews();
+  }
+
   async function fetchConversationMessages(
     key: ConversationKey,
   ): Promise<ConversationFetch> {
-    if (await store.readConversationComplete(key)) {
-      return { status: "complete" };
+    const id = conversationFetchKey(key);
+    // Watching starts before the read, so a preparation landing in between
+    // still wakes this fill.
+    const preparation = watchPreparation(id);
+    let state = await store.readConversationMembershipState(
+      key,
+      runtime.nowMs(),
+    );
+    if (state === "preparing") {
+      await preparation.settled;
+      state = await store.readConversationMembershipState(key, runtime.nowMs());
+      // The command's own read was put off; it fills the conversation when
+      // it runs, and the reader stops waiting meanwhile.
+      if (state === "preparing") {
+        return { status: "unavailable", retryAfterMs: 0 };
+      }
+    } else {
+      preparation.cancel();
     }
+    if (state === "complete") return { status: "complete" };
     return inConversationFetchSlot(conversationFetchKey(key), () =>
       readConversationMembers(key),
     );
@@ -865,10 +902,42 @@ export function createMailEngine(input: {
       if (applied.status === "stale") {
         return { status: "unavailable", retryAfterMs: 0 };
       }
+      for (const commandId of applied.preparedCommandIds) {
+        await store.finishPreparation({
+          accountId: key.accountId,
+          commandId,
+        });
+      }
       await refreshViews();
       page = membership.value.page.nextPage;
     } while (page);
     return { status: "complete" };
+  }
+
+  // Resolves when the command preparing a conversation next settles a read,
+  // or when the fill would have given up anyway.
+  function watchPreparation(id: string) {
+    let done: () => void = () => undefined;
+    const settled = new Promise<void>((resolve) => {
+      done = resolve;
+    });
+    const timeout = setTimeout(() => finish(), conversationFetchTimeoutMs);
+    const watchers = preparationWatchers.get(id) ?? new Set<() => void>();
+    preparationWatchers.set(id, watchers);
+    function finish() {
+      clearTimeout(timeout);
+      watchers.delete(finish);
+      if (watchers.size === 0 && preparationWatchers.get(id) === watchers) {
+        preparationWatchers.delete(id);
+      }
+      done();
+    }
+    watchers.add(finish);
+    return { settled, cancel: finish };
+  }
+
+  function notifyPreparationWatchers(id: string) {
+    for (const finish of [...(preparationWatchers.get(id) ?? [])]) finish();
   }
 
   // An account added back after a purge starts over, without waiting out
@@ -883,6 +952,9 @@ export function createMailEngine(input: {
     }
     for (const id of conversationFetchRetryAt.keys()) {
       if (id.startsWith(prefix)) conversationFetchRetryAt.delete(id);
+    }
+    for (const id of [...preparationWatchers.keys()]) {
+      if (id.startsWith(prefix)) notifyPreparationWatchers(id);
     }
   }
 
