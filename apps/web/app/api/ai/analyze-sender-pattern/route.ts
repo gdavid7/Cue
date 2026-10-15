@@ -27,7 +27,7 @@ export const POST = withError(
   async (request) => {
     const json = await request.json();
 
-    let logger = request.logger;
+    const logger = request.logger;
 
     if (!isValidInternalApiKey(await headers(), logger)) {
       return NextResponse.json({ error: "Invalid API key" }, { status: 401 });
@@ -37,9 +37,7 @@ export const POST = withError(
     const { emailAccountId } = data;
     const from = canonicalizeEmailAddress(data.from);
 
-    logger = logger.with({ from });
-
-    logger.trace("Analyzing sender pattern");
+    logger.trace("Analyzing sender pattern", { from });
 
     // return immediately and process in background
     after(() => process({ emailAccountId, from, logger }));

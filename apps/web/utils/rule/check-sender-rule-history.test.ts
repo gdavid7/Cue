@@ -41,6 +41,37 @@ describe("checkSenderRuleHistory", () => {
     });
   });
 
+  it("keeps the sender's address out of logs above trace", async () => {
+    vi.mocked(mockProvider.getMessagesFromSender).mockResolvedValue({
+      messages: [getMockMessage({ id: "msg1", threadId: "thread1" })],
+      nextPageToken: undefined,
+    });
+    prisma.executedRule.findMany.mockResolvedValue([]);
+    const output = [
+      vi.spyOn(console, "log").mockImplementation(() => {}),
+      vi.spyOn(console, "warn").mockImplementation(() => {}),
+      vi.spyOn(console, "error").mockImplementation(() => {}),
+    ];
+
+    try {
+      await checkSenderRuleHistory({
+        emailAccountId: "test-email-account",
+        from: "Private Person <private.person@example.com>",
+        provider: mockProvider,
+        logger,
+      });
+
+      const logged = output
+        .flatMap((spy) => spy.mock.calls)
+        .flat()
+        .join(" ");
+      expect(logged).toContain("Checking sender rule history");
+      expect(logged).not.toContain("private.person@example.com");
+    } finally {
+      for (const spy of output) spy.mockRestore();
+    }
+  });
+
   it("should return consistent rule when all emails match the same rule", async () => {
     const mockMessages = [
       getMockMessage({

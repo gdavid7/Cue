@@ -27,10 +27,11 @@ export async function checkSenderRuleHistory({
   provider: EmailProvider;
   logger: Logger;
 }): Promise<SenderRuleHistory> {
-  logger = logger.with({ emailAccountId, from });
+  logger = logger.with({ emailAccountId });
   const senderEmail = extractEmailAddress(from);
 
   logger.info("Checking sender rule history");
+  logger.trace("Sender for rule history", { from });
 
   const { messages } = await provider.getMessagesFromSender({
     senderEmail,
