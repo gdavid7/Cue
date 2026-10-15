@@ -11,6 +11,7 @@ import type {
   QuerySnapshot,
 } from "@inboxzero/mail-core/queries";
 import type { ThreadsQuery } from "@/utils/threads/validation";
+import { beginOptimisticTriage } from "@/utils/mail-engine/optimistic-triage";
 import { useEngineMailThreads } from "./use-engine-mail-threads";
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -203,7 +204,77 @@ describe("useEngineMailThreads", () => {
 
     expect(result.current.threads).toBe(afterEdit);
   });
+
+  it("shows triage at once and never lets an older snapshot bring the row back", async () => {
+    const { client, push, result } = renderPushedInbox([
+      conversation("c-1"),
+      conversation("c-2"),
+    ]);
+    await waitFor(() => expect(result.current.threads).toHaveLength(2));
+
+    let retireArchive: (() => void) | undefined;
+    act(() => {
+      retireArchive = beginOptimisticTriage(client, {
+        accountId: "acc-1",
+        conversationIds: ["c-2"],
+        change: { kind: "archive" },
+      });
+      beginOptimisticTriage(client, {
+        accountId: "acc-1",
+        conversationIds: ["c-1"],
+        change: { kind: "set_starred", starred: true },
+      });
+    });
+
+    expect(result.current.threads.map((thread) => thread.id)).toEqual(["c-1"]);
+    expect(result.current.threads[0].messages[0].labelIds).toContain("STARRED");
+
+    // A sync that finished before the engine wrote the archive.
+    act(() =>
+      push(mailboxSnapshot([conversation("c-1"), conversation("c-2")])),
+    );
+    expect(result.current.threads.map((thread) => thread.id)).toEqual(["c-1"]);
+
+    // The write failed: the row comes back where it was.
+    act(() => retireArchive?.());
+    expect(result.current.threads.map((thread) => thread.id)).toEqual([
+      "c-1",
+      "c-2",
+    ]);
+  });
 });
+
+function renderPushedInbox(initial: MailboxView["conversations"]) {
+  let snapshot = mailboxSnapshot(initial);
+  const listeners = new Set<() => void>();
+  const push = (next: QuerySnapshot<MailboxView>) => {
+    snapshot = next;
+    for (const listener of listeners) listener();
+  };
+  const client = {
+    observeMailbox: vi.fn(() => ({
+      getSnapshot: () => snapshot,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      close: () => undefined,
+    })),
+    requestSync: vi.fn(async () => ({ status: "scheduled" as const })),
+  } as unknown as MailClient;
+  const clientWrapper = ({ children }: { children: ReactNode }) => (
+    <MailEngineProvider client={client}>{children}</MailEngineProvider>
+  );
+  const { result } = renderHook(
+    () =>
+      useEngineMailThreads({
+        emailAccountId: "acc-1",
+        query: { type: "inbox" } as ThreadsQuery,
+      }),
+    { wrapper: clientWrapper },
+  );
+  return { client, push, result };
+}
 
 function conversation(
   conversationId: string,

@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { MailFrame } from "@/app/(app)/[emailAccountId]/mail/MailFrame";
-import { MailListPlaceholder } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
+import { InboxPreviewList } from "@/app/(app)/[emailAccountId]/mail/InboxPreviewList";
 import { MailShell } from "@/app/(app)/[emailAccountId]/mail/MailShell";
 import { PermissionsCheck } from "@/app/(app)/[emailAccountId]/PermissionsCheck";
 import {
@@ -18,11 +18,12 @@ export function MailScreen() {
         <ConversionQueryParamEvents />
       </Suspense>
       <ConversionAnalyticsScript />
-      {/* The frame paints at once; only the list waits for the engine. */}
+      {/* The frame paints at once; the inbox shows its newest mail from the
+          server while the engine opens. */}
       <MailEngineHost
         fallback={
           <MailFrame activeType="inbox">
-            <MailListPlaceholder message="Opening your mailbox…" withChrome />
+            <InboxPreviewList message="Opening your mailbox…" withChrome />
           </MailFrame>
         }
       >

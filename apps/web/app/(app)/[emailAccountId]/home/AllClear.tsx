@@ -7,6 +7,7 @@ import type { GetHomeResponse } from "@/app/api/user/home/route";
 import { useMailHref } from "@/hooks/useMailHref";
 import { cn } from "@/utils";
 import { ConnectLine } from "./NextUp";
+import { TodayStatus } from "./TodayStatus";
 import { formatDay, formatFromNow, formatTime } from "./today-format";
 
 /**
@@ -41,24 +42,15 @@ export function AllClear({
 
   return (
     <section aria-labelledby={titleId} className="space-y-3">
-      <div role="status">
-        <h2
-          className="flex items-center gap-2 font-title text-foreground text-lg"
-          id={titleId}
-        >
-          <span
-            aria-hidden
-            className="flex size-5 items-center justify-center rounded-full bg-green-600/10 text-green-700 motion-safe:fade-in motion-safe:zoom-in-75 motion-safe:animate-in motion-safe:duration-300 dark:bg-green-400/15 dark:text-green-400"
-          >
-            <CheckIcon className="size-3.5" strokeWidth={2.5} />
-          </span>
-          All clear.
-        </h2>
-        <p className="mt-1 text-muted-foreground text-sm">
-          Nothing needs a reply.{" "}
-          {today.checked ? <CueChecked today={today} /> : "Nothing new today."}
-        </p>
-      </div>
+      <TodayStatus
+        icon={CheckIcon}
+        title="All clear."
+        titleId={titleId}
+        tone="done"
+      >
+        Nothing needs a reply.{" "}
+        {today.checked ? <CueChecked today={today} /> : "Nothing new today."}
+      </TodayStatus>
 
       <div className="space-y-1.5 text-sm">
         {next ? (
@@ -66,12 +58,17 @@ export function AllClear({
             {next.tomorrow ? (
               <>
                 Tomorrow starts with <EventName event={next} /> at{" "}
-                {formatTime(next.at)}.
+                <span className="whitespace-nowrap">
+                  {formatTime(next.at)}.
+                </span>
               </>
             ) : (
               <>
-                Next: <EventName event={next} /> at {formatTime(next.at)} ·{" "}
-                <span className="text-muted-foreground">
+                Next: <EventName event={next} /> at{" "}
+                <span className="whitespace-nowrap">
+                  {formatTime(next.at)} ·
+                </span>{" "}
+                <span className="whitespace-nowrap text-muted-foreground">
                   {formatFromNow(next.at, now)}
                 </span>
               </>

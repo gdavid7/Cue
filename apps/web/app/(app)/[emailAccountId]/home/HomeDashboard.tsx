@@ -14,7 +14,13 @@ import {
 } from "react";
 import { useSetAtom } from "jotai";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
-import { CheckIcon, FlagIcon } from "lucide-react";
+import {
+  CheckIcon,
+  FlagIcon,
+  type LucideIcon,
+  MailSearchIcon,
+  PauseIcon,
+} from "lucide-react";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
 import type { ActionableThread } from "@/app/(app)/[emailAccountId]/mail/types";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
@@ -40,6 +46,7 @@ import { AllClear, CueChecked } from "./AllClear";
 import { BeforeYourMeeting } from "./BeforeYourMeeting";
 import { ConnectLine, NextUpList } from "./NextUp";
 import { formatTime } from "./today-format";
+import { TodayStatus } from "./TodayStatus";
 import {
   type TodayRowCorrection,
   type TodayRowHandlers,
@@ -456,23 +463,17 @@ function HomeLanes({
   return (
     <>
       {notice ? (
-        <div
-          className="rounded-lg bg-muted/60 px-4 py-3 text-foreground text-sm"
-          role="status"
-        >
-          {notice.text}
+        <TodayStatus icon={notice.icon} title={notice.title} tone={notice.tone}>
+          {notice.detail}
           {notice.link ? (
-            <>
-              {" "}
-              <Link
-                className="font-medium text-blue-600 underline-offset-2 hover:underline dark:text-blue-400"
-                href={notice.link.href}
-              >
-                {notice.link.label}
-              </Link>
-            </>
+            <Link
+              className="font-medium text-blue-600 underline-offset-2 hover:underline dark:text-blue-400"
+              href={notice.link.href}
+            >
+              {notice.link.label}
+            </Link>
           ) : null}
-        </div>
+        </TodayStatus>
       ) : null}
 
       {allClear ? (
@@ -540,7 +541,7 @@ function HomeLanes({
       {!allClear && (data.nextUp.length > 0 || data.suggestion) ? (
         <Section title="Next up">
           {data.nextUp.length > 0 ? (
-            <NextUpList items={data.nextUp} now={now} />
+            <NextUpList items={data.nextUp} layout={layout} now={now} />
           ) : null}
           {data.suggestion ? (
             <div className={data.nextUp.length > 0 ? "mt-2" : undefined}>
@@ -615,12 +616,21 @@ function cueNotice(
   cue: GetHomeResponse["cue"],
   emailAccountId: string,
   { hasTrackedThreads }: { hasTrackedThreads: boolean },
-): { text: string; link?: { label: string; href: string } } | null {
+): {
+  icon: LucideIcon;
+  /** Settings that are off are nags, quieter than what Cue is doing. */
+  tone: "info" | "quiet";
+  title: string;
+  detail?: string;
+  link?: { label: string; href: string };
+} | null {
   if (!cue.aiAccess) {
     // Conversations tracked while the assistant was on still show, so only
     // say they would appear when there are none.
     return {
-      text: hasTrackedThreads
+      icon: PauseIcon,
+      tone: "quiet",
+      title: hasTrackedThreads
         ? "The AI assistant is off, so this list isn't being updated."
         : "Turn on the AI assistant to see what needs a reply.",
       link: { label: "See plans", href: "/premium" },
@@ -628,7 +638,9 @@ function cueNotice(
   }
   if (!cue.replyTracking) {
     return {
-      text: "Reply tracking is off, so Cue isn't checking what needs a reply.",
+      icon: PauseIcon,
+      tone: "quiet",
+      title: "Reply tracking is off, so Cue isn't checking what needs a reply.",
       link: {
         label: "Turn it on in Rules",
         href: prefixPath(emailAccountId, "/automation"),
@@ -637,7 +649,10 @@ function cueNotice(
   }
   if (!cue.hasReadMail) {
     return {
-      text: "Cue is reading your recent mail. What needs a reply will appear here.",
+      icon: MailSearchIcon,
+      tone: "info",
+      title: "Cue is reading your recent mail.",
+      detail: "What needs a reply will appear here.",
     };
   }
   return null;
@@ -706,7 +721,8 @@ function ThreadList({
 function TaskRow({ task, href }: { task: AgentTask; href: string }) {
   return (
     <Link
-      className="flex w-full items-center gap-3 border-border/60 border-b bg-background px-3.5 py-2.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      // Text starts where the lanes' rows put it, past their unread-dot slot.
+      className="flex w-full items-center gap-3 border-border/60 border-b bg-background py-2.5 pr-3.5 pl-8 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring active:bg-muted lg:pr-5"
       href={href}
     >
       <div className="min-w-0 flex-1">
@@ -717,7 +733,7 @@ function TaskRow({ task, href }: { task: AgentTask; href: string }) {
           {task.detail}
         </div>
       </div>
-      <span className="shrink-0 text-muted-foreground text-xs">
+      <span className="shrink-0 whitespace-nowrap text-muted-foreground text-xs">
         {formatShortDate(new Date(task.at))}
       </span>
     </Link>
@@ -740,13 +756,21 @@ function HomeSkeleton({ layout }: { layout: "list" | "split" }) {
   );
 }
 
-/** "3 need a reply · next: Design review 2:00 PM". */
+/**
+ * "3 need a reply · next: Design review 2:00 PM". The meeting is left to the
+ * Next up list when that shows, rather than said twice.
+ */
 function busySummary(data: GetHomeResponse, needsReply: number) {
   const count = formatCount(needsReply, data.stats.needsYouCapped) ?? "0";
   const status = `${count} ${needsReply === 1 ? "needs" : "need"} a reply`;
   const next = data.calendar.next;
-  if (!next) return status;
-  return `${status} · ${next.tomorrow ? "tomorrow" : "next"}: ${next.title} ${formatTime(next.at)}`;
+  if (!next || data.nextUp.length > 0) return status;
+  return (
+    <>
+      {status} · {next.tomorrow ? "tomorrow" : "next"}: {next.title}{" "}
+      <span className="whitespace-nowrap">{formatTime(next.at)}</span>
+    </>
+  );
 }
 
 /**
