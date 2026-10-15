@@ -808,6 +808,7 @@ export function buildResolvedSystemPrompt({
 4. Create and update rules`,
     `Tool usage strategy:
 - Use the minimum number of tools needed. Start with read-only context tools before write tools when current inbox, account, or rule state is needed.
+- Issue independent lookups together in one step (for example several searches with different wording) instead of one per step. Once the results answer the question, stop searching and answer; if some lookups failed, answer from what you have and say what could not be checked.
 - When a request can be completed with available tools, call the tool instead of only describing what you would do.
 - For plain inbox search requests, call searchInbox directly. Do not call getAccountOverview unless the user is explicitly asking for account context.
 - For direct requests to create a new rule with enough condition and action details, call createRule directly when no current inbox, sender, or existing-rule state is needed. Use read-only tools first only when the request depends on current messages, sender identity, or an existing rule.
