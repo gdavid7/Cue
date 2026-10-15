@@ -71,6 +71,53 @@ describe("parseMessage", () => {
       ).toBeUndefined();
     });
 
+    // Gmail fetching from another mailbox records that hop, not a delivery.
+    it("keeps none when Gmail fetched the message by POP3, even over a forged delivery", () => {
+      expect(
+        parsed([
+          {
+            name: "Received",
+            value:
+              "from pop.example.com [5.6.7.8] by mx.google.com with POP3 id p1; Tue, 13 Oct 2026",
+          },
+          receivedByGmail,
+          { name: "Authentication-Results", value: forged },
+        ]),
+      ).toBeUndefined();
+      expect(
+        parsed([
+          {
+            name: "Received",
+            value: "from imap.example.com by mx.google.com with IMAP id i1",
+          },
+          { name: "Authentication-Results", value: forged },
+        ]),
+      ).toBeUndefined();
+    });
+
+    it("keeps Gmail's own verdict over a forged Received and Authentication-Results pair below it", () => {
+      expect(
+        parsed([
+          { name: "Received", value: "by 2002:a05:6a10:1 with SMTP id x" },
+          receivedByGmail,
+          { name: "Authentication-Results", value: gmail },
+          { name: "From", value: "nora@acme.com" },
+          receivedByGmail,
+          { name: "Authentication-Results", value: forged },
+        ]),
+      ).toBe(gmail);
+    });
+
+    it("keeps none when another hop sits between Gmail's delivery and the verdict", () => {
+      expect(
+        parsed([
+          receivedByGmail,
+          { name: "Received", value: "from relay.example by relay2.example" },
+          { name: "Authentication-Results", value: forged },
+        ]),
+      ).toBeUndefined();
+    });
+
     it("keeps none when Gmail's Received header comes only below it", () => {
       expect(
         parsed([
