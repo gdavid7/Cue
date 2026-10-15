@@ -78,14 +78,20 @@ async function startInboxPreview(account: { id: string; provider: string }) {
     return { preview: null };
   if (hasLocalMailbox(cookieStore.get(LOCAL_MAILBOX_COOKIE)?.value, account.id))
     return { preview: null };
-  // An inbox that opens on a tab, such as Gmail's Primary, would show its
-  // other tabs' mail and then swap to the tab.
+  return { preview: loadLandingInboxPreview(account) };
+}
+
+// An inbox that opens on a tab, such as Gmail's Primary, would show its other
+// tabs' mail and then swap to the tab. Checked with the rows, not before the
+// page is sent, so the page never waits on it.
+async function loadLandingInboxPreview(account: {
+  id: string;
+  provider: string;
+}) {
   const { splits } = await getMailSettings({ emailAccountId: account.id });
-  if (findLandingSplit(splits)?.filters.length) return { preview: null };
-  return {
-    preview: loadInboxPreview({
-      emailAccountId: account.id,
-      provider: account.provider,
-    }),
-  };
+  if (findLandingSplit(splits)?.filters.length) return null;
+  return loadInboxPreview({
+    emailAccountId: account.id,
+    provider: account.provider,
+  });
 }

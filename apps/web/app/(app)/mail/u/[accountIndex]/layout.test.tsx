@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   mailPath: "/mail/u/1/inbox" as string | null,
   localMailCookie: undefined as string | undefined,
   splits: [] as { id: string; filters: { kind: string; value: string }[] }[],
+  getMailSettings: vi.fn(),
   redirect: vi.fn((url: string) => {
     throw new Error(`redirect:${url}`);
   }),
@@ -21,7 +22,7 @@ vi.mock("@/utils/threads/inbox-preview.server", () => ({
   loadInboxPreview: (input: unknown) => mocks.loadInboxPreview(input),
 }));
 vi.mock("@/utils/split-inbox/settings.server", () => ({
-  getMailSettings: async () => ({ splits: mocks.splits }),
+  getMailSettings: () => mocks.getMailSettings(),
 }));
 vi.mock("next/headers", () => ({
   headers: async () =>
@@ -74,6 +75,9 @@ describe("MailRouteLayout", () => {
     mocks.mailPath = "/mail/u/1/inbox";
     mocks.localMailCookie = undefined;
     mocks.splits = [{ id: "all", filters: [] }];
+    mocks.getMailSettings.mockImplementation(async () => ({
+      splits: mocks.splits,
+    }));
   });
 
   it("opens one of the signed-in user's own accounts", async () => {
@@ -87,10 +91,12 @@ describe("MailRouteLayout", () => {
 
     await renderAt("1");
 
-    expect(mocks.loadInboxPreview).toHaveBeenCalledWith({
-      emailAccountId: "acc_b",
-      provider: "microsoft",
-    });
+    await vi.waitFor(() =>
+      expect(mocks.loadInboxPreview).toHaveBeenCalledWith({
+        emailAccountId: "acc_b",
+        provider: "microsoft",
+      }),
+    );
   });
 
   it("leaves a mailbox this browser has synced to the local engine", async () => {
@@ -113,8 +119,8 @@ describe("MailRouteLayout", () => {
 
     const layout = await renderAt("1");
 
+    await expect(screenOf(layout).props.preview).resolves.toBeNull();
     expect(mocks.loadInboxPreview).not.toHaveBeenCalled();
-    expect(screenOf(layout).props.preview).toBeNull();
   });
 
   it("fetches the inbox when it opens on All", async () => {
@@ -125,7 +131,15 @@ describe("MailRouteLayout", () => {
 
     await renderAt("1");
 
-    expect(mocks.loadInboxPreview).toHaveBeenCalled();
+    await vi.waitFor(() => expect(mocks.loadInboxPreview).toHaveBeenCalled());
+  });
+
+  it("sends the page without waiting on the inbox or on the tab settings", async () => {
+    mocks.getMailSettings.mockReturnValue(new Promise(() => {}));
+
+    const layout = await renderAt("1");
+
+    expect(screenOf(layout).props.preview).toBeInstanceOf(Promise);
   });
 
   it("keeps the mail screen in the same place whether or not it seeds the inbox", async () => {
