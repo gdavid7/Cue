@@ -27,19 +27,24 @@ const FLOOR: Record<GmailQuotaPriority, number> = {
 // units in one instant) while the minute held about 3,300 units. Its older
 // documentation put the per-user rate at 250 units a second, a moving
 // average; the current page lists only the minute. So any one second admits
-// at most `PACE_CAP` units in all, 80% of 250; sync and background stop
-// lower, so someone opening mail or asking the assistant always finds room.
+// at most `PACE_CAP` units in all, 80% of 250. Each priority may fill the
+// second up to its own level: sync leaves interactive calls room, and
+// background only runs below sync's level, so it never slows the sync that
+// fills the inbox.
 const PACE_WINDOW_MS = 1000;
 const PACE_CAP: Record<GmailQuotaPriority, number> = {
   interactive: 200,
-  sync: 120,
+  sync: 160,
   background: 80,
 };
-// For two seconds after a person's call, sync drops to 40 units a second
-// and background waits, so a first inbox page of 25 messages (about 505
-// units) takes the two and a half seconds the cap allows, not longer. A new
-// episode starts at most every three seconds, so someone clicking all the
-// time still leaves sync and background one second in three.
+// For two seconds after a person's large request, such as a first inbox page
+// or an assistant search, sync drops to 40 units a second and background
+// waits, so a first page of 25 messages (about 505 units) takes the two and a
+// half seconds the cap allows. Opening a thread is a few small reads and
+// starts no episode: the sync that fills that thread's older messages keeps
+// its share. A new episode starts at most every three seconds, so someone
+// working all the time still leaves sync and background one second in three.
+const INTERACTIVE_DEMAND_MIN_UNITS = 100;
 const INTERACTIVE_DEMAND_MS = 2000;
 const INTERACTIVE_DEMAND_EVERY_MS = 3000;
 const PACE_YIELD_CAP = { sync: 40, background: 0 };
@@ -418,16 +423,18 @@ export async function admitGmailCall({
             cap: PACE_CAP[priority],
             windowMs: PACE_WINDOW_MS,
             demand:
-              priority === "interactive"
+              priority !== "interactive"
                 ? {
                     key: keys.interactiveDemand,
-                    markMs: INTERACTIVE_DEMAND_MS,
-                    everyMs: INTERACTIVE_DEMAND_EVERY_MS,
-                  }
-                : {
-                    key: keys.interactiveDemand,
                     yieldCap: PACE_YIELD_CAP[priority],
-                  },
+                  }
+                : cost >= INTERACTIVE_DEMAND_MIN_UNITS
+                  ? {
+                      key: keys.interactiveDemand,
+                      markMs: INTERACTIVE_DEMAND_MS,
+                      everyMs: INTERACTIVE_DEMAND_EVERY_MS,
+                    }
+                  : { key: keys.interactiveDemand },
           },
         }),
       );

@@ -12,7 +12,7 @@ import {
 
 // Gmail charges every request in a batch at once, so a batch is one burst.
 // Each is sized to fit the gate's per-second pace at the caller's priority
-// (5 messages interactive, 3 sync, 2 background) rather than 25 at a time,
+// (5 messages interactive, 4 sync, 2 background) rather than 25 at a time,
 // which Gmail answered by refusing the tail of each batch.
 const RATE_LIMIT_RETRY_BATCH_SIZE = 10;
 const MAX_BATCH_RETRIES = 3;
