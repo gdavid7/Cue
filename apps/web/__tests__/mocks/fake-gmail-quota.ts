@@ -52,15 +52,20 @@ export type FakeGmailCall = {
  * A Gmail double that charges each request its documented cost and, like
  * Gmail, refuses requests once a rolling minute of accepted cost would pass
  * `unitsPerMinute`. Recent mail is `recentCount` messages; older mail is
- * `historyCount` more.
+ * `historyCount` more. With `unitsPerSecond`, it also refuses what would push
+ * the last second past that many units, as Gmail does for bursts well under
+ * the per-minute limit (seen in production: the tail of each 25-message batch
+ * refused while the minute held about 3,300 units).
  */
 export function createFakeGmail({
   unitsPerMinute = 6000,
   latencyMs = 250,
   recentCount = 150,
   historyCount = 4000,
+  unitsPerSecond = Number.POSITIVE_INFINITY,
 }: {
   unitsPerMinute?: number;
+  unitsPerSecond?: number;
   latencyMs?: number;
   recentCount?: number;
   historyCount?: number;
@@ -69,10 +74,13 @@ export function createFakeGmail({
 
   function charge(units: number) {
     const now = Date.now();
-    const spent = calls
-      .filter((call) => !call.limited && call.at > now - 60_000)
-      .reduce((sum, call) => sum + call.units, 0);
-    const limited = spent + units > unitsPerMinute;
+    const spentSince = (ms: number) =>
+      calls
+        .filter((call) => !call.limited && call.at > now - ms)
+        .reduce((sum, call) => sum + call.units, 0);
+    const limited =
+      spentSince(60_000) + units > unitsPerMinute ||
+      spentSince(1000) + units > unitsPerSecond;
     calls.push({
       at: now,
       caller: getAuditContext().source ?? "unattributed",
@@ -236,6 +244,17 @@ export function createFakeGmail({
       for (const start of calls) {
         const total = calls
           .filter((c) => c.at >= start.at && c.at < start.at + 60_000)
+          .reduce((sum, c) => sum + c.units, 0);
+        peak = Math.max(peak, total);
+      }
+      return peak;
+    },
+    /** The most accepted units in any rolling one-second window. */
+    peakSecondUnits() {
+      let peak = 0;
+      for (const start of calls) {
+        const total = calls
+          .filter((c) => c.at >= start.at && c.at < start.at + 1000)
           .reduce((sum, c) => sum + c.units, 0);
         peak = Math.max(peak, total);
       }

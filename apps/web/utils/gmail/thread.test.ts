@@ -4,6 +4,12 @@ import { getBatch } from "@/utils/gmail/batch";
 import { createTestLogger } from "@/__tests__/helpers";
 
 vi.mock("@/utils/gmail/batch");
+// These cases are about retries, not sizing: pin a request to 500 units
+// (25 messages) so their hand-built responses line up with the batches.
+vi.mock("@/utils/gmail/quota", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/gmail/quota")>()),
+  gmailRequestUnitsFor: vi.fn(() => 500),
+}));
 vi.mock("@/utils/sleep", () => ({
   sleep: vi.fn().mockResolvedValue(undefined),
 }));

@@ -22,6 +22,27 @@ const FLOOR: Record<GmailQuotaPriority, number> = {
   sync: 200,
   background: 500,
 };
+// Gmail also refuses short bursts far below the minute's limit: in
+// production it refused the tail of each 25-message first-sync batch (500
+// units in one instant) while the minute held about 3,300 units. Its older
+// documentation put the per-user rate at 250 units a second, a moving
+// average; the current page lists only the minute. So any one second admits
+// at most `PACE_CAP` units in all, 80% of 250; sync and background stop
+// lower, so someone opening mail or asking the assistant always finds room.
+const PACE_WINDOW_MS = 1000;
+const PACE_CAP: Record<GmailQuotaPriority, number> = {
+  interactive: 200,
+  sync: 120,
+  background: 80,
+};
+// For two seconds after a person's call, sync drops to 40 units a second
+// and background waits, so a first inbox page of 25 messages (about 505
+// units) takes the two and a half seconds the cap allows, not longer. A new
+// episode starts at most every three seconds, so someone clicking all the
+// time still leaves sync and background one second in three.
+const INTERACTIVE_DEMAND_MS = 2000;
+const INTERACTIVE_DEMAND_EVERY_MS = 3000;
+const PACE_YIELD_CAP = { sync: 40, background: 0 };
 const MAX_WAIT_MS: Record<GmailQuotaPriority, number> = {
   interactive: 10_000,
   sync: 15_000,
@@ -40,6 +61,9 @@ const ENGINE_SCAN_CALLER = "mail/v1/enumeration";
 // The REST client retries for seconds; a gate that cannot coordinate within
 // this long lets the call through rather than stall every Gmail call.
 const STORE_TIMEOUT_MS = 300;
+// After Gmail refuses a call, sync and background stand back while
+// interactive calls continue under Gmail's own retry.
+const SYNC_PAUSE_MIN_MS = 10_000;
 const BACKGROUND_PAUSE_MIN_MS = 30_000;
 // Usage hashes expire five minutes after their last write, so a summary can
 // still claim the four minutes before the current one.
@@ -357,15 +381,16 @@ export async function admitGmailCall({
 
   rememberUnsummarizedAccount(emailAccountId);
   const keys = accountKeys(emailAccountId);
-  const blockers =
-    priority === "background"
-      ? [
-          context.caller === ENGINE_SCAN_CALLER
-            ? { key: keys.initialSync, deferMs: INITIAL_SYNC_RETRY_MS }
-            : { key: keys.initialSync },
-          { key: keys.backgroundPause },
-        ]
-      : [];
+  const blockers = {
+    interactive: [],
+    sync: [{ key: keys.syncPause }],
+    background: [
+      context.caller === ENGINE_SCAN_CALLER
+        ? { key: keys.initialSync, deferMs: INITIAL_SYNC_RETRY_MS }
+        : { key: keys.initialSync },
+      { key: keys.backgroundPause },
+    ],
+  }[priority];
   const { stats, maxTotalWaitMs } = context;
   const deadline =
     Date.now() +
@@ -388,6 +413,22 @@ export async function admitGmailCall({
           capacity: BUCKET.capacity,
           perMinute: BUCKET.perMinute,
           floor: FLOOR[priority],
+          pace: {
+            key: keys.pace,
+            cap: PACE_CAP[priority],
+            windowMs: PACE_WINDOW_MS,
+            demand:
+              priority === "interactive"
+                ? {
+                    key: keys.interactiveDemand,
+                    markMs: INTERACTIVE_DEMAND_MS,
+                    everyMs: INTERACTIVE_DEMAND_EVERY_MS,
+                  }
+                : {
+                    key: keys.interactiveDemand,
+                    yieldCap: PACE_YIELD_CAP[priority],
+                  },
+          },
         }),
       );
     } catch (error) {
@@ -416,9 +457,9 @@ export async function admitGmailCall({
 }
 
 /**
- * Gmail refused a call for quota. A background caller only pauses background
- * work; anyone else also empties the shared bucket so every caller backs off
- * until Gmail's minute has refilled.
+ * Gmail refused a call for quota. Background work pauses; a refusal of
+ * anything else also pauses sync. Interactive calls keep going, with Gmail's
+ * own retry, since someone is waiting on them and they are few.
  */
 export async function noteGmailQuotaRefusal(
   ticket: GmailQuotaTicket,
@@ -429,19 +470,21 @@ export async function noteGmailQuotaRefusal(
   if (!ticket.emailAccountId || !isEmailProviderRateLimitRedisConfigured())
     return;
   const keys = accountKeys(ticket.emailAccountId);
-  const retryAfterMs = Math.max(
-    BACKGROUND_PAUSE_MIN_MS,
-    retryAfterFromMessage(error) ?? 0,
-  );
+  const retryAfterMs = retryAfterFromMessage(error) ?? 0;
   try {
     await withinStoreTimeout(
       gmailQuotaStore.block({
         key: keys.backgroundPause,
-        ms: retryAfterMs,
-        drainBucketKey:
-          ticket.priority === "background" ? undefined : keys.bucket,
+        ms: Math.max(BACKGROUND_PAUSE_MIN_MS, retryAfterMs),
       }),
     );
+    if (ticket.priority !== "background")
+      await withinStoreTimeout(
+        gmailQuotaStore.block({
+          key: keys.syncPause,
+          ms: Math.max(SYNC_PAUSE_MIN_MS, retryAfterMs),
+        }),
+      );
     await withinStoreTimeout(
       gmailQuotaStore.note({
         usageKey: keys.usage(minuteOf(Date.now())),
@@ -461,6 +504,15 @@ export function isGmailQuotaRefusal(error: unknown) {
     (info.status === 403 || info.status === 429) &&
     isRetryableError(info).isRateLimit
   );
+}
+
+/**
+ * The most units one Gmail request at `priority` should carry. Half its
+ * per-second cap lets a request in while the second holds other traffic,
+ * instead of waiting for a quiet second that steady sync never leaves.
+ */
+export function gmailRequestUnitsFor(priority: GmailQuotaPriority) {
+  return PACE_CAP[priority] / 2;
 }
 
 /**
@@ -640,7 +692,12 @@ function logMinuteUsage(
   const deferredByCaller: { caller: string; calls: number }[] = [];
   const refusedByCaller: { caller: string; calls: number }[] = [];
   const storeUnavailableByCaller: { caller: string; calls: number }[] = [];
+  let peakSecondUnits = 0;
   for (const [field, value] of Object.entries(usage)) {
+    if (field === "peak:second") {
+      peakSecondUnits = value;
+      continue;
+    }
     const separator = field.indexOf(":");
     const kind = field.slice(0, separator);
     const caller = field.slice(separator + 1);
@@ -655,6 +712,8 @@ function logMinuteUsage(
     minute: new Date(minute * 60_000).toISOString(),
     totalUnits: sumOf(unitsByCaller.map((entry) => entry.units)),
     limitUnits: GMAIL_USER_UNITS_PER_MINUTE,
+    // The most units admitted within any one second of the minute.
+    peakSecondUnits,
     unitsByCaller: unitsByCaller.sort((a, b) => b.units - a.units),
     deferredByCaller,
     refusedByCaller,
@@ -755,6 +814,9 @@ function accountKeys(emailAccountId: string) {
   const prefix = `gmail-quota:${emailAccountId}`;
   return {
     bucket: `${prefix}:bucket`,
+    pace: `${prefix}:pace`,
+    interactiveDemand: `${prefix}:interactive-demand`,
+    syncPause: `${prefix}:sync-pause`,
     initialSync: `${prefix}:initial-sync`,
     backgroundPause: `${prefix}:background-pause`,
     usage: (minute: number) => `${prefix}:usage:${minute}`,
