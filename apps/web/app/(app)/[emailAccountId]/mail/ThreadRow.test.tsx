@@ -79,6 +79,32 @@ describe("ThreadRow", () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
+  it("leaves held, modified and bubbled Space presses alone", () => {
+    const onToggleSelect = vi.fn();
+    renderRow({ onToggleSelect });
+    const row = screen.getByRole("option");
+
+    fireEvent.keyDown(row, { key: " ", repeat: true });
+    fireEvent.keyDown(row, { key: " ", metaKey: true });
+    fireEvent.keyDown(row, { key: " ", ctrlKey: true });
+    fireEvent.keyDown(row, { key: " ", altKey: true });
+    fireEvent.keyDown(screen.getByText("Office hours"), {
+      key: " ",
+    });
+
+    expect(onToggleSelect).not.toHaveBeenCalled();
+  });
+
+  // Focus stays on the row so J/K, Enter and Space carry on from there.
+  it("keeps focus on the row when its checkbox is clicked", () => {
+    renderRow();
+    const row = screen.getByRole("option");
+    row.focus();
+    const checkbox = screen.getByRole("checkbox", { hidden: true });
+
+    expect(fireEvent.mouseDown(checkbox)).toBe(false);
+  });
+
   // Children of role="option" are presentational, so buttons inside it have
   // no role or name for assistive tech.
   it("exposes the row's hover actions as named buttons outside the option", () => {

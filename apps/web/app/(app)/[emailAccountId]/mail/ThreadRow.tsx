@@ -247,6 +247,8 @@ export const ThreadRow = memo(function ThreadRow({
                   : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 max-lg:opacity-100",
               )}
               onClick={onClick}
+              // Focus stays on the row, where J/K, Enter and Space carry on.
+              onMouseDown={(event) => event.preventDefault()}
               // The listbox moves focus between rows; Space, `x` and Shift+click
               // select, so a tab stop per row would only bury the rest of the page.
               tabIndex={-1}
