@@ -276,6 +276,26 @@ describe("getHomeData", () => {
     expect(home.pending).toEqual([]);
   });
 
+  it("holds back the rest of the inbox until the labels load, so filed mail isn't shown there", async () => {
+    for (const failure of [
+      new GmailCallDeferredError(5000, "interactive"),
+      new Error("Bad request"),
+    ]) {
+      const newsletter = thread("weekly", {
+        from: "News <n@x.com>",
+        subject: "Weekly",
+        labels: ["INBOX", "Label_Newsletter"],
+      });
+      const provider = mockProvider({ INBOX: [newsletter] });
+      provider.getLabels.mockRejectedValue(failure);
+
+      const home = await run(provider);
+
+      expect(home.alsoInInbox).toEqual([]);
+      expect(home.pending).toEqual(["alsoInInbox"]);
+    }
+  });
+
   it("lists pending AI drafts as work in progress", async () => {
     prisma.executedAction.findMany.mockResolvedValue([
       {

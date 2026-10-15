@@ -29,6 +29,8 @@ const mocks = vi.hoisted(() => ({
   home: {
     data: undefined as GetHomeResponse | undefined,
     error: undefined as { error: string } | undefined,
+    gaveUp: false,
+    retry: vi.fn(),
   },
 }));
 
@@ -75,6 +77,8 @@ vi.mock("@/hooks/useHome", () => ({
       data,
       isLoading: false,
       error: mocks.home.error,
+      gaveUp: mocks.home.gaveUp,
+      retry: mocks.home.retry,
       mutate: (
         update?:
           | GetHomeResponse
@@ -104,6 +108,7 @@ describe("HomeDashboard row actions", () => {
     mocks.client.cancelOperation.mockResolvedValue({ status: "cancelled" });
     mocks.undoLatestToast.mockResolvedValue(false);
     mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
     mocks.home.data = homeData([
       thread("first", "Quarterly numbers"),
       thread("second", "Lunch on Friday?"),
@@ -235,6 +240,7 @@ describe("HomeDashboard states", () => {
     vi.clearAllMocks();
     mocks.client.getDiagnostics.mockResolvedValue({ revision: 1 });
     mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
   });
 
   afterEach(cleanup);
@@ -442,6 +448,31 @@ describe("HomeDashboard states", () => {
     expect(lanes()).toEqual(["Also in your inbox"]);
   });
 
+  it("caught up while waiting-on is still loading: shows it loading, not missing", () => {
+    mocks.home.data = { ...homeData([]), pending: ["waiting"] };
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toMatch(/^All clear\./);
+    expect(skeletons()).not.toEqual([]);
+  });
+
+  it("gave up on a pending lane: offers to try again instead of loading forever", () => {
+    mocks.home.data = {
+      ...homeData([thread("a", "Quarterly numbers")]),
+      pending: ["alsoInInbox"],
+    };
+    mocks.home.gaveUp = true;
+
+    renderToday();
+
+    expect(lanes()).toEqual(["Needs reply"]);
+    expect(skeletons()).toEqual([]);
+    expect(screen.getByText("Couldn't load this")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+    expect(mocks.home.retry).toHaveBeenCalled();
+  });
+
   it("error: shows the error alone, with no status or lanes", () => {
     mocks.home.data = undefined;
     mocks.home.error = { error: "Boom" };
@@ -462,6 +493,10 @@ function onlyStatus() {
 
 function lane(name: string) {
   return screen.getByRole("listbox", { name });
+}
+
+function skeletons() {
+  return [...document.querySelectorAll(".animate-pulse")];
 }
 
 function lanes() {

@@ -26,6 +26,7 @@ import type { ActionableThread } from "@/app/(app)/[emailAccountId]/mail/types";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
 import { useThreadActions } from "@/app/(app)/[emailAccountId]/mail/use-thread-actions";
 import { PlaceholderRow } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
+import { ErrorDisplay } from "@/components/ErrorDisplay";
 import { LoadingContent } from "@/components/LoadingContent";
 import { toastError, toastSuccess, undoLatestToast } from "@/components/Toast";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -55,6 +56,7 @@ import {
 
 const ALSO_IN_INBOX_LIMIT = 5;
 const NO_THREADS: ReadonlySet<string> = new Set();
+const NO_LANES: ReadonlySet<HomeLane> = new Set();
 const SKELETON_ROWS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2"];
 
 /**
@@ -66,7 +68,8 @@ const SKELETON_ROWS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2"];
  */
 export function HomeDashboard() {
   const { emailAccountId, emailAccount } = useAccount();
-  const { data, isLoading, error, mutate } = useHome(emailAccountId);
+  const { data, isLoading, error, mutate, gaveUp, retry } =
+    useHome(emailAccountId);
   const greetingText = useGreeting();
   const firstName = (emailAccount?.name || "").split(" ")[0];
   const mailHref = useMailHref();
@@ -398,8 +401,15 @@ export function HomeDashboard() {
             canChange={engineReady}
             layout={isLargeScreen ? "list" : "split"}
             onCorrect={correct}
-            pending={pending}
+            // Past the last refresh a pending lane would load forever.
+            pending={gaveUp ? NO_LANES : pending}
             threadHref={threadHref}
+          />
+        ) : null}
+        {gaveUp ? (
+          <ErrorDisplay
+            error={{ error: "Today's lanes didn't load in time" }}
+            onRetry={retry}
           />
         ) : null}
       </LoadingContent>
@@ -565,9 +575,7 @@ function HomeLanes({
       ) : null}
       {allClear ? null : <BeforeYourMeeting emailAccountId={emailAccountId} />}
 
-      {!allClear && pending.has("waiting") ? (
-        <HomeSkeleton layout={layout} />
-      ) : null}
+      {pending.has("waiting") ? <HomeSkeleton layout={layout} /> : null}
       {!allClear && lanes.waiting.length > 0 ? (
         <Section
           title="Waiting on"

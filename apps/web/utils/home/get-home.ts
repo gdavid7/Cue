@@ -193,11 +193,14 @@ export async function getHomeData({
     result.ok ? result.value : [];
   const needsYou = lane(needsYouResult);
   const waiting = lane(waitingResult);
+  // Without the labels, filed mail can't be told apart from the rest of the
+  // inbox, so that lane waits for a load that has them.
+  const inbox = labelsResult.ok ? inboxResult : PENDING;
   const pending = (
     [
       ["needsYou", needsYouResult],
       ["waiting", waitingResult],
-      ["alsoInInbox", inboxResult],
+      ["alsoInInbox", inbox],
     ] as const
   )
     .filter(([, result]) => !result.ok && result.pending)
@@ -239,7 +242,7 @@ export async function getHomeData({
   return {
     needsYou: needsYouRows,
     waiting: waiting.map(toRow).filter(isDefined),
-    alsoInInbox: lane(inboxResult)
+    alsoInInbox: lane(inbox)
       .filter((t) => !shownIds.has(t.id) && !isRecentlyFiled(t))
       .map(toRow)
       .filter(isDefined),

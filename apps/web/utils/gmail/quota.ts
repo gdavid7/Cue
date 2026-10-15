@@ -110,8 +110,9 @@ type GmailQuotaContext = {
 // they clicked or a question they asked the assistant, or it blocks first
 // paint of a page the person opened. Background: it only
 // enriches or analyzes mail the user already has. Any other route, the sync
-// engine's scans and webhooks among them, is sync. Today raises its own reads
-// to interactive within a time budget (utils/home/get-home.ts).
+// engine's scans and webhooks among them, is sync. A route a person is
+// waiting on that also fans out raises its own reads to interactive, with a
+// wait budget, through runWithGmailQuota.
 const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
   ...withPriority("interactive", [
     "labels",
