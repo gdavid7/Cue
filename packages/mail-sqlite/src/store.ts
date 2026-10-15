@@ -385,47 +385,13 @@ export async function createSqliteMailStore(
     },
     async finishPreparation(input) {
       return driver.write(async (tx) => {
-        const remaining = await tx.query(
-          `SELECT conversation_id FROM operation_conversations
-           WHERE account_id = ? AND command_id = ? AND complete = 0`,
-          [input.accountId, input.commandId],
-        );
-        if (remaining.length > 0) return { status: "stale" };
-        const operation = await loadOperation(
+        const queued = await queuePreparedOperation(
           tx,
           input.accountId,
           input.commandId,
+          digest,
         );
-        if (operation?.status !== "preparing") return { status: "stale" };
-        const payload = JSON.parse(String(operation.payload_json)) as {
-          change: SubmitMetadataCommand["change"];
-        };
-        const targets = await tx.query(
-          `SELECT message_id, conversation_id FROM operation_targets
-           WHERE account_id = ? AND command_id = ?`,
-          [input.accountId, input.commandId],
-        );
-        const messageTargets = targets.map((row) => ({
-          accountId: input.accountId,
-          messageId: String(row.message_id),
-        }));
-        const executable = {
-          kind: "metadata" as const,
-          targets: messageTargets,
-          change: payload.change,
-        };
-        const executableHash = await digest(executable);
-        await tx.execute(
-          `UPDATE operations SET status = 'queued', executable_hash = ?, executable_payload_json = ?
-           WHERE account_id = ? AND command_id = ?`,
-          [
-            executableHash,
-            JSON.stringify(executable),
-            input.accountId,
-            input.commandId,
-          ],
-        );
-        await recomputeTargets(tx, messageTargets);
+        if (!queued) return { status: "stale" };
         const revision = await bumpRevision(tx);
         return {
           status: "queued" as const,
@@ -439,6 +405,31 @@ export async function createSqliteMailStore(
     },
     async claimWork(input) {
       return driver.write(async (tx) => {
+        // A command whose membership was settled but which a stopped host
+        // never queued would otherwise stay preparing for good.
+        const prepared = await tx.query(
+          `SELECT o.account_id, o.command_id FROM operations o
+           WHERE o.status = 'preparing'
+             AND EXISTS (
+               SELECT 1 FROM operation_conversations c
+               WHERE c.account_id = o.account_id AND c.command_id = o.command_id
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM operation_conversations c
+               WHERE c.account_id = o.account_id AND c.command_id = o.command_id
+                 AND c.complete = 0
+             )
+           LIMIT 20`,
+        );
+        for (const row of prepared) {
+          await queuePreparedOperation(
+            tx,
+            String(row.account_id),
+            String(row.command_id),
+            digest,
+          );
+        }
+        if (prepared.length > 0) await bumpRevision(tx);
         const preparing = await tx.query(
           `SELECT o.account_id, o.command_id, c.conversation_id, c.resolution_id, c.next_page, a.generation
            FROM operations o
@@ -858,6 +849,30 @@ export async function createSqliteMailStore(
              ON CONFLICT(account_id, conversation_id) DO UPDATE SET complete = 1`,
             [accountId, conversationId],
           );
+          // The commands now target every message, so this read resolves
+          // their membership too and they skip their own.
+          for (const row of preparing) {
+            const commandId = String(row.command_id);
+            await tx.execute(
+              `UPDATE operation_conversations SET next_page = NULL, complete = 1
+               WHERE account_id = ? AND command_id = ? AND conversation_id = ?`,
+              [accountId, commandId, conversationId],
+            );
+            await tx.execute(
+              `UPDATE operations
+               SET claimed_by = NULL, claimed_until_ms = NULL, attempt_id = NULL, next_attempt_at_ms = NULL
+               WHERE account_id = ? AND command_id = ? AND status = 'preparing'`,
+              [accountId, commandId],
+            );
+            const remaining = await tx.query(
+              `SELECT 1 AS n FROM operation_conversations
+               WHERE account_id = ? AND command_id = ? AND complete = 0`,
+              [accountId, commandId],
+            );
+            if (remaining.length === 0) {
+              await queuePreparedOperation(tx, accountId, commandId, digest);
+            }
+          }
         }
         const revision = await bumpRevision(tx);
         return { status: "committed" as const, revision };
@@ -1390,17 +1405,30 @@ export async function createSqliteMailStore(
         };
       });
     },
-    async readConversationComplete(key) {
+    async readConversationMembershipState(key, nowMs) {
       return driver.read(async (tx) => {
         const coverage = await readCoverage(tx, [key.accountId]);
         if (coverage.every((scope) => scope.metadata === "complete")) {
-          return true;
+          return "complete" as const;
         }
         const flag = await tx.query(
           "SELECT complete FROM conversation_completeness WHERE account_id = ? AND conversation_id = ?",
           [key.accountId, key.conversationId],
         );
-        return Number(flag[0]?.complete) === 1;
+        if (Number(flag[0]?.complete) === 1) return "complete" as const;
+        const preparing = await tx.query(
+          `SELECT 1 AS n FROM operation_conversations c
+           JOIN operations o
+             ON o.account_id = c.account_id AND o.command_id = c.command_id
+           WHERE c.account_id = ? AND c.conversation_id = ? AND c.complete = 0
+             AND o.status = 'preparing'
+             AND (o.next_attempt_at_ms IS NULL OR o.next_attempt_at_ms <= ?)
+           LIMIT 1`,
+          [key.accountId, key.conversationId, nowMs],
+        );
+        return preparing.length > 0
+          ? ("preparing" as const)
+          : ("incomplete" as const);
       });
     },
     async readOperation(key) {
@@ -2887,6 +2915,55 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
       messageId: message.messageId,
     });
   }
+}
+
+// Queues a preparing command once every conversation's membership is known,
+// in the caller's transaction so the two never come apart.
+async function queuePreparedOperation(
+  tx: SqlTransaction,
+  accountId: string,
+  commandId: string,
+  digest: (value: unknown) => Promise<string>,
+) {
+  const remaining = await tx.query(
+    `SELECT conversation_id FROM operation_conversations
+     WHERE account_id = ? AND command_id = ? AND complete = 0`,
+    [accountId, commandId],
+  );
+  if (remaining.length > 0) return false;
+  const operation = await loadOperation(tx, accountId, commandId);
+  if (operation?.status !== "preparing") return false;
+  const payload = JSON.parse(String(operation.payload_json)) as {
+    change: SubmitMetadataCommand["change"];
+  };
+  const targets = await tx.query(
+    `SELECT message_id FROM operation_targets
+     WHERE account_id = ? AND command_id = ?`,
+    [accountId, commandId],
+  );
+  const messageTargets = targets.map((row) => ({
+    accountId,
+    messageId: String(row.message_id),
+  }));
+  const executable = {
+    kind: "metadata" as const,
+    targets: messageTargets,
+    change: payload.change,
+  };
+  await tx.execute(
+    `UPDATE operations
+     SET status = 'queued', executable_hash = ?, executable_payload_json = ?,
+         claimed_by = NULL, claimed_until_ms = NULL, attempt_id = NULL, next_attempt_at_ms = NULL
+     WHERE account_id = ? AND command_id = ?`,
+    [
+      await digest(executable),
+      JSON.stringify(executable),
+      accountId,
+      commandId,
+    ],
+  );
+  await recomputeTargets(tx, messageTargets);
+  return true;
 }
 
 async function recomputeTargets(tx: SqlTransaction, targets: MessageKey[]) {
