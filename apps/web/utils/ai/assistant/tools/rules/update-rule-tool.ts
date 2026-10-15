@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { type InferUITool, tool } from "ai";
 import { z } from "zod";
 import { LogicalOperator } from "@/generated/prisma/enums";
@@ -9,7 +10,9 @@ import {
   type RuleAction,
 } from "@/utils/ai/rule/create-rule-schema";
 import { isDuplicateError } from "@/utils/prisma-helpers";
+import { isOutboundRuleAction } from "@/utils/rule/outbound-actions";
 import {
+  outboundActionsNeedChatConfirmation,
   partialUpdateRule,
   setRuleEnabled,
   updateRuleActions,
@@ -244,45 +247,43 @@ export const updateRuleTool = ({
           };
         }
 
-        if (effectiveUpdates.name || effectiveUpdates.condition) {
-          await partialUpdateRule({
+        const { needsConfirmation, riskMessages } =
+          outboundActionsNeedChatConfirmation(
+            buildRiskCheckInput({
+              rule,
+              effectiveUpdates,
+              originalActions,
+              provider,
+            }),
+          );
+        if (needsConfirmation) {
+          return {
+            success: true,
+            actionType: "update_rule" as const,
+            requiresConfirmation: true as const,
+            confirmationState: "pending" as const,
+            riskMessages,
             ruleId: rule.id,
-            emailAccountId,
-            data: {
-              ...(effectiveUpdates.name && { name: effectiveUpdates.name }),
-              ...(effectiveUpdates.condition &&
-                buildConditionUpdateData(effectiveUpdates.condition)),
-            },
-          });
+            ruleFingerprint: getRuleFingerprint(rule),
+            originalName: rule.name,
+            updatedName: effectiveUpdates.name ?? rule.name,
+            originalEnabled: rule.enabled,
+            updatedEnabled: effectiveUpdates.enabled ?? rule.enabled,
+            originalConditions,
+            updatedConditions: effectiveUpdates.condition,
+            originalActions,
+            updatedActions: effectiveUpdates.actions,
+          };
         }
 
-        if (effectiveUpdates.actions) {
-          await updateRuleActions({
-            ruleId: rule.id,
-            actions: effectiveUpdates.actions.map((action) => ({
-              type: action.type,
-              fields: buildProviderRuleActionFields({
-                provider,
-                fields: action.fields ?? {},
-              }),
-              delayInMinutes: action.delayInMinutes ?? null,
-            })),
-            provider,
-            emailAccountId,
-            logger,
-          });
-        }
-
-        if (
-          effectiveUpdates.enabled !== undefined &&
-          effectiveUpdates.enabled !== rule.enabled
-        ) {
-          await setRuleEnabled({
-            ruleId: rule.id,
-            emailAccountId,
-            enabled: effectiveUpdates.enabled,
-          });
-        }
+        await applyRuleUpdate({
+          ruleId: rule.id,
+          currentEnabled: rule.enabled,
+          emailAccountId,
+          provider,
+          updates: effectiveUpdates,
+          logger,
+        });
 
         const snapshot = await loadRuleSnapshotAfterWrite({
           emailAccountId,
@@ -332,8 +333,130 @@ export const updateRuleTool = ({
 
 export type UpdateRuleTool = InferUITool<ReturnType<typeof updateRuleTool>>;
 
+export const RULE_FINGERPRINT_SELECT = {
+  name: true,
+  enabled: true,
+  instructions: true,
+  from: true,
+  to: true,
+  subject: true,
+  conditionalOperator: true,
+  actions: {
+    select: {
+      type: true,
+      content: true,
+      label: true,
+      to: true,
+      cc: true,
+      bcc: true,
+      subject: true,
+      url: true,
+      folderName: true,
+      delayInMinutes: true,
+    },
+  },
+} as const;
+
+/**
+ * What the rule does now, as one value, so a confirmation can tell that the
+ * rule it was shown is still the rule it would change. Covers action edits
+ * that may not touch the rule's own updatedAt.
+ */
+export function getRuleFingerprint(rule: {
+  name: string;
+  enabled: boolean;
+  instructions: string | null;
+  from: string | null;
+  to: string | null;
+  subject: string | null;
+  conditionalOperator: string | null;
+  actions: Array<Record<string, unknown> & { type: string }>;
+}) {
+  const actions = rule.actions
+    .map((action) =>
+      JSON.stringify(
+        Object.keys(RULE_FINGERPRINT_SELECT.actions.select).map((key) => [
+          key,
+          action[key] ?? null,
+        ]),
+      ),
+    )
+    .sort();
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        rule.name,
+        rule.enabled,
+        rule.instructions,
+        rule.from,
+        rule.to,
+        rule.subject,
+        rule.conditionalOperator,
+        actions,
+      ]),
+    )
+    .digest("hex");
+}
+
+export async function applyRuleUpdate({
+  ruleId,
+  currentEnabled,
+  emailAccountId,
+  provider,
+  updates,
+  logger,
+}: {
+  ruleId: string;
+  currentEnabled: boolean;
+  emailAccountId: string;
+  provider: string;
+  updates: RuleUpdatePatch;
+  logger: Logger;
+}) {
+  if (updates.name || updates.condition) {
+    await partialUpdateRule({
+      ruleId,
+      emailAccountId,
+      data: {
+        ...(updates.name && { name: updates.name }),
+        ...(updates.condition && buildConditionUpdateData(updates.condition)),
+      },
+    });
+  }
+
+  if (updates.actions) {
+    await updateRuleActions({
+      ruleId,
+      actions: updates.actions.map((action) => ({
+        type: action.type,
+        fields: buildProviderRuleActionFields({
+          provider,
+          fields: action.fields ?? {},
+        }),
+        delayInMinutes: action.delayInMinutes ?? null,
+      })),
+      provider,
+      emailAccountId,
+      logger,
+    });
+  }
+
+  if (updates.enabled !== undefined && updates.enabled !== currentEnabled) {
+    await setRuleEnabled({
+      ruleId,
+      emailAccountId,
+      enabled: updates.enabled,
+    });
+  }
+}
+
 export type UpdateRuleOutput = {
   success: boolean;
+  actionType?: "update_rule";
+  requiresConfirmation?: true;
+  confirmationState?: "pending" | "processing" | "confirmed";
+  riskMessages?: string[];
+  ruleFingerprint?: string;
   alreadyApplied?: boolean;
   message?: string;
   ruleId?: string;
@@ -369,12 +492,75 @@ type PatchCondition = {
   conditionalOperator?: LogicalOperator | null;
 };
 
-type RuleUpdatePatch = {
+export type RuleUpdatePatch = {
   name?: string;
   enabled?: boolean;
   condition?: PatchCondition;
   actions?: RuleAction[];
 };
+
+function buildRiskCheckInput({
+  rule,
+  effectiveUpdates,
+  originalActions,
+  provider,
+}: {
+  rule: {
+    conditionalOperator: LogicalOperator | null;
+    enabled: boolean;
+    from: string | null;
+    instructions: string | null;
+    subject: string | null;
+    to: string | null;
+  };
+  effectiveUpdates: RuleUpdatePatch;
+  originalActions: NonNullable<UpdateRuleOutput["originalActions"]>;
+  provider: string;
+}) {
+  const originalActionKeys = new Set(
+    originalActions.map((action) =>
+      JSON.stringify(normalizeActionForComparison(action)),
+    ),
+  );
+  const resultingActions: RuleAction[] =
+    effectiveUpdates.actions ??
+    originalActions.map((action) => ({
+      ...action,
+      type: action.type as RuleAction["type"],
+    }));
+  // Turning a rule back on, or changing which mail it matches, changes where
+  // its existing outbound actions send mail, so those count as changed too.
+  const reachChanges =
+    !!effectiveUpdates.condition ||
+    (effectiveUpdates.enabled === true && !rule.enabled);
+  const changedActions = resultingActions.filter(
+    (action) =>
+      (reachChanges && isOutboundRuleAction(action.type)) ||
+      !originalActionKeys.has(
+        JSON.stringify(normalizeActionForComparison(action)),
+      ),
+  );
+
+  return {
+    actions: changedActions.map((action) => ({
+      type: action.type,
+      fields: buildProviderRuleActionFields({
+        provider,
+        fields: action.fields ?? {},
+      }),
+      delayInMinutes: action.delayInMinutes ?? null,
+    })),
+    conditions: {
+      instructions: rule.instructions,
+      from: rule.from,
+      to: rule.to,
+      subject: rule.subject,
+      conditionalOperator: rule.conditionalOperator ?? undefined,
+      ...(effectiveUpdates.condition &&
+        buildConditionUpdateData(effectiveUpdates.condition)),
+    },
+  };
+}
 
 function ruleUpdateHasChanges({
   updates,

@@ -411,6 +411,44 @@ describe("ChatProvider", () => {
     expect(mockCaptureException).toHaveBeenCalledWith(error);
   });
 
+  it("shows the server's message when the user is over the rate limit", async () => {
+    const error = Object.assign(new Error("rate limited"), {
+      statusCode: 429,
+      responseBody: JSON.stringify({
+        error: "Cue needs a short break. Try again in a few minutes.",
+        isKnownError: true,
+      }),
+    });
+    mockSendMessage.mockRejectedValueOnce(error);
+
+    let latestContext: ReturnType<typeof useChat> | undefined;
+
+    function Consumer() {
+      latestContext = useChat();
+      return null;
+    }
+
+    renderWithProvider(<Consumer />);
+
+    act(() => {
+      latestContext?.setInput("One more question");
+    });
+    await waitFor(() => {
+      expect(latestContext?.input).toBe("One more question");
+    });
+    act(() => {
+      latestContext?.handleSubmit();
+    });
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith({
+        description: "Cue needs a short break. Try again in a few minutes.",
+      });
+    });
+    expect(latestContext?.input).toBe("One more question");
+    expect(mockCaptureException).not.toHaveBeenCalled();
+  });
+
   it("rejects oversized drafts before sending and keeps their content", async () => {
     const draft = "a".repeat(ASSISTANT_CHAT_MAX_TEXT_LENGTH + 1);
     let latestContext: ReturnType<typeof useChat> | undefined;

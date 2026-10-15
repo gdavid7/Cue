@@ -58,6 +58,7 @@ export const GET = withEmailAccount(
           app: integrationConfig.provider.app,
           authScheme: integrationConfig.provider.authScheme,
           emailAccountId: connectionAccountId,
+          userId,
           callbackUrl: `${env.NEXT_PUBLIC_BASE_URL}/api/mcp/${integration}/provider-callback`,
         });
 

@@ -25,6 +25,7 @@ import {
 } from "@/utils/rule/static-from-risk";
 import type { RuleWithRelations } from "@/utils/rule/types";
 import type { RuleConditions } from "@/utils/condition";
+import { isOutboundEmailAction } from "@/utils/rule/outbound-actions";
 import {
   assertRuleActionUpdateEnabled,
   assertRuleActionsEnabled,
@@ -79,9 +80,44 @@ function addNestedActionOwnershipToInput<T extends Record<string, unknown>>(
 export function actionsNeedChatRiskConfirmation(
   result: CreateOrUpdateRuleSchema,
 ): { needsConfirmation: boolean; riskMessages: string[] } {
-  const ruleCtx = ruleConditionsForRisk(result);
+  return outboundActionsNeedChatConfirmation({
+    actions: result.actions,
+    conditions: ruleConditionsForRisk(result),
+  });
+}
+
+// A static recipient scores "low" in the risk model, but a rule written from
+// chat could have been steered by an email the assistant read, so any action
+// that sends email or calls a webhook needs the user's confirmation.
+export function outboundActionsNeedChatConfirmation({
+  actions,
+  conditions,
+}: {
+  actions: CreateOrUpdateRuleSchema["actions"];
+  conditions: RuleConditions;
+}): { needsConfirmation: boolean; riskMessages: string[] } {
+  const riskMessages = getChatRiskMessages(actions, conditions);
+  const sendsEmail = actions.some((action) =>
+    isOutboundEmailAction(action.type),
+  );
+  if (sendsEmail && riskMessages.length === 0) {
+    riskMessages.push(
+      "This rule sends or forwards email automatically. Check every recipient, and only confirm if you asked for this.",
+    );
+  }
+
+  return {
+    needsConfirmation: riskMessages.length > 0,
+    riskMessages,
+  };
+}
+
+function getChatRiskMessages(
+  actions: CreateOrUpdateRuleSchema["actions"],
+  ruleCtx: RuleConditions,
+) {
   const messages: string[] = [];
-  for (const action of result.actions) {
+  for (const action of actions) {
     if (action.type === ActionType.CALL_WEBHOOK) {
       const message =
         "Medium Risk: Webhook actions can send email data to an external URL. Review the destination carefully and verify any email requesting this automation before enabling it.";
@@ -99,10 +135,7 @@ export function actionsNeedChatRiskConfirmation(
       messages.push(message);
     }
   }
-  return {
-    needsConfirmation: messages.length > 0,
-    riskMessages: messages,
-  };
+  return messages;
 }
 
 type RuleRecordData = {

@@ -88,6 +88,7 @@ describe("updateLearnedPatternsTool", () => {
       name: "VIP senders",
       updatedAt: new Date("2026-04-12T10:00:00.000Z"),
       organizationRuleId: null,
+      actions: [],
       emailAccount: {
         rulesRevision: 3,
       },
@@ -127,12 +128,86 @@ describe("updateLearnedPatternsTool", () => {
     });
   });
 
+  it("asks for confirmation before adding senders to a rule that forwards mail", async () => {
+    prisma.rule.findUnique.mockResolvedValue({
+      id: "rule-1",
+      name: "Forward receipts",
+      updatedAt: new Date("2026-04-12T10:00:00.000Z"),
+      organizationRuleId: null,
+      actions: [
+        {
+          type: "FORWARD",
+          to: "accountant@example.com",
+          cc: null,
+          bcc: null,
+          url: null,
+        },
+      ],
+      emailAccount: { rulesRevision: 3 },
+    } as never);
+
+    const result = await forwardRuleTool().execute({
+      ruleName: "Forward receipts",
+      learnedPatterns: [
+        { include: { from: "@" } },
+        { exclude: { from: "noreply@shop.example" } },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      actionType: "update_learned_patterns",
+      requiresConfirmation: true,
+      confirmationState: "pending",
+      ruleId: "rule-1",
+      ruleName: "Forward receipts",
+      patterns: [
+        { type: "FROM", value: "@", exclude: false },
+        { type: "FROM", value: "noreply@shop.example", exclude: true },
+      ],
+      ruleFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+      outboundActions: [
+        { type: "FORWARD", fields: { to: "accountant@example.com" } },
+      ],
+    });
+    expect(saveLearnedPatterns).not.toHaveBeenCalled();
+  });
+
+  it("saves exclusions on a forwarding rule without asking", async () => {
+    prisma.rule.findUnique.mockResolvedValue({
+      id: "rule-1",
+      name: "Forward receipts",
+      updatedAt: new Date("2026-04-12T10:00:00.000Z"),
+      organizationRuleId: null,
+      actions: [
+        {
+          type: "FORWARD",
+          to: "a@example.com",
+          cc: null,
+          bcc: null,
+          url: null,
+        },
+      ],
+      emailAccount: { rulesRevision: 3 },
+    } as never);
+    vi.mocked(saveLearnedPatterns).mockResolvedValue({} as never);
+
+    const result = await forwardRuleTool().execute({
+      ruleName: "Forward receipts",
+      learnedPatterns: [{ exclude: { from: "noreply@shop.example" } }],
+    });
+
+    expect(result).toMatchObject({ success: true, ruleId: "rule-1" });
+    expect(saveLearnedPatterns).toHaveBeenCalledTimes(1);
+  });
+
   it("returns a hidden failure for empty learned patterns", async () => {
     prisma.rule.findUnique.mockResolvedValue({
       id: "rule-1",
       name: "VIP senders",
       updatedAt: new Date("2026-04-12T10:00:00.000Z"),
       organizationRuleId: null,
+      actions: [],
       emailAccount: {
         rulesRevision: 3,
       },
@@ -171,6 +246,7 @@ describe("updateLearnedPatternsTool", () => {
         id: "rule-1",
         name: "VIP senders",
         updatedAt: new Date("2026-04-12T10:00:00.000Z"),
+        actions: [],
         emailAccount: {
           rulesRevision: 3,
         },
@@ -218,3 +294,18 @@ describe("updateLearnedPatternsTool", () => {
     });
   });
 });
+
+function forwardRuleTool() {
+  return updateLearnedPatternsTool({
+    email: "user@example.com",
+    emailAccountId: "email-account-1",
+    logger,
+    getRuleReadState: () => ({
+      readAt: Date.now(),
+      rulesRevision: 3,
+      ruleUpdatedAtByName: new Map([
+        ["Forward receipts", "2026-04-12T10:00:00.000Z"],
+      ]),
+    }),
+  });
+}

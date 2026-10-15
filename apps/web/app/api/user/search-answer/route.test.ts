@@ -5,6 +5,11 @@ import { createScopedLogger } from "@/utils/logger";
 const mocks = vi.hoisted(() => ({
   searchContext: vi.fn(),
   generateObject: vi.fn(),
+  rateLimitCount: vi.fn(),
+}));
+
+vi.mock("@/utils/redis", () => ({
+  redis: { eval: mocks.rateLimitCount },
 }));
 
 vi.mock("server-only", () => ({}));
@@ -80,6 +85,7 @@ const KEVIN_EMAIL = {
 describe("GET /api/user/search-answer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.rateLimitCount.mockResolvedValue(1);
     mocks.searchContext.mockResolvedValue({
       results: [PROFESSOR_EMAIL, KEVIN_EMAIL, CANVAS_ASSIGNMENT],
     });
@@ -120,6 +126,20 @@ describe("GET /api/user/search-answer", () => {
     });
 
     expect(await get("Kevin")).toBeNull();
+  });
+
+  it("stops searching for a user over the rate limit", async () => {
+    mocks.rateLimitCount.mockResolvedValue(61);
+
+    await expect(get("When is milestone 2 due?")).rejects.toMatchObject({
+      statusCode: 429,
+    });
+    expect(mocks.searchContext).not.toHaveBeenCalled();
+    expect(mocks.rateLimitCount).toHaveBeenCalledWith(
+      expect.any(String),
+      ["rate-limit:search-answer:user-1"],
+      ["300"],
+    );
   });
 
   it("skips the model when nothing matches", async () => {

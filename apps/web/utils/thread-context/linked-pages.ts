@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ContextCandidate } from "@cue/context";
 import { load } from "cheerio";
 import { getDomain } from "tldts";
@@ -42,6 +43,13 @@ const TRACKING_SEGMENTS = new Set([
   "wf",
 ]);
 const UNSUBSCRIBE_PATH = /unsubscribe|opt-?out|email-?preferences/i;
+// Campaign and recipient tags mail tools add to ordinary links; dropped
+// before reading so they neither block the link nor reach the crawler.
+const CAMPAIGN_PARAM =
+  /^(utm_\w+|fbclid|gclid|mc_cid|mc_eid|_hsenc|_hsmi|mkt_tok)$/i;
+// A piece of a path segment this long that mixes letters and digits is a
+// generated token (a magic link, an invite, a verification), not a page name.
+const TOKEN_PIECE_MIN_LENGTH = 16;
 const ACCOUNT_SEGMENTS = new Set([
   "account",
   "accounts",
@@ -65,8 +73,9 @@ type LinkedPage = { title: string; text: string };
 
 /**
  * The public pages the latest message links to, read with Exa, as context
- * candidates: an event page, a job posting, a public doc. Cached by URL, so
- * each page is fetched about once a day however often the thread is opened.
+ * candidates: an event page, a job posting, a public doc. Cached by a hash of
+ * the URL, so each page is fetched about once a day however often the thread
+ * is opened.
  * `complete` is false when a page could not be read this time.
  */
 export async function fetchLinkedPages({
@@ -106,8 +115,10 @@ export async function fetchLinkedPages({
  * The links most likely to be what the email is about, in order, at most
  * two. Links with words on them come first, then bare ones, each in the order
  * they appear; unsubscribe, tracking and redirect links, images, homepages and
- * the sender's own sign-in or account pages are dropped. The rules read only
- * URL structure, so they work in any language.
+ * the sender's own sign-in or account pages are dropped, and so is any link
+ * that may carry a secret, since reading it hands it to a third-party crawler
+ * whose visit can also redeem a one-time link. The rules read only URL
+ * structure, so they work in any language.
  */
 export function extractMainLinks(
   message: Pick<ParsedMessage, "textHtml" | "textPlain" | "headers">,
@@ -126,7 +137,11 @@ export function extractMainLinks(
   const links: { url: string; hasText: boolean }[] = [];
   for (const { href, text } of linksIn(message)) {
     const url = parseUrl(href);
-    if (!url || unsubscribe.has(href) || isNoise(url, senderDomain)) continue;
+    if (!url || unsubscribe.has(href)) continue;
+    for (const name of [...url.searchParams.keys()]) {
+      if (CAMPAIGN_PARAM.test(name)) url.searchParams.delete(name);
+    }
+    if (isNoise(url, senderDomain) || mayCarrySecret(url)) continue;
     url.hash = "";
     if (seen.has(url.href)) continue;
     seen.add(url.href);
@@ -141,7 +156,7 @@ async function readPage(
   url: string,
   logger: Logger,
 ): Promise<LinkedPage | null> {
-  const key = `linked-page:${url}`;
+  const key = `linked-page:${createHash("sha256").update(url).digest("hex")}`;
   const cached = await redis.get<LinkedPage>(key).catch(() => null);
   if (cached) return cached;
   try {
@@ -195,6 +210,36 @@ function isNoise(url: URL, senderDomain: string | null) {
     !!senderDomain &&
     getDomain(url.hostname) === senderDomain &&
     lower.some((s) => ACCOUNT_SEGMENTS.has(s))
+  );
+}
+
+// Public pages rarely need a query; tokens, codes, meeting passcodes and
+// signatures live there, or in a fragment the page's script reads.
+function mayCarrySecret(url: URL) {
+  if (url.search) return true;
+  if (url.hash.includes("=")) return true;
+  return url.pathname.split("/").some(isTokenSegment);
+}
+
+function isTokenSegment(segment: string) {
+  const pieces = segment.split(/[-_.~]/);
+  if (
+    pieces.some(
+      (piece) =>
+        piece.length >= TOKEN_PIECE_MIN_LENGTH &&
+        /\d/.test(piece) &&
+        /[a-z]/i.test(piece),
+    )
+  ) {
+    return true;
+  }
+  // UUIDs, hex tokens and long numeric tokens, even split by separators;
+  // joined, an article slug never reads as hex digits only.
+  const joined = pieces.join("");
+  return (
+    joined.length >= TOKEN_PIECE_MIN_LENGTH &&
+    /^[0-9a-f]+$/i.test(joined) &&
+    /\d/.test(joined)
   );
 }
 

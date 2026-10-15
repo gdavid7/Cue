@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  ActionType,
+  GroupItemType,
+  LogicalOperator,
+} from "@/generated/prisma/enums";
 import { messageContextSchema } from "@/utils/ai/assistant/chat-context-validation";
 import { inlineEmailActionSchema } from "@/utils/ai/assistant/inline-email-actions";
 
@@ -146,6 +151,93 @@ export const confirmAssistantCreateRuleBody = confirmAssistantActionBaseBody;
 export type ConfirmAssistantCreateRuleBody = z.infer<
   typeof confirmAssistantCreateRuleBody
 >;
+
+// The confirmed apply uses these output fields (what the card showed), never
+// the raw tool input, so the user approves exactly what gets written.
+export const pendingUpdateRuleToolOutputSchema = z.object({
+  success: z.literal(true),
+  actionType: z.literal("update_rule"),
+  requiresConfirmation: z.literal(true),
+  confirmationState: z.enum(["pending", "processing", "confirmed"]),
+  confirmationProcessingAt: z.string().optional(),
+  riskMessages: z.array(z.string()),
+  ruleId: z.string().trim().min(1),
+  ruleFingerprint: z.string().min(1),
+  originalName: z.string(),
+  updatedName: z.string().trim().min(1),
+  originalEnabled: z.boolean(),
+  updatedEnabled: z.boolean(),
+  updatedConditions: z
+    .object({
+      aiInstructions: z.string().optional(),
+      clearAiInstructions: z.boolean().optional(),
+      static: z
+        .object({
+          from: z.string().nullish(),
+          to: z.string().nullish(),
+          subject: z.string().nullish(),
+        })
+        .nullish(),
+      conditionalOperator: z
+        .enum([LogicalOperator.AND, LogicalOperator.OR])
+        .nullish(),
+    })
+    .optional(),
+  updatedActions: z
+    .array(
+      z.object({
+        type: z.nativeEnum(ActionType),
+        fields: z.record(z.string(), z.string().nullable()).nullish(),
+        delayInMinutes: z.number().nullish(),
+      }),
+    )
+    .min(1)
+    .optional(),
+  confirmationResult: z
+    .object({
+      ruleId: z.string().trim().min(1),
+      confirmedAt: z.string().min(1),
+    })
+    .optional(),
+});
+
+export const confirmAssistantUpdateRuleBody = confirmAssistantActionBaseBody;
+
+export const pendingLearnedPatternsToolOutputSchema = z.object({
+  success: z.literal(true),
+  actionType: z.literal("update_learned_patterns"),
+  requiresConfirmation: z.literal(true),
+  confirmationState: z.enum(["pending", "processing", "confirmed"]),
+  confirmationProcessingAt: z.string().optional(),
+  riskMessages: z.array(z.string()),
+  ruleId: z.string().trim().min(1),
+  ruleName: z.string(),
+  ruleFingerprint: z.string().min(1),
+  patterns: z
+    .array(
+      z.object({
+        type: z.nativeEnum(GroupItemType),
+        value: z.string().min(1),
+        exclude: z.boolean().optional(),
+      }),
+    )
+    .min(1),
+  outboundActions: z.array(
+    z.object({
+      type: z.string(),
+      fields: z.record(z.string(), z.string().nullable()).nullish(),
+    }),
+  ),
+  confirmationResult: z
+    .object({ ruleId: z.string(), confirmedAt: z.string().min(1) })
+    .optional(),
+});
+export type PendingLearnedPatternsToolOutput = z.infer<
+  typeof pendingLearnedPatternsToolOutputSchema
+>;
+
+export const confirmAssistantLearnedPatternsBody =
+  confirmAssistantActionBaseBody;
 
 export const pendingSaveMemoryToolOutputSchema = z.object({
   success: z.literal(true),

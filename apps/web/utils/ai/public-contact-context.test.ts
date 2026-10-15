@@ -102,6 +102,54 @@ describe("getPublicContactContext", () => {
     expect(redis.set).not.toHaveBeenCalled();
   });
 
+  it("stops starting new research for a user over the rate limit", async () => {
+    vi.mocked(redis.eval).mockResolvedValueOnce(21);
+
+    await expect(
+      getPublicContactContext({
+        email: "john@acme.com",
+        name: "John Smith",
+        emailAccount: getEmailAccount(),
+      }),
+    ).rejects.toMatchObject({ statusCode: 429 });
+    expect(generateTextMock).not.toHaveBeenCalled();
+    // The lock is released so the user can retry once the window passes
+    expect(redis.eval).toHaveBeenLastCalledWith(
+      expect.any(String),
+      [expect.stringContaining("public-contact-context:v1:lock")],
+      expect.anything(),
+    );
+  });
+
+  it("does not count polls while research is in progress", async () => {
+    vi.mocked(redis.set).mockResolvedValue(null);
+
+    for (let poll = 0; poll < 5; poll++) {
+      await getPublicContactContext({
+        email: "john@acme.com",
+        name: "John Smith",
+        emailAccount: getEmailAccount(),
+      });
+    }
+
+    expect(redis.eval).not.toHaveBeenCalled();
+  });
+
+  it("does not count stored profiles against the research rate limit", async () => {
+    getStoredPublicContactContextMock.mockResolvedValue({
+      status: "found",
+      context: getContext(),
+    });
+
+    await getPublicContactContext({
+      email: "john@acme.com",
+      name: "John Smith",
+      emailAccount: getEmailAccount(),
+    });
+
+    expect(redis.eval).not.toHaveBeenCalled();
+  });
+
   it("returns a shared stored profile without exposing storage metadata", async () => {
     const context = getContext();
     getStoredPublicContactContextMock.mockResolvedValue({

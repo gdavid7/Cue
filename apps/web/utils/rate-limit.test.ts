@@ -24,6 +24,7 @@ vi.mock("@/utils/redis", () => ({
 
 import { redis } from "@/utils/redis";
 import {
+  assertWithinUserRateLimit,
   checkRateLimit,
   createRateLimitKey,
   getClientIp,
@@ -168,5 +169,48 @@ describe("rate limit utilities", () => {
     },
   ])("extracts $name", ({ headers, expected }) => {
     expect(getClientIp(new Headers(headers))).toBe(expected);
+  });
+});
+
+describe("assertWithinUserRateLimit", () => {
+  beforeEach(() => {
+    mockedEnv.NODE_ENV = "production";
+    mockedEnv.REDIS_HTTP_URL = "https://redis.example.com";
+    mockedEnv.REDIS_HTTP_TOKEN = "token";
+    vi.clearAllMocks();
+  });
+
+  it("counts each user separately for a scope", async () => {
+    vi.mocked(redis.eval).mockResolvedValue(1);
+
+    await assertWithinUserRateLimit({
+      scope: "search-answer",
+      userId: "user-1",
+      limit: 60,
+      windowSeconds: 300,
+    });
+
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.any(String),
+      ["rate-limit:search-answer:user-1"],
+      ["300"],
+    );
+  });
+
+  it("rejects with a 429 known error once the user is over the limit", async () => {
+    vi.mocked(redis.eval).mockResolvedValue(61);
+
+    await expect(
+      assertWithinUserRateLimit({
+        scope: "search-answer",
+        userId: "user-1",
+        limit: 60,
+        windowSeconds: 300,
+      }),
+    ).rejects.toMatchObject({
+      name: "SafeError",
+      statusCode: 429,
+      safeMessage: expect.stringContaining("Try again in a few minutes"),
+    });
   });
 });

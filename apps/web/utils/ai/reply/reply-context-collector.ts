@@ -135,7 +135,7 @@ ${getTodayForLLM()}`;
               .describe("Search query to find relevant emails in history"),
           }),
           execute: async ({ query }) => {
-            logger.info("Searching emails", { query });
+            logger.trace("Searching emails", { query });
             try {
               const emails = await searchReplyContextEmails({
                 emailProvider,
@@ -168,10 +168,10 @@ ${getTodayForLLM()}`;
               const responseBody =
                 typeof err?.body === "string" ? err.body : undefined;
 
+              logger.trace("Failed email search query", { query });
               logger.error("Email search failed", {
                 error,
                 errorMessage,
-                query,
                 emailProvider: emailProvider.name,
                 afterDate: sixMonthsAgo.toISOString(),
                 responseBody,

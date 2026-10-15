@@ -19,8 +19,10 @@ const {
   mockCreateUIMessageStreamResponse,
   mockConsumeStream,
   mockGetChatStreamContext,
+  mockRateLimitCount,
   streamState,
 } = vi.hoisted(() => ({
+  mockRateLimitCount: vi.fn(),
   mockAiProcessAssistantChat: vi.fn(),
   mockGetEmailAccountWithAi: vi.fn(),
   mockGetInboxStatsForChatContext: vi.fn(),
@@ -115,6 +117,10 @@ vi.mock("@/utils/ai/assistant/chat-response-guard", () => ({
   getToolFailureWarning: mockGetToolFailureWarning,
 }));
 
+vi.mock("@/utils/redis", () => ({
+  redis: { eval: mockRateLimitCount },
+}));
+
 // Stub the parts that would open Redis; keep the real database bookkeeping.
 vi.mock("@/utils/chat/active-run", async (importActual) => ({
   ...(await importActual<typeof import("@/utils/chat/active-run")>()),
@@ -130,6 +136,7 @@ import { POST } from "./route";
 describe("chat route rule freshness persistence", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRateLimitCount.mockResolvedValue(1);
 
     streamState.finishMessages = [
       {
@@ -786,6 +793,26 @@ describe("chat route rule freshness persistence", () => {
       consoleLogSpy.mockRestore();
       vi.unstubAllEnvs();
     }
+  });
+
+  it("counts each message against the user's chat rate limit", async () => {
+    await POST(createRequest());
+
+    expect(mockRateLimitCount).toHaveBeenCalledWith(
+      expect.any(String),
+      ["rate-limit:assistant-chat:user-1"],
+      ["300"],
+    );
+  });
+
+  it("stops a user over the chat rate limit before running the assistant", async () => {
+    mockRateLimitCount.mockResolvedValue(61);
+
+    await expect(POST(createRequest())).rejects.toMatchObject({
+      statusCode: 429,
+    });
+    expect(mockAiProcessAssistantChat).not.toHaveBeenCalled();
+    expect(prisma.chatMessage.create).not.toHaveBeenCalled();
   });
 });
 

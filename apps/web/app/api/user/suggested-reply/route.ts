@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isExaSearchEnabled } from "@/utils/exa/search";
 import { withEmailProvider } from "@/utils/middleware";
+import { assertWithinUserRateLimit } from "@/utils/rate-limit";
 import {
   getCachedSuggestedReply,
   getSuggestedReplySettings,
@@ -32,6 +33,18 @@ export const GET = withEmailProvider(
       web: searchParams.get("web"),
       cachedFor: searchParams.get("cachedFor"),
     });
+
+    // Only the web pass is limited: it calls a model and a web search for
+    // every thread mail and calendar couldn't answer.
+    if (web === "1" && !cachedFor) {
+      await assertWithinUserRateLimit({
+        scope: "suggested-reply-web",
+        userId: request.auth.userId,
+        limit: 40,
+        windowSeconds: 5 * 60,
+        logger: request.logger,
+      });
+    }
 
     const settings = await getSuggestedReplySettings(
       request.auth.emailAccountId,

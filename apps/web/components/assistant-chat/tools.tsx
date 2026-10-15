@@ -1,10 +1,11 @@
 import type { ChangeEvent } from "react";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useQueryState } from "nuqs";
 import type { AddToKnowledgeBaseTool } from "@/utils/ai/assistant/tools/rules/add-to-knowledge-base-tool";
 import type { CreateRuleTool } from "@/utils/ai/assistant/tools/rules/create-rule-tool";
 import type { UpdatePersonalInstructionsTool } from "@/utils/ai/assistant/tools/rules/update-personal-instructions-tool";
 import type { UpdateLearnedPatternsTool } from "@/utils/ai/assistant/tools/rules/update-learned-patterns-tool";
+import type { PendingLearnedPatternsToolOutput } from "@/utils/actions/assistant-chat.validation";
 import type {
   UpdateRuleOutput,
   UpdateRuleTool,
@@ -42,6 +43,8 @@ import {
   confirmAssistantCreateRule,
   confirmAssistantEmailAction,
   confirmAssistantSaveMemory,
+  confirmAssistantLearnedPatterns,
+  confirmAssistantUpdateRule,
 } from "@/utils/actions/assistant-chat";
 import { deleteRuleAction, toggleRuleAction } from "@/utils/actions/rule";
 import { useAction } from "next-safe-action/hooks";
@@ -63,6 +66,7 @@ import { getActionColor } from "@/components/PlanBadge";
 import type { ActionType } from "@/generated/prisma/enums";
 import { formatShortDate } from "@/utils/date";
 import { trimToNonEmptyString } from "@/utils/string";
+import { isOutboundRuleAction } from "@/utils/rule/outbound-actions";
 import { decodeHtmlEntities } from "@/utils/gmail/decode";
 import { getEmailSearchUrl, getEmailUrlForOptionalMessage } from "@/utils/url";
 import {
@@ -943,6 +947,157 @@ export function PendingCreateRuleToolCard({
   );
 }
 
+export function PendingUpdateRuleToolCard({
+  args,
+  output,
+  chatMessageId,
+  toolCallId,
+  disableConfirm,
+}: {
+  args: UpdateRuleTool["input"];
+  output: UpdateRuleOutput;
+  chatMessageId: string;
+  toolCallId: string;
+  disableConfirm: boolean;
+}) {
+  const { emailAccountId } = useAccount();
+  const { chatId } = useChat();
+  const [isConfirming, setIsConfirming] = useState(false);
+  const [isConfirmed, setIsConfirmed] = useState(false);
+
+  const riskMessages = output.riskMessages?.filter(Boolean) ?? [];
+  const isProcessing = output.confirmationState === "processing";
+
+  if (isConfirmed) return <UpdatedRule args={args} output={output} />;
+
+  const handleConfirm = async () => {
+    setIsConfirming(true);
+    try {
+      if (!chatId) {
+        toastError({ description: "Could not update this rule." });
+        return;
+      }
+
+      const input = { chatId, chatMessageId, toolCallId };
+      const result = await confirmAssistantUpdateRule(emailAccountId, input);
+
+      if (result?.serverError) {
+        toastError({ description: result.serverError });
+        return;
+      }
+
+      if (result?.data?.confirmationState !== "confirmed") {
+        toastError({ description: "Could not update this rule." });
+        return;
+      }
+
+      setIsConfirmed(true);
+      toastSuccess({ description: "Rule updated." });
+    } catch {
+      toastError({ description: "Could not update this rule." });
+    } finally {
+      setIsConfirming(false);
+    }
+  };
+
+  return (
+    <PendingRuleConfirmation
+      title="Review before updating"
+      description="This change lets the rule send email or data automatically. Review where it sends before applying."
+      riskMessages={riskMessages}
+      actions={output.updatedActions ?? output.originalActions ?? []}
+      confirmLabel="Apply update"
+      busyLabel="Updating..."
+      isConfirming={isConfirming}
+      isProcessing={isProcessing}
+      disableConfirm={disableConfirm}
+      onConfirm={handleConfirm}
+    >
+      <UpdatedRule args={args} output={output} preview />
+    </PendingRuleConfirmation>
+  );
+}
+
+export function PendingLearnedPatternsToolCard({
+  args,
+  output,
+  chatMessageId,
+  toolCallId,
+  disableConfirm,
+}: {
+  args: UpdateLearnedPatternsTool["input"];
+  output: PendingLearnedPatternsToolOutput;
+  chatMessageId: string;
+  toolCallId: string;
+  disableConfirm: boolean;
+}) {
+  const { emailAccountId } = useAccount();
+  const { chatId } = useChat();
+  const [isConfirming, setIsConfirming] = useState(false);
+  const [isConfirmed, setIsConfirmed] = useState(false);
+
+  if (isConfirmed) {
+    return <UpdatedLearnedPatterns args={args} ruleId={output.ruleId} />;
+  }
+
+  const handleConfirm = async () => {
+    setIsConfirming(true);
+    try {
+      if (!chatId) {
+        toastError({ description: "Could not save these patterns." });
+        return;
+      }
+
+      const input = { chatId, chatMessageId, toolCallId };
+      const result = await confirmAssistantLearnedPatterns(
+        emailAccountId,
+        input,
+      );
+
+      if (result?.serverError) {
+        toastError({ description: result.serverError });
+        return;
+      }
+      if (result?.data?.confirmationState !== "confirmed") {
+        toastError({ description: "Could not save these patterns." });
+        return;
+      }
+
+      setIsConfirmed(true);
+      toastSuccess({ description: "Patterns saved." });
+    } catch {
+      toastError({ description: "Could not save these patterns." });
+    } finally {
+      setIsConfirming(false);
+    }
+  };
+
+  return (
+    <PendingRuleConfirmation
+      title="Review before saving"
+      description={`"${output.ruleName}" sends email or data automatically. Mail these patterns match will be sent too.`}
+      riskMessages={output.riskMessages.filter(Boolean)}
+      actions={output.outboundActions}
+      confirmLabel="Save patterns"
+      busyLabel="Saving..."
+      isConfirming={isConfirming}
+      isProcessing={output.confirmationState === "processing"}
+      disableConfirm={disableConfirm}
+      onConfirm={handleConfirm}
+    >
+      <ToolPanel className="space-y-1 text-sm">
+        {output.patterns.map((pattern, index) => (
+          <p key={index} className="break-all text-foreground">
+            {`${pattern.exclude ? "Exclude" : "Include"} ${
+              pattern.type === "SUBJECT" ? "subject" : "sender"
+            }: ${pattern.value}`}
+          </p>
+        ))}
+      </ToolPanel>
+    </PendingRuleConfirmation>
+  );
+}
+
 export function PendingCreateRulePreviewCard({
   args,
   riskMessages,
@@ -1120,14 +1275,56 @@ function PendingCreateRuleCardContent({
   }
 
   return (
+    <PendingRuleConfirmation
+      title="Review before enabling"
+      description="This rule can send email or data automatically. Review where it sends before enabling."
+      riskMessages={riskMessages}
+      actions={args.actions}
+      confirmLabel="Create & enable rule"
+      busyLabel="Creating..."
+      isConfirming={isConfirming}
+      isProcessing={isProcessing}
+      disableConfirm={disableConfirm}
+      onConfirm={onConfirm}
+    >
+      <CreatedRuleToolCard args={args} preview />
+    </PendingRuleConfirmation>
+  );
+}
+
+function PendingRuleConfirmation({
+  title,
+  description,
+  riskMessages,
+  actions,
+  confirmLabel,
+  busyLabel,
+  isConfirming,
+  isProcessing,
+  disableConfirm,
+  onConfirm,
+  children,
+}: {
+  title: string;
+  description: string;
+  riskMessages: string[];
+  actions: Array<{ type: string; fields?: RuleActionFields | null }>;
+  confirmLabel: string;
+  busyLabel: string;
+  isConfirming: boolean;
+  isProcessing: boolean;
+  disableConfirm: boolean;
+  onConfirm: () => void;
+  children: React.ReactNode;
+}) {
+  return (
     <div className="space-y-3">
       <Alert variant="default" className="border-amber-500/40 bg-amber-500/5">
         <AlertTriangleIcon className="size-4 text-amber-600 dark:text-amber-400" />
-        <AlertTitle>Review before enabling</AlertTitle>
-        <AlertDescription className="space-y-2 text-sm">
-          <p>
-            This rule can send email automatically. Review it before enabling.
-          </p>
+        <AlertTitle>{title}</AlertTitle>
+        <AlertDescription className="space-y-3 text-sm">
+          <p className="break-words [overflow-wrap:anywhere]">{description}</p>
+          <OutboundDestinations actions={actions} />
           {riskMessages.length === 1 ? (
             <p className="text-muted-foreground">{riskMessages[0]}</p>
           ) : riskMessages.length > 1 ? (
@@ -1140,7 +1337,7 @@ function PendingCreateRuleCardContent({
         </AlertDescription>
       </Alert>
 
-      <CreatedRuleToolCard args={args} preview />
+      {children}
 
       <div className="flex justify-end">
         <Button
@@ -1150,17 +1347,64 @@ function PendingCreateRuleCardContent({
           className="gap-2"
         >
           {isProcessing ? (
-            "Creating..."
+            busyLabel
           ) : isConfirming ? (
             <>
               <Loader2 className="size-4 animate-spin" />
-              Creating...
+              {busyLabel}
             </>
           ) : (
-            "Create & enable rule"
+            confirmLabel
           )}
         </Button>
       </div>
+    </div>
+  );
+}
+
+const OUTBOUND_ACTION_NAMES: Record<string, string> = {
+  FORWARD: "Forward",
+  SEND_EMAIL: "Send email",
+  REPLY: "Reply",
+  CALL_WEBHOOK: "Webhook",
+};
+
+/**
+ * Every place the rule would send mail or email data, written out in full:
+ * the badges abbreviate addresses, and a confirmation must not.
+ */
+function OutboundDestinations({
+  actions,
+}: {
+  actions: Array<{ type: string; fields?: RuleActionFields | null }>;
+}) {
+  const outbound = actions.filter(
+    (action) => action && isOutboundRuleAction(action.type),
+  );
+  if (!outbound.length) return null;
+
+  return (
+    <div className="space-y-2.5 rounded-md border border-border bg-background/60 px-3 py-2.5">
+      {outbound.map((action, index) => {
+        const rows = getOutboundDestinationRows(action);
+        return (
+          <div key={index} className="space-y-1">
+            <p className="font-medium text-foreground">
+              {OUTBOUND_ACTION_NAMES[action.type] ?? action.type}
+            </p>
+            <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5">
+              {rows.map(([label, value]) => (
+                <Fragment key={label}>
+                  <dt className="text-muted-foreground">{label}</dt>
+                  <dd className="select-text break-all text-foreground">
+                    {value}
+                  </dd>
+                </Fragment>
+              ))}
+            </dl>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1329,6 +1573,7 @@ export function UpdatedRule({
     !output.updatedConditions &&
     !output.updatedActions;
   const status = getRuleUpdateStatus({
+    pending: preview && output.requiresConfirmation === true,
     alreadyApplied: output.alreadyApplied,
     onlyEnabledChanged,
     updatedEnabled: output.updatedEnabled,
@@ -1840,14 +2085,17 @@ function RuleStatusBadge({ label, color }: { label: string; color: Color }) {
 }
 
 function getRuleUpdateStatus({
+  pending,
   alreadyApplied,
   onlyEnabledChanged,
   updatedEnabled,
 }: {
+  pending: boolean | undefined;
   alreadyApplied: boolean | undefined;
   onlyEnabledChanged: boolean;
   updatedEnabled: boolean | undefined;
 }): { label: string; color: Color } {
+  if (pending) return { label: "Pending", color: "yellow" };
   if (alreadyApplied) return { label: "Already applied", color: "gray" };
 
   if (onlyEnabledChanged) {
@@ -2375,6 +2623,28 @@ function mergeUpdatedConditionsForDisplay({
   };
 }
 
+function getOutboundDestinationRows(action: {
+  type: string;
+  fields?: RuleActionFields | null;
+}): [string, string][] {
+  const fields = action.fields ?? {};
+  if (action.type === "CALL_WEBHOOK") {
+    return [["URL", fields.webhookUrl || "No URL set"]];
+  }
+  const rows: [string, string][] = [
+    [
+      "To",
+      fields.to ||
+        (action.type === "REPLY"
+          ? "The sender of each matching email"
+          : "No recipient set"),
+    ],
+  ];
+  if (fields.cc) rows.push(["Cc", fields.cc]);
+  if (fields.bcc) rows.push(["Bcc", fields.bcc]);
+  return rows;
+}
+
 function formatActionsForDiff(
   actions: Array<{ type: string; fields: Record<string, string | null> }>,
 ): string {
@@ -2383,6 +2653,8 @@ function formatActionsForDiff(
       const parts = [action.type];
       if (action.fields?.label) parts.push(`Label: ${action.fields.label}`);
       if (action.fields?.to) parts.push(`To: ${action.fields.to}`);
+      if (action.fields?.cc) parts.push(`Cc: ${action.fields.cc}`);
+      if (action.fields?.bcc) parts.push(`Bcc: ${action.fields.bcc}`);
       if (action.fields?.content)
         parts.push(`Content: ${action.fields.content}`);
       if (action.fields?.webhookUrl)

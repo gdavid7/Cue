@@ -5,11 +5,15 @@ import {
   confirmAssistantCreateRuleBody,
   confirmAssistantEmailActionBody,
   confirmAssistantSaveMemoryBody,
+  confirmAssistantLearnedPatternsBody,
+  confirmAssistantUpdateRuleBody,
 } from "./assistant-chat.validation";
 import {
   confirmAssistantCreateRuleForAccount,
   confirmAssistantEmailActionForAccount,
   confirmAssistantSaveMemoryForAccount,
+  confirmAssistantLearnedPatternsForAccount,
+  confirmAssistantUpdateRuleForAccount,
 } from "./assistant-chat-confirmation";
 
 export const confirmAssistantEmailAction = actionClient
@@ -54,6 +58,43 @@ export const confirmAssistantCreateRule = actionClient
         waitForPersistence: true,
         emailAccountId,
         provider,
+        logger,
+      }),
+  );
+
+export const confirmAssistantUpdateRule = actionClient
+  .metadata({ name: "confirmAssistantUpdateRule" })
+  .inputSchema(confirmAssistantUpdateRuleBody)
+  .action(
+    async ({
+      ctx: { emailAccountId, provider, logger },
+      parsedInput: { chatId, chatMessageId, toolCallId },
+    }) =>
+      confirmAssistantUpdateRuleForAccount({
+        chatId,
+        chatMessageId,
+        toolCallId,
+        waitForPersistence: true,
+        emailAccountId,
+        provider,
+        logger,
+      }),
+  );
+
+export const confirmAssistantLearnedPatterns = actionClient
+  .metadata({ name: "confirmAssistantLearnedPatterns" })
+  .inputSchema(confirmAssistantLearnedPatternsBody)
+  .action(
+    async ({
+      ctx: { emailAccountId, logger },
+      parsedInput: { chatId, chatMessageId, toolCallId },
+    }) =>
+      confirmAssistantLearnedPatternsForAccount({
+        chatId,
+        chatMessageId,
+        toolCallId,
+        waitForPersistence: true,
+        emailAccountId,
         logger,
       }),
   );

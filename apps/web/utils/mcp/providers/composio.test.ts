@@ -13,11 +13,24 @@ vi.mock("@/env", () => ({
   },
 }));
 
+const redisStore = vi.hoisted(() => new Map<string, unknown>());
+
 vi.mock("@/utils/redis", () => ({
   redis: {
     get: vi.fn(async () => null),
-    set: vi.fn(async () => "OK"),
-    del: vi.fn(async () => 1),
+    set: vi.fn(async (key: string, value: unknown) => {
+      redisStore.set(key, value);
+      return "OK";
+    }),
+    del: vi.fn(async (key: string) => {
+      redisStore.delete(key);
+      return 1;
+    }),
+    getdel: vi.fn(async (key: string) => {
+      const value = redisStore.get(key) ?? null;
+      redisStore.delete(key);
+      return value;
+    }),
   },
 }));
 
@@ -79,40 +92,126 @@ describe("composioProvider", () => {
     ]);
   });
 
-  it("keeps only the newest active account when a connection completes", async () => {
+  it("keeps only the account its own link created when a connection completes", async () => {
     const authConfigId = await createAuthConfig("app-complete");
     api.state.accounts.push(
       account("ca_old", "email-account-1", authConfigId, "ACTIVE", "2026-01"),
-      account("ca_new", "email-account-1", authConfigId, "ACTIVE", "2026-03"),
-      account("ca_stale", "email-account-1", authConfigId, "FAILED", "2026-02"),
+      // Newer and active, but not created by this user's link
+      account("ca_newer", "email-account-1", authConfigId, "ACTIVE", "2027"),
       account("ca_other", "email-account-2", authConfigId, "ACTIVE", "2026-01"),
     );
+    const linkAccountId = await startLink("app-complete");
+    activate(linkAccountId);
 
     const connected = await composioProvider.completeConnection({
       app: "app-complete",
       emailAccountId: "email-account-1",
+      userId: "user-1",
+      connectedAccountId: linkAccountId,
     });
 
     expect(connected).toBe(true);
-    expect(api.state.accounts.map((a) => a.id).sort()).toEqual([
-      "ca_new",
-      "ca_other",
-    ]);
+    expect(api.state.accounts.map((a) => a.id).sort()).toEqual(
+      ["ca_other", linkAccountId].sort(),
+    );
   });
 
-  it("reports an incomplete connection when no account is active", async () => {
-    const authConfigId = await createAuthConfig("app-incomplete");
+  it("completes a link once, and discards it when it is not authorized yet", async () => {
+    await createAuthConfig("app-incomplete");
+    const linkAccountId = await startLink("app-incomplete");
+    const complete = () =>
+      composioProvider.completeConnection({
+        app: "app-incomplete",
+        emailAccountId: "email-account-1",
+        userId: "user-1",
+        connectedAccountId: null,
+      });
+
+    expect(await complete()).toBe(false);
+    expect(api.state.accounts.map((a) => a.id)).not.toContain(linkAccountId);
+    expect(await complete()).toBe(false);
+  });
+
+  it("refuses a callback naming a different account than the link created", async () => {
+    const authConfigId = await createAuthConfig("app-mismatch");
     api.state.accounts.push(
-      account("ca_1", "email-account-1", authConfigId, "INITIALIZING", "2026"),
+      account("ca_planted", "email-account-1", authConfigId, "ACTIVE", "2027"),
     );
+    const linkAccountId = await startLink("app-mismatch");
+    activate(linkAccountId);
 
     const connected = await composioProvider.completeConnection({
-      app: "app-incomplete",
+      app: "app-mismatch",
       emailAccountId: "email-account-1",
+      userId: "user-1",
+      connectedAccountId: "ca_planted",
     });
 
     expect(connected).toBe(false);
-    expect(api.state.accounts).toHaveLength(1);
+  });
+
+  it("fails closed when the callback names no connected account", async () => {
+    await createAuthConfig("app-no-id");
+    const linkAccountId = await startLink("app-no-id");
+    activate(linkAccountId);
+
+    const connected = await composioProvider.completeConnection({
+      app: "app-no-id",
+      emailAccountId: "email-account-1",
+      userId: "user-1",
+      connectedAccountId: null,
+    });
+
+    expect(connected).toBe(false);
+    expect(api.state.accounts.map((a) => a.id)).not.toContain(linkAccountId);
+  });
+
+  it("discards the account a mismatched callback names when another user's link created it", async () => {
+    await createAuthConfig("app-crossed");
+    await composioProvider.getConnectUrl({
+      app: "app-crossed",
+      emailAccountId: "email-account-2",
+      userId: "user-2",
+      callbackUrl: "http://localhost:3000/callback",
+    });
+    const othersAccountId = api.state.accounts.at(-1)!.id;
+    activate(othersAccountId);
+    const ownAccountId = await startLink("app-crossed");
+
+    const connected = await composioProvider.completeConnection({
+      app: "app-crossed",
+      emailAccountId: "email-account-1",
+      userId: "user-1",
+      connectedAccountId: othersAccountId,
+    });
+
+    expect(connected).toBe(false);
+    const remaining = api.state.accounts.map((a) => a.id);
+    expect(remaining).not.toContain(othersAccountId);
+    expect(remaining).not.toContain(ownAccountId);
+  });
+
+  it("only discards connections from links it issued", async () => {
+    const authConfigId = await createAuthConfig("app-discard");
+    api.state.accounts.push(
+      account(
+        "ca_unrelated",
+        "email-account-9",
+        authConfigId,
+        "ACTIVE",
+        "2026",
+      ),
+    );
+    const linkAccountId = await startLink("app-discard");
+
+    await composioProvider.discardConnection({
+      connectedAccountId: "ca_unrelated",
+    });
+    await composioProvider.discardConnection({
+      connectedAccountId: linkAccountId,
+    });
+
+    expect(api.state.accounts.map((a) => a.id)).toEqual(["ca_unrelated"]);
   });
 
   it("revokes every account for the email account on disconnect", async () => {
@@ -180,14 +279,26 @@ describe("composioProvider", () => {
   });
 
   async function createAuthConfig(app: string) {
-    await composioProvider.getConnectUrl({
-      app,
-      emailAccountId: "email-account-1",
-      callbackUrl: "http://localhost:3000/callback",
-    });
+    await startLink(app);
+    // The setup link isn't part of the test
+    api.state.accounts = [];
     return api.state.authConfigs.find(
       (config) => config.name === `inbox-zero-${app}`,
     )!.id;
+  }
+
+  async function startLink(app: string) {
+    await composioProvider.getConnectUrl({
+      app,
+      emailAccountId: "email-account-1",
+      userId: "user-1",
+      callbackUrl: "http://localhost:3000/callback",
+    });
+    return api.state.accounts.at(-1)!.id;
+  }
+
+  function activate(accountId: string) {
+    api.state.accounts.find((a) => a.id === accountId)!.status = "ACTIVE";
   }
 });
 
@@ -376,7 +487,20 @@ function createFakeComposioApi() {
       return json(server);
     }
     if (method === "POST" && path === "/connected_accounts/link") {
-      return json({ redirect_url: "https://connect.composio.dev/link/lk_1" });
+      const id = `ca_link_${state.accounts.length + 1}`;
+      state.accounts.push(
+        account(
+          id,
+          body.user_id,
+          body.auth_config_id,
+          "INITIATED",
+          new Date().toISOString(),
+        ),
+      );
+      return json({
+        redirect_url: `https://connect.composio.dev/link/${id}`,
+        connected_account_id: id,
+      });
     }
     if (method === "GET" && path === "/connected_accounts") {
       return json({
