@@ -11,6 +11,8 @@ vi.mock("@/utils/gmail/message");
 const logger = createTestLogger();
 // What one sync page may carry (packages/mail-core/src/sync.ts).
 const MAX_PAGE_CHANGES = 1000;
+// Bodies a catch-up page keeps (apps/web/utils/mail-api/source.ts).
+const MAX_PAGE_BODIES = 50;
 const MAX_CHECKPOINT_LENGTH = 16_384;
 
 // A mailbox changes while Cue is closed, then keeps changing during the
@@ -60,6 +62,7 @@ describe.each([
     const apply = (
       page: Awaited<ReturnType<typeof getGmailMailboxSyncPage>>,
     ) => {
+      expect(page.upsertedMessages.length).toBeLessThanOrEqual(MAX_PAGE_BODIES);
       expect(
         page.upsertedMessages.length + page.deletedMessageIds.length,
       ).toBeLessThanOrEqual(MAX_PAGE_CHANGES);
@@ -98,15 +101,19 @@ describe.each([
         if (pages > 50_000) throw new Error("catch-up did not finish");
       } while (page.hasMore);
     }
-    apply(
-      await getGmailMailboxSyncPage({
+    // A last catch-up with Gmail quiet picks up the final rounds' changes.
+    let final: Awaited<ReturnType<typeof getGmailMailboxSyncPage>>;
+    do {
+      final = await getGmailMailboxSyncPage({
         gmail: gmail.client as never,
         accessToken: "access-token",
         logger,
         cursor,
         limit: 50,
-      }),
-    );
+      });
+      apply(final);
+      cursor = final.cursor;
+    } while (final.hasMore);
 
     expect(firstPageHasNewest).toBe(true);
     expect(new Map([...local].map(([id, value]) => [id, value.label]))).toEqual(
@@ -175,8 +182,16 @@ function simulatedGmail(perRecord: number, random: () => number) {
     const eligible = records.filter(
       (record) => record.id > Number(options.startHistoryId),
     );
-    const offset = options.pageToken ? Number(options.pageToken) : 0;
     const max = options.maxResults ?? 100;
+    // A page token only works with the page size and start that minted it.
+    let offset = 0;
+    if (options.pageToken) {
+      const [tokenOffset, tokenSize, tokenStart] = options.pageToken.split(":");
+      if (Number(tokenSize) !== max || tokenStart !== options.startHistoryId) {
+        throw Object.assign(new Error("Invalid pageToken"), { status: 400 });
+      }
+      offset = Number(tokenOffset);
+    }
     const slice = eligible.slice(offset, offset + max);
     return {
       history: slice.map((record) => {
@@ -193,7 +208,9 @@ function simulatedGmail(perRecord: number, random: () => number) {
       }),
       historyId: String(historyId),
       nextPageToken:
-        offset + max < eligible.length ? String(offset + max) : undefined,
+        offset + max < eligible.length
+          ? `${offset + max}:${max}:${options.startHistoryId}`
+          : undefined,
     };
   });
   vi.mocked(getMessagesBatch).mockImplementation(async ({ messageIds }) =>

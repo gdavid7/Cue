@@ -3,6 +3,7 @@ import {
   compactMailboxSyncMessage,
   decodeMailboxSyncCursor,
   encodeMailboxSyncCursor,
+  MAILBOX_SYNC_PAGE_MAX_MESSAGES,
   type MailboxSyncCursor,
 } from "@/utils/email/mailbox-sync";
 import type { MailboxSyncPage } from "@/utils/email/types";
@@ -32,10 +33,11 @@ const PREVIEW_SIZE = 10;
 // A backlog this small is applied whole in one page, well inside the 1000
 // changes a sync page may carry.
 const SHORT_CATCH_UP_MAX_CHANGES = 500;
-// Changes one replay page carries: far inside a sync page's 1000, and few
-// enough message fetches (about 2000 units) to finish well within the
-// client's request timeout under the account's quota.
-const REPLAY_PAGE_MAX_CHANGES = 100;
+// Changes one replay page carries, its preview included: no more messages
+// than a page keeps the bodies of, so none is fetched in full only to be
+// fetched again, and few enough fetches (about 1000 units) to finish well
+// within the client's request timeout under the account's quota.
+const REPLAY_PAGE_MAX_CHANGES = MAILBOX_SYNC_PAGE_MAX_MESSAGES;
 
 type GmailDeltaCursor = Extract<MailboxSyncCursor, { provider: "google" }>;
 
@@ -157,11 +159,11 @@ async function getGmailDeltaPage({
   limit: number;
 }): Promise<MailboxSyncPage> {
   const marker = cursor.previewedThrough;
+  // The scan starts without a token, so it only ever uses tokens it minted.
   const preview = await scanGmailHistory({
     gmail,
     logger,
     startHistoryId: marker ?? cursor.historyId,
-    pageToken: marker ? undefined : cursor.pageToken,
   });
   if (
     !marker &&
@@ -181,6 +183,7 @@ async function getGmailDeltaPage({
         historyId: preview.historyId,
         pageToken: undefined,
         previewedThrough: undefined,
+        replayedChanges: undefined,
       },
     });
   }
@@ -204,36 +207,43 @@ async function getGmailDeltaPage({
     });
   }
 
-  const { response, replay } = await readReplayPage({
+  const budget = REPLAY_PAGE_MAX_CHANGES - previewed.upsertIds.length;
+  const { response, records, replay, pageToken } = await readReplayPage({
     gmail,
     logger,
     cursor,
     limit,
+    budget,
   });
   // A record naming more changes than a page may carry is delivered in parts,
-  // holding the Gmail page token until the last part is out.
+  // holding the replay's position until the last part is out.
   const delivered = cursor.replayedChanges ?? 0;
   const ordered = [
     ...[...replay.deletedIds].map((id) => ({ id, deleted: true })),
     ...replay.upsertIds.map((id) => ({ id, deleted: false })),
   ];
-  const part = ordered.slice(delivered, delivered + REPLAY_PAGE_MAX_CHANGES);
+  const part = ordered.slice(delivered, delivered + budget);
   const remaining = delivered + part.length < ordered.length;
   const deletedIds = new Set(
     part.filter((change) => change.deleted).map((change) => change.id),
   );
-  const pageToken = response.nextPageToken ?? undefined;
+  const lastRecordId = records.at(-1)?.id;
   let nextCursor: GmailDeltaCursor;
   if (remaining) {
     nextCursor = {
       ...cursor,
+      pageToken,
       previewedThrough: previewed.through,
       replayedChanges: delivered + part.length,
     };
-  } else if (pageToken) {
+  } else if (response.nextPageToken) {
+    // The next page starts after this page's last record. Gmail's page tokens
+    // are not promised to work with another page size, and the page shrinks.
     nextCursor = {
       ...cursor,
-      pageToken,
+      ...(lastRecordId
+        ? { historyId: lastRecordId, pageToken: undefined }
+        : { pageToken: response.nextPageToken }),
       previewedThrough: previewed.through,
       replayedChanges: undefined,
     };
@@ -272,29 +282,47 @@ async function readReplayPage({
   logger,
   cursor,
   limit,
+  budget,
 }: {
   gmail: gmail_v1.Gmail;
   logger: Logger;
   cursor: GmailDeltaCursor;
   limit: number;
+  budget: number;
 }) {
   // A record split across pages is re-read alone, so its parts line up.
   let maxResults = cursor.replayedChanges ? 1 : limit;
+  // Only a cursor from an earlier version still carries a page token.
+  let pageToken = cursor.pageToken;
   for (;;) {
-    const response = await getHistory(
-      gmail,
-      {
-        startHistoryId: cursor.historyId,
-        historyTypes: [...GMAIL_MAILBOX_HISTORY_TYPES],
-        maxResults,
-        pageToken: cursor.pageToken,
-      },
-      logger,
+    let response: gmail_v1.Schema$ListHistoryResponse;
+    try {
+      response = await getHistory(
+        gmail,
+        {
+          startHistoryId: cursor.historyId,
+          historyTypes: [...GMAIL_MAILBOX_HISTORY_TYPES],
+          maxResults,
+          pageToken,
+        },
+        logger,
+      );
+    } catch (error) {
+      // A token Gmail refuses is dropped: replaying from the cursor's history
+      // again re-applies changes the store already has, which is harmless.
+      if (!pageToken || extractErrorInfo(error).status !== 400) throw error;
+      pageToken = undefined;
+      continue;
+    }
+    // History ids only grow, so this guards the position if Gmail ever
+    // returns the record the replay last stopped at.
+    const records = (response.history ?? []).filter(
+      (record) => !record.id || BigInt(record.id) > BigInt(cursor.historyId),
     );
-    const replay = getGmailMailboxChangeIds(response.history ?? []);
+    const replay = getGmailMailboxChangeIds(records);
     const changes = replay.upsertIds.length + replay.deletedIds.size;
-    if (changes <= REPLAY_PAGE_MAX_CHANGES || maxResults === 1) {
-      return { response, replay };
+    if (changes <= budget || maxResults === 1) {
+      return { response, records, replay, pageToken };
     }
     maxResults = Math.max(1, Math.floor(maxResults / 2));
   }
@@ -306,16 +334,14 @@ async function scanGmailHistory({
   gmail,
   logger,
   startHistoryId,
-  pageToken,
 }: {
   gmail: gmail_v1.Gmail;
   logger: Logger;
   startHistoryId: string;
-  pageToken: string | undefined;
 }) {
   const history: gmail_v1.Schema$History[] = [];
   let historyId: string | null = null;
-  let nextPageToken = pageToken;
+  let nextPageToken: string | undefined;
   for (let call = 0; call < HISTORY_SCAN_MAX_CALLS; call++) {
     const response = await getHistory(
       gmail,

@@ -33,6 +33,11 @@ const cursorSchema = z.discriminatedUnion("provider", [
 
 export type MailboxSyncCursor = z.infer<typeof cursorSchema>;
 
+// The most messages one catch-up page brings in, each with its body: bodies
+// can be megabytes, and a provider page that fetched more would drop bodies
+// only to fetch them again.
+export const MAILBOX_SYNC_PAGE_MAX_MESSAGES = 50;
+
 export class InvalidMailboxSyncCursorError extends Error {
   constructor() {
     super("Invalid mailbox sync cursor");

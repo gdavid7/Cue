@@ -10,6 +10,7 @@ import {
   decodeMailboxSyncCursor,
   encodeMailboxSyncCursor,
   InvalidMailboxSyncCursorError,
+  MAILBOX_SYNC_PAGE_MAX_MESSAGES,
 } from "@/utils/email/mailbox-sync";
 import type { EmailProvider, ProviderMailboxSearch } from "@/utils/email/types";
 import {
@@ -49,8 +50,6 @@ import {
 // Outlook allows four concurrent Graph requests per mailbox, shared with
 // webhook processing, so batched folder reads stay below that.
 const CHANGES_BATCH_CONCURRENCY = 3;
-// As many bodies as a full enumeration page carries.
-const MAX_CHANGES_PAGE_BODIES = 50;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Gmail's first scan covers only recent mail so the inbox fills and live
@@ -339,7 +338,7 @@ export function createEmailProviderMailboxSource(input: {
         // Bodies can be megabytes each, so one page carries a bounded number
         // and the rest are hydrated in batches.
         const withBodies = page.includesBodies
-          ? page.upsertedMessages.slice(0, MAX_CHANGES_PAGE_BODIES)
+          ? page.upsertedMessages.slice(0, MAILBOX_SYNC_PAGE_MAX_MESSAGES)
           : [];
         const { requiredHydration, bodies } = parsedMessageBodies(
           accountId,

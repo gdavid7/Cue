@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestLogger, getMockMessage } from "@/__tests__/helpers";
-import { encodeMailboxSyncCursor } from "@/utils/email/mailbox-sync";
+import {
+  decodeMailboxSyncCursor,
+  encodeMailboxSyncCursor,
+} from "@/utils/email/mailbox-sync";
 import { getHistory } from "@/utils/gmail/history";
 import {
   getGmailMailboxChangeIds,
@@ -358,6 +361,8 @@ describe("getGmailMailboxSyncPage", () => {
     const pages = await readUntilCaughtUp(gmail.read, startCursor());
 
     for (const page of pages) {
+      // Every message a page fetched in full can keep its body.
+      expect(page.upsertedMessages.length).toBeLessThanOrEqual(50);
       expect(
         page.upsertedMessages.length + page.deletedMessageIds.length,
       ).toBeLessThanOrEqual(1000);
@@ -365,6 +370,43 @@ describe("getGmailMailboxSyncPage", () => {
     }
     expect(new Set(pages.flatMap(ids))).toEqual(new Set(gmail.allMessages()));
     expect(pages.at(-1)?.hasMore).toBe(false);
+  });
+
+  it("recovers from a page token Gmail no longer accepts", async () => {
+    const gmail = fakeGmailHistory(120, 1);
+    // A cursor written by an earlier version, mid-replay, holding a token
+    // minted for another page size.
+    const cursor = encodeMailboxSyncCursor({
+      version: 1,
+      provider: "google",
+      phase: "delta",
+      historyId: "100",
+      after: "2026-07-01T00:00:00.000Z",
+      pageToken: "40:7:100",
+    });
+
+    const pages = await readUntilCaughtUp(gmail.read, cursor);
+
+    expect(new Set(pages.flatMap(ids))).toEqual(new Set(gmail.allMessages()));
+    expect(pages.at(-1)?.hasMore).toBe(false);
+  });
+
+  it("starts a short catch-up's next read clean of a split record's progress", async () => {
+    const gmail = fakeGmailHistory(3, 1);
+    const cursor = encodeMailboxSyncCursor({
+      version: 1,
+      provider: "google",
+      phase: "delta",
+      historyId: "100",
+      after: "2026-07-01T00:00:00.000Z",
+      replayedChanges: 5,
+    });
+
+    const page = await gmail.read(cursor);
+
+    expect(decodeMailboxSyncCursor(page.cursor, "google")).not.toHaveProperty(
+      "replayedChanges",
+    );
   });
 
   it("previews new mail ahead of later label changes on older mail", async () => {
@@ -502,12 +544,25 @@ function fakeGmailHistory(recordCount: number, perRecord: number) {
     });
   };
   for (let index = 0; index < recordCount; index++) addRecord();
+  // Gmail does not promise that a page token works with another page size or
+  // start, so this fake refuses one used with anything but what minted it.
   vi.mocked(getHistory).mockImplementation(async (_gmail, options) => {
+    const maxResults = options.maxResults ?? 100;
+    let offset = 0;
+    if (options.pageToken) {
+      const [tokenOffset, tokenSize, tokenStart] = options.pageToken.split(":");
+      if (
+        Number(tokenSize) !== maxResults ||
+        tokenStart !== options.startHistoryId
+      ) {
+        throw Object.assign(new Error("Invalid pageToken"), { status: 400 });
+      }
+      offset = Number(tokenOffset);
+    }
     const eligible = records.filter(
       (record) => record.id > Number(options.startHistoryId),
     );
-    const offset = Number(options.pageToken ?? 0);
-    const slice = eligible.slice(offset, offset + (options.maxResults ?? 100));
+    const slice = eligible.slice(offset, offset + maxResults);
     const end = offset + slice.length;
     return {
       history: slice.map((record) => ({
@@ -515,7 +570,10 @@ function fakeGmailHistory(recordCount: number, perRecord: number) {
         messages: record.messages.map((id) => ({ id, threadId: `t-${id}` })),
       })),
       historyId: String(records.at(-1)?.id ?? 100),
-      nextPageToken: end < eligible.length ? String(end) : undefined,
+      nextPageToken:
+        end < eligible.length
+          ? `${end}:${maxResults}:${options.startHistoryId}`
+          : undefined,
     };
   });
   vi.mocked(getMessagesBatch).mockImplementation(async ({ messageIds }) =>
