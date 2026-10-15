@@ -153,8 +153,8 @@ type Finding = { severity: "fail" | "slow" | "warn"; message: string };
 /**
  * Judges one attempt. It FAILS when the run threw, a check failed, a metric
  * passed its limit, the page threw or hydration broke, or our own server
- * answered 5xx. It is SLOW when a metric passed its target. Other console
- * errors and 4xx responses are reported as warnings.
+ * answered 5xx other than a throttling 503. It is SLOW when a metric passed
+ * its target. Other console errors, 503s and 4xx responses are warnings.
  */
 export function evaluateAttempt(
   attempt: JourneyAttempt,
@@ -193,11 +193,22 @@ export function evaluateAttempt(
   const ours = attempt.diagnostics.failedRequests.filter(
     (request) => safeOrigin(request.url) === origin,
   );
-  const serverErrors = ours.filter((request) => request.status >= 500);
+  const serverErrors = ours.filter(
+    (request) => request.status >= 500 && request.status !== 503,
+  );
   if (serverErrors.length) {
     findings.push({
       severity: "fail",
       message: `server errors: ${describeRequests(serverErrors)}`,
+    });
+  }
+  // Cue answers 503 on purpose, with a retry time, when Gmail quota pacing
+  // holds a request back; the app retries it.
+  const throttled = ours.filter((request) => request.status === 503);
+  if (throttled.length) {
+    findings.push({
+      severity: "warn",
+      message: `throttled (503): ${describeRequests(throttled)}`,
     });
   }
   const clientErrors = ours.filter((request) => request.status < 500);

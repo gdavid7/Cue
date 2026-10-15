@@ -21,9 +21,13 @@ export type JourneyProbeState = {
   chat: ChatProbe[];
 };
 
-const MAX_STREAM_CHARS = 400_000;
+export const MAX_STREAM_CHARS = 400_000;
 
-export function installJourneyProbes(maxStreamChars = MAX_STREAM_CHARS) {
+/**
+ * Pass `MAX_STREAM_CHARS` as the init script's argument: the function is
+ * serialized into the page, where module constants do not exist.
+ */
+export function installJourneyProbes(maxStreamChars: number) {
   const scope = window as unknown as {
     __cueJourney?: JourneyProbeState;
     EventSource: typeof EventSource;

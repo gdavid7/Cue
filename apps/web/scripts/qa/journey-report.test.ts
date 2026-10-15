@@ -122,7 +122,7 @@ describe("evaluateAttempt", () => {
     ).toBe("FAIL");
   });
 
-  it("fails on our own 5xx, page errors and hydration errors but only warns on 4xx and other console errors", () => {
+  it("fails on our own 5xx, page errors and hydration errors but only warns on throttling, 4xx and other console errors", () => {
     const warnOnly = evaluateAttempt(
       attempt({
         diagnostics: {
@@ -130,7 +130,12 @@ describe("evaluateAttempt", () => {
           pageErrors: [],
           failedRequests: [
             { method: "GET", url: `${BASE_URL}/api/user/me`, status: 401 },
-            { method: "GET", url: "https://third.party/x", status: 503 },
+            {
+              method: "POST",
+              url: `${BASE_URL}/api/mail/v1/accounts/a/enumeration`,
+              status: 503,
+            },
+            { method: "GET", url: "https://third.party/x", status: 500 },
           ],
         },
       }),
@@ -138,7 +143,11 @@ describe("evaluateAttempt", () => {
       BASE_URL,
     );
     expect(warnOnly.verdict).toBe("PASS");
-    expect(warnOnly.findings.map((f) => f.severity)).toEqual(["warn", "warn"]);
+    expect(warnOnly.findings.map((f) => f.message)).toEqual([
+      "throttled (503): 503 POST /api/mail/v1/accounts/a/enumeration",
+      "4xx responses: 401 GET /api/user/me",
+      "1 console errors, e.g. Failed to load resource",
+    ]);
 
     for (const diagnostics of [
       {

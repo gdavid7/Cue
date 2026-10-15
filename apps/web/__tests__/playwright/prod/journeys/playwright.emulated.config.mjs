@@ -9,7 +9,8 @@ import baseConfig from "../../../../playwright.config.mjs";
 export default defineConfig({
   ...baseConfig,
   outputDir:
-    process.env.CUE_JOURNEYS_OUTPUT_DIR ?? ".tmp/journeys/emulated-output",
+    process.env.CUE_JOURNEYS_OUTPUT_DIR ??
+    path.resolve(".tmp/journeys/emulated-output"),
   testDir: path.resolve("__tests__/playwright"),
   projects: [
     baseConfig.projects[0],
@@ -29,7 +30,7 @@ export default defineConfig({
         open: "never",
         outputFolder:
           process.env.CUE_JOURNEYS_REPORT_DIR ??
-          ".tmp/journeys/emulated-report",
+          path.resolve(".tmp/journeys/emulated-report"),
       },
     ],
   ],

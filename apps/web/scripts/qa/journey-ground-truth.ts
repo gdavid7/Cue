@@ -30,7 +30,9 @@ export type PlantedEmail = {
 export type GroundTruth = ReturnType<typeof buildGroundTruth>;
 
 export function journeySubject(base: string, runTag: string) {
-  return `${base} · ${JOURNEY_SUBJECT_MARKER} ${runTag}`;
+  // ASCII only: a non-ASCII subject is MIME-encoded, which not every
+  // mailbox (the Gmail emulator, for one) decodes back.
+  return `${base} (${JOURNEY_SUBJECT_MARKER} ${runTag})`;
 }
 
 export function buildGroundTruth({

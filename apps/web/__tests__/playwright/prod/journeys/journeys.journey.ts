@@ -35,6 +35,7 @@ import {
 } from "./journey-mailbox";
 import {
   installJourneyProbes,
+  MAX_STREAM_CHARS,
   onlyRowsMatching,
   readProbes,
   rowWithSubjectAbsent,
@@ -115,7 +116,7 @@ test("Cue journeys", async ({ page }, testInfo) => {
         });
     }
 
-    await page.addInitScript(installJourneyProbes);
+    await page.addInitScript(installJourneyProbes, MAX_STREAM_CHARS);
     run.attach(page);
 
     if (credentials) {
@@ -194,7 +195,6 @@ async function inboxLoad(
 ) {
   await page.goto("about:blank");
   await page.goto(inboxPath, { waitUntil: "commit" });
-  const conversations = page.getByRole("listbox", { name: "Conversations" });
   const reconnect = page.getByText(/Reconnect (this|your) account/i).first();
   const firstRow = page
     .waitForFunction(firstInboxRowVisible, undefined, {
@@ -215,7 +215,11 @@ async function inboxLoad(
   const rowAt = shown ?? (await firstRow);
   if (rowAt === null) throw new Error("No inbox row within 45s");
   metrics.firstRowMs = rowAt;
-  metrics.inboxRows = await conversations.getByRole("option").count();
+  metrics.inboxRows = await page
+    .locator(
+      '[role="listbox"][aria-label="Conversations"] [data-mail-thread-row]',
+    )
+    .count();
   check(
     "no Gmail rate-limit banner",
     (await page.getByText(/Gmail is (rate )?limiting/i).count()) === 0,
@@ -507,12 +511,16 @@ async function triage(
     10_000,
   );
 
+  // The toast follows the archive once it is queued, a moment after the row
+  // has gone.
   const undo = page
     .getByRole("region", { name: "Notifications alt+T" })
     .getByRole("button", { name: /^Undo/ });
+  await expect(undo, "the archive offers Undo").toBeVisible({
+    timeout: 10_000,
+  });
   await armInteraction(page);
-  if (await undo.isVisible()) await undo.click();
-  else await page.keyboard.press("z");
+  await undo.click();
   metrics.undoMs = await timeSinceInput(
     page,
     rowWithSubjectPresent,
@@ -631,6 +639,12 @@ async function openInbox(page: Page, inboxPath: string) {
     conversations.getByRole("option").first(),
     "the inbox shows its rows",
   ).toBeVisible({ timeout: 45_000 });
+  // The server's placeholder rows show first; only the mail engine's list
+  // can be selected and triaged.
+  await expect(
+    page.locator("[data-mail-inbox-preview]"),
+    "the mail engine's list replaces the placeholder",
+  ).toHaveCount(0, { timeout: 60_000 });
 }
 
 async function findAccount(page: Page, email: string) {
