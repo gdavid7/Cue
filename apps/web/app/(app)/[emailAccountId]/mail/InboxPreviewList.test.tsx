@@ -90,12 +90,21 @@ describe("InboxPreviewList", () => {
     ]);
   });
 
+  it("offers the rows as a placeholder, not as a list to select and triage", async () => {
+    await renderSeeded(previewOf("s1", "s2"));
+
+    // Selection, `x` and select-all act on the engine's list; until it is
+    // here there is nothing they could act on.
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByText("s1").closest('[aria-busy="true"]')).not.toBeNull();
+  });
+
   it("asks the provider for nothing on a warm open, which has no seed", async () => {
     await act(async () => {
       render(seeded(null));
     });
 
-    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(document.querySelector("[data-mail-inbox-preview]")).toBeNull();
     expect(screen.getByText("Opening your mailbox…")).toBeTruthy();
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -137,7 +146,7 @@ describe("InboxPreviewList", () => {
 
     await renderSeeded(Promise.reject(new Error("stream broke")));
 
-    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(document.querySelector("[data-mail-inbox-preview]")).toBeNull();
     expect(screen.getByText("Opening your mailbox…")).toBeTruthy();
   });
 

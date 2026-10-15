@@ -97,13 +97,20 @@ export function MailEngineRuntime({ children }: { children: ReactNode }) {
 export function MailEngineHost({
   children,
   fallback,
+  showChildrenWhileStarting,
 }: {
   children: ReactNode;
   fallback?: ReactNode;
+  showChildrenWhileStarting?: boolean;
 }) {
   return (
     <MailEngineRuntime>
-      <MailCoverageGate fallback={fallback}>{children}</MailCoverageGate>
+      <MailCoverageGate
+        fallback={fallback}
+        showChildrenWhileStarting={showChildrenWhileStarting}
+      >
+        {children}
+      </MailCoverageGate>
     </MailEngineRuntime>
   );
 }
@@ -111,10 +118,18 @@ export function MailEngineHost({
 export function MailCoverageGate({
   children,
   fallback = <LoadingContent loading>{null}</LoadingContent>,
+  showChildrenWhileStarting = false,
 }: {
   children: ReactNode;
   /** Shown until the engine is ready, so the screen's frame needn't wait. */
   fallback?: ReactNode;
+  /**
+   * Shows the children as soon as the page has hydrated, for a screen that
+   * reads as loading without the engine. Swapping a stand-in for it once the
+   * engine is ready would remount it, closing any menu or dialog opened
+   * meanwhile. The fallback still covers the server render.
+   */
+  showChildrenWhileStarting?: boolean;
 }) {
   const status = useContext(MailEngineRuntimeStatusContext);
   // SSR has no OPFS; checking capabilities before hydration paints the
@@ -134,7 +149,7 @@ export function MailCoverageGate({
     return <MailStorageUnavailable onRetry={status.retryStart} />;
   }
   if (!status.client && status.rebuilding) return <MailboxRebuilding />;
-  if (!status.client) return fallback;
+  if (!status.client && !showChildrenWhileStarting) return fallback;
   return children;
 }
 
