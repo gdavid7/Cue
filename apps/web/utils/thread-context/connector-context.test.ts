@@ -306,6 +306,71 @@ describe("fetchConnectorCandidates with an unreadable app", () => {
   });
 });
 
+describe("fetchConnectorCandidates with an app that keeps failing", () => {
+  const logger = createScopedLogger("connector-context-test");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const store = new Map<string, unknown>();
+    vi.mocked(redis.get).mockImplementation(
+      async (key: string) => (store.get(key) ?? null) as never,
+    );
+    vi.mocked(redis.set).mockImplementation(async (key, value) => {
+      store.set(key as string, value);
+      return "OK";
+    });
+    prisma.mcpConnection.findMany.mockResolvedValue([
+      {
+        id: "connection-slack",
+        updatedAt: new Date(1000),
+        emailAccountId: "school",
+        integration: { name: "slack" },
+      },
+    ] as never);
+  });
+
+  afterEach(() => {
+    vi.mocked(redis.get).mockImplementation(async () => null);
+    vi.mocked(redis.set).mockImplementation(async () => "OK");
+  });
+
+  it("doesn't wait on it again right after it failed, and says the result is partial", async () => {
+    mockExecuteTool.mockRejectedValue(new Error("internal_server_error"));
+    const search = () =>
+      fetchConnectorCandidates({
+        emailAccountId: "school",
+        keywords: ["milestone"],
+        logger,
+        now: NOW,
+      });
+
+    await search();
+    expect(mockExecuteTool).toHaveBeenCalledTimes(1);
+
+    const again = await search();
+
+    expect(mockExecuteTool).toHaveBeenCalledTimes(1);
+    expect(again).toEqual({ candidates: [], complete: false });
+  });
+
+  it("keeps asking an app whose last search worked", async () => {
+    mockExecuteTool.mockResolvedValue({ messages: { matches: [] } });
+    const search = () =>
+      fetchConnectorCandidates({
+        emailAccountId: "school",
+        keywords: ["milestone"],
+        logger,
+        now: NOW,
+      });
+
+    await search();
+    const again = await search();
+
+    expect(mockExecuteTool).toHaveBeenCalledTimes(2);
+    expect(again.complete).toBe(true);
+  });
+});
+
 describe("fetchConnectorCandidates with links and the sender in the thread", () => {
   const logger = createScopedLogger("connector-context-test");
 
