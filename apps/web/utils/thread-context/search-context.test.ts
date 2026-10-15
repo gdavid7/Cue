@@ -203,10 +203,14 @@ describe("searchContext", () => {
       );
     });
 
-    it("still searches when the thread can't be loaded", async () => {
+    it("still searches when the thread can't be loaded, logging why at warn and the error at trace", async () => {
+      const failure = new Error("Requested entity was not found.");
       const emailProvider = provider(async () => {
-        throw new Error("Requested entity was not found.");
+        throw failure;
       });
+      const logger = createTestLogger();
+      const warn = vi.spyOn(logger, "warn");
+      const trace = vi.spyOn(logger, "trace");
 
       await expect(
         searchContext({
@@ -215,12 +219,20 @@ describe("searchContext", () => {
           query: "status",
           threadId: "gone",
           emailProvider,
-          logger: createTestLogger(),
+          logger,
           now: NOW,
         }),
       ).resolves.toEqual({ results: [] });
       expect(fetchConnectorCandidates).toHaveBeenLastCalledWith(
         expect.objectContaining({ signals: undefined }),
+      );
+      expect(warn).toHaveBeenCalledWith(
+        "Failed to load thread for context search",
+        { reason: "Error" },
+      );
+      expect(trace).toHaveBeenCalledWith(
+        "Thread for context search failed to load",
+        { error: failure },
       );
     });
 

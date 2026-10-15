@@ -79,7 +79,11 @@ export async function searchContext({
     ? await emailProvider.getThread(threadId).catch((error) => {
         if (describeProviderRateLimitError(error, emailProvider.name))
           throw error;
-        logger.warn("Failed to load thread for context search", { error });
+        // The provider's error can quote the thread; it goes to trace only.
+        logger.warn("Failed to load thread for context search", {
+          reason: error instanceof Error ? error.name : typeof error,
+        });
+        logger.trace("Thread for context search failed to load", { error });
         return null;
       })
     : null;
