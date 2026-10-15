@@ -5,7 +5,10 @@ import { createEmailProvider } from "@/utils/email/provider";
 import type { Logger } from "@/utils/logger";
 import { getOutlookClientForEmailId } from "@/utils/email-account-client";
 import { extractErrorInfo } from "@/utils/outlook/retry";
-import { renewOutlookWatch } from "@/utils/outlook/watch";
+import {
+  OUTLOOK_SUBSCRIPTION_LIFETIME_MS,
+  renewOutlookWatch,
+} from "@/utils/outlook/watch";
 import {
   parseSubscriptionHistory,
   cleanupOldHistoryEntries,
@@ -14,7 +17,6 @@ import {
 
 const OUTLOOK_SUBSCRIPTION_RENEWAL_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 const OUTLOOK_MAX_REUSE_AGE_MS = 24 * 60 * 60 * 1000;
-const OUTLOOK_SUBSCRIPTION_LIFETIME_MS = 3 * 24 * 60 * 60 * 1000;
 
 /**
  * Manages Outlook subscriptions, ensuring only one active subscription per email account

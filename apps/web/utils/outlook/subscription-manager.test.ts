@@ -226,6 +226,36 @@ describe("OutlookSubscriptionManager", () => {
       vi.useRealTimers();
     });
 
+    it("renews a full-lifetime subscription once it is older than a day", async () => {
+      const now = new Date("2026-04-14T12:00:00Z");
+      vi.useFakeTimers();
+      vi.setSystemTime(now);
+
+      // Created 30 hours ago with the ~6.9 day Graph lifetime.
+      vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue({
+        watchEmailsSubscriptionId: "aged-subscription-id",
+        watchEmailsExpirationDate: new Date("2026-04-20T03:36:00Z"),
+        watchEmailsSubscriptionHistory: null,
+        createdAt: new Date("2026-03-01T00:00:00Z"),
+      } as any);
+      vi.mocked(mockProvider.watchEmails).mockResolvedValue({
+        subscriptionId: "replacement-subscription-id",
+        expirationDate: new Date("2026-04-21T09:36:00Z"),
+      });
+
+      const result = await manager.createSubscription();
+
+      expect(mockProvider.watchEmails).toHaveBeenCalled();
+      expect(result).toEqual(
+        expect.objectContaining({
+          subscriptionId: "replacement-subscription-id",
+          changed: true,
+        }),
+      );
+
+      vi.useRealTimers();
+    });
+
     it("should reuse a subscription that is less than a day old", async () => {
       const now = new Date("2026-04-14T12:00:00Z");
       vi.useFakeTimers();
@@ -233,7 +263,7 @@ describe("OutlookSubscriptionManager", () => {
 
       vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue({
         watchEmailsSubscriptionId: "fresh-subscription-id",
-        watchEmailsExpirationDate: new Date("2026-04-17T06:00:00Z"),
+        watchEmailsExpirationDate: new Date("2026-04-21T03:36:00Z"),
         watchEmailsSubscriptionHistory: null,
         createdAt: new Date("2026-03-01T00:00:00Z"),
       } as any);
