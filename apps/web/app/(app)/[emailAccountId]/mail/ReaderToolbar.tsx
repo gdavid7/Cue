@@ -96,7 +96,11 @@ export function ReaderToolbar({
         extraAction || onSnooze ? (
           <>
             {extraAction}
-            {onSnooze ? <SnoozeButton onSnooze={onSnooze} /> : null}
+            {onSnooze ? (
+              <span className="contents max-lg:hidden">
+                <SnoozeButton onSnooze={onSnooze} />
+              </span>
+            ) : null}
           </>
         ) : null
       }
@@ -112,6 +116,9 @@ export function ReaderToolbar({
         />
       ))}
       menu={menu}
+      // MailShell's MailMobileNav carries Back, Archive, Snooze and More
+      // whenever a conversation is open below lg.
+      bottomBarBelowLg
       messageExpansion={messageExpansion}
       onArchive={onArchive}
       onMoveToInbox={onMoveToInbox}
@@ -131,6 +138,8 @@ function renderButton(button: MailReaderToolbarButton) {
   return (
     <Button
       aria-label={button.ariaLabel}
+      // What stays in the header on a phone still gets a 44px hit area.
+      className="relative max-lg:after:absolute max-lg:after:-inset-2 max-lg:after:content-['']"
       onClick={button.onClick}
       size="iconXs"
       title={button.title}
