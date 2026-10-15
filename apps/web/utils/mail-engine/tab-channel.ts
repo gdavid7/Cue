@@ -335,6 +335,8 @@ export function createTabFollowerClient(input: {
       await call("ensureAccount", [account]);
     },
     ensureMessageContent: (key) => call("ensureMessageContent", [key]) as never,
+    ensureConversationMessages: (key) =>
+      call("ensureConversationMessages", [key]) as never,
     async getDiagnostics(accountId) {
       return call("getDiagnostics", [accountId]) as never;
     },

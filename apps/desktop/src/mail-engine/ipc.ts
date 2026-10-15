@@ -56,6 +56,11 @@ export async function dispatchMailIpc(engine: MailEngine, payload: unknown) {
         status: "ok" as const,
         result: await engine.ensureMessageContent(request.payload),
       };
+    case "ensureConversationMessages":
+      return {
+        status: "ok" as const,
+        result: await engine.ensureConversationMessages(request.payload),
+      };
     case "getDiagnostics":
       return {
         status: "ok" as const,

@@ -103,6 +103,8 @@ export type MailDiagnostics = {
   }>;
 };
 
+export type ConversationCompletion = { status: "complete" | "unavailable" };
+
 export type MailboxWindowHandle = QueryHandle<MailboxView> & {
   loadMore(): Promise<void>;
 };
@@ -149,6 +151,16 @@ export type MailClient = {
     provider: "google" | "microsoft";
   }): Promise<void>;
   ensureMessageContent(key: MessageKey): Promise<WorkAdmission>;
+  /**
+   * Makes sure the store holds every message of a conversation someone opened.
+   * Until sync has covered the whole mailbox, some of its older messages may
+   * not be local yet, so this asks the provider for its membership once and
+   * merges it. Resolves once the conversation is complete locally, or with
+   * `unavailable` when the provider couldn't answer; a later call tries again.
+   */
+  ensureConversationMessages(
+    key: ConversationKey,
+  ): Promise<ConversationCompletion>;
   getDiagnostics(accountId: string): Promise<MailDiagnostics>;
   purgeAccount(accountId: string): Promise<LocalRevision>;
   /** Purges every local account outside `accountIds`; an empty list is ignored. */
@@ -199,6 +211,13 @@ export function createMailEngine(input: {
   // as they need rows; a page left in the store by an earlier session or a
   // closed view is dropped instead of walking the whole result set.
   const providerSearches = new Map<string, ProviderSearch>();
+  // Keyed by account and conversation. Each is fetched at most once per
+  // engine: incremental sync keeps it complete from then on.
+  const conversationFetches = new Map<
+    string,
+    Promise<ConversationCompletion>
+  >();
+  const completeConversations = new Set<string>();
 
   async function refreshViews() {
     refreshQueued = true;
@@ -355,12 +374,30 @@ export function createMailEngine(input: {
       await store.enqueueHydration({ keys: [key], purpose: "body" });
       return { status: "scheduled" };
     },
+    ensureConversationMessages(key) {
+      const id = conversationFetchKey(key);
+      if (completeConversations.has(id)) {
+        return Promise.resolve({ status: "complete" });
+      }
+      const inFlight = conversationFetches.get(id);
+      if (inFlight) return inFlight;
+      const fetched = fetchConversationMessages(key)
+        .catch((): ConversationCompletion => ({ status: "unavailable" }))
+        .then((result) => {
+          if (result.status === "complete") completeConversations.add(id);
+          return result;
+        })
+        .finally(() => conversationFetches.delete(id));
+      conversationFetches.set(id, fetched);
+      return fetched;
+    },
     getDiagnostics(accountId) {
       return store.getDiagnostics(accountId);
     },
     async purgeAccount(accountId) {
       stopSyncLane(accountId);
       idleCatchUpGates.delete(accountId);
+      forgetCompleteConversations(accountId);
       const revision = await store.purgeAccount(accountId);
       await refreshViews();
       return revision;
@@ -375,6 +412,7 @@ export function createMailEngine(input: {
         if (retained.has(account.accountId)) continue;
         stopSyncLane(account.accountId);
         idleCatchUpGates.delete(account.accountId);
+        forgetCompleteConversations(account.accountId);
         await store.purgeAccount(account.accountId);
         purged = true;
       }
@@ -674,6 +712,66 @@ export function createMailEngine(input: {
       await store.close();
     },
   };
+
+  // One provider read (Gmail's threads.get) per page of up to 100 messages.
+  // Its patches pass the same version check as hydration, so an older copy
+  // never overwrites what a sync page committed in the meantime.
+  async function fetchConversationMessages(
+    key: ConversationKey,
+  ): Promise<ConversationCompletion> {
+    const local = await store.readConversation(key, {
+      after: null,
+      pageSize: 1,
+    });
+    if (
+      local.view.coverage.every((coverage) => coverage.metadata === "complete")
+    ) {
+      return { status: "complete" };
+    }
+    const account = (await store.readAccountSyncStates()).find(
+      (candidate) => candidate.accountId === key.accountId,
+    );
+    if (!account) return { status: "unavailable" };
+    const session = {
+      accountId: account.accountId,
+      generation: account.generation,
+    };
+    const resolutionId = runtime.randomId();
+    let page: string | null = null;
+    do {
+      const requestId = runtime.randomId();
+      const membership = await source.readConversationMembership({
+        session,
+        requestId,
+        signal: new AbortController().signal,
+        conversation: key,
+        resolutionId,
+        page,
+        pageSize: 100,
+      });
+      if (membership.status !== "ok") {
+        await noteConnection(key.accountId, membership);
+        return { status: "unavailable" };
+      }
+      if (membership.value.status !== "page") return { status: "unavailable" };
+      const applied = await store.applyHydration({
+        session,
+        requestId,
+        changes: membership.value.page.changes,
+        bodies: [],
+      });
+      if (applied.status === "committed") await refreshViews();
+      page = membership.value.page.nextPage;
+    } while (page);
+    return { status: "complete" };
+  }
+
+  function forgetCompleteConversations(accountId: string) {
+    const prefix = conversationFetchKey({ accountId, conversationId: "" });
+    for (const id of completeConversations) {
+      if (id.startsWith(prefix)) completeConversations.delete(id);
+    }
+  }
 
   function watchProviderSearches(query: ConversationQuery, wantedRows: number) {
     const observer = Symbol("mailbox-view");
@@ -1500,6 +1598,10 @@ type ProviderSearch = {
 
 function providerSearchKey(accountId: string, predicate: MailPredicate) {
   return `${accountId}:${JSON.stringify(predicate)}`;
+}
+
+function conversationFetchKey(key: ConversationKey) {
+  return `${key.accountId}\u0000${key.conversationId}`;
 }
 
 type IdleCatchUpGate = {

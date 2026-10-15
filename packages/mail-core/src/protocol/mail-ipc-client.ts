@@ -68,6 +68,8 @@ export function createMailIpcClient(
         ...(options.provider ? { provider: options.provider } : {}),
       }),
     ensureMessageContent: (key) => call("ensureMessageContent", key),
+    ensureConversationMessages: (key) =>
+      call("ensureConversationMessages", key),
     getDiagnostics: (accountId) => call("getDiagnostics", { accountId }),
     purgeAccount: (accountId) => call("purgeAccount", { accountId }),
     retainAccounts: (accountIds) => call("retainAccounts", { accountIds }),
