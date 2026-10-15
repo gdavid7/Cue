@@ -3,6 +3,7 @@
 import {
   type ComponentProps,
   type FormEvent,
+  type MouseEvent,
   type ReactNode,
   useCallback,
   useEffect,
@@ -1025,7 +1026,7 @@ function NavRow({
         // Views of the open mail screen change on the client, so fetching
         // them from the server ahead of time would be wasted.
         prefetch={parseMailPath(href.split("?")[0]) ? false : undefined}
-        onClick={(event) => {
+        onClick={(event: MouseEvent<HTMLAnchorElement>) => {
           if (
             event.button !== 0 ||
             event.metaKey ||
