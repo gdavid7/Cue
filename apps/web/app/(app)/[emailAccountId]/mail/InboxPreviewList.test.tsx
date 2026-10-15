@@ -1,6 +1,13 @@
 /** @vitest-environment jsdom */
 
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
 import { SWRConfig } from "swr";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -23,12 +30,23 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/ThreadList", () => ({
-  ThreadList: ({ threads }: { threads: { id: string }[] }) => (
+  ThreadList: ({
+    threads,
+    onOpenThread,
+  }: {
+    threads: { id: string }[];
+    onOpenThread: (index: number) => void;
+  }) => (
     <div aria-label="Conversations" role="listbox">
-      {threads.map((thread) => (
-        <span data-mail-thread-subject key={thread.id}>
+      {threads.map((thread, index) => (
+        <button
+          data-mail-thread-subject
+          key={thread.id}
+          onClick={() => onOpenThread(index)}
+          type="button"
+        >
           {thread.id}
-        </span>
+        </button>
       ))}
     </div>
   ),
@@ -62,6 +80,23 @@ describe("InboxPreviewList", () => {
       "/api/threads?view=list&type=inbox&limit=25",
       "acc-1",
     ]);
+  });
+
+  it("opens a conversation clicked before the engine is ready once it is", async () => {
+    window.history.replaceState(null, "", "/mail/u/0/inbox");
+    const fetcher = vi.fn(async () => ({
+      threads: [thread("t1"), thread("t2")],
+      nextPageToken: null,
+    }));
+    renderWithSwr(
+      <InboxPreviewList message="Opening your mailbox…" />,
+      fetcher,
+    );
+
+    fireEvent.click(await screen.findByText("t2"));
+
+    // The mail screen opens the conversation in the address when it mounts.
+    expect(window.location.pathname).toBe("/mail/u/0/inbox/t2");
   });
 
   it("asks for the open account's mail only", async () => {

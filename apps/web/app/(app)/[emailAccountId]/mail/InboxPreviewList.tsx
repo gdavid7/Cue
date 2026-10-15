@@ -21,7 +21,8 @@ import { ThreadList } from "@/app/(app)/[emailAccountId]/mail/ThreadList";
 import type { MailLayoutMode } from "@/app/(app)/[emailAccountId]/mail/types";
 import { useEmailLabels } from "@/providers/EmailLabelsProvider";
 import { useAccount } from "@/providers/EmailAccountProvider";
-import { parseMailPath } from "@/utils/mail-url";
+import { showMailView } from "@/app/(app)/[emailAccountId]/mail/show-mail-view";
+import { buildMailPath, parseMailPath, withPageParams } from "@/utils/mail-url";
 import { getAccountScopedKey } from "@/utils/swr";
 
 const PREVIEW_PATH = "/api/threads?view=list&type=inbox&limit=25";
@@ -81,8 +82,8 @@ export function InboxPreviewSeed({
  * newest conversations come from the server, started with the page when it
  * could be or fetched once here otherwise, so the inbox reads at once rather
  * than after the engine has booted and synced. The engine's own list replaces
- * this as soon as it has rows; until then the rows are read-only. Elsewhere,
- * or with `enabled` off, it is the usual skeleton.
+ * this as soon as it has rows. Elsewhere, or with `enabled` off, it is the
+ * usual skeleton.
  */
 export function InboxPreviewList({
   message,
@@ -172,10 +173,8 @@ function PreviewRows({
   const { emailAccountId, userEmail } = useAccount();
   const { userLabels } = useEmailLabels();
   return (
-    // Rows open once the mail engine has them; until then they only show.
     <div
-      aria-disabled="true"
-      className="flex min-h-0 flex-1 cursor-default flex-col overflow-hidden"
+      className="flex min-h-0 flex-1 flex-col overflow-hidden"
       data-mail-inbox-preview
     >
       {withChrome ? <PlaceholderChrome /> : null}
@@ -190,7 +189,7 @@ function PreviewRows({
         focusedIndex={-1}
         isSelected={NO_SELECTION}
         selectedCount={0}
-        onOpenThread={IGNORE}
+        onOpenThread={(index) => openInAddress(preview.threads[index]?.id)}
         onToggleSelect={IGNORE}
         onSelectRangeTo={IGNORE}
         showLoadMore={false}
@@ -200,5 +199,23 @@ function PreviewRows({
         insightsPaused
       />
     </div>
+  );
+}
+
+/**
+ * Puts a conversation clicked here in the address, from which the mail screen
+ * opens it as soon as the engine is ready, so an early click is never lost.
+ */
+function openInAddress(threadId: string | undefined) {
+  const current = parseMailPath(
+    window.location.pathname,
+    window.location.search,
+  );
+  if (!threadId || !current) return;
+  showMailView(
+    withPageParams(
+      buildMailPath({ ...current, threadId }),
+      window.location.search,
+    ),
   );
 }
