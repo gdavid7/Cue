@@ -26,7 +26,10 @@ const mocks = vi.hoisted(() => ({
   push: vi.fn(),
   toastUndo: vi.fn(),
   undoLatestToast: vi.fn(),
-  home: { data: undefined as GetHomeResponse | undefined },
+  home: {
+    data: undefined as GetHomeResponse | undefined,
+    error: undefined as { error: string } | undefined,
+  },
 }));
 
 vi.mock("@/env", () => ({ env: {} }));
@@ -52,8 +55,16 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
 vi.mock("@/hooks/useMailHref", () => ({
   useMailHref:
     () =>
-    ({ threadId }: { threadId?: string } = {}) =>
-      `/mail/u/0/inbox${threadId ? `/${threadId}` : ""}`,
+    ({
+      threadId,
+      view,
+    }: {
+      threadId?: string;
+      view?: { kind: string; slug: string };
+    } = {}) =>
+      view
+        ? `/mail/u/0/${view.kind}/${view.slug}`
+        : `/mail/u/0/inbox${threadId ? `/${threadId}` : ""}`,
 }));
 vi.mock("@/hooks/use-mobile", () => ({ useIsLargeScreen: () => true }));
 vi.mock("@/hooks/useHome", () => ({
@@ -63,7 +74,7 @@ vi.mock("@/hooks/useHome", () => ({
     return {
       data,
       isLoading: false,
-      error: undefined,
+      error: mocks.home.error,
       mutate: (
         update?:
           | GetHomeResponse
@@ -92,6 +103,7 @@ describe("HomeDashboard row actions", () => {
     mocks.client.submitConversations.mockResolvedValue({ status: "queued" });
     mocks.client.cancelOperation.mockResolvedValue({ status: "cancelled" });
     mocks.undoLatestToast.mockResolvedValue(false);
+    mocks.home.error = undefined;
     mocks.home.data = homeData([
       thread("first", "Quarterly numbers"),
       thread("second", "Lunch on Friday?"),
@@ -216,8 +228,235 @@ describe("HomeDashboard notices", () => {
   });
 });
 
+describe("HomeDashboard states", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.client.getDiagnostics.mockResolvedValue({ revision: 1 });
+    mocks.home.error = undefined;
+  });
+
+  afterEach(cleanup);
+
+  it("busy: one summary line with the count and the next meeting, then the lanes", () => {
+    mocks.home.data = {
+      ...homeData([
+        thread("a", "Quarterly numbers"),
+        thread("b", "Lunch on Friday?"),
+        thread("c", "Contract"),
+      ]),
+      waiting: [thread("w", "Intro to Sam")],
+      calendar: { connected: true, next: nextEvent(false) },
+    };
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toMatch(
+      /^3 need a reply · next: Design review \d{1,2}:\d{2}/,
+    );
+    expect(lanes()).toEqual(["Needs reply", "Waiting on"]);
+    expect(screen.queryByText("All clear.")).toBeNull();
+  });
+
+  it("light: one email that needs a reply, and no empty lanes", () => {
+    mocks.home.data = homeData([thread("a", "Quarterly numbers")]);
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toBe("1 needs a reply");
+    expect(lanes()).toEqual(["Needs reply"]);
+    expect(screen.queryByText(/Nothing here|You're not waiting/)).toBeNull();
+  });
+
+  it("caught up: one All clear with proof, what's next, what's due, and who you're waiting on", () => {
+    mocks.home.data = {
+      ...homeData([]),
+      waiting: [
+        thread("w1", "Intro to Sam"),
+        { ...thread("w2", "Offer letter"), fromEmail: "hr@acme.com" },
+      ],
+      today: {
+        checked: 42,
+        filed: 12,
+        filedLabel: { labelId: "Label_Newsletter", name: "Newsletter" },
+      },
+      calendar: { connected: true, next: nextEvent(false) },
+      nextUp: [
+        {
+          id: "canvas:4",
+          kind: "deadline",
+          title: "Problem set 4",
+          at: new Date(Date.now() + 86_400_000).toISOString(),
+          source: "Canvas",
+          url: "https://school.instructure.com/assignments/4",
+        },
+      ],
+    };
+
+    renderToday();
+
+    const status = onlyStatus();
+    expect(status.textContent).toBe(
+      "All clear.Nothing needs a reply. Cue checked 42 emails today and filed 12.",
+    );
+    expect(
+      within(status)
+        .getByRole("link", { name: "filed 12" })
+        .getAttribute("href"),
+    ).toBe("/mail/u/0/label/Label_Newsletter");
+    expect(screen.getByText(/^Next:/).textContent).toMatch(
+      /^Next: Design review \(opens in a new tab\) at \d{1,2}:\d{2}.* · in \d+ (minutes|hours?)$/,
+    );
+    expect(screen.getByText(/^Due tomorrow:/).textContent).toBe(
+      "Due tomorrow: Problem set 4 (opens in a new tab) (Canvas)",
+    );
+    expect(screen.queryByText(/!/)).toBeNull();
+    // Waiting on folds into one collapsed line, and opens in place.
+    expect(lanes()).toEqual([]);
+    const waiting = screen.getByRole("button", { name: "Waiting on 2 people" });
+    expect(waiting.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(waiting);
+    expect(lanes()).toEqual(["Waiting on"]);
+    expect(screen.getByText("Offer letter")).toBeTruthy();
+  });
+
+  it("caught up after 5 pm: says how tomorrow starts", () => {
+    mocks.home.data = {
+      ...homeData([]),
+      calendar: { connected: true, next: nextEvent(true) },
+    };
+
+    renderToday();
+
+    expect(screen.getByText(/^Tomorrow starts with/).textContent).toMatch(
+      /^Tomorrow starts with Design review \(opens in a new tab\) at \d{1,2}:\d{2}.*\.$/,
+    );
+    expect(screen.queryByText(/^Next:/)).toBeNull();
+  });
+
+  it("caught up on a quiet day: nothing new, and no lines without data", () => {
+    mocks.home.data = homeData([]);
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toBe(
+      "All clear.Nothing needs a reply. Nothing new today.",
+    );
+    expect(screen.queryByText(/^Next:|^Due |Waiting on|Connect/)).toBeNull();
+  });
+
+  it("new: says Cue is still reading, not that all is clear", () => {
+    const data = homeData([]);
+    mocks.home.data = { ...data, cue: { ...data.cue, hasReadMail: false } };
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toBe(
+      "Cue is reading your recent mail. What needs a reply will appear here.",
+    );
+    expect(screen.queryByText("All clear.")).toBeNull();
+    expect(lanes()).toEqual([]);
+  });
+
+  it("no integrations: offers the calendar and one app the user gets mail from", () => {
+    mocks.home.data = {
+      ...homeData([]),
+      calendar: { connected: false, next: null },
+      suggestion: { app: "canvas", name: "Canvas" },
+    };
+
+    renderToday();
+
+    onlyStatus();
+    expect(
+      screen
+        .getByRole("link", { name: "Connect Calendar" })
+        .getAttribute("href"),
+    ).toBe("/account/calendars");
+    expect(screen.getByText(/to see what's next\./)).toBeTruthy();
+    expect(
+      screen
+        .getAllByRole("link", { name: /^Connect / })
+        .map((l) => l.textContent),
+    ).toEqual(["Connect Calendar", "Connect Canvas"]);
+    expect(
+      screen.getByRole("link", { name: "Connect Canvas" }).getAttribute("href"),
+    ).toBe("/account/integrations");
+  });
+
+  it("busy with deadlines: lists what's next, soonest first, each with its source", () => {
+    mocks.home.data = {
+      ...homeData([thread("a", "Quarterly numbers")]),
+      nextUp: [
+        {
+          id: "event:review",
+          kind: "event",
+          title: "Design review",
+          at: new Date(Date.now() + 3_600_000).toISOString(),
+          source: "Calendar",
+          url: "https://calendar.example.com/review",
+        },
+        {
+          id: "jira:OPS-12",
+          kind: "deadline",
+          title: "OPS-12 Rotate keys",
+          at: new Date(Date.now() + 2 * 86_400_000).toISOString(),
+          allDay: true,
+          source: "Jira",
+        },
+      ],
+    };
+
+    renderToday();
+
+    const nextUp = screen.getByRole("region", { name: "Next up" });
+    expect(
+      within(nextUp)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent?.replace(/^.*?(Design|OPS)/, "$1")),
+    ).toEqual([
+      "Design reviewCalendar (opens in a new tab)",
+      "OPS-12 Rotate keysJira",
+    ]);
+    expect(within(nextUp).getByRole("link").getAttribute("href")).toBe(
+      "https://calendar.example.com/review",
+    );
+  });
+
+  it("error: shows the error alone, with no status or lanes", () => {
+    mocks.home.data = undefined;
+    mocks.home.error = { error: "Boom" };
+
+    renderToday();
+
+    expect(screen.getByText("Couldn't load this")).toBeTruthy();
+    expect(screen.queryAllByRole("status")).toEqual([]);
+    expect(lanes()).toEqual([]);
+  });
+});
+
+function onlyStatus() {
+  const statuses = screen.getAllByRole("status");
+  expect(statuses).toHaveLength(1);
+  return statuses[0];
+}
+
 function lane(name: string) {
   return screen.getByRole("listbox", { name });
+}
+
+function lanes() {
+  return screen
+    .queryAllByRole("listbox")
+    .map((lane) => lane.getAttribute("aria-label"));
+}
+
+function nextEvent(tomorrow: boolean) {
+  return {
+    title: "Design review",
+    at: new Date(Date.now() + 45 * 60_000).toISOString(),
+    url: "https://calendar.example.com/review",
+    tomorrow,
+  };
 }
 
 function renderToday() {
@@ -261,10 +500,13 @@ function homeData(needsYou: HomeThread[]): GetHomeResponse {
     needsYou,
     waiting: [],
     handled: [],
-    handledLabels: [],
     alsoInInbox: [],
     agentTasks: [],
     cue: { aiAccess: true, replyTracking: true, hasReadMail: true },
+    today: { checked: 0, filed: 0, filedLabel: null },
+    calendar: { connected: true, next: null },
+    nextUp: [],
+    suggestion: null,
     stats: {
       needsYou: needsYou.length,
       estimatedMinutes: 0,

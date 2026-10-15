@@ -1,3 +1,5 @@
+import { TZDate } from "@date-fns/tz";
+import { startOfDay } from "date-fns";
 import {
   ActionType,
   DraftEmailStatus,
@@ -21,6 +23,7 @@ import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import { getTrackedThreads } from "@/utils/reply-tracker/tracked-threads";
+import { getNextUp } from "@/utils/home/next-up";
 import { getRuleLabel } from "@/utils/rule/consts";
 import {
   getUserTier,
@@ -35,6 +38,8 @@ const HANDLED_WINDOW_DAYS = 7;
 // still "applying" after this long has crashed; neither is work in progress.
 const DRAFT_WINDOW_DAYS = 7;
 const RUNNING_WINDOW_MINUTES = 30;
+// A day's filing actions; far more than one inbox gets in a day.
+const FILED_ACTIONS_LIMIT = 2000;
 /** Labels Inbox Zero's rules file mail under without asking the user. */
 export const HANDLED_LABELS = [
   "Newsletter",
@@ -91,12 +96,15 @@ export async function getHomeData({
   userEmail,
   emailProvider,
   logger,
+  timeZone = "UTC",
   now = new Date(),
 }: {
   emailAccountId: string;
   userEmail: string;
   emailProvider: EmailProvider;
   logger: Logger;
+  /** The user's IANA time zone, which decides where "today" starts. */
+  timeZone?: string;
   now?: Date;
 }) {
   const labels = await emailProvider.getLabels();
@@ -145,22 +153,33 @@ export async function getHomeData({
       return [] as EmailThread[];
     });
 
-  const [needsYou, waiting, handledByLabel, inbox, agentTasks, cue] =
-    await Promise.all([
-      // An archived conversation is off the user's plate even before they reply.
-      tracked(ThreadTrackerType.NEEDS_REPLY, "needs-you", true),
-      tracked(ThreadTrackerType.AWAITING, "waiting", false),
-      // One query per label: the EmailProvider interface has no "any of these labels".
-      Promise.all(
-        handledIds.map((id) =>
-          list({ labelIds: [id], after: since }, "handled"),
-        ),
-      ),
-      // Everything still in the inbox, so nothing is only reachable through AI triage.
-      list({ labelIds: ["INBOX"] }, "inbox"),
-      getAgentTasks({ emailAccountId, now }),
-      getCueStatus(emailAccountId),
-    ]);
+  const [
+    needsYou,
+    waiting,
+    handledByLabel,
+    inbox,
+    agentTasks,
+    cue,
+    today,
+    nextUp,
+  ] = await Promise.all([
+    // An archived conversation is off the user's plate even before they reply.
+    tracked(ThreadTrackerType.NEEDS_REPLY, "needs-you", true),
+    tracked(ThreadTrackerType.AWAITING, "waiting", false),
+    // One query per label: the EmailProvider interface has no "any of these labels".
+    Promise.all(
+      handledIds.map((id) => list({ labelIds: [id], after: since }, "handled")),
+    ),
+    // Everything still in the inbox, so nothing is only reachable through AI triage.
+    list({ labelIds: ["INBOX"] }, "inbox"),
+    getAgentTasks({ emailAccountId, now }),
+    getCueStatus(emailAccountId),
+    getTodayActivity({
+      emailAccountId,
+      since: startOfDay(new TZDate(now, timeZone)),
+    }),
+    getNextUp({ emailAccountId, userEmail, timeZone, logger, now }),
+  ]);
   const handled = uniqueByThreadId(handledByLabel.flat());
   // Each thread shows once on Today: sorted mail has its own section.
   const shownIds = new Set([...needsYou, ...handled].map((t) => t.id));
@@ -185,16 +204,6 @@ export async function getHomeData({
     needsYou: needsYouRows,
     waiting: waiting.map(toRow).filter(isDefined),
     handled: handled.map(toRow).filter(isDefined),
-    // Where filed mail went, so the user can check what was moved out of the way.
-    handledLabels: handledIds
-      .map((id, index) => ({
-        labelId: id,
-        name: labelNames.get(id) ?? "",
-        count: handledByLabel[index]?.length ?? 0,
-        // Each label's list is capped, so a full one means "at least".
-        capped: (handledByLabel[index]?.length ?? 0) >= LIST_LIMIT,
-      }))
-      .filter((label) => label.count > 0),
     alsoInInbox: inbox
       .filter((t) => !shownIds.has(t.id))
       .map(toRow)
@@ -202,6 +211,8 @@ export async function getHomeData({
     agentTasks,
     // Whether an empty lane means "nothing there" or "nobody has looked".
     cue,
+    today,
+    ...nextUp,
     stats: {
       needsYou: needsYouRows.length,
       estimatedMinutes: needsYouRows.length * MINUTES_PER_REPLY,
@@ -218,6 +229,71 @@ export async function getHomeData({
 }
 
 const PRIORITY_ORDER: Record<Priority, number> = { high: 0, medium: 1, low: 2 };
+
+/**
+ * What Cue did with today's mail, from its own records rather than the
+ * mailbox: how many emails it checked, and how many it filed out of the
+ * inbox. Where they went, when that's a single label, so it can be checked.
+ */
+async function getTodayActivity({
+  emailAccountId,
+  since,
+}: {
+  emailAccountId: string;
+  since: Date;
+}) {
+  const [checked, actions] = await Promise.all([
+    prisma.executedRule.groupBy({
+      by: ["messageId"],
+      where: { emailAccountId, createdAt: { gte: since } },
+    }),
+    prisma.executedAction.findMany({
+      where: {
+        type: {
+          in: [ActionType.ARCHIVE, ActionType.MOVE_FOLDER, ActionType.LABEL],
+        },
+        // Scoped through the rule, whose [emailAccountId, createdAt] index this uses.
+        executedRule: {
+          emailAccountId,
+          status: ExecutedRuleStatus.APPLIED,
+          createdAt: { gte: since },
+        },
+      },
+      select: {
+        type: true,
+        labelId: true,
+        label: true,
+        executedRule: { select: { messageId: true } },
+      },
+      take: FILED_ACTIONS_LIMIT,
+    }),
+  ]);
+
+  const filed = new Set(
+    actions
+      .filter((a) => a.type !== ActionType.LABEL)
+      .map((a) => a.executedRule.messageId),
+  );
+  const labels = new Map<string, string>();
+  for (const action of actions) {
+    if (
+      action.type === ActionType.LABEL &&
+      action.labelId &&
+      filed.has(action.executedRule.messageId)
+    ) {
+      labels.set(action.labelId, action.label || "");
+    }
+  }
+  const [onlyLabel] = labels.size === 1 ? [...labels] : [];
+
+  return {
+    checked: checked.length,
+    filed: filed.size,
+    filedLabel: onlyLabel
+      ? { labelId: onlyLabel[0], name: onlyLabel[1] }
+      : null,
+  };
+}
 
 /**
  * Whether Cue is in a position to say what needs a reply: it has AI access,
