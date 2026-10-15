@@ -470,7 +470,7 @@ function listProblems({
     const { summary } = axiom;
     if (summary.appLogs === 0) {
       problems.push(
-        "Axiom has no app log events (no `level` field) in the last hour; server logs may not be reaching this dataset.",
+        "Axiom has no app log events (no `level` field) in the last hour; server logs may not be reaching this dataset. Search the Vercel runtime logs for `[axiom]`: each server instance says whether its logs ship, to which dataset, and what Axiom answered.",
       );
     }
     for (const failed of summary.failedQueries) {

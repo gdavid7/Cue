@@ -1,8 +1,8 @@
 /** biome-ignore-all lint/suspicious/noConsole: we use console.log for development logs */
 import get from "lodash/get";
-import { log } from "next-axiom";
 import { serializeError } from "serialize-error";
 import { env } from "@/env";
+import { axiomLog, describeAxiomTarget } from "@/utils/axiom-log";
 import { capLogFields } from "@/utils/log-fields";
 import {
   CONTENT_FIELD_NAMES,
@@ -30,16 +30,16 @@ const colors = {
   reset: "\x1b[0m",
 } as const;
 
+// The shipping outcome last reported; an instance reports it once.
+let reportedShipping: string | undefined;
+
 export function createScopedLogger(scope: string) {
-  // Only Vercel deployments ship to Axiom. Local builds, test runs and
-  // Playwright servers can carry the production token, and their errors
-  // would read as production ones. next.config inlines the flag at build.
-  if (
-    typeof window === "undefined" &&
-    env.AXIOM_TOKEN &&
-    process.env.SHIP_LOGS_TO_AXIOM === "1"
-  )
-    return createAxiomLogger(scope, createConsoleLogger(scope));
+  if (typeof window === "undefined") {
+    const shipping = getAxiomShipping();
+    reportAxiomShipping(shipping);
+    if (shipping.enabled)
+      return createAxiomLogger(scope, createConsoleLogger(scope));
+  }
   if (env.NEXT_PUBLIC_LOG_SCOPES && !env.NEXT_PUBLIC_LOG_SCOPES.includes(scope))
     return createNullLogger();
 
@@ -125,15 +125,15 @@ function createAxiomLogger(
     return {
       info: (message: string, args?: Record<string, unknown>) => {
         mirror.info(message, ...(args ? [args] : []));
-        log.info(message, toAxiomFields(args));
+        axiomLog.info(message, toAxiomFields(args));
       },
       error: (message: string, args?: Record<string, unknown>) => {
         mirror.error(message, ...(args ? [args] : []));
-        log.error(message, toAxiomFields(args));
+        axiomLog.error(message, toAxiomFields(args));
       },
       warn: (message: string, args?: Record<string, unknown>) => {
         mirror.warn(message, ...(args ? [args] : []));
-        log.warn(message, toAxiomFields(args));
+        axiomLog.warn(message, toAxiomFields(args));
       },
       trace: (
         message: string,
@@ -141,11 +141,11 @@ function createAxiomLogger(
       ) => {
         if (!env.ENABLE_DEBUG_LOGS) return;
         const resolved = typeof args === "function" ? args() : args;
-        log.debug(message, toAxiomFields(resolved));
+        axiomLog.debug(message, toAxiomFields(resolved));
       },
       with: (newFields: Record<string, unknown>) =>
         createLogger({ ...fields, ...newFields }, mirror.with(newFields)),
-      flush: () => log.flush(),
+      flush: () => axiomLog.flush(),
     };
   };
 
@@ -160,6 +160,38 @@ function createAxiomLogger(
  */
 export function toLogJson(value: unknown): string {
   return JSON.stringify(hashSensitiveFields(value)) ?? "";
+}
+
+// Only Vercel deployments ship to Axiom. Local builds, test runs and
+// Playwright servers can carry the production token, and their errors
+// would read as production ones. next.config inlines the flag at build.
+function getAxiomShipping():
+  | { enabled: true }
+  | { enabled: false; reason: string } {
+  if (process.env.SHIP_LOGS_TO_AXIOM !== "1") {
+    return {
+      enabled: false,
+      reason:
+        'this build has no SHIP_LOGS_TO_AXIOM, which next.config sets only when VERCEL is "1" during next build (Vercel provides VERCEL only while the project exposes System Environment Variables)',
+    };
+  }
+  if (!env.AXIOM_TOKEN) {
+    return { enabled: false, reason: "AXIOM_TOKEN is not set at runtime" };
+  }
+  return { enabled: true };
+}
+
+// One line per server instance in production says whether and where server
+// logs ship, so a deployment that sends nothing to Axiom says why.
+function reportAxiomShipping(shipping: ReturnType<typeof getAxiomShipping>) {
+  if (env.NODE_ENV !== "production") return;
+  const report = shipping.enabled
+    ? `[axiom]: Server logs ship to ${describeAxiomTarget()}`
+    : `[axiom]: Server logs do not ship to Axiom: ${shipping.reason}. They only reach this console.`;
+  if (report === reportedShipping) return;
+  reportedShipping = report;
+  if (shipping.enabled) console.log(report);
+  else console.warn(report);
 }
 
 function createNullLogger() {
