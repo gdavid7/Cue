@@ -13,6 +13,7 @@ import {
 import { getEmailProviderRateLimitState } from "@/utils/email/rate-limit";
 import { isGoogleProvider } from "@/utils/email/provider-types";
 import { markGmailHistoryCatchUp } from "@/utils/redis/gmail-history-catch-up";
+import { scheduleGmailHistoryCatchUp } from "@/utils/webhook/google/history-catch-up";
 
 import { notifyMailboxChanged } from "@/utils/mailbox-push";
 
@@ -103,6 +104,12 @@ export const POST = withError("google/webhook", async (request) => {
         },
       );
       await markGmailHistoryCatchUp(emailAccount.id, logger);
+      await scheduleGmailHistoryCatchUp({
+        emailAccountId: emailAccount.id,
+        historyId: decodedData.historyId,
+        retryAt: activeRateLimit.retryAt,
+        logger,
+      });
       logger.warn("Skipping webhook enqueue due to active Gmail rate limit", {
         retryAt: activeRateLimit.retryAt.toISOString(),
         rateLimitSource: activeRateLimit.source,
