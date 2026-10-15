@@ -38,6 +38,7 @@ import { mapWithConcurrency } from "@/utils/async";
 import { convertEmailHtmlToText } from "@/utils/mail";
 import {
   getGmailCallDeferredError,
+  type GmailQuotaPriority,
   runWithGmailQuota,
   setGmailInitialSync,
 } from "@/utils/gmail/quota";
@@ -82,6 +83,8 @@ type BootstrapToken = {
   afterMs?: number;
   catchUpFrom?: SyncPosition | null;
   folderId?: string | null;
+  /** The recent scan of a mailbox that has never synced, as after a sign-in. */
+  initial?: boolean;
   pageToken?: string;
   receivedAfterMs?: number;
   receivedBeforeMs?: number;
@@ -138,11 +141,12 @@ export function createEmailProviderMailboxSource(input: {
         },
       };
     },
-    async beginBootstrap({ afterMs, scope, session }) {
+    async beginBootstrap({ afterMs, initial, scope, session }) {
       try {
         const isHistory = isGmail && scope.id === GMAIL_HISTORY_SCOPE_ID;
         const token: BootstrapToken = {
           afterMs: afterMs ?? 0,
+          ...(initial && isGmail && !isHistory && { initial: true }),
           scopeId: scope.id,
           folderId: scopedFolderId(provider, scope),
           receivedAfterMs:
@@ -202,25 +206,21 @@ export function createEmailProviderMailboxSource(input: {
             }),
           });
         // The backfill only fills in older mail, so it yields to everything
-        // else; the primary scan fills the inbox the user is waiting on, and
-        // its first page is the one the screen waits for after a sign-in.
+        // else. The primary scan fills the inbox the user is waiting on, and
+        // after a sign-in the screen waits on its very first page.
+        let priority: GmailQuotaPriority = "sync";
+        if (isBackfill) priority = "background";
+        else if (token.initial && !token.pageToken) priority = "interactive";
         const syncPage = isGmail
-          ? await runWithGmailQuota(
-              {
-                priority: gmailEnumerationPriority({
-                  isBackfill,
-                  isFirstPage: !token.pageToken,
-                }),
-              },
-              () =>
-                withGmailSyncBudget(
-                  {
-                    emailAccountId: accountId,
-                    priority: isBackfill ? "backfill" : "current",
-                    cost: gmailPageCost(maxResults),
-                  },
-                  listPage,
-                ),
+          ? await runWithGmailQuota({ priority }, () =>
+              withGmailSyncBudget(
+                {
+                  emailAccountId: accountId,
+                  priority: isBackfill ? "backfill" : "current",
+                  cost: gmailPageCost(maxResults),
+                },
+                listPage,
+              ),
             )
           : await listPage();
         if (isPrimaryGmailScan && !syncPage.nextPageToken)
@@ -792,17 +792,6 @@ function throttled(retryAfterMs: number) {
     retryAfterMs: Math.max(1000, Math.ceil(retryAfterMs)),
     reason: "throttled" as const,
   };
-}
-
-function gmailEnumerationPriority({
-  isBackfill,
-  isFirstPage,
-}: {
-  isBackfill: boolean;
-  isFirstPage: boolean;
-}) {
-  if (isBackfill) return "background" as const;
-  return isFirstPage ? ("interactive" as const) : ("sync" as const);
 }
 
 function gmailPageCost(pageSize: number) {

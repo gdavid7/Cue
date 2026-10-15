@@ -17,6 +17,73 @@ const inboxQuery = {
   after: null,
 };
 
+describe("first sync or resync", () => {
+  it("tells the source a mailbox with nothing synced yet is starting its first sync", async () => {
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({ ...session, provider: "google" });
+    const begun: Array<boolean | undefined> = [];
+    const engine = createMailEngine({
+      store,
+      source: expiredHistorySource({
+        enumerated: [gmailPatch("first", 5000)],
+        resets: false,
+        onBegin: (initial) => begun.push(initial),
+      }),
+      executor: noExecutor,
+      runtime: createHostRuntime({ nowMs: () => 10_000 }),
+    });
+
+    await engine.requestSync(["acc-1"]);
+    await engine.runUntil(Date.now() + 2000);
+
+    expect(begun).toEqual([true]);
+    await engine.close();
+  });
+
+  it("tells the source a resync after expired history is not a first sync", async () => {
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({ ...session, provider: "google" });
+    await store.applySyncPage({
+      ownerId: "owner",
+      page: {
+        session,
+        requestId: "synced",
+        from: { streamId: "primary", generation: "g1", checkpoint: null },
+        to: { streamId: "primary", generation: "g1", checkpoint: "h1" },
+        changes: [gmailPatch("kept", 5000)],
+        requiredHydration: [],
+        roundComplete: true,
+      },
+    });
+    const begun: Array<boolean | undefined> = [];
+    const engine = createMailEngine({
+      store,
+      source: expiredHistorySource({
+        enumerated: [gmailPatch("kept", 5000)],
+        onBegin: (initial) => begun.push(initial),
+      }),
+      executor: noExecutor,
+      runtime: createHostRuntime({ nowMs: () => 10_000 }),
+    });
+
+    await engine.requestSync(["acc-1"]);
+    for (let pass = 0; pass < 2; pass++)
+      await engine.runUntil(Date.now() + 2000);
+
+    expect(begun).toEqual([false]);
+    await engine.close();
+  });
+});
+
+const noExecutor = {
+  async execute() {
+    return { status: "uncertain" as const, receiptId: null };
+  },
+  async inspect() {
+    return { status: "uncertain" as const, receiptId: null };
+  },
+};
+
 describe("engine resync after a long time offline", () => {
   it("drops mail deleted elsewhere while Gmail history expired, and keeps local drafts", async () => {
     const store = await createSqliteMailStore(createNodeSqliteDriver());
@@ -132,6 +199,7 @@ function expiredHistorySource(input: {
   enumerated: Array<Extract<ProviderChange, { kind: "message_patch" }>>;
   resets?: boolean;
   onHydrate?: (messageIds: string[]) => void;
+  onBegin?: (initial: boolean | undefined) => void;
 }): MailboxSource {
   let reset = input.resets !== false;
   return {
@@ -155,7 +223,8 @@ function expiredHistorySource(input: {
         },
       };
     },
-    async beginBootstrap() {
+    async beginBootstrap({ initial }) {
+      input.onBegin?.(initial);
       return {
         status: "ok",
         value: {

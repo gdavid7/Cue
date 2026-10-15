@@ -1299,11 +1299,46 @@ describe("createEmailProviderMailboxSource", () => {
         pageSize: 50,
       });
 
+    await enumerate({ scopeId: "primary", initial: true });
+    await enumerate({ scopeId: "primary", initial: true, pageToken: "next" });
+    // A resync after expired history: nobody is waiting on an empty inbox.
     await enumerate({ scopeId: "primary" });
-    await enumerate({ scopeId: "primary", pageToken: "next" });
-    await enumerate({ scopeId: "history" });
+    await enumerate({ scopeId: "history", initial: true });
 
-    expect(priorities).toEqual(["interactive", "sync", "background"]);
+    expect(priorities).toEqual(["interactive", "sync", "sync", "background"]);
+  });
+
+  it("remembers a first sync in the primary scan's page token only", async () => {
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination: vi.fn(),
+      } as unknown as EmailProvider,
+    });
+    const begin = (id: string, initial: boolean) =>
+      source.beginBootstrap({
+        session: { accountId: "acc-1", generation: "g1" },
+        requestId: "r1",
+        signal: new AbortController().signal,
+        scope: { id, kind: "account", folderId: null },
+        afterMs: null,
+        initial,
+      });
+    const tokenOf = async (begun: ReturnType<typeof begin>) => {
+      const result = await begun;
+      if (result.status !== "ok") throw new Error("expected ok");
+      return JSON.parse(result.value.enumerationToken);
+    };
+
+    expect(await tokenOf(begin("primary", true))).toMatchObject({
+      initial: true,
+    });
+    expect(await tokenOf(begin("primary", false))).not.toHaveProperty(
+      "initial",
+    );
+    expect(await tokenOf(begin("history", true))).not.toHaveProperty("initial");
   });
 
   it("scans recent Gmail mail first and backfills older mail in a separate background scope", async () => {
