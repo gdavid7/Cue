@@ -3,7 +3,9 @@ import { cn } from "@/utils";
 
 /**
  * Today's one status line, whatever the state: an icon, what's true, and a
- * quieter line under it. Green only when there's nothing left to do.
+ * quieter line under it. Green only when there's nothing left to do. A
+ * "quiet" status is a secondary nag, such as a setting that's off, so its
+ * line reads as body text and stays out of the heading outline.
  */
 export function TodayStatus({
   icon: Icon,
@@ -13,22 +15,30 @@ export function TodayStatus({
   children,
 }: {
   icon: LucideIcon;
-  tone: "done" | "info";
+  tone: "done" | "info" | "quiet";
   title: React.ReactNode;
   titleId?: string;
   children?: React.ReactNode;
 }) {
+  const quiet = tone === "quiet";
+  const Line = quiet ? "p" : "h2";
   return (
     <div role="status">
-      <h2
-        className="flex items-start gap-2 font-title text-foreground text-lg"
+      <Line
+        className={cn(
+          "flex items-start gap-2",
+          quiet
+            ? "text-muted-foreground text-sm"
+            : "font-title text-foreground text-lg",
+        )}
         id={titleId}
       >
-        {/* mt-1 centres the 20px badge on the title's 28px first line. */}
+        {/* Centres the 20px badge on the first line: 20px body, 28px title. */}
         <span
           aria-hidden
           className={cn(
-            "mt-1 flex size-5 shrink-0 items-center justify-center rounded-full motion-safe:fade-in motion-safe:zoom-in-75 motion-safe:animate-in motion-safe:duration-300",
+            "flex size-5 shrink-0 items-center justify-center rounded-full motion-safe:fade-in motion-safe:zoom-in-75 motion-safe:animate-in motion-safe:duration-300",
+            !quiet && "mt-1",
             tone === "done"
               ? "bg-green-600/10 text-green-700 dark:bg-green-400/15 dark:text-green-400"
               : "bg-muted text-muted-foreground",
@@ -37,7 +47,7 @@ export function TodayStatus({
           <Icon className="size-3.5" strokeWidth={2.5} />
         </span>
         <span>{title}</span>
-      </h2>
+      </Line>
       {children ? (
         <p className="mt-1 text-muted-foreground text-sm">{children}</p>
       ) : null}

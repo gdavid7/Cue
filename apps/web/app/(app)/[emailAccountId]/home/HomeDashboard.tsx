@@ -463,7 +463,7 @@ function HomeLanes({
   return (
     <>
       {notice ? (
-        <TodayStatus icon={notice.icon} title={notice.title} tone="info">
+        <TodayStatus icon={notice.icon} title={notice.title} tone={notice.tone}>
           {notice.detail}
           {notice.link ? (
             <Link
@@ -618,6 +618,8 @@ function cueNotice(
   { hasTrackedThreads }: { hasTrackedThreads: boolean },
 ): {
   icon: LucideIcon;
+  /** Settings that are off are nags, quieter than what Cue is doing. */
+  tone: "info" | "quiet";
   title: string;
   detail?: string;
   link?: { label: string; href: string };
@@ -627,6 +629,7 @@ function cueNotice(
     // say they would appear when there are none.
     return {
       icon: PauseIcon,
+      tone: "quiet",
       title: hasTrackedThreads
         ? "The AI assistant is off, so this list isn't being updated."
         : "Turn on the AI assistant to see what needs a reply.",
@@ -636,6 +639,7 @@ function cueNotice(
   if (!cue.replyTracking) {
     return {
       icon: PauseIcon,
+      tone: "quiet",
       title: "Reply tracking is off, so Cue isn't checking what needs a reply.",
       link: {
         label: "Turn it on in Rules",
@@ -646,6 +650,7 @@ function cueNotice(
   if (!cue.hasReadMail) {
     return {
       icon: MailSearchIcon,
+      tone: "info",
       title: "Cue is reading your recent mail.",
       detail: "What needs a reply will appear here.",
     };

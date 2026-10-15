@@ -214,6 +214,8 @@ describe("HomeDashboard notices", () => {
     expect(
       within(notice).getByRole("link", { name: "See plans" }),
     ).toBeTruthy();
+    // A nag, not a section: it stays out of the heading outline.
+    expect(within(notice).queryByRole("heading")).toBeNull();
   });
 
   it("asks to turn on the assistant when nothing has been tracked", () => {
