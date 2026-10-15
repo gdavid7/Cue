@@ -77,6 +77,11 @@ describe("EmailAccountProvider", () => {
     expect(screen.getByTestId("account-id").textContent).toBe("account-2");
     // The mail engine starts from this, so it must not wait on the fetch.
     expect(screen.getByTestId("provider").textContent).toBe("microsoft");
+    // The server's list also names the address, so the list says "me" from
+    // the first paint rather than the user's own address.
+    expect(screen.getByTestId("user-email").textContent).toBe(
+      "two@example.com",
+    );
     // A mailbox rebuild restores carried work only for these owned accounts,
     // so the engine may start early only with the complete list.
     expect(screen.getByTestId("account-ids").textContent).toBe(
@@ -301,12 +306,13 @@ describe("EmailAccountProvider", () => {
 });
 
 const SERVER_ACCOUNTS = [
-  { id: "account-1", provider: "google" },
-  { id: "account-2", provider: "microsoft" },
+  { id: "account-1", email: "one@example.com", provider: "google" },
+  { id: "account-2", email: "two@example.com", provider: "microsoft" },
 ];
 
 function AccountState() {
-  const { accountIds, emailAccountId, isLoading, provider } = useAccount();
+  const { accountIds, emailAccountId, isLoading, provider, userEmail } =
+    useAccount();
 
   return (
     <span>
@@ -315,6 +321,7 @@ function AccountState() {
         : `ready ${emailAccountId ? "with" : "without"} an account`}
       <span data-testid="account-id">{emailAccountId}</span>
       <span data-testid="provider">{provider}</span>
+      <span data-testid="user-email">{userEmail}</span>
       <span data-testid="account-ids">{accountIds.join(",")}</span>
     </span>
   );

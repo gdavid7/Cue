@@ -30,7 +30,11 @@ type Context = {
 type EmailAccount = GetEmailAccountsResponse["emailAccounts"][number];
 
 /** An account as the server lists it, in connection order. */
-export type ServerEmailAccount = { id: string; provider: string };
+export type ServerEmailAccount = {
+  id: string;
+  email: string;
+  provider: string;
+};
 
 const NO_ACCOUNTS: ServerEmailAccount[] = [];
 
@@ -138,6 +142,9 @@ export function EmailAccountProvider({
 
   const resolvedEmailAccountId =
     ownedRouteId ?? (data ? (emailAccount?.id ?? "") : (emailAccountId ?? ""));
+  const serverAccount = serverAccounts.find(
+    (account) => account.id === resolvedEmailAccountId,
+  );
 
   return (
     <EmailAccountContext.Provider
@@ -146,13 +153,9 @@ export function EmailAccountProvider({
         emailAccount,
         isLoading,
         emailAccountId: resolvedEmailAccountId,
-        userEmail: emailAccount?.email ?? "",
+        userEmail: emailAccount?.email ?? serverAccount?.email ?? "",
         provider:
-          emailAccount?.account?.provider ??
-          serverAccounts.find(
-            (account) => account.id === resolvedEmailAccountId,
-          )?.provider ??
-          "",
+          emailAccount?.account?.provider ?? serverAccount?.provider ?? "",
         providerRateLimit: emailAccount?.providerRateLimit ?? null,
       }}
     >

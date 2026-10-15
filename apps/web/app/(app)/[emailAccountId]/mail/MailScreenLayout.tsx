@@ -28,7 +28,11 @@ export async function MailScreenLayout({
       <MailThemeScope />
       {/* On the root so toasts, rendered outside this layout, can clear it. */}
       <style>{`:root{--mail-sidebar-width:${sidebarWidth}px}`}</style>
-      {children}
+      {/* The root's theme comes from an effect, after the server's HTML has
+          painted; this scope gives that first paint the same palette. */}
+      <div className="contents" data-theme="mail">
+        {children}
+      </div>
     </ShortcutsProvider>
   );
 }

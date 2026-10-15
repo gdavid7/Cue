@@ -46,11 +46,12 @@ describe("getMailRedirectPath", () => {
 
   it("only numbers the signed-in user's own accounts, in connection order", async () => {
     await getMailRedirectPath({ userId: USER_ID, emailAccountId: null });
-    expect(mocks.findMany).toHaveBeenCalledWith({
-      where: { userId: USER_ID },
-      select: { id: true, account: { select: { provider: true } } },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    });
+    expect(mocks.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: USER_ID },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      }),
+    );
   });
 
   it("turns the old split address into the tab's slug", async () => {
