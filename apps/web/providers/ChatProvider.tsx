@@ -571,7 +571,8 @@ function reportChatRequestError({
       "We couldn't send your message. Please try again.",
   });
   console.error(error);
-  captureException(error);
+  // Hitting the rate limit is expected, not a bug to report.
+  if (getErrorStatusCode(error) !== 429) captureException(error);
 }
 
 // The chat transport puts the server's response body on the error.

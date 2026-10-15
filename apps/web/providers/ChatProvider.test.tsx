@@ -446,6 +446,7 @@ describe("ChatProvider", () => {
       });
     });
     expect(latestContext?.input).toBe("One more question");
+    expect(mockCaptureException).not.toHaveBeenCalled();
   });
 
   it("rejects oversized drafts before sending and keeps their content", async () => {
