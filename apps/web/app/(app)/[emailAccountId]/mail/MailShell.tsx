@@ -1119,6 +1119,18 @@ export function MailShell() {
     setOpenThread(nextSelection);
   });
 
+  // Selecting from a row (its checkbox, Space, Shift+click, a touch hold)
+  // also moves the cursor there, as a click or J/K does, so focus and the
+  // highlight stay on one row and Enter and J/K carry on from it.
+  const toggleSelectAt = useStableCallback((index: number) => {
+    setFocusedIndex(index);
+    selection.toggle(index);
+  });
+  const selectRangeAt = useStableCallback((index: number) => {
+    setFocusedIndex(index);
+    selection.selectRangeTo(index);
+  });
+
   const move = useCallback(
     (delta: number) => {
       const next = clampIndex(clampedIndex + delta);
@@ -2033,8 +2045,8 @@ export function MailShell() {
                       isSelected={selection.isSelected}
                       selectedCount={selection.selectedCount}
                       onOpenThread={openAt}
-                      onToggleSelect={selection.toggle}
-                      onSelectRangeTo={selection.selectRangeTo}
+                      onToggleSelect={toggleSelectAt}
+                      onSelectRangeTo={selectRangeAt}
                       showLoadMore={hasMore}
                       isLoadingMore={isLoadingMore}
                       onLoadMore={loadMore}

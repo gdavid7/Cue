@@ -79,6 +79,10 @@ export function MailThreadRow({
           visible: showSelection,
           onClick: (event) => {
             event.stopPropagation();
+            // Keyboard selection and Escape carry on from the row.
+            event.currentTarget
+              .closest<HTMLElement>("[data-mail-thread-row]")
+              ?.focus({ preventScroll: true });
             if (event.shiftKey) onSelectRangeTo(index);
             else onToggleSelect(index);
           },

@@ -18,6 +18,11 @@ interface TooltipProps {
   content?: string;
   contentComponent?: React.ReactNode;
   hide?: boolean;
+  /**
+   * Opens on a tap, for touch. Off for a control whose click acts at once:
+   * the tooltip would stay open and take the next Escape.
+   */
+  openOnClick?: boolean;
   shortcuts?: readonly ShortcutTooltipItem[];
   side?: "top" | "right" | "bottom" | "left";
 }
@@ -28,6 +33,7 @@ export const Tooltip = ({
   contentComponent,
   shortcuts,
   hide,
+  openOnClick = true,
   side,
 }: TooltipProps) => {
   // Make tooltip work on mobile with a click
@@ -38,7 +44,10 @@ export const Tooltip = ({
   return (
     <TooltipProvider delayDuration={200}>
       <ShadcnTooltip open={isOpen} onOpenChange={setIsOpen}>
-        <TooltipTrigger asChild onClick={() => setIsOpen(!isOpen)}>
+        <TooltipTrigger
+          asChild
+          onClick={openOnClick ? () => setIsOpen(!isOpen) : undefined}
+        >
           {children}
         </TooltipTrigger>
         <TooltipContent side={side}>

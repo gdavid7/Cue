@@ -258,7 +258,12 @@ test("advances the split reader after archiving an open conversation", async ({
       .poll(() => openThreadIdFromUrl(page.url()))
       .not.toBe("thr_playwright_3");
     await expect.poll(() => openThreadIdFromUrl(page.url())).not.toBeNull();
-    await expect(page.getByRole("button", { name: /^Archive/ })).toBeVisible();
+    // Scoped to the reader: the keyboard-focused row shows its own Archive.
+    await expect(
+      page
+        .getByTestId("thread-reader")
+        .getByRole("button", { name: /^Archive/ }),
+    ).toBeVisible();
     await capturePlaywrightCheckpoint(
       page,
       testInfo,
