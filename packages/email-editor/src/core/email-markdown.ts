@@ -142,21 +142,41 @@ function inlineToText(tokens: Token[]): string {
     .join("");
 }
 
-function describeLink(text: string, href: string) {
+function describeLink(text: string, rawHref: string) {
+  // Bidi controls would let ".../\u202Egnp.exe" read as ".../exe.png", so the
+  // address shows them percent-encoded, as a browser's address bar does.
+  const href = rawHref.replace(BIDI_CONTROLS, (character) =>
+    encodeURIComponent(character),
+  );
   const label = text.trim();
-  if (!label || label === href || `mailto:${label}` === href) return href;
+  if (!label || label === rawHref || `mailto:${label}` === rawHref) return href;
   return `${label} (${href})`;
 }
 
-// Marked escapes the text it tokenizes the way it would render it.
+// Marked keeps character references in the text it tokenizes; the draft shows
+// the characters they stand for.
 function decodeEntities(text: string) {
-  return text
-    .replace(/&lt;/gu, "<")
-    .replace(/&gt;/gu, ">")
-    .replace(/&quot;/gu, '"')
-    .replace(/&#39;/gu, "'")
-    .replace(/&amp;/gu, "&");
+  return text.replace(
+    /&(?:#(\d{1,7})|#x([\da-f]{1,6})|(lt|gt|quot|amp|apos));/giu,
+    (reference, decimal, hex, name) => {
+      if (name) return NAMED_ENTITIES[name.toLowerCase()] ?? reference;
+      const codePoint = decimal ? Number(decimal) : Number.parseInt(hex, 16);
+      return codePoint > 0 && codePoint <= 0x10_ff_ff
+        ? String.fromCodePoint(codePoint)
+        : reference;
+    },
+  );
 }
+
+const BIDI_CONTROLS = /[\u202A-\u202E\u2066-\u2069]/gu;
+
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  quot: '"',
+};
 
 function escapeHtml(value: string) {
   return value

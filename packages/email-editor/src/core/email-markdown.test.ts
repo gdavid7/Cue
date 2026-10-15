@@ -132,6 +132,22 @@ describe("markdownToPlainText", () => {
     );
   });
 
+  it("shows bidi controls in an address instead of letting them reorder it", () => {
+    const text = markdownToPlainText(
+      "[report](https://files.example/\u202Egnp.exe) ![x](https://files.example/\u2067a\u2069.png)",
+    );
+
+    expect(text).not.toMatch(/[‪-\u202E⁦-\u2069]/u);
+    expect(text).toContain("https://files.example/%E2%80%AEgnp.exe");
+    expect(text).toContain("https://files.example/%E2%81%A7a%E2%81%A9.png");
+  });
+
+  it("decodes numeric character references like the draft shows them", () => {
+    expect(
+      markdownToPlainText("5 &#8364; or &#x20AC;, Tom&#39;s &amp; co"),
+    ).toBe("5 € or €, Tom's & co");
+  });
+
   it("reads like the email the markdown becomes", () => {
     expect(
       markdownToPlainText(

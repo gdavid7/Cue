@@ -143,6 +143,7 @@ describe("inline markdown shortcuts", () => {
   it.each([
     ["a word", "[a](b)"],
     ["a footnote-style aside", "see [1](note)"],
+    ["a number", "see [fig](1.2)"],
   ])("leaves %s in brackets as typed", async (_name, typed) => {
     const editor = await renderEditor();
 
