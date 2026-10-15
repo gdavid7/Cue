@@ -332,8 +332,8 @@ export const ListToolbar = memo(function ListToolbar({
       {selectedCount === 0 ? (
         <Button
           aria-label="Ask Cue"
-          // A 44px hit area on touch layouts without a bigger toolbar.
-          className="relative h-8 gap-1.5 px-2 text-muted-foreground max-sm:w-8 max-sm:px-0 max-lg:after:absolute max-lg:after:-inset-1.5 max-lg:after:content-['']"
+          // A 44px hit area on touchscreens without a bigger toolbar.
+          className="relative h-8 gap-1.5 px-2 text-muted-foreground max-sm:w-8 max-sm:px-0 pointer-coarse:after:absolute pointer-coarse:after:-inset-1.5 pointer-coarse:after:content-['']"
           onClick={onToggleAssistant}
           size="sm"
           type="button"
@@ -419,11 +419,11 @@ function MailSearchInput({
                   type="button"
                   aria-label="Show search options"
                   aria-expanded={filtersOpen}
-                  // Wider on touch layouts, and 44px tall through the
+                  // Wider on touchscreens, and 44px tall through the
                   // toolbar's padding, so it's hard to hit by mistake when
                   // aiming for the field beside it.
                   className={cn(
-                    "relative flex h-full w-7 shrink-0 items-center justify-center rounded-r-lg text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-lg:w-11 max-lg:after:absolute max-lg:after:-inset-y-1.5 max-lg:after:inset-x-0 max-lg:after:content-['']",
+                    "relative flex h-full w-7 shrink-0 items-center justify-center rounded-r-lg text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:w-11 pointer-coarse:after:absolute pointer-coarse:after:-inset-y-1.5 pointer-coarse:after:inset-x-0 pointer-coarse:after:content-['']",
                     filtersOpen && "text-foreground",
                   )}
                 >
@@ -464,9 +464,9 @@ function MailSearchInput({
             // The forms plugin sizes untyped inputs at 1rem, so the size has
             // to be stated for the field to match the rest of the toolbar.
             // Phones keep 16px: iOS zooms into a focused field below that.
-            // On touch layouts the field reaches 44px into the toolbar's
+            // On touchscreens the field reaches 44px into the toolbar's
             // padding, so the tap target is bigger than the box drawn.
-            className="h-full min-w-0 flex-1 border-0 max-lg:h-11 bg-transparent p-0 text-base text-foreground outline-none md:text-sm focus:ring-0 placeholder:text-muted-foreground"
+            className="h-full min-w-0 flex-1 border-0 pointer-coarse:h-11 bg-transparent p-0 text-base text-foreground outline-none md:text-sm focus:ring-0 placeholder:text-muted-foreground"
             onChange={(event) => {
               onSearchChange(event.target.value);
               setActiveIndex(-1);

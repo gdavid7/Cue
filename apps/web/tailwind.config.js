@@ -1,4 +1,5 @@
 const { fontFamily } = require("tailwindcss/defaultTheme");
+const plugin = require("tailwindcss/plugin");
 
 /** @type {import('tailwindcss').Config} */
 /* eslint-disable max-len */
@@ -242,5 +243,10 @@ module.exports = {
     require("tailwindcss-animate"),
     require("@headlessui/tailwindcss"),
     require("@tailwindcss/typography"),
+    // Tailwind 4's name for it: touch-only styles that narrow desktop
+    // windows shouldn't get.
+    plugin(({ addVariant }) => {
+      addVariant("pointer-coarse", "@media (pointer: coarse)");
+    }),
   ],
 };

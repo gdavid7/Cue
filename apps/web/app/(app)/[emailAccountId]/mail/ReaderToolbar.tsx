@@ -138,8 +138,8 @@ function renderButton(button: MailReaderToolbarButton) {
   return (
     <Button
       aria-label={button.ariaLabel}
-      // What stays in the header on a phone still gets a 44px hit area.
-      className="relative max-lg:after:absolute max-lg:after:-inset-2 max-lg:after:content-['']"
+      // A 44px hit area on touchscreens without a bigger header.
+      className="relative pointer-coarse:after:absolute pointer-coarse:after:-inset-2 pointer-coarse:after:content-['']"
       onClick={button.onClick}
       size="iconXs"
       title={button.title}

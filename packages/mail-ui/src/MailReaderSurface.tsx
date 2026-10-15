@@ -140,8 +140,8 @@ export function MailReaderToolbar({
 
       <div
         aria-label="Thread actions"
-        // Room between the phone's 44px hit areas, so they don't overlap.
-        className={`ml-auto flex flex-wrap items-center gap-1.5 ${bottomBarBelowLg ? "max-lg:gap-4" : ""}`}
+        // Room between the host's 44px touch hit areas, so they don't overlap.
+        className={`ml-auto flex flex-wrap items-center gap-1.5 ${bottomBarBelowLg ? "pointer-coarse:gap-4" : ""}`}
         role="group"
       >
         {messageExpansion?.canExpand
