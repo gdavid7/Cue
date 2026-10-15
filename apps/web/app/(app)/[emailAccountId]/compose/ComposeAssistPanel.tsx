@@ -19,6 +19,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { markdownToPlainText } from "@inboxzero/email-editor/markdown";
 import { Kbd } from "@/components/Kbd";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/utils";
@@ -470,7 +471,8 @@ function Preview({
 }) {
   const [refinement, setRefinement] = useState("");
   const { request, context } = state;
-  const output = state.status === "error" ? "" : toPlainText(state.output);
+  const output =
+    state.status === "error" ? "" : markdownToPlainText(state.output);
   const parts: DiffPart[] =
     request.mode === "rewrite"
       ? wordDiff(context.text, output)
@@ -691,17 +693,4 @@ function usePanelPosition({
   }, [container, panelRef]);
 
   return position;
-}
-
-// The preview shows the words, not the markdown that formats them. A link
-// keeps its address in view: it may come from a message someone else wrote,
-// and its text alone could disguise where it goes.
-function toPlainText(markdown: string) {
-  return markdown
-    .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/gu, (_match, text, href) =>
-      text === href ? text : `${text} (${href})`,
-    )
-    .replace(/\*\*([^*\n]+)\*\*/gu, "$1")
-    .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/gu, "$1$2")
-    .trim();
 }

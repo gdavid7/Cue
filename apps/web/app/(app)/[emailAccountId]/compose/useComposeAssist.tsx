@@ -151,7 +151,9 @@ export function useComposeAssist({
   const accept = useCallback(() => {
     const current = stateRef.current;
     if (current.status !== "ready") return;
-    const html = markdownToEmailHtml(current.output.trim());
+    // A suggestion may echo a message someone else wrote, so images in it
+    // become text: nothing loads now, and nothing tracks the recipient.
+    const html = markdownToEmailHtml(current.output.trim(), { images: false });
     if (!editorRef.current?.commitAssist(html)) {
       dispatch({ type: "fail", message: DRAFT_CHANGED_MESSAGE });
       return;

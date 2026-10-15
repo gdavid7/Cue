@@ -2,7 +2,11 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeEmailBodyHtml } from "./email-body";
 import { finalizeEditableEmailHtml } from "./email-html";
-import { looksLikeMarkdown, markdownToEmailHtml } from "./email-markdown";
+import {
+  looksLikeMarkdown,
+  markdownToEmailHtml,
+  markdownToPlainText,
+} from "./email-markdown";
 import { toEmailStyledHtml } from "./email-styles";
 
 describe("looksLikeMarkdown", () => {
@@ -81,6 +85,61 @@ describe("markdownToEmailHtml", () => {
     const doc = parse(markdownToEmailHtml("Ada\nLondon\n\n- a\n- b"));
 
     expect(doc.querySelector("p br")).toBeTruthy();
+  });
+
+  it("keeps images in pasted markdown", () => {
+    const doc = parse(
+      markdownToEmailHtml("![Logo](https://example.com/l.png)"),
+    );
+
+    expect(doc.querySelector("img")?.getAttribute("src")).toBe(
+      "https://example.com/l.png",
+    );
+  });
+
+  it("can render images as visible text, so nothing loads or hides", () => {
+    const text = [
+      "Thanks!",
+      "",
+      "![](https://evil.example/p.gif?q=secret)",
+      "![chart][c]",
+      "",
+      "[c]: https://evil.example/c.png",
+    ].join("\n");
+    const doc = parse(markdownToEmailHtml(text, { images: false }));
+
+    expect(doc.querySelector("img")).toBeNull();
+    expect(doc.body.textContent).toContain(
+      "https://evil.example/p.gif?q=secret",
+    );
+    expect(doc.body.textContent).toContain(
+      "chart (https://evil.example/c.png)",
+    );
+  });
+});
+
+describe("markdownToPlainText", () => {
+  it("shows where every link goes, reference-style ones included", () => {
+    const text = [
+      "Pay [here](https://pay.example/x) or [there][t].",
+      "See <https://example.com/doc> and https://example.org/plain.",
+      "",
+      "[t]: https://pay.example/y",
+    ].join("\n");
+
+    expect(markdownToPlainText(text)).toBe(
+      "Pay here (https://pay.example/x) or there (https://pay.example/y).\nSee https://example.com/doc and https://example.org/plain.",
+    );
+  });
+
+  it("reads like the email the markdown becomes", () => {
+    expect(
+      markdownToPlainText(
+        "Hi **Sam**,\n\nTwo things:\n\n- the *deck*\n- `v2` notes\n\n![logo](https://x.example/l.png)",
+      ),
+    ).toBe(
+      "Hi Sam,\n\nTwo things:\n\n- the deck\n- v2 notes\n\nlogo (https://x.example/l.png)",
+    );
   });
 });
 
