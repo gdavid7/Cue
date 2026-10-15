@@ -480,6 +480,24 @@ export async function setGmailInitialSync(
 }
 
 /**
+ * While a primary scan of the account runs, how soon a background scan should
+ * ask again; null when none runs. Lets the backfill skip a page the gate would
+ * turn away before the page reserves its share of the sync budget.
+ */
+export async function gmailInitialSyncRetryMs(emailAccountId: string) {
+  if (!isEmailProviderRateLimitRedisConfigured()) return null;
+  try {
+    const active = await withinStoreTimeout(
+      gmailQuotaStore.isSet(accountKeys(emailAccountId).initialSync),
+    );
+    return active ? INITIAL_SYNC_RETRY_MS : null;
+  } catch {
+    // The gate itself still holds the backfill back if the scan is running.
+    return null;
+  }
+}
+
+/**
  * Logs the "Gmail quota usage" summary of each account this instance metered,
  * for every minute that has ended and that no instance has logged yet. Runs
  * when a request flushes its logs: a serverless instance may never run again

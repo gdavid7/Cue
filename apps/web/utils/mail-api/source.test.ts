@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { gmailQuotaStore } from "@/utils/gmail/quota-store";
+import { setGmailInitialSync } from "@/utils/gmail/quota";
 import {
   compactMailboxSyncMessage,
   decodeMailboxSyncCursor,
@@ -24,6 +26,12 @@ import {
 } from "@/utils/email/local-mail-sync-budget";
 
 vi.mock("server-only", () => ({}));
+vi.mock("@/utils/gmail/quota-store", async () => {
+  const { createMemoryGmailQuotaStore } = await import(
+    "@/__tests__/mocks/gmail-quota-store.mock"
+  );
+  return { gmailQuotaStore: createMemoryGmailQuotaStore() };
+});
 vi.mock("@/utils/redis", () => ({
   redis: { get: vi.fn(), set: vi.fn(), del: vi.fn(), eval: vi.fn() },
 }));
@@ -36,6 +44,11 @@ vi.mock("@/utils/email/local-mail-sync-budget", async (original) => ({
 }));
 
 const logger = createTestLogger();
+
+beforeEach(() => {
+  vi.mocked(withLocalMailSyncBudget).mockClear();
+  (gmailQuotaStore as unknown as { reset(): void }).reset();
+});
 
 describe("createEmailProviderMailboxSource", () => {
   it("continues provider search after the first page", async () => {
@@ -1242,6 +1255,37 @@ describe("createEmailProviderMailboxSource", () => {
       }),
     ).resolves.toMatchObject({ status: "paused", reason: "throttled" });
     expect(redis.set).not.toHaveBeenCalled();
+  });
+
+  it("leaves the sync budget to the first sync while it fills the inbox", async () => {
+    // The gate would turn a backfill page away during the first sync, but
+    // only after the page had reserved its share of the sync budget, which
+    // the primary scan then could not use.
+    await setGmailInitialSync("acc-first-sync", true);
+    const getMessagesWithPagination = vi.fn();
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-first-sync",
+      provider: {
+        name: "google",
+        getMessagesWithPagination,
+      } as unknown as EmailProvider,
+    });
+    const result = await source.enumerate({
+      session: { accountId: "acc-first-sync", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      bootstrapId: "mailbox",
+      page: JSON.stringify({ scopeId: "history" }),
+      pageSize: 50,
+    });
+
+    expect(result).toMatchObject({ status: "paused", reason: "throttled" });
+    expect(
+      result.status === "paused" ? result.retryAfterMs : null,
+    ).toBeLessThanOrEqual(5000);
+    expect(withLocalMailSyncBudget).not.toHaveBeenCalled();
+    expect(getMessagesWithPagination).not.toHaveBeenCalled();
   });
 
   it("returns the sync budget's wait as a throttled pause", async () => {
