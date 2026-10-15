@@ -4,10 +4,10 @@ import { env } from "@/env";
 import { useUser } from "@/hooks/useUser";
 import {
   getUserTier,
-  hasAiAccess,
   hasUnsubscribeAccess,
   isPremiumRecord,
 } from "@/utils/premium";
+import { getAiAccess } from "@/utils/premium/ai-access";
 
 export function usePremium() {
   const swrResponse = useUser();
@@ -35,9 +35,7 @@ export function usePremium() {
 
   const isUserPremium = isPremiumRecord(premium);
   const tier = getUserTier(premium);
-
-  const isProPlanWithoutApiKey =
-    (tier === "PRO_MONTHLY" || tier === "PRO_ANNUALLY") && !hasAiApiKey;
+  const aiAccess = getAiAccess({ premium, hasAiApiKey });
 
   return {
     ...swrResponse,
@@ -48,8 +46,8 @@ export function usePremium() {
       isUserPremium ||
       hasUnsubscribeAccess(tier || null, unsubscribeCreditsRemaining),
     unsubscribeCreditsRemaining,
-    hasAiAccess: isUserPremium && hasAiAccess(tier || null, hasAiApiKey),
-    isProPlanWithoutApiKey,
+    hasAiAccess: aiAccess.hasAiAccess,
+    isProPlanWithoutApiKey: aiAccess.isProPlanWithoutApiKey,
     tier,
   };
 }

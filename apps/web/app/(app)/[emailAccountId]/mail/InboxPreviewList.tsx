@@ -3,6 +3,7 @@
 import {
   Component,
   createContext,
+  type MouseEvent,
   type ReactNode,
   Suspense,
   use,
@@ -219,32 +220,47 @@ function PreviewRows({
   };
   return (
     <div
+      aria-busy="true"
       className="flex min-h-0 flex-1 flex-col overflow-hidden"
       data-mail-inbox-preview
     >
       {withChrome ? <PlaceholderChrome /> : null}
       <MailLoadingNote message={message} />
-      <ThreadList
-        threads={preview.threads}
-        layout={layout}
-        expandedPreview={false}
-        userEmail={userEmail}
-        userLabels={userLabels}
-        selectionEnabled={false}
-        focusedIndex={-1}
-        isSelected={NO_SELECTION}
-        selectedCount={0}
-        onOpenThread={openThread}
-        onToggleSelect={IGNORE}
-        onSelectRangeTo={IGNORE}
-        showLoadMore={false}
-        isLoadingMore={false}
-        onLoadMore={IGNORE}
-        listKey={`inbox-preview:${emailAccountId}`}
-        insightsPaused
-      />
+      {/* A placeholder, not the list: nothing selects, focuses or triages
+          these rows, and assistive tech hears only the loading note. A
+          click still opens the conversation, once the engine is ready. */}
+      <div
+        aria-hidden
+        className="flex min-h-0 flex-1 flex-col"
+        onMouseDown={keepFocus}
+      >
+        <ThreadList
+          threads={preview.threads}
+          layout={layout}
+          expandedPreview={false}
+          userEmail={userEmail}
+          userLabels={userLabels}
+          selectionEnabled={false}
+          focusedIndex={-1}
+          isSelected={NO_SELECTION}
+          selectedCount={0}
+          onOpenThread={openThread}
+          onToggleSelect={IGNORE}
+          onSelectRangeTo={IGNORE}
+          showLoadMore={false}
+          isLoadingMore={false}
+          onLoadMore={IGNORE}
+          listKey={`inbox-preview:${emailAccountId}`}
+          insightsPaused
+        />
+      </div>
     </div>
   );
+}
+
+// A row that took focus would look like the list's focused row.
+function keepFocus(event: MouseEvent) {
+  event.preventDefault();
 }
 
 /** A seed that failed to arrive shows the skeleton instead of breaking mail. */

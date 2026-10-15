@@ -19,8 +19,11 @@ export function MailScreen() {
       </Suspense>
       <ConversionAnalyticsScript />
       {/* The frame paints at once; the inbox shows its newest mail from the
-          server while the engine opens. */}
+          server while the engine opens. The mail screen itself takes over
+          once the page hydrates, before the engine is ready, so nothing
+          opened on it is lost when the engine arrives. */}
       <MailEngineHost
+        showChildrenWhileStarting
         fallback={
           <MailFrame activeType="inbox">
             <InboxPreviewList message="Opening your mailbox…" withChrome />

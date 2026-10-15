@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useHydrated } from "@/hooks/useHydrated";
 import { useInboxInsights } from "@/hooks/useInboxInsights";
 import { useSentMessageOpensForThreads } from "@/hooks/useSentMessageOpens";
 import { cn } from "@/utils";
@@ -136,7 +137,7 @@ export const ThreadList = memo(function ThreadList({
   const getGroupLabel = useCallback(
     (thread: ListThread) => {
       const timestamp = getThreadTimestamp(thread);
-      return timestamp
+      return timestamp && dayStart !== null
         ? formatDateGroupLabel(new Date(timestamp), new Date(dayStart))
         : null;
     },
@@ -214,8 +215,13 @@ export const ThreadList = memo(function ThreadList({
   );
 });
 
-/** Refreshes idle lists at midnight and when a suspended tab becomes active. */
+/**
+ * Refreshes idle lists at midnight and when a suspended tab becomes active.
+ * Null in server HTML and while hydrating: days fall in the viewer's
+ * timezone, which the server cannot know.
+ */
 function useDayStart() {
+  const hydrated = useHydrated();
   const [, setDayStart] = useState(() => startOfDay(new Date()).getTime());
   // Read the clock on every render, even if a background timer has not fired yet.
   const dayStart = startOfDay(new Date()).getTime();
@@ -235,5 +241,5 @@ function useDayStart() {
     };
   }, [dayStart]);
 
-  return dayStart;
+  return hydrated ? dayStart : null;
 }

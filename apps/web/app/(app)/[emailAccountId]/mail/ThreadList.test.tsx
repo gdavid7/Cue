@@ -2,9 +2,26 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
+import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MailboxThreadList } from "@inboxzero/mail-ui/MailboxSurface";
 import { MailThreadRow } from "@inboxzero/mail-ui/MailThreadRow";
+import { ThreadList } from "./ThreadList";
+import type { ListThread } from "./types";
+
+vi.mock("@/providers/EmailAccountProvider", () => ({
+  useAccount: () => ({ emailAccountId: "acc-1" }),
+}));
+vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => false }));
+vi.mock("@/hooks/useInboxInsights", () => ({
+  useInboxInsights: () => ({ data: undefined }),
+}));
+vi.mock("@/hooks/useSentMessageOpens", () => ({
+  useSentMessageOpensForThreads: () => ({ data: undefined }),
+}));
+vi.mock("@/app/(app)/[emailAccountId]/mail/ThreadRow", () => ({
+  ThreadRow: ({ thread }: { thread: { id: string } }) => <div>{thread.id}</div>,
+}));
 
 type Item = { id: string; day: string };
 
@@ -81,6 +98,36 @@ describe("mailbox thread list", () => {
   });
 });
 
+describe("ThreadList", () => {
+  it("leaves day groups out of server HTML, which knows no viewer's timezone", () => {
+    const lastWeek = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+    const html = renderToString(
+      <ThreadList
+        expandedPreview={false}
+        focusedIndex={-1}
+        isLoadingMore={false}
+        isSelected={() => false}
+        layout="list"
+        listKey="inbox"
+        onLoadMore={vi.fn()}
+        onOpenThread={vi.fn()}
+        onSelectRangeTo={vi.fn()}
+        onToggleSelect={vi.fn()}
+        selectedCount={0}
+        showLoadMore={false}
+        threads={[threadAt("t1", lastWeek)]}
+        userEmail="me@example.com"
+        userLabels={{}}
+      />,
+    );
+
+    expect(html).toContain("t1");
+    // A day group carries its label as the group's accessible name.
+    expect(html).not.toMatch(/<div aria-label="[^"]+" role="group"/);
+  });
+});
+
 const ITEMS: Item[] = [
   { id: "First", day: "Today" },
   { id: "Second", day: "Today" },
@@ -151,6 +198,23 @@ function RowList({
       showLoadMore={false}
     />
   );
+}
+
+function threadAt(id: string, receivedAtMs: number) {
+  return {
+    id,
+    snippet: "",
+    messages: [
+      {
+        id: `${id}-m`,
+        threadId: id,
+        internalDate: String(receivedAtMs),
+        date: new Date(receivedAtMs).toISOString(),
+        labelIds: ["INBOX"],
+        headers: { from: "a@example.com", to: "me@example.com", subject: id },
+      },
+    ],
+  } as unknown as ListThread;
 }
 
 function list(items: Item[]) {

@@ -11,6 +11,7 @@ const notifications = vi.hoisted(() => ({
   success: vi.fn(),
 }));
 const mail = vi.hoisted(() => ({
+  started: true,
   client: {
     cancelOperation: vi.fn(),
     getDiagnostics: vi.fn(),
@@ -21,12 +22,13 @@ const mail = vi.hoisted(() => ({
 vi.mock("sonner", () => ({ toast: notifications }));
 vi.mock("@/components/Toast", () => ({ toastUndo: vi.fn() }));
 vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
-  useOptionalMailClient: () => mail.client,
+  useOptionalMailClient: () => (mail.started ? mail.client : null),
 }));
 
 describe("useThreadActions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mail.started = true;
     mail.client.getDiagnostics.mockResolvedValue({ revision: 1 });
     mail.client.submitConversations.mockResolvedValue({ status: "queued" });
     mail.client.cancelOperation.mockResolvedValue({ status: "cancelled" });
@@ -169,6 +171,15 @@ describe("useThreadActions", () => {
     expect(mail.client.submitConversations).not.toHaveBeenCalled();
     expect(notifications.error).toHaveBeenCalledWith(
       "Couldn't queue archiving",
+    );
+  });
+
+  it("says mail is still starting when the engine isn't ready yet", async () => {
+    mail.started = false;
+    const { result } = renderActions();
+    await act(() => result.current.archive(["thread"]));
+    expect(notifications.error).toHaveBeenCalledWith(
+      "Mail is still starting. Try again in a moment.",
     );
   });
 

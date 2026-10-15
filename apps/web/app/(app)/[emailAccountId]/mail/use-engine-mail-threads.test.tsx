@@ -42,6 +42,23 @@ describe("useEngineMailThreads", () => {
     expect(result.current.threads).toBe(emptyThreads);
   });
 
+  it("reads as loading, not empty, while the mail engine is still starting", () => {
+    const { result } = renderHook(
+      () =>
+        useEngineMailThreads({
+          emailAccountId: "acc-1",
+          query: { type: "inbox" } as ThreadsQuery,
+        }),
+      { wrapper },
+    );
+
+    // The mail screen shows before the engine is ready; an empty inbox now
+    // would claim there's no mail.
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.hasRemoteResponse).toBe(false);
+    expect(result.current.threads).toEqual([]);
+  });
+
   it("does not claim load-more support when the client only exposes a single mailbox page", async () => {
     const observeMailbox = vi.fn(() => staticMailboxHandle(mailboxSnapshot()));
     const client = {

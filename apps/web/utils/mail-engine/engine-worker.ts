@@ -2,6 +2,7 @@ import {
   createHostRuntime,
   createMailEngine,
 } from "@inboxzero/mail-core/engine";
+import { startEngineLoop } from "./engine-loop";
 import { createMailHttpRequest } from "./http";
 import { createWasmMailStore, preloadSqlite } from "./wasm-sqlite";
 import {
@@ -76,29 +77,16 @@ async function createWorkerEngine(
   if (shouldReleaseDeferredOnStart(input.online)) {
     await created.requestSync([input.accountId]);
   }
-  let stopped = false;
-  const loop = (async () => {
-    while (!stopped) {
-      try {
-        await created.runUntil(Date.now() + 2000);
-      } catch {
-        await delay(1000);
-      }
-      await delay(250);
-    }
-  })();
+  const loop = startEngineLoop(created);
   const originalClose = created.close.bind(created);
   return {
     ...created,
     ensureAccount,
     async close() {
-      stopped = true;
+      // The loop stops first, so its turn neither waits out its deadline nor
+      // fails against the closed store and pauses before noticing.
+      await loop.stop();
       await originalClose();
-      await loop;
     },
   };
-}
-
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -127,11 +127,13 @@ export function useEngineMailThreads({
     );
   }, [accounts, client, enabled, conversations]);
 
+  // The mail screen shows while the engine starts, and has no answer yet.
+  const engineStarting = enabled && !client;
   return {
     threads,
-    hasRemoteResponse: mailbox.status !== "loading",
+    hasRemoteResponse: !engineStarting && mailbox.status !== "loading",
     searchError: undefined,
-    isLoading: enabled && Boolean(client) && mailbox.status === "loading",
+    isLoading: engineStarting || (enabled && mailbox.status === "loading"),
     error: mailboxQueryError(mailbox.error),
     hasMore: mailbox.canLoadMore,
     isLoadingMore: mailbox.isLoadingMore,

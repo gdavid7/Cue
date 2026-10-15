@@ -18,11 +18,12 @@ import { findLandingSplit } from "@/utils/split-inbox/inbox-styles";
 export const getOrderedEmailAccounts = cache(async (userId: string) => {
   const accounts = await prisma.emailAccount.findMany({
     where: { userId },
-    select: { id: true, account: { select: { provider: true } } },
+    select: { id: true, email: true, account: { select: { provider: true } } },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
   return accounts.map((account) => ({
     id: account.id,
+    email: account.email,
     provider: account.account.provider,
   }));
 });
