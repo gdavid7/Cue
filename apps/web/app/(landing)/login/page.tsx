@@ -87,8 +87,8 @@ export default async function AuthenticationPage(props: {
               aria-hidden
             />
             <span>
-              Works on top of your Gmail. Nothing to migrate, and you can leave
-              any time.{" "}
+              Works with your existing Gmail. Your emails stay in Gmail, and if
+              you stop using {BRAND_NAME}, nothing changes.{" "}
               <a
                 href="#keep-gmail"
                 className="whitespace-nowrap text-muted-foreground underline underline-offset-4 hover:text-foreground"
@@ -106,7 +106,7 @@ export default async function AuthenticationPage(props: {
           </p>
           <figure className="mt-8 max-w-md rounded-xl border bg-card px-4 py-3 shadow-sm">
             <figcaption className="text-muted-foreground text-xs">
-              The next step {BRAND_NAME} writes under each email
+              What {BRAND_NAME} writes under each email
             </figcaption>
             <p className="mt-2 truncate text-foreground text-sm">
               <span className="font-medium">Prof. Lin</span>
