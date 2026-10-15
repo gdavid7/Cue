@@ -1741,7 +1741,7 @@ function ComposeEmailFormContent({
                 placeholder="Subject"
                 // Borderless like the rest of the header, with a hairline in
                 // the focus colour so keyboard focus stays visible.
-                className="h-8 rounded-none border-0 border-transparent border-b bg-transparent p-0 text-sm font-medium text-foreground shadow-none focus:border-ring focus:ring-0 sm:text-sm"
+                className="h-8 rounded-none border-0 border-transparent border-b bg-transparent p-0 text-base font-medium text-foreground shadow-none focus:border-ring focus:ring-0 sm:text-base md:text-sm"
               />
             </div>
           </div>
