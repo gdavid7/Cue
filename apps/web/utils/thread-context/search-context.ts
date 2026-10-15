@@ -13,6 +13,7 @@ import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
 import {
   eventToCandidate,
+  threadSignals,
   threadToCandidate,
   truncate,
 } from "@/utils/thread-context/get-thread-context";
@@ -54,6 +55,7 @@ export async function searchContext({
   emailAccountId,
   userEmail,
   query,
+  threadId,
   emailProvider,
   logger,
   now = new Date(),
@@ -61,12 +63,27 @@ export async function searchContext({
   emailAccountId: string;
   userEmail: string;
   query: string;
+  /**
+   * The thread the question is about: what it links to and its sender's
+   * record in connected apps count too, as in its Relevant context.
+   */
+  threadId?: string;
   emailProvider: EmailProvider;
   logger: Logger;
   now?: Date;
 }): Promise<{ results: ContextSearchResult[] }> {
   const terms = queryTerms(query);
   if (!terms.length) return { results: [] };
+
+  const thread = threadId
+    ? await emailProvider.getThread(threadId).catch((error) => {
+        if (describeProviderRateLimitError(error, emailProvider.name))
+          throw error;
+        logger.warn("Failed to load thread for context search", { error });
+        return null;
+      })
+    : null;
+  const signals = thread ? threadSignals(thread, userEmail) : undefined;
 
   const startedAt = Date.now();
   const timing = {
@@ -116,6 +133,7 @@ export async function searchContext({
     fetchConnectorCandidates({
       emailAccountId,
       keywords: terms,
+      signals,
       logger,
       now,
     }).finally(() => {
@@ -153,7 +171,11 @@ export async function searchContext({
       subject: query,
       text: query,
       at: now.toISOString(),
-      people,
+      // The thread's sender is who the question is about, which is what
+      // links their record in a connected app.
+      people: signals?.senderEmail
+        ? [...people, { email: signals.senderEmail }]
+        : people,
     },
     candidates: [
       ...[...threads.values()].map(threadToCandidate),
