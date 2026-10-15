@@ -35,6 +35,7 @@ import {
 } from "./journey-mailbox";
 import {
   installJourneyProbes,
+  firstRowShown,
   MAX_STREAM_CHARS,
   onlyRowsMatching,
   readProbes,
@@ -196,6 +197,18 @@ async function inboxLoad(
   await page.goto("about:blank");
   await page.goto(inboxPath, { waitUntil: "commit" });
   const reconnect = page.getByText(/Reconnect (this|your) account/i).first();
+  // A browser without a local mailbox first sees the server's placeholder
+  // rows, then the mail engine's list; each is timed on its own.
+  const rowIn = (preview: boolean) =>
+    page
+      .waitForFunction(firstRowShown, preview, {
+        polling: "raf",
+        timeout: 45_000,
+      })
+      .then((handle) => handle.jsonValue() as Promise<number>)
+      .catch(() => null);
+  const previewRow = rowIn(true);
+  const engineRow = rowIn(false);
   const firstRow = page
     .waitForFunction(firstInboxRowVisible, undefined, {
       polling: "raf",
@@ -215,6 +228,25 @@ async function inboxLoad(
   const rowAt = shown ?? (await firstRow);
   if (rowAt === null) throw new Error("No inbox row within 45s");
   metrics.firstRowMs = rowAt;
+  const engineAt = await engineRow;
+  if (engineAt !== null) metrics.engineRowMs = engineAt;
+  // Placeholder rows only ever come before the engine's, so a preview that
+  // has not shown by now never will.
+  const previewAt = await Promise.race([
+    previewRow,
+    page.waitForTimeout(500).then(() => null),
+  ]);
+  metrics.previewShown = previewAt !== null;
+  if (previewAt !== null) metrics.previewRowMs = previewAt;
+  metrics.documentTtfbMs = await page.evaluate(() =>
+    Math.round(
+      (
+        performance.getEntriesByType("navigation")[0] as
+          | PerformanceNavigationTiming
+          | undefined
+      )?.responseStart ?? 0,
+    ),
+  );
   metrics.inboxRows = await page
     .locator(
       '[role="listbox"][aria-label="Conversations"] [data-mail-thread-row]',
@@ -431,15 +463,15 @@ async function chat(
           ? `missing ${graded.missing.join(", ")}`
           : undefined,
       );
-      check(
-        `chat ${question.id} completes`,
-        finished && (await failure.count()) === 0 && streams.length > 0,
-        !streams.length
-          ? "no chat response stream"
-          : !finished
-            ? "still answering at the time limit"
-            : "the chat showed an error",
-      );
+      const errorShown = (await failure.count()) > 0;
+      const incomplete = !streams.length
+        ? "no chat response stream"
+        : !finished
+          ? "still answering at the time limit"
+          : errorShown
+            ? "the chat showed an error"
+            : undefined;
+      check(`chat ${question.id} completes`, !incomplete, incomplete);
       check(
         `chat ${question.id} tools succeed`,
         stream.toolErrors.length === 0 && stream.streamErrors === 0,
@@ -607,10 +639,22 @@ async function composeSend(
     ).toHaveCount(0, { timeout: 90_000 });
     metrics.sendLeftUndoMs = Date.now() - sentAt;
     const view = mailbox.selfSendReachesInbox ? "Inbox" : "Sent";
-    await page
+    const link = page
       .getByRole("link", { name: new RegExp(`^${view}`) })
-      .first()
-      .click();
+      .first();
+    // Informational: whether something (such as a tooltip) sits on top of
+    // the sidebar link once the composer has closed.
+    metrics.navCoveredAfterSend = await link.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        box.x + box.width / 2,
+        box.y + box.height / 2,
+      );
+      return hit !== null && !element.contains(hit);
+    });
+    if ((await link.getAttribute("aria-current")) !== "page") {
+      await link.click();
+    }
     const shownAt = await page
       .waitForFunction(
         rowWithSubjectShown,

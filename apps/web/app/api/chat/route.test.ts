@@ -246,6 +246,26 @@ describe("chat route rule freshness persistence", () => {
     );
   });
 
+  it("lets the browser answer inbox searches only when it says it can", async () => {
+    await POST(createRequest(), { params: Promise.resolve({}) });
+
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ localMailSearch: undefined }),
+    );
+
+    await POST(createRequest("Any interviews?", { localMailSearch: true }), {
+      params: Promise.resolve({}),
+    });
+
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        localMailSearch: expect.objectContaining({
+          search: expect.any(Function),
+        }),
+      }),
+    );
+  });
+
   it("passes on the thread the user has open, when the client sends one", async () => {
     await POST(
       createRequest("What's this about?", {
@@ -467,6 +487,31 @@ describe("chat route rule freshness persistence", () => {
       where: { id: "chat-1", activeStreamId },
       data: { activeStreamId: null, activeStreamStartedAt: null },
     });
+  });
+
+  it("lets go of what the turn holds when the reply ends", async () => {
+    const cleanup = vi.fn();
+    mockAiProcessAssistantChat.mockImplementationOnce(async (args) => {
+      args.registerCleanup(cleanup);
+      return createAssistantStreamResult();
+    });
+
+    await POST(createRequest());
+
+    await vi.waitFor(() => expect(cleanup).toHaveBeenCalledTimes(1));
+  });
+
+  it("lets go of what the turn holds when setting it up fails", async () => {
+    const cleanup = vi.fn();
+    mockAiProcessAssistantChat.mockImplementationOnce(async (args) => {
+      args.registerCleanup(cleanup);
+      throw new Error("model down");
+    });
+
+    const response = await POST(createRequest());
+
+    expect(response.status).toBe(500);
+    expect(cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("marks chats with prior messages as having history", async () => {

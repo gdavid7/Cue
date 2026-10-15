@@ -98,6 +98,8 @@ type GmailQuotaContext = {
   stats?: GmailQuotaStats;
   /** Caps the gate waits of every call in this context together. */
   maxTotalWaitMs?: number;
+  /** Told before each Gmail call this context makes, admitted or not. */
+  onAdmit?: () => void;
 };
 
 // Route scopes, matched exactly so a route added under a background path is
@@ -255,6 +257,7 @@ export function runWithGmailQuota<T>(
     priority: GmailQuotaPriority;
     stats?: GmailQuotaStats;
     maxTotalWaitMs?: number;
+    onAdmit?: () => void;
   },
   operation: () => T,
 ): T {
@@ -265,6 +268,7 @@ export function runWithGmailQuota<T>(
       priority: context.priority,
       stats: context.stats ?? current.stats,
       maxTotalWaitMs: context.maxTotalWaitMs ?? current.maxTotalWaitMs,
+      onAdmit: context.onAdmit ?? current.onAdmit,
     },
     operation,
   );
@@ -377,6 +381,7 @@ export async function admitGmailCall({
 }): Promise<GmailQuotaTicket> {
   const context = currentGmailQuotaContext();
   const priority = priorityOverride ?? context.priority;
+  context.onAdmit?.();
   const ticket = { emailAccountId, caller: context.caller, priority };
   const admitted = () => {
     if (context.stats) context.stats.admittedCost += cost;
@@ -521,6 +526,37 @@ export function isGmailQuotaRefusal(error: unknown) {
  */
 export function gmailRequestUnitsFor(priority: GmailQuotaPriority) {
   return PACE_CAP[priority] / 2;
+}
+
+/**
+ * Holds sync and background back, as one large interactive request does for
+ * two seconds, for as long as someone waits on a longer piece of work such as
+ * an assistant turn, up to `maxMs` so a turn that never ends can't starve
+ * sync. Call the returned function when the work ends.
+ */
+export async function holdGmailInteractiveDemand(
+  emailAccountId: string,
+  maxMs: number,
+): Promise<() => Promise<void>> {
+  const done = async () => {};
+  if (!isEmailProviderRateLimitRedisConfigured()) return done;
+  const key = accountKeys(emailAccountId).interactiveDemand;
+  try {
+    const endsAt = await withinStoreTimeout(
+      gmailQuotaStore.holdDemand({ key, ms: maxMs }),
+    );
+    if (!endsAt) return done;
+    return async () => {
+      await withinStoreTimeout(
+        gmailQuotaStore.releaseDemand({ key, endsAt }),
+      ).catch((error) => {
+        logger.warn("Failed to release Gmail interactive demand", { error });
+      });
+    };
+  } catch (error) {
+    logger.warn("Failed to hold Gmail interactive demand", { error });
+    return done;
+  }
 }
 
 /**

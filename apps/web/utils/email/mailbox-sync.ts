@@ -8,6 +8,13 @@ const gmailCursorSchema = z.object({
   historyId: z.string().regex(/^\d+$/),
   after: z.string().datetime(),
   pageToken: z.string().min(1).optional(),
+  // The history a delta catch-up has already fetched the newest changes of,
+  // while its replay from historyId is still behind it. Readers that ignore it
+  // just replay.
+  previewedThrough: z.string().regex(/^\d+$/).optional(),
+  // How many changes of the record at pageToken were already delivered, when
+  // one record names more changes than a page may carry.
+  replayedChanges: z.number().int().min(0).optional(),
 });
 
 const microsoftCursorSchema = z.object({
@@ -25,6 +32,11 @@ const cursorSchema = z.discriminatedUnion("provider", [
 ]);
 
 export type MailboxSyncCursor = z.infer<typeof cursorSchema>;
+
+// The most messages one catch-up page brings in, each with its body: bodies
+// can be megabytes, and a provider page that fetched more would drop bodies
+// only to fetch them again.
+export const MAILBOX_SYNC_PAGE_MAX_MESSAGES = 50;
 
 export class InvalidMailboxSyncCursorError extends Error {
   constructor() {

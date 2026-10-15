@@ -243,3 +243,38 @@ export type ContactSuggestionQuery = {
   ownAddresses: string[];
   excludeEmails: string[];
 };
+
+/**
+ * Messages, not conversations, that match a predicate, newest first: the unit
+ * a provider's message search returns. `fromAddress` matches the sender's
+ * address exactly, whether stored bare or as `Name <address>`.
+ */
+export type MessageSearchQuery = {
+  accountId: string;
+  predicate: MailPredicate;
+  fromAddress: string | null;
+  pageSize: number;
+  after: string | null;
+};
+
+export type MessageSearchMatch = {
+  messageId: string;
+  conversationId: string;
+  subject: string;
+  preview: string;
+  from: string;
+  to: string[];
+  receivedAtMs: number;
+  read: boolean;
+  starred: boolean;
+  labelIds: string[];
+  categoryIds: string[];
+  roles: z.infer<typeof mailboxRoleSchema>[];
+  hasAttachments: boolean;
+};
+
+export type MessageSearchPage = {
+  messages: MessageSearchMatch[];
+  nextPage: string | null;
+  coverage: Coverage[];
+};

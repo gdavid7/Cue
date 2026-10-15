@@ -88,6 +88,19 @@ export function getModel(
   return { ...primaryModel, fallbackModels, hasUserApiKey: !!userAi.aiApiKey };
 }
 
+/**
+ * Per-step provider options that lower a Gemini 3 model's thinking to low, or
+ * undefined for any other model, which keeps its configured reasoning.
+ */
+export function getLowThinkingStepOptions(model: {
+  provider: string;
+  modelId: string;
+}) {
+  if (!model.provider.startsWith("google") || !isGemini3Model(model.modelId))
+    return;
+  return { google: { thinkingConfig: { thinkingLevel: "low" as const } } };
+}
+
 function selectModel(
   {
     aiProvider,

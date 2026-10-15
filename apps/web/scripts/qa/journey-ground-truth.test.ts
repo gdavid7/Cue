@@ -38,6 +38,20 @@ describe("buildGroundTruth", () => {
     }
   });
 
+  it("accepts a cross-email answer that names each email by its facts instead of its sender", () => {
+    const truth = buildGroundTruth({ runTag: "r7a1", now: NOW });
+    const fact = (id: string, key: string) =>
+      truth.questions.find((q) => q.id === id)?.facts.find((f) => f.key === key)
+        ?.anyOf[0];
+    // The shape production answered with: inline email cards, no names.
+    const answer = `<emails><email index="1" threadid="a">Requests your decision on the ${fact("offer", "role")} offer.</email><email index="2" threadid="b">Requires payment of $${fact("invoice", "amount")}.</email></emails>`;
+    const deadlines = truth.questions.find((q) => q.id === "deadlines");
+    expect(matchFacts(answer, deadlines?.facts ?? []).missing).toEqual([]);
+    expect(
+      matchFacts("Nothing is due.", deadlines?.facts ?? []).missing,
+    ).toEqual(["offer", "invoice"]);
+  });
+
   it("gives search and triage targets that are planted", () => {
     const truth = buildGroundTruth({ runTag: "r5a1", now: NOW });
     expect(truth.searchSubject).toContain(truth.searchTerm);

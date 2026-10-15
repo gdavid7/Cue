@@ -10,6 +10,7 @@ import {
   decodeMailboxSyncCursor,
   encodeMailboxSyncCursor,
   InvalidMailboxSyncCursorError,
+  MAILBOX_SYNC_PAGE_MAX_MESSAGES,
 } from "@/utils/email/mailbox-sync";
 import type { EmailProvider, ProviderMailboxSearch } from "@/utils/email/types";
 import {
@@ -326,10 +327,25 @@ export function createEmailProviderMailboxSource(input: {
             provider.name === "microsoft" && position.streamId !== "primary"
               ? position.streamId
               : undefined,
+          includeBodies: isGmail,
           limit: pageSize,
         });
         if (page.reset) {
           return { status: "reset_required", scopeId: position.streamId };
+        }
+        // A page without bodies carries metadata only, so a body-derived flag
+        // such as a meeting invitation must not stand in for the body.
+        // Bodies can be megabytes each, so one page carries a bounded number
+        // and the rest are hydrated in batches.
+        const withBodies = page.includesBodies
+          ? page.upsertedMessages.slice(0, MAILBOX_SYNC_PAGE_MAX_MESSAGES)
+          : [];
+        const { requiredHydration, bodies } = parsedMessageBodies(
+          accountId,
+          withBodies,
+        );
+        for (const message of page.upsertedMessages.slice(withBodies.length)) {
+          requiredHydration.push({ accountId, messageId: message.id });
         }
         return {
           status: "page" as const,
@@ -359,12 +375,8 @@ export function createEmailProviderMailboxSource(input: {
                 scopeId: position.streamId,
               })),
             ],
-            // Delta pages carry metadata only, so a body-derived flag such as
-            // a meeting invitation must not stand in for the body.
-            requiredHydration: page.upsertedMessages.map((message) => ({
-              accountId,
-              messageId: message.id,
-            })),
+            requiredHydration,
+            bodies,
             roundComplete: !page.hasMore,
           },
         };

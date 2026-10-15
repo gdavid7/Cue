@@ -9,6 +9,7 @@ import {
   currentGmailQuotaContext,
   GmailCallDeferredError,
   gmailRequestCost,
+  holdGmailInteractiveDemand,
   logGmailQuotaUsage,
   meterGmailCall,
   runWithGmailQuota,
@@ -37,6 +38,8 @@ const YIELD_ACCOUNT = "account-yield";
 const LARGE_ACCOUNT = "account-large";
 const OPEN_ACCOUNT = "account-open";
 const WAITING_ACCOUNT = "account-waiting";
+const TURN_ACCOUNT = "account-turn";
+const STUCK_TURN_ACCOUNT = "account-stuck-turn";
 // Gmail refuses short bursts past this many units a second, per user.
 const GMAIL_UNITS_PER_SECOND = 250;
 const logger = createScopedLogger("gmail-quota-test");
@@ -724,6 +727,68 @@ describe("Gmail quota gate", () => {
         }),
       ),
     ).resolves.toBeNull();
+  });
+
+  it("holds sync and background back for a whole assistant turn until it ends", async () => {
+    const admissions: Array<{ at: number; priority: string; cost: number }> =
+      [];
+    const admit = (priority: "sync" | "background", cost: number) =>
+      runWithGmailQuota({ caller: `test/${priority}`, priority }, () =>
+        meterGmailCall({ emailAccountId: TURN_ACCOUNT, cost }, async () => {
+          admissions.push({ at: Date.now(), priority, cost });
+        }),
+      );
+    const start = Date.now();
+    const release = await holdGmailInteractiveDemand(TURN_ACCOUNT, 45_000);
+
+    let stop = false;
+    const scan = (async () => {
+      while (!stop) await admit("sync", 20);
+    })();
+    // Well past a single large request's two seconds.
+    await vi.advanceTimersByTimeAsync(8000);
+    // Background is told to come back after the turn rather than waiting.
+    await expect(admit("background", 20)).rejects.toBeInstanceOf(
+      GmailCallDeferredError,
+    );
+    // Sync still brings new mail in, at the yielding pace.
+    const syncDuringTurn = admissions
+      .filter((entry) => entry.at >= start + 5000 && entry.at < start + 6000)
+      .reduce((sum, entry) => sum + entry.cost, 0);
+    expect(syncDuringTurn).toBeGreaterThan(0);
+    expect(syncDuringTurn).toBeLessThanOrEqual(40);
+
+    await release();
+    let insight = false;
+    admit("background", 20).then(() => {
+      insight = true;
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    stop = true;
+    await vi.advanceTimersByTimeAsync(1000);
+    await scan;
+    expect(insight).toBe(true);
+  });
+
+  it("lets go of a turn that never ends once its cap runs out", async () => {
+    await holdGmailInteractiveDemand(STUCK_TURN_ACCOUNT, 3000);
+    let insight = false;
+    // Within its 15-second wait, background sits the hold out.
+    runWithGmailQuota(
+      { caller: "test/background", priority: "background" },
+      () =>
+        meterGmailCall(
+          { emailAccountId: STUCK_TURN_ACCOUNT, cost: 20 },
+          async () => {
+            insight = true;
+          },
+        ),
+    );
+
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(insight).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(insight).toBe(true);
   });
 
   it("tells the assistant when Gmail is limiting requests", () => {

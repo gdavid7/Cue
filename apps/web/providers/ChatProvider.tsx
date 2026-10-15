@@ -34,6 +34,9 @@ import {
   ASSISTANT_CHAT_MAX_TEXT_LENGTH_MESSAGE,
 } from "@/utils/actions/assistant-chat.validation";
 import { createClientLogger } from "@/utils/logger-client";
+import { getActiveMailClient } from "@/utils/mail-engine/active-client";
+import { answerAssistantSearch } from "@/utils/mail-engine/assistant-search";
+import { submitLocalMailSearchResult } from "@/utils/actions/assistant-chat";
 
 const logger = createClientLogger("assistant-chat");
 
@@ -135,6 +138,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             inlineActions: pendingInlineActionsRef.current ?? undefined,
             openThreadId: openThreadRef.current?.threadId,
             openMessageId: openThreadRef.current?.messageId,
+            localMailSearch: Boolean(getActiveMailClient()),
             ...body,
           },
         };
@@ -143,6 +147,26 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // messages: initialMessages, // NOTE: couldn't get this to work
     experimental_throttle: 100,
     generateId: generateUUID,
+    onData: (part) => {
+      if (part.type !== "data-local-mail-search") return;
+      answerAssistantSearch({
+        request: part.data,
+        accountId: emailAccountId,
+        client: getActiveMailClient(),
+        submit: async (input) => {
+          const result = await submitLocalMailSearchResult(
+            emailAccountId,
+            input,
+          );
+          if (result?.serverError || result?.validationErrors)
+            logger.warn("Local mail search answer was not accepted");
+        },
+      }).catch((error) => {
+        logger.warn("Local mail search failed", {
+          errorName: error instanceof Error ? error.name : typeof error,
+        });
+      });
+    },
     onFinish: async ({ isAbort }) => {
       pendingInlineActionsRef.current = null;
       pendingRequestRef.current = null;

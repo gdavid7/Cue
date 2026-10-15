@@ -1867,6 +1867,107 @@ describe("Gmail history expiry", () => {
     ]);
     await engine.close();
   });
+
+  it("sends the bodies of at most 50 messages on one catch-up page and hydrates the rest", async () => {
+    const ids = Array.from({ length: 120 }, (_, index) => `m-${index}`);
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "a",
+      provider: {
+        name: "google",
+        async getMailboxSyncPage() {
+          return {
+            cursor: "next",
+            reset: false,
+            upsertedMessages: ids.map((id) => ({
+              ...searchMessage(id),
+              textPlain: `body of ${id}`,
+            })),
+            includesBodies: true,
+            deletedMessageIds: [],
+            hasMore: false,
+          };
+        },
+      } as unknown as EmailProvider,
+    });
+
+    const result = await source.readChanges({
+      session: { accountId: "a", generation: "g1" },
+      requestId: "r1",
+      position: { streamId: "primary", generation: "g1", checkpoint: "1" },
+      pageSize: 50,
+      signal: new AbortController().signal,
+    });
+    if (result.status !== "page") throw new Error("expected a page");
+
+    const withBody = (result.page.bodies ?? []).map(
+      (body) => body.key.messageId,
+    );
+    const hydrated = result.page.requiredHydration.map((key) => key.messageId);
+    expect(withBody.length).toBeLessThanOrEqual(50);
+    expect([...withBody, ...hydrated].sort()).toEqual([...ids].sort());
+  });
+
+  it("fetches each Gmail message a catch-up brings in once, body included", async () => {
+    const fetches = new Map<string, number>();
+    const fetch = (id: string) => {
+      fetches.set(id, (fetches.get(id) ?? 0) + 1);
+      return {
+        ...searchMessage(id),
+        textPlain: `body of ${id}`,
+        textHtml: `<p>body of ${id}</p>`,
+      } as ParsedMessage;
+    };
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "a",
+      provider: {
+        name: "google",
+        // Like the real provider: the delta reads full messages and keeps
+        // their bodies only when asked to.
+        async getMailboxSyncPage(options: { includeBodies?: boolean }) {
+          const messages = ["new-1", "new-2"].map(fetch);
+          return {
+            cursor: "next",
+            reset: false,
+            upsertedMessages: options.includeBodies
+              ? messages
+              : messages.map(compactMailboxSyncMessage),
+            includesBodies: options.includeBodies === true,
+            deletedMessageIds: [],
+            hasMore: false,
+          };
+        },
+        getMessagesBatch: async (ids: string[]) => ids.map(fetch),
+      } as unknown as EmailProvider,
+    });
+    const session = { accountId: "a", generation: "g1" };
+
+    const result = await source.readChanges({
+      session,
+      requestId: "r1",
+      position: { streamId: "primary", generation: "g1", checkpoint: "1" },
+      pageSize: 50,
+      signal: new AbortController().signal,
+    });
+    if (result.status !== "page") throw new Error("expected a page");
+    // What the engine does with a page: hydrate whatever came without a body.
+    if (result.page.requiredHydration.length > 0) {
+      await source.hydrate({
+        session,
+        requestId: "h1",
+        keys: result.page.requiredHydration,
+        purpose: "body",
+        signal: new AbortController().signal,
+      });
+    }
+
+    expect(Object.fromEntries(fetches)).toEqual({ "new-1": 1, "new-2": 1 });
+    expect(result.page.bodies?.map((body) => body.text)).toEqual([
+      "body of new-1",
+      "body of new-2",
+    ]);
+  });
 });
 
 describe("structured mailbox search", () => {

@@ -73,7 +73,11 @@ import {
   getThreadMessages,
   getThreadsFromSenderWithSubject,
 } from "@/utils/gmail/thread";
-import { getMessagesBatch } from "@/utils/gmail/message";
+import {
+  getMessagesBatch,
+  getMessagesBatchPartial,
+} from "@/utils/gmail/message";
+import { requireCompleteBatch } from "@/utils/gmail/batch-with-retry";
 import {
   getAccessTokenFromClient,
   getContactsClient,
@@ -1484,7 +1488,12 @@ export class GmailProvider implements EmailProvider {
     labelIds?: string[];
     includeSpamTrash?: boolean;
     folder?: "spam" | "trash";
-  }): Promise<{ messages: ParsedMessage[]; nextPageToken?: string }> {
+    allowPartial?: boolean;
+  }): Promise<{
+    messages: ParsedMessage[];
+    nextPageToken?: string;
+    unloadedMessages?: number;
+  }> {
     const query = options.mailboxSearch
       ? gmailMailboxQuery(options.mailboxSearch)
       : options.query;
@@ -1514,10 +1523,50 @@ export class GmailProvider implements EmailProvider {
         ),
     });
 
+    if (options.allowPartial) {
+      const { messages, unloadedMessages } =
+        await this.getListedMessagesPartial(response.messages);
+      return {
+        messages,
+        nextPageToken: response.nextPageToken || undefined,
+        ...(unloadedMessages ? { unloadedMessages } : {}),
+      };
+    }
+
     return {
       messages: await this.getListedMessages(response.messages),
       nextPageToken: response.nextPageToken || undefined,
     };
+  }
+
+  // Once Gmail keeps refusing one batch, the rest of the page is left
+  // unloaded too: it would meet the same limit.
+  private async getListedMessagesPartial(
+    listed: gmail_v1.Schema$Message[] | undefined,
+  ) {
+    const ids = (listed ?? []).flatMap((message) =>
+      message.id ? [message.id] : [],
+    );
+    const messages: ParsedMessage[] = [];
+    for (const [index, idsChunk] of chunk(ids, 100).entries()) {
+      const result = await getMessagesBatchPartial({
+        messageIds: idsChunk,
+        accessToken: getAccessTokenFromClient(this.client),
+        logger: this.logger,
+      });
+      messages.push(...result.messages);
+      if (!result.unloadedCount) continue;
+      const notTried = Math.max(0, ids.length - (index + 1) * 100);
+      // Nothing to show: fail as a full search would, with Gmail's error.
+      if (!messages.length)
+        requireCompleteBatch({
+          items: [],
+          unloadedIds: ids,
+          unloadedError: result.unloadedError,
+        });
+      return { messages, unloadedMessages: result.unloadedCount + notTried };
+    }
+    return { messages, unloadedMessages: 0 };
   }
 
   // One request per listed message fans a page out into dozens of parallel
@@ -1751,6 +1800,7 @@ export class GmailProvider implements EmailProvider {
     after?: Date;
     cursor?: string;
     folderId?: string;
+    includeBodies?: boolean;
     limit: number;
   }) {
     return getGmailMailboxSyncPage({
