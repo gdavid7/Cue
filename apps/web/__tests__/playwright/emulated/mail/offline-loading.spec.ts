@@ -283,6 +283,9 @@ test("opens saved mail offline, reconnects, and clears it on sign-out", async ({
     await expect.poll(() => mailEngineOpfsExists(page)).toBe(true);
     await signOutFromAppNav(page);
     await expect(page).toHaveURL(/\/login(\?|$)/, { timeout: 30_000 });
+    await expect(
+      page.getByRole("button", { name: "Continue with Google" }),
+    ).toBeVisible();
     await expect
       .poll(() => mailEngineOpfsExists(page), { timeout: 30_000 })
       .toBe(false);
