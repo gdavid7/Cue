@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   redirect: vi.fn(),
   toastLoading: vi.fn(),
   clearLastEmailAccount: vi.fn(),
+  swrFetcher: vi.fn(),
 }));
 
 vi.mock("@/utils/auth-client", () => ({ signOut: mocks.signOut }));
@@ -20,6 +21,7 @@ vi.mock("@/utils/actions/email-account-cookie", () => ({
 vi.mock("@/utils/mail-engine/reply-drafts", () => ({
   clearLocalReplyDrafts: vi.fn(),
 }));
+vi.mock("@/providers/swr-fetcher", () => ({ swrFetcher: mocks.swrFetcher }));
 vi.mock("@/utils/swr-persistence", () => ({
   clearPersistedSwrCache: vi.fn(),
 }));
@@ -83,6 +85,32 @@ describe("logOut", () => {
     await logOut();
 
     expect(mocks.redirect).toHaveBeenCalledWith("/login");
+  });
+
+  it("cancels the account list request instead of letting the ended session refuse it", async () => {
+    let signal: AbortSignal | undefined;
+    mocks.swrFetcher.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          signal = init.signal ?? undefined;
+          signal?.addEventListener("abort", () =>
+            reject(new DOMException("Aborted", "AbortError")),
+          );
+        }),
+    );
+    const logOut = await loadLogOut();
+    const { fetchEmailAccounts } = await import("@/utils/fetch-email-accounts");
+    const settled = vi.fn();
+    fetchEmailAccounts().then(settled, settled);
+
+    await logOut();
+    fetchEmailAccounts().then(settled, settled);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(signal?.aborted).toBe(true);
+    // Nothing reports an error, and no new request goes out on the way out.
+    expect(settled).not.toHaveBeenCalled();
+    expect(mocks.swrFetcher).toHaveBeenCalledTimes(1);
   });
 });
 

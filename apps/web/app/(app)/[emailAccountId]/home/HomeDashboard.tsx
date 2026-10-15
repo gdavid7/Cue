@@ -395,7 +395,9 @@ function HomeLanes({
 }) {
   const { cue, stats } = data;
   const mailHref = useMailHref();
-  const notice = cueNotice(cue, emailAccountId);
+  const notice = cueNotice(cue, emailAccountId, {
+    hasTrackedThreads: lanes.needsYou.length > 0 || lanes.waiting.length > 0,
+  });
   const canCheck = !notice;
   const caughtUp =
     canCheck && lanes.needsYou.length === 0 && lanes.waiting.length === 0;
@@ -564,10 +566,15 @@ function HomeLanes({
 function cueNotice(
   cue: GetHomeResponse["cue"],
   emailAccountId: string,
+  { hasTrackedThreads }: { hasTrackedThreads: boolean },
 ): { text: string; link?: { label: string; href: string } } | null {
   if (!cue.aiAccess) {
+    // Conversations tracked while the assistant was on still show, so only
+    // say they would appear when there are none.
     return {
-      text: "Turn on the AI assistant to see what needs a reply.",
+      text: hasTrackedThreads
+        ? "The AI assistant is off, so this list isn't being updated."
+        : "Turn on the AI assistant to see what needs a reply.",
       link: { label: "See plans", href: "/premium" },
     };
   }

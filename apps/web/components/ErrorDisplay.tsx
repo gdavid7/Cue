@@ -36,7 +36,7 @@ export function ErrorDisplay(props: {
   const retry = props.onRetry ?? (() => mutate(() => true));
 
   return (
-    <Empty>
+    <Empty role="alert">
       <EmptyHeader>
         <EmptyMedia variant="icon" className="bg-destructive/10">
           <AlertCircle className="text-destructive" />
