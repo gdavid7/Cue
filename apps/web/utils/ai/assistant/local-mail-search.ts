@@ -12,6 +12,8 @@ import { sleep } from "@/utils/sleep";
 // Gmail search is the faster way to an answer.
 const LOCAL_SEARCH_WAIT_MS = 2500;
 const POLL_INTERVAL_MS = 50;
+// 50, 100, then every 200 ms.
+const MAX_BACKOFF_DOUBLINGS = 2;
 // A request is open for answers this long; the key then expires on its own.
 const PENDING_TTL_SECONDS = 10;
 const PENDING = "pending";
@@ -62,11 +64,14 @@ export function createLocalMailSearch({
   logger,
   waitMs = LOCAL_SEARCH_WAIT_MS,
   pollIntervalMs = POLL_INTERVAL_MS,
+  abortSignal,
 }: {
   emailAccountId: string;
   logger: Logger;
   waitMs?: number;
   pollIntervalMs?: number;
+  /** The turn's stop signal: a stopped turn stops waiting for the browser. */
+  abortSignal?: AbortSignal;
 }): LocalMailSearch & { attach(writer: UIMessageStreamWriter): void } {
   let writer: UIMessageStreamWriter | null = null;
 
@@ -92,8 +97,15 @@ export function createLocalMailSearch({
         transient: true,
       });
 
-      while (Date.now() - startedAt < waitMs) {
-        await sleep(pollIntervalMs);
+      // The browser usually answers within the first poll or two; past that,
+      // reading Redis less often costs little.
+      for (let poll = 0; Date.now() - startedAt < waitMs; poll++) {
+        if (abortSignal?.aborted) break;
+        await abortableSleep(
+          pollIntervalMs * 2 ** Math.min(poll, MAX_BACKOFF_DOUBLINGS),
+          abortSignal,
+        );
+        if (abortSignal?.aborted) break;
         const stored = await redis
           .eval<string[], unknown>(takeScript, [key], [PENDING])
           .catch(() => null);
@@ -117,7 +129,12 @@ export function createLocalMailSearch({
       }
 
       redis.del(key).catch(() => undefined);
-      logger.info("Local mail search timed out", { durationMs: waitMs });
+      logger.info(
+        abortSignal?.aborted
+          ? "Local mail search stopped with the turn"
+          : "Local mail search timed out",
+        { durationMs: Date.now() - startedAt },
+      );
       return null;
     },
   };
@@ -166,6 +183,19 @@ export async function saveLocalMailSearchResult({
     [PENDING, JSON.stringify(result)],
   );
   return Number(stored) === 1;
+}
+
+function abortableSleep(ms: number, signal: AbortSignal | undefined) {
+  if (!signal) return sleep(ms);
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
+    function done() {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    }
+  });
 }
 
 // The client returns JSON as a string, or already parsed.

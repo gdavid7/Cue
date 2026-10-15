@@ -222,6 +222,39 @@ describe("createLocalMailSearch", () => {
     expect(store.size).toBe(0);
   });
 
+  it("stops waiting as soon as the turn is stopped", async () => {
+    const controller = new AbortController();
+    const search = createLocalMailSearch({
+      emailAccountId: ACCOUNT,
+      logger: createTestLogger(),
+      waitMs: 5000,
+      abortSignal: controller.signal,
+    });
+    search.attach({ write: vi.fn() } as unknown as UIMessageStreamWriter);
+    const startedAt = Date.now();
+
+    setTimeout(() => controller.abort(), 20);
+
+    expect(await search.search({ query: "x", limit: 20 })).toBeNull();
+    expect(Date.now() - startedAt).toBeLessThan(500);
+  });
+
+  it("asks Redis less often the longer it waits", async () => {
+    const { redis } = await import("@/utils/redis");
+    vi.mocked(redis.eval).mockClear();
+    const search = createLocalMailSearch({
+      emailAccountId: ACCOUNT,
+      logger: createTestLogger(),
+      waitMs: 1000,
+    });
+    search.attach({ write: vi.fn() } as unknown as UIMessageStreamWriter);
+
+    await search.search({ query: "x", limit: 20 });
+
+    // 50, 100, then every 200 ms: about 6 reads in a second, not 20.
+    expect(vi.mocked(redis.eval).mock.calls.length).toBeLessThanOrEqual(8);
+  });
+
   it("asks nothing before the reply stream is attached", async () => {
     const search = createLocalMailSearch({
       emailAccountId: ACCOUNT,

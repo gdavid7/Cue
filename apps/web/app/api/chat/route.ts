@@ -342,7 +342,11 @@ export const POST = withEmailAccount("chat", async (request) => {
     // and only for Gmail, whose query syntax the local search reads.
     const localMailSearch =
       data.localMailSearch && isGoogleProvider(user.account.provider)
-        ? createLocalMailSearch({ emailAccountId, logger: runLogger })
+        ? createLocalMailSearch({
+            emailAccountId,
+            logger: runLogger,
+            abortSignal: chatRun.abortSignal,
+          })
         : undefined;
     const result = await aiProcessAssistantChat({
       localMailSearch,
