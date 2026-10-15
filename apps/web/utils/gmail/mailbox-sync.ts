@@ -3,6 +3,8 @@ import {
   compactMailboxSyncMessage,
   decodeMailboxSyncCursor,
   encodeMailboxSyncCursor,
+  MAILBOX_SYNC_PAGE_MAX_MESSAGES,
+  type MailboxSyncCursor,
 } from "@/utils/email/mailbox-sync";
 import type { MailboxSyncPage } from "@/utils/email/types";
 import { getGmailSyncMessages } from "@/utils/gmail/sync-messages";
@@ -18,6 +20,26 @@ const GMAIL_MAILBOX_HISTORY_TYPES = [
   "labelAdded",
   "labelRemoved",
 ] as const;
+// A catch-up after time away replays history oldest first, which under the
+// account's Gmail quota can take minutes. Before each replay page, a preview
+// reads history past what was already previewed, at 2 units a call, and
+// fetches only the newest changes, so new mail shows first whatever the
+// backlog's size. The replay fetches previewed messages again; the store drops
+// a version it already has.
+const HISTORY_SCAN_PAGE_SIZE = 500;
+const HISTORY_SCAN_MAX_CALLS = 10;
+// About 200 units, which the quota gate admits within a second or so.
+const PREVIEW_SIZE = 10;
+// A backlog this small is applied whole in one page, well inside the 1000
+// changes a sync page may carry.
+const SHORT_CATCH_UP_MAX_CHANGES = 500;
+// Changes one replay page carries, its preview included: no more messages
+// than a page keeps the bodies of, so none is fetched in full only to be
+// fetched again, and few enough fetches (about 1000 units) to finish well
+// within the client's request timeout under the account's quota.
+const REPLAY_PAGE_MAX_CHANGES = MAILBOX_SYNC_PAGE_MAX_MESSAGES;
+
+type GmailDeltaCursor = Extract<MailboxSyncCursor, { provider: "google" }>;
 
 export async function getGmailMailboxSyncPage({
   gmail,
@@ -25,6 +47,7 @@ export async function getGmailMailboxSyncPage({
   logger,
   cursor,
   after,
+  includeBodies = false,
   limit,
 }: {
   gmail: gmail_v1.Gmail;
@@ -32,6 +55,7 @@ export async function getGmailMailboxSyncPage({
   logger: Logger;
   cursor?: string;
   after?: Date;
+  includeBodies?: boolean;
   limit: number;
 }): Promise<MailboxSyncPage> {
   if (!cursor) {
@@ -61,53 +85,19 @@ export async function getGmailMailboxSyncPage({
   }
 
   try {
-    const response = await getHistory(
+    const page = await getGmailDeltaPage({
       gmail,
-      {
-        startHistoryId: decoded.historyId,
-        historyTypes: [...GMAIL_MAILBOX_HISTORY_TYPES],
-        maxResults: limit,
-        pageToken: decoded.pageToken,
-      },
-      logger,
-    );
-    const { upsertIds, deletedIds, changedThreadIds } =
-      getGmailMailboxChangeIds(response.history ?? []);
-    const fetched = await getGmailSyncMessages({
-      gmail,
-      messageIds: upsertIds,
       accessToken,
       logger,
+      cursor: decoded,
+      limit,
     });
-    const fetchedMessages = fetched.messages.map(compactMailboxSyncMessage);
-    const afterTimestamp = new Date(decoded.after).getTime();
-    const upsertedMessages = fetchedMessages.filter((message) => {
-      const inTimeWindow = Number(message.internalDate) >= afterTimestamp;
-      if (!inTimeWindow) deletedIds.add(message.id);
-      return inTimeWindow;
-    });
-    const fetchedIds = new Set(fetchedMessages.map((message) => message.id));
-    for (const messageId of upsertIds) {
-      if (!fetchedIds.has(messageId)) deletedIds.add(messageId);
-    }
-
-    const nextHistoryId = response.nextPageToken
-      ? decoded.historyId
-      : (response.historyId ?? decoded.historyId);
+    // The delta fetched each message in full, so a caller that stores bodies
+    // keeps them rather than fetching every message a second time.
+    if (includeBodies) return { ...page, includesBodies: true };
     return {
-      cursor: encodeMailboxSyncCursor({
-        version: 1,
-        provider: "google",
-        phase: "delta",
-        historyId: nextHistoryId,
-        after: decoded.after,
-        pageToken: response.nextPageToken ?? undefined,
-      }),
-      changedThreadIds: [...changedThreadIds],
-      deletedMessageIds: [...deletedIds],
-      hasMore: Boolean(response.nextPageToken),
-      reset: false,
-      upsertedMessages,
+      ...page,
+      upsertedMessages: page.upsertedMessages.map(compactMailboxSyncMessage),
     };
   } catch (error) {
     if (extractErrorInfo(error).status !== 404) throw error;
@@ -150,6 +140,368 @@ export async function advanceGmailMailboxSyncCursor({
     if (extractErrorInfo(error).status !== 404) throw error;
     return null;
   }
+}
+
+// Every Gmail delta read: past a preview of the newest changes, one page of
+// history replayed oldest first. The preview is what lets new mail win: the
+// replay of a long backlog can take minutes under the account's quota.
+async function getGmailDeltaPage({
+  gmail,
+  accessToken,
+  logger,
+  cursor,
+  limit,
+}: {
+  gmail: gmail_v1.Gmail;
+  accessToken: string;
+  logger: Logger;
+  cursor: GmailDeltaCursor;
+  limit: number;
+}): Promise<MailboxSyncPage> {
+  const marker = cursor.previewedThrough;
+  // The scan starts without a token, so it only ever uses tokens it minted.
+  const preview = await scanGmailHistory({
+    gmail,
+    logger,
+    startHistoryId: marker ?? cursor.historyId,
+  });
+  if (
+    !marker &&
+    preview.historyId &&
+    preview.changes.upsertIds.length <= PREVIEW_SIZE &&
+    preview.changes.upsertIds.length + preview.changes.deletedIds.size <=
+      SHORT_CATCH_UP_MAX_CHANGES
+  ) {
+    // The preview holds the whole backlog, so it is the catch-up.
+    return fetchDeltaPage({
+      gmail,
+      accessToken,
+      logger,
+      ...preview.changes,
+      cursor: {
+        ...cursor,
+        historyId: preview.historyId,
+        pageToken: undefined,
+        previewedThrough: undefined,
+        replayedChanges: undefined,
+      },
+    });
+  }
+  const previewed = preview.historyId
+    ? {
+        upsertIds: preview.changes.upsertIds.slice(0, PREVIEW_SIZE),
+        through: preview.historyId,
+      }
+    : await newestGmailMessages({ gmail, logger, after: cursor.after });
+  // A preview carries only its few newest messages. Deletions, which can number
+  // thousands after Trash is emptied, wait for the replay's bounded pages.
+  if (!marker) {
+    return fetchDeltaPage({
+      gmail,
+      accessToken,
+      logger,
+      upsertIds: previewed.upsertIds,
+      deletedIds: new Set(),
+      changedThreadIds: new Set(),
+      cursor: { ...cursor, previewedThrough: previewed.through },
+    });
+  }
+
+  const budget = REPLAY_PAGE_MAX_CHANGES - previewed.upsertIds.length;
+  const { response, records, replay } = await readReplayPage({
+    gmail,
+    logger,
+    cursor,
+    limit,
+    budget,
+  });
+  // A record naming more changes than a page may carry is delivered in parts,
+  // holding the replay's position until the last part is out.
+  const delivered = cursor.replayedChanges ?? 0;
+  const ordered = [
+    ...[...replay.deletedIds].map((id) => ({ id, deleted: true })),
+    ...replay.upsertIds.map((id) => ({ id, deleted: false })),
+  ];
+  const part = ordered.slice(delivered, delivered + budget);
+  const remaining = delivered + part.length < ordered.length;
+  const deletedIds = new Set(
+    part.filter((change) => change.deleted).map((change) => change.id),
+  );
+  // The replay's position is a history id, never a page token: Gmail's tokens
+  // are not promised to work with another page size, and the page shrinks.
+  let nextCursor: GmailDeltaCursor;
+  if (remaining) {
+    // Only an oversized single record is split; its next part is read from
+    // just before it.
+    nextCursor = {
+      ...cursor,
+      historyId: String(BigInt(recordId(records[0])) - BigInt(1)),
+      pageToken: undefined,
+      previewedThrough: previewed.through,
+      replayedChanges: delivered + part.length,
+    };
+  } else if (response.nextPageToken) {
+    nextCursor = {
+      ...cursor,
+      historyId: recordId(records.at(-1)),
+      pageToken: undefined,
+      previewedThrough: previewed.through,
+      replayedChanges: undefined,
+    };
+  } else {
+    // The replay's end is the mailbox's current history, past the preview.
+    nextCursor = {
+      ...cursor,
+      historyId: response.historyId ?? cursor.historyId,
+      pageToken: undefined,
+      previewedThrough: undefined,
+      replayedChanges: undefined,
+    };
+  }
+  return fetchDeltaPage({
+    gmail,
+    accessToken,
+    logger,
+    upsertIds: [
+      ...new Set([
+        ...previewed.upsertIds,
+        ...part.filter((change) => !change.deleted).map((change) => change.id),
+      ]),
+    ].filter((id) => !deletedIds.has(id)),
+    deletedIds,
+    changedThreadIds: replay.changedThreadIds,
+    cursor: nextCursor,
+  });
+}
+
+// One page of the oldest-first replay. A record can name a whole thread's
+// messages, so a page of `limit` records can hold thousands of changes; the
+// page shrinks, re-reading the same position at 2 units a call, until its
+// changes fit or it is down to one record.
+async function readReplayPage({
+  gmail,
+  logger,
+  cursor,
+  limit,
+  budget,
+}: {
+  gmail: gmail_v1.Gmail;
+  logger: Logger;
+  cursor: GmailDeltaCursor;
+  limit: number;
+  budget: number;
+}) {
+  // A record split across pages is re-read alone, so its parts line up.
+  let maxResults = cursor.replayedChanges ? 1 : limit;
+  // Room for the start record, once Gmail is seen returning it.
+  let startRecordRoom = 0;
+  // Only a cursor from an earlier version still carries a page token.
+  let pageToken = cursor.pageToken;
+  for (;;) {
+    let response: gmail_v1.Schema$ListHistoryResponse;
+    try {
+      response = await getHistory(
+        gmail,
+        {
+          startHistoryId: cursor.historyId,
+          historyTypes: [...GMAIL_MAILBOX_HISTORY_TYPES],
+          maxResults: maxResults + startRecordRoom,
+          pageToken,
+        },
+        logger,
+      );
+    } catch (error) {
+      // A token Gmail refuses is dropped: replaying from the cursor's history
+      // again re-applies changes the store already has, which is harmless.
+      if (!pageToken || extractErrorInfo(error).status !== 400) throw error;
+      pageToken = undefined;
+      continue;
+    }
+    // Gmail documents history as starting after `startHistoryId`. If it ever
+    // returns the start record too, that record is dropped and the page
+    // re-read one larger, so it still holds a record the replay needs.
+    const returned = response.history ?? [];
+    const records = returned.filter(
+      (record) => !record.id || BigInt(record.id) > BigInt(cursor.historyId),
+    );
+    if (records.length < returned.length && startRecordRoom === 0) {
+      startRecordRoom = 1;
+      continue;
+    }
+    const replay = getGmailMailboxChangeIds(records);
+    const changes = replay.upsertIds.length + replay.deletedIds.size;
+    if (changes <= budget || maxResults === 1) {
+      return { response, records, replay };
+    }
+    maxResults = Math.max(1, Math.floor(maxResults / 2));
+  }
+}
+
+// Gmail always sends each history record's id; the replay's position needs it.
+function recordId(record: gmail_v1.Schema$History | undefined) {
+  if (!record?.id)
+    throw new Error("Gmail returned a history record without an id");
+  return record.id;
+}
+
+// Reads history to its end, at 2 units a call, newest change first. A backlog
+// too long to read within the bound returns no historyId.
+async function scanGmailHistory({
+  gmail,
+  logger,
+  startHistoryId,
+}: {
+  gmail: gmail_v1.Gmail;
+  logger: Logger;
+  startHistoryId: string;
+}) {
+  const history: gmail_v1.Schema$History[] = [];
+  let historyId: string | null = null;
+  let nextPageToken: string | undefined;
+  for (let call = 0; call < HISTORY_SCAN_MAX_CALLS; call++) {
+    const response = await getHistory(
+      gmail,
+      {
+        startHistoryId,
+        historyTypes: [...GMAIL_MAILBOX_HISTORY_TYPES],
+        maxResults: HISTORY_SCAN_PAGE_SIZE,
+        pageToken: nextPageToken,
+      },
+      logger,
+    );
+    history.push(...(response.history ?? []));
+    nextPageToken = response.nextPageToken ?? undefined;
+    if (!nextPageToken) {
+      historyId = response.historyId ?? startHistoryId;
+      break;
+    }
+  }
+  const changes = getGmailMailboxChangeIds(history);
+  return {
+    historyId,
+    changes: {
+      ...changes,
+      upsertIds: newestChangeFirst(changes.upsertIds, history),
+    },
+  };
+}
+
+// For a backlog too long to scan: the mailbox's newest messages, and the
+// history they are current as of, taken first so nothing after it is missed.
+async function newestGmailMessages({
+  gmail,
+  logger,
+  after,
+}: {
+  gmail: gmail_v1.Gmail;
+  logger: Logger;
+  after: string;
+}) {
+  const profile = await withGmailRetry(
+    () => gmail.users.getProfile({ userId: "me" }),
+    5,
+    { logger },
+  );
+  const through = profile.data.historyId;
+  if (!through) throw new Error("Gmail did not return a mailbox history ID");
+  const response = await withGmailRetry(
+    () =>
+      gmail.users.messages.list({
+        userId: "me",
+        q: `after:${Math.floor(new Date(after).getTime() / 1000)}`,
+        maxResults: PREVIEW_SIZE,
+      }),
+    5,
+    { logger },
+  );
+  return {
+    upsertIds: (response.data.messages ?? []).flatMap((message) =>
+      message.id ? [message.id] : [],
+    ),
+    through,
+  };
+}
+
+async function fetchDeltaPage({
+  gmail,
+  accessToken,
+  logger,
+  cursor,
+  upsertIds,
+  deletedIds,
+  changedThreadIds,
+}: {
+  gmail: gmail_v1.Gmail;
+  accessToken: string;
+  logger: Logger;
+  cursor: GmailDeltaCursor;
+  upsertIds: string[];
+  deletedIds: Set<string>;
+  changedThreadIds: Set<string>;
+}): Promise<MailboxSyncPage> {
+  const fetched = await getGmailSyncMessages({
+    gmail,
+    messageIds: upsertIds,
+    accessToken,
+    logger,
+  });
+  const fetchedMessages = fetched.messages;
+  const afterTimestamp = new Date(cursor.after).getTime();
+  const upsertedMessages = fetchedMessages.filter((message) => {
+    const inTimeWindow = Number(message.internalDate) >= afterTimestamp;
+    if (!inTimeWindow) deletedIds.add(message.id);
+    return inTimeWindow;
+  });
+  const fetchedIds = new Set(fetchedMessages.map((message) => message.id));
+  for (const messageId of upsertIds) {
+    if (!fetchedIds.has(messageId)) deletedIds.add(messageId);
+  }
+
+  return {
+    cursor: encodeMailboxSyncCursor({
+      version: 1,
+      provider: "google",
+      phase: "delta",
+      historyId: cursor.historyId,
+      after: cursor.after,
+      pageToken: cursor.pageToken,
+      previewedThrough: cursor.previewedThrough,
+      replayedChanges: cursor.replayedChanges,
+    }),
+    changedThreadIds: [...changedThreadIds],
+    deletedMessageIds: [...deletedIds],
+    hasMore: Boolean(cursor.pageToken || cursor.previewedThrough),
+    reset: false,
+    upsertedMessages,
+  };
+}
+
+// Orders message ids so mail that arrived in the backlog comes first, then
+// the rest; each group by the latest history record that touched each one,
+// newest first, keeping their order within a record. A bulk relabel of old
+// mail after new mail arrives must not push the new mail out of a preview.
+function newestChangeFirst(
+  messageIds: string[],
+  history: gmail_v1.Schema$History[],
+) {
+  const added = new Set<string>();
+  const lastTouched = new Map<string, number>();
+  history.forEach((record, index) => {
+    for (const change of record.messagesAdded ?? []) {
+      if (change.message?.id) added.add(change.message.id);
+    }
+    const touched = [
+      ...(record.messagesAdded ?? []),
+      ...(record.labelsAdded ?? []),
+      ...(record.labelsRemoved ?? []),
+    ].map((change) => change.message);
+    for (const message of [...touched, ...(record.messages ?? [])]) {
+      if (message?.id) lastTouched.set(message.id, index);
+    }
+  });
+  const rank = (id: string) =>
+    (added.has(id) ? history.length : 0) + (lastTouched.get(id) ?? -1);
+  return [...messageIds].sort((a, b) => rank(b) - rank(a));
 }
 
 export function getGmailMailboxChangeIds(history: gmail_v1.Schema$History[]): {
