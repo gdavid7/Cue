@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { redis } from "@/utils/redis";
 import { createScopedLogger } from "@/utils/logger";
 import {
+  TRACKER_HINT_MESSAGE,
   publishLocalMailHint,
+  publishTrackerHint,
   refreshLocalMailInterest,
 } from "./local-mail-hints";
 
@@ -27,6 +29,17 @@ describe("local mail hints", () => {
     await publishLocalMailHint("account-a", logger);
     expect(redis.publish).toHaveBeenCalledTimes(2);
     expect(redis.publish).toHaveBeenCalledWith("local-mail:account-a", "{}");
+  });
+  it("publishes a tracker hint Today can tell apart from new mail, only while a client is connected", async () => {
+    vi.mocked(redis.exists).mockResolvedValueOnce(0).mockResolvedValue(1);
+    await publishTrackerHint("account-a", logger);
+    expect(redis.publish).not.toHaveBeenCalled();
+    await publishTrackerHint("account-a", logger);
+    expect(redis.publish).toHaveBeenCalledWith(
+      "local-mail:account-a",
+      TRACKER_HINT_MESSAGE,
+    );
+    expect(TRACKER_HINT_MESSAGE).not.toBe("{}");
   });
   it("bounds interest after disconnect without deleting other clients' leases", async () => {
     await refreshLocalMailInterest("account-a");

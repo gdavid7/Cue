@@ -8,6 +8,7 @@ import { SystemType, ThreadTrackerType } from "@/generated/prisma/enums";
 import prisma from "@/utils/prisma";
 import { sortByInternalDate } from "@/utils/date";
 import { withPrismaRetry } from "@/utils/prisma-retry";
+import { publishTrackerHint } from "@/utils/redis/local-mail-hints";
 import {
   buildThreadStatusMessagesForLLM,
   excludeAssistantMessages,
@@ -175,4 +176,6 @@ export async function updateThreadTrackers({
       },
     });
   }
+
+  await publishTrackerHint(emailAccountId, logger);
 }

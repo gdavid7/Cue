@@ -4,6 +4,7 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { announceTodayChanged } from "@/utils/home/today-changes";
 import { useHome } from "./useHome";
 
 vi.mock("@/utils/swr", () => ({
@@ -40,6 +41,34 @@ describe("useHome", () => {
 
     expect(fetcher).toHaveBeenCalledTimes(13);
     expect(result.current.gaveUp).toBe(false);
+  });
+
+  it("reloads when Cue changes what needs a reply, so new mail shows without a reload", async () => {
+    const fetcher = vi.fn(async () => ({ pending: [] }));
+    renderHook(() => useHome("account"), { wrapper: wrapper(fetcher) });
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      announceTodayChanged();
+      await vi.advanceTimersByTimeAsync(100);
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("reloads when the user comes back to the tab", async () => {
+    const fetcher = vi.fn(async () => ({ pending: [] }));
+    renderHook(() => useHome("account"), { wrapper: wrapper(fetcher) });
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(100);
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it("stops asking once every lane has loaded", async () => {

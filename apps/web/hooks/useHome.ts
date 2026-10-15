@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
+import { onTodayChanged } from "@/utils/home/today-changes";
 import { getAccountScopedKey } from "@/utils/swr";
 
 // A lane Gmail couldn't serve in time loads on a later request. A minute of
@@ -8,6 +9,7 @@ import { getAccountScopedKey } from "@/utils/swr";
 // each ask spends its quota again.
 const PENDING_REFRESH_MS = 5000;
 const PENDING_LOAD_LIMIT = 12;
+const FOCUS_REFRESH_MIN_MS = 30_000;
 
 /**
  * Today's data. `gaveUp` is set once a lane has stayed pending through every
@@ -30,7 +32,8 @@ export function useHome(emailAccountId?: string | null) {
         )
       : null,
     {
-      revalidateOnFocus: false,
+      // Each load spends Gmail quota, so tab switches share one.
+      focusThrottleInterval: FOCUS_REFRESH_MIN_MS,
       onSuccess: (data) =>
         countPendingLoads(
           data.pending.length ? pendingLoadsRef.current + 1 : 0,
@@ -42,6 +45,10 @@ export function useHome(emailAccountId?: string | null) {
     },
   );
   const { mutate } = home;
+
+  // Cue sorted new mail or the user's reply changed a lane: show it now
+  // rather than on the next reload.
+  useEffect(() => onTodayChanged(() => mutate()), [mutate]);
 
   return {
     data: home.data,
