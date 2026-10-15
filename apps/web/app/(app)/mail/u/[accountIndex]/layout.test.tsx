@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   loadInboxPreview: vi.fn(),
   mailPath: "/mail/u/1/inbox" as string | null,
   localMailCookie: undefined as string | undefined,
+  splits: [] as { id: string; filters: { kind: string; value: string }[] }[],
   redirect: vi.fn((url: string) => {
     throw new Error(`redirect:${url}`);
   }),
@@ -18,6 +19,9 @@ vi.mock("@/utils/mail-url.server", () => ({
 }));
 vi.mock("@/utils/threads/inbox-preview.server", () => ({
   loadInboxPreview: (input: unknown) => mocks.loadInboxPreview(input),
+}));
+vi.mock("@/utils/split-inbox/settings.server", () => ({
+  getMailSettings: async () => ({ splits: mocks.splits }),
 }));
 vi.mock("next/headers", () => ({
   headers: async () =>
@@ -46,6 +50,11 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/MailScreenLayout", () => ({
 import { InboxPreviewSeed } from "@/app/(app)/[emailAccountId]/mail/InboxPreviewList";
 import MailRouteLayout from "./layout";
 
+function screenOf(layout: Awaited<ReturnType<typeof renderAt>>) {
+  return (layout as React.ReactElement<{ children: React.ReactElement[] }>)
+    .props.children[0] as React.ReactElement<{ preview: unknown }>;
+}
+
 function renderAt(accountIndex: string) {
   return MailRouteLayout({
     children: null,
@@ -64,6 +73,7 @@ describe("MailRouteLayout", () => {
     mocks.loadInboxPreview.mockReturnValue(new Promise(() => {}));
     mocks.mailPath = "/mail/u/1/inbox";
     mocks.localMailCookie = undefined;
+    mocks.splits = [{ id: "all", filters: [] }];
   });
 
   it("opens one of the signed-in user's own accounts", async () => {
@@ -91,14 +101,38 @@ describe("MailRouteLayout", () => {
     expect(mocks.loadInboxPreview).not.toHaveBeenCalled();
   });
 
+  it("does not fetch the whole inbox when the inbox opens on a tab", async () => {
+    // Gmail's tabs: the inbox opens on Primary, not on All.
+    mocks.splits = [
+      { id: "all", filters: [] },
+      {
+        id: "primary",
+        filters: [{ kind: "CATEGORY", value: "CATEGORY_PERSONAL" }],
+      },
+    ];
+
+    const layout = await renderAt("1");
+
+    expect(mocks.loadInboxPreview).not.toHaveBeenCalled();
+    expect(screenOf(layout).props.preview).toBeNull();
+  });
+
+  it("fetches the inbox when it opens on All", async () => {
+    mocks.splits = [
+      { id: "all", filters: [] },
+      { id: "work", filters: [{ kind: "LABEL", value: "Work" }] },
+    ];
+
+    await renderAt("1");
+
+    expect(mocks.loadInboxPreview).toHaveBeenCalled();
+  });
+
   it("keeps the mail screen in the same place whether or not it seeds the inbox", async () => {
     const seeded = await renderAt("1");
     mocks.localMailCookie = "acc_b";
     const unseeded = await renderAt("1");
 
-    const screenOf = (layout: Awaited<ReturnType<typeof renderAt>>) =>
-      (layout as React.ReactElement<{ children: React.ReactElement[] }>).props
-        .children[0] as React.ReactElement<{ preview: unknown }>;
     expect(screenOf(seeded).type).toBe(InboxPreviewSeed);
     expect(screenOf(unseeded).type).toBe(InboxPreviewSeed);
     expect(screenOf(seeded).props.preview).toBeInstanceOf(Promise);

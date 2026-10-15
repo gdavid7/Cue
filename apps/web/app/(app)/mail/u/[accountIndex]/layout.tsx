@@ -16,6 +16,8 @@ import {
 } from "@/utils/mail-url";
 import { getOrderedEmailAccounts } from "@/utils/mail-url.server";
 import { buildLoginRedirectUrl } from "@/utils/redirect";
+import { findLandingSplit } from "@/utils/split-inbox/inbox-styles";
+import { getMailSettings } from "@/utils/split-inbox/settings.server";
 import { loadInboxPreview } from "@/utils/threads/inbox-preview.server";
 
 // The mail screen lives in the layout, not the page: a layout persists while
@@ -76,6 +78,10 @@ async function startInboxPreview(account: { id: string; provider: string }) {
     return { preview: null };
   if (hasLocalMailbox(cookieStore.get(LOCAL_MAILBOX_COOKIE)?.value, account.id))
     return { preview: null };
+  // An inbox that opens on a tab, such as Gmail's Primary, would show its
+  // other tabs' mail and then swap to the tab.
+  const { splits } = await getMailSettings({ emailAccountId: account.id });
+  if (findLandingSplit(splits)?.filters.length) return { preview: null };
   return {
     preview: loadInboxPreview({
       emailAccountId: account.id,

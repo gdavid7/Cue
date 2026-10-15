@@ -125,7 +125,7 @@ import {
   mailSplitToThreadsQuery,
   mailTypeToThreadsQuery,
 } from "@/utils/split-inbox/split-query";
-import { isInboxStyleLandingSplit } from "@/utils/split-inbox/inbox-styles";
+import { findLandingSplit } from "@/utils/split-inbox/inbox-styles";
 import { getActionErrorMessage } from "@/utils/error";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
 import {
@@ -559,14 +559,12 @@ export function MailShell() {
   );
   // With an inbox style chosen, mail opens on its Primary or Focused tab
   // rather than All, which shows the same mail and more.
+  const landingSplit = findLandingSplit(splits);
   const activeSplit =
-    splits.find((split) => split.id === activeSplitId) ??
-    splits.find(isInboxStyleLandingSplit) ??
-    splits[0];
+    splits.find((split) => split.id === activeSplitId) ?? landingSplit;
   const displayedActiveSplitId = activeSplit?.id ?? null;
   // The tab mail opens on reads as plain `/inbox`; the others by their slug.
-  const landingSplitId =
-    (splits.find(isInboxStyleLandingSplit) ?? splits[0])?.id ?? null;
+  const landingSplitId = landingSplit?.id ?? null;
   const setActiveSplitId = useCallback(
     (splitId: string | null) => {
       // A tab created a moment ago has no slug until settings reload; its id
