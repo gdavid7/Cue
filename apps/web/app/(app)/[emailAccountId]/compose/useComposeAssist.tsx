@@ -30,6 +30,11 @@ const ACCEPTED_MESSAGE = `Cue's suggestion added. Undo with ${
     ? "Command"
     : "Control"
 } Z.`;
+const MAX_TEXT = 20_000;
+const CONTEXT_BEFORE = 6000;
+const CONTEXT_AFTER = 2000;
+const TOO_LONG_MESSAGE =
+  "That's more text than Cue can rewrite at once. Select a shorter passage.";
 const IMAGES_MESSAGE =
   "Cue can only rewrite text. Select the words without the images.";
 
@@ -103,6 +108,13 @@ export function useComposeAssist({
       dispatch({ type: "run", request });
       if (context.containsImages && request.mode !== "write") {
         dispatch({ type: "fail", message: IMAGES_MESSAGE });
+        return;
+      }
+      if (
+        (request.mode === "rewrite" || request.mode === "expand-notes") &&
+        context.text.length > MAX_TEXT
+      ) {
+        dispatch({ type: "fail", message: TOO_LONG_MESSAGE });
         return;
       }
       const controller = new AbortController();
@@ -312,14 +324,13 @@ function toRequestBody(
 ): ComposeAssistBody {
   const { label: _label, ...fields } = request;
   if (request.mode === "expand-notes") return { ...fields, text: context.text };
+  // The model reads the text nearest the edit; the rest of a long draft
+  // only adds cost.
+  const before = context.before.slice(-CONTEXT_BEFORE);
+  const after = context.after.slice(0, CONTEXT_AFTER);
   if (request.mode === "rewrite")
-    return {
-      ...fields,
-      before: context.before,
-      text: context.text,
-      after: context.after,
-    };
-  return { ...fields, before: context.before, after: context.after };
+    return { ...fields, before, text: context.text, after };
+  return { ...fields, before, after };
 }
 
 function focusPanel(panel: HTMLElement | null) {

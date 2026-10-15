@@ -305,6 +305,20 @@ describe("useComposeAssist", { timeout: 20_000 }, () => {
     );
   });
 
+  it("asks for a shorter selection instead of sending a huge one", async () => {
+    renderAssist({ ...SELECTION, text: "word ".repeat(5000) });
+    openAssist();
+    fireEvent.keyDown(
+      await screen.findByRole("menuitem", { name: /Improve/ }),
+      { key: "i" },
+    );
+
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /shorter passage/u,
+    );
+    expect(requests).toHaveLength(0);
+  });
+
   it("refuses to rewrite a selection that holds images", async () => {
     renderAssist({ ...SELECTION, containsImages: true });
     openAssist();
