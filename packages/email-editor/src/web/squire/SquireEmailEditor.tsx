@@ -443,8 +443,10 @@ export const SquireEmailEditor = forwardRef<
     setExpandedState(value);
   }, []);
 
+  // Mounting in the commit, not after paint, means the textbox never shows
+  // or reports itself empty before the draft is in it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: Squire is uncontrolled; it mounts once with the initial content.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;
     const squire = new EmailSquire(root, {
