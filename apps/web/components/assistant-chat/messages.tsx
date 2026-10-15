@@ -1,4 +1,4 @@
-import { Fragment, useMemo, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { MessagePart } from "./message-part";
 import { MessagingChannelHint } from "./messaging-channel-hint";
 import type { UseChatHelpers } from "@ai-sdk/react";
@@ -31,7 +31,14 @@ export function Messages({
   persistedMessageIds,
   footer,
 }: MessagesProps) {
-  const disableConfirm = status === "streaming" || status === "submitted";
+  const isAnswering = status === "streaming" || status === "submitted";
+  const disableConfirm = isAnswering;
+  // "Cue replied" only follows an answer seen here, not a loaded history.
+  const [hasAnswered, setHasAnswered] = useState(false);
+  if (isAnswering && !hasAnswered) setHasAnswered(true);
+  let answerStatus = "";
+  if (isAnswering) answerStatus = "Cue is thinking…";
+  else if (hasAnswered && status === "ready") answerStatus = "Cue replied";
   const emailLookup = useMemo(() => buildEmailLookup(messages), [messages]);
   const firstAssistantIndex = useMemo(
     () => messages.findIndex((m) => m.role === "assistant"),
@@ -45,7 +52,13 @@ export function Messages({
           className="mx-auto flex min-h-full flex-col max-w-[calc(var(--chat-max-w)+var(--chat-px)*2)] px-[var(--chat-px)] pt-0 pb-0"
           scrollClassName="![scrollbar-gutter:auto] scrollbar-thin"
         >
-          <div className="flex flex-1 flex-col gap-4">
+          {/* Silent while an answer streams: Markdown re-renders on every
+              chunk, which screen readers read as repeated fragments. */}
+          <div
+            aria-live={isAnswering ? "off" : "polite"}
+            className="flex flex-1 flex-col gap-4"
+            role="log"
+          >
             {messages.map((message, index) => (
               <Fragment key={message.id}>
                 <Message from={message.role}>
@@ -83,6 +96,9 @@ export function Messages({
                   </MessageContent>
                 </Message>
               )}
+          </div>
+          <div className="sr-only" role="status">
+            {answerStatus}
           </div>
 
           <div className="h-8 shrink-0" />

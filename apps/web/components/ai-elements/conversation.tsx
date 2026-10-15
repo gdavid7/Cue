@@ -15,7 +15,6 @@ export const Conversation = ({ className, ...props }: ConversationProps) => (
     className={cn("relative flex-1 overflow-y-auto", className)}
     initial="smooth"
     resize="smooth"
-    role="log"
     {...props}
   />
 );
