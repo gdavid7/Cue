@@ -361,6 +361,29 @@ describe("opening a conversation a first sync has not fully reached", () => {
     expect(maxInFlight).toBe(2);
     await engine.close();
   });
+
+  it("asks again right away for an account purged and added back", async () => {
+    let paused = true;
+    const source = firstSyncSource({
+      firstPage: replies,
+      async readMembership(answer) {
+        if (!paused) return answer();
+        paused = false;
+        return { status: "paused", retryAfterMs: 60_000, reason: "throttled" };
+      },
+    });
+    const { engine, store } = await startFirstSync(source);
+    await engine.ensureConversationMessages(thread);
+
+    await engine.purgeAccount("acc-1");
+    await store.ensureAccount({ ...session, provider: "google" });
+
+    await expect(engine.ensureConversationMessages(thread)).resolves.toEqual({
+      status: "complete",
+    });
+    expect(source.membershipReads).toBe(2);
+    await engine.close();
+  });
 });
 
 async function isDeleted(engine: MailEngine, messageId: string) {

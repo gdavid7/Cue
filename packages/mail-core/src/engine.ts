@@ -423,7 +423,7 @@ export function createMailEngine(input: {
     async purgeAccount(accountId) {
       stopSyncLane(accountId);
       idleCatchUpGates.delete(accountId);
-      abortConversationFetches(accountId);
+      stopConversationFetches(accountId);
       const revision = await store.purgeAccount(accountId);
       await refreshViews();
       return revision;
@@ -438,7 +438,7 @@ export function createMailEngine(input: {
         if (retained.has(account.accountId)) continue;
         stopSyncLane(account.accountId);
         idleCatchUpGates.delete(account.accountId);
-        abortConversationFetches(account.accountId);
+        stopConversationFetches(account.accountId);
         await store.purgeAccount(account.accountId);
         purged = true;
       }
@@ -728,7 +728,7 @@ export function createMailEngine(input: {
     },
     async close() {
       closed = true;
-      abortConversationFetches(null);
+      stopConversationFetches(null);
       const lanes = [...syncLanes.keys()].map((accountId) => {
         const done = syncLanes.get(accountId)?.done;
         stopSyncLane(accountId);
@@ -839,13 +839,18 @@ export function createMailEngine(input: {
     return { status: "complete" };
   }
 
-  function abortConversationFetches(accountId: string | null) {
+  // An account added back after a purge starts over, without waiting out
+  // the backoff its earlier fills earned.
+  function stopConversationFetches(accountId: string | null) {
     const prefix =
       accountId === null
         ? ""
         : conversationFetchKey({ accountId, conversationId: "" });
     for (const [id, abort] of conversationFetchAborts) {
       if (id.startsWith(prefix)) abort.abort();
+    }
+    for (const id of conversationFetchRetryAt.keys()) {
+      if (id.startsWith(prefix)) conversationFetchRetryAt.delete(id);
     }
   }
 
