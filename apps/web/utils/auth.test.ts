@@ -23,7 +23,8 @@ const { mockAfter, mockAssertSignUpAllowed } = vi.hoisted(() => ({
   mockAssertSignUpAllowed: vi.fn(),
 }));
 
-vi.mock("@/utils/access/policy", () => ({
+vi.mock("@/utils/access/policy", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/access/policy")>()),
   assertSignUpAllowed: mockAssertSignUpAllowed,
 }));
 

@@ -3,6 +3,7 @@ import prisma from "@/utils/__mocks__/prisma";
 import {
   assertSignUpAllowed,
   isApprovedForAccess,
+  isGoogleAuthoritativeEmail,
   normalizeAccessEmail,
   recordAccessRequest,
 } from "@/utils/access/policy";
@@ -32,6 +33,28 @@ describe("normalizeAccessEmail", () => {
     expect(normalizeAccessEmail("Jane.Doe@School.edu")).toBe(
       "jane.doe@school.edu",
     );
+  });
+});
+
+describe("isGoogleAuthoritativeEmail", () => {
+  it.each([
+    [{ email: "Friend@Gmail.com", emailVerified: true }, true],
+    [{ email: "friend@googlemail.com", emailVerified: true }, true],
+    [
+      {
+        email: "student@school.edu",
+        emailVerified: true,
+        hostedDomain: "school.edu",
+      },
+      true,
+    ],
+    // A consumer Google account made with someone else's school address.
+    [{ email: "student@school.edu", emailVerified: true }, false],
+    [{ email: "friend@gmail.com", emailVerified: false }, false],
+    [{ email: "friend@gmail.com" }, false],
+    [{ email: "friend@gmail.com.evil.com", emailVerified: true }, false],
+  ])("%j → %s", (profile, expected) => {
+    expect(isGoogleAuthoritativeEmail(profile)).toBe(expected);
   });
 });
 
@@ -229,6 +252,126 @@ describe("assertSignUpAllowed", () => {
     ).rejects.toThrow("signup_not_allowed");
     // An unproven claim isn't recorded as that person's request either.
     expect(prisma.accessRequest.create).not.toHaveBeenCalled();
+  });
+});
+
+// Production today: the waitlist is off and AUTH_ALLOWED_EMAILS gates sign-up,
+// so an approval on /admin/access has to count without a redeploy.
+describe("assertSignUpAllowed with the waitlist off and an allow-list", () => {
+  const allowlisted = {
+    ...closed,
+    waitlistEnabled: false,
+    admins: [],
+    allowedEmails: ["founder@gmail.com"],
+  };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    prisma.accessRequest.findUnique.mockResolvedValue(null);
+    prisma.accessRequest.create.mockResolvedValue({ id: "r1" } as never);
+  });
+
+  it("admits an address approved on /admin/access", async () => {
+    prisma.accessRequest.findFirst.mockResolvedValue({
+      status: "APPROVED",
+    } as never);
+
+    await expect(
+      assertSignUpAllowed(
+        { email: "Friend@Gmail.com", ...google },
+        allowlisted,
+      ),
+    ).resolves.toBeUndefined();
+    expect(prisma.accessRequest.create).not.toHaveBeenCalled();
+  });
+
+  it("admits an approved school address", async () => {
+    prisma.accessRequest.findFirst.mockResolvedValue({
+      status: "APPROVED",
+    } as never);
+
+    await expect(
+      assertSignUpAllowed(
+        { email: "Student@School.edu", ...google },
+        allowlisted,
+      ),
+    ).resolves.toBeUndefined();
+    expect(prisma.accessRequest.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { email: { in: ["student@school.edu"] }, status: "APPROVED" },
+      }),
+    );
+  });
+
+  it("refuses an address with no approval", async () => {
+    prisma.accessRequest.findFirst.mockResolvedValue(null);
+
+    await expect(
+      assertSignUpAllowed(
+        { email: "stranger@gmail.com", ...google },
+        allowlisted,
+      ),
+    ).rejects.toThrow("signup_not_allowed");
+  });
+
+  it("refuses a declined address and keeps the decision", async () => {
+    // Only APPROVED rows match; a declined row is the existing request.
+    prisma.accessRequest.findFirst.mockResolvedValue(null);
+    prisma.accessRequest.findUnique.mockResolvedValue({ id: "r9" } as never);
+
+    await expect(
+      assertSignUpAllowed(
+        { email: "declined@gmail.com", ...google },
+        allowlisted,
+      ),
+    ).rejects.toThrow("signup_not_allowed");
+    expect(prisma.accessRequest.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ status: "APPROVED" }),
+      }),
+    );
+    expect(prisma.accessRequest.create).not.toHaveBeenCalled();
+    expect(prisma.accessRequest.update).not.toHaveBeenCalled();
+    expect(prisma.accessRequest.upsert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { provider: "microsoft", emailVerified: true },
+    { provider: "google", emailVerified: false },
+    { provider: "apple", emailVerified: undefined },
+    { provider: undefined, emailVerified: true },
+  ])("refuses an approved address claimed by $provider (verified: $emailVerified)", async (identity) => {
+    prisma.accessRequest.findFirst.mockResolvedValue({
+      status: "APPROVED",
+    } as never);
+
+    await expect(
+      assertSignUpAllowed(
+        { email: "friend@gmail.com", ...identity },
+        allowlisted,
+      ),
+    ).rejects.toThrow("signup_not_allowed");
+    expect(prisma.accessRequest.create).not.toHaveBeenCalled();
+  });
+
+  it("still admits AUTH_ALLOWED_EMAILS with any provider and no lookup", async () => {
+    await expect(
+      assertSignUpAllowed(
+        { email: "Founder@Gmail.com", provider: "microsoft" },
+        allowlisted,
+      ),
+    ).resolves.toBeUndefined();
+    expect(prisma.accessRequest.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("keeps sign-up open when the allow-list is empty", async () => {
+    await expect(
+      assertSignUpAllowed(
+        { email: "anyone@outlook.com", provider: "microsoft" },
+        { ...allowlisted, allowedEmails: [] },
+      ),
+    ).resolves.toBeUndefined();
+    expect(prisma.accessRequest.findFirst).not.toHaveBeenCalled();
   });
 });
 

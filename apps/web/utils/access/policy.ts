@@ -45,18 +45,21 @@ export async function assertSignUpAllowed(
   },
   policy: AccessPolicy = getAccessPolicy(),
 ) {
+  // The env allow-list predates approvals and admits any provider.
   if (!policy.waitlistEnabled && isAllowedAuthSignupEmail(email, policy))
     return;
 
   // Approval belongs to an address, so only a sign-in that proves the address
   // can use it. An unproven claim isn't recorded as that person's request.
+  // Google's claim is narrowed to addresses it is authoritative for when its
+  // profile is mapped (see utils/auth.ts).
   const provesEmail =
     !!provider &&
     PROVIDERS_THAT_PROVE_EMAIL.has(provider) &&
     emailVerified === true;
   if (!provesEmail) throw createSignupNotAllowedError();
 
-  if (await isApprovedForAccess(email, policy)) return;
+  if (await isAllowedProvenEmail(email, policy)) return;
 
   // The person tried to get in, so that counts as asking. Google has already
   // shown its consent screen, but nothing from it is kept.
@@ -73,6 +76,40 @@ export async function assertSignUpAllowed(
     );
   }
   throw createSignupNotAllowedError();
+}
+
+/**
+ * The sign-up rule for an address whose owner the sign-in already proved:
+ * with the waitlist off, the env allow-list (empty means open) or an approval;
+ * with it on, an approval.
+ */
+export async function isAllowedProvenEmail(
+  email: string,
+  policy: AccessPolicy = getAccessPolicy(),
+) {
+  if (!policy.waitlistEnabled && isAllowedAuthSignupEmail(email, policy))
+    return true;
+  return isApprovedForAccess(email, policy);
+}
+
+/**
+ * Google is authoritative only for Gmail and Workspace (`hd`) addresses. A
+ * consumer Google account registered with another provider's address keeps
+ * `email_verified` after its owner loses that address, so it proves nothing.
+ */
+export function isGoogleAuthoritativeEmail({
+  email,
+  emailVerified,
+  hostedDomain,
+}: {
+  email?: string;
+  emailVerified?: boolean;
+  hostedDomain?: string;
+}) {
+  if (emailVerified !== true || !email) return false;
+  if (hostedDomain) return true;
+  const domain = lowercaseEmail(email).split("@").pop() ?? "";
+  return GMAIL_DOMAINS.includes(domain);
 }
 
 export async function isApprovedForAccess(

@@ -6,22 +6,15 @@ const SIGNUP_NOT_ALLOWED_ERROR = {
   code: "SIGNUP_NOT_ALLOWED",
 } as const;
 
-export function assertAllowedAuthSignupEmail(
-  email: string,
-  options: {
-    allowedEmails?: readonly string[];
-    allowedDomains?: readonly string[];
-  } = getAuthSignupPolicy(),
-) {
-  if (isAllowedAuthSignupEmail(email, options)) return;
-
-  throw createSignupNotAllowedError();
-}
-
 export function createSignupNotAllowedError() {
   return APIError.from("UNAUTHORIZED", SIGNUP_NOT_ALLOWED_ERROR);
 }
 
+/**
+ * The env allow-list on its own. Sign-up also admits people approved on
+ * /admin/access, so gate new accounts with `assertSignUpAllowed` in
+ * utils/access/policy.ts rather than this.
+ */
 export function isAllowedAuthSignupEmail(
   email: string,
   options: {
