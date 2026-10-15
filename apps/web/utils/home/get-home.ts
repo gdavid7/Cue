@@ -196,14 +196,16 @@ export async function getHomeData({
   // Without the labels, filed mail can't be told apart from the rest of the
   // inbox, so that lane waits for a load that has them.
   const inbox = labelsResult.ok ? inboxResult : PENDING;
-  const pending = (
-    [
-      ["needsYou", needsYouResult],
-      ["waiting", waitingResult],
-      ["alsoInInbox", inbox],
-    ] as const
-  )
+  const laneResults = [
+    ["needsYou", needsYouResult],
+    ["waiting", waitingResult],
+    ["alsoInInbox", inbox],
+  ] as const;
+  const pending = laneResults
     .filter(([, result]) => !result.ok && result.pending)
+    .map(([name]) => name);
+  const failed = laneResults
+    .filter(([, result]) => !result.ok && !result.pending)
     .map(([name]) => name);
   if (pending.length) logger.info("Home lanes pending", { pending });
 
@@ -248,6 +250,8 @@ export async function getHomeData({
       .filter(isDefined),
     /** Lanes Gmail couldn't serve in time; empty here means "not loaded yet". */
     pending,
+    /** Lanes that failed to load; empty here means "unknown", not "nothing". */
+    failed,
     agentTasks,
     // Whether an empty lane means "nothing there" or "nobody has looked".
     cue,
@@ -575,8 +579,8 @@ export type HomeLane = "needsYou" | "waiting" | "alsoInInbox";
 type Pending = { ok: false; pending: boolean };
 type LaneResult<T> = { ok: true; value: T } | Pending;
 const PENDING: Pending = { ok: false, pending: true };
-// A lane Gmail failed for another reason shows empty, as before: asking again
-// wouldn't change the answer.
+// A lane Gmail failed for another reason isn't asked for again on its own,
+// since that wouldn't change the answer; the page says it didn't load.
 const FAILED: Pending = { ok: false, pending: false };
 
 async function withinBudget<T>(

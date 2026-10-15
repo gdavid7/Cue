@@ -103,9 +103,13 @@ export function HomeDashboard() {
       : null;
   // Gmail couldn't serve these in time; they load on the next refresh.
   const pending = useMemo(() => new Set(data?.pending), [data]);
+  const failed = useMemo(() => new Set(data?.failed), [data]);
+  // Whether the Needs reply lane is what Cue knows, rather than empty because
+  // it hasn't loaded.
+  const needsYouLoaded = !pending.has("needsYou") && !failed.has("needsYou");
   // Nothing needs a reply: who you're waiting on folds into the All clear.
   const allClear = Boolean(
-    lanes && !notice && !pending.has("needsYou") && lanes.needsYou.length === 0,
+    lanes && !notice && needsYouLoaded && lanes.needsYou.length === 0,
   );
   // Keyboard order, top to bottom, as the lanes render.
   const rows = useMemo(
@@ -373,7 +377,7 @@ export function HomeDashboard() {
           {greetingText}
           {firstName ? `, ${firstName}` : ""}
         </PageHeading>
-        {data && lanes && !notice && !allClear && !pending.has("needsYou") ? (
+        {data && lanes && !notice && !allClear && needsYouLoaded ? (
           <p className="mt-1 text-muted-foreground text-sm" role="status">
             {busySummary(data, lanes.needsYou.length)}
           </p>
@@ -406,9 +410,13 @@ export function HomeDashboard() {
             threadHref={threadHref}
           />
         ) : null}
-        {gaveUp ? (
+        {gaveUp || failed.size > 0 ? (
           <ErrorDisplay
-            error={{ error: "Today's lanes didn't load in time" }}
+            error={{
+              error: gaveUp
+                ? "Today's lanes didn't load in time"
+                : "Some of Today's lanes didn't load",
+            }}
             onRetry={retry}
           />
         ) : null}
