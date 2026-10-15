@@ -113,8 +113,8 @@ test("creates and applies a label to selected conversations with L", async ({
     conversations,
     "Read Command Message",
   );
-  await first.getByRole("checkbox").click();
-  await second.getByRole("checkbox").click();
+  await first.getByRole("checkbox", { includeHidden: true }).click();
+  await second.getByRole("checkbox", { includeHidden: true }).click();
   await page.keyboard.press("l");
   const picker = page.getByRole("dialog", { name: "Label conversations" });
   await expect(picker).toBeVisible();
@@ -308,7 +308,7 @@ test("keeps a queued label visible while provider execute is held", async ({
     conversations,
     "Keyboard Navigation Message",
   );
-  await conversation.getByRole("checkbox").click();
+  await conversation.getByRole("checkbox", { includeHidden: true }).click();
   await page.keyboard.press("l");
   const picker = page.getByRole("dialog", { name: "Label conversations" });
   const labelOption = picker.getByRole("option", {

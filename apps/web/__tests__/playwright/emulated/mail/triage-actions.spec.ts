@@ -25,7 +25,10 @@ test("archives a selected conversation and restores it with undo", async ({
   );
 
   await archiveConversation
-    .getByRole("checkbox", { name: "Select conversation with Erin Example" })
+    .getByRole("checkbox", {
+      name: "Select conversation with Erin Example",
+      includeHidden: true,
+    })
     .click();
   await expect(page.getByText("1 selected", { exact: true })).toBeVisible();
   await expect(
@@ -80,7 +83,7 @@ test("shows a queue_full toast when a second archive cannot be admitted", async 
   let archiveQueued = false;
   try {
     await expect(first).toBeVisible();
-    await first.getByRole("checkbox").click();
+    await first.getByRole("checkbox", { includeHidden: true }).click();
     await page.getByRole("button", { name: "Archive", exact: true }).click();
     await expect(first).toHaveCount(0);
     await expect
@@ -95,7 +98,7 @@ test("shows a queue_full toast when a second archive cannot be admitted", async 
     archiveQueued = true;
 
     await expect(second).toBeVisible();
-    await second.getByRole("checkbox").click();
+    await second.getByRole("checkbox", { includeHidden: true }).click();
     await page.getByRole("button", { name: "Archive", exact: true }).click();
     await expect(second).toBeVisible();
     await expect(
@@ -289,8 +292,8 @@ test("archives two selected conversations and restores both with undo", async ({
     conversations,
     "Read Command Message",
   );
-  await first.getByRole("checkbox").click();
-  await second.getByRole("checkbox").click();
+  await first.getByRole("checkbox", { includeHidden: true }).click();
+  await second.getByRole("checkbox", { includeHidden: true }).click();
   await expect(page.getByText("2 selected", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Archive", exact: true }).click();
   await expect(first).toHaveCount(0);
@@ -339,7 +342,7 @@ test("selects and clears all conversations from the split tabs row", async ({
   await expect(selectAll).toBeHidden();
 
   await options.first().hover();
-  await options.first().getByRole("checkbox").click();
+  await options.first().getByRole("checkbox", { includeHidden: true }).click();
   await expect(selectAll).toHaveAttribute("aria-checked", "mixed");
 
   await selectAll.click();
@@ -351,7 +354,7 @@ test("selects and clears all conversations from the split tabs row", async ({
   await expect.poll(() => allRowsAreSelected(options, true)).toBe(true);
   await capturePlaywrightCheckpoint(page, testInfo, "select-all-conversations");
 
-  await options.nth(1).getByRole("checkbox").click();
+  await options.nth(1).getByRole("checkbox", { includeHidden: true }).click();
 
   await expect(
     page.getByText(`${conversationCount - 1} selected`, { exact: true }),
@@ -394,7 +397,7 @@ test("selects every conversation with Command A", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(commandInput).toBeHidden();
 
-  await options.nth(1).getByRole("checkbox").click();
+  await options.nth(1).getByRole("checkbox", { includeHidden: true }).click();
   await expect(page.getByText("1 selected", { exact: true })).toBeVisible();
 
   await page.keyboard.press(`${commandModifier}+KeyA`);

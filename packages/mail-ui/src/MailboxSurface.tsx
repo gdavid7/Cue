@@ -92,6 +92,7 @@ export function MailboxThreadList<T>({
 }: MailboxThreadListProps<T>) {
   const [scrollRoot, setScrollRoot] = useState<HTMLDivElement | null>(null);
   const focusedRowRef = useRef<HTMLDivElement | null>(null);
+  const listHadFocus = useRef(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const prefetchForCount = useRef<number | null>(null);
   const prefetchListKey = useRef(listKey);
@@ -111,7 +112,43 @@ export function MailboxThreadList<T>({
     const row = focusedRowRef.current;
     if (!row) return;
     scrollElementIntoContainer(scrollRoot, row);
+    // Screen readers and Enter follow DOM focus, so it moves with the
+    // highlight, but only from inside the list: J/K must not pull focus out
+    // of the search box or the reader. Archiving the focused row removes it
+    // and drops focus to the page, which still counts as inside.
+    const document = row.ownerDocument;
+    const active = document.activeElement;
+    const lostFromList =
+      listHadFocus.current && (!active || active === document.body);
+    if (active !== row && (scrollRoot.contains(active) || lostFromList)) {
+      row.focus({ preventScroll: true });
+    }
   }, [focusedIndex, focusedKey, scrollRoot]);
+
+  useEffect(() => {
+    if (!scrollRoot) return;
+    const onFocusIn = () => {
+      listHadFocus.current = true;
+    };
+    const onFocusOut = (event: FocusEvent) => {
+      const next = event.relatedTarget;
+      if (next instanceof Node && scrollRoot.contains(next)) return;
+      const left = event.target;
+      // Some browsers fire focusout for a focused row as it is removed; that
+      // is the case to recover from, not the user leaving the list.
+      queueMicrotask(() => {
+        if (next || !(left instanceof Node) || left.isConnected) {
+          listHadFocus.current = false;
+        }
+      });
+    };
+    scrollRoot.addEventListener("focusin", onFocusIn);
+    scrollRoot.addEventListener("focusout", onFocusOut);
+    return () => {
+      scrollRoot.removeEventListener("focusin", onFocusIn);
+      scrollRoot.removeEventListener("focusout", onFocusOut);
+    };
+  }, [scrollRoot]);
 
   useEffect(() => {
     if (prefetchListKey.current !== listKey) {

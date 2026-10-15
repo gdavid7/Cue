@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/utils/index";
-import { motion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 import {
   type CSSProperties,
   type ElementType,
@@ -33,6 +33,17 @@ const ShimmerComponent = ({
     () => (children?.length ?? 0) * spread,
     [children, spread],
   );
+  const reduceMotion = useReducedMotion();
+
+  // MotionConfig's reducedMotion only stops transforms; this sweep loops
+  // forever, so it becomes plain muted text instead.
+  if (reduceMotion) {
+    return (
+      <Component className={cn("text-muted-foreground", className)}>
+        {children}
+      </Component>
+    );
+  }
 
   return (
     <MotionComponent

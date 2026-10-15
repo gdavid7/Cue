@@ -18,17 +18,17 @@ test("toggles stars with shortcuts, the palette and the list toolbar while prese
   );
   const starStatus = row.getByText("Starred conversation", { exact: true });
   if (await starStatus.count()) {
-    await row.getByRole("checkbox").click();
+    await row.getByRole("checkbox", { includeHidden: true }).click();
     await page.keyboard.press("s");
     await expect(starStatus).toHaveCount(0);
     await expectCompletedStarMutation(page, emailAccountId, false);
   }
-  await row.getByRole("checkbox").click();
+  await row.getByRole("checkbox", { includeHidden: true }).click();
   await page.keyboard.press("u");
   await expect(page.getByText("1 selected", { exact: true })).toBeHidden();
   await page.getByRole("button", { name: "Unread", exact: true }).click();
   await expect(row).toBeVisible();
-  await row.getByRole("checkbox").click();
+  await row.getByRole("checkbox", { includeHidden: true }).click();
   await page.keyboard.press("s");
   await expect(
     row.getByText("Starred conversation", { exact: true }),
@@ -42,7 +42,7 @@ test("toggles stars with shortcuts, the palette and the list toolbar while prese
   });
   await expect(row).toBeVisible();
   await capturePlaywrightCheckpoint(page, testInfo, "starred-and-unread-dots");
-  await row.getByRole("checkbox").click();
+  await row.getByRole("checkbox", { includeHidden: true }).click();
   await page.keyboard.press("ControlOrMeta+k");
   await page.getByPlaceholder("Type a command or search...").fill("star");
   await page.getByRole("option", { name: /^Unstar/ }).click();
@@ -59,7 +59,7 @@ test("toggles stars with shortcuts, the palette and the list toolbar while prese
   const otherStarStatus = otherRow.getByText("Starred conversation", {
     exact: true,
   });
-  await otherRow.getByRole("checkbox").click();
+  await otherRow.getByRole("checkbox", { includeHidden: true }).click();
   await page.getByRole("button", { name: "Star", exact: true }).click();
   await expect(otherStarStatus).toHaveCount(1);
   await expectCompletedStarMutation(
@@ -71,8 +71,8 @@ test("toggles stars with shortcuts, the palette and the list toolbar while prese
 
   // A selection that mixes starred and unstarred conversations still offers
   // Star, and starring it brings every row up to starred.
-  await row.getByRole("checkbox").click();
-  await otherRow.getByRole("checkbox").click();
+  await row.getByRole("checkbox", { includeHidden: true }).click();
+  await otherRow.getByRole("checkbox", { includeHidden: true }).click();
   const starAction = page.getByRole("button", { name: "Star", exact: true });
   await expect(starAction).toBeVisible();
   await capturePlaywrightCheckpoint(page, testInfo, "list-toolbar-star-action");
@@ -82,8 +82,8 @@ test("toggles stars with shortcuts, the palette and the list toolbar while prese
   await expectCompletedStarMutation(page, emailAccountId, true);
 
   // Unstar only takes over once the whole selection is starred.
-  await row.getByRole("checkbox").click();
-  await otherRow.getByRole("checkbox").click();
+  await row.getByRole("checkbox", { includeHidden: true }).click();
+  await otherRow.getByRole("checkbox", { includeHidden: true }).click();
   await page.getByRole("button", { name: "Unstar", exact: true }).click();
   await expect(starStatus).toHaveCount(0);
   await expect(otherStarStatus).toHaveCount(0);

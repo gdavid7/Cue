@@ -51,7 +51,58 @@ describe("ThreadRow", () => {
   it("keeps the select checkbox out of the tab order", () => {
     renderRow();
 
-    expect(screen.getByRole("checkbox").getAttribute("tabindex")).toBe("-1");
+    expect(
+      screen.getByRole("checkbox", { hidden: true }).getAttribute("tabindex"),
+    ).toBe("-1");
+  });
+
+  // The option's aria-selected already says whether it is selected; a
+  // checkbox inside it only prefixed every row's name with "Select…".
+  it("names the row by its conversation, with the checkbox still clickable", () => {
+    const onToggleSelect = vi.fn();
+    renderRow({ onToggleSelect });
+
+    expect(screen.queryByRole("option", { name: /Select/ })).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { hidden: true }));
+    expect(onToggleSelect).toHaveBeenCalledWith(0);
+  });
+
+  it("toggles selection with Space on the focused row, like a listbox", () => {
+    const onOpen = vi.fn();
+    const onToggleSelect = vi.fn();
+    renderRow({ onOpen, onToggleSelect });
+
+    fireEvent.keyDown(screen.getByRole("option"), { key: " " });
+
+    expect(onToggleSelect).toHaveBeenCalledWith(0);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("leaves held, modified and bubbled Space presses alone", () => {
+    const onToggleSelect = vi.fn();
+    renderRow({ onToggleSelect });
+    const row = screen.getByRole("option");
+
+    fireEvent.keyDown(row, { key: " ", repeat: true });
+    fireEvent.keyDown(row, { key: " ", metaKey: true });
+    fireEvent.keyDown(row, { key: " ", ctrlKey: true });
+    fireEvent.keyDown(row, { key: " ", altKey: true });
+    fireEvent.keyDown(screen.getByText("Office hours"), {
+      key: " ",
+    });
+
+    expect(onToggleSelect).not.toHaveBeenCalled();
+  });
+
+  // Focus stays on the row so J/K, Enter and Space carry on from there.
+  it("keeps focus on the row when its checkbox is clicked", () => {
+    renderRow();
+    const row = screen.getByRole("option");
+    row.focus();
+    const checkbox = screen.getByRole("checkbox", { hidden: true });
+
+    expect(fireEvent.mouseDown(checkbox)).toBe(false);
   });
 
   // Children of role="option" are presentational, so buttons inside it have

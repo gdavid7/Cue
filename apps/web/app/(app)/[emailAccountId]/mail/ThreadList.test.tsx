@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MailboxThreadList } from "@inboxzero/mail-ui/MailboxSurface";
+import { MailThreadRow } from "@inboxzero/mail-ui/MailThreadRow";
 
 type Item = { id: string; day: string };
 
@@ -28,7 +30,128 @@ describe("mailbox thread list", () => {
     expect(screen.getByTestId("c")).toBe(yesterday);
     expect(screen.getByTestId("d")).toBe(earlier);
   });
+
+  // Screen readers follow DOM focus, and Enter is handled by the focused row,
+  // so moving only the highlight left both on the first conversation.
+  it("moves focus with the highlight and opens the highlighted row on Enter", () => {
+    const onOpen = vi.fn();
+    render(<KeyboardList onOpen={onOpen} />);
+    screen.getByRole("option", { name: /First/ }).focus();
+
+    fireEvent.keyDown(document.activeElement as Element, { key: "ArrowDown" });
+    fireEvent.keyDown(document.activeElement as Element, { key: "ArrowDown" });
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("option", { name: /Third/ }),
+    );
+    fireEvent.keyDown(document.activeElement as Element, { key: "Enter" });
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onOpen).toHaveBeenCalledWith(2);
+  });
+
+  it("leaves focus outside the list where it is", () => {
+    const search = document.createElement("input");
+    document.body.append(search);
+    const { rerender } = render(<RowList focusedIndex={0} />);
+    screen.getByRole("option", { name: /First/ }).focus();
+    search.focus();
+
+    rerender(<RowList focusedIndex={2} />);
+
+    expect(document.activeElement).toBe(search);
+    search.remove();
+  });
+
+  // Archiving the focused row removes it, which drops focus to the page;
+  // J/K and Enter then had nothing to act on until the user clicked a row.
+  it("focuses the next row when the focused row goes", () => {
+    const { rerender } = render(<RowList focusedIndex={1} />);
+    screen.getByRole("option", { name: /Second/ }).focus();
+
+    rerender(
+      <RowList
+        focusedIndex={1}
+        items={ITEMS.filter((item) => item.id !== "Second")}
+      />,
+    );
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("option", { name: /Third/ }),
+    );
+  });
 });
+
+const ITEMS: Item[] = [
+  { id: "First", day: "Today" },
+  { id: "Second", day: "Today" },
+  { id: "Third", day: "Yesterday" },
+];
+
+function KeyboardList({ onOpen }: { onOpen: (index: number) => void }) {
+  const [focusedIndex, setFocusedIndex] = useState(0);
+  return (
+    // Stands in for the app's global J/K/arrow shortcuts.
+    <div
+      onKeyDown={(event) => {
+        if (event.key === "ArrowDown") {
+          setFocusedIndex((index) => Math.min(index + 1, ITEMS.length - 1));
+        }
+      }}
+    >
+      <RowList focusedIndex={focusedIndex} onOpen={onOpen} />
+    </div>
+  );
+}
+
+function RowList({
+  focusedIndex,
+  items = ITEMS,
+  onOpen = vi.fn(),
+}: {
+  focusedIndex: number;
+  items?: Item[];
+  onOpen?: (index: number) => void;
+}) {
+  return (
+    <MailboxThreadList<Item>
+      focusedIndex={focusedIndex}
+      getGroupLabel={(item) => item.day}
+      getKey={(item) => item.id}
+      isLoadingMore={false}
+      isSelected={() => false}
+      items={items}
+      listKey="inbox"
+      onLoadMore={vi.fn()}
+      onOpen={onOpen}
+      onSelectRangeTo={vi.fn()}
+      onToggleSelect={vi.fn()}
+      renderItem={(row) => (
+        <MailThreadRow
+          date="Oct 14"
+          hasAnySelection={false}
+          index={row.index}
+          isDraft={false}
+          isFocused={row.isFocused}
+          isSelected={row.isSelected}
+          isStarred={false}
+          isUnread={false}
+          key={row.rowKey}
+          layout="list"
+          messageCount={1}
+          onOpen={row.onOpen}
+          onSelectRangeTo={row.onSelectRangeTo}
+          onToggleSelect={row.onToggleSelect}
+          participantSummary="Alice"
+          rowRef={row.rowRef}
+          snippet="Hello"
+          subject={row.item.id}
+        />
+      )}
+      selectedCount={0}
+      showLoadMore={false}
+    />
+  );
+}
 
 function list(items: Item[]) {
   return (

@@ -207,10 +207,16 @@ test("Command K acts on highlighted and selected conversations", async ({
   await expect(palette).toBeHidden();
 
   await conversations
-    .getByRole("checkbox", { name: "Select conversation with Alice Example" })
+    .getByRole("checkbox", {
+      name: "Select conversation with Alice Example",
+      includeHidden: true,
+    })
     .click();
   await conversations
-    .getByRole("checkbox", { name: "Select conversation with Bob Example" })
+    .getByRole("checkbox", {
+      name: "Select conversation with Bob Example",
+      includeHidden: true,
+    })
     .click();
 
   await page.keyboard.press(`${commandModifier}+KeyK`);
@@ -241,10 +247,16 @@ test("Command K acts on highlighted and selected conversations", async ({
     )
     .toMatchObject({ status: "succeeded", payload: { read: true } });
   await conversations
-    .getByRole("checkbox", { name: "Select conversation with Alice Example" })
+    .getByRole("checkbox", {
+      name: "Select conversation with Alice Example",
+      includeHidden: true,
+    })
     .click();
   await conversations
-    .getByRole("checkbox", { name: "Select conversation with Bob Example" })
+    .getByRole("checkbox", {
+      name: "Select conversation with Bob Example",
+      includeHidden: true,
+    })
     .click();
   await page.keyboard.press(`${commandModifier}+KeyK`);
   await expect(
@@ -358,7 +370,7 @@ test("sender actions are available for a selected list row and match the reader"
     conversations,
     "Re: Reader Visual Message",
   );
-  await row.getByRole("checkbox").click();
+  await row.getByRole("checkbox", { includeHidden: true }).click();
   await page.keyboard.press(`${commandModifier}+KeyK`);
   const palette = page.getByRole("dialog");
   await expect(
@@ -376,7 +388,7 @@ test("sender actions are available for a selected list row and match the reader"
     "mail-list-sender-actions",
   );
   await page.keyboard.press("Escape");
-  await row.getByRole("checkbox").click();
+  await row.getByRole("checkbox", { includeHidden: true }).click();
   await row.click();
   await page.getByRole("button", { name: /^More actions/ }).click();
   const menu = page.getByRole("menu");
@@ -469,6 +481,7 @@ async function ensureReadState(
 ) {
   const checkbox = conversations.getByRole("checkbox", {
     name: `Select conversation with ${sender}`,
+    includeHidden: true,
   });
   await checkbox.click();
   const selectionCount = page.getByText("1 selected", { exact: true });

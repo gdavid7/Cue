@@ -170,7 +170,8 @@ export const ThreadRow = memo(function ThreadRow({
             <div
               className={cn(
                 "flex items-center justify-end gap-1.5",
-                showActions && "group-hover:invisible",
+                showActions &&
+                  "group-hover:invisible group-has-[:focus-visible]:invisible",
               )}
             >
               {thread.hasAttachments ? (
@@ -194,7 +195,7 @@ export const ThreadRow = memo(function ThreadRow({
             // Over the date column, which the row hides on hover.
             <div
               className={cn(
-                "absolute hidden rounded-md bg-background shadow-sm group-hover:flex",
+                "absolute hidden rounded-md bg-background shadow-sm group-hover:flex group-has-[:focus-visible]:flex",
                 layout === "list" ? "right-5" : "right-3.5",
                 expandedPreview ? "top-2" : "-translate-y-1/2 top-1/2",
               )}
@@ -231,6 +232,9 @@ export const ThreadRow = memo(function ThreadRow({
           // Opening above would cover the select-all checkbox for the first row.
           <Tooltip shortcuts={["select"]} side="right">
             <Checkbox
+              // A pointer control only: inside the option it would prefix every
+              // row's name, and aria-selected already says it is selected.
+              aria-hidden
               aria-label={ariaLabel}
               checked={checked}
               className={cn(
@@ -243,8 +247,10 @@ export const ThreadRow = memo(function ThreadRow({
                   : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 max-lg:opacity-100",
               )}
               onClick={onClick}
-              // The listbox moves focus between rows; `x` and Shift+click select,
-              // so a tab stop per row would only bury the rest of the page.
+              // Focus stays on the row, where J/K, Enter and Space carry on.
+              onMouseDown={(event) => event.preventDefault()}
+              // The listbox moves focus between rows; Space, `x` and Shift+click
+              // select, so a tab stop per row would only bury the rest of the page.
               tabIndex={-1}
             />
           </Tooltip>
