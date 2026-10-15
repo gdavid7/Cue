@@ -68,9 +68,19 @@ export const POST = withError("google/webhook", async (request) => {
   );
 
   logger = logger.with({ emailAccountId: emailAccount?.id });
+  const publishedAt = Date.parse(body.message?.publishTime ?? "");
+  const lastSyncedHistoryId = emailAccount?.lastSyncedHistoryId;
   logger.info("Gmail webhook account lookup completed", {
     emailAccountFound: !!emailAccount,
-    lastSyncedHistoryId: emailAccount?.lastSyncedHistoryId,
+    lastSyncedHistoryId,
+    // How late Pub/Sub delivered this push, and how much history it covers.
+    pushAgeMs: Number.isFinite(publishedAt) ? Date.now() - publishedAt : null,
+    historyIdGap:
+      lastSyncedHistoryId && /^\d+$/.test(lastSyncedHistoryId)
+        ? (
+            BigInt(decodedData.historyId) - BigInt(lastSyncedHistoryId)
+          ).toString()
+        : null,
   });
 
   if (emailAccount) {

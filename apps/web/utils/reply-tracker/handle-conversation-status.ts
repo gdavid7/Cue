@@ -175,6 +175,15 @@ export async function updateThreadTrackers({
         sentAt,
       },
     });
+    // How long after the message arrived it reached Today.
+    logger.info("Thread tracker set", {
+      emailAccountId,
+      messageId,
+      trackerType,
+      latencyMs: Number.isFinite(sentAt.getTime())
+        ? Date.now() - sentAt.getTime()
+        : null,
+    });
   }
 
   await publishTrackerHint(emailAccountId, logger);
