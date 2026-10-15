@@ -1,10 +1,11 @@
 import "server-only";
 import type { ThreadsListResponse } from "@/app/api/threads/route";
 import { createEmailProvider } from "@/utils/email/provider";
-import type { EmailThread, ParsedMessage } from "@/utils/email/types";
+import type { EmailThread } from "@/utils/email/types";
 import { runWithGmailQuota } from "@/utils/gmail/quota";
 import { createScopedLogger } from "@/utils/logger";
 import { attachThreadPlans, toListThreads } from "@/utils/threads/load";
+import type { ParsedMessage } from "@/utils/types";
 
 const logger = createScopedLogger("mail/inbox-preview");
 
