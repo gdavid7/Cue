@@ -281,7 +281,7 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
       await page.goto(`/${qaAccount().id}/home`);
       const lane = page.getByRole("heading", {
         level: 2,
-        name: /Needs reply|Waiting on|Also in your inbox|Drafts ready for you|Cue is working on/,
+        name: /Needs reply|Waiting on|Next up|All clear|Also in your inbox|Drafts ready for you|Cue is working on/,
       });
       await expect(
         lane.first().or(page.getByRole("status").first()),

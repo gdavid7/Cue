@@ -779,7 +779,7 @@ async function canvasCourseContextCodes(
  * body, or a wrapper we don't know) fails the source so it is logged, naming
  * only the fields, never the content.
  */
-function parseToolResult<T>(
+export function parseToolResult<T>(
   tool: string,
   schema: z.ZodType<T>,
   data: unknown,
