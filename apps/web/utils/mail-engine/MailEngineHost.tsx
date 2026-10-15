@@ -20,6 +20,7 @@ import { env } from "@/env";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import {
   createBrowserMailEngine,
+  prewarmMailEngineWorker,
   type BrowserMailEngine,
 } from "@/utils/mail-engine/create-browser-engine";
 import {
@@ -58,6 +59,20 @@ type MailEngineRuntimeStatus = {
 };
 
 type MailEngineInspectTransport = "browser" | "desktop-ipc";
+
+// On a page that starts the engine, its worker and SQLite load while the page
+// hydrates instead of after; the worker opens nothing until the engine starts.
+if (
+  typeof window !== "undefined" &&
+  !hasDesktopMailEngineIpc() &&
+  browserMailEngineCapabilities().opfs &&
+  shouldStartMailEngine({
+    pathname: window.location.pathname,
+    desktopIpc: false,
+  })
+) {
+  prewarmMailEngineWorker();
+}
 
 const MailEngineRuntimeStatusContext = createContext<MailEngineRuntimeStatus>({
   client: null,

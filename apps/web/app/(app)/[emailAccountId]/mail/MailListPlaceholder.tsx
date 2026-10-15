@@ -51,7 +51,8 @@ export function MailLoadingNote({ message }: { message: string }) {
   );
 }
 
-function PlaceholderChrome() {
+/** The toolbar and tab row, for when the shell hasn't mounted. */
+export function PlaceholderChrome() {
   return (
     <div aria-hidden>
       <MailListToolbarSurface>

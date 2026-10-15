@@ -810,6 +810,7 @@ export function createMailEngine(input: {
           input.scope ??
           (await resolveScope(input.session, scopeId, input.signal)),
         afterMs: null,
+        initial: input.from.checkpoint === null,
       });
       if (bootstrap.status !== "ok") {
         await noteConnection(input.session.accountId, bootstrap);

@@ -79,6 +79,16 @@ export function orderSplitsForInboxStyle(
 }
 
 /**
+ * The split plain `/inbox` shows: the inbox style's landing tab when there is
+ * one, otherwise the first split.
+ */
+export function findLandingSplit<T extends { filters: MailSplitFilter[] }>(
+  splits: T[],
+): T | undefined {
+  return splits.find(isInboxStyleLandingSplit) ?? splits[0];
+}
+
+/**
  * Whether a split is the tab its inbox style opens on, Primary or Focused, as
  * the inbox it mirrors does. Matched by filter, so a renamed tab still counts.
  */

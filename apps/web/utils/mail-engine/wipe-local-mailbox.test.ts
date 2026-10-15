@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { markLocalMailboxSynced } from "./local-mailbox-cookie";
 import {
   finishPendingLocalMailboxWipe,
   wipeLocalMailbox,
@@ -39,6 +40,14 @@ vi.mock("@/store/mail-search-history", () => ({
 }));
 
 describe("wipeLocalMailbox", () => {
+  it("forgets which mailboxes this browser had synced, so the next sign-in starts from the server", async () => {
+    markLocalMailboxSynced("acc-1");
+
+    await wipeLocalMailbox();
+
+    expect(document.cookie).not.toContain("acc-1");
+  });
+
   beforeEach(() => {
     engine.close.mockResolvedValue(undefined);
     offlineCache.clear.mockResolvedValue(undefined);

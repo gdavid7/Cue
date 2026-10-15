@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { MailPredicate } from "./queries";
 import {
+  conversationMatchesAfterChange,
   conversationMatchesPredicate,
   type EffectiveMessage,
 } from "./query-semantics";
@@ -85,6 +87,111 @@ describe("mailbox predicates", () => {
         { kind: "mailbox", mailbox: "snoozed" },
       ),
     ).toBe(false);
+  });
+});
+
+describe("conversationMatchesAfterChange", () => {
+  const inbox: MailPredicate = { kind: "mailbox", mailbox: "inbox" };
+  const unread: MailPredicate = {
+    kind: "all",
+    predicates: [inbox, { kind: "read", value: false }],
+  };
+  const label: MailPredicate = {
+    kind: "membership",
+    membership: "label",
+    id: "Label_1",
+  };
+
+  it("knows an archived conversation leaves the inbox", () => {
+    expect(conversationMatchesAfterChange(inbox, { kind: "archive" })).toBe(
+      false,
+    );
+    expect(
+      conversationMatchesAfterChange(
+        { kind: "role", role: "inbox" },
+        { kind: "archive" },
+      ),
+    ).toBe(false);
+  });
+
+  it("cannot tell whether an archived conversation stays in a label", () => {
+    expect(conversationMatchesAfterChange(label, { kind: "archive" })).toBe(
+      null,
+    );
+    expect(
+      conversationMatchesAfterChange(
+        { kind: "mailbox", mailbox: "archive" },
+        { kind: "archive" },
+      ),
+    ).toBe(null);
+  });
+
+  it("knows a conversation marked read leaves an unread view but not the inbox", () => {
+    expect(
+      conversationMatchesAfterChange(unread, { kind: "set_read", read: true }),
+    ).toBe(false);
+    expect(
+      conversationMatchesAfterChange(inbox, { kind: "set_read", read: true }),
+    ).toBe(null);
+  });
+
+  it("follows starring in and out of the starred mailbox", () => {
+    const starred: MailPredicate = { kind: "mailbox", mailbox: "starred" };
+    expect(
+      conversationMatchesAfterChange(starred, {
+        kind: "set_starred",
+        starred: false,
+      }),
+    ).toBe(false);
+    expect(
+      conversationMatchesAfterChange(starred, {
+        kind: "set_starred",
+        starred: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("knows trash leaves every mailbox but trash", () => {
+    expect(conversationMatchesAfterChange(label, { kind: "trash" })).toBe(null);
+    expect(
+      conversationMatchesAfterChange(
+        { kind: "mailbox", mailbox: "all" },
+        { kind: "trash" },
+      ),
+    ).toBe(false);
+    expect(
+      conversationMatchesAfterChange(
+        { kind: "mailbox", mailbox: "trash" },
+        { kind: "trash" },
+      ),
+    ).toBe(true);
+  });
+
+  it("leaves fields no change touches unknown", () => {
+    const fromAda: MailPredicate = {
+      kind: "address",
+      field: "from",
+      value: "ada@example.com",
+      match: "address",
+    };
+    expect(
+      conversationMatchesAfterChange(
+        { kind: "all", predicates: [inbox, fromAda] },
+        { kind: "archive" },
+      ),
+    ).toBe(false);
+    expect(
+      conversationMatchesAfterChange(
+        { kind: "any", predicates: [inbox, fromAda] },
+        { kind: "archive" },
+      ),
+    ).toBe(null);
+    expect(
+      conversationMatchesAfterChange(
+        { kind: "not", predicate: inbox },
+        { kind: "archive" },
+      ),
+    ).toBe(true);
   });
 });
 
