@@ -71,9 +71,10 @@ function NoAiAccessBanner({
   }, [legacyDismissed]);
 
   // The server's answer until the account has loaded here, and while
-  // hydrating, so the page hydrates what the server sent.
+  // hydrating, so the page hydrates what the server sent. A failed load
+  // keeps it too, rather than read as no plan.
   const { hasAiAccess, isProPlanWithoutApiKey } =
-    hydrated && !premium.isLoading ? premium : aiAccess;
+    hydrated && premium.data ? premium : aiAccess;
   // Today and the plans page already explain this in place.
   const explainedInPage =
     pathname?.endsWith("/home") || pathname?.startsWith("/premium");

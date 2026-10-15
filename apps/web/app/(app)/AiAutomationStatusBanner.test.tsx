@@ -8,6 +8,7 @@ import { AiAutomationStatusBanner } from "./AiAutomationStatusBanner";
 
 const premium = vi.hoisted(() => ({
   current: {
+    data: undefined as object | undefined,
     isLoading: true,
     hasAiAccess: false,
     isProPlanWithoutApiKey: false,
@@ -26,6 +27,7 @@ const NO_AI = { hasAiAccess: false, isProPlanWithoutApiKey: false };
 
 beforeEach(() => {
   premium.current = {
+    data: undefined,
     isLoading: true,
     hasAiAccess: false,
     isProPlanWithoutApiKey: false,
@@ -75,12 +77,33 @@ describe("AiAutomationStatusBanner", () => {
 
   it("follows the loaded account once it arrives", () => {
     premium.current = {
+      data: {},
       isLoading: false,
       hasAiAccess: true,
       isProPlanWithoutApiKey: false,
     };
 
     render(<AiAutomationStatusBanner aiAccess={NO_AI} dismissed={false} />);
+
+    expect(screen.queryByText(NOTICE)).toBeNull();
+  });
+
+  it("keeps the server's answer when the account fails to load", () => {
+    // A failed fetch reads as no plan, which would tell a paying user their
+    // AI is off.
+    premium.current = {
+      data: undefined,
+      isLoading: false,
+      hasAiAccess: false,
+      isProPlanWithoutApiKey: false,
+    };
+
+    render(
+      <AiAutomationStatusBanner
+        aiAccess={{ hasAiAccess: true, isProPlanWithoutApiKey: false }}
+        dismissed={false}
+      />,
+    );
 
     expect(screen.queryByText(NOTICE)).toBeNull();
   });
