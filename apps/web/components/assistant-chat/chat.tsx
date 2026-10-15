@@ -231,7 +231,9 @@ export function Chat({
           setInput(e.currentTarget.value)
         }
         onPaste={handlePaste}
-        className="pr-48"
+        // The controls get their own row on a phone instead of a column
+        // that would leave the text a third of the width.
+        className="sm:pr-48"
       />
 
       <input
@@ -244,7 +246,7 @@ export function Chat({
         tabIndex={-1}
       />
 
-      <div className="absolute bottom-2 right-2 flex items-center gap-1">
+      <div className="flex items-center justify-end gap-1 px-2 pb-2 sm:absolute sm:right-2 sm:bottom-2 sm:p-0">
         <VoiceInput
           liveEnabled
           liveHistory={liveHistoryFromUiMessages(messages)}

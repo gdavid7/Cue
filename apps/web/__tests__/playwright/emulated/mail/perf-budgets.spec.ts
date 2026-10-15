@@ -304,7 +304,12 @@ test("Today, Rules, Settings and chat are ready quickly", async ({
       }
       await page.getByTestId("chat-input").fill(`perf chat probe ${run}`);
       await armInteraction(page);
-      await page.getByTestId("chat-input").press("Enter");
+      // On a touchscreen Return is a newline; the send button submits.
+      if (perfProfile === "phone") {
+        await page.getByRole("button", { name: "Send message" }).click();
+      } else {
+        await page.getByTestId("chat-input").press("Enter");
+      }
       recorder.add(
         "chat-first-token",
         await timeSinceInput(page, pageShowsText, chatReply, 30_000),
