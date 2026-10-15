@@ -813,9 +813,18 @@ export function createMailEngine(input: {
       preparation.cancel();
     }
     if (state === "complete") return { status: "complete" };
-    return inConversationFetchSlot(conversationFetchKey(key), () =>
-      readConversationMembers(key),
-    );
+    return inConversationFetchSlot(id, async () => {
+      // A command may have read the conversation while this waited its turn.
+      const current = await store.readConversationMembershipState(
+        key,
+        runtime.nowMs(),
+      );
+      if (current === "complete") return { status: "complete" };
+      if (current === "preparing") {
+        return { status: "unavailable", retryAfterMs: 0 };
+      }
+      return readConversationMembers(key);
+    });
   }
 
   // One provider read (Gmail's threads.get) per page of up to 100 messages.

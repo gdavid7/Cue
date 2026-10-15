@@ -559,6 +559,33 @@ describe("opening a conversation a first sync has not fully reached", () => {
     await engine.close();
   });
 
+  it("skips the read when a command filled the conversation while the fill queued", async () => {
+    const held = heldMembershipSource();
+    const { engine } = await startFirstSync(held.source);
+    const open = (id: string) =>
+      engine.ensureConversationMessages({
+        accountId: "acc-1",
+        conversationId: id,
+      });
+    open("a");
+    open("b");
+    await held.reading(2);
+    const filling = engine.ensureConversationMessages(thread);
+    await settle();
+
+    await markRead(engine, "read-1");
+    const running = engine.runUntil(Date.now() + 1000);
+    await held.reading(3);
+    held.answer(thread.conversationId);
+    await running;
+    held.answer("a");
+
+    await expect(filling).resolves.toEqual({ status: "complete" });
+    expect(held.order).toEqual(["a", "b", thread.conversationId]);
+    held.answer("b");
+    await engine.close();
+  });
+
   it("asks again right away for an account purged and added back", async () => {
     let paused = true;
     const source = firstSyncSource({
