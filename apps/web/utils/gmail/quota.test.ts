@@ -40,6 +40,7 @@ const OPEN_ACCOUNT = "account-open";
 const WAITING_ACCOUNT = "account-waiting";
 const TURN_ACCOUNT = "account-turn";
 const STUCK_TURN_ACCOUNT = "account-stuck-turn";
+const TURN_GAP_ACCOUNT = "account-turn-gap";
 // Gmail refuses short bursts past this many units a second, per user.
 const GMAIL_UNITS_PER_SECOND = 250;
 const logger = createScopedLogger("gmail-quota-test");
@@ -768,6 +769,43 @@ describe("Gmail quota gate", () => {
     await vi.advanceTimersByTimeAsync(1000);
     await scan;
     expect(insight).toBe(true);
+  });
+
+  it("gives sync its gap after a turn ends before a person's next yield", async () => {
+    const admissions: Array<{ at: number; priority: string; cost: number }> =
+      [];
+    const admit = (priority: "sync" | "interactive", cost: number) =>
+      runWithGmailQuota({ caller: `test/${priority}`, priority }, () =>
+        meterGmailCall({ emailAccountId: TURN_GAP_ACCOUNT, cost }, async () => {
+          admissions.push({ at: Date.now(), priority, cost });
+        }),
+      );
+    const release = await holdGmailInteractiveDemand(TURN_GAP_ACCOUNT, 45_000);
+    await vi.advanceTimersByTimeAsync(5000);
+    await release();
+
+    // The assistant's next large read comes the moment the turn ends.
+    const endedAt = Date.now();
+    await admit("interactive", 100);
+    let stop = false;
+    const scan = (async () => {
+      while (!stop) await admit("sync", 20);
+    })();
+    await vi.advanceTimersByTimeAsync(1100);
+    stop = true;
+    await vi.advanceTimersByTimeAsync(1000);
+    await scan;
+
+    // Sync gets its full share back for a moment, as between two requests.
+    const syncUnits = admissions
+      .filter(
+        (entry) =>
+          entry.priority === "sync" &&
+          entry.at >= endedAt &&
+          entry.at < endedAt + 1000,
+      )
+      .reduce((sum, entry) => sum + entry.cost, 0);
+    expect(syncUnits).toBeGreaterThan(40);
   });
 
   it("lets go of a turn that never ends once its cap runs out", async () => {

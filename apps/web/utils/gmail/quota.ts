@@ -48,6 +48,8 @@ const PACE_CAP: Record<GmailQuotaPriority, number> = {
 const INTERACTIVE_DEMAND_MIN_UNITS = 100;
 const INTERACTIVE_DEMAND_MS = 2000;
 const INTERACTIVE_DEMAND_EVERY_MS = 3000;
+// What sync and background get between two episodes.
+const DEMAND_GAP_MS = INTERACTIVE_DEMAND_EVERY_MS - INTERACTIVE_DEMAND_MS;
 const PACE_YIELD_CAP = { sync: 40, background: 0 };
 const MAX_WAIT_MS: Record<GmailQuotaPriority, number> = {
   interactive: 10_000,
@@ -543,12 +545,12 @@ export async function holdGmailInteractiveDemand(
   const key = accountKeys(emailAccountId).interactiveDemand;
   try {
     const endsAt = await withinStoreTimeout(
-      gmailQuotaStore.holdDemand({ key, ms: maxMs }),
+      gmailQuotaStore.holdDemand({ key, ms: maxMs, gapMs: DEMAND_GAP_MS }),
     );
     if (!endsAt) return done;
     return async () => {
       await withinStoreTimeout(
-        gmailQuotaStore.releaseDemand({ key, endsAt }),
+        gmailQuotaStore.releaseDemand({ key, endsAt, gapMs: DEMAND_GAP_MS }),
       ).catch((error) => {
         logger.warn("Failed to release Gmail interactive demand", { error });
       });

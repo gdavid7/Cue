@@ -48,12 +48,24 @@ export type GmailQuotaStore = {
   /** Sets `key` for `ms` unless it is already set for longer. */
   block(input: { key: string; ms: number }): Promise<void>;
   /**
-   * Makes the demand episode on `key` last at least `ms` from now. Returns
+   * Makes the demand episode on `key` last at least `ms` from now, then
+   * starts no other for `gapMs`, as between two requests' episodes. Returns
    * when this hold ends, or 0 when a longer one was already running.
    */
-  holdDemand(input: { key: string; ms: number }): Promise<number>;
-  /** Ends the hold that ends at `endsAt`, unless another replaced it. */
-  releaseDemand(input: { key: string; endsAt: number }): Promise<void>;
+  holdDemand(input: {
+    key: string;
+    ms: number;
+    gapMs: number;
+  }): Promise<number>;
+  /**
+   * Ends the hold that ends at `endsAt`, unless another replaced it, leaving
+   * the `gapMs` before another episode may start.
+   */
+  releaseDemand(input: {
+    key: string;
+    endsAt: number;
+    gapMs: number;
+  }): Promise<void>;
   clear(key: string): Promise<void>;
   /** Adds `amount` to a usage field without admitting anything. */
   note(input: {
@@ -166,16 +178,20 @@ const holdDemandScript = `
 local time = redis.call('TIME')
 local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
 local ms = tonumber(ARGV[1])
+local gap = tonumber(ARGV[2])
 local ends = now + ms
 local current = tonumber(redis.call('GET', KEYS[1])) or 0
 if current >= ends then return 0 end
-redis.call('SET', KEYS[1], tostring(ends), 'PX', ms)
+redis.call('SET', KEYS[1], tostring(ends), 'PX', ms + gap)
 return ends
 `;
 
+// Ended rather than deleted, so the next episode still waits out the gap.
 const releaseDemandScript = `
 if redis.call('GET', KEYS[1]) == ARGV[1] then
-  redis.call('DEL', KEYS[1])
+  local time = redis.call('TIME')
+  local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
+  redis.call('SET', KEYS[1], tostring(now), 'PX', tonumber(ARGV[2]))
 end
 return 1
 `;
@@ -235,16 +251,20 @@ export const gmailQuotaStore: GmailQuotaStore = {
   async clear(key) {
     await redis.del(key);
   },
-  async holdDemand({ key, ms }) {
+  async holdDemand({ key, ms, gapMs }) {
     const endsAt = await redis.eval<string[], number>(
       holdDemandScript,
       [key],
-      [String(Math.max(1, Math.ceil(ms)))],
+      [String(Math.max(1, Math.ceil(ms))), String(Math.max(1, gapMs))],
     );
     return Number(endsAt) || 0;
   },
-  async releaseDemand({ key, endsAt }) {
-    await redis.eval(releaseDemandScript, [key], [String(endsAt)]);
+  async releaseDemand({ key, endsAt, gapMs }) {
+    await redis.eval(
+      releaseDemandScript,
+      [key],
+      [String(endsAt), String(Math.max(1, gapMs))],
+    );
   },
   async note({ usageKey, field, amount }) {
     await redis.eval(noteScript, [usageKey], [field, String(amount)]);
