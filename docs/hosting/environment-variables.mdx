@@ -202,7 +202,7 @@ Reference for environment variables relevant to self-hosting Inbox Zero. Hosted-
 - `API_KEY_SALT` is required only when external API keys are enabled with `NEXT_PUBLIC_EXTERNAL_API_ENABLED=true`.
 - `TELEGRAM_BOT_SECRET_TOKEN` is required only when `TELEGRAM_BOT_TOKEN` is set.
 - `RECALL_API_KEY` and `RECALL_WEBHOOK_SECRET` are both required when Meeting Recorder is enabled.
-- `GOOGLE_PUBSUB_VERIFICATION_TOKEN` is required when Gmail Pub/Sub push is enabled. If your deployment authenticates `/api/google/webhook` upstream, you can set it to an empty string to intentionally disable query-parameter verification.
+- `GOOGLE_PUBSUB_VERIFICATION_TOKEN` is required when Gmail Pub/Sub push is enabled. Outside production you can set it to an empty string to disable query-parameter verification; in production an empty value is treated as a misconfiguration and the webhook refuses requests.
 
 ## Setup Guides
 

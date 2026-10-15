@@ -36,16 +36,12 @@ export async function sendColdEmailNotification({
     });
 
     logger.info("Cold email notification sent", {
-      senderEmail,
       messageId: result.data?.id,
     });
 
     return { success: true };
   } catch (error) {
-    logger.error("Error sending cold email notification", {
-      error,
-      senderEmail,
-    });
+    logger.error("Error sending cold email notification", { error });
     return {
       success: false,
       error: error instanceof Error ? error.message : "Unknown error",

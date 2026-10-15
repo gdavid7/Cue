@@ -7,6 +7,10 @@ export const HEALTH_REPORT_END = "=== CUE HEALTH REPORT END ===";
 const MAX_TEXT_LENGTH = 160;
 const MAX_LIST_ITEMS = 10;
 const MAX_AXIOM_ERROR_LENGTH = 200;
+const MAX_STACK_FRAMES = 3;
+const MAX_QUOTED_LENGTH = 24;
+const QUOTED_TEXT = /"[^"\n]*"|'[^'\n]*'/g;
+const STACK_ERROR_NAME = /^((?:[A-Za-z_$][\w$]*)?(?:Error|Exception))(?::|$)/;
 
 const robotStepSchema = z.object({
   name: z.string(),
@@ -54,6 +58,7 @@ export type AxiomResults = {
   gmailQuotaUsage: AxiomQueryResult;
   gmailDeferred: AxiomQueryResult;
   slowestRoutes: AxiomQueryResult;
+  errorSamples: AxiomQueryResult;
 };
 
 export type SentryIssue = {
@@ -75,6 +80,12 @@ export type SentryIssue = {
  * (`fields.url` is the request path). Axiom rejects a query with HTTP 400 when
  * it names a field missing from the dataset's schema, so every field goes
  * through `column_ifexists`; `appLogs` then shows whether app logs arrived.
+ *
+ * `errorSamples` keeps the latest event of each route and message pair. A
+ * logged Error is serialized under `fields.error.*`; the middleware's
+ * "Unhandled error" logs its message as `fields.error` and its stack as
+ * `fields.stack`. next-axiom files its platform metadata under `vercel.*`
+ * only on Vercel, so the sample also says whether the event came from there.
  */
 export function buildAxiomQueries(dataset: string) {
   const source = `['${dataset.replaceAll("'", "")}'] | where _time > ago(1h)`;
@@ -84,6 +95,19 @@ export function buildAxiomQueries(dataset: string) {
   const durationMs = `todouble(${field("fields.durationMs")})`;
   const totalUnits = `toint(${field("fields.totalUnits")})`;
   const limitUnits = `toint(${field("fields.limitUnits")})`;
+  const text = (name: string) => `tostring(${field(name)})`;
+  const sampleColumns = {
+    errorName: text("fields.error.name"),
+    errorMessage: text("fields.errorMessage"),
+    errorStatus: text("fields.error.status"),
+    errorCode: text("fields.error.code"),
+    errorStack: `strcat(${text("fields.error.stack")}, ${text("fields.stack")})`,
+    errorCause: text("fields.cause"),
+    vercelEnvironment: text("vercel.environment"),
+    vercelRegion: text("vercel.region"),
+    gitRef: text("git.ref"),
+  };
+  const sampleNames = Object.keys(sampleColumns).join(", ");
   return {
     totals: `${source} | summarize total = count(), appLogs = countif(isnotempty(${level})), errors = countif(${level} == "error"), warnings = countif(${level} == "warn")`,
     errorsByRoute: `${source} | where ${level} == "error" | summarize events = count() by route = ${route}, message = ${message} | top ${MAX_LIST_ITEMS} by events`,
@@ -91,6 +115,13 @@ export function buildAxiomQueries(dataset: string) {
     gmailQuotaUsage: `${source} | where ${message} == "Gmail quota usage" | summarize samples = count(), maxUnits = max(${totalUnits}), avgUnits = avg(${totalUnits}), limitUnits = max(${limitUnits})`,
     gmailDeferred: `${source} | where ${message} == "Gmail call deferred by the account's quota budget" | summarize events = count()`,
     slowestRoutes: `${source} | where isnotnull(${durationMs}) | summarize p95Ms = percentile(${durationMs}, 95), maxMs = max(${durationMs}), events = count() by route = ${route} | top ${MAX_LIST_ITEMS} by p95Ms`,
+    errorSamples: `${source} | where ${level} == "error" | extend route = ${route}, message = ${message}, ${Object.entries(
+      sampleColumns,
+    )
+      .map(([name, expression]) => `${name} = ${expression}`)
+      .join(
+        ", ",
+      )} | summarize arg_max(_time, ${sampleNames}) by route, message`,
   } satisfies Record<keyof AxiomResults, string>;
 }
 
@@ -125,6 +156,9 @@ export function summarizeAxiom(results: AxiomResults) {
   const totals = firstRow(results.totals);
   const quota = firstRow(results.gmailQuotaUsage);
   const quotaSamples = toNumber(quota?.samples);
+  const samples = new Map(
+    rowsOf(results.errorSamples).map((row) => [errorKey(row), row]),
+  );
   return {
     window: "1h",
     totalLogs: toNumber(totals?.total),
@@ -147,11 +181,15 @@ export function summarizeAxiom(results: AxiomResults) {
               deferredCalls: toNumber(firstRow(results.gmailDeferred)?.events),
             }
           : { status: "no_quota_logs" as const },
-    topErrors: rowsOf(results.errorsByRoute).map((row) => ({
-      route: normalizeRoute(row.route),
-      message: redact(row.message),
-      count: toNumber(row.events),
-    })),
+    topErrors: rowsOf(results.errorsByRoute).map((row) => {
+      const sample = samples.get(errorKey(row));
+      return {
+        route: normalizeRoute(row.route),
+        message: redact(row.message),
+        count: toNumber(row.events),
+        ...(sample ? { sample: summarizeErrorSample(sample) } : {}),
+      };
+    }),
     slowestRoutes: rowsOf(results.slowestRoutes).map((row) => ({
       route: normalizeRoute(row.route),
       p95Ms: Math.round(toNumber(row.p95Ms) ?? 0),
@@ -423,6 +461,60 @@ function describeUnavailable(section: { status: string }) {
   }
   if ("error" in section) return `query failed (${String(section.error)})`;
   return section.status;
+}
+
+function errorKey(row: AxiomRow) {
+  return `${String(row.route ?? "")}\u0000${String(row.message ?? "")}`;
+}
+
+/**
+ * One event behind a top error: what was thrown, where, and from which
+ * deployment. Error text can echo user input, so it is redacted and quoted
+ * values are dropped; stack frames only name code.
+ */
+function summarizeErrorSample(row: AxiomRow) {
+  const [firstLine = "", ...lines] = String(row.errorStack ?? "").split("\n");
+  const errorName =
+    text(row.errorName) || firstLine.match(STACK_ERROR_NAME)?.[1];
+  const status = [...new Set([text(row.errorStatus), text(row.errorCode)])]
+    .filter(Boolean)
+    .join(" ");
+  const cause = redactErrorText(row.errorCause);
+  return {
+    errorName: errorName ? redact(errorName) : undefined,
+    errorMessage: redactErrorText(row.errorMessage),
+    ...(status ? { status: redact(status) } : {}),
+    ...(cause ? { cause } : {}),
+    stack: lines
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("at "))
+      .slice(0, MAX_STACK_FRAMES)
+      .map(redact),
+    origin: describeOrigin(row),
+  };
+}
+
+function redactErrorText(value: unknown) {
+  return redact(
+    text(value).replaceAll(QUOTED_TEXT, (quoted) =>
+      quoted.length > MAX_QUOTED_LENGTH ? `${quoted[0]}…${quoted[0]}` : quoted,
+    ),
+  );
+}
+
+// Events logged outside Vercel (local builds, CI, scripts) share the dataset
+// when they carry its token, so a sample says where it ran.
+function describeOrigin(row: AxiomRow) {
+  if (!text(row.vercelEnvironment)) return "not vercel";
+  const region = text(row.vercelRegion);
+  const ref = text(row.gitRef);
+  return redact(
+    ["vercel", region, ref ? `(${ref})` : ""].filter(Boolean).join(" "),
+  );
+}
+
+function text(value: unknown) {
+  return value === undefined || value === null ? "" : String(value).trim();
 }
 
 function firstRow(result: AxiomQueryResult) {

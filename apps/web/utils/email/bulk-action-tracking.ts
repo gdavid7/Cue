@@ -58,7 +58,6 @@ export async function updateEmailMessagesForSender(options: {
       });
 
       logger.info("Deleted EmailMessage records", {
-        sender,
         emailAccountId,
         action,
         deletedCount: result.count,
@@ -77,7 +76,6 @@ export async function updateEmailMessagesForSender(options: {
       });
 
       logger.info("Updated EmailMessage records", {
-        sender,
         emailAccountId,
         action,
         updatedCount: result.count,
@@ -86,7 +84,6 @@ export async function updateEmailMessagesForSender(options: {
     }
   } catch (error) {
     logger.error("Failed to update/delete EmailMessage records", {
-      sender,
       emailAccountId,
       action,
       error,

@@ -30,7 +30,6 @@ export async function analyzeSenderPattern(
     if (!response.ok) {
       logger.error("Sender pattern analysis API request failed", {
         emailAccountId: body.emailAccountId,
-        from: body.from,
         status: response.status,
         statusText: response.statusText,
       });
@@ -38,7 +37,6 @@ export async function analyzeSenderPattern(
   } catch (error) {
     logger.error("Error in sender pattern analysis", {
       emailAccountId: body.emailAccountId,
-      from: body.from,
       error,
     });
   }

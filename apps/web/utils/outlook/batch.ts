@@ -482,7 +482,6 @@ export async function moveMessagesForSenders({
           } catch (error) {
             logger.error("Failed to move or track messages", {
               action,
-              sender,
               ownerEmail,
               destinationId,
               messageIds,
@@ -501,7 +500,6 @@ export async function moveMessagesForSenders({
         });
       } catch (error) {
         logger.error("Failed to fetch messages from sender", {
-          sender,
           action,
           error,
         });

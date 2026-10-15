@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
 import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import type { SqliteDriver } from "./driver";
-import { compressLegacyBodies } from "./message-body-migration";
+import { BATCH_ROWS, compressLegacyBodies } from "./message-body-migration";
 import { createNodeSqliteDriver, nodeBodyCodec } from "./node-sqlite";
 import { createSqliteMailStore } from "./store";
 
@@ -31,7 +31,9 @@ describe("compressed message bodies", () => {
   it("converts legacy rows on open and finishes an interrupted run on the next open", async () => {
     const driver = createNodeSqliteDriver();
     const { store } = await mailbox(driver);
-    const messages = Array.from({ length: 1200 }, (_, index) => ({
+    // One batch converts before the interruption; reopening must finish a full
+    // batch and then a partial one.
+    const messages = Array.from({ length: BATCH_ROWS * 2 + 1 }, (_, index) => ({
       messageId: `m${String(index).padStart(4, "0")}`,
       html: index % 2 ? `${HTML}<p>${index}</p>` : null,
       text: `Body ${index}`,

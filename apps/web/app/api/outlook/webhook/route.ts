@@ -41,8 +41,9 @@ export const POST = withError("outlook/webhook", async (request) => {
   const parseResult = webhookBodySchema.safeParse(rawBody);
 
   if (!parseResult.success) {
+    // The body carries the subscription's clientState secret, so only the
+    // validation issues are logged.
     logger.error("Invalid webhook payload", {
-      body: rawBody,
       errors: parseResult.error.issues,
     });
     return NextResponse.json(

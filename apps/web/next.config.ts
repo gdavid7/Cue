@@ -113,8 +113,10 @@ const nextConfig: NextConfig = {
         key: "Content-Security-Policy",
         value: [
           "default-src 'self'",
-          // Next.js needs these
-          "script-src 'self' 'unsafe-inline' 'unsafe-eval' https:",
+          // Inline scripts: Next.js bootstrap and the theme script. Production
+          // needs no eval; the mail engine's SQLite runs as WebAssembly.
+          // React dev tooling evals, so only development allows it.
+          `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${isDevelopment ? " 'unsafe-eval'" : ""} https:`,
           // Needed for Tailwind/Shadcn
           "style-src 'self' 'unsafe-inline' https:",
           // Add this line to allow data: fonts
@@ -190,7 +192,7 @@ const nextConfig: NextConfig = {
           },
           {
             key: "Content-Security-Policy",
-            value: "default-src 'self'; script-src 'self' 'unsafe-eval'",
+            value: "default-src 'self'; script-src 'self'",
           },
         ],
         source: "/sw.js",
@@ -505,7 +507,11 @@ if (env.MICROSOFT_CLIENT_ID && !env.MICROSOFT_WEBHOOK_CLIENT_STATE) {
 // The service worker is built separately by `serwist build` (serwist.config.mjs)
 // because the @serwist/next webpack plugin doesn't support Turbopack.
 
-export default withAxiom(exportConfig);
+// Off Vercel, skip next-axiom's /_axiom rewrites so browser logs and web
+// vitals from local or self-hosted servers never reach the Axiom dataset.
+export default process.env.VERCEL === "1"
+  ? withAxiom(exportConfig)
+  : exportConfig;
 
 function commonAncestorPath(firstPath: string, secondPath: string) {
   const [firstParts, secondParts] = [firstPath, secondPath].map((value) =>

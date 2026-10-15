@@ -1,4 +1,8 @@
 import type { MailEngine, WorkAdmission } from "@inboxzero/mail-core/engine";
+import {
+  classifyMailboxError,
+  type DroppedMailWork,
+} from "@inboxzero/mail-sqlite/recovery";
 import type {
   MailboxView,
   QueryHandle,
@@ -15,8 +19,23 @@ import {
   type WorkerResponse,
 } from "@/utils/mail-engine/worker-protocol";
 import { finishPendingLocalMailboxWipe } from "@/utils/mail-engine/wipe-local-mailbox";
+import { createClientLogger } from "@/utils/logger-client";
 
 export { browserMailEngineCapabilities };
+
+const logger = createClientLogger("mail-engine");
+
+// A closing tab's worker can hold the mailbox's OPFS handles for a moment
+// after its lock is released; these waits cover that without a dead end.
+const BUSY_START_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 4000];
+// A start can itself wait out another tab's file lock, so retries stop once
+// the whole start has taken this long rather than multiplying that wait.
+const BUSY_START_BUDGET_MS = 10_000;
+
+export type BrowserEngineHooks = {
+  /** Called when a corrupt mailbox is being rebuilt during start. */
+  onRebuild?: () => void;
+};
 
 export type BrowserMailEngine = Omit<MailEngine, "ensureAccount"> & {
   ensureAccount(input: {
@@ -28,6 +47,7 @@ export type BrowserMailEngine = Omit<MailEngine, "ensureAccount"> & {
 
 export async function createBrowserMailEngine(
   input: BrowserEngineStart,
+  hooks: BrowserEngineHooks = {},
 ): Promise<BrowserMailEngine> {
   // The previous user's mailbox must be gone before this one opens it.
   await finishPendingLocalMailboxWipe();
@@ -36,10 +56,34 @@ export async function createBrowserMailEngine(
     maxPendingOperations:
       input.maxPendingOperations ?? readPageMaxPendingOperations(),
   };
+  const startedAt = Date.now();
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await startBrowserEngine(start, hooks);
+    } catch (error) {
+      const retryInMs = BUSY_START_RETRY_DELAYS_MS[attempt];
+      if (
+        classifyMailboxError(error) !== "busy" ||
+        retryInMs === undefined ||
+        Date.now() - startedAt + retryInMs > BUSY_START_BUDGET_MS
+      ) {
+        throw error;
+      }
+      await delay(retryInMs);
+    }
+  }
+}
+
+async function startBrowserEngine(
+  start: BrowserEngineStart,
+  hooks: BrowserEngineHooks,
+) {
   if (browserMailEngineCapabilities().worker) {
     try {
-      return await createWorkerOwnedEngine(start);
-    } catch {
+      return await createWorkerOwnedEngine(start, hooks);
+    } catch (error) {
+      // The tab would wait on the same held files, so retry the worker.
+      if (classifyMailboxError(error) === "busy") throw error;
       // Dedicated workers can fail in private mode or without module workers.
     }
   }
@@ -48,11 +92,12 @@ export async function createBrowserMailEngine(
   const { createInTabEngine } = await import(
     "@/utils/mail-engine/in-tab-engine"
   );
-  return createInTabEngine(start);
+  return createInTabEngine(start, hooks);
 }
 
 async function createWorkerOwnedEngine(
   input: BrowserEngineStart,
+  hooks: BrowserEngineHooks,
 ): Promise<BrowserMailEngine> {
   performance.mark("mail-engine:worker-create");
   const worker = new Worker(new URL("./engine-worker.ts", import.meta.url), {
@@ -73,6 +118,14 @@ async function createWorkerOwnedEngine(
 
   worker.addEventListener("message", (event: MessageEvent<WorkerResponse>) => {
     const message = event.data;
+    if (message.type === "rebuilding") {
+      hooks.onRebuild?.();
+      return;
+    }
+    if (message.type === "dropped") {
+      logDroppedWork(message.drop);
+      return;
+    }
     if (message.type === "snapshots") {
       // Every view takes its new state before any listener runs, so the page
       // renders the whole change once.
@@ -100,11 +153,18 @@ async function createWorkerOwnedEngine(
     pending.clear();
   });
 
-  await request(worker, pending, {
-    id: crypto.randomUUID(),
-    type: "start",
-    input,
-  });
+  try {
+    await request(worker, pending, {
+      id: crypto.randomUUID(),
+      type: "start",
+      input,
+    });
+  } catch (error) {
+    // The worker may already hold the mailbox's OPFS handles, which the
+    // in-tab fallback needs.
+    worker.terminate();
+    throw error;
+  }
   performance.mark("mail-engine:ready");
 
   function observe<T>(
@@ -249,4 +309,12 @@ function callWorker<T>(
     method,
     args,
   }) as Promise<T>;
+}
+
+export function logDroppedWork(drop: DroppedMailWork) {
+  logger.warn("Mailbox rebuild left out carried work", drop);
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

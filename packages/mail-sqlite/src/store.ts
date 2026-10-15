@@ -4,7 +4,7 @@ import {
   indexContactBacklog,
   readContactSuggestions,
 } from "./contact-suggestions";
-import { hashCanonical } from "@inboxzero/mail-core/canonical";
+import { canonicalJson, hashCanonical } from "@inboxzero/mail-core/canonical";
 import type { HostRuntime } from "@inboxzero/mail-core/ports/runtime";
 import type {
   Admission,
@@ -947,6 +947,12 @@ export async function createSqliteMailStore(
               input.operation.key.operationId,
             ],
           );
+          // The account shows the reconnect state, and its return to ready is
+          // what releases this command again.
+          await tx.execute(
+            "UPDATE accounts SET connection = 'blocked_auth' WHERE account_id = ?",
+            [input.operation.key.accountId],
+          );
         } else {
           await tx.execute(
             `UPDATE operations SET status = 'retry_wait', next_attempt_at_ms = ?, claimed_by = NULL
@@ -1548,6 +1554,7 @@ export async function createSqliteMailStore(
           tx,
           input.session.accountId,
           input.scopeId,
+          await scansWholeMailbox(tx, input.session.accountId),
         );
         await tx.execute(
           `INSERT INTO bootstrap_scans(
@@ -1719,6 +1726,16 @@ export async function createSqliteMailStore(
                  )`,
               [input.session.accountId, input.scopeId, input.scopeId],
             );
+          } else if (await scansWholeMailbox(tx, input.session.accountId)) {
+            // A first scan has no older sync to have missed changes; only a
+            // resync does.
+            if (input.from.checkpoint !== null) {
+              await recheckMessagesMissingFromScan(tx, {
+                accountId: input.session.accountId,
+                scopeId: input.scopeId,
+                digest,
+              });
+            }
           } else {
             await clearStaleBootstrapScopeMembership(
               tx,
@@ -1838,6 +1855,15 @@ export async function createSqliteMailStore(
           [input.connection, input.accountId, input.connection],
         );
         if (updated.changedRows === 0) return false;
+        if (input.connection === "ready") {
+          // Commands the provider refused while the account was disconnected
+          // are not retried on a timer, so reconnecting must release them.
+          await tx.execute(
+            `UPDATE operations SET status = 'retry_wait', next_attempt_at_ms = NULL
+             WHERE account_id = ? AND status = 'blocked_auth'`,
+            [input.accountId],
+          );
+        }
         await bumpRevision(tx);
         return true;
       });
@@ -2181,7 +2207,7 @@ async function saveDraftRow(
   input: SaveDraft,
 ): Promise<DraftSaveResult> {
   const current = await tx.query(
-    "SELECT revision, frozen FROM drafts WHERE account_id = ? AND draft_id = ?",
+    "SELECT revision, frozen, content_json FROM drafts WHERE account_id = ? AND draft_id = ?",
     [input.key.accountId, input.key.draftId],
   );
   const currentRevision = current[0] ? Number(current[0].revision) : null;
@@ -2189,6 +2215,20 @@ async function saveDraftRow(
     return { status: "conflict", currentDraftRevision: currentRevision };
   }
   if (input.expectedRevision !== currentRevision) {
+    // A save resent after a tab handoff already landed through the old owner;
+    // its content is what is stored, so it is saved rather than in conflict.
+    if (
+      current[0] &&
+      currentRevision !== null &&
+      currentRevision > (input.expectedRevision ?? 0) &&
+      sameDraftContent(String(current[0].content_json), input.content)
+    ) {
+      return {
+        status: "saved",
+        draftRevision: currentRevision,
+        revision: await readRevision(tx),
+      };
+    }
     return { status: "conflict", currentDraftRevision: currentRevision };
   }
   const next = (currentRevision ?? 0) + 1;
@@ -2509,8 +2549,9 @@ async function snapshotBootstrapExistingMessages(
   tx: SqlTransaction,
   accountId: string,
   scopeId: string,
+  wholeMailbox: boolean,
 ) {
-  if (scopeAllowsMissingDeletion(scopeId)) {
+  if (wholeMailbox || scopeAllowsMissingDeletion(scopeId)) {
     await tx.execute(
       `INSERT OR IGNORE INTO bootstrap_existing_messages(account_id, scope_id, message_id)
        SELECT account_id, ?, message_id
@@ -2528,6 +2569,66 @@ async function snapshotBootstrapExistingMessages(
      WHERE account_id = ? AND deleted = 0 AND folder_id = ?`,
     [scopeId, accountId, folderId],
   );
+}
+
+// Gmail scans list the whole mailbox (outside spam and trash) over a date
+// range rather than one folder. A resync after its history expired is the
+// only record of mail deleted, trashed or marked spam meanwhile, and those
+// messages are simply absent from the scan.
+async function scansWholeMailbox(tx: SqlTransaction, accountId: string) {
+  const rows = await tx.query(
+    "SELECT provider FROM accounts WHERE account_id = ?",
+    [accountId],
+  );
+  return rows[0]?.provider === "google";
+}
+
+// A local message dated inside the range a finished scan listed, but not
+// listed, is gone from that range on the provider. It is refetched rather
+// than deleted, so mail moved to spam or trash keeps its row with its new
+// labels, and only mail the provider no longer has is removed.
+async function recheckMessagesMissingFromScan(
+  tx: SqlTransaction,
+  input: {
+    accountId: string;
+    scopeId: string;
+    digest: (value: unknown) => Promise<string>;
+  },
+) {
+  const range = await tx.query(
+    `SELECT MIN(m.received_at_ms) AS oldest, MAX(m.received_at_ms) AS newest
+     FROM bootstrap_seen_messages seen
+     JOIN messages m
+       ON m.account_id = seen.account_id AND m.message_id = seen.message_id
+     WHERE seen.account_id = ? AND seen.scope_id = ?`,
+    [input.accountId, input.scopeId],
+  );
+  if (range[0]?.oldest == null || range[0]?.newest == null) return;
+  const missing = await tx.query(
+    `SELECT m.message_id
+     FROM bootstrap_existing_messages existing
+     JOIN messages m
+       ON m.account_id = existing.account_id AND m.message_id = existing.message_id
+     LEFT JOIN bootstrap_seen_messages seen
+       ON seen.account_id = existing.account_id
+      AND seen.scope_id = existing.scope_id
+      AND seen.message_id = existing.message_id
+     WHERE existing.account_id = ?
+       AND existing.scope_id = ?
+       AND seen.message_id IS NULL
+       AND m.deleted = 0
+       AND m.received_at_ms BETWEEN ? AND ?`,
+    [input.accountId, input.scopeId, range[0].oldest, range[0].newest],
+  );
+  if (missing.length === 0) return;
+  await enqueueHydrationJobs(tx, {
+    keys: missing.map((row) => ({
+      accountId: input.accountId,
+      messageId: String(row.message_id),
+    })),
+    purpose: "metadata",
+    digest: input.digest,
+  });
 }
 
 async function clearStaleBootstrapScopeMembership(
@@ -3418,6 +3519,14 @@ async function defaultStoreSha256(bytes: Uint8Array): Promise<Uint8Array> {
   const copy = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(copy).set(bytes);
   return new Uint8Array(await subtle.digest("SHA-256", copy));
+}
+
+function sameDraftContent(stored: string, content: SaveDraft["content"]) {
+  try {
+    return canonicalJson(JSON.parse(stored)) === canonicalJson(content);
+  } catch {
+    return false;
+  }
 }
 
 export type { SyncPage, ConversationKey };

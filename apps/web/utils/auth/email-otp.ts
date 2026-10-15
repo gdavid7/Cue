@@ -10,8 +10,17 @@ import prisma from "@/utils/prisma";
 import { isDuplicateError } from "@/utils/prisma-helpers";
 import { createScopedLogger } from "@/utils/logger";
 import { BRAND_NAME } from "@/utils/branding";
+import {
+  checkRateLimit,
+  createRateLimitKey,
+  hashRateLimitValue,
+} from "@/utils/rate-limit";
 
 const logger = createScopedLogger("auth/email-otp");
+const EMAIL_OTP_DAILY_SIGN_IN_ATTEMPTS = {
+  limit: 20,
+  windowSeconds: 24 * 60 * 60,
+};
 
 export const emailOtpPlugin = emailOTP({
   disableSignUp: true,
@@ -54,9 +63,9 @@ export const emailOtpBeforeHook = createAuthMiddleware(async (ctx) => {
     return;
   }
   if (ctx.path === "/sign-in/email-otp") {
-    if (!(await isEmailOtpEnabled(normalizeEmail(ctx.body?.email)))) {
-      throw invalidCode();
-    }
+    const email = normalizeEmail(ctx.body?.email);
+    if (!(await isEmailOtpEnabled(email))) throw invalidCode();
+    await enforceDailySignInAttempts(email);
     return;
   }
   // The plugin also exposes password reset and email-change endpoints. This
@@ -162,6 +171,28 @@ async function claimDelivery(email: string) {
   } catch (error) {
     if (isDuplicateError(error)) return false;
     throw error;
+  }
+}
+
+// Each code allows a few guesses and a new one can be sent every minute, so
+// without a per-address cap a patient attacker gets thousands of guesses a day
+// at a 6-digit code.
+async function enforceDailySignInAttempts(email: string) {
+  const result = await checkRateLimit({
+    rule: {
+      key: createRateLimitKey([
+        "rate-limit",
+        "email-otp-sign-in",
+        hashRateLimitValue(email),
+      ]),
+      ...EMAIL_OTP_DAILY_SIGN_IN_ATTEMPTS,
+    },
+    logger,
+  });
+  if (result.limited) {
+    throw new APIError("TOO_MANY_REQUESTS", {
+      message: "Too many sign-in attempts. Try again later.",
+    });
   }
 }
 

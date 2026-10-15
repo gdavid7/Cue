@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Database } from "@sqlite.org/sqlite-wasm";
 import {
   applyReferenceChange,
   createReferenceModel,
@@ -9,8 +10,31 @@ import { archiveThenNewMailScenario } from "@inboxzero/mail-core/test-support/sc
 import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
 import type { SqliteDriver } from "@inboxzero/mail-sqlite/driver";
+import { classifyMailboxError } from "@inboxzero/mail-sqlite/recovery";
 import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
-import { createWasmSqliteDriver } from "./wasm-sqlite";
+import { createWasmMailStore, createWasmMemoryDriver } from "./wasm-sqlite";
+
+type Sqlite = Awaited<
+  ReturnType<typeof import("@sqlite.org/sqlite-wasm").default>
+>;
+
+const opfsPool = vi.hoisted(() => ({
+  install: undefined as undefined | ((sqlite: Sqlite) => unknown),
+}));
+
+vi.mock("@sqlite.org/sqlite-wasm", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@sqlite.org/sqlite-wasm")>();
+  return {
+    default: async () => {
+      const sqlite = await actual.default();
+      return {
+        ...sqlite,
+        installOpfsSAHPoolVfs: async () => opfsPool.install?.(sqlite),
+      };
+    },
+  };
+});
 
 const inboxQuery = {
   accountIds: ["acc-1"],
@@ -22,7 +46,7 @@ const inboxQuery = {
 
 describe("browser wasm sqlite driver", () => {
   it("runs the shared store on an in-memory sqlite-wasm database", async () => {
-    const driver = await createWasmSqliteDriver({ persist: false });
+    const driver = await createWasmMemoryDriver();
     const store = await createSqliteMailStore(driver);
     await store.ensureAccount({
       accountId: "acc-1",
@@ -35,7 +59,7 @@ describe("browser wasm sqlite driver", () => {
   });
 
   it("keeps archive and new-mail counts aligned on the wasm driver", async () => {
-    const driver = await createWasmSqliteDriver({ persist: false });
+    const driver = await createWasmMemoryDriver();
     const store = await createSqliteMailStore(driver);
     await store.ensureAccount({
       accountId: "acc-1",
@@ -93,7 +117,7 @@ describe("browser wasm sqlite driver", () => {
   });
 
   it("matches the shared archive-then-new-mail fixture on sqlite-wasm", async () => {
-    const driver = await createWasmSqliteDriver({ persist: false });
+    const driver = await createWasmMemoryDriver();
     const store = await createSqliteMailStore(driver);
     await store.ensureAccount({
       accountId: "a1",
@@ -202,7 +226,7 @@ describe("browser wasm sqlite driver", () => {
   });
 
   it("rebuilds a legacy search index without its text copy on sqlite-wasm", async () => {
-    const driver = await createWasmSqliteDriver({ persist: false });
+    const driver = await createWasmMemoryDriver();
     const store = await createSqliteMailStore(driver);
     await store.ensureAccount({
       accountId: "acc-1",
@@ -276,7 +300,7 @@ describe("browser wasm sqlite driver", () => {
   });
 
   it("compresses stored bodies on sqlite-wasm and converts rows written before compression on open", async () => {
-    const driver = await createWasmSqliteDriver({ persist: false });
+    const driver = await createWasmMemoryDriver();
     const store = await createSqliteMailStore(driver);
     await store.ensureAccount({
       accountId: "acc-1",
@@ -395,4 +419,149 @@ function messagePatch(
       hasAttachments: false,
     },
   };
+}
+
+describe("createWasmMailStore", () => {
+  afterEach(() => {
+    opfsPool.install = undefined;
+    vi.unstubAllGlobals();
+  });
+
+  it("closes a database that fails while being set up, so its files can be wiped for the rebuild", async () => {
+    vi.stubGlobal("navigator", { storage: { getDirectory: async () => ({}) } });
+    const pool = notADatabasePool({ failOnSetup: true });
+    opfsPool.install = pool.install;
+    const onRebuild = vi.fn();
+
+    const store = await createWasmMailStore({
+      ownedAccountIds: ["acc-1"],
+      onRebuild,
+    });
+
+    expect(onRebuild).toHaveBeenCalledOnce();
+    expect(pool.wipes).toBe(1);
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    await store.close();
+  });
+
+  it.each([
+    ["an OPFS handle that will not open", "UnknownError", "unavailable"],
+    ["a broken OPFS state", "InvalidStateError", "unavailable"],
+    ["files another context still holds", "NoModificationAllowedError", "busy"],
+  ])("reports %s (%s) while installing the pool as %s", async (_, name, kind) => {
+    vi.stubGlobal("navigator", { storage: { getDirectory: async () => ({}) } });
+    opfsPool.install = () => {
+      throw new DOMException("could not create a sync access handle", name);
+    };
+
+    const error = await createWasmMailStore({
+      ownedAccountIds: ["acc-1"],
+    }).catch((caught: unknown) => caught);
+
+    // Workers pass errors on as message text.
+    expect(classifyMailboxError(new Error(String(error)))).toBe(kind);
+  });
+
+  it("rebuilds an OPFS mailbox file that is not a database", async () => {
+    vi.stubGlobal("navigator", { storage: { getDirectory: async () => ({}) } });
+    const pool = notADatabasePool({ failOnSetup: false });
+    opfsPool.install = pool.install;
+    const onRebuild = vi.fn();
+
+    const store = await createWasmMailStore({
+      ownedAccountIds: ["acc-1"],
+      onRebuild,
+    });
+
+    expect(onRebuild).toHaveBeenCalledOnce();
+    expect(pool.wipes).toBe(1);
+    await store.close();
+  });
+
+  it("keeps the OPFS mailbox's rollback journal between commits", async () => {
+    vi.stubGlobal("navigator", { storage: { getDirectory: async () => ({}) } });
+    const pool = notADatabasePool({ failOnSetup: false });
+    opfsPool.install = pool.install;
+
+    const store = await createWasmMailStore({ ownedAccountIds: ["acc-1"] });
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+
+    await store.close();
+
+    expect(pool.journalModes.at(-1)).toBe("persist");
+  });
+});
+
+/**
+ * Stands in for the OPFS SAH pool on sqlite-wasm's in-memory file system,
+ * holding a mailbox file that is not a database. Like the real pool, it
+ * cannot wipe files a database still has open.
+ */
+function notADatabasePool({ failOnSetup }: { failOnSetup: boolean }) {
+  const path = `/mailbox-${crypto.randomUUID()}.sqlite`;
+  const open = new Set<Database>();
+  let paused = false;
+  const state = {
+    wipes: 0,
+    journalModes: [] as string[],
+    install(sqlite: Sqlite) {
+      sqlite.capi.sqlite3_js_posix_create_file(
+        path,
+        new TextEncoder().encode("this is not sqlite ".repeat(512)),
+      );
+      class PoolDb extends sqlite.oo1.DB {
+        constructor() {
+          super(path);
+          open.add(this);
+          // A damaged header can fail the very first statement.
+          if (failOnSetup && state.wipes === 0) {
+            const exec = this.exec.bind(this);
+            this.exec = ((sql: never) => {
+              if (sql === "PRAGMA foreign_keys=ON") {
+                exec("SELECT count(*) FROM sqlite_master");
+              }
+              return exec(sql);
+            }) as typeof this.exec;
+          }
+        }
+        override close() {
+          if (this.isOpen()) {
+            try {
+              state.journalModes.push(
+                String(this.selectValue("PRAGMA journal_mode")),
+              );
+            } catch {
+              // A file that is not a database has no journal mode.
+            }
+          }
+          open.delete(this);
+          return super.close();
+        }
+      }
+      return {
+        OpfsSAHPoolDb: PoolDb,
+        isPaused: () => paused,
+        pauseVfs: () => {
+          paused = true;
+        },
+        unpauseVfs: async () => {
+          paused = false;
+        },
+        wipeFiles: async () => {
+          if (open.size > 0) throw new Error("SAH pool files are still open");
+          state.wipes += 1;
+          sqlite.capi.sqlite3_js_posix_create_file(path, new Uint8Array(0));
+        },
+      };
+    },
+  };
+  return state;
 }

@@ -14,6 +14,7 @@ const engine = vi.hoisted(() => ({ close: vi.fn() }));
 const offlineCache = vi.hoisted(() => ({ clear: vi.fn() }));
 const senderQueue = vi.hoisted(() => ({ clear: vi.fn() }));
 const searchHistory = vi.hoisted(() => ({ clear: vi.fn() }));
+const recoveryStash = vi.hoisted(() => ({ delete: vi.fn() }));
 
 vi.mock("@/utils/desktop-app", () => ({
   getInboxZeroDesktopApp: () => desktop.app,
@@ -30,6 +31,9 @@ vi.mock("@/utils/offline/clear-mail-cache", () => ({
 vi.mock("@/store/sender-queue", () => ({
   clearStoredSenderQueues: () => senderQueue.clear(),
 }));
+vi.mock("@/utils/mail-engine/recovery-stash", () => ({
+  deleteMailRecoveryStash: () => recoveryStash.delete(),
+}));
 vi.mock("@/store/mail-search-history", () => ({
   clearRecentSearchHistory: () => searchHistory.clear(),
 }));
@@ -38,6 +42,7 @@ describe("wipeLocalMailbox", () => {
   beforeEach(() => {
     engine.close.mockResolvedValue(undefined);
     offlineCache.clear.mockResolvedValue(undefined);
+    recoveryStash.delete.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -69,6 +74,27 @@ describe("wipeLocalMailbox", () => {
     await wipeLocalMailbox();
     expect(order).toEqual(["close", "wipe"]);
     expect(offlineCache.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes drafts and commands kept aside for a mailbox rebuild", async () => {
+    opfs.wipe.mockResolvedValue(true);
+
+    await wipeLocalMailbox();
+
+    expect(recoveryStash.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the wipe pending until the kept-aside drafts are deleted", async () => {
+    // A rebuild running at sign-out holds the stash open, blocking its delete.
+    opfs.wipe.mockResolvedValue(true);
+    recoveryStash.delete.mockResolvedValue(false);
+    await wipeLocalMailbox();
+    recoveryStash.delete.mockResolvedValue(true);
+
+    await finishPendingLocalMailboxWipe();
+    await finishPendingLocalMailboxWipe();
+
+    expect(recoveryStash.delete).toHaveBeenCalledTimes(2);
   });
 
   it("leaves nothing for the next engine once the wipe succeeds", async () => {

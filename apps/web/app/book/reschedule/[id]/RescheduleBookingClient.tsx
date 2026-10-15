@@ -253,7 +253,9 @@ function ConfirmRescheduleStep({
           Previously: {formatLongDateTime(previousStartTime, timezone)}
         </p>
 
-        {error ? <p className="mt-4 text-sm text-red-500">{error}</p> : null}
+        {error ? (
+          <p className="mt-4 text-sm text-destructive">{error}</p>
+        ) : null}
 
         <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-end sm:gap-3">
           <a

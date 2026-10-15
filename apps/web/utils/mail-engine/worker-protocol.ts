@@ -1,9 +1,12 @@
 import type { MailClient, WorkAdmission } from "@inboxzero/mail-core/engine";
 import type { QuerySnapshot } from "@inboxzero/mail-core/queries";
+import type { DroppedMailWork } from "@inboxzero/mail-sqlite/recovery";
 
 export type BrowserEngineStart = {
   accountId: string;
   provider: "google" | "microsoft";
+  /** The signed-in user's accounts, whose carried-over work a rebuild may restore. */
+  ownedAccountIds: string[];
   generation?: string;
   persist?: boolean;
   maxPendingOperations?: number;
@@ -82,7 +85,11 @@ export type WorkerResponse =
   | {
       type: "snapshots";
       snapshots: { handleId: string; snapshot: QuerySnapshot<unknown> }[];
-    };
+    }
+  /** The mailbox was corrupt and is being rebuilt while the engine starts. */
+  | { type: "rebuilding" }
+  /** Carried work a rebuild could not restore; counts only, no content. */
+  | { type: "dropped"; drop: DroppedMailWork };
 
 export function browserMailEngineCapabilities() {
   return {

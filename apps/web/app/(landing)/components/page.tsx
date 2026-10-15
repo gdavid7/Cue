@@ -32,7 +32,6 @@ import { ActionCard } from "@/components/ui/card";
 import { AlertBasic } from "@/components/Alert";
 import { Notice } from "@/components/Notice";
 import { TestErrorButton } from "@/app/(landing)/components/TestError";
-import { TestActionButton } from "@/app/(landing)/components/TestAction";
 import {
   MultiSelectFilter,
   useMultiSelectFilter,
@@ -1111,7 +1110,6 @@ function ComponentsDemo() {
 
         <div className="flex gap-2">
           <TestErrorButton />
-          <TestActionButton />
         </div>
       </div>
     </Container>

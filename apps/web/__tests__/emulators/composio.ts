@@ -18,7 +18,9 @@ import type { AddressInfo } from "node:net";
  * Tools enforce the argument rules the apps document where Cue has tripped on
  * them: Drive refuses to sort a full-text search, and Canvas lists only the
  * personal calendar unless it is given course context codes (at most 10).
- * Other tools in COMPOSIO_TOOL_CATALOG answer with no data; any other slug is
+ * The tools Cue fetches a linked item or the sender's record with (Drive file
+ * metadata, Jira, Asana and ClickUp lookups, HubSpot and Salesforce people
+ * searches) refuse arguments their Composio docs don't list. Other tools in COMPOSIO_TOOL_CATALOG answer with no data; any other slug is
  * unknown, as a retired one is to Composio.
  *
  * Fidelity caveat: tool results are the shapes Cue's parsers read, seeded by
@@ -175,11 +177,69 @@ export type ComposioEmulatorSlackMessage = {
   channel: { id: string; name: string };
 };
 
+/** A Jira issue as `GET /rest/api/3/issue/{key}` returns it. */
+export type ComposioEmulatorJiraIssue = {
+  key: string;
+  /** The issue's own API URL, which names its site. */
+  self: string;
+  fields: {
+    summary: string;
+    status: { name: string };
+    assignee: { displayName: string; emailAddress: string } | null;
+    priority: { name: string };
+    updated: string;
+  };
+};
+
+/** An Asana task, without the `data` wrapper. */
+export type ComposioEmulatorAsanaTask = {
+  gid: string;
+  name: string;
+  completed: boolean;
+  due_on: string | null;
+  assignee: { name: string } | null;
+  permalink_url: string;
+  modified_at: string;
+};
+
+export type ComposioEmulatorClickUpTask = {
+  id: string;
+  name: string;
+  status: { status: string };
+  assignees: { username: string; email: string }[];
+  /** Milliseconds since the epoch. */
+  date_updated: string;
+  url: string;
+};
+
+export type ComposioEmulatorHubSpotContact = {
+  id: string;
+  properties: Record<string, string>;
+};
+
+/** A Salesforce Contact or Lead record. */
+export type ComposioEmulatorSalesforcePerson = {
+  Id: string;
+  Name: string;
+  Email: string;
+  Title?: string;
+  Company?: string;
+  Status?: string;
+  Account?: { Name: string };
+  LastModifiedDate?: string;
+};
+
 export interface ComposioEmulatorOptions {
   apiKey?: string;
+  asanaTasks?: ComposioEmulatorAsanaTask[];
   canvasEvents?: ComposioEmulatorCanvasEvent[];
+  clickupTasks?: ComposioEmulatorClickUpTask[];
   driveFiles?: ComposioEmulatorDriveFile[];
+  hubspotContacts?: ComposioEmulatorHubSpotContact[];
+  jiraIssues?: ComposioEmulatorJiraIssue[];
   port?: number;
+  salesforceContacts?: ComposioEmulatorSalesforcePerson[];
+  salesforceLeads?: ComposioEmulatorSalesforcePerson[];
   slackMessages?: ComposioEmulatorSlackMessage[];
 }
 
@@ -232,6 +292,12 @@ export async function createComposioEmulator(
   const driveFiles = options.driveFiles ?? [];
   const canvasEvents = options.canvasEvents ?? [];
   const slackMessages = options.slackMessages ?? [];
+  const jiraIssues = options.jiraIssues ?? [];
+  const asanaTasks = options.asanaTasks ?? [];
+  const clickupTasks = options.clickupTasks ?? [];
+  const hubspotContacts = options.hubspotContacts ?? [];
+  const salesforceContacts = options.salesforceContacts ?? [];
+  const salesforceLeads = options.salesforceLeads ?? [];
   const failingTools = new Map<string, "revoked" | "server_error">();
   const toolCalls: ComposioEmulator["toolCalls"] = [];
 
@@ -302,6 +368,89 @@ export async function createComposioEmulator(
         matches: searchSlackMessages(slackMessages, String(args.query ?? "")),
       },
     }),
+    GOOGLEDRIVE_GET_FILE_METADATA: (args) => {
+      checkArgs("GOOGLEDRIVE_GET_FILE_METADATA", args, {
+        required: { fileId: "string" },
+        optional: {
+          fields: "string",
+          includeLabels: "string",
+          supportsAllDrives: "boolean",
+          includePermissionsForView: "string",
+        },
+      });
+      const file = driveFiles.find((f) => f.id === args.fileId);
+      if (!file) throw new ToolFailure(`404: File not found: ${args.fileId}`);
+      return file;
+    },
+    JIRA_GET_ISSUE: (args) => {
+      checkArgs("JIRA_GET_ISSUE", args, {
+        required: { issue_id_or_key: "string" },
+        optional: {
+          expand: "string",
+          fields: "array",
+          fail_fast: "boolean",
+          properties: "array",
+          fields_by_keys: "boolean",
+          update_history: "boolean",
+        },
+      });
+      const issue = jiraIssues.find((i) => i.key === args.issue_id_or_key);
+      if (!issue) {
+        throw new ToolFailure(
+          "404: Issue does not exist or you do not have permission to see it.",
+        );
+      }
+      return issue;
+    },
+    ASANA_GET_A_TASK: (args) => {
+      checkArgs("ASANA_GET_A_TASK", args, {
+        required: { task_gid: "string" },
+        optional: { opt_fields: "array", opt_pretty: "boolean" },
+      });
+      const task = asanaTasks.find((t) => t.gid === args.task_gid);
+      if (!task) throw new ToolFailure("404: Not Found");
+      return { data: task };
+    },
+    // Composio documents only task_id as required; team_id (with
+    // custom_task_ids) is for custom ids, which this emulator doesn't model.
+    CLICKUP_GET_TASK: (args) => {
+      checkArgs("CLICKUP_GET_TASK", args, {
+        required: { task_id: "string" },
+      });
+      const task = clickupTasks.find((t) => t.id === args.task_id);
+      if (!task) throw new ToolFailure("404: Task not found");
+      return task;
+    },
+    // HubSpot's CRM search: filters in a group are ANDed, groups ORed; at
+    // most 100 results.
+    HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA: (args) => {
+      checkArgs("HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA", args, {
+        required: { filterGroups: "array" },
+        optional: { properties: "array", limit: "number" },
+      });
+      if (Number(args.limit ?? 10) > 100) {
+        throw new ToolFailure("400: limit must be at most 100");
+      }
+      return {
+        results: hubspotContacts
+          .filter((contact) =>
+            hubspotFilterGroups(args.filterGroups).some((filters) =>
+              filters.every((filter) => matchesHubSpotFilter(contact, filter)),
+            ),
+          )
+          .slice(0, Number(args.limit ?? 10)),
+      };
+    },
+    // Composio: "All parameters support partial/fuzzy matching"; at least
+    // one criterion.
+    SALESFORCE_SEARCH_CONTACTS: (args) =>
+      searchSalesforcePeople("SALESFORCE_SEARCH_CONTACTS", args, [
+        ...salesforceContacts,
+      ]),
+    SALESFORCE_SEARCH_LEADS: (args) =>
+      searchSalesforcePeople("SALESFORCE_SEARCH_LEADS", args, [
+        ...salesforceLeads,
+      ]),
     // A saved file joins the drive, so it can turn up as context afterwards.
     GOOGLEDRIVE_UPLOAD_FILE: (args) => {
       const file = uploadedFile(args.file_to_upload, "drive");
@@ -500,6 +649,108 @@ export async function createComposioEmulator(
 
 /** A call the app itself rejected, which Composio reports as unsuccessful. */
 class ToolFailure extends Error {}
+
+type ArgType = "string" | "number" | "boolean" | "array" | "any";
+
+/**
+ * Refuses arguments outside a tool's documented inputs, as Composio does when
+ * they fail its schema: a missing or mistyped required one, or one it
+ * doesn't take. `optional` omitted means unknown arguments aren't checked.
+ */
+function checkArgs(
+  tool: string,
+  args: Record<string, unknown>,
+  {
+    required,
+    optional,
+  }: {
+    required: Record<string, ArgType>;
+    optional?: Record<string, ArgType>;
+  },
+) {
+  const known = { ...required, ...optional };
+  for (const [name, value] of Object.entries(args)) {
+    if (optional && !(name in known)) {
+      throw new ToolFailure(`${tool}: unknown argument ${name}`);
+    }
+    if (name in known && !isArgType(value, known[name]!)) {
+      throw new ToolFailure(`${tool}: ${name} must be a ${known[name]}`);
+    }
+  }
+  for (const name of Object.keys(required)) {
+    if (args[name] === undefined || args[name] === "") {
+      throw new ToolFailure(`${tool}: ${name} is required`);
+    }
+  }
+}
+
+function isArgType(value: unknown, type: ArgType) {
+  if (type === "any") return true;
+  return type === "array" ? Array.isArray(value) : typeof value === type;
+}
+
+type HubSpotFilter = { propertyName: string; operator: string; value: string };
+
+/** Only EQ is modelled; anything else is refused rather than guessed. */
+function hubspotFilterGroups(value: unknown): HubSpotFilter[][] {
+  const groups = value as { filters?: unknown }[];
+  return groups.map((group) => {
+    if (!Array.isArray(group?.filters)) {
+      throw new ToolFailure("400: each filter group needs filters");
+    }
+    return group.filters.map((filter: Partial<HubSpotFilter>) => {
+      if (
+        typeof filter.propertyName !== "string" ||
+        filter.operator !== "EQ" ||
+        typeof filter.value !== "string"
+      ) {
+        throw new ToolFailure(
+          "400: filters need propertyName, operator EQ and a value",
+        );
+      }
+      return filter as HubSpotFilter;
+    });
+  });
+}
+
+// HubSpot compares email values without case.
+function matchesHubSpotFilter(
+  contact: ComposioEmulatorHubSpotContact,
+  filter: HubSpotFilter,
+) {
+  return (
+    contact.properties[filter.propertyName]?.toLowerCase() ===
+    filter.value.toLowerCase()
+  );
+}
+
+function searchSalesforcePeople(
+  tool: "SALESFORCE_SEARCH_CONTACTS" | "SALESFORCE_SEARCH_LEADS",
+  args: Record<string, unknown>,
+  people: ComposioEmulatorSalesforcePerson[],
+) {
+  const criteria =
+    tool === "SALESFORCE_SEARCH_CONTACTS"
+      ? ["name", "email", "phone", "title", "account_name"]
+      : ["name", "email", "phone", "title", "company", "status", "lead_source"];
+  checkArgs(tool, args, {
+    required: {},
+    optional: {
+      ...Object.fromEntries(criteria.map((name) => [name, "string" as const])),
+      // Documented without a type.
+      fields: "any",
+      limit: "number",
+    },
+  });
+  if (!criteria.some((name) => args[name])) {
+    throw new ToolFailure(`${tool}: provide at least one search criterion`);
+  }
+  const email = String(args.email ?? "").toLowerCase();
+  const records = people
+    .filter((person) => person.Email.toLowerCase().includes(email))
+    .slice(0, Number(args.limit ?? 25));
+  return { totalSize: records.length, records };
+}
 
 /** The courses the seeded assignments belong to. */
 function canvasCourses(events: ComposioEmulatorCanvasEvent[]) {

@@ -36,7 +36,6 @@ export async function createFilter(options: {
     const errorInfo = extractErrorInfo(error);
 
     logger.error("Failed to create Gmail filter", {
-      from,
       addLabelIds,
       removeLabelIds,
       error,

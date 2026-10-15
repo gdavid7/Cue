@@ -17,7 +17,10 @@ vi.mock("@/utils/redis", () => ({
 vi.mock("@/utils/thread-context/connector-context", () => ({
   fetchConnectorCandidates: vi.fn(),
 }));
-vi.mock("@/utils/thread-context/linked-pages", () => ({
+vi.mock("@/utils/thread-context/linked-pages", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/utils/thread-context/linked-pages")
+  >()),
   fetchLinkedPages: vi.fn(),
 }));
 
@@ -234,6 +237,57 @@ describe("getThreadContext", () => {
     expect(items.map((i) => i.id)).toEqual(["figma"]);
     expect(provider.searchThreads).toHaveBeenCalledWith(
       expect.objectContaining({ query: expect.stringContaining("payment") }),
+    );
+  });
+
+  it("asks connected apps about every link in the thread and its latest sender, from the loaded thread", async () => {
+    const open = thread("handoff", [
+      message({
+        id: "m1",
+        threadId: "handoff",
+        from: "Nora Patel <Nora@Northwind.com>",
+        textHtml:
+          '<p>Notes are <a href="https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/edit">here</a></p>',
+      }),
+      message({
+        id: "m2",
+        threadId: "handoff",
+        from: `David <${USER}>`,
+        textPlain: "Tracking it in https://acme.atlassian.net/browse/OPS-12.",
+        textHtml: "",
+      }),
+    ]);
+    const provider = mockProvider({ threads: { handoff: open } });
+
+    await run(provider, "handoff");
+
+    expect(fetchConnectorCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signals: {
+          links: [
+            "https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/edit",
+            "https://acme.atlassian.net/browse/OPS-12",
+          ],
+          senderEmail: "nora@northwind.com",
+        },
+      }),
+    );
+    expect(provider.getThread).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't look up an automated sender", async () => {
+    const open = thread("alert", [
+      message({
+        threadId: "alert",
+        from: "GitHub <notifications@github.com>",
+        subject: "Review requested",
+      }),
+    ]);
+
+    await run(mockProvider({ threads: { alert: open } }), "alert");
+
+    expect(fetchConnectorCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ signals: { links: [] } }),
     );
   });
 

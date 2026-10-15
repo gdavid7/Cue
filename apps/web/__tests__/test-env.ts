@@ -20,6 +20,19 @@ setEnvDefault("INTERNAL_API_KEY", "test-internal-api-key");
 setEnvDefault("DEFAULT_LLMS", "openrouter:openai/gpt-6-luna");
 setEnvDefault("NEXT_PUBLIC_BASE_URL", "http://localhost:3000");
 
+// A shell or cloud environment that exports Axiom credentials would otherwise
+// switch the real logger to next-axiom, which ships test logs to the live
+// dataset through the stubbed global `fetch` and leaves a throttled flush timer
+// behind, breaking fetch-call and fake-timer assertions.
+for (const key of [
+  "AXIOM_TOKEN",
+  "AXIOM_DATASET",
+  "NEXT_PUBLIC_AXIOM_TOKEN",
+  "NEXT_PUBLIC_AXIOM_DATASET",
+]) {
+  delete process.env[key];
+}
+
 function setEnvDefault(key: string, value: string) {
   if (!process.env[key]) {
     process.env[key] = value;

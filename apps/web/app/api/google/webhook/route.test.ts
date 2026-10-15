@@ -22,6 +22,7 @@ const {
     GOOGLE_PUBSUB_VERIFICATION_TOKEN: "test-google-webhook-token" as
       | string
       | undefined,
+    NODE_ENV: "test" as "development" | "production" | "test",
   },
   processHistoryForUserMock: vi.fn(),
   runWithBackgroundLoggerFlushMock: vi.fn(),
@@ -74,6 +75,7 @@ describe("Google webhook route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     envMock.GOOGLE_PUBSUB_VERIFICATION_TOKEN = "test-google-webhook-token";
+    envMock.NODE_ENV = "test";
     processHistoryForUserMock.mockResolvedValue(undefined);
     getWebhookEmailAccountMock.mockResolvedValue(null);
     getEmailProviderRateLimitStateMock.mockResolvedValue(null);
@@ -112,7 +114,18 @@ describe("Google webhook route", () => {
     expect(publishLocalMailHint).not.toHaveBeenCalled();
   });
 
-  it("allows requests without a token when verification is intentionally disabled", async () => {
+  it("refuses requests in production when the verification token is empty", async () => {
+    envMock.GOOGLE_PUBSUB_VERIFICATION_TOKEN = "";
+    envMock.NODE_ENV = "production";
+    const request = createRequest({});
+
+    const response = await POST(request as any, {} as never);
+
+    expect(response.status).toBe(503);
+    expect(processHistoryForUserMock).not.toHaveBeenCalled();
+  });
+
+  it("allows requests without a token when verification is intentionally disabled outside production", async () => {
     envMock.GOOGLE_PUBSUB_VERIFICATION_TOKEN = "";
     const request = createRequest({
       emailAddress: "user@example.com",

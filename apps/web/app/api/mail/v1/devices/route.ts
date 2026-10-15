@@ -6,6 +6,7 @@ import {
 } from "@/generated/prisma/enums";
 import { withAuth } from "@/utils/middleware";
 import prisma from "@/utils/prisma";
+import { isDuplicateError } from "@/utils/prisma-helpers";
 
 const APNS_DEVICE_TOKEN = /^[A-Fa-f0-9]{64,200}$/;
 
@@ -29,22 +30,41 @@ export const POST = withAuth("mail/v1/devices/register", async (request) => {
   if (!json.ok) return json.response;
   const device = registerDeviceSchema.parse(json.value);
 
-  await prisma.mobilePushToken.upsert({
-    where: { token: device.token },
-    create: {
-      token: device.token,
-      platform: MobilePushPlatform.IOS,
-      tokenType: MobilePushTokenType.APNS,
-      appVersion: device.appVersion ?? null,
-      userId: request.auth.userId,
-    },
-    update: {
-      platform: MobilePushPlatform.IOS,
-      tokenType: MobilePushTokenType.APNS,
-      appVersion: device.appVersion ?? null,
-      userId: request.auth.userId,
-    },
-  });
+  // Scoped to this user, so a caller who knows another device's token cannot
+  // take over its notifications. On Postgres a token owned by someone else
+  // makes the upsert change nothing and return null rather than throw.
+  let registered: unknown;
+  try {
+    registered = await prisma.mobilePushToken.upsert({
+      where: { token: device.token, userId: request.auth.userId },
+      create: {
+        token: device.token,
+        platform: MobilePushPlatform.IOS,
+        tokenType: MobilePushTokenType.APNS,
+        appVersion: device.appVersion ?? null,
+        userId: request.auth.userId,
+      },
+      update: {
+        platform: MobilePushPlatform.IOS,
+        tokenType: MobilePushTokenType.APNS,
+        appVersion: device.appVersion ?? null,
+        userId: request.auth.userId,
+      },
+    });
+  } catch (error) {
+    if (!isDuplicateError(error, "token")) throw error;
+    registered = null;
+  }
+
+  if (!registered) {
+    return NextResponse.json(
+      {
+        error: "This device is registered to another account",
+        isKnownError: true,
+      },
+      { status: 409 },
+    );
+  }
 
   return NextResponse.json({ ok: true });
 });

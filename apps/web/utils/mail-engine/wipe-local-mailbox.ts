@@ -3,6 +3,7 @@ import { clearStoredSenderQueues } from "@/store/sender-queue";
 import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 import { closeActiveMailEngine } from "@/utils/mail-engine/active-client";
 import { wipeOpfsMailEngine } from "@/utils/mail-engine/opfs-mailbox";
+import { deleteMailRecoveryStash } from "@/utils/mail-engine/recovery-stash";
 import { clearOfflineMailCache } from "@/utils/offline/clear-mail-cache";
 
 // Sign-out leaves the page before a slow wipe can finish, so the marker
@@ -22,11 +23,14 @@ export async function finishPendingLocalMailboxWipe() {
 }
 
 async function removeLocalMail(engineClosed: Promise<void>) {
-  const [mailboxWiped] = await Promise.all([
+  const [mailboxWiped, , stashDeleted] = await Promise.all([
     engineClosed.then(wipeMailboxStore),
     clearOfflineMailCache(),
+    deleteMailRecoveryStash(),
   ]);
-  if (mailboxWiped) setWipePending(false);
+  // The stash holds the signed-out user's drafts and commands as much as the
+  // mailbox does.
+  if (mailboxWiped && stashDeleted) setWipePending(false);
 }
 
 async function wipeMailboxStore() {

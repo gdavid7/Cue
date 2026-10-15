@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hasCronSecret, isAuthorizedCronOrInternalRequest } from "./cron";
+import {
+  hasCronSecret,
+  hasPostCronSecret,
+  isAuthorizedCronOrInternalRequest,
+} from "./cron";
 import type { RequestWithLogger } from "@/utils/middleware";
 import { createTestLogger } from "@/__tests__/helpers";
 
@@ -59,6 +63,41 @@ describe("hasCronSecret", () => {
     });
 
     expect(hasCronSecret(request)).toBe(false);
+  });
+
+  it("does not log the presented secret on failure", () => {
+    const errorSpy = vi.spyOn(logger, "error");
+    const request = createMockRequestWithLogger({
+      authorization: "Bearer leaked-guess-456",
+    });
+
+    expect(hasCronSecret(request)).toBe(false);
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(
+      "leaked-guess-456",
+    );
+  });
+});
+
+describe("hasPostCronSecret", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("does not log the presented secret or body on failure", async () => {
+    const errorSpy = vi.spyOn(logger, "error");
+    const request = Object.assign(
+      new Request("https://example.com", {
+        method: "POST",
+        body: JSON.stringify({ CRON_SECRET: "leaked-guess-456" }),
+      }),
+      { logger },
+    ) as RequestWithLogger;
+
+    expect(await hasPostCronSecret(request)).toBe(false);
+    expect(errorSpy).toHaveBeenCalled();
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(
+      "leaked-guess-456",
+    );
   });
 });
 

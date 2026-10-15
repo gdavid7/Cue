@@ -40,7 +40,8 @@ async function loadDispatchModule({
     enqueueBullmqHttpJob: mockEnqueueBullmqHttpJob,
   }));
 
-  vi.doMock("@/utils/queue/vercel", () => ({
+  vi.doMock("@/utils/queue/vercel", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/utils/queue/vercel")>()),
     isVercelQueueDispatchEnabled: mockIsVercelQueueDispatchEnabled,
   }));
 
@@ -162,5 +163,59 @@ describe("enqueueBackgroundJob", () => {
       headers: undefined,
     });
     expect(mockPublishToQstashQueue).not.toHaveBeenCalled();
+  });
+
+  it("on Vercel, sends topics whose queue consumer is deployed", async () => {
+    const { enqueueBackgroundJob } = await loadDispatchModule({
+      queueBackend: "qstash",
+      qstashToken: "qstash-token",
+    });
+    mockIsVercelQueueDispatchEnabled.mockReturnValue(true);
+    mockSend.mockResolvedValue(undefined);
+
+    const result = await enqueueBackgroundJob({
+      topic: "ai-digest",
+      body: { id: "job-5" },
+      qstash: {
+        queueName: "ai-digest",
+        parallelism: 3,
+        path: "/api/ai/digest",
+      },
+      logger: createTestLogger(),
+    });
+
+    expect(result).toBe("vercel");
+    expect(mockSend).toHaveBeenCalledWith(
+      "ai-digest",
+      { id: "job-5" },
+      {
+        delaySeconds: undefined,
+      },
+    );
+  });
+
+  it("on Vercel, skips topics whose queue consumer is not deployed", async () => {
+    const { enqueueBackgroundJob } = await loadDispatchModule({
+      queueBackend: "qstash",
+      qstashToken: "qstash-token",
+    });
+    mockIsVercelQueueDispatchEnabled.mockReturnValue(true);
+
+    const result = await enqueueBackgroundJob({
+      topic: "resend-digest",
+      body: { id: "job-6" },
+      qstash: {
+        queueName: "email-digest-all",
+        parallelism: 3,
+        path: "/api/resend/digest",
+      },
+      logger: createTestLogger(),
+    });
+
+    expect(result).toBe("skipped");
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockPublishToQstashQueue).not.toHaveBeenCalled();
+    expect(mockPublishToInternalApiInBackground).not.toHaveBeenCalled();
+    expect(mockEnqueueBullmqHttpJob).not.toHaveBeenCalled();
   });
 });

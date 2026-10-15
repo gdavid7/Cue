@@ -30,7 +30,14 @@ const colors = {
 } as const;
 
 export function createScopedLogger(scope: string) {
-  if (typeof window === "undefined" && env.AXIOM_TOKEN)
+  // Only Vercel deployments ship to Axiom. Local builds, test runs and
+  // Playwright servers can carry the production token, and their errors
+  // would read as production ones.
+  if (
+    typeof window === "undefined" &&
+    env.AXIOM_TOKEN &&
+    process.env.VERCEL === "1"
+  )
     return createAxiomLogger(scope, createConsoleLogger(scope));
   if (env.NEXT_PUBLIC_LOG_SCOPES && !env.NEXT_PUBLIC_LOG_SCOPES.includes(scope))
     return createNullLogger();

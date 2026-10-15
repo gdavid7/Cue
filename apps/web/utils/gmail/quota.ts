@@ -64,11 +64,13 @@ type GmailQuotaContext = {
 // Route scopes, matched exactly so a route added under a background path is
 // never held back by accident. Interactive: someone is waiting on it, for a
 // thread they opened, a message they send, a search they typed, a bulk action
-// they clicked or a question they asked the assistant. Background: it only
+// they clicked or a question they asked the assistant, or it blocks first
+// paint of a page the person opened. Background: it only
 // enriches or analyzes mail the user already has. Any other route, the sync
 // engine's scans, Today and webhooks among them, is sync.
 const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
   ...withPriority("interactive", [
+    "labels",
     "mail/v1/conversation-membership",
     "mail/v1/search",
     "mail/v1/attachment-content",

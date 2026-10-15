@@ -14,6 +14,7 @@ const portableFiles = [
   "observations.ts",
   "drafts.ts",
   "maintenance.ts",
+  "recovery.ts",
   "capabilities.ts",
   "mailbox-view-readers.ts",
   "store-read-utils.ts",

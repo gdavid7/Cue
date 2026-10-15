@@ -33,7 +33,7 @@ packageExtensionsChecksum: sha256-PRbzx2viqV+1LR1E4uOlUjx+heWO2EvJ6w+FHgUvBZY=
 patchedDependencies:
   '@better-auth/oauth-provider@1.7.4': f3e7e8d12056b3b4c2a2a4154041f666a87ec5e12419a2e2dfa5b56d573b346e
   '@inbox-zero/emulate@0.13.0': 9eb919ed09cd6dc705636413bcb9e19d9860152e4c71e02dc367cc2c98f8216c
-  '@sqlite.org/sqlite-wasm@3.53.4-build1': 0d8786ef5c43372d91f393ee2e75e3ea352d98cfd0b43b9b729156a1497ae855
+  '@sqlite.org/sqlite-wasm@3.53.4-build1': 877a0e7ab02be271764a77936d3ababba53c79d52067fa2efc2556d688d08e5b
 
 importers:
 
@@ -435,7 +435,7 @@ importers:
         version: 7.15.2(debug@4.4.3(supports-color@8.1.1))(supports-color@8.1.1)
       '@sqlite.org/sqlite-wasm':
         specifier: 3.53.4-build1
-        version: 3.53.4-build1(patch_hash=0d8786ef5c43372d91f393ee2e75e3ea352d98cfd0b43b9b729156a1497ae855)
+        version: 3.53.4-build1(patch_hash=877a0e7ab02be271764a77936d3ababba53c79d52067fa2efc2556d688d08e5b)
       '@stripe/stripe-js':
         specifier: 9.16.0
         version: 9.16.0
@@ -19492,7 +19492,7 @@ snapshots:
 
   '@speed-highlight/core@1.2.15': {}
 
-  '@sqlite.org/sqlite-wasm@3.53.4-build1(patch_hash=0d8786ef5c43372d91f393ee2e75e3ea352d98cfd0b43b9b729156a1497ae855)': {}
+  '@sqlite.org/sqlite-wasm@3.53.4-build1(patch_hash=877a0e7ab02be271764a77936d3ababba53c79d52067fa2efc2556d688d08e5b)': {}
 
   '@stablelib/base64@1.0.1': {}
 

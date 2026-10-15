@@ -1,10 +1,11 @@
 import { rename, rm, stat } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 import type { HostRuntime } from "@inboxzero/mail-core/ports/runtime";
 import type { SqlTransaction, SqlValue, SqliteDriver } from "./driver";
 import type { MessageBodyCodec } from "./message-body-codec";
+import { classifyMailboxError } from "./recovery";
 
 export function nodeMailCrypto(): Pick<HostRuntime, "randomId" | "sha256"> {
   return {
@@ -82,7 +83,7 @@ export async function openOrQuarantineNodeMailbox(path: string): Promise<{
     if (driver) {
       await driver.close().catch(() => undefined);
     }
-    if (!isCorruptSqliteError(error)) throw error;
+    if (classifyMailboxError(error) !== "corrupt") throw error;
     const quarantinedPaths = await quarantineMailboxFiles(path);
     return {
       driver: createNodeSqliteDriver(path),
@@ -104,12 +105,13 @@ type TransactionQueue = ReturnType<typeof createTransactionQueue>;
 // statements, so each connection runs its transactions one after another.
 function createTransactionQueue(database: DatabaseSync) {
   let tail = Promise.resolve();
+  const prepare = createStatementCache(database);
   return {
     run<T>(work: (tx: SqlTransaction) => Promise<T>, begin: string) {
       const run = tail.then(async () => {
         database.exec(begin);
         try {
-          const result = await work(createTransaction(database));
+          const result = await work(createTransaction(database, prepare));
           database.exec("COMMIT");
           return result;
         } catch (error) {
@@ -131,23 +133,57 @@ function createTransactionQueue(database: DatabaseSync) {
   };
 }
 
-function createTransaction(database: DatabaseSync): SqlTransaction {
+function createTransaction(
+  database: DatabaseSync,
+  prepare: (sql: string) => StatementSync,
+): SqlTransaction {
   return {
     async exec(sql) {
       database.exec(sql);
     },
     async query(sql, bindings = []) {
-      const statement = database.prepare(sql);
-      const rows = statement.all(...bindings) as Array<
+      const rows = prepare(sql).all(...bindings) as Array<
         Record<string, SqlValue>
       >;
       return rows;
     },
     async execute(sql, bindings = []) {
-      const statement = database.prepare(sql);
-      const result = statement.run(...bindings) as { changes?: number };
+      const result = prepare(sql).run(...bindings) as { changes?: number };
       return { changedRows: Number(result.changes ?? 0) };
     },
+  };
+}
+
+// The store issues the same few statements for every message, and compiling
+// them dominated sync writes. A statement compiled before a schema change can
+// keep its old shape (SELECT * misses added columns), so the cache is dropped
+// whenever SQLite's schema cookie moves. The cap bounds SQL built with
+// variable IN lists.
+const STATEMENT_CACHE_LIMIT = 256;
+
+function createStatementCache(database: DatabaseSync) {
+  const statements = new Map<string, StatementSync>();
+  let schemaVersionStatement: StatementSync | undefined;
+  let cachedSchemaVersion: unknown;
+  return (sql: string) => {
+    schemaVersionStatement ??= database.prepare("PRAGMA schema_version");
+    const schemaVersion = schemaVersionStatement.get()?.schema_version;
+    if (schemaVersion !== cachedSchemaVersion) {
+      statements.clear();
+      cachedSchemaVersion = schemaVersion;
+    }
+    let statement = statements.get(sql);
+    if (statement) {
+      statements.delete(sql);
+    } else {
+      statement = database.prepare(sql);
+      if (statements.size >= STATEMENT_CACHE_LIMIT) {
+        const oldest = statements.keys().next().value;
+        if (oldest !== undefined) statements.delete(oldest);
+      }
+    }
+    statements.set(sql, statement);
+    return statement;
   };
 }
 
@@ -178,17 +214,4 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-function isCorruptSqliteError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const errcode = "errcode" in error ? Number(error.errcode) : Number.NaN;
-  const message = "message" in error ? String(error.message).toLowerCase() : "";
-  return (
-    errcode === 11 ||
-    errcode === 26 ||
-    message.includes("not a database") ||
-    message.includes("database disk image is malformed") ||
-    message.includes("file is encrypted or is not a database")
-  );
 }

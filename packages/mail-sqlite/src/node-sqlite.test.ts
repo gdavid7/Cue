@@ -74,6 +74,25 @@ describe("node sqlite reads", () => {
   });
 });
 
+describe("node sqlite statements", () => {
+  it("sees schema changes made after a statement was first run", async () => {
+    const driver = createNodeSqliteDriver();
+    try {
+      const rows = await driver.write(async (tx) => {
+        await tx.exec("CREATE TABLE items(name TEXT NOT NULL)");
+        await tx.execute("INSERT INTO items(name) VALUES (?)", ["first"]);
+        await tx.query("SELECT * FROM items");
+        await tx.exec("ALTER TABLE items ADD COLUMN size INTEGER");
+        await tx.execute("UPDATE items SET size = ?", [3]);
+        return tx.query("SELECT * FROM items");
+      });
+      expect(rows).toEqual([{ name: "first", size: 3 }]);
+    } finally {
+      await driver.close();
+    }
+  });
+});
+
 describe("node mailbox quarantine", () => {
   it("renames a damaged sqlite file and opens a fresh mailbox", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mail-sqlite-corrupt-"));

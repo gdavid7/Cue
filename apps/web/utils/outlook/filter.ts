@@ -46,7 +46,7 @@ export async function createFilter(options: {
     return { status: 201, data: response };
   } catch (error) {
     if (isAlreadyExistsError(error)) {
-      logger.warn("Filter already exists", { from });
+      logger.warn("Filter already exists");
       return { status: 200 };
     }
     throw error;
@@ -89,7 +89,7 @@ export async function createAutoArchiveFilter({
     return { status: 201, data: response };
   } catch (error) {
     if (isAlreadyExistsError(error)) {
-      logger.warn("Auto-archive filter already exists", { from });
+      logger.warn("Auto-archive filter already exists");
       return { status: 200 };
     }
     throw error;

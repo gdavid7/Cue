@@ -375,6 +375,55 @@ describe("backend operation executor", () => {
     });
   });
 
+  it.each([
+    {
+      name: "a revoked session or provider grant",
+      status: 401,
+      json: { error: "Authorization required. Please grant permissions." },
+      expected: { status: "not_dispatched", reason: "blocked_auth" },
+    },
+    {
+      name: "a platform rate limit",
+      status: 429,
+      json: { error: "Rate limited" },
+      expected: { status: "not_dispatched", reason: "throttled" },
+    },
+    {
+      name: "a proxy error page",
+      status: 504,
+      json: null,
+      expected: { status: "not_dispatched", reason: "unavailable" },
+    },
+  ])("settles a command answered by $name instead of throwing", async ({
+    status,
+    json,
+    expected,
+  }) => {
+    const executor = createBackendOperationExecutor({
+      accountId: "acc-1",
+      request: async () => ({ status, json }),
+    });
+    const operation = {
+      key: { accountId: "acc-1", operationId: "op-1" },
+      session: { accountId: "acc-1", generation: "g1" },
+      authority: "backend" as const,
+      payloadHash: "hash",
+      intent: {
+        kind: "metadata" as const,
+        targets: [{ accountId: "acc-1", messageId: "m1" }],
+        change: { kind: "archive" as const },
+      },
+    };
+    const signal = new AbortController().signal;
+
+    await expect(
+      executor.execute({ operation, attemptId: "a1", signal }),
+    ).resolves.toMatchObject(expected);
+    await expect(
+      executor.inspect({ operation, receiptId: "r1", signal }),
+    ).resolves.toMatchObject(expected);
+  });
+
   it("cancels a held send and treats an unreachable server as retryable", async () => {
     const operation = {
       key: { accountId: "acc-1", operationId: "send-1" },

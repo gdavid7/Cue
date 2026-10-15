@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { APICallError, NoObjectGeneratedError, RetryError } from "ai";
+import { Gaxios } from "gaxios";
 import { createScopedLogger } from "@/utils/logger";
 
 const { mockSentryCaptureException, mockSetUser } = vi.hoisted(() => ({
@@ -33,6 +34,7 @@ import {
   isOutlookItemNotFoundError,
   isOutlookThrottlingError,
   markAsHandledUserKeyError,
+  isGmailInsufficientPermissionsError,
 } from "./error";
 
 describe("isAiQuotaExceededError", () => {
@@ -640,6 +642,28 @@ describe("checkCommonErrors", () => {
     });
   });
 
+  it("maps a Gmail missing-scope 403 from gaxios to the 403 permissions response", async () => {
+    const error = await gaxiosErrorFor(403, {
+      error: {
+        code: 403,
+        message: "Request had insufficient authentication scopes.",
+        errors: [
+          {
+            message: "Insufficient Permission",
+            domain: "global",
+            reason: "insufficientPermissions",
+          },
+        ],
+        status: "PERMISSION_DENIED",
+      },
+    });
+
+    expect(isGmailInsufficientPermissionsError(error)).toBe(true);
+    expect(
+      checkCommonErrors(error, "/api/user/vacation-responder", logger),
+    ).toMatchObject({ type: "Gmail Insufficient Permissions", code: 403 });
+  });
+
   it.each([
     [
       "Gmail",
@@ -738,6 +762,25 @@ function createNoObjectGeneratedError({
     usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
     finishReason,
   });
+}
+
+// Builds the error gaxios 7 itself throws for a Gmail error response: the
+// API's `errors` array sits on `cause`, not on the error.
+async function gaxiosErrorFor(status: number, body: unknown) {
+  try {
+    await new Gaxios().request({
+      url: "https://gmail.googleapis.com/gmail/v1/users/me/settings/vacation",
+      retry: false,
+      fetchImplementation: async () =>
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+  } catch (error) {
+    return error;
+  }
+  throw new Error("Expected gaxios to reject");
 }
 
 function createProviderRateLimitError(provider: "google" | "microsoft") {

@@ -1490,6 +1490,44 @@ describe("createEmailProviderMailboxSource", () => {
     expect(result).toEqual({ status: "blocked_auth" });
   });
 
+  it.each([
+    {
+      name: "Gmail rejecting a revoked access token",
+      error: Object.assign(
+        new Error("Request had invalid authentication credentials."),
+        { response: { status: 401 } },
+      ),
+    },
+    {
+      name: "a refresh that found the grant revoked",
+      error: Object.assign(new Error("No refresh token"), {
+        cause: new Error("invalid_grant"),
+      }),
+    },
+  ])("reports $name as needing reconnect, not as offline", async ({
+    error,
+  }) => {
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        localMailSyncStrategy: "history",
+        async getMailboxSyncPage() {
+          throw error;
+        },
+      } as unknown as EmailProvider,
+    });
+    const result = await source.readChanges({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      position: { streamId: "primary", generation: "g1", checkpoint: "1" },
+      pageSize: 20,
+      signal: new AbortController().signal,
+    });
+    expect(result).toEqual({ status: "blocked_auth" });
+  });
+
   it("streams attachment bytes from the provider", async () => {
     const bytes = new Uint8Array([7, 8, 9]);
     const source = createEmailProviderMailboxSource({

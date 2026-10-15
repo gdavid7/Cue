@@ -92,7 +92,7 @@ export async function getCachedResearch(
       getResearchCacheKey(userId, source, email, name),
     );
   } catch (error) {
-    logger.error("Failed to get cached research", { source, email, error });
+    logger.error("Failed to get cached research", { source, error });
     return null;
   }
 }
@@ -107,13 +107,12 @@ export async function setCachedResearch(
   if (!isRedisConfigured()) return;
 
   if (!content?.trim()) {
-    logger.warn("Skipping cache: content is empty", { source, email });
+    logger.warn("Skipping cache: content is empty", { source });
     return;
   }
   if (content.length > MAX_CONTENT_SIZE) {
     logger.warn("Skipping cache: content exceeds max size", {
       source,
-      email,
       size: content.length,
       maxSize: MAX_CONTENT_SIZE,
     });
@@ -124,6 +123,6 @@ export async function setCachedResearch(
     const key = getResearchCacheKey(userId, source, email, name);
     await redis.set(key, content, { ex: CACHE_TTL_SECONDS });
   } catch (error) {
-    logger.error("Failed to cache research", { source, email, error });
+    logger.error("Failed to cache research", { source, error });
   }
 }

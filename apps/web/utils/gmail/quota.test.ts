@@ -353,7 +353,7 @@ describe("Gmail quota gate", () => {
     ).rejects.toBeInstanceOf(GmailCallDeferredError);
   });
 
-  it("treats what a person clicked, typed or opened as interactive and only enrichment as background", () => {
+  it("treats what a person clicked, typed or opened, or what blocks the page they opened, as interactive and only enrichment as background", () => {
     const priorityOf = (source: string) =>
       runWithAuditContext(
         { source },
@@ -375,6 +375,8 @@ describe("Gmail quota gate", () => {
       "mail/v1/conversation-membership",
       "mail/v1/operations",
       "mobile/all-inboxes/archive",
+      // The mail page cannot paint until it has the account's labels.
+      "labels",
       // The assistant's own route scopes, as their handlers name them.
       "chat",
       "chat/stream",

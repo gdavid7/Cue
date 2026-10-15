@@ -205,6 +205,30 @@ describe("messaging attachment handling", () => {
     expect(aiProcessAssistantChat).toHaveBeenCalledOnce();
     expect(post).toHaveBeenCalledOnce();
   });
+
+  it("does not fetch image attachment URLs that point at internal addresses", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(Buffer.from("metadata"), {
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    const { thread, message } = createMessagingInput({});
+    message.raw = { type: "app_mention", team_id: "T-TEST" };
+    message.attachments = [
+      {
+        type: "image",
+        mimeType: "image/png",
+        url: "http://169.254.169.254/latest/meta-data/",
+      },
+    ];
+
+    await onMention(thread, message);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const savedParts = prisma.chatMessage.upsert.mock.calls[0]?.[0].create
+      .parts as { type: string }[];
+    expect(savedParts.some((part) => part.type === "file")).toBe(false);
+  });
 });
 
 function createMessagingInput({

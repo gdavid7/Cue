@@ -1864,13 +1864,10 @@ export class OutlookProvider implements EmailProvider {
         this.logger,
       );
       const sent = (response.messages?.length ?? 0) > 0;
-      this.logger.info("Checked for sent reply", { senderEmail, sent });
+      this.logger.info("Checked for sent reply", { sent });
       return sent;
     } catch (error) {
-      this.logger.warn("Error checking if reply was sent", {
-        error,
-        senderEmail,
-      });
+      this.logger.warn("Error checking if reply was sent", { error });
       return true; // Default to true on error (safer for TO_REPLY filtering)
     }
   }
@@ -1881,10 +1878,7 @@ export class OutlookProvider implements EmailProvider {
   ): Promise<number> {
     try {
       const query = `from:${senderEmail}`;
-      this.logger.info("Checking received message count", {
-        senderEmail,
-        threshold,
-      });
+      this.logger.info("Checking received message count", { threshold });
 
       // Fetch up to the threshold number of messages
       const response = await getMessages(
@@ -1897,16 +1891,10 @@ export class OutlookProvider implements EmailProvider {
       );
       const count = response.messages?.length ?? 0;
 
-      this.logger.info("Received message count check result", {
-        senderEmail,
-        count,
-      });
+      this.logger.info("Received message count check result", { count });
       return count;
     } catch (error) {
-      this.logger.warn("Error counting received messages", {
-        error,
-        senderEmail,
-      });
+      this.logger.warn("Error counting received messages", { error });
       return 0; // Default to 0 on error
     }
   }

@@ -20,8 +20,11 @@ import { getMessageTimestamp } from "@/utils/email/message-timestamp";
 import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
 import { parseReply } from "@/utils/mail";
-import { fetchConnectorCandidates } from "@/utils/thread-context/connector-context";
-import { fetchLinkedPages } from "@/utils/thread-context/linked-pages";
+import {
+  fetchConnectorCandidates,
+  type ThreadSignals,
+} from "@/utils/thread-context/connector-context";
+import { fetchLinkedPages, linksIn } from "@/utils/thread-context/linked-pages";
 import { redis } from "@/utils/redis";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import type { ParsedMessage } from "@/utils/types";
@@ -181,6 +184,7 @@ export async function collectThreadContext({
       fetchConnectorCandidates({
         emailAccountId,
         keywords: focusKeywords(focus, TOPIC_KEYWORDS),
+        signals: threadSignals(thread, userEmail),
         logger,
         now,
       }),
@@ -324,6 +328,28 @@ function threadText(messages: ParsedMessage[]) {
 
 function messageTime(m: ParsedMessage) {
   return new Date(getMessageTimestamp(m)).toISOString();
+}
+
+/**
+ * Every link in the thread, and the latest person other than the user who
+ * wrote in it, so connected apps can show what the thread points at.
+ */
+function threadSignals(thread: EmailThread, userEmail: string): ThreadSignals {
+  const links = [
+    ...new Set(
+      thread.messages.flatMap((m) => linksIn(m).map((link) => link.href)),
+    ),
+  ];
+  const senderEmail = [...thread.messages]
+    .reverse()
+    .map((m) => extractEmailAddress(m.headers.from).toLowerCase())
+    .find(
+      (email) =>
+        email &&
+        !isSameEmailAddress(email, userEmail) &&
+        !isAutomatedAddress(email),
+    );
+  return senderEmail ? { links, senderEmail } : { links };
 }
 
 function uniqueById<T extends { id: string }>(items: T[]): T[] {

@@ -371,8 +371,8 @@ export const betterAuthConfig = betterAuth({
             name: user.name,
             image: user.image,
           }).catch((error) => {
-            logger.error("Error posting sign up", { error, user });
-            captureException(error, { extra: { user } });
+            logger.error("Error posting sign up", { error, userId: user.id });
+            captureException(error, { userId: user.id });
           });
         },
       },

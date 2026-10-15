@@ -1,6 +1,8 @@
 import { env } from "@/env";
 import { randomBytes, scryptSync } from "node:crypto";
 
+export const API_KEY_HEADER = "API-Key";
+
 export function generateSecureToken(): string {
   return randomBytes(32).toString("base64");
 }

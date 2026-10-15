@@ -2,12 +2,15 @@ import {
   createMailEngine,
   createHostRuntime,
 } from "@inboxzero/mail-core/engine";
-import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
 import { createRoutedBackendAdapter } from "@inboxzero/mail-core/protocol/routed-backend-adapter";
-import type { BrowserMailEngine } from "@/utils/mail-engine/create-browser-engine";
+import {
+  logDroppedWork,
+  type BrowserEngineHooks,
+  type BrowserMailEngine,
+} from "@/utils/mail-engine/create-browser-engine";
 import { createMailHttpRequest } from "@/utils/mail-engine/http";
 import { browserStoragePressure } from "@/utils/mail-engine/storage-pressure";
-import { createWasmSqliteDriver } from "@/utils/mail-engine/wasm-sqlite";
+import { createWasmMailStore } from "@/utils/mail-engine/wasm-sqlite";
 import {
   pageConnectivityOnline,
   requestSyncUnlessOffline,
@@ -18,14 +21,17 @@ import {
 /** The engine on the page itself, for browsers whose dedicated workers fail. */
 export async function createInTabEngine(
   input: BrowserEngineStart,
+  hooks: BrowserEngineHooks,
 ): Promise<BrowserMailEngine> {
-  const driver = await createWasmSqliteDriver({ persist: input.persist });
   const runtime = createHostRuntime({
     storagePressure: browserStoragePressure,
   });
-  const store = await createSqliteMailStore(driver, {
-    maxPendingOperations: input.maxPendingOperations,
-    runtime,
+  const store = await createWasmMailStore({
+    persist: input.persist,
+    options: { maxPendingOperations: input.maxPendingOperations, runtime },
+    ownedAccountIds: input.ownedAccountIds,
+    onRebuild: hooks.onRebuild,
+    onDropped: logDroppedWork,
   });
   const ensureAccount: BrowserMailEngine["ensureAccount"] = async (account) => {
     await store.ensureAccount({

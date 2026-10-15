@@ -257,9 +257,8 @@ async function getThreadsFromSender(
   const from = extractEmailAddress(sender);
 
   if (!from) {
-    logger.error("Unable to analyze sender pattern - from address missing", {
-      from: sender,
-    });
+    logger.error("Unable to analyze sender pattern - from address missing");
+    logger.trace("Sender without an address", { from: sender });
     return {
       threads: [],
       conversationDetected: false,

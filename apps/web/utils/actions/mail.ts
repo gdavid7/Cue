@@ -204,7 +204,6 @@ export const createFilterAction = actionClient
 
       if (!isStatusOk(res.status)) {
         logger.error("Failed to create filter", {
-          from,
           gmailLabelId,
           status: res.status,
         });

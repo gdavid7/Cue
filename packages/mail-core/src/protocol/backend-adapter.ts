@@ -409,7 +409,7 @@ export function createBackendOperationExecutor(input: {
         }),
         signal,
       });
-      const error = parseError(response);
+      const error = readError(response);
       if (error) return mapExecutionError(error);
       return operationAdmitResultSchema.parse(response.json);
     },
@@ -427,7 +427,7 @@ export function createBackendOperationExecutor(input: {
         }),
         signal,
       });
-      const error = parseError(response);
+      const error = readError(response);
       if (error) return mapExecutionError(error);
       return operationAdmitResultSchema.parse(response.json);
     },
@@ -556,8 +556,7 @@ function mapReadError(error: Pick<MailHttpError, "error">) {
   };
 }
 
-function mapExecutionError(error: NonNullable<ReturnType<typeof parseError>>) {
-  if (!error) return { status: "uncertain" as const, receiptId: null };
+function mapExecutionError(error: Pick<MailHttpError, "error">) {
   if (error.error.code === "blocked_auth") {
     return {
       status: "not_dispatched" as const,

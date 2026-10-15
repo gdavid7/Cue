@@ -44,15 +44,22 @@ describe("Composio allowlists", () => {
 
     expect(allowedTools.filter((tool) => !catalog.includes(tool))).toEqual([]);
     for (const tool of allowedTools) {
-      await expect(
-        composioProvider.executeTool({
+      // Tools with an argument contract refuse empty args, which still proves
+      // Composio publishes them; an unpublished slug never reaches that check.
+      const outcome = await composioProvider
+        .executeTool({
           app,
           authScheme,
           emailAccountId: "email-account-1",
           tool,
           args: {},
-        }),
-      ).resolves.toBeDefined();
+        })
+        .catch((error: Error) => error);
+      if (outcome instanceof Error) {
+        expect(outcome.message).toMatch(/is required|must be a|at least one/);
+      } else {
+        expect(outcome).toBeDefined();
+      }
     }
   });
 
