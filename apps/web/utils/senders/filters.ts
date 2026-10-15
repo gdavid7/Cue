@@ -3,6 +3,7 @@ import { canonicalizeEmailAddress, extractEmailAddress } from "@/utils/email";
 import prisma from "@/utils/prisma";
 import { NewsletterStatus } from "@/generated/prisma/enums";
 import { GmailLabel } from "@/utils/gmail/label";
+import { getGmailCallDeferredError } from "@/utils/gmail/quota";
 import type { Logger } from "@/utils/logger";
 
 export async function getAutoArchiveFilters(
@@ -20,8 +21,17 @@ export async function getEmailFilters(
   try {
     return await emailProvider.getFiltersList();
   } catch (error) {
-    logger.error("Error getting email filters", { error });
     // Return empty array instead of throwing, so the newsletter stats still work
+    const deferred = getGmailCallDeferredError(error);
+    if (deferred) {
+      // Background stats yield to the account's per-minute Gmail budget.
+      logger.info("Skipped email filters: Gmail call deferred", {
+        priority: deferred.priority,
+        retryAfterMs: deferred.retryAfterMs,
+      });
+      return [];
+    }
+    logger.error("Error getting email filters", { error });
     return [];
   }
 }

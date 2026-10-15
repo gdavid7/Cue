@@ -1,8 +1,48 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { NewsletterStatus } from "@/generated/prisma/enums";
-import type { EmailFilter } from "@/utils/email/types";
+import type { EmailFilter, EmailProvider } from "@/utils/email/types";
 import { GmailLabel } from "@/utils/gmail/label";
-import { findNewsletterStatus, findSenderLabelFilters } from "./filters";
+import { GmailCallDeferredError } from "@/utils/gmail/quota";
+import { createScopedLogger } from "@/utils/logger";
+import {
+  findNewsletterStatus,
+  findSenderLabelFilters,
+  getEmailFilters,
+} from "./filters";
+
+describe("getEmailFilters", () => {
+  it("treats a quota deferral as filters not loaded yet, not an error", async () => {
+    const logger = createScopedLogger("test");
+    const errorSpy = vi.spyOn(logger, "error");
+    const provider = {
+      getFiltersList: vi
+        .fn()
+        // Gaxios wraps what the metered request throws.
+        .mockRejectedValue(
+          Object.assign(new Error("request failed"), {
+            cause: new GmailCallDeferredError(20_000, "background"),
+          }),
+        ),
+    } as unknown as EmailProvider;
+
+    await expect(getEmailFilters(provider, logger)).resolves.toEqual([]);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("still reports a real provider failure as an error", async () => {
+    const logger = createScopedLogger("test");
+    const errorSpy = vi.spyOn(logger, "error");
+    const provider = {
+      getFiltersList: vi.fn().mockRejectedValue(new Error("Backend Error")),
+    } as unknown as EmailProvider;
+
+    await expect(getEmailFilters(provider, logger)).resolves.toEqual([]);
+    expect(errorSpy).toHaveBeenCalledWith(
+      "Error getting email filters",
+      expect.anything(),
+    );
+  });
+});
 
 describe("findNewsletterStatus", () => {
   it("matches sender addresses case-insensitively", () => {
