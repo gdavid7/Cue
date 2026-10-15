@@ -3,6 +3,7 @@ import type { SqlTransaction } from "./driver";
 import {
   migrateConversationIndex,
   migrateInboxUnreadExcludesArchive,
+  migrateIncrementalConversationIndex,
   migrateMembershipIndex,
 } from "./conversation-index";
 import { migrateMessageSearchIndex } from "./message-search-index";
@@ -417,6 +418,7 @@ export async function migrateMailbox(
   await migrateConversationIndex(tx);
   await migrateMembershipIndex(tx);
   await migrateInboxUnreadExcludesArchive(tx);
+  await migrateIncrementalConversationIndex(tx);
   await migrateMessageSearchIndex(tx);
   await migrateEmptyMeetingInvitationBodies(tx);
   await migrateContactSuggestions(tx);

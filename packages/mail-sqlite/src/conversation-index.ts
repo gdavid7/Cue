@@ -42,11 +42,7 @@ export async function migrateInboxUnreadExcludesArchive(tx: SqlTransaction) {
     "SELECT 1 FROM schema_migrations WHERE id = 2",
   );
   if (indexed.length) {
-    for (const event of ["insert", "delete", "update"]) {
-      await tx.exec(
-        `DROP TRIGGER IF EXISTS effective_conversations_after_${event}`,
-      );
-    }
+    await dropConversationTriggers(tx);
     await tx.exec(`
       ${clearArchiveInboxRole("messages")}
       ${clearArchiveInboxRole("effective_messages")}
@@ -60,27 +56,110 @@ export async function migrateInboxUnreadExcludesArchive(tx: SqlTransaction) {
   );
 }
 
-async function installConversationTriggers(tx: SqlTransaction) {
-  for (const [event, identities] of [
-    ["INSERT", ["NEW"]],
-    ["DELETE", ["OLD"]],
-    ["UPDATE", ["OLD", "NEW"]],
-  ] as const) {
-    const predicate = identities
-      .map(
-        (row) =>
-          `(account_id = ${row}.account_id AND conversation_id = ${row}.conversation_id)`,
-      )
-      .join(" OR ");
-    await tx.exec(`
-      CREATE TRIGGER effective_conversations_after_${event.toLowerCase()}
-      AFTER ${event} ON effective_messages
-      BEGIN
-        DELETE FROM effective_role_conversations WHERE ${predicate};
-        ${rebuildConversations(predicate)}
-      END;
-    `);
+// Earlier triggers rebuilt a conversation from all its messages on every
+// write, so syncing an n-message conversation cost O(n^2).
+export async function migrateIncrementalConversationIndex(tx: SqlTransaction) {
+  const applied = await tx.query(
+    "SELECT 1 FROM schema_migrations WHERE id = 11",
+  );
+  if (applied.length) return;
+
+  const indexed = await tx.query(
+    "SELECT 1 FROM schema_migrations WHERE id = 2",
+  );
+  if (indexed.length) {
+    await dropConversationTriggers(tx);
+    await installConversationTriggers(tx);
   }
+  await tx.execute(
+    "INSERT INTO schema_migrations(id, name) VALUES (11, '0011-incremental-conversation-index')",
+  );
+}
+
+async function dropConversationTriggers(tx: SqlTransaction) {
+  for (const event of ["insert", "delete", "update"]) {
+    await tx.exec(
+      `DROP TRIGGER IF EXISTS effective_conversations_after_${event}`,
+    );
+  }
+}
+
+// Every aggregate is a MAX over the conversation's messages, so an insert can
+// only raise it and is folded in without reading the rest of the conversation.
+// Updates and deletes can lower it, so they rebuild the conversation, and an
+// update that leaves every aggregated column alone is skipped.
+async function installConversationTriggers(tx: SqlTransaction) {
+  await tx.exec(`
+    CREATE TRIGGER effective_conversations_after_insert
+    AFTER INSERT ON effective_messages
+    BEGIN
+      INSERT INTO effective_role_conversations(
+        account_id, conversation_id, role, latest_at_ms, unread, starred
+      )
+      SELECT NEW.account_id, NEW.conversation_id, roles.value,
+             NEW.received_at_ms, 1 - NEW.read, NEW.starred
+      FROM json_each(NEW.roles_json) AS roles
+      WHERE ${countsTowardRole("roles.value", "NEW")}
+      ON CONFLICT(account_id, conversation_id, role) DO UPDATE SET
+        latest_at_ms = MAX(latest_at_ms, excluded.latest_at_ms),
+        unread = MAX(unread, excluded.unread),
+        starred = MAX(starred, excluded.starred);
+    END;
+  `);
+
+  const oldConversation = conversationOf("OLD");
+  await tx.exec(`
+    CREATE TRIGGER effective_conversations_after_delete
+    AFTER DELETE ON effective_messages
+    BEGIN
+      DELETE FROM effective_role_conversations WHERE ${oldConversation};
+      ${rebuildConversations(oldConversation)}
+    END;
+  `);
+
+  const changedConversations = `${oldConversation} OR ${conversationOf("NEW")}`;
+  const aggregatedColumnChanged = AGGREGATED_COLUMNS.map(
+    (column) => `OLD.${column} IS NOT NEW.${column}`,
+  ).join(" OR ");
+  await tx.exec(`
+    CREATE TRIGGER effective_conversations_after_update
+    AFTER UPDATE ON effective_messages
+    WHEN ${aggregatedColumnChanged}
+    BEGIN
+      DELETE FROM effective_role_conversations WHERE ${changedConversations};
+      ${rebuildConversations(changedConversations)}
+    END;
+  `);
+}
+
+// Every column rebuildConversations reads from effective_messages.
+const AGGREGATED_COLUMNS = [
+  "account_id",
+  "conversation_id",
+  "received_at_ms",
+  "read",
+  "starred",
+  "roles_json",
+  "in_inbox",
+  "label_ids_json",
+];
+
+function conversationOf(row: "OLD" | "NEW") {
+  return `(account_id = ${row}.account_id AND conversation_id = ${row}.conversation_id)`;
+}
+
+// Archived mail keeps no inbox membership even if its roles still say inbox.
+function countsTowardRole(role: string, row: string) {
+  return `NOT (
+        ${role} = 'inbox'
+        AND (
+          ${row}.in_inbox = 0
+          OR EXISTS (
+            SELECT 1 FROM json_each(${row}.label_ids_json) AS labels
+            WHERE labels.value = 'ARCHIVE'
+          )
+        )
+      )`;
 }
 
 function rebuildConversations(predicate: string) {
@@ -91,16 +170,7 @@ function rebuildConversations(predicate: string) {
            MAX(received_at_ms), MAX(1 - read), MAX(starred)
     FROM effective_messages, json_each(roles_json) AS roles
     WHERE (${predicate})
-      AND NOT (
-        roles.value = 'inbox'
-        AND (
-          effective_messages.in_inbox = 0
-          OR EXISTS (
-            SELECT 1 FROM json_each(effective_messages.label_ids_json) AS labels
-            WHERE labels.value = 'ARCHIVE'
-          )
-        )
-      )
+      AND ${countsTowardRole("roles.value", "effective_messages")}
     GROUP BY account_id, conversation_id, roles.value;`;
 }
 

@@ -5,7 +5,7 @@ import {
   migrateConversationIndex,
   migrateMembershipIndex,
 } from "./conversation-index";
-import type { SqlTransaction } from "./driver";
+import type { SqlTransaction, SqliteDriver } from "./driver";
 import type { MailboxCountsQuery } from "@inboxzero/mail-core/queries";
 
 describe("transactional conversation index", () => {
@@ -370,6 +370,131 @@ describe("transactional conversation index", () => {
     }
   });
 
+  it("keeps the role index equal to a full rebuild through inserts, updates and deletes", async () => {
+    const driver = createNodeSqliteDriver();
+    const store = await createSqliteMailStore(driver);
+    try {
+      await store.ensureAccount({
+        accountId: "a",
+        provider: "google",
+        generation: "g",
+      });
+      await store.ensureAccount({
+        accountId: "b",
+        provider: "google",
+        generation: "g",
+      });
+      // Each aggregated column changes alone in a conversation nothing else
+      // touches, so skipping any one rebuild leaves a stale row behind.
+      await driver.write(async (tx) => {
+        await insertMessage(tx, "m1", "received", 10, 1);
+        await insertMessage(tx, "m2", "received", 30, 0);
+        await insertMessage(tx, "m3", "read", 20, 0);
+        await insertMessage(tx, "m4", "starred", 40, 1);
+        await insertMessage(tx, "m5", "roles", 50, 0, {
+          roles: ["inbox", "sent"],
+        });
+        await insertMessage(tx, "m6", "labels", 60, 0, {
+          labels: ["ARCHIVE"],
+        });
+        await insertMessage(tx, "m7", "in-inbox", 70, 0);
+        await insertMessage(tx, "m8", "moved-from", 80, 0);
+        await insertMessage(tx, "m9", "moved-to", 90, 0);
+        await insertMessage(tx, "m10", "account", 100, 0, { account: "b" });
+        await insertMessage(tx, "m11", "renamed", 110, 0);
+        await insertMessage(tx, "m12", "deleted", 120, 0);
+        await insertMessage(tx, "m13", "deleted", 5, 1);
+        // An older, read insert must not lower the newer unread message's row.
+        await insertMessage(tx, "m14", "folded", 200, 0);
+        await insertMessage(tx, "m15", "folded", 150, 1);
+        for (const [assignment, messageId] of [
+          ["received_at_ms = 15", "m2"],
+          ["read = 1", "m3"],
+          ["starred = 1", "m4"],
+          [`roles_json = '["sent"]'`, "m5"],
+          ["label_ids_json = '[]'", "m6"],
+          ["in_inbox = 0", "m7"],
+          ["conversation_id = 'moved-to'", "m8"],
+          ["account_id = 'a'", "m10"],
+          ["subject = 'Renamed'", "m11"],
+        ]) {
+          await tx.execute(
+            `UPDATE effective_messages SET ${assignment} WHERE message_id = ?`,
+            [messageId],
+          );
+        }
+        await tx.execute(
+          "DELETE FROM effective_messages WHERE message_id = 'm12'",
+        );
+      });
+      const maintained = await roleIndexRows(driver);
+
+      await driver.write(async (tx) => {
+        for (const event of ["insert", "delete", "update"]) {
+          await tx.exec(`DROP TRIGGER effective_conversations_after_${event}`);
+        }
+        await tx.exec(
+          "DROP TABLE effective_role_conversations; DELETE FROM schema_migrations WHERE id = 2;",
+        );
+        await migrateConversationIndex(tx);
+      });
+
+      expect(maintained).toEqual(await roleIndexRows(driver));
+      expect(maintained).toContainEqual({
+        account_id: "a",
+        conversation_id: "received",
+        role: "inbox",
+        latest_at_ms: 15,
+        unread: 1,
+        starred: 0,
+      });
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("adds a message to a large conversation without rereading the conversation", async () => {
+    const driver = createNodeSqliteDriver();
+    const store = await createSqliteMailStore(driver);
+    try {
+      await store.ensureAccount({
+        accountId: "a",
+        provider: "google",
+        generation: "g",
+      });
+      const elapsed = await driver.write(async (tx) => {
+        for (let index = 0; index < 2000; index += 1) {
+          await insertMessage(tx, `big-${index}`, "big", index, 0);
+        }
+        const timeInserts = async (
+          conversationFor: (index: number) => string,
+        ) => {
+          const started = performance.now();
+          for (let index = 0; index < 200; index += 1) {
+            const conversation = conversationFor(index);
+            await insertMessage(
+              tx,
+              `added-${conversation}-${index}`,
+              conversation,
+              index,
+              0,
+            );
+          }
+          return performance.now() - started;
+        };
+        return {
+          large: await timeInserts(() => "big"),
+          fresh: await timeInserts((index) => `fresh-${index}`),
+        };
+      });
+      // Rebuilding on every write made each insert here read all 2,000 rows
+      // (about 90x the fresh case); folding the row in keeps them comparable.
+      expect(elapsed.large).toBeLessThan(elapsed.fresh * 3);
+    } finally {
+      await store.close();
+    }
+  });
+
   it("backfills an existing mailbox once", async () => {
     const driver = createNodeSqliteDriver();
     const store = await createSqliteMailStore(driver);
@@ -443,5 +568,15 @@ async function insertMessage(
       inDraft,
       options.snoozedUntil ?? null,
     ],
+  );
+}
+
+async function roleIndexRows(driver: SqliteDriver) {
+  return driver.read((tx) =>
+    tx.query(
+      `SELECT account_id, conversation_id, role, latest_at_ms, unread, starred
+       FROM effective_role_conversations
+       ORDER BY account_id, conversation_id, role`,
+    ),
   );
 }
