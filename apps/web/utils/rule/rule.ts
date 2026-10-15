@@ -107,7 +107,7 @@ export function outboundActionsNeedChatConfirmation({
     getChatRiskMessages(emailActions, conditions).length === 0
   ) {
     riskMessages.unshift(
-      "This rule sends or forwards email automatically. Check every recipient, and only confirm if you asked for this.",
+      "Emails matching this rule will be sent or forwarded automatically to the recipients above. Confirm only if you asked for this.",
     );
   }
 
