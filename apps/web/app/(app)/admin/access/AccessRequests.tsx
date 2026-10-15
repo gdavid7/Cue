@@ -1,13 +1,11 @@
 "use client";
 
-import { type FormEvent, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
 import { ExternalLinkIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -27,7 +25,6 @@ import {
 } from "@/components/ui/table";
 import { toastError, toastSuccess } from "@/components/Toast";
 import {
-  approveAccessEmailAction,
   approveAccessRequestsAction,
   declineAccessRequestAction,
   importAllowlistAction,
@@ -123,13 +120,6 @@ export function AccessRequests({
 
   return (
     <div className="mt-6 space-y-6">
-      <ApproveAddressForm
-        onApproved={(rows) => {
-          setApproved(rows);
-          router.refresh();
-        }}
-      />
-
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <p className="text-muted-foreground text-sm">
           {counts.APPROVED} approved · {counts.PENDING} pending
@@ -337,54 +327,6 @@ function ImportAllowlistButton({
     >
       Import AUTH_ALLOWED_EMAILS ({count})
     </Button>
-  );
-}
-
-function ApproveAddressForm({
-  onApproved,
-}: {
-  onApproved: (approved: Approved[]) => void;
-}) {
-  const [email, setEmail] = useState("");
-  const [isSaving, setIsSaving] = useState(false);
-
-  async function onSubmit(event: FormEvent) {
-    event.preventDefault();
-    setIsSaving(true);
-    const result = await approveAccessEmailAction({ email });
-    setIsSaving(false);
-    if (result?.serverError || result?.validationErrors) {
-      toastError({ description: getActionErrorMessage(result) });
-      return;
-    }
-    if (result?.data?.alreadyApproved) {
-      toastSuccess({ description: "That address is already approved." });
-      return;
-    }
-    setEmail("");
-    onApproved(result?.data?.approved ?? []);
-  }
-
-  return (
-    <form
-      onSubmit={onSubmit}
-      className="flex max-w-md flex-col gap-2 sm:flex-row sm:items-end"
-    >
-      <div className="flex-1 space-y-1.5">
-        <Label htmlFor="approve-address">Approve an address</Label>
-        <Input
-          id="approve-address"
-          type="email"
-          required
-          placeholder="friend@gmail.com"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-        />
-      </div>
-      <Button type="submit" loading={isSaving}>
-        Approve
-      </Button>
-    </form>
   );
 }
 

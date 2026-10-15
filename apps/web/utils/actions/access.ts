@@ -117,7 +117,10 @@ export const approveAccessRequestsAction = adminActionClient
     return { approved };
   });
 
-/** Lets the founder approve a friend directly, without a request first. */
+/**
+ * Lets the founder approve anyone directly, without a request first. Returns
+ * the address as stored, which is the one sign-in is matched against.
+ */
 export const approveAccessEmailAction = adminActionClient
   .metadata({ name: "approveAccessEmail" })
   .inputSchema(approveAccessEmailBody)
@@ -128,7 +131,12 @@ export const approveAccessEmailAction = adminActionClient
       select: { id: true, status: true },
     });
     if (existing?.status === "APPROVED")
-      return { approved: [], alreadyApproved: true };
+      return {
+        id: existing.id,
+        email: normalizedEmail,
+        approved: [],
+        alreadyApproved: true,
+      };
 
     const request = await prisma.accessRequest.upsert({
       where: { email: normalizedEmail },
@@ -153,6 +161,8 @@ export const approveAccessEmailAction = adminActionClient
     });
 
     return {
+      id: request.id,
+      email: request.email,
       approved: [{ id: request.id, email: request.email, emailed }],
       alreadyApproved: false,
     };
