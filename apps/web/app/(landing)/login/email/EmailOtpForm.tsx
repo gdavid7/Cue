@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
+import { useHydrated } from "@/hooks/useHydrated";
 import { emailOtp, signIn } from "@/utils/auth-client";
 import { buildRedirectUrl, redirectToSafeUrl } from "@/utils/redirect";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,7 @@ import { Label } from "@/components/ui/label";
 export function EmailOtpForm({ callbackURL }: { callbackURL: string }) {
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const hydrated = useHydrated();
   const {
     register,
     handleSubmit,
@@ -97,7 +99,12 @@ export function EmailOtpForm({ callbackURL }: { callbackURL: string }) {
           {error}
         </p>
       )}
-      <Button className="w-full" type="submit" loading={isSubmitting}>
+      <Button
+        className="w-full"
+        type="submit"
+        loading={isSubmitting}
+        disabled={!hydrated}
+      >
         {sentTo ? "Sign in" : "Send code"}
       </Button>
       {sentTo ? (

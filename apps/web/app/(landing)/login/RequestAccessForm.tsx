@@ -6,6 +6,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useAction } from "next-safe-action/hooks";
 import { Button } from "@/components/ui/button";
+import { useHydrated } from "@/hooks/useHydrated";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { requestAccessAction } from "@/utils/actions/access";
@@ -19,6 +20,7 @@ import { BRAND_NAME } from "@/utils/branding";
 export function RequestAccessForm() {
   const [requestedEmail, setRequestedEmail] = useState<string | null>(null);
   const confirmationRef = useRef<HTMLHeadingElement>(null);
+  const hydrated = useHydrated();
   const {
     register,
     handleSubmit,
@@ -139,7 +141,13 @@ export function RequestAccessForm() {
           {serverError}
         </p>
       )}
-      <Button type="submit" size="lg" className="w-full" loading={isExecuting}>
+      <Button
+        type="submit"
+        size="lg"
+        className="w-full"
+        loading={isExecuting}
+        disabled={!hydrated}
+      >
         Request access
       </Button>
       <p className="text-muted-foreground text-xs leading-relaxed">
