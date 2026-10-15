@@ -156,6 +156,24 @@ describe("ComposeModalProvider focus", () => {
     // Radix restores focus a task after the dialog unmounts.
     await waitFor(() => expect(document.activeElement).toBe(opener));
   });
+
+  // Docked compose sits beside the inbox, so the user may have moved on to
+  // another row; pulling focus back would make Enter open the stale one.
+  it("leaves focus where the user moved it outside compose", async () => {
+    renderProvider();
+    const opener = await screen.findByRole("button", { name: "Compose" });
+    opener.focus();
+    fireEvent.click(opener);
+    await screen.findByTestId("composer");
+    const elsewhere = screen.getByRole("button", { name: "Pop out" });
+    elsewhere.focus();
+
+    fireEvent.keyDown(elsewhere, { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByTestId("composer")).toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(document.activeElement).toBe(elsewhere);
+  });
 });
 
 function renderProvider() {

@@ -212,6 +212,11 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
           onCloseAutoFocus={(event) => {
             const target = opener.current;
             opener.current = null;
+            // Focus left with compose only if it was inside; docked compose
+            // sits beside the inbox, where the user may have moved on to
+            // another row that Enter should open.
+            const active = document.activeElement;
+            if (active && active !== document.body) return;
             if (!target?.isConnected) return;
             event.preventDefault();
             target.focus();
