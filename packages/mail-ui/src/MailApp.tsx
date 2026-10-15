@@ -155,6 +155,7 @@ export function MailApp({
       style={styles.frame}
       bodyStyle={styles.body}
       sidebar={sidebar}
+      sidebarStyle={styles.sidebarScope}
     >
       <section aria-label="Mailbox" style={styles.listPane}>
         <header style={styles.toolbar}>
@@ -526,14 +527,15 @@ function formatDate(ms: number) {
   });
 }
 
+// Theme tokens from the shared stylesheet, so the shell follows light and dark.
 const styles = {
   frame: {
     height: "100vh",
     minHeight: 0,
     display: "flex",
     flexDirection: "column",
-    background: "white",
-    color: "#111827",
+    background: "hsl(var(--background))",
+    color: "hsl(var(--foreground))",
     fontFamily:
       'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   },
@@ -542,31 +544,40 @@ const styles = {
     flex: 1,
     display: "flex",
   },
+  // Lets the sidebar fill the window height instead of its content height.
+  sidebarScope: { display: "flex" },
   sidebar: {
     width: 224,
     minWidth: 224,
-    borderRight: "1px solid #e5e7eb",
+    borderRight: "1px solid hsl(var(--sidebar-border))",
     padding: 12,
     display: "flex",
     flexDirection: "column",
     gap: 8,
-    background: "#f8fafc",
+    background: "hsl(var(--sidebar-background))",
+    color: "hsl(var(--sidebar-foreground))",
   },
-  brand: { fontWeight: 700, fontSize: 18, marginBottom: 8 },
+  brand: {
+    fontWeight: 700,
+    fontSize: 18,
+    marginBottom: 8,
+    color: "hsl(var(--foreground))",
+  },
   primaryButton: {
     border: 0,
     borderRadius: 10,
     padding: "10px 12px",
-    background: "#111827",
-    color: "white",
+    background: "hsl(var(--primary))",
+    color: "hsl(var(--primary-foreground))",
     textAlign: "left",
     cursor: "pointer",
   },
   secondaryButton: {
-    border: "1px solid #d1d5db",
+    border: "1px solid hsl(var(--input))",
     borderRadius: 8,
     padding: "8px 10px",
-    background: "white",
+    background: "hsl(var(--background))",
+    color: "hsl(var(--foreground))",
     cursor: "pointer",
   },
   navButton: {
@@ -579,7 +590,7 @@ const styles = {
   },
   sidebarHeading: {
     marginTop: 12,
-    color: "#6b7280",
+    color: "hsl(var(--sidebar-muted-foreground))",
     fontSize: 12,
     textTransform: "uppercase",
   },
@@ -597,18 +608,19 @@ const styles = {
     border: 0,
     borderRadius: 8,
     padding: "8px 10px",
-    background: "#e0e7ff",
+    background: "hsl(var(--sidebar-accent))",
+    color: "hsl(var(--sidebar-accent-foreground))",
     textAlign: "left",
     cursor: "pointer",
     display: "flex",
     flexDirection: "column",
   },
   accountName: { fontWeight: 600 },
-  accountEmail: { color: "#6b7280", fontSize: 12 },
+  accountEmail: { color: "hsl(var(--sidebar-muted-foreground))", fontSize: 12 },
   listPane: {
     width: 390,
     minWidth: 320,
-    borderRight: "1px solid #e5e7eb",
+    borderRight: "1px solid hsl(var(--border-strong))",
     display: "flex",
     flexDirection: "column",
   },
@@ -616,7 +628,7 @@ const styles = {
     display: "flex",
     gap: 8,
     padding: 12,
-    borderBottom: "1px solid #e5e7eb",
+    borderBottom: "1px solid hsl(var(--border))",
     alignItems: "end",
   },
   searchLabel: {
@@ -625,20 +637,22 @@ const styles = {
     flexDirection: "column",
     gap: 4,
     fontSize: 12,
-    color: "#6b7280",
+    color: "hsl(var(--muted-foreground))",
   },
   searchInput: {
-    border: "1px solid #d1d5db",
+    border: "1px solid hsl(var(--input))",
     borderRadius: 8,
     padding: "8px 10px",
     fontSize: 14,
+    background: "hsl(var(--background))",
+    color: "hsl(var(--foreground))",
   },
   status: {
     margin: 0,
     padding: "8px 12px",
-    color: "#6b7280",
+    color: "hsl(var(--muted-foreground))",
     fontSize: 13,
-    borderBottom: "1px solid #f3f4f6",
+    borderBottom: "1px solid hsl(var(--border))",
   },
   conversationList: {
     margin: 0,
@@ -657,17 +671,24 @@ const styles = {
     fontSize: 11,
   },
   labelChip: {
-    border: "1px solid #dbe3ef",
+    border: "1px solid hsl(var(--border-strong))",
     borderRadius: 999,
-    color: "#475569",
+    color: "hsl(var(--muted-foreground))",
     fontSize: 11,
     padding: "1px 6px",
   },
-  readerPane: { minWidth: 0, flex: 1, overflow: "auto", background: "white" },
+  readerPane: {
+    minWidth: 0,
+    flex: 1,
+    display: "flex",
+    flexDirection: "column",
+    overflow: "auto",
+    background: "hsl(var(--background))",
+  },
   emptyReader: {
     height: "100%",
     display: "grid",
     placeItems: "center",
-    color: "#6b7280",
+    color: "hsl(var(--muted-foreground))",
   },
 } satisfies Record<string, import("react").CSSProperties>;

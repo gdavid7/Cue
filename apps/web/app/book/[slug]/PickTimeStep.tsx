@@ -71,7 +71,7 @@ export function PickTimeStep({
           {loading ? (
             <SlotSkeleton />
           ) : error ? (
-            <p className="text-sm text-red-500">{error}</p>
+            <p className="text-sm text-destructive">{error}</p>
           ) : slotsForDay.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               No slots available on this day.
@@ -83,7 +83,7 @@ export function PickTimeStep({
                   key={slot.startTime}
                   type="button"
                   onClick={() => onPickSlot(slot)}
-                  className="rounded-lg border border-input bg-background px-3 py-2.5 text-sm font-medium tabular-nums text-foreground transition-colors hover:border-blue-600 hover:text-blue-700"
+                  className="rounded-lg border border-input bg-background px-3 py-2.5 text-sm font-medium tabular-nums text-foreground transition-colors hover:border-blue-600 hover:text-blue-700 dark:hover:border-blue-400 dark:hover:text-blue-300"
                 >
                   {formatSlotTime(slot.startTime, timezone, hourFormat)}
                 </button>
@@ -155,8 +155,8 @@ function BookingCalendar({
           "size-9 rounded-lg p-0 text-xs font-normal tabular-nums aria-selected:opacity-100 sm:size-10 sm:text-sm md:size-14",
         ),
         day_selected:
-          "bg-blue-600 text-white hover:bg-blue-600 hover:text-white focus:bg-blue-600 focus:text-white",
-        day_today: "ring-1 ring-blue-200",
+          "bg-blue-600 text-white hover:bg-blue-600 hover:text-white focus:bg-blue-600 focus:text-white dark:aria-selected:bg-blue-600 dark:aria-selected:text-white",
+        day_today: "ring-1 ring-blue-200 dark:ring-blue-400/50",
         day_disabled:
           "pointer-events-none cursor-not-allowed text-muted-foreground opacity-40 hover:bg-transparent hover:text-muted-foreground",
       }}

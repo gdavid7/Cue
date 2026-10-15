@@ -288,7 +288,8 @@ export function getDesktopMailAccountId(
   return MAIL_ACCOUNT_PATH.exec(parsed.pathname)?.[1] ?? null;
 }
 
-const DESKTOP_WINDOW_BACKGROUND = "#ffffff";
+/** The app's light and dark `--background`, shown until the page paints. */
+const DESKTOP_WINDOW_BACKGROUND = { light: "#ffffff", dark: "#26282c" };
 
 /** Vertically centers the lights in the 52px left drag region. */
 export const DESKTOP_MAC_TRAFFIC_LIGHT_POSITION = { x: 16, y: 18 } as const;
@@ -300,15 +301,19 @@ export const DESKTOP_MAC_TITLEBAR_SPACER_ATTRIBUTE =
   "data-desktop-mac-titlebar-spacer";
 export const DESKTOP_MAC_END_ATTRIBUTE = "data-desktop-mac-end";
 
-export function getDesktopWindowChrome(platform = process.platform): {
+export function getDesktopWindowChrome(
+  platform = process.platform,
+  dark = false,
+): {
   autoHideMenuBar?: boolean;
   backgroundColor: string;
   titleBarStyle?: "default" | "hiddenInset";
   trafficLightPosition?: { x: number; y: number };
 } {
+  const backgroundColor = DESKTOP_WINDOW_BACKGROUND[dark ? "dark" : "light"];
   if (platform === "darwin") {
     return {
-      backgroundColor: DESKTOP_WINDOW_BACKGROUND,
+      backgroundColor,
       titleBarStyle: "hiddenInset",
       trafficLightPosition: { ...DESKTOP_MAC_TRAFFIC_LIGHT_POSITION },
     };
@@ -317,14 +322,14 @@ export function getDesktopWindowChrome(platform = process.platform): {
   if (platform === "win32") {
     return {
       autoHideMenuBar: false,
-      backgroundColor: DESKTOP_WINDOW_BACKGROUND,
+      backgroundColor,
       titleBarStyle: "default",
     };
   }
 
   return {
     autoHideMenuBar: true,
-    backgroundColor: DESKTOP_WINDOW_BACKGROUND,
+    backgroundColor,
   };
 }
 

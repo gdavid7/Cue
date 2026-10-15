@@ -262,6 +262,9 @@ describe("desktop shell helpers", () => {
       autoHideMenuBar: true,
       backgroundColor: "#ffffff",
     });
+    expect(getDesktopWindowChrome("darwin", true).backgroundColor).toBe(
+      "#26282c",
+    );
   });
 
   it("persists in-app pages but not auth or API URLs", () => {

@@ -271,7 +271,9 @@ function DetailsStep({
           </FormField>
         </div>
 
-        {error ? <p className="mt-4 text-sm text-red-500">{error}</p> : null}
+        {error ? (
+          <p className="mt-4 text-sm text-destructive">{error}</p>
+        ) : null}
 
         <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
           <p className="text-xs text-muted-foreground sm:min-w-0 sm:flex-1 sm:pr-2">
@@ -324,7 +326,7 @@ function BookingSuccessCard({
             {success.rescheduleUrl ? (
               <a
                 href={success.rescheduleUrl}
-                className="font-medium text-blue-600 underline"
+                className="font-medium text-blue-600 underline dark:text-blue-400"
               >
                 Reschedule
               </a>
@@ -333,7 +335,7 @@ function BookingSuccessCard({
             {success.cancelUrl ? (
               <a
                 href={success.cancelUrl}
-                className="font-medium text-blue-600 underline"
+                className="font-medium text-blue-600 underline dark:text-blue-400"
               >
                 cancel booking
               </a>
@@ -363,7 +365,7 @@ function FormField({
     <div>
       <div className="mb-1.5 text-sm font-medium text-foreground">
         {label}
-        {required ? <span className="text-red-500"> *</span> : null}
+        {required ? <span className="text-destructive"> *</span> : null}
         {optional ? (
           <span className="text-muted-foreground"> (optional)</span>
         ) : null}

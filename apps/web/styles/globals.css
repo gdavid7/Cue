@@ -78,8 +78,8 @@
     --destructive: 0 90.6% 76%; /* #F98A8A, 4.5:1+ even on a highlighted --accent row */
     --destructive-foreground: 220 7% 12%; /* #1C1E21 */
     --border: 220 6% 22%; /* #35373B */
-    /* A step above --border so field outlines stay findable */
-    --input: 220 6% 28%; /* #43464C */
+    /* Well above --border so field outlines stay findable on --card too */
+    --input: 220 5% 40%; /* #61646B, 2.5:1 on --background */
     --border-strong: 220 6% 28%; /* #43464C */
     --ring: 240 4.9% 83.9%;
     --chart-1: oklch(0.7 0.2 250);
@@ -179,6 +179,34 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+  /* @tailwindcss/forms paints unstyled fields white with a gray-500 outline;
+     in dark mode they take the theme's surface and field outline instead.
+     Same specificity as the plugin's rules, so its :checked and :focus states
+     and any utility class still win. */
+  .dark
+  :where(
+    [type="text"],
+    input:where(:not([type])),
+    [type="email"],
+    [type="url"],
+    [type="password"],
+    [type="number"],
+    [type="date"],
+    [type="datetime-local"],
+    [type="month"],
+    [type="search"],
+    [type="tel"],
+    [type="time"],
+    [type="week"],
+    [multiple],
+    textarea,
+    select,
+    [type="checkbox"],
+    [type="radio"]
+  ) {
+    background-color: hsl(var(--background));
+    border-color: hsl(var(--input));
   }
 }
 
