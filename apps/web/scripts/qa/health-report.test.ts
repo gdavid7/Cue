@@ -1,6 +1,8 @@
 import { Logger, LogLevel } from "next-axiom";
+import { serializeError } from "serialize-error";
 import { describe, expect, it } from "vitest";
 import {
+  type AxiomResults,
   buildAxiomQueries,
   buildHealthReport,
   formatAxiomError,
@@ -65,6 +67,26 @@ describe("buildAxiomQueries", () => {
       totalUnits: 120,
       limitUnits: 15_000,
     });
+    // What Cue's logger ships for `logger.error(message, { error })` in
+    // production, and for the middleware's "Unhandled error".
+    const gmailError = Object.assign(new Error("Insufficient Permission"), {
+      status: 403,
+      code: 403,
+    });
+    logger.error("Error getting email filters", {
+      scope: "api",
+      url: "/api/user/stats/newsletters",
+      error: serializeError(gmailError),
+      errorMessage: gmailError.message,
+    });
+    logger.error("Unhandled error", {
+      scope: "mail-stream",
+      url: "/api/mail-stream",
+      error: "REDIS_URL is not set",
+      errorMessage: "REDIS_URL is not set",
+      cause: "missing configuration",
+      stack: new Error("REDIS_URL is not set").stack,
+    });
     const shipped = new Set(
       logger.logEvents.flatMap((event) => flattenKeys(event)),
     );
@@ -74,17 +96,32 @@ describe("buildAxiomQueries", () => {
       const bracketed = [...apl.matchAll(/\['([^']+)'\]/g)].map((m) => m[1]);
       expect(bracketed, name).toEqual(["cue"]);
       for (const [, field] of apl.matchAll(/column_ifexists\('([^']+)'/g)) {
-        expect(shipped, `${name} names ${field}`).toContain(field);
+        // next-axiom files the same platform metadata under `vercel` on
+        // Vercel and under `platform` elsewhere, such as this test, and only
+        // adds `git` on Vercel.
+        const shippedAs = field.replace(/^vercel\./, "platform.");
+        if (field.startsWith("git.")) expect(field).toBe("git.ref");
+        else expect(shipped, `${name} names ${field}`).toContain(shippedAs);
         checked.add(field);
       }
     }
     expect([...checked].sort()).toEqual([
+      "fields.cause",
       "fields.durationMs",
+      "fields.error.code",
+      "fields.error.name",
+      "fields.error.stack",
+      "fields.error.status",
+      "fields.errorMessage",
       "fields.limitUnits",
+      "fields.stack",
       "fields.totalUnits",
       "fields.url",
+      "git.ref",
       "level",
       "message",
+      "vercel.environment",
+      "vercel.region",
     ]);
   });
 });
@@ -135,6 +172,7 @@ describe("summarizeAxiom", () => {
           { route: "/api/chat?x=1", p95Ms: 8123.4, maxMs: 20_000, events: 5 },
         ],
       },
+      errorSamples: { rows: [] },
     });
 
     expect(summary).toMatchObject({
@@ -154,6 +192,74 @@ describe("summarizeAxiom", () => {
     expect(JSON.stringify(summary)).not.toContain("jane.doe");
   });
 
+  it("attaches one redacted sample to each top error", () => {
+    const filtersRoute = "/api/user/stats/newsletters";
+    const summary = summarizeAxiom({
+      ...emptyAxiomResults(),
+      errorsByRoute: {
+        rows: [
+          {
+            route: filtersRoute,
+            message: "Error getting email filters",
+            events: 49,
+          },
+          { route: "", message: "Discovery fetch failed", events: 6 },
+          { route: "/api/labels", message: "Error fetching labels", events: 1 },
+        ],
+      },
+      errorSamples: {
+        rows: [
+          {
+            route: filtersRoute,
+            message: "Error getting email filters",
+            errorName: "",
+            errorMessage:
+              'Gmail call deferred for 20s for jane.doe@example.org in "Quarterly salary review for the whole team"',
+            errorStatus: "403",
+            errorCode: "403",
+            errorStack: [
+              "Error: Gmail call deferred",
+              "    at admitGmailCall (/var/task/apps/web/.next/server/chunks/quota.js:1:200)",
+              "    at async meterGmailCall (/var/task/apps/web/.next/server/chunks/quota.js:1:900)",
+              "    at async getEmailFilters (/var/task/apps/web/.next/server/chunks/filters.js:1:50)",
+              "    at async Promise.all (index 1)",
+            ].join("\n"),
+            vercelEnvironment: "production",
+            vercelRegion: "iad1",
+            gitRef: "main",
+          },
+          {
+            route: "",
+            message: "Discovery fetch failed",
+            errorMessage: "TypeError: fetch failed",
+            errorStack: "",
+            vercelEnvironment: "",
+          },
+        ],
+      },
+    });
+
+    const [filters, discovery, labels] = summary.topErrors;
+    expect(filters?.sample).toEqual({
+      errorName: "Error",
+      errorMessage: 'Gmail call deferred for 20s for [REDACTED:EMAIL] in "…"',
+      status: "403",
+      stack: [
+        "at admitGmailCall (/var/task/apps/web/.next/server/chunks/quota.js:1:200)",
+        "at async meterGmailCall (/var/task/apps/web/.next/server/chunks/quota.js:1:900)",
+        "at async getEmailFilters (/var/task/apps/web/.next/server/chunks/filters.js:1:50)",
+      ],
+      origin: "vercel iad1 (main)",
+    });
+    expect(discovery?.sample).toMatchObject({
+      errorMessage: "TypeError: fetch failed",
+      stack: [],
+      origin: "not vercel",
+    });
+    expect(labels).not.toHaveProperty("sample");
+    expect(JSON.stringify(summary)).not.toMatch(/jane\.doe|salary/);
+  });
+
   it("keeps the other signals when one query fails", () => {
     const summary = summarizeAxiom({
       totals: { rows: [{ total: 10, errors: 0, warnings: 0 }] },
@@ -162,6 +268,7 @@ describe("summarizeAxiom", () => {
       gmailQuotaUsage: { rows: [{ samples: 0 }] },
       gmailDeferred: { rows: [] },
       slowestRoutes: { error: "timeout" },
+      errorSamples: { rows: [] },
     });
 
     expect(summary.errors).toBe(0);
@@ -344,6 +451,18 @@ describe("redact", () => {
     expect(text.length).toBeLessThanOrEqual(161);
   });
 });
+
+function emptyAxiomResults(): AxiomResults {
+  return {
+    totals: { rows: [] },
+    errorsByRoute: { rows: [] },
+    gmailRateLimited: { rows: [] },
+    gmailQuotaUsage: { rows: [] },
+    gmailDeferred: { rows: [] },
+    slowestRoutes: { rows: [] },
+    errorSamples: { rows: [] },
+  };
+}
 
 function flattenKeys(value: object, prefix = ""): string[] {
   return Object.entries(value).flatMap(([key, child]) =>

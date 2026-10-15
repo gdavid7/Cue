@@ -1,5 +1,5 @@
 import { log } from "next-axiom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createScopedLogger } from "./logger";
 
 const { mockedEnv } = vi.hoisted(() => ({
@@ -54,6 +54,7 @@ describe("Logger", () => {
     mockedEnv.NEXT_PUBLIC_LOG_SCOPES = undefined;
     mockedEnv.ENABLE_DEBUG_LOGS = false;
     vi.unstubAllGlobals();
+    vi.stubEnv("VERCEL", "1");
     vi.clearAllMocks();
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -82,6 +83,10 @@ describe("Logger", () => {
     );
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("uses Axiom logging when the server token is configured", () => {
     mockedEnv.AXIOM_TOKEN = "server-token";
 
@@ -95,6 +100,20 @@ describe("Logger", () => {
     );
     expect(consoleLogSpy).toHaveBeenCalledWith(
       expect.stringContaining("[test]: Server log"),
+    );
+  });
+
+  it("keeps logs off Axiom outside Vercel even with the server token", () => {
+    // Local builds, test runs and Playwright servers can carry the
+    // production token; their errors must not read as production ones.
+    vi.stubEnv("VERCEL", "");
+    mockedEnv.AXIOM_TOKEN = "server-token";
+
+    createScopedLogger("test").error("Local failure");
+
+    expect(log.error).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[test]: Local failure"),
     );
   });
 
