@@ -7,8 +7,18 @@ import {
 import { getBatch } from "@/utils/gmail/batch";
 import { createTestLogger } from "@/__tests__/helpers";
 import { sleep } from "@/utils/sleep";
+import {
+  gmailRequestUnitsFor as quotaRequestUnits,
+  runWithGmailQuota,
+} from "@/utils/gmail/quota";
 
 vi.mock("@/utils/gmail/batch");
+// These cases are about retries, not sizing: pin a request to 500 units
+// (25 messages) so their hand-built responses line up with the batches.
+vi.mock("@/utils/gmail/quota", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/gmail/quota")>()),
+  gmailRequestUnitsFor: vi.fn(() => 500),
+}));
 vi.mock("@/utils/sleep", () => ({
   sleep: vi.fn().mockResolvedValue(undefined),
 }));
@@ -119,6 +129,7 @@ describe("getMessagesBatch", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(quotaRequestUnits).mockImplementation(() => 500);
   });
 
   it("should retry on retryable 403 error (rate limit)", async () => {
@@ -204,7 +215,11 @@ describe("getMessagesBatch", () => {
     expect(getBatch).toHaveBeenCalledTimes(2);
   });
 
-  it("uses conservative sequential initial Gmail batches", async () => {
+  it("sizes sequential batches to the gate's per-second pace for the caller", async () => {
+    const { gmailRequestUnitsFor } = await vi.importActual<
+      typeof import("@/utils/gmail/quota")
+    >("@/utils/gmail/quota");
+    vi.mocked(quotaRequestUnits).mockImplementation(gmailRequestUnitsFor);
     const messageIds = Array.from(
       { length: 100 },
       (_, index) => `id${index + 1}`,
@@ -229,13 +244,29 @@ describe("getMessagesBatch", () => {
       }));
     });
 
-    const result = await getMessagesBatch({ messageIds, accessToken, logger });
+    // A chat search: 100 units, five messages at a time.
+    const result = await runWithGmailQuota({ priority: "interactive" }, () =>
+      getMessagesBatch({ messageIds, accessToken, logger }),
+    );
 
     expect(result).toHaveLength(100);
-    expect(vi.mocked(getBatch).mock.calls.map(([ids]) => ids.length)).toEqual([
-      25, 25, 25, 25,
-    ]);
+    expect(vi.mocked(getBatch).mock.calls.map(([ids]) => ids.length)).toEqual(
+      new Array(20).fill(5),
+    );
     expect(maxActiveBatchRequests).toBe(1);
+
+    // A sync scan: 60 units, three at a time.
+    vi.mocked(getBatch).mockClear();
+    await runWithGmailQuota({ priority: "sync" }, () =>
+      getMessagesBatch({
+        messageIds: messageIds.slice(0, 9),
+        accessToken,
+        logger,
+      }),
+    );
+    expect(vi.mocked(getBatch).mock.calls.map(([ids]) => ids.length)).toEqual([
+      3, 3, 3,
+    ]);
   });
 
   it("retries only rate-limited items in smaller sequential batches", async () => {

@@ -7,13 +7,13 @@ import type { Logger } from "@/utils/logger";
 import {
   currentGmailQuotaContext,
   gmailRequestCost,
+  gmailRequestUnitsFor,
 } from "@/utils/gmail/quota";
 
-// Each batch is admitted against the account's Gmail budget as one debit, so
-// keep it to 500 units: 25 messages or 12 threads. Background work must also
-// leave half the bucket to everyone else, so a smaller debit fits the room
-// other callers leave instead of waiting for a nearly full bucket.
-const MAX_BATCH_UNITS = { foreground: 500, background: 200 };
+// Gmail charges every request in a batch at once, so a batch is one burst.
+// Each is sized to fit the gate's per-second pace at the caller's priority
+// (5 messages interactive, 3 sync, 2 background) rather than 25 at a time,
+// which Gmail answered by refusing the tail of each batch.
 const RATE_LIMIT_RETRY_BATCH_SIZE = 10;
 const MAX_BATCH_RETRIES = 3;
 const MAX_RETRY_JITTER_MS = 1000;
@@ -170,7 +170,10 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
     );
     const retryChunks = [
       ...chunk(nonRateLimitedIds, batchSizeFor(endpoint)),
-      ...chunk(Array.from(rateLimitedIds), RATE_LIMIT_RETRY_BATCH_SIZE),
+      ...chunk(
+        Array.from(rateLimitedIds),
+        Math.min(RATE_LIMIT_RETRY_BATCH_SIZE, batchSizeFor(endpoint)),
+      ),
     ];
     const refetched: TParsed[] = [];
     for (const idsChunk of retryChunks) {
@@ -193,10 +196,7 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
 }
 
 function batchSizeFor(endpoint: string) {
-  const maxUnits =
-    currentGmailQuotaContext().priority === "background"
-      ? MAX_BATCH_UNITS.background
-      : MAX_BATCH_UNITS.foreground;
+  const maxUnits = gmailRequestUnitsFor(currentGmailQuotaContext().priority);
   return Math.max(
     1,
     Math.floor(maxUnits / gmailRequestCost("GET", `${endpoint}/id`)),

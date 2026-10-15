@@ -46,18 +46,21 @@ const keys = {
   bucket: "gmail-quota:test:bucket",
   usage: "gmail-quota:test:usage:1",
   pause: "gmail-quota:test:background-pause",
+  pace: "gmail-quota:test:pace",
 };
 const take = (input: {
   cost: number;
   floor: number;
   blockers?: { key: string; deferMs?: number }[];
   usageField?: string;
+  paceCap?: number;
 }) => admit(input).then(({ waitMs }) => waitMs);
 const admit = (input: {
   cost: number;
   floor: number;
   blockers?: { key: string; deferMs?: number }[];
   usageField?: string;
+  paceCap?: number;
 }) =>
   gmailQuotaStore.take({
     bucketKey: keys.bucket,
@@ -68,6 +71,8 @@ const admit = (input: {
     capacity: 1000,
     perMinute: 3600,
     floor: input.floor,
+    // Out of the way unless a case is about the per-second pace.
+    pace: { key: keys.pace, cap: input.paceCap ?? 100_000, windowMs: 1000 },
   });
 
 let server: ChildProcess | null = null;
@@ -118,7 +123,10 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       expect(
         Number(await redis!.hget(keys.bucket, "tokens")),
       ).toBeGreaterThanOrEqual(400);
-      expect(await redis!.hgetall(keys.usage)).toEqual({ "sync:a": "600" });
+      expect(await redis!.hgetall(keys.usage)).toEqual({
+        "sync:a": "600",
+        "peak:second": "600",
+      });
       expect(await redis!.pttl(keys.bucket)).toBeGreaterThan(0);
     });
 
@@ -129,7 +137,10 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       expect(wait).toBeGreaterThan(3000);
       expect(wait).toBeLessThanOrEqual(3400);
       // Nothing was debited or recorded for the refused call.
-      expect(await redis!.hgetall(keys.usage)).toEqual({ "sync:test": "700" });
+      expect(await redis!.hgetall(keys.usage)).toEqual({
+        "sync:test": "700",
+        "peak:second": "700",
+      });
     });
 
     it("lets interactive calls overdraw into the reserved slice", async () => {
@@ -178,22 +189,16 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       });
     });
 
-    it("empties the bucket when a refusal drains it, and keeps an overdraft", async () => {
-      expect(await take({ cost: 100, floor: 200 })).toBe(0);
-      await gmailQuotaStore.block({
-        key: keys.pause,
-        ms: 30_000,
-        drainBucketKey: keys.bucket,
-      });
-      expect(Number(await redis!.hget(keys.bucket, "tokens"))).toBe(0);
-      await redis!.hset(keys.bucket, "tokens", "-150");
-      await gmailQuotaStore.block({
-        key: keys.pause,
-        ms: 30_000,
-        drainBucketKey: keys.bucket,
-      });
-      expect(Number(await redis!.hget(keys.bucket, "tokens"))).toBe(-150);
-      expect(await take({ cost: 10, floor: 200 })).toBeGreaterThan(3000);
+    it("holds any one second to the pace cap and records the busiest second", async () => {
+      expect(await take({ cost: 60, floor: 200, paceCap: 120 })).toBe(0);
+      expect(await take({ cost: 60, floor: 200, paceCap: 120 })).toBe(0);
+      // A third request waits for the first of the second to age out.
+      const wait = await take({ cost: 60, floor: 200, paceCap: 120 });
+      expect(wait).toBeGreaterThan(0);
+      expect(wait).toBeLessThanOrEqual(1001);
+      // A higher cap still has room in the same second.
+      expect(await take({ cost: 60, floor: -200, paceCap: 200 })).toBe(0);
+      expect(Number(await redis!.hget(keys.usage, "peak:second"))).toBe(180);
     });
 
     it("hands a minute's usage to exactly one caller", async () => {
@@ -212,7 +217,7 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
           },
         ]);
       expect(await claim()).toEqual([
-        { "deferred:user/stats": 2, chat: 40 },
+        { "deferred:user/stats": 2, chat: 40, "peak:second": 40 },
         null,
       ]);
       expect(await claim()).toEqual([null, null]);
