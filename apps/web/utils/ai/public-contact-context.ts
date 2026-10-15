@@ -21,6 +21,7 @@ import {
   releasePublicContactResearchLock,
 } from "@/utils/redis/public-contact-context-lock";
 import { createScopedLogger } from "@/utils/logger";
+import { assertWithinUserRateLimit } from "@/utils/rate-limit";
 
 const logger = createScopedLogger("ai/public-contact-context");
 
@@ -87,6 +88,16 @@ export async function getPublicContactContext({
   if (!webSearch) {
     return { status: "unavailable", reason: "search_unavailable" };
   }
+
+  // Counted here, not per request: the panel polls while research runs, and
+  // only starting research is costly (a model call with web search).
+  await assertWithinUserRateLimit({
+    scope: "public-contact-research",
+    userId: emailAccount.userId,
+    limit: 20,
+    windowSeconds: 5 * 60,
+    logger,
+  });
 
   const researchLock = await acquirePublicContactResearchLock(
     identity.data.email,

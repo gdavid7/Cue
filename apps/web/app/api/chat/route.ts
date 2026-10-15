@@ -7,6 +7,7 @@ import {
   type UIMessage,
 } from "ai";
 import { withEmailAccount } from "@/utils/middleware";
+import { assertWithinUserRateLimit } from "@/utils/rate-limit";
 import { FIRST_TIME_EVENTS, trackFirstTimeEvent } from "@/utils/posthog";
 import { getEmailAccountWithAi } from "@/utils/user/get";
 import {
@@ -59,6 +60,13 @@ export const maxDuration = 300;
 export const POST = withEmailAccount("chat", async (request) => {
   const requestStartedAt = Date.now();
   const emailAccountId = request.auth.emailAccountId;
+  await assertWithinUserRateLimit({
+    scope: "assistant-chat",
+    userId: request.auth.userId,
+    limit: 60,
+    windowSeconds: 5 * 60,
+    logger: request.logger,
+  });
 
   const json = await request.json();
   const { data, error } = assistantInputSchema.safeParse(json);

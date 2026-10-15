@@ -1,6 +1,7 @@
 import "server-only";
 import { createHmac } from "node:crypto";
 import { env } from "@/env";
+import { SafeError } from "@/utils/error";
 import { redis } from "@/utils/redis";
 import type { Logger } from "@/utils/logger";
 
@@ -69,6 +70,39 @@ export async function checkRateLimit({
       limit: rule.limit,
       remaining: rule.limit,
     };
+  }
+}
+
+/**
+ * Caps how often one user can run a costly request, failing with the 429
+ * known error the clients already show as a message.
+ */
+export async function assertWithinUserRateLimit({
+  scope,
+  userId,
+  limit,
+  windowSeconds,
+  logger,
+}: {
+  scope: string;
+  userId: string;
+  limit: number;
+  windowSeconds: number;
+  logger?: Logger;
+}) {
+  const result = await checkRateLimit({
+    rule: {
+      key: createRateLimitKey(["rate-limit", scope, userId]),
+      limit,
+      windowSeconds,
+    },
+    logger,
+  });
+  if (result.limited) {
+    throw new SafeError(
+      "Cue needs a short break. Try again in a few minutes.",
+      429,
+    );
   }
 }
 
