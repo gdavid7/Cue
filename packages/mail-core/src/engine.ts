@@ -397,6 +397,7 @@ export function createMailEngine(input: {
       return { status: "scheduled" };
     },
     ensureConversationMessages(key) {
+      if (closed) return Promise.resolve({ status: "unavailable" });
       const id = conversationFetchKey(key);
       const inFlight = conversationFetches.get(id);
       if (inFlight) {
@@ -756,6 +757,7 @@ export function createMailEngine(input: {
     },
     async close() {
       closed = true;
+      for (const queued of queuedConversationFetches.splice(0)) queued.drop();
       stopConversationFetches(null);
       const lanes = [...syncLanes.keys()].map((accountId) => {
         const done = syncLanes.get(accountId)?.done;
@@ -889,7 +891,9 @@ export function createMailEngine(input: {
     run: () => Promise<ConversationFetch>,
   ): Promise<ConversationFetch> {
     const dropped = { status: "unavailable" as const, retryAfterMs: 0 };
-    if ((conversationFetches.get(id)?.waiters ?? 0) === 0) return dropped;
+    if (closed || (conversationFetches.get(id)?.waiters ?? 0) === 0) {
+      return dropped;
+    }
     if (runningConversationFetches < MAX_CONVERSATION_FETCHES) {
       runningConversationFetches += 1;
     } else {

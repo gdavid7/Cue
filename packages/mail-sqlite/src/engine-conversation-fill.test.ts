@@ -419,6 +419,30 @@ describe("opening a conversation a first sync has not fully reached", () => {
     await engine.close();
   });
 
+  it("starts no fill once the engine is closed", async () => {
+    const held = heldMembershipSource();
+    const { engine } = await startFirstSync(held.source, {
+      storeOutlivesEngine: true,
+    });
+    const open = (id: string) =>
+      engine.ensureConversationMessages({
+        accountId: "acc-1",
+        conversationId: id,
+      });
+    open("a");
+    open("b");
+    await held.reading(2);
+    const queued = open("c");
+    await settle();
+
+    await engine.close();
+
+    await expect(queued).resolves.toEqual({ status: "unavailable" });
+    await expect(open("d")).resolves.toEqual({ status: "unavailable" });
+    await settle();
+    expect(held.order).toEqual(["a", "b"]);
+  });
+
   it("asks again right away for an account purged and added back", async () => {
     let paused = true;
     const source = firstSyncSource({
@@ -494,12 +518,20 @@ async function startFirstSync(
   {
     clock = { nowMs: 10_000 },
     conversationFetchTimeoutMs,
-  }: { clock?: { nowMs: number }; conversationFetchTimeoutMs?: number } = {},
+    storeOutlivesEngine = false,
+  }: {
+    clock?: { nowMs: number };
+    conversationFetchTimeoutMs?: number;
+    /** Closing the engine leaves the store open, as a shared host store. */
+    storeOutlivesEngine?: boolean;
+  } = {},
 ) {
   const store = await createSqliteMailStore(createNodeSqliteDriver());
   await store.ensureAccount({ ...session, provider: "google" });
   const engine = createMailEngine({
-    store,
+    store: storeOutlivesEngine
+      ? { ...store, close: async () => undefined }
+      : store,
     source,
     executor: {
       async execute() {
