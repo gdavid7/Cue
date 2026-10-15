@@ -104,6 +104,81 @@ test("Today's rows match the inbox in both themes and on phones", async ({
   }
 });
 
+test("Today says what needs you in one place: busy, all clear, and new", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(600_000);
+  // The real answer, reshaped into each state, so counts and calendar stay real.
+  let state: "busy" | "clear" | "new" = "busy";
+  await page.route("**/api/user/home*", async (route) => {
+    const response = await route.fetch();
+    const home = await response.json();
+    // Cue is checking (the emulated account has no AI plan); only "new" hasn't read mail yet.
+    home.cue = {
+      aiAccess: true,
+      replyTracking: true,
+      hasReadMail: state !== "new",
+    };
+    if (state !== "busy") home.needsYou = [];
+    await route.fulfill({ response, json: home });
+  });
+  const main = page.getByRole("main");
+
+  for (const theme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: theme });
+    await page.addInitScript((value) => {
+      localStorage.setItem("theme", value);
+    }, theme);
+    for (const next of ["busy", "clear", "new"] as const) {
+      state = next;
+      const emailAccountId = await getEmailAccountId(page);
+      await page.goto(`/${emailAccountId}/home`, {
+        waitUntil: "domcontentloaded",
+      });
+      const status = main.getByRole("status");
+      if (next === "busy") {
+        await expect(status).toHaveText(/^\d+\+? needs? a reply/, {
+          timeout: 60_000,
+        });
+        await expect(
+          page.getByRole("listbox", { name: "Needs reply" }),
+        ).toBeVisible();
+      } else if (next === "clear") {
+        await expect(status).toContainText("All clear.", { timeout: 60_000 });
+        await expect(status).toContainText("Nothing needs a reply.");
+        await expect(
+          page.getByRole("listbox", { name: "Needs reply" }),
+        ).toHaveCount(0);
+      } else {
+        await expect(status).toHaveText(
+          "Cue is reading your recent mail. What needs a reply will appear here.",
+          { timeout: 60_000 },
+        );
+        await expect(page.getByText("All clear.")).toHaveCount(0);
+      }
+      // One line carries the state; empty lanes don't each say so.
+      await expect(status).toHaveCount(1);
+      await expect(page.getByText(/Nothing here|caught up/)).toHaveCount(0);
+      for (const size of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(size);
+        const scrollWidth = await page.evaluate(
+          () => document.documentElement.scrollWidth,
+        );
+        expect(scrollWidth).toBeLessThanOrEqual(size.width);
+        await capturePlaywrightCheckpoint(
+          page,
+          testInfo,
+          `today-${next}-${theme}-${size.width}`,
+        );
+      }
+      await page.setViewportSize({ width: 1280, height: 800 });
+    }
+  }
+});
+
 test("Before your meeting stays inside a phone-width Today in both themes", async ({
   page,
 }, testInfo) => {

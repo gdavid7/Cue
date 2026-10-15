@@ -7,8 +7,18 @@ import {
 import { getBatch } from "@/utils/gmail/batch";
 import { createTestLogger } from "@/__tests__/helpers";
 import { sleep } from "@/utils/sleep";
+import {
+  gmailRequestUnitsFor as quotaRequestUnits,
+  runWithGmailQuota,
+} from "@/utils/gmail/quota";
 
 vi.mock("@/utils/gmail/batch");
+// These cases are about retries, not sizing: pin a request to 500 units
+// (25 messages) so their hand-built responses line up with the batches.
+vi.mock("@/utils/gmail/quota", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/gmail/quota")>()),
+  gmailRequestUnitsFor: vi.fn(() => 500),
+}));
 vi.mock("@/utils/sleep", () => ({
   sleep: vi.fn().mockResolvedValue(undefined),
 }));
@@ -21,6 +31,113 @@ afterEach(() => {
 });
 
 describe("parseMessage", () => {
+  // A sender can write their own Authentication-Results lower in the
+  // message; the receiving server's verdict is the one it adds on top.
+  describe("Authentication-Results", () => {
+    const gmail =
+      "mx.google.com; dkim=fail header.i=@acme.com; dmarc=fail header.from=acme.com";
+    const forged = "mx.google.com; dmarc=pass header.from=acme.com";
+    const receivedByGmail = {
+      name: "Received",
+      value:
+        "from mail.acme.com (mail.acme.com. [1.2.3.4]) by mx.google.com with ESMTPS id x1si; Tue, 13 Oct 2026 09:00:00 -0700 (PDT)",
+    };
+
+    function parsed(headers: { name: string; value: string }[]) {
+      return parseMessage({
+        payload: { headers },
+        // What gmail-api-parse-message makes of them: the last one wins.
+        headers: { from: "nora@acme.com", "authentication-results": forged },
+      } as never).headers["authentication-results"];
+    }
+
+    it("keeps the topmost one, which Gmail added on receipt", () => {
+      expect(
+        parsed([
+          { name: "Received", value: "by 2002:a05:6a10:1 with SMTP id x" },
+          receivedByGmail,
+          { name: "Received-SPF", value: "pass (google.com: ...)" },
+          { name: "Authentication-Results", value: gmail },
+          { name: "From", value: "nora@acme.com" },
+          { name: "authentication-results", value: forged },
+        ]),
+      ).toBe(gmail);
+    });
+
+    // Imported, inserted or fetched (POP) mail never passed Gmail's checks;
+    // its headers are whatever the original carried.
+    it("keeps none when Gmail's servers didn't receive the message", () => {
+      expect(
+        parsed([
+          {
+            name: "Received",
+            value: "from a by mx.other.example with ESMTP id y",
+          },
+          { name: "Authentication-Results", value: forged },
+        ]),
+      ).toBeUndefined();
+      expect(
+        parsed([{ name: "Authentication-Results", value: forged }]),
+      ).toBeUndefined();
+    });
+
+    // Gmail fetching from another mailbox records that hop, not a delivery.
+    it("keeps none when Gmail fetched the message by POP3, even over a forged delivery", () => {
+      expect(
+        parsed([
+          {
+            name: "Received",
+            value:
+              "from pop.example.com [5.6.7.8] by mx.google.com with POP3 id p1; Tue, 13 Oct 2026",
+          },
+          receivedByGmail,
+          { name: "Authentication-Results", value: forged },
+        ]),
+      ).toBeUndefined();
+      expect(
+        parsed([
+          {
+            name: "Received",
+            value: "from imap.example.com by mx.google.com with IMAP id i1",
+          },
+          { name: "Authentication-Results", value: forged },
+        ]),
+      ).toBeUndefined();
+    });
+
+    it("keeps Gmail's own verdict over a forged Received and Authentication-Results pair below it", () => {
+      expect(
+        parsed([
+          { name: "Received", value: "by 2002:a05:6a10:1 with SMTP id x" },
+          receivedByGmail,
+          { name: "Authentication-Results", value: gmail },
+          { name: "From", value: "nora@acme.com" },
+          receivedByGmail,
+          { name: "Authentication-Results", value: forged },
+        ]),
+      ).toBe(gmail);
+    });
+
+    it("keeps none when another hop sits between Gmail's delivery and the verdict", () => {
+      expect(
+        parsed([
+          receivedByGmail,
+          { name: "Received", value: "from relay.example by relay2.example" },
+          { name: "Authentication-Results", value: forged },
+        ]),
+      ).toBeUndefined();
+    });
+
+    it("keeps none when Gmail's Received header comes only below it", () => {
+      expect(
+        parsed([
+          { name: "Authentication-Results", value: forged },
+          receivedByGmail,
+        ]),
+      ).toBeUndefined();
+    });
+  });
+
   it("detects calendar MIME parts without decoding their contents in lists", () => {
     const message = parseMessage({
       payload: {
@@ -119,6 +236,7 @@ describe("getMessagesBatch", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(quotaRequestUnits).mockImplementation(() => 500);
   });
 
   it("should retry on retryable 403 error (rate limit)", async () => {
@@ -204,7 +322,11 @@ describe("getMessagesBatch", () => {
     expect(getBatch).toHaveBeenCalledTimes(2);
   });
 
-  it("uses conservative sequential initial Gmail batches", async () => {
+  it("sizes sequential batches to the gate's per-second pace for the caller", async () => {
+    const { gmailRequestUnitsFor } = await vi.importActual<
+      typeof import("@/utils/gmail/quota")
+    >("@/utils/gmail/quota");
+    vi.mocked(quotaRequestUnits).mockImplementation(gmailRequestUnitsFor);
     const messageIds = Array.from(
       { length: 100 },
       (_, index) => `id${index + 1}`,
@@ -229,13 +351,29 @@ describe("getMessagesBatch", () => {
       }));
     });
 
-    const result = await getMessagesBatch({ messageIds, accessToken, logger });
+    // A chat search: 100 units, five messages at a time.
+    const result = await runWithGmailQuota({ priority: "interactive" }, () =>
+      getMessagesBatch({ messageIds, accessToken, logger }),
+    );
 
     expect(result).toHaveLength(100);
-    expect(vi.mocked(getBatch).mock.calls.map(([ids]) => ids.length)).toEqual([
-      25, 25, 25, 25,
-    ]);
+    expect(vi.mocked(getBatch).mock.calls.map(([ids]) => ids.length)).toEqual(
+      new Array(20).fill(5),
+    );
     expect(maxActiveBatchRequests).toBe(1);
+
+    // A sync scan: 60 units, three at a time.
+    vi.mocked(getBatch).mockClear();
+    await runWithGmailQuota({ priority: "sync" }, () =>
+      getMessagesBatch({
+        messageIds: messageIds.slice(0, 9),
+        accessToken,
+        logger,
+      }),
+    );
+    expect(vi.mocked(getBatch).mock.calls.map(([ids]) => ids.length)).toEqual([
+      3, 3, 3,
+    ]);
   });
 
   it("retries only rate-limited items in smaller sequential batches", async () => {

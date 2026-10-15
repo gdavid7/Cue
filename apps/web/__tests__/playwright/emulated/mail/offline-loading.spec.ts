@@ -5,7 +5,7 @@ import { expect, type Page } from "@playwright/test";
 import { test } from "../playwright-test";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { conversationWithSubject, openMail } from "./mail-test-helpers";
-import { MAIL_ENGINE_OPFS_DIRECTORY } from "@/utils/mail-engine/wasm-sqlite";
+import { MAIL_ENGINE_OPFS_DIRECTORY } from "@/utils/mail-engine/opfs-mailbox";
 
 test("preserves bootstrap fragments for precached workers online and offline", async ({
   page,

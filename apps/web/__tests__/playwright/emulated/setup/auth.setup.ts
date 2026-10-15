@@ -20,7 +20,7 @@ test(`${playwrightMailProvider} emulator signs in and creates an app account`, a
     waitUntil: "domcontentloaded",
   });
   await expect(
-    page.getByRole("heading", { name: "The better email." }),
+    page.getByRole("heading", { name: "The better email.", exact: true }),
   ).toBeVisible();
 
   const signInPayload = await page.evaluate(async (provider) => {

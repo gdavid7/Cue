@@ -1,13 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Prisma } from "@/generated/prisma/client";
 import { renameGoogleEmail } from "@/utils/auth/rename-email";
 import prisma from "@/utils/__mocks__/prisma";
 import { invalidateAccountValidation } from "@/utils/redis/account-validation";
+import { env } from "@/env";
 
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/redis/account-validation", () => ({
   invalidateAccountValidation: vi.fn(),
 }));
+vi.mock("@/utils/posthog", () => ({ posthogCaptureEvent: vi.fn() }));
 
 const input = {
   account: {
@@ -158,5 +160,43 @@ describe("renameGoogleEmail", () => {
       body: { code: "email_already_linked" },
     });
     expect(invalidateAccountValidation).not.toHaveBeenCalled();
+  });
+
+  // Production today: the waitlist is off and AUTH_ALLOWED_EMAILS gates
+  // sign-up, so a rename must accept the same addresses sign-up does.
+  describe("with the waitlist off and an allow-list", () => {
+    const original = {
+      AUTH_WAITLIST_ENABLED: env.AUTH_WAITLIST_ENABLED,
+      AUTH_ALLOWED_EMAILS: env.AUTH_ALLOWED_EMAILS,
+    };
+    beforeEach(() => {
+      Object.assign(env, {
+        AUTH_WAITLIST_ENABLED: false,
+        AUTH_ALLOWED_EMAILS: ["founder@example.com"],
+      });
+    });
+    afterEach(() => {
+      Object.assign(env, original);
+    });
+
+    it("renames to an address approved on /admin/access", async () => {
+      prisma.accessRequest.findFirst.mockResolvedValue({
+        status: "APPROVED",
+      } as never);
+
+      await expect(renameGoogleEmail(input)).resolves.toMatchObject({
+        id: "mailbox",
+      });
+      expect(prisma.$transaction).toHaveBeenCalledOnce();
+    });
+
+    it("refuses an address that is neither listed nor approved", async () => {
+      prisma.accessRequest.findFirst.mockResolvedValue(null);
+
+      await expect(renameGoogleEmail(input)).rejects.toThrow(
+        "signup_not_allowed",
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
   });
 });

@@ -38,6 +38,14 @@ export function parseMessage(
   } finally {
     restoreTextBodies(hiddenText);
   }
+  if (parsed.headers) {
+    parsed.headers = {
+      ...parsed.headers,
+      "authentication-results": gmailAuthenticationResults(
+        message.payload?.headers ?? [],
+      ),
+    };
+  }
   if (message.payload) {
     const bodies = gmailMessageBodies(message.payload, message.snippet);
     parsed.textHtml = bodies.html;
@@ -378,4 +386,38 @@ function getCalendarParts(
     if (parts.length > 1) break;
   }
   return parts;
+}
+
+/**
+ * Gmail's verdict on the sender, if Gmail's mail servers took delivery of the
+ * message over SMTP. Gmail writes its Received line and then its
+ * Authentication-Results on top of anything the sender wrote, so its first
+ * mx.google.com Received line must be an SMTP delivery and the Received line
+ * nearest above the first Authentication-Results. Mail Gmail fetched by POP3
+ * or IMAP shows that hop instead, and keeps the original's own headers below.
+ *
+ * Residual risk: mail added through the API (import or insert) or migrated
+ * in carries whatever headers its source wrote, including a forged
+ * mx.google.com delivery and verdict on top. Only the account's owner or an
+ * app they authorized can add such mail.
+ */
+function gmailAuthenticationResults(
+  headers: gmail_v1.Schema$MessagePartHeader[],
+): string | undefined {
+  const isReceived = (header: gmail_v1.Schema$MessagePartHeader) =>
+    header.name?.toLowerCase() === "received";
+  const results = headers.findIndex(
+    (header) => header.name?.toLowerCase() === "authentication-results",
+  );
+  if (results < 0) return;
+  const nearest = headers.slice(0, results).findLastIndex(isReceived);
+  const firstByGmail = headers.findIndex(
+    (header) =>
+      isReceived(header) && /\bby mx\.google\.com\b/i.test(header.value ?? ""),
+  );
+  const delivered =
+    nearest >= 0 &&
+    nearest === firstByGmail &&
+    /\bby mx\.google\.com with E?SMTPS?\b/i.test(headers[nearest]?.value ?? "");
+  return delivered ? (headers[results]?.value ?? undefined) : undefined;
 }

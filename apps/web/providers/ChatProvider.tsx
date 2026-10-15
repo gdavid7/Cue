@@ -12,7 +12,9 @@ import {
   useRef,
   useState,
 } from "react";
+import { useAtomValue } from "jotai";
 import { useSWRConfig } from "swr";
+import { openThreadAtom } from "@/store/open-thread";
 import { captureException } from "@/utils/error";
 import { toastError } from "@/components/Toast";
 import { convertToUIMessages } from "@/components/assistant-chat/helpers";
@@ -83,6 +85,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [inlineActions, setInlineActions] = useState<InlineEmailAction[]>([]);
   const inlineActionsRef = useRef(inlineActions);
+  const openThread = useAtomValue(openThreadAtom);
+  const openThreadRef = useRef<typeof openThread>(null);
   const pendingInlineActionsRef = useRef<InlineEmailAction[] | null>(null);
   const pendingRequestRef = useRef<PendingChatRequest | null>(null);
   const pendingRequestContextRef = useRef<MessageContext | null>(null);
@@ -129,6 +133,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             message: messages.at(-1),
             supportsInlineEmailCards: true,
             inlineActions: pendingInlineActionsRef.current ?? undefined,
+            openThreadId: openThreadRef.current?.threadId,
+            openMessageId: openThreadRef.current?.messageId,
             ...body,
           },
         };
@@ -269,6 +275,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     inlineActionsRef.current = inlineActions;
   }, [inlineActions]);
+
+  useEffect(() => {
+    // A thread from another account means nothing to this account's chat.
+    openThreadRef.current =
+      openThread?.emailAccountId === emailAccountId ? openThread : null;
+  }, [openThread, emailAccountId]);
 
   useEffect(() => {
     if (previousChatIdRef.current === chatId) return;

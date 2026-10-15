@@ -8,8 +8,16 @@ import { redis } from "@/utils/redis";
 export type GmailQuotaStore = {
   /**
    * Debits `cost` when the bucket keeps at least `floor` tokens afterwards
-   * (a request larger than the bucket only needs the bucket above `floor`)
-   * and no `blockers` key exists. Returns `waitMs` 0 when admitted,
+   * (a request larger than the bucket only needs the bucket above `floor`),
+   * the units admitted in the last `pace.windowMs` stay within `pace.cap`
+   * (a request larger than the cap needs an empty window) and no `blockers`
+   * key exists. During a demand episode on `pace.demand.key` the cap is
+   * `pace.demand.yieldCap` instead, when given (0 holds the caller until the
+   * episode ends). An admission with `pace.demand.markMs` starts an episode
+   * of that length unless one started within `pace.demand.everyMs`, so
+   * back-to-back episodes always leave the others a gap. Records the
+   * busiest window in the usage hash's
+   * `peak:second` field. Returns `waitMs` 0 when admitted,
    * otherwise the milliseconds to wait before asking again. A blocker with
    * `deferMs` is lifted explicitly, usually long before it expires, so a
    * caller it holds is told to come back in `deferMs` (`defer`) rather than
@@ -24,13 +32,20 @@ export type GmailQuotaStore = {
     capacity: number;
     perMinute: number;
     floor: number;
+    pace: {
+      key: string;
+      cap: number;
+      windowMs: number;
+      demand: {
+        key: string;
+        yieldCap?: number;
+        markMs?: number;
+        everyMs?: number;
+      };
+    };
   }): Promise<{ waitMs: number; defer: boolean }>;
-  /** Sets `key` for `ms` unless it is already set for longer; optionally empties the bucket. */
-  block(input: {
-    key: string;
-    ms: number;
-    drainBucketKey?: string;
-  }): Promise<void>;
+  /** Sets `key` for `ms` unless it is already set for longer. */
+  block(input: { key: string; ms: number }): Promise<void>;
   clear(key: string): Promise<void>;
   /** Adds `amount` to a usage field without admitting anything. */
   note(input: {
@@ -54,11 +69,16 @@ local cost = tonumber(ARGV[1])
 local capacity = tonumber(ARGV[2])
 local rate = tonumber(ARGV[3]) / 60000
 local floor = tonumber(ARGV[4])
+local paceCap = tonumber(ARGV[6])
+local paceWindow = tonumber(ARGV[7])
+local yieldCap = tonumber(ARGV[8])
+local demandMs = tonumber(ARGV[9])
+local demandEvery = tonumber(ARGV[10])
 local wait = 0
 local defer = 0
-for i = 3, #KEYS do
+for i = 6, #KEYS do
   local ttl = redis.call('PTTL', KEYS[i])
-  local deferMs = tonumber(ARGV[i + 3])
+  local deferMs = tonumber(ARGV[i + 5])
   if ttl > 0 and deferMs and deferMs > 0 then
     ttl = deferMs
     defer = 1
@@ -73,10 +93,54 @@ local need = floor + math.min(cost, capacity - floor)
 if tokens < need then
   wait = math.max(wait, math.ceil((need - tokens) / rate))
 end
+redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', now - paceWindow)
+local recent = redis.call('ZRANGE', KEYS[3], 0, -1, 'WITHSCORES')
+local inWindow = 0
+for j = 1, #recent, 2 do
+  inWindow = inWindow + tonumber(string.match(recent[j], ':(%d+)$'))
+end
+-- How long until the window has room for this request under cap; -1 never.
+local function windowWait(cap)
+  if cap <= 0 then return -1 end
+  local excess = inWindow + math.min(cost, cap) - cap
+  if excess <= 0 then return 0 end
+  local freed = 0
+  for j = 1, #recent, 2 do
+    freed = freed + tonumber(string.match(recent[j], ':(%d+)$'))
+    if freed >= excess then
+      return tonumber(recent[j + 1]) + paceWindow - now + 1
+    end
+  end
+  return paceWindow
+end
+local paceWait = windowWait(paceCap)
+local demandEnds = tonumber(redis.call('GET', KEYS[5])) or 0
+local demandTtl = demandEnds - now
+if yieldCap >= 0 and demandTtl > 0 then
+  local afterDemand = math.max(demandTtl, paceWait)
+  local yieldWait = windowWait(yieldCap)
+  if yieldWait < 0 or yieldWait > afterDemand then
+    paceWait = afterDemand
+  else
+    paceWait = yieldWait
+  end
+end
+wait = math.max(wait, paceWait)
 if wait > 0 then return {wait, defer} end
 redis.call('HSET', KEYS[1], 'tokens', tostring(tokens - cost), 'at', tostring(now))
 redis.call('PEXPIRE', KEYS[1], 300000)
+local seq = redis.call('INCR', KEYS[4])
+redis.call('PEXPIRE', KEYS[4], 300000)
+redis.call('ZADD', KEYS[3], now, seq .. ':' .. cost)
+redis.call('PEXPIRE', KEYS[3], paceWindow * 2)
+if demandMs > 0 then
+  redis.call('SET', KEYS[5], tostring(now + demandMs), 'PX', demandEvery, 'NX')
+end
 redis.call('HINCRBY', KEYS[2], ARGV[5], cost)
+local peak = tonumber(redis.call('HGET', KEYS[2], 'peak:second')) or 0
+if inWindow + cost > peak then
+  redis.call('HSET', KEYS[2], 'peak:second', inWindow + cost)
+end
 redis.call('PEXPIRE', KEYS[2], 300000)
 return {0, 0}
 `;
@@ -85,14 +149,6 @@ const blockScript = `
 local ms = tonumber(ARGV[1])
 if redis.call('PTTL', KEYS[1]) < ms then
   redis.call('SET', KEYS[1], '1', 'PX', ms)
-end
-if KEYS[2] then
-  local time = redis.call('TIME')
-  local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
-  local tokens = tonumber(redis.call('HGET', KEYS[2], 'tokens'))
-  if tokens == nil or tokens > 0 then tokens = 0 end
-  redis.call('HSET', KEYS[2], 'tokens', tostring(tokens), 'at', tostring(now))
-  redis.call('PEXPIRE', KEYS[2], 300000)
 end
 return 1
 `;
@@ -122,6 +178,9 @@ export const gmailQuotaStore: GmailQuotaStore = {
       [
         input.bucketKey,
         input.usageKey,
+        input.pace.key,
+        `${input.pace.key}:seq`,
+        input.pace.demand.key,
         ...input.blockers.map((blocker) => blocker.key),
       ],
       [
@@ -130,6 +189,11 @@ export const gmailQuotaStore: GmailQuotaStore = {
         String(input.perMinute),
         String(input.floor),
         input.usageField,
+        String(input.pace.cap),
+        String(input.pace.windowMs),
+        String(input.pace.demand.yieldCap ?? -1),
+        String(input.pace.demand.markMs ?? 0),
+        String(input.pace.demand.everyMs ?? input.pace.demand.markMs ?? 0),
         ...input.blockers.map((blocker) => String(blocker.deferMs ?? 0)),
       ],
     );
@@ -138,12 +202,8 @@ export const gmailQuotaStore: GmailQuotaStore = {
       return { waitMs: 0, defer: false };
     return { waitMs, defer: Number(result?.[1]) === 1 };
   },
-  async block({ key, ms, drainBucketKey }) {
-    await redis.eval(
-      blockScript,
-      drainBucketKey ? [key, drainBucketKey] : [key],
-      [String(Math.max(1, Math.ceil(ms)))],
-    );
+  async block({ key, ms }) {
+    await redis.eval(blockScript, [key], [String(Math.max(1, Math.ceil(ms)))]);
   },
   async clear(key) {
     await redis.del(key);

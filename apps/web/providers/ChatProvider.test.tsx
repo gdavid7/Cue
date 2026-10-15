@@ -8,6 +8,8 @@ import type { ChatMessage } from "@/components/assistant-chat/types";
 import { ASSISTANT_CHAT_MAX_TEXT_LENGTH } from "@/utils/actions/assistant-chat.validation";
 import type { MessageContext } from "@/utils/ai/assistant/chat-context-validation";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
+import { getDefaultStore } from "jotai";
+import { openThreadAtom } from "@/store/open-thread";
 import { ChatProvider, useChat } from "./ChatProvider";
 
 const {
@@ -481,6 +483,51 @@ describe("ChatProvider", () => {
       supportsInlineEmailCards: true,
       context: buildFixRuleContext("thread-1"),
     });
+  });
+
+  it.each([
+    [
+      "names the thread open in this account and its latest message",
+      "account-a",
+      { openThreadId: "t-42", openMessageId: "m-7" },
+    ],
+    [
+      "leaves out a thread open in another account",
+      "account-b",
+      { openThreadId: undefined, openMessageId: undefined },
+    ],
+  ])("%s", async (_name, ownerAccountId, expected) => {
+    getDefaultStore().set(openThreadAtom, {
+      emailAccountId: ownerAccountId,
+      threadId: "t-42",
+      messageId: "m-7",
+    });
+    renderWithProvider(null);
+    const transport = mockChatTransport.mock.results.at(-1)
+      ?.value as DefaultChatTransport<ChatMessage>;
+    vi.mocked(fetch).mockResolvedValueOnce(new Response("data: [DONE]\n\n"));
+
+    await transport.sendMessages({
+      trigger: "submit-message",
+      chatId: "chat-1",
+      messageId: undefined,
+      abortSignal: undefined,
+      messages: [
+        {
+          id: "user-message",
+          role: "user",
+          parts: [{ type: "text", text: "What's this about?" }],
+        },
+      ],
+    });
+    getDefaultStore().set(openThreadAtom, null);
+
+    const [, request] = vi.mocked(fetch).mock.calls.at(-1)!;
+    const body = JSON.parse(request?.body as string);
+    expect({
+      openThreadId: body.openThreadId,
+      openMessageId: body.openMessageId,
+    }).toEqual(expected);
   });
 
   it("resumes the existing reply without starting another generation", async () => {

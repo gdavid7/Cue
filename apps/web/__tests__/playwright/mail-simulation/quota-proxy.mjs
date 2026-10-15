@@ -33,6 +33,7 @@ export const QUOTA_COSTS = {
   "labels.delete": 5,
   "history.list": 2,
   getProfile: 1,
+  "settings.get": 1,
   watch: 100,
   stop: 50,
   "settings.sendAs.list": 1,

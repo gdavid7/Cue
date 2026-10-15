@@ -49,6 +49,7 @@ async function createWorkerEngine(
       self.postMessage({ type: "dropped", drop } satisfies WorkerResponse);
     },
   });
+  performance.mark("mail-engine:store-ready");
   const ensureAccount: BrowserMailEngine["ensureAccount"] = async (account) => {
     await store.ensureAccount({
       accountId: account.accountId,

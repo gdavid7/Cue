@@ -2,14 +2,16 @@ import { Suspense } from "react";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import {
-  MailCheckIcon,
-  MessageCircleQuestionIcon,
-  PenLineIcon,
-  SunIcon,
-} from "lucide-react";
+import { CheckIcon } from "lucide-react";
 import { LoginForm } from "@/app/(landing)/login/LoginForm";
+import { HeroInboxLoop } from "@/app/(landing)/login/HeroInboxLoop";
 import { RequestAccessForm } from "@/app/(landing)/login/RequestAccessForm";
+import {
+  FaqSection,
+  IntegrationsSection,
+  IntelligenceSection,
+  KeepGmailSection,
+} from "@/app/(landing)/login/LandingSections";
 import {
   getEmailAlreadyLinkedDescription,
   getRequiresReconsentDescription,
@@ -34,30 +36,6 @@ export const metadata: Metadata = {
   description: SITE_DESCRIPTION,
   alternates: { canonical: "/login" },
 };
-
-const CAPABILITIES = [
-  {
-    icon: MailCheckIcon,
-    title: "Knows what needs you",
-    description: "Needs reply and Reading sort themselves.",
-  },
-  {
-    icon: PenLineIcon,
-    title: "Has the reply ready",
-    description: "Drafts that learn from your edits.",
-  },
-  {
-    icon: SunIcon,
-    title: "Briefs you",
-    description: "Today, plus meeting briefs before every call.",
-  },
-  {
-    icon: MessageCircleQuestionIcon,
-    title: "Answers questions",
-    description:
-      "Ask about anything in your email, calendar and connected apps.",
-  },
-];
 
 export default async function AuthenticationPage(props: {
   searchParams?: Promise<Record<string, string>>;
@@ -87,12 +65,12 @@ export default async function AuthenticationPage(props: {
   );
 
   return (
-    <main className="min-h-screen bg-background px-4 py-8 text-foreground sm:px-6 sm:py-12 lg:flex lg:items-center lg:py-16">
+    <main className="min-h-screen bg-background px-4 py-8 text-foreground sm:px-6 sm:py-12 lg:py-16">
       <div className="mx-auto grid w-full max-w-md gap-y-8 lg:max-w-5xl lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-x-16 lg:gap-y-10">
         <section aria-labelledby="pitch-heading" className="lg:col-start-1">
           <Logo className="h-6 text-foreground" />
           <p className="mt-8 font-medium text-muted-foreground text-sm lg:mt-12">
-            Next-generation email
+            Next-generation email platform
           </p>
           <h1
             id="pitch-heading"
@@ -101,18 +79,51 @@ export default async function AuthenticationPage(props: {
             The better email.
           </h1>
           <p className="mt-3 text-foreground/80 text-lg leading-snug">
-            {BRAND_NAME} reads your Gmail so you know what needs you, and has
-            the reply ready.
+            {BRAND_NAME} tells you what every email needs, and brings in
+            everything around it: your classes, docs, chats and tasks.
           </p>
-          <p className="mt-4 text-muted-foreground leading-relaxed">
-            Email has worked the same way for over 50 years: a pile of messages,
-            and everything else is up to you.
+          <p className="mt-6 flex gap-2 text-foreground text-sm leading-snug">
+            <CheckIcon
+              className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+              aria-hidden
+            />
+            <span>
+              Works with your existing Gmail. Your emails stay in Gmail, and if
+              you stop using {BRAND_NAME}, nothing changes.{" "}
+              <a
+                href="#keep-gmail"
+                className="whitespace-nowrap text-muted-foreground underline underline-offset-4 hover:text-foreground"
+              >
+                How it works
+              </a>
+            </span>
           </p>
+          <p className="mt-2 flex gap-2 text-foreground text-sm leading-snug">
+            <CheckIcon
+              className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+              aria-hidden
+            />
+            Built for students, freelancers, founders and small teams.
+          </p>
+          {/* On phones the form sits below the example, so offer a way
+              straight to it. */}
+          <Button asChild size="lg" className="mt-6 w-full lg:hidden">
+            <a href="#get-access">
+              {showRequestForm ? "Request access" : "Get started"}
+            </a>
+          </Button>
+          <div className="mt-8">
+            <p className="mb-2 text-muted-foreground text-xs">
+              What {BRAND_NAME} writes under each email
+            </p>
+            <HeroInboxLoop />
+          </div>
         </section>
 
         <section
+          id="get-access"
           aria-label={showRequestForm ? "Request access" : "Sign in"}
-          className="lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:self-center"
+          className="scroll-mt-8 lg:col-start-2 lg:row-start-1 lg:self-center"
         >
           <div className="space-y-5 rounded-xl border bg-card p-5 shadow-sm sm:p-6">
             {searchParams?.error && <ErrorAlert error={searchParams.error} />}
@@ -163,32 +174,36 @@ export default async function AuthenticationPage(props: {
           </div>
         </section>
 
-        <section
-          aria-label={`What ${BRAND_NAME} does`}
-          className="lg:col-start-1"
-        >
-          <ul className="space-y-4">
-            {CAPABILITIES.map((capability) => (
-              <li key={capability.title} className="flex gap-3">
-                <capability.icon
-                  className="mt-0.5 size-5 shrink-0 text-muted-foreground"
-                  aria-hidden
-                />
-                <p className="leading-snug">
-                  <span className="font-medium text-foreground">
-                    {capability.title}
-                  </span>
-                  <span className="sr-only"> — </span>
-                  <span className="block text-muted-foreground text-sm">
-                    {capability.description}
-                  </span>
-                </p>
-              </li>
-            ))}
-          </ul>
-        </section>
+        <div className="mt-8 space-y-20 sm:mt-12 sm:space-y-24 lg:col-span-2">
+          <KeepGmailSection />
+          <IntelligenceSection />
+          <IntegrationsSection />
+          <FaqSection />
+          <section
+            aria-labelledby="final-cta-heading"
+            className="rounded-xl border bg-card px-5 py-8 text-center sm:px-8 sm:py-10"
+          >
+            <h2
+              id="final-cta-heading"
+              className="font-title text-2xl text-foreground leading-tight tracking-tight sm:text-3xl"
+            >
+              Try the better email.
+            </h2>
+            {waitlistEnabled && (
+              <p className="mx-auto mt-3 max-w-md text-muted-foreground leading-relaxed">
+                {BRAND_NAME} is in private beta. We let people in a few at a
+                time and review every request personally.
+              </p>
+            )}
+            <Button asChild size="lg" className="mt-6">
+              <a href="#get-access">
+                {showRequestForm ? "Request access" : "Get started"}
+              </a>
+            </Button>
+          </section>
+        </div>
 
-        <footer className="space-y-3 lg:col-span-2">
+        <footer className="space-y-3 border-t pt-8 lg:col-span-2">
           <nav
             aria-label="Legal"
             className="flex gap-4 text-muted-foreground text-sm"

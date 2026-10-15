@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ActionType } from "@/generated/prisma/enums";
 import prisma from "@/utils/__mocks__/prisma";
 import { getMockMessage } from "@/__tests__/helpers";
@@ -11,6 +11,7 @@ import {
   renderSource,
   type Source,
   suggestReply,
+  vouchedLinkMessageIds,
   webSearchQuery,
   webSource,
 } from "./suggest-reply";
@@ -305,33 +306,244 @@ describe("getCachedSuggestedReply", () => {
 });
 
 describe("contextSources", () => {
-  // Anyone can send a guessable link or forge a From: header, so the records
-  // they pull in are shown to the user but aren't evidence for a reply.
-  it("leaves out tasks and contacts found from links or the sender, keeping linked files", async () => {
-    const item = (kind: "file" | "task" | "contact", title: string) => ({
-      id: `${kind}:1`,
-      kind,
-      title,
-      snippet: "",
-      text: title,
-      at: "2026-10-12T00:00:00.000Z",
-      reasons: [],
-    });
+  const item = (
+    kind: "file" | "task" | "contact",
+    title: string,
+    source: string,
+    linkedFrom?: string,
+  ) => ({
+    id: `${kind}:${title}`,
+    kind,
+    title,
+    snippet: "",
+    text: `${title}\nIn Progress`,
+    at: "2026-10-12T00:00:00.000Z",
+    source,
+    linkedFrom,
+    reasons: [],
+  });
+  const items = [
+    item("task", "OPS-12 Rotate staging keys", "Jira", "m1"),
+    item("contact", "Nora Patel", "HubSpot"),
+    item("file", "Milestone 2 write-up", "Google Drive", "m1"),
+  ];
 
-    const sources = await contextSources({
-      items: [
-        item("task", "OPS-12 Rotate staging keys"),
-        item("contact", "Nora Patel"),
-        item("file", "Milestone 2 write-up"),
-      ],
+  function sourcesFor({
+    senderAuthenticated,
+    trusted,
+    from = items,
+  }: {
+    senderAuthenticated: boolean;
+    trusted: string[];
+    from?: ReturnType<typeof item>[];
+  }) {
+    return contextSources({
+      items: from,
+      senderAuthenticated,
+      vouchedLinkMessageIds: new Set(trusted),
       emailProvider: {} as EmailProvider,
       timezone: null,
       logger: createScopedLogger("suggest-reply-test"),
     });
+  }
 
-    expect(sources.map((s) => [s.id, s.kind, s.title])).toEqual([
-      ["c1", "file", "Milestone 2 write-up"],
+  it("backs a reply with linked tasks and the authenticated sender's record, labelled as such", async () => {
+    const sources = await sourcesFor({
+      senderAuthenticated: true,
+      trusted: ["m1"],
+    });
+
+    expect(sources.map((s) => [s.id, s.kind, s.text])).toEqual([
+      [
+        "c1",
+        "task",
+        "Task: OPS-12 Rotate staging keys (Jira)\nOPS-12 Rotate staging keys\nIn Progress",
+      ],
+      [
+        "c2",
+        "contact",
+        "Contact: Nora Patel (HubSpot)\nNora Patel\nIn Progress",
+      ],
+      [
+        "c3",
+        "file",
+        "File: Milestone 2 write-up (Google Drive)\nMilestone 2 write-up\nIn Progress",
+      ],
     ]);
+  });
+
+  // Anyone can forge From: to pull in the record of whoever they impersonate.
+  it("leaves out the sender's record when the sender's address wasn't authenticated", async () => {
+    const sources = await sourcesFor({
+      senderAuthenticated: false,
+      trusted: ["m1"],
+    });
+
+    expect(sources.map((s) => s.kind)).toEqual(["task", "file"]);
+  });
+
+  // Anyone can send a link to a guessed task id; what counts is who sent
+  // the message the link is in, not who wrote last.
+  it("uses a task only when the message that links to it was authenticated", async () => {
+    const sources = await sourcesFor({
+      senderAuthenticated: true,
+      trusted: ["m2"],
+      from: [
+        item("task", "OPS-12 from m1", "Jira", "m1"),
+        item("task", "OPS-13 from m2", "Jira", "m2"),
+        item("task", "OPS-14 from nowhere", "Jira"),
+      ],
+    });
+
+    expect(sources.map((s) => s.title)).toEqual(["OPS-13 from m2"]);
+  });
+});
+
+describe("vouchedLinkMessageIds", () => {
+  function authenticated(id: string, from: string) {
+    const domain = from.split("@")[1];
+    return {
+      ...getMockMessage({ id, from }),
+      headers: {
+        ...getMockMessage({ from }).headers,
+        "authentication-results": `mx.google.com; dmarc=pass header.from=${domain}`,
+      },
+    };
+  }
+
+  function vouched(
+    userEmail: string,
+    messages: ReturnType<typeof getMockMessage>[],
+  ) {
+    return vouchedLinkMessageIds({
+      thread: { id: "t", snippet: "", messages },
+      userEmail,
+      emailAccountId: "a1",
+    }).then((ids) => [...ids]);
+  }
+
+  beforeEach(() => {
+    prisma.emailMessage.findFirst.mockReset();
+    prisma.emailMessage.findFirst.mockResolvedValue(null);
+  });
+
+  it("vouches for an authenticated colleague in the user's own organization", async () => {
+    expect(
+      await vouched("me@acme.com", [authenticated("m1", "nora@eng.acme.com")]),
+    ).toEqual(["m1"]);
+    expect(prisma.emailMessage.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("never counts a free-mail domain as one organization", async () => {
+    expect(
+      await vouched("me@gmail.com", [authenticated("m1", "nora@gmail.com")]),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["web.de"],
+    ["qq.com"],
+    ["yahoo.co.jp"],
+  ])("never counts the mailbox provider %s as one organization", async (domain) => {
+    expect(
+      await vouched(`me@${domain}`, [authenticated("m1", `nora@${domain}`)]),
+    ).toEqual([]);
+  });
+
+  // A university's domain is shared by everyone who studies or works there.
+  it.each([
+    ["ucsd.edu"],
+    ["ox.ac.uk"],
+    ["unimelb.edu.au"],
+  ])("never counts the academic domain %s as one organization", async (domain) => {
+    expect(
+      await vouched(`me@${domain}`, [
+        authenticated("m1", `someone@cs.${domain}`),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("still vouches for a professor at the user's university whom the user has written to", async () => {
+    const question = getMockMessage({
+      id: "m1",
+      from: "me@ucsd.edu",
+      to: "Prof. Lee <lee@cs.ucsd.edu>",
+      labelIds: ["SENT"],
+    });
+
+    expect(
+      await vouched("me@ucsd.edu", [
+        question,
+        authenticated("m2", "lee@cs.ucsd.edu"),
+      ]),
+    ).toEqual(["m1", "m2"]);
+  });
+
+  it("asks stored mail once per sender, however many of their messages are in the thread", async () => {
+    await vouched("me@acme.com", [
+      authenticated("m1", "nora@northwind.com"),
+      authenticated("m2", "Nora@Northwind.com"),
+      authenticated("m3", "kai@other.example"),
+    ]);
+
+    expect(
+      prisma.emailMessage.findFirst.mock.calls.map(
+        ([args]) => (args?.where?.to as { equals: string }).equals,
+      ),
+    ).toEqual(["nora@northwind.com", "kai@other.example"]);
+  });
+
+  it("keeps organizations under a shared hosting suffix apart", async () => {
+    expect(
+      await vouched("alice@alice.github.io", [
+        authenticated("m1", "bob@bob.github.io"),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("vouches for an authenticated outsider the user wrote to earlier in the thread", async () => {
+    const reply = getMockMessage({
+      id: "m1",
+      from: "me@acme.com",
+      to: "Nora <nora@northwind.com>",
+      labelIds: ["SENT"],
+    });
+
+    expect(
+      await vouched("me@acme.com", [
+        reply,
+        authenticated("m2", "nora@northwind.com"),
+      ]),
+    ).toEqual(["m1", "m2"]);
+    expect(prisma.emailMessage.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("vouches for an authenticated outsider the user has emailed before, from stored mail", async () => {
+    prisma.emailMessage.findFirst.mockResolvedValue({ id: "e1" } as never);
+
+    expect(
+      await vouched("me@acme.com", [authenticated("m1", "nora@northwind.com")]),
+    ).toEqual(["m1"]);
+    expect(prisma.emailMessage.findFirst).toHaveBeenCalledWith({
+      where: {
+        emailAccountId: "a1",
+        sent: true,
+        to: { equals: "nora@northwind.com", mode: "insensitive" },
+      },
+      select: { id: true },
+    });
+  });
+
+  it("doesn't vouch for an authenticated stranger, or for anyone unauthenticated", async () => {
+    expect(
+      await vouched("me@acme.com", [
+        authenticated("m1", "mallory@evil.example"),
+        // Claims to be a colleague, but Gmail didn't authenticate it.
+        getMockMessage({ id: "m2", from: "nora@acme.com" }),
+        // Claims to be the user, who didn't send it.
+        getMockMessage({ id: "m3", from: "me@acme.com" }),
+      ]),
+    ).toEqual([]);
   });
 });
 

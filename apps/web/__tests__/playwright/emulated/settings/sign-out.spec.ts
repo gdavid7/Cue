@@ -2,7 +2,7 @@ import { expect, type Page } from "@playwright/test";
 import { test } from "../playwright-test";
 import { playwrightMailProvider } from "../mail-provider";
 import { openMail } from "../mail/mail-test-helpers";
-import { MAIL_ENGINE_OPFS_DIRECTORY } from "@/utils/mail-engine/wasm-sqlite";
+import { MAIL_ENGINE_OPFS_DIRECTORY } from "@/utils/mail-engine/opfs-mailbox";
 
 const PLAYWRIGHT_TEST_EMAIL =
   process.env.PLAYWRIGHT_TEST_EMAIL || "playwright-test@gmail.com";

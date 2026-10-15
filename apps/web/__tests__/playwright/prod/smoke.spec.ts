@@ -259,11 +259,15 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
           .filter({ hasText: subject })
           .first();
         await expect(async () => {
-          if (!(await sentRow.isVisible())) await page.reload();
+          // An opened thread replaces the list, so reloading it would never
+          // bring the row back; go back to the Sent list instead.
+          if (!(await sentRow.isVisible())) {
+            await page.goto(`/mail/u/${qaAccount().index}/sent`);
+          }
           await sentRow.click({ timeout: 10_000 });
-          await expect(
-            page.getByText(token, { exact: false }).first(),
-          ).toBeVisible({ timeout: 15_000 });
+          await expect
+            .poll(() => threadShowsText(page, token), { timeout: 15_000 })
+            .toBe(true);
         }, "the reply appears in Sent").toPass({ timeout: SENT_TIMEOUT_MS });
         metrics.replyToSentMs = Date.now() - clickedAt;
       } finally {
@@ -281,10 +285,11 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
       await page.goto(`/${qaAccount().id}/home`);
       const lane = page.getByRole("heading", {
         level: 2,
-        name: /Needs reply|Waiting on|Also in your inbox|Drafts ready for you|Cue is working on/,
+        name: /Needs reply|Waiting on|Next up|All clear|Also in your inbox|Drafts ready for you|Cue is working on/,
       });
+      // Today often shows both, such as a notice above "Also in your inbox".
       await expect(
-        lane.first().or(page.getByRole("status").first()),
+        lane.or(page.getByRole("main").getByRole("status")).first(),
         "Today shows a lane or a status line",
       ).toBeVisible({ timeout: 60_000 });
       metrics.todayLoadMs = Date.now() - started;
@@ -431,6 +436,22 @@ async function guardRecipients(page: Page, self: string) {
   // Context-wide, so requests from the mail engine's workers are covered too.
   await page.context().route(matches, handler);
   return () => page.context().unroute(matches, handler);
+}
+
+/**
+ * Whether the open thread shows `text`. Sent mail is HTML, which the reader
+ * renders in a sandboxed frame that page-level text locators do not reach.
+ */
+async function threadShowsText(page: Page, text: string) {
+  if ((await page.getByTestId("thread-reader").getByText(text).count()) > 0)
+    return true;
+  const frames = page.locator('iframe[title="Email content preview"]');
+  const count = await frames.count();
+  for (let index = 0; index < count; index += 1) {
+    const frame = frames.nth(index).contentFrame();
+    if ((await frame.getByText(text).count()) > 0) return true;
+  }
+  return false;
 }
 
 async function readSession(page: Page) {

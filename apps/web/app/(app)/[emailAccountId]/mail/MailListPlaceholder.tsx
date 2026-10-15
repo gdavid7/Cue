@@ -68,7 +68,7 @@ function PlaceholderChrome() {
   );
 }
 
-function PlaceholderRow({
+export function PlaceholderRow({
   width,
   layout,
 }: {

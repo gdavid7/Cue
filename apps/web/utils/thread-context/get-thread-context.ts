@@ -58,6 +58,8 @@ export type ThreadContextItem = {
   url?: string;
   /** The app it came from, for items that aren't email or calendar. */
   source?: string;
+  /** For an item a link in the thread points at: the message the link is in. */
+  linkedFrom?: string;
   reasons: ContextReason[];
 };
 
@@ -218,6 +220,7 @@ export async function collectThreadContext({
     at: candidate.at,
     url: candidate.url,
     source: candidate.source,
+    linkedFrom: candidate.linkedFrom,
     reasons,
   }));
   if (complete && connectors.complete && linkedPages.complete)
@@ -334,22 +337,43 @@ function messageTime(m: ParsedMessage) {
  * Every link in the thread, and the latest person other than the user who
  * wrote in it, so connected apps can show what the thread points at.
  */
-function threadSignals(thread: EmailThread, userEmail: string): ThreadSignals {
-  const links = [
-    ...new Set(
-      thread.messages.flatMap((m) => linksIn(m).map((link) => link.href)),
-    ),
-  ];
-  const senderEmail = [...thread.messages]
-    .reverse()
-    .map((m) => extractEmailAddress(m.headers.from).toLowerCase())
-    .find(
-      (email) =>
-        email &&
-        !isSameEmailAddress(email, userEmail) &&
-        !isAutomatedAddress(email),
+export function threadSignals(
+  thread: EmailThread,
+  userEmail: string,
+): ThreadSignals {
+  // A link quoted in later replies stays with the message that first sent it.
+  const byUrl = new Map<string, ThreadSignals["links"][number]>();
+  for (const m of thread.messages) {
+    for (const { href } of linksIn(m)) {
+      if (!byUrl.has(href)) byUrl.set(href, { url: href, messageId: m.id });
+    }
+  }
+  const links = [...byUrl.values()];
+  const sender = latestSenderMessage(thread, userEmail);
+  return sender
+    ? {
+        links,
+        senderEmail: extractEmailAddress(sender.headers.from).toLowerCase(),
+      }
+    : { links };
+}
+
+/**
+ * The latest message from a person other than the user, whose sender a
+ * connected CRM is asked about. Automated senders have no record worth finding.
+ */
+export function latestSenderMessage(
+  thread: EmailThread,
+  userEmail: string,
+): ParsedMessage | undefined {
+  return [...thread.messages].reverse().find((m) => {
+    const email = extractEmailAddress(m.headers.from);
+    return (
+      !!email &&
+      !isSameEmailAddress(email, userEmail) &&
+      !isAutomatedAddress(email.toLowerCase())
     );
-  return senderEmail ? { links, senderEmail } : { links };
+  });
 }
 
 function uniqueById<T extends { id: string }>(items: T[]): T[] {

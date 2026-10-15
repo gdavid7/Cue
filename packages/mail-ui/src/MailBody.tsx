@@ -310,7 +310,6 @@ export function buildMailHtmlDocument({
     "media-src 'none'",
     "connect-src 'none'",
     "manifest-src 'none'",
-    "prefetch-src 'none'",
     "worker-src 'none'",
     "child-src 'none'",
     "script-src 'none'",

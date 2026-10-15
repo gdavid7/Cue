@@ -169,7 +169,7 @@ export function MailboxThreadList<T>({
               {groups.map((group) => (
                 <div
                   aria-label={group.label ?? undefined}
-                  key={`${group.label ?? "ungrouped"}-${group.startIndex}`}
+                  key={group.key}
                   role="group"
                 >
                   {group.label && group.label !== "Today" ? (
@@ -308,13 +308,31 @@ function groupItemsByLabel<T>(
   items: T[],
   getGroupLabel: (item: T) => string | null,
 ) {
-  const groups: { label: string | null; startIndex: number; items: T[] }[] = [];
+  const groups: {
+    key: string;
+    label: string | null;
+    startIndex: number;
+    items: T[];
+  }[] = [];
+  const labelCounts = new Map<string | null, number>();
 
   items.forEach((item, index) => {
     const label = getGroupLabel(item);
     const openGroup = groups.at(-1);
-    if (openGroup?.label === label) openGroup.items.push(item);
-    else groups.push({ label, startIndex: index, items: [item] });
+    if (openGroup?.label === label) {
+      openGroup.items.push(item);
+      return;
+    }
+    // Keyed by label, not position: archiving a row above shifts every later
+    // group's start, and a positional key would remount all of their rows.
+    const occurrence = labelCounts.get(label) ?? 0;
+    labelCounts.set(label, occurrence + 1);
+    groups.push({
+      key: `${label ?? "ungrouped"}#${occurrence}`,
+      label,
+      startIndex: index,
+      items: [item],
+    });
   });
 
   return groups;

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { createTestLogger, getMockMessage } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
 import type { EmailProvider, EmailThread } from "@/utils/email/types";
@@ -6,9 +6,29 @@ import { getHomeData, priorityOf } from "./get-home";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
+vi.mock("@/utils/redis", () => ({
+  redis: { get: vi.fn(async () => null), set: vi.fn(async () => "OK") },
+}));
+const mocks = vi.hoisted(() => ({
+  fetchEvents: vi.fn(),
+  executeTool: vi.fn(),
+}));
+vi.mock("@/utils/calendar/fetch-events-in-window", () => ({
+  fetchCalendarEventsInWindow: mocks.fetchEvents,
+}));
+vi.mock("@/utils/mcp/providers/registry", () => ({
+  getIntegrationProvider: () => ({
+    executeTool: mocks.executeTool,
+    isConfigured: () => true,
+  }),
+}));
 
 const USER = "david@example.com";
 const NOW = new Date("2026-10-13T16:00:00Z");
+// 9:00 AM in Los Angeles, where the user is.
+const TIME_ZONE = "America/Los_Angeles";
+// Prisma's groupBy type is too generic for the mock's helpers.
+const checkedMessages = prisma.executedRule.groupBy as unknown as Mock;
 const LABELS = [
   { id: "INBOX", name: "INBOX" },
   { id: "UNREAD", name: "UNREAD" },
@@ -21,6 +41,11 @@ const LABELS = [
 
 describe("getHomeData", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.fetchEvents.mockResolvedValue({ events: [], complete: true });
+    checkedMessages.mockResolvedValue([]);
+    prisma.mcpConnection.findMany.mockResolvedValue([]);
+    prisma.emailMessage.findMany.mockResolvedValue([]);
     prisma.executedAction.findMany.mockResolvedValue([]);
     prisma.scheduledAction.findMany.mockResolvedValue([]);
     prisma.executedRule.findMany.mockResolvedValue([]);
@@ -279,29 +304,283 @@ describe("getHomeData", () => {
     expect(home.alsoInInbox).toEqual([]);
   });
 
-  it("says where filed mail went, per label", async () => {
-    const provider = mockProvider({
-      Newsletter: [
-        thread("n1", {
-          from: "News <n@x.com>",
-          subject: "Weekly",
-          labels: ["Label_Newsletter"],
-        }),
-      ],
-    });
+  it("counts the emails Cue checked and filed since the user's midnight, from its own records", async () => {
+    checkedMessages.mockResolvedValue([
+      { messageId: "m1" },
+      { messageId: "m2" },
+      { messageId: "m3" },
+    ] as never);
+    prisma.executedAction.findMany.mockImplementation((async ({
+      where,
+    }: {
+      where: { type: unknown };
+    }) =>
+      where.type === "DRAFT_EMAIL"
+        ? []
+        : [
+            filedAction("m1", "ARCHIVE"),
+            filedAction("m1", "LABEL", "Label_Newsletter", "Newsletter"),
+            filedAction("m2", "ARCHIVE"),
+            filedAction("m2", "LABEL", "Label_Newsletter", "Newsletter"),
+            // Labelled but left in the inbox: checked, not filed.
+            filedAction("m3", "LABEL", "Label_Customer", "Customer"),
+          ]) as never);
+    const provider = mockProvider({});
 
     const home = await run(provider);
 
-    expect(home.handledLabels).toEqual([
-      {
-        labelId: "Label_Newsletter",
-        name: "Newsletter",
-        count: 1,
-        capped: false,
-      },
-    ]);
+    expect(home.today).toEqual({
+      checked: 3,
+      filed: 2,
+      filedLabel: { labelId: "Label_Newsletter", name: "Newsletter" },
+    });
+    // Midnight in Los Angeles, not UTC.
+    expect(checkedMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          emailAccountId: "account-1",
+          createdAt: { gte: new Date("2026-10-13T07:00:00Z") },
+        },
+      }),
+    );
+    // Counted from Cue's records: no extra mailbox reads.
+    expect(provider.getThreadsWithQuery).toHaveBeenCalledTimes(3);
   });
 });
+
+describe("getHomeData: what's next", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    prisma.executedAction.findMany.mockResolvedValue([]);
+    prisma.scheduledAction.findMany.mockResolvedValue([]);
+    prisma.executedRule.findMany.mockResolvedValue([]);
+    checkedMessages.mockResolvedValue([]);
+    prisma.executedRule.findFirst.mockResolvedValue({ id: "run-1" } as never);
+    prisma.threadTracker.findFirst.mockResolvedValue(null);
+    prisma.threadTracker.findMany.mockResolvedValue([]);
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      user: { aiApiKey: null, premium: null },
+      rules: [],
+    } as never);
+    prisma.mcpConnection.findMany.mockResolvedValue([]);
+    prisma.emailMessage.findMany.mockResolvedValue([]);
+    mocks.fetchEvents.mockResolvedValue({ events: [], complete: true });
+  });
+
+  it("names the next meeting today, skipping ones that started, all-day items and declined invites", async () => {
+    mocks.fetchEvents.mockResolvedValue({
+      complete: true,
+      events: [
+        event("standup", "Standup", "2026-10-13T15:30:00Z"),
+        event("offsite", "Offsite", "2026-10-13T00:00:00Z", { allDay: true }),
+        event("declined", "Vendor pitch", "2026-10-13T17:00:00Z", {
+          declined: true,
+        }),
+        event("review", "Design review", "2026-10-13T21:00:00Z"),
+        event("dinner", "Dinner", "2026-10-14T02:00:00Z"),
+      ],
+    });
+
+    const home = await run(mockProvider({}));
+
+    expect(home.calendar).toEqual({
+      connected: true,
+      next: {
+        title: "Design review",
+        at: "2026-10-13T21:00:00.000Z",
+        url: "https://calendar.example.com/review",
+        tomorrow: false,
+      },
+    });
+  });
+
+  it("after 5 pm, names how tomorrow starts instead of what's left tonight", async () => {
+    // 6:00 PM in Los Angeles.
+    const evening = new Date("2026-10-14T01:00:00Z");
+    mocks.fetchEvents.mockResolvedValue({
+      complete: true,
+      events: [
+        event("dinner", "Team dinner", "2026-10-14T02:00:00Z"),
+        event("sync", "Morning sync", "2026-10-14T16:00:00Z"),
+      ],
+    });
+
+    const home = await run(mockProvider({}), evening);
+
+    expect(home.calendar.next).toMatchObject({
+      title: "Morning sync",
+      tomorrow: true,
+    });
+  });
+
+  it("knows when no calendar is connected", async () => {
+    mocks.fetchEvents.mockResolvedValue({
+      events: [],
+      complete: false,
+      noCalendarConnected: true,
+    });
+
+    const home = await run(mockProvider({}));
+
+    expect(home.calendar).toEqual({ connected: false, next: null });
+  });
+
+  it("merges the next meetings with work due from connected apps, soonest first", async () => {
+    mocks.fetchEvents.mockResolvedValue({
+      complete: true,
+      events: [
+        event("review", "Design review", "2026-10-13T21:00:00Z"),
+        event("dinner", "Dinner", "2026-10-14T02:00:00Z"),
+        event("sync", "Morning sync", "2026-10-14T16:00:00Z"),
+      ],
+    });
+    prisma.mcpConnection.findMany.mockResolvedValue([
+      connection("canvas"),
+      connection("jira"),
+    ] as never);
+    mocks.executeTool.mockImplementation(
+      async ({ tool }: { tool: string }) => TOOL_RESULTS[tool],
+    );
+
+    const home = await run(mockProvider({}));
+
+    expect(
+      home.nextUp.map(({ kind, title, source }) => [kind, title, source]),
+    ).toEqual([
+      ["deadline", "Problem set 4", "Canvas"],
+      ["event", "Design review", "Calendar"],
+      ["event", "Dinner", "Calendar"],
+      // Due on a date, not at a time: by the end of the user's day.
+      ["deadline", "OPS-12 Rotate keys", "Jira"],
+    ]);
+    expect(home.nextUp[0]).toMatchObject({
+      at: "2026-10-13T20:00:00.000Z",
+      detail: "Linear Algebra",
+      url: "https://school.instructure.com/assignments/4",
+    });
+    expect(home.nextUp[3]).toMatchObject({
+      allDay: true,
+      url: "https://acme.atlassian.net/browse/OPS-12",
+    });
+    // Connected apps, so nothing to suggest.
+    expect(home.suggestion).toBeNull();
+  });
+
+  it("leaves out an app that doesn't answer in time, and shows the rest", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      prisma.mcpConnection.findMany.mockResolvedValue([
+        connection("asana"),
+        connection("canvas"),
+      ] as never);
+      mocks.executeTool.mockImplementation(({ tool }: { tool: string }) =>
+        tool.startsWith("ASANA_")
+          ? new Promise(() => {})
+          : Promise.resolve(TOOL_RESULTS[tool]),
+      );
+
+      const pending = run(mockProvider({}));
+      await vi.advanceTimersByTimeAsync(10_000);
+      const home = await pending;
+
+      expect(home.nextUp.map((item) => item.source)).toEqual(["Canvas"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("suggests connecting an app the user already gets mail from, by sender domain", async () => {
+    prisma.emailMessage.findMany.mockResolvedValue([
+      { fromDomain: "sfu.instructure.com" },
+    ] as never);
+
+    const home = await run(mockProvider({}));
+
+    expect(home.suggestion).toEqual({ app: "canvas", name: "Canvas" });
+  });
+
+  it("suggests nothing when no mail comes from an app Cue can read", async () => {
+    prisma.emailMessage.findMany.mockResolvedValue([
+      { fromDomain: "example.com" },
+    ] as never);
+
+    const home = await run(mockProvider({}));
+
+    expect(home.suggestion).toBeNull();
+    expect(home.nextUp).toEqual([]);
+  });
+});
+
+const TOOL_RESULTS: Record<string, unknown> = {
+  CANVAS_GET_CURRENT_USER: { response_data: { id: 7 } },
+  CANVAS_LIST_COURSES: { response_data: [{ id: 101 }] },
+  CANVAS_LIST_CALENDAR_EVENTS_FOR_USER: {
+    response_data: [
+      {
+        id: 4,
+        title: "Problem set 4",
+        context_name: "Linear Algebra",
+        html_url: "https://school.instructure.com/assignments/4",
+        assignment: { due_at: "2026-10-13T20:00:00Z" },
+      },
+      {
+        id: 3,
+        title: "Problem set 3",
+        context_name: "Linear Algebra",
+        assignment: { due_at: "2026-10-10T20:00:00Z" },
+      },
+    ],
+  },
+  JIRA_SEARCH_ISSUES: {
+    issues: [
+      {
+        key: "OPS-12",
+        self: "https://acme.atlassian.net/rest/api/3/issue/10012",
+        fields: { summary: "Rotate keys", duedate: "2026-10-14" },
+      },
+      {
+        key: "OPS-20",
+        self: "https://acme.atlassian.net/rest/api/3/issue/10020",
+        fields: { summary: "Audit logs", duedate: "2026-10-16" },
+      },
+    ],
+  },
+};
+
+function connection(app: string) {
+  return {
+    emailAccountId: "account-1",
+    emailAccount: { email: USER },
+    integration: { name: app },
+  };
+}
+
+function event(
+  id: string,
+  title: string,
+  start: string,
+  { allDay = false, declined = false } = {},
+) {
+  const startTime = new Date(start);
+  return {
+    id,
+    title,
+    startTime,
+    endTime: new Date(startTime.getTime() + 30 * 60_000),
+    allDay,
+    eventUrl: `https://calendar.example.com/${id}`,
+    attendees: [{ email: USER, declined }],
+  };
+}
+
+function filedAction(
+  messageId: string,
+  type: string,
+  labelId: string | null = null,
+  label: string | null = null,
+) {
+  return { type, labelId, label, executedRule: { messageId } };
+}
 
 describe("priorityOf", () => {
   it("is high for an unread email with a deadline, or a customer", () => {
@@ -323,13 +602,14 @@ describe("priorityOf", () => {
   });
 });
 
-function run(emailProvider: EmailProvider) {
+function run(emailProvider: EmailProvider, now = NOW) {
   return getHomeData({
     emailAccountId: "account-1",
     userEmail: USER,
     emailProvider,
     logger: createTestLogger(),
-    now: NOW,
+    timeZone: TIME_ZONE,
+    now,
   });
 }
 

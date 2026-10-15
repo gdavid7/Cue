@@ -250,3 +250,94 @@ describe("requestAccessAction", () => {
     expect(prisma.accessRequest.create).not.toHaveBeenCalled();
   });
 });
+
+describe("approveAccessEmailAction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth.mockResolvedValue({
+      user: { id: "u1", email: "founder@example.com" },
+    });
+    prisma.accessRequest.findUnique.mockResolvedValue(null);
+    prisma.accessRequest.upsert.mockImplementation(((args: {
+      create: { email: string };
+    }) =>
+      Promise.resolve({
+        id: "r1",
+        email: args.create.email,
+        name: null,
+      })) as never);
+  });
+
+  it.each([
+    ["a school address", " Student@School.EDU ", "student@school.edu"],
+    ["a work address", "dee@company.co.uk", "dee@company.co.uk"],
+    [
+      "a Gmail address with dots",
+      "Jane.Doe@googlemail.com",
+      "janedoe@gmail.com",
+    ],
+  ])("approves %s, stored the way sign-in matches it", async (_label, input, stored) => {
+    const result = await approveAccessEmailAction({ email: input });
+
+    expect(result?.data).toEqual({
+      id: "r1",
+      email: stored,
+      alreadyApproved: false,
+      approved: [{ id: "r1", email: stored, emailed: false }],
+    });
+    expect(prisma.accessRequest.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { email: stored },
+        create: expect.objectContaining({
+          email: stored,
+          source: "admin",
+          status: "APPROVED",
+          decidedBy: "founder@example.com",
+        }),
+        update: expect.objectContaining({ status: "APPROVED" }),
+      }),
+    );
+  });
+
+  it("approves someone who was declined", async () => {
+    prisma.accessRequest.findUnique.mockResolvedValue({
+      id: "r1",
+      status: "DECLINED",
+    } as never);
+
+    const result = await approveAccessEmailAction({ email: "pal@gmail.com" });
+
+    expect(result?.data?.alreadyApproved).toBe(false);
+    expect(prisma.accessRequest.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({ status: "APPROVED" }),
+      }),
+    );
+  });
+
+  it("says when someone is already in the beta and changes nothing", async () => {
+    prisma.accessRequest.findUnique.mockResolvedValue({
+      id: "r1",
+      status: "APPROVED",
+    } as never);
+
+    const result = await approveAccessEmailAction({
+      email: "Pal.Friend@gmail.com",
+    });
+
+    expect(result?.data).toEqual({
+      id: "r1",
+      email: "palfriend@gmail.com",
+      alreadyApproved: true,
+      approved: [],
+    });
+    expect(prisma.accessRequest.upsert).not.toHaveBeenCalled();
+  });
+
+  it("refuses something that isn't an email", async () => {
+    const result = await approveAccessEmailAction({ email: "not an email" });
+
+    expect(result?.validationErrors).toBeDefined();
+    expect(prisma.accessRequest.upsert).not.toHaveBeenCalled();
+  });
+});

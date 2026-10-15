@@ -80,6 +80,7 @@ export const COMPOSIO_TOOL_CATALOG: Record<string, string[]> = {
     "GOOGLESHEETS_SEARCH_SPREADSHEETS",
   ],
   hubspot: [
+    "HUBSPOT_GET_ACCOUNT_INFO",
     "HUBSPOT_GET_COMPANY",
     "HUBSPOT_GET_DEAL",
     "HUBSPOT_GET_TICKET",
@@ -118,6 +119,7 @@ export const COMPOSIO_TOOL_CATALOG: Record<string, string[]> = {
     "SALESFORCE_GET_CONTACT",
     "SALESFORCE_GET_LEAD",
     "SALESFORCE_GET_OPPORTUNITY",
+    "SALESFORCE_GET_USER_INFO",
     "SALESFORCE_SEARCH_ACCOUNTS",
     "SALESFORCE_SEARCH_CONTACTS",
     "SALESFORCE_SEARCH_LEADS",
@@ -235,11 +237,15 @@ export interface ComposioEmulatorOptions {
   canvasEvents?: ComposioEmulatorCanvasEvent[];
   clickupTasks?: ComposioEmulatorClickUpTask[];
   driveFiles?: ComposioEmulatorDriveFile[];
+  /** What HUBSPOT_GET_ACCOUNT_INFO answers for the connected portal. */
+  hubspotAccount?: Record<string, unknown>;
   hubspotContacts?: ComposioEmulatorHubSpotContact[];
   jiraIssues?: ComposioEmulatorJiraIssue[];
   port?: number;
   salesforceContacts?: ComposioEmulatorSalesforcePerson[];
   salesforceLeads?: ComposioEmulatorSalesforcePerson[];
+  /** What SALESFORCE_GET_USER_INFO answers for the connected user. */
+  salesforceUserInfo?: Record<string, unknown>;
   slackMessages?: ComposioEmulatorSlackMessage[];
 }
 
@@ -440,6 +446,22 @@ export async function createComposioEmulator(
           )
           .slice(0, Number(args.limit ?? 10)),
       };
+    },
+    // Composio documents no inputs and describes the answer only as
+    // "email, hubId, user details", so the seed is what Cue's parser reads.
+    HUBSPOT_GET_ACCOUNT_INFO: (args) => {
+      checkArgs("HUBSPOT_GET_ACCOUNT_INFO", args, {
+        required: {},
+        optional: {},
+      });
+      return options.hubspotAccount ?? {};
+    },
+    SALESFORCE_GET_USER_INFO: (args) => {
+      checkArgs("SALESFORCE_GET_USER_INFO", args, {
+        required: {},
+        optional: { user_id: "string", include_permissions: "boolean" },
+      });
+      return options.salesforceUserInfo ?? {};
     },
     // Composio: "All parameters support partial/fuzzy matching"; at least
     // one criterion.

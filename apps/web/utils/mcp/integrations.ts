@@ -203,6 +203,7 @@ export const MCP_INTEGRATIONS: Record<
       "HUBSPOT_GET_COMPANY",
       "HUBSPOT_GET_DEAL",
       "HUBSPOT_GET_TICKET",
+      "HUBSPOT_GET_ACCOUNT_INFO",
     ],
   },
   salesforce: {
@@ -221,6 +222,7 @@ export const MCP_INTEGRATIONS: Record<
       "SALESFORCE_GET_ACCOUNT",
       "SALESFORCE_GET_OPPORTUNITY",
       "SALESFORCE_GET_LEAD",
+      "SALESFORCE_GET_USER_INFO",
     ],
   },
   airtable: {

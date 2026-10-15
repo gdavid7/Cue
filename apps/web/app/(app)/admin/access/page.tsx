@@ -6,6 +6,7 @@ import { ErrorPage } from "@/components/ErrorPage";
 import { PageWrapper } from "@/components/PageWrapper";
 import { PageHeader } from "@/components/PageHeader";
 import { AccessRequests } from "@/app/(app)/admin/access/AccessRequests";
+import { AddToBeta } from "@/app/(app)/admin/access/AddToBeta";
 import { InfoIcon } from "lucide-react";
 import { AlertBasic } from "@/components/Alert";
 import {
@@ -44,12 +45,9 @@ export default async function AdminAccessPage() {
     <PageWrapper>
       <PageHeader
         title="Access requests"
-        description={
-          env.AUTH_WAITLIST_ENABLED
-            ? "Only approved people can create an account."
-            : "The waitlist is off, so anyone can still sign up. Set AUTH_WAITLIST_ENABLED=true to require approval."
-        }
+        description={getSignUpDescription()}
       />
+      <AddToBeta />
       {env.AUTH_WAITLIST_ENABLED &&
         (env.AUTH_ALLOWED_EMAIL_DOMAINS?.length ?? 0) > 0 && (
           <AlertBasic
@@ -92,4 +90,12 @@ export default async function AdminAccessPage() {
       />
     </PageWrapper>
   );
+}
+
+function getSignUpDescription() {
+  if (env.AUTH_WAITLIST_ENABLED)
+    return "Only approved people can create an account.";
+  if (env.AUTH_ALLOWED_EMAILS?.length || env.AUTH_ALLOWED_EMAIL_DOMAINS?.length)
+    return "Only people on the allow-list and people approved here can create an account.";
+  return "The waitlist and allow-list are off, so anyone can sign up. Set AUTH_WAITLIST_ENABLED=true to require approval.";
 }

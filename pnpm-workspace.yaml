@@ -67,6 +67,8 @@ allowBuilds:
   electron: true
   electron-winstaller: true
   esbuild: true
+  # Its postinstall re-downloads the list; the published JSON is what we pin.
+  free-email-domains: false
   msgpackr-extract: true
   prisma: true
   protobufjs: true

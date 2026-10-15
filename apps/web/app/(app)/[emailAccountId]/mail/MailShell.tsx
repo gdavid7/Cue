@@ -91,6 +91,7 @@ import { MailLayout, MailSplitFilterKind } from "@/generated/prisma/enums";
 import { useSidebar } from "@/components/ui/sidebar";
 import { useChat } from "@/providers/ChatProvider";
 import { useAtomValue, useSetAtom } from "jotai";
+import { openThreadAtom } from "@/store/open-thread";
 import {
   commandPaletteOpenAtom,
   mailCommandContextAtom,
@@ -131,6 +132,7 @@ import {
 import { isInboxStyleLandingSplit } from "@/utils/split-inbox/inbox-styles";
 import { getActionErrorMessage } from "@/utils/error";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
+import { showMailView } from "@/app/(app)/[emailAccountId]/mail/show-mail-view";
 import {
   getMailNavView,
   type MailSlugs,
@@ -758,6 +760,21 @@ export function MailShell() {
   const openMessages = readerSelectionSettled
     ? (openThreadData?.thread.messages ?? NO_MESSAGES)
     : NO_MESSAGES;
+  // The assistant chat lives outside this screen; it reads the open thread
+  // from here so a question about "this email" names it.
+  const setReaderOpenThread = useSetAtom(openThreadAtom);
+  const latestOpenMessageId = openMessages
+    .filter((message) => !message.labelIds?.includes(GmailLabel.DRAFT))
+    .at(-1)?.id;
+  useEffect(() => {
+    setReaderOpenThread(
+      openThreadSelection && {
+        ...openThreadSelection,
+        messageId: latestOpenMessageId,
+      },
+    );
+    return () => setReaderOpenThread(null);
+  }, [openThreadSelection, latestOpenMessageId, setReaderOpenThread]);
   const openExternalUrl = useMemo(() => {
     const message = openMessages.at(-1);
     if (!message || !readerEmailAccount) return;
@@ -1521,12 +1538,11 @@ export function MailShell() {
 
   // Same destination as the sidebar row, so the view starts fresh.
   function goToMailbox(type: string) {
-    router.push(
-      buildMailPath({
-        accountIndex: mailLocation.accountIndex,
-        view: getMailNavView({ kind: "type", type }, mailSlugs),
-      }),
-    );
+    const href = buildMailPath({
+      accountIndex: mailLocation.accountIndex,
+      view: getMailNavView({ kind: "type", type }, mailSlugs),
+    });
+    if (!showMailView(href)) router.push(href);
   }
 
   function openReply(toEveryone: boolean) {
