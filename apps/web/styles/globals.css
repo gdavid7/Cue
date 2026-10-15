@@ -252,6 +252,28 @@
     --toast-offset-bottom: calc(72px + env(safe-area-inset-bottom));
   }
 }
+/* With the keyboard up, Android lifts the tab bar to sit on top of it,
+   where it takes room from what's being typed. It comes back on blur. */
+@media (max-width: 1023px) and (pointer: coarse) {
+  :root:has(
+      :is(
+          input:not(
+            [type="button"],
+            [type="checkbox"],
+            [type="radio"],
+            [type="range"],
+            [type="file"],
+            [type="submit"],
+            [type="reset"]
+          ),
+          textarea,
+          [contenteditable]:not([contenteditable="false"])
+        ):focus
+    )
+    [data-mail-mobile-nav] {
+    display: none;
+  }
+}
 @media (min-width: 1024px) {
   :root:has([data-mail-sidebar="open"]) {
     --toast-offset-left: calc(var(--mail-sidebar-width, 236px) + 16px);
