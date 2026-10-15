@@ -367,14 +367,20 @@ async function fetchDeltaPage({
   };
 }
 
-// Orders message ids by the latest history record that touched each one,
-// newest first, keeping their order within a record.
+// Orders message ids so mail that arrived in the backlog comes first, then
+// the rest; each group by the latest history record that touched each one,
+// newest first, keeping their order within a record. A bulk relabel of old
+// mail after new mail arrives must not push the new mail out of a preview.
 function newestChangeFirst(
   messageIds: string[],
   history: gmail_v1.Schema$History[],
 ) {
+  const added = new Set<string>();
   const lastTouched = new Map<string, number>();
   history.forEach((record, index) => {
+    for (const change of record.messagesAdded ?? []) {
+      if (change.message?.id) added.add(change.message.id);
+    }
     const touched = [
       ...(record.messagesAdded ?? []),
       ...(record.labelsAdded ?? []),
@@ -384,9 +390,9 @@ function newestChangeFirst(
       if (message?.id) lastTouched.set(message.id, index);
     }
   });
-  return [...messageIds].sort(
-    (a, b) => (lastTouched.get(b) ?? -1) - (lastTouched.get(a) ?? -1),
-  );
+  const rank = (id: string) =>
+    (added.has(id) ? history.length : 0) + (lastTouched.get(id) ?? -1);
+  return [...messageIds].sort((a, b) => rank(b) - rank(a));
 }
 
 export function getGmailMailboxChangeIds(history: gmail_v1.Schema$History[]): {

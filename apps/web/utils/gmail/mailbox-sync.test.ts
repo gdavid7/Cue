@@ -349,6 +349,33 @@ describe("getGmailMailboxSyncPage", () => {
     );
   });
 
+  it("previews new mail ahead of later label changes on older mail", async () => {
+    const relabeled = Array.from({ length: 300 }, (_, index) => `old-${index}`);
+    const history = [
+      { messagesAdded: [{ message: { id: "new-mail", threadId: "t-new" } }] },
+      ...relabeled.map((id) => ({
+        labelsAdded: [{ labelIds: ["Label_1"], message: { id, threadId: id } }],
+      })),
+    ];
+    vi.mocked(getHistory).mockResolvedValue({ history, historyId: "500" });
+    vi.mocked(getMessagesBatch).mockImplementation(async ({ messageIds }) =>
+      messageIds.map((id) => ({
+        ...getMockMessage({ id, labelIds: ["INBOX"] }),
+        internalDate: RECENT,
+      })),
+    );
+
+    const first = await getGmailMailboxSyncPage({
+      gmail: {} as never,
+      accessToken: "access-token",
+      logger,
+      cursor: startCursor(),
+      limit: 50,
+    });
+
+    expect(ids(first)).toContain("new-mail");
+  });
+
   it("catches up a short backlog in one history read", async () => {
     const gmail = fakeGmailHistory(3, 2);
 
