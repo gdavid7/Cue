@@ -81,6 +81,7 @@ const MAX_SEARCH_PAGES_PER_DEMAND = 2;
 // Each conversation fill is an interactive provider read; anything past this
 // waits its turn instead of crowding out sync and commands.
 const MAX_CONVERSATION_FETCHES = 2;
+const CONVERSATION_FETCH_RETRY_MS = 60_000;
 
 export type WorkAdmission =
   | { status: "scheduled" | "already_satisfied" }
@@ -220,6 +221,9 @@ export function createMailEngine(input: {
     string,
     Promise<ConversationCompletion>
   >();
+  // When a conversation whose read failed may be asked for again; a
+  // conversation the provider doesn't have never is.
+  const conversationFetchRetryAt = new Map<string, number>();
   let runningConversationFetches = 0;
   const queuedConversationFetches: Array<() => void> = [];
 
@@ -382,8 +386,27 @@ export function createMailEngine(input: {
       const id = conversationFetchKey(key);
       const inFlight = conversationFetches.get(id);
       if (inFlight) return inFlight;
+      if ((conversationFetchRetryAt.get(id) ?? 0) > runtime.nowMs()) {
+        return Promise.resolve({ status: "unavailable" });
+      }
       const fetched = fetchConversationMessages(key)
-        .catch((): ConversationCompletion => ({ status: "unavailable" }))
+        .catch(
+          (): ConversationFetch => ({
+            status: "unavailable",
+            retryAfterMs: CONVERSATION_FETCH_RETRY_MS,
+          }),
+        )
+        .then((result): ConversationCompletion => {
+          if (result.status === "complete") {
+            conversationFetchRetryAt.delete(id);
+            return result;
+          }
+          conversationFetchRetryAt.set(
+            id,
+            runtime.nowMs() + result.retryAfterMs,
+          );
+          return { status: "unavailable" };
+        })
         .finally(() => conversationFetches.delete(id));
       conversationFetches.set(id, fetched);
       return fetched;
@@ -710,7 +733,7 @@ export function createMailEngine(input: {
 
   async function fetchConversationMessages(
     key: ConversationKey,
-  ): Promise<ConversationCompletion> {
+  ): Promise<ConversationFetch> {
     if (await store.readConversationComplete(key)) {
       return { status: "complete" };
     }
@@ -722,11 +745,16 @@ export function createMailEngine(input: {
   // never overwrites what a sync page committed in the meantime.
   async function readConversationMembers(
     key: ConversationKey,
-  ): Promise<ConversationCompletion> {
+  ): Promise<ConversationFetch> {
     const account = (await store.readAccountSyncStates()).find(
       (candidate) => candidate.accountId === key.accountId,
     );
-    if (!account) return { status: "unavailable" };
+    if (!account) {
+      return {
+        status: "unavailable",
+        retryAfterMs: CONVERSATION_FETCH_RETRY_MS,
+      };
+    }
     const session = {
       accountId: account.accountId,
       generation: account.generation,
@@ -745,15 +773,34 @@ export function createMailEngine(input: {
       });
       if (membership.status !== "ok") {
         await noteConnection(key.accountId, membership);
-        return { status: "unavailable" };
+        return {
+          status: "unavailable",
+          retryAfterMs:
+            membership.status === "paused"
+              ? membership.retryAfterMs
+              : CONVERSATION_FETCH_RETRY_MS,
+        };
       }
-      if (membership.value.status !== "page") return { status: "unavailable" };
+      if (membership.value.status === "not_found") {
+        return {
+          status: "unavailable",
+          retryAfterMs: Number.POSITIVE_INFINITY,
+        };
+      }
+      if (membership.value.status !== "page") {
+        return {
+          status: "unavailable",
+          retryAfterMs: CONVERSATION_FETCH_RETRY_MS,
+        };
+      }
       const applied = await store.applyConversationMembership({
         session,
         page: membership.value.page,
       });
       // The account was reset or removed while the provider answered.
-      if (applied.status === "stale") return { status: "unavailable" };
+      if (applied.status === "stale") {
+        return { status: "unavailable", retryAfterMs: 0 };
+      }
       await refreshViews();
       page = membership.value.page.nextPage;
     } while (page);
@@ -1604,6 +1651,10 @@ type ProviderSearch = {
 function providerSearchKey(accountId: string, predicate: MailPredicate) {
   return `${accountId}:${JSON.stringify(predicate)}`;
 }
+
+type ConversationFetch =
+  | { status: "complete" }
+  | { status: "unavailable"; retryAfterMs: number };
 
 function conversationFetchKey(key: ConversationKey) {
   return `${key.accountId}\u0000${key.conversationId}`;

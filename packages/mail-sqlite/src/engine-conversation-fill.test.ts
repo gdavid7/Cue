@@ -111,26 +111,78 @@ describe("opening a conversation a first sync has not fully reached", () => {
     await engine.close();
   });
 
-  it("tries again on the next open when the provider could not answer", async () => {
+  it("asks again once the provider's pause is over", async () => {
     let paused = true;
     const source = firstSyncSource({
       firstPage: replies,
       async readMembership(answer) {
         if (!paused) return answer();
         paused = false;
-        return { status: "paused", retryAfterMs: 0, reason: "throttled" };
+        return { status: "paused", retryAfterMs: 5000, reason: "throttled" };
       },
     });
-    const { engine } = await startFirstSync(source);
+    const clock = { nowMs: 10_000 };
+    const { engine } = await startFirstSync(source, clock);
 
     await expect(engine.ensureConversationMessages(thread)).resolves.toEqual({
       status: "unavailable",
     });
+    await engine.ensureConversationMessages(thread);
+    expect(source.membershipReads).toBe(1);
+
+    clock.nowMs += 5000;
     await expect(engine.ensureConversationMessages(thread)).resolves.toEqual({
       status: "complete",
     });
-
     expect(source.membershipReads).toBe(2);
+    await engine.close();
+  });
+
+  it("waits a minute before asking again after a failed read", async () => {
+    let failing = true;
+    const source = firstSyncSource({
+      firstPage: replies,
+      async readMembership(answer) {
+        if (!failing) return answer();
+        failing = false;
+        throw new Error("network down");
+      },
+    });
+    const clock = { nowMs: 10_000 };
+    const { engine } = await startFirstSync(source, clock);
+
+    await expect(engine.ensureConversationMessages(thread)).resolves.toEqual({
+      status: "unavailable",
+    });
+    clock.nowMs += 30_000;
+    await engine.ensureConversationMessages(thread);
+    expect(source.membershipReads).toBe(1);
+
+    clock.nowMs += 30_000;
+    await expect(engine.ensureConversationMessages(thread)).resolves.toEqual({
+      status: "complete",
+    });
+    expect(source.membershipReads).toBe(2);
+    await engine.close();
+  });
+
+  it("stops asking about a conversation the provider doesn't have", async () => {
+    const source = firstSyncSource({
+      firstPage: replies,
+      async readMembership() {
+        return { status: "ok", value: { status: "not_found" } };
+      },
+    });
+    const clock = { nowMs: 10_000 };
+    const { engine } = await startFirstSync(source, clock);
+
+    await engine.ensureConversationMessages(thread);
+    clock.nowMs += 24 * 60 * 60_000;
+    await expect(engine.ensureConversationMessages(thread)).resolves.toEqual({
+      status: "unavailable",
+    });
+
+    expect(source.membershipReads).toBe(1);
     await engine.close();
   });
 
@@ -295,7 +347,10 @@ async function archive(engine: MailEngine, commandId: string) {
   });
 }
 
-async function startFirstSync(source: MailboxSource) {
+async function startFirstSync(
+  source: MailboxSource,
+  clock = { nowMs: 10_000 },
+) {
   const store = await createSqliteMailStore(createNodeSqliteDriver());
   await store.ensureAccount({ ...session, provider: "google" });
   const engine = createMailEngine({
@@ -309,7 +364,7 @@ async function startFirstSync(source: MailboxSource) {
         return { status: "uncertain", receiptId: null };
       },
     },
-    runtime: createHostRuntime({ nowMs: () => 10_000 }),
+    runtime: createHostRuntime({ nowMs: () => clock.nowMs }),
   });
   await engine.requestSync(["acc-1"]);
   await engine.runUntil(Date.now() + 2000);
