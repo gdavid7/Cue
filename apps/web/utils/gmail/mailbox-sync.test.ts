@@ -349,6 +349,24 @@ describe("getGmailMailboxSyncPage", () => {
     );
   });
 
+  it("keeps every replay page small when history records name many messages", async () => {
+    // Thread-wide changes: 50 messages a record, and one record naming 1500.
+    const gmail = fakeGmailHistory(200, 50);
+    const huge = Array.from({ length: 1500 }, (_, index) => `huge-${index}`);
+    gmail.addRecord(huge);
+
+    const pages = await readUntilCaughtUp(gmail.read, startCursor());
+
+    for (const page of pages) {
+      expect(
+        page.upsertedMessages.length + page.deletedMessageIds.length,
+      ).toBeLessThanOrEqual(1000);
+      expect(page.cursor.length).toBeLessThanOrEqual(16_384);
+    }
+    expect(new Set(pages.flatMap(ids))).toEqual(new Set(gmail.allMessages()));
+    expect(pages.at(-1)?.hasMore).toBe(false);
+  });
+
   it("previews new mail ahead of later label changes on older mail", async () => {
     const relabeled = Array.from({ length: 300 }, (_, index) => `old-${index}`);
     const history = [

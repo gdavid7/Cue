@@ -32,6 +32,10 @@ const PREVIEW_SIZE = 10;
 // A backlog this small is applied whole in one page, well inside the 1000
 // changes a sync page may carry.
 const SHORT_CATCH_UP_MAX_CHANGES = 500;
+// Changes one replay page carries: far inside a sync page's 1000, and few
+// enough message fetches (about 2000 units) to finish well within the
+// client's request timeout under the account's quota.
+const REPLAY_PAGE_MAX_CHANGES = 100;
 
 type GmailDeltaCursor = Extract<MailboxSyncCursor, { provider: "google" }>;
 
@@ -200,38 +204,100 @@ async function getGmailDeltaPage({
     });
   }
 
-  const response = await getHistory(
+  const { response, replay } = await readReplayPage({
     gmail,
-    {
-      startHistoryId: cursor.historyId,
-      historyTypes: [...GMAIL_MAILBOX_HISTORY_TYPES],
-      maxResults: limit,
-      pageToken: cursor.pageToken,
-    },
     logger,
+    cursor,
+    limit,
+  });
+  // A record naming more changes than a page may carry is delivered in parts,
+  // holding the Gmail page token until the last part is out.
+  const delivered = cursor.replayedChanges ?? 0;
+  const ordered = [
+    ...[...replay.deletedIds].map((id) => ({ id, deleted: true })),
+    ...replay.upsertIds.map((id) => ({ id, deleted: false })),
+  ];
+  const part = ordered.slice(delivered, delivered + REPLAY_PAGE_MAX_CHANGES);
+  const remaining = delivered + part.length < ordered.length;
+  const deletedIds = new Set(
+    part.filter((change) => change.deleted).map((change) => change.id),
   );
-  const replay = getGmailMailboxChangeIds(response.history ?? []);
-  const deletedIds = replay.deletedIds;
   const pageToken = response.nextPageToken ?? undefined;
+  let nextCursor: GmailDeltaCursor;
+  if (remaining) {
+    nextCursor = {
+      ...cursor,
+      previewedThrough: previewed.through,
+      replayedChanges: delivered + part.length,
+    };
+  } else if (pageToken) {
+    nextCursor = {
+      ...cursor,
+      pageToken,
+      previewedThrough: previewed.through,
+      replayedChanges: undefined,
+    };
+  } else {
+    // The replay's end is the mailbox's current history, past the preview.
+    nextCursor = {
+      ...cursor,
+      historyId: response.historyId ?? cursor.historyId,
+      pageToken: undefined,
+      previewedThrough: undefined,
+      replayedChanges: undefined,
+    };
+  }
   return fetchDeltaPage({
     gmail,
     accessToken,
     logger,
     upsertIds: [
-      ...new Set([...previewed.upsertIds, ...replay.upsertIds]),
+      ...new Set([
+        ...previewed.upsertIds,
+        ...part.filter((change) => !change.deleted).map((change) => change.id),
+      ]),
     ].filter((id) => !deletedIds.has(id)),
     deletedIds,
     changedThreadIds: replay.changedThreadIds,
-    // The replay's end is the mailbox's current history, past the preview.
-    cursor: pageToken
-      ? { ...cursor, pageToken, previewedThrough: previewed.through }
-      : {
-          ...cursor,
-          historyId: response.historyId ?? cursor.historyId,
-          pageToken: undefined,
-          previewedThrough: undefined,
-        },
+    cursor: nextCursor,
   });
+}
+
+// One page of the oldest-first replay. A record can name a whole thread's
+// messages, so a page of `limit` records can hold thousands of changes; the
+// page shrinks, re-reading the same position at 2 units a call, until its
+// changes fit or it is down to one record.
+async function readReplayPage({
+  gmail,
+  logger,
+  cursor,
+  limit,
+}: {
+  gmail: gmail_v1.Gmail;
+  logger: Logger;
+  cursor: GmailDeltaCursor;
+  limit: number;
+}) {
+  // A record split across pages is re-read alone, so its parts line up.
+  let maxResults = cursor.replayedChanges ? 1 : limit;
+  for (;;) {
+    const response = await getHistory(
+      gmail,
+      {
+        startHistoryId: cursor.historyId,
+        historyTypes: [...GMAIL_MAILBOX_HISTORY_TYPES],
+        maxResults,
+        pageToken: cursor.pageToken,
+      },
+      logger,
+    );
+    const replay = getGmailMailboxChangeIds(response.history ?? []);
+    const changes = replay.upsertIds.length + replay.deletedIds.size;
+    if (changes <= REPLAY_PAGE_MAX_CHANGES || maxResults === 1) {
+      return { response, replay };
+    }
+    maxResults = Math.max(1, Math.floor(maxResults / 2));
+  }
 }
 
 // Reads history to its end, at 2 units a call, newest change first. A backlog
@@ -358,6 +424,7 @@ async function fetchDeltaPage({
       after: cursor.after,
       pageToken: cursor.pageToken,
       previewedThrough: cursor.previewedThrough,
+      replayedChanges: cursor.replayedChanges,
     }),
     changedThreadIds: [...changedThreadIds],
     deletedMessageIds: [...deletedIds],

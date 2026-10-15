@@ -12,6 +12,9 @@ const gmailCursorSchema = z.object({
   // while its replay from historyId is still behind it. Readers that ignore it
   // just replay.
   previewedThrough: z.string().regex(/^\d+$/).optional(),
+  // How many changes of the record at pageToken were already delivered, when
+  // one record names more changes than a page may carry.
+  replayedChanges: z.number().int().min(0).optional(),
 });
 
 const microsoftCursorSchema = z.object({

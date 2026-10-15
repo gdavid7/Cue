@@ -17,12 +17,22 @@ const MAX_CHECKPOINT_LENGTH = 16_384;
 // catch-up. Whatever the backlog, the first page must show the newest mail,
 // every page must fit the protocol, and the local copy must end up equal to
 // Gmail.
+// Records naming 50 or 150 messages (thread-wide changes) exercise shrinking
+// and splitting replay pages; their 7000-change backlogs also converge but
+// take minutes, so they run with shorter backlogs here.
 describe.each([
-  1, 5,
-])("Gmail delta catch-up, %i messages per record", (perRecord) => {
-  it.each([
-    5, 300, 7000,
-  ])("converges after a backlog of %i changes", async (backlog) => {
+  { perRecord: 1, backlogs: [5, 300, 7000] },
+  { perRecord: 5, backlogs: [5, 300, 7000] },
+  { perRecord: 20, backlogs: [5, 300, 7000] },
+  { perRecord: 50, backlogs: [5, 300] },
+  { perRecord: 150, backlogs: [5, 300] },
+])("Gmail delta catch-up, $perRecord messages per record", ({
+  perRecord,
+  backlogs,
+}) => {
+  it.each(
+    backlogs,
+  )("converges after a backlog of %i changes", async (backlog) => {
     const gmail = simulatedGmail(
       perRecord,
       seededRandom(backlog * 10 + perRecord),
@@ -40,10 +50,12 @@ describe.each([
     });
     const startHistoryId = gmail.historyId();
     for (let index = 0; index < backlog; index++) gmail.mutate();
-    const newest = gmail.records
-      .filter((record) => record.kind === "add" && record.id > startHistoryId)
-      .at(-1)
-      ?.messages.at(-1);
+    // Messages added by one record arrive together; a preview may hold only
+    // some of them.
+    const newest =
+      gmail.records
+        .filter((record) => record.kind === "add" && record.id > startHistoryId)
+        .at(-1)?.messages ?? [];
 
     const apply = (
       page: Awaited<ReturnType<typeof getGmailMailboxSyncPage>>,
@@ -74,16 +86,16 @@ describe.each([
           includeBodies: true,
         });
         if (pages === 0) {
+          const live = newest.filter((id) => gmail.truth.has(id));
           firstPageHasNewest =
-            !newest ||
-            !gmail.truth.has(newest) ||
-            page.upsertedMessages.some((message) => message.id === newest);
+            live.length === 0 ||
+            page.upsertedMessages.some((message) => live.includes(message.id));
         }
         pages += 1;
         apply(page);
         cursor = page.cursor;
         if (pages % 3 === 0) gmail.mutate();
-        if (pages > 5000) throw new Error("catch-up did not finish");
+        if (pages > 50_000) throw new Error("catch-up did not finish");
       } while (page.hasMore);
     }
     apply(
