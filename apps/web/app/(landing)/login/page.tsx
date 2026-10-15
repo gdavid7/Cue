@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { CheckIcon } from "lucide-react";
 import { LoginForm } from "@/app/(landing)/login/LoginForm";
+import { HeroInboxLoop } from "@/app/(landing)/login/HeroInboxLoop";
 import { RequestAccessForm } from "@/app/(landing)/login/RequestAccessForm";
 import {
   FaqSection,
@@ -104,22 +105,19 @@ export default async function AuthenticationPage(props: {
             />
             Built for students, freelancers, founders and small teams.
           </p>
-          <figure className="mt-8 max-w-md rounded-xl border bg-card px-4 py-3 shadow-sm">
-            <figcaption className="text-muted-foreground text-xs">
+          {/* On phones the form sits below the example, so offer a way
+              straight to it. */}
+          <Button asChild size="lg" className="mt-6 w-full lg:hidden">
+            <a href="#get-access">
+              {showRequestForm ? "Request access" : "Get started"}
+            </a>
+          </Button>
+          <div className="mt-8">
+            <p className="mb-2 text-muted-foreground text-xs">
               What {BRAND_NAME} writes under each email
-            </figcaption>
-            <p className="mt-2 truncate text-foreground text-sm">
-              <span className="font-medium">Prof. Lin</span>
-              <span className="text-muted-foreground">
-                {" "}
-                · Milestone 2 check-in
-              </span>
             </p>
-            <p className="mt-1 flex gap-1 text-primary text-xs">
-              <span aria-hidden>↳</span>
-              Confirm meeting time for milestone 2 · Oct 21 4 PM · CSE building
-            </p>
-          </figure>
+            <HeroInboxLoop />
+          </div>
         </section>
 
         <section
