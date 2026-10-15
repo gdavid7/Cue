@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useState, useSyncExternalStore } from "react";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import { AppAlertBanner } from "@/app/(app)/AppAlertBanner";
 import { Button } from "@/components/ui/button";
@@ -15,9 +15,20 @@ export const MailEngineConnectionBanner = memo(
   function MailEngineConnectionBanner() {
     const { emailAccountId, provider } = useAccount();
     const client = useOptionalMailClient();
-    const [connection, setConnection] = useState<
+    const [engineConnection, setConnection] = useState<
       "ready" | "offline" | "blocked_auth" | undefined
     >();
+    // Sync waits for the network instead of failing while the browser is
+    // offline, so the engine has nothing to report; say so here instead.
+    const isBrowserOnline = useSyncExternalStore(
+      subscribeToOnline,
+      () => navigator.onLine,
+      () => true,
+    );
+    const connection =
+      !isBrowserOnline && engineConnection !== "blocked_auth"
+        ? "offline"
+        : engineConnection;
     const [reconnecting, setReconnecting] = useState(false);
     const copy = mailEngineConnectionCopy(connection, provider);
 
@@ -95,3 +106,12 @@ export const MailEngineConnectionBanner = memo(
     );
   },
 );
+
+function subscribeToOnline(onChange: () => void) {
+  window.addEventListener("online", onChange);
+  window.addEventListener("offline", onChange);
+  return () => {
+    window.removeEventListener("online", onChange);
+    window.removeEventListener("offline", onChange);
+  };
+}
