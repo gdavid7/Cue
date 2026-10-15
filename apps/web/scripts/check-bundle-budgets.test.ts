@@ -1,5 +1,11 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { findBudgetOverruns } from "./check-bundle-budgets";
+import {
+  findBudgetOverruns,
+  readRouteBundleStats,
+} from "./check-bundle-budgets";
 
 describe("findBudgetOverruns", () => {
   const sizes: Record<string, number> = {
@@ -28,5 +34,18 @@ describe("findBudgetOverruns", () => {
     expect(
       findBudgetOverruns(stats, { "/renamed": 100 }, (chunk) => sizes[chunk]),
     ).toEqual([{ route: "/renamed", budgetKb: 100, sizeKb: null, over: true }]);
+  });
+});
+
+describe("readRouteBundleStats", () => {
+  it("explains a build that wrote no route bundle stats", () => {
+    const appRoot = mkdtempSync(path.join(tmpdir(), "bundle-budgets-"));
+    try {
+      expect(() => readRouteBundleStats(appRoot)).toThrow(
+        /route-bundle-stats\.json.*Turbopack production build/s,
+      );
+    } finally {
+      rmSync(appRoot, { recursive: true, force: true });
+    }
   });
 });

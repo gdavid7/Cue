@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 
@@ -35,14 +35,29 @@ export function findBudgetOverruns(
   });
 }
 
+/** The per-route first-load chunks a Turbopack production build records. */
+export function readRouteBundleStats(appRoot: string): RouteBundleStats[] {
+  const statsPath = path.join(
+    appRoot,
+    ".next/diagnostics/route-bundle-stats.json",
+  );
+  if (!existsSync(statsPath)) {
+    throw new Error(
+      `No ${path.relative(appRoot, statsPath)} found. Run a Turbopack production build (next build) first; other builds do not write it.`,
+    );
+  }
+  return JSON.parse(readFileSync(statsPath, "utf8")) as RouteBundleStats[];
+}
+
 function main() {
   const appRoot = path.resolve(import.meta.dirname, "..");
-  const stats = JSON.parse(
-    readFileSync(
-      path.join(appRoot, ".next/diagnostics/route-bundle-stats.json"),
-      "utf8",
-    ),
-  ) as RouteBundleStats[];
+  let stats: RouteBundleStats[];
+  try {
+    stats = readRouteBundleStats(appRoot);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  }
   const results = findBudgetOverruns(
     stats,
     FIRST_LOAD_JS_BUDGETS_KB,
