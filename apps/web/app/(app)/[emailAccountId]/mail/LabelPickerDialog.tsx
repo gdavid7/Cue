@@ -18,7 +18,8 @@ import { useAccount } from "@/providers/EmailAccountProvider";
 import { createLabelAction } from "@/utils/actions/mail";
 import { getActionErrorMessage } from "@/utils/error";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
-import { applyEngineLabels } from "@/app/(app)/[emailAccountId]/mail/apply-engine-labels";
+import type { MailClient } from "@inboxzero/mail-core/engine";
+import { randomUuid } from "@/utils/uuid";
 
 const GMAIL_CATEGORY_NAMES: Record<string, string> = {
   CATEGORY_PERSONAL: "Personal",
@@ -204,4 +205,66 @@ function getPartialFailureMessage(mode: "label" | "move", count: number) {
 
 function getLabelDisplayName(id: string, name: string) {
   return GMAIL_CATEGORY_NAMES[id] ?? name;
+}
+
+async function applyEngineLabels({
+  client,
+  emailAccountId,
+  threadIds,
+  labelId,
+  removeFromInbox,
+}: {
+  client: MailClient;
+  emailAccountId: string;
+  threadIds: string[];
+  labelId: string;
+  removeFromInbox: boolean;
+}) {
+  const succeededThreadIds: string[] = [];
+  const failedThreadIds: string[] = [];
+  let error: unknown;
+  for (const threadId of threadIds) {
+    try {
+      const diagnostics = await client.getDiagnostics(emailAccountId);
+      const label = await client.submitConversations({
+        accountId: emailAccountId,
+        commandId: randomUuid(),
+        conversations: [
+          { accountId: emailAccountId, conversationId: threadId },
+        ],
+        change: {
+          kind: "set_membership",
+          membership: "label",
+          id: labelId,
+          present: true,
+        },
+        observedRevision: diagnostics.revision,
+      });
+      if (label.status === "rejected") {
+        failedThreadIds.push(threadId);
+        continue;
+      }
+      if (removeFromInbox) {
+        const archived = await client.submitConversations({
+          accountId: emailAccountId,
+          commandId: randomUuid(),
+          conversations: [
+            { accountId: emailAccountId, conversationId: threadId },
+          ],
+          change: { kind: "archive" },
+          observedRevision: (await client.getDiagnostics(emailAccountId))
+            .revision,
+        });
+        if (archived.status === "rejected") {
+          failedThreadIds.push(threadId);
+          continue;
+        }
+      }
+      succeededThreadIds.push(threadId);
+    } catch (cause) {
+      error = cause;
+      failedThreadIds.push(threadId);
+    }
+  }
+  return { succeededThreadIds, failedThreadIds, error };
 }

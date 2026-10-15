@@ -5,7 +5,6 @@ import type {
   SubmitConversationCommand,
 } from "@inboxzero/mail-core/commands";
 import type { LocalRevision } from "@inboxzero/mail-core/identities";
-import { beginOptimisticTriage } from "@/utils/mail-engine/optimistic-triage";
 import { randomUuid } from "@/utils/uuid";
 
 const MAX_CONVERSATIONS_PER_COMMAND = 500;
@@ -76,28 +75,6 @@ export async function submitConversationChanges(input: {
 }
 
 async function submitWithObservedRevision(
-  client: MailClient,
-  command: Omit<SubmitConversationCommand, "observedRevision">,
-) {
-  // Registered before the first await, so the change shows in the same task
-  // as the keypress or click that made it.
-  const retire = beginOptimisticTriage(client, {
-    accountId: command.accountId,
-    conversationIds: command.conversations.map(
-      (conversation) => conversation.conversationId,
-    ),
-    change: command.change,
-  });
-  try {
-    return await submitAgainIfStale(client, command);
-  } finally {
-    // Admitted, the engine's views already show the change; rejected or
-    // failed, the row goes back to how the engine has it.
-    retire();
-  }
-}
-
-async function submitAgainIfStale(
   client: MailClient,
   command: Omit<SubmitConversationCommand, "observedRevision">,
 ) {

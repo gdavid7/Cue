@@ -1,5 +1,3 @@
-import type { MetadataChange } from "./commands";
-import { applyMetadataChange } from "./effective-state";
 import type { MessageMetadata } from "./messages";
 import type { MailPredicate } from "./queries";
 
@@ -107,67 +105,6 @@ export function conversationIsUnread(
     (message) =>
       messageMatchesPredicate(message, predicate) && message.read === false,
   );
-}
-
-/**
- * Whether a conversation matches `predicate` once `change` has been applied
- * to every message in it, as conversation triage does. True or false when the
- * change alone decides it; null when the answer also depends on what the
- * change leaves alone, such as a label or the sender. Lets a view drop or keep
- * a row before the engine has written the change.
- */
-export function conversationMatchesAfterChange(
-  predicate: MailPredicate,
-  change: MetadataChange,
-): boolean | null {
-  switch (predicate.kind) {
-    case "all": {
-      let unknown = false;
-      for (const child of predicate.predicates) {
-        const result = conversationMatchesAfterChange(child, change);
-        if (result === false) return false;
-        if (result === null) unknown = true;
-      }
-      return unknown ? null : true;
-    }
-    case "any": {
-      let unknown = false;
-      for (const child of predicate.predicates) {
-        const result = conversationMatchesAfterChange(child, change);
-        if (result === true) return true;
-        if (result === null) unknown = true;
-      }
-      return unknown ? null : false;
-    }
-    case "not": {
-      const result = conversationMatchesAfterChange(
-        predicate.predicate,
-        change,
-      );
-      return result === null ? null : !result;
-    }
-    case "role":
-    case "mailbox":
-    case "read":
-    case "starred":
-    case "membership": {
-      // The change sets the same value on every message. Applied to a message
-      // with every flag set and to one with none, it decides the predicate
-      // only where both give the same answer.
-      const matchesAfter = (probe: EffectiveMessage) =>
-        messageMatchesPredicate(
-          { ...probe, ...applyMetadataChange(probe, change) },
-          predicate,
-        );
-      const fromEverything = matchesAfter(probeMessage(predicate, true));
-      const fromNothing = matchesAfter(probeMessage(predicate, false));
-      return fromEverything === fromNothing ? fromEverything : null;
-    }
-    default:
-      // No metadata change touches the section, addresses, dates,
-      // attachments, message ids or text.
-      return null;
-  }
 }
 
 export function extractTextPredicates(
@@ -290,38 +227,4 @@ function conversationMatchesMailbox(
     );
   }
   return messages.some((message) => messageMatchesMailbox(message, mailbox));
-}
-
-function probeMessage(
-  predicate: Extract<
-    MailPredicate,
-    { kind: "role" | "mailbox" | "read" | "starred" | "membership" }
-  >,
-  everything: boolean,
-): EffectiveMessage {
-  const id = predicate.kind === "membership" ? predicate.id : "probe";
-  return {
-    accountId:
-      predicate.kind === "membership" && predicate.accountId
-        ? predicate.accountId
-        : "probe",
-    messageId: "probe",
-    conversationId: "probe",
-    pendingOperationIds: [],
-    subject: "",
-    preview: "",
-    from: "",
-    to: [],
-    cc: [],
-    receivedAtMs: 0,
-    hasAttachments: false,
-    inboxSection: null,
-    read: everything,
-    starred: everything,
-    folderId: everything ? id : null,
-    labelIds: everything ? [id] : [],
-    categoryIds: everything ? [id] : [],
-    roles: everything ? ["inbox", "sent", "draft", "trash", "spam"] : [],
-    snoozedUntilMs: everything ? Number.MAX_SAFE_INTEGER : null,
-  };
 }

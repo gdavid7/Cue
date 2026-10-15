@@ -60,16 +60,7 @@ export type SyncReadResult =
 
 export interface MailboxSource {
   beginBootstrap(
-    input: SourceContext & {
-      scope: ScopeDescriptor;
-      afterMs: number | null;
-      /**
-       * The mailbox has never synced this scope, as after every sign-in, so
-       * someone is waiting on its first page; a resync after expired history
-       * is not initial.
-       */
-      initial?: boolean;
-    },
+    input: SourceContext & { scope: ScopeDescriptor; afterMs: number | null },
   ): Promise<
     ReadResult<{
       bootstrapId: string;

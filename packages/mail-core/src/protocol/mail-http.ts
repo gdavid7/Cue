@@ -99,8 +99,6 @@ export const bootstrapRequestSchema = z.object({
     folderId: z.string().max(256).nullable(),
   }),
   afterMs: z.number().int().nullable(),
-  // Absent from older clients, which are then never treated as initial.
-  initial: z.boolean().optional(),
 });
 
 export const bootstrapResultSchema = z.object({

@@ -125,14 +125,7 @@ export function createBackendMailboxSource(input: {
         value: { scopes: parsed.scopes, nextPage: parsed.nextPage },
       };
     },
-    async beginBootstrap({
-      session,
-      requestId,
-      scope,
-      afterMs,
-      initial,
-      signal,
-    }) {
+    async beginBootstrap({ session, requestId, scope, afterMs, signal }) {
       const response = await request({
         method: "POST",
         path: `${base}/bootstrap`,
@@ -142,7 +135,6 @@ export function createBackendMailboxSource(input: {
           session,
           scope,
           afterMs,
-          initial,
         }),
         signal,
       });

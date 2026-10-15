@@ -1,24 +1,10 @@
-import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { InboxPreviewSeed } from "@/app/(app)/[emailAccountId]/mail/InboxPreviewList";
 import { MailScreen } from "@/app/(app)/[emailAccountId]/mail/MailScreen";
 import { MailScreenLayout } from "@/app/(app)/[emailAccountId]/mail/MailScreenLayout";
 import { auth } from "@/utils/auth";
-import {
-  hasLocalMailbox,
-  LOCAL_MAILBOX_COOKIE,
-} from "@/utils/mail-engine/local-mailbox-cookie";
-import {
-  buildMailPath,
-  MAIL_PATH_HEADER,
-  parseAccountIndex,
-  parseMailPath,
-} from "@/utils/mail-url";
-import { getOrderedEmailAccounts } from "@/utils/mail-url.server";
+import { buildMailPath, parseAccountIndex } from "@/utils/mail-url";
+import { getOrderedEmailAccountIds } from "@/utils/mail-url.server";
 import { buildLoginRedirectUrl } from "@/utils/redirect";
-import { findLandingSplit } from "@/utils/split-inbox/inbox-styles";
-import { getMailSettings } from "@/utils/split-inbox/settings.server";
-import { loadInboxPreview } from "@/utils/threads/inbox-preview.server";
 
 // The mail screen lives in the layout, not the page: a layout persists while
 // the view below it (`inbox`, `sent`, a thread) changes, so switching views
@@ -41,51 +27,18 @@ export default async function MailRouteLayout({
 
   // Only the signed-in user's own accounts are numbered, so `/u/{n}` can never
   // reach someone else's mailbox.
-  const accounts = await getOrderedEmailAccounts(session.user.id);
-  if (!accounts.length) redirect("/connect-mailbox");
+  const accountIds = await getOrderedEmailAccountIds(session.user.id);
+  if (!accountIds.length) redirect("/connect-mailbox");
   // The same rule the client reads the address with, or its updates would
   // find no mail address to change.
   const index = parseAccountIndex(accountIndex);
-  const account = index === null ? undefined : accounts[index];
-  if (!account) redirect(buildMailPath({ accountIndex: 0 }));
+  if (index === null || index >= accountIds.length)
+    redirect(buildMailPath({ accountIndex: 0 }));
 
-  const { preview } = await startInboxPreview(account);
   return (
     <MailScreenLayout>
-      {/* Always here, so the mail screen keeps its place in the tree. */}
-      <InboxPreviewSeed emailAccountId={account.id} preview={preview}>
-        <MailScreen />
-      </InboxPreviewSeed>
+      <MailScreen />
       {children}
     </MailScreenLayout>
   );
-}
-
-/**
- * A browser with no local mailbox for the account, as after every sign-in,
- * would wait for the mail engine to boot and sync before showing any mail.
- * The inbox's newest conversations are fetched here instead, without being
- * awaited, so they stream to the page with its first response. Wrapped, as an
- * async function's returned promise would otherwise be awaited with it.
- */
-async function startInboxPreview(account: { id: string; provider: string }) {
-  const [headerStore, cookieStore] = await Promise.all([headers(), cookies()]);
-  const [pathname, search] = (headerStore.get(MAIL_PATH_HEADER) ?? "").split(
-    "?",
-  );
-  const location = parseMailPath(pathname ?? "", search);
-  if (location?.view?.kind !== "inbox" || location.allInboxes)
-    return { preview: null };
-  if (hasLocalMailbox(cookieStore.get(LOCAL_MAILBOX_COOKIE)?.value, account.id))
-    return { preview: null };
-  // An inbox that opens on a tab, such as Gmail's Primary, would show its
-  // other tabs' mail and then swap to the tab.
-  const { splits } = await getMailSettings({ emailAccountId: account.id });
-  if (findLandingSplit(splits)?.filters.length) return { preview: null };
-  return {
-    preview: loadInboxPreview({
-      emailAccountId: account.id,
-      provider: account.provider,
-    }),
-  };
 }

@@ -12,9 +12,6 @@ import { OTHER_SPLIT_ID } from "@/utils/split-inbox/split-query";
 
 export const MAIL_PATH_PREFIX = "/mail/u";
 
-/** Set by the proxy: the mail address a layout is rendering under. */
-export const MAIL_PATH_HEADER = "x-cue-mail-path";
-
 export type MailUrlView =
   | { kind: "inbox" }
   | { kind: "split"; slug: string }

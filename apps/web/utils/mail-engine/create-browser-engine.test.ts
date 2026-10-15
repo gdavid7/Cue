@@ -1,20 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createBrowserMailEngine,
-  prewarmMailEngineWorker,
-} from "./create-browser-engine";
+import { createBrowserMailEngine } from "./create-browser-engine";
 
-const wipe = vi.hoisted(() => ({
-  finishPending: vi.fn(),
-  isPending: vi.fn(() => false),
-}));
+const wipe = vi.hoisted(() => ({ finishPending: vi.fn() }));
 const sqlite = vi.hoisted(() => ({ createStore: vi.fn() }));
 const BUSY =
   "NoModificationAllowedError: Access Handles cannot be created if there is another open Access Handle";
 
 vi.mock("@/utils/mail-engine/wipe-local-mailbox", () => ({
   finishPendingLocalMailboxWipe: wipe.finishPending,
-  isLocalMailboxWipePending: wipe.isPending,
 }));
 vi.mock("@/utils/mail-engine/wasm-sqlite", () => ({
   createWasmMailStore: sqlite.createStore,
@@ -29,7 +22,6 @@ describe("createBrowserMailEngine", () => {
     FakeWorker.startReplyDelayMs = 0;
     FakeWorker.startMessages = [];
     wipe.finishPending.mockResolvedValue(undefined);
-    wipe.isPending.mockReturnValue(false);
     vi.stubGlobal("Worker", FakeWorker);
   });
 
@@ -49,54 +41,6 @@ describe("createBrowserMailEngine", () => {
     await startEngine();
 
     expect(order).toEqual(["wipe", "worker"]);
-  });
-
-  it("opens the mailbox in the worker started while the page loaded", async () => {
-    prewarmMailEngineWorker();
-    expect(FakeWorker.instances).toHaveLength(1);
-    // Loaded early, it opens nothing until the engine starts it.
-    expect(FakeWorker.instances[0].received("start")).toBe(0);
-
-    await startEngine();
-
-    expect(FakeWorker.instances).toHaveLength(1);
-    expect(FakeWorker.instances[0].received("start")).toBe(1);
-  });
-
-  it("starts no worker early while a sign-out wipe is unfinished", () => {
-    wipe.isPending.mockReturnValue(true);
-
-    prewarmMailEngineWorker();
-
-    expect(FakeWorker.instances).toHaveLength(0);
-  });
-
-  it("lets go of an early worker this tab never needed", async () => {
-    vi.useFakeTimers();
-    prewarmMailEngineWorker();
-
-    await vi.advanceTimersByTimeAsync(30_000);
-
-    expect(FakeWorker.instances[0].terminated).toBe(true);
-    const started = startEngine();
-    await vi.runAllTimersAsync();
-    await started;
-    expect(FakeWorker.instances).toHaveLength(2);
-    expect(FakeWorker.instances[1].received("start")).toBe(1);
-  });
-
-  it("retries in a fresh worker when the early one met a held mailbox", async () => {
-    vi.useFakeTimers();
-    FakeWorker.startErrors = [BUSY];
-    prewarmMailEngineWorker();
-
-    const started = startEngine();
-    await vi.runAllTimersAsync();
-    await started;
-
-    expect(FakeWorker.instances).toHaveLength(2);
-    expect(FakeWorker.instances[0].terminated).toBe(true);
-    expect(FakeWorker.instances[1].received("start")).toBe(1);
   });
 
   it("lets sign-out and the mail host close the same engine at once", async () => {

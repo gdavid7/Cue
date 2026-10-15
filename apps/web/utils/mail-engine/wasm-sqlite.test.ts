@@ -12,11 +12,7 @@ import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
 import type { SqliteDriver } from "@inboxzero/mail-sqlite/driver";
 import { classifyMailboxError } from "@inboxzero/mail-sqlite/mailbox-errors";
 import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
-import {
-  createWasmMailStore,
-  createWasmMemoryDriver,
-  preloadSqlite,
-} from "./wasm-sqlite";
+import { createWasmMailStore, createWasmMemoryDriver } from "./wasm-sqlite";
 
 type Sqlite = Awaited<
   ReturnType<typeof import("@sqlite.org/sqlite-wasm").default>
@@ -24,7 +20,6 @@ type Sqlite = Awaited<
 
 const opfsPool = vi.hoisted(() => ({
   install: undefined as undefined | ((sqlite: Sqlite) => unknown),
-  loads: 0,
 }));
 
 vi.mock("@sqlite.org/sqlite-wasm", async (importOriginal) => {
@@ -32,7 +27,6 @@ vi.mock("@sqlite.org/sqlite-wasm", async (importOriginal) => {
     await importOriginal<typeof import("@sqlite.org/sqlite-wasm")>();
   return {
     default: async () => {
-      opfsPool.loads += 1;
       const sqlite = await actual.default();
       return {
         ...sqlite,
@@ -426,20 +420,6 @@ function messagePatch(
     },
   };
 }
-
-describe("SQLite loading", () => {
-  it("loads sqlite-wasm once for every database the engine opens", async () => {
-    const before = opfsPool.loads;
-
-    await Promise.all([
-      preloadSqlite(),
-      createWasmMemoryDriver(),
-      createWasmMemoryDriver(),
-    ]);
-
-    expect(opfsPool.loads - before).toBeLessThanOrEqual(1);
-  });
-});
 
 describe("createWasmMailStore", () => {
   afterEach(() => {

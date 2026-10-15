@@ -40,7 +40,6 @@ import {
   createGmailQuotaStats,
   currentGmailQuotaContext,
   getGmailCallDeferredError,
-  type GmailQuotaPriority,
   isGmailCallDeferredError,
   runWithGmailQuota,
   setGmailInitialSync,
@@ -86,8 +85,6 @@ type BootstrapToken = {
   afterMs?: number;
   catchUpFrom?: SyncPosition | null;
   folderId?: string | null;
-  /** The recent scan of a mailbox that has never synced, as after a sign-in. */
-  initial?: boolean;
   pageToken?: string;
   receivedAfterMs?: number;
   receivedBeforeMs?: number;
@@ -144,12 +141,11 @@ export function createEmailProviderMailboxSource(input: {
         },
       };
     },
-    async beginBootstrap({ afterMs, initial, scope, session }) {
+    async beginBootstrap({ afterMs, scope, session }) {
       try {
         const isHistory = isGmail && scope.id === GMAIL_HISTORY_SCOPE_ID;
         const token: BootstrapToken = {
           afterMs: afterMs ?? 0,
-          ...(initial && isGmail && !isHistory && { initial: true }),
           scopeId: scope.id,
           folderId: scopedFolderId(provider, scope),
           receivedAfterMs:
@@ -209,21 +205,19 @@ export function createEmailProviderMailboxSource(input: {
             }),
           });
         // The backfill only fills in older mail, so it yields to everything
-        // else. The primary scan fills the inbox the user is waiting on, and
-        // after a sign-in the screen waits on its very first page.
-        let priority: GmailQuotaPriority = "sync";
-        if (isBackfill) priority = "background";
-        else if (token.initial && !token.pageToken) priority = "interactive";
+        // else; the primary scan fills the inbox the user is waiting on.
         const syncPage = isGmail
-          ? await runWithGmailQuota({ priority }, () =>
-              withGmailSyncBudget(
-                {
-                  emailAccountId: accountId,
-                  priority: isBackfill ? "backfill" : "current",
-                  cost: gmailPageCost(maxResults),
-                },
-                listPage,
-              ),
+          ? await runWithGmailQuota(
+              { priority: isBackfill ? "background" : "sync" },
+              () =>
+                withGmailSyncBudget(
+                  {
+                    emailAccountId: accountId,
+                    priority: isBackfill ? "backfill" : "current",
+                    cost: gmailPageCost(maxResults),
+                  },
+                  listPage,
+                ),
             )
           : await listPage();
         if (isPrimaryGmailScan && !syncPage.nextPageToken)
