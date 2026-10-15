@@ -21,16 +21,22 @@ const MAX_CHECKPOINT_LENGTH = 16_384;
 // Gmail.
 // Records naming 50 or 150 messages (thread-wide changes) exercise shrinking
 // and splitting replay pages; their 7000-change backlogs also converge but
-// take minutes, so they run with shorter backlogs here.
+// take minutes, so they run with shorter backlogs here. Gmail documents
+// history as starting after `startHistoryId`; the inclusive runs check that
+// catch-up still finishes if it ever returns the start record too.
 describe.each([
-  { perRecord: 1, backlogs: [5, 300, 7000] },
-  { perRecord: 5, backlogs: [5, 300, 7000] },
-  { perRecord: 20, backlogs: [5, 300, 7000] },
-  { perRecord: 50, backlogs: [5, 300] },
-  { perRecord: 150, backlogs: [5, 300] },
-])("Gmail delta catch-up, $perRecord messages per record", ({
+  { perRecord: 1, backlogs: [5, 300, 7000], inclusive: false },
+  { perRecord: 5, backlogs: [5, 300, 7000], inclusive: false },
+  { perRecord: 20, backlogs: [5, 300, 7000], inclusive: false },
+  { perRecord: 50, backlogs: [5, 300], inclusive: false },
+  { perRecord: 150, backlogs: [5, 300], inclusive: false },
+  { perRecord: 1, backlogs: [5, 300], inclusive: true },
+  { perRecord: 50, backlogs: [5, 300], inclusive: true },
+  { perRecord: 150, backlogs: [5], inclusive: true },
+])("Gmail delta catch-up, $perRecord messages per record, inclusive start $inclusive", ({
   perRecord,
   backlogs,
+  inclusive,
 }) => {
   it.each(
     backlogs,
@@ -38,6 +44,7 @@ describe.each([
     const gmail = simulatedGmail(
       perRecord,
       seededRandom(backlog * 10 + perRecord),
+      inclusive,
     );
     for (let index = 0; index < 20; index++) gmail.add();
     const local = new Map<string, { label: string; version: number }>();
@@ -128,7 +135,11 @@ type HistoryRecord = {
   kind: "add" | "label" | "delete";
 };
 
-function simulatedGmail(perRecord: number, random: () => number) {
+function simulatedGmail(
+  perRecord: number,
+  random: () => number,
+  inclusive: boolean,
+) {
   let historyId = 1000;
   let nextMessage = 0;
   const records: HistoryRecord[] = [];
@@ -179,8 +190,10 @@ function simulatedGmail(perRecord: number, random: () => number) {
     else remove();
   };
   vi.mocked(getHistory).mockImplementation(async (_gmail, options) => {
-    const eligible = records.filter(
-      (record) => record.id > Number(options.startHistoryId),
+    const eligible = records.filter((record) =>
+      inclusive
+        ? record.id >= Number(options.startHistoryId)
+        : record.id > Number(options.startHistoryId),
     );
     const max = options.maxResults ?? 100;
     // A page token only works with the page size and start that minted it.

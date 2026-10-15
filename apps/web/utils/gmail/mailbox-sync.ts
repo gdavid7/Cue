@@ -208,7 +208,7 @@ async function getGmailDeltaPage({
   }
 
   const budget = REPLAY_PAGE_MAX_CHANGES - previewed.upsertIds.length;
-  const { response, records, replay, pageToken } = await readReplayPage({
+  const { response, records, replay } = await readReplayPage({
     gmail,
     logger,
     cursor,
@@ -227,23 +227,24 @@ async function getGmailDeltaPage({
   const deletedIds = new Set(
     part.filter((change) => change.deleted).map((change) => change.id),
   );
-  const lastRecordId = records.at(-1)?.id;
+  // The replay's position is a history id, never a page token: Gmail's tokens
+  // are not promised to work with another page size, and the page shrinks.
   let nextCursor: GmailDeltaCursor;
   if (remaining) {
+    // Only an oversized single record is split; its next part is read from
+    // just before it.
     nextCursor = {
       ...cursor,
-      pageToken,
+      historyId: String(BigInt(recordId(records[0])) - BigInt(1)),
+      pageToken: undefined,
       previewedThrough: previewed.through,
       replayedChanges: delivered + part.length,
     };
   } else if (response.nextPageToken) {
-    // The next page starts after this page's last record. Gmail's page tokens
-    // are not promised to work with another page size, and the page shrinks.
     nextCursor = {
       ...cursor,
-      ...(lastRecordId
-        ? { historyId: lastRecordId, pageToken: undefined }
-        : { pageToken: response.nextPageToken }),
+      historyId: recordId(records.at(-1)),
+      pageToken: undefined,
       previewedThrough: previewed.through,
       replayedChanges: undefined,
     };
@@ -292,6 +293,8 @@ async function readReplayPage({
 }) {
   // A record split across pages is re-read alone, so its parts line up.
   let maxResults = cursor.replayedChanges ? 1 : limit;
+  // Room for the start record, once Gmail is seen returning it.
+  let startRecordRoom = 0;
   // Only a cursor from an earlier version still carries a page token.
   let pageToken = cursor.pageToken;
   for (;;) {
@@ -302,7 +305,7 @@ async function readReplayPage({
         {
           startHistoryId: cursor.historyId,
           historyTypes: [...GMAIL_MAILBOX_HISTORY_TYPES],
-          maxResults,
+          maxResults: maxResults + startRecordRoom,
           pageToken,
         },
         logger,
@@ -314,18 +317,31 @@ async function readReplayPage({
       pageToken = undefined;
       continue;
     }
-    // History ids only grow, so this guards the position if Gmail ever
-    // returns the record the replay last stopped at.
-    const records = (response.history ?? []).filter(
+    // Gmail documents history as starting after `startHistoryId`. If it ever
+    // returns the start record too, that record is dropped and the page
+    // re-read one larger, so it still holds a record the replay needs.
+    const returned = response.history ?? [];
+    const records = returned.filter(
       (record) => !record.id || BigInt(record.id) > BigInt(cursor.historyId),
     );
+    if (records.length < returned.length && startRecordRoom === 0) {
+      startRecordRoom = 1;
+      continue;
+    }
     const replay = getGmailMailboxChangeIds(records);
     const changes = replay.upsertIds.length + replay.deletedIds.size;
     if (changes <= budget || maxResults === 1) {
-      return { response, records, replay, pageToken };
+      return { response, records, replay };
     }
     maxResults = Math.max(1, Math.floor(maxResults / 2));
   }
+}
+
+// Gmail always sends each history record's id; the replay's position needs it.
+function recordId(record: gmail_v1.Schema$History | undefined) {
+  if (!record?.id)
+    throw new Error("Gmail returned a history record without an id");
+  return record.id;
 }
 
 // Reads history to its end, at 2 units a call, newest change first. A backlog
