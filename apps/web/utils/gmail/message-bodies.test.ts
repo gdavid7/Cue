@@ -151,20 +151,16 @@ describe("Apple Mail message bodies", () => {
     expect(parsed.textPlain).toContain(shelf);
   });
 
-  it("reads a megabyte of unclosed tags quickly", () => {
-    const html = "<a".repeat(500_000);
-    const plain = `${"y".repeat(html.length)} tail`;
-    const start = performance.now();
-    const bodies = gmailMessageBodies(
-      {
-        mimeType: "multipart/alternative",
-        parts: [textPart("text/plain", plain), textPart("text/html", html)],
-      },
-      "y",
-    );
-    expect(performance.now() - start).toBeLessThan(1000);
-    expect(bodies.html).toBe(html);
-    expect(bodies.plain).toContain("tail");
+  it("reads a megabyte of unclosed tags in linear time", () => {
+    const megabyte = readUnclosedTags(500_000);
+    expect(megabyte.bodies.html).toBe("<a".repeat(500_000));
+    expect(megabyte.bodies.plain).toContain("tail");
+
+    // Compared with a tenth of the input in the same process, so a busy host
+    // slows both sides alike. Linear work grows about 10x; rescanning the
+    // rest of the input at every unclosed tag would grow about 100x.
+    const tenth = readUnclosedTags(50_000);
+    expect(megabyte.ms / tenth.ms).toBeLessThan(40);
   });
 
   it("ignores a named text part and an attached message", () => {
@@ -297,6 +293,24 @@ function message(
       parts,
     },
   };
+}
+
+/** Fastest of several runs, which drops pauses from GC and other processes. */
+function readUnclosedTags(tagCount: number) {
+  const html = "<a".repeat(tagCount);
+  const plain = `${"y".repeat(html.length)} tail`;
+  const payload = {
+    mimeType: "multipart/alternative",
+    parts: [textPart("text/plain", plain), textPart("text/html", html)],
+  };
+  let bodies = gmailMessageBodies(payload, "y");
+  let ms = Number.POSITIVE_INFINITY;
+  for (let run = 0; run < 3; run++) {
+    const start = performance.now();
+    bodies = gmailMessageBodies(payload, "y");
+    ms = Math.min(ms, performance.now() - start);
+  }
+  return { bodies, ms };
 }
 
 function textPart(

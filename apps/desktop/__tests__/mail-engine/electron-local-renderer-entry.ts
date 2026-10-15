@@ -325,7 +325,9 @@ async function clickArchive(window: BrowserWindow, subject: string) {
     (() => {
       const row = [...document.querySelectorAll("[role='listbox'][aria-label='Conversations'] [role='option']")]
         .find((item) => item.textContent.includes(${JSON.stringify(subject)}));
-      const button = [...(row?.querySelectorAll("button") ?? [])]
+      // Row actions render beside the option, inside the row's group wrapper.
+      const wrapper = row?.closest(".group");
+      const button = [...(wrapper?.querySelectorAll("button") ?? [])]
         .find((item) => item.textContent === "Archive");
       button?.click();
       return Boolean(button);
