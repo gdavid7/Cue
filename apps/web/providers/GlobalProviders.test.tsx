@@ -16,12 +16,33 @@ vi.mock("next/navigation", () => ({ usePathname: () => "/welcome-upgrade" }));
 const serwistState = vi.hoisted(() => ({
   serwist: undefined as { register: () => Promise<undefined> } | undefined,
 }));
-const { toastInfo } = vi.hoisted(() => ({ toastInfo: vi.fn() }));
-vi.mock("sonner", () => ({ toast: { info: toastInfo } }));
-vi.mock("@serwist/next/react", () => ({
-  SerwistProvider: ({ children }: { children: ReactNode }) => children,
-  useSerwist: () => serwistState,
+const { toastInfo, reloadPage } = vi.hoisted(() => ({
+  toastInfo: vi.fn(),
+  reloadPage: vi.fn(),
 }));
+vi.mock("sonner", () => ({ toast: { info: toastInfo } }));
+// Like Serwist's provider, reloads the page whenever the browser comes back
+// online unless `reloadOnOnline` is false.
+vi.mock("@serwist/next/react", async () => {
+  const { useEffect } = await import("react");
+  return {
+    SerwistProvider: ({
+      children,
+      reloadOnOnline = true,
+    }: {
+      children: ReactNode;
+      reloadOnOnline?: boolean;
+    }) => {
+      useEffect(() => {
+        if (!reloadOnOnline) return;
+        window.addEventListener("online", reloadPage);
+        return () => window.removeEventListener("online", reloadPage);
+      }, [reloadOnOnline]);
+      return children;
+    },
+    useSerwist: () => serwistState,
+  };
+});
 vi.mock("nuqs/adapters/next/app", () => ({
   NuqsAdapter: ({ children }: { children: ReactNode }) => children,
 }));
@@ -191,5 +212,15 @@ describe("service worker updates", () => {
         action: expect.objectContaining({ label: "Reload" }),
       }),
     );
+  });
+
+  // Reconnecting reloaded every page, dropping a reply being written while
+  // the network was away and racing the draft save that runs on reconnect.
+  it("keeps the page when the network comes back", () => {
+    render(<GlobalProviders>{null}</GlobalProviders>);
+
+    window.dispatchEvent(new Event("online"));
+
+    expect(reloadPage).not.toHaveBeenCalled();
   });
 });

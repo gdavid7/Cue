@@ -30,10 +30,13 @@ export function GlobalProviders(props: { children: React.ReactNode }) {
     // Registers the service worker built by `serwist build`; the @serwist/next
     // webpack plugin used to inject this registration, but it doesn't support
     // Turbopack. cacheOnNavigation={false} matches the old plugin default.
+    // Its reload on reconnect would drop whatever is on screen; the mail
+    // engine and draft saves resume by themselves when the network returns.
     <SerwistProvider
       swUrl="/sw.js"
       register={false}
       cacheOnNavigation={false}
+      reloadOnOnline={false}
       disable={process.env.NODE_ENV !== "production"}
     >
       <ManageServiceWorker />
