@@ -9,11 +9,19 @@ import { threadsQuery } from "@/utils/threads/validation";
 
 const logger = createScopedLogger("mail/inbox-preview");
 
+// About the first screen of the inbox. The list and ten messages fit Gmail's
+// per-second pacing; the mail engine fills in the rest as it syncs.
+const PREVIEW_CONVERSATIONS = 10;
+// The page streams until this settles, so a slow or busy provider is given up
+// on: the list then waits for the mail engine as it did before.
+const MAX_QUOTA_WAIT_MS = 2500;
+const PREVIEW_TIMEOUT_MS = 3000;
+
 /**
  * The inbox's newest conversations, as the mail list shows them, for a
  * browser that has no local mailbox for the account yet. Someone is waiting
  * on it, so it runs at interactive Gmail priority. Resolves null rather than
- * failing the page; the list then waits for the mail engine as before.
+ * failing or holding up the page.
  */
 export async function loadInboxPreview({
   emailAccountId,
@@ -23,32 +31,46 @@ export async function loadInboxPreview({
   provider: string;
 }): Promise<ThreadsListResponse | null> {
   const log = logger.with({ emailAccountId });
-  try {
-    return await runWithGmailQuota(
-      { caller: "mail/inbox-preview", priority: "interactive" },
-      async () => {
-        const emailProvider = await createEmailProvider({
-          emailAccountId,
-          provider,
-          logger: log,
-        });
-        const query = await resolveNativeThreadsQuery({
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const gaveUp = new Promise<null>((resolve) => {
+    timeout = setTimeout(() => resolve(null), PREVIEW_TIMEOUT_MS);
+  });
+  const loaded = runWithGmailQuota(
+    {
+      caller: "mail/inbox-preview",
+      priority: "interactive",
+      maxTotalWaitMs: MAX_QUOTA_WAIT_MS,
+    },
+    async () => {
+      const emailProvider = await createEmailProvider({
+        emailAccountId,
+        provider,
+        logger: log,
+      });
+      const query = await resolveNativeThreadsQuery({
+        emailAccountId,
+        emailProvider,
+        query: threadsQuery.parse({
+          type: "inbox",
+          limit: PREVIEW_CONVERSATIONS,
+        }),
+      });
+      return toListThreads(
+        await loadThreads({
+          query,
           emailAccountId,
           emailProvider,
-          query: threadsQuery.parse({ type: "inbox", limit: 25 }),
-        });
-        return toListThreads(
-          await loadThreads({
-            query,
-            emailAccountId,
-            emailProvider,
-            messageFormat: "metadata",
-          }),
-        );
-      },
-    );
-  } catch (error) {
+          messageFormat: "metadata",
+        }),
+      );
+    },
+  ).catch((error: unknown) => {
     log.warn("Could not load the inbox preview", { error });
     return null;
+  });
+  try {
+    return await Promise.race([loaded, gaveUp]);
+  } finally {
+    clearTimeout(timeout);
   }
 }
