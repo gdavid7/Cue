@@ -73,6 +73,39 @@ export function useThread(
     requestMissingMessageContent(client, view, requestedContent.current.ids);
   }, [client, createHandle, view]);
 
+  // Until sync covers the whole mailbox, older messages of an opened
+  // conversation may not be local yet; the engine fetches them once.
+  const [completedConversations, setCompletedConversations] = useState(
+    () => new Set<string>(),
+  );
+  useEffect(() => {
+    if (!client || !emailAccountId || !id) return;
+    const key = conversationKey(emailAccountId, id);
+    let current = true;
+    client
+      .ensureConversationMessages({
+        accountId: emailAccountId,
+        conversationId: id,
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!current) return;
+        setCompletedConversations((completed) =>
+          completed.has(key) ? completed : new Set(completed).add(key),
+        );
+      });
+    return () => {
+      current = false;
+    };
+  }, [client, emailAccountId, id]);
+  const openKey =
+    emailAccountId && id ? conversationKey(emailAccountId, id) : null;
+  const completing = Boolean(
+    openKey &&
+      !completedConversations.has(openKey) &&
+      view?.coverage.some((coverage) => coverage.metadata !== "complete"),
+  );
+
   const data = useMemo<ThreadResponse | undefined>(() => {
     if (!id || !view) return;
     return conversationViewToThreadResponse(view, { includeDrafts });
@@ -104,8 +137,10 @@ export function useThread(
       missingBodyIds: missingConversationBodyIds(view),
       outgoing: conversationOutgoingMessages(view),
       sendOperationIds: conversationSendOperationIds(view),
-      hasMore: Boolean(view.nextPage),
-      loadingMore,
+      // The messages being fetched are the conversation's earlier ones, so
+      // they load where earlier pages do.
+      hasMore: Boolean(view.nextPage) || completing,
+      loadingMore: loadingMore || completing,
       loadMore: () =>
         setPagination({
           accountId: emailAccountId,
@@ -113,7 +148,7 @@ export function useThread(
           pageSize: pageSize + CONVERSATION_PAGE_SIZE,
         }),
     };
-  }, [data, emailAccountId, id, loadingMore, pageSize, view]);
+  }, [completing, data, emailAccountId, id, loadingMore, pageSize, view]);
 
   return {
     data,
@@ -123,6 +158,10 @@ export function useThread(
     mutate,
     localAvailability,
   };
+}
+
+function conversationKey(emailAccountId: string, id: string) {
+  return `${emailAccountId}\u0000${id}`;
 }
 
 function conversationQueryError(
