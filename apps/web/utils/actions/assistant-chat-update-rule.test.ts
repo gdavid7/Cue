@@ -134,6 +134,21 @@ describe("confirmAssistantUpdateRule", () => {
     expect(updateRuleActionsMock).not.toHaveBeenCalled();
   });
 
+  it("refuses when the rule was toggled from the Rules page while pending", async () => {
+    mockStoredMessage(buildPendingUpdateRulePart());
+    prisma.rule.findUnique.mockResolvedValue({
+      ...STORED_RULE,
+      enabled: false,
+    } as never);
+
+    await expect(confirmForAccount()).rejects.toThrow(
+      "This rule changed after the assistant proposed this update",
+    );
+    expect(partialUpdateRuleMock).not.toHaveBeenCalled();
+    expect(updateRuleActionsMock).not.toHaveBeenCalled();
+    expect(setRuleEnabledMock).not.toHaveBeenCalled();
+  });
+
   it("refuses when only the rule's actions changed, even with the same updatedAt", async () => {
     mockStoredMessage(buildPendingUpdateRulePart());
     prisma.rule.findUnique.mockResolvedValue({

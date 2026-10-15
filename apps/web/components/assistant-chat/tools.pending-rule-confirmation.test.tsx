@@ -92,6 +92,8 @@ describe("pending rule confirmations", () => {
     );
 
     expectDestinationsVisible();
+    // The rule preview's chip abbreviates; its title carries the full address
+    expect(screen.getByTitle(`Forward to ${FORWARD_TO}`)).toBeTruthy();
   });
 
   it("shows the rule's existing destinations when re-enabling it", () => {
@@ -167,4 +169,6 @@ function expectDestinationsVisible() {
   }
   expect(screen.getByText("Forward")).toBeTruthy();
   expect(screen.getByText("Webhook")).toBeTruthy();
+  // The proposal isn't applied yet, so no controls for the live rule
+  expect(screen.queryByRole("switch")).toBeNull();
 }

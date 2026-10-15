@@ -31,7 +31,12 @@ const badgeVariants = cva(
 // https://www.radix-ui.com/docs/primitives/guides/composition
 export const Badge = forwardRef(
   (
-    props: { children: React.ReactNode; color: Color; className?: string },
+    props: {
+      children: React.ReactNode;
+      color: Color;
+      className?: string;
+      title?: string;
+    },
     ref: ForwardedRef<HTMLSpanElement | null>,
   ) => {
     const { color, className, ...rest } = props;

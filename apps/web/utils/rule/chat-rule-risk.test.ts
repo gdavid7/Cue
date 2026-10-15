@@ -142,4 +142,32 @@ describe("actionsNeedChatRiskConfirmation", () => {
     expect(result.needsConfirmation).toBe(false);
     expect(result.riskMessages).toEqual([]);
   });
+
+  it("flags outbound email even when a webhook is flagged too", () => {
+    const result = actionsNeedChatRiskConfirmation({
+      name: "x",
+      condition: {
+        aiInstructions: null,
+        conditionalOperator: null,
+        static: { from: "@vendor.com", to: null, subject: null },
+      },
+      actions: [
+        {
+          type: ActionType.FORWARD,
+          fields: { to: "audit@example.com" },
+          delayInMinutes: null,
+        },
+        {
+          type: ActionType.CALL_WEBHOOK,
+          fields: { webhookUrl: "https://hooks.example.com/c" },
+          delayInMinutes: null,
+        },
+      ],
+    });
+
+    expect(result.riskMessages).toEqual([
+      expect.stringContaining("sends or forwards email"),
+      expect.stringContaining("Webhook actions can send email data"),
+    ]);
+  });
 });
