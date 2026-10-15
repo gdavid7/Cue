@@ -85,6 +85,64 @@ describe("searchContext", () => {
     expect(provider.getThreadsWithParticipant).not.toHaveBeenCalled();
   });
 
+  it("finds threads with every word before newer ones with just a common word", async () => {
+    const match = thread("match", {
+      from: "Recruiting <jobs@northwind.com>",
+      subject: "Superday schedule for analysts",
+      snippet: "Your analyst superday is Thursday",
+    });
+    // Newest-first matches for any one word: a common word fills the page.
+    const noise = Array.from({ length: 15 }, (_, i) =>
+      thread(`noise-${i}`, {
+        from: `Sender ${i} <sender${i}@example.com>`,
+        subject: `Thursday update ${i}`,
+        snippet: "See you Thursday",
+      }),
+    );
+    const provider = {
+      searchThreads: vi.fn(async ({ query }: { query: string }) => ({
+        threads: query.includes(" OR ") ? noise : [match],
+      })),
+      getThreadsWithParticipant: vi.fn(async () => []),
+    } as unknown as EmailProvider;
+
+    const { results } = await searchContext({
+      emailAccountId: "account-1",
+      userEmail: USER,
+      query: "analyst superday thursday",
+      emailProvider: provider,
+      logger: createTestLogger(),
+      now: NOW,
+    });
+
+    expect(results.map((r) => r.id)).toContain("match");
+  });
+
+  it("searches once when threads with every word fill the page", async () => {
+    const full = Array.from({ length: 15 }, (_, i) =>
+      thread(`t${i}`, {
+        from: `Sender ${i} <sender${i}@example.com>`,
+        subject: "Analyst superday",
+        snippet: "Superday on Thursday",
+      }),
+    );
+    const provider = {
+      searchThreads: vi.fn(async () => ({ threads: full })),
+      getThreadsWithParticipant: vi.fn(async () => []),
+    } as unknown as EmailProvider;
+
+    await searchContext({
+      emailAccountId: "account-1",
+      userEmail: USER,
+      query: "analyst superday",
+      emailProvider: provider,
+      logger: createTestLogger(),
+      now: NOW,
+    });
+
+    expect(provider.searchThreads).toHaveBeenCalledTimes(1);
+  });
+
   it("reports a mailbox Gmail is limiting instead of finding nothing", async () => {
     const deferred = new GmailCallDeferredError(12_000, "interactive");
     const provider = {
