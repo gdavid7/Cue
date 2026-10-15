@@ -35,6 +35,7 @@ const JOBS_ACCOUNT = "account-jobs";
 const PACE_ACCOUNT = "account-pace";
 const YIELD_ACCOUNT = "account-yield";
 const LARGE_ACCOUNT = "account-large";
+const OPEN_ACCOUNT = "account-open";
 // Gmail refuses short bursts past this many units a second, per user.
 const GMAIL_UNITS_PER_SECOND = 250;
 const logger = createScopedLogger("gmail-quota-test");
@@ -514,7 +515,8 @@ describe("Gmail quota gate", () => {
         }),
       );
     const start = Date.now();
-    await admit("interactive", 20);
+    // A first inbox page's batch: five messages.
+    await admit("interactive", 100);
 
     // Sync asks for everything it can get, a message at a time.
     let stop = false;
@@ -542,12 +544,51 @@ describe("Gmail quota gate", () => {
             entry.at < start + to,
         )
         .reduce((sum, entry) => sum + entry.cost, 0);
-    // About 40 units a second while the person is being served...
+    // At most 40 units a second while the person is being served...
     expect(units("sync", 0, 1000)).toBeLessThanOrEqual(40);
     expect(units("sync", 1000, 2000)).toBeLessThanOrEqual(40);
-    // ...and its full 120 a second once they have been.
-    expect(units("sync", 2500, 3500)).toBeGreaterThan(80);
+    // ...and its full 160 a second once they have been.
+    expect(units("sync", 2500, 3500)).toBeGreaterThan(120);
     expect(insight).toBe(true);
+  });
+
+  it("keeps sync's full share while a person opens a thread", async () => {
+    const admissions: Array<{ at: number; priority: string; cost: number }> =
+      [];
+    const admit = (priority: "sync" | "interactive", cost: number) =>
+      runWithGmailQuota({ caller: `test/${priority}`, priority }, () =>
+        meterGmailCall({ emailAccountId: OPEN_ACCOUNT, cost }, async () => {
+          admissions.push({ at: Date.now(), priority, cost });
+        }),
+      );
+    const start = Date.now();
+    let stop = false;
+    const scan = (async () => {
+      while (!stop) await admit("sync", 20);
+    })();
+    // Opening a thread: its messages, one small read each.
+    const reads: Promise<unknown>[] = [];
+    for (let read = 0; read < 3; read++) {
+      await vi.advanceTimersByTimeAsync(300);
+      reads.push(admit("interactive", 40));
+    }
+    await vi.advanceTimersByTimeAsync(2000);
+    await Promise.all(reads);
+    stop = true;
+    await vi.advanceTimersByTimeAsync(1000);
+    await scan;
+
+    const syncUnits = admissions
+      .filter(
+        (entry) =>
+          entry.priority === "sync" &&
+          entry.at >= start + 1000 &&
+          entry.at < start + 2000,
+      )
+      .reduce((sum, entry) => sum + entry.cost, 0);
+    // The second after the thread opened, sync still fills what the person's
+    // reads leave of its 160 units.
+    expect(syncUnits).toBeGreaterThanOrEqual(120);
   });
 
   it("admits a call larger than its priority's per-second cap once the second has room for it alone", async () => {

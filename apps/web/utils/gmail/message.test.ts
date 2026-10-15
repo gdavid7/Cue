@@ -362,7 +362,7 @@ describe("getMessagesBatch", () => {
     );
     expect(maxActiveBatchRequests).toBe(1);
 
-    // A sync scan: 60 units, three at a time.
+    // A sync scan: 80 units, four at a time.
     vi.mocked(getBatch).mockClear();
     await runWithGmailQuota({ priority: "sync" }, () =>
       getMessagesBatch({
@@ -372,7 +372,7 @@ describe("getMessagesBatch", () => {
       }),
     );
     expect(vi.mocked(getBatch).mock.calls.map(([ids]) => ids.length)).toEqual([
-      3, 3, 3,
+      4, 4, 1,
     ]);
   });
 
