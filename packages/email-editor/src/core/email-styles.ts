@@ -14,12 +14,12 @@ const MONOSPACE_FONT =
 export const EMAIL_ELEMENT_STYLES: Record<string, string> = {
   blockquote: "margin:0 0 0 0.8ex;border-left:2px solid #ccc;padding-left:1ex",
   code: `${MONOSPACE_FONT};font-size:0.9em;border:1px solid #ccc;border-radius:3px;padding:0 3px`,
-  h1: "font-size:24px;line-height:1.25;margin:16px 0 8px",
-  h2: "font-size:20px;line-height:1.3;margin:14px 0 6px",
-  h3: "font-size:17px;line-height:1.35;margin:12px 0 4px",
-  h4: "font-size:15px;line-height:1.4;margin:12px 0 4px",
-  h5: "font-size:14px;line-height:1.4;margin:12px 0 4px",
-  h6: "font-size:13px;line-height:1.4;margin:12px 0 4px",
+  h1: "font-weight:bold;font-size:24px;line-height:1.25;margin:16px 0 8px",
+  h2: "font-weight:bold;font-size:20px;line-height:1.3;margin:14px 0 6px",
+  h3: "font-weight:bold;font-size:17px;line-height:1.35;margin:12px 0 4px",
+  h4: "font-weight:bold;font-size:15px;line-height:1.4;margin:12px 0 4px",
+  h5: "font-weight:bold;font-size:14px;line-height:1.4;margin:12px 0 4px",
+  h6: "font-weight:bold;font-size:13px;line-height:1.4;margin:12px 0 4px",
   pre: `${MONOSPACE_FONT};font-size:0.9em;white-space:pre-wrap;border:1px solid #ccc;border-radius:3px;padding:8px;margin:8px 0`,
   table: "border-collapse:collapse",
 };

@@ -139,6 +139,14 @@ function convertBlockMarker(editor: MarkdownSquire) {
   const caret = editor.getSelection();
   const { positions } = textBefore(context.block, caret);
   rangeOf(positions, caret, 0, positions.length).deleteContents();
+  // An empty block has no height, so the browser would put the caret on the
+  // line above.
+  if (
+    !context.block.textContent?.replace(/\u200b/gu, "") &&
+    !context.block.querySelector("br, img")
+  ) {
+    context.block.append(document.createElement("BR"));
+  }
   const start = document.createRange();
   start.setStart(context.block, 0);
   editor.setSelection(start);
@@ -153,7 +161,6 @@ function convertBlockMarker(editor: MarkdownSquire) {
     const direction = context.block.getAttribute("dir");
     if (direction) heading.setAttribute("dir", direction);
     heading.append(...context.block.childNodes);
-    if (!heading.textContent) heading.append(document.createElement("BR"));
     context.block.replaceWith(heading);
     const caretInHeading = document.createRange();
     caretInHeading.setStart(heading, 0);
