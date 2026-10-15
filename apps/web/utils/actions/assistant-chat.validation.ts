@@ -162,7 +162,7 @@ export const pendingUpdateRuleToolOutputSchema = z.object({
   confirmationProcessingAt: z.string().optional(),
   riskMessages: z.array(z.string()),
   ruleId: z.string().trim().min(1),
-  ruleUpdatedAt: z.string().min(1),
+  ruleFingerprint: z.string().min(1),
   originalName: z.string(),
   updatedName: z.string().trim().min(1),
   originalEnabled: z.boolean(),

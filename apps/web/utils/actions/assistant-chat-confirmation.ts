@@ -31,7 +31,11 @@ import {
 } from "@/utils/ai/assistant/tools/rules/shared";
 import { createRule } from "@/utils/rule/rule";
 import { saveLearnedPatterns } from "@/utils/rule/learned-patterns";
-import { applyRuleUpdate } from "@/utils/ai/assistant/tools/rules/update-rule-tool";
+import {
+  applyRuleUpdate,
+  getRuleFingerprint,
+  RULE_FINGERPRINT_SELECT,
+} from "@/utils/ai/assistant/tools/rules/update-rule-tool";
 
 const CONFIRMATION_IN_PROGRESS_ERROR =
   "Email action confirmation already in progress";
@@ -394,15 +398,14 @@ export async function confirmAssistantUpdateRuleForAccount({
       where: { id: output.ruleId, emailAccountId },
       select: {
         id: true,
-        enabled: true,
-        updatedAt: true,
         organizationRuleId: true,
+        ...RULE_FINGERPRINT_SELECT,
       },
     });
     if (!rule || rule.organizationRuleId) {
       throw new SafeError("Rule not found");
     }
-    if (rule.updatedAt.toISOString() !== output.ruleUpdatedAt) {
+    if (getRuleFingerprint(rule) !== output.ruleFingerprint) {
       throw new SafeError(
         "This rule changed after the assistant proposed this update. Ask the assistant to propose it again.",
       );

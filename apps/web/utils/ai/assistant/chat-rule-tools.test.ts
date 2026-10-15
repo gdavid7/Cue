@@ -533,7 +533,7 @@ describe("updateRuleTool", () => {
         requiresConfirmation: true,
         confirmationState: "pending",
         ruleId: "rule-id",
-        ruleUpdatedAt: "2026-04-27T00:00:00.000Z",
+        ruleFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
         updatedName: "Vendor Billing Forwarding",
         updatedActions: expect.arrayContaining([
           expect.objectContaining({

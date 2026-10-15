@@ -27,19 +27,40 @@ vi.mock("@/utils/auth", () => ({
 import prisma from "@/utils/__mocks__/prisma";
 import { confirmAssistantUpdateRule } from "@/utils/actions/assistant-chat";
 import { confirmAssistantUpdateRuleForAccount } from "@/utils/actions/assistant-chat-confirmation";
+import { getRuleFingerprint } from "@/utils/ai/assistant/tools/rules/update-rule-tool";
 
-const RULE_UPDATED_AT = "2026-04-27T00:00:00.000Z";
+const STORED_RULE = {
+  id: "rule-id",
+  name: "Newsletter",
+  enabled: true,
+  updatedAt: new Date("2026-04-27T00:00:00.000Z"),
+  organizationRuleId: null,
+  instructions: "Newsletters",
+  from: null,
+  to: null,
+  subject: null,
+  conditionalOperator: "AND",
+  actions: [
+    {
+      type: ActionType.LABEL,
+      content: null,
+      label: "Newsletter",
+      to: null,
+      cc: null,
+      bcc: null,
+      subject: null,
+      url: null,
+      folderName: null,
+      delayInMinutes: null,
+    },
+  ],
+};
 
 describe("confirmAssistantUpdateRule", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     prisma.chatMessage.updateMany.mockResolvedValue({ count: 1 } as never);
-    prisma.rule.findUnique.mockResolvedValue({
-      id: "rule-id",
-      enabled: true,
-      updatedAt: new Date(RULE_UPDATED_AT),
-      organizationRuleId: null,
-    } as never);
+    prisma.rule.findUnique.mockResolvedValue(STORED_RULE as never);
   });
 
   it("applies exactly the pending update shown to the user", async () => {
@@ -103,15 +124,28 @@ describe("confirmAssistantUpdateRule", () => {
   it("refuses when the rule changed after the update was proposed", async () => {
     mockStoredMessage(buildPendingUpdateRulePart());
     prisma.rule.findUnique.mockResolvedValue({
-      id: "rule-id",
-      enabled: true,
-      updatedAt: new Date("2026-04-28T00:00:00.000Z"),
-      organizationRuleId: null,
+      ...STORED_RULE,
+      instructions: "Every newsletter and every receipt",
     } as never);
 
     await expect(confirmForAccount()).rejects.toThrow("changed");
 
     expect(partialUpdateRuleMock).not.toHaveBeenCalled();
+    expect(updateRuleActionsMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses when only the rule's actions changed, even with the same updatedAt", async () => {
+    mockStoredMessage(buildPendingUpdateRulePart());
+    prisma.rule.findUnique.mockResolvedValue({
+      ...STORED_RULE,
+      actions: [
+        ...STORED_RULE.actions,
+        { ...STORED_RULE.actions[0], type: ActionType.ARCHIVE, label: null },
+      ],
+    } as never);
+
+    await expect(confirmForAccount()).rejects.toThrow("changed");
+
     expect(updateRuleActionsMock).not.toHaveBeenCalled();
   });
 
@@ -169,7 +203,7 @@ function buildPendingUpdateRulePart(output: Record<string, unknown> = {}) {
       confirmationState: "pending",
       riskMessages: ["This change makes the rule send or forward email."],
       ruleId: "rule-id",
-      ruleUpdatedAt: RULE_UPDATED_AT,
+      ruleFingerprint: getRuleFingerprint(STORED_RULE as never),
       originalName: "Newsletter",
       updatedName: "Newsletter forwarding",
       originalEnabled: true,

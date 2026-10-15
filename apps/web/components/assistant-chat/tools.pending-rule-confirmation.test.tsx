@@ -105,7 +105,7 @@ describe("pending rule confirmations", () => {
           confirmationState: "pending",
           riskMessages: ["Review the recipients"],
           ruleId: "rule-1",
-          ruleUpdatedAt: "2026-10-15T00:00:00.000Z",
+          ruleFingerprint: "fingerprint",
           originalName: "Vendor Billing",
           updatedName: "Vendor Billing",
           originalEnabled: false,

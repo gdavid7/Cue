@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { type InferUITool, tool } from "ai";
 import { z } from "zod";
 import { LogicalOperator } from "@/generated/prisma/enums";
@@ -263,7 +264,7 @@ export const updateRuleTool = ({
             confirmationState: "pending" as const,
             riskMessages,
             ruleId: rule.id,
-            ruleUpdatedAt: rule.updatedAt.toISOString(),
+            ruleFingerprint: getRuleFingerprint(rule),
             originalName: rule.name,
             updatedName: effectiveUpdates.name ?? rule.name,
             originalEnabled: rule.enabled,
@@ -332,6 +333,71 @@ export const updateRuleTool = ({
 
 export type UpdateRuleTool = InferUITool<ReturnType<typeof updateRuleTool>>;
 
+export const RULE_FINGERPRINT_SELECT = {
+  name: true,
+  enabled: true,
+  instructions: true,
+  from: true,
+  to: true,
+  subject: true,
+  conditionalOperator: true,
+  actions: {
+    select: {
+      type: true,
+      content: true,
+      label: true,
+      to: true,
+      cc: true,
+      bcc: true,
+      subject: true,
+      url: true,
+      folderName: true,
+      delayInMinutes: true,
+    },
+  },
+} as const;
+
+/**
+ * What the rule does now, as one value, so a confirmation can tell that the
+ * rule it was shown is still the rule it would change. Covers action edits
+ * that may not touch the rule's own updatedAt.
+ */
+export function getRuleFingerprint(rule: {
+  name: string;
+  enabled: boolean;
+  instructions: string | null;
+  from: string | null;
+  to: string | null;
+  subject: string | null;
+  conditionalOperator: string | null;
+  actions: Array<Record<string, unknown> & { type: string }>;
+}) {
+  const actions = rule.actions
+    .map((action) =>
+      JSON.stringify(
+        Object.keys(RULE_FINGERPRINT_SELECT.actions.select).map((key) => [
+          key,
+          action[key] ?? null,
+        ]),
+      ),
+    )
+    .sort();
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        rule.name,
+        rule.enabled,
+        rule.instructions,
+        rule.from,
+        rule.to,
+        rule.subject,
+        rule.conditionalOperator,
+        actions,
+      ]),
+    )
+    .digest("hex");
+}
+
 export async function applyRuleUpdate({
   ruleId,
   currentEnabled,
@@ -390,7 +456,7 @@ export type UpdateRuleOutput = {
   requiresConfirmation?: true;
   confirmationState?: "pending" | "processing" | "confirmed";
   riskMessages?: string[];
-  ruleUpdatedAt?: string;
+  ruleFingerprint?: string;
   alreadyApplied?: boolean;
   message?: string;
   ruleId?: string;
