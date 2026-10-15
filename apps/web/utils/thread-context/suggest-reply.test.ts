@@ -357,12 +357,12 @@ describe("contextSources", () => {
     ]);
   });
 
-  // Anyone can put someone else's address in From:, which would pull the
-  // record of the person they impersonate into the reply.
-  it("leaves out the sender's record when the sender's address wasn't authenticated", async () => {
+  // Anyone can forge From: to pull in the record of whoever they impersonate,
+  // or send a link to a guessed task id; neither backs a reply unchecked.
+  it("leaves out tasks and the sender's record when the sender's address wasn't authenticated", async () => {
     const sources = await sourcesFor(false);
 
-    expect(sources.map((s) => s.kind)).toEqual(["task", "file"]);
+    expect(sources.map((s) => s.kind)).toEqual(["file"]);
   });
 });
 

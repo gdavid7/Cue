@@ -408,18 +408,22 @@ export async function contextSources({
   logger,
 }: {
   items: Awaited<ReturnType<typeof collectThreadContext>>["items"];
-  /** Whether the sender whose record a contact item is passed SPF/DKIM/DMARC. */
+  /** Whether the thread's latest sender passed DMARC, or aligned DKIM, at Gmail. */
   senderAuthenticated: boolean;
   emailProvider: EmailProvider;
   timezone: string | null;
   logger: Logger;
 }): Promise<Source[]> {
   // A contact is looked up by the From address, which anyone can forge to
-  // pull in the record of whoever they impersonate. Tasks need no such check:
-  // a Jira link counts only on the connected site, and Asana and ClickUp
-  // tasks come from the person's own workspace.
+  // pull in the record of whoever they impersonate, and a task by a link,
+  // whose id can be guessed. Either backs a reply only from a sender whose
+  // address was authenticated.
   const evidence = items
-    .filter((item) => item.kind !== "contact" || senderAuthenticated)
+    .filter(
+      (item) =>
+        (item.kind !== "contact" && item.kind !== "task") ||
+        senderAuthenticated,
+    )
     .slice(0, MAX_CONTEXT_SOURCES);
   // Ranking ran on headers and snippets; the reply needs what was actually said.
   return Promise.all(
