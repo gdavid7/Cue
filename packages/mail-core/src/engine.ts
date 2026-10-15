@@ -902,12 +902,6 @@ export function createMailEngine(input: {
       if (applied.status === "stale") {
         return { status: "unavailable", retryAfterMs: 0 };
       }
-      for (const commandId of applied.preparedCommandIds) {
-        await store.finishPreparation({
-          accountId: key.accountId,
-          commandId,
-        });
-      }
       await refreshViews();
       page = membership.value.page.nextPage;
     } while (page);

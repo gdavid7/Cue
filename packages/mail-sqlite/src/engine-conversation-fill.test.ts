@@ -535,6 +535,30 @@ describe("opening a conversation a first sync has not fully reached", () => {
     await engine.close();
   });
 
+  it("queues a command whose membership was settled before it could be queued", async () => {
+    const source = firstSyncSource({ firstPage: replies });
+    const { engine, driver } = await startFirstSync(source);
+    await markRead(engine, "read-1");
+    // The host stopped after the membership landed and before the command
+    // was queued.
+    await driver.write((tx) =>
+      tx.execute(
+        "UPDATE operation_conversations SET complete = 1 WHERE command_id = ?",
+        ["read-1"],
+      ),
+    );
+
+    await engine.runUntil(Date.now() + 500);
+
+    const inspection = await engine.inspect();
+    expect(
+      inspection.operations.find((op) => op.key.operationId === "read-1")
+        ?.status,
+    ).not.toBe("preparing");
+    expect(source.membershipReads).toBe(0);
+    await engine.close();
+  });
+
   it("asks again right away for an account purged and added back", async () => {
     let paused = true;
     const source = firstSyncSource({
@@ -628,7 +652,8 @@ async function startFirstSync(
     storeOutlivesEngine?: boolean;
   } = {},
 ) {
-  const store = await createSqliteMailStore(createNodeSqliteDriver());
+  const driver = createNodeSqliteDriver();
+  const store = await createSqliteMailStore(driver);
   await store.ensureAccount({ ...session, provider: "google" });
   const engine = createMailEngine({
     store: storeOutlivesEngine
@@ -648,7 +673,7 @@ async function startFirstSync(
   });
   await engine.requestSync(["acc-1"]);
   await engine.runUntil(Date.now() + 2000);
-  return { engine, store };
+  return { engine, store, driver };
 }
 
 function messageIds(handle: QueryHandle<ConversationView>) {

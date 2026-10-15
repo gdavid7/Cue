@@ -228,19 +228,14 @@ export interface MailStore {
   /**
    * Merges one page of a conversation's membership read outside any command,
    * as when a reader opens it. The last page marks the conversation complete
-   * and settles the membership of commands preparing it; `preparedCommandIds`
-   * names those now ready for `finishPreparation`.
+   * and settles the membership of commands preparing it, queuing any that
+   * have nothing left to prepare.
    */
   applyConversationMembership(input: {
     session: AccountSession;
     page: ConversationMembershipPage;
   }): Promise<
-    | {
-        status: "committed";
-        revision: LocalRevision;
-        preparedCommandIds: string[];
-      }
-    | { status: "stale" }
+    { status: "committed"; revision: LocalRevision } | { status: "stale" }
   >;
   applyHydration(input: {
     session: AccountSession;
@@ -340,6 +335,11 @@ export interface MailStore {
   }): Promise<
     { status: "committed"; revision: LocalRevision } | { status: "stale" }
   >;
+  /**
+   * Queues a preparing command whose every conversation's membership is
+   * known. `claimWork` also does this for any it finds, so a host stopped
+   * between settling the membership and this call recovers.
+   */
   finishPreparation(input: {
     accountId: string;
     commandId: string;

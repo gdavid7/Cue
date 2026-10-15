@@ -385,47 +385,13 @@ export async function createSqliteMailStore(
     },
     async finishPreparation(input) {
       return driver.write(async (tx) => {
-        const remaining = await tx.query(
-          `SELECT conversation_id FROM operation_conversations
-           WHERE account_id = ? AND command_id = ? AND complete = 0`,
-          [input.accountId, input.commandId],
-        );
-        if (remaining.length > 0) return { status: "stale" };
-        const operation = await loadOperation(
+        const queued = await queuePreparedOperation(
           tx,
           input.accountId,
           input.commandId,
+          digest,
         );
-        if (operation?.status !== "preparing") return { status: "stale" };
-        const payload = JSON.parse(String(operation.payload_json)) as {
-          change: SubmitMetadataCommand["change"];
-        };
-        const targets = await tx.query(
-          `SELECT message_id, conversation_id FROM operation_targets
-           WHERE account_id = ? AND command_id = ?`,
-          [input.accountId, input.commandId],
-        );
-        const messageTargets = targets.map((row) => ({
-          accountId: input.accountId,
-          messageId: String(row.message_id),
-        }));
-        const executable = {
-          kind: "metadata" as const,
-          targets: messageTargets,
-          change: payload.change,
-        };
-        const executableHash = await digest(executable);
-        await tx.execute(
-          `UPDATE operations SET status = 'queued', executable_hash = ?, executable_payload_json = ?
-           WHERE account_id = ? AND command_id = ?`,
-          [
-            executableHash,
-            JSON.stringify(executable),
-            input.accountId,
-            input.commandId,
-          ],
-        );
-        await recomputeTargets(tx, messageTargets);
+        if (!queued) return { status: "stale" };
         const revision = await bumpRevision(tx);
         return {
           status: "queued" as const,
@@ -439,6 +405,31 @@ export async function createSqliteMailStore(
     },
     async claimWork(input) {
       return driver.write(async (tx) => {
+        // A command whose membership was settled but which a stopped host
+        // never queued would otherwise stay preparing for good.
+        const prepared = await tx.query(
+          `SELECT o.account_id, o.command_id FROM operations o
+           WHERE o.status = 'preparing'
+             AND EXISTS (
+               SELECT 1 FROM operation_conversations c
+               WHERE c.account_id = o.account_id AND c.command_id = o.command_id
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM operation_conversations c
+               WHERE c.account_id = o.account_id AND c.command_id = o.command_id
+                 AND c.complete = 0
+             )
+           LIMIT 20`,
+        );
+        for (const row of prepared) {
+          await queuePreparedOperation(
+            tx,
+            String(row.account_id),
+            String(row.command_id),
+            digest,
+          );
+        }
+        if (prepared.length > 0) await bumpRevision(tx);
         const preparing = await tx.query(
           `SELECT o.account_id, o.command_id, c.conversation_id, c.resolution_id, c.next_page, a.generation
            FROM operations o
@@ -851,7 +842,6 @@ export async function createSqliteMailStore(
           await applyChange(tx, change);
         }
         await recomputeTargets(tx, newTargets);
-        const preparedCommandIds: string[] = [];
         if (!input.page.nextPage) {
           await tx.execute(
             `INSERT INTO conversation_completeness(account_id, conversation_id, complete)
@@ -879,11 +869,13 @@ export async function createSqliteMailStore(
                WHERE account_id = ? AND command_id = ? AND complete = 0`,
               [accountId, commandId],
             );
-            if (remaining.length === 0) preparedCommandIds.push(commandId);
+            if (remaining.length === 0) {
+              await queuePreparedOperation(tx, accountId, commandId, digest);
+            }
           }
         }
         const revision = await bumpRevision(tx);
-        return { status: "committed" as const, revision, preparedCommandIds };
+        return { status: "committed" as const, revision };
       });
     },
     async settleAttempt(input) {
@@ -2923,6 +2915,55 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
       messageId: message.messageId,
     });
   }
+}
+
+// Queues a preparing command once every conversation's membership is known,
+// in the caller's transaction so the two never come apart.
+async function queuePreparedOperation(
+  tx: SqlTransaction,
+  accountId: string,
+  commandId: string,
+  digest: (value: unknown) => Promise<string>,
+) {
+  const remaining = await tx.query(
+    `SELECT conversation_id FROM operation_conversations
+     WHERE account_id = ? AND command_id = ? AND complete = 0`,
+    [accountId, commandId],
+  );
+  if (remaining.length > 0) return false;
+  const operation = await loadOperation(tx, accountId, commandId);
+  if (operation?.status !== "preparing") return false;
+  const payload = JSON.parse(String(operation.payload_json)) as {
+    change: SubmitMetadataCommand["change"];
+  };
+  const targets = await tx.query(
+    `SELECT message_id FROM operation_targets
+     WHERE account_id = ? AND command_id = ?`,
+    [accountId, commandId],
+  );
+  const messageTargets = targets.map((row) => ({
+    accountId,
+    messageId: String(row.message_id),
+  }));
+  const executable = {
+    kind: "metadata" as const,
+    targets: messageTargets,
+    change: payload.change,
+  };
+  await tx.execute(
+    `UPDATE operations
+     SET status = 'queued', executable_hash = ?, executable_payload_json = ?,
+         claimed_by = NULL, claimed_until_ms = NULL, attempt_id = NULL, next_attempt_at_ms = NULL
+     WHERE account_id = ? AND command_id = ?`,
+    [
+      await digest(executable),
+      JSON.stringify(executable),
+      accountId,
+      commandId,
+    ],
+  );
+  await recomputeTargets(tx, messageTargets);
+  return true;
 }
 
 async function recomputeTargets(tx: SqlTransaction, targets: MessageKey[]) {
