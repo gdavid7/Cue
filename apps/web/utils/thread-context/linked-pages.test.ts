@@ -95,6 +95,18 @@ describe("extractMainLinks", () => {
       "an invite token in the path",
       "https://team.example.org/join/aB3dE5fG7hJ9kL1mN3pQ",
     ],
+    [
+      "a UUID in the path",
+      "https://app.example.org/invite/3f2b8c1e-9a4d-4e7b-8c2f-1d6a5b9e0c7a",
+    ],
+    [
+      "a hex token in the path",
+      "https://app.example.org/verify/9e107d9d372bb6826bd81d3542a419d6",
+    ],
+    [
+      "a hex token split by separators",
+      "https://app.example.org/confirm/a1b2c3d4-e5f6a7b8-c9d0e1f2",
+    ],
   ])("never sends a link with %s to the crawler", (_, href) => {
     expect(
       extractMainLinks({ headers, textHtml: `<a href="${href}">Open</a>` }),
@@ -114,6 +126,14 @@ describe("extractMainLinks", () => {
       "https://news.example.com/2026/10/15/city-council-approves-budget",
       "https://blog.example.org/posts/launch-recap",
     ]);
+  });
+
+  it("keeps an article whose slug mixes words and numbers", () => {
+    const href =
+      "https://blog.example.org/posts/top-10-agent-frameworks-of-2026";
+    expect(
+      extractMainLinks({ headers, textHtml: `<a href="${href}">Guide</a>` }),
+    ).toEqual([href]);
   });
 
   it("keeps another site's login page; only the sender's own is skipped", () => {

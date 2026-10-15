@@ -218,15 +218,30 @@ function isNoise(url: URL, senderDomain: string | null) {
 function mayCarrySecret(url: URL) {
   if (url.search) return true;
   if (url.hash.includes("=")) return true;
-  return url.pathname
-    .split("/")
-    .flatMap((segment) => segment.split(/[-_.~]/))
-    .some(
+  return url.pathname.split("/").some(isTokenSegment);
+}
+
+function isTokenSegment(segment: string) {
+  const pieces = segment.split(/[-_.~]/);
+  if (
+    pieces.some(
       (piece) =>
         piece.length >= TOKEN_PIECE_MIN_LENGTH &&
         /\d/.test(piece) &&
         /[a-z]/i.test(piece),
-    );
+    )
+  ) {
+    return true;
+  }
+  // UUIDs and hex tokens split by separators; joined, an article slug
+  // never reads as hex digits only.
+  const joined = pieces.join("");
+  return (
+    joined.length >= TOKEN_PIECE_MIN_LENGTH &&
+    /^[0-9a-f]+$/i.test(joined) &&
+    /\d/.test(joined) &&
+    /[a-f]/i.test(joined)
+  );
 }
 
 export function parseUrl(href: string): URL | null {
