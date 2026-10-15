@@ -2262,7 +2262,8 @@ const ROUTE_KIND_NAMES: Partial<Record<MailUrlView["kind"], string>> = {
 };
 
 // A first sync fetches the last few days before backfilling (see
-// utils/mail-api/source.ts), so the first wait says what's coming first.
+// utils/mail-api/source.ts), and Outlook backfills newest first, so the first
+// wait says what's coming first.
 function getListPlaceholderMessage({
   engineStarting,
   isAllAccounts,
@@ -2278,7 +2279,6 @@ function getListPlaceholderMessage({
 }) {
   if (engineStarting) return "Opening your mailbox…";
   if (isAllAccounts) return allInboxesFirstSyncMessage ?? "Loading your mail…";
-  if (isFirstSync && !isOutlook)
-    return "Getting your last 3 days of mail first…";
+  if (isFirstSync) return "Getting your last 3 days of mail first…";
   return `Loading your mail from ${isOutlook ? "Outlook" : "Gmail"}…`;
 }
