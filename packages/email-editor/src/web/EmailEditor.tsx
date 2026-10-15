@@ -28,8 +28,28 @@ export type EmailEditorSlashTrigger = {
   rect: DOMRect;
 };
 
+export type EmailEditorAssistContext = {
+  // What the edit replaces: the selected text, nothing at the caret, or
+  // everything typed so far.
+  target: "selection" | "cursor" | "body";
+  before: string;
+  text: string;
+  after: string;
+  containsImages: boolean;
+};
+
 export type EmailEditorHandle = {
   focus: () => void;
+  // Holds the selection (or the caret, or with "body" everything typed) for
+  // an edit made outside the editor, such as an AI suggestion. The held text
+  // is marked until the edit is committed or ended; nothing changes before.
+  beginAssist: (scope: "selection" | "body") => EmailEditorAssistContext | null;
+  // Where the held text is on screen, to place UI next to it.
+  getAssistAnchor: () => DOMRect | null;
+  // Replaces the held text as one undo step. False when the held text was
+  // changed in the meantime.
+  commitAssist: (html: string) => boolean;
+  endAssist: () => void;
   getSelectedText: () => string;
   getValue: () => EmailEditorValue;
   insertHtml: (html: string) => boolean;
@@ -55,6 +75,8 @@ export type EmailEditorProps = {
   spellCheck?: boolean;
   onStateChange?: (state: EmailEditorState) => void;
   onImageFiles?: (files: File[]) => void;
+  // Shows an "Ask Cue" item in the selection toolbar.
+  onAssist?: () => void;
   // A "/" typed at a line start or after whitespace.
   onSlashTrigger?: (trigger: EmailEditorSlashTrigger | null) => void;
   // Keys typed while a slash trigger is open. Return true when handled.
@@ -86,6 +108,7 @@ export const EmailEditor = forwardRef<EmailEditorHandle, EmailEditorProps>(
       spellCheck = true,
       onStateChange,
       onImageFiles,
+      onAssist,
       onSlashKeyDown,
       onSlashTrigger,
       resolveRemoteImages,
@@ -117,6 +140,7 @@ export const EmailEditor = forwardRef<EmailEditorHandle, EmailEditorProps>(
           autofocus={initialState.autofocus}
           initialHtml={initialState.initialHtml}
           initialMode={initialState.mode}
+          onAssist={onAssist}
           onImageFiles={onImageFiles}
           onSlashKeyDown={onSlashKeyDown}
           onSlashTrigger={onSlashTrigger}

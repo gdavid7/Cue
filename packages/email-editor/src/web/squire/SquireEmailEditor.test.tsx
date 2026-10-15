@@ -546,6 +546,187 @@ describe("Squire email editor", () => {
   });
 });
 
+describe("edits made outside the editor", () => {
+  it("replaces the held selection as one undo step", async () => {
+    const { handle, textbox } = await renderEditor({
+      initialHtml: "<div>Hi Sam,</div><div>can u send the doc pls</div>",
+    });
+    selectText(textbox(), "can u send the doc pls");
+
+    let context = null as ReturnType<EmailEditorHandle["beginAssist"]>;
+    act(() => {
+      context = handle().beginAssist("selection");
+    });
+    expect(context).toMatchObject({
+      target: "selection",
+      before: "Hi Sam,\n",
+      text: "can u send the doc pls",
+      after: "",
+      containsImages: false,
+    });
+
+    await act(async () => {
+      expect(
+        handle().commitAssist("<p>Could you send me the doc, please?</p>"),
+      ).toBe(true);
+    });
+    expect(textbox().textContent).toBe(
+      "Hi Sam,Could you send me the doc, please?",
+    );
+    expect(handle().getValue().mode).toBe("edited");
+
+    await act(async () => {
+      fireEvent.keyDown(textbox(), { key: "z", ctrlKey: true });
+    });
+    expect(textbox().textContent).toBe("Hi Sam,can u send the doc pls");
+  });
+
+  it("keeps a rewrite of part of a line on that line", async () => {
+    const { handle, textbox } = await renderEditor({
+      initialHtml: "<div>Thanks so much for the update!</div><div>Bye</div>",
+    });
+    selectText(textbox(), "so much");
+    act(() => {
+      handle().beginAssist("selection");
+    });
+
+    await act(async () => {
+      handle().commitAssist("<p>a lot</p>");
+    });
+
+    expect(
+      [...textbox().children].map((block) =>
+        block.textContent?.replace(/\u00a0/gu, " ").replace(/\u200b/gu, ""),
+      ),
+    ).toEqual(["Thanks a lot for the update!", "Bye"]);
+  });
+
+  it("reports the caret's place in the draft when nothing is selected", async () => {
+    const { handle } = await renderEditor({
+      initialHtml: "<ul><li>budget ok</li><li>need deck</li></ul>",
+    });
+    act(() => handle().focus());
+
+    let context = null as ReturnType<EmailEditorHandle["beginAssist"]>;
+    act(() => {
+      context = handle().beginAssist("selection");
+    });
+
+    expect(context).toMatchObject({
+      target: "cursor",
+      before: "- budget ok\n- need deck",
+      text: "",
+      after: "",
+    });
+  });
+
+  it("spaces text written at the caret from the word before it", async () => {
+    const { handle, textbox } = await renderEditor({
+      initialHtml: "<div>Thanks for</div>",
+    });
+    act(() => handle().focus());
+    act(() => {
+      handle().beginAssist("selection");
+    });
+
+    await act(async () => {
+      handle().commitAssist("<p>the quick update.</p>");
+    });
+
+    expect(textbox().textContent?.replace(/\u00a0/gu, " ")).toBe(
+      "Thanks for the quick update.",
+    );
+  });
+
+  it("rewrites the whole body without touching the signature", async () => {
+    const { handle, textbox } = await renderEditor({
+      initialHtml: "<div>- budget ok</div><div>- need deck</div>",
+      preservedBlocks: [SIGNATURE],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Show signature" }));
+
+    let context = null as ReturnType<EmailEditorHandle["beginAssist"]>;
+    act(() => {
+      context = handle().beginAssist("body");
+    });
+    expect(context).toMatchObject({
+      target: "body",
+      text: "- budget ok\n- need deck",
+    });
+    expect(context?.text).not.toContain("Example Person");
+
+    await act(async () => {
+      handle().commitAssist(
+        "<p>The budget is fine.</p><p>Could you send the deck?</p>",
+      );
+    });
+
+    expect(textbox().textContent).toContain(
+      "The budget is fine.Could you send the deck?",
+    );
+    expect(textbox().textContent).not.toContain("budget ok");
+    expect(textbox().querySelector("[data-smartmail]")?.textContent).toContain(
+      "Example Person",
+    );
+  });
+
+  it("refuses to replace text that changed while it was held", async () => {
+    const { handle, textbox } = await renderEditor({
+      initialHtml: "<div>first draft</div>",
+    });
+    selectText(textbox(), "first draft");
+    act(() => {
+      handle().beginAssist("selection");
+    });
+    const text = textbox().querySelector("div")?.firstChild as Text;
+    act(() => {
+      text.data = "edited meanwhile";
+    });
+
+    expect(handle().commitAssist("<p>replacement</p>")).toBe(false);
+    expect(textbox().textContent).toBe("edited meanwhile");
+  });
+
+  it("strips markup the sanitizer does not allow from committed HTML", async () => {
+    const { handle, textbox } = await renderEditor({
+      initialHtml: "<div>hello</div>",
+    });
+    selectText(textbox(), "hello");
+    act(() => {
+      handle().beginAssist("selection");
+    });
+
+    await act(async () => {
+      handle().commitAssist(
+        '<p>hi <img src=x onerror="alert(1)"><a href="javascript:alert(1)">there</a><script>alert(1)</script></p>',
+      );
+    });
+
+    const html = textbox().innerHTML;
+    expect(html).not.toContain("onerror");
+    expect(html).not.toContain("javascript:");
+    expect(html).not.toContain("<script");
+    expect(textbox().textContent).toContain("hi there");
+  });
+
+  it("offers Cue in the selection toolbar only when the app handles it", async () => {
+    const onAssist = vi.fn();
+    const { textbox } = await renderEditor({
+      initialHtml: "<div>hello world</div>",
+      onAssist,
+    });
+    selectText(textbox(), "hello");
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Ask Cue to rewrite the selection",
+      }),
+    );
+
+    expect(onAssist).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("spell checking", () => {
   // Text the user didn't write shouldn't arrive covered in squiggles.
   it("follows the spellCheck prop after the editor has loaded", async () => {
@@ -560,6 +741,27 @@ describe("spell checking", () => {
     expect(textbox.getAttribute("spellcheck")).toBe("true");
   });
 });
+
+// Selects the first occurrence of text, as dragging over it would.
+function selectText(root: HTMLElement, text: string) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const index = (node as Text).data.indexOf(text);
+    if (index < 0) continue;
+    act(() => {
+      root.focus();
+      const range = document.createRange();
+      range.setStart(node, index);
+      range.setEnd(node, index + text.length);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    return;
+  }
+  throw new Error(`"${text}" is not in the editor`);
+}
 
 async function renderEditor(props: Partial<EmailEditorProps>) {
   const ref = createRef<EmailEditorHandle>();

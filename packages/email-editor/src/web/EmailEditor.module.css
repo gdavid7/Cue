@@ -279,6 +279,14 @@
   padding: 0;
   font-size: 1rem;
 }
+.bubbleToolbar .toolbarButtonWide {
+  gap: 0.25rem;
+  width: auto;
+  padding: 0 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
 .bubbleToolbar .separator {
   height: 1rem;
   margin: 0 0.125rem;
@@ -347,6 +355,14 @@
   color: var(--email-editor-foreground);
   outline: none;
   background: var(--email-editor-muted);
+}
+
+/* Text an AI edit would replace, until the edit is accepted or discarded. */
+.squireContent::highlight(email-editor-assist),
+.squireContent *::highlight(email-editor-assist) {
+  color: var(--email-editor-muted-foreground);
+  text-decoration: line-through;
+  background-color: rgb(239 68 68 / 12%);
 }
 
 .squireToolbar {

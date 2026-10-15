@@ -64,11 +64,13 @@ export function readFormatState(editor: Squire): FormatState {
 
 export function SelectionToolbar({
   editor,
+  onAssist,
   onLink,
   position,
   state,
 }: {
   editor: Squire;
+  onAssist?: () => void;
   onLink: () => void;
   // Viewport coordinates of the selection; the toolbar is portalled so
   // containers that clip their overflow cannot hide it.
@@ -119,6 +121,19 @@ export function SelectionToolbar({
         className={styles.bubbleToolbar}
         role="toolbar"
       >
+        {onAssist && (
+          <>
+            <ToolbarButton
+              label="Ask Cue to rewrite the selection"
+              onPress={onAssist}
+              wide
+            >
+              <span aria-hidden="true">✦</span>
+              <span>Cue</span>
+            </ToolbarButton>
+            <span aria-hidden className={styles.separator} />
+          </>
+        )}
         <ToolbarButton
           active={state.bold}
           label="Bold"
