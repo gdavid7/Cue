@@ -3,6 +3,7 @@ import { z } from "zod";
 import { findIntegration } from "@/utils/mcp/integrations";
 import { getIntegrationProvider } from "@/utils/mcp/providers/registry";
 import { ConnectionExpiredError } from "@/utils/mcp/providers/types";
+import { parseUrl } from "@/utils/thread-context/linked-pages";
 import {
   onePerIntegration,
   ownedBySameUser,
@@ -16,6 +17,9 @@ const SOURCE_TIMEOUT_MS = 8000;
 // Fetching one known item should be quick; a slow one is left out.
 const LOOKUP_TIMEOUT_MS = 5000;
 const LINKS_PER_APP = 3;
+const JIRA_SITE = /^[a-z0-9-]+\.atlassian\.net$/;
+const JIRA_TENANT_TIMEOUT_MS = 2000;
+const JIRA_CLOUD_ID_CACHE_SECONDS = 30 * 24 * 60 * 60;
 const RESULTS_PER_SOURCE = 10;
 const MAX_TEXT = 600;
 const ASSIGNMENT_PAST_DAYS = 7;
@@ -43,7 +47,7 @@ type Search = {
 /** What a thread points at directly, read from its links and headers. */
 export type ThreadSignals = {
   links: string[];
-  /** The latest sender other than the user, unless automated. */
+  /** The latest sender other than the user, unless automated; lowercase. */
   senderEmail?: string;
 };
 
@@ -169,7 +173,7 @@ export async function fetchConnectorCandidates({
             )
         : [];
       const senderSource = SENDER_SOURCES[name];
-      const senderEmail = signals.senderEmail?.toLowerCase();
+      const { senderEmail } = signals;
       const sender =
         senderSource && senderEmail
           ? [lookup(() => senderSource(execute, senderEmail, now))]
@@ -455,10 +459,10 @@ async function fetchJiraIssue(
       fields: ["summary", "status", "assignee", "priority", "updated"],
     }),
   );
-  // Jira is connected to one site; the same key on another site is another
-  // issue. OAuth answers through api.atlassian.com, which names no site.
-  const site = issue.self ? parseUrl(issue.self)?.hostname : undefined;
-  if (site?.endsWith(".atlassian.net") && site !== url.hostname) return null;
+  // Jira is connected to one site, and the same key on another site is
+  // another issue: anyone can link to their own site with a key the person's
+  // site also has. Show the issue only once the linked site is the connected one.
+  if (!(await isConnectedJiraSite(issue.self, url.hostname))) return null;
   const { fields } = issue;
   return {
     ...card(`${issue.key} ${fields.summary}`, [
@@ -639,9 +643,51 @@ function driveFileId(url: URL): string | null {
     : null;
 }
 
-/** `<site>.atlassian.net/browse/KEY-123`. */
+/**
+ * Whether an issue the connection returned lives on `site`. A connection made
+ * with an API key answers from the site itself; one made with OAuth answers
+ * through api.atlassian.com under the site's cloud id, which the site
+ * publishes. Anything that can't be confirmed counts as another site.
+ */
+async function isConnectedJiraSite(
+  self: string | null | undefined,
+  site: string,
+): Promise<boolean> {
+  const issueUrl = self ? parseUrl(self) : null;
+  if (!issueUrl) return false;
+  if (issueUrl.hostname === site) return true;
+  const cloudId =
+    issueUrl.hostname === "api.atlassian.com"
+      ? /^\/ex\/jira\/([0-9a-f-]+)\//i.exec(issueUrl.pathname)?.[1]
+      : undefined;
+  return !!cloudId && cloudId === (await jiraCloudId(site));
+}
+
+/** The cloud id Atlassian publishes for a site, cached since it never changes. */
+async function jiraCloudId(site: string): Promise<string | null> {
+  if (!JIRA_SITE.test(site)) return null;
+  const key = `jira-cloud-id:${site}`;
+  const cached = await redis.get<string>(key).catch(() => null);
+  if (cached) return cached;
+  const response = await fetch(`https://${site}/_edge/tenant_info`, {
+    redirect: "error",
+    signal: AbortSignal.timeout(JIRA_TENANT_TIMEOUT_MS),
+  }).catch(() => null);
+  if (!response?.ok) return null;
+  const parsed = jiraTenantSchema.safeParse(
+    await response.json().catch(() => null),
+  );
+  if (!parsed.success) return null;
+  await redis
+    .set(key, parsed.data.cloudId, { ex: JIRA_CLOUD_ID_CACHE_SECONDS })
+    .catch(() => null);
+  return parsed.data.cloudId;
+}
+
+/** `https://<site>.atlassian.net/browse/KEY-123`. */
 function jiraIssueKey(url: URL): string | null {
-  if (!url.hostname.endsWith(".atlassian.net")) return null;
+  if (url.protocol !== "https:" || url.port || !JIRA_SITE.test(url.hostname))
+    return null;
   return /^\/browse\/([A-Z][A-Z0-9_]+-\d+)\/?$/.exec(url.pathname)?.[1] ?? null;
 }
 
@@ -793,14 +839,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 class TimeoutError extends Error {}
 
-function parseUrl(href: string): URL | null {
-  try {
-    return new URL(href);
-  } catch {
-    return null;
-  }
-}
-
 function uniqueBy<T>(items: T[], key: (item: T) => string): T[] {
   const seen = new Set<string>();
   return items.filter((item) => {
@@ -858,6 +896,8 @@ const jiraIssueSchema = z.object({
       .nullish(),
   }),
 });
+
+const jiraTenantSchema = z.object({ cloudId: z.string().min(1) });
 
 // Asana wraps every resource in `data`.
 const asanaTaskSchema = z.object({

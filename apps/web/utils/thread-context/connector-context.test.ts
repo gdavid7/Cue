@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
 import { createScopedLogger } from "@/utils/logger";
 import {
@@ -492,6 +492,99 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
     });
 
     expect(candidates).toEqual([]);
+  });
+
+  describe("with an OAuth connection, which answers through api.atlassian.com", () => {
+    const CLOUD_ID = "11111111-2222-3333-4444-555555555555";
+
+    function oauthIssue() {
+      answer({
+        JIRA_GET_ISSUE: () => ({
+          key: "OPS-12",
+          self: `https://api.atlassian.com/ex/jira/${CLOUD_ID}/rest/api/3/issue/10012`,
+          fields: { summary: "Rotate staging keys", status: { name: "Done" } },
+        }),
+      });
+    }
+
+    function tenantInfo(respond: (url: string) => Promise<Response>) {
+      return vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async (input) => respond(String(input)));
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("shows the issue when the linked site is the connected one", async () => {
+      connected("jira");
+      oauthIssue();
+      const fetch = tenantInfo(async () =>
+        Response.json({ cloudId: CLOUD_ID }),
+      );
+
+      const { candidates } = await lookup({
+        links: ["https://acme.atlassian.net/browse/OPS-12"],
+      });
+
+      expect(fetch).toHaveBeenCalledWith(
+        "https://acme.atlassian.net/_edge/tenant_info",
+        expect.objectContaining({ redirect: "error" }),
+      );
+      expect(candidates).toEqual([
+        expect.objectContaining({
+          id: "jira:OPS-12",
+          url: "https://acme.atlassian.net/browse/OPS-12",
+        }),
+      ]);
+    });
+
+    it("shows nothing when the linked site is another tenant", async () => {
+      connected("jira");
+      oauthIssue();
+      tenantInfo(async () =>
+        Response.json({ cloudId: "99999999-0000-0000-0000-000000000000" }),
+      );
+
+      const { candidates } = await lookup({
+        links: ["https://evil.atlassian.net/browse/OPS-12"],
+      });
+
+      expect(candidates).toEqual([]);
+    });
+
+    it("shows nothing when the linked site can't be identified", async () => {
+      connected("jira");
+      oauthIssue();
+      tenantInfo(async () => new Response("Not found", { status: 404 }));
+
+      const { candidates } = await lookup({
+        links: ["https://acme.atlassian.net/browse/OPS-12"],
+      });
+
+      expect(candidates).toEqual([]);
+    });
+
+    it("never asks a host that isn't a plain Atlassian site", async () => {
+      connected("jira");
+      oauthIssue();
+      const fetch = tenantInfo(async () =>
+        Response.json({ cloudId: CLOUD_ID }),
+      );
+
+      const { candidates } = await lookup({
+        links: [
+          "https://acme.atlassian.net.evil.com/browse/OPS-12",
+          "https://a.b.atlassian.net/browse/OPS-12",
+          "http://acme.atlassian.net:8080/browse/OPS-12",
+        ],
+      });
+
+      expect(fetch).not.toHaveBeenCalled();
+      expect(mockExecuteTool).not.toHaveBeenCalled();
+      expect(candidates).toEqual([]);
+    });
   });
 
   it("turns Asana task links, old and new style, into task cards", async () => {

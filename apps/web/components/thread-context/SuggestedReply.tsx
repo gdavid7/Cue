@@ -3,13 +3,11 @@
 import {
   BrainIcon,
   CalendarIcon,
-  ContactIcon,
   CheckIcon,
   CopyIcon,
   FileTextIcon,
   GlobeIcon,
   GraduationCapIcon,
-  ListTodoIcon,
   type LucideIcon,
   MailIcon,
   MessageSquareQuoteIcon,
@@ -43,8 +41,6 @@ const SOURCE_ICON: Record<Citation["source"]["kind"], LucideIcon> = {
   assignment: GraduationCapIcon,
   chat: MessagesSquareIcon,
   web: GlobeIcon,
-  task: ListTodoIcon,
-  contact: ContactIcon,
   memory: BrainIcon,
 };
 
@@ -315,8 +311,6 @@ const SOURCE_PLACE: Record<Citation["source"]["kind"], string> = {
   assignment: "your courses",
   chat: "your chats",
   web: "the web",
-  task: "your tasks",
-  contact: "your contacts",
   memory: "your past edits",
 };
 

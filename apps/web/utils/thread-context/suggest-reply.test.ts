@@ -6,6 +6,7 @@ import { createScopedLogger } from "@/utils/logger";
 import type { EmailProvider } from "@/utils/email/types";
 import {
   checkSuggestion,
+  contextSources,
   getCachedSuggestedReply,
   renderSource,
   type Source,
@@ -300,6 +301,37 @@ describe("getCachedSuggestedReply", () => {
     expect(
       await getCachedSuggestedReply({ ...key, messageId: "m2" }, enabled),
     ).toBeNull();
+  });
+});
+
+describe("contextSources", () => {
+  // Anyone can send a guessable link or forge a From: header, so the records
+  // they pull in are shown to the user but aren't evidence for a reply.
+  it("leaves out tasks and contacts found from links or the sender, keeping linked files", async () => {
+    const item = (kind: "file" | "task" | "contact", title: string) => ({
+      id: `${kind}:1`,
+      kind,
+      title,
+      snippet: "",
+      text: title,
+      at: "2026-10-12T00:00:00.000Z",
+      reasons: [],
+    });
+
+    const sources = await contextSources({
+      items: [
+        item("task", "OPS-12 Rotate staging keys"),
+        item("contact", "Nora Patel"),
+        item("file", "Milestone 2 write-up"),
+      ],
+      emailProvider: {} as EmailProvider,
+      timezone: null,
+      logger: createScopedLogger("suggest-reply-test"),
+    });
+
+    expect(sources.map((s) => [s.id, s.kind, s.title])).toEqual([
+      ["c1", "file", "Milestone 2 write-up"],
+    ]);
   });
 });
 

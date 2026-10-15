@@ -198,7 +198,7 @@ function isNoise(url: URL, senderDomain: string | null) {
   );
 }
 
-function parseUrl(href: string): URL | null {
+export function parseUrl(href: string): URL | null {
   try {
     const url = new URL(href);
     return url.protocol === "https:" || url.protocol === "http:" ? url : null;
