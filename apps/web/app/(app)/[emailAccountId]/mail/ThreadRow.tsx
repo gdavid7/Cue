@@ -170,7 +170,8 @@ export const ThreadRow = memo(function ThreadRow({
             <div
               className={cn(
                 "flex items-center justify-end gap-1.5",
-                showActions && "group-hover:invisible",
+                showActions &&
+                  "group-hover:invisible group-has-[:focus-visible]:invisible",
               )}
             >
               {thread.hasAttachments ? (
@@ -194,7 +195,7 @@ export const ThreadRow = memo(function ThreadRow({
             // Over the date column, which the row hides on hover.
             <div
               className={cn(
-                "absolute hidden rounded-md bg-background shadow-sm group-hover:flex",
+                "absolute hidden rounded-md bg-background shadow-sm group-hover:flex group-has-[:focus-visible]:flex",
                 layout === "list" ? "right-5" : "right-3.5",
                 expandedPreview ? "top-2" : "-translate-y-1/2 top-1/2",
               )}

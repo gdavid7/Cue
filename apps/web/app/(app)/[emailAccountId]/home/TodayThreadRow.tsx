@@ -74,7 +74,7 @@ export function TodayThreadRow({
             {/* Over the date column, which the row hides on hover. */}
             <div
               className={cn(
-                "absolute hidden rounded-md bg-background shadow-sm sm:group-hover:flex",
+                "absolute hidden rounded-md bg-background shadow-sm sm:group-hover:flex sm:group-has-[:focus-visible]:flex",
                 layout === "list"
                   ? "-translate-y-1/2 top-1/2 right-5"
                   : "top-2 right-3.5",
@@ -182,7 +182,7 @@ export function TodayThreadRow({
           </>
         }
         date={
-          <div className="flex items-center justify-end sm:group-hover:invisible">
+          <div className="flex items-center justify-end sm:group-hover:invisible sm:group-has-[:focus-visible]:invisible">
             {waiting ? (
               <span className="whitespace-nowrap text-muted-foreground text-xs">
                 {waitingFor(thread.at)}

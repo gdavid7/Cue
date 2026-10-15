@@ -33,8 +33,10 @@ export type ThreadRowActionHandlers = {
  * read state, star and snooze, without opening or selecting the thread.
  * A mouse shortcut: the same actions are in the toolbar and on the keyboard,
  * so these stay out of the tab order rather than add five tab stops per row.
- * They sit beside the row's `role="option"`, so assistive tech still finds
- * them as named buttons.
+ * The row shows them on hover and while it has keyboard focus; otherwise they
+ * are `display: none` and out of the accessibility tree. When shown they sit
+ * beside the row's `role="option"`, not inside it, so they keep their button
+ * role and name.
  */
 export function ThreadRowActions({
   threadKey,
