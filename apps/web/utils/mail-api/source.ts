@@ -120,14 +120,18 @@ export function createEmailProviderMailboxSource(input: {
     },
     async discoverScopes() {
       if (provider.name === "microsoft") {
-        const folders = await provider.getFolders();
-        return {
-          status: "ok",
-          value: {
-            scopes: flattenFolderScopes(folders),
-            nextPage: null,
-          },
-        };
+        try {
+          const folders = await provider.getFolders();
+          return {
+            status: "ok",
+            value: {
+              scopes: flattenFolderScopes(folders),
+              nextPage: null,
+            },
+          };
+        } catch (error) {
+          return mapProviderError(error);
+        }
       }
       return {
         status: "ok",

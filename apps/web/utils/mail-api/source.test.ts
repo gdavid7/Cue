@@ -1,3 +1,4 @@
+import { GraphError } from "@microsoft/microsoft-graph-client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { admitGmailCall, GmailCallDeferredError } from "@/utils/gmail/quota";
 import {
@@ -324,6 +325,137 @@ describe("createEmailProviderMailboxSource", () => {
     expect(result).toMatchObject({
       status: "paused",
       reason: "throttled",
+    });
+  });
+
+  describe("Graph throttling", () => {
+    const session = { accountId: "acc-1", generation: "g1" };
+    const signal = new AbortController().signal;
+    const calls: Array<
+      [
+        string,
+        (
+          source: ReturnType<typeof createEmailProviderMailboxSource>,
+        ) => Promise<unknown>,
+      ]
+    > = [
+      [
+        "discovering folders",
+        (source) =>
+          source.discoverScopes({ session, page: null, signal } as never),
+      ],
+      [
+        "starting a folder bootstrap",
+        (source) =>
+          source.beginBootstrap({
+            session,
+            scope: { id: "inbox-id", kind: "folder", folderId: "inbox-id" },
+            afterMs: 0,
+            signal,
+          } as never),
+      ],
+      [
+        "enumerating a folder",
+        (source) =>
+          source.enumerate({
+            session,
+            page: JSON.stringify({ scopeId: "inbox-id", folderId: "inbox-id" }),
+            pageSize: 20,
+            signal,
+          } as never),
+      ],
+      [
+        "reading folder changes",
+        (source) =>
+          source.readChanges({
+            session,
+            requestId: "r1",
+            position: {
+              streamId: "inbox-id",
+              generation: "g1",
+              checkpoint: "1",
+            },
+            pageSize: 20,
+            signal,
+          }),
+      ],
+      [
+        "hydrating bodies",
+        (source) =>
+          source.hydrate({
+            session,
+            requestId: "r1",
+            signal,
+            keys: [{ accountId: "acc-1", messageId: "m1" }],
+            purpose: "body",
+          }),
+      ],
+      [
+        "reading a conversation",
+        (source) =>
+          source.readConversationMembership({
+            session,
+            conversation: { accountId: "acc-1", conversationId: "c1" },
+            resolutionId: "res-1",
+            page: null,
+            pageSize: 20,
+            signal,
+          } as never),
+      ],
+      [
+        "searching",
+        (source) =>
+          source.search({
+            session,
+            predicate: { kind: "text", field: "any", value: "invoice" },
+            page: null,
+            pageSize: 20,
+            signal,
+          } as never),
+      ],
+    ];
+
+    it.each(
+      calls,
+    )("pauses for Graph's Retry-After when %s is throttled", async (_name, call) => {
+      vi.mocked(redis.set).mockClear();
+      const throttle = () => {
+        const error = new GraphError(
+          429,
+          "Application is over its MailboxConcurrency limit.",
+        );
+        error.code = "ApplicationThrottled";
+        error.headers = new Headers({ "Retry-After": "7" });
+        throw error;
+      };
+      const source = createEmailProviderMailboxSource({
+        logger,
+        accountId: "acc-1",
+        provider: {
+          name: "microsoft",
+          localMailSyncStrategy: "folder-delta",
+          getFolders: throttle,
+          getMailboxSyncPage: throttle,
+          getMessagesWithPagination: throttle,
+          getMessagesBatch: throttle,
+          getThread: throttle,
+          getThreadMessages: throttle,
+          searchMessages: throttle,
+        } as unknown as EmailProvider,
+      });
+
+      const result = await call(source);
+
+      expect(result).toEqual({
+        status: "paused",
+        reason: "throttled",
+        retryAfterMs: 7000,
+      });
+      expect(redis.set).toHaveBeenCalledWith(
+        "email-provider-rate-limit:acc-1",
+        expect.any(String),
+        expect.anything(),
+      );
     });
   });
 
