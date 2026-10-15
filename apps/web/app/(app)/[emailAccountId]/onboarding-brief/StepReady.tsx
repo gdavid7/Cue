@@ -12,9 +12,9 @@ import { PageHeading, TypographyP } from "@/components/Typography";
 import { Button } from "@/components/ui/button";
 import { CardBasic } from "@/components/ui/card";
 import { IconCircle } from "@/components/IconCircle";
-import { getGmailBasicSearchUrl } from "@/utils/url";
+import { getMailboxSearchUrl } from "@/utils/url";
 import { useAccount } from "@/providers/EmailAccountProvider";
-import { isGoogleProvider } from "@/utils/email/provider-types";
+import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import {
   PricingFrequencyToggle,
   frequencies,
@@ -38,6 +38,14 @@ export function StepReady() {
   const showPricing = !env.NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS;
   const [frequency, setFrequency] = useState(frequencies[1]);
   const [loading, setLoading] = useState(false);
+  const provider = emailAccount?.account?.provider;
+  const testBriefUrl = emailAccount?.email
+    ? getMailboxSearchUrl(
+        emailAccount.email,
+        'subject:"Briefing for"',
+        provider,
+      )
+    : null;
 
   async function handleCheckout() {
     setLoading(true);
@@ -149,22 +157,15 @@ export function StepReady() {
           </Button>
         )}
 
-        {emailAccount?.email &&
-          isGoogleProvider(emailAccount?.account?.provider) && (
-            <Button variant="outline" size="lg" className="w-full" asChild>
-              <Link
-                href={getGmailBasicSearchUrl(
-                  emailAccount.email,
-                  'subject:("Briefing for")',
-                )}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <ExternalLinkIcon className="mr-2 h-4 w-4" />
-                View test brief in Gmail
-              </Link>
-            </Button>
-          )}
+        {testBriefUrl && (
+          <Button variant="outline" size="lg" className="w-full" asChild>
+            <Link href={testBriefUrl} target="_blank" rel="noopener noreferrer">
+              <ExternalLinkIcon className="mr-2 h-4 w-4" />
+              View test brief in{" "}
+              {isMicrosoftProvider(provider) ? "Outlook" : "Gmail"}
+            </Link>
+          </Button>
+        )}
       </div>
     </>
   );
