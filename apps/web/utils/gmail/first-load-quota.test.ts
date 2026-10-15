@@ -16,9 +16,11 @@ import { loadEmails } from "@/utils/actions/stats-loading";
 import { createScopedLogger } from "@/utils/logger";
 import { gmailQuotaStore } from "@/utils/gmail/quota-store";
 import {
+  createGmailQuotaStats,
   GMAIL_USER_UNITS_PER_MINUTE,
   runWithGmailQuota,
 } from "@/utils/gmail/quota";
+import { CHAT_TOOL_GMAIL_WAIT_BUDGET_MS } from "@/utils/ai/assistant/chat-tool-runtime";
 import { getHomeData } from "@/utils/home/get-home";
 import prisma from "@/utils/prisma";
 import { bulkArchiveAction } from "@/utils/actions/mail-bulk-action";
@@ -88,6 +90,14 @@ vi.mock("@/utils/gmail/quota-store", async () => {
   return { gmailQuotaStore: createMemoryGmailQuotaStore() };
 });
 vi.mock("@/utils/redis", () => ({ redis: memory.redis }));
+// Today's Next up reads the calendar and connected apps, not Gmail.
+vi.mock("@/utils/home/next-up", () => ({
+  getNextUp: async () => ({
+    calendar: { connected: false, next: null },
+    nextUp: [],
+    suggestion: null,
+  }),
+}));
 vi.mock("@/utils/calendar/fetch-events-in-window", () => ({
   fetchCalendarEventsInWindow: async () => ({ events: [], complete: true }),
 }));
@@ -122,6 +132,8 @@ const STEADY_MS = 180_000;
 // every 0.7 s spends 95% of that.
 const BUCKET_UNITS_PER_SECOND = 60;
 const OPEN_EVERY_MS = 700;
+// Gmail's per-user limit for short bursts, a moving average over a second.
+const GMAIL_UNITS_PER_SECOND = 250;
 
 // Replays what opening Cue fires at Gmail: two tabs each scanning the recent
 // window and backfilling older mail, a deep-linked thread plus three more
@@ -241,6 +253,8 @@ describe("Gmail quota on a first load", () => {
       prisma.executedRule.findMany,
     ])
       vi.mocked(findMany).mockResolvedValue([]);
+    // Today's activity summary counts the messages Cue checked today.
+    vi.mocked(prisma.executedRule.groupBy).mockResolvedValue([] as never);
     let home: unknown = null;
     const actors = Promise.all([
       engineScope("a", "primary"),
@@ -289,10 +303,7 @@ describe("Gmail quota on a first load", () => {
       at(45_000, () => openThread("t20")),
     ]);
 
-    for (let elapsed = 0; elapsed < END_MS + 60_000; elapsed += 100) {
-      await vi.advanceTimersByTimeAsync(100);
-    }
-    await actors;
+    await advanceUntilSettled(actors, END_MS + 60_000);
 
     expect(gmail.limitedCalls()).toEqual([]);
     expect(rateLimitModes).toEqual([]);
@@ -316,6 +327,155 @@ describe("Gmail quota on a first load", () => {
       "user/thread-context": expect.any(Number),
       "user/inbox-insights": expect.any(Number),
     });
+  }, 60_000);
+
+  // Replays the founder's first minute in production (06:09): Gmail refused
+  // the tail of each first-sync batch and then the assistant's searches,
+  // although the gate had admitted only about 3,300 of 6,000 units that
+  // minute. Gmail also limits short bursts; a 25-message batch is 500 units
+  // in one instant.
+  it("never bursts past Gmail's per-second limit during a first sync, and a chat search mid-sync gets through", async () => {
+    const { gmail, provider, route, engineScope, sleep, rateLimitModes } =
+      await startReplay(STEADY_MS, { unitsPerSecond: GMAIL_UNITS_PER_SECOND });
+    const chat = createGmailQuotaStats();
+    let search: { ok: boolean; ms: number } | null = null;
+    const actors = Promise.all([
+      engineScope("a", "primary"),
+      engineScope("a", "history"),
+      sleep(2000).then(async () => {
+        const askedAt = Date.now();
+        const result = await route("chat/searchInbox", () =>
+          runWithGmailQuota(
+            {
+              caller: "chat/searchInbox",
+              priority: "interactive",
+              stats: chat,
+              maxTotalWaitMs: CHAT_TOOL_GMAIL_WAIT_BUDGET_MS,
+            },
+            () =>
+              provider.getMessagesWithPagination({
+                query: "from:registrar@example.com",
+                maxResults: 20,
+              }),
+          ),
+        );
+        search = { ok: result.ok, ms: Date.now() - askedAt };
+      }),
+    ]);
+
+    for (let elapsed = 0; elapsed < STEADY_MS + 60_000; elapsed += 100) {
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    await actors;
+
+    expect(gmail.limitedCalls()).toEqual([]);
+    expect(rateLimitModes).toEqual([]);
+    expect(gmail.peakSecondUnits()).toBeLessThanOrEqual(GMAIL_UNITS_PER_SECOND);
+    // The search waits at most a moment behind the sync, never the turn.
+    expect(search).toMatchObject({ ok: true });
+    expect(search?.ms).toBeLessThan(3000);
+    expect(chat.deferred).toBe(0);
+    // The first sync still finishes its recent window within the minute.
+    expect(
+      gmail.unitsByCaller(start, start + 60_000)["mail/v1/enumeration"],
+    ).toBeGreaterThan(2000);
+  }, 60_000);
+
+  // The inbox's first page is one interactive request for 25 messages:
+  // about 505 units, two and a half seconds of the per-second cap.
+  it("serves a first inbox page within the per-second cap's time while a first sync runs", async () => {
+    const { gmail, provider, route, engineScope, sleep, rateLimitModes } =
+      await startReplay(STEADY_MS, { unitsPerSecond: GMAIL_UNITS_PER_SECOND });
+    let firstPage: { ok: boolean; ms: number; count: number } | null = null;
+    const actors = Promise.all([
+      engineScope("a", "primary"),
+      engineScope("a", "history"),
+      // Five seconds in, the sync has filled the second with its share.
+      sleep(5000).then(async () => {
+        const askedAt = Date.now();
+        const result = await route("threads", () =>
+          runWithGmailQuota({ priority: "interactive" }, () =>
+            provider.getMessagesWithPagination({ maxResults: 25 }),
+          ),
+        );
+        firstPage = {
+          ok: result.ok,
+          ms: Date.now() - askedAt,
+          count: result.ok ? result.value.messages.length : 0,
+        };
+      }),
+    ]);
+
+    for (let elapsed = 0; elapsed < STEADY_MS + 60_000; elapsed += 100) {
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    await actors;
+
+    expect(gmail.limitedCalls()).toEqual([]);
+    expect(rateLimitModes).toEqual([]);
+    expect(gmail.peakSecondUnits()).toBeLessThanOrEqual(GMAIL_UNITS_PER_SECOND);
+    expect(firstPage).toMatchObject({ ok: true, count: 25 });
+    expect(firstPage?.ms).toBeLessThanOrEqual(2600);
+  }, 60_000);
+
+  // A person opens threads while the first sync fills the inbox and inbox
+  // insights read in the background. Opening a thread must not slow the very
+  // scan that fills in its older messages (seen in emulated QA: the reader
+  // showed a reply thread without its original, still on page two).
+  it("keeps the first sync filling the inbox while someone opens threads", async () => {
+    // A small mailbox, as in the emulated QA account: the recent window is
+    // two pages, about 810 units, which the minute's bucket covers at once.
+    const { gmail, provider, route, retried, engineScope, sleep } =
+      await startReplay(STEADY_MS, {
+        unitsPerSecond: GMAIL_UNITS_PER_SECOND,
+        recentCount: 40,
+      });
+    const opens: number[] = [];
+    // A second in, the person opens a thread whose original is on page two:
+    // a few reads of its messages.
+    const reader = async () => {
+      await sleep(1000);
+      for (let i = 0; i < 3; i++) {
+        await sleep(300);
+        const openedAt = Date.now();
+        const result = await route("threads/detail", () =>
+          provider.getThread(`t${i}`),
+        );
+        if (result.ok) opens.push(Date.now() - openedAt);
+      }
+    };
+    const insights = sleep(1500).then(() =>
+      retried("user/inbox-insights", () =>
+        getInboxInsights({
+          emailAccountId: ACCOUNT,
+          userEmail: "me@example.com",
+          items: Array.from({ length: 25 }, (_, i) => ({
+            threadId: `t${i}`,
+            messageId: `m${i}`,
+          })),
+          emailProvider: provider,
+          logger,
+        }),
+      ),
+    );
+    let recentWindowMs: number | null = null;
+    const actors = Promise.all([
+      engineScope("a", "primary").then(() => {
+        recentWindowMs = Date.now() - start;
+      }),
+      engineScope("a", "history"),
+      reader(),
+      insights,
+    ]);
+    await advanceUntilSettled(actors, STEADY_MS + 60_000);
+
+    expect(gmail.limitedCalls()).toEqual([]);
+    expect(gmail.peakSecondUnits()).toBeLessThanOrEqual(GMAIL_UNITS_PER_SECOND);
+    expect(opens).toHaveLength(3);
+    // About 810 units at sync's 160 a second, around the thread's reads and
+    // the insights (9.6 s when those reads cut sync to 40 a second).
+    expect(recentWindowMs).not.toBeNull();
+    expect(recentWindowMs).toBeLessThanOrEqual(8000);
   }, 60_000);
 
   it("keeps the backfill moving while someone opens threads at nearly the bucket's refill rate", async () => {
@@ -437,11 +597,19 @@ describe("Gmail quota on a first load", () => {
  * client and provider, and the actors a replay is built from: a route that
  * records rate-limit mode, an SWR-style retry, and a tab's engine scope.
  */
-async function startReplay(endMs: number) {
+async function startReplay(
+  endMs: number,
+  {
+    unitsPerSecond,
+    recentCount,
+  }: { unitsPerSecond?: number; recentCount?: number } = {},
+) {
   const start = Date.now();
   const rateLimitModes: Array<{ at: number; source: string }> = [];
   const gmail = createFakeGmail({
     unitsPerMinute: GMAIL_USER_UNITS_PER_MINUTE,
+    unitsPerSecond,
+    recentCount,
     latencyMs: 250,
   });
   const client = await getGmailClientWithRefresh({
@@ -546,4 +714,26 @@ async function startReplay(endMs: number) {
     sleep,
     rateLimitModes,
   };
+}
+
+/**
+ * Advances the fake clock through the replay, then on until every actor has
+ * finished: a call made near the end can still be waiting its turn.
+ */
+async function advanceUntilSettled(
+  actors: Promise<unknown>,
+  throughMs: number,
+) {
+  let settled = false;
+  const done = actors.finally(() => {
+    settled = true;
+  });
+  for (
+    let elapsed = 0;
+    elapsed < throughMs || (!settled && elapsed < throughMs + 120_000);
+    elapsed += 100
+  ) {
+    await vi.advanceTimersByTimeAsync(100);
+  }
+  await done;
 }

@@ -1,4 +1,5 @@
 import type { MailEngine } from "@inboxzero/mail-core/engine";
+import type { QuerySnapshot } from "@inboxzero/mail-core/queries";
 import {
   observeByKind,
   workerStartFence,
@@ -18,6 +19,34 @@ export function createMailWorkerHost(hooks: {
   let engine: MailEngine | undefined;
   let startedAccount: string | undefined;
   let startQueue = Promise.resolve();
+  // One write refreshes every open view. Sending their snapshots together
+  // lets the page render the change once instead of once per view.
+  const queuedSnapshots = new Map<string, QuerySnapshot<unknown>>();
+  let flushTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function queueSnapshot(handleId: string, snapshot: QuerySnapshot<unknown>) {
+    queuedSnapshots.set(handleId, snapshot);
+    flushTimer ??= setTimeout(flushSnapshots, 0);
+  }
+
+  function flushSnapshots() {
+    clearTimeout(flushTimer);
+    flushTimer = undefined;
+    if (queuedSnapshots.size === 0) return;
+    const snapshots = [...queuedSnapshots].map(([handleId, snapshot]) => ({
+      handleId,
+      snapshot,
+    }));
+    queuedSnapshots.clear();
+    hooks.post({ type: "snapshots", snapshots });
+  }
+
+  // Views are current by the time a call settles, as they were when each
+  // snapshot went out on its own.
+  function respond(message: WorkerResponse) {
+    flushSnapshots();
+    hooks.post(message);
+  }
 
   async function handle(message: WorkerRequest) {
     try {
@@ -31,7 +60,7 @@ export function createMailWorkerHost(hooks: {
         return;
       }
       if (!engine) {
-        hooks.post({
+        respond({
           id: message.id,
           type: "error",
           message: "engine not started",
@@ -41,46 +70,40 @@ export function createMailWorkerHost(hooks: {
       if (message.type === "close") {
         for (const item of handles.values()) item.close();
         handles.clear();
+        queuedSnapshots.clear();
         await engine.close();
         engine = undefined;
         startedAccount = undefined;
-        hooks.post({ id: message.id, type: "ok" });
+        respond({ id: message.id, type: "ok" });
         return;
       }
       if (message.type === "loadMore") {
         const handle = handles.get(message.handleId);
         if (!handle?.loadMore) throw new Error("Mailbox window is unavailable");
         await handle.loadMore();
-        hooks.post({ id: message.id, type: "ok" });
+        respond({ id: message.id, type: "ok" });
         return;
       }
       if (message.type === "unobserve") {
         handles.get(message.handleId)?.close();
         handles.delete(message.handleId);
-        hooks.post({ id: message.id, type: "ok" });
+        queuedSnapshots.delete(message.handleId);
+        respond({ id: message.id, type: "ok" });
         return;
       }
       if (message.type === "observe") {
         const observed = observeByKind(engine, message.kind, message.args);
         handles.set(message.handleId, observed);
         observed.subscribe(() => {
-          hooks.post({
-            type: "snapshot",
-            handleId: message.handleId,
-            snapshot: observed.getSnapshot(),
-          });
+          queueSnapshot(message.handleId, observed.getSnapshot());
         });
-        hooks.post({
-          type: "snapshot",
-          handleId: message.handleId,
-          snapshot: observed.getSnapshot(),
-        });
-        hooks.post({ id: message.id, type: "ok" });
+        queueSnapshot(message.handleId, observed.getSnapshot());
+        respond({ id: message.id, type: "ok" });
         return;
       }
       const method = engine[message.method as keyof MailEngine];
       if (typeof method !== "function") {
-        hooks.post({
+        respond({
           id: message.id,
           type: "error",
           message: `unsupported method ${message.method}`,
@@ -90,9 +113,9 @@ export function createMailWorkerHost(hooks: {
       const value = await (
         method as (...args: unknown[]) => Promise<unknown>
       ).apply(engine, message.args);
-      hooks.post({ id: message.id, type: "ok", value });
+      respond({ id: message.id, type: "ok", value });
     } catch (error) {
-      hooks.post({
+      respond({
         id: "id" in message ? message.id : "worker",
         type: "error",
         message: error instanceof Error ? error.message : "worker_error",
@@ -103,7 +126,7 @@ export function createMailWorkerHost(hooks: {
   async function start(message: Extract<WorkerRequest, { type: "start" }>) {
     const fence = workerStartFence(startedAccount, message.input.accountId);
     if (fence) {
-      hooks.post({
+      respond({
         id: message.id,
         type: "error",
         message: fence,
@@ -111,7 +134,7 @@ export function createMailWorkerHost(hooks: {
       return;
     }
     if (engine) {
-      hooks.post({ id: message.id, type: "ok" });
+      respond({ id: message.id, type: "ok" });
       return;
     }
     startedAccount = message.input.accountId;
@@ -121,7 +144,7 @@ export function createMailWorkerHost(hooks: {
       startedAccount = undefined;
       throw error;
     }
-    hooks.post({ id: message.id, type: "ok" });
+    respond({ id: message.id, type: "ok" });
   }
 
   return { handle };

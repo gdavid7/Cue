@@ -14,11 +14,18 @@ import {
 } from "react";
 import { useSetAtom } from "jotai";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
-import { CheckIcon, FlagIcon } from "lucide-react";
+import {
+  CheckIcon,
+  FlagIcon,
+  type LucideIcon,
+  MailSearchIcon,
+  PauseIcon,
+} from "lucide-react";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
 import type { ActionableThread } from "@/app/(app)/[emailAccountId]/mail/types";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
 import { useThreadActions } from "@/app/(app)/[emailAccountId]/mail/use-thread-actions";
+import { PlaceholderRow } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { LoadingContent } from "@/components/LoadingContent";
 import { toastError, toastSuccess, undoLatestToast } from "@/components/Toast";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -35,7 +42,11 @@ import { formatShortDate } from "@/utils/date";
 import { getActionErrorMessage } from "@/utils/error";
 import type { AgentTask, HomeThread } from "@/utils/home/get-home";
 import { prefixPath } from "@/utils/path";
+import { AllClear, CueChecked } from "./AllClear";
 import { BeforeYourMeeting } from "./BeforeYourMeeting";
+import { ConnectLine, NextUpList } from "./NextUp";
+import { formatTime } from "./today-format";
+import { TodayStatus } from "./TodayStatus";
 import {
   type TodayRowCorrection,
   type TodayRowHandlers,
@@ -44,12 +55,14 @@ import {
 
 const ALSO_IN_INBOX_LIMIT = 5;
 const NO_THREADS: ReadonlySet<string> = new Set();
+const SKELETON_ROWS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2"];
 
 /**
- * Today: what needs a reply, what Cue did for you, and who you're waiting
- * on. Rows act like the inbox's: archive, delete, snooze and reply in place,
- * with the same shortcuts and undo, through the same mail engine commands.
- * An empty lane only says "nothing here" once Cue is actually checking.
+ * Today answers "what needs me, and what's next?", then gets out of the way.
+ * Busy, a summary line and the lanes that have something in them; clear, one
+ * "All clear." with proof Cue looked and what's next. Rows act like the
+ * inbox's: archive, delete, snooze and reply in place, with the same
+ * shortcuts and undo, through the same mail engine commands.
  */
 export function HomeDashboard() {
   const { emailAccountId, emailAccount } = useAccount();
@@ -66,6 +79,7 @@ export function HomeDashboard() {
   // snapshot, so they're hidden here until an undo brings them back.
   const [hidden, setHidden] = useState(NO_THREADS);
   const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [waitingShown, setWaitingShown] = useState(false);
 
   const lanes = useMemo(() => {
     if (!data) return null;
@@ -77,11 +91,26 @@ export function HomeDashboard() {
       alsoInInbox: visible(data.alsoInInbox).slice(0, ALSO_IN_INBOX_LIMIT),
     };
   }, [data, hidden]);
+  const notice =
+    data && lanes
+      ? cueNotice(data.cue, emailAccountId, {
+          hasTrackedThreads:
+            lanes.needsYou.length > 0 || lanes.waiting.length > 0,
+        })
+      : null;
+  // Nothing needs a reply: who you're waiting on folds into the All clear.
+  const allClear = Boolean(lanes && !notice && lanes.needsYou.length === 0);
   // Keyboard order, top to bottom, as the lanes render.
   const rows = useMemo(
     () =>
-      lanes ? [...lanes.needsYou, ...lanes.waiting, ...lanes.alsoInInbox] : [],
-    [lanes],
+      lanes
+        ? [
+            ...lanes.needsYou,
+            ...(allClear && !waitingShown ? [] : lanes.waiting),
+            ...lanes.alsoInInbox,
+          ]
+        : [],
+    [lanes, allClear, waitingShown],
   );
   const focused = rows.find((thread) => thread.threadId === focusedId);
   const actionable = useMemo<ActionableThread[]>(
@@ -337,22 +366,28 @@ export function HomeDashboard() {
           {greetingText}
           {firstName ? `, ${firstName}` : ""}
         </PageHeading>
-        <p className="mt-1 text-muted-foreground text-sm">
-          What needs a reply, and what Cue handled for you.
-        </p>
+        {data && lanes && !notice && !allClear ? (
+          <p className="mt-1 text-muted-foreground text-sm" role="status">
+            {busySummary(data, lanes.needsYou.length)}
+          </p>
+        ) : null}
       </header>
-
-      <BeforeYourMeeting emailAccountId={emailAccountId} />
 
       <LoadingContent
         error={error}
         loading={isLoading}
-        loadingComponent={<HomeSkeleton />}
+        loadingComponent={
+          <HomeSkeleton layout={isLargeScreen ? "list" : "split"} />
+        }
       >
         {data && lanes ? (
           <HomeLanes
             data={data}
             lanes={lanes}
+            notice={notice}
+            allClear={allClear}
+            waitingShown={waitingShown}
+            onToggleWaiting={() => setWaitingShown((shown) => !shown)}
             emailAccountId={emailAccountId}
             focusedId={focused ? focusedId : null}
             handlers={handlers}
@@ -370,6 +405,10 @@ export function HomeDashboard() {
 function HomeLanes({
   data,
   lanes,
+  notice,
+  allClear,
+  waitingShown,
+  onToggleWaiting,
   emailAccountId,
   focusedId,
   handlers,
@@ -384,6 +423,11 @@ function HomeLanes({
     waiting: HomeThread[];
     alsoInInbox: HomeThread[];
   };
+  /** Why Cue can't yet say what needs a reply, which then says so instead. */
+  notice: ReturnType<typeof cueNotice>;
+  allClear: boolean;
+  waitingShown: boolean;
+  onToggleWaiting: () => void;
   emailAccountId: string;
   focusedId: string | null;
   handlers: TodayRowHandlers;
@@ -395,10 +439,7 @@ function HomeLanes({
 }) {
   const { cue, stats } = data;
   const mailHref = useMailHref();
-  const notice = cueNotice(cue, emailAccountId);
-  const canCheck = !notice;
-  const caughtUp =
-    canCheck && lanes.needsYou.length === 0 && lanes.waiting.length === 0;
+  const now = new Date();
   const drafts = data.agentTasks.filter((task) => task.kind === "draft");
   const otherTasks = data.agentTasks.filter((task) => task.kind !== "draft");
   const row = (
@@ -422,37 +463,45 @@ function HomeLanes({
   return (
     <>
       {notice ? (
-        <div
-          className="rounded-lg bg-muted/60 px-4 py-3 text-foreground text-sm"
-          role="status"
-        >
-          {notice.text}
+        <TodayStatus icon={notice.icon} title={notice.title} tone={notice.tone}>
+          {notice.detail}
           {notice.link ? (
-            <>
-              {" "}
-              <Link
-                className="font-medium text-blue-600 underline-offset-2 hover:underline dark:text-blue-400"
-                href={notice.link.href}
-              >
-                {notice.link.label}
-              </Link>
-            </>
+            <Link
+              className="font-medium text-blue-600 underline-offset-2 hover:underline dark:text-blue-400"
+              href={notice.link.href}
+            >
+              {notice.link.label}
+            </Link>
           ) : null}
-        </div>
+        </TodayStatus>
       ) : null}
 
-      {caughtUp ? (
-        <p className="text-muted-foreground text-sm" role="status">
-          You're all caught up.
-        </p>
+      {allClear ? (
+        <AllClear
+          data={data}
+          emailAccountId={emailAccountId}
+          now={now}
+          onToggleWaiting={onToggleWaiting}
+          waitingOn={
+            new Set(lanes.waiting.map((thread) => thread.fromEmail)).size
+          }
+          waitingShown={waitingShown}
+        >
+          <ThreadList
+            hasFocusedRow={hasFocus(lanes.waiting)}
+            label="Waiting on"
+          >
+            {lanes.waiting.map((thread) => row(thread, { waiting: true }))}
+          </ThreadList>
+        </AllClear>
       ) : null}
+      {/* What needs the user comes first; meeting news sits with what's next. */}
+      {allClear ? <BeforeYourMeeting emailAccountId={emailAccountId} /> : null}
 
-      {lanes.needsYou.length > 0 || (canCheck && !caughtUp) ? (
+      {lanes.needsYou.length > 0 ? (
         <Section
           title="Needs reply"
           count={formatCount(lanes.needsYou.length, stats.needsYouCapped)}
-          empty="Nothing needs a reply."
-          isEmpty={lanes.needsYou.length === 0}
         >
           <ThreadList
             hasFocusedRow={hasFocus(lanes.needsYou)}
@@ -475,7 +524,6 @@ function HomeLanes({
         <Section
           title={drafts.length ? "Drafts ready for you" : "Cue is working on"}
           count={formatCount(data.agentTasks.length, false)}
-          isEmpty={false}
         >
           <div className="-mx-4 sm:mx-0 border-border/60 border-t">
             {[...drafts, ...otherTasks].map((task) => (
@@ -489,12 +537,30 @@ function HomeLanes({
         </Section>
       ) : null}
 
-      {lanes.waiting.length > 0 || (canCheck && !caughtUp) ? (
+      {/* The All clear names what's next itself. */}
+      {!allClear && (data.nextUp.length > 0 || data.suggestion) ? (
+        <Section title="Next up">
+          {data.nextUp.length > 0 ? (
+            <NextUpList items={data.nextUp} layout={layout} now={now} />
+          ) : null}
+          {data.suggestion ? (
+            <div className={data.nextUp.length > 0 ? "mt-2" : undefined}>
+              <ConnectLine
+                emailAccountId={emailAccountId}
+                name={data.suggestion.name}
+                path="/integrations"
+                purpose="to see what's due."
+              />
+            </div>
+          ) : null}
+        </Section>
+      ) : null}
+      {allClear ? null : <BeforeYourMeeting emailAccountId={emailAccountId} />}
+
+      {!allClear && lanes.waiting.length > 0 ? (
         <Section
           title="Waiting on"
           count={formatCount(lanes.waiting.length, stats.waitingCapped)}
-          empty="You're not waiting on anyone."
-          isEmpty={lanes.waiting.length === 0}
         >
           <ThreadList
             hasFocusedRow={hasFocus(lanes.waiting)}
@@ -505,30 +571,15 @@ function HomeLanes({
         </Section>
       ) : null}
 
-      {data.handledLabels.length > 0 ? (
+      {!allClear && !notice && data.today.checked > 0 ? (
         <p className="text-muted-foreground text-sm">
-          Cue filed mail for you in the last {stats.handledWindowDays} days:{" "}
-          {data.handledLabels.map((label, index) => (
-            <span key={label.labelId}>
-              {index > 0 ? ", " : null}
-              <Link
-                className="text-foreground underline-offset-2 hover:underline"
-                href={mailHref({
-                  view: { kind: "label", slug: label.labelId },
-                })}
-              >
-                {label.name} {formatCount(label.count, label.capped)}
-              </Link>
-            </span>
-          ))}
-          .
+          <CueChecked today={data.today} />
         </p>
       ) : null}
 
       {lanes.alsoInInbox.length > 0 ? (
         <Section
           title="Also in your inbox"
-          isEmpty={false}
           action={
             <Link
               className="font-sans text-muted-foreground text-sm underline-offset-2 hover:text-foreground hover:underline"
@@ -564,16 +615,32 @@ function HomeLanes({
 function cueNotice(
   cue: GetHomeResponse["cue"],
   emailAccountId: string,
-): { text: string; link?: { label: string; href: string } } | null {
+  { hasTrackedThreads }: { hasTrackedThreads: boolean },
+): {
+  icon: LucideIcon;
+  /** Settings that are off are nags, quieter than what Cue is doing. */
+  tone: "info" | "quiet";
+  title: string;
+  detail?: string;
+  link?: { label: string; href: string };
+} | null {
   if (!cue.aiAccess) {
+    // Conversations tracked while the assistant was on still show, so only
+    // say they would appear when there are none.
     return {
-      text: "Turn on the AI assistant to see what needs a reply.",
+      icon: PauseIcon,
+      tone: "quiet",
+      title: hasTrackedThreads
+        ? "The AI assistant is off, so this list isn't being updated."
+        : "Turn on the AI assistant to see what needs a reply.",
       link: { label: "See plans", href: "/premium" },
     };
   }
   if (!cue.replyTracking) {
     return {
-      text: "Reply tracking is off, so Cue isn't checking what needs a reply.",
+      icon: PauseIcon,
+      tone: "quiet",
+      title: "Reply tracking is off, so Cue isn't checking what needs a reply.",
       link: {
         label: "Turn it on in Rules",
         href: prefixPath(emailAccountId, "/automation"),
@@ -582,7 +649,10 @@ function cueNotice(
   }
   if (!cue.hasReadMail) {
     return {
-      text: "Cue is reading your recent mail. What needs a reply will show up here.",
+      icon: MailSearchIcon,
+      tone: "info",
+      title: "Cue is reading your recent mail.",
+      detail: "What needs a reply will appear here.",
     };
   }
   return null;
@@ -591,15 +661,11 @@ function cueNotice(
 function Section({
   title,
   count,
-  empty,
-  isEmpty,
   action,
   children,
 }: {
   title: string;
   count?: string;
-  empty?: string;
-  isEmpty: boolean;
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {
@@ -615,11 +681,7 @@ function Section({
         ) : null}
         {action ? <span className="ml-auto">{action}</span> : null}
       </h2>
-      {isEmpty ? (
-        <p className="text-muted-foreground text-sm">{empty}</p>
-      ) : (
-        children
-      )}
+      {children}
     </section>
   );
 }
@@ -659,7 +721,8 @@ function ThreadList({
 function TaskRow({ task, href }: { task: AgentTask; href: string }) {
   return (
     <Link
-      className="flex w-full items-center gap-3 border-border/60 border-b bg-background px-3.5 py-2.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      // Text starts where the lanes' rows put it, past their unread-dot slot.
+      className="flex w-full items-center gap-3 border-border/60 border-b bg-background py-2.5 pr-3.5 pl-8 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring active:bg-muted lg:pr-5"
       href={href}
     >
       <div className="min-w-0 flex-1">
@@ -670,20 +733,43 @@ function TaskRow({ task, href }: { task: AgentTask; href: string }) {
           {task.detail}
         </div>
       </div>
-      <span className="shrink-0 text-muted-foreground text-xs">
+      <span className="shrink-0 whitespace-nowrap text-muted-foreground text-xs">
         {formatShortDate(new Date(task.at))}
       </span>
     </Link>
   );
 }
 
-function HomeSkeleton() {
+/** A lane's heading and rows, line for line, so nothing jumps when it lands. */
+function HomeSkeleton({ layout }: { layout: "list" | "split" }) {
   return (
-    <div className="space-y-3">
-      {[0, 1, 2].map((i) => (
-        <Skeleton className="h-20 rounded-xl" key={i} />
-      ))}
+    <div aria-hidden>
+      <div className="mb-2 flex h-7 items-center">
+        <Skeleton className="h-4 w-28" />
+      </div>
+      <div className="-mx-4 sm:mx-0 border-border/60 border-t">
+        {SKELETON_ROWS.map((width) => (
+          <PlaceholderRow key={width} layout={layout} width={width} />
+        ))}
+      </div>
     </div>
+  );
+}
+
+/**
+ * "3 need a reply · next: Design review 2:00 PM". The meeting is left to the
+ * Next up list when that shows, rather than said twice.
+ */
+function busySummary(data: GetHomeResponse, needsReply: number) {
+  const count = formatCount(needsReply, data.stats.needsYouCapped) ?? "0";
+  const status = `${count} ${needsReply === 1 ? "needs" : "need"} a reply`;
+  const next = data.calendar.next;
+  if (!next || data.nextUp.length > 0) return status;
+  return (
+    <>
+      {status} · {next.tomorrow ? "tomorrow" : "next"}: {next.title}{" "}
+      <span className="whitespace-nowrap">{formatTime(next.at)}</span>
+    </>
   );
 }
 

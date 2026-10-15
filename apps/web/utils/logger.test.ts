@@ -1,5 +1,5 @@
-import { log } from "next-axiom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { axiomLog as log } from "@/utils/axiom-log";
 import { LOG_FIELDS_OVERFLOW_KEY, MAX_LOG_FIELD_PATHS } from "./log-fields";
 import { createScopedLogger, toLogJson } from "./logger";
 
@@ -29,14 +29,15 @@ const { mockedEnv } = vi.hoisted(() => ({
   })(),
 }));
 
-vi.mock("next-axiom", () => ({
-  log: {
+vi.mock("@/utils/axiom-log", () => ({
+  axiomLog: {
     info: vi.fn(),
     error: vi.fn(),
     warn: vi.fn(),
     debug: vi.fn(),
     flush: vi.fn().mockResolvedValue(undefined),
   },
+  describeAxiomTarget: () => 'dataset "test-dataset"',
 }));
 
 vi.mock("@/env", () => ({
@@ -101,6 +102,35 @@ describe("Logger", () => {
     );
     expect(consoleLogSpy).toHaveBeenCalledWith(
       expect.stringContaining("[test]: Server log"),
+    );
+  });
+
+  it("says once per instance whether production server logs ship to Axiom, and why not", () => {
+    mockedEnv.NODE_ENV = "production";
+    mockedEnv.AXIOM_TOKEN = "server-token";
+    const consoleWarnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => {});
+    const axiomLines = (spy: typeof consoleWarnSpy) =>
+      spy.mock.calls
+        .map(([line]) => String(line))
+        .filter((line) => line.startsWith("[axiom]"));
+
+    vi.stubEnv("SHIP_LOGS_TO_AXIOM", "");
+    createScopedLogger("first");
+    createScopedLogger("second");
+    expect(axiomLines(consoleWarnSpy)).toEqual([
+      expect.stringContaining("this build has no SHIP_LOGS_TO_AXIOM"),
+    ]);
+
+    vi.stubEnv("SHIP_LOGS_TO_AXIOM", "1");
+    createScopedLogger("third");
+    createScopedLogger("fourth");
+    expect(axiomLines(consoleLogSpy)).toEqual([
+      '[axiom]: Server logs ship to dataset "test-dataset"',
+    ]);
+    expect(JSON.stringify(consoleLogSpy.mock.calls)).not.toContain(
+      "server-token",
     );
   });
 

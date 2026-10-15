@@ -37,6 +37,12 @@ export type MailReaderToolbarProps = {
   onMarkRead: () => void;
   onMarkUnread: () => void;
   menu?: ReactNode;
+  /**
+   * Below `lg` the host shows Back, Archive and More in a bottom bar, so the
+   * header leaves its copies out there and gives the subject the row. The
+   * menu stays mounted, invisibly, as the anchor the bar's More opens.
+   */
+  bottomBarBelowLg?: boolean;
   messageExpansion?: {
     allExpanded: boolean;
     canExpand: boolean;
@@ -64,6 +70,7 @@ export function MailReaderToolbar({
   onMarkRead,
   onMarkUnread,
   menu,
+  bottomBarBelowLg = false,
   messageExpansion,
   icons,
   renderButton = defaultToolbarButton,
@@ -80,10 +87,23 @@ export function MailReaderToolbar({
 
   const actionButton = (button: MailReaderToolbarButton) =>
     renderActionTooltip(button, renderButton(button));
+  const primaryAction = getPrimaryAction({
+    onArchive,
+    onMoveToInbox,
+    onRestore,
+    onNotSpam,
+    icons,
+  });
+  const primaryActionInBottomBar =
+    bottomBarBelowLg &&
+    (primaryAction.action === "archive" ||
+      primaryAction.action === "move_to_inbox");
 
   return (
-    <div className="flex flex-wrap items-start gap-x-4 gap-y-3 pb-3">
-      <div className="flex items-center gap-1">
+    <div className="relative flex flex-wrap items-start gap-x-4 gap-y-3 pb-3">
+      <div
+        className={`flex items-center gap-1 ${bottomBarBelowLg ? "max-lg:hidden" : ""}`}
+      >
         {renderButton({
           action: "back",
           ariaLabel: "Back to inbox",
@@ -105,7 +125,12 @@ export function MailReaderToolbar({
                 title="Starred conversation"
               />
             )}
-            <h1 className="line-clamp-2 font-title font-medium text-2xl text-foreground leading-tight tracking-tight max-sm:text-lg">
+            {/* Focusable from script so opening a conversation can land here. */}
+            <h1
+              className="line-clamp-2 font-title font-medium text-2xl text-foreground leading-tight tracking-tight outline-none max-sm:text-lg"
+              data-mail-reader-subject
+              tabIndex={-1}
+            >
               {subject}
             </h1>
           </div>
@@ -115,7 +140,8 @@ export function MailReaderToolbar({
 
       <div
         aria-label="Thread actions"
-        className="ml-auto flex flex-wrap items-center gap-1.5"
+        // Room between the host's 44px touch hit areas, so they don't overlap.
+        className={`ml-auto flex flex-wrap items-center gap-1.5 ${bottomBarBelowLg ? "pointer-coarse:gap-4" : ""}`}
         role="group"
       >
         {messageExpansion?.canExpand
@@ -127,14 +153,12 @@ export function MailReaderToolbar({
               onClick: messageExpansion.onToggleAll,
             })
           : null}
-        {actionButton(
-          getPrimaryAction({
-            onArchive,
-            onMoveToInbox,
-            onRestore,
-            onNotSpam,
-            icons,
-          }),
+        {primaryActionInBottomBar ? (
+          <span className="contents max-lg:hidden">
+            {actionButton(primaryAction)}
+          </span>
+        ) : (
+          actionButton(primaryAction)
         )}
         {extraActions}
         {actionButton({
@@ -144,7 +168,13 @@ export function MailReaderToolbar({
           icon: icons?.[readAction],
           onClick: isUnread ? onMarkRead : onMarkUnread,
         })}
-        {menu}
+        {bottomBarBelowLg && menu ? (
+          <div className="max-lg:invisible max-lg:absolute max-lg:top-0 max-lg:right-0">
+            {menu}
+          </div>
+        ) : (
+          menu
+        )}
       </div>
     </div>
   );

@@ -88,6 +88,13 @@
   border-inline-start: 3px solid var(--email-editor-border);
 }
 
+/* The app's reset strips the cell borders and padding that a data table's
+   border and cellpadding attributes give it in mail clients. */
+.editor [data-email-editor-content] table[border="1"] :is(td, th) {
+  padding: 6px;
+  border: 1px solid var(--email-editor-border);
+}
+
 .editor [data-email-editor-content] a {
   color: #2563eb;
   text-decoration: underline;
@@ -377,5 +384,18 @@
 
   .squireBody {
     min-height: var(--email-editor-content-min-height, 160px);
+  }
+}
+
+/* iOS zooms into a focused field set below 16px. */
+@media (max-width: 767px) {
+  .surface[data-email-editor-appearance="seamless"]
+    .editor
+    [data-email-editor-content] {
+    font-size: 1rem;
+  }
+
+  .linkInput {
+    font-size: 1rem;
   }
 }

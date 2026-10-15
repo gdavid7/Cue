@@ -26,8 +26,13 @@ import { captureException } from "@/utils/error";
 import prisma from "@/utils/prisma";
 import { createScopedLogger } from "@/utils/logger";
 import { booleanString } from "@/utils/zod";
-import { getOrderedEmailAccountIds } from "@/utils/mail-url.server";
+import { getOrderedEmailAccounts } from "@/utils/mail-url.server";
 import { THEME_COLOR } from "@/components/theme-options";
+import { premiumEntitlementSelect } from "@/utils/premium";
+import {
+  getAiAccess,
+  NO_AI_BANNER_DISMISSED_COOKIE,
+} from "@/utils/premium/ai-access";
 
 const logger = createScopedLogger("AppLayout");
 
@@ -49,9 +54,11 @@ export const viewport = {
   themeColor: THEME_COLOR,
   initialScale: 1,
   width: "device-width",
-  height: "device-height",
   // safe area for iOS PWA
   viewportFit: "cover",
+  // Android shrinks the layout (and `dvh`) for the keyboard, so bottom
+  // controls like compose's Send stay above it.
+  interactiveWidget: "resizes-content",
 };
 
 export default async function AppLayout({
@@ -63,9 +70,10 @@ export default async function AppLayout({
 
   if (!session?.user.email) redirect("/login");
 
-  const [cookieStore, accountIds] = await Promise.all([
+  const [cookieStore, accounts, aiAccess] = await Promise.all([
     cookies(),
-    getOrderedEmailAccountIds(session.user.id),
+    getOrderedEmailAccounts(session.user.id),
+    getUserAiAccess(session.user.id),
   ]);
   const isClosed = cookieStore.get("left-sidebar:state")?.value === "false";
   const bypassPremiumChecks =
@@ -89,14 +97,19 @@ export default async function AppLayout({
   return (
     <div className={inter.variable}>
       <div className="font-inter">
-        <AppProviders accountIds={accountIds}>
+        <AppProviders accounts={accounts}>
           <MailEngineRuntime>
             <SideNavWithTopNav
               defaultOpen={!isClosed}
               feedbackEnabled={feedbackEnabled}
             >
               <DesktopMailIndicators />
-              <AiAutomationStatusBanner />
+              <AiAutomationStatusBanner
+                aiAccess={aiAccess}
+                dismissed={
+                  cookieStore.get(NO_AI_BANNER_DISMISSED_COOKIE)?.value === "1"
+                }
+              />
               <ErrorMessages />
               <ProviderRateLimitBanner />
               {children}
@@ -117,4 +130,15 @@ export default async function AppLayout({
       </div>
     </div>
   );
+}
+
+async function getUserAiAccess(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { aiApiKey: true, premium: { select: premiumEntitlementSelect } },
+  });
+  return getAiAccess({
+    premium: user?.premium,
+    hasAiApiKey: Boolean(user?.aiApiKey),
+  });
 }

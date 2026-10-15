@@ -154,7 +154,11 @@ export const ThreadRow = memo(function ThreadRow({
   return (
     // Touch has no hover or Shift, so holding a row selects it, as in the
     // platform mail apps. `contents` keeps the row the listbox's own child.
-    <div className="contents" {...longPress}>
+    // Text selection and iOS's callout would start on the same hold.
+    <div
+      className="contents pointer-coarse:select-none pointer-coarse:[-webkit-touch-callout:none]"
+      {...longPress}
+    >
       <MailThreadRow
         accountAvatar={
           account ? (
@@ -170,7 +174,8 @@ export const ThreadRow = memo(function ThreadRow({
             <div
               className={cn(
                 "flex items-center justify-end gap-1.5",
-                showActions && "group-hover:invisible",
+                showActions &&
+                  "group-hover:invisible group-has-[:focus-visible]:invisible",
               )}
             >
               {thread.hasAttachments ? (
@@ -194,7 +199,7 @@ export const ThreadRow = memo(function ThreadRow({
             // Over the date column, which the row hides on hover.
             <div
               className={cn(
-                "absolute hidden rounded-md bg-background shadow-sm group-hover:flex",
+                "absolute hidden rounded-md bg-background shadow-sm group-hover:flex group-has-[:focus-visible]:flex",
                 layout === "list" ? "right-5" : "right-3.5",
                 expandedPreview ? "top-2" : "-translate-y-1/2 top-1/2",
               )}
@@ -229,8 +234,13 @@ export const ThreadRow = memo(function ThreadRow({
         participantSummary={participantSummary}
         renderSelectionControl={({ ariaLabel, checked, onClick, visible }) => (
           // Opening above would cover the select-all checkbox for the first row.
-          <Tooltip shortcuts={["select"]} side="right">
+          // A click selects at once; a tooltip it left open would also take
+          // the Escape that clears the selection.
+          <Tooltip openOnClick={false} shortcuts={["select"]} side="right">
             <Checkbox
+              // A pointer control only: inside the option it would prefix every
+              // row's name, and aria-selected already says it is selected.
+              aria-hidden
               aria-label={ariaLabel}
               checked={checked}
               className={cn(
@@ -243,8 +253,11 @@ export const ThreadRow = memo(function ThreadRow({
                   : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 max-lg:opacity-100",
               )}
               onClick={onClick}
-              // The listbox moves focus between rows; `x` and Shift+click select,
-              // so a tab stop per row would only bury the rest of the page.
+              // Not on the hidden checkbox: the click puts focus on its row,
+              // where J/K, Enter, Space and Escape carry on.
+              onMouseDown={(event) => event.preventDefault()}
+              // The listbox moves focus between rows; Space, `x` and Shift+click
+              // select, so a tab stop per row would only bury the rest of the page.
               tabIndex={-1}
             />
           </Tooltip>

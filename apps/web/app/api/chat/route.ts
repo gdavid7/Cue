@@ -7,6 +7,7 @@ import {
   type UIMessage,
 } from "ai";
 import { withEmailAccount } from "@/utils/middleware";
+import { assertWithinUserRateLimit } from "@/utils/rate-limit";
 import { FIRST_TIME_EVENTS, trackFirstTimeEvent } from "@/utils/posthog";
 import { getEmailAccountWithAi } from "@/utils/user/get";
 import {
@@ -47,6 +48,8 @@ import {
   getToolFailureWarning,
 } from "@/utils/ai/assistant/chat-response-guard";
 import { flushLoggerSafely } from "@/utils/logger-flush";
+import { createLocalMailSearch } from "@/utils/ai/assistant/local-mail-search";
+import { isGoogleProvider } from "@/utils/email/provider-types";
 import {
   claimActiveStream,
   clearActiveStream,
@@ -59,6 +62,13 @@ export const maxDuration = 300;
 export const POST = withEmailAccount("chat", async (request) => {
   const requestStartedAt = Date.now();
   const emailAccountId = request.auth.emailAccountId;
+  await assertWithinUserRateLimit({
+    scope: "assistant-chat",
+    userId: request.auth.userId,
+    limit: 60,
+    windowSeconds: 5 * 60,
+    logger: request.logger,
+  });
 
   const json = await request.json();
   const { data, error } = assistantInputSchema.safeParse(json);
@@ -169,6 +179,13 @@ export const POST = withEmailAccount("chat", async (request) => {
       { status: 409 },
     );
   }
+
+  // Whatever the turn holds (such as Gmail's demand signal) is let go when
+  // the reply ends, and also when setting it up or streaming it fails.
+  const turnCleanups: Array<() => void> = [];
+  const runTurnCleanups = () => {
+    for (const cleanup of turnCleanups.splice(0)) cleanup();
+  };
 
   try {
     const hiddenInlineActionMessage =
@@ -328,7 +345,19 @@ export const POST = withEmailAccount("chat", async (request) => {
       toolCallCount: 0,
       visibleTextProduced: false,
     };
+    // Searches are answered locally only by a browser that says it can,
+    // and only for Gmail, whose query syntax the local search reads.
+    const localMailSearch =
+      data.localMailSearch && isGoogleProvider(user.account.provider)
+        ? createLocalMailSearch({
+            emailAccountId,
+            logger: runLogger,
+            abortSignal: chatRun.abortSignal,
+          })
+        : undefined;
     const result = await aiProcessAssistantChat({
+      localMailSearch,
+      registerCleanup: (cleanup) => turnCleanups.push(cleanup),
       messages: modelMessages,
       conversationMessagesForMemory: conversationModelMessages,
       emailAccountId,
@@ -336,6 +365,9 @@ export const POST = withEmailAccount("chat", async (request) => {
       context,
       chatId: chat.id,
       supportsInlineEmailCards: data.supportsInlineEmailCards,
+      openThread: data.openThreadId
+        ? { threadId: data.openThreadId, messageId: data.openMessageId }
+        : undefined,
       chatLastSeenRulesRevision: chat.lastSeenRulesRevision,
       chatHasHistory,
       memories,
@@ -367,6 +399,7 @@ export const POST = withEmailAccount("chat", async (request) => {
     const stream = createUIMessageStream({
       generateId: () => streamId,
       execute: async ({ writer }) => {
+        localMailSearch?.attach(writer);
         let responseMessage: UIMessage | null = null;
 
         for await (const chunk of result.toUIMessageStream({
@@ -455,6 +488,7 @@ export const POST = withEmailAccount("chat", async (request) => {
             insertedMessageCount,
           });
         } finally {
+          runTurnCleanups();
           chatRun.end();
           await clearActiveStream({ chatId: chat.id, streamId });
         }
@@ -487,6 +521,7 @@ export const POST = withEmailAccount("chat", async (request) => {
       },
     });
   } catch (error) {
+    runTurnCleanups();
     chatRun.end();
     await clearActiveStream({ chatId: chat.id, streamId });
     runLogger.error("Error in assistant chat", { error });

@@ -3,10 +3,8 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  MAIL_ENGINE_OPFS_DIRECTORY,
-  MAIL_ENGINE_SAH_POOL_RETRY,
-} from "./wasm-sqlite";
+import { MAIL_ENGINE_OPFS_DIRECTORY } from "./opfs-mailbox";
+import { MAIL_ENGINE_SAH_POOL_RETRY } from "./wasm-sqlite";
 
 // Exercises the installed @sqlite.org/sqlite-wasm, including its pnpm patch.
 describe("OPFS SAH pool install", () => {

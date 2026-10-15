@@ -24,8 +24,11 @@ export async function openMail(page: Page) {
     waitUntil: "domcontentloaded",
   });
 
+  // The inbox the server shows at sign-in is a placeholder, not this list;
+  // only the mail engine's list can be selected and triaged.
   const conversations = page.getByRole("listbox", { name: "Conversations" });
   await expect(conversations).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator("[data-mail-inbox-preview]")).toHaveCount(0);
 
   return { conversations, emailAccountId };
 }
@@ -407,7 +410,7 @@ async function insertOutlookInboxReply(
   return message.id;
 }
 
-async function readProviderAccessToken() {
+export async function readProviderAccessToken() {
   const email = process.env.PLAYWRIGHT_TEST_EMAIL;
   if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
   const token = await withClient(async (client) => {

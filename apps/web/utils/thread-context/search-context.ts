@@ -13,6 +13,7 @@ import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
 import {
   eventToCandidate,
+  threadSignals,
   threadToCandidate,
   truncate,
 } from "@/utils/thread-context/get-thread-context";
@@ -54,6 +55,7 @@ export async function searchContext({
   emailAccountId,
   userEmail,
   query,
+  threadId,
   emailProvider,
   logger,
   now = new Date(),
@@ -61,12 +63,31 @@ export async function searchContext({
   emailAccountId: string;
   userEmail: string;
   query: string;
+  /**
+   * The thread the question is about: what it links to and its sender's
+   * record in connected apps count too, as in its Relevant context.
+   */
+  threadId?: string;
   emailProvider: EmailProvider;
   logger: Logger;
   now?: Date;
 }): Promise<{ results: ContextSearchResult[] }> {
   const terms = queryTerms(query);
   if (!terms.length) return { results: [] };
+
+  const thread = threadId
+    ? await emailProvider.getThread(threadId).catch((error) => {
+        if (describeProviderRateLimitError(error, emailProvider.name))
+          throw error;
+        // The provider's error can quote the thread; it goes to trace only.
+        logger.warn("Failed to load thread for context search", {
+          reason: error instanceof Error ? error.name : typeof error,
+        });
+        logger.trace("Thread for context search failed to load", { error });
+        return null;
+      })
+    : null;
+  const signals = thread ? threadSignals(thread, userEmail) : undefined;
 
   const startedAt = Date.now();
   const timing = {
@@ -78,13 +99,7 @@ export async function searchContext({
   let emailFailed = false;
   let calendarFailed = false;
   const [hits, events, connectors] = await Promise.all([
-    emailProvider
-      .searchThreads({
-        query: terms.join(" OR "),
-        maxResults: SEARCH_THREADS,
-        messageFormat: "metadata",
-      })
-      .then((r) => r.threads)
+    searchEmailThreads(emailProvider, terms)
       .catch((error) => {
         // Empty results would read as "nothing about this"; a limited mailbox
         // has to be reported so the assistant can say to try again.
@@ -116,6 +131,7 @@ export async function searchContext({
     fetchConnectorCandidates({
       emailAccountId,
       keywords: terms,
+      signals,
       logger,
       now,
     }).finally(() => {
@@ -153,7 +169,11 @@ export async function searchContext({
       subject: query,
       text: query,
       at: now.toISOString(),
-      people,
+      // The thread's sender is who the question is about, which is what
+      // links their record in a connected app.
+      people: signals?.senderEmail
+        ? [...people, { email: signals.senderEmail }]
+        : people,
     },
     candidates: [
       ...[...threads.values()].map(threadToCandidate),
@@ -236,6 +256,32 @@ export function queryTerms(query: string) {
   return [...new Set(words(query).filter((w) => w.length >= 2))].slice(
     0,
     MAX_TERMS,
+  );
+}
+
+/**
+ * Threads with every word first, then any word to fill the page. Mail search
+ * returns newest first, so asking for any word alone fills the page with
+ * recent mail that only shares a common word and leaves out the older thread
+ * that has them all.
+ */
+async function searchEmailThreads(
+  emailProvider: EmailProvider,
+  terms: string[],
+): Promise<EmailThread[]> {
+  const search = (query: string, maxResults: number) =>
+    emailProvider
+      .searchThreads({ query, maxResults, messageFormat: "metadata" })
+      .then((r) => r.threads);
+  const all = await search(terms.join(" "), SEARCH_THREADS);
+  if (terms.length < 2 || all.length >= SEARCH_THREADS) return all;
+  // The newest any-word matches usually include the every-word ones, so a
+  // full page is asked for and the repeats dropped.
+  const seen = new Set(all.map((t) => t.id));
+  const any = await search(terms.join(" OR "), SEARCH_THREADS);
+  return [...all, ...any.filter((t) => !seen.has(t.id))].slice(
+    0,
+    SEARCH_THREADS,
   );
 }
 

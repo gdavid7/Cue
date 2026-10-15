@@ -307,6 +307,9 @@ export function createTabFollowerClient(input: {
   }
 
   const client: MailClient = {
+    // Answered by the tab that owns the engine; it fails over to the
+    // provider search if that tab can't.
+    searchMessages: (query) => call("searchMessages", [query]) as never,
     observeMailbox: (query) => observeRemote("mailbox", [query]),
     observeMailboxCounts: (query) => observeRemote("mailboxCounts", [query]),
     observeMailboxWindow: (query) => {
@@ -335,6 +338,11 @@ export function createTabFollowerClient(input: {
       await call("ensureAccount", [account]);
     },
     ensureMessageContent: (key) => call("ensureMessageContent", [key]) as never,
+    ensureConversationMessages: (key) =>
+      call("ensureConversationMessages", [key]) as never,
+    async releaseConversationMessages(key) {
+      await call("releaseConversationMessages", [key]);
+    },
     async getDiagnostics(accountId) {
       return call("getDiagnostics", [accountId]) as never;
     },

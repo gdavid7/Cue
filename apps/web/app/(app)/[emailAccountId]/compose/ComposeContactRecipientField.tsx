@@ -203,7 +203,7 @@ export function ComposeContactRecipientField({
           <ComboboxInput
             aria-label={label}
             autoFocus={autoFocus}
-            className="w-full border-none bg-background p-0 text-sm focus:border-none focus:ring-0"
+            className="w-full border-none bg-background p-0 text-base focus:border-none focus:ring-0 md:text-sm"
             id={name}
             onChange={(event) => updateSearchQuery(event.target.value)}
             onFocus={() => onActivate(name)}

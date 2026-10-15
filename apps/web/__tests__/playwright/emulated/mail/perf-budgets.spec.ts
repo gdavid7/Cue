@@ -1,0 +1,468 @@
+import { type BrowserContext, expect, type Page } from "@playwright/test";
+import { getEmailAccountId } from "../account-test-helpers";
+import { test } from "../playwright-test";
+import { buildMailPath } from "@/utils/mail-url";
+import {
+  PERF_BUDGETS_MS,
+  PerfRecorder,
+  armInteraction,
+  editorReady,
+  firstInboxRowVisible,
+  firstRowSubject,
+  headingMatches,
+  newPerfContext,
+  newPerfPage,
+  pageShowsText,
+  perfProfile,
+  perfRuns,
+  readVitals,
+  readerShowsText,
+  rowWithSubjectGone,
+  rowWithSubjectMatches,
+  timeSinceInput,
+  timeSinceNavigation,
+} from "./perf-test-helpers";
+
+// Gmail-level speed is a product requirement, so the flows people repeat all
+// day carry budgets. Timings run in the page, from the input event to the
+// animation frame that shows the result. `perf/playwright.config.mjs` reruns
+// these against a large mailbox with more repetitions to produce a report.
+const inbox = buildMailPath({ accountIndex: 0 });
+
+test("inbox paints its rows quickly on a cold and a warm load", async ({
+  browser,
+}, testInfo) => {
+  // Each run waits for a full first sync and the provider quota to refill.
+  test.setTimeout(300_000 + perfRuns * 360_000);
+  const recorder = new PerfRecorder();
+  // Each cold load syncs the account from scratch. The provider quota refills
+  // per minute, so a first sync straight after another would measure the
+  // quota wait instead of a person's first visit: without a cooldown between
+  // them, one cold load is measured and the rest of the runs are warm.
+  const cooldownMs = Number(process.env.PERF_COLD_COOLDOWN_MS ?? 0);
+  const coldRuns = cooldownMs > 0 ? perfRuns : 1;
+  let context: BrowserContext | undefined;
+  try {
+    for (let run = 0; run < perfRuns; run++) {
+      if (run < coldRuns) {
+        await context?.close();
+        if (run > 0) await sleep(cooldownMs);
+        context = await newPerfContext(browser);
+        // Cold: no HTTP cache, no service worker and no local mailbox.
+        const cold = await newPerfPage(context, { network: true });
+        await cold.goto(inbox, { waitUntil: "commit" });
+        recorder.add(
+          "cold-inbox-rows",
+          await timeSinceNavigation(
+            cold,
+            firstInboxRowVisible,
+            undefined,
+            180_000,
+          ),
+        );
+        const coldVitals = await readVitals(cold);
+        recorder.add("cold-lcp", coldVitals.lcp);
+        recorder.add("cold-ttfb", coldVitals.ttfb);
+        recorder.add("cold-cls-x1000", coldVitals.cls * 1000);
+        recorder.add("cold-long-tasks", coldVitals.longTaskMs);
+        await waitForEngineIdle(cold);
+        await cold.close();
+      }
+      if (!context) throw new Error("No cold load opened a browser");
+
+      // Warm: the mailbox, scripts and service worker are already local.
+      const warm = await newPerfPage(context);
+      await warm.goto(inbox, { waitUntil: "commit" });
+      recorder.add(
+        "warm-inbox-rows",
+        await timeSinceNavigation(warm, firstInboxRowVisible, undefined),
+      );
+      const warmVitals = await readVitals(warm);
+      recorder.add("warm-lcp", warmVitals.lcp);
+      recorder.add("warm-ttfb", warmVitals.ttfb);
+      recorder.add("warm-cls-x1000", warmVitals.cls * 1000);
+      recorder.add("warm-long-tasks", warmVitals.longTaskMs);
+      await warm.close();
+    }
+  } finally {
+    await context?.close();
+    await recorder.attach(testInfo, "load");
+  }
+  expect(recorder.median("cold-inbox-rows")).toBeLessThan(
+    PERF_BUDGETS_MS.coldInboxRows,
+  );
+  expect(recorder.median("warm-inbox-rows")).toBeLessThan(
+    PERF_BUDGETS_MS.warmInboxRows,
+  );
+});
+
+test("opening, triaging, switching and searching respond within budget", async ({
+  browser,
+}, testInfo) => {
+  test.setTimeout(900_000);
+  const recorder = new PerfRecorder();
+  const context = await newPerfContext(browser);
+  const page = await newPerfPage(context);
+  try {
+    await page.goto(inbox);
+    await page.waitForFunction(firstInboxRowVisible, undefined, {
+      timeout: 60_000,
+    });
+    await waitForEngineIdle(page);
+    const inboxFirst = await page.evaluate(firstRowSubject);
+    const inboxTop = await page.evaluate(topRowSubjects);
+
+    for (let run = 0; run < perfRuns; run++) {
+      // Open the next conversation, then reopen it once it is local.
+      await page.keyboard.press("j");
+      const subject = await focusedSubject(page);
+      for (const flow of ["open-email-first", "open-email-cached"]) {
+        await armInteraction(page);
+        await page.keyboard.press("Enter");
+        recorder.add(
+          flow,
+          await timeSinceInput(
+            page,
+            readerShowsText,
+            subject.replace(/^Re: /, ""),
+          ),
+        );
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(firstInboxRowVisible, undefined);
+      }
+
+      // Triage the next conversation, one this run has not opened: opening
+      // one marks it read, and a read toggle straight after would race that.
+      await page.keyboard.press("j");
+      const target = await focusedSubject(page);
+      const isStarred = await rowHasText(page, target, "Starred conversation");
+      await armInteraction(page);
+      await page.keyboard.press("s");
+      recorder.add(
+        "star",
+        await timeSinceInput(page, rowWithSubjectMatches, {
+          subject: target,
+          text: "Starred conversation",
+          present: !isStarred,
+        }),
+      );
+      await page.keyboard.press("s");
+
+      const isUnread = await rowHasText(page, target, "Unread,");
+      await armInteraction(page);
+      await page.keyboard.press(isUnread ? "Shift+I" : "u");
+      recorder.add(
+        "mark-read",
+        await timeSinceInput(page, rowWithSubjectMatches, {
+          subject: target,
+          text: "Unread,",
+          present: !isUnread,
+        }),
+      );
+      await page.keyboard.press(isUnread ? "u" : "Shift+I");
+
+      await armInteraction(page);
+      await page.keyboard.press("e");
+      recorder.add(
+        "archive",
+        await timeSinceInput(page, rowWithSubjectGone, target),
+      );
+      await page.keyboard.press("z");
+      await page.waitForFunction(
+        rowWithSubjectMatches,
+        { subject: target, text: "", present: true },
+        { timeout: 20_000 },
+      );
+
+      // Sent and back to the inbox, each judged by its top rows: the newest
+      // conversation can lead both views when the person replied to it last.
+      await armInteraction(page);
+      await goToView(page, "Sent");
+      recorder.add(
+        "switch-view",
+        await timeSinceInput(page, topRowsAreNot, inboxTop),
+      );
+      await armInteraction(page);
+      await goToView(page, "Inbox");
+      recorder.add(
+        "switch-view",
+        await timeSinceInput(page, topRowsAre, inboxTop),
+      );
+
+      // Search: the first matching result on screen.
+      const term = searchTerms[run % searchTerms.length];
+      const search = page.getByPlaceholder("Search mail");
+      await search.fill(term);
+      await armInteraction(page);
+      await search.press("Enter");
+      recorder.add(
+        "search",
+        await timeSinceInput(page, firstRowSubjectIncludes, term),
+      );
+      await page.getByRole("button", { name: "Clear search" }).click();
+      await page.waitForFunction(firstRowSubjectIs, inboxFirst);
+
+      // Compose: the editor on screen, ready for typing.
+      await armInteraction(page);
+      await page.keyboard.press("c");
+      recorder.add(
+        "compose",
+        await timeSinceInput(page, editorReady, undefined),
+      );
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+    }
+    const vitals = await readVitals(page);
+    recorder.add("session-inp", vitals.inp);
+    recorder.add("session-long-tasks", vitals.longTaskMs);
+    recorder.add("session-longest-task", vitals.longestTaskMs);
+  } catch (error) {
+    testInfo.annotations.push({ type: "failed-at", description: page.url() });
+    await page.screenshot({ path: testInfo.outputPath("perf-failure.png") });
+    throw error;
+  } finally {
+    await context.close();
+    // Partial results still help when a later flow fails.
+    await recorder.attach(testInfo, "interactions");
+  }
+  expect
+    .soft(recorder.median("open-email-cached"))
+    .toBeLessThan(PERF_BUDGETS_MS.openCachedEmail);
+  expect.soft(recorder.median("archive")).toBeLessThan(PERF_BUDGETS_MS.archive);
+  expect.soft(recorder.median("star")).toBeLessThan(PERF_BUDGETS_MS.star);
+  expect
+    .soft(recorder.median("mark-read"))
+    .toBeLessThan(PERF_BUDGETS_MS.markRead);
+  expect
+    .soft(recorder.median("switch-view"))
+    .toBeLessThan(PERF_BUDGETS_MS.switchView);
+  expect.soft(recorder.median("search")).toBeLessThan(PERF_BUDGETS_MS.search);
+  expect.soft(recorder.median("compose")).toBeLessThan(PERF_BUDGETS_MS.compose);
+});
+
+test("Today, Rules, Settings and chat are ready quickly", async ({
+  browser,
+}, testInfo) => {
+  test.setTimeout(900_000);
+  const recorder = new PerfRecorder();
+  const context = await newPerfContext(browser);
+  const page = await newPerfPage(context);
+  const chatReply = `Perf chat reply ${Date.now()}`;
+  await registerLlmReply({ match: "perf chat probe", text: chatReply });
+  try {
+    await page.goto(inbox);
+    await page.waitForFunction(firstInboxRowVisible, undefined, {
+      timeout: 60_000,
+    });
+    const emailAccountId = await getEmailAccountId(page);
+    // A phone has no sidebar, so its screens are measured as page loads.
+    const viaLink = perfProfile === "laptop";
+    for (let run = 0; run < perfRuns; run++) {
+      for (const [flow, link, path, heading] of [
+        ["today", "Today", "home", "^Good (morning|afternoon|evening)"],
+        ["rules", "Rules", "automation", "^Rules$"],
+      ] as const) {
+        if (viaLink) {
+          await armInteraction(page);
+          await page.getByRole("link", { name: link, exact: true }).click();
+          recorder.add(
+            flow,
+            await timeSinceInput(page, headingMatches, heading),
+          );
+        } else {
+          await page.goto(`/${emailAccountId}/${path}`, {
+            waitUntil: "commit",
+          });
+          recorder.add(
+            `${flow}-load`,
+            await timeSinceNavigation(page, headingMatches, heading),
+          );
+        }
+      }
+
+      await page.goto("/settings", { waitUntil: "commit" });
+      recorder.add(
+        "settings-load",
+        await timeSinceNavigation(page, headingMatches, "^Settings$"),
+      );
+
+      if (viaLink) {
+        await armInteraction(page);
+        await page.getByRole("link", { name: "Chat", exact: true }).click();
+        recorder.add(
+          "chat-ready",
+          await timeSinceInput(page, chatInputReady, undefined),
+        );
+      } else {
+        await page.goto(`/${emailAccountId}/assistant`, {
+          waitUntil: "commit",
+        });
+        recorder.add(
+          "chat-ready-load",
+          await timeSinceNavigation(page, chatInputReady, undefined),
+        );
+      }
+      await page.getByTestId("chat-input").fill(`perf chat probe ${run}`);
+      await armInteraction(page);
+      // On a touchscreen Return is a newline; the send button submits.
+      if (perfProfile === "phone") {
+        await page.getByRole("button", { name: "Send message" }).click();
+      } else {
+        await page.getByTestId("chat-input").press("Enter");
+      }
+      recorder.add(
+        "chat-first-token",
+        await timeSinceInput(page, pageShowsText, chatReply, 30_000),
+      );
+      await page.goto(inbox);
+      await page.waitForFunction(firstInboxRowVisible, undefined, {
+        timeout: 60_000,
+      });
+    }
+  } catch (error) {
+    testInfo.annotations.push({ type: "failed-at", description: page.url() });
+    await page.screenshot({ path: testInfo.outputPath("perf-failure.png") });
+    throw error;
+  } finally {
+    await context.close();
+    // Partial results still help when a later flow fails.
+    await recorder.attach(testInfo, "pages");
+  }
+});
+
+/** The sidebar on a laptop; the go-to shortcut on a phone, which has none. */
+async function goToView(page: Page, view: "Inbox" | "Sent") {
+  if (perfProfile === "laptop") {
+    await page.getByRole("link", { name: new RegExp(`^${view}`) }).click();
+    return;
+  }
+  await page.keyboard.press("g");
+  await page.keyboard.press(view === "Sent" ? "t" : "i");
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function chatInputReady() {
+  return document.querySelector('[data-testid="chat-input"]')
+    ? performance.now()
+    : false;
+}
+
+async function registerLlmReply(reply: { match: string; text: string }) {
+  const response = await fetch(
+    `${process.env.PLAYWRIGHT_LLM_BASE_URL}/__emulator/replies`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(reply),
+    },
+  );
+  expect(response.ok).toBe(true);
+}
+
+const searchTerms =
+  process.env.PERF_MAILBOX === "large"
+    ? ["invoice", "meeting", "launch", "travel", "hiring"]
+    : ["Archive Action", "Playwright Test", "Reader Navigation"];
+
+function firstRowSubjectIs(subject: string) {
+  const first = document.querySelector(
+    '[role="listbox"][aria-label="Conversations"] [data-mail-thread-subject]',
+  );
+  return first?.textContent === subject ? performance.now() : false;
+}
+
+function topRowSubjects() {
+  return Array.from(
+    document.querySelectorAll(
+      '[role="listbox"][aria-label="Conversations"] [data-mail-thread-subject]',
+    ),
+    (row) => row.textContent,
+  )
+    .slice(0, 3)
+    .join("\n");
+}
+
+function topRowsAre(expected: string) {
+  const top = Array.from(
+    document.querySelectorAll(
+      '[role="listbox"][aria-label="Conversations"] [data-mail-thread-subject]',
+    ),
+    (row) => row.textContent,
+  )
+    .slice(0, 3)
+    .join("\n");
+  return top === expected ? performance.now() : false;
+}
+
+function topRowsAreNot(previous: string) {
+  const top = Array.from(
+    document.querySelectorAll(
+      '[role="listbox"][aria-label="Conversations"] [data-mail-thread-subject]',
+    ),
+    (row) => row.textContent,
+  )
+    .slice(0, 3)
+    .join("\n");
+  return top && top !== previous ? performance.now() : false;
+}
+
+function firstRowSubjectIncludes(text: string) {
+  const first = document.querySelector(
+    '[role="listbox"][aria-label="Conversations"] [data-mail-thread-subject]',
+  );
+  return first?.textContent?.toLowerCase().includes(text.toLowerCase())
+    ? performance.now()
+    : false;
+}
+
+async function focusedSubject(page: Page) {
+  const subject = await page
+    .locator('[data-mail-thread-row][tabindex="0"] [data-mail-thread-subject]')
+    .first()
+    .textContent();
+  if (!subject) throw new Error("No focused conversation");
+  return subject;
+}
+
+async function rowHasText(page: Page, subject: string, text: string) {
+  return page.evaluate(
+    ({ subject, text }) => {
+      for (const element of document.querySelectorAll(
+        "[data-mail-thread-subject]",
+      )) {
+        if (element.textContent !== subject) continue;
+        return (
+          element.closest("[data-mail-thread-row]")?.textContent ?? ""
+        ).includes(text);
+      }
+      return false;
+    },
+    { subject, text },
+  );
+}
+
+/**
+ * Lets the first sync settle so later timings measure the UI rather than the
+ * backfill. A mailbox still syncing after the wait is measured as it is.
+ */
+async function waitForEngineIdle(page: Page) {
+  const deadline = Date.now() + Number(process.env.PERF_SYNC_WAIT_MS ?? 10_000);
+  while (Date.now() < deadline) {
+    const idle = await page.evaluate(async () => {
+      const diagnostics = (await window.__inboxZeroMailInspect
+        ?.read()
+        .catch(() => null)) as {
+        coverage?: { lastCompletedSyncAtMs?: number | null }[];
+      } | null;
+      return Boolean(
+        diagnostics?.coverage?.some((c) => c.lastCompletedSyncAtMs),
+      );
+    });
+    if (idle) break;
+    await page.waitForTimeout(500);
+  }
+  if (perfProfile === "phone") await page.waitForTimeout(500);
+}

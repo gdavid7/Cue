@@ -210,5 +210,17 @@
     "hooks/useDarkEmailMode.ts",
     "components/ThemeSubmenu.tsx",
     "components/email-list/EmailContents.tsx"
+  ],
+  "perf-budgets.spec.ts": [
+    "utils/mail-engine/MailEngineHost.tsx",
+    "utils/mail-engine/create-browser-engine.ts",
+    "utils/mail-engine/engine-worker.ts",
+    "utils/mail-engine/worker-session.ts",
+    "utils/mail-engine/wasm-sqlite.ts",
+    "utils/mail-engine/submit-conversations.ts",
+    "providers/EmailAccountProvider.tsx",
+    "app/(app)/[emailAccountId]/mail/ThreadList.tsx",
+    "app/(app)/[emailAccountId]/mail/use-thread-actions.ts",
+    "app/(app)/[emailAccountId]/mail/use-engine-mail-threads.ts"
   ]
 }

@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildSnoozeCommandPalette,
   getSnoozePresets,
-  parseSnoozeDate,
 } from "./snooze-command-palette";
+import { parseSnoozeDate } from "./snooze-date-parse";
 
 describe("buildSnoozeCommandPalette", () => {
   it("offers a short list of days and shows when each one lands", () => {
@@ -11,6 +11,7 @@ describe("buildSnoozeCommandPalette", () => {
     const commands = buildSnoozeCommandPalette({
       now,
       onSnooze: vi.fn(),
+      parseDate: parseSnoozeDate,
       query: "",
     });
 
@@ -56,6 +57,7 @@ describe("buildSnoozeCommandPalette", () => {
     const commands = buildSnoozeCommandPalette({
       now: new Date(2026, 7, 15, 10),
       onSnooze,
+      parseDate: parseSnoozeDate,
       query: "tomorrow at 3pm",
     });
 
@@ -63,6 +65,17 @@ describe("buildSnoozeCommandPalette", () => {
     expect(commands[0]?.label).toContain("Sun, Aug 16 at 3:00 PM");
     commands[0]?.action();
     expect(onSnooze).toHaveBeenCalledWith(new Date(2026, 7, 16, 15));
+  });
+
+  it("waits for the date parser before offering a typed time", () => {
+    const commands = buildSnoozeCommandPalette({
+      now: new Date(2026, 7, 15, 10),
+      onSnooze: vi.fn(),
+      parseDate: null,
+      query: "tomorrow at 3pm",
+    });
+
+    expect(commands).toEqual([]);
   });
 
   it("defaults date-only input to 9am", () => {

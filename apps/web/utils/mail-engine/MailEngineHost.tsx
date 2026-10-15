@@ -15,11 +15,13 @@ import { Loader2Icon } from "lucide-react";
 import type { MailClient } from "@inboxzero/mail-core/engine";
 import { MailEngineProvider } from "@inboxzero/mail-react/MailEngineProvider";
 import { LoadingContent } from "@/components/LoadingContent";
+import { useHydrated } from "@/hooks/useHydrated";
 import { Button } from "@/components/ui/button";
 import { env } from "@/env";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import {
   createBrowserMailEngine,
+  prewarmMailEngineWorker,
   type BrowserMailEngine,
 } from "@/utils/mail-engine/create-browser-engine";
 import {
@@ -59,6 +61,20 @@ type MailEngineRuntimeStatus = {
 
 type MailEngineInspectTransport = "browser" | "desktop-ipc";
 
+// On a page that starts the engine, its worker and SQLite load while the page
+// hydrates instead of after; the worker opens nothing until the engine starts.
+if (
+  typeof window !== "undefined" &&
+  !hasDesktopMailEngineIpc() &&
+  browserMailEngineCapabilities().opfs &&
+  shouldStartMailEngine({
+    pathname: window.location.pathname,
+    desktopIpc: false,
+  })
+) {
+  prewarmMailEngineWorker();
+}
+
 const MailEngineRuntimeStatusContext = createContext<MailEngineRuntimeStatus>({
   client: null,
   mounted: false,
@@ -82,13 +98,20 @@ export function MailEngineRuntime({ children }: { children: ReactNode }) {
 export function MailEngineHost({
   children,
   fallback,
+  showChildrenWhileStarting,
 }: {
   children: ReactNode;
   fallback?: ReactNode;
+  showChildrenWhileStarting?: boolean;
 }) {
   return (
     <MailEngineRuntime>
-      <MailCoverageGate fallback={fallback}>{children}</MailCoverageGate>
+      <MailCoverageGate
+        fallback={fallback}
+        showChildrenWhileStarting={showChildrenWhileStarting}
+      >
+        {children}
+      </MailCoverageGate>
     </MailEngineRuntime>
   );
 }
@@ -96,21 +119,25 @@ export function MailEngineHost({
 export function MailCoverageGate({
   children,
   fallback = <LoadingContent loading>{null}</LoadingContent>,
+  showChildrenWhileStarting = false,
 }: {
   children: ReactNode;
   /** Shown until the engine is ready, so the screen's frame needn't wait. */
   fallback?: ReactNode;
+  /**
+   * Shows the children as soon as the page has hydrated, for a screen that
+   * reads as loading without the engine. Swapping a stand-in for it once the
+   * engine is ready would remount it, closing any menu or dialog opened
+   * meanwhile. The fallback still covers the server render.
+   */
+  showChildrenWhileStarting?: boolean;
 }) {
   const status = useContext(MailEngineRuntimeStatusContext);
   // SSR has no OPFS; checking capabilities before hydration paints the
   // storage-error shell instead of the shared loading state.
-  const isClient = useSyncExternalStore(
-    subscribeNever,
-    () => true,
-    () => false,
-  );
+  const hydrated = useHydrated();
 
-  if (!isClient) return fallback;
+  if (!hydrated) return fallback;
   const mode = selectMailEngineRuntimeMode({
     desktopIpc: hasDesktopMailEngineIpc(),
     opfs: browserMailEngineCapabilities().opfs,
@@ -119,7 +146,7 @@ export function MailCoverageGate({
     return <MailStorageUnavailable onRetry={status.retryStart} />;
   }
   if (!status.client && status.rebuilding) return <MailboxRebuilding />;
-  if (!status.client) return fallback;
+  if (!status.client && !showChildrenWhileStarting) return fallback;
   return children;
 }
 

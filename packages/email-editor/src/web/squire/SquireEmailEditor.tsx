@@ -18,7 +18,10 @@ import {
   markdownToEmailHtml,
 } from "../../core/email-markdown";
 import { EMAIL_ELEMENT_STYLES } from "../../core/email-styles";
-import { SIGNATURE_CONTAINER_ATTRIBUTE } from "../../core/email-profile";
+import {
+  escapeHtml,
+  SIGNATURE_CONTAINER_ATTRIBUTE,
+} from "../../core/email-profile";
 import type {
   EmailEditorAssistContext,
   EmailEditorHandle,
@@ -51,8 +54,8 @@ import {
   showAssistHighlight,
   splitDraftText,
 } from "./assist";
-import { attachMarkdownShortcuts } from "./markdown-shortcuts";
 import { closestWithin } from "./dom";
+import { attachMarkdownShortcuts } from "./markdown-shortcuts";
 import { placePopover, visibleBounds } from "./placement";
 import { findSlashTrigger, type SlashTriggerMatch } from "./slash-trigger";
 
@@ -449,8 +452,10 @@ export const SquireEmailEditor = forwardRef<
     setExpandedState(value);
   }, []);
 
+  // Mounting in the commit, not after paint, means the textbox never shows
+  // or reports itself empty before the draft is in it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: Squire is uncontrolled; it mounts once with the initial content.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;
     const squire = new EmailSquire(root, {
@@ -1085,12 +1090,4 @@ function rangeAnchor(range: Range) {
 // Squire needs at least one block to place the caret in.
 function ensureBlock(editor: Squire, root: HTMLElement) {
   if (!root.firstElementChild) root.append(editor.createDefaultBlock());
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/gu, "&amp;")
-    .replace(/"/gu, "&quot;")
-    .replace(/</gu, "&lt;")
-    .replace(/>/gu, "&gt;");
 }

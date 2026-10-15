@@ -9,6 +9,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/utils";
+import { useIsCoarsePointer } from "@/hooks/use-mobile";
 import type { ChatStatus } from "ai";
 import { ArrowUpIcon, Loader2Icon, SquareIcon, XIcon } from "lucide-react";
 import type {
@@ -47,6 +48,9 @@ export const PromptInputTextarea = ({
   maxHeight = 164,
   ...props
 }: PromptInputTextareaProps) => {
+  // Phone keyboards have no Shift+Return, so Return has to stay a newline
+  // there; the send button submits.
+  const isCoarsePointer = useIsCoarsePointer();
   const handleKeyDown: KeyboardEventHandler<HTMLTextAreaElement> = (e) => {
     if (e.key === "Enter") {
       // Don't submit if IME composition is in progress
@@ -54,7 +58,10 @@ export const PromptInputTextarea = ({
         return;
       }
 
-      if (e.shiftKey) {
+      // Cmd/Ctrl+Return sends even on a touchscreen, for a tablet with a
+      // hardware keyboard.
+      const sendShortcut = e.metaKey || e.ctrlKey;
+      if (e.shiftKey || (isCoarsePointer && !sendShortcut)) {
         // Allow newline
         return;
       }
@@ -81,6 +88,7 @@ export const PromptInputTextarea = ({
         onChange?.(e);
       }}
       onKeyDown={handleKeyDown}
+      enterKeyHint={isCoarsePointer ? "enter" : "send"}
       placeholder={placeholder}
       minRows={2}
       maxRows={15}
@@ -168,6 +176,11 @@ export const PromptInputSubmit = ({
 
   return (
     <Button
+      aria-label={
+        status === "submitted" || status === "streaming"
+          ? "Stop generating"
+          : "Send message"
+      }
       className={cn(
         variant === "default" &&
           size === "icon" &&

@@ -598,6 +598,178 @@ test("keeps pasted layout safely and restores it with the draft", async ({
   await expect(dialog).toBeHidden();
 });
 
+test("turns markdown typed in the composer into formatting", async ({
+  page,
+}, testInfo) => {
+  await openMail(page);
+  await page.getByRole("button", { name: /^Compose/ }).click();
+  const dialog = page.getByRole("dialog", { name: "New Message" });
+  const editor = dialog.getByRole("textbox", { name: "Email message" });
+  await editor.click();
+
+  await page.keyboard.type("## Agenda");
+  await expect(editor.getByRole("heading", { name: "Agenda" })).toBeVisible();
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("- Budget");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Hiring");
+  await expect(editor.getByRole("listitem")).toHaveText(["Budget", "Hiring"]);
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+
+  await page.keyboard.type(
+    "Ship **today**, *soon* or `pnpm test`, not ~~never~~. See [the doc](example.com/doc) ",
+  );
+  await expect(editor.locator("b")).toHaveText("today");
+  await expect(editor.locator("i")).toHaveText("soon");
+  await expect(editor.locator("code")).toHaveText("pnpm test");
+  await expect(editor.locator("s")).toHaveText("never");
+  await expect(editor.getByRole("link", { name: "the doc" })).toHaveAttribute(
+    "href",
+    "https://example.com/doc",
+  );
+  await expect(editor).toContainText(
+    "Ship today, soon or pnpm test, not never. See the doc",
+  );
+  await expect(editor).not.toContainText("**");
+
+  // Undo, or Backspace straight after, brings back what was typed.
+  await page.keyboard.type("**kept**");
+  await expect(editor.locator("b", { hasText: "kept" })).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(editor).toContainText("**kept**");
+  await expect(editor.locator("b", { hasText: "kept" })).toHaveCount(0);
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("> ");
+  await expect(editor.locator("blockquote")).toHaveCount(1);
+  await page.keyboard.press("Backspace");
+  await expect(editor.locator("blockquote")).toHaveCount(0);
+  await page.keyboard.press("Backspace");
+  await page.keyboard.press("Backspace");
+
+  await page.keyboard.type("> Quoted line");
+  await expect(editor.locator("blockquote")).toHaveText("Quoted line");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("---");
+  await page.keyboard.press("Enter");
+  await expect(editor.locator("hr")).toHaveCount(1);
+  await page.keyboard.type("```");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("const a = **1**;");
+  await expect(editor.locator("pre")).toHaveText("const a = **1**;");
+
+  // Snippets still open from "/" on a fresh line.
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("/");
+  const picker = page.getByRole("listbox", { name: "Snippets" });
+  await expect(picker).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(picker).toBeHidden();
+  await page.keyboard.press("Backspace");
+
+  await page.emulateMedia({ colorScheme: "light" });
+  await capturePlaywrightCheckpoint(dialog, testInfo, "markdown-typed-light");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  await capturePlaywrightCheckpoint(dialog, testInfo, "markdown-typed-dark");
+  await page.emulateMedia({ colorScheme: "light" });
+
+  await dialog.getByRole("button", { name: "Discard draft" }).click();
+  await expect(dialog).toBeHidden();
+});
+
+test("pastes markdown as formatting that survives sending", async ({
+  page,
+}, testInfo) => {
+  const { conversations, emailAccountId } = await openMail(page);
+  const subject = `Markdown paste ${testInfo.retry}`;
+  await page.getByRole("button", { name: /^Compose/ }).click();
+  const dialog = page.getByRole("dialog", { name: "New Message" });
+  const editor = dialog.getByRole("textbox", { name: "Email message" });
+  await dialog
+    .getByRole("combobox", { name: "To" })
+    .fill("recipient@example.com");
+  await dialog.getByPlaceholder("Subject").fill(subject);
+  await editor.click();
+
+  const markdown = [
+    "## Launch plan",
+    "",
+    "- Copy is **final**",
+    "- Notes in [the doc](https://example.com/doc)",
+    "",
+    "| Item | Owner |",
+    "| --- | --- |",
+    "| Copy | Ada |",
+    "",
+    "```",
+    "pnpm release",
+    "```",
+  ].join("\n");
+
+  // Shift pastes the same text exactly as written.
+  await page.keyboard.down("Shift");
+  await pastePlainText(editor, "- one\n- two");
+  await page.keyboard.up("Shift");
+  await expect(editor).toContainText("- one");
+  await expect(editor.getByRole("listitem")).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("Backspace");
+
+  await pastePlainText(editor, markdown);
+  await expect(editor.getByRole("heading", { name: "Launch plan" })).toHaveCSS(
+    "font-size",
+    "20px",
+  );
+  await expect(editor.getByRole("listitem")).toHaveCount(2);
+  await expect(editor.locator("li b, li strong")).toHaveText("final");
+  await expect(editor.getByRole("link", { name: "the doc" })).toHaveAttribute(
+    "href",
+    "https://example.com/doc",
+  );
+  await expect(editor.getByRole("cell", { name: "Ada" })).toBeVisible();
+  await expect(editor.locator("table")).toHaveCSS(
+    "border-collapse",
+    "collapse",
+  );
+  await expect(editor.locator("pre")).toHaveText("pnpm release");
+  await expect(editor.locator("pre")).toHaveCSS("white-space", "pre-wrap");
+
+  await page.emulateMedia({ colorScheme: "light" });
+  await capturePlaywrightCheckpoint(dialog, testInfo, "markdown-pasted-light");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  await capturePlaywrightCheckpoint(dialog, testInfo, "markdown-pasted-dark");
+  await page.emulateMedia({ colorScheme: "light" });
+
+  await editor.press("ControlOrMeta+Enter");
+  await expect(dialog).toBeHidden();
+  await openMailboxFromSidebar(page, "Sent");
+  await waitForComposeOutboxSend(page, emailAccountId);
+  const sentConversation = conversationWithSubject(
+    page,
+    conversations,
+    subject,
+  );
+  await expect(sentConversation).toBeVisible({ timeout: 60_000 });
+  await sentConversation.click();
+  const sentBody = page
+    .frameLocator('iframe[title="Email content preview"]')
+    .locator("body");
+  await expect(
+    sentBody.getByRole("heading", { name: "Launch plan" }),
+  ).toHaveCSS("font-size", "20px");
+  await expect(sentBody.locator("table")).toHaveAttribute("border", "1");
+  await expect(sentBody.locator("pre")).toHaveCSS("white-space", "pre-wrap");
+  await expect(sentBody.getByRole("link", { name: "the doc" })).toHaveAttribute(
+    "href",
+    "https://example.com/doc",
+  );
+  await capturePlaywrightCheckpoint(page, testInfo, "markdown-sent");
+});
+
 test.describe("Cue writing partner", () => {
   test("rewrites a selection from the selection toolbar, and undo takes it back", async ({
     page,
@@ -837,5 +1009,24 @@ async function selectEditorText(editor: Locator, text: string) {
       node = walker.nextNode();
     }
     throw new Error(`Could not find text to select: ${selectedText}`);
+  }, text);
+}
+
+async function pastePlainText(editor: Locator, text: string) {
+  await editor.evaluate((element, pasted) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/plain", pasted);
+    const selection = window.getSelection();
+    const target =
+      selection?.anchorNode instanceof Element
+        ? selection.anchorNode
+        : (selection?.anchorNode?.parentElement ?? element);
+    target.dispatchEvent(
+      new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData,
+      }),
+    );
   }, text);
 }

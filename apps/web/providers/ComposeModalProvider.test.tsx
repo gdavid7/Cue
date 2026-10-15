@@ -6,11 +6,24 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { SWRConfig } from "swr";
+import { Tooltip } from "@/components/Tooltip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ComposeModalProvider, useComposeModal } from "./ComposeModalProvider";
 import { EmailAccountProvider, useAccount } from "./EmailAccountProvider";
+
+// The real tooltip positions itself with floating-ui, which observes size.
+class MockResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+(globalThis as { ResizeObserver?: typeof MockResizeObserver }).ResizeObserver =
+  MockResizeObserver;
 
 const navigation = vi.hoisted(() => ({
   pathname: "/account-a/mail",
@@ -104,15 +117,136 @@ describe("ComposeModalProvider popped-out reply", () => {
   });
 });
 
-function renderProvider() {
+describe("ComposeModalProvider focus", () => {
+  beforeEach(() => {
+    navigation.pathname = "/account-a/mail";
+    navigation.search = "";
+    vi.stubGlobal(
+      "matchMedia",
+      (query: string) =>
+        ({
+          matches: false,
+          media: query,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+        }) as unknown as MediaQueryList,
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  // Full-screen compose covers the inbox, so Tab must not walk into it.
+  it("shuts out the page behind expanded compose without remounting the draft", async () => {
+    renderProvider();
+    const opener = await screen.findByRole("button", { name: "Compose" });
+    fireEvent.click(opener);
+    const composer = await screen.findByTestId("composer");
+    expect(opener.closest("[inert]")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand compose" }));
+
+    expect(opener.closest("[inert]")).not.toBeNull();
+    expect(screen.getByTestId("composer")).toBe(composer);
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore compose" }));
+    expect(opener.closest("[inert]")).toBeNull();
+  });
+
+  it("returns focus to what opened compose when it closes", async () => {
+    renderProvider();
+    const opener = await screen.findByRole("button", { name: "Compose" });
+    opener.focus();
+    fireEvent.click(opener);
+    await screen.findByTestId("composer");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close compose" }));
+
+    expect(screen.queryByTestId("composer")).toBeNull();
+    // Radix restores focus a task after the dialog unmounts.
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+  });
+
+  // Docked compose sits beside the inbox, so the user may have moved on to
+  // another row; pulling focus back would make Enter open the stale one.
+  it("leaves focus where the user moved it outside compose", async () => {
+    renderProvider();
+    const opener = await screen.findByRole("button", { name: "Compose" });
+    opener.focus();
+    fireEvent.click(opener);
+    await screen.findByTestId("composer");
+    const elsewhere = screen.getByRole("button", { name: "Pop out" });
+    elsewhere.focus();
+
+    fireEvent.keyDown(elsewhere, { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByTestId("composer")).toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
+  // The sidebar's Compose tooltip opens below it, over the Inbox link, and
+  // swallowed clicks there until focus moved on.
+  it("returns focus to Compose without opening its tooltip", async () => {
+    renderProvider({ withTooltip: true });
+    const opener = await screen.findByRole("button", { name: "Compose" });
+    opener.focus();
+    fireEvent.click(opener);
+    await screen.findByTestId("composer");
+
+    fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
+
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("still shows the Compose tooltip when Tab lands on it", async () => {
+    renderProvider({ withTooltip: true });
+    const opener = await screen.findByRole("button", { name: "Compose" });
+
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    opener.focus();
+
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "Write a new email",
+    );
+  });
+});
+
+function renderProvider({ withTooltip = false } = {}) {
   render(
     <SWRConfig value={{ provider: () => new Map() }}>
       <EmailAccountProvider>
         <ComposeModalProvider>
+          {withTooltip ? (
+            <Tooltip content="Write a new email">
+              <ComposeButton />
+            </Tooltip>
+          ) : (
+            <ComposeButton />
+          )}
           <PopOutButton />
         </ComposeModalProvider>
       </EmailAccountProvider>
     </SWRConfig>,
+  );
+}
+
+function ComposeButton(props: ComponentProps<"button">) {
+  const { onOpen } = useComposeModal();
+  return (
+    <button
+      {...props}
+      onClick={(event) => {
+        props.onClick?.(event);
+        onOpen();
+      }}
+      type="button"
+    >
+      Compose
+    </button>
   );
 }
 

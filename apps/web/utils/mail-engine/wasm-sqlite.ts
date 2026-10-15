@@ -5,8 +5,8 @@ import type {
   SqlValue,
   SqliteDriver,
 } from "@inboxzero/mail-sqlite/driver";
+import { MailboxUnavailableError } from "@inboxzero/mail-sqlite/mailbox-errors";
 import {
-  MailboxUnavailableError,
   openMailStoreWithRecovery,
   type DroppedMailWork,
 } from "@inboxzero/mail-sqlite/recovery";
@@ -14,9 +14,9 @@ import {
   createSqliteMailStore,
   type SqliteMailStoreOptions,
 } from "@inboxzero/mail-sqlite/store";
+import { MAIL_ENGINE_OPFS_DIRECTORY } from "@/utils/mail-engine/opfs-mailbox";
 import { createMailRecoveryStash } from "@/utils/mail-engine/recovery-stash";
 
-export const MAIL_ENGINE_OPFS_DIRECTORY = ".mail-engine";
 // Held while a context has the mailbox files open. The browser releases it
 // when that context dies, so whoever holds it is alive.
 const MAILBOX_FILES_LOCK = "inbox-zero:mailbox-files";
@@ -31,9 +31,26 @@ export const MAIL_ENGINE_SAH_POOL_RETRY = {
   forceReinitIfPreviouslyFailed: true,
 };
 
+type Sqlite = Awaited<ReturnType<typeof initSqlite>>;
+
+let sqliteLoad: Promise<Sqlite> | undefined;
+
+/**
+ * Starts compiling sqlite-wasm before the engine needs it, as the worker does
+ * when it loads. Every database shares the one load; a failed load is tried
+ * again by the next caller.
+ */
+export function preloadSqlite(): Promise<Sqlite> {
+  sqliteLoad ??= initSqlite().catch((error: unknown) => {
+    sqliteLoad = undefined;
+    throw error;
+  });
+  return sqliteLoad;
+}
+
 /** An in-memory mailbox database, for hosts that cannot persist one. */
 export async function createWasmMemoryDriver(): Promise<SqliteDriver> {
-  return createMemoryDriver(await initSqlite());
+  return createMemoryDriver(await preloadSqlite());
 }
 
 /**
@@ -47,7 +64,7 @@ export async function createWasmMailStore(input: {
   onRebuild?: () => void;
   onDropped?: (drop: DroppedMailWork) => void;
 }): Promise<MailStore> {
-  const sqlite = await initSqlite();
+  const sqlite = await preloadSqlite();
   if (!canPersist(input.persist)) {
     return createSqliteMailStore(createMemoryDriver(sqlite), input.options);
   }
@@ -75,6 +92,13 @@ export async function createWasmMailStore(input: {
           pool.pauseVfs();
         };
         try {
+          // Each archive or star commits a transaction. Keeping the rollback
+          // journal between them, instead of creating and deleting a pool
+          // file for every one, saves the pool's header writes and flushes.
+          // A kept journal never shrinks on its own, so a large write's
+          // journal is truncated back to this size after it commits.
+          database.exec("PRAGMA journal_mode=PERSIST");
+          database.exec("PRAGMA journal_size_limit=1048576");
           return createDatabaseDriver(database, release);
         } catch (error) {
           // The pool cannot wipe the files for a rebuild while this is open.
@@ -108,35 +132,6 @@ export async function createWasmMailStore(input: {
   }
 }
 
-/** Resolves false when the mailbox is still on disk after every retry. */
-export async function wipeOpfsMailEngine(): Promise<boolean> {
-  if (
-    typeof navigator === "undefined" ||
-    !("storage" in navigator) ||
-    !("getDirectory" in navigator.storage)
-  ) {
-    return true;
-  }
-  let root: FileSystemDirectoryHandle;
-  try {
-    root = await navigator.storage.getDirectory();
-  } catch {
-    // Without OPFS access the engine could not have stored anything either.
-    return true;
-  }
-  for (let attempt = 0; attempt < 8; attempt++) {
-    try {
-      await root.removeEntry(MAIL_ENGINE_OPFS_DIRECTORY, { recursive: true });
-      return true;
-    } catch (error) {
-      if (isMissingOpfsEntry(error)) return true;
-      if (attempt === 7) return false;
-      await new Promise((resolve) => setTimeout(resolve, 25 * 2 ** attempt));
-    }
-  }
-  return false;
-}
-
 function canPersist(persist: boolean | undefined) {
   return (
     persist !== false &&
@@ -146,7 +141,7 @@ function canPersist(persist: boolean | undefined) {
   );
 }
 
-function createMemoryDriver(sqlite: Awaited<ReturnType<typeof initSqlite>>) {
+function createMemoryDriver(sqlite: Sqlite) {
   const database = new sqlite.oo1.DB(":memory:");
   return createDatabaseDriver(database, async () => {
     database.close();
@@ -253,14 +248,5 @@ function isHeldFileError(error: unknown) {
     error !== null &&
     "name" in error &&
     error.name === "NoModificationAllowedError"
-  );
-}
-
-function isMissingOpfsEntry(error: unknown) {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "name" in error &&
-    error.name === "NotFoundError"
   );
 }

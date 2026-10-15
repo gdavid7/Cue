@@ -81,6 +81,33 @@ describe("markdownToEmailHtml", () => {
     expect(doc.querySelectorAll("li")[1]?.textContent).toBe("☐ Next");
   });
 
+  it("keeps a signature dash line as text, not a heading", () => {
+    const doc = parse(
+      markdownToEmailHtml("Agenda:\n- one\n- two\n\nThanks,\n--\nJane Doe"),
+    );
+
+    expect(doc.querySelector("h1, h2")).toBeNull();
+    expect(doc.body.textContent).toContain("Thanks,");
+    expect(doc.body.textContent).toContain("Jane Doe");
+  });
+
+  it("keeps a line above --- as text, with a rule below it", () => {
+    const doc = parse(markdownToEmailHtml("- a\n- b\n\nSee below\n---"));
+
+    expect(doc.querySelector("h1, h2")).toBeNull();
+    expect(doc.querySelector("hr")).toBeTruthy();
+    expect(doc.body.textContent).toContain("See below");
+  });
+
+  it("keeps an indented paragraph as prose, not a code block", () => {
+    const doc = parse(
+      markdownToEmailHtml("# Notes\n\n    Indented note from an email."),
+    );
+
+    expect(doc.querySelector("pre, code")).toBeNull();
+    expect(doc.body.textContent).toContain("Indented note from an email.");
+  });
+
   it("keeps single line breaks inside a paragraph", () => {
     const doc = parse(markdownToEmailHtml("Ada\nLondon\n\n- a\n- b"));
 

@@ -8,19 +8,15 @@
  * failing. The script never prints secrets, mail content, or addresses.
  */
 import { appendFile, readFile, writeFile } from "node:fs/promises";
+import { errorName, queryAxiomWindow } from "./axiom-query";
 import {
-  type AxiomQueryResult,
   buildHealthReport,
-  formatAxiomError,
   formatHumanSummary,
   formatJobSummary,
   formatReportBlock,
-  parseAxiomTabular,
   redact,
   robotResultsSchema,
-  runAxiomQueries,
   type SentryIssue,
-  summarizeAxiom,
   summarizeSentry,
 } from "./health-report";
 
@@ -93,61 +89,11 @@ async function readRobot(path: string | undefined) {
 }
 
 async function queryAxiom() {
-  const token = process.env.AXIOM_QUERY_TOKEN;
-  const dataset = process.env.AXIOM_DATASET;
-  if (!token || !dataset) {
-    return {
-      status: "not_configured" as const,
-      missing: missingEnv(["AXIOM_QUERY_TOKEN", "AXIOM_DATASET"]),
-    };
-  }
-  const baseUrl = process.env.AXIOM_URL || "https://api.axiom.co";
   const endTime = new Date();
-  const startTime = new Date(endTime.getTime() - 60 * 60_000);
-  const results = await runAxiomQueries(
-    dataset,
-    async (apl): Promise<AxiomQueryResult> => {
-      try {
-        const response = await fetch(
-          `${baseUrl}/v1/datasets/_apl?format=tabular`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${token}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              apl,
-              startTime: startTime.toISOString(),
-              endTime: endTime.toISOString(),
-            }),
-            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-          },
-        );
-        if (!response.ok) {
-          return {
-            error: formatAxiomError(
-              response.status,
-              await response.text().catch(() => ""),
-            ),
-          };
-        }
-        return { rows: parseAxiomTabular(await response.json()) };
-      } catch (error) {
-        return { error: errorName(error) };
-      }
-    },
-  );
-  const errors = Object.values(results).flatMap((result) =>
-    "error" in result ? [result.error] : [],
-  );
-  if (errors.length === Object.keys(results).length) {
-    return {
-      status: "error" as const,
-      error: `every Axiom query failed (${[...new Set(errors)].join("; ")})`,
-    };
-  }
-  return { status: "ok" as const, summary: summarizeAxiom(results) };
+  return queryAxiomWindow({
+    startTime: new Date(endTime.getTime() - 60 * 60_000),
+    endTime,
+  });
 }
 
 async function querySentry() {
@@ -191,11 +137,6 @@ async function querySentry() {
 
 function missingEnv(names: string[]) {
   return names.filter((name) => !process.env[name]);
-}
-
-function errorName(error: unknown) {
-  if (error instanceof Error && error.name === "TimeoutError") return "timeout";
-  return error instanceof Error ? error.name : "unknown error";
 }
 
 function safeJson(raw: string) {

@@ -48,10 +48,7 @@ import { InboxStyleCard } from "@/app/(app)/[emailAccountId]/mail/InboxStylePick
 import { CueLabelsCard } from "@/components/CueLabelsCleanup";
 import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
 import { TodayIntroLine } from "@/app/(app)/[emailAccountId]/mail/TodayIntroLine";
-import {
-  MailListPlaceholder,
-  MailLoadingNote,
-} from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
+import { MailLoadingNote } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
 import { useTranslateThread } from "@/app/(app)/[emailAccountId]/mail/use-thread-translation";
 import { printThread } from "@/app/(app)/[emailAccountId]/mail/print-thread";
@@ -80,6 +77,7 @@ import { MailProductFrame } from "@inboxzero/mail-ui/MailProductFrame";
 import { MailEngineConnectionBanner } from "@/utils/mail-engine/MailEngineConnectionBanner";
 import { useThreadSelection } from "@/app/(app)/[emailAccountId]/mail/use-thread-selection";
 import { useWarmNeighbourThreads } from "@/app/(app)/[emailAccountId]/mail/use-warm-neighbour-threads";
+import { useReaderFocusHandoff } from "@/app/(app)/[emailAccountId]/mail/use-reader-focus-handoff";
 import { useMailPerformanceTelemetry } from "@/app/(app)/[emailAccountId]/mail/use-mail-performance-telemetry";
 import {
   isThreadArchived,
@@ -91,6 +89,7 @@ import { MailLayout, MailSplitFilterKind } from "@/generated/prisma/enums";
 import { useSidebar } from "@/components/ui/sidebar";
 import { useChat } from "@/providers/ChatProvider";
 import { useAtomValue, useSetAtom } from "jotai";
+import { openThreadAtom } from "@/store/open-thread";
 import {
   commandPaletteOpenAtom,
   mailCommandContextAtom,
@@ -128,9 +127,16 @@ import {
   mailSplitToThreadsQuery,
   mailTypeToThreadsQuery,
 } from "@/utils/split-inbox/split-query";
-import { isInboxStyleLandingSplit } from "@/utils/split-inbox/inbox-styles";
+import { findLandingSplit } from "@/utils/split-inbox/inbox-styles";
 import { getActionErrorMessage } from "@/utils/error";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
+import {
+  InboxPreviewList,
+  useFetchOpenedPreviewThreads,
+  useRetireInboxPreview,
+} from "@/app/(app)/[emailAccountId]/mail/InboxPreviewList";
+import { markLocalMailboxSynced } from "@/utils/mail-engine/local-mailbox-cookie";
+import { showMailView } from "@/app/(app)/[emailAccountId]/mail/show-mail-view";
 import {
   getMailNavView,
   type MailSlugs,
@@ -299,6 +305,10 @@ export function MailShell() {
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [isDesktopApp, setIsDesktopApp] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  // The bottom bar's More opens the reader's menu while its trigger is
+  // hidden, so closing hands focus back to that button instead.
+  const barMoreButtonRef = useRef<HTMLButtonElement>(null);
+  const menuOpenedFromBarRef = useRef(false);
   const [isTourOpen, setIsTourOpen] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const isLargeScreen = useIsLargeScreen();
@@ -555,14 +565,12 @@ export function MailShell() {
   );
   // With an inbox style chosen, mail opens on its Primary or Focused tab
   // rather than All, which shows the same mail and more.
+  const landingSplit = findLandingSplit(splits);
   const activeSplit =
-    splits.find((split) => split.id === activeSplitId) ??
-    splits.find(isInboxStyleLandingSplit) ??
-    splits[0];
+    splits.find((split) => split.id === activeSplitId) ?? landingSplit;
   const displayedActiveSplitId = activeSplit?.id ?? null;
   // The tab mail opens on reads as plain `/inbox`; the others by their slug.
-  const landingSplitId =
-    (splits.find(isInboxStyleLandingSplit) ?? splits[0])?.id ?? null;
+  const landingSplitId = landingSplit?.id ?? null;
   const setActiveSplitId = useCallback(
     (splitId: string | null) => {
       // A tab created a moment ago has no slug until settings reload; its id
@@ -647,7 +655,26 @@ export function MailShell() {
   const isFirstSync = isAllAccounts
     ? Boolean(allInboxesFirstSyncMessage)
     : accountThreadState.isFirstSync;
+  // Only the whole inbox can be shown from the server's newest-first list
+  // while the engine syncs; a tab or search would show different mail.
+  const showsWholeInbox =
+    !isAllAccounts &&
+    !searchQuery &&
+    query.type === "inbox" &&
+    Object.keys(query).length === 1;
+  // Once the local mailbox has this account's mail, later visits read it from
+  // there, so the server stops fetching the inbox for them, and the rows it
+  // fetched at sign-in are put away for good.
+  const hasLocalMail = !isAllAccounts && accountThreadState.threads.length > 0;
+  const retireInboxPreview = useRetireInboxPreview();
+  useEffect(() => {
+    if (!hasLocalMail) return;
+    markLocalMailboxSynced(emailAccountId);
+    retireInboxPreview();
+  }, [hasLocalMail, emailAccountId, retireInboxPreview]);
+  useFetchOpenedPreviewThreads();
   const listPlaceholderMessage = getListPlaceholderMessage({
+    engineStarting: !client,
     isAllAccounts,
     allInboxesFirstSyncMessage,
     isFirstSync,
@@ -730,6 +757,12 @@ export function MailShell() {
   const deferredReaderSelection = useDeferredValue(openThreadSelection);
   const readerThreadKey = getThreadSelectionKey(deferredReaderSelection);
   const openReaderThreadKey = getThreadSelectionKey(openThreadSelection);
+  const {
+    listRef: listSectionRef,
+    readerRef: readerColumnRef,
+    focusReaderWhenShown,
+    focusListWhenShown,
+  } = useReaderFocusHandoff(openReaderThreadKey);
   useLayoutEffect(() => {
     if (openReaderThreadKey) setIsMenuOpen(false);
   }, [openReaderThreadKey]);
@@ -751,13 +784,28 @@ export function MailShell() {
       id: deferredReaderSelection?.threadId ?? null,
       emailAccountId: deferredReaderSelection?.emailAccountId,
     },
-    { includeDrafts: true, localMail: true },
+    { includeDrafts: true, fillConversation: true, localMail: true },
   );
   // Withheld until the deferred id catches up, so a fast J/K can't pair the new
   // thread's header with the previous thread's body.
   const openMessages = readerSelectionSettled
     ? (openThreadData?.thread.messages ?? NO_MESSAGES)
     : NO_MESSAGES;
+  // The assistant chat lives outside this screen; it reads the open thread
+  // from here so a question about "this email" names it.
+  const setReaderOpenThread = useSetAtom(openThreadAtom);
+  const latestOpenMessageId = openMessages
+    .filter((message) => !message.labelIds?.includes(GmailLabel.DRAFT))
+    .at(-1)?.id;
+  useEffect(() => {
+    setReaderOpenThread(
+      openThreadSelection && {
+        ...openThreadSelection,
+        messageId: latestOpenMessageId,
+      },
+    );
+    return () => setReaderOpenThread(null);
+  }, [openThreadSelection, latestOpenMessageId, setReaderOpenThread]);
   const openExternalUrl = useMemo(() => {
     const message = openMessages.at(-1);
     if (!message || !readerEmailAccount) return;
@@ -1064,7 +1112,23 @@ export function MailShell() {
     setReplyToMessageId(undefined);
     setForwardToMessageId(undefined);
     selection.clear();
-    setOpenThread(getListThreadSelection(thread, emailAccountId));
+    const nextSelection = getListThreadSelection(thread, emailAccountId);
+    const nextKey = getThreadSelectionKey(nextSelection);
+    // Split layout keeps the list, and focus with it.
+    if (layout === "list" && nextKey) focusReaderWhenShown(nextKey);
+    setOpenThread(nextSelection);
+  });
+
+  // Selecting from a row (its checkbox, Space, Shift+click, a touch hold)
+  // also moves the cursor there, as a click or J/K does, so focus and the
+  // highlight stay on one row and Enter and J/K carry on from it.
+  const toggleSelectAt = useStableCallback((index: number) => {
+    setFocusedIndex(index);
+    selection.toggle(index);
+  });
+  const selectRangeAt = useStableCallback((index: number) => {
+    setFocusedIndex(index);
+    selection.selectRangeTo(index);
   });
 
   const move = useCallback(
@@ -1393,8 +1457,9 @@ export function MailShell() {
       router.push(prefixPath(emailAccountId, "/home"));
       return;
     }
+    focusListWhenShown();
     setOpenThread(null);
-  }, [openedFrom, router, emailAccountId, setOpenThread]);
+  }, [openedFrom, router, emailAccountId, setOpenThread, focusListWhenShown]);
 
   const senderCommands =
     senderCommandContext?.emailAccountId ===
@@ -1521,12 +1586,11 @@ export function MailShell() {
 
   // Same destination as the sidebar row, so the view starts fresh.
   function goToMailbox(type: string) {
-    router.push(
-      buildMailPath({
-        accountIndex: mailLocation.accountIndex,
-        view: getMailNavView({ kind: "type", type }, mailSlugs),
-      }),
-    );
+    const href = buildMailPath({
+      accountIndex: mailLocation.accountIndex,
+      view: getMailNavView({ kind: "type", type }, mailSlugs),
+    });
+    if (!showMailView(href)) router.push(href);
   }
 
   function openReply(toEveryone: boolean) {
@@ -1775,7 +1839,12 @@ export function MailShell() {
                   onSnooze:
                     targetsTrashed || targetsSpam ? undefined : snoozeTargets,
                   onDelete: trashTargets,
-                  onMore: () => setIsMenuOpen(true),
+                  onMore: () => {
+                    menuOpenedFromBarRef.current = true;
+                    setIsMenuOpen(true);
+                  },
+                  isMoreOpen: isMenuOpen,
+                  moreButtonRef: barMoreButtonRef,
                 }
               : null
           }
@@ -1813,6 +1882,7 @@ export function MailShell() {
         <div className="flex min-h-0 min-w-0 flex-1">
           {showList && (
             <section
+              ref={listSectionRef}
               className={
                 layout === "split"
                   ? "flex min-h-0 w-[clamp(258px,32vw,400px)] shrink-0 flex-col border-r border-border"
@@ -1953,9 +2023,10 @@ export function MailShell() {
                     }
                     loadingComponent={
                       searchQuery ? undefined : (
-                        <MailListPlaceholder
+                        <InboxPreviewList
                           message={listPlaceholderMessage}
                           layout={layout}
+                          enabled={showsWholeInbox}
                         />
                       )
                     }
@@ -1974,8 +2045,8 @@ export function MailShell() {
                       isSelected={selection.isSelected}
                       selectedCount={selection.selectedCount}
                       onOpenThread={openAt}
-                      onToggleSelect={selection.toggle}
-                      onSelectRangeTo={selection.selectRangeTo}
+                      onToggleSelect={toggleSelectAt}
+                      onSelectRangeTo={selectRangeAt}
                       showLoadMore={hasMore}
                       isLoadingMore={isLoadingMore}
                       onLoadMore={loadMore}
@@ -1997,7 +2068,10 @@ export function MailShell() {
           )}
 
           {showReader ? (
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <div
+              className="flex min-h-0 min-w-0 flex-1 flex-col"
+              ref={readerColumnRef}
+            >
               {showList ? null : (
                 <MailTitlebarNav
                   showHistory={isDesktopApp}
@@ -2037,6 +2111,11 @@ export function MailShell() {
                 onPrint={printOpenThread}
                 isMenuOpen={isMenuOpen}
                 onMenuOpenChange={setIsMenuOpen}
+                menuReturnFocusTo={() => {
+                  const openedFromBar = menuOpenedFromBarRef.current;
+                  menuOpenedFromBarRef.current = false;
+                  return openedFromBar ? barMoreButtonRef.current : null;
+                }}
                 enableMessageNavigation={!sidePanelThreadId}
                 thread={openThread ?? null}
                 threadId={openThreadId}
@@ -2185,16 +2264,19 @@ const ROUTE_KIND_NAMES: Partial<Record<MailUrlView["kind"], string>> = {
 // A first sync fetches the last few days before backfilling (see
 // utils/mail-api/source.ts), so the first wait says what's coming first.
 function getListPlaceholderMessage({
+  engineStarting,
   isAllAccounts,
   allInboxesFirstSyncMessage,
   isFirstSync,
   isOutlook,
 }: {
+  engineStarting: boolean;
   isAllAccounts: boolean;
   allInboxesFirstSyncMessage: string | null;
   isFirstSync: boolean;
   isOutlook: boolean;
 }) {
+  if (engineStarting) return "Opening your mailbox…";
   if (isAllAccounts) return allInboxesFirstSyncMessage ?? "Loading your mail…";
   if (isFirstSync && !isOutlook)
     return "Getting your last 3 days of mail first…";

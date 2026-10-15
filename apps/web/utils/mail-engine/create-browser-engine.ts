@@ -1,34 +1,25 @@
-import {
-  createMailEngine,
-  createHostRuntime,
-  type MailEngine,
-  type WorkAdmission,
-} from "@inboxzero/mail-core/engine";
-import {
-  classifyMailboxError,
-  type DroppedMailWork,
-} from "@inboxzero/mail-sqlite/recovery";
+import type { MailEngine, WorkAdmission } from "@inboxzero/mail-core/engine";
+import { classifyMailboxError } from "@inboxzero/mail-sqlite/mailbox-errors";
+import type { DroppedMailWork } from "@inboxzero/mail-sqlite/recovery";
 import type {
   MailboxView,
   QueryHandle,
   QuerySnapshot,
 } from "@inboxzero/mail-core/queries";
-import { createMailHttpRequest } from "@/utils/mail-engine/http";
-import { createRoutedBackendAdapter } from "@inboxzero/mail-core/protocol/routed-backend-adapter";
-import { createWasmMailStore } from "@/utils/mail-engine/wasm-sqlite";
 import {
   browserMailEngineCapabilities,
   pageConnectivityOnline,
   readPageMaxPendingOperations,
   requestSyncUnlessOffline,
-  shouldReleaseDeferredOnStart,
   type BrowserEngineStart,
   type WorkerObserveKind,
   type WorkerRequest,
   type WorkerResponse,
 } from "@/utils/mail-engine/worker-protocol";
-import { browserStoragePressure } from "@/utils/mail-engine/storage-pressure";
-import { finishPendingLocalMailboxWipe } from "@/utils/mail-engine/wipe-local-mailbox";
+import {
+  finishPendingLocalMailboxWipe,
+  isLocalMailboxWipePending,
+} from "@/utils/mail-engine/wipe-local-mailbox";
 import { createClientLogger } from "@/utils/logger-client";
 
 export { browserMailEngineCapabilities };
@@ -41,8 +32,16 @@ const BUSY_START_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 4000];
 // A start can itself wait out another tab's file lock, so retries stop once
 // the whole start has taken this long rather than multiplying that wait.
 const BUSY_START_BUDGET_MS = 10_000;
+// An early worker this tab never starts, as when another tab owns the engine,
+// is let go after this long.
+const PREWARMED_WORKER_IDLE_MS = 30_000;
 
-type BrowserEngineHooks = {
+let prewarmed: {
+  worker: Worker;
+  timer: ReturnType<typeof setTimeout>;
+} | null = null;
+
+export type BrowserEngineHooks = {
   /** Called when a corrupt mailbox is being rebuilt during start. */
   onRebuild?: () => void;
 };
@@ -97,82 +96,43 @@ async function startBrowserEngine(
       // Dedicated workers can fail in private mode or without module workers.
     }
   }
+  // The engine, its store and SQLite normally load in the worker only, so the
+  // page downloads them only on this fallback.
+  const { createInTabEngine } = await import(
+    "@/utils/mail-engine/in-tab-engine"
+  );
   return createInTabEngine(start, hooks);
 }
 
-async function createInTabEngine(
-  input: BrowserEngineStart,
-  hooks: BrowserEngineHooks,
-): Promise<BrowserMailEngine> {
-  const runtime = createHostRuntime({
-    storagePressure: browserStoragePressure,
-  });
-  const store = await createWasmMailStore({
-    persist: input.persist,
-    options: { maxPendingOperations: input.maxPendingOperations, runtime },
-    ownedAccountIds: input.ownedAccountIds,
-    onRebuild: hooks.onRebuild,
-    onDropped: logDroppedWork,
-  });
-  const ensureAccount: BrowserMailEngine["ensureAccount"] = async (account) => {
-    await store.ensureAccount({
-      accountId: account.accountId,
-      provider: account.provider,
-      generation: account.generation ?? account.accountId,
-    });
-  };
-  await ensureAccount(input);
-  const ports = createRoutedBackendAdapter({
-    requestFor: createMailHttpRequest,
-  });
-  const engine = createMailEngine({
-    store,
-    source: ports.source,
-    executor: ports.executor,
-    assistant: ports.assistant,
-    runtime,
-    ownerId: "browser-owner",
-  });
-  if (shouldReleaseDeferredOnStart(input.online)) {
-    await engine.requestSync([input.accountId]);
+/**
+ * Starts loading the engine worker and SQLite while the page is still
+ * hydrating, so the engine can open the mailbox as soon as it starts. The
+ * worker opens nothing until then, and none is started while a sign-out wipe
+ * is unfinished, since that wipe must come before any mailbox opens.
+ */
+export function prewarmMailEngineWorker() {
+  if (
+    prewarmed ||
+    !browserMailEngineCapabilities().worker ||
+    isLocalMailboxWipePending()
+  ) {
+    return;
   }
-  let stopped = false;
-  const loop = (async () => {
-    while (!stopped) {
-      try {
-        await engine.runUntil(Date.now() + 2000);
-      } catch {
-        await delay(1000);
-      }
-      await delay(250);
-    }
-  })();
-  const originalClose = engine.close.bind(engine);
-  const originalRequestSync = engine.requestSync.bind(engine);
-  return {
-    ...engine,
-    // Local autocomplete stays off the UI thread if dedicated workers fail.
-    queryContactSuggestions: undefined,
-    ensureAccount,
-    requestSync: (accountIds) =>
-      requestSyncUnlessOffline(pageConnectivityOnline(), () =>
-        originalRequestSync(accountIds),
-      ),
-    async close() {
-      stopped = true;
-      await originalClose();
-      await loop;
-    },
-  };
+  const worker = createEngineWorker();
+  const timer = setTimeout(() => {
+    if (prewarmed?.worker !== worker) return;
+    prewarmed = null;
+    worker.terminate();
+  }, PREWARMED_WORKER_IDLE_MS);
+  prewarmed = { worker, timer };
 }
 
 async function createWorkerOwnedEngine(
   input: BrowserEngineStart,
   hooks: BrowserEngineHooks,
 ): Promise<BrowserMailEngine> {
-  const worker = new Worker(new URL("./engine-worker.ts", import.meta.url), {
-    type: "module",
-  });
+  performance.mark("mail-engine:worker-create");
+  const worker = takePrewarmedWorker() ?? createEngineWorker();
   const pending = new Map<
     string,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
@@ -196,11 +156,18 @@ async function createWorkerOwnedEngine(
       logDroppedWork(message.drop);
       return;
     }
-    if (message.type === "snapshot") {
-      const observation = observations.get(message.handleId);
-      if (!observation) return;
-      observation.snapshot = message.snapshot;
-      for (const listener of observation.listeners) listener();
+    if (message.type === "snapshots") {
+      // Every view takes its new state before any listener runs, so the page
+      // renders the whole change once.
+      const changed = message.snapshots.flatMap(({ handleId, snapshot }) => {
+        const observation = observations.get(handleId);
+        if (!observation) return [];
+        observation.snapshot = snapshot;
+        return [observation];
+      });
+      for (const observation of changed) {
+        for (const listener of observation.listeners) listener();
+      }
       return;
     }
     const waiter = pending.get(message.id);
@@ -228,6 +195,7 @@ async function createWorkerOwnedEngine(
     worker.terminate();
     throw error;
   }
+  performance.mark("mail-engine:ready");
 
   function observe<T>(
     kind: WorkerObserveKind,
@@ -273,6 +241,8 @@ async function createWorkerOwnedEngine(
   return {
     queryContactSuggestions: (query) =>
       callWorker(worker, pending, "queryContactSuggestions", [query]),
+    searchMessages: (query) =>
+      callWorker(worker, pending, "searchMessages", [query]),
     observeMailbox: (query) => observe("mailbox", [query]),
     observeMailboxCounts: (query) => observe("mailboxCounts", [query]),
     observeMailboxWindow: (query) => {
@@ -307,6 +277,10 @@ async function createWorkerOwnedEngine(
       callWorker<void>(worker, pending, "ensureAccount", [account]),
     ensureMessageContent: (key) =>
       callWorker(worker, pending, "ensureMessageContent", [key]),
+    ensureConversationMessages: (key) =>
+      callWorker(worker, pending, "ensureConversationMessages", [key]),
+    releaseConversationMessages: (key) =>
+      callWorker<void>(worker, pending, "releaseConversationMessages", [key]),
     getDiagnostics: (accountId) =>
       callWorker(worker, pending, "getDiagnostics", [accountId]),
     purgeAccount: (accountId) =>
@@ -373,10 +347,24 @@ function callWorker<T>(
   }) as Promise<T>;
 }
 
-function logDroppedWork(drop: DroppedMailWork) {
+export function logDroppedWork(drop: DroppedMailWork) {
   logger.warn("Mailbox rebuild left out carried work", drop);
 }
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function takePrewarmedWorker() {
+  if (!prewarmed) return null;
+  clearTimeout(prewarmed.timer);
+  const { worker } = prewarmed;
+  prewarmed = null;
+  return worker;
+}
+
+function createEngineWorker() {
+  return new Worker(new URL("./engine-worker.ts", import.meta.url), {
+    type: "module",
+  });
 }

@@ -1,4 +1,5 @@
-import { Marked, type Token, type Tokens } from "marked";
+import { Marked, type MarkedExtension, type Token, type Tokens } from "marked";
+import { escapeHtml } from "./email-profile";
 import { toEmailStyledHtml } from "./email-styles";
 
 // Markdown's block structure, the part that plain text never has by accident.
@@ -10,17 +11,26 @@ const TABLE =
   /^[^\n]*\|[^\n]*\n[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)+\|?[ \t]*$/mu;
 const LINK = /\[[^\]\n]+\]\((?:https?:\/\/|mailto:)[^)\s]+\)/u;
 
-const markdown = new Marked({
+const MARKDOWN_OPTIONS: MarkedExtension = {
   async: false,
   breaks: true,
   gfm: true,
+  // Only the explicit forms. In pasted email a line over "--" is a
+  // signature and an indented paragraph is just indented, not a heading or
+  // code. Returning undefined skips marked's built-in rule.
+  tokenizer: {
+    code: () => undefined,
+    lheading: () => undefined,
+  },
   renderer: {
     // Raw HTML in pasted text is text the person wants to show, not markup.
     html: ({ text }) => escapeHtml(text),
     // Checkboxes are form controls, which mail clients drop.
     checkbox: ({ checked }) => (checked ? "☑ " : "☐ "),
   },
-});
+};
+
+const markdown = new Marked(MARKDOWN_OPTIONS);
 
 /** Whether plain text is clearly markdown rather than prose. */
 export function looksLikeMarkdown(text: string) {
@@ -36,13 +46,8 @@ export function looksLikeMarkdown(text: string) {
 // For text nobody typed, such as a model's: an image would load from wherever
 // it points as soon as it is shown, and track whoever opens the email. It is
 // written out as text instead, so nothing loads and nothing is hidden.
-const markdownWithoutImages = new Marked({
-  async: false,
-  breaks: true,
-  gfm: true,
+const markdownWithoutImages = new Marked(MARKDOWN_OPTIONS, {
   renderer: {
-    html: ({ text }) => escapeHtml(text),
-    checkbox: ({ checked }) => (checked ? "☑ " : "☐ "),
     image: ({ href, text }) => escapeHtml(describeLink(text, href)),
   },
 });
@@ -177,10 +182,3 @@ const NAMED_ENTITIES: Record<string, string> = {
   lt: "<",
   quot: '"',
 };
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/gu, "&amp;")
-    .replace(/</gu, "&lt;")
-    .replace(/>/gu, "&gt;");
-}

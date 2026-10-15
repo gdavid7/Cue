@@ -19,8 +19,10 @@ const {
   mockCreateUIMessageStreamResponse,
   mockConsumeStream,
   mockGetChatStreamContext,
+  mockRateLimitCount,
   streamState,
 } = vi.hoisted(() => ({
+  mockRateLimitCount: vi.fn(),
   mockAiProcessAssistantChat: vi.fn(),
   mockGetEmailAccountWithAi: vi.fn(),
   mockGetInboxStatsForChatContext: vi.fn(),
@@ -115,6 +117,10 @@ vi.mock("@/utils/ai/assistant/chat-response-guard", () => ({
   getToolFailureWarning: mockGetToolFailureWarning,
 }));
 
+vi.mock("@/utils/redis", () => ({
+  redis: { eval: mockRateLimitCount },
+}));
+
 // Stub the parts that would open Redis; keep the real database bookkeeping.
 vi.mock("@/utils/chat/active-run", async (importActual) => ({
   ...(await importActual<typeof import("@/utils/chat/active-run")>()),
@@ -130,6 +136,7 @@ import { POST } from "./route";
 describe("chat route rule freshness persistence", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRateLimitCount.mockResolvedValue(1);
 
     streamState.finishMessages = [
       {
@@ -236,6 +243,48 @@ describe("chat route rule freshness persistence", () => {
 
     expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
       expect.objectContaining({ supportsInlineEmailCards: true }),
+    );
+  });
+
+  it("lets the browser answer inbox searches only when it says it can", async () => {
+    await POST(createRequest(), { params: Promise.resolve({}) });
+
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ localMailSearch: undefined }),
+    );
+
+    await POST(createRequest("Any interviews?", { localMailSearch: true }), {
+      params: Promise.resolve({}),
+    });
+
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        localMailSearch: expect.objectContaining({
+          search: expect.any(Function),
+        }),
+      }),
+    );
+  });
+
+  it("passes on the thread the user has open, when the client sends one", async () => {
+    await POST(
+      createRequest("What's this about?", {
+        openThreadId: "t-42",
+        openMessageId: "m-7",
+      }),
+      { params: Promise.resolve({}) },
+    );
+
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        openThread: { threadId: "t-42", messageId: "m-7" },
+      }),
+    );
+
+    await POST(createRequest("And now?"), { params: Promise.resolve({}) });
+
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ openThread: undefined }),
     );
   });
 
@@ -438,6 +487,31 @@ describe("chat route rule freshness persistence", () => {
       where: { id: "chat-1", activeStreamId },
       data: { activeStreamId: null, activeStreamStartedAt: null },
     });
+  });
+
+  it("lets go of what the turn holds when the reply ends", async () => {
+    const cleanup = vi.fn();
+    mockAiProcessAssistantChat.mockImplementationOnce(async (args) => {
+      args.registerCleanup(cleanup);
+      return createAssistantStreamResult();
+    });
+
+    await POST(createRequest());
+
+    await vi.waitFor(() => expect(cleanup).toHaveBeenCalledTimes(1));
+  });
+
+  it("lets go of what the turn holds when setting it up fails", async () => {
+    const cleanup = vi.fn();
+    mockAiProcessAssistantChat.mockImplementationOnce(async (args) => {
+      args.registerCleanup(cleanup);
+      throw new Error("model down");
+    });
+
+    const response = await POST(createRequest());
+
+    expect(response.status).toBe(500);
+    expect(cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("marks chats with prior messages as having history", async () => {
@@ -764,6 +838,26 @@ describe("chat route rule freshness persistence", () => {
       consoleLogSpy.mockRestore();
       vi.unstubAllEnvs();
     }
+  });
+
+  it("counts each message against the user's chat rate limit", async () => {
+    await POST(createRequest());
+
+    expect(mockRateLimitCount).toHaveBeenCalledWith(
+      expect.any(String),
+      ["rate-limit:assistant-chat:user-1"],
+      ["300"],
+    );
+  });
+
+  it("stops a user over the chat rate limit before running the assistant", async () => {
+    mockRateLimitCount.mockResolvedValue(61);
+
+    await expect(POST(createRequest())).rejects.toMatchObject({
+      statusCode: 429,
+    });
+    expect(mockAiProcessAssistantChat).not.toHaveBeenCalled();
+    expect(prisma.chatMessage.create).not.toHaveBeenCalled();
   });
 });
 

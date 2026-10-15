@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
 import { buildDraftReplyBody } from "@/utils/email/reply-body";
 import { draftEmail } from "@/utils/gmail/mail";
-import { textToHtmlParagraphs } from "@/utils/string";
 
 vi.mock("@/utils/prisma");
 
@@ -44,14 +43,6 @@ describe("markdown links in an automatic draft", () => {
     expect(html).toContain("https://cal.example.com/ada");
     expect(text).toContain("https://cal.example.com/ada");
     expect(`${html}${text}`).not.toContain("](");
-  });
-
-  // Text that skips buildDraftReplyBody, such as the meeting follow-up, is
-  // escaped as written. Its prompt does not ask for markdown links.
-  it("are left as typed by the plain paragraph conversion", () => {
-    expect(textToHtmlParagraphs("[a](https://example.com)")).toBe(
-      "<p>[a](https://example.com)</p>",
-    );
   });
 });
 

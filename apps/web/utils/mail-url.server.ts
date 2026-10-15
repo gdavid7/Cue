@@ -7,7 +7,7 @@ import {
   withPageParams,
 } from "@/utils/mail-url";
 import { getMailSettings } from "@/utils/split-inbox/settings.server";
-import { isInboxStyleLandingSplit } from "@/utils/split-inbox/inbox-styles";
+import { findLandingSplit } from "@/utils/split-inbox/inbox-styles";
 
 /**
  * The signed-in user's accounts in the order they were connected. Position in
@@ -15,14 +15,22 @@ import { isInboxStyleLandingSplit } from "@/utils/split-inbox/inbox-styles";
  * breaks ties between accounts created in the same instant. Removing an
  * account shifts the ones after it down, as signing out of one does in Gmail.
  */
-export const getOrderedEmailAccountIds = cache(async (userId: string) => {
+export const getOrderedEmailAccounts = cache(async (userId: string) => {
   const accounts = await prisma.emailAccount.findMany({
     where: { userId },
-    select: { id: true },
+    select: { id: true, email: true, account: { select: { provider: true } } },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
-  return accounts.map((account) => account.id);
+  return accounts.map((account) => ({
+    id: account.id,
+    email: account.email,
+    provider: account.account.provider,
+  }));
 });
+
+export const getOrderedEmailAccountIds = cache(async (userId: string) =>
+  (await getOrderedEmailAccounts(userId)).map((account) => account.id),
+);
 
 /** Parameters the old `/{emailAccountId}/mail` address carried its view in. */
 const LEGACY_MAIL_PARAMS = [
@@ -96,7 +104,7 @@ async function getLegacyView(
   if (!splitId) return { kind: "inbox" };
   const { splits } = await getMailSettings({ emailAccountId });
   const slug = getSplitSlugs(splits).get(splitId);
-  const landing = splits.find(isInboxStyleLandingSplit) ?? splits[0];
+  const landing = findLandingSplit(splits);
   if (!slug || landing?.id === splitId) return { kind: "inbox" };
   return { kind: "split", slug };
 }

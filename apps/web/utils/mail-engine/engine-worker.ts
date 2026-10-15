@@ -2,8 +2,9 @@ import {
   createHostRuntime,
   createMailEngine,
 } from "@inboxzero/mail-core/engine";
+import { startEngineLoop } from "./engine-loop";
 import { createMailHttpRequest } from "./http";
-import { createWasmMailStore } from "./wasm-sqlite";
+import { createWasmMailStore, preloadSqlite } from "./wasm-sqlite";
 import {
   shouldReleaseDeferredOnStart,
   type BrowserEngineStart,
@@ -14,6 +15,10 @@ import { browserStoragePressure } from "./storage-pressure";
 import { createMailWorkerHost } from "./worker-session";
 import type { BrowserMailEngine } from "./create-browser-engine";
 import { createRoutedBackendAdapter } from "@inboxzero/mail-core/protocol/routed-backend-adapter";
+
+// Compiling sqlite-wasm takes a while and opens no files, so it starts as
+// soon as the worker loads rather than when the engine starts.
+preloadSqlite().catch(() => undefined);
 
 const host = createMailWorkerHost({
   createEngine: createWorkerEngine,
@@ -49,6 +54,7 @@ async function createWorkerEngine(
       self.postMessage({ type: "dropped", drop } satisfies WorkerResponse);
     },
   });
+  performance.mark("mail-engine:store-ready");
   const ensureAccount: BrowserMailEngine["ensureAccount"] = async (account) => {
     await store.ensureAccount({
       accountId: account.accountId,
@@ -71,29 +77,16 @@ async function createWorkerEngine(
   if (shouldReleaseDeferredOnStart(input.online)) {
     await created.requestSync([input.accountId]);
   }
-  let stopped = false;
-  const loop = (async () => {
-    while (!stopped) {
-      try {
-        await created.runUntil(Date.now() + 2000);
-      } catch {
-        await delay(1000);
-      }
-      await delay(250);
-    }
-  })();
+  const loop = startEngineLoop(created);
   const originalClose = created.close.bind(created);
   return {
     ...created,
     ensureAccount,
     async close() {
-      stopped = true;
+      // The loop stops first, so its turn neither waits out its deadline nor
+      // fails against the closed store and pauses before noticing.
+      await loop.stop();
       await originalClose();
-      await loop;
     },
   };
-}
-
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -19,7 +19,7 @@ vi.mock("@/utils/middleware", async () => {
   const { createWithEmailAccountTestMiddleware } = await vi.importActual<
     typeof import("@/__tests__/helpers")
   >("@/__tests__/helpers");
-  return createWithEmailAccountTestMiddleware();
+  return createWithEmailAccountTestMiddleware({ handleSafeErrors: true });
 });
 vi.mock("@/utils/user/get", () => ({
   getEmailAccountWithAi: vi.fn(async () => ({
@@ -53,7 +53,7 @@ describe("compose-assist route", () => {
     }));
   });
 
-  it("stops calling the model for an account after a burst of requests", async () => {
+  it("stops calling the model for a user after a burst of requests", async () => {
     const statuses: number[] = [];
     for (let index = 0; index < 200; index++) {
       const response = await POST(

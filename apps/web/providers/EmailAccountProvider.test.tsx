@@ -69,12 +69,42 @@ describe("EmailAccountProvider", () => {
     );
 
     render(
-      <EmailAccountProvider accountIds={["account-1", "account-2"]}>
+      <EmailAccountProvider accounts={SERVER_ACCOUNTS}>
         <AccountState />
       </EmailAccountProvider>,
     );
 
     expect(screen.getByTestId("account-id").textContent).toBe("account-2");
+    // The mail engine starts from this, so it must not wait on the fetch.
+    expect(screen.getByTestId("provider").textContent).toBe("microsoft");
+    // The server's list also names the address, so the list says "me" from
+    // the first paint rather than the user's own address.
+    expect(screen.getByTestId("user-email").textContent).toBe(
+      "two@example.com",
+    );
+    // A mailbox rebuild restores carried work only for these owned accounts,
+    // so the engine may start early only with the complete list.
+    expect(screen.getByTestId("account-ids").textContent).toBe(
+      "account-1,account-2",
+    );
+  });
+
+  it("leaves the provider unknown until accounts load without a server list", () => {
+    navigation.emailAccountId = "account-1";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+
+    render(
+      <EmailAccountProvider>
+        <AccountState />
+      </EmailAccountProvider>,
+    );
+
+    // The mail engine waits for a provider, and with it the owned accounts.
+    expect(screen.getByTestId("provider").textContent).toBe("");
+    expect(screen.getByTestId("account-ids").textContent).toBe("");
   });
 
   it("remembers the account a /mail/u/{n} address opened", async () => {
@@ -88,7 +118,7 @@ describe("EmailAccountProvider", () => {
     );
 
     render(
-      <EmailAccountProvider accountIds={["account-1", "account-2"]}>
+      <EmailAccountProvider accounts={SERVER_ACCOUNTS}>
         <AccountState />
       </EmailAccountProvider>,
     );
@@ -275,8 +305,14 @@ describe("EmailAccountProvider", () => {
   });
 });
 
+const SERVER_ACCOUNTS = [
+  { id: "account-1", email: "one@example.com", provider: "google" },
+  { id: "account-2", email: "two@example.com", provider: "microsoft" },
+];
+
 function AccountState() {
-  const { emailAccountId, isLoading } = useAccount();
+  const { accountIds, emailAccountId, isLoading, provider, userEmail } =
+    useAccount();
 
   return (
     <span>
@@ -284,6 +320,9 @@ function AccountState() {
         ? "loading"
         : `ready ${emailAccountId ? "with" : "without"} an account`}
       <span data-testid="account-id">{emailAccountId}</span>
+      <span data-testid="provider">{provider}</span>
+      <span data-testid="user-email">{userEmail}</span>
+      <span data-testid="account-ids">{accountIds.join(",")}</span>
     </span>
   );
 }

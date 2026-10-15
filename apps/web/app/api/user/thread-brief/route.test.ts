@@ -1,0 +1,60 @@
+import { NextRequest } from "next/server";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  rateLimitCount: vi.fn(),
+  getThreadBrief: vi.fn(),
+}));
+
+vi.mock("server-only", () => ({}));
+vi.mock("@/utils/redis", () => ({
+  redis: { eval: mocks.rateLimitCount },
+}));
+vi.mock("@/utils/home/get-thread-brief", () => ({
+  getThreadBrief: mocks.getThreadBrief,
+}));
+vi.mock("@/utils/middleware", async () => {
+  const { createWithEmailProviderTestMiddleware } = await vi.importActual<
+    typeof import("@/__tests__/helpers")
+  >("@/__tests__/helpers");
+
+  return createWithEmailProviderTestMiddleware({}, { handleSafeErrors: true });
+});
+
+import { GET } from "./route";
+
+describe("GET /api/user/thread-brief", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getThreadBrief.mockResolvedValue(null);
+  });
+
+  it("briefs threads for a user under the rate limit", async () => {
+    mocks.rateLimitCount.mockResolvedValue(1);
+
+    const response = await get();
+
+    expect(response.status).toBe(200);
+    expect(mocks.rateLimitCount).toHaveBeenCalledWith(
+      expect.any(String),
+      ["rate-limit:thread-brief:user-1"],
+      ["300"],
+    );
+  });
+
+  it("stops briefing threads for a user over the rate limit", async () => {
+    mocks.rateLimitCount.mockResolvedValue(121);
+
+    const response = await get();
+
+    expect(response.status).toBe(429);
+    expect(mocks.getThreadBrief).not.toHaveBeenCalled();
+  });
+});
+
+function get() {
+  return GET(
+    new NextRequest("http://localhost:3000/api/user/thread-brief?threadId=t1"),
+    { params: Promise.resolve({}) },
+  );
+}

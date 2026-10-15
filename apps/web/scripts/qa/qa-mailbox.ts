@@ -1,5 +1,6 @@
 import { ImapFlow, type MessageStructureObject } from "imapflow";
 import { createTransport } from "nodemailer";
+import MailComposer from "nodemailer/lib/mail-composer";
 
 // The production robot's own Gmail account, reached with a Google app
 // password. App passwords do not expire like the OAuth app's Testing-mode
@@ -117,6 +118,75 @@ export async function pruneReplyProbes(
           subject: QA_PROBE_SUBJECT_PREFIX,
           before: new Date(Date.now() - olderThanDays * 86_400_000),
         },
+        { uid: true },
+      );
+      if (!uids || uids.length === 0) return 0;
+      await client.messageMove(uids, trash, { uid: true });
+      return uids.length;
+    } finally {
+      lock.release();
+    }
+  });
+}
+
+/**
+ * Writes messages straight into INBOX as unread mail from their (example.com)
+ * senders. Gmail records an appended message like delivered mail, with a new
+ * history record, so Cue's push notifications fire for it too.
+ */
+export async function appendInboxMessages(
+  credentials: QaMailboxCredentials,
+  messages: {
+    subject: string;
+    from: { name: string; address: string };
+    text: string;
+    date?: Date;
+    messageId: string;
+  }[],
+) {
+  if (messages.length === 0) return;
+  await withImap(credentials, async (client) => {
+    for (const message of messages) {
+      const date = message.date ?? new Date();
+      const raw = await new MailComposer({
+        from: message.from,
+        to: credentials.email,
+        subject: message.subject,
+        text: message.text,
+        date,
+        messageId: message.messageId,
+        headers: { [QA_SEED_HEADER]: "journey" },
+      })
+        .compile()
+        .build();
+      await client.append("INBOX", raw, [], date);
+    }
+  });
+}
+
+/**
+ * Moves every message whose subject has all of `subjectWords` to Trash, from
+ * every folder but Spam. Gmail search matches whole words, so the words must
+ * be ones only the robot's own subjects contain.
+ */
+export async function trashMessagesWithSubject(
+  credentials: QaMailboxCredentials,
+  subjectWords: string[],
+) {
+  const words = subjectWords.map((word) => word.replaceAll(/[^a-z0-9]/gi, ""));
+  if (words.length === 0 || words.some((word) => !word)) {
+    throw new Error("Refusing to trash mail without specific subject words");
+  }
+  return withImap(credentials, async (client) => {
+    const allMail = await findSpecialMailbox(client, "\\All");
+    const trash = await findSpecialMailbox(client, "\\Trash");
+    if (!allMail || !trash) {
+      throw new Error("Gmail All Mail or Trash folder not found over IMAP");
+    }
+    const lock = await client.getMailboxLock(allMail);
+    try {
+      const uids = await client.search(
+        { gmraw: `subject:(${words.join(" ")})` },
         { uid: true },
       );
       if (!uids || uids.length === 0) return 0;

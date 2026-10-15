@@ -253,7 +253,9 @@ describe("getThreadContext", () => {
         id: "m2",
         threadId: "handoff",
         from: `David <${USER}>`,
-        textPlain: "Tracking it in https://acme.atlassian.net/browse/OPS-12.",
+        // Quotes Nora's link; it stays hers.
+        textPlain:
+          "Tracking it in https://acme.atlassian.net/browse/OPS-12.\n\n> Notes are in https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/edit",
         textHtml: "",
       }),
     ]);
@@ -265,8 +267,14 @@ describe("getThreadContext", () => {
       expect.objectContaining({
         signals: {
           links: [
-            "https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/edit",
-            "https://acme.atlassian.net/browse/OPS-12",
+            {
+              url: "https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/edit",
+              messageId: "m1",
+            },
+            {
+              url: "https://acme.atlassian.net/browse/OPS-12",
+              messageId: "m2",
+            },
           ],
           senderEmail: "nora@northwind.com",
         },

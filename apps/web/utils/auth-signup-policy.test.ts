@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  assertAllowedAuthSignupEmail,
-  isAllowedAuthSignupEmail,
-} from "./auth-signup-policy";
+import { isAllowedAuthSignupEmail } from "./auth-signup-policy";
 
 describe("isAllowedAuthSignupEmail", () => {
   it("allows all sign-ups when no allowlist is configured", () => {
@@ -41,15 +38,5 @@ describe("isAllowedAuthSignupEmail", () => {
         allowedDomains: ["company.com"],
       }),
     ).toBe(false);
-  });
-});
-
-describe("assertAllowedAuthSignupEmail", () => {
-  it("throws the login error code when sign-up is blocked", () => {
-    expect(() =>
-      assertAllowedAuthSignupEmail("user@outside.com", {
-        allowedDomains: ["company.com"],
-      }),
-    ).toThrowError("signup_not_allowed");
   });
 });

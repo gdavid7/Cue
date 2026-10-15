@@ -49,6 +49,10 @@ export function SelectAllCheckbox({
   );
 }
 
-/** Shared by the row checkboxes so select-all lines up with them and matches. */
+/**
+ * Shared by the row checkboxes so select-all lines up with them and matches.
+ * The muted-foreground border keeps an empty box at 4:1 or more against the
+ * rows in both themes; `--input` is about 1.1:1 in light.
+ */
 export const mailCheckboxClassName =
-  "size-3.5 rounded border-input data-[state=checked]:border-primary data-[state=indeterminate]:border-primary [&_svg]:size-2.5";
+  "size-3.5 rounded border-muted-foreground data-[state=checked]:border-primary data-[state=indeterminate]:border-primary [&_svg]:size-2.5";

@@ -28,6 +28,11 @@ import {
   runOutlookSearch,
 } from "@/utils/outlook/assistant-search";
 import { sleep } from "@/utils/sleep";
+import {
+  isLocalPageToken,
+  SEARCH_INBOX_MAX_RESULTS,
+} from "@/utils/actions/assistant-local-search.validation";
+import type { LocalMailSearch } from "@/utils/ai/assistant/local-mail-search";
 import { archiveCategory } from "@/utils/categorize/senders/archive-category";
 import { getCategoryOverview } from "@/utils/categorize/senders/get-category-overview";
 import { startBulkCategorization } from "@/utils/categorize/senders/start-bulk-categorization";
@@ -54,7 +59,6 @@ import { microsoftGraphPageTokenSchema } from "@/utils/outlook/page-token";
 import { validateUserAndAiAccess } from "@/utils/user/validate";
 import { SafeError } from "@/utils/error";
 
-const SEARCH_INBOX_MAX_RESULTS = 20;
 const MAX_SENDER_CATEGORIZATION_WAIT_MS = 1500;
 const recipientListSchema = z
   .string()
@@ -134,6 +138,8 @@ type InboxToolOptions = {
   emailAccountId: string;
   provider: string;
   logger: Logger;
+  /** The chat's browser, when it can answer searches from its local mail. */
+  localMailSearch?: LocalMailSearch;
 };
 
 type ProviderToolFactory = (options: InboxToolOptions) => unknown;
@@ -566,6 +572,7 @@ const gmailSearchInboxTool = ({
   emailAccountId,
   provider,
   logger,
+  localMailSearch,
 }: InboxToolOptions) =>
   tool({
     description:
@@ -575,27 +582,64 @@ const gmailSearchInboxTool = ({
       trackToolCall({ tool: "search_inbox", email, logger });
 
       const { query, limit, pageToken } = input;
+      const maxResults = limit ?? SEARCH_INBOX_MAX_RESULTS;
+      const localPage = isLocalPageToken(pageToken);
 
       try {
-        const emailProvider = await createEmailProvider({
+        const emailProviderPromise = createEmailProvider({
           emailAccountId,
           provider,
           logger,
         });
+        // Awaited below; this only keeps a failure during the local search
+        // from counting as unhandled.
+        emailProviderPromise.catch(() => undefined);
+        // A Gmail page walk stays on Gmail; a local one stays local.
+        const local =
+          localMailSearch && (!pageToken || localPage)
+            ? await localMailSearch.search({
+                query,
+                limit: maxResults,
+                pageToken: pageToken ?? undefined,
+              })
+            : null;
+        if (localPage && !local)
+          return {
+            queryUsed: query,
+            error:
+              "The next page of this search is no longer available; run the search again without pageToken.",
+            searchFeedback: {
+              message: "Local search page unavailable",
+              retryable: true,
+            },
+          };
 
-        const [searchResult, labels] = await Promise.all([
-          emailProvider.searchMessages({
-            query,
-            maxResults: limit ?? SEARCH_INBOX_MAX_RESULTS,
-            pageToken: pageToken ?? undefined,
-          }),
-          getLabelsForSearchResults({ emailProvider, logger }),
-        ]);
+        const emailProvider = await emailProviderPromise;
+        const labelsPromise = getLabelsForSearchResults({
+          emailProvider,
+          logger,
+        });
+        const searchResult = local
+          ? {
+              messages: local.messages,
+              nextPageToken: local.nextPageToken,
+            }
+          : await emailProvider
+              .searchMessages({
+                query,
+                maxResults,
+                pageToken: pageToken ?? undefined,
+                allowPartial: true,
+              })
+              .then((result) => ({
+                ...result,
+                messages: result.messages.map(searchSourceFromMessage),
+              }));
 
         return formatSearchInboxResult({
           searchResult,
           queryUsed: query,
-          labels,
+          labels: await labelsPromise,
           taxonomyNamesKey: "labelNames",
         });
       } catch (error) {
@@ -678,7 +722,12 @@ const outlookSearchInboxTool = ({
 
         return {
           ...formatSearchInboxResult({
-            searchResult: searchResult.result,
+            searchResult: {
+              ...searchResult.result,
+              messages: searchResult.result.messages.map(
+                searchSourceFromMessage,
+              ),
+            },
             queryUsed: searchResult.queryUsed,
             labels,
             taxonomyNamesKey: "categoryNames",
@@ -1537,9 +1586,39 @@ async function getLabelsForSearchResults({
   });
 }
 
-type SearchMessagesResult = Awaited<
-  ReturnType<EmailProvider["searchMessages"]>
->;
+type SearchResultSource = {
+  id: string;
+  threadId: string;
+  externalUrl?: string;
+  subject: string;
+  from: string;
+  to: string;
+  snippet: string;
+  date: string;
+  labelIds: string[];
+  hasAttachments: boolean;
+};
+
+type SearchMessagesResult = {
+  messages: SearchResultSource[];
+  nextPageToken?: string;
+  unloadedMessages?: number;
+};
+
+function searchSourceFromMessage(message: ParsedMessage): SearchResultSource {
+  return {
+    id: message.id,
+    threadId: message.threadId,
+    externalUrl: message.externalUrl,
+    subject: message.subject,
+    from: message.headers.from,
+    to: message.headers.to,
+    snippet: message.snippet,
+    date: message.date,
+    labelIds: message.labelIds || [],
+    hasAttachments: Boolean(message.attachments?.length),
+  };
+}
 
 function formatSearchInboxResult({
   searchResult,
@@ -1562,17 +1641,20 @@ function formatSearchInboxResult({
     totalReturned: items.length,
     nextPageToken: searchResult.nextPageToken,
     hasMore: Boolean(searchResult.nextPageToken),
+    ...(searchResult.unloadedMessages
+      ? { incomplete: { unloadedMessages: searchResult.unloadedMessages } }
+      : {}),
     summary: summarizeSearchResults(items),
     messages: items,
   };
 }
 
 function mapMessageForSearchResult(
-  message: ParsedMessage,
+  message: SearchResultSource,
   labelsById: Map<string, string>,
   taxonomyNamesKey: "categoryNames" | "labelNames",
 ) {
-  const labelIds = message.labelIds || [];
+  const labelIds = message.labelIds;
   const labelNames = labelIds.map(
     (labelId) => labelsById.get(labelId.toLowerCase()) || labelId,
   );
@@ -1586,14 +1668,14 @@ function mapMessageForSearchResult(
     threadId: message.threadId,
     externalUrl: message.externalUrl,
     subject: message.subject,
-    from: message.headers.from,
-    to: message.headers.to,
+    from: message.from,
+    to: message.to,
     snippet: message.snippet,
     date: message.date,
     [taxonomyNamesKey]: labelNames,
     category,
     isUnread,
-    hasAttachments: Boolean(message.attachments?.length),
+    hasAttachments: message.hasAttachments,
   };
 }
 

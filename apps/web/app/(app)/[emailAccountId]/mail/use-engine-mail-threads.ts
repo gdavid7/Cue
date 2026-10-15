@@ -15,11 +15,16 @@ import type { ThreadsQuery } from "@/utils/threads/validation";
 import { conversationSummaryToListThread } from "@/utils/mail-engine/list-thread";
 import { threadsQueryToConversationQuery } from "@/utils/mail-engine/threads-query";
 import {
+  applyOptimisticTriage,
+  useOptimisticTriage,
+} from "@/utils/mail-engine/optimistic-triage";
+import {
   getFirstSyncAccountIds,
   isMetadataCoverageComplete,
 } from "@/utils/mail-engine/coverage";
 
 const EMPTY_THREADS: ListThread[] = [];
+const NO_CONVERSATIONS: ConversationSummary[] = [];
 const NO_ACCOUNT_IDS: string[] = [];
 const NO_LABELS_BY_ACCOUNT: Record<string, EmailLabels> = {};
 
@@ -92,26 +97,43 @@ export function useEngineMailThreads({
     [firstSyncAccountKey],
   );
 
+  // Archive, read and star show before the engine has written them.
+  const optimisticTriage = useOptimisticTriage(client);
+  const conversations = useMemo(
+    () =>
+      applyOptimisticTriage(
+        mailbox.data?.conversations ?? NO_CONVERSATIONS,
+        conversationQuery.predicate,
+        optimisticTriage,
+      ),
+    [
+      mailbox.data?.conversations,
+      conversationQuery.predicate,
+      optimisticTriage,
+    ],
+  );
+
   const previousThreads = useRef<PreviousThreads>({
     rows: new Map(),
     threads: EMPTY_THREADS,
   });
   const threads = useMemo(() => {
     if (!client || !enabled) return EMPTY_THREADS;
-    const conversations = mailbox.data?.conversations;
-    if (!conversations?.length) return EMPTY_THREADS;
+    if (!conversations.length) return EMPTY_THREADS;
     return reuseUnchangedThreads(
       previousThreads.current,
       conversations,
       accounts,
     );
-  }, [accounts, client, enabled, mailbox.data?.conversations]);
+  }, [accounts, client, enabled, conversations]);
 
+  // The mail screen shows while the engine starts, and has no answer yet.
+  const engineStarting = enabled && !client;
   return {
     threads,
-    hasRemoteResponse: mailbox.status !== "loading",
+    hasRemoteResponse: !engineStarting && mailbox.status !== "loading",
     searchError: undefined,
-    isLoading: enabled && Boolean(client) && mailbox.status === "loading",
+    isLoading: engineStarting || (enabled && mailbox.status === "loading"),
     error: mailboxQueryError(mailbox.error),
     hasMore: mailbox.canLoadMore,
     isLoadingMore: mailbox.isLoadingMore,

@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  ActionType,
+  GroupItemType,
+  LogicalOperator,
+} from "@/generated/prisma/enums";
 import { messageContextSchema } from "@/utils/ai/assistant/chat-context-validation";
 import { inlineEmailActionSchema } from "@/utils/ai/assistant/inline-email-actions";
 
@@ -147,6 +152,93 @@ export type ConfirmAssistantCreateRuleBody = z.infer<
   typeof confirmAssistantCreateRuleBody
 >;
 
+// The confirmed apply uses these output fields (what the card showed), never
+// the raw tool input, so the user approves exactly what gets written.
+export const pendingUpdateRuleToolOutputSchema = z.object({
+  success: z.literal(true),
+  actionType: z.literal("update_rule"),
+  requiresConfirmation: z.literal(true),
+  confirmationState: z.enum(["pending", "processing", "confirmed"]),
+  confirmationProcessingAt: z.string().optional(),
+  riskMessages: z.array(z.string()),
+  ruleId: z.string().trim().min(1),
+  ruleFingerprint: z.string().min(1),
+  originalName: z.string(),
+  updatedName: z.string().trim().min(1),
+  originalEnabled: z.boolean(),
+  updatedEnabled: z.boolean(),
+  updatedConditions: z
+    .object({
+      aiInstructions: z.string().optional(),
+      clearAiInstructions: z.boolean().optional(),
+      static: z
+        .object({
+          from: z.string().nullish(),
+          to: z.string().nullish(),
+          subject: z.string().nullish(),
+        })
+        .nullish(),
+      conditionalOperator: z
+        .enum([LogicalOperator.AND, LogicalOperator.OR])
+        .nullish(),
+    })
+    .optional(),
+  updatedActions: z
+    .array(
+      z.object({
+        type: z.nativeEnum(ActionType),
+        fields: z.record(z.string(), z.string().nullable()).nullish(),
+        delayInMinutes: z.number().nullish(),
+      }),
+    )
+    .min(1)
+    .optional(),
+  confirmationResult: z
+    .object({
+      ruleId: z.string().trim().min(1),
+      confirmedAt: z.string().min(1),
+    })
+    .optional(),
+});
+
+export const confirmAssistantUpdateRuleBody = confirmAssistantActionBaseBody;
+
+export const pendingLearnedPatternsToolOutputSchema = z.object({
+  success: z.literal(true),
+  actionType: z.literal("update_learned_patterns"),
+  requiresConfirmation: z.literal(true),
+  confirmationState: z.enum(["pending", "processing", "confirmed"]),
+  confirmationProcessingAt: z.string().optional(),
+  riskMessages: z.array(z.string()),
+  ruleId: z.string().trim().min(1),
+  ruleName: z.string(),
+  ruleFingerprint: z.string().min(1),
+  patterns: z
+    .array(
+      z.object({
+        type: z.nativeEnum(GroupItemType),
+        value: z.string().min(1),
+        exclude: z.boolean().optional(),
+      }),
+    )
+    .min(1),
+  outboundActions: z.array(
+    z.object({
+      type: z.string(),
+      fields: z.record(z.string(), z.string().nullable()).nullish(),
+    }),
+  ),
+  confirmationResult: z
+    .object({ ruleId: z.string(), confirmedAt: z.string().min(1) })
+    .optional(),
+});
+export type PendingLearnedPatternsToolOutput = z.infer<
+  typeof pendingLearnedPatternsToolOutputSchema
+>;
+
+export const confirmAssistantLearnedPatternsBody =
+  confirmAssistantActionBaseBody;
+
 export const pendingSaveMemoryToolOutputSchema = z.object({
   success: z.literal(true),
   actionType: z.literal("save_memory"),
@@ -194,6 +286,11 @@ const assistantChatMessagePartSchema = z.discriminatedUnion("type", [
   assistantChatFilePartSchema,
 ]);
 
+const providerIdSchema = z
+  .string()
+  .trim()
+  .regex(/^[\w=+/.-]{1,200}$/);
+
 export const assistantInputSchema = z.object({
   id: z.string().trim().min(1),
   message: z.object({
@@ -210,6 +307,15 @@ export const assistantInputSchema = z.object({
   // Clients that can't render the assistant's inline email card markup would
   // show it as raw XML, so cards are opt-in per client.
   supportsInlineEmailCards: z.boolean().optional().default(false),
+  // The thread open in the reader as the message is sent, so "this email"
+  // has an id the assistant can use. It goes into the model's context, so it
+  // may only contain the characters provider thread ids use.
+  openThreadId: providerIdSchema.optional(),
+  // Its latest message, so the assistant can read the email itself.
+  openMessageId: providerIdSchema.optional(),
+  // The browser holds this account's mail locally and can answer the
+  // assistant's inbox searches from it.
+  localMailSearch: z.boolean().optional().default(false),
 });
 
 export type AssistantInput = z.infer<typeof assistantInputSchema>;

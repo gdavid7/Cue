@@ -10,6 +10,7 @@ import {
   decodeMailboxSyncCursor,
   encodeMailboxSyncCursor,
   InvalidMailboxSyncCursorError,
+  MAILBOX_SYNC_PAGE_MAX_MESSAGES,
 } from "@/utils/email/mailbox-sync";
 import type { EmailProvider, ProviderMailboxSearch } from "@/utils/email/types";
 import {
@@ -40,6 +41,7 @@ import {
   createGmailQuotaStats,
   currentGmailQuotaContext,
   getGmailCallDeferredError,
+  type GmailQuotaPriority,
   isGmailCallDeferredError,
   runWithGmailQuota,
   setGmailInitialSync,
@@ -85,6 +87,8 @@ type BootstrapToken = {
   afterMs?: number;
   catchUpFrom?: SyncPosition | null;
   folderId?: string | null;
+  /** The recent scan of a mailbox that has never synced, as after a sign-in. */
+  initial?: boolean;
   pageToken?: string;
   receivedAfterMs?: number;
   receivedBeforeMs?: number;
@@ -141,11 +145,12 @@ export function createEmailProviderMailboxSource(input: {
         },
       };
     },
-    async beginBootstrap({ afterMs, scope, session }) {
+    async beginBootstrap({ afterMs, initial, scope, session }) {
       try {
         const isHistory = isGmail && scope.id === GMAIL_HISTORY_SCOPE_ID;
         const token: BootstrapToken = {
           afterMs: afterMs ?? 0,
+          ...(initial && isGmail && !isHistory && { initial: true }),
           scopeId: scope.id,
           folderId: scopedFolderId(provider, scope),
           receivedAfterMs:
@@ -205,19 +210,21 @@ export function createEmailProviderMailboxSource(input: {
             }),
           });
         // The backfill only fills in older mail, so it yields to everything
-        // else; the primary scan fills the inbox the user is waiting on.
+        // else. The primary scan fills the inbox the user is waiting on, and
+        // after a sign-in the screen waits on its very first page.
+        let priority: GmailQuotaPriority = "sync";
+        if (isBackfill) priority = "background";
+        else if (token.initial && !token.pageToken) priority = "interactive";
         const syncPage = isGmail
-          ? await runWithGmailQuota(
-              { priority: isBackfill ? "background" : "sync" },
-              () =>
-                withGmailSyncBudget(
-                  {
-                    emailAccountId: accountId,
-                    priority: isBackfill ? "backfill" : "current",
-                    cost: gmailPageCost(maxResults),
-                  },
-                  listPage,
-                ),
+          ? await runWithGmailQuota({ priority }, () =>
+              withGmailSyncBudget(
+                {
+                  emailAccountId: accountId,
+                  priority: isBackfill ? "backfill" : "current",
+                  cost: gmailPageCost(maxResults),
+                },
+                listPage,
+              ),
             )
           : await listPage();
         if (isPrimaryGmailScan && !syncPage.nextPageToken)
@@ -320,10 +327,25 @@ export function createEmailProviderMailboxSource(input: {
             provider.name === "microsoft" && position.streamId !== "primary"
               ? position.streamId
               : undefined,
+          includeBodies: isGmail,
           limit: pageSize,
         });
         if (page.reset) {
           return { status: "reset_required", scopeId: position.streamId };
+        }
+        // A page without bodies carries metadata only, so a body-derived flag
+        // such as a meeting invitation must not stand in for the body.
+        // Bodies can be megabytes each, so one page carries a bounded number
+        // and the rest are hydrated in batches.
+        const withBodies = page.includesBodies
+          ? page.upsertedMessages.slice(0, MAILBOX_SYNC_PAGE_MAX_MESSAGES)
+          : [];
+        const { requiredHydration, bodies } = parsedMessageBodies(
+          accountId,
+          withBodies,
+        );
+        for (const message of page.upsertedMessages.slice(withBodies.length)) {
+          requiredHydration.push({ accountId, messageId: message.id });
         }
         return {
           status: "page" as const,
@@ -353,12 +375,8 @@ export function createEmailProviderMailboxSource(input: {
                 scopeId: position.streamId,
               })),
             ],
-            // Delta pages carry metadata only, so a body-derived flag such as
-            // a meeting invitation must not stand in for the body.
-            requiredHydration: page.upsertedMessages.map((message) => ({
-              accountId,
-              messageId: message.id,
-            })),
+            requiredHydration,
+            bodies,
             roundComplete: !page.hasMore,
           },
         };

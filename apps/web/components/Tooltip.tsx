@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ShortcutTooltipContent,
   type ShortcutTooltipItem,
@@ -18,6 +18,11 @@ interface TooltipProps {
   content?: string;
   contentComponent?: React.ReactNode;
   hide?: boolean;
+  /**
+   * Opens on a tap, for touch. Off for a control whose click acts at once:
+   * the tooltip would stay open and take the next Escape.
+   */
+  openOnClick?: boolean;
   shortcuts?: readonly ShortcutTooltipItem[];
   side?: "top" | "right" | "bottom" | "left";
 }
@@ -28,17 +33,26 @@ export const Tooltip = ({
   contentComponent,
   shortcuts,
   hide,
+  openOnClick = true,
   side,
 }: TooltipProps) => {
   // Make tooltip work on mobile with a click
   const [isOpen, setIsOpen] = useState(false);
+  useEffect(trackLastInput, []);
 
   if (hide) return children;
 
   return (
     <TooltipProvider delayDuration={200}>
       <ShadcnTooltip open={isOpen} onOpenChange={setIsOpen}>
-        <TooltipTrigger asChild onClick={() => setIsOpen(!isOpen)}>
+        <TooltipTrigger
+          asChild
+          onClick={openOnClick ? () => setIsOpen(!isOpen) : undefined}
+          onFocus={(event) => {
+            // Skips Radix's open-on-focus unless the user moved focus here.
+            if (!movedFocusByKeyboard()) event.preventDefault();
+          }}
+        >
           {children}
         </TooltipTrigger>
         <TooltipContent side={side}>
@@ -53,3 +67,42 @@ export const Tooltip = ({
     </TooltipProvider>
   );
 };
+
+// A tooltip opens on focus only when the user moved focus with Tab or the
+// arrow keys. Focus a dialog puts back as it closes, after Escape or a
+// click, would otherwise open one over the controls beside its trigger
+// and swallow their clicks.
+const NAVIGATION_KEYS = new Set([
+  "Tab",
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "Home",
+  "End",
+]);
+let lastInput: string | null = null;
+let isTrackingInput = false;
+
+function trackLastInput() {
+  if (isTrackingInput) return;
+  isTrackingInput = true;
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      lastInput = event.key;
+    },
+    true,
+  );
+  document.addEventListener(
+    "pointerdown",
+    () => {
+      lastInput = "pointer";
+    },
+    true,
+  );
+}
+
+function movedFocusByKeyboard() {
+  return lastInput !== null && NAVIGATION_KEYS.has(lastInput);
+}

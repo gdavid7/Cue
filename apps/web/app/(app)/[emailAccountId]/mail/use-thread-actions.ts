@@ -22,6 +22,8 @@ import {
 import { submitConversationChanges } from "@/utils/mail-engine/submit-conversations";
 import { admissionRejectionCopy } from "@/utils/mail-engine/admission-notice";
 
+const ENGINE_STARTING = "engine_starting";
+
 type UndoableAction = "archive" | "unarchive" | "trash";
 
 type ThreadSnapshot = {
@@ -104,9 +106,10 @@ export function useThreadActions({
       targets: ReturnType<typeof resolveTargets>,
       payload: ThreadMutationPayload,
     ) => {
-      if (!targets.length || !client) {
-        return { snapshots: [], rejectionCodes: [] };
-      }
+      if (!targets.length) return { snapshots: [], rejectionCodes: [] };
+      // The mail screen shows while the engine starts, so a triage can come
+      // before there is anything to queue it on.
+      if (!client) return { snapshots: [], rejectionCodes: [ENGINE_STARTING] };
       const change = mutationPayloadToChange(payload);
       if (!change) return { snapshots: [], rejectionCodes: [] };
       const snapshots: ThreadSnapshot[] = [];
@@ -480,5 +483,8 @@ function summarise(verb: string, count: number) {
 }
 
 function enqueueFailureCopy(generic: string, rejectionCodes: string[]) {
+  if (rejectionCodes[0] === ENGINE_STARTING) {
+    return "Mail is still starting. Try again in a moment.";
+  }
   return admissionRejectionCopy(rejectionCodes[0]) ?? generic;
 }

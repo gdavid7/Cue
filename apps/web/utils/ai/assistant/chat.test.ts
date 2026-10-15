@@ -9,7 +9,11 @@ import {
   loadFreshRuleContext,
 } from "@/utils/ai/assistant/chat";
 import { runWithAuditContext } from "@/utils/audit/context";
-import { currentGmailQuotaContext } from "@/utils/gmail/quota";
+import {
+  admitGmailCall,
+  currentGmailQuotaContext,
+  holdGmailInteractiveDemand,
+} from "@/utils/gmail/quota";
 import { toolCallAgentStream } from "@/utils/llms";
 
 const {
@@ -25,6 +29,13 @@ const {
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/llms", () => ({ toolCallAgentStream: vi.fn() }));
+const { mockReleaseDemand } = vi.hoisted(() => ({
+  mockReleaseDemand: vi.fn(async () => {}),
+}));
+vi.mock("@/utils/gmail/quota", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/gmail/quota")>()),
+  holdGmailInteractiveDemand: vi.fn(async () => mockReleaseDemand),
+}));
 vi.mock("@/utils/integration-action.server", () => ({
   isIntegrationActionEnabledForUserId: mockIsIntegrationActionEnabledForUserId,
 }));
@@ -329,6 +340,48 @@ describe("aiProcessAssistantChat setup", () => {
   });
 });
 
+describe("aiProcessAssistantChat open thread", () => {
+  async function modelMessagesFor(openThread?: {
+    threadId: string;
+    messageId?: string;
+  }) {
+    vi.clearAllMocks();
+    vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
+    await aiProcessAssistantChat({
+      messages: [{ role: "user", content: "what's this about?" }],
+      emailAccountId: "email-account-id",
+      user: getEmailAccount(),
+      openThread,
+      logger: createTestLogger(),
+    });
+    const [options] = vi.mocked(toolCallAgentStream).mock.calls[0];
+    return JSON.stringify(options.messages);
+  }
+
+  it("names the open thread and its latest message, and nothing more", async () => {
+    const messages = await modelMessagesFor({
+      threadId: "thread-42",
+      messageId: "msg-7",
+    });
+
+    expect(messages).toContain(
+      "[Automated context — not a message from the user] The user has this email open: threadId thread-42, latest messageId msg-7.",
+    );
+    // When to use the ids is the tools' to say.
+    expect(messages).not.toContain("pass this threadId");
+  });
+
+  it("names just the thread when its messages aren't known", async () => {
+    expect(await modelMessagesFor({ threadId: "thread-42" })).toContain(
+      "The user has this email open: threadId thread-42.",
+    );
+  });
+
+  it("says nothing about an open thread when none is open", async () => {
+    expect(await modelMessagesFor()).not.toContain("has this email open");
+  });
+});
+
 describe("aiProcessAssistantChat inbox snapshot", () => {
   it("follows the caller's first-turn flag rather than counting user-role messages", async () => {
     vi.clearAllMocks();
@@ -366,5 +419,191 @@ describe("aiProcessAssistantChat inbox snapshot", () => {
     expect(
       await snapshotFor([{ role: "user", content: "and now?" }], false),
     ).toBe(false);
+  });
+});
+
+describe("aiProcessAssistantChat turn limits", () => {
+  async function prepareStepFor() {
+    vi.clearAllMocks();
+    vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
+    await aiProcessAssistantChat({
+      messages: [{ role: "user", content: "what's new?" }],
+      emailAccountId: "email-account-id",
+      user: getEmailAccount(),
+      logger: createTestLogger(),
+    });
+    const [options] = vi.mocked(toolCallAgentStream).mock.calls[0];
+    const prepareStep = options.prepareStep!;
+    return (
+      stepNumber: number,
+      model = { provider: "google.generative-ai", modelId: "gemini-3.8-flash" },
+    ) =>
+      prepareStep({
+        stepNumber,
+        steps: [],
+        messages: [{ role: "user", content: "what's new?" }],
+        model,
+      } as never);
+  }
+
+  it("thinks briefly while it can still call tools and fully for the forced answer", async () => {
+    const step = await prepareStepFor();
+    const lowThinking = {
+      providerOptions: { google: { thinkingConfig: { thinkingLevel: "low" } } },
+    };
+
+    expect(await step(0)).toMatchObject(lowThinking);
+    expect(await step(5)).toMatchObject(lowThinking);
+    expect(await step(6)).not.toHaveProperty("providerOptions");
+  });
+
+  it("keeps a non-Gemini model's own reasoning settings", async () => {
+    const step = await prepareStepFor();
+
+    const result = await step(1, {
+      provider: "anthropic.messages",
+      modelId: "claude-sonnet-5",
+    });
+
+    expect(result?.providerOptions).toBeUndefined();
+  });
+
+  it("answers without more tools after six steps", async () => {
+    const step = await prepareStepFor();
+
+    expect(await step(5)).not.toMatchObject({ toolChoice: "none" });
+    expect(await step(6)).toMatchObject({
+      activeTools: [],
+      toolChoice: "none",
+    });
+  });
+
+  it("caps Slack, Teams and Telegram turns at six tool steps too", async () => {
+    vi.clearAllMocks();
+    vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
+    await aiProcessAssistantChat({
+      messages: [{ role: "user", content: "what's new?" }],
+      emailAccountId: "email-account-id",
+      user: getEmailAccount(),
+      responseSurface: "messaging",
+      messagingPlatform: "slack",
+      logger: createTestLogger(),
+    });
+    const [options] = vi.mocked(toolCallAgentStream).mock.calls[0];
+
+    expect(
+      await options.prepareStep!({
+        stepNumber: 6,
+        steps: [],
+        messages: [{ role: "user", content: "what's new?" }],
+        model: {
+          provider: "google.generative-ai",
+          modelId: "gemini-3.8-flash",
+        },
+      } as never),
+    ).toMatchObject({ activeTools: [], toolChoice: "none" });
+  });
+
+  it("answers without more tools once a web turn has spent 45 seconds", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const step = await prepareStepFor();
+      vi.setSystemTime(Date.now() + 44_000);
+      expect(await step(1)).not.toMatchObject({ toolChoice: "none" });
+      vi.setSystemTime(Date.now() + 2000);
+      expect(await step(1)).toMatchObject({
+        activeTools: [],
+        toolChoice: "none",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("aiProcessAssistantChat Gmail demand", () => {
+  async function run() {
+    vi.clearAllMocks();
+    const { createEmailProvider } = await import("@/utils/email/provider");
+    // Each tool's provider makes one Gmail call, then stops the tool.
+    vi.mocked(createEmailProvider).mockImplementation(async () => {
+      await admitGmailCall({ emailAccountId: "email-account-id", cost: 5 });
+      throw new Error("stop after one Gmail call");
+    });
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      email: "user@test.com",
+      timezone: "UTC",
+    } as never);
+    vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
+    const cleanups: Array<() => void> = [];
+    await aiProcessAssistantChat({
+      messages: [{ role: "user", content: "what's new?" }],
+      emailAccountId: "email-account-id",
+      user: getEmailAccount(),
+      logger: createTestLogger(),
+      registerCleanup: (cleanup) => cleanups.push(cleanup),
+    });
+    const options = vi.mocked(toolCallAgentStream).mock.calls[0][0];
+    const tools = options.tools as Record<string, Tool>;
+    const callGmailTool = () =>
+      tools.readEmail.execute?.({ messageId: "message-1" }, {
+        toolCallId: "call",
+        messages: [],
+      } as never);
+    return { options, cleanups, callGmailTool };
+  }
+
+  it("holds nothing for a turn that never calls Gmail", async () => {
+    const { options } = await run();
+
+    await options.onEnd?.({} as never);
+
+    expect(holdGmailInteractiveDemand).not.toHaveBeenCalled();
+    expect(mockReleaseDemand).not.toHaveBeenCalled();
+  });
+
+  it("holds background work back from the first Gmail call, once, capped at the tool budget", async () => {
+    const { callGmailTool } = await run();
+
+    await callGmailTool();
+    await callGmailTool();
+
+    expect(holdGmailInteractiveDemand).toHaveBeenCalledTimes(1);
+    expect(holdGmailInteractiveDemand).toHaveBeenCalledWith(
+      "email-account-id",
+      45_000,
+    );
+  });
+
+  it("lets background work go once the turn ends", async () => {
+    const { options, callGmailTool } = await run();
+    await callGmailTool();
+
+    await options.onEnd?.({} as never);
+
+    await vi.waitFor(() => expect(mockReleaseDemand).toHaveBeenCalledTimes(1));
+  });
+
+  it("lets background work go once tools are switched off", async () => {
+    const { options, callGmailTool } = await run();
+    await callGmailTool();
+
+    await options.prepareStep?.({
+      stepNumber: 6,
+      steps: [],
+      messages: [],
+      model: { provider: "google.generative-ai", modelId: "gemini-3.8-flash" },
+    } as never);
+
+    await vi.waitFor(() => expect(mockReleaseDemand).toHaveBeenCalledTimes(1));
+  });
+
+  it("lets background work go through the caller's cleanup when the stream fails", async () => {
+    const { cleanups, callGmailTool } = await run();
+    await callGmailTool();
+
+    for (const cleanup of cleanups) cleanup();
+
+    await vi.waitFor(() => expect(mockReleaseDemand).toHaveBeenCalledTimes(1));
   });
 });

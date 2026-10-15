@@ -32,6 +32,8 @@ import type {
   MailboxCountsQuery,
   MailboxCountsView,
   MailboxView,
+  MessageSearchPage,
+  MessageSearchQuery,
   QuerySnapshot,
 } from "../queries";
 import type {
@@ -225,6 +227,18 @@ export interface MailStore {
   }): Promise<
     { status: "committed"; revision: LocalRevision } | { status: "stale" }
   >;
+  /**
+   * Merges one page of a conversation's membership read outside any command,
+   * as when a reader opens it. The last page marks the conversation complete
+   * and settles the membership of commands preparing it, queuing any that
+   * have nothing left to prepare.
+   */
+  applyConversationMembership(input: {
+    session: AccountSession;
+    page: ConversationMembershipPage;
+  }): Promise<
+    { status: "committed"; revision: LocalRevision } | { status: "stale" }
+  >;
   applyHydration(input: {
     session: AccountSession;
     requestId: string;
@@ -323,6 +337,11 @@ export interface MailStore {
   }): Promise<
     { status: "committed"; revision: LocalRevision } | { status: "stale" }
   >;
+  /**
+   * Queues a preparing command whose every conversation's membership is
+   * known. `claimWork` also does this for any it finds, so a host stopped
+   * between settling the membership and this call recovers.
+   */
   finishPreparation(input: {
     accountId: string;
     commandId: string;
@@ -363,6 +382,15 @@ export interface MailStore {
     key: ConversationKey,
     page: { after: string | null; pageSize: number },
   ): Promise<{ revision: LocalRevision; view: ConversationView }>;
+  /**
+   * `complete` when every message of the conversation is local (sync covered
+   * the whole mailbox, or its membership was merged); `preparing` when a
+   * command's preparation is due by `nowMs` to read its membership.
+   */
+  readConversationMembershipState(
+    key: ConversationKey,
+    nowMs: number,
+  ): Promise<"complete" | "preparing" | "incomplete">;
   readDraft(key: DraftKey): Promise<DraftReadResult>;
   /**
    * A send already handed to the server to deliver at its `sendAtMs`, which
@@ -384,6 +412,7 @@ export interface MailStore {
     revision: LocalRevision;
     view: MailboxView;
   }>;
+  readMessageSearch(query: MessageSearchQuery): Promise<MessageSearchPage>;
   readOperation(key: OperationKey): Promise<{
     revision: LocalRevision;
     operation: OperationState | null;

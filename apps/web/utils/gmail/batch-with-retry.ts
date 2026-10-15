@@ -7,19 +7,29 @@ import type { Logger } from "@/utils/logger";
 import {
   currentGmailQuotaContext,
   gmailRequestCost,
+  gmailRequestUnitsFor,
 } from "@/utils/gmail/quota";
 
-// Each batch is admitted against the account's Gmail budget as one debit, so
-// keep it to 500 units: 25 messages or 12 threads. Background work must also
-// leave half the bucket to everyone else, so a smaller debit fits the room
-// other callers leave instead of waiting for a nearly full bucket.
-const MAX_BATCH_UNITS = { foreground: 500, background: 200 };
+// Gmail charges every request in a batch at once, so a batch is one burst.
+// Each is sized to fit the gate's per-second pace at the caller's priority
+// (5 messages interactive, 4 sync, 2 background) rather than 25 at a time,
+// which Gmail answered by refusing the tail of each batch.
 const RATE_LIMIT_RETRY_BATCH_SIZE = 10;
 const MAX_BATCH_RETRIES = 3;
 const MAX_RETRY_JITTER_MS = 1000;
 
+export type BatchWithRetryResult<TParsed> = {
+  items: TParsed[];
+  /** Ids Gmail still refused once retries ran out; not attempted after that. */
+  unloadedIds: string[];
+  unloadedError?: BatchError["error"];
+};
+
 // Gmail counts each subrequest toward per-user concurrency. Leave headroom for
 // other account activity, then reduce rate-limited retries even further.
+// Returns what loaded: once a batch runs out of retries the rest are left
+// unloaded rather than retried, since they would meet the same limit. Callers
+// that need every item use `requireCompleteBatch`.
 export async function getBatchWithRetry<TRaw, TParsed>({
   ids,
   endpoint,
@@ -38,12 +48,11 @@ export async function getBatchWithRetry<TRaw, TParsed>({
   queryString?: string;
   retryCount?: number;
   retryError?: BatchError["error"];
-}): Promise<TParsed[]> {
+}): Promise<BatchWithRetryResult<TParsed>> {
   if (!accessToken) throw new Error("No access token");
 
-  const results: TParsed[] = [];
-  for (const idsChunk of chunk(ids, batchSizeFor(endpoint))) {
-    const chunkResults = await getBatchChunkWithRetry<TRaw, TParsed>({
+  return getChunksWithRetry(chunk(ids, batchSizeFor(endpoint)), (idsChunk) =>
+    getBatchChunkWithRetry<TRaw, TParsed>({
       ids: idsChunk,
       endpoint,
       accessToken,
@@ -52,11 +61,21 @@ export async function getBatchWithRetry<TRaw, TParsed>({
       queryString,
       retryCount,
       retryError,
-    });
-    results.push(...chunkResults);
-  }
+    }),
+  );
+}
 
-  return results;
+/** The items of a batch, or the error Gmail kept returning for the rest. */
+export function requireCompleteBatch<TParsed>(
+  result: BatchWithRetryResult<TParsed>,
+): TParsed[] {
+  if (!result.unloadedIds.length) return result.items;
+  if (!result.unloadedError)
+    throw new Error("Gmail batch retry limit exceeded");
+  // Preserve the provider error so account-level rate-limit protection can pause follow-on calls.
+  throw new Error(result.unloadedError.message, {
+    cause: result.unloadedError,
+  });
 }
 
 async function getBatchChunkWithRetry<TRaw, TParsed>({
@@ -77,10 +96,10 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
   queryString?: string;
   retryCount: number;
   retryError?: BatchError["error"];
-}): Promise<TParsed[]> {
+}): Promise<BatchWithRetryResult<TParsed>> {
   if (retryCount > MAX_BATCH_RETRIES)
-    throwBatchRetryLimit({
-      batchSize: ids.length,
+    return retryLimitReached({
+      ids,
       retryCount,
       retryError,
       logger,
@@ -146,12 +165,15 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
     const nextRetryCount = retryCount + 1;
 
     if (nextRetryCount > MAX_BATCH_RETRIES)
-      throwBatchRetryLimit({
-        batchSize: remainingIds.length,
-        retryCount: nextRetryCount,
-        retryError: lastRetryableError,
-        logger,
-      });
+      return {
+        ...retryLimitReached({
+          ids: remainingIds,
+          retryCount: nextRetryCount,
+          retryError: lastRetryableError,
+          logger,
+        }),
+        items: parsed,
+      };
 
     logger.warn("Retrying Gmail batch items", {
       batchSize: ids.length,
@@ -170,11 +192,13 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
     );
     const retryChunks = [
       ...chunk(nonRateLimitedIds, batchSizeFor(endpoint)),
-      ...chunk(Array.from(rateLimitedIds), RATE_LIMIT_RETRY_BATCH_SIZE),
+      ...chunk(
+        Array.from(rateLimitedIds),
+        Math.min(RATE_LIMIT_RETRY_BATCH_SIZE, batchSizeFor(endpoint)),
+      ),
     ];
-    const refetched: TParsed[] = [];
-    for (const idsChunk of retryChunks) {
-      const chunkResults = await getBatchChunkWithRetry({
+    const refetched = await getChunksWithRetry(retryChunks, (idsChunk) =>
+      getBatchChunkWithRetry<TRaw, TParsed>({
         ids: idsChunk,
         endpoint,
         accessToken,
@@ -183,40 +207,54 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
         retryError: lastRetryableError,
         logger,
         queryString,
-      });
-      refetched.push(...chunkResults);
-    }
-    return [...parsed, ...refetched];
+      }),
+    );
+    return { ...refetched, items: [...parsed, ...refetched.items] };
   }
 
-  return parsed;
+  return { items: parsed, unloadedIds: [] };
+}
+
+async function getChunksWithRetry<TParsed>(
+  chunks: string[][],
+  getChunk: (ids: string[]) => Promise<BatchWithRetryResult<TParsed>>,
+): Promise<BatchWithRetryResult<TParsed>> {
+  const items: TParsed[] = [];
+  for (const [index, idsChunk] of chunks.entries()) {
+    const result = await getChunk(idsChunk);
+    items.push(...result.items);
+    if (result.unloadedIds.length)
+      return {
+        items,
+        unloadedIds: [...result.unloadedIds, ...chunks.slice(index + 1).flat()],
+        unloadedError: result.unloadedError,
+      };
+  }
+  return { items, unloadedIds: [] };
 }
 
 function batchSizeFor(endpoint: string) {
-  const maxUnits =
-    currentGmailQuotaContext().priority === "background"
-      ? MAX_BATCH_UNITS.background
-      : MAX_BATCH_UNITS.foreground;
+  const maxUnits = gmailRequestUnitsFor(currentGmailQuotaContext().priority);
   return Math.max(
     1,
     Math.floor(maxUnits / gmailRequestCost("GET", `${endpoint}/id`)),
   );
 }
 
-function throwBatchRetryLimit({
-  batchSize,
+function retryLimitReached<TParsed>({
+  ids,
   retryCount,
   retryError,
   logger,
 }: {
-  batchSize: number;
+  ids: string[];
   retryCount: number;
   retryError?: BatchError["error"];
   logger: Logger;
-}): never {
-  logger.warn("Too many Gmail batch retries", { batchSize, retryCount });
-  if (!retryError) throw new Error("Gmail batch retry limit exceeded");
-
-  // Preserve the provider error so account-level rate-limit protection can pause follow-on calls.
-  throw new Error(retryError.message, { cause: retryError });
+}): BatchWithRetryResult<TParsed> {
+  logger.warn("Too many Gmail batch retries", {
+    batchSize: ids.length,
+    retryCount,
+  });
+  return { items: [], unloadedIds: ids, unloadedError: retryError };
 }

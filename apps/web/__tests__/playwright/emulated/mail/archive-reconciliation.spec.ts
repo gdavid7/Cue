@@ -22,7 +22,7 @@ test("keeps an archived conversation hidden through engine reconciliation", asyn
 
   const cleanupErrors: unknown[] = [];
   try {
-    await conversation.getByRole("checkbox").click();
+    await conversation.getByRole("checkbox", { includeHidden: true }).click();
     await page.getByRole("button", { name: "Archive", exact: true }).click();
     await expect(conversation).toHaveCount(0);
     await expect
@@ -100,7 +100,7 @@ test("keeps a queued archive hidden after an OPFS reload", async ({
 
   const cleanupErrors: unknown[] = [];
   try {
-    await conversation.getByRole("checkbox").click();
+    await conversation.getByRole("checkbox", { includeHidden: true }).click();
     await page.getByRole("button", { name: "Archive", exact: true }).click();
     await expect(conversation).toHaveCount(0);
     await expect
@@ -177,7 +177,7 @@ test("drops Inbox and Unread counts when an unread conversation is archived", as
 
   const cleanupErrors: unknown[] = [];
   try {
-    await conversation.getByRole("checkbox").click();
+    await conversation.getByRole("checkbox", { includeHidden: true }).click();
     await page.getByRole("button", { name: "Archive", exact: true }).click();
     await expect(conversation).toHaveCount(0);
     await expect.poll(() => inboxUnreadBadge(page)).toBe(before - 1);
@@ -244,7 +244,7 @@ test("returns an archived conversation when new mail arrives in it", async ({
 
   const cleanupErrors: unknown[] = [];
   try {
-    await conversation.getByRole("checkbox").click();
+    await conversation.getByRole("checkbox", { includeHidden: true }).click();
     await page.getByRole("button", { name: "Archive", exact: true }).click();
     await expect(conversation).toHaveCount(0);
     await expect

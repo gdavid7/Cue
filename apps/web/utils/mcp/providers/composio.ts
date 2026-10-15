@@ -13,6 +13,9 @@ const logger = createScopedLogger("composio");
 
 const COMPOSIO_REQUEST_TIMEOUT_MS = 15_000;
 const COMPOSIO_UPLOAD_TIMEOUT_MS = 60_000;
+// Long enough to finish an app's OAuth, short enough that a forwarded link
+// soon stops being completable.
+const PENDING_CONNECTION_SECONDS = 15 * 60;
 // The integrations list reads status on every sidebar load; a healthy
 // connection is re-checked every few minutes, a lapsed one only clears when
 // the user reconnects.
@@ -33,7 +36,13 @@ const mcpServerUrls = new Map<string, Promise<string>>();
 export const composioProvider: IntegrationProvider = {
   isConfigured: () => !!env.COMPOSIO_API_KEY,
 
-  async getConnectUrl({ app, emailAccountId, callbackUrl, authScheme }) {
+  async getConnectUrl({
+    app,
+    emailAccountId,
+    userId,
+    callbackUrl,
+    authScheme,
+  }) {
     const authConfigId = await getAuthConfigId(app, authScheme);
     const link = linkSchema.parse(
       await composioFetch("/connected_accounts/link", {
@@ -45,24 +54,63 @@ export const composioProvider: IntegrationProvider = {
         },
       }),
     );
+
+    const pending: PendingConnection = { app, emailAccountId, userId };
+    await Promise.all([
+      redis.set(pendingByAccountKey(link.connected_account_id), pending, {
+        ex: PENDING_CONNECTION_SECONDS,
+      }),
+      redis.set(pendingByStarterKey(pending), link.connected_account_id, {
+        ex: PENDING_CONNECTION_SECONDS,
+      }),
+    ]);
     return link.redirect_url;
   },
 
-  async completeConnection({ app, emailAccountId, authScheme }) {
+  async completeConnection({
+    app,
+    emailAccountId,
+    userId,
+    authScheme,
+    connectedAccountId,
+  }) {
+    // One attempt per link, so a forwarded link can't be polled until
+    // someone authorizes it.
+    const pendingId = await redis.getdel<string>(
+      pendingByStarterKey({ app, emailAccountId, userId }),
+    );
+    if (pendingId) await redis.del(pendingByAccountKey(pendingId));
+
+    // Composio always names the account it just authorized. One this user's
+    // link didn't create was authorized from someone else's link.
+    if (connectedAccountId && connectedAccountId !== pendingId) {
+      await discardPendingConnection(connectedAccountId);
+    }
+    if (!pendingId) return false;
+
     const accounts = await listConnectedAccounts({
       app,
       emailAccountId,
       authScheme,
     });
-    const active = newestActive(accounts);
-    if (!active) return false;
+    const pendingAccount = accounts.find((account) => account.id === pendingId);
+    if (
+      connectedAccountId !== pendingId ||
+      pendingAccount?.status !== "ACTIVE"
+    ) {
+      if (pendingAccount) await deleteConnectedAccounts([pendingAccount]);
+      return false;
+    }
 
     await deleteConnectedAccounts(
-      accounts.filter((account) => account.id !== active.id),
+      accounts.filter((account) => account.id !== pendingId),
     );
     await forgetStatus(app, emailAccountId);
     return true;
   },
+
+  discardConnection: ({ connectedAccountId }) =>
+    discardPendingConnection(connectedAccountId),
 
   async connectWithCredentials({
     app,
@@ -351,6 +399,35 @@ function newestActive<T extends { status: string; created_at: string }>(
     .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
 }
 
+// Only links we issued; an arbitrary id in a callback URL deletes nothing.
+async function discardPendingConnection(connectedAccountId: string) {
+  const pending = await redis.getdel<PendingConnection>(
+    pendingByAccountKey(connectedAccountId),
+  );
+  if (!pending) return;
+
+  await redis.del(pendingByStarterKey(pending));
+  await deleteConnectedAccounts([{ id: connectedAccountId }]);
+}
+
+type PendingConnection = {
+  app: string;
+  emailAccountId: string;
+  userId: string;
+};
+
+function pendingByAccountKey(connectedAccountId: string) {
+  return `composio-pending-connection:${connectedAccountId}`;
+}
+
+function pendingByStarterKey({
+  app,
+  emailAccountId,
+  userId,
+}: PendingConnection) {
+  return `composio-pending-connection:${app}:${emailAccountId}:${userId}`;
+}
+
 function statusKey(app: string, emailAccountId: string) {
   return `composio-status:${app}:${emailAccountId}`;
 }
@@ -443,7 +520,10 @@ function haveSameItems(a: string[], b: string[]) {
   return a.length === b.length && a.every((item) => b.includes(item));
 }
 
-const linkSchema = z.object({ redirect_url: z.string().url() });
+const linkSchema = z.object({
+  redirect_url: z.string().url(),
+  connected_account_id: z.string().min(1),
+});
 
 const uploadRequestSchema = z.object({
   key: z.string(),

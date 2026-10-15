@@ -273,10 +273,10 @@ describe("aiProcessAssistantChat", () => {
   }, 30_000);
 
   it.each([
-    ["web", 210_000],
+    ["web", 45_000],
     ["messaging", 60_000],
   ] as const)(
-    "continues %s tool calls without a step cap and reserves time for a final response",
+    "keeps %s tool calls going until the turn's time budget, then has the model answer",
     async (responseSurface, toolBudgetMs) => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
@@ -305,11 +305,13 @@ describe("aiProcessAssistantChat", () => {
 
         vi.advanceTimersByTime(toolBudgetMs - 1);
         expect(
-          await args.prepareStep({ messages: baseMessages }),
+          await args.prepareStep({ messages: baseMessages, stepNumber: 1 }),
         ).toBeUndefined();
 
         vi.advanceTimersByTime(1);
-        expect(await args.prepareStep({ messages: baseMessages })).toEqual({
+        expect(
+          await args.prepareStep({ messages: baseMessages, stepNumber: 1 }),
+        ).toEqual({
           activeTools: [],
           toolChoice: "none",
         });

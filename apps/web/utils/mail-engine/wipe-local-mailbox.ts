@@ -2,8 +2,9 @@ import { clearRecentSearchHistory } from "@/store/mail-search-history";
 import { clearStoredSenderQueues } from "@/store/sender-queue";
 import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 import { closeActiveMailEngine } from "@/utils/mail-engine/active-client";
+import { clearLocalMailboxCookie } from "@/utils/mail-engine/local-mailbox-cookie";
+import { wipeOpfsMailEngine } from "@/utils/mail-engine/opfs-mailbox";
 import { deleteMailRecoveryStash } from "@/utils/mail-engine/recovery-stash";
-import { wipeOpfsMailEngine } from "@/utils/mail-engine/wasm-sqlite";
 import { clearOfflineMailCache } from "@/utils/offline/clear-mail-cache";
 
 // Sign-out leaves the page before a slow wipe can finish, so the marker
@@ -12,6 +13,8 @@ const WIPE_PENDING_KEY = "inbox-zero:local-mailbox-wipe-pending";
 
 export async function wipeLocalMailbox() {
   setWipePending(true);
+  // The next sign-in then shows the inbox from the server while it syncs.
+  clearLocalMailboxCookie();
   clearStoredSenderQueues();
   clearRecentSearchHistory();
   // The open engine holds the mailbox files until it is closed.
@@ -19,7 +22,7 @@ export async function wipeLocalMailbox() {
 }
 
 export async function finishPendingLocalMailboxWipe() {
-  if (isWipePending()) await removeLocalMail(Promise.resolve());
+  if (isLocalMailboxWipePending()) await removeLocalMail(Promise.resolve());
 }
 
 async function removeLocalMail(engineClosed: Promise<void>) {
@@ -46,7 +49,8 @@ async function wipeMailboxStore() {
   return wipeOpfsMailEngine();
 }
 
-function isWipePending() {
+/** A sign-out wipe that has not finished yet; it must finish before any mailbox opens. */
+export function isLocalMailboxWipePending() {
   try {
     return window.localStorage.getItem(WIPE_PENDING_KEY) === "1";
   } catch {

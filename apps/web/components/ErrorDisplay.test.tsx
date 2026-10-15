@@ -63,6 +63,14 @@ describe("ErrorDisplay", () => {
     expect(swr.mutate).toHaveBeenCalledOnce();
   });
 
+  it("announces the failure to assistive technology", () => {
+    render(<ErrorDisplay error={{ error: "Failed to fetch" }} />);
+
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Couldn't load this",
+    );
+  });
+
   it("renders nothing without an error", () => {
     const { container } = render(<ErrorDisplay error={undefined} />);
     expect(container.innerHTML).toBe("");

@@ -44,6 +44,8 @@ import type {
   MailboxCountsQuery,
   MailboxCountsView,
   MailboxView,
+  MessageSearchPage,
+  MessageSearchQuery,
   QueryHandle,
 } from "./queries";
 import {
@@ -52,7 +54,7 @@ import {
   mailboxQueryKey,
 } from "./subscriptions";
 import type { SyncPage } from "./sync";
-import type { ConversationView } from "./ports/mail-store";
+import type { ClaimedWork, ConversationView } from "./ports/mail-store";
 
 const MAX_BOOTSTRAP_PAGES_PER_RUN = 25;
 const NON_ADVANCING_BOOTSTRAP_RETRY_MS = 60_000;
@@ -78,6 +80,12 @@ const SEARCH_PAGE_SIZE = 50;
 // A provider search page costs Gmail about 1000 of its 6000 units a minute,
 // so one view's demand for rows never fetches more than this many pages.
 const MAX_SEARCH_PAGES_PER_DEMAND = 2;
+// Each conversation fill is an interactive provider read; anything past this
+// waits its turn instead of crowding out sync and commands.
+const MAX_CONVERSATION_FETCHES = 2;
+const CONVERSATION_FETCH_RETRY_MS = 60_000;
+// Past this a fill gives up, so the reader's loading row can't stay forever.
+const CONVERSATION_FETCH_TIMEOUT_MS = 30_000;
 
 export type WorkAdmission =
   | { status: "scheduled" | "already_satisfied" }
@@ -103,6 +111,8 @@ export type MailDiagnostics = {
   }>;
 };
 
+export type ConversationCompletion = { status: "complete" | "unavailable" };
+
 export type MailboxWindowHandle = QueryHandle<MailboxView> & {
   loadMore(): Promise<void>;
 };
@@ -115,6 +125,11 @@ export type MailClient = {
   queryContactSuggestions?(
     query: ContactSuggestionQuery,
   ): Promise<ContactSuggestion[]>;
+  /**
+   * Reads matching messages once from the local store, without asking the
+   * provider. Hosts that can't answer off the UI thread leave it out.
+   */
+  searchMessages?(query: MessageSearchQuery): Promise<MessageSearchPage>;
   observeMailbox(query: ConversationQuery): QueryHandle<MailboxView>;
   observeMailboxCounts(
     query: MailboxCountsQuery,
@@ -149,6 +164,21 @@ export type MailClient = {
     provider: "google" | "microsoft";
   }): Promise<void>;
   ensureMessageContent(key: MessageKey): Promise<WorkAdmission>;
+  /**
+   * Makes sure the store holds every message of a conversation someone opened.
+   * Until sync has covered the whole mailbox, some of its older messages may
+   * not be local yet, so this asks the provider for its membership once and
+   * merges it. Resolves once the conversation is complete locally, or with
+   * `unavailable` when the provider couldn't answer; a later call tries again.
+   */
+  ensureConversationMessages(
+    key: ConversationKey,
+  ): Promise<ConversationCompletion>;
+  /**
+   * Says one caller of `ensureConversationMessages` no longer waits, as when
+   * the reader moves on. A fill still queued that nobody waits for is dropped.
+   */
+  releaseConversationMessages(key: ConversationKey): Promise<void>;
   getDiagnostics(accountId: string): Promise<MailDiagnostics>;
   purgeAccount(accountId: string): Promise<LocalRevision>;
   /** Purges every local account outside `accountIds`; an empty list is ignored. */
@@ -171,6 +201,7 @@ export function createMailEngine(input: {
   assistant?: AssistantStateSource;
   idleCatchUpIntervalMs?: number;
   syncLaneTimeoutMs?: number;
+  conversationFetchTimeoutMs?: number;
   /** Committed incremental changes only; bootstrap and backfill never emit. */
   onSyncPageCommitted?: (page: SyncPage) => void;
 }): MailEngine {
@@ -178,6 +209,8 @@ export function createMailEngine(input: {
   const idleCatchUpIntervalMs =
     input.idleCatchUpIntervalMs ?? IDLE_CATCH_UP_INTERVAL_MS;
   const syncLaneTimeoutMs = input.syncLaneTimeoutMs ?? SYNC_LANE_TIMEOUT_MS;
+  const conversationFetchTimeoutMs =
+    input.conversationFetchTimeoutMs ?? CONVERSATION_FETCH_TIMEOUT_MS;
   const ownerId = input.ownerId ?? "local-owner";
   const assistant = input.assistant;
   const queries = createQueryRegistry();
@@ -199,6 +232,22 @@ export function createMailEngine(input: {
   // as they need rows; a page left in the store by an earlier session or a
   // closed view is dropped instead of walking the whole result set.
   const providerSearches = new Map<string, ProviderSearch>();
+  // Keyed by account and conversation, so concurrent opens share one read.
+  // Completion itself is stored, and resets with the account.
+  const conversationFetches = new Map<string, ConversationFetchEntry>();
+  // When a conversation whose read failed may be asked for again; a
+  // conversation the provider doesn't have never is.
+  const conversationFetchRetryAt = new Map<string, number>();
+  const conversationFetchAborts = new Map<string, AbortController>();
+  const preparationWatchers = new Map<string, Set<() => void>>();
+  let runningConversationFetches = 0;
+  // Served newest first: the conversation open now matters more than ones
+  // the reader passed on its way to it.
+  const queuedConversationFetches: Array<{
+    id: string;
+    start: () => void;
+    drop: () => void;
+  }> = [];
 
   async function refreshViews() {
     refreshQueued = true;
@@ -219,6 +268,9 @@ export function createMailEngine(input: {
   return {
     queryContactSuggestions(query) {
       return store.readContactSuggestions(query);
+    },
+    searchMessages(query) {
+      return store.readMessageSearch(query);
     },
     observeMailbox(query) {
       const searches = watchProviderSearches(query, query.pageSize);
@@ -355,12 +407,63 @@ export function createMailEngine(input: {
       await store.enqueueHydration({ keys: [key], purpose: "body" });
       return { status: "scheduled" };
     },
+    ensureConversationMessages(key) {
+      if (closed) return Promise.resolve({ status: "unavailable" });
+      const id = conversationFetchKey(key);
+      const inFlight = conversationFetches.get(id);
+      if (inFlight) {
+        inFlight.waiters += 1;
+        return inFlight.promise;
+      }
+      if ((conversationFetchRetryAt.get(id) ?? 0) > runtime.nowMs()) {
+        return Promise.resolve({ status: "unavailable" });
+      }
+      const entry: ConversationFetchEntry = {
+        waiters: 1,
+        promise: Promise.resolve({ status: "unavailable" }),
+      };
+      conversationFetches.set(id, entry);
+      entry.promise = fetchConversationMessages(key)
+        .catch(
+          (): ConversationFetch => ({
+            status: "unavailable",
+            retryAfterMs: CONVERSATION_FETCH_RETRY_MS,
+          }),
+        )
+        .then((result): ConversationCompletion => {
+          if (result.status === "complete") {
+            conversationFetchRetryAt.delete(id);
+            return result;
+          }
+          if (result.retryAfterMs > 0) {
+            conversationFetchRetryAt.set(
+              id,
+              runtime.nowMs() + result.retryAfterMs,
+            );
+          }
+          return { status: "unavailable" };
+        })
+        .finally(() => conversationFetches.delete(id));
+      return entry.promise;
+    },
+    async releaseConversationMessages(key) {
+      const id = conversationFetchKey(key);
+      const entry = conversationFetches.get(id);
+      if (!entry) return;
+      entry.waiters = Math.max(0, entry.waiters - 1);
+      if (entry.waiters > 0) return;
+      const index = queuedConversationFetches.findIndex(
+        (queued) => queued.id === id,
+      );
+      if (index >= 0) queuedConversationFetches.splice(index, 1)[0]?.drop();
+    },
     getDiagnostics(accountId) {
       return store.getDiagnostics(accountId);
     },
     async purgeAccount(accountId) {
       stopSyncLane(accountId);
       idleCatchUpGates.delete(accountId);
+      stopConversationFetches(accountId);
       const revision = await store.purgeAccount(accountId);
       await refreshViews();
       return revision;
@@ -375,6 +478,7 @@ export function createMailEngine(input: {
         if (retained.has(account.accountId)) continue;
         stopSyncLane(account.accountId);
         idleCatchUpGates.delete(account.accountId);
+        stopConversationFetches(account.accountId);
         await store.purgeAccount(account.accountId);
         purged = true;
       }
@@ -445,82 +549,11 @@ export function createMailEngine(input: {
           continue;
         }
         if (work.kind === "prepare") {
-          const membership = await source.readConversationMembership({
-            session: work.session,
-            requestId: work.resolutionId,
-            signal: signal ?? new AbortController().signal,
-            conversation: work.conversation,
-            resolutionId: work.resolutionId,
-            page: work.page,
-            pageSize: 100,
-          });
-          if (membership.status !== "ok") {
-            await store.deferPreparation({
-              accountId: work.accountId,
-              commandId: work.commandId,
-              attemptId: work.attemptId,
-              nextAttemptAtMs:
-                membership.status === "paused"
-                  ? runtime.nowMs() + membership.retryAfterMs
-                  : runtime.nowMs() + 60_000,
-            });
-            await noteConnection(work.accountId, membership);
-            continue;
+          try {
+            await prepareConversation(work, signal);
+          } finally {
+            notifyPreparationWatchers(conversationFetchKey(work.conversation));
           }
-          if (membership.value.status === "not_found") {
-            await store.failPreparation({
-              accountId: work.accountId,
-              commandId: work.commandId,
-              attemptId: work.attemptId,
-              session: work.session,
-              code: "conversation_not_found",
-            });
-            await refreshViews();
-            continue;
-          }
-          if (
-            membership.value.status === "unsupported" ||
-            membership.value.status === "restart_required"
-          ) {
-            if (membership.value.status === "unsupported") {
-              await store.failPreparation({
-                accountId: work.accountId,
-                commandId: work.commandId,
-                attemptId: work.attemptId,
-                session: work.session,
-                code: "membership_unsupported",
-              });
-              await refreshViews();
-            } else {
-              await store.deferPreparation({
-                accountId: work.accountId,
-                commandId: work.commandId,
-                attemptId: work.attemptId,
-                nextAttemptAtMs: runtime.nowMs() + 1000,
-              });
-            }
-            continue;
-          }
-          if (membership.value.status === "page") {
-            const prepared = await store.applyPreparationPage({
-              accountId: work.accountId,
-              commandId: work.commandId,
-              attemptId: work.attemptId,
-              session: work.session,
-              previousPage: work.page,
-              page: membership.value.page,
-            });
-            if (
-              prepared.status !== "stale" &&
-              !membership.value.page.nextPage
-            ) {
-              await store.finishPreparation({
-                accountId: work.accountId,
-                commandId: work.commandId,
-              });
-            }
-          }
-          await refreshViews();
           continue;
         }
         if (work.kind === "hydrate") {
@@ -664,16 +697,306 @@ export function createMailEngine(input: {
     },
     async close() {
       closed = true;
-      const lanes = [...syncLanes.keys()].map((accountId) => {
-        const done = syncLanes.get(accountId)?.done;
-        stopSyncLane(accountId);
-        return done;
-      });
+      for (const queued of queuedConversationFetches.splice(0)) queued.drop();
+      stopConversationFetches(null);
+      const lanes = [...syncLanes.values()].map((lane) => lane.done);
+      for (const laneKey of [...syncLanes.keys()]) stopSyncLane(laneKey);
       await Promise.allSettled(lanes);
       queries.closeAll();
       await store.close();
     },
   };
+
+  async function prepareConversation(
+    work: Extract<ClaimedWork, { kind: "prepare" }>,
+    signal?: AbortSignal,
+  ) {
+    // A fill already reading this conversation resolves this command's
+    // membership too, so one open makes one provider read.
+    if (conversationFetchAborts.has(conversationFetchKey(work.conversation))) {
+      await store.deferPreparation({
+        accountId: work.accountId,
+        commandId: work.commandId,
+        attemptId: work.attemptId,
+        nextAttemptAtMs: runtime.nowMs() + 1000,
+      });
+      return;
+    }
+    const membership = await source.readConversationMembership({
+      session: work.session,
+      requestId: work.resolutionId,
+      signal: signal ?? new AbortController().signal,
+      conversation: work.conversation,
+      resolutionId: work.resolutionId,
+      page: work.page,
+      pageSize: 100,
+    });
+    if (membership.status !== "ok") {
+      await store.deferPreparation({
+        accountId: work.accountId,
+        commandId: work.commandId,
+        attemptId: work.attemptId,
+        nextAttemptAtMs:
+          membership.status === "paused"
+            ? runtime.nowMs() + membership.retryAfterMs
+            : runtime.nowMs() + 60_000,
+      });
+      await noteConnection(work.accountId, membership);
+      return;
+    }
+    if (membership.value.status === "not_found") {
+      await store.failPreparation({
+        accountId: work.accountId,
+        commandId: work.commandId,
+        attemptId: work.attemptId,
+        session: work.session,
+        code: "conversation_not_found",
+      });
+      await refreshViews();
+      return;
+    }
+    if (
+      membership.value.status === "unsupported" ||
+      membership.value.status === "restart_required"
+    ) {
+      if (membership.value.status === "unsupported") {
+        await store.failPreparation({
+          accountId: work.accountId,
+          commandId: work.commandId,
+          attemptId: work.attemptId,
+          session: work.session,
+          code: "membership_unsupported",
+        });
+        await refreshViews();
+      } else {
+        await store.deferPreparation({
+          accountId: work.accountId,
+          commandId: work.commandId,
+          attemptId: work.attemptId,
+          nextAttemptAtMs: runtime.nowMs() + 1000,
+        });
+      }
+      return;
+    }
+    if (membership.value.status === "page") {
+      const prepared = await store.applyPreparationPage({
+        accountId: work.accountId,
+        commandId: work.commandId,
+        attemptId: work.attemptId,
+        session: work.session,
+        previousPage: work.page,
+        page: membership.value.page,
+      });
+      if (prepared.status !== "stale" && !membership.value.page.nextPage) {
+        await store.finishPreparation({
+          accountId: work.accountId,
+          commandId: work.commandId,
+        });
+      }
+    }
+    await refreshViews();
+  }
+
+  async function fetchConversationMessages(
+    key: ConversationKey,
+  ): Promise<ConversationFetch> {
+    const id = conversationFetchKey(key);
+    // Watching starts before the read, so a preparation landing in between
+    // still wakes this fill.
+    const preparation = watchPreparation(id);
+    let state = await store.readConversationMembershipState(
+      key,
+      runtime.nowMs(),
+    );
+    if (state === "preparing") {
+      await preparation.settled;
+      state = await store.readConversationMembershipState(key, runtime.nowMs());
+      // The command's own read was put off; it fills the conversation when
+      // it runs, and the reader stops waiting meanwhile.
+      if (state === "preparing") {
+        return { status: "unavailable", retryAfterMs: 0 };
+      }
+    } else {
+      preparation.cancel();
+    }
+    if (state === "complete") return { status: "complete" };
+    return inConversationFetchSlot(id, async () => {
+      // A command may have read the conversation while this waited its turn.
+      const current = await store.readConversationMembershipState(
+        key,
+        runtime.nowMs(),
+      );
+      if (current === "complete") return { status: "complete" };
+      if (current === "preparing") {
+        return { status: "unavailable", retryAfterMs: 0 };
+      }
+      return readConversationMembers(key);
+    });
+  }
+
+  // One provider read (Gmail's threads.get) per page of up to 100 messages.
+  // Its patches pass the same version check as hydration, so an older copy
+  // never overwrites what a sync page committed in the meantime.
+  async function readConversationMembers(
+    key: ConversationKey,
+  ): Promise<ConversationFetch> {
+    const id = conversationFetchKey(key);
+    const abort = new AbortController();
+    conversationFetchAborts.set(id, abort);
+    const timeout = setTimeout(() => abort.abort(), conversationFetchTimeoutMs);
+    try {
+      return await readConversationMemberPages(key, abort.signal);
+    } finally {
+      clearTimeout(timeout);
+      if (conversationFetchAborts.get(id) === abort) {
+        conversationFetchAborts.delete(id);
+      }
+    }
+  }
+
+  async function readConversationMemberPages(
+    key: ConversationKey,
+    signal: AbortSignal,
+  ): Promise<ConversationFetch> {
+    const account = (await store.readAccountSyncStates()).find(
+      (candidate) => candidate.accountId === key.accountId,
+    );
+    if (!account) {
+      return {
+        status: "unavailable",
+        retryAfterMs: CONVERSATION_FETCH_RETRY_MS,
+      };
+    }
+    const session = {
+      accountId: account.accountId,
+      generation: account.generation,
+    };
+    const resolutionId = runtime.randomId();
+    let page: string | null = null;
+    do {
+      const membership: Awaited<
+        ReturnType<MailboxSource["readConversationMembership"]>
+      > = await untilAborted(
+        source.readConversationMembership({
+          session,
+          requestId: runtime.randomId(),
+          signal,
+          conversation: key,
+          resolutionId,
+          page,
+          pageSize: 100,
+        }),
+        signal,
+      );
+      if (membership.status !== "ok") {
+        await noteConnection(key.accountId, membership);
+        return {
+          status: "unavailable",
+          retryAfterMs:
+            membership.status === "paused"
+              ? membership.retryAfterMs
+              : CONVERSATION_FETCH_RETRY_MS,
+        };
+      }
+      if (membership.value.status === "not_found") {
+        return {
+          status: "unavailable",
+          retryAfterMs: Number.POSITIVE_INFINITY,
+        };
+      }
+      if (membership.value.status !== "page") {
+        return {
+          status: "unavailable",
+          retryAfterMs: CONVERSATION_FETCH_RETRY_MS,
+        };
+      }
+      const applied = await store.applyConversationMembership({
+        session,
+        page: membership.value.page,
+      });
+      // The account was reset or removed while the provider answered.
+      if (applied.status === "stale") {
+        return { status: "unavailable", retryAfterMs: 0 };
+      }
+      await refreshViews();
+      page = membership.value.page.nextPage;
+    } while (page);
+    return { status: "complete" };
+  }
+
+  // Resolves when the command preparing a conversation next settles a read,
+  // or when the fill would have given up anyway.
+  function watchPreparation(id: string) {
+    let done: () => void = () => undefined;
+    const settled = new Promise<void>((resolve) => {
+      done = resolve;
+    });
+    const timeout = setTimeout(() => finish(), conversationFetchTimeoutMs);
+    const watchers = preparationWatchers.get(id) ?? new Set<() => void>();
+    preparationWatchers.set(id, watchers);
+    function finish() {
+      clearTimeout(timeout);
+      watchers.delete(finish);
+      if (watchers.size === 0 && preparationWatchers.get(id) === watchers) {
+        preparationWatchers.delete(id);
+      }
+      done();
+    }
+    watchers.add(finish);
+    return { settled, cancel: finish };
+  }
+
+  function notifyPreparationWatchers(id: string) {
+    for (const finish of [...(preparationWatchers.get(id) ?? [])]) finish();
+  }
+
+  // An account added back after a purge starts over, without waiting out
+  // the backoff its earlier fills earned.
+  function stopConversationFetches(accountId: string | null) {
+    const prefix =
+      accountId === null
+        ? ""
+        : conversationFetchKey({ accountId, conversationId: "" });
+    for (const [id, abort] of conversationFetchAborts) {
+      if (id.startsWith(prefix)) abort.abort();
+    }
+    for (const id of conversationFetchRetryAt.keys()) {
+      if (id.startsWith(prefix)) conversationFetchRetryAt.delete(id);
+    }
+    for (const id of [...preparationWatchers.keys()]) {
+      if (id.startsWith(prefix)) notifyPreparationWatchers(id);
+    }
+  }
+
+  async function inConversationFetchSlot(
+    id: string,
+    run: () => Promise<ConversationFetch>,
+  ): Promise<ConversationFetch> {
+    const dropped = { status: "unavailable" as const, retryAfterMs: 0 };
+    if (closed || (conversationFetches.get(id)?.waiters ?? 0) === 0) {
+      return dropped;
+    }
+    if (runningConversationFetches < MAX_CONVERSATION_FETCHES) {
+      runningConversationFetches += 1;
+    } else {
+      // A finishing fetch hands its slot straight to the next in line.
+      const started = await new Promise<boolean>((resolve) =>
+        queuedConversationFetches.push({
+          id,
+          start: () => resolve(true),
+          drop: () => resolve(false),
+        }),
+      );
+      if (!started) return dropped;
+    }
+    try {
+      return await run();
+    } finally {
+      const next = queuedConversationFetches.pop();
+      if (next) next.start();
+      else runningConversationFetches -= 1;
+    }
+  }
 
   function watchProviderSearches(query: ConversationQuery, wantedRows: number) {
     const observer = Symbol("mailbox-view");
@@ -810,6 +1133,7 @@ export function createMailEngine(input: {
           input.scope ??
           (await resolveScope(input.session, scopeId, input.signal)),
         afterMs: null,
+        initial: input.from.checkpoint === null,
       });
       if (bootstrap.status !== "ok") {
         await noteConnection(input.session.accountId, bootstrap);
@@ -894,6 +1218,9 @@ export function createMailEngine(input: {
       });
       if (applied.status === "stale") break;
       processedPages += 1;
+      // A first sync shows each page as it lands rather than after the whole
+      // slice, so a new mailbox fills in from its first page of mail.
+      refreshViews().catch(() => undefined);
       if (repeatedCursor) {
         await store.deferBootstrapScan({
           session: input.session,
@@ -924,61 +1251,91 @@ export function createMailEngine(input: {
   async function startSyncLanes() {
     const accounts = await store.readAccountSyncStates();
     for (const account of accounts) {
-      const { accountId } = account;
-      if (closed || syncLanes.has(accountId)) continue;
-      const retry = syncLaneRetries.get(accountId);
-      if (retry && retry.retryAtMs > runtime.nowMs()) continue;
-      const abort = new AbortController();
-      let timedOut = false;
-      const timeout = setTimeout(() => {
-        timedOut = true;
-        abort.abort();
-      }, syncLaneTimeoutMs);
-      // The lane settles on abort even if a request ignores the signal.
-      const aborted = new Promise<void>((resolve) => {
-        abort.signal.addEventListener("abort", () => resolve(), { once: true });
-      });
-      const lane: SyncLane = {
-        abort,
-        done: Promise.race([catchUpAccount(account, abort.signal), aborted])
-          .then(() => {
-            if (timedOut) {
-              failSyncLane(accountId, new Error("Mail sync lane timed out"));
-            } else {
-              syncLaneRetries.delete(accountId);
-            }
-          })
-          .catch((error: unknown) => {
-            // A purge or close stopped the lane on purpose.
-            if (abort.signal.aborted && !timedOut) return;
-            failSyncLane(accountId, error);
-          })
-          .finally(() => {
-            clearTimeout(timeout);
-            if (syncLanes.get(accountId) === lane) syncLanes.delete(accountId);
-          }),
-      };
-      syncLanes.set(accountId, lane);
+      startLane(account.accountId, (signal) => catchUpAccount(account, signal));
     }
   }
 
-  function failSyncLane(accountId: string, error: unknown) {
+  // A low-priority scope's backfill pages wait behind everything else for
+  // quota, so one page can take tens of seconds. It runs in a lane of its own
+  // so the account's lane stays free to read new mail the moment it is asked.
+  function startBackfill(input: {
+    session: { accountId: string; generation: string };
+    idleGate: IdleCatchUpGate;
+    stream: AccountSyncState["streams"][number];
+  }) {
+    const { session, idleGate, stream } = input;
+    startLane(backfillLaneKey(session.accountId), async (signal) => {
+      await ingestBootstrap({
+        session,
+        from: stream,
+        deadlineMs: runtime.nowMs() + SYNC_LANE_BOOTSTRAP_SLICE_MS,
+        signal,
+        requestId: runtime.randomId(),
+        scopeId: stream.streamId,
+        scope: idleGate.activeBootstrapScopes.get(stream.streamId),
+      });
+      if (signal.aborted) return;
+      await rememberBootstrapContinuation(idleGate, session, stream.streamId);
+    });
+  }
+
+  function startLane(laneKey: string, run: (signal: AbortSignal) => unknown) {
+    if (closed || syncLanes.has(laneKey)) return;
+    const retry = syncLaneRetries.get(laneKey);
+    if (retry && retry.retryAtMs > runtime.nowMs()) return;
+    const abort = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      abort.abort();
+    }, syncLaneTimeoutMs);
+    // The lane settles on abort even if a request ignores the signal.
+    const aborted = new Promise<void>((resolve) => {
+      abort.signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    const lane: SyncLane = {
+      abort,
+      done: Promise.race([run(abort.signal), aborted])
+        .then(() => {
+          if (timedOut) {
+            failSyncLane(laneKey, new Error("Mail sync lane timed out"));
+          } else {
+            syncLaneRetries.delete(laneKey);
+          }
+        })
+        .catch((error: unknown) => {
+          // A purge or close stopped the lane on purpose.
+          if (abort.signal.aborted && !timedOut) return;
+          failSyncLane(laneKey, error);
+        })
+        .finally(() => {
+          clearTimeout(timeout);
+          if (syncLanes.get(laneKey) === lane) syncLanes.delete(laneKey);
+        }),
+    };
+    syncLanes.set(laneKey, lane);
+  }
+
+  function failSyncLane(laneKey: string, error: unknown) {
     const delayMs = Math.min(
       SYNC_LANE_RETRY_MAX_MS,
-      (syncLaneRetries.get(accountId)?.delayMs ?? 0) * 2 ||
+      (syncLaneRetries.get(laneKey)?.delayMs ?? 0) * 2 ||
         SYNC_LANE_RETRY_MIN_MS,
     );
-    syncLaneRetries.set(accountId, {
+    syncLaneRetries.set(laneKey, {
       retryAtMs: runtime.nowMs() + delayMs,
       delayMs,
     });
     syncLaneErrors.push(error);
   }
 
-  function stopSyncLane(accountId: string) {
-    syncLanes.get(accountId)?.abort.abort();
-    syncLanes.delete(accountId);
-    syncLaneRetries.delete(accountId);
+  // Stopping an account's lane also stops its backfill.
+  function stopSyncLane(laneKey: string) {
+    for (const key of [laneKey, backfillLaneKey(laneKey)]) {
+      syncLanes.get(key)?.abort.abort();
+      syncLanes.delete(key);
+      syncLaneRetries.delete(key);
+    }
   }
 
   async function waitForSyncLanes(deadlineMs: number, signal?: AbortSignal) {
@@ -1111,6 +1468,12 @@ export function createMailEngine(input: {
         !stream.checkpoint ||
         (await resumesBootstrap(idleGate, session, stream.streamId, catchUpDue))
       ) {
+        if (idleGate.lowPriorityStreams.has(stream.streamId)) {
+          // A purge or close during the scan read must not restart the backfill.
+          if (signal.aborted) return;
+          startBackfill({ session, idleGate, stream });
+          continue;
+        }
         await ingestBootstrap({
           session,
           from: stream,
@@ -1245,9 +1608,16 @@ export function createMailEngine(input: {
       });
       await rememberBootstrapContinuation(idleGate, session, changes.scopeId);
     } else {
+      // A throttled read comes back as soon as the provider allows, so new
+      // mail waits out the quota window rather than a whole idle interval.
+      const intervalMs = streamCatchUpInterval(idleGate, stream.streamId);
+      const retryMs =
+        changes.status === "paused" && changes.reason === "throttled"
+          ? Math.max(SYNC_LANE_RETRY_MIN_MS, changes.retryAfterMs)
+          : intervalMs;
       idleGate.nextStreamCatchUpAtMs.set(
         stream.streamId,
-        runtime.nowMs() + streamCatchUpInterval(idleGate, stream.streamId),
+        runtime.nowMs() + Math.min(retryMs, intervalMs),
       );
       await noteConnection(session.accountId, changes);
     }
@@ -1498,6 +1868,32 @@ function providerSearchKey(accountId: string, predicate: MailPredicate) {
   return `${accountId}:${JSON.stringify(predicate)}`;
 }
 
+// Settles on abort even when the request ignores its signal.
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal) {
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new Error("Conversation fill stopped"));
+    if (signal.aborted) return onAbort();
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => {
+      signal.removeEventListener("abort", onAbort);
+    });
+  });
+}
+
+type ConversationFetchEntry = {
+  promise: Promise<ConversationCompletion>;
+  /** Callers still waiting; a queued fill with none is dropped. */
+  waiters: number;
+};
+
+type ConversationFetch =
+  | { status: "complete" }
+  | { status: "unavailable"; retryAfterMs: number };
+
+function conversationFetchKey(key: ConversationKey) {
+  return `${key.accountId}\u0000${key.conversationId}`;
+}
+
 type IdleCatchUpGate = {
   activeBootstrapScopes: Map<string, ScopeDescriptor>;
   generation: string;
@@ -1511,6 +1907,10 @@ type IdleCatchUpGate = {
 };
 
 type CheckStamp = { atMs: number; requestCount: number };
+
+function backfillLaneKey(accountId: string) {
+  return `${accountId}\u0000backfill`;
+}
 
 function idleGateDue(nextAtMs: number, nowMs: number, intervalMs: number) {
   return nextAtMs <= nowMs || nextAtMs - nowMs > intervalMs;

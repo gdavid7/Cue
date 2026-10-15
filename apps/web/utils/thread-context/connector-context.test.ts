@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
 import { createScopedLogger } from "@/utils/logger";
+import { redis } from "@/utils/redis";
 import {
   fetchConnectorCandidates,
   searchCanvas,
@@ -12,7 +13,11 @@ import {
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/redis", () => ({
-  redis: { get: vi.fn(async () => null), set: vi.fn(async () => "OK") },
+  redis: {
+    get: vi.fn(async () => null),
+    set: vi.fn(async () => "OK"),
+    del: vi.fn(async () => 1),
+  },
 }));
 const { mockExecuteTool } = vi.hoisted(() => ({ mockExecuteTool: vi.fn() }));
 vi.mock("@/utils/mcp/providers/registry", () => ({
@@ -305,6 +310,100 @@ describe("fetchConnectorCandidates with an unreadable app", () => {
   });
 });
 
+describe("fetchConnectorCandidates with an app that keeps failing", () => {
+  const logger = createScopedLogger("connector-context-test");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const store = new Map<string, unknown>();
+    vi.mocked(redis.get).mockImplementation(
+      async (key: string) => (store.get(key) ?? null) as never,
+    );
+    vi.mocked(redis.set).mockImplementation(async (key, value) => {
+      store.set(key as string, value);
+      return "OK";
+    });
+    vi.mocked(redis.del).mockImplementation(async (key) => {
+      store.delete(key as string);
+      return 1;
+    });
+    prisma.mcpConnection.findMany.mockResolvedValue([
+      {
+        id: "connection-slack",
+        updatedAt: new Date(1000),
+        emailAccountId: "school",
+        integration: { name: "slack" },
+      },
+    ] as never);
+  });
+
+  afterEach(() => {
+    vi.mocked(redis.get).mockImplementation(async () => null);
+    vi.mocked(redis.set).mockImplementation(async () => "OK");
+  });
+
+  it("doesn't wait on it again after it failed twice in a row, and says the result is partial", async () => {
+    mockExecuteTool.mockRejectedValue(new Error("internal_server_error"));
+    const search = () =>
+      fetchConnectorCandidates({
+        emailAccountId: "school",
+        keywords: ["milestone"],
+        logger,
+        now: NOW,
+      });
+
+    await search();
+    await search();
+    expect(mockExecuteTool).toHaveBeenCalledTimes(2);
+
+    const again = await search();
+
+    expect(mockExecuteTool).toHaveBeenCalledTimes(2);
+    expect(again).toEqual({ candidates: [], complete: false });
+  });
+
+  it("asks again after a single failure", async () => {
+    mockExecuteTool
+      .mockRejectedValueOnce(new Error("internal_server_error"))
+      .mockResolvedValueOnce({ messages: { matches: [] } })
+      .mockRejectedValueOnce(new Error("internal_server_error"))
+      .mockResolvedValue({ messages: { matches: [] } });
+    const search = () =>
+      fetchConnectorCandidates({
+        emailAccountId: "school",
+        keywords: ["milestone"],
+        logger,
+        now: NOW,
+      });
+
+    // Failures that a success separates never add up to a cooldown.
+    await search();
+    await search();
+    await search();
+    const fourth = await search();
+
+    expect(mockExecuteTool).toHaveBeenCalledTimes(4);
+    expect(fourth.complete).toBe(true);
+  });
+
+  it("keeps asking an app whose last search worked", async () => {
+    mockExecuteTool.mockResolvedValue({ messages: { matches: [] } });
+    const search = () =>
+      fetchConnectorCandidates({
+        emailAccountId: "school",
+        keywords: ["milestone"],
+        logger,
+        now: NOW,
+      });
+
+    await search();
+    const again = await search();
+
+    expect(mockExecuteTool).toHaveBeenCalledTimes(2);
+    expect(again.complete).toBe(true);
+  });
+});
+
 describe("fetchConnectorCandidates with links and the sender in the thread", () => {
   const logger = createScopedLogger("connector-context-test");
 
@@ -316,6 +415,8 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
   function connected(...apps: string[]) {
     prisma.mcpConnection.findMany.mockResolvedValue(
       apps.map((name) => ({
+        id: `connection-${name}`,
+        updatedAt: new Date(1000),
         emailAccountId: "school",
         integration: { name },
       })) as never,
@@ -336,11 +437,23 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
     return mockExecuteTool.mock.calls.map(([call]) => [call.tool, call.args]);
   }
 
-  function lookup(signals: { links?: string[]; senderEmail?: string }) {
+  /** Links as written in message m1, unless given with their message. */
+  function lookup({
+    links = [],
+    senderEmail,
+  }: {
+    links?: (string | { url: string; messageId: string })[];
+    senderEmail?: string;
+  }) {
     return fetchConnectorCandidates({
       emailAccountId: "school",
       keywords: [],
-      signals: { links: [], ...signals },
+      signals: {
+        links: links.map((link) =>
+          typeof link === "string" ? { url: link, messageId: "m1" } : link,
+        ),
+        ...(senderEmail ? { senderEmail } : {}),
+      },
       logger,
       now: NOW,
     });
@@ -392,6 +505,7 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
         url: "https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/edit",
         people: [{ email: "kruiz@ucsd.edu", name: "Kevin Ruiz" }],
         linkedBy: "url",
+        linkedFrom: "m1",
       },
     ]);
   });
@@ -412,7 +526,12 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
       emailAccountId: "school",
       keywords: ["milestone"],
       signals: {
-        links: [`https://docs.google.com/document/d/${file.id}/edit`],
+        links: [
+          {
+            url: `https://docs.google.com/document/d/${file.id}/edit`,
+            messageId: "m2",
+          },
+        ],
       },
       logger,
       now: NOW,
@@ -422,6 +541,7 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
       expect.objectContaining({
         id: `googledrive:${file.id}`,
         linkedBy: "url",
+        linkedFrom: "m2",
       }),
     ]);
   });
@@ -473,6 +593,7 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
         url: "https://acme.atlassian.net/browse/OPS-12",
         people: [{ email: "nora@acme.com", name: "Nora Patel" }],
         linkedBy: "url",
+        linkedFrom: "m1",
       },
     ]);
   });
@@ -671,6 +792,7 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
         url: "https://app.clickup.com/t/86abc123",
         people: [{ email: "kruiz@ucsd.edu", name: "Kevin Ruiz" }],
         linkedBy: "url",
+        linkedFrom: "m1",
       },
     ]);
   });
@@ -694,37 +816,46 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
           },
         ],
       }),
+      HUBSPOT_GET_ACCOUNT_INFO: () => ({
+        hub_id: 4211,
+        hub_domain: "northwind-sales.com",
+      }),
     });
 
     const { candidates } = await lookup({ senderEmail: "nora@northwind.com" });
 
-    expect(calls()).toEqual([
-      [
-        "HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA",
-        {
-          filterGroups: [
-            {
-              filters: [
-                {
-                  propertyName: "email",
-                  operator: "EQ",
-                  value: "nora@northwind.com",
-                },
-              ],
-            },
-          ],
-          properties: [
-            "email",
-            "firstname",
-            "lastname",
-            "jobtitle",
-            "company",
-            "lifecyclestage",
-            "lastmodifieddate",
-          ],
-          limit: 1,
-        },
-      ],
+    expect(calls()).toHaveLength(2);
+    expect(calls()).toContainEqual(["HUBSPOT_GET_ACCOUNT_INFO", {}]);
+    expect(redis.set).toHaveBeenCalledWith(
+      "hubspot-portal-id:connection-hubspot:1000",
+      "4211",
+      expect.anything(),
+    );
+    expect(calls()).toContainEqual([
+      "HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA",
+      {
+        filterGroups: [
+          {
+            filters: [
+              {
+                propertyName: "email",
+                operator: "EQ",
+                value: "nora@northwind.com",
+              },
+            ],
+          },
+        ],
+        properties: [
+          "email",
+          "firstname",
+          "lastname",
+          "jobtitle",
+          "company",
+          "lifecyclestage",
+          "lastmodifieddate",
+        ],
+        limit: 1,
+      },
     ]);
     expect(candidates).toEqual([
       {
@@ -735,10 +866,33 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
         text: "Nora Patel\nVP Finance · Northwind · customer",
         snippet: "VP Finance · Northwind · customer",
         at: "2026-09-01T00:00:00.000Z",
+        url: "https://app.hubspot.com/contacts/4211/record/0-1/501",
         people: [{ email: "nora@northwind.com", name: "Nora Patel" }],
         linkedBy: "sender",
       },
     ]);
+  });
+
+  it("links a HubSpot contact through the connection's cached portal without asking again", async () => {
+    connected("hubspot");
+    vi.mocked(redis.get).mockImplementation(async (key: string) =>
+      key === "hubspot-portal-id:connection-hubspot:1000" ? "4211" : null,
+    );
+    answer({
+      HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA: () => ({
+        results: [{ id: "501", properties: { email: "nora@northwind.com" } }],
+      }),
+    });
+
+    const { candidates } = await lookup({ senderEmail: "nora@northwind.com" });
+
+    expect(calls().map(([tool]) => tool)).toEqual([
+      "HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA",
+    ]);
+    expect(candidates[0]?.url).toBe(
+      "https://app.hubspot.com/contacts/4211/record/0-1/501",
+    );
+    vi.mocked(redis.get).mockImplementation(async () => null);
   });
 
   it("finds the sender among Salesforce contacts, then leads, ignoring partial matches", async () => {
@@ -762,14 +916,26 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
           },
         ],
       }),
+      SALESFORCE_GET_USER_INFO: () => ({
+        salesforce_user_details: {
+          user_id: "005A",
+          profile: "https://acme.my.salesforce.com/005A",
+          urls: {
+            rest: "https://acme.my.salesforce.com/services/data/v{version}/",
+          },
+        },
+      }),
     });
 
     const { candidates } = await lookup({ senderEmail: "nora@northwind.com" });
 
-    expect(calls()).toEqual([
+    expect(
+      calls().filter(([tool]) => tool !== "SALESFORCE_GET_USER_INFO"),
+    ).toEqual([
       ["SALESFORCE_SEARCH_CONTACTS", { email: "nora@northwind.com", limit: 5 }],
       ["SALESFORCE_SEARCH_LEADS", { email: "nora@northwind.com", limit: 5 }],
     ]);
+    expect(calls()).toContainEqual(["SALESFORCE_GET_USER_INFO", {}]);
     expect(candidates).toEqual([
       {
         id: "salesforce:00QB",
@@ -779,13 +945,59 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
         text: "Nora Patel\nVP Finance · Northwind · Lead: Working",
         snippet: "VP Finance · Northwind · Lead: Working",
         at: "2026-09-01T00:00:00.000Z",
+        url: "https://acme.my.salesforce.com/lightning/r/Lead/00QB/view",
         people: [{ email: "nora@northwind.com", name: "Nora Patel" }],
         linkedBy: "sender",
       },
     ]);
   });
 
-  it("uses a Salesforce contact without asking for leads", async () => {
+  it("links through the org's named domain before any other Salesforce address, cached by connection", async () => {
+    connected("salesforce");
+    answer({
+      SALESFORCE_SEARCH_CONTACTS: () => ({
+        totalSize: 1,
+        records: [{ Id: "003A", Name: "Nora", Email: "nora@northwind.com" }],
+      }),
+      SALESFORCE_GET_USER_INFO: () => ({
+        profile: "https://login-sandbox.my.salesforce.com/005A",
+        urls: { custom_domain: "https://acme.my.salesforce.com" },
+      }),
+    });
+
+    const { candidates } = await lookup({ senderEmail: "nora@northwind.com" });
+
+    expect(candidates[0]?.url).toBe(
+      "https://acme.my.salesforce.com/lightning/r/Contact/003A/view",
+    );
+    expect(redis.set).toHaveBeenCalledWith(
+      "salesforce-instance:connection-salesforce:1000",
+      "https://acme.my.salesforce.com",
+      expect.anything(),
+    );
+  });
+
+  it("links nowhere when Salesforce names an address outside its own domains", async () => {
+    connected("salesforce");
+    answer({
+      SALESFORCE_SEARCH_CONTACTS: () => ({
+        totalSize: 1,
+        records: [{ Id: "003A", Name: "Nora", Email: "nora@northwind.com" }],
+      }),
+      SALESFORCE_GET_USER_INFO: () => ({
+        profile: "https://acme.my.salesforce.com.evil.example/005A",
+      }),
+    });
+
+    const { candidates } = await lookup({ senderEmail: "nora@northwind.com" });
+
+    expect(candidates).toEqual([
+      expect.objectContaining({ id: "salesforce:003A", url: undefined }),
+    ]);
+  });
+
+  // GET_USER_INFO isn't answered here, so finding the instance fails.
+  it("uses a Salesforce contact without asking for leads, unlinked when the instance can't be found", async () => {
     connected("salesforce");
     answer({
       SALESFORCE_SEARCH_CONTACTS: () => ({
@@ -804,14 +1016,15 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
 
     const { candidates } = await lookup({ senderEmail: "nora@northwind.com" });
 
-    expect(calls().map(([tool]) => tool)).toEqual([
-      "SALESFORCE_SEARCH_CONTACTS",
-    ]);
+    expect(calls().map(([tool]) => tool)).not.toContain(
+      "SALESFORCE_SEARCH_LEADS",
+    );
     expect(candidates[0]).toMatchObject({
       id: "salesforce:003A",
       snippet: "VP Finance · Northwind",
       at: NOW.toISOString(),
     });
+    expect(candidates[0]?.url).toBeUndefined();
   });
 
   it("asks nothing of the apps when the thread has no links or sender", async () => {

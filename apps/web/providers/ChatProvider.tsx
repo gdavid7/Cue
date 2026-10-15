@@ -12,7 +12,9 @@ import {
   useRef,
   useState,
 } from "react";
+import { useAtomValue } from "jotai";
 import { useSWRConfig } from "swr";
+import { openThreadAtom } from "@/store/open-thread";
 import { captureException } from "@/utils/error";
 import { toastError } from "@/components/Toast";
 import { convertToUIMessages } from "@/components/assistant-chat/helpers";
@@ -32,6 +34,9 @@ import {
   ASSISTANT_CHAT_MAX_TEXT_LENGTH_MESSAGE,
 } from "@/utils/actions/assistant-chat.validation";
 import { createClientLogger } from "@/utils/logger-client";
+import { getActiveMailClient } from "@/utils/mail-engine/active-client";
+import { answerAssistantSearch } from "@/utils/mail-engine/assistant-search";
+import { submitLocalMailSearchResult } from "@/utils/actions/assistant-chat";
 
 const logger = createClientLogger("assistant-chat");
 
@@ -83,6 +88,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [inlineActions, setInlineActions] = useState<InlineEmailAction[]>([]);
   const inlineActionsRef = useRef(inlineActions);
+  const openThread = useAtomValue(openThreadAtom);
+  const openThreadRef = useRef<typeof openThread>(null);
   const pendingInlineActionsRef = useRef<InlineEmailAction[] | null>(null);
   const pendingRequestRef = useRef<PendingChatRequest | null>(null);
   const pendingRequestContextRef = useRef<MessageContext | null>(null);
@@ -129,6 +136,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             message: messages.at(-1),
             supportsInlineEmailCards: true,
             inlineActions: pendingInlineActionsRef.current ?? undefined,
+            openThreadId: openThreadRef.current?.threadId,
+            openMessageId: openThreadRef.current?.messageId,
+            localMailSearch: Boolean(getActiveMailClient()),
             ...body,
           },
         };
@@ -137,6 +147,26 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // messages: initialMessages, // NOTE: couldn't get this to work
     experimental_throttle: 100,
     generateId: generateUUID,
+    onData: (part) => {
+      if (part.type !== "data-local-mail-search") return;
+      answerAssistantSearch({
+        request: part.data,
+        accountId: emailAccountId,
+        client: getActiveMailClient(),
+        submit: async (input) => {
+          const result = await submitLocalMailSearchResult(
+            emailAccountId,
+            input,
+          );
+          if (result?.serverError || result?.validationErrors)
+            logger.warn("Local mail search answer was not accepted");
+        },
+      }).catch((error) => {
+        logger.warn("Local mail search failed", {
+          errorName: error instanceof Error ? error.name : typeof error,
+        });
+      });
+    },
     onFinish: async ({ isAbort }) => {
       pendingInlineActionsRef.current = null;
       pendingRequestRef.current = null;
@@ -269,6 +299,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     inlineActionsRef.current = inlineActions;
   }, [inlineActions]);
+
+  useEffect(() => {
+    // A thread from another account means nothing to this account's chat.
+    openThreadRef.current =
+      openThread?.emailAccountId === emailAccountId ? openThread : null;
+  }, [openThread, emailAccountId]);
 
   useEffect(() => {
     if (previousChatIdRef.current === chatId) return;
@@ -554,10 +590,26 @@ function reportChatRequestError({
   });
   logger.flush().catch(() => undefined);
   toastError({
-    description: "We couldn't send your message. Please try again.",
+    description:
+      getRateLimitMessage(error) ??
+      "We couldn't send your message. Please try again.",
   });
   console.error(error);
-  captureException(error);
+  // Hitting the rate limit is expected, not a bug to report.
+  if (getErrorStatusCode(error) !== 429) captureException(error);
+}
+
+// The chat transport puts the server's response body on the error.
+function getRateLimitMessage(error: unknown) {
+  if (getErrorStatusCode(error) !== 429) return null;
+  try {
+    const body = JSON.parse(
+      String((error as Record<string, unknown>).responseBody),
+    );
+    return typeof body?.error === "string" ? body.error : null;
+  } catch {
+    return null;
+  }
 }
 
 function getErrorStatusCode(error: unknown) {

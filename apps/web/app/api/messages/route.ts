@@ -74,9 +74,9 @@ async function getMessages({
 
     return { messages: incomingMessages, nextPageToken };
   } catch (error) {
+    logger.trace("Failed messages query", { query });
     logger.error("Error getting messages", {
       emailAccountId,
-      query,
       pageToken,
       error,
     });

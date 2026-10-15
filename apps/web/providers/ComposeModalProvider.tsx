@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -12,6 +13,7 @@ import { Maximize2Icon, Minimize2Icon, XIcon } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useModal } from "@/hooks/useModal";
 import { useAccounts } from "@/hooks/useAccounts";
+import { useVisualViewportBox } from "@/hooks/useVisualViewportBox";
 import { ComposeEmailFormLazy } from "@/app/(app)/[emailAccountId]/compose/ComposeEmailFormLazy";
 import type { ReplyingToEmail } from "@/app/(app)/[emailAccountId]/compose/ComposeEmailForm";
 import {
@@ -66,6 +68,7 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
     () => false,
   );
   const pathname = usePathname();
+  const visualViewportBoxRef = useVisualViewportBox(isPhone);
   const searchParams = useSearchParams();
   const { emailAccountId } = useAccount();
   const { isModalOpen, openModal, closeModal } = useModal();
@@ -99,20 +102,30 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
   const returnOpenReply = useCallback(() => {
     if (isOpen) reply?.onReturn?.();
   }, [isOpen, reply]);
+  // Nothing opens compose through a Radix trigger, so the dialog can't put
+  // focus back on its own.
+  const opener = useRef<HTMLElement | null>(null);
+  const rememberOpener = useCallback(() => {
+    if (isOpen) return;
+    const active = document.activeElement;
+    opener.current = active instanceof HTMLElement ? active : null;
+  }, [isOpen]);
   const openCompose = useCallback(() => {
+    rememberOpener();
     returnOpenReply();
     setIsExpanded(false);
     setPoppedOutReply(undefined);
     openModal();
-  }, [openModal, returnOpenReply]);
+  }, [openModal, returnOpenReply, rememberOpener]);
   const popOutReply = useCallback(
     (nextReply: PoppedOutReply) => {
+      rememberOpener();
       returnOpenReply();
       setIsExpanded(false);
       setPoppedOutReply(nextReply);
       openModal();
     },
-    [openModal, returnOpenReply],
+    [openModal, returnOpenReply, rememberOpener],
   );
   // Keeps the popped-out reply so undo send can reopen it.
   const closeCompose = useCallback(() => {
@@ -162,7 +175,12 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
 
   return (
     <ComposeModalContext.Provider value={contextValue}>
-      {props.children}
+      {/* Expanded compose covers the page, so what's behind it leaves the tab
+          order and the accessibility tree. Not via `modal`: switching it
+          remounts the dialog's content, and with it the draft. */}
+      <div className="contents" inert={isOpen && isExpanded}>
+        {props.children}
+      </div>
       <Dialog
         // A phone shows compose full screen, so the inbox behind it must not
         // take taps or focus. Wider screens keep it beside the mail.
@@ -177,11 +195,15 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
         <DialogContent
           className={cn(
             "fixed z-50 flex max-h-none max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden bg-background p-0",
+            // Full screen on a phone, but only the part the keyboard leaves
+            // visible, so Send stays reachable while typing.
+            "max-sm:top-[var(--visual-viewport-top,0px)] max-sm:bottom-auto max-sm:h-[var(--visual-viewport-height,100dvh)]",
             isExpanded
               ? "inset-0 h-dvh w-screen rounded-none border-0 shadow-none"
               : "inset-0 h-dvh w-screen sm:inset-auto sm:right-4 sm:bottom-4 sm:h-[min(42rem,calc(100dvh-1.5rem))] sm:w-[38rem] sm:rounded-xl sm:border sm:border-border sm:shadow-2xl",
           )}
           data-compose-expanded={isExpanded}
+          ref={visualViewportBoxRef}
           hideCloseButton
           hideOverlay
           onEscapeKeyDown={(event) => {
@@ -192,6 +214,18 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
             ) {
               event.preventDefault();
             }
+          }}
+          onCloseAutoFocus={(event) => {
+            const target = opener.current;
+            opener.current = null;
+            // Focus left with compose only if it was inside; docked compose
+            // sits beside the inbox, where the user may have moved on to
+            // another row that Enter should open.
+            const active = document.activeElement;
+            if (active && active !== document.body) return;
+            if (!target?.isConnected) return;
+            event.preventDefault();
+            target.focus();
           }}
           onInteractOutside={(event) => event.preventDefault()}
           unstyled

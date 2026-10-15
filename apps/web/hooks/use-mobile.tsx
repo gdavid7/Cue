@@ -39,3 +39,20 @@ function subscribeToLargeScreen(onChange: () => void) {
   mql?.addEventListener("change", onChange);
   return () => mql?.removeEventListener("change", onChange);
 }
+
+const COARSE_POINTER_QUERY = "(pointer: coarse)";
+
+/** A touchscreen is the main input, so there's no hardware Shift+Return. */
+export function useIsCoarsePointer() {
+  return React.useSyncExternalStore(
+    subscribeToCoarsePointer,
+    () => window.matchMedia?.(COARSE_POINTER_QUERY).matches ?? false,
+    () => false,
+  );
+}
+
+function subscribeToCoarsePointer(onChange: () => void) {
+  const mql = window.matchMedia?.(COARSE_POINTER_QUERY);
+  mql?.addEventListener("change", onChange);
+  return () => mql?.removeEventListener("change", onChange);
+}

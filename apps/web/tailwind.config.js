@@ -1,4 +1,5 @@
 const { fontFamily } = require("tailwindcss/defaultTheme");
+const plugin = require("tailwindcss/plugin");
 
 /** @type {import('tailwindcss').Config} */
 /* eslint-disable max-len */
@@ -42,6 +43,10 @@ module.exports = {
           from: { transform: "translateX(0)" },
           to: { transform: "translateX(calc(-200% - var(--gap)))" },
         },
+        "loop-progress": {
+          from: { transform: "scaleX(0)" },
+          to: { transform: "scaleX(1)" },
+        },
         "hero-reveal": {
           from: {
             opacity: 0,
@@ -61,6 +66,7 @@ module.exports = {
         marquee: "marquee var(--duration) linear infinite",
         "marquee-reverse": "marquee-reverse var(--duration) linear infinite",
         "hero-rise": "hero-reveal 0.4s ease-out both",
+        "loop-progress": "loop-progress 8s linear both",
         "hero-word": "hero-reveal 0.6s ease-out both",
       },
       fontFamily: {
@@ -237,5 +243,10 @@ module.exports = {
     require("tailwindcss-animate"),
     require("@headlessui/tailwindcss"),
     require("@tailwindcss/typography"),
+    // Tailwind 4's name for it: touch-only styles that narrow desktop
+    // windows shouldn't get.
+    plugin(({ addVariant }) => {
+      addVariant("pointer-coarse", "@media (pointer: coarse)");
+    }),
   ],
 };

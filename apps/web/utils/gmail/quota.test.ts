@@ -9,6 +9,7 @@ import {
   currentGmailQuotaContext,
   GmailCallDeferredError,
   gmailRequestCost,
+  holdGmailInteractiveDemand,
   logGmailQuotaUsage,
   meterGmailCall,
   runWithGmailQuota,
@@ -32,6 +33,14 @@ const ACCOUNT = "account-1";
 // The gate remembers marks per process, so this scan gets its own account.
 const BACKFILL_ACCOUNT = "account-backfill";
 const JOBS_ACCOUNT = "account-jobs";
+const PACE_ACCOUNT = "account-pace";
+const YIELD_ACCOUNT = "account-yield";
+const LARGE_ACCOUNT = "account-large";
+const OPEN_ACCOUNT = "account-open";
+const TURN_ACCOUNT = "account-turn";
+const STUCK_TURN_ACCOUNT = "account-stuck-turn";
+// Gmail refuses short bursts past this many units a second, per user.
+const GMAIL_UNITS_PER_SECOND = 250;
 const logger = createScopedLogger("gmail-quota-test");
 const quotaRefusal = {
   status: 403,
@@ -82,37 +91,40 @@ describe("Gmail quota gate", () => {
   });
 
   it("keeps a reserved slice for interactive calls once sync has spent the bucket", async () => {
-    const sync = () =>
-      runWithGmailQuota(
-        { caller: "mail/v1/enumeration", priority: "sync" },
-        () =>
-          meterGmailCall(
-            { emailAccountId: ACCOUNT, cost: 400 },
-            async () => "page",
-          ),
-      );
-    await sync();
-    await sync();
-    // A third page has to wait for the bucket to refill.
-    let third = false;
-    sync().then(() => {
-      third = true;
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(third).toBe(false);
+    let stop = false;
+    let pages = 0;
+    const scan = (async () => {
+      while (!stop) {
+        await runWithGmailQuota(
+          { caller: "mail/v1/enumeration", priority: "sync" },
+          () =>
+            meterGmailCall(
+              { emailAccountId: ACCOUNT, cost: 100 },
+              async () => "page",
+            ),
+        );
+        pages++;
+      }
+    })();
+    await vi.advanceTimersByTimeAsync(30_000);
+    // The scan has spent the bucket down to its floor and now runs at the
+    // bucket's refill rate: 1,000 - 200 + 30 s at 60 units a second.
+    expect(pages).toBeLessThanOrEqual(26);
 
-    await expect(
-      runWithGmailQuota(
-        { caller: "chat/readEmail", priority: "interactive" },
-        () =>
-          meterGmailCall(
-            { emailAccountId: ACCOUNT, cost: 40 },
-            async () => "read",
-          ),
-      ),
-    ).resolves.toBe("read");
+    let read = false;
+    runWithGmailQuota(
+      { caller: "chat/readEmail", priority: "interactive" },
+      () =>
+        meterGmailCall({ emailAccountId: ACCOUNT, cost: 40 }, async () => {
+          read = true;
+        }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toBe(true);
+
+    stop = true;
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(third).toBe(true);
+    await scan;
   });
 
   it("pauses only background callers when Gmail refuses a background call", async () => {
@@ -148,7 +160,7 @@ describe("Gmail quota gate", () => {
         { caller: "mail/v1/enumeration", priority: "sync" },
         () =>
           meterGmailCall(
-            { emailAccountId: ACCOUNT, cost: 500 },
+            { emailAccountId: ACCOUNT, cost: 100 },
             async () => "page",
           ),
       ),
@@ -233,6 +245,7 @@ describe("Gmail quota gate", () => {
       expect.objectContaining({
         minute: "2026-10-14T13:00:00.000Z",
         totalUnits: 120,
+        peakSecondUnits: 120,
         unitsByCaller: [
           {
             priority: "interactive",
@@ -248,6 +261,7 @@ describe("Gmail quota gate", () => {
       "emailAccountId",
       "limitUnits",
       "minute",
+      "peakSecondUnits",
       "refusedByCaller",
       "storeUnavailableByCaller",
       "storeUnavailableCalls",
@@ -401,18 +415,30 @@ describe("Gmail quota gate", () => {
     expect(job.retryAfterMs).toBeLessThanOrEqual(80_000);
   });
 
-  it("makes every caller wait out Gmail's minute after a refusal outside background work", async () => {
+  it("pauses sync and background after a refusal but keeps admitting what a person is waiting on", async () => {
     await expect(
       runWithGmailQuota(
-        { caller: "mail/v1/conversation-membership", priority: "interactive" },
+        { caller: "mail/v1/enumeration", priority: "sync" },
         () =>
-          meterGmailCall({ emailAccountId: ACCOUNT, cost: 40 }, async () => {
+          meterGmailCall({ emailAccountId: ACCOUNT, cost: 100 }, async () => {
             throw quotaRefusal;
           }),
       ),
     ).rejects.toBe(quotaRefusal);
+    await vi.advanceTimersByTimeAsync(1000);
 
-    // The bucket is empty: a sync page waits for it to refill.
+    // A chat search right after: admitted at once, with Gmail's own retry
+    // left to handle a refusal, rather than held until it gives up.
+    const search = vi.fn(async () => "results");
+    await expect(
+      runWithGmailQuota(
+        { caller: "chat/searchInbox", priority: "interactive" },
+        () => meterGmailCall({ emailAccountId: ACCOUNT, cost: 200 }, search),
+      ),
+    ).resolves.toBe("results");
+    expect(search).toHaveBeenCalledTimes(1);
+
+    // The sync waits out the pause.
     let page = false;
     runWithGmailQuota({ caller: "mail/v1/enumeration", priority: "sync" }, () =>
       meterGmailCall(
@@ -422,21 +448,180 @@ describe("Gmail quota gate", () => {
     ).then(() => {
       page = true;
     });
-    await vi.advanceTimersByTimeAsync(4000);
+    await vi.advanceTimersByTimeAsync(5000);
     expect(page).toBe(false);
-    await vi.advanceTimersByTimeAsync(2000);
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(page).toBe(true);
-    // Background work stays out until the pause ends.
-    await expect(
-      runWithGmailQuota(
-        { caller: "user/inbox-insights", priority: "background" },
-        () =>
-          meterGmailCall(
-            { emailAccountId: ACCOUNT, cost: 20 },
-            async () => "x",
-          ),
+    // Background work stays out until its longer pause ends.
+    let insight = false;
+    runWithGmailQuota(
+      { caller: "user/inbox-insights", priority: "background" },
+      () =>
+        meterGmailCall({ emailAccountId: ACCOUNT, cost: 20 }, async () => {
+          insight = true;
+        }),
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(insight).toBe(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(insight).toBe(true);
+  });
+
+  it("never admits more in any second than Gmail allows, leaving room for interactive calls", async () => {
+    const admissions: Array<{ at: number; cost: number }> = [];
+    const admit = (
+      priority: "sync" | "background" | "interactive",
+      cost: number,
+    ) =>
+      runWithGmailQuota({ caller: `test/${priority}`, priority }, () =>
+        meterGmailCall({ emailAccountId: PACE_ACCOUNT, cost }, async () => {
+          admissions.push({ at: Date.now(), cost });
+        }),
+      );
+    // A first sync asks for everything at once, as a page of batches does.
+    const sync = Promise.all(
+      Array.from({ length: 10 }, () => admit("sync", 100)),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    // A person opens a thread in the middle of it.
+    let openedIn: number | null = null;
+    const openedAt = Date.now();
+    admit("interactive", 40).then(() => {
+      openedIn = Date.now() - openedAt;
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(openedIn).not.toBeNull();
+    expect(openedIn).toBeLessThan(1000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await sync;
+
+    const peakSecond = Math.max(
+      ...admissions.map(({ at }) =>
+        admissions
+          .filter((entry) => entry.at >= at && entry.at < at + 1000)
+          .reduce((sum, entry) => sum + entry.cost, 0),
       ),
-    ).rejects.toBeInstanceOf(GmailCallDeferredError);
+    );
+    expect(peakSecond).toBeLessThanOrEqual(GMAIL_UNITS_PER_SECOND);
+  });
+
+  it("gives way to a person for two seconds, then gives sync its full share back", async () => {
+    const admissions: Array<{ at: number; priority: string; cost: number }> =
+      [];
+    const admit = (
+      priority: "sync" | "background" | "interactive",
+      cost: number,
+    ) =>
+      runWithGmailQuota({ caller: `test/${priority}`, priority }, () =>
+        meterGmailCall({ emailAccountId: YIELD_ACCOUNT, cost }, async () => {
+          admissions.push({ at: Date.now(), priority, cost });
+        }),
+      );
+    const start = Date.now();
+    // A first inbox page's batch: five messages.
+    await admit("interactive", 100);
+
+    // Sync asks for everything it can get, a message at a time.
+    let stop = false;
+    const scan = (async () => {
+      while (!stop) await admit("sync", 20);
+    })();
+    let insight = false;
+    admit("background", 20).then(() => {
+      insight = true;
+    });
+    await vi.advanceTimersByTimeAsync(1900);
+    // Background waits out the person's two seconds entirely.
+    expect(insight).toBe(false);
+    await vi.advanceTimersByTimeAsync(2100);
+    stop = true;
+    await vi.advanceTimersByTimeAsync(2000);
+    await scan;
+
+    const units = (priority: string, from: number, to: number) =>
+      admissions
+        .filter(
+          (entry) =>
+            entry.priority === priority &&
+            entry.at >= start + from &&
+            entry.at < start + to,
+        )
+        .reduce((sum, entry) => sum + entry.cost, 0);
+    // At most 40 units a second while the person is being served...
+    expect(units("sync", 0, 1000)).toBeLessThanOrEqual(40);
+    expect(units("sync", 1000, 2000)).toBeLessThanOrEqual(40);
+    // ...and its full 160 a second once they have been.
+    expect(units("sync", 2500, 3500)).toBeGreaterThan(120);
+    expect(insight).toBe(true);
+  });
+
+  it("keeps sync's full share while a person opens a thread", async () => {
+    const admissions: Array<{ at: number; priority: string; cost: number }> =
+      [];
+    const admit = (priority: "sync" | "interactive", cost: number) =>
+      runWithGmailQuota({ caller: `test/${priority}`, priority }, () =>
+        meterGmailCall({ emailAccountId: OPEN_ACCOUNT, cost }, async () => {
+          admissions.push({ at: Date.now(), priority, cost });
+        }),
+      );
+    const start = Date.now();
+    let stop = false;
+    const scan = (async () => {
+      while (!stop) await admit("sync", 20);
+    })();
+    // Opening a thread: its messages, one small read each.
+    const reads: Promise<unknown>[] = [];
+    for (let read = 0; read < 3; read++) {
+      await vi.advanceTimersByTimeAsync(300);
+      reads.push(admit("interactive", 40));
+    }
+    await vi.advanceTimersByTimeAsync(2000);
+    await Promise.all(reads);
+    stop = true;
+    await vi.advanceTimersByTimeAsync(1000);
+    await scan;
+
+    const syncUnits = admissions
+      .filter(
+        (entry) =>
+          entry.priority === "sync" &&
+          entry.at >= start + 1000 &&
+          entry.at < start + 2000,
+      )
+      .reduce((sum, entry) => sum + entry.cost, 0);
+    // The second after the thread opened, sync still fills what the person's
+    // reads leave of its 160 units.
+    expect(syncUnits).toBeGreaterThanOrEqual(120);
+  });
+
+  it("admits a call larger than its priority's per-second cap once the second has room for it alone", async () => {
+    // A background cron job renews the Gmail watch: 100 units, more than
+    // background's 80 a second.
+    const watchCost = gmailRequestCost(
+      "POST",
+      "https://gmail.googleapis.com/gmail/v1/users/me/watch",
+    );
+    expect(watchCost).toBe(100);
+    const admissions: Array<{ at: number; cost: number }> = [];
+    const admit = (priority: "sync" | "background", cost: number) =>
+      runWithGmailQuota({ caller: `test/${priority}`, priority }, () =>
+        meterGmailCall({ emailAccountId: LARGE_ACCOUNT, cost }, async () => {
+          admissions.push({ at: Date.now(), cost });
+        }),
+      );
+    await admit("sync", 60);
+    let renewed = false;
+    admit("background", watchCost).then(() => {
+      renewed = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(renewed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(renewed).toBe(true);
+    // It went alone, so the second still stayed within the total cap.
+    expect(admissions.at(-1)?.at).toBeGreaterThanOrEqual(
+      (admissions[0]?.at ?? 0) + 1000,
+    );
   });
 
   it("treats what a person clicked, typed or opened, or what blocks the page they opened, as interactive and only enrichment as background", () => {
@@ -450,6 +635,7 @@ describe("Gmail quota gate", () => {
       "user/senders/unsubscribe",
       "user/senders/status",
       "user/search-answer",
+      "user/signature",
       "user/drafts/update",
       "user/scheduled-emails/retry",
       "user/snoozed-threads/create",
@@ -504,6 +690,68 @@ describe("Gmail quota gate", () => {
         }),
       ),
     ).resolves.toBeNull();
+  });
+
+  it("holds sync and background back for a whole assistant turn until it ends", async () => {
+    const admissions: Array<{ at: number; priority: string; cost: number }> =
+      [];
+    const admit = (priority: "sync" | "background", cost: number) =>
+      runWithGmailQuota({ caller: `test/${priority}`, priority }, () =>
+        meterGmailCall({ emailAccountId: TURN_ACCOUNT, cost }, async () => {
+          admissions.push({ at: Date.now(), priority, cost });
+        }),
+      );
+    const start = Date.now();
+    const release = await holdGmailInteractiveDemand(TURN_ACCOUNT, 45_000);
+
+    let stop = false;
+    const scan = (async () => {
+      while (!stop) await admit("sync", 20);
+    })();
+    // Well past a single large request's two seconds.
+    await vi.advanceTimersByTimeAsync(8000);
+    // Background is told to come back after the turn rather than waiting.
+    await expect(admit("background", 20)).rejects.toBeInstanceOf(
+      GmailCallDeferredError,
+    );
+    // Sync still brings new mail in, at the yielding pace.
+    const syncDuringTurn = admissions
+      .filter((entry) => entry.at >= start + 5000 && entry.at < start + 6000)
+      .reduce((sum, entry) => sum + entry.cost, 0);
+    expect(syncDuringTurn).toBeGreaterThan(0);
+    expect(syncDuringTurn).toBeLessThanOrEqual(40);
+
+    await release();
+    let insight = false;
+    admit("background", 20).then(() => {
+      insight = true;
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    stop = true;
+    await vi.advanceTimersByTimeAsync(1000);
+    await scan;
+    expect(insight).toBe(true);
+  });
+
+  it("lets go of a turn that never ends once its cap runs out", async () => {
+    await holdGmailInteractiveDemand(STUCK_TURN_ACCOUNT, 3000);
+    let insight = false;
+    // Within its 15-second wait, background sits the hold out.
+    runWithGmailQuota(
+      { caller: "test/background", priority: "background" },
+      () =>
+        meterGmailCall(
+          { emailAccountId: STUCK_TURN_ACCOUNT, cost: 20 },
+          async () => {
+            insight = true;
+          },
+        ),
+    );
+
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(insight).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(insight).toBe(true);
   });
 
   it("tells the assistant when Gmail is limiting requests", () => {

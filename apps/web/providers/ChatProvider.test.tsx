@@ -8,6 +8,8 @@ import type { ChatMessage } from "@/components/assistant-chat/types";
 import { ASSISTANT_CHAT_MAX_TEXT_LENGTH } from "@/utils/actions/assistant-chat.validation";
 import type { MessageContext } from "@/utils/ai/assistant/chat-context-validation";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
+import { getDefaultStore } from "jotai";
+import { openThreadAtom } from "@/store/open-thread";
 import { ChatProvider, useChat } from "./ChatProvider";
 
 const {
@@ -57,9 +59,25 @@ const {
   },
 }));
 
+const { mockSubmitLocalMailSearchResult, localSearchState } = vi.hoisted(
+  () => ({
+    mockSubmitLocalMailSearchResult: vi.fn(async () => ({ data: undefined })),
+    localSearchState: {
+      onData: undefined as ((part: unknown) => void) | undefined,
+    },
+  }),
+);
+vi.mock("@/utils/actions/assistant-chat", () => ({
+  submitLocalMailSearchResult: mockSubmitLocalMailSearchResult,
+}));
+
 vi.mock("@ai-sdk/react", () => ({
-  useChat: (options: { onError?: (error: Error) => void }) => {
+  useChat: (options: {
+    onError?: (error: Error) => void;
+    onData?: (part: unknown) => void;
+  }) => {
     chatState.onError = options.onError;
+    localSearchState.onData = options.onData;
     return {
       id: chatState.id,
       messages: chatState.messages,
@@ -409,6 +427,44 @@ describe("ChatProvider", () => {
     expect(mockCaptureException).toHaveBeenCalledWith(error);
   });
 
+  it("shows the server's message when the user is over the rate limit", async () => {
+    const error = Object.assign(new Error("rate limited"), {
+      statusCode: 429,
+      responseBody: JSON.stringify({
+        error: "Cue needs a short break. Try again in a few minutes.",
+        isKnownError: true,
+      }),
+    });
+    mockSendMessage.mockRejectedValueOnce(error);
+
+    let latestContext: ReturnType<typeof useChat> | undefined;
+
+    function Consumer() {
+      latestContext = useChat();
+      return null;
+    }
+
+    renderWithProvider(<Consumer />);
+
+    act(() => {
+      latestContext?.setInput("One more question");
+    });
+    await waitFor(() => {
+      expect(latestContext?.input).toBe("One more question");
+    });
+    act(() => {
+      latestContext?.handleSubmit();
+    });
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith({
+        description: "Cue needs a short break. Try again in a few minutes.",
+      });
+    });
+    expect(latestContext?.input).toBe("One more question");
+    expect(mockCaptureException).not.toHaveBeenCalled();
+  });
+
   it("rejects oversized drafts before sending and keeps their content", async () => {
     const draft = "a".repeat(ASSISTANT_CHAT_MAX_TEXT_LENGTH + 1);
     let latestContext: ReturnType<typeof useChat> | undefined;
@@ -479,8 +535,102 @@ describe("ChatProvider", () => {
       id: "chat-1",
       message,
       supportsInlineEmailCards: true,
+      localMailSearch: false,
       context: buildFixRuleContext("thread-1"),
     });
+  });
+
+  it.each([
+    [
+      "names the thread open in this account and its latest message",
+      "account-a",
+      { openThreadId: "t-42", openMessageId: "m-7" },
+    ],
+    [
+      "leaves out a thread open in another account",
+      "account-b",
+      { openThreadId: undefined, openMessageId: undefined },
+    ],
+  ])("%s", async (_name, ownerAccountId, expected) => {
+    getDefaultStore().set(openThreadAtom, {
+      emailAccountId: ownerAccountId,
+      threadId: "t-42",
+      messageId: "m-7",
+    });
+    renderWithProvider(null);
+    const transport = mockChatTransport.mock.results.at(-1)
+      ?.value as DefaultChatTransport<ChatMessage>;
+    vi.mocked(fetch).mockResolvedValueOnce(new Response("data: [DONE]\n\n"));
+
+    await transport.sendMessages({
+      trigger: "submit-message",
+      chatId: "chat-1",
+      messageId: undefined,
+      abortSignal: undefined,
+      messages: [
+        {
+          id: "user-message",
+          role: "user",
+          parts: [{ type: "text", text: "What's this about?" }],
+        },
+      ],
+    });
+    getDefaultStore().set(openThreadAtom, null);
+
+    const [, request] = vi.mocked(fetch).mock.calls.at(-1)!;
+    const body = JSON.parse(request?.body as string);
+    expect({
+      openThreadId: body.openThreadId,
+      openMessageId: body.openMessageId,
+    }).toEqual(expected);
+  });
+
+  it("answers the assistant's local mail searches for this account", async () => {
+    renderWithProvider(null);
+
+    localSearchState.onData?.({
+      type: "data-local-mail-search",
+      data: {
+        requestId: "8d4a1f8e-5f5c-4b9b-9a51-4f1f0e7a2c11",
+        query: "from:jobs@acme.com",
+        limit: 20,
+      },
+    });
+
+    // No mail engine runs in this test, so it says so straight away.
+    await vi.waitFor(() =>
+      expect(mockSubmitLocalMailSearchResult).toHaveBeenCalledWith(
+        "account-a",
+        {
+          requestId: "8d4a1f8e-5f5c-4b9b-9a51-4f1f0e7a2c11",
+          result: { status: "unavailable", reason: "no_engine" },
+        },
+      ),
+    );
+  });
+
+  it("tells the server whether this tab can search its local mail", async () => {
+    renderWithProvider(null);
+    const transport = mockChatTransport.mock.results.at(-1)
+      ?.value as DefaultChatTransport<ChatMessage>;
+    vi.mocked(fetch).mockResolvedValueOnce(new Response("data: [DONE]\n\n"));
+
+    await transport.sendMessages({
+      trigger: "submit-message",
+      chatId: "chat-1",
+      messageId: undefined,
+      abortSignal: undefined,
+      messages: [
+        {
+          id: "user-message",
+          role: "user",
+          parts: [{ type: "text", text: "Any interviews?" }],
+        },
+      ],
+    });
+
+    const [, request] = vi.mocked(fetch).mock.calls.at(-1)!;
+    expect(JSON.parse(request?.body as string).localMailSearch).toBe(false);
   });
 
   it("resumes the existing reply without starting another generation", async () => {

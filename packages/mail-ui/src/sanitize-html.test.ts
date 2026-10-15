@@ -133,4 +133,49 @@ describe("sanitizeMailHtml", () => {
     expect(csp?.getAttribute("content")).toContain("img-src data:");
     expect(csp?.getAttribute("content")).not.toContain("https:");
   });
+
+  it("uses only CSP directives browsers recognise", () => {
+    // Chrome logs a console error for every frame that names an unknown
+    // directive, so one stray directive floods the console of every thread.
+    const document = buildMailHtmlDocument({
+      html: "<p>Hello</p>",
+      darkTreatment: "light",
+      imageProxyBaseUrl: null,
+      imageProxyOrigin: null,
+      documentKey: "test-document",
+      allowRemoteImages: false,
+    });
+    const content = new DOMParser()
+      .parseFromString(document, "text/html")
+      .querySelector('meta[http-equiv="Content-Security-Policy"]')
+      ?.getAttribute("content");
+    const directives = (content ?? "")
+      .split(";")
+      .map((directive) => directive.trim().split(/\s+/)[0])
+      .filter(Boolean);
+
+    expect(directives.length).toBeGreaterThan(0);
+    for (const directive of directives) {
+      expect(RECOGNISED_CSP_DIRECTIVES).toContain(directive);
+    }
+  });
 });
+
+// CSP Level 3 fetch, document and navigation directives that Chrome, Firefox
+// and Safari all parse. `prefetch-src` was dropped from the spec and is not.
+const RECOGNISED_CSP_DIRECTIVES = [
+  "default-src",
+  "script-src",
+  "style-src",
+  "img-src",
+  "font-src",
+  "media-src",
+  "connect-src",
+  "manifest-src",
+  "worker-src",
+  "child-src",
+  "frame-src",
+  "object-src",
+  "base-uri",
+  "form-action",
+];
