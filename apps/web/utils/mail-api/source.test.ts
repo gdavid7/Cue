@@ -1867,6 +1867,46 @@ describe("Gmail history expiry", () => {
     ]);
     await engine.close();
   });
+
+  it("sends the bodies of at most 50 messages on one catch-up page and hydrates the rest", async () => {
+    const ids = Array.from({ length: 120 }, (_, index) => `m-${index}`);
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "a",
+      provider: {
+        name: "google",
+        async getMailboxSyncPage() {
+          return {
+            cursor: "next",
+            reset: false,
+            upsertedMessages: ids.map((id) => ({
+              ...searchMessage(id),
+              textPlain: `body of ${id}`,
+            })),
+            includesBodies: true,
+            deletedMessageIds: [],
+            hasMore: false,
+          };
+        },
+      } as unknown as EmailProvider,
+    });
+
+    const result = await source.readChanges({
+      session: { accountId: "a", generation: "g1" },
+      requestId: "r1",
+      position: { streamId: "primary", generation: "g1", checkpoint: "1" },
+      pageSize: 50,
+      signal: new AbortController().signal,
+    });
+    if (result.status !== "page") throw new Error("expected a page");
+
+    const withBody = (result.page.bodies ?? []).map(
+      (body) => body.key.messageId,
+    );
+    const hydrated = result.page.requiredHydration.map((key) => key.messageId);
+    expect(withBody.length).toBeLessThanOrEqual(50);
+    expect([...withBody, ...hydrated].sort()).toEqual([...ids].sort());
+  });
 });
 
 describe("structured mailbox search", () => {

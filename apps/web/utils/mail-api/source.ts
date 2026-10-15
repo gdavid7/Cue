@@ -49,6 +49,8 @@ import {
 // Outlook allows four concurrent Graph requests per mailbox, shared with
 // webhook processing, so batched folder reads stay below that.
 const CHANGES_BATCH_CONCURRENCY = 3;
+// As many bodies as a full enumeration page carries.
+const MAX_CHANGES_PAGE_BODIES = 50;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Gmail's first scan covers only recent mail so the inbox fills and live
@@ -334,15 +336,18 @@ export function createEmailProviderMailboxSource(input: {
         }
         // A page without bodies carries metadata only, so a body-derived flag
         // such as a meeting invitation must not stand in for the body.
-        const { requiredHydration, bodies } = page.includesBodies
-          ? parsedMessageBodies(accountId, page.upsertedMessages)
-          : {
-              requiredHydration: page.upsertedMessages.map((message) => ({
-                accountId,
-                messageId: message.id,
-              })),
-              bodies: [],
-            };
+        // Bodies can be megabytes each, so one page carries a bounded number
+        // and the rest are hydrated in batches.
+        const withBodies = page.includesBodies
+          ? page.upsertedMessages.slice(0, MAX_CHANGES_PAGE_BODIES)
+          : [];
+        const { requiredHydration, bodies } = parsedMessageBodies(
+          accountId,
+          withBodies,
+        );
+        for (const message of page.upsertedMessages.slice(withBodies.length)) {
+          requiredHydration.push({ accountId, messageId: message.id });
+        }
         return {
           status: "page" as const,
           page: {
