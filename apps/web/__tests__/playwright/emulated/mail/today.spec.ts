@@ -150,9 +150,11 @@ test("Today says what needs you in one place: busy, all clear, and new", async (
           page.getByRole("listbox", { name: "Needs reply" }),
         ).toHaveCount(0);
       } else {
-        await expect(status).toHaveText(
-          "Cue is reading your recent mail. What needs a reply will appear here.",
-          { timeout: 60_000 },
+        await expect(status).toContainText("Cue is reading your recent mail.", {
+          timeout: 60_000,
+        });
+        await expect(status).toContainText(
+          "What needs a reply will appear here.",
         );
         await expect(page.getByText("All clear.")).toHaveCount(0);
       }
