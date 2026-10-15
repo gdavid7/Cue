@@ -478,6 +478,32 @@ describe("aiProcessAssistantChat turn limits", () => {
     });
   });
 
+  it("caps Slack, Teams and Telegram turns at six tool steps too", async () => {
+    vi.clearAllMocks();
+    vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
+    await aiProcessAssistantChat({
+      messages: [{ role: "user", content: "what's new?" }],
+      emailAccountId: "email-account-id",
+      user: getEmailAccount(),
+      responseSurface: "messaging",
+      messagingPlatform: "slack",
+      logger: createTestLogger(),
+    });
+    const [options] = vi.mocked(toolCallAgentStream).mock.calls[0];
+
+    expect(
+      await options.prepareStep!({
+        stepNumber: 6,
+        steps: [],
+        messages: [{ role: "user", content: "what's new?" }],
+        model: {
+          provider: "google.generative-ai",
+          modelId: "gemini-3.8-flash",
+        },
+      } as never),
+    ).toMatchObject({ activeTools: [], toolChoice: "none" });
+  });
+
   it("answers without more tools once a web turn has spent 45 seconds", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {

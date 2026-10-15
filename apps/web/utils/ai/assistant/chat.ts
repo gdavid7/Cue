@@ -72,6 +72,8 @@ const ASSISTANT_CHAT_TOOL_BUDGET_MS = {
   web: 45_000,
   messaging: 60_000,
 } satisfies Record<"web" | "messaging", number>;
+// On every surface, Slack, Teams and Telegram included: a messaging turn
+// keeps its longer time budget, but not more model round trips.
 const ASSISTANT_CHAT_MAX_TOOL_STEPS = 6;
 
 type AssistantChatOnStepEnd = NonNullable<
