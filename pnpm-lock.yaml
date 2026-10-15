@@ -32,7 +32,7 @@ packageExtensionsChecksum: sha256-PRbzx2viqV+1LR1E4uOlUjx+heWO2EvJ6w+FHgUvBZY=
 
 patchedDependencies:
   '@better-auth/oauth-provider@1.7.4': f3e7e8d12056b3b4c2a2a4154041f666a87ec5e12419a2e2dfa5b56d573b346e
-  '@inbox-zero/emulate@0.13.0': 9eb919ed09cd6dc705636413bcb9e19d9860152e4c71e02dc367cc2c98f8216c
+  '@inbox-zero/emulate@0.13.0': 79c39d5204210d1eb3a3dcf1f75627f28e1eeb5e7cfaf5e9a36770df212849a2
   '@sqlite.org/sqlite-wasm@3.53.4-build1': 877a0e7ab02be271764a77936d3ababba53c79d52067fa2efc2556d688d08e5b
 
 importers:
@@ -838,7 +838,7 @@ importers:
         version: 11.0.0
       emulate:
         specifier: npm:@inbox-zero/emulate@0.13.0
-        version: '@inbox-zero/emulate@0.13.0(patch_hash=9eb919ed09cd6dc705636413bcb9e19d9860152e4c71e02dc367cc2c98f8216c)'
+        version: '@inbox-zero/emulate@0.13.0(patch_hash=79c39d5204210d1eb3a3dcf1f75627f28e1eeb5e7cfaf5e9a36770df212849a2)'
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -15878,7 +15878,7 @@ snapshots:
   '@img/sharp-win32-x64@0.35.4':
     optional: true
 
-  '@inbox-zero/emulate@0.13.0(patch_hash=9eb919ed09cd6dc705636413bcb9e19d9860152e4c71e02dc367cc2c98f8216c)':
+  '@inbox-zero/emulate@0.13.0(patch_hash=79c39d5204210d1eb3a3dcf1f75627f28e1eeb5e7cfaf5e9a36770df212849a2)':
     dependencies:
       commander: 14.0.3
       picocolors: 1.1.1
@@ -20239,7 +20239,7 @@ snapshots:
       obug: 2.2.1
       std-env: 4.1.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@24.10.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(jsdom@27.3.0(supports-color@8.1.1))(vite@7.3.6(@types/node@24.10.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.47.0)(tsx@4.23.13)(yaml@2.9.0))
+      vitest: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@24.10.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@7.3.6(@types/node@24.10.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.47.0)(tsx@4.23.13)(yaml@2.9.0))
 
   '@vitest/expect@4.1.10':
     dependencies:
@@ -20293,7 +20293,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.0
-      vitest: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@24.10.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(jsdom@27.3.0(supports-color@8.1.1))(vite@7.3.6(@types/node@24.10.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.47.0)(tsx@4.23.13)(yaml@2.9.0))
+      vitest: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@24.10.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@7.3.6(@types/node@24.10.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.47.0)(tsx@4.23.13)(yaml@2.9.0))
 
   '@vitest/utils@4.1.10':
     dependencies:

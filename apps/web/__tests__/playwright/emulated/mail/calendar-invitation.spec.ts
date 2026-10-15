@@ -1,12 +1,6 @@
 import { expect } from "@playwright/test";
 import { getEmailAccountId } from "../account-test-helpers";
-import { isMicrosoftPlaywright } from "../mail-provider";
 import { test } from "../playwright-test";
-
-test.skip(
-  isMicrosoftPlaywright(),
-  "Calendar MIME invites are seeded in the Google emulator.",
-);
 
 // The card renders the meeting time in the viewer's timezone.
 test.use({ timezoneId: "UTC" });
