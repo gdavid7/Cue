@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
-  getOrderedEmailAccountIds: vi.fn(),
+  getOrderedEmailAccounts: vi.fn(),
+  loadInboxPreview: vi.fn(),
+  mailPath: "/mail/u/1/inbox" as string | null,
+  localMailCookie: undefined as string | undefined,
   redirect: vi.fn((url: string) => {
     throw new Error(`redirect:${url}`);
   }),
@@ -10,8 +13,24 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/utils/auth", () => ({ auth: () => mocks.auth() }));
 vi.mock("@/utils/mail-url.server", () => ({
-  getOrderedEmailAccountIds: (userId: string) =>
-    mocks.getOrderedEmailAccountIds(userId),
+  getOrderedEmailAccounts: (userId: string) =>
+    mocks.getOrderedEmailAccounts(userId),
+}));
+vi.mock("@/utils/threads/inbox-preview.server", () => ({
+  loadInboxPreview: (input: unknown) => mocks.loadInboxPreview(input),
+}));
+vi.mock("next/headers", () => ({
+  headers: async () =>
+    new Headers(mocks.mailPath ? { "x-cue-mail-path": mocks.mailPath } : {}),
+  cookies: async () => ({
+    get: (name: string) =>
+      name === "cue-local-mail" && mocks.localMailCookie !== undefined
+        ? { value: mocks.localMailCookie }
+        : undefined,
+  }),
+}));
+vi.mock("@/app/(app)/[emailAccountId]/mail/InboxPreviewList", () => ({
+  InboxPreviewSeed: ({ children }: { children: React.ReactNode }) => children,
 }));
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => mocks.redirect(url),
@@ -37,13 +56,50 @@ describe("MailRouteLayout", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.auth.mockResolvedValue({ user: { id: "user-1" } });
-    mocks.getOrderedEmailAccountIds.mockResolvedValue(["acc_a", "acc_b"]);
+    mocks.getOrderedEmailAccounts.mockResolvedValue([
+      { id: "acc_a", provider: "google" },
+      { id: "acc_b", provider: "microsoft" },
+    ]);
+    mocks.loadInboxPreview.mockReturnValue(new Promise(() => {}));
+    mocks.mailPath = "/mail/u/1/inbox";
+    mocks.localMailCookie = undefined;
   });
 
   it("opens one of the signed-in user's own accounts", async () => {
     await expect(renderAt("1")).resolves.toBeTruthy();
-    expect(mocks.getOrderedEmailAccountIds).toHaveBeenCalledWith("user-1");
+    expect(mocks.getOrderedEmailAccounts).toHaveBeenCalledWith("user-1");
     expect(mocks.redirect).not.toHaveBeenCalled();
+  });
+
+  it("starts the inbox from the server for a browser without that mailbox", async () => {
+    mocks.localMailCookie = "acc_a";
+
+    await renderAt("1");
+
+    expect(mocks.loadInboxPreview).toHaveBeenCalledWith({
+      emailAccountId: "acc_b",
+      provider: "microsoft",
+    });
+  });
+
+  it("leaves a mailbox this browser has synced to the local engine", async () => {
+    mocks.localMailCookie = "acc_a.acc_b";
+
+    await renderAt("1");
+
+    expect(mocks.loadInboxPreview).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "/mail/u/1/sent",
+    "/mail/u/1/search?q=x",
+    "/mail/u/1/all-inboxes",
+  ])("does not fetch the inbox for %s", async (mailPath) => {
+    mocks.mailPath = mailPath;
+
+    await renderAt("1");
+
+    expect(mocks.loadInboxPreview).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -66,7 +122,7 @@ describe("MailRouteLayout", () => {
   });
 
   it("sends a user without a mailbox to connect one", async () => {
-    mocks.getOrderedEmailAccountIds.mockResolvedValue([]);
+    mocks.getOrderedEmailAccounts.mockResolvedValue([]);
     await expect(renderAt("0")).rejects.toThrow("redirect:/connect-mailbox");
   });
 });

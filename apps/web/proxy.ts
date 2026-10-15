@@ -10,7 +10,7 @@ import {
   markdownResponse,
 } from "@/utils/agent-markdown/content";
 import { BRAND_NAME, SUPPORT_EMAIL } from "@/utils/branding";
-import { MAIL_PATH_PREFIX } from "@/utils/mail-url";
+import { MAIL_PATH_HEADER, MAIL_PATH_PREFIX } from "@/utils/mail-url";
 import { buildLoginRedirectUrl } from "@/utils/redirect";
 
 export function proxy(request: NextRequest) {
@@ -31,6 +31,15 @@ export function proxy(request: NextRequest) {
 
   if (request.method !== "GET" && request.method !== "HEAD") {
     return withVaryAccept(NextResponse.next());
+  }
+
+  // The mail layout starts the inbox from the server only on the inbox, and
+  // layouts are not told their address. Always set here, so it is never the
+  // client's own value.
+  if (isMailPath(pathname)) {
+    const headers = new Headers(request.headers);
+    headers.set(MAIL_PATH_HEADER, `${pathname}${search}`);
+    return withVaryAccept(NextResponse.next({ request: { headers } }));
   }
 
   if (!prefersMarkdown(request.headers.get("accept"))) {

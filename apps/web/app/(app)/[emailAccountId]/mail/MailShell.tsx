@@ -48,10 +48,7 @@ import { InboxStyleCard } from "@/app/(app)/[emailAccountId]/mail/InboxStylePick
 import { CueLabelsCard } from "@/components/CueLabelsCleanup";
 import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
 import { TodayIntroLine } from "@/app/(app)/[emailAccountId]/mail/TodayIntroLine";
-import {
-  MailListPlaceholder,
-  MailLoadingNote,
-} from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
+import { MailLoadingNote } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
 import { useTranslateThread } from "@/app/(app)/[emailAccountId]/mail/use-thread-translation";
 import { printThread } from "@/app/(app)/[emailAccountId]/mail/print-thread";
@@ -131,6 +128,8 @@ import {
 import { isInboxStyleLandingSplit } from "@/utils/split-inbox/inbox-styles";
 import { getActionErrorMessage } from "@/utils/error";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
+import { InboxPreviewList } from "@/app/(app)/[emailAccountId]/mail/InboxPreviewList";
+import { markLocalMailboxSynced } from "@/utils/mail-engine/local-mailbox-cookie";
 import { showMailView } from "@/app/(app)/[emailAccountId]/mail/show-mail-view";
 import {
   getMailNavView,
@@ -648,6 +647,19 @@ export function MailShell() {
   const isFirstSync = isAllAccounts
     ? Boolean(allInboxesFirstSyncMessage)
     : accountThreadState.isFirstSync;
+  // Only the whole inbox can be shown from the server's newest-first list
+  // while the engine syncs; a tab or search would show different mail.
+  const showsWholeInbox =
+    !isAllAccounts &&
+    !searchQuery &&
+    query.type === "inbox" &&
+    Object.keys(query).length === 1;
+  // Once the local mailbox has this account's mail, later visits read it from
+  // there, so the server stops fetching the inbox for them.
+  const hasLocalMail = !isAllAccounts && accountThreadState.threads.length > 0;
+  useEffect(() => {
+    if (hasLocalMail) markLocalMailboxSynced(emailAccountId);
+  }, [hasLocalMail, emailAccountId]);
   const listPlaceholderMessage = getListPlaceholderMessage({
     isAllAccounts,
     allInboxesFirstSyncMessage,
@@ -1953,9 +1965,10 @@ export function MailShell() {
                     }
                     loadingComponent={
                       searchQuery ? undefined : (
-                        <MailListPlaceholder
+                        <InboxPreviewList
                           message={listPlaceholderMessage}
                           layout={layout}
+                          enabled={showsWholeInbox}
                         />
                       )
                     }

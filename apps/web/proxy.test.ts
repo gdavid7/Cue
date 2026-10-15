@@ -3,6 +3,7 @@ import { unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
 import { NextRequest } from "next/server";
 import { config, proxy } from "./proxy";
 import { BRAND_NAME } from "@/utils/branding";
+import { MAIL_PATH_HEADER } from "@/utils/mail-url";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -48,6 +49,21 @@ describe("proxy mail links", () => {
     );
 
     expect(response.headers.get("location")).toBeNull();
+  });
+
+  it("tells the mail layout which view it renders, whatever the client sent", () => {
+    const response = proxy(
+      new NextRequest("https://www.getinboxzero.com/mail/u/0/search?q=x", {
+        headers: {
+          cookie: "better-auth.session_token=abc.def",
+          [MAIL_PATH_HEADER]: "/mail/u/0/inbox",
+        },
+      }),
+    );
+
+    expect(
+      response.headers.get(`x-middleware-request-${MAIL_PATH_HEADER}`),
+    ).toBe("/mail/u/0/search?q=x");
   });
 });
 
