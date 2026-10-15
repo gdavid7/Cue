@@ -183,6 +183,43 @@ describe("HomeDashboard row actions", () => {
   });
 });
 
+describe("HomeDashboard notices", () => {
+  afterEach(cleanup);
+
+  it("does not ask to turn on the assistant as if the lanes were empty", () => {
+    const data = homeData([thread("first", "Quarterly numbers")]);
+    mocks.home.data = { ...data, cue: { ...data.cue, aiAccess: false } };
+
+    renderToday();
+
+    // Earlier tracking still fills Needs reply, so the notice explains why
+    // the lane may be stale instead of implying it would otherwise show up.
+    expect(
+      within(lane("Needs reply")).getByText("Quarterly numbers"),
+    ).toBeTruthy();
+    const notice = screen.getByRole("status");
+    expect(notice.textContent).toContain("isn't being updated");
+    expect(
+      within(notice).getByRole("link", { name: "See plans" }),
+    ).toBeTruthy();
+  });
+
+  it("asks to turn on the assistant when nothing has been tracked", () => {
+    const data = homeData([]);
+    mocks.home.data = { ...data, cue: { ...data.cue, aiAccess: false } };
+
+    renderToday();
+
+    expect(screen.getByRole("status").textContent).toContain(
+      "Turn on the AI assistant to see what needs a reply.",
+    );
+  });
+});
+
+function lane(name: string) {
+  return screen.getByRole("listbox", { name });
+}
+
 function renderToday() {
   return render(
     <ShortcutsProvider scopes={MAIL_SHORTCUT_SCOPES}>
