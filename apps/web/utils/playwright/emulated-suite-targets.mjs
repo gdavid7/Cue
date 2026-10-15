@@ -9,9 +9,26 @@ import path from "node:path";
 const featureGroups = [
   {
     name: "onboarding",
+    providers: ["google", "microsoft"],
     specs: [
       "onboarding/first-run.spec.ts",
       "attachments/attachment-onboarding.spec.ts",
+    ],
+  },
+  {
+    name: "settings",
+    providers: ["google", "microsoft"],
+    specs: [
+      "settings/add-outlook-account.spec.ts",
+      "settings/api-keys.spec.ts",
+      "settings/appearance.spec.ts",
+      "settings/dark-mode.spec.ts",
+      "settings/email-account-settings.spec.ts",
+      "settings/email-otp.spec.ts",
+      "settings/mcp-access.spec.ts",
+      "settings/scim-credentials.spec.ts",
+      "settings/settings-dialog.spec.ts",
+      "settings/sign-out.spec.ts",
     ],
   },
   {

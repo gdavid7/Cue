@@ -1,4 +1,5 @@
 import { expect } from "@playwright/test";
+import { isMicrosoftPlaywright } from "../mail-provider";
 import { test } from "../playwright-test";
 import {
   openAttachments,
@@ -17,6 +18,10 @@ test.afterEach(async () => {
 test("uses Drive folders to complete auto-file attachment setup", async ({
   page,
 }, testInfo) => {
+  test.skip(
+    isMicrosoftPlaywright(),
+    "The Drive folders come from the Google emulator, which Microsoft runs don't start.",
+  );
   test.setTimeout(360_000);
   await openAttachments(page);
 

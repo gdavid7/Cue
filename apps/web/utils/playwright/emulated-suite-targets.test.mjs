@@ -115,7 +115,7 @@ test("mail batches run on both providers and other batches on Google by default"
     "mail/compose-and-reply.spec.ts",
     "mail/new-behavior.spec.ts",
     "billing/upgrade-to-paid.spec.ts",
-    "settings/new-behavior.spec.ts",
+    "cleanup/new-behavior.spec.ts",
   ].map((spec) => ({
     name: getPlaywrightTargetName(spec),
     path: `__tests__/playwright/emulated/${spec}`,
@@ -130,7 +130,7 @@ test("mail batches run on both providers and other batches on Google by default"
     "mail-send": ["google", "microsoft"],
     mail: ["google", "microsoft"],
     "account-features": ["google"],
-    settings: ["google"],
+    cleanup: ["google"],
   });
 });
 
