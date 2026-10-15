@@ -49,6 +49,27 @@ describe("mailbox thread list", () => {
     expect(onOpen).toHaveBeenCalledWith(2);
   });
 
+  // Focus and the highlight stay on one row, so J/K and Enter carry on from
+  // the row whose checkbox was clicked.
+  it("moves focus and the highlight to a row selected by its checkbox", () => {
+    const onOpen = vi.fn();
+    render(<KeyboardList onOpen={onOpen} />);
+
+    fireEvent.click(
+      screen.getByLabelText("Select conversation with Alice Second"),
+    );
+    const second = screen.getByRole("option", { name: /Second/ });
+    expect(document.activeElement).toBe(second);
+    expect(second.getAttribute("tabindex")).toBe("0");
+
+    fireEvent.keyDown(document.activeElement as Element, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(
+      screen.getByRole("option", { name: /Third/ }),
+    );
+    fireEvent.keyDown(document.activeElement as Element, { key: "Enter" });
+    expect(onOpen).toHaveBeenCalledWith(2);
+  });
+
   it("leaves focus outside the list where it is", () => {
     const search = document.createElement("input");
     document.body.append(search);
@@ -98,7 +119,12 @@ function KeyboardList({ onOpen }: { onOpen: (index: number) => void }) {
         }
       }}
     >
-      <RowList focusedIndex={focusedIndex} onOpen={onOpen} />
+      <RowList
+        focusedIndex={focusedIndex}
+        onOpen={onOpen}
+        // As MailShell wires it: selecting from a row moves the cursor there.
+        onToggleSelect={setFocusedIndex}
+      />
     </div>
   );
 }
@@ -107,10 +133,12 @@ function RowList({
   focusedIndex,
   items = ITEMS,
   onOpen = vi.fn(),
+  onToggleSelect = vi.fn(),
 }: {
   focusedIndex: number;
   items?: Item[];
   onOpen?: (index: number) => void;
+  onToggleSelect?: (index: number) => void;
 }) {
   return (
     <MailboxThreadList<Item>
@@ -124,7 +152,7 @@ function RowList({
       onLoadMore={vi.fn()}
       onOpen={onOpen}
       onSelectRangeTo={vi.fn()}
-      onToggleSelect={vi.fn()}
+      onToggleSelect={onToggleSelect}
       renderItem={(row) => (
         <MailThreadRow
           date="Oct 14"
@@ -142,6 +170,16 @@ function RowList({
           onSelectRangeTo={row.onSelectRangeTo}
           onToggleSelect={row.onToggleSelect}
           participantSummary="Alice"
+          renderSelectionControl={({ ariaLabel, onClick }) => (
+            <button
+              aria-hidden
+              aria-label={`${ariaLabel} ${row.item.id}`}
+              onClick={onClick}
+              onMouseDown={(event) => event.preventDefault()}
+              tabIndex={-1}
+              type="button"
+            />
+          )}
           rowRef={row.rowRef}
           snippet="Hello"
           subject={row.item.id}
