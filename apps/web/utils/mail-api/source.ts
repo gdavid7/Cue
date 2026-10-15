@@ -327,7 +327,7 @@ export function createEmailProviderMailboxSource(input: {
             provider.name === "microsoft" && position.streamId !== "primary"
               ? position.streamId
               : undefined,
-          includeBodies: isGmail,
+          includeBodies: true,
           limit: pageSize,
         });
         if (page.reset) {
@@ -689,6 +689,8 @@ async function catchUpCheckpoint(
     const page = await provider.getMailboxSyncPage({
       after: new Date(afterMs),
       folderId,
+      // The cursor this starts is the one catch-up follows.
+      includeBodies: true,
       limit: 1,
     });
     if (page.cursor) {

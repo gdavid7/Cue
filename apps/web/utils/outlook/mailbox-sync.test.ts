@@ -111,6 +111,65 @@ describe("buildOutlookMailboxSyncPage", () => {
     });
   });
 
+  it("keeps the bodies a delta carried when asked, except where attachments still need listing", () => {
+    const page = buildOutlookMailboxSyncPage({
+      response: {
+        value: [
+          {
+            id: "plain-message",
+            conversationId: "thread-1",
+            parentFolderId: "inbox-folder-id",
+            hasAttachments: false,
+            body: { contentType: "html", content: "<p>Hello</p>" },
+          },
+          {
+            id: "attachment-message",
+            conversationId: "thread-2",
+            parentFolderId: "inbox-folder-id",
+            hasAttachments: true,
+            body: { contentType: "html", content: "<p>See attached</p>" },
+          },
+        ],
+        "@odata.deltaLink": DELTA_LINK,
+      },
+      after: "2026-07-01T00:00:00.000Z",
+      wasSnapshot: false,
+      reset: false,
+      includeBodies: true,
+      categoryMap: new Map(),
+      folderIds: { inbox: "inbox-folder-id" },
+    });
+
+    expect(page.includesBodies).toBe(true);
+    expect(page.upsertedMessages).toMatchObject([
+      { id: "plain-message", textHtml: "<p>Hello</p>" },
+      { id: "attachment-message", textHtml: undefined, hasAttachment: true },
+    ]);
+  });
+
+  it("leaves bodies out unless asked", () => {
+    const page = buildOutlookMailboxSyncPage({
+      response: {
+        value: [
+          {
+            id: "plain-message",
+            conversationId: "thread-1",
+            hasAttachments: false,
+            body: { contentType: "html", content: "<p>Hello</p>" },
+          },
+        ],
+        "@odata.deltaLink": DELTA_LINK,
+      },
+      after: "2026-07-01T00:00:00.000Z",
+      wasSnapshot: false,
+      reset: false,
+      categoryMap: new Map(),
+    });
+
+    expect(page.includesBodies).toBeFalsy();
+    expect(page.upsertedMessages[0].textHtml).toBeUndefined();
+  });
+
   it("maps a moved message to its new folder instead of inbox", () => {
     const page = buildOutlookMailboxSyncPage({
       response: {
@@ -170,6 +229,23 @@ describe("buildOutlookMailboxSyncPage", () => {
 });
 
 describe("getOutlookMailboxSyncPage", () => {
+  it("starts folder deltas that carry message bodies", async () => {
+    const initialUrl = "/me/mailFolders/inbox/messages/delta";
+    const { client, selectedFields } = createGraphClient({
+      [initialUrl]: { value: [], "@odata.deltaLink": DELTA_LINK },
+    });
+
+    await getOutlookMailboxSyncPage({
+      client,
+      logger,
+      after: new Date("2026-07-01T00:00:00.000Z"),
+      includeBodies: true,
+      limit: 20,
+    });
+
+    expect(selectedFields.get(initialUrl)?.split(",")).toContain("body");
+  });
+
   it("refetches delta messages that omit their conversation", async () => {
     const { client, requestedUrls } = createGraphClient({
       [DELTA_LINK]: {
@@ -215,10 +291,16 @@ describe("getOutlookMailboxSyncPage", () => {
 
 function createGraphClient(responses: Record<string, unknown>) {
   const requestedUrls: string[] = [];
+  const selectedFields = new Map<string, string>();
   const api = vi.fn((url: string) => {
     requestedUrls.push(url);
     const request = {
-      select: () => request,
+      select: (fields: string) => {
+        selectedFields.set(url, fields);
+        return request;
+      },
+      filter: () => request,
+      top: () => request,
       header: () => request,
       get: async () => {
         if (url in responses) return responses[url];
@@ -241,5 +323,6 @@ function createGraphClient(responses: Record<string, unknown>) {
       }),
     } as unknown as OutlookClient,
     requestedUrls,
+    selectedFields,
   };
 }

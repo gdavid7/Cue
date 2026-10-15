@@ -1821,6 +1821,7 @@ export class OutlookProvider implements EmailProvider {
     after?: Date;
     cursor?: string;
     folderId?: string;
+    includeBodies?: boolean;
     limit: number;
   }) {
     return getOutlookMailboxSyncPage({

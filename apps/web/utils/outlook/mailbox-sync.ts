@@ -40,6 +40,7 @@ export async function getOutlookMailboxSyncPage({
   cursor,
   after,
   folderId,
+  includeBodies = false,
   limit,
 }: {
   client: OutlookClient;
@@ -47,11 +48,20 @@ export async function getOutlookMailboxSyncPage({
   cursor?: string;
   after?: Date;
   folderId?: string;
+  /** Start deltas that select bodies, and keep the bodies a page carries. */
+  includeBodies?: boolean;
   limit: number;
 }): Promise<MailboxSyncPage> {
   if (!cursor) {
     if (!after) throw new Error("after is required for initial mailbox sync");
-    return getInitialPage({ client, logger, after, folderId, limit });
+    return getInitialPage({
+      client,
+      logger,
+      after,
+      folderId,
+      includeBodies,
+      limit,
+    });
   }
 
   const decoded = decodeMailboxSyncCursor(cursor, "microsoft");
@@ -83,6 +93,7 @@ export async function getOutlookMailboxSyncPage({
       folderId: decoded.folderId ?? folderId,
       wasSnapshot: decoded.snapshot,
       reset: false,
+      includeBodies,
       categoryMap,
       folderIds,
     });
@@ -100,6 +111,7 @@ export async function getOutlookMailboxSyncPage({
       logger,
       after: new Date(decoded.after),
       folderId: decoded.folderId ?? folderId,
+      includeBodies,
       limit,
     });
   }
@@ -111,6 +123,7 @@ export function buildOutlookMailboxSyncPage({
   folderId,
   wasSnapshot,
   reset,
+  includeBodies = false,
   categoryMap,
   folderIds = {},
 }: {
@@ -119,6 +132,7 @@ export function buildOutlookMailboxSyncPage({
   folderId?: string;
   wasSnapshot: boolean;
   reset: boolean;
+  includeBodies?: boolean;
   categoryMap: Map<string, string>;
   folderIds?: Record<string, string>;
 }): MailboxSyncPage {
@@ -148,10 +162,13 @@ export function buildOutlookMailboxSyncPage({
     }
     if (!message.conversationId) return [];
 
+    const parsed = convertMessage(message, folderIds, categoryMap);
+    // Delta can't expand attachments, so a message with any still needs a
+    // full read before its body is complete.
     return [
-      compactMailboxSyncMessage(
-        convertMessage(message, folderIds, categoryMap),
-      ),
+      includeBodies && message.hasAttachments === false
+        ? parsed
+        : compactMailboxSyncMessage(parsed),
     ];
   });
 
@@ -169,6 +186,7 @@ export function buildOutlookMailboxSyncPage({
     removedMessageIds,
     reset,
     upsertedMessages,
+    ...(includeBodies && { includesBodies: true }),
   };
 }
 
@@ -177,12 +195,14 @@ async function getInitialPage({
   logger,
   after,
   folderId,
+  includeBodies,
   limit,
 }: {
   client: OutlookClient;
   logger: Logger;
   after: Date;
   folderId?: string;
+  includeBodies: boolean;
   limit: number;
 }) {
   const resolvedFolderId = folderId ?? "inbox";
@@ -193,7 +213,12 @@ async function getInitialPage({
         .api(
           `/me/mailFolders/${encodeURIComponent(resolvedFolderId)}/messages/delta`,
         )
-        .select(MESSAGE_SELECT_FIELDS)
+        // The selection is kept in every delta link that follows.
+        .select(
+          includeBodies
+            ? `${MESSAGE_SELECT_FIELDS},body`
+            : MESSAGE_SELECT_FIELDS,
+        )
         .filter(`receivedDateTime ge ${after.toISOString()}`)
         .top(limit)
         .header("Prefer", `IdType="ImmutableId", odata.maxpagesize=${limit}`)
@@ -216,6 +241,7 @@ async function getInitialPage({
     folderId: resolvedFolderId,
     wasSnapshot: true,
     reset: true,
+    includeBodies,
     categoryMap,
     folderIds,
   });

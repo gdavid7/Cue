@@ -471,6 +471,7 @@ describe("createEmailProviderMailboxSource", () => {
     expect(getMailboxSyncPage).toHaveBeenCalledWith({
       after: new Date(0),
       folderId: "archive",
+      includeBodies: true,
       limit: 1,
     });
   });
@@ -889,6 +890,7 @@ describe("createEmailProviderMailboxSource", () => {
     });
     expect(getMailboxSyncPage).toHaveBeenCalledWith({
       after: new Date(0),
+      includeBodies: true,
       limit: 1,
     });
   });
@@ -1943,6 +1945,44 @@ describe("Gmail history expiry", () => {
     const hydrated = result.page.requiredHydration.map((key) => key.messageId);
     expect(withBody.length).toBeLessThanOrEqual(50);
     expect([...withBody, ...hydrated].sort()).toEqual([...ids].sort());
+  });
+
+  it("asks Outlook folder deltas for the bodies they carry", async () => {
+    const getMailboxSyncPage = vi.fn(async () => ({
+      cursor: "next",
+      reset: false,
+      upsertedMessages: [
+        { ...searchMessage("new-1"), textHtml: "<p>body of new-1</p>" },
+      ],
+      includesBodies: true,
+      deletedMessageIds: [],
+      hasMore: false,
+    }));
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "a",
+      provider: {
+        name: "microsoft",
+        getMailboxSyncPage,
+      } as unknown as EmailProvider,
+    });
+
+    const result = await source.readChanges({
+      session: { accountId: "a", generation: "g1" },
+      requestId: "r1",
+      position: { streamId: "inbox-id", generation: "g1", checkpoint: "1" },
+      pageSize: 20,
+      signal: new AbortController().signal,
+    });
+
+    if (result.status !== "page") throw new Error("expected a page");
+    expect(getMailboxSyncPage).toHaveBeenCalledWith(
+      expect.objectContaining({ includeBodies: true, folderId: "inbox-id" }),
+    );
+    expect(result.page.bodies?.map((body) => body.html)).toEqual([
+      "<p>body of new-1</p>",
+    ]);
+    expect(result.page.requiredHydration).toEqual([]);
   });
 
   it("fetches each Gmail message a catch-up brings in once, body included", async () => {
