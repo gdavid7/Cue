@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { fetchThreadsPage } from "@/utils/threads/fetch-page";
+import { threadsQuery } from "@/utils/threads/validation";
 import { getCueMembership } from "@/utils/split-inbox/cue-membership.server";
 
 vi.mock("@/utils/redis/thread-page-buffer", () => ({
@@ -148,6 +149,42 @@ describe("Other pagination", () => {
     expect(result.threads).toEqual([]);
     expect(result.nextPageToken).toBe("5");
     expect(emailProvider.getThreadsWithQuery).toHaveBeenCalledTimes(5);
+  });
+});
+
+describe("Outlook Other tab", () => {
+  it("leaves out conversations any Outlook split claims, Focused included", async () => {
+    const message = (
+      labelIds: string[],
+      inboxSection: "focused" | "other",
+    ) => ({ labelIds: ["INBOX", ...labelIds], inboxSection, headers: {} });
+    const emailProvider = {
+      name: "microsoft",
+      getThreadsWithQuery: vi.fn(async () => ({
+        threads: [
+          { id: "focused", messages: [message([], "focused")] },
+          { id: "categorized", messages: [message(["category-id"], "other")] },
+          { id: "rest", messages: [message([], "other")] },
+        ],
+      })),
+    };
+    const query = threadsQuery.parse({
+      type: "inbox",
+      excludeSplits: JSON.stringify([
+        { matchAll: true, filters: [{ kind: "CATEGORY", value: "focused" }] },
+        { matchAll: true, filters: [{ kind: "LABEL", value: "category-id" }] },
+      ]),
+    });
+
+    const result = await fetchThreadsPage({
+      query,
+      emailProvider: emailProvider as never,
+      emailAccountId: "account",
+      maxResults: 20,
+      messageFormat: "metadata",
+    });
+
+    expect(result.threads.map(({ id }) => id)).toEqual(["rest"]);
   });
 });
 
