@@ -2,6 +2,7 @@ import type { ContextCandidate, Person } from "@cue/context";
 import { z } from "zod";
 import { findIntegration } from "@/utils/mcp/integrations";
 import { getIntegrationProvider } from "@/utils/mcp/providers/registry";
+import { ConnectionExpiredError } from "@/utils/mcp/providers/types";
 import {
   onePerIntegration,
   ownedBySameUser,
@@ -12,6 +13,9 @@ import { redis } from "@/utils/redis";
 
 // A slow app shouldn't hold up the panel: its items just don't show.
 const SOURCE_TIMEOUT_MS = 8000;
+// Fetching one known item should be quick; a slow one is left out.
+const LOOKUP_TIMEOUT_MS = 5000;
+const LINKS_PER_APP = 3;
 const RESULTS_PER_SOURCE = 10;
 const MAX_TEXT = 600;
 const ASSIGNMENT_PAST_DAYS = 7;
@@ -36,31 +40,52 @@ type Search = {
   now: Date;
 };
 
+/** What a thread points at directly, read from its links and headers. */
+export type ThreadSignals = {
+  links: string[];
+  /** The latest sender other than the user, unless automated. */
+  senderEmail?: string;
+};
+
 /**
  * Items from the person's connected apps, whichever of their email accounts
  * connected them, that may relate to a thread or a question: files from Drive
  * and OneDrive, assignments from Canvas, messages from Slack. Each app is asked in its own way and turned into candidates the
  * ranker treats like emails and meetings; an app that fails or is slow is
  * left out, and `complete` is false so the result is not kept.
+ *
+ * Given a thread's `signals`, the items it points at are fetched too: files,
+ * issues and tasks it links to, and the sender's record in a CRM.
  */
 export async function fetchConnectorCandidates({
   emailAccountId,
   keywords,
+  signals = { links: [] },
   logger,
   now = new Date(),
 }: Pick<Search, "keywords"> & {
   /** The account being viewed; apps connected from the person's others count. */
   emailAccountId: string;
+  signals?: ThreadSignals;
   logger: Logger;
   now?: Date;
 }): Promise<{ candidates: ContextCandidate[]; complete: boolean }> {
-  if (!keywords.length) return { candidates: [], complete: true };
+  const links = signals.links.flatMap((link) => {
+    const url = parseUrl(link);
+    return url ? [url] : [];
+  });
+  const apps = new Set([
+    ...(keywords.length ? Object.keys(SOURCES) : []),
+    ...(links.length ? Object.keys(LINK_SOURCES) : []),
+    ...(signals.senderEmail ? Object.keys(SENDER_SOURCES) : []),
+  ]);
+  if (!apps.size) return { candidates: [], complete: true };
   let complete = true;
   const connections = await prisma.mcpConnection
     .findMany({
       where: {
         isActive: true,
-        integration: { name: { in: Object.keys(SOURCES) } },
+        integration: { name: { in: [...apps] } },
         ...ownedBySameUser(emailAccountId),
       },
       select: {
@@ -78,9 +103,8 @@ export async function fetchConnectorCandidates({
   const results = await Promise.all(
     onePerIntegration(connections, emailAccountId).map(async (connection) => {
       const name = connection.integration.name;
-      const source = SOURCES[name];
       const provider = findIntegration(name)?.provider;
-      if (!source || !provider || !connection.emailAccountId) return [];
+      if (!apps.has(name) || !provider || !connection.emailAccountId) return [];
       // The provider knows the connection by the account it was made from.
       const connectionAccountId = connection.emailAccountId;
       const execute: Execute = (tool, args) =>
@@ -91,23 +115,81 @@ export async function fetchConnectorCandidates({
           tool,
           args,
         });
-      try {
-        return await withTimeout(
-          source(execute, {
-            emailAccountId: connectionAccountId,
-            keywords,
-            now,
-          }),
-          SOURCE_TIMEOUT_MS,
-        );
-      } catch (error) {
-        logger.warn("Connected app search failed", { app: name, error });
-        complete = false;
-        return [];
-      }
+      const search = async (): Promise<ContextCandidate[]> => {
+        const source = SOURCES[name];
+        if (!source || !keywords.length) return [];
+        try {
+          return await withTimeout(
+            source(execute, {
+              emailAccountId: connectionAccountId,
+              keywords,
+              now,
+            }),
+            SOURCE_TIMEOUT_MS,
+          );
+        } catch (error) {
+          logger.warn("Connected app search failed", { app: name, error });
+          complete = false;
+          return [];
+        }
+      };
+
+      // A link to something the person can't open fails on every try, so a
+      // failed lookup leaves `complete` alone: otherwise the thread's context
+      // would never be kept, and each open would spend mail quota again.
+      const lookup = async (
+        find: () => Promise<ContextCandidate | null>,
+      ): Promise<ContextCandidate[]> => {
+        try {
+          const item = await withTimeout(find(), LOOKUP_TIMEOUT_MS);
+          return item ? [item] : [];
+        } catch (error) {
+          // The app's error can quote what was asked, e.g. the sender's email.
+          logger.warn("Connected app lookup failed", {
+            app: name,
+            reason: failureReason(error),
+          });
+          logger.trace("Connected app lookup error", { app: name, error });
+          return [];
+        }
+      };
+
+      const linkSource = LINK_SOURCES[name];
+      const linked = linkSource
+        ? uniqueBy(
+            links.flatMap((url) => {
+              const key = linkSource.match(url);
+              return key ? [{ key, url }] : [];
+            }),
+            (link) => link.key,
+          )
+            .slice(0, LINKS_PER_APP)
+            .map((link) =>
+              lookup(() => linkSource.fetch(execute, link.key, link.url, now)),
+            )
+        : [];
+      const senderSource = SENDER_SOURCES[name];
+      const senderEmail = signals.senderEmail?.toLowerCase();
+      const sender =
+        senderSource && senderEmail
+          ? [lookup(() => senderSource(execute, senderEmail, now))]
+          : [];
+
+      return (await Promise.all([...linked, ...sender, search()])).flat();
     }),
   );
-  return { candidates: results.flat(), complete };
+  // A file the thread links to can also turn up in search; keep the link.
+  const candidates = results.flat();
+  return {
+    candidates: uniqueBy(
+      [
+        ...candidates.filter((c) => c.linkedBy),
+        ...candidates.filter((c) => !c.linkedBy),
+      ],
+      (c) => c.id,
+    ),
+    complete,
+  };
 }
 
 const SOURCES: Record<
@@ -118,6 +200,42 @@ const SOURCES: Record<
   one_drive: searchOneDrive,
   canvas: searchCanvas,
   slack: searchSlack,
+};
+
+/** Apps whose links name one item, fetched by the key the link holds. */
+const LINK_SOURCES: Partial<
+  Record<
+    string,
+    {
+      match: (url: URL) => string | null;
+      fetch: (
+        execute: Execute,
+        key: string,
+        url: URL,
+        now: Date,
+      ) => Promise<ContextCandidate | null>;
+    }
+  >
+> = {
+  googledrive: { match: driveFileId, fetch: fetchDriveFile },
+  jira: { match: jiraIssueKey, fetch: fetchJiraIssue },
+  asana: { match: asanaTaskGid, fetch: fetchAsanaTask },
+  clickup: { match: clickUpTaskId, fetch: fetchClickUpTask },
+};
+
+/** Apps that keep a record of people, looked up by the sender's address. */
+const SENDER_SOURCES: Partial<
+  Record<
+    string,
+    (
+      execute: Execute,
+      email: string,
+      now: Date,
+    ) => Promise<ContextCandidate | null>
+  >
+> = {
+  hubspot: findHubSpotContact,
+  salesforce: findSalesforceContact,
 };
 
 export async function searchGoogleDrive(
@@ -285,6 +403,292 @@ export async function searchSlack(
   }));
 }
 
+async function fetchDriveFile(
+  execute: Execute,
+  fileId: string,
+  _url: URL,
+  now: Date,
+): Promise<ContextCandidate | null> {
+  const file = parseToolResult(
+    "GOOGLEDRIVE_GET_FILE_METADATA",
+    driveFileSchema,
+    await execute("GOOGLEDRIVE_GET_FILE_METADATA", {
+      fileId,
+      fields:
+        "id,name,mimeType,modifiedTime,webViewLink,owners(displayName,emailAddress)",
+      supportsAllDrives: true,
+    }),
+  );
+  if (file.mimeType === DRIVE_FOLDER_MIME_TYPE) return null;
+  const owners = (file.owners ?? []).flatMap((owner) =>
+    owner.emailAddress
+      ? [{ email: owner.emailAddress, name: owner.displayName ?? undefined }]
+      : [],
+  );
+  const details = [
+    DRIVE_TYPE_LABEL[file.mimeType ?? ""],
+    owners[0]?.name ?? owners[0]?.email,
+  ];
+  return {
+    ...card(file.name, details),
+    id: `googledrive:${file.id}`,
+    kind: "file",
+    source: "Google Drive",
+    at: isoTime(file.modifiedTime, now),
+    url: file.webViewLink ?? undefined,
+    people: owners,
+    linkedBy: "url",
+  };
+}
+
+async function fetchJiraIssue(
+  execute: Execute,
+  key: string,
+  url: URL,
+  now: Date,
+): Promise<ContextCandidate | null> {
+  const issue = parseToolResult(
+    "JIRA_GET_ISSUE",
+    jiraIssueSchema,
+    await execute("JIRA_GET_ISSUE", {
+      issue_id_or_key: key,
+      fields: ["summary", "status", "assignee", "priority", "updated"],
+    }),
+  );
+  // Jira is connected to one site; the same key on another site is another
+  // issue. OAuth answers through api.atlassian.com, which names no site.
+  const site = issue.self ? parseUrl(issue.self)?.hostname : undefined;
+  if (site?.endsWith(".atlassian.net") && site !== url.hostname) return null;
+  const { fields } = issue;
+  return {
+    ...card(`${issue.key} ${fields.summary}`, [
+      fields.status?.name,
+      fields.assignee?.displayName,
+      fields.priority?.name,
+    ]),
+    id: `jira:${issue.key}`,
+    kind: "task",
+    source: "Jira",
+    at: isoTime(fields.updated, now),
+    url: `${url.origin}/browse/${issue.key}`,
+    people: personFrom({
+      email: fields.assignee?.emailAddress,
+      displayName: fields.assignee?.displayName,
+    }),
+    linkedBy: "url",
+  };
+}
+
+async function fetchAsanaTask(
+  execute: Execute,
+  gid: string,
+  url: URL,
+  now: Date,
+): Promise<ContextCandidate | null> {
+  const { data: task } = parseToolResult(
+    "ASANA_GET_A_TASK",
+    asanaTaskSchema,
+    await execute("ASANA_GET_A_TASK", {
+      task_gid: gid,
+      opt_fields: [
+        "name",
+        "completed",
+        "due_on",
+        "assignee.name",
+        "permalink_url",
+        "modified_at",
+      ],
+    }),
+  );
+  const state = task.completed
+    ? "Completed"
+    : task.due_on
+      ? `Due ${task.due_on}`
+      : undefined;
+  return {
+    ...card(task.name, [state, task.assignee?.name]),
+    id: `asana:${task.gid}`,
+    kind: "task",
+    source: "Asana",
+    at: isoTime(task.modified_at, now),
+    url: task.permalink_url ?? url.href,
+    people: [],
+    linkedBy: "url",
+  };
+}
+
+async function fetchClickUpTask(
+  execute: Execute,
+  taskId: string,
+  url: URL,
+  now: Date,
+): Promise<ContextCandidate | null> {
+  const task = parseToolResult(
+    "CLICKUP_GET_TASK",
+    clickUpTaskSchema,
+    await execute("CLICKUP_GET_TASK", { task_id: taskId }),
+  );
+  const assignees = task.assignees ?? [];
+  return {
+    ...card(task.name, [task.status?.status, assignees[0]?.username]),
+    id: `clickup:${task.id}`,
+    kind: "task",
+    source: "ClickUp",
+    // ClickUp times are milliseconds since the epoch, as strings.
+    at: isoTime(task.date_updated ? Number(task.date_updated) : undefined, now),
+    url: task.url ?? url.href,
+    people: assignees.flatMap((assignee) =>
+      personFrom({ email: assignee.email, displayName: assignee.username }),
+    ),
+    linkedBy: "url",
+  };
+}
+
+async function findHubSpotContact(
+  execute: Execute,
+  email: string,
+  now: Date,
+): Promise<ContextCandidate | null> {
+  const { results } = parseToolResult(
+    "HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA",
+    hubSpotContactsSchema,
+    await execute("HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA", {
+      filterGroups: [
+        { filters: [{ propertyName: "email", operator: "EQ", value: email }] },
+      ],
+      properties: [
+        "email",
+        "firstname",
+        "lastname",
+        "jobtitle",
+        "company",
+        "lifecyclestage",
+        "lastmodifieddate",
+      ],
+      limit: 1,
+    }),
+  );
+  const contact = results.find(
+    (result) => result.properties.email?.toLowerCase() === email,
+  );
+  if (!contact) return null;
+  const p = contact.properties;
+  const name = [p.firstname, p.lastname].filter(Boolean).join(" ") || email;
+  return {
+    ...card(name, [p.jobtitle, p.company, p.lifecyclestage]),
+    id: `hubspot:${contact.id}`,
+    kind: "contact",
+    source: "HubSpot",
+    at: isoTime(p.lastmodifieddate, now),
+    people: [{ email, name }],
+    linkedBy: "sender",
+  };
+}
+
+/** The sender's Salesforce contact, or else their lead. */
+async function findSalesforceContact(
+  execute: Execute,
+  email: string,
+  now: Date,
+): Promise<ContextCandidate | null> {
+  // Salesforce matches emails partially, so only an exact one counts.
+  const exact = (records: SalesforcePerson[]) =>
+    records.find((record) => record.Email?.toLowerCase() === email);
+  const search = async (tool: string) =>
+    exact(
+      parseToolResult(
+        tool,
+        salesforcePeopleSchema,
+        await execute(tool, { email, limit: 5 }),
+      ).records,
+    );
+
+  const contact = await search("SALESFORCE_SEARCH_CONTACTS");
+  const lead = contact ? undefined : await search("SALESFORCE_SEARCH_LEADS");
+  const person = contact ?? lead;
+  if (!person) return null;
+  const name = person.Name || email;
+  return {
+    ...card(name, [
+      person.Title,
+      person.Account?.Name ?? person.Company,
+      lead && (person.Status ? `Lead: ${person.Status}` : "Lead"),
+    ]),
+    id: `salesforce:${person.Id}`,
+    kind: "contact",
+    source: "Salesforce",
+    at: isoTime(person.LastModifiedDate, now),
+    people: [{ email, name }],
+    linkedBy: "sender",
+  };
+}
+
+/** `docs.google.com/<type>/d/<id>/…`, `drive.google.com/file/d/<id>/…`, `drive.google.com/open?id=<id>`. */
+function driveFileId(url: URL): string | null {
+  if (url.hostname !== "docs.google.com" && url.hostname !== "drive.google.com")
+    return null;
+  // A published copy (`/d/e/…`) has an id of its own that Drive can't fetch.
+  const inPath = /\/d\/([\w-]{20,})(?:\/|$)/.exec(url.pathname)?.[1];
+  if (inPath) return inPath;
+  const inQuery = url.searchParams.get("id");
+  return url.hostname === "drive.google.com" &&
+    url.pathname === "/open" &&
+    inQuery &&
+    /^[\w-]{20,}$/.test(inQuery)
+    ? inQuery
+    : null;
+}
+
+/** `<site>.atlassian.net/browse/KEY-123`. */
+function jiraIssueKey(url: URL): string | null {
+  if (!url.hostname.endsWith(".atlassian.net")) return null;
+  return /^\/browse\/([A-Z][A-Z0-9_]+-\d+)\/?$/.exec(url.pathname)?.[1] ?? null;
+}
+
+/** `app.asana.com/0/<project>/<task>` and `app.asana.com/1/<workspace>/…/task/<task>`. */
+function asanaTaskGid(url: URL): string | null {
+  if (url.hostname !== "app.asana.com") return null;
+  return (
+    /^\/0\/\d+\/(\d+)(?:\/f)?\/?$/.exec(url.pathname)?.[1] ??
+    /^\/1\/\d+\/(?:[a-z]+\/\d+\/)*task\/(\d+)(?:\/f)?\/?$/.exec(
+      url.pathname,
+    )?.[1] ??
+    null
+  );
+}
+
+/**
+ * `app.clickup.com/t/<id>`. Custom ids (`/t/<workspace>/DEV-12`) are left
+ * out: fetching one needs options the allowlisted tool may not take.
+ */
+function clickUpTaskId(url: URL): string | null {
+  if (url.hostname !== "app.clickup.com") return null;
+  return /^\/t\/([a-z0-9]+)\/?$/.exec(url.pathname)?.[1] ?? null;
+}
+
+/** A card's title, and its details as one line under it. */
+function card(title: string, details: (string | null | undefined)[]) {
+  const line = details.filter(Boolean).join(" · ");
+  return {
+    title,
+    text: [title, line].filter(Boolean).join("\n").slice(0, MAX_TEXT),
+    snippet: line || undefined,
+  };
+}
+
+function isoTime(value: string | number | null | undefined, fallback: Date) {
+  const date = value === null || value === undefined ? null : new Date(value);
+  return date && !Number.isNaN(date.getTime())
+    ? date.toISOString()
+    : fallback.toISOString();
+}
+
+function failureReason(error: unknown) {
+  if (error instanceof TimeoutError) return "timeout";
+  if (error instanceof ConnectionExpiredError) return "needs_reconnect";
+  return "error";
+}
+
 async function canvasUserId(execute: Execute, emailAccountId: string) {
   const key = `canvas-user-id:${emailAccountId}`;
   const cached = await redis.get<number>(key).catch(() => null);
@@ -375,12 +779,36 @@ function addDays(date: Date, days: number) {
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
     promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms),
-    ),
-  ]);
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new TimeoutError(`Timed out after ${ms}ms`)),
+        ms,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+class TimeoutError extends Error {}
+
+function parseUrl(href: string): URL | null {
+  try {
+    return new URL(href);
+  } catch {
+    return null;
+  }
+}
+
+function uniqueBy<T>(items: T[], key: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const k = key(item);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 
 // Apps return their own API's JSON; only the fields used here are checked.
@@ -402,6 +830,96 @@ const driveFilesSchema = z.object({
         .nullish(),
     }),
   ),
+});
+
+const driveFileSchema = driveFilesSchema.shape.files.element;
+
+const DRIVE_TYPE_LABEL: Record<string, string> = {
+  "application/vnd.google-apps.document": "Google Doc",
+  "application/vnd.google-apps.spreadsheet": "Google Sheet",
+  "application/vnd.google-apps.presentation": "Google Slides",
+  "application/vnd.google-apps.form": "Google Form",
+  "application/pdf": "PDF",
+};
+
+const jiraIssueSchema = z.object({
+  key: z.string(),
+  self: z.string().nullish(),
+  fields: z.object({
+    summary: z.string(),
+    updated: z.string().nullish(),
+    status: z.object({ name: z.string().nullish() }).nullish(),
+    priority: z.object({ name: z.string().nullish() }).nullish(),
+    assignee: z
+      .object({
+        displayName: z.string().nullish(),
+        emailAddress: z.string().nullish(),
+      })
+      .nullish(),
+  }),
+});
+
+// Asana wraps every resource in `data`.
+const asanaTaskSchema = z.object({
+  data: z.object({
+    gid: z.string(),
+    name: z.string(),
+    completed: z.boolean().nullish(),
+    due_on: z.string().nullish(),
+    modified_at: z.string().nullish(),
+    permalink_url: z.string().nullish(),
+    assignee: z.object({ name: z.string().nullish() }).nullish(),
+  }),
+});
+
+const clickUpTaskSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  url: z.string().nullish(),
+  date_updated: z.string().nullish(),
+  status: z.object({ status: z.string().nullish() }).nullish(),
+  assignees: z
+    .array(
+      z.object({
+        username: z.string().nullish(),
+        email: z.string().nullish(),
+      }),
+    )
+    .nullish(),
+});
+
+const hubSpotContactsSchema = z.object({
+  results: z.array(
+    z.object({
+      id: z.string(),
+      properties: z.object({
+        email: z.string().nullish(),
+        firstname: z.string().nullish(),
+        lastname: z.string().nullish(),
+        jobtitle: z.string().nullish(),
+        company: z.string().nullish(),
+        lifecyclestage: z.string().nullish(),
+        lastmodifieddate: z.string().nullish(),
+      }),
+    }),
+  ),
+});
+
+// Contacts and leads share the fields used here; leads have Company and Status.
+const salesforcePersonSchema = z.object({
+  Id: z.string(),
+  Name: z.string().nullish(),
+  Email: z.string().nullish(),
+  Title: z.string().nullish(),
+  Company: z.string().nullish(),
+  Status: z.string().nullish(),
+  Account: z.object({ Name: z.string().nullish() }).nullish(),
+  LastModifiedDate: z.string().nullish(),
+});
+type SalesforcePerson = z.infer<typeof salesforcePersonSchema>;
+
+const salesforcePeopleSchema = z.object({
+  records: z.array(salesforcePersonSchema),
 });
 
 const oneDriveItemsSchema = z.object({

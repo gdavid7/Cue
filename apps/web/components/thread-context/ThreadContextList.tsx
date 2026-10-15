@@ -2,9 +2,11 @@
 
 import {
   CalendarIcon,
+  ContactIcon,
   FileTextIcon,
   GlobeIcon,
   GraduationCapIcon,
+  ListTodoIcon,
   type LucideIcon,
   MailIcon,
   MessagesSquareIcon,
@@ -24,6 +26,8 @@ const KIND: Record<
   assignment: { icon: GraduationCapIcon, label: "Assignment" },
   chat: { icon: MessagesSquareIcon, label: "Message" },
   web: { icon: GlobeIcon, label: "Web" },
+  task: { icon: ListTodoIcon, label: "Task" },
+  contact: { icon: ContactIcon, label: "Contact" },
 };
 
 /**

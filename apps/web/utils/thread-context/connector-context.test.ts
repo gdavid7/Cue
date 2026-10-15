@@ -304,3 +304,471 @@ describe("fetchConnectorCandidates with an unreadable app", () => {
     expect(fields.error.message).not.toContain("salary");
   });
 });
+
+describe("fetchConnectorCandidates with links and the sender in the thread", () => {
+  const logger = createScopedLogger("connector-context-test");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  function connected(...apps: string[]) {
+    prisma.mcpConnection.findMany.mockResolvedValue(
+      apps.map((name) => ({
+        emailAccountId: "school",
+        integration: { name },
+      })) as never,
+    );
+  }
+
+  function answer(byTool: Record<string, (args: never) => unknown>) {
+    mockExecuteTool.mockImplementation(
+      async ({ tool, args }: { tool: string; args: never }) => {
+        const handler = byTool[tool];
+        if (!handler) throw new Error(`unexpected ${tool}`);
+        return handler(args);
+      },
+    );
+  }
+
+  function calls() {
+    return mockExecuteTool.mock.calls.map(([call]) => [call.tool, call.args]);
+  }
+
+  function lookup(signals: { links?: string[]; senderEmail?: string }) {
+    return fetchConnectorCandidates({
+      emailAccountId: "school",
+      keywords: [],
+      signals: { links: [], ...signals },
+      logger,
+      now: NOW,
+    });
+  }
+
+  it("turns Google Drive links into file cards, once per file, leaving folders and other sites alone", async () => {
+    connected("googledrive");
+    answer({
+      GOOGLEDRIVE_GET_FILE_METADATA: (args: { fileId: string }) => ({
+        id: args.fileId,
+        name: "CSE 151B milestone 2 write-up",
+        mimeType: "application/vnd.google-apps.document",
+        modifiedTime: "2026-10-12T20:00:00Z",
+        webViewLink: `https://docs.google.com/document/d/${args.fileId}/edit`,
+        owners: [{ displayName: "Kevin Ruiz", emailAddress: "kruiz@ucsd.edu" }],
+      }),
+    });
+
+    const { candidates, complete } = await lookup({
+      links: [
+        "https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/edit?usp=sharing",
+        "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/view",
+        "https://drive.google.com/drive/folders/1FolderFolderFolderFolder0000",
+        "https://example.com/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+      ],
+    });
+
+    expect(calls()).toEqual([
+      [
+        "GOOGLEDRIVE_GET_FILE_METADATA",
+        {
+          fileId: "1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+          fields:
+            "id,name,mimeType,modifiedTime,webViewLink,owners(displayName,emailAddress)",
+          supportsAllDrives: true,
+        },
+      ],
+    ]);
+    expect(complete).toBe(true);
+    expect(candidates).toEqual([
+      {
+        id: "googledrive:1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+        kind: "file",
+        source: "Google Drive",
+        title: "CSE 151B milestone 2 write-up",
+        text: "CSE 151B milestone 2 write-up\nGoogle Doc · Kevin Ruiz",
+        snippet: "Google Doc · Kevin Ruiz",
+        at: "2026-10-12T20:00:00.000Z",
+        url: "https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/edit",
+        people: [{ email: "kruiz@ucsd.edu", name: "Kevin Ruiz" }],
+        linkedBy: "url",
+      },
+    ]);
+  });
+
+  it("keeps one card for a file both linked and found by search, marked as linked", async () => {
+    connected("googledrive");
+    const file = {
+      id: "1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+      name: "Milestone 2",
+      modifiedTime: NOW.toISOString(),
+    };
+    answer({
+      GOOGLEDRIVE_FIND_FILE: () => ({ files: [file] }),
+      GOOGLEDRIVE_GET_FILE_METADATA: () => file,
+    });
+
+    const { candidates } = await fetchConnectorCandidates({
+      emailAccountId: "school",
+      keywords: ["milestone"],
+      signals: {
+        links: [`https://docs.google.com/document/d/${file.id}/edit`],
+      },
+      logger,
+      now: NOW,
+    });
+
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        id: `googledrive:${file.id}`,
+        linkedBy: "url",
+      }),
+    ]);
+  });
+
+  it("turns Jira browse links into issue cards", async () => {
+    connected("jira");
+    answer({
+      JIRA_GET_ISSUE: () => ({
+        key: "OPS-12",
+        self: "https://acme.atlassian.net/rest/api/3/issue/10012",
+        fields: {
+          summary: "Rotate staging keys",
+          status: { name: "In Progress" },
+          assignee: {
+            displayName: "Nora Patel",
+            emailAddress: "nora@acme.com",
+          },
+          priority: { name: "High" },
+          updated: "2026-10-12T09:00:00.000+0000",
+        },
+      }),
+    });
+
+    const { candidates } = await lookup({
+      links: [
+        "https://acme.atlassian.net/browse/OPS-12?focusedCommentId=1",
+        "https://acme.atlassian.net/jira/software/projects/OPS/boards/1",
+      ],
+    });
+
+    expect(calls()).toEqual([
+      [
+        "JIRA_GET_ISSUE",
+        {
+          issue_id_or_key: "OPS-12",
+          fields: ["summary", "status", "assignee", "priority", "updated"],
+        },
+      ],
+    ]);
+    expect(candidates).toEqual([
+      {
+        id: "jira:OPS-12",
+        kind: "task",
+        source: "Jira",
+        title: "OPS-12 Rotate staging keys",
+        text: "OPS-12 Rotate staging keys\nIn Progress · Nora Patel · High",
+        snippet: "In Progress · Nora Patel · High",
+        at: "2026-10-12T09:00:00.000Z",
+        url: "https://acme.atlassian.net/browse/OPS-12",
+        people: [{ email: "nora@acme.com", name: "Nora Patel" }],
+        linkedBy: "url",
+      },
+    ]);
+  });
+
+  it("shows no Jira card when the connected site is not the one linked", async () => {
+    connected("jira");
+    answer({
+      JIRA_GET_ISSUE: () => ({
+        key: "OPS-12",
+        self: "https://other.atlassian.net/rest/api/3/issue/10012",
+        fields: { summary: "Someone else's issue", status: { name: "Done" } },
+      }),
+    });
+
+    const { candidates } = await lookup({
+      links: ["https://acme.atlassian.net/browse/OPS-12"],
+    });
+
+    expect(candidates).toEqual([]);
+  });
+
+  it("turns Asana task links, old and new style, into task cards", async () => {
+    connected("asana");
+    answer({
+      ASANA_GET_A_TASK: (args: { task_gid: string }) => ({
+        data: {
+          gid: args.task_gid,
+          name: `Task ${args.task_gid}`,
+          completed: args.task_gid === "1200000000000002",
+          due_on: "2026-10-16",
+          assignee: { name: "Kevin Ruiz" },
+          permalink_url: `https://app.asana.com/0/0/${args.task_gid}`,
+          modified_at: "2026-10-12T10:00:00.000Z",
+        },
+      }),
+    });
+
+    const { candidates } = await lookup({
+      links: [
+        "https://app.asana.com/0/1199999999999999/1200000000000001/f",
+        "https://app.asana.com/1/1100000000000000/project/1199999999999999/task/1200000000000002",
+        "https://app.asana.com/0/1199999999999999/list",
+      ],
+    });
+
+    expect(calls()).toEqual(
+      ["1200000000000001", "1200000000000002"].map((gid) => [
+        "ASANA_GET_A_TASK",
+        {
+          task_gid: gid,
+          opt_fields: [
+            "name",
+            "completed",
+            "due_on",
+            "assignee.name",
+            "permalink_url",
+            "modified_at",
+          ],
+        },
+      ]),
+    );
+    expect(candidates.map((c) => [c.id, c.kind, c.source, c.snippet])).toEqual([
+      [
+        "asana:1200000000000001",
+        "task",
+        "Asana",
+        "Due 2026-10-16 · Kevin Ruiz",
+      ],
+      ["asana:1200000000000002", "task", "Asana", "Completed · Kevin Ruiz"],
+    ]);
+  });
+
+  it("turns ClickUp task links into task cards", async () => {
+    connected("clickup");
+    answer({
+      CLICKUP_GET_TASK: () => ({
+        id: "86abc123",
+        name: "Slides for the group project",
+        status: { status: "in progress" },
+        assignees: [{ username: "Kevin Ruiz", email: "kruiz@ucsd.edu" }],
+        date_updated: String(Date.parse("2026-10-12T10:00:00Z")),
+        url: "https://app.clickup.com/t/86abc123",
+      }),
+    });
+
+    const { candidates } = await lookup({
+      links: [
+        "https://app.clickup.com/t/86abc123",
+        "https://app.clickup.com/t/9011111/DEV-12",
+      ],
+    });
+
+    expect(calls()).toEqual([["CLICKUP_GET_TASK", { task_id: "86abc123" }]]);
+    expect(candidates).toEqual([
+      {
+        id: "clickup:86abc123",
+        kind: "task",
+        source: "ClickUp",
+        title: "Slides for the group project",
+        text: "Slides for the group project\nin progress · Kevin Ruiz",
+        snippet: "in progress · Kevin Ruiz",
+        at: "2026-10-12T10:00:00.000Z",
+        url: "https://app.clickup.com/t/86abc123",
+        people: [{ email: "kruiz@ucsd.edu", name: "Kevin Ruiz" }],
+        linkedBy: "url",
+      },
+    ]);
+  });
+
+  it("looks the sender up in HubSpot by exact email", async () => {
+    connected("hubspot");
+    answer({
+      HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA: () => ({
+        results: [
+          {
+            id: "501",
+            properties: {
+              email: "Nora@Northwind.com",
+              firstname: "Nora",
+              lastname: "Patel",
+              jobtitle: "VP Finance",
+              company: "Northwind",
+              lifecyclestage: "customer",
+              lastmodifieddate: "2026-09-01T00:00:00Z",
+            },
+          },
+        ],
+      }),
+    });
+
+    const { candidates } = await lookup({ senderEmail: "nora@northwind.com" });
+
+    expect(calls()).toEqual([
+      [
+        "HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA",
+        {
+          filterGroups: [
+            {
+              filters: [
+                {
+                  propertyName: "email",
+                  operator: "EQ",
+                  value: "nora@northwind.com",
+                },
+              ],
+            },
+          ],
+          properties: [
+            "email",
+            "firstname",
+            "lastname",
+            "jobtitle",
+            "company",
+            "lifecyclestage",
+            "lastmodifieddate",
+          ],
+          limit: 1,
+        },
+      ],
+    ]);
+    expect(candidates).toEqual([
+      {
+        id: "hubspot:501",
+        kind: "contact",
+        source: "HubSpot",
+        title: "Nora Patel",
+        text: "Nora Patel\nVP Finance · Northwind · customer",
+        snippet: "VP Finance · Northwind · customer",
+        at: "2026-09-01T00:00:00.000Z",
+        people: [{ email: "nora@northwind.com", name: "Nora Patel" }],
+        linkedBy: "sender",
+      },
+    ]);
+  });
+
+  it("finds the sender among Salesforce contacts, then leads, ignoring partial matches", async () => {
+    connected("salesforce");
+    answer({
+      SALESFORCE_SEARCH_CONTACTS: () => ({
+        totalSize: 1,
+        records: [{ Id: "003A", Name: "Nora P", Email: "nora@northwind.co" }],
+      }),
+      SALESFORCE_SEARCH_LEADS: () => ({
+        totalSize: 1,
+        records: [
+          {
+            Id: "00QB",
+            Name: "Nora Patel",
+            Email: "nora@northwind.com",
+            Title: "VP Finance",
+            Company: "Northwind",
+            Status: "Working",
+            LastModifiedDate: "2026-09-01T00:00:00.000+0000",
+          },
+        ],
+      }),
+    });
+
+    const { candidates } = await lookup({ senderEmail: "nora@northwind.com" });
+
+    expect(calls()).toEqual([
+      ["SALESFORCE_SEARCH_CONTACTS", { email: "nora@northwind.com", limit: 5 }],
+      ["SALESFORCE_SEARCH_LEADS", { email: "nora@northwind.com", limit: 5 }],
+    ]);
+    expect(candidates).toEqual([
+      {
+        id: "salesforce:00QB",
+        kind: "contact",
+        source: "Salesforce",
+        title: "Nora Patel",
+        text: "Nora Patel\nVP Finance · Northwind · Lead: Working",
+        snippet: "VP Finance · Northwind · Lead: Working",
+        at: "2026-09-01T00:00:00.000Z",
+        people: [{ email: "nora@northwind.com", name: "Nora Patel" }],
+        linkedBy: "sender",
+      },
+    ]);
+  });
+
+  it("uses a Salesforce contact without asking for leads", async () => {
+    connected("salesforce");
+    answer({
+      SALESFORCE_SEARCH_CONTACTS: () => ({
+        totalSize: 1,
+        records: [
+          {
+            Id: "003A",
+            Name: "Nora Patel",
+            Email: "nora@northwind.com",
+            Title: "VP Finance",
+            Account: { Name: "Northwind" },
+          },
+        ],
+      }),
+    });
+
+    const { candidates } = await lookup({ senderEmail: "nora@northwind.com" });
+
+    expect(calls().map(([tool]) => tool)).toEqual([
+      "SALESFORCE_SEARCH_CONTACTS",
+    ]);
+    expect(candidates[0]).toMatchObject({
+      id: "salesforce:003A",
+      snippet: "VP Finance · Northwind",
+      at: NOW.toISOString(),
+    });
+  });
+
+  it("asks nothing of the apps when the thread has no links or sender", async () => {
+    connected("googledrive", "hubspot");
+
+    await expect(lookup({})).resolves.toEqual({
+      candidates: [],
+      complete: true,
+    });
+    expect(prisma.mcpConnection.findMany).not.toHaveBeenCalled();
+  });
+
+  it("shows no card for a failed or slow lookup, keeps the rest, and logs no content", async () => {
+    vi.useFakeTimers();
+    connected("hubspot", "jira", "googledrive");
+    const warn = vi.spyOn(logger, "warn");
+    answer({
+      HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA: () => {
+        throw new Error(
+          "HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA failed: bad filter nora@northwind.com",
+        );
+      },
+      JIRA_GET_ISSUE: () => new Promise(() => {}),
+      GOOGLEDRIVE_GET_FILE_METADATA: () => ({
+        id: "1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+        name: "Pricing",
+      }),
+    });
+
+    const pending = lookup({
+      senderEmail: "nora@northwind.com",
+      links: [
+        "https://acme.atlassian.net/browse/OPS-12",
+        "https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz012345/edit",
+      ],
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = await pending;
+
+    expect(result.candidates.map((c) => c.id)).toEqual([
+      "googledrive:1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+    ]);
+    // A link that can never be read must not keep the thread from caching.
+    expect(result.complete).toBe(true);
+    expect(warn.mock.calls).toEqual(
+      expect.arrayContaining([
+        ["Connected app lookup failed", { app: "hubspot", reason: "error" }],
+        ["Connected app lookup failed", { app: "jira", reason: "timeout" }],
+      ]),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("nora@");
+  });
+});

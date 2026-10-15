@@ -29,6 +29,8 @@ const CONNECTOR_SOURCE_LABEL = {
   assignment: "Assignment",
   chat: "Message",
   web: "Web page",
+  task: "Task",
+  contact: "Contact",
 } as const;
 const MAX_SOURCE_TEXT = 2000;
 const WEB_SEARCH_RESULTS = 3;
@@ -86,6 +88,8 @@ export type Source = {
     | "assignment"
     | "chat"
     | "web"
+    | "task"
+    | "contact"
     | "memory";
   title: string;
   text: string;

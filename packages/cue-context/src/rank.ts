@@ -14,14 +14,19 @@ import { Corpus, tokenize } from "./text";
 
 export type Person = { email: string; name?: string };
 
-/** `web` is a public page the open thread links to. */
+/**
+ * `web` is a public page the open thread links to; `task` is an issue or task
+ * in a tracker; `contact` is a person's record in a CRM.
+ */
 export type CandidateKind =
   | "email"
   | "event"
   | "file"
   | "assignment"
   | "chat"
-  | "web";
+  | "web"
+  | "task"
+  | "contact";
 
 export type ContextCandidate = {
   id: string;
@@ -36,6 +41,11 @@ export type ContextCandidate = {
   url?: string;
   /** Where it came from when that isn't obvious from the kind, e.g. "Canvas". */
   source?: string;
+  /**
+   * The open thread points at it: it links to it (`url`), or it is the
+   * sender's own record (`sender`). Such an item matters however old it is.
+   */
+  linkedBy?: "url" | "sender";
 };
 
 export type FocusThread = {
@@ -80,6 +90,8 @@ const KIND_PRIOR: Record<CandidateKind, number> = {
   file: 0.5,
   chat: 0.5,
   web: 0.6,
+  task: 0.6,
+  contact: 0.6,
 };
 const MIN_SCORE = 0.18;
 const MIN_TOPIC_SIMILARITY = 0.12;
@@ -142,7 +154,7 @@ export function rankContext({
   >();
   for (const c of pool) {
     // The thread itself points to the page: as direct a link as a shared person.
-    if (c.kind === "web") {
+    if (c.kind === "web" || c.linkedBy === "url") {
       links.set(c.id, { structure: 1, reasons: [{ type: "linked" }] });
       continue;
     }
@@ -202,7 +214,7 @@ export function rankContext({
     const score =
       WEIGHTS.similarity * sim.score +
       WEIGHTS.structure * (link?.structure ?? 0) +
-      WEIGHTS.recency * recency(c.kind, days) +
+      WEIGHTS.recency * (c.linkedBy ? 1 : recency(c.kind, days)) +
       WEIGHTS.kind * KIND_PRIOR[c.kind];
 
     const reasons: ContextReason[] = [...(link?.reasons ?? [])];

@@ -5,7 +5,10 @@ import {
   uploadComposioFile,
 } from "@/utils/mcp/providers/composio";
 import { ConnectionExpiredError } from "@/utils/mcp/providers/types";
+import prisma from "@/utils/__mocks__/prisma";
+import { createScopedLogger } from "@/utils/logger";
 import {
+  fetchConnectorCandidates,
   searchCanvas,
   searchGoogleDrive,
   searchOneDrive,
@@ -35,6 +38,69 @@ let emulator: ComposioEmulator;
 beforeAll(async () => {
   emulator = await createComposioEmulator({
     ...buildCueDemoConnectorData(NOW),
+    jiraIssues: [
+      {
+        key: "OPS-12",
+        self: "https://acme.atlassian.net/rest/api/3/issue/10012",
+        fields: {
+          summary: "Rotate staging keys",
+          status: { name: "In Progress" },
+          assignee: {
+            displayName: "Nora Patel",
+            emailAddress: "nora@acme.com",
+          },
+          priority: { name: "High" },
+          updated: "2026-10-12T09:00:00.000+0000",
+        },
+      },
+    ],
+    asanaTasks: [
+      {
+        gid: "1200000000000001",
+        name: "Book the venue",
+        completed: false,
+        due_on: "2026-10-16",
+        assignee: { name: "Kevin Ruiz" },
+        permalink_url: "https://app.asana.com/0/0/1200000000000001",
+        modified_at: "2026-10-12T10:00:00.000Z",
+      },
+    ],
+    clickupTasks: [
+      {
+        id: "86abc123",
+        name: "Slides for the group project",
+        status: { status: "in progress" },
+        assignees: [{ username: "Kevin Ruiz", email: "kruiz@ucsd.edu" }],
+        date_updated: String(Date.parse("2026-10-12T10:00:00Z")),
+        url: "https://app.clickup.com/t/86abc123",
+      },
+    ],
+    hubspotContacts: [
+      {
+        id: "501",
+        properties: {
+          email: "Priya@Brightline.io",
+          firstname: "Priya",
+          lastname: "Nair",
+          jobtitle: "Head of Procurement",
+          company: "Brightline",
+          lifecyclestage: "opportunity",
+        },
+      },
+    ],
+    salesforceContacts: [
+      // A partial match Salesforce returns for the address below.
+      { Id: "003A", Name: "Pri Nair", Email: "priya@brightline.io.old" },
+    ],
+    salesforceLeads: [
+      {
+        Id: "00QB",
+        Name: "Priya Nair",
+        Email: "priya@brightline.io",
+        Company: "Brightline",
+        Status: "Working",
+      },
+    ],
     slackMessages: [
       {
         text: "I'll make the plots for milestone 2 tonight",
@@ -151,6 +217,90 @@ describe("Composio emulator with the Cue demo data", () => {
     await expect(searchSlack(execute, search(["pricing"]))).rejects.toThrow(
       "No active slack connection",
     );
+  });
+});
+
+describe("Composio emulator with links and the sender in a thread", () => {
+  const logger = createScopedLogger("composio-emulator-test");
+
+  function connected(...apps: string[]) {
+    prisma.mcpConnection.findMany.mockResolvedValue(
+      apps.map((name) => ({
+        emailAccountId: ACCOUNT,
+        integration: { name },
+      })) as never,
+    );
+  }
+
+  it("turns links to Drive, Jira, Asana and ClickUp into cards", async () => {
+    connected("googledrive", "jira", "asana", "clickup");
+
+    const { candidates } = await fetchConnectorCandidates({
+      emailAccountId: ACCOUNT,
+      keywords: [],
+      signals: {
+        links: [
+          "https://docs.google.com/spreadsheets/d/cue-demo-enterprise-pricing-v3/edit",
+          "https://acme.atlassian.net/browse/OPS-12",
+          "https://app.asana.com/0/1199999999999999/1200000000000001/f",
+          "https://app.clickup.com/t/86abc123",
+        ],
+      },
+      logger,
+      now: NOW,
+    });
+
+    expect(
+      candidates.map((c) => [c.source, c.title, c.linkedBy]).sort(),
+    ).toEqual([
+      ["Asana", "Book the venue", "url"],
+      ["ClickUp", "Slides for the group project", "url"],
+      ["Google Drive", "Enterprise pricing v3", "url"],
+      ["Jira", "OPS-12 Rotate staging keys", "url"],
+    ]);
+  });
+
+  it("finds the sender in HubSpot, and among Salesforce leads when no contact matches exactly", async () => {
+    connected("hubspot", "salesforce");
+
+    const { candidates } = await fetchConnectorCandidates({
+      emailAccountId: ACCOUNT,
+      keywords: [],
+      signals: { links: [], senderEmail: "priya@brightline.io" },
+      logger,
+      now: NOW,
+    });
+
+    expect(candidates.map((c) => [c.id, c.snippet]).sort()).toEqual([
+      ["hubspot:501", "Head of Procurement · Brightline · opportunity"],
+      ["salesforce:00QB", "Brightline · Lead: Working"],
+    ]);
+  });
+
+  it("refuses arguments a tool doesn't document", async () => {
+    await expect(
+      executor("googledrive")("GOOGLEDRIVE_GET_FILE_METADATA", {
+        file_id: "cue-demo-enterprise-pricing-v3",
+      }),
+    ).rejects.toThrow("unknown argument file_id");
+    await expect(
+      executor("hubspot")("HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA", {
+        filterGroups: [
+          {
+            filters: [
+              {
+                propertyName: "email",
+                operator: "CONTAINS_TOKEN",
+                value: "priya",
+              },
+            ],
+          },
+        ],
+      }),
+    ).rejects.toThrow("operator EQ");
+    await expect(
+      executor("salesforce")("SALESFORCE_SEARCH_LEADS", { limit: 5 }),
+    ).rejects.toThrow("at least one search criterion");
   });
 });
 
