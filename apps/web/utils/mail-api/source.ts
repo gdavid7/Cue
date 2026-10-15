@@ -202,10 +202,16 @@ export function createEmailProviderMailboxSource(input: {
             }),
           });
         // The backfill only fills in older mail, so it yields to everything
-        // else; the primary scan fills the inbox the user is waiting on.
+        // else; the primary scan fills the inbox the user is waiting on, and
+        // its first page is the one the screen waits for after a sign-in.
         const syncPage = isGmail
           ? await runWithGmailQuota(
-              { priority: isBackfill ? "background" : "sync" },
+              {
+                priority: gmailEnumerationPriority({
+                  isBackfill,
+                  isFirstPage: !token.pageToken,
+                }),
+              },
               () =>
                 withGmailSyncBudget(
                   {
@@ -786,6 +792,17 @@ function throttled(retryAfterMs: number) {
     retryAfterMs: Math.max(1000, Math.ceil(retryAfterMs)),
     reason: "throttled" as const,
   };
+}
+
+function gmailEnumerationPriority({
+  isBackfill,
+  isFirstPage,
+}: {
+  isBackfill: boolean;
+  isFirstPage: boolean;
+}) {
+  if (isBackfill) return "background" as const;
+  return isFirstPage ? ("interactive" as const) : ("sync" as const);
 }
 
 function gmailPageCost(pageSize: number) {

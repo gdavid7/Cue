@@ -8,6 +8,7 @@ import {
 import { ProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
 import { syncPageSchema } from "@inboxzero/mail-core/sync";
 import { createEmailProviderMailboxSource } from "./source";
+import { currentGmailQuotaContext } from "@/utils/gmail/quota";
 import type { EmailProvider } from "@/utils/email/types";
 import type { ParsedMessage } from "@/utils/types";
 import { createTestLogger } from "@/__tests__/helpers";
@@ -1272,6 +1273,37 @@ describe("createEmailProviderMailboxSource", () => {
       reason: "throttled",
     });
     expect(getMessagesWithPagination).not.toHaveBeenCalled();
+  });
+
+  it("asks Gmail for a first sync's first page at the priority of someone waiting", async () => {
+    const priorities: string[] = [];
+    const getMessagesWithPagination = vi.fn(async () => {
+      priorities.push(currentGmailQuotaContext().priority);
+      return { messages: [], nextPageToken: "next" };
+    });
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination,
+      } as unknown as EmailProvider,
+    });
+    const enumerate = (token: object) =>
+      source.enumerate({
+        session: { accountId: "acc-1", generation: "g1" },
+        requestId: "r1",
+        signal: new AbortController().signal,
+        bootstrapId: "mailbox",
+        page: JSON.stringify(token),
+        pageSize: 50,
+      });
+
+    await enumerate({ scopeId: "primary" });
+    await enumerate({ scopeId: "primary", pageToken: "next" });
+    await enumerate({ scopeId: "history" });
+
+    expect(priorities).toEqual(["interactive", "sync", "background"]);
   });
 
   it("scans recent Gmail mail first and backfills older mail in a separate background scope", async () => {
