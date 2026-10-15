@@ -77,6 +77,7 @@ import { MailProductFrame } from "@inboxzero/mail-ui/MailProductFrame";
 import { MailEngineConnectionBanner } from "@/utils/mail-engine/MailEngineConnectionBanner";
 import { useThreadSelection } from "@/app/(app)/[emailAccountId]/mail/use-thread-selection";
 import { useWarmNeighbourThreads } from "@/app/(app)/[emailAccountId]/mail/use-warm-neighbour-threads";
+import { useReaderFocusHandoff } from "@/app/(app)/[emailAccountId]/mail/use-reader-focus-handoff";
 import { useMailPerformanceTelemetry } from "@/app/(app)/[emailAccountId]/mail/use-mail-performance-telemetry";
 import {
   isThreadArchived,
@@ -745,6 +746,12 @@ export function MailShell() {
     : undefined;
   const readAttemptedForOpenThread = useRef<string | null>(null);
   useWarmNeighbourThreads({ threads, openThreadKey, emailAccountId });
+  const {
+    listRef: listSectionRef,
+    readerRef: readerColumnRef,
+    focusReaderWhenShown,
+    focusListWhenShown,
+  } = useReaderFocusHandoff();
 
   // Defer the pair as one value: rendering a new id with the previous account
   // would be worse than fetching eagerly when J/K moves between account rows.
@@ -1100,6 +1107,8 @@ export function MailShell() {
     setReplyToMessageId(undefined);
     setForwardToMessageId(undefined);
     selection.clear();
+    // Split layout keeps the list, and focus with it.
+    if (layout === "list") focusReaderWhenShown();
     setOpenThread(getListThreadSelection(thread, emailAccountId));
   });
 
@@ -1429,8 +1438,9 @@ export function MailShell() {
       router.push(prefixPath(emailAccountId, "/home"));
       return;
     }
+    focusListWhenShown();
     setOpenThread(null);
-  }, [openedFrom, router, emailAccountId, setOpenThread]);
+  }, [openedFrom, router, emailAccountId, setOpenThread, focusListWhenShown]);
 
   const senderCommands =
     senderCommandContext?.emailAccountId ===
@@ -1848,6 +1858,7 @@ export function MailShell() {
         <div className="flex min-h-0 min-w-0 flex-1">
           {showList && (
             <section
+              ref={listSectionRef}
               className={
                 layout === "split"
                   ? "flex min-h-0 w-[clamp(258px,32vw,400px)] shrink-0 flex-col border-r border-border"
@@ -2033,7 +2044,10 @@ export function MailShell() {
           )}
 
           {showReader ? (
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <div
+              className="flex min-h-0 min-w-0 flex-1 flex-col"
+              ref={readerColumnRef}
+            >
               {showList ? null : (
                 <MailTitlebarNav
                   showHistory={isDesktopApp}

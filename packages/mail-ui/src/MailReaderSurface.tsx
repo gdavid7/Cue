@@ -105,7 +105,12 @@ export function MailReaderToolbar({
                 title="Starred conversation"
               />
             )}
-            <h1 className="line-clamp-2 font-title font-medium text-2xl text-foreground leading-tight tracking-tight max-sm:text-lg">
+            {/* Focusable from script so opening a conversation can land here. */}
+            <h1
+              className="line-clamp-2 font-title font-medium text-2xl text-foreground leading-tight tracking-tight outline-none max-sm:text-lg"
+              data-mail-reader-subject
+              tabIndex={-1}
+            >
               {subject}
             </h1>
           </div>
