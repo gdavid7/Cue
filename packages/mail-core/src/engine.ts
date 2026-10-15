@@ -82,6 +82,8 @@ const MAX_SEARCH_PAGES_PER_DEMAND = 2;
 // waits its turn instead of crowding out sync and commands.
 const MAX_CONVERSATION_FETCHES = 2;
 const CONVERSATION_FETCH_RETRY_MS = 60_000;
+// Past this a fill gives up, so the reader's loading row can't stay forever.
+const CONVERSATION_FETCH_TIMEOUT_MS = 30_000;
 
 export type WorkAdmission =
   | { status: "scheduled" | "already_satisfied" }
@@ -187,6 +189,7 @@ export function createMailEngine(input: {
   assistant?: AssistantStateSource;
   idleCatchUpIntervalMs?: number;
   syncLaneTimeoutMs?: number;
+  conversationFetchTimeoutMs?: number;
   /** Committed incremental changes only; bootstrap and backfill never emit. */
   onSyncPageCommitted?: (page: SyncPage) => void;
 }): MailEngine {
@@ -194,6 +197,8 @@ export function createMailEngine(input: {
   const idleCatchUpIntervalMs =
     input.idleCatchUpIntervalMs ?? IDLE_CATCH_UP_INTERVAL_MS;
   const syncLaneTimeoutMs = input.syncLaneTimeoutMs ?? SYNC_LANE_TIMEOUT_MS;
+  const conversationFetchTimeoutMs =
+    input.conversationFetchTimeoutMs ?? CONVERSATION_FETCH_TIMEOUT_MS;
   const ownerId = input.ownerId ?? "local-owner";
   const assistant = input.assistant;
   const queries = createQueryRegistry();
@@ -224,6 +229,7 @@ export function createMailEngine(input: {
   // When a conversation whose read failed may be asked for again; a
   // conversation the provider doesn't have never is.
   const conversationFetchRetryAt = new Map<string, number>();
+  const conversationFetchAborts = new Map<string, AbortController>();
   let runningConversationFetches = 0;
   const queuedConversationFetches: Array<() => void> = [];
 
@@ -417,6 +423,7 @@ export function createMailEngine(input: {
     async purgeAccount(accountId) {
       stopSyncLane(accountId);
       idleCatchUpGates.delete(accountId);
+      abortConversationFetches(accountId);
       const revision = await store.purgeAccount(accountId);
       await refreshViews();
       return revision;
@@ -431,6 +438,7 @@ export function createMailEngine(input: {
         if (retained.has(account.accountId)) continue;
         stopSyncLane(account.accountId);
         idleCatchUpGates.delete(account.accountId);
+        abortConversationFetches(account.accountId);
         await store.purgeAccount(account.accountId);
         purged = true;
       }
@@ -720,6 +728,7 @@ export function createMailEngine(input: {
     },
     async close() {
       closed = true;
+      abortConversationFetches(null);
       const lanes = [...syncLanes.keys()].map((accountId) => {
         const done = syncLanes.get(accountId)?.done;
         stopSyncLane(accountId);
@@ -746,6 +755,24 @@ export function createMailEngine(input: {
   async function readConversationMembers(
     key: ConversationKey,
   ): Promise<ConversationFetch> {
+    const id = conversationFetchKey(key);
+    const abort = new AbortController();
+    conversationFetchAborts.set(id, abort);
+    const timeout = setTimeout(() => abort.abort(), conversationFetchTimeoutMs);
+    try {
+      return await readConversationMemberPages(key, abort.signal);
+    } finally {
+      clearTimeout(timeout);
+      if (conversationFetchAborts.get(id) === abort) {
+        conversationFetchAborts.delete(id);
+      }
+    }
+  }
+
+  async function readConversationMemberPages(
+    key: ConversationKey,
+    signal: AbortSignal,
+  ): Promise<ConversationFetch> {
     const account = (await store.readAccountSyncStates()).find(
       (candidate) => candidate.accountId === key.accountId,
     );
@@ -762,15 +789,20 @@ export function createMailEngine(input: {
     const resolutionId = runtime.randomId();
     let page: string | null = null;
     do {
-      const membership = await source.readConversationMembership({
-        session,
-        requestId: runtime.randomId(),
-        signal: new AbortController().signal,
-        conversation: key,
-        resolutionId,
-        page,
-        pageSize: 100,
-      });
+      const membership: Awaited<
+        ReturnType<MailboxSource["readConversationMembership"]>
+      > = await untilAborted(
+        source.readConversationMembership({
+          session,
+          requestId: runtime.randomId(),
+          signal,
+          conversation: key,
+          resolutionId,
+          page,
+          pageSize: 100,
+        }),
+        signal,
+      );
       if (membership.status !== "ok") {
         await noteConnection(key.accountId, membership);
         return {
@@ -805,6 +837,16 @@ export function createMailEngine(input: {
       page = membership.value.page.nextPage;
     } while (page);
     return { status: "complete" };
+  }
+
+  function abortConversationFetches(accountId: string | null) {
+    const prefix =
+      accountId === null
+        ? ""
+        : conversationFetchKey({ accountId, conversationId: "" });
+    for (const [id, abort] of conversationFetchAborts) {
+      if (id.startsWith(prefix)) abort.abort();
+    }
   }
 
   async function inConversationFetchSlot<T>(run: () => Promise<T>) {
@@ -1650,6 +1692,18 @@ type ProviderSearch = {
 
 function providerSearchKey(accountId: string, predicate: MailPredicate) {
   return `${accountId}:${JSON.stringify(predicate)}`;
+}
+
+// Settles on abort even when the request ignores its signal.
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal) {
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new Error("Conversation fill stopped"));
+    if (signal.aborted) return onAbort();
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => {
+      signal.removeEventListener("abort", onAbort);
+    });
+  });
 }
 
 type ConversationFetch =

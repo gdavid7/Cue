@@ -205,6 +205,25 @@ describe("useThread", () => {
     });
   });
 
+  it("stops showing earlier messages loading when the fill gives up", async () => {
+    mail.client.ensureConversationMessages.mockResolvedValue({
+      status: "unavailable",
+    });
+    mail.client.observeConversation.mockReturnValue(
+      handle(readySnapshot(view({ coverage: [partialCoverage] }))),
+    );
+    const { result } = renderHook(() =>
+      useThread({ id: "c-1" }, { fillConversation: true }),
+    );
+
+    await waitFor(() =>
+      expect(result.current.localAvailability).toMatchObject({
+        hasMore: false,
+        loadingMore: false,
+      }),
+    );
+  });
+
   it("leaves filling in the conversation to the reader that asks for it", async () => {
     mail.client.observeConversation.mockReturnValue(
       handle(readySnapshot(view({ coverage: [partialCoverage] }))),

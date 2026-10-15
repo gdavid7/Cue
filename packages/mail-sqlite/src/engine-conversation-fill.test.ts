@@ -122,7 +122,7 @@ describe("opening a conversation a first sync has not fully reached", () => {
       },
     });
     const clock = { nowMs: 10_000 };
-    const { engine } = await startFirstSync(source, clock);
+    const { engine } = await startFirstSync(source, { clock });
 
     await expect(engine.ensureConversationMessages(thread)).resolves.toEqual({
       status: "unavailable",
@@ -149,7 +149,7 @@ describe("opening a conversation a first sync has not fully reached", () => {
       },
     });
     const clock = { nowMs: 10_000 };
-    const { engine } = await startFirstSync(source, clock);
+    const { engine } = await startFirstSync(source, { clock });
 
     await expect(engine.ensureConversationMessages(thread)).resolves.toEqual({
       status: "unavailable",
@@ -174,7 +174,7 @@ describe("opening a conversation a first sync has not fully reached", () => {
       },
     });
     const clock = { nowMs: 10_000 };
-    const { engine } = await startFirstSync(source, clock);
+    const { engine } = await startFirstSync(source, { clock });
 
     await engine.ensureConversationMessages(thread);
     clock.nowMs += 24 * 60 * 60_000;
@@ -298,6 +298,38 @@ describe("opening a conversation a first sync has not fully reached", () => {
     await engine.close();
   });
 
+  it("gives up on a provider read that never answers", async () => {
+    const source = firstSyncSource({
+      firstPage: replies,
+      readMembership: () => new Promise(() => undefined),
+    });
+    const { engine } = await startFirstSync(source, {
+      conversationFetchTimeoutMs: 20,
+    });
+
+    await expect(engine.ensureConversationMessages(thread)).resolves.toEqual({
+      status: "unavailable",
+    });
+    await engine.close();
+  });
+
+  it("stops filling a conversation of an account being removed", async () => {
+    const source = firstSyncSource({
+      firstPage: replies,
+      readMembership: () => new Promise(() => undefined),
+    });
+    const { engine } = await startFirstSync(source);
+
+    const filling = engine.ensureConversationMessages(thread);
+    while (source.membershipReads === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    await engine.purgeAccount("acc-1");
+
+    await expect(filling).resolves.toEqual({ status: "unavailable" });
+    await engine.close();
+  });
+
   it("asks the provider for at most two conversations at a time", async () => {
     let inFlight = 0;
     let maxInFlight = 0;
@@ -349,7 +381,10 @@ async function archive(engine: MailEngine, commandId: string) {
 
 async function startFirstSync(
   source: MailboxSource,
-  clock = { nowMs: 10_000 },
+  {
+    clock = { nowMs: 10_000 },
+    conversationFetchTimeoutMs,
+  }: { clock?: { nowMs: number }; conversationFetchTimeoutMs?: number } = {},
 ) {
   const store = await createSqliteMailStore(createNodeSqliteDriver());
   await store.ensureAccount({ ...session, provider: "google" });
@@ -365,6 +400,7 @@ async function startFirstSync(
       },
     },
     runtime: createHostRuntime({ nowMs: () => clock.nowMs }),
+    conversationFetchTimeoutMs,
   });
   await engine.requestSync(["acc-1"]);
   await engine.runUntil(Date.now() + 2000);
