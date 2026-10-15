@@ -485,6 +485,121 @@ describe("updateRuleTool", () => {
     });
   });
 
+  it("returns a pending confirmation instead of adding a forward action", async () => {
+    mockPrisma.rule.findUnique.mockResolvedValue(
+      vendorBillingRuleWithActions(),
+    );
+
+    const result = await vendorBillingUpdateTool().execute({
+      ruleName: "Vendor Billing",
+      updates: {
+        name: "Vendor Billing Forwarding",
+        actions: [
+          ...vendorBillingActionsInput(),
+          {
+            type: ActionType.FORWARD,
+            fields: { to: "audit@attacker.example" },
+            delayInMinutes: null,
+          },
+        ],
+      },
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        success: true,
+        actionType: "update_rule",
+        requiresConfirmation: true,
+        confirmationState: "pending",
+        ruleId: "rule-id",
+        ruleUpdatedAt: "2026-04-27T00:00:00.000Z",
+        updatedName: "Vendor Billing Forwarding",
+        updatedActions: expect.arrayContaining([
+          expect.objectContaining({
+            type: ActionType.FORWARD,
+            fields: { to: "audit@attacker.example" },
+          }),
+        ]),
+      }),
+    );
+    expect(
+      (result as { riskMessages?: string[] }).riskMessages?.length,
+    ).toBeGreaterThan(0);
+    expect(mockPartialUpdateRule).not.toHaveBeenCalled();
+    expect(mockUpdateRuleActions).not.toHaveBeenCalled();
+    expect(mockSetRuleEnabled).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      ActionType.CALL_WEBHOOK,
+      { webhookUrl: "https://hooks.attacker.example/collect" },
+    ],
+    [ActionType.SEND_EMAIL, { to: "a@attacker.example", content: "hi" }],
+    [ActionType.REPLY, { content: "{{anything}}" }],
+  ])("returns a pending confirmation for a new %s action", async (type, fields) => {
+    mockPrisma.rule.findUnique.mockResolvedValue(
+      vendorBillingRuleWithActions(),
+    );
+
+    const result = await vendorBillingUpdateTool().execute({
+      ruleName: "Vendor Billing",
+      updates: {
+        actions: [{ type, fields, delayInMinutes: null }],
+      },
+    });
+
+    expect(result).toMatchObject({
+      requiresConfirmation: true,
+      confirmationState: "pending",
+    });
+    expect(mockUpdateRuleActions).not.toHaveBeenCalled();
+  });
+
+  it("applies action changes directly when existing outbound actions are unchanged", async () => {
+    const rule = vendorBillingRuleWithActions();
+    mockPrisma.rule.findUnique.mockResolvedValue({
+      ...rule,
+      actions: [
+        ...rule.actions,
+        {
+          type: ActionType.FORWARD,
+          content: null,
+          label: null,
+          to: "accountant@example.com",
+          cc: null,
+          bcc: null,
+          subject: null,
+          url: null,
+          folderName: null,
+          delayInMinutes: null,
+        },
+      ],
+    });
+
+    const result = await vendorBillingUpdateTool().execute({
+      ruleName: "Vendor Billing",
+      updates: {
+        actions: [
+          {
+            type: ActionType.LABEL,
+            fields: { label: "Finance" },
+            delayInMinutes: null,
+          },
+          {
+            type: ActionType.FORWARD,
+            fields: { to: "accountant@example.com" },
+            delayInMinutes: null,
+          },
+        ],
+      },
+    });
+
+    expect(result).not.toHaveProperty("requiresConfirmation");
+    expect(result.success).toBe(true);
+    expect(mockUpdateRuleActions).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks updates after deletion is pending for the same rule", async () => {
     const result = await updateRuleTool({
       email: "user@example.com",
@@ -811,6 +926,22 @@ function vendorBillingRuleWithActions() {
       },
     ],
   };
+}
+
+function vendorBillingUpdateTool() {
+  return updateRuleTool({
+    email: "user@example.com",
+    emailAccountId: "email-account-id",
+    provider: "google",
+    logger,
+    getRuleReadState: () => ({
+      readAt: Date.now(),
+      rulesRevision: 3,
+      ruleUpdatedAtByName: new Map([
+        ["Vendor Billing", "2026-04-27T00:00:00.000Z"],
+      ]),
+    }),
+  });
 }
 
 function vendorBillingActionsInput() {

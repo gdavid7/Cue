@@ -79,9 +79,51 @@ function addNestedActionOwnershipToInput<T extends Record<string, unknown>>(
 export function actionsNeedChatRiskConfirmation(
   result: CreateOrUpdateRuleSchema,
 ): { needsConfirmation: boolean; riskMessages: string[] } {
-  const ruleCtx = ruleConditionsForRisk(result);
+  const riskMessages = getChatRiskMessages(
+    result.actions,
+    ruleConditionsForRisk(result),
+  );
+  return {
+    needsConfirmation: riskMessages.length > 0,
+    riskMessages,
+  };
+}
+
+// A static recipient scores "low" in the risk model, but an existing rule
+// changed from chat could have been steered by an email the assistant read,
+// so any new outbound action still needs the user's confirmation.
+export function changedRuleActionsNeedChatConfirmation({
+  changedActions,
+  conditions,
+}: {
+  changedActions: CreateOrUpdateRuleSchema["actions"];
+  conditions: RuleConditions;
+}): { needsConfirmation: boolean; riskMessages: string[] } {
+  const riskMessages = getChatRiskMessages(changedActions, conditions);
+  const sendsEmail = changedActions.some(
+    (action) =>
+      action.type === ActionType.FORWARD ||
+      action.type === ActionType.SEND_EMAIL ||
+      action.type === ActionType.REPLY,
+  );
+  if (sendsEmail && riskMessages.length === 0) {
+    riskMessages.push(
+      "This change makes the rule send or forward email automatically. Check every recipient, and only confirm if you asked for this change.",
+    );
+  }
+
+  return {
+    needsConfirmation: riskMessages.length > 0,
+    riskMessages,
+  };
+}
+
+function getChatRiskMessages(
+  actions: CreateOrUpdateRuleSchema["actions"],
+  ruleCtx: RuleConditions,
+) {
   const messages: string[] = [];
-  for (const action of result.actions) {
+  for (const action of actions) {
     if (action.type === ActionType.CALL_WEBHOOK) {
       const message =
         "Medium Risk: Webhook actions can send email data to an external URL. Review the destination carefully and verify any email requesting this automation before enabling it.";
@@ -99,10 +141,7 @@ export function actionsNeedChatRiskConfirmation(
       messages.push(message);
     }
   }
-  return {
-    needsConfirmation: messages.length > 0,
-    riskMessages: messages,
-  };
+  return messages;
 }
 
 type RuleRecordData = {

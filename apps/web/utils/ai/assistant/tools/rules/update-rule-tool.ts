@@ -10,6 +10,7 @@ import {
 } from "@/utils/ai/rule/create-rule-schema";
 import { isDuplicateError } from "@/utils/prisma-helpers";
 import {
+  changedRuleActionsNeedChatConfirmation,
   partialUpdateRule,
   setRuleEnabled,
   updateRuleActions,
@@ -244,45 +245,43 @@ export const updateRuleTool = ({
           };
         }
 
-        if (effectiveUpdates.name || effectiveUpdates.condition) {
-          await partialUpdateRule({
+        const { needsConfirmation, riskMessages } =
+          changedRuleActionsNeedChatConfirmation(
+            buildRiskCheckInput({
+              rule,
+              effectiveUpdates,
+              originalActions,
+              provider,
+            }),
+          );
+        if (needsConfirmation) {
+          return {
+            success: true,
+            actionType: "update_rule" as const,
+            requiresConfirmation: true as const,
+            confirmationState: "pending" as const,
+            riskMessages,
             ruleId: rule.id,
-            emailAccountId,
-            data: {
-              ...(effectiveUpdates.name && { name: effectiveUpdates.name }),
-              ...(effectiveUpdates.condition &&
-                buildConditionUpdateData(effectiveUpdates.condition)),
-            },
-          });
+            ruleUpdatedAt: rule.updatedAt.toISOString(),
+            originalName: rule.name,
+            updatedName: effectiveUpdates.name ?? rule.name,
+            originalEnabled: rule.enabled,
+            updatedEnabled: effectiveUpdates.enabled ?? rule.enabled,
+            originalConditions,
+            updatedConditions: effectiveUpdates.condition,
+            originalActions,
+            updatedActions: effectiveUpdates.actions,
+          };
         }
 
-        if (effectiveUpdates.actions) {
-          await updateRuleActions({
-            ruleId: rule.id,
-            actions: effectiveUpdates.actions.map((action) => ({
-              type: action.type,
-              fields: buildProviderRuleActionFields({
-                provider,
-                fields: action.fields ?? {},
-              }),
-              delayInMinutes: action.delayInMinutes ?? null,
-            })),
-            provider,
-            emailAccountId,
-            logger,
-          });
-        }
-
-        if (
-          effectiveUpdates.enabled !== undefined &&
-          effectiveUpdates.enabled !== rule.enabled
-        ) {
-          await setRuleEnabled({
-            ruleId: rule.id,
-            emailAccountId,
-            enabled: effectiveUpdates.enabled,
-          });
-        }
+        await applyRuleUpdate({
+          ruleId: rule.id,
+          currentEnabled: rule.enabled,
+          emailAccountId,
+          provider,
+          updates: effectiveUpdates,
+          logger,
+        });
 
         const snapshot = await loadRuleSnapshotAfterWrite({
           emailAccountId,
@@ -332,8 +331,65 @@ export const updateRuleTool = ({
 
 export type UpdateRuleTool = InferUITool<ReturnType<typeof updateRuleTool>>;
 
+export async function applyRuleUpdate({
+  ruleId,
+  currentEnabled,
+  emailAccountId,
+  provider,
+  updates,
+  logger,
+}: {
+  ruleId: string;
+  currentEnabled: boolean;
+  emailAccountId: string;
+  provider: string;
+  updates: RuleUpdatePatch;
+  logger: Logger;
+}) {
+  if (updates.name || updates.condition) {
+    await partialUpdateRule({
+      ruleId,
+      emailAccountId,
+      data: {
+        ...(updates.name && { name: updates.name }),
+        ...(updates.condition && buildConditionUpdateData(updates.condition)),
+      },
+    });
+  }
+
+  if (updates.actions) {
+    await updateRuleActions({
+      ruleId,
+      actions: updates.actions.map((action) => ({
+        type: action.type,
+        fields: buildProviderRuleActionFields({
+          provider,
+          fields: action.fields ?? {},
+        }),
+        delayInMinutes: action.delayInMinutes ?? null,
+      })),
+      provider,
+      emailAccountId,
+      logger,
+    });
+  }
+
+  if (updates.enabled !== undefined && updates.enabled !== currentEnabled) {
+    await setRuleEnabled({
+      ruleId,
+      emailAccountId,
+      enabled: updates.enabled,
+    });
+  }
+}
+
 export type UpdateRuleOutput = {
   success: boolean;
+  actionType?: "update_rule";
+  requiresConfirmation?: true;
+  confirmationState?: "pending" | "processing" | "confirmed";
+  riskMessages?: string[];
+  ruleUpdatedAt?: string;
   alreadyApplied?: boolean;
   message?: string;
   ruleId?: string;
@@ -369,12 +425,62 @@ type PatchCondition = {
   conditionalOperator?: LogicalOperator | null;
 };
 
-type RuleUpdatePatch = {
+export type RuleUpdatePatch = {
   name?: string;
   enabled?: boolean;
   condition?: PatchCondition;
   actions?: RuleAction[];
 };
+
+function buildRiskCheckInput({
+  rule,
+  effectiveUpdates,
+  originalActions,
+  provider,
+}: {
+  rule: {
+    conditionalOperator: LogicalOperator | null;
+    from: string | null;
+    instructions: string | null;
+    subject: string | null;
+    to: string | null;
+  };
+  effectiveUpdates: RuleUpdatePatch;
+  originalActions: NonNullable<UpdateRuleOutput["originalActions"]>;
+  provider: string;
+}) {
+  const originalActionKeys = new Set(
+    originalActions.map((action) =>
+      JSON.stringify(normalizeActionForComparison(action)),
+    ),
+  );
+  const changedActions = (effectiveUpdates.actions ?? []).filter(
+    (action) =>
+      !originalActionKeys.has(
+        JSON.stringify(normalizeActionForComparison(action)),
+      ),
+  );
+
+  return {
+    changedActions: changedActions.map((action) => ({
+      type: action.type,
+      fields: buildProviderRuleActionFields({
+        provider,
+        fields: action.fields ?? {},
+      }),
+      delayInMinutes: action.delayInMinutes ?? null,
+    })),
+    conditions: {
+      instructions: rule.instructions,
+      from: rule.from,
+      to: rule.to,
+      subject: rule.subject,
+      conditionalOperator: rule.conditionalOperator ?? undefined,
+      ...(effectiveUpdates.condition &&
+        buildConditionUpdateData(effectiveUpdates.condition)),
+    },
+  };
+}
 
 function ruleUpdateHasChanges({
   updates,
