@@ -49,6 +49,7 @@ export const MailReaderPane = memo(function MailReaderPane({
   onPrint,
   isMenuOpen,
   onMenuOpenChange,
+  menuReturnFocusTo,
   ...readerProps
 }: Omit<ThreadReaderProps, "onBackToInbox" | "menu" | "renderMessageMenu"> & {
   /** Undefined while the account owning the open thread is still loading. */
@@ -75,6 +76,7 @@ export const MailReaderPane = memo(function MailReaderPane({
   onPrint?: () => void;
   isMenuOpen: boolean;
   onMenuOpenChange: (open: boolean) => void;
+  menuReturnFocusTo?: () => HTMLElement | null;
 }) {
   const { data: planData } = useThreadPlans({
     threadId: planSelection?.threadId,
@@ -144,6 +146,7 @@ export const MailReaderPane = memo(function MailReaderPane({
                 }
                 open={isMenuOpen}
                 onOpenChange={onMenuOpenChange}
+                returnFocusTo={menuReturnFocusTo}
               />
             }
           />

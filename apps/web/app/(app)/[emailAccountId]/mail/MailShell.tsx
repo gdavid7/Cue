@@ -302,6 +302,10 @@ export function MailShell() {
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [isDesktopApp, setIsDesktopApp] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  // The bottom bar's More opens the reader's menu while its trigger is
+  // hidden, so closing hands focus back to that button instead.
+  const barMoreButtonRef = useRef<HTMLButtonElement>(null);
+  const menuOpenedFromBarRef = useRef(false);
   const [isTourOpen, setIsTourOpen] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const isLargeScreen = useIsLargeScreen();
@@ -1803,7 +1807,12 @@ export function MailShell() {
                   onSnooze:
                     targetsTrashed || targetsSpam ? undefined : snoozeTargets,
                   onDelete: trashTargets,
-                  onMore: () => setIsMenuOpen(true),
+                  onMore: () => {
+                    menuOpenedFromBarRef.current = true;
+                    setIsMenuOpen(true);
+                  },
+                  isMoreOpen: isMenuOpen,
+                  moreButtonRef: barMoreButtonRef,
                 }
               : null
           }
@@ -2069,6 +2078,11 @@ export function MailShell() {
                 onPrint={printOpenThread}
                 isMenuOpen={isMenuOpen}
                 onMenuOpenChange={setIsMenuOpen}
+                menuReturnFocusTo={() => {
+                  const openedFromBar = menuOpenedFromBarRef.current;
+                  menuOpenedFromBarRef.current = false;
+                  return openedFromBar ? barMoreButtonRef.current : null;
+                }}
                 enableMessageNavigation={!sidePanelThreadId}
                 thread={openThread ?? null}
                 threadId={openThreadId}
