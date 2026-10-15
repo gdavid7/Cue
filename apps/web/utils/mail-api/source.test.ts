@@ -1907,9 +1907,7 @@ describe("Gmail history expiry", () => {
     expect(withBody.length).toBeLessThanOrEqual(50);
     expect([...withBody, ...hydrated].sort()).toEqual([...ids].sort());
   });
-});
 
-describe("structured mailbox search", () => {
   it("fetches each Gmail message a catch-up brings in once, body included", async () => {
     const fetches = new Map<string, number>();
     const fetch = (id: string) => {
@@ -1970,7 +1968,9 @@ describe("structured mailbox search", () => {
       "body of new-2",
     ]);
   });
+});
 
+describe("structured mailbox search", () => {
   it("returns the messages and bodies it fetched so they are not fetched again", async () => {
     const source = createEmailProviderMailboxSource({
       logger,
