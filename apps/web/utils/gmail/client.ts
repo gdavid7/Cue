@@ -1,5 +1,9 @@
 import { auth, gmail, type gmail_v1 } from "@googleapis/gmail";
-import type { GaxiosOptions } from "gaxios";
+import type {
+  GaxiosOptions,
+  GaxiosOptionsPrepared,
+  GaxiosPromise,
+} from "gaxios";
 import { people } from "@googleapis/people";
 import { saveTokens } from "@/utils/auth/save-tokens";
 import { cleanupInvalidTokens } from "@/utils/auth/cleanup-invalid-tokens";
@@ -14,10 +18,12 @@ import {
   getGooglePeopleApiRootUrl,
 } from "@/utils/gmail/oauth";
 import {
+  admitGmailCall,
   gmailRequestCost,
   meterGmailCall,
   rememberGmailAccessToken,
 } from "@/utils/gmail/quota";
+import { extractErrorInfo } from "@/utils/gmail/retry";
 
 type AuthOptions = {
   accessToken?: string | null;
@@ -84,8 +90,11 @@ export const getGmailClientWithRefresh = async ({
     throw new SafeError("No refresh token");
   }
 
-  // we handle refresh ourselves so not passing in expiresAt
-  const auth = getAuth({ accessToken, refreshToken });
+  // Without the token's expiry, the auth client refreshes the token and
+  // resends any call Gmail answers 401 or 403, so every quota refusal reached
+  // Gmail twice and the resend went past the quota gate. Knowing the expiry,
+  // it refreshes ahead of it instead; a 401 is handled in meterGmailRequests.
+  const auth = getAuth({ accessToken, refreshToken, expiresAt });
   meterGmailRequests(auth, emailAccountId);
   const g = gmail({
     version: "v1",
@@ -212,7 +221,9 @@ const meteredAccounts = new WeakMap<object, string>();
 
 // Every REST call the Gmail client makes passes through the auth client's
 // `request`, so this is where each call is charged to the account's budget.
-// Token refreshes use the transporter directly and are not charged.
+// Gmail charges every request it receives, so each retry Gaxios sends after
+// a server error or timeout is admitted and charged as well. Token refreshes
+// use the transporter directly and are not charged.
 function meterGmailRequests(
   client: InstanceType<typeof auth.OAuth2>,
   emailAccountId: string,
@@ -220,14 +231,35 @@ function meterGmailRequests(
   const request = client.request.bind(client) as (
     options: GaxiosOptions,
   ) => Promise<unknown>;
-  const metered = (options: GaxiosOptions) =>
-    meterGmailCall(
-      {
-        emailAccountId,
-        cost: gmailRequestCost(options.method ?? "GET", String(options.url)),
-      },
-      () => request(options),
+  const send = (options: GaxiosOptions) => {
+    const cost = gmailRequestCost(options.method ?? "GET", String(options.url));
+    let attempts = 0;
+    // Gaxios calls the adapter for every attempt it sends.
+    const adapter = async <T>(
+      prepared: GaxiosOptionsPrepared,
+      defaultAdapter: (options: GaxiosOptionsPrepared) => GaxiosPromise<T>,
+    ) => {
+      // meterGmailCall admitted the first attempt.
+      if (attempts++ > 0) await admitGmailCall({ emailAccountId, cost });
+      return options.adapter
+        ? options.adapter(prepared, defaultAdapter)
+        : defaultAdapter(prepared);
+    };
+    return meterGmailCall({ emailAccountId, cost }, () =>
+      request({ ...options, adapter }),
     );
+  };
+  const metered = async (options: GaxiosOptions) => {
+    try {
+      return await send(options);
+    } catch (error) {
+      if (extractErrorInfo(error).status !== 401) throw error;
+      // Gmail rejected a token before its recorded expiry: it was revoked or
+      // the stored expiry is wrong. One refresh and a charged resend.
+      await client.refreshAccessToken();
+      return send(options);
+    }
+  };
   client.request = metered as typeof client.request;
   meteredAccounts.set(client, emailAccountId);
 }
