@@ -6,7 +6,10 @@ import {
   type ThreadWithPayloadMessages,
   isDefined,
 } from "@/utils/types";
-import { getBatchWithRetry } from "@/utils/gmail/batch-with-retry";
+import {
+  getBatchWithRetry,
+  requireCompleteBatch,
+} from "@/utils/gmail/batch-with-retry";
 import { getSearchTermForSender } from "@/utils/email";
 import { getAccessTokenFromClient } from "@/utils/gmail/client";
 import { GmailLabel } from "@/utils/gmail/label";
@@ -187,14 +190,46 @@ export async function getMessagesBatch({
 }): Promise<ParsedMessage[]> {
   if (messageIds.length > 100) throw new Error("Too many messages. Max 100");
 
-  return getBatchWithRetry<MessageWithPayload, ParsedMessage>({
+  return requireCompleteBatch(
+    await getBatchWithRetry<MessageWithPayload, ParsedMessage>({
+      ids: messageIds,
+      endpoint: "/gmail/v1/users/me/messages",
+      accessToken,
+      parse: (message) => parseMessage(message),
+      retryCount,
+      logger,
+    }),
+  );
+}
+
+/**
+ * Like `getMessagesBatch`, but keeps the messages that loaded when Gmail goes
+ * on refusing the rest, for someone waiting who is better served by most of
+ * the results now than by none after the retries.
+ */
+export async function getMessagesBatchPartial({
+  messageIds,
+  accessToken,
+  logger,
+}: {
+  messageIds: string[];
+  accessToken: string;
+  logger: Logger;
+}) {
+  if (messageIds.length > 100) throw new Error("Too many messages. Max 100");
+
+  const result = await getBatchWithRetry<MessageWithPayload, ParsedMessage>({
     ids: messageIds,
     endpoint: "/gmail/v1/users/me/messages",
     accessToken,
     parse: (message) => parseMessage(message),
-    retryCount,
     logger,
   });
+  return {
+    messages: result.items,
+    unloadedCount: result.unloadedIds.length,
+    unloadedError: result.unloadedError,
+  };
 }
 
 async function findPreviousEmailsWithSender(

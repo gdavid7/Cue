@@ -1128,6 +1128,59 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     expect(result.hasMore).toBe(true);
   });
 
+  it("searchInbox returns the messages that loaded and says how many could not", async () => {
+    const searchMessages = vi.fn().mockResolvedValue({
+      messages: [getMockMessage({ id: "m1", threadId: "t1" })],
+      unloadedMessages: 4,
+    });
+    (createEmailProvider as any).mockResolvedValue({
+      searchMessages,
+      getLabels: vi.fn().mockResolvedValue([]),
+    });
+
+    const toolInstance = searchInboxTool({
+      email: TEST_EMAIL,
+      emailAccountId: "email-account-1",
+      provider: "google",
+      logger,
+    });
+
+    const result: any = await (toolInstance.execute as any)({
+      query: "from:jobs@example.com",
+      limit: 20,
+    });
+
+    expect(searchMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ allowPartial: true }),
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.messages.map((m: any) => m.messageId)).toEqual(["m1"]);
+    expect(result.incomplete).toEqual({ unloadedMessages: 4 });
+  });
+
+  it("searchInbox says nothing about missing messages when all loaded", async () => {
+    (createEmailProvider as any).mockResolvedValue({
+      searchMessages: vi.fn().mockResolvedValue({
+        messages: [getMockMessage({ id: "m1", threadId: "t1" })],
+      }),
+      getLabels: vi.fn().mockResolvedValue([]),
+    });
+
+    const toolInstance = searchInboxTool({
+      email: TEST_EMAIL,
+      emailAccountId: "email-account-1",
+      provider: "google",
+      logger,
+    });
+
+    const result: any = await (toolInstance.execute as any)({
+      query: "from:jobs@example.com",
+      limit: 20,
+    });
+
+    expect(result).not.toHaveProperty("incomplete");
+  });
+
   it("searchInbox uses the capped default page size when limit is omitted", async () => {
     const searchMessages = vi.fn().mockResolvedValue({
       messages: [
@@ -1173,6 +1226,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
       query: "older_than:3y is:unread",
       maxResults: 20,
       pageToken: undefined,
+      allowPartial: true,
     });
   });
 
@@ -1998,6 +2052,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
       query: "newsletter",
       maxResults: 20,
       pageToken: undefined,
+      allowPartial: true,
     });
   });
 

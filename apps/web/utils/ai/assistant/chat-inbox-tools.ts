@@ -588,6 +588,7 @@ const gmailSearchInboxTool = ({
             query,
             maxResults: limit ?? SEARCH_INBOX_MAX_RESULTS,
             pageToken: pageToken ?? undefined,
+            allowPartial: true,
           }),
           getLabelsForSearchResults({ emailProvider, logger }),
         ]);
@@ -1562,6 +1563,9 @@ function formatSearchInboxResult({
     totalReturned: items.length,
     nextPageToken: searchResult.nextPageToken,
     hasMore: Boolean(searchResult.nextPageToken),
+    ...(searchResult.unloadedMessages
+      ? { incomplete: { unloadedMessages: searchResult.unloadedMessages } }
+      : {}),
     summary: summarizeSearchResults(items),
     messages: items,
   };

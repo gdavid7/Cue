@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   getMessagesBatch,
+  getMessagesBatchPartial,
   hasPreviousCommunicationsWithSenderOrDomain,
   parseMessage,
 } from "./message";
@@ -556,6 +557,77 @@ describe("getMessagesBatch", () => {
 
     expect(getBatch).toHaveBeenCalledTimes(4);
     expect(sleep).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("getMessagesBatchPartial", () => {
+  const logger = createTestLogger();
+  const refused = {
+    error: {
+      code: 403,
+      message: "Quota exceeded for quota metric 'Total Query Cost'",
+      errors: [{ reason: "rateLimitExceeded" }],
+      status: "PERMISSION_DENIED",
+    },
+  };
+  const loaded = (id: string) => ({
+    id,
+    threadId: `thread-${id}`,
+    payload: { headers: [] },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Two 20-unit message reads per batch.
+    vi.mocked(quotaRequestUnits).mockImplementation(() => 40);
+  });
+
+  it("keeps the messages that loaded and counts the ones Gmail kept refusing", async () => {
+    vi.mocked(getBatch).mockImplementation(async (ids) =>
+      ids.map((id) => (id === "id1" || id === "id2" ? loaded(id) : refused)),
+    );
+
+    const result = await getMessagesBatchPartial({
+      messageIds: ["id1", "id2", "id3", "id4"],
+      accessToken: "token",
+      logger,
+    });
+
+    expect(result.messages.map((m) => m.id)).toEqual(["id1", "id2"]);
+    expect(result.unloadedCount).toBe(2);
+    expect(result.unloadedError).toMatchObject({ code: 403 });
+  });
+
+  it("stops asking Gmail once one batch has run out of retries", async () => {
+    vi.mocked(getBatch).mockImplementation(async (ids) =>
+      ids.map((id) => (id === "id1" || id === "id2" ? loaded(id) : refused)),
+    );
+
+    const result = await getMessagesBatchPartial({
+      messageIds: ["id1", "id2", "id3", "id4", "id5", "id6"],
+      accessToken: "token",
+      logger,
+    });
+
+    expect(result.unloadedCount).toBe(4);
+    // The first batch, then the second batch and its three retries.
+    expect(getBatch).toHaveBeenCalledTimes(5);
+    expect(
+      vi.mocked(getBatch).mock.calls.some(([ids]) => ids.includes("id5")),
+    ).toBe(false);
+  });
+
+  it("reports nothing unloaded when every message loads", async () => {
+    vi.mocked(getBatch).mockImplementation(async (ids) => ids.map(loaded));
+
+    const result = await getMessagesBatchPartial({
+      messageIds: ["id1", "id2", "id3"],
+      accessToken: "token",
+      logger,
+    });
+
+    expect(result.messages).toHaveLength(3);
+    expect(result.unloadedCount).toBe(0);
   });
 });
 

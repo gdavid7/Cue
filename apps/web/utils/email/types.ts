@@ -462,9 +462,15 @@ export interface EmailProvider {
     includeSpamTrash?: boolean;
     folder?: "spam" | "trash";
     mailboxSearch?: ProviderMailboxSearch;
+    /**
+     * Return the messages that loaded when the provider keeps refusing the
+     * rest, with their count in `unloadedMessages`, instead of failing.
+     */
+    allowPartial?: boolean;
   }): Promise<{
     messages: ParsedMessage[];
     nextPageToken?: string;
+    unloadedMessages?: number;
   }>;
   /** Free-text search over the whole mailbox, like the provider's own search box. */
   searchThreads(options: {
