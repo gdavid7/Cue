@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SparklesIcon } from "lucide-react";
 import { ConnectorLogo } from "@/components/connectors/ConnectorLogo";
+import { LoopPauseButton } from "@/app/(landing)/login/LoopPauseButton";
+import { useLoopPlayback } from "@/app/(landing)/login/useLoopPlayback";
 import { cn } from "@/utils";
 import { BRAND_NAME } from "@/utils/branding";
 import { MCP_INTEGRATIONS } from "@/utils/mcp/integrations";
@@ -87,12 +89,34 @@ const DEMO_EMAILS: {
 ];
 
 export function IntelligenceDemo() {
+  const ref = useRef<HTMLElement>(null);
+  const { playing, reducedMotion, paused, togglePaused } = useLoopPlayback(ref);
   const [selectedId, setSelectedId] = useState(DEMO_EMAILS[0].id);
-  const selected =
-    DEMO_EMAILS.find((email) => email.id === selectedId) ?? DEMO_EMAILS[0];
+  // Steps through the emails on its own until the viewer picks one.
+  const [autoplay, setAutoplay] = useState(true);
+  // Replays the context arriving the first time the demo comes into view.
+  const [cycle, setCycle] = useState(0);
+  const selectedIndex = Math.max(
+    0,
+    DEMO_EMAILS.findIndex((email) => email.id === selectedId),
+  );
+  const selected = DEMO_EMAILS[selectedIndex];
+  const showProgress = autoplay && !reducedMotion;
+
+  useEffect(() => {
+    if (playing) setCycle((current) => current || 1);
+  }, [playing]);
+
+  const advance = () => {
+    setSelectedId(DEMO_EMAILS[(selectedIndex + 1) % DEMO_EMAILS.length].id);
+    setCycle((current) => current + 1);
+  };
 
   return (
-    <figure className="overflow-hidden rounded-xl border bg-card shadow-sm">
+    <figure
+      ref={ref}
+      className="overflow-hidden rounded-xl border bg-card shadow-sm"
+    >
       <div className="grid md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
         <div
           role="group"
@@ -106,9 +130,13 @@ export function IntelligenceDemo() {
                 key={email.id}
                 type="button"
                 aria-pressed={isSelected}
-                onClick={() => setSelectedId(email.id)}
+                onClick={() => {
+                  setAutoplay(false);
+                  setSelectedId(email.id);
+                  setCycle((current) => current + 1);
+                }}
                 className={cn(
-                  "block w-full px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                  "relative block w-full px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
                   isSelected ? "bg-muted" : "hover:bg-muted/50",
                 )}
               >
@@ -124,23 +152,39 @@ export function IntelligenceDemo() {
                   </span>
                   <span>{email.nextStep.join(" · ")}</span>
                 </span>
+                {isSelected && showProgress && (
+                  <span
+                    aria-hidden
+                    key={cycle}
+                    className="absolute inset-x-0 bottom-0 h-0.5 origin-left animate-loop-progress bg-primary/50"
+                    style={{
+                      animationPlayState: playing ? "running" : "paused",
+                    }}
+                    onAnimationEnd={advance}
+                  />
+                )}
               </button>
             );
           })}
         </div>
 
-        <div className="space-y-4 p-4" aria-live="polite">
+        <div
+          key={`${selected.id}-${cycle}`}
+          className="space-y-4 p-4"
+          aria-live={autoplay ? "off" : "polite"}
+        >
           <div>
             <p className="font-medium text-muted-foreground text-xs">
               Related to this email
             </p>
             <ul className="mt-2 space-y-2">
-              {selected.related.map((item) => {
+              {selected.related.map((item, index) => {
                 const app = MCP_INTEGRATIONS[item.app];
                 return (
                   <li
                     key={`${item.app}-${item.title}`}
-                    className="flex items-center gap-3 rounded-lg border bg-background px-3 py-2"
+                    className="flex items-center gap-3 rounded-lg border bg-background px-3 py-2 motion-safe:animate-hero-rise"
+                    style={{ animationDelay: `${index * 140}ms` }}
                   >
                     <ConnectorLogo logo={app.logo} domain={app.url} size={20} />
                     <span className="min-w-0">
@@ -162,14 +206,31 @@ export function IntelligenceDemo() {
               Suggested reply · learns from your edits
             </p>
             <p className="mt-2 rounded-lg border bg-background px-3 py-2 text-foreground text-sm leading-relaxed">
-              {selected.reply}
+              {selected.reply.split(" ").map((word, index) => (
+                <span
+                  key={index}
+                  className="motion-safe:animate-hero-rise"
+                  style={{ animationDelay: `${500 + index * 35}ms` }}
+                >
+                  {word}{" "}
+                </span>
+              ))}
             </p>
           </div>
         </div>
       </div>
-      <figcaption className="border-t px-4 py-2 text-muted-foreground text-xs">
-        An example. Pick an email to see what {BRAND_NAME} shows next to it.
-        Names and messages are made up.
+      <figcaption className="flex items-center justify-between gap-3 border-t px-4 py-2 text-muted-foreground text-xs">
+        <span>
+          An example. Pick an email to see what {BRAND_NAME} shows next to it.
+          Names and messages are made up.
+        </span>
+        {showProgress && (
+          <LoopPauseButton
+            paused={paused}
+            onToggle={togglePaused}
+            className="-my-1 shrink-0"
+          />
+        )}
       </figcaption>
     </figure>
   );
