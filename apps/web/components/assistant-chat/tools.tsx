@@ -2476,11 +2476,17 @@ function ActionBadgeList({
       {actions.map((action, i) => {
         if (!action) return null;
         const Icon = getActionIcon(action.type as ActionType);
+        // The chip abbreviates addresses; the title keeps the full one.
+        const recipient = action.fields?.to;
+        const title = recipient
+          ? `${getActionDisplay({ type: action.type as ActionType }, "", [])} to ${recipient}`
+          : undefined;
         return (
           <Badge
             key={i}
             color={getActionColor(action.type as ActionType)}
             className="w-fit shrink-0"
+            title={title}
           >
             <Icon className="mr-1.5 size-3" />
             {getActionDisplay(
