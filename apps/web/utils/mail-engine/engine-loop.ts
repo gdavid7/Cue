@@ -24,6 +24,8 @@ export function startEngineLoop(engine: Pick<MailEngine, "runUntil">) {
   })();
   return {
     async stop() {
+      // Safe mid-command: an aborted command is retried as not dispatched,
+      // under the same operationId.
       abort.abort();
       await done;
     },
