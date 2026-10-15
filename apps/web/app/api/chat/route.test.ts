@@ -246,6 +246,26 @@ describe("chat route rule freshness persistence", () => {
     );
   });
 
+  it("lets the browser answer inbox searches only when it says it can", async () => {
+    await POST(createRequest(), { params: Promise.resolve({}) });
+
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ localMailSearch: undefined }),
+    );
+
+    await POST(createRequest("Any interviews?", { localMailSearch: true }), {
+      params: Promise.resolve({}),
+    });
+
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        localMailSearch: expect.objectContaining({
+          search: expect.any(Function),
+        }),
+      }),
+    );
+  });
+
   it("passes on the thread the user has open, when the client sends one", async () => {
     await POST(
       createRequest("What's this about?", {

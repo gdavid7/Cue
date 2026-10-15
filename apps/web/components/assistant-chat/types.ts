@@ -1,4 +1,5 @@
 import type { UIMessage } from "ai";
+import type { AssistantSearchRequest } from "@/utils/mail-engine/assistant-search";
 import type { AddToKnowledgeBaseTool } from "@/utils/ai/assistant/tools/rules/add-to-knowledge-base-tool";
 import type { CreateRuleTool } from "@/utils/ai/assistant/tools/rules/create-rule-tool";
 import type { GetLearnedPatternsTool } from "@/utils/ai/assistant/tools/rules/get-learned-patterns-tool";
@@ -79,6 +80,8 @@ export type ChatTools = {
 
 // biome-ignore lint/complexity/noBannedTypes: ignore
 export type CustomUIDataTypes = {
+  // A search the assistant asks this tab to answer from its local mail.
+  "local-mail-search": AssistantSearchRequest;
   // textDelta: string;
   // // suggestion: Suggestion;
   // appendMessage: string;

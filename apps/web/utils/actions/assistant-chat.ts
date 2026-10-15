@@ -15,6 +15,8 @@ import {
   confirmAssistantLearnedPatternsForAccount,
   confirmAssistantUpdateRuleForAccount,
 } from "./assistant-chat-confirmation";
+import { submitLocalMailSearchResultBody } from "./assistant-local-search.validation";
+import { saveLocalMailSearchResult } from "@/utils/ai/assistant/local-mail-search";
 
 export const confirmAssistantEmailAction = actionClient
   .metadata({ name: "confirmAssistantEmail" })
@@ -97,6 +99,15 @@ export const confirmAssistantLearnedPatterns = actionClient
         emailAccountId,
         logger,
       }),
+  );
+
+// The browser's answer to an inbox search the assistant asked it for.
+export const submitLocalMailSearchResult = actionClient
+  .metadata({ name: "submitLocalMailSearchResult" })
+  .inputSchema(submitLocalMailSearchResultBody)
+  .action(
+    async ({ ctx: { emailAccountId }, parsedInput: { requestId, result } }) =>
+      saveLocalMailSearchResult({ emailAccountId, requestId, result }),
   );
 
 export const confirmAssistantSaveMemory = actionClient

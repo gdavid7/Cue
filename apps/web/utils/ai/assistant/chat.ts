@@ -60,11 +60,12 @@ import { trimStaleToolResults } from "@/utils/ai/assistant/trim-stale-tool-resul
 import { withChatToolRuntime } from "@/utils/ai/assistant/chat-tool-runtime";
 import { getLowThinkingStepOptions } from "@/utils/llms/model";
 import { holdGmailInteractiveDemand } from "@/utils/gmail/quota";
+import type { LocalMailSearch } from "@/utils/ai/assistant/local-mail-search";
 import { isGoogleProvider } from "@/utils/email/provider-types";
 
 export const maxDuration = 300;
 // Increment when chat prompts, tools, or routing change so run quality remains attributable.
-export const ASSISTANT_CHAT_PIPELINE_VERSION = 20;
+export const ASSISTANT_CHAT_PIPELINE_VERSION = 21;
 // Someone is watching the reply, so past these the model stops looking and
 // answers from what it found rather than searching on for minutes.
 const ASSISTANT_CHAT_TOOL_BUDGET_MS = {
@@ -108,6 +109,7 @@ export async function aiProcessAssistantChat({
   onModelResolved,
   onEnd,
   abortSignal,
+  localMailSearch,
   logger,
 }: {
   messages: ModelMessage[];
@@ -133,6 +135,8 @@ export async function aiProcessAssistantChat({
   onModelResolved?: AssistantChatOnModelResolved;
   onEnd?: AssistantChatOnEnd;
   abortSignal?: AbortSignal;
+  /** The chat's browser, when it can answer inbox searches locally. */
+  localMailSearch?: LocalMailSearch;
   logger: Logger;
 }) {
   const startedAt = Date.now();
@@ -234,6 +238,7 @@ export async function aiProcessAssistantChat({
   const toolOptions = {
     email: user.email,
     emailAccountId,
+    localMailSearch,
     userId: user.userId,
     provider: user.account.provider,
     integrationActionsEnabled,
@@ -473,9 +478,9 @@ export async function aiProcessAssistantChat({
         Date.now() - startedAt < ASSISTANT_CHAT_TOOL_BUDGET_MS[responseSurface]
       ) {
         const providerOptions =
-          typeof model === "string"
-            ? undefined
-            : getLowThinkingStepOptions(model);
+          model && typeof model !== "string"
+            ? getLowThinkingStepOptions(model)
+            : undefined;
         if (!messages && !providerOptions) return;
         return { messages, providerOptions };
       }

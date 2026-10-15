@@ -59,9 +59,25 @@ const {
   },
 }));
 
+const { mockSubmitLocalMailSearchResult, localSearchState } = vi.hoisted(
+  () => ({
+    mockSubmitLocalMailSearchResult: vi.fn(async () => ({ data: undefined })),
+    localSearchState: {
+      onData: undefined as ((part: unknown) => void) | undefined,
+    },
+  }),
+);
+vi.mock("@/utils/actions/assistant-chat", () => ({
+  submitLocalMailSearchResult: mockSubmitLocalMailSearchResult,
+}));
+
 vi.mock("@ai-sdk/react", () => ({
-  useChat: (options: { onError?: (error: Error) => void }) => {
+  useChat: (options: {
+    onError?: (error: Error) => void;
+    onData?: (part: unknown) => void;
+  }) => {
     chatState.onError = options.onError;
+    localSearchState.onData = options.onData;
     return {
       id: chatState.id,
       messages: chatState.messages,
@@ -519,6 +535,7 @@ describe("ChatProvider", () => {
       id: "chat-1",
       message,
       supportsInlineEmailCards: true,
+      localMailSearch: false,
       context: buildFixRuleContext("thread-1"),
     });
   });
@@ -566,6 +583,54 @@ describe("ChatProvider", () => {
       openThreadId: body.openThreadId,
       openMessageId: body.openMessageId,
     }).toEqual(expected);
+  });
+
+  it("answers the assistant's local mail searches for this account", async () => {
+    renderWithProvider(null);
+
+    localSearchState.onData?.({
+      type: "data-local-mail-search",
+      data: {
+        requestId: "8d4a1f8e-5f5c-4b9b-9a51-4f1f0e7a2c11",
+        query: "from:jobs@acme.com",
+        limit: 20,
+      },
+    });
+
+    // No mail engine runs in this test, so it says so straight away.
+    await vi.waitFor(() =>
+      expect(mockSubmitLocalMailSearchResult).toHaveBeenCalledWith(
+        "account-a",
+        {
+          requestId: "8d4a1f8e-5f5c-4b9b-9a51-4f1f0e7a2c11",
+          result: { status: "unavailable", reason: "no_engine" },
+        },
+      ),
+    );
+  });
+
+  it("tells the server whether this tab can search its local mail", async () => {
+    renderWithProvider(null);
+    const transport = mockChatTransport.mock.results.at(-1)
+      ?.value as DefaultChatTransport<ChatMessage>;
+    vi.mocked(fetch).mockResolvedValueOnce(new Response("data: [DONE]\n\n"));
+
+    await transport.sendMessages({
+      trigger: "submit-message",
+      chatId: "chat-1",
+      messageId: undefined,
+      abortSignal: undefined,
+      messages: [
+        {
+          id: "user-message",
+          role: "user",
+          parts: [{ type: "text", text: "Any interviews?" }],
+        },
+      ],
+    });
+
+    const [, request] = vi.mocked(fetch).mock.calls.at(-1)!;
+    expect(JSON.parse(request?.body as string).localMailSearch).toBe(false);
   });
 
   it("resumes the existing reply without starting another generation", async () => {
