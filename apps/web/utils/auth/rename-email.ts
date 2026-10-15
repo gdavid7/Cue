@@ -2,7 +2,11 @@ import { APIError, type Account } from "better-auth";
 import prisma from "@/utils/prisma";
 import { isDuplicateError, isNotFoundError } from "@/utils/prisma-helpers";
 import { env } from "@/env";
-import { assertAllowedAuthSignupEmail } from "@/utils/auth-signup-policy";
+import { createSignupNotAllowedError } from "@/utils/auth-signup-policy";
+import {
+  isAllowedProvenEmail,
+  isGoogleAuthoritativeEmail,
+} from "@/utils/access/policy";
 import { invalidateAccountValidation } from "@/utils/redis/account-validation";
 import { fetchGoogleOpenIdProfile } from "@/utils/gmail/oauth";
 
@@ -61,14 +65,19 @@ export async function renameGoogleEmail({
   if (
     account.providerId !== "google" ||
     profile.sub !== account.accountId ||
-    profile.emailVerified !== true ||
-    !(email.endsWith("@gmail.com") || profile.hostedDomain)
+    !isGoogleAuthoritativeEmail({
+      email,
+      emailVerified: profile.emailVerified,
+      hostedDomain: profile.hostedDomain,
+    })
   ) {
     return;
   }
-  // Waitlist approval belongs to the person, and this is the same Google
-  // account under a new address, so only the legacy allow-list applies.
-  if (!env.AUTH_WAITLIST_ENABLED) assertAllowedAuthSignupEmail(email);
+  // With the waitlist on, approval belongs to the person, and this is the same
+  // Google account under a new address. With it off, the new address must be
+  // one sign-up would take.
+  if (!env.AUTH_WAITLIST_ENABLED && !(await isAllowedProvenEmail(email)))
+    throw createSignupNotAllowedError();
 
   const isPrimary = userEmail === mailbox.email;
   // Secondary-mailbox updates do not touch User.email, so its unique

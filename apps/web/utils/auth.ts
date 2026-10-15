@@ -18,6 +18,11 @@ import { cookies, headers } from "next/headers";
 import { after } from "next/server";
 import { env } from "@/env";
 import { assertSignUpAllowed } from "@/utils/access/policy";
+import {
+  ACCOUNT_LINKING,
+  getGoogleUserFields,
+  getMicrosoftUserFields,
+} from "@/utils/auth/account-linking";
 import { trackDubSignUp } from "@/utils/dub";
 import {
   isGoogleProvider,
@@ -107,6 +112,11 @@ const googleSocialProvider =
         accessType: "offline" as const,
         prompt: "select_account consent" as const,
         disableIdTokenSignIn: true,
+        // Approvals and account linking trust a verified email only where
+        // Google is authoritative for it.
+        mapProfileToUser: async (
+          profile: Parameters<typeof getGoogleUserFields>[0],
+        ) => getGoogleUserFields(profile),
         // For preview deployments, redirect through staging (which proxies back to preview URL)
         ...(env.OAUTH_PROXY_URL && {
           redirectURI: `${env.OAUTH_PROXY_URL}/api/auth/callback/google`,
@@ -130,7 +140,7 @@ const microsoftSocialProvider =
             oid: typeof profile.oid === "string" ? profile.oid : null,
             sub: typeof profile.sub === "string" ? profile.sub : null,
           });
-          return {};
+          return getMicrosoftUserFields();
         },
         ...(env.OAUTH_PROXY_URL && {
           redirectURI: `${env.OAUTH_PROXY_URL}/api/auth/callback/microsoft`,
@@ -309,12 +319,7 @@ export const betterAuthConfig = betterAuth({
       idToken: "id_token",
     },
     storeStateStrategy: "cookie", // Required for oAuthProxy to encrypt state
-    accountLinking: {
-      enabled: true,
-      // Microsoft Entra email claims can be mutable/unverified, so Microsoft
-      // must not implicitly link users by email during social sign-in.
-      trustedProviders: ["google", "apple"],
-    },
+    accountLinking: ACCOUNT_LINKING,
   },
   verification: {
     modelName: "verificationToken",
