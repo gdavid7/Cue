@@ -15,6 +15,7 @@ import { Loader2Icon } from "lucide-react";
 import type { MailClient } from "@inboxzero/mail-core/engine";
 import { MailEngineProvider } from "@inboxzero/mail-react/MailEngineProvider";
 import { LoadingContent } from "@/components/LoadingContent";
+import { useHydrated } from "@/hooks/useHydrated";
 import { Button } from "@/components/ui/button";
 import { env } from "@/env";
 import { useAccount } from "@/providers/EmailAccountProvider";
@@ -134,13 +135,9 @@ export function MailCoverageGate({
   const status = useContext(MailEngineRuntimeStatusContext);
   // SSR has no OPFS; checking capabilities before hydration paints the
   // storage-error shell instead of the shared loading state.
-  const isClient = useSyncExternalStore(
-    subscribeNever,
-    () => true,
-    () => false,
-  );
+  const hydrated = useHydrated();
 
-  if (!isClient) return fallback;
+  if (!hydrated) return fallback;
   const mode = selectMailEngineRuntimeMode({
     desktopIpc: hasDesktopMailEngineIpc(),
     opfs: browserMailEngineCapabilities().opfs,
