@@ -505,7 +505,11 @@ if (env.MICROSOFT_CLIENT_ID && !env.MICROSOFT_WEBHOOK_CLIENT_STATE) {
 // The service worker is built separately by `serwist build` (serwist.config.mjs)
 // because the @serwist/next webpack plugin doesn't support Turbopack.
 
-export default withAxiom(exportConfig);
+// Off Vercel, skip next-axiom's /_axiom rewrites so browser logs and web
+// vitals from local or self-hosted servers never reach the Axiom dataset.
+export default process.env.VERCEL === "1"
+  ? withAxiom(exportConfig)
+  : exportConfig;
 
 function commonAncestorPath(firstPath: string, secondPath: string) {
   const [firstParts, secondParts] = [firstPath, secondPath].map((value) =>
