@@ -1,21 +1,23 @@
 import "server-only";
 import type { ThreadsListResponse } from "@/app/api/threads/route";
 import { createEmailProvider } from "@/utils/email/provider";
+import type { EmailThread, ParsedMessage } from "@/utils/email/types";
 import { runWithGmailQuota } from "@/utils/gmail/quota";
 import { createScopedLogger } from "@/utils/logger";
-import { resolveNativeThreadsQuery } from "@/utils/split-inbox/native-categories";
-import { loadThreads, toListThreads } from "@/utils/threads/load";
-import { threadsQuery } from "@/utils/threads/validation";
+import { attachThreadPlans, toListThreads } from "@/utils/threads/load";
 
 const logger = createScopedLogger("mail/inbox-preview");
 
-// About the first screen of the inbox. The list and ten messages fit Gmail's
-// per-second pacing; the mail engine fills in the rest as it syncs.
-const PREVIEW_CONVERSATIONS = 10;
-// The page streams until this settles, so a slow or busy provider is given up
-// on: the list then waits for the mail engine as it did before.
-const MAX_QUOTA_WAIT_MS = 2500;
-const PREVIEW_TIMEOUT_MS = 3000;
+// About the first screen of the inbox, read as its newest messages: a list
+// (5 Gmail units) and ten message reads (20 each), about 205 units in two
+// batches that fit Gmail's per-second pace. Whole threads cost 40 units each,
+// 410 for ten, more than two seconds of that pace before anything else on
+// the account is counted. The mail engine fills in the rest as it syncs.
+const PREVIEW_MESSAGES = 10;
+// The page's shell is sent before this settles; only the stream stays open
+// for the rows. Past these, the list waits for the mail engine instead.
+const MAX_QUOTA_WAIT_MS = 4000;
+const PREVIEW_TIMEOUT_MS = 5000;
 
 /**
  * The inbox's newest conversations, as the mail list shows them, for a
@@ -33,7 +35,10 @@ export async function loadInboxPreview({
   const log = logger.with({ emailAccountId });
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const gaveUp = new Promise<null>((resolve) => {
-    timeout = setTimeout(() => resolve(null), PREVIEW_TIMEOUT_MS);
+    timeout = setTimeout(() => {
+      log.warn("Gave up on the inbox preview");
+      resolve(null);
+    }, PREVIEW_TIMEOUT_MS);
   });
   const loaded = runWithGmailQuota(
     {
@@ -47,20 +52,14 @@ export async function loadInboxPreview({
         provider,
         logger: log,
       });
-      const query = await resolveNativeThreadsQuery({
-        emailAccountId,
-        emailProvider,
-        query: threadsQuery.parse({
-          type: "inbox",
-          limit: PREVIEW_CONVERSATIONS,
-        }),
+      const { messages } = await emailProvider.getMessagesWithPagination({
+        inboxOnly: true,
+        maxResults: PREVIEW_MESSAGES,
       });
       return toListThreads(
-        await loadThreads({
-          query,
+        await attachThreadPlans({
           emailAccountId,
-          emailProvider,
-          messageFormat: "metadata",
+          threads: groupByThread(messages),
         }),
       );
     },
@@ -73,4 +72,20 @@ export async function loadInboxPreview({
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// Messages arrive newest first; each conversation lists at its newest and
+// keeps its own messages oldest first, as a thread does.
+function groupByThread(messages: ParsedMessage[]): EmailThread[] {
+  const threads = new Map<string, ParsedMessage[]>();
+  for (const message of messages) {
+    const threadMessages = threads.get(message.threadId) ?? [];
+    threadMessages.unshift(message);
+    threads.set(message.threadId, threadMessages);
+  }
+  return [...threads].map(([id, threadMessages]) => ({
+    id,
+    messages: threadMessages,
+    snippet: threadMessages.at(-1)?.snippet ?? "",
+  }));
 }
