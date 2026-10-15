@@ -38,7 +38,7 @@ import { mapWithConcurrency } from "@/utils/async";
 import { convertEmailHtmlToText } from "@/utils/mail";
 import {
   getGmailCallDeferredError,
-  gmailInitialSyncRetryMs,
+  isGmailCallDeferredError,
   runWithGmailQuota,
   setGmailInitialSync,
 } from "@/utils/gmail/quota";
@@ -184,10 +184,6 @@ export function createEmailProviderMailboxSource(input: {
         isBackfill = isGmail && token.scopeId === GMAIL_HISTORY_SCOPE_ID;
         const isPrimaryGmailScan = isGmail && !isBackfill;
         if (isPrimaryGmailScan) await setGmailInitialSync(accountId, true);
-        if (isBackfill) {
-          const retryAfterMs = await gmailInitialSyncRetryMs(accountId);
-          if (retryAfterMs !== null) return throttled(retryAfterMs);
-        }
         const maxResults = Math.min(
           pageSize,
           maxPageSize,
@@ -808,7 +804,12 @@ function withGmailSyncBudget<T>(
   operation: () => Promise<T>,
 ) {
   if (!isEmailProviderRateLimitRedisConfigured()) return operation();
-  return withLocalMailSyncBudget({ ...input, provider: "google" }, operation);
+  // The quota gate turns calls away before they reach Gmail, so a page it
+  // defers spent nothing and keeps nothing of the budget.
+  return withLocalMailSyncBudget(
+    { ...input, provider: "google", refundOn: isGmailCallDeferredError },
+    operation,
+  );
 }
 
 async function batchedMessages(provider: EmailProvider, keys: MessageKey[]) {

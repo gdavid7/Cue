@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { gmailQuotaStore } from "@/utils/gmail/quota-store";
-import { setGmailInitialSync } from "@/utils/gmail/quota";
+import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import {
   compactMailboxSyncMessage,
   decodeMailboxSyncCursor,
@@ -26,12 +25,6 @@ import {
 } from "@/utils/email/local-mail-sync-budget";
 
 vi.mock("server-only", () => ({}));
-vi.mock("@/utils/gmail/quota-store", async () => {
-  const { createMemoryGmailQuotaStore } = await import(
-    "@/__tests__/mocks/gmail-quota-store.mock"
-  );
-  return { gmailQuotaStore: createMemoryGmailQuotaStore() };
-});
 vi.mock("@/utils/redis", () => ({
   redis: { get: vi.fn(), set: vi.fn(), del: vi.fn(), eval: vi.fn() },
 }));
@@ -47,7 +40,6 @@ const logger = createTestLogger();
 
 beforeEach(() => {
   vi.mocked(withLocalMailSyncBudget).mockClear();
-  (gmailQuotaStore as unknown as { reset(): void }).reset();
 });
 
 describe("createEmailProviderMailboxSource", () => {
@@ -1257,22 +1249,20 @@ describe("createEmailProviderMailboxSource", () => {
     expect(redis.set).not.toHaveBeenCalled();
   });
 
-  it("leaves the sync budget to the first sync while it fills the inbox", async () => {
-    // The gate would turn a backfill page away during the first sync, but
-    // only after the page had reserved its share of the sync budget, which
-    // the primary scan then could not use.
-    await setGmailInitialSync("acc-first-sync", true);
-    const getMessagesWithPagination = vi.fn();
+  it("gives the sync budget back when the quota gate turns a page away", async () => {
+    // A page reserves its share of the sync budget before its Gmail calls
+    // reach the gate, so a page the gate turns away must not keep it.
+    const deferred = new GmailCallDeferredError(90_000, "background");
     const source = createEmailProviderMailboxSource({
       logger,
-      accountId: "acc-first-sync",
+      accountId: "acc-1",
       provider: {
         name: "google",
-        getMessagesWithPagination,
+        getMessagesWithPagination: vi.fn().mockRejectedValue(deferred),
       } as unknown as EmailProvider,
     });
     const result = await source.enumerate({
-      session: { accountId: "acc-first-sync", generation: "g1" },
+      session: { accountId: "acc-1", generation: "g1" },
       requestId: "r1",
       signal: new AbortController().signal,
       bootstrapId: "mailbox",
@@ -1281,11 +1271,10 @@ describe("createEmailProviderMailboxSource", () => {
     });
 
     expect(result).toMatchObject({ status: "paused", reason: "throttled" });
-    expect(
-      result.status === "paused" ? result.retryAfterMs : null,
-    ).toBeLessThanOrEqual(5000);
-    expect(withLocalMailSyncBudget).not.toHaveBeenCalled();
-    expect(getMessagesWithPagination).not.toHaveBeenCalled();
+    const [reservation] =
+      vi.mocked(withLocalMailSyncBudget).mock.calls[0] ?? [];
+    expect(reservation?.refundOn?.(deferred)).toBe(true);
+    expect(reservation?.refundOn?.(new Error("Gmail failed"))).toBe(false);
   });
 
   it("returns the sync budget's wait as a throttled pause", async () => {

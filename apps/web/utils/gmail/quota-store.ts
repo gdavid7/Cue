@@ -32,7 +32,6 @@ export type GmailQuotaStore = {
     drainBucketKey?: string;
   }): Promise<void>;
   clear(key: string): Promise<void>;
-  isSet(key: string): Promise<boolean>;
   /** Adds `amount` to a usage field without admitting anything. */
   note(input: {
     usageKey: string;
@@ -148,9 +147,6 @@ export const gmailQuotaStore: GmailQuotaStore = {
   },
   async clear(key) {
     await redis.del(key);
-  },
-  async isSet(key) {
-    return (await redis.exists(key)) > 0;
   },
   async note({ usageKey, field, amount }) {
     await redis.eval(noteScript, [usageKey], [field, String(amount)]);

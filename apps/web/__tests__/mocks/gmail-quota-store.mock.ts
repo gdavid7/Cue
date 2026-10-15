@@ -53,9 +53,6 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
     async clear(key) {
       blocks.delete(key);
     },
-    async isSet(key) {
-      return ttl(key) > 0;
-    },
     async note({ usageKey, field, amount }) {
       const fields = usage.get(usageKey) ?? {};
       fields[field] = (fields[field] ?? 0) + amount;

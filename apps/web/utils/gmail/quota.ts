@@ -31,11 +31,12 @@ const MAX_WAIT_MS: Record<GmailQuotaPriority, number> = {
 const INITIAL_SYNC_TTL_MS = 90_000;
 const INITIAL_SYNC_REFRESH_MS = 30_000;
 // The scan clears the marker the moment it ends, long before it expires, so
-// callers held behind it, the history backfill among them, come back this
-// soon instead of waiting out the expiry. They never wait inside the gate:
-// the engine's lane would sit on the request while the scan that clears the
-// marker waits behind it.
+// the engine's own backfill comes back this soon instead of waiting out the
+// expiry. It never waits inside the gate: the engine's lane would sit on the
+// request while the scan that clears the marker waits behind it. Routes and
+// queued jobs are told the expiry, so they do not spend their retries early.
 const INITIAL_SYNC_RETRY_MS = 5000;
+const ENGINE_SCAN_CALLER = "mail/v1/enumeration";
 // The REST client retries for seconds; a gate that cannot coordinate within
 // this long lets the call through rather than stall every Gmail call.
 const STORE_TIMEOUT_MS = 300;
@@ -345,7 +346,9 @@ export async function admitGmailCall({
   const blockers =
     priority === "background"
       ? [
-          { key: keys.initialSync, deferMs: INITIAL_SYNC_RETRY_MS },
+          context.caller === ENGINE_SCAN_CALLER
+            ? { key: keys.initialSync, deferMs: INITIAL_SYNC_RETRY_MS }
+            : { key: keys.initialSync },
           { key: keys.backgroundPause },
         ]
       : [];
@@ -476,24 +479,6 @@ export async function setGmailInitialSync(
     }
   } catch (error) {
     logger.warn("Failed to update Gmail initial sync state", { error });
-  }
-}
-
-/**
- * While a primary scan of the account runs, how soon a background scan should
- * ask again; null when none runs. Lets the backfill skip a page the gate would
- * turn away before the page reserves its share of the sync budget.
- */
-export async function gmailInitialSyncRetryMs(emailAccountId: string) {
-  if (!isEmailProviderRateLimitRedisConfigured()) return null;
-  try {
-    const active = await withinStoreTimeout(
-      gmailQuotaStore.isSet(accountKeys(emailAccountId).initialSync),
-    );
-    return active ? INITIAL_SYNC_RETRY_MS : null;
-  } catch {
-    // The gate itself still holds the backfill back if the scan is running.
-    return null;
   }
 }
 

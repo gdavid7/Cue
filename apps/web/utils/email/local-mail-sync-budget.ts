@@ -29,6 +29,8 @@ type Input = {
   provider: keyof typeof policies;
   priority: "backfill" | "current";
   cost: number;
+  /** Errors after which none of the reserved work reached the provider. */
+  refundOn?: (error: unknown) => boolean;
 };
 
 export class LocalMailSyncPausedError extends Error {
@@ -81,6 +83,16 @@ for i = 5, 6 do
   redis.call('PEXPIRE', KEYS[i], 180000)
 end
 return 0
+`;
+// Admission caps a bucket at its capacity as it refills, so a refund only adds
+// the tokens back.
+const refundScript = `
+for i = 1, #KEYS do
+  if redis.call('EXISTS', KEYS[i]) == 1 then
+    redis.call('HINCRBYFLOAT', KEYS[i], 'tokens', ARGV[1])
+  end
+end
+return 1
 `;
 const releaseScript = `
 for i = 1, 2 do redis.call('ZREM', KEYS[i], ARGV[1]) end
@@ -143,6 +155,7 @@ export async function withLocalMailSyncBudget<T>(
     `${account}:recovery`,
   ];
   const owner = randomUUID();
+  const background = input.priority === "backfill";
   try {
     if (!isEmailProviderRateLimitRedisConfigured())
       throw new LocalMailSyncPausedError();
@@ -151,7 +164,6 @@ export async function withLocalMailSyncBudget<T>(
       throw new LocalMailSyncPausedError(
         cooldown.retryAt.getTime() - Date.now(),
       );
-    const background = input.priority === "backfill";
     const wait = await redis.eval<string[], number>(admitScript, keys, [
       String(input.cost),
       String(policy.account),
@@ -193,6 +205,13 @@ export async function withLocalMailSyncBudget<T>(
     return result;
   } catch (error) {
     if (pauseError) throw pauseError;
+    if (input.refundOn?.(error)) {
+      const debited = background ? keys.slice(0, 4) : keys.slice(0, 2);
+      await redis
+        .eval(refundScript, debited, [String(input.cost)])
+        .catch(() => undefined);
+      throw error;
+    }
     const delay = getProviderRateLimitDelayMs({
       error: normalizeThrottleHeaders(error),
       provider: input.provider,

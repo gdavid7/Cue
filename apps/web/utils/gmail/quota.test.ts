@@ -31,6 +31,7 @@ vi.mock("@/utils/redis/email-provider-rate-limit", () => ({
 const ACCOUNT = "account-1";
 // The gate remembers marks per process, so this scan gets its own account.
 const BACKFILL_ACCOUNT = "account-backfill";
+const JOBS_ACCOUNT = "account-jobs";
 const logger = createScopedLogger("gmail-quota-test");
 const quotaRefusal = {
   status: 403,
@@ -354,6 +355,30 @@ describe("Gmail quota gate", () => {
     await setGmailInitialSync(BACKFILL_ACCOUNT, false);
     await vi.advanceTimersByTimeAsync(retryAfterMs - 1000);
     await expect(backfillPage()).resolves.toBe("page");
+  });
+
+  it("asks only the engine's backfill back within seconds; jobs and routes wait out the first sync", async () => {
+    await setGmailInitialSync(JOBS_ACCOUNT, true);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const deferral = (caller: string) =>
+      runWithGmailQuota({ caller, priority: "background" }, () =>
+        meterGmailCall(
+          { emailAccountId: JOBS_ACCOUNT, cost: 20 },
+          async () => "x",
+        ),
+      ).catch((error: unknown) => error as GmailCallDeferredError);
+
+    // The engine retries on its own schedule and spends nothing doing so.
+    const backfill = await deferral("mail/v1/enumeration");
+    expect(backfill).toBeInstanceOf(GmailCallDeferredError);
+    expect(backfill.retryAfterMs).toBeLessThanOrEqual(5000);
+
+    // A queued job has a few retries; spending them while the inbox fills
+    // would mark it failed, so it is told when the first sync can be over.
+    const job = await deferral("automation-jobs/execute");
+    expect(job).toBeInstanceOf(GmailCallDeferredError);
+    expect(job.retryAfterMs).toBeGreaterThan(60_000);
+    expect(job.retryAfterMs).toBeLessThanOrEqual(80_000);
   });
 
   it("makes every caller wait out Gmail's minute after a refusal outside background work", async () => {
