@@ -149,9 +149,19 @@ export function MailThreadRow({
         else onOpen(index);
       }}
       onKeyDown={(event) => {
-        if (event.key !== "Enter") return;
-        event.preventDefault();
-        onOpen(index);
+        if (event.key === "Enter") {
+          event.preventDefault();
+          onOpen(index);
+          return;
+        }
+        // Space toggles the focused option, as in any multi-select listbox.
+        // Handled on the row so Space still scrolls and presses buttons
+        // everywhere else.
+        if (event.key === " " && selectionEnabled) {
+          event.preventDefault();
+          if (event.shiftKey) onSelectRangeTo(index);
+          else onToggleSelect(index);
+        }
       }}
       ref={rowRef}
       // Lets the app's mail shortcuts act while a row has focus, unlike

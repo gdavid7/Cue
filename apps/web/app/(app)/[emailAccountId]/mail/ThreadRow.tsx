@@ -231,6 +231,9 @@ export const ThreadRow = memo(function ThreadRow({
           // Opening above would cover the select-all checkbox for the first row.
           <Tooltip shortcuts={["select"]} side="right">
             <Checkbox
+              // A pointer control only: inside the option it would prefix every
+              // row's name, and aria-selected already says it is selected.
+              aria-hidden
               aria-label={ariaLabel}
               checked={checked}
               className={cn(
@@ -243,8 +246,8 @@ export const ThreadRow = memo(function ThreadRow({
                   : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 max-lg:opacity-100",
               )}
               onClick={onClick}
-              // The listbox moves focus between rows; `x` and Shift+click select,
-              // so a tab stop per row would only bury the rest of the page.
+              // The listbox moves focus between rows; Space, `x` and Shift+click
+              // select, so a tab stop per row would only bury the rest of the page.
               tabIndex={-1}
             />
           </Tooltip>

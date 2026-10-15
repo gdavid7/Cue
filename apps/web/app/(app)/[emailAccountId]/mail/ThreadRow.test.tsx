@@ -51,7 +51,32 @@ describe("ThreadRow", () => {
   it("keeps the select checkbox out of the tab order", () => {
     renderRow();
 
-    expect(screen.getByRole("checkbox").getAttribute("tabindex")).toBe("-1");
+    expect(
+      screen.getByRole("checkbox", { hidden: true }).getAttribute("tabindex"),
+    ).toBe("-1");
+  });
+
+  // The option's aria-selected already says whether it is selected; a
+  // checkbox inside it only prefixed every row's name with "Select…".
+  it("names the row by its conversation, with the checkbox still clickable", () => {
+    const onToggleSelect = vi.fn();
+    renderRow({ onToggleSelect });
+
+    expect(screen.queryByRole("option", { name: /Select/ })).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { hidden: true }));
+    expect(onToggleSelect).toHaveBeenCalledWith(0);
+  });
+
+  it("toggles selection with Space on the focused row, like a listbox", () => {
+    const onOpen = vi.fn();
+    const onToggleSelect = vi.fn();
+    renderRow({ onOpen, onToggleSelect });
+
+    fireEvent.keyDown(screen.getByRole("option"), { key: " " });
+
+    expect(onToggleSelect).toHaveBeenCalledWith(0);
+    expect(onOpen).not.toHaveBeenCalled();
   });
 
   // Children of role="option" are presentational, so buttons inside it have
