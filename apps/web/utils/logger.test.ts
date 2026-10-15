@@ -54,7 +54,7 @@ describe("Logger", () => {
     mockedEnv.NEXT_PUBLIC_LOG_SCOPES = undefined;
     mockedEnv.ENABLE_DEBUG_LOGS = false;
     vi.unstubAllGlobals();
-    vi.stubEnv("VERCEL", "1");
+    vi.stubEnv("SHIP_LOGS_TO_AXIOM", "1");
     vi.clearAllMocks();
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -106,7 +106,7 @@ describe("Logger", () => {
   it("keeps logs off Axiom outside Vercel even with the server token", () => {
     // Local builds, test runs and Playwright servers can carry the
     // production token; their errors must not read as production ones.
-    vi.stubEnv("VERCEL", "");
+    vi.stubEnv("SHIP_LOGS_TO_AXIOM", "");
     mockedEnv.AXIOM_TOKEN = "server-token";
 
     createScopedLogger("test").error("Local failure");
@@ -114,6 +114,18 @@ describe("Logger", () => {
     expect(log.error).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining("[test]: Local failure"),
+    );
+  });
+
+  it("ships from a Vercel build when the runtime does not expose VERCEL", () => {
+    vi.stubEnv("VERCEL", "");
+    mockedEnv.AXIOM_TOKEN = "server-token";
+
+    createScopedLogger("test").error("Production failure");
+
+    expect(log.error).toHaveBeenCalledWith(
+      "Production failure",
+      expect.objectContaining({ scope: "test" }),
     );
   });
 

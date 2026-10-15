@@ -4,6 +4,7 @@
   "tasks": {
     "build": {
       "env": [
+        "VERCEL",
         "VERCEL_ENV",
         "VERCEL_URL",
         "NODE_ENV",
@@ -313,6 +314,7 @@
     },
     "build:ci": {
       "env": [
+        "VERCEL",
         "VERCEL_ENV",
         "VERCEL_URL",
         "NODE_ENV",
