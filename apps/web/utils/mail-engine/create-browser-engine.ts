@@ -1,8 +1,6 @@
 import type { MailEngine, WorkAdmission } from "@inboxzero/mail-core/engine";
-import {
-  classifyMailboxError,
-  type DroppedMailWork,
-} from "@inboxzero/mail-sqlite/recovery";
+import { classifyMailboxError } from "@inboxzero/mail-sqlite/mailbox-errors";
+import type { DroppedMailWork } from "@inboxzero/mail-sqlite/recovery";
 import type {
   MailboxView,
   QueryHandle,

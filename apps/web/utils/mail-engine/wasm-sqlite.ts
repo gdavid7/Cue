@@ -5,8 +5,8 @@ import type {
   SqlValue,
   SqliteDriver,
 } from "@inboxzero/mail-sqlite/driver";
+import { MailboxUnavailableError } from "@inboxzero/mail-sqlite/mailbox-errors";
 import {
-  MailboxUnavailableError,
   openMailStoreWithRecovery,
   type DroppedMailWork,
 } from "@inboxzero/mail-sqlite/recovery";
