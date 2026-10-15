@@ -52,9 +52,11 @@ import {
 import type { EmailLabel } from "@/providers/email-label-types";
 import { GmailLabel } from "@/utils/gmail/label";
 import { cn } from "@/utils";
+import { parseMailPath } from "@/utils/mail-url";
 import type { OutlookFolder } from "@/utils/outlook/folders";
 import { OUTLOOK_INBOX_SECTIONS } from "@/utils/outlook/inbox-sections";
 import { getLabelTree, type SidebarLabel } from "./label-tree";
+import { showMailView } from "./show-mail-view";
 import { splitLabelsByListVisibility } from "./label-visibility";
 import { getMailSidebarFolders } from "./outlook-folder-list";
 import {
@@ -1006,15 +1008,38 @@ function NavRow({
   const className = cn(presentation.className);
   const content = presentation.content;
 
-  const RowLink = reloadDocument ? "a" : Link;
   const row = href ? (
-    <RowLink
-      href={href}
-      aria-current={active ? "page" : undefined}
-      className={className}
-    >
-      {content}
-    </RowLink>
+    reloadDocument ? (
+      <a
+        href={href}
+        aria-current={active ? "page" : undefined}
+        className={className}
+      >
+        {content}
+      </a>
+    ) : (
+      <Link
+        href={href}
+        aria-current={active ? "page" : undefined}
+        className={className}
+        // Views of the open mail screen change on the client, so fetching
+        // them from the server ahead of time would be wasted.
+        prefetch={parseMailPath(href.split("?")[0]) ? false : undefined}
+        onClick={(event) => {
+          if (
+            event.button !== 0 ||
+            event.metaKey ||
+            event.ctrlKey ||
+            event.shiftKey ||
+            event.altKey
+          )
+            return;
+          if (showMailView(href)) event.preventDefault();
+        }}
+      >
+        {content}
+      </Link>
+    )
   ) : (
     <div aria-current={active ? "page" : undefined} className={className}>
       {content}

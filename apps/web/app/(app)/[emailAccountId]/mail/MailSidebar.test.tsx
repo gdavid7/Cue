@@ -57,6 +57,18 @@ function renderSidebar(overrides: Partial<MailSidebarProps> = {}) {
 }
 
 describe("MailSidebar", () => {
+  it("switches views of the open mail screen without a server round trip", () => {
+    window.history.replaceState(null, "", "/mail/u/0/inbox");
+    renderSidebar({
+      hrefFor: (target) =>
+        target.kind === "type" ? `/mail/u/0/${target.type}` : "/mail/u/0",
+    });
+
+    fireEvent.click(screen.getByText("Sent"));
+
+    expect(window.location.pathname).toBe("/mail/u/0/sent");
+  });
+
   it("keeps Drafts and Sent beside the inbox and the rarer views behind More", () => {
     renderSidebar();
 
