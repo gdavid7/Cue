@@ -4,6 +4,7 @@ import {
   indexContactBacklog,
   readContactSuggestions,
 } from "./contact-suggestions";
+import { readMessageSearch } from "./message-search";
 import { canonicalJson, hashCanonical } from "@inboxzero/mail-core/canonical";
 import type { HostRuntime } from "@inboxzero/mail-core/ports/runtime";
 import type {
@@ -163,6 +164,16 @@ export async function createSqliteMailStore(
   const store: MailStore = {
     readContactSuggestions(query) {
       return driver.read((tx) => readContactSuggestions(tx, query));
+    },
+    readMessageSearch(query) {
+      return driver.read(async (tx) => {
+        const page = await readMessageSearch(
+          tx,
+          query,
+          await searchSupport(tx),
+        );
+        return withIndexedCoverage({ view: page }, { fts5 }).view;
+      });
     },
     indexContactBacklog() {
       return driver.write(indexContactBacklog);

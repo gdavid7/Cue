@@ -32,6 +32,8 @@ import type {
   MailboxCountsQuery,
   MailboxCountsView,
   MailboxView,
+  MessageSearchPage,
+  MessageSearchQuery,
   QuerySnapshot,
 } from "../queries";
 import type {
@@ -410,6 +412,7 @@ export interface MailStore {
     revision: LocalRevision;
     view: MailboxView;
   }>;
+  readMessageSearch(query: MessageSearchQuery): Promise<MessageSearchPage>;
   readOperation(key: OperationKey): Promise<{
     revision: LocalRevision;
     operation: OperationState | null;

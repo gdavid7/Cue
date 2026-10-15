@@ -28,7 +28,10 @@ import {
   runOutlookSearch,
 } from "@/utils/outlook/assistant-search";
 import { sleep } from "@/utils/sleep";
-import { isLocalPageToken } from "@/utils/actions/assistant-local-search.validation";
+import {
+  isLocalPageToken,
+  SEARCH_INBOX_MAX_RESULTS,
+} from "@/utils/actions/assistant-local-search.validation";
 import type {
   LocalMailSearch,
   LocalMailSearchAnswer,
@@ -59,7 +62,6 @@ import { microsoftGraphPageTokenSchema } from "@/utils/outlook/page-token";
 import { validateUserAndAiAccess } from "@/utils/user/validate";
 import { SafeError } from "@/utils/error";
 
-const SEARCH_INBOX_MAX_RESULTS = 20;
 const MAX_SENDER_CATEGORIZATION_WAIT_MS = 1500;
 const recipientListSchema = z
   .string()

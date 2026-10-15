@@ -44,6 +44,8 @@ import type {
   MailboxCountsQuery,
   MailboxCountsView,
   MailboxView,
+  MessageSearchPage,
+  MessageSearchQuery,
   QueryHandle,
 } from "./queries";
 import {
@@ -123,6 +125,11 @@ export type MailClient = {
   queryContactSuggestions?(
     query: ContactSuggestionQuery,
   ): Promise<ContactSuggestion[]>;
+  /**
+   * Reads matching messages once from the local store, without asking the
+   * provider. Hosts that can't answer off the UI thread leave it out.
+   */
+  searchMessages?(query: MessageSearchQuery): Promise<MessageSearchPage>;
   observeMailbox(query: ConversationQuery): QueryHandle<MailboxView>;
   observeMailboxCounts(
     query: MailboxCountsQuery,
@@ -261,6 +268,9 @@ export function createMailEngine(input: {
   return {
     queryContactSuggestions(query) {
       return store.readContactSuggestions(query);
+    },
+    searchMessages(query) {
+      return store.readMessageSearch(query);
     },
     observeMailbox(query) {
       const searches = watchProviderSearches(query, query.pageSize);

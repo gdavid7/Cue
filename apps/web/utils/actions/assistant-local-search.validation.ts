@@ -1,5 +1,21 @@
 import { z } from "zod";
 
+// The most messages one searchInbox call returns, wherever it is answered.
+export const SEARCH_INBOX_MAX_RESULTS = 20;
+
+// What one local answer may hold. The browser clamps to these before it
+// answers, so an oversized field shortens a result instead of losing it.
+export const LOCAL_SEARCH_LIMITS = {
+  messages: SEARCH_INBOX_MAX_RESULTS,
+  id: 256,
+  subject: 500,
+  address: 500,
+  recipients: 2000,
+  snippet: 500,
+  labels: 50,
+  pageToken: 1024,
+} as const;
+
 // What a browser's local mail store answers to one of the assistant's inbox
 // searches. It goes into the model's context like a Gmail result, so every
 // field is bounded.
@@ -9,19 +25,21 @@ export const localMailSearchResultSchema = z.discriminatedUnion("status", [
     messages: z
       .array(
         z.object({
-          id: z.string().min(1).max(256),
-          threadId: z.string().min(1).max(256),
-          subject: z.string().max(1000),
-          from: z.string().max(1000),
-          to: z.string().max(4000),
-          snippet: z.string().max(1000),
+          id: z.string().min(1).max(LOCAL_SEARCH_LIMITS.id),
+          threadId: z.string().min(1).max(LOCAL_SEARCH_LIMITS.id),
+          subject: z.string().max(LOCAL_SEARCH_LIMITS.subject),
+          from: z.string().max(LOCAL_SEARCH_LIMITS.address),
+          to: z.string().max(LOCAL_SEARCH_LIMITS.recipients),
+          snippet: z.string().max(LOCAL_SEARCH_LIMITS.snippet),
           date: z.string().datetime(),
-          labelIds: z.array(z.string().max(256)).max(100),
+          labelIds: z
+            .array(z.string().max(LOCAL_SEARCH_LIMITS.id))
+            .max(LOCAL_SEARCH_LIMITS.labels),
           hasAttachments: z.boolean(),
         }),
       )
-      .max(100),
-    nextPageToken: z.string().max(2048).optional(),
+      .max(LOCAL_SEARCH_LIMITS.messages),
+    nextPageToken: z.string().max(LOCAL_SEARCH_LIMITS.pageToken).optional(),
   }),
   z.object({
     status: z.literal("unavailable"),

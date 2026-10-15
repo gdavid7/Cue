@@ -2,17 +2,17 @@ import { TZDate } from "@date-fns/tz";
 import { subDays, subMonths, subYears } from "date-fns";
 import type { MailClient } from "@inboxzero/mail-core/engine";
 import type {
-  ConversationQuery,
-  ConversationSummary,
   Coverage,
-  MailboxView,
   MailPredicate,
-  QuerySnapshot,
+  MessageSearchMatch,
+  MessageSearchPage,
 } from "@inboxzero/mail-core/queries";
 import {
   isLocalPageToken,
   LOCAL_PAGE_TOKEN_PREFIX,
+  LOCAL_SEARCH_LIMITS,
   type LocalMailSearchResult,
+  localMailSearchResultSchema,
 } from "@/utils/actions/assistant-local-search.validation";
 import {
   parseSearchToken,
@@ -29,6 +29,8 @@ export type AssistantSearchRequest = {
   limit: number;
   pageToken?: string;
 };
+
+type LocalSearch = { predicate: MailPredicate; fromAddress: string | null };
 
 /**
  * Answers one search the assistant asked this tab for and sends the answer
@@ -58,15 +60,20 @@ export async function answerAssistantSearch({
         pageToken: request.pageToken,
       }).catch(() => ({ status: "unavailable", reason: "error" }) as const)
     : { status: "unavailable", reason: "no_engine" };
-  await submit({ requestId: request.requestId, result });
+  // An answer the server would reject is worth less than a quick handback.
+  const accepted = localMailSearchResultSchema.safeParse(result).success
+    ? result
+    : ({ status: "unavailable", reason: "error" } as const);
+  await submit({ requestId: request.requestId, result: accepted });
 }
 
 /**
  * Answers the assistant's Gmail search from the mail already in the local
- * store, in the shape the server's search returns. Says `unavailable` (and the
- * server searches Gmail instead) for a query it can't answer exactly, before
- * the mailbox has fully synced, or for word searches before bodies are
- * indexed, so a local answer is never a partial one.
+ * store, in the shape the server's search returns: matching messages, each
+ * with its own fields, newest first, `limit` counting messages. Says
+ * `unavailable` (and the server searches Gmail instead) for a query it can't
+ * answer exactly, before the mailbox has fully synced, or for word searches
+ * before bodies are indexed, so a local answer is never a partial one.
  */
 export async function searchLocalMail({
   client,
@@ -85,66 +92,47 @@ export async function searchLocalMail({
   now?: Date;
   timeoutMs?: number;
 }): Promise<LocalMailSearchResult> {
-  const predicate = gmailQueryToLocalPredicate(query, now);
-  if (!predicate) return { status: "unavailable", reason: "unsupported_query" };
+  if (!client.searchMessages)
+    return { status: "unavailable", reason: "no_engine" };
+  const search = gmailQueryToLocalSearch(query, now);
+  if (!search) return { status: "unavailable", reason: "unsupported_query" };
   const after = pageToken ? decodeLocalPageToken(pageToken) : null;
   if (pageToken && after === null)
     return { status: "unavailable", reason: "unsupported_query" };
 
-  const conversationQuery: ConversationQuery = {
-    accountIds: [accountId],
-    predicate,
-    order: "newest_first",
-    pageSize: limit,
-    after,
-  };
-  const view = await readOnce(client, conversationQuery, timeoutMs);
-  if (!view) return { status: "unavailable", reason: "timeout" };
-
-  const accountCoverage = view.coverage.filter(
-    (item) => item.accountId === accountId,
+  const page = await withTimeout(
+    client.searchMessages({
+      accountId,
+      predicate: search.predicate,
+      fromAddress: search.fromAddress,
+      pageSize: Math.min(limit, LOCAL_SEARCH_LIMITS.messages),
+      after,
+    }),
+    timeoutMs,
   );
-  if (!isComplete(accountCoverage, "metadata"))
+  if (!page) return { status: "unavailable", reason: "timeout" };
+
+  const coverage = page.coverage.filter((item) => item.accountId === accountId);
+  if (!isComplete(coverage, "metadata"))
     return { status: "unavailable", reason: "not_synced" };
-  if (hasText(predicate) && !isComplete(accountCoverage, "indexedContent"))
+  if (hasText(search.predicate) && !isComplete(coverage, "indexedContent"))
     return { status: "unavailable", reason: "not_indexed" };
 
-  return {
-    status: "ok",
-    messages: view.conversations.flatMap((conversation) =>
-      conversation.latestMessageId
-        ? [
-            {
-              id: conversation.latestMessageId,
-              threadId: conversation.key.conversationId,
-              subject: conversation.subject,
-              from: conversation.from,
-              to: conversation.to,
-              snippet: conversation.preview,
-              date: new Date(conversation.latestMessageAtMs).toISOString(),
-              labelIds: gmailLabelIds(conversation),
-              hasAttachments: Boolean(conversation.hasAttachments),
-            },
-          ]
-        : [],
-    ),
-    ...(view.nextPage
-      ? { nextPageToken: encodeLocalPageToken(view.nextPage) }
-      : {}),
-  };
+  return toResult(page);
 }
 
 /**
- * The local predicate for a Gmail search query, or null when any part of it
- * has Gmail semantics the local store can't reproduce exactly (OR, negation,
- * labels by name, partial sender names, sizes, categories...).
+ * The local search for a Gmail query, or null when any part of it has Gmail
+ * semantics the local store can't reproduce exactly (OR, negation, labels by
+ * name, partial sender names, recipients, sizes, categories...).
  */
-export function gmailQueryToLocalPredicate(
+export function gmailQueryToLocalSearch(
   query: string,
   now: Date,
-): MailPredicate | null {
+): LocalSearch | null {
   if (!query.trim()) return null;
   let mailbox: MailPredicate = { kind: "mailbox", mailbox: "all" };
+  let fromAddress: string | null = null;
   const clauses: MailPredicate[] = [];
   const words: string[] = [];
 
@@ -164,6 +152,13 @@ export function gmailQueryToLocalPredicate(
       continue;
     }
 
+    if (operator === "from") {
+      // Gmail also matches partial names and addresses; only one whole
+      // address means the same thing locally.
+      if (fromAddress || !isWholeAddress(value)) return null;
+      fromAddress = value.toLowerCase();
+      continue;
+    }
     const clause = operatorClause(operator, value, now);
     if (clause === null) return null;
     if (clause.kind === "mailbox") mailbox = clause;
@@ -177,7 +172,10 @@ export function gmailQueryToLocalPredicate(
       value: words.join(" "),
       match: "term",
     });
-  return { kind: "all", predicates: [mailbox, ...clauses] };
+  return {
+    predicate: { kind: "all", predicates: [mailbox, ...clauses] },
+    fromAddress,
+  };
 }
 
 function operatorClause(
@@ -186,17 +184,6 @@ function operatorClause(
   now: Date,
 ): MailPredicate | null {
   switch (operator) {
-    case "from":
-    case "to":
-      // Gmail also matches partial names and addresses; only a whole address
-      // means the same thing locally.
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return null;
-      return {
-        kind: "address",
-        field: operator,
-        value: value.toLowerCase(),
-        match: "address",
-      };
     case "subject":
       return { kind: "text", field: "subject", value, match: "phrase" };
     case "has":
@@ -223,6 +210,8 @@ function operatorClause(
         ? { kind: "received", afterMs: at, beforeMs: null }
         : { kind: "received", afterMs: null, beforeMs: at };
     }
+    // to: also matches Cc and Bcc in Gmail, which the local index doesn't
+    // reproduce; it stays with Gmail like every other operator not above.
     default:
       return null;
   }
@@ -255,6 +244,10 @@ function inClause(value: string): MailPredicate | null {
   }
 }
 
+function isWholeAddress(value: string) {
+  return /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(value);
+}
+
 function gmailDateMs(value: string): number | null {
   if (/^\d{9,11}$/.test(value)) return Number(value) * 1000;
   const match = value.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/);
@@ -274,9 +267,45 @@ function relativeAgeMs(value: string, now: Date): number | null {
   return at.getTime();
 }
 
+function toResult(page: MessageSearchPage): LocalMailSearchResult {
+  const nextPageToken = page.nextPage
+    ? encodeLocalPageToken(page.nextPage)
+    : null;
+  return {
+    status: "ok",
+    messages: page.messages
+      .filter(
+        (message) =>
+          message.messageId.length <= LOCAL_SEARCH_LIMITS.id &&
+          message.conversationId.length <= LOCAL_SEARCH_LIMITS.id,
+      )
+      .slice(0, LOCAL_SEARCH_LIMITS.messages)
+      .map((message) => ({
+        id: message.messageId,
+        threadId: message.conversationId,
+        subject: clamp(message.subject, LOCAL_SEARCH_LIMITS.subject),
+        from: clamp(message.from, LOCAL_SEARCH_LIMITS.address),
+        to: clamp(message.to.join(", "), LOCAL_SEARCH_LIMITS.recipients),
+        snippet: clamp(message.preview, LOCAL_SEARCH_LIMITS.snippet),
+        date: new Date(message.receivedAtMs).toISOString(),
+        labelIds: gmailLabelIds(message)
+          .filter((labelId) => labelId.length <= LOCAL_SEARCH_LIMITS.id)
+          .slice(0, LOCAL_SEARCH_LIMITS.labels),
+        hasAttachments: message.hasAttachments,
+      })),
+    ...(nextPageToken && nextPageToken.length <= LOCAL_SEARCH_LIMITS.pageToken
+      ? { nextPageToken }
+      : {}),
+  };
+}
+
+function clamp(value: string, max: number) {
+  return value.length > max ? value.slice(0, max) : value;
+}
+
 // The store keeps Gmail's system labels as roles and flags; a Gmail search
 // result lists them as label ids, so they are put back.
-const ROLE_LABEL_IDS: Record<ConversationSummary["roles"][number], string> = {
+const ROLE_LABEL_IDS: Record<MessageSearchMatch["roles"][number], string> = {
   inbox: "INBOX",
   sent: "SENT",
   draft: "DRAFT",
@@ -284,13 +313,14 @@ const ROLE_LABEL_IDS: Record<ConversationSummary["roles"][number], string> = {
   spam: "SPAM",
 };
 
-function gmailLabelIds(conversation: ConversationSummary) {
+function gmailLabelIds(message: MessageSearchMatch) {
   return [
     ...new Set([
-      ...conversation.roles.map((role) => ROLE_LABEL_IDS[role]),
-      ...(conversation.unread ? ["UNREAD"] : []),
-      ...(conversation.starred ? ["STARRED"] : []),
-      ...conversation.labelIds,
+      ...message.roles.map((role) => ROLE_LABEL_IDS[role]),
+      ...(message.read ? [] : ["UNREAD"]),
+      ...(message.starred ? ["STARRED"] : []),
+      ...message.categoryIds,
+      ...message.labelIds,
     ]),
   ];
 }
@@ -318,35 +348,14 @@ function isComplete(
   );
 }
 
-// The view is read once and closed at once: closing before the engine's
-// lane picks up the provider search it queues for word predicates drops
-// that search, so answering locally spends no Gmail quota.
-function readOnce(
-  client: MailClient,
-  query: ConversationQuery,
-  timeoutMs: number,
-): Promise<MailboxView | null> {
-  return new Promise((resolve) => {
-    const handle = client.observeMailbox(query);
-    let settled = false;
-    let unsubscribe = () => {};
-    const finish = (view: MailboxView | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      unsubscribe();
-      handle.close();
-      resolve(view);
-    };
-    const check = (snapshot: QuerySnapshot<MailboxView>) => {
-      if (snapshot.status === "ready" && snapshot.data) finish(snapshot.data);
-      else if (snapshot.status === "error" || snapshot.status === "unavailable")
-        finish(null);
-    };
-    const timer = setTimeout(() => finish(null), timeoutMs);
-    unsubscribe = handle.subscribe(() => check(handle.getSnapshot()));
-    check(handle.getSnapshot());
-  });
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 // Base64url, so the store's tab-separated cursor stays one opaque token.
