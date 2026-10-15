@@ -104,6 +104,10 @@ describe("extractMainLinks", () => {
       "https://app.example.org/verify/9e107d9d372bb6826bd81d3542a419d6",
     ],
     [
+      "a long numeric token in the path",
+      "https://app.example.org/reset/8301274659120384756",
+    ],
+    [
       "a hex token split by separators",
       "https://app.example.org/confirm/a1b2c3d4-e5f6a7b8-c9d0e1f2",
     ],

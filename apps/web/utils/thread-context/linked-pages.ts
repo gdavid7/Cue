@@ -233,14 +233,13 @@ function isTokenSegment(segment: string) {
   ) {
     return true;
   }
-  // UUIDs and hex tokens split by separators; joined, an article slug
-  // never reads as hex digits only.
+  // UUIDs, hex tokens and long numeric tokens, even split by separators;
+  // joined, an article slug never reads as hex digits only.
   const joined = pieces.join("");
   return (
     joined.length >= TOKEN_PIECE_MIN_LENGTH &&
     /^[0-9a-f]+$/i.test(joined) &&
-    /\d/.test(joined) &&
-    /[a-f]/i.test(joined)
+    /\d/.test(joined)
   );
 }
 
