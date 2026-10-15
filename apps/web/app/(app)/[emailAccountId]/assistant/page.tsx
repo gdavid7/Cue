@@ -20,7 +20,7 @@ export default async function AssistantPage({
       <Suspense>
         <PermissionsCheck />
 
-        <div className="flex h-[calc(100dvh-theme(spacing.10)-theme(spacing.14)-env(safe-area-inset-bottom))] md:h-screen flex-col">
+        <div className="flex min-h-0 flex-1 flex-col pb-[env(safe-area-inset-bottom)]">
           <Chat
             open
             topBarStart={

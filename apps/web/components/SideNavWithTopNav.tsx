@@ -23,7 +23,8 @@ function ContentWrapper({ children }: { children: React.ReactNode }) {
   // The padding only exists to clear the fixed MobileHeader. Mail and the
   // chat page render none; the rule editor pages under /assistant need the
   // padding like any other page.
-  const noTopPadding = isChatPagePath(pathname) || isMailRoute;
+  const isChatPage = isChatPagePath(pathname);
+  const noTopPadding = isChatPage || isMailRoute;
 
   return (
     <div
@@ -41,6 +42,9 @@ function ContentWrapper({ children }: { children: React.ReactNode }) {
           // The mail page fills the viewport and scrolls its thread list
           // internally, so layout banners shrink it instead of overflowing
           isMailRoute && "h-svh",
+          // Chat pins its input to the bottom and scrolls the conversation
+          // above it, so it fills what the banners leave, too.
+          isChatPage && "h-dvh",
         )}
         // Mail's own sidebar is fixed over the left edge, so layout banners
         // above the mail screen indent by its width to stay readable.
