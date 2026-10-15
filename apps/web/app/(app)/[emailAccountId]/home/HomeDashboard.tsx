@@ -40,7 +40,7 @@ import { markNoReplyNeededAction } from "@/utils/actions/rule-feedback";
 import { markNeedsReplyAction } from "@/utils/actions/thread-assist";
 import { formatShortDate } from "@/utils/date";
 import { getActionErrorMessage } from "@/utils/error";
-import type { AgentTask, HomeThread } from "@/utils/home/get-home";
+import type { AgentTask, HomeLane, HomeThread } from "@/utils/home/get-home";
 import { prefixPath } from "@/utils/path";
 import { AllClear, CueChecked } from "./AllClear";
 import { BeforeYourMeeting } from "./BeforeYourMeeting";
@@ -98,8 +98,12 @@ export function HomeDashboard() {
             lanes.needsYou.length > 0 || lanes.waiting.length > 0,
         })
       : null;
+  // Gmail couldn't serve these in time; they load on the next refresh.
+  const pending = useMemo(() => new Set(data?.pending), [data]);
   // Nothing needs a reply: who you're waiting on folds into the All clear.
-  const allClear = Boolean(lanes && !notice && lanes.needsYou.length === 0);
+  const allClear = Boolean(
+    lanes && !notice && !pending.has("needsYou") && lanes.needsYou.length === 0,
+  );
   // Keyboard order, top to bottom, as the lanes render.
   const rows = useMemo(
     () =>
@@ -366,7 +370,7 @@ export function HomeDashboard() {
           {greetingText}
           {firstName ? `, ${firstName}` : ""}
         </PageHeading>
-        {data && lanes && !notice && !allClear ? (
+        {data && lanes && !notice && !allClear && !pending.has("needsYou") ? (
           <p className="mt-1 text-muted-foreground text-sm" role="status">
             {busySummary(data, lanes.needsYou.length)}
           </p>
@@ -394,6 +398,7 @@ export function HomeDashboard() {
             canChange={engineReady}
             layout={isLargeScreen ? "list" : "split"}
             onCorrect={correct}
+            pending={pending}
             threadHref={threadHref}
           />
         ) : null}
@@ -416,6 +421,7 @@ function HomeLanes({
   layout,
   threadHref,
   onCorrect,
+  pending,
 }: {
   data: GetHomeResponse;
   lanes: {
@@ -436,6 +442,7 @@ function HomeLanes({
   layout: "list" | "split";
   threadHref: (threadId: string) => string;
   onCorrect: (thread: HomeThread, needsReply: boolean) => Promise<void>;
+  pending: ReadonlySet<HomeLane>;
 }) {
   const { cue, stats } = data;
   const mailHref = useMailHref();
@@ -498,6 +505,7 @@ function HomeLanes({
       {/* What needs the user comes first; meeting news sits with what's next. */}
       {allClear ? <BeforeYourMeeting emailAccountId={emailAccountId} /> : null}
 
+      {pending.has("needsYou") ? <HomeSkeleton layout={layout} /> : null}
       {lanes.needsYou.length > 0 ? (
         <Section
           title="Needs reply"
@@ -557,6 +565,9 @@ function HomeLanes({
       ) : null}
       {allClear ? null : <BeforeYourMeeting emailAccountId={emailAccountId} />}
 
+      {!allClear && pending.has("waiting") ? (
+        <HomeSkeleton layout={layout} />
+      ) : null}
       {!allClear && lanes.waiting.length > 0 ? (
         <Section
           title="Waiting on"
@@ -577,6 +588,7 @@ function HomeLanes({
         </p>
       ) : null}
 
+      {pending.has("alsoInInbox") ? <HomeSkeleton layout={layout} /> : null}
       {lanes.alsoInInbox.length > 0 ? (
         <Section
           title="Also in your inbox"

@@ -427,6 +427,21 @@ describe("HomeDashboard states", () => {
     );
   });
 
+  it("still loading needs reply: shows the lanes that loaded, not All clear", () => {
+    mocks.home.data = {
+      ...homeData([]),
+      alsoInInbox: [thread("b", "Dentist")],
+      pending: ["needsYou"],
+    };
+
+    renderToday();
+
+    expect(screen.queryByText("All clear.")).toBeNull();
+    expect(screen.queryByText("Couldn't load this")).toBeNull();
+    expect(screen.queryAllByRole("status")).toEqual([]);
+    expect(lanes()).toEqual(["Also in your inbox"]);
+  });
+
   it("error: shows the error alone, with no status or lanes", () => {
     mocks.home.data = undefined;
     mocks.home.error = { error: "Boom" };
@@ -504,8 +519,8 @@ function homeData(needsYou: HomeThread[]): GetHomeResponse {
   return {
     needsYou,
     waiting: [],
-    handled: [],
     alsoInInbox: [],
+    pending: [],
     agentTasks: [],
     cue: { aiAccess: true, replyTracking: true, hasReadMail: true },
     today: { checked: 0, filed: 0, filedLabel: null },
@@ -517,11 +532,8 @@ function homeData(needsYou: HomeThread[]): GetHomeResponse {
       estimatedMinutes: 0,
       agentWorking: 0,
       waiting: 0,
-      handled: 0,
-      handledWindowDays: 7,
       needsYouCapped: false,
       waitingCapped: false,
-      handledCapped: false,
     },
   };
 }

@@ -134,6 +134,7 @@ const BUCKET_UNITS_PER_SECOND = 60;
 const OPEN_EVERY_MS = 700;
 // Gmail's per-user limit for short bursts, a moving average over a second.
 const GMAIL_UNITS_PER_SECOND = 250;
+const HOME_BUDGET_MS = 10_000;
 
 // Replays what opening Cue fires at Gmail: two tabs each scanning the recent
 // window and backfilling older mail, a deep-linked thread plus three more
@@ -320,7 +321,11 @@ describe("Gmail quota on a first load", () => {
     // Today waits for its share rather than showing lanes emptied by quota.
     expect(home).toMatchObject({
       ok: true,
-      value: { handled: expect.arrayContaining([expect.anything()]) },
+      value: {
+        needsYou: expect.arrayContaining([expect.anything()]),
+        alsoInInbox: expect.arrayContaining([expect.anything()]),
+        pending: [],
+      },
     });
     // Background work still gets done once the inbox has filled.
     expect(gmail.unitsByCaller(start, start + END_MS)).toMatchObject({
@@ -416,6 +421,71 @@ describe("Gmail quota on a first load", () => {
     expect(gmail.peakSecondUnits()).toBeLessThanOrEqual(GMAIL_UNITS_PER_SECOND);
     expect(firstPage).toMatchObject({ ok: true, count: 25 });
     expect(firstPage?.ms).toBeLessThanOrEqual(2600);
+  }, 60_000);
+
+  // Production, 20:14: Today on a large mailbox ran into the route's 30 s
+  // limit while the account's sync held the gate, and every SWR retry did the
+  // same. Today must answer within its budget, with whatever Gmail could not
+  // serve in time marked pending rather than failing the page.
+  it("answers Today within its budget while two tabs' first syncs run", async () => {
+    const { gmail, provider, route, engineScope, sleep, rateLimitModes } =
+      await startReplay(STEADY_MS, { unitsPerSecond: GMAIL_UNITS_PER_SECOND });
+    vi.mocked(prisma.threadTracker.findMany).mockImplementation((async ({
+      where,
+    }: {
+      where: { type: string };
+    }) =>
+      Array.from({ length: 30 }, (_, i) => ({
+        threadId: `t${(where.type === "AWAITING" ? 60 : 30) + i}`,
+      }))) as never);
+    for (const findMany of [
+      prisma.executedAction.findMany,
+      prisma.scheduledAction.findMany,
+      prisma.executedRule.findMany,
+    ])
+      vi.mocked(findMany).mockResolvedValue([]);
+    vi.mocked(prisma.executedRule.groupBy).mockResolvedValue([] as never);
+    let home: { ok: boolean; ms: number; value?: unknown } | null = null;
+    const actors = Promise.all([
+      engineScope("a", "primary"),
+      engineScope("a", "history"),
+      engineScope("b", "primary"),
+      engineScope("b", "history"),
+      sleep(5000).then(async () => {
+        const askedAt = Date.now();
+        const result = await route("user/home", () =>
+          getHomeData({
+            emailAccountId: ACCOUNT,
+            userEmail: "me@example.com",
+            emailProvider: provider,
+            logger,
+          }),
+        );
+        home = {
+          ok: result.ok,
+          ms: Date.now() - askedAt,
+          value: result.ok ? result.value : result.error,
+        };
+      }),
+    ]);
+
+    for (let elapsed = 0; elapsed < STEADY_MS + 60_000; elapsed += 100) {
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    await actors;
+
+    expect(gmail.limitedCalls()).toEqual([]);
+    expect(rateLimitModes).toEqual([]);
+    // Before the fix: deferred after 15.7 s, failing the whole page.
+    expect(home).toMatchObject({ ok: true });
+    expect(home!.ms).toBeLessThanOrEqual(HOME_BUDGET_MS);
+    // Today's reads go ahead of the sync, so every lane lands in one request.
+    expect(home!.value).toMatchObject({
+      needsYou: expect.arrayContaining([expect.anything()]),
+      waiting: expect.arrayContaining([expect.anything()]),
+      alsoInInbox: expect.arrayContaining([expect.anything()]),
+      pending: [],
+    });
   }, 60_000);
 
   // A person opens threads while the first sync fills the inbox and inbox
