@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
 import { createScopedLogger } from "@/utils/logger";
+import { redis } from "@/utils/redis";
 import {
   fetchConnectorCandidates,
   searchCanvas,
@@ -694,37 +695,46 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
           },
         ],
       }),
+      HUBSPOT_GET_ACCOUNT_INFO: () => ({
+        hub_id: 4211,
+        hub_domain: "northwind-sales.com",
+      }),
     });
 
     const { candidates } = await lookup({ senderEmail: "nora@northwind.com" });
 
-    expect(calls()).toEqual([
-      [
-        "HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA",
-        {
-          filterGroups: [
-            {
-              filters: [
-                {
-                  propertyName: "email",
-                  operator: "EQ",
-                  value: "nora@northwind.com",
-                },
-              ],
-            },
-          ],
-          properties: [
-            "email",
-            "firstname",
-            "lastname",
-            "jobtitle",
-            "company",
-            "lifecyclestage",
-            "lastmodifieddate",
-          ],
-          limit: 1,
-        },
-      ],
+    expect(calls()).toHaveLength(2);
+    expect(calls()).toContainEqual(["HUBSPOT_GET_ACCOUNT_INFO", {}]);
+    expect(redis.set).toHaveBeenCalledWith(
+      "hubspot-portal-id:school",
+      "4211",
+      expect.anything(),
+    );
+    expect(calls()).toContainEqual([
+      "HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA",
+      {
+        filterGroups: [
+          {
+            filters: [
+              {
+                propertyName: "email",
+                operator: "EQ",
+                value: "nora@northwind.com",
+              },
+            ],
+          },
+        ],
+        properties: [
+          "email",
+          "firstname",
+          "lastname",
+          "jobtitle",
+          "company",
+          "lifecyclestage",
+          "lastmodifieddate",
+        ],
+        limit: 1,
+      },
     ]);
     expect(candidates).toEqual([
       {
@@ -735,10 +745,33 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
         text: "Nora Patel\nVP Finance · Northwind · customer",
         snippet: "VP Finance · Northwind · customer",
         at: "2026-09-01T00:00:00.000Z",
+        url: "https://app.hubspot.com/contacts/4211/record/0-1/501",
         people: [{ email: "nora@northwind.com", name: "Nora Patel" }],
         linkedBy: "sender",
       },
     ]);
+  });
+
+  it("links a HubSpot contact through the connection's cached portal without asking again", async () => {
+    connected("hubspot");
+    vi.mocked(redis.get).mockImplementation(async (key: string) =>
+      key === "hubspot-portal-id:school" ? "4211" : null,
+    );
+    answer({
+      HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA: () => ({
+        results: [{ id: "501", properties: { email: "nora@northwind.com" } }],
+      }),
+    });
+
+    const { candidates } = await lookup({ senderEmail: "nora@northwind.com" });
+
+    expect(calls().map(([tool]) => tool)).toEqual([
+      "HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA",
+    ]);
+    expect(candidates[0]?.url).toBe(
+      "https://app.hubspot.com/contacts/4211/record/0-1/501",
+    );
+    vi.mocked(redis.get).mockImplementation(async () => null);
   });
 
   it("finds the sender among Salesforce contacts, then leads, ignoring partial matches", async () => {
@@ -762,14 +795,26 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
           },
         ],
       }),
+      SALESFORCE_GET_USER_INFO: () => ({
+        salesforce_user_details: {
+          user_id: "005A",
+          profile: "https://acme.my.salesforce.com/005A",
+          urls: {
+            rest: "https://acme.my.salesforce.com/services/data/v{version}/",
+          },
+        },
+      }),
     });
 
     const { candidates } = await lookup({ senderEmail: "nora@northwind.com" });
 
-    expect(calls()).toEqual([
+    expect(
+      calls().filter(([tool]) => tool !== "SALESFORCE_GET_USER_INFO"),
+    ).toEqual([
       ["SALESFORCE_SEARCH_CONTACTS", { email: "nora@northwind.com", limit: 5 }],
       ["SALESFORCE_SEARCH_LEADS", { email: "nora@northwind.com", limit: 5 }],
     ]);
+    expect(calls()).toContainEqual(["SALESFORCE_GET_USER_INFO", {}]);
     expect(candidates).toEqual([
       {
         id: "salesforce:00QB",
@@ -779,13 +824,34 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
         text: "Nora Patel\nVP Finance · Northwind · Lead: Working",
         snippet: "VP Finance · Northwind · Lead: Working",
         at: "2026-09-01T00:00:00.000Z",
+        url: "https://acme.my.salesforce.com/lightning/r/Lead/00QB/view",
         people: [{ email: "nora@northwind.com", name: "Nora Patel" }],
         linkedBy: "sender",
       },
     ]);
   });
 
-  it("uses a Salesforce contact without asking for leads", async () => {
+  it("links nowhere when Salesforce names an address outside its own domains", async () => {
+    connected("salesforce");
+    answer({
+      SALESFORCE_SEARCH_CONTACTS: () => ({
+        totalSize: 1,
+        records: [{ Id: "003A", Name: "Nora", Email: "nora@northwind.com" }],
+      }),
+      SALESFORCE_GET_USER_INFO: () => ({
+        profile: "https://acme.my.salesforce.com.evil.example/005A",
+      }),
+    });
+
+    const { candidates } = await lookup({ senderEmail: "nora@northwind.com" });
+
+    expect(candidates).toEqual([
+      expect.objectContaining({ id: "salesforce:003A", url: undefined }),
+    ]);
+  });
+
+  // GET_USER_INFO isn't answered here, so finding the instance fails.
+  it("uses a Salesforce contact without asking for leads, unlinked when the instance can't be found", async () => {
     connected("salesforce");
     answer({
       SALESFORCE_SEARCH_CONTACTS: () => ({
@@ -804,14 +870,15 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
 
     const { candidates } = await lookup({ senderEmail: "nora@northwind.com" });
 
-    expect(calls().map(([tool]) => tool)).toEqual([
-      "SALESFORCE_SEARCH_CONTACTS",
-    ]);
+    expect(calls().map(([tool]) => tool)).not.toContain(
+      "SALESFORCE_SEARCH_LEADS",
+    );
     expect(candidates[0]).toMatchObject({
       id: "salesforce:003A",
       snippet: "VP Finance · Northwind",
       at: NOW.toISOString(),
     });
+    expect(candidates[0]?.url).toBeUndefined();
   });
 
   it("asks nothing of the apps when the thread has no links or sender", async () => {
