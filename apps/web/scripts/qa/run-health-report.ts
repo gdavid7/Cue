@@ -10,8 +10,6 @@
 import { appendFile, readFile, writeFile } from "node:fs/promises";
 import {
   type AxiomQueryResult,
-  type AxiomResults,
-  buildAxiomQueries,
   buildHealthReport,
   formatAxiomError,
   formatHumanSummary,
@@ -20,6 +18,7 @@ import {
   parseAxiomTabular,
   redact,
   robotResultsSchema,
+  runAxiomQueries,
   type SentryIssue,
   summarizeAxiom,
   summarizeSentry,
@@ -103,52 +102,46 @@ async function queryAxiom() {
     };
   }
   const baseUrl = process.env.AXIOM_URL || "https://api.axiom.co";
-  const queries = buildAxiomQueries(dataset);
   const endTime = new Date();
   const startTime = new Date(endTime.getTime() - 60 * 60_000);
-  const entries = await Promise.all(
-    Object.entries(queries).map(
-      async ([name, apl]): Promise<[string, AxiomQueryResult]> => {
-        try {
-          const response = await fetch(
-            `${baseUrl}/v1/datasets/_apl?format=tabular`,
-            {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${token}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                apl,
-                startTime: startTime.toISOString(),
-                endTime: endTime.toISOString(),
-              }),
-              signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  const results = await runAxiomQueries(
+    dataset,
+    async (apl): Promise<AxiomQueryResult> => {
+      try {
+        const response = await fetch(
+          `${baseUrl}/v1/datasets/_apl?format=tabular`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
             },
-          );
-          if (!response.ok) {
-            return [
-              name,
-              {
-                error: formatAxiomError(
-                  response.status,
-                  await response.text().catch(() => ""),
-                ),
-              },
-            ];
-          }
-          return [name, { rows: parseAxiomTabular(await response.json()) }];
-        } catch (error) {
-          return [name, { error: errorName(error) }];
+            body: JSON.stringify({
+              apl,
+              startTime: startTime.toISOString(),
+              endTime: endTime.toISOString(),
+            }),
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          },
+        );
+        if (!response.ok) {
+          return {
+            error: formatAxiomError(
+              response.status,
+              await response.text().catch(() => ""),
+            ),
+          };
         }
-      },
-    ),
+        return { rows: parseAxiomTabular(await response.json()) };
+      } catch (error) {
+        return { error: errorName(error) };
+      }
+    },
   );
-  const results = Object.fromEntries(entries) as AxiomResults;
   const errors = Object.values(results).flatMap((result) =>
     "error" in result ? [result.error] : [],
   );
-  if (errors.length === entries.length) {
+  if (errors.length === Object.keys(results).length) {
     return {
       status: "error" as const,
       error: `every Axiom query failed (${[...new Set(errors)].join("; ")})`,

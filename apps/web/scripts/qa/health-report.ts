@@ -6,6 +6,7 @@ export const HEALTH_REPORT_END = "=== CUE HEALTH REPORT END ===";
 
 const MAX_TEXT_LENGTH = 160;
 const MAX_LIST_ITEMS = 10;
+const MAX_ERROR_SAMPLE_EVENTS = 200;
 const MAX_AXIOM_ERROR_LENGTH = 200;
 const MAX_STACK_FRAMES = 3;
 const MAX_QUOTED_LENGTH = 24;
@@ -51,6 +52,13 @@ type AxiomRow = Record<string, unknown>;
 
 export type AxiomQueryResult = { rows: AxiomRow[] } | { error: string };
 
+/**
+ * Where the dataset keeps the logger's context: in one `fields` map field, or
+ * in one column per flattened key path (`fields.url`), as it did before the
+ * map field was created. Events ingested before the change keep the columns.
+ */
+export type AxiomFieldsLayout = "map" | "flattened";
+
 export type AxiomResults = {
   totals: AxiomQueryResult;
   errorsByRoute: AxiomQueryResult;
@@ -76,42 +84,54 @@ export type SentryIssue = {
 /**
  * One APL query per signal, so a failure only blanks that signal. Field names
  * follow next-axiom's event shape for `createScopedLogger`: top-level
- * `message` and `level`, and logger context flattened under `fields.*`
- * (`fields.url` is the request path). Axiom rejects a query with HTTP 400 when
- * it names a field missing from the dataset's schema, so every field goes
- * through `column_ifexists`; `appLogs` then shows whether app logs arrived.
+ * `message` and `level`, and logger context under `fields` (`url` is the
+ * request path). With the `map` layout that context is read as map keys
+ * (`['fields']['url']`), where a missing key is null; with `flattened` it is
+ * read from the per-path columns (`fields.url`). Axiom rejects a query with
+ * HTTP 400 when it names a column missing from the dataset's schema, so every
+ * column goes through `column_ifexists`; `appLogs` then shows whether app logs
+ * arrived.
  *
- * `errorSamples` keeps the latest event of each route and message pair. A
- * logged Error is serialized under `fields.error.*`; the middleware's
- * "Unhandled error" logs its message as `fields.error` and its stack as
- * `fields.stack`. next-axiom files its platform metadata under `vercel.*`
- * only on Vercel, so the sample also says whether the event came from there.
- * It computes its columns with `project`, not `extend`: Axiom planned the
- * extended expressions as temporaries `arg_max` could not see ("field '_tmp28'
- * not found in current projection"), and `extend message = ...` shadowed the
- * dataset's own `message`. After `project`, `arg_max` only names real columns.
+ * `errorSamples` lists the latest error events, newest first, and
+ * `summarizeAxiom` keeps the first of each route and message pair. A logged
+ * Error is serialized under `fields.error`; the middleware's "Unhandled error"
+ * logs its message as `fields.error` and its stack as `fields.stack`.
+ * next-axiom files its platform metadata under `vercel.*` only on Vercel, so
+ * the sample also says whether the event came from there. It does not pick the
+ * latest event per pair inside Axiom: `arg_max` over computed columns failed
+ * whether they came from `extend` or `project` ("field '_tmp30' not found in
+ * current projection"), so the query only projects and sorts.
  */
-export function buildAxiomQueries(dataset: string) {
+export function buildAxiomQueries(
+  dataset: string,
+  layout: AxiomFieldsLayout = "map",
+) {
   const source = `['${dataset.replaceAll("'", "")}'] | where _time > ago(1h)`;
-  const level = `tostring(${field("level")})`;
-  const message = `tostring(${field("message")})`;
-  const route = `tostring(${field("fields.url")})`;
-  const durationMs = `todouble(${field("fields.durationMs")})`;
-  const totalUnits = `toint(${field("fields.totalUnits")})`;
-  const limitUnits = `toint(${field("fields.limitUnits")})`;
-  const text = (name: string) => `tostring(${field(name)})`;
+  const appField = (path: string) =>
+    layout === "map"
+      ? `['fields']${path
+          .split(".")
+          .map((key) => `['${key}']`)
+          .join("")}`
+      : field(`fields.${path}`);
+  const text = (expression: string) => `tostring(${expression})`;
+  const level = text(field("level"));
+  const message = text(field("message"));
+  const route = text(appField("url"));
+  const durationMs = `todouble(${appField("durationMs")})`;
+  const totalUnits = `toint(${appField("totalUnits")})`;
+  const limitUnits = `toint(${appField("limitUnits")})`;
   const sampleColumns = {
-    errorName: text("fields.error.name"),
-    errorMessage: text("fields.errorMessage"),
-    errorStatus: text("fields.error.status"),
-    errorCode: text("fields.error.code"),
-    errorStack: `strcat(${text("fields.error.stack")}, ${text("fields.stack")})`,
-    errorCause: text("fields.cause"),
-    vercelEnvironment: text("vercel.environment"),
-    vercelRegion: text("vercel.region"),
-    gitRef: text("git.ref"),
+    errorName: text(appField("error.name")),
+    errorMessage: text(appField("errorMessage")),
+    errorStatus: text(appField("error.status")),
+    errorCode: text(appField("error.code")),
+    errorStack: `strcat(${text(appField("error.stack"))}, ${text(appField("stack"))})`,
+    errorCause: text(appField("cause")),
+    vercelEnvironment: text(field("vercel.environment")),
+    vercelRegion: text(field("vercel.region")),
+    gitRef: text(field("git.ref")),
   };
-  const sampleNames = Object.keys(sampleColumns).join(", ");
   return {
     totals: `${source} | summarize total = count(), appLogs = countif(isnotempty(${level})), errors = countif(${level} == "error"), warnings = countif(${level} == "warn")`,
     errorsByRoute: `${source} | where ${level} == "error" | summarize events = count() by route = ${route}, message = ${message} | top ${MAX_LIST_ITEMS} by events`,
@@ -123,10 +143,31 @@ export function buildAxiomQueries(dataset: string) {
       sampleColumns,
     )
       .map(([name, expression]) => `${name} = ${expression}`)
-      .join(
-        ", ",
-      )} | summarize arg_max(_time, ${sampleNames}) by route, message`,
+      .join(", ")} | top ${MAX_ERROR_SAMPLE_EVENTS} by _time desc`,
   } satisfies Record<keyof AxiomResults, string>;
+}
+
+/**
+ * Runs every query against the `fields` map field, and a query Axiom rejects
+ * with HTTP 400 again against the flattened columns: a dataset without the map
+ * field has no `fields` column for the map form to name.
+ */
+export async function runAxiomQueries(
+  dataset: string,
+  run: (apl: string) => Promise<AxiomQueryResult>,
+): Promise<AxiomResults> {
+  const map = buildAxiomQueries(dataset, "map");
+  const flattened = buildAxiomQueries(dataset, "flattened");
+  const names = Object.keys(map) as (keyof AxiomResults)[];
+  const entries = await Promise.all(
+    names.map(async (name): Promise<[string, AxiomQueryResult]> => {
+      const result = await run(map[name]);
+      const rejected = "error" in result && result.error.startsWith("HTTP 400");
+      if (!rejected || map[name] === flattened[name]) return [name, result];
+      return [name, await run(flattened[name])];
+    }),
+  );
+  return Object.fromEntries(entries) as AxiomResults;
 }
 
 /** Keeps a failed query diagnosable: status plus the start of Axiom's reason. */
@@ -160,9 +201,11 @@ export function summarizeAxiom(results: AxiomResults) {
   const totals = firstRow(results.totals);
   const quota = firstRow(results.gmailQuotaUsage);
   const quotaSamples = toNumber(quota?.samples);
-  const samples = new Map(
-    rowsOf(results.errorSamples).map((row) => [errorKey(row), row]),
-  );
+  // Sample rows come newest first; the first of each route and message wins.
+  const samples = new Map<string, AxiomRow>();
+  for (const row of rowsOf(results.errorSamples)) {
+    if (!samples.has(errorKey(row))) samples.set(errorKey(row), row);
+  }
   return {
     window: "1h",
     totalLogs: toNumber(totals?.total),

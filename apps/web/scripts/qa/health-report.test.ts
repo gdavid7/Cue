@@ -13,6 +13,7 @@ import {
   parseAxiomTabular,
   type RobotResults,
   redact,
+  runAxiomQueries,
   summarizeAxiom,
   summarizeSentry,
 } from "./health-report";
@@ -51,68 +52,35 @@ describe("buildAxiomQueries", () => {
     expect(queries.totals.startsWith("['vercel] | delete']")).toBe(true);
   });
 
-  it("samples errors with arg_max over projected columns only", () => {
-    const apl = buildAxiomQueries("cue").errorSamples;
-    const [, projected, aggregation] =
-      apl.match(/\| project (.+) \| summarize (.+)$/) ?? [];
-    expect(apl).not.toContain("| extend ");
-    expect(aggregation).toMatch(/^arg_max\(_time, .+\) by route, message$/);
-    const projectedNames = new Set(
-      [...(projected ?? "").matchAll(/(?:^|, )(\w+)(?= = |,|$)/g)].map(
-        (match) => match[1],
-      ),
+  it.each([
+    "map",
+    "flattened",
+  ] as const)("samples the latest error events without aggregating computed columns (%s)", (layout) => {
+    const apl = buildAxiomQueries("cue", layout).errorSamples;
+
+    // Axiom could not find the temporaries of computed columns from an
+    // aggregate after `extend` or `project` ("field '_tmp30' not found in
+    // current projection"), so the newest event per error is picked in code.
+    expect(apl).toMatch(
+      /\| project _time, route = .+ \| top \d+ by _time desc$/,
     );
-    const sampled = aggregation
-      ?.replace(/^arg_max\(/, "")
-      .replace(/\) by route, message$/, "")
-      .split(", ");
-    for (const name of [...(sampled ?? []), "route", "message"]) {
-      expect(projectedNames, name).toContain(name);
-    }
+    expect(apl).not.toMatch(/\| (extend|summarize) |arg_max/);
   });
 
   it("only names fields that next-axiom ships for Cue's logger calls", () => {
-    const logger = new Logger({ autoFlush: false, logLevel: LogLevel.debug });
-    logger.error("Request failed", {
-      scope: "middleware",
-      url: "/api/threads",
-    });
-    logger.warn("Slow request", {
-      scope: "middleware",
-      url: "/api/chat",
-      durationMs: 9000,
-    });
-    logger.info("Gmail quota usage", {
-      scope: "gmail-quota",
-      totalUnits: 120,
-      limitUnits: 15_000,
-    });
-    // What Cue's logger ships for `logger.error(message, { error })` in
-    // production, and for the middleware's "Unhandled error".
-    const gmailError = Object.assign(new Error("Insufficient Permission"), {
-      status: 403,
-      code: 403,
-    });
-    logger.error("Error getting email filters", {
-      scope: "api",
-      url: "/api/user/stats/newsletters",
-      error: serializeError(gmailError),
-      errorMessage: gmailError.message,
-    });
-    logger.error("Unhandled error", {
-      scope: "mail-stream",
-      url: "/api/mail-stream",
-      error: "REDIS_URL is not set",
-      errorMessage: "REDIS_URL is not set",
-      cause: "missing configuration",
-      stack: new Error("REDIS_URL is not set").stack,
-    });
+    const logger = shipCueLoggerCalls();
     const shipped = new Set(
       logger.logEvents.flatMap((event) => flattenKeys(event)),
     );
+    // Callers are list values, not keys, so they add no columns.
+    expect([...shipped].filter((key) => key.includes("messages/send"))).toEqual(
+      [],
+    );
 
     const checked = new Set<string>();
-    for (const [name, apl] of Object.entries(buildAxiomQueries("cue"))) {
+    for (const [name, apl] of Object.entries(
+      buildAxiomQueries("cue", "flattened"),
+    )) {
       const bracketed = [...apl.matchAll(/\['([^']+)'\]/g)].map((m) => m[1]);
       expect(bracketed, name).toEqual(["cue"]);
       for (const [, field] of apl.matchAll(/column_ifexists\('([^']+)'/g)) {
@@ -143,6 +111,78 @@ describe("buildAxiomQueries", () => {
       "vercel.environment",
       "vercel.region",
     ]);
+  });
+
+  it("reads logger context as keys of the fields map field", () => {
+    const events = shipCueLoggerCalls().logEvents;
+    const contextPaths = new Set(
+      events.flatMap((event) =>
+        flattenKeys((event as { fields?: object }).fields ?? {}),
+      ),
+    );
+
+    const checked = new Set<string>();
+    for (const [name, apl] of Object.entries(buildAxiomQueries("cue", "map"))) {
+      expect(apl, name).not.toContain("column_ifexists('fields.");
+      for (const [access] of apl.matchAll(/\['fields'\](?:\['[^']+'\])+/g)) {
+        const path = [...access.matchAll(/\['([^']+)'\]/g)]
+          .map((match) => match[1])
+          .slice(1)
+          .join(".");
+        expect(contextPaths, `${name} reads ${path}`).toContain(path);
+        checked.add(path);
+      }
+    }
+    expect([...checked].sort()).toEqual([
+      "cause",
+      "durationMs",
+      "error.code",
+      "error.name",
+      "error.stack",
+      "error.status",
+      "errorMessage",
+      "limitUnits",
+      "stack",
+      "totalUnits",
+      "url",
+    ]);
+    expect(buildAxiomQueries("cue", "map").errorsByRoute).toContain(
+      "by route = tostring(['fields']['url'])",
+    );
+  });
+
+  it("falls back to the flattened columns when Axiom rejects the map form", async () => {
+    const map = buildAxiomQueries("cue", "map");
+    const flattened = buildAxiomQueries("cue", "flattened");
+    const ran: string[] = [];
+
+    const results = await runAxiomQueries("cue", async (apl) => {
+      ran.push(apl);
+      if (apl.includes("['fields']")) {
+        return { error: "HTTP 400: field 'fields' not found" };
+      }
+      if (apl === flattened.slowestRoutes) return { error: "HTTP 500" };
+      return { rows: [{ events: 1 }] };
+    });
+
+    expect(results.errorsByRoute).toEqual({ rows: [{ events: 1 }] });
+    expect(results.slowestRoutes).toEqual({ error: "HTTP 500" });
+    // The query that names no logger context runs once.
+    expect(ran.filter((apl) => apl === map.gmailRateLimited)).toHaveLength(1);
+    expect(ran).toContain(flattened.errorSamples);
+  });
+
+  it("keeps the map form's result when Axiom accepts it", async () => {
+    const ran: string[] = [];
+
+    await runAxiomQueries("cue", async (apl) => {
+      ran.push(apl);
+      return { rows: [] };
+    });
+
+    expect(ran.some((apl) => apl.includes("column_ifexists('fields."))).toBe(
+      false,
+    );
   });
 });
 
@@ -277,6 +317,20 @@ describe("summarizeAxiom", () => {
       origin: "not vercel",
     });
     expect(labels).not.toHaveProperty("sample");
+    expect(
+      summarizeAxiom({
+        ...emptyAxiomResults(),
+        errorsByRoute: {
+          rows: [{ route: "/api/labels", message: "Failed", events: 2 }],
+        },
+        errorSamples: {
+          rows: [
+            { route: "/api/labels", message: "Failed", errorMessage: "newest" },
+            { route: "/api/labels", message: "Failed", errorMessage: "older" },
+          ],
+        },
+      }).topErrors[0]?.sample?.errorMessage,
+    ).toBe("newest");
     expect(JSON.stringify(summary)).not.toMatch(/jane\.doe|salary/);
   });
 
@@ -490,4 +544,46 @@ function flattenKeys(value: object, prefix = ""): string[] {
       ? flattenKeys(child, `${prefix}${key}.`)
       : [`${prefix}${key}`],
   );
+}
+
+function shipCueLoggerCalls() {
+  const logger = new Logger({ autoFlush: false, logLevel: LogLevel.debug });
+  logger.error("Request failed", {
+    scope: "middleware",
+    url: "/api/threads",
+  });
+  logger.warn("Slow request", {
+    scope: "middleware",
+    url: "/api/chat",
+    durationMs: 9000,
+  });
+  logger.info("Gmail quota usage", {
+    scope: "gmail-quota",
+    totalUnits: 120,
+    limitUnits: 15_000,
+    unitsByCaller: [
+      { priority: "interactive", caller: "messages/send", units: 120 },
+    ],
+  });
+  // What Cue's logger ships for `logger.error(message, { error })` in
+  // production, and for the middleware's "Unhandled error".
+  const gmailError = Object.assign(new Error("Insufficient Permission"), {
+    status: 403,
+    code: 403,
+  });
+  logger.error("Error getting email filters", {
+    scope: "api",
+    url: "/api/user/stats/newsletters",
+    error: serializeError(gmailError),
+    errorMessage: gmailError.message,
+  });
+  logger.error("Unhandled error", {
+    scope: "mail-stream",
+    url: "/api/mail-stream",
+    error: "REDIS_URL is not set",
+    errorMessage: "REDIS_URL is not set",
+    cause: "missing configuration",
+    stack: new Error("REDIS_URL is not set").stack,
+  });
+  return logger;
 }
