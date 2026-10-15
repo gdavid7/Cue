@@ -90,6 +90,14 @@ vi.mock("@/utils/gmail/quota-store", async () => {
   return { gmailQuotaStore: createMemoryGmailQuotaStore() };
 });
 vi.mock("@/utils/redis", () => ({ redis: memory.redis }));
+// Today's Next up reads the calendar and connected apps, not Gmail.
+vi.mock("@/utils/home/next-up", () => ({
+  getNextUp: async () => ({
+    calendar: { connected: false, next: null },
+    nextUp: [],
+    suggestion: null,
+  }),
+}));
 vi.mock("@/utils/calendar/fetch-events-in-window", () => ({
   fetchCalendarEventsInWindow: async () => ({ events: [], complete: true }),
 }));
@@ -245,6 +253,8 @@ describe("Gmail quota on a first load", () => {
       prisma.executedRule.findMany,
     ])
       vi.mocked(findMany).mockResolvedValue([]);
+    // Today's activity summary counts the messages Cue checked today.
+    vi.mocked(prisma.executedRule.groupBy).mockResolvedValue([] as never);
     let home: unknown = null;
     const actors = Promise.all([
       engineScope("a", "primary"),
