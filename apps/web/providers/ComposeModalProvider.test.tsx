@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -104,15 +105,78 @@ describe("ComposeModalProvider popped-out reply", () => {
   });
 });
 
+describe("ComposeModalProvider focus", () => {
+  beforeEach(() => {
+    navigation.pathname = "/account-a/mail";
+    navigation.search = "";
+    vi.stubGlobal(
+      "matchMedia",
+      (query: string) =>
+        ({
+          matches: false,
+          media: query,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+        }) as unknown as MediaQueryList,
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  // Full-screen compose covers the inbox, so Tab must not walk into it.
+  it("shuts out the page behind expanded compose without remounting the draft", async () => {
+    renderProvider();
+    const opener = await screen.findByRole("button", { name: "Compose" });
+    fireEvent.click(opener);
+    const composer = await screen.findByTestId("composer");
+    expect(opener.closest("[inert]")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand compose" }));
+
+    expect(opener.closest("[inert]")).not.toBeNull();
+    expect(screen.getByTestId("composer")).toBe(composer);
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore compose" }));
+    expect(opener.closest("[inert]")).toBeNull();
+  });
+
+  it("returns focus to what opened compose when it closes", async () => {
+    renderProvider();
+    const opener = await screen.findByRole("button", { name: "Compose" });
+    opener.focus();
+    fireEvent.click(opener);
+    await screen.findByTestId("composer");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close compose" }));
+
+    expect(screen.queryByTestId("composer")).toBeNull();
+    // Radix restores focus a task after the dialog unmounts.
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+  });
+});
+
 function renderProvider() {
   render(
     <SWRConfig value={{ provider: () => new Map() }}>
       <EmailAccountProvider>
         <ComposeModalProvider>
+          <ComposeButton />
           <PopOutButton />
         </ComposeModalProvider>
       </EmailAccountProvider>
     </SWRConfig>,
+  );
+}
+
+function ComposeButton() {
+  const { onOpen } = useComposeModal();
+  return (
+    <button onClick={onOpen} type="button">
+      Compose
+    </button>
   );
 }
 

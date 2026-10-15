@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -99,20 +100,30 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
   const returnOpenReply = useCallback(() => {
     if (isOpen) reply?.onReturn?.();
   }, [isOpen, reply]);
+  // Nothing opens compose through a Radix trigger, so the dialog can't put
+  // focus back on its own.
+  const opener = useRef<HTMLElement | null>(null);
+  const rememberOpener = useCallback(() => {
+    if (isOpen) return;
+    const active = document.activeElement;
+    opener.current = active instanceof HTMLElement ? active : null;
+  }, [isOpen]);
   const openCompose = useCallback(() => {
+    rememberOpener();
     returnOpenReply();
     setIsExpanded(false);
     setPoppedOutReply(undefined);
     openModal();
-  }, [openModal, returnOpenReply]);
+  }, [openModal, returnOpenReply, rememberOpener]);
   const popOutReply = useCallback(
     (nextReply: PoppedOutReply) => {
+      rememberOpener();
       returnOpenReply();
       setIsExpanded(false);
       setPoppedOutReply(nextReply);
       openModal();
     },
-    [openModal, returnOpenReply],
+    [openModal, returnOpenReply, rememberOpener],
   );
   // Keeps the popped-out reply so undo send can reopen it.
   const closeCompose = useCallback(() => {
@@ -162,7 +173,12 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
 
   return (
     <ComposeModalContext.Provider value={contextValue}>
-      {props.children}
+      {/* Expanded compose covers the page, so what's behind it leaves the tab
+          order and the accessibility tree. Not via `modal`: switching it
+          remounts the dialog's content, and with it the draft. */}
+      <div className="contents" inert={isOpen && isExpanded}>
+        {props.children}
+      </div>
       <Dialog
         // A phone shows compose full screen, so the inbox behind it must not
         // take taps or focus. Wider screens keep it beside the mail.
@@ -192,6 +208,13 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
             ) {
               event.preventDefault();
             }
+          }}
+          onCloseAutoFocus={(event) => {
+            const target = opener.current;
+            opener.current = null;
+            if (!target?.isConnected) return;
+            event.preventDefault();
+            target.focus();
           }}
           onInteractOutside={(event) => event.preventDefault()}
           unstyled
