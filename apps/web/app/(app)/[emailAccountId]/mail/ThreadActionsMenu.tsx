@@ -65,6 +65,11 @@ export type ThreadActionsMenuProps = {
   sortReason?: ReactNode;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /**
+   * Where focus goes when the menu closes, if not its own trigger: the
+   * phone's bottom-bar More opens it while the trigger is hidden.
+   */
+  returnFocusTo?: () => HTMLElement | null;
 };
 
 /**
@@ -86,6 +91,7 @@ export function ThreadActionsMenu({
   sortReason,
   open,
   onOpenChange,
+  returnFocusTo,
 }: ThreadActionsMenuProps) {
   const { emailAccountId, provider, userEmail } = useAccount();
   // The correction for when the AI filed or skipped something that matters.
@@ -143,10 +149,16 @@ export function ThreadActionsMenu({
           align="end"
           className="w-80 max-w-[calc(100vw-1rem)]"
           onCloseAutoFocus={(event) => {
-            if (!commentOnClose.current) return;
-            commentOnClose.current = false;
+            const focusTarget = returnFocusTo?.();
+            if (commentOnClose.current) {
+              commentOnClose.current = false;
+              event.preventDefault();
+              onComment?.();
+              return;
+            }
+            if (!focusTarget) return;
             event.preventDefault();
-            onComment?.();
+            focusTarget.focus();
           }}
           onEscapeKeyDown={(event) => event.stopPropagation()}
         >

@@ -370,3 +370,16 @@
     min-height: var(--email-editor-content-min-height, 160px);
   }
 }
+
+/* iOS zooms into a focused field set below 16px. */
+@media (max-width: 767px) {
+  .surface[data-email-editor-appearance="seamless"]
+    .editor
+    [data-email-editor-content] {
+    font-size: 1rem;
+  }
+
+  .linkInput {
+    font-size: 1rem;
+  }
+}

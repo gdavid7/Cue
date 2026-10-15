@@ -154,7 +154,11 @@ export const ThreadRow = memo(function ThreadRow({
   return (
     // Touch has no hover or Shift, so holding a row selects it, as in the
     // platform mail apps. `contents` keeps the row the listbox's own child.
-    <div className="contents" {...longPress}>
+    // Text selection and iOS's callout would start on the same hold.
+    <div
+      className="contents pointer-coarse:select-none pointer-coarse:[-webkit-touch-callout:none]"
+      {...longPress}
+    >
       <MailThreadRow
         accountAvatar={
           account ? (

@@ -13,6 +13,7 @@ import { Maximize2Icon, Minimize2Icon, XIcon } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useModal } from "@/hooks/useModal";
 import { useAccounts } from "@/hooks/useAccounts";
+import { useVisualViewportBox } from "@/hooks/useVisualViewportBox";
 import { ComposeEmailFormLazy } from "@/app/(app)/[emailAccountId]/compose/ComposeEmailFormLazy";
 import type { ReplyingToEmail } from "@/app/(app)/[emailAccountId]/compose/ComposeEmailForm";
 import {
@@ -67,6 +68,7 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
     () => false,
   );
   const pathname = usePathname();
+  const visualViewportBoxRef = useVisualViewportBox(isPhone);
   const searchParams = useSearchParams();
   const { emailAccountId } = useAccount();
   const { isModalOpen, openModal, closeModal } = useModal();
@@ -193,11 +195,15 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
         <DialogContent
           className={cn(
             "fixed z-50 flex max-h-none max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden bg-background p-0",
+            // Full screen on a phone, but only the part the keyboard leaves
+            // visible, so Send stays reachable while typing.
+            "max-sm:top-[var(--visual-viewport-top,0px)] max-sm:bottom-auto max-sm:h-[var(--visual-viewport-height,100dvh)]",
             isExpanded
               ? "inset-0 h-dvh w-screen rounded-none border-0 shadow-none"
               : "inset-0 h-dvh w-screen sm:inset-auto sm:right-4 sm:bottom-4 sm:h-[min(42rem,calc(100dvh-1.5rem))] sm:w-[38rem] sm:rounded-xl sm:border sm:border-border sm:shadow-2xl",
           )}
           data-compose-expanded={isExpanded}
+          ref={visualViewportBoxRef}
           hideCloseButton
           hideOverlay
           onEscapeKeyDown={(event) => {

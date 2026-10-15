@@ -64,7 +64,45 @@ describe("ThreadActionsMenu", () => {
       screen.getByRole("textbox", { name: "Comment" }),
     );
   });
+
+  // On a phone the bottom bar's More opens this menu; its own trigger is
+  // hidden, so focus goes back to the button the user pressed.
+  it("returns focus to the control that opened it from elsewhere", async () => {
+    render(<MenuOpenedFromBar />);
+    await screen.findByRole("menu");
+
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "More" }),
+    );
+  });
 });
+
+function MenuOpenedFromBar() {
+  const [open, setOpen] = useState(true);
+  return (
+    <>
+      <ThreadActionsMenu
+        isStarred={false}
+        message={null}
+        onDelete={vi.fn()}
+        onMarkSpam={vi.fn()}
+        onOpenChange={setOpen}
+        onToggleStar={vi.fn()}
+        open={open}
+        returnFocusTo={() =>
+          document.querySelector<HTMLButtonElement>("[data-bar-more]")
+        }
+      />
+      <button data-bar-more type="button">
+        More
+      </button>
+    </>
+  );
+}
 
 function MenuWithCommentBox() {
   const [open, setOpen] = useState(true);

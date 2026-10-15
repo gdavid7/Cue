@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import { barItemClassName } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
 import { SnoozeButton } from "@/app/(app)/[emailAccountId]/mail/SnoozeButton";
 import { useMailHref } from "@/hooks/useMailHref";
@@ -37,6 +37,10 @@ export type MailMobileReaderActions = {
   onSnooze?: (until: Date) => void;
   onDelete: () => void;
   onMore: () => void;
+  /** Whether the menu More opens is showing. */
+  isMoreOpen?: boolean;
+  /** The menu hands focus back here when it closes. */
+  moreButtonRef?: Ref<HTMLButtonElement>;
 };
 
 /**
@@ -125,6 +129,9 @@ export function MailMobileNav({
           onClick={readerActions.onDelete}
         />
         <BarButton
+          aria-expanded={readerActions.isMoreOpen ?? false}
+          aria-haspopup="menu"
+          buttonRef={readerActions.moreButtonRef}
           current
           icon={EllipsisIcon}
           label="More"
@@ -187,14 +194,21 @@ function BarButton({
   label,
   onClick,
   current,
+  buttonRef,
+  ...ariaProps
 }: {
   icon: LucideIcon;
   label: string;
   onClick: () => void;
   current?: boolean;
+  buttonRef?: Ref<HTMLButtonElement>;
+  "aria-expanded"?: boolean;
+  "aria-haspopup"?: "menu";
 }) {
   return (
     <button
+      {...ariaProps}
+      ref={buttonRef}
       type="button"
       onClick={onClick}
       className={cn(
