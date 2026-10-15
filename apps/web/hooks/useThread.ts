@@ -87,14 +87,14 @@ export function useThread(
   useEffect(() => {
     if (!fillConversation || !client || !emailAccountId || !id) return;
     const key = conversationKey(emailAccountId, id);
+    const conversation = { accountId: emailAccountId, conversationId: id };
     let current = true;
+    let settled = false;
     client
-      .ensureConversationMessages({
-        accountId: emailAccountId,
-        conversationId: id,
-      })
+      .ensureConversationMessages(conversation)
       .catch(() => undefined)
       .finally(() => {
+        settled = true;
         if (!current) return;
         setCompletedConversations((completed) =>
           completed.has(key) ? completed : new Set(completed).add(key),
@@ -102,6 +102,11 @@ export function useThread(
       });
     return () => {
       current = false;
+      // Moving on through threads must not leave the one opened next queued
+      // behind fills nobody will read.
+      if (!settled) {
+        client.releaseConversationMessages(conversation).catch(() => undefined);
+      }
     };
   }, [client, emailAccountId, fillConversation, id]);
   const openKey =

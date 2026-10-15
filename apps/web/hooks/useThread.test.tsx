@@ -11,6 +11,7 @@ const mail = vi.hoisted(() => ({
     observeConversation: vi.fn(),
     ensureMessageContent: vi.fn(),
     ensureConversationMessages: vi.fn(),
+    releaseConversationMessages: vi.fn(),
     requestSync: vi.fn(),
   },
 }));
@@ -30,6 +31,7 @@ describe("useThread", () => {
     mail.client.ensureConversationMessages.mockResolvedValue({
       status: "complete",
     });
+    mail.client.releaseConversationMessages.mockResolvedValue(undefined);
   });
 
   it("projects an engine conversation onto the reader thread", async () => {
@@ -222,6 +224,28 @@ describe("useThread", () => {
         loadingMore: false,
       }),
     );
+  });
+
+  it("stops waiting for a fill when the reader moves on", async () => {
+    mail.client.ensureConversationMessages.mockReturnValue(
+      new Promise(() => undefined),
+    );
+    mail.client.observeConversation.mockImplementation((key) =>
+      handle(readySnapshot(view({ key, coverage: [partialCoverage] }))),
+    );
+    const { rerender, result } = renderHook(
+      ({ id }) => useThread({ id }, { fillConversation: true }),
+      { initialProps: { id: "c-1" } },
+    );
+    await waitFor(() => expect(result.current.data?.thread.id).toBe("c-1"));
+    expect(mail.client.releaseConversationMessages).not.toHaveBeenCalled();
+
+    rerender({ id: "c-2" });
+
+    expect(mail.client.releaseConversationMessages).toHaveBeenCalledWith({
+      accountId: "account",
+      conversationId: "c-1",
+    });
   });
 
   it("leaves filling in the conversation to the reader that asks for it", async () => {

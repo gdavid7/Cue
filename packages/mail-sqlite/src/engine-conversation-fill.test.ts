@@ -362,6 +362,63 @@ describe("opening a conversation a first sync has not fully reached", () => {
     await engine.close();
   });
 
+  it("drops queued fills nobody waits for and serves the newest open first", async () => {
+    const held = heldMembershipSource();
+    const { engine } = await startFirstSync(held.source);
+    const open = (id: string) =>
+      engine.ensureConversationMessages({
+        accountId: "acc-1",
+        conversationId: id,
+      });
+    const busy = [open("a"), open("b")];
+    await held.reading(2);
+    const queued = ["c", "d", "e", "f"].map(open);
+    await settle();
+    for (const id of ["c", "d", "e"]) {
+      engine.releaseConversationMessages({
+        accountId: "acc-1",
+        conversationId: id,
+      });
+    }
+
+    held.answer("a");
+    await held.reading(3);
+
+    expect(held.order).toEqual(["a", "b", "f"]);
+    await expect(Promise.all(queued.slice(0, 3))).resolves.toEqual([
+      { status: "unavailable" },
+      { status: "unavailable" },
+      { status: "unavailable" },
+    ]);
+    held.answer("b");
+    held.answer("f");
+    await Promise.all([...busy, queued[3]]);
+    expect(held.order).toEqual(["a", "b", "f"]);
+    await engine.close();
+  });
+
+  it("serves queued fills newest first", async () => {
+    const held = heldMembershipSource();
+    const { engine } = await startFirstSync(held.source);
+    const open = (id: string) =>
+      engine.ensureConversationMessages({
+        accountId: "acc-1",
+        conversationId: id,
+      });
+    open("a");
+    open("b");
+    await held.reading(2);
+    open("c");
+    open("d");
+    await settle();
+
+    held.answer("a");
+    await held.reading(3);
+
+    expect(held.order).toEqual(["a", "b", "d"]);
+    await engine.close();
+  });
+
   it("asks again right away for an account purged and added back", async () => {
     let paused = true;
     const source = firstSyncSource({
@@ -385,6 +442,36 @@ describe("opening a conversation a first sync has not fully reached", () => {
     await engine.close();
   });
 });
+
+function settle() {
+  return new Promise((resolve) => setTimeout(resolve, 10));
+}
+
+/** Membership reads wait until a test answers them, by conversation id. */
+function heldMembershipSource() {
+  const order: string[] = [];
+  const answers = new Map<string, () => void>();
+  const source = firstSyncSource({
+    firstPage: replies,
+    async readMembership(answer, conversation) {
+      order.push(conversation.conversationId);
+      await new Promise<void>((resolve) =>
+        answers.set(conversation.conversationId, resolve),
+      );
+      return answer();
+    },
+  });
+  return {
+    source,
+    order,
+    answer(id: string) {
+      answers.get(id)?.();
+    },
+    async reading(count: number) {
+      while (order.length < count) await settle();
+    },
+  };
+}
 
 async function isDeleted(engine: MailEngine, messageId: string) {
   const inspection = await engine.inspect();

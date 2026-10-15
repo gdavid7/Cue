@@ -167,6 +167,11 @@ export type MailClient = {
   ensureConversationMessages(
     key: ConversationKey,
   ): Promise<ConversationCompletion>;
+  /**
+   * Says one caller of `ensureConversationMessages` no longer waits, as when
+   * the reader moves on. A fill still queued that nobody waits for is dropped.
+   */
+  releaseConversationMessages(key: ConversationKey): Promise<void>;
   getDiagnostics(accountId: string): Promise<MailDiagnostics>;
   purgeAccount(accountId: string): Promise<LocalRevision>;
   /** Purges every local account outside `accountIds`; an empty list is ignored. */
@@ -222,16 +227,19 @@ export function createMailEngine(input: {
   const providerSearches = new Map<string, ProviderSearch>();
   // Keyed by account and conversation, so concurrent opens share one read.
   // Completion itself is stored, and resets with the account.
-  const conversationFetches = new Map<
-    string,
-    Promise<ConversationCompletion>
-  >();
+  const conversationFetches = new Map<string, ConversationFetchEntry>();
   // When a conversation whose read failed may be asked for again; a
   // conversation the provider doesn't have never is.
   const conversationFetchRetryAt = new Map<string, number>();
   const conversationFetchAborts = new Map<string, AbortController>();
   let runningConversationFetches = 0;
-  const queuedConversationFetches: Array<() => void> = [];
+  // Served newest first: the conversation open now matters more than ones
+  // the reader passed on its way to it.
+  const queuedConversationFetches: Array<{
+    id: string;
+    start: () => void;
+    drop: () => void;
+  }> = [];
 
   async function refreshViews() {
     refreshQueued = true;
@@ -391,11 +399,19 @@ export function createMailEngine(input: {
     ensureConversationMessages(key) {
       const id = conversationFetchKey(key);
       const inFlight = conversationFetches.get(id);
-      if (inFlight) return inFlight;
+      if (inFlight) {
+        inFlight.waiters += 1;
+        return inFlight.promise;
+      }
       if ((conversationFetchRetryAt.get(id) ?? 0) > runtime.nowMs()) {
         return Promise.resolve({ status: "unavailable" });
       }
-      const fetched = fetchConversationMessages(key)
+      const entry: ConversationFetchEntry = {
+        waiters: 1,
+        promise: Promise.resolve({ status: "unavailable" }),
+      };
+      conversationFetches.set(id, entry);
+      entry.promise = fetchConversationMessages(key)
         .catch(
           (): ConversationFetch => ({
             status: "unavailable",
@@ -407,15 +423,27 @@ export function createMailEngine(input: {
             conversationFetchRetryAt.delete(id);
             return result;
           }
-          conversationFetchRetryAt.set(
-            id,
-            runtime.nowMs() + result.retryAfterMs,
-          );
+          if (result.retryAfterMs > 0) {
+            conversationFetchRetryAt.set(
+              id,
+              runtime.nowMs() + result.retryAfterMs,
+            );
+          }
           return { status: "unavailable" };
         })
         .finally(() => conversationFetches.delete(id));
-      conversationFetches.set(id, fetched);
-      return fetched;
+      return entry.promise;
+    },
+    async releaseConversationMessages(key) {
+      const id = conversationFetchKey(key);
+      const entry = conversationFetches.get(id);
+      if (!entry) return;
+      entry.waiters = Math.max(0, entry.waiters - 1);
+      if (entry.waiters > 0) return;
+      const index = queuedConversationFetches.findIndex(
+        (queued) => queued.id === id,
+      );
+      if (index >= 0) queuedConversationFetches.splice(index, 1)[0]?.drop();
     },
     getDiagnostics(accountId) {
       return store.getDiagnostics(accountId);
@@ -746,7 +774,9 @@ export function createMailEngine(input: {
     if (await store.readConversationComplete(key)) {
       return { status: "complete" };
     }
-    return inConversationFetchSlot(() => readConversationMembers(key));
+    return inConversationFetchSlot(conversationFetchKey(key), () =>
+      readConversationMembers(key),
+    );
   }
 
   // One provider read (Gmail's threads.get) per page of up to 100 messages.
@@ -854,20 +884,30 @@ export function createMailEngine(input: {
     }
   }
 
-  async function inConversationFetchSlot<T>(run: () => Promise<T>) {
+  async function inConversationFetchSlot(
+    id: string,
+    run: () => Promise<ConversationFetch>,
+  ): Promise<ConversationFetch> {
+    const dropped = { status: "unavailable" as const, retryAfterMs: 0 };
+    if ((conversationFetches.get(id)?.waiters ?? 0) === 0) return dropped;
     if (runningConversationFetches < MAX_CONVERSATION_FETCHES) {
       runningConversationFetches += 1;
     } else {
       // A finishing fetch hands its slot straight to the next in line.
-      await new Promise<void>((resolve) =>
-        queuedConversationFetches.push(resolve),
+      const started = await new Promise<boolean>((resolve) =>
+        queuedConversationFetches.push({
+          id,
+          start: () => resolve(true),
+          drop: () => resolve(false),
+        }),
       );
+      if (!started) return dropped;
     }
     try {
       return await run();
     } finally {
-      const next = queuedConversationFetches.shift();
-      if (next) next();
+      const next = queuedConversationFetches.pop();
+      if (next) next.start();
       else runningConversationFetches -= 1;
     }
   }
@@ -1710,6 +1750,12 @@ function untilAborted<T>(promise: Promise<T>, signal: AbortSignal) {
     });
   });
 }
+
+type ConversationFetchEntry = {
+  promise: Promise<ConversationCompletion>;
+  /** Callers still waiting; a queued fill with none is dropped. */
+  waiters: number;
+};
 
 type ConversationFetch =
   | { status: "complete" }
