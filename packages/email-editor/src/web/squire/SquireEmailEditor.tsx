@@ -18,7 +18,10 @@ import {
   markdownToEmailHtml,
 } from "../../core/email-markdown";
 import { EMAIL_ELEMENT_STYLES } from "../../core/email-styles";
-import { SIGNATURE_CONTAINER_ATTRIBUTE } from "../../core/email-profile";
+import {
+  escapeHtml,
+  SIGNATURE_CONTAINER_ATTRIBUTE,
+} from "../../core/email-profile";
 import type {
   EmailEditorHandle,
   EmailEditorSlashTrigger,
@@ -44,6 +47,7 @@ import {
   readFormatState,
   SelectionToolbar,
 } from "./selection-toolbar";
+import { closestWithin } from "./dom";
 import { attachMarkdownShortcuts } from "./markdown-shortcuts";
 import { placePopover, visibleBounds } from "./placement";
 import { findSlashTrigger, type SlashTriggerMatch } from "./slash-trigger";
@@ -992,18 +996,4 @@ function withoutSignatureMarkers(html: string) {
 // Squire needs at least one block to place the caret in.
 function ensureBlock(editor: Squire, root: HTMLElement) {
   if (!root.firstElementChild) root.append(editor.createDefaultBlock());
-}
-
-function closestWithin(node: Node, selector: string, root: HTMLElement) {
-  const element = node instanceof Element ? node : node.parentElement;
-  const match = element?.closest(selector);
-  return match && root.contains(match) ? match : null;
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/gu, "&amp;")
-    .replace(/"/gu, "&quot;")
-    .replace(/</gu, "&lt;")
-    .replace(/>/gu, "&gt;");
 }

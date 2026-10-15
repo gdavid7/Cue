@@ -300,6 +300,29 @@ export function canOpenEmailLink(value: string) {
   return /^(?:https?:|mailto:|tel:)/iu.test(value.trim());
 }
 
+/**
+ * Turns what someone typed as a link address into an href: bare email
+ * addresses become mailto: and bare hosts https://. Other schemes are kept so
+ * isSafeEmailUrl can reject them.
+ */
+export function normalizeLinkHref(value: string) {
+  const href = value.trim();
+  if (!href) return "";
+  if (/^(?:https?:\/\/|mailto:|tel:|#)/iu.test(href)) return href;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(href)) return `mailto:${href}`;
+  // A colon followed by digits is a port, as in example.com:8080.
+  if (/^[a-z][a-z\d+.-]*:(?!\d)/iu.test(href)) return href;
+  return `https://${href}`;
+}
+
+export function escapeHtml(value: string) {
+  return value
+    .replace(/&/gu, "&amp;")
+    .replace(/"/gu, "&quot;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;");
+}
+
 export function isSafeEmailUrl(value: string) {
   const normalized = value.trim();
   return canOpenEmailLink(normalized) || normalized.startsWith("#");

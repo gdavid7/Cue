@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { isSafeEmailUrl } from "../core/email-profile";
+import { isSafeEmailUrl, normalizeLinkHref } from "../core/email-profile";
 import styles from "./EmailEditor.module.css";
 
 export function LinkPanel({
@@ -103,15 +103,4 @@ export function openSafeLink(value: string) {
   const href = normalizeLinkHref(value);
   if (!isSafeEmailUrl(href)) return;
   window.open(href, "_blank", "noopener,noreferrer");
-}
-
-export function normalizeLinkHref(value: string) {
-  const href = value.trim();
-  if (!href) return "";
-  if (/^(?:https?:\/\/|mailto:|tel:|#)/iu.test(href)) return href;
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(href)) return `mailto:${href}`;
-  // Keep other explicit schemes so the allowlist rejects them; a colon
-  // followed by digits is a port, as in example.com:8080.
-  if (/^[a-z][a-z\d+.-]*:(?!\d)/iu.test(href)) return href;
-  return `https://${href}`;
 }

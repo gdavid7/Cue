@@ -1,10 +1,11 @@
 import type Squire from "squire-rte";
 import {
   isSafeEmailUrl,
+  normalizeLinkHref,
   SIGNATURE_CONTAINER_ATTRIBUTE,
 } from "../../core/email-profile";
 import { EMAIL_ELEMENT_STYLES } from "../../core/email-styles";
-import { normalizeLinkHref } from "../link-panel";
+import { closestWithin } from "./dom";
 
 type MarkdownSquire = Squire & { saveEditUndoState: () => void };
 
@@ -32,16 +33,24 @@ const INLINE_RULES = [
     tag: "I",
   },
   {
-    pattern: /(?:^|[^\p{L}\p{N}_\\])(_)([^_\s](?:[^_]*[^_\s])?)_$/u,
-    tag: "I",
+    pattern: /(?:^|[^`\\])(`)([^`\s](?:[^`]*[^`\s])?)`$/u,
+    tag: "CODE",
   },
-  { pattern: /(?:^|[^`\\])(`)([^`]*[^`\s][^`]*)`$/u, tag: "CODE" },
   {
     pattern: /(?:^|[^~\\])(~~)([^~\s](?:[^~]*[^~\s])?)~~$/u,
     tag: "S",
   },
 ];
+// "_" also joins words ("call _private_var"), so "_italic_" only converts
+// once the character after it shows the word has ended.
+const UNDERSCORE_ITALIC =
+  /(?:^|[^\p{L}\p{N}_\\])(_)([^_\s](?:[^_]*[^_\s])?)_$/u;
+const WORD_CHARACTER = /[\p{L}\p{N}_]/u;
 const LINK = /\[([^\]\n]*[^\]\s][^\]\n]*)\]\(([^()\s]+)\)$/u;
+// A scheme, an email address, or a host with a dot: "[TODO](later)" and
+// "[notes](docs/notes)" are not links.
+const LINK_TARGET =
+  /^(?:[a-z][a-z\d+.-]*:(?!\d)|[^\s@/]+@[^\s@]+\.[^\s@]+$|[^\s@/?#:]+\.[^\s@/?#:]+(?:[:/?#]|$))/iu;
 const INLINE_TRIGGERS = new Set(["*", "_", "`", "~", ")"]);
 
 /**
@@ -74,9 +83,9 @@ export function attachMarkdownShortcuts(editor: MarkdownSquire) {
     }
     const typed = event.data.slice(-1);
     const done =
-      typed === " "
-        ? convertBlockMarker(editor)
-        : INLINE_TRIGGERS.has(typed) && convertInlineMarkers(editor, typed);
+      (typed === " " && convertBlockMarker(editor)) ||
+      ((INLINE_TRIGGERS.has(typed) || !WORD_CHARACTER.test(typed)) &&
+        convertInlineMarkers(editor, typed));
     if (done) converted();
   };
   const onCompositionStart = () => {
@@ -131,7 +140,7 @@ function convertBlockMarker(editor: MarkdownSquire) {
   )?.[1];
   if (!marker) return false;
   // A list can't hold another list item's marker as a new list.
-  if (marker === "-" && closestWithin(context.block, "li", editor)) {
+  if (marker === "-" && closestWithin(context.block, "li", editor.getRoot())) {
     return false;
   }
 
@@ -208,14 +217,14 @@ function convertInlineMarkers(editor: MarkdownSquire, typed: string) {
   const context = caretContext(editor);
   if (!context) return false;
   const { text } = textBefore(context.block, context.caret);
-  const match = typed === ")" ? matchLink(text) : matchFormat(text);
+  const match = (typed === ")" && matchLink(text)) || matchFormat(text, typed);
   if (!match) return false;
 
   editor.saveEditUndoState();
   // Saving the undo step can merge text nodes, so map the text again.
   const caret = editor.getSelection();
   const { positions } = textBefore(context.block, caret);
-  const end = positions.length;
+  const end = positions.length - match.trailing;
   const content = rangeOf(
     positions,
     caret,
@@ -244,6 +253,17 @@ function convertInlineMarkers(editor: MarkdownSquire, typed: string) {
       content,
     );
   }
+  // The character that ended the word is already outside the element.
+  const next = match.trailing
+    ? closestWithin(editor.getSelection().endContainer, tag, editor.getRoot())
+        ?.nextSibling
+    : null;
+  if (next instanceof Text) {
+    const caretAfter = document.createRange();
+    caretAfter.setStart(next, Math.min(match.trailing, next.length));
+    editor.setSelection(caretAfter);
+    return true;
+  }
   // Text typed next continues unformatted, after the new element.
   const after = editor.getSelection();
   after.collapse(false);
@@ -251,18 +271,26 @@ function convertInlineMarkers(editor: MarkdownSquire, typed: string) {
   return true;
 }
 
-function matchFormat(text: string) {
-  for (const { pattern, tag } of INLINE_RULES) {
-    const match = pattern.exec(text);
+function matchFormat(text: string, typed: string) {
+  const rules = INLINE_TRIGGERS.has(typed)
+    ? INLINE_RULES.map((rule) => ({ ...rule, trailing: 0 }))
+    : [];
+  if (!WORD_CHARACTER.test(typed)) {
+    rules.push({ pattern: UNDERSCORE_ITALIC, tag: "I", trailing: 1 });
+  }
+  for (const { pattern, tag, trailing } of rules) {
+    const searched = text.slice(0, text.length - trailing);
+    const match = pattern.exec(searched);
     if (!match) continue;
     const [, marker, content] = match;
-    const start = text.length - marker.length * 2 - content.length;
+    const start = searched.length - marker.length * 2 - content.length;
     return {
-      contentEnd: text.length - marker.length,
+      contentEnd: searched.length - marker.length,
       contentStart: start + marker.length,
       kind: "format" as const,
       start,
       tag,
+      trailing,
     };
   }
   return null;
@@ -270,7 +298,7 @@ function matchFormat(text: string) {
 
 function matchLink(text: string) {
   const match = LINK.exec(text);
-  if (!match) return null;
+  if (!match || !LINK_TARGET.test(match[2])) return null;
   const href = normalizeLinkHref(match[2]);
   if (!href || !isSafeEmailUrl(href)) return null;
   const start = text.length - match[0].length;
@@ -280,6 +308,7 @@ function matchLink(text: string) {
     href,
     kind: "link" as const,
     start,
+    trailing: 0,
   };
 }
 
@@ -287,7 +316,7 @@ function caretContext(editor: Squire) {
   const root = editor.getRoot();
   const caret = editor.getSelection();
   if (!caret.collapsed || !root.contains(caret.startContainer)) return null;
-  if (closestWithin(caret.startContainer, EXCLUDED_CONTAINERS, editor)) {
+  if (closestWithin(caret.startContainer, EXCLUDED_CONTAINERS, root)) {
     return null;
   }
   let node: Node | null = caret.startContainer;
@@ -342,10 +371,4 @@ function rangeOf(
 // Same length as the input, so character offsets still line up.
 function cleanText(text: string) {
   return text.replace(/\u00a0/gu, " ");
-}
-
-function closestWithin(node: Node, selector: string, editor: Squire) {
-  const element = node instanceof Element ? node : node.parentElement;
-  const match = element?.closest(selector);
-  return match && editor.getRoot().contains(match) ? match : null;
 }

@@ -1,4 +1,5 @@
 import { Marked } from "marked";
+import { escapeHtml } from "./email-profile";
 import { toEmailStyledHtml } from "./email-styles";
 
 // Markdown's block structure, the part that plain text never has by accident.
@@ -14,6 +15,13 @@ const markdown = new Marked({
   async: false,
   breaks: true,
   gfm: true,
+  // Only the explicit forms. In pasted email a line over "--" is a
+  // signature and an indented paragraph is just indented, not a heading or
+  // code. Returning undefined skips marked's built-in rule.
+  tokenizer: {
+    code: () => undefined,
+    lheading: () => undefined,
+  },
   renderer: {
     // Raw HTML in pasted text is text the person wants to show, not markup.
     html: ({ text }) => escapeHtml(text),
@@ -40,11 +48,4 @@ export function looksLikeMarkdown(text: string) {
  */
 export function markdownToEmailHtml(text: string) {
   return toEmailStyledHtml(markdown.parse(text) as string);
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/gu, "&amp;")
-    .replace(/</gu, "&lt;")
-    .replace(/>/gu, "&gt;");
 }

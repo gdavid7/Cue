@@ -54,10 +54,10 @@ describe("markdown shortcuts at the start of a line", () => {
     await editor.type("After");
 
     const rule = editor.textbox().querySelector("hr");
-    expect(rule).toBeTruthy();
+    if (!rule) throw new Error("No rule was inserted");
     expect(editor.text()).toBe("After");
     expect(
-      rule?.compareDocumentPosition(screenText(editor.textbox(), "After")) &
+      rule.compareDocumentPosition(screenText(editor.textbox(), "After")) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
@@ -90,7 +90,6 @@ describe("inline markdown shortcuts", () => {
   it.each([
     ["**bold**", "b"],
     ["*italic*", "i"],
-    ["_italic_", "i"],
     ["`code`", "code"],
     ["~~gone~~", "s"],
   ])("formats %s when the closing marker is typed", async (typed, tag) => {
@@ -101,6 +100,15 @@ describe("inline markdown shortcuts", () => {
     const element = editor.textbox().querySelector(tag);
     expect(element?.textContent).toBe(typed.replace(/[*_`~]/gu, ""));
     expect(editor.text()).toBe(`Say ${element?.textContent}`);
+  });
+
+  it("formats _italic_ once the next character ends the word", async () => {
+    const editor = await renderEditor();
+
+    await editor.type("Say _italic_, then");
+
+    expect(editor.textbox().querySelector("i")?.textContent).toBe("italic");
+    expect(editor.text()).toBe("Say italic, then");
   });
 
   it("continues typing outside the new formatting", async () => {
@@ -123,6 +131,36 @@ describe("inline markdown shortcuts", () => {
     expect(editor.text()).toBe("Read the doc");
   });
 
+  it.each([
+    ["a bare word", "[TODO](later)"],
+    ["a relative path", "[notes](docs/notes)"],
+  ])("leaves a link to %s as typed", async (_name, typed) => {
+    const editor = await renderEditor();
+
+    await editor.type(typed);
+
+    expect(editor.textbox().querySelector("a")).toBeNull();
+    expect(editor.text()).toBe(typed);
+  });
+
+  it.each([
+    ["an email address", "[Ada](ada@example.com)", "mailto:ada@example.com"],
+    ["a telephone number", "[Call](tel:+15550100)", "tel:+15550100"],
+    [
+      "a host with a port",
+      "[App](example.com:8080/x)",
+      "https://example.com:8080/x",
+    ],
+  ])("links to %s", async (_name, typed, href) => {
+    const editor = await renderEditor();
+
+    await editor.type(typed);
+
+    expect(editor.textbox().querySelector("a")?.getAttribute("href")).toBe(
+      href,
+    );
+  });
+
   it("refuses links the composer would not allow", async () => {
     const editor = await renderEditor();
 
@@ -136,6 +174,8 @@ describe("inline markdown shortcuts", () => {
     ["snake case", "my_var_name"],
     ["spaced markers", "a * b * c"],
     ["an empty pair", "****"],
+    ["underscores inside an identifier", "call _private_var"],
+    ["an unmatched backtick before a later one", "it's `odd and later `x"],
   ])("leaves %s as typed", async (_name, typed) => {
     const editor = await renderEditor();
 
