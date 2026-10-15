@@ -1,4 +1,4 @@
-import { expect, type Page, type Route } from "@playwright/test";
+import { expect, type Route } from "@playwright/test";
 import { getEmailAccountId } from "../account-test-helpers";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
@@ -6,7 +6,11 @@ import {
   createSecondEmailAccount,
   deleteSecondEmailAccount,
 } from "./account-test-helpers";
-import { openMail } from "./mail-test-helpers";
+import {
+  openMail,
+  requestMailSync,
+  waitForMetadataCoverage,
+} from "./mail-test-helpers";
 
 test("exposes engine diagnostics after metadata coverage", async ({
   page,
@@ -151,6 +155,8 @@ test("opens account reconnect from blocked_auth catch-up", async ({
     enumerationRequests += 1;
     await route.continue();
   });
+  // Without a mailbox push, the engine's next catch-up is a minute away.
+  await requestMailSync(page);
   await expect(
     page.getByRole("heading", {
       name: "Sign in again to reconnect Gmail",
@@ -336,27 +342,3 @@ test("joins two different accounts when both tabs start together", async ({
     await deleteSecondEmailAccount(secondAccount.accountId);
   }
 });
-
-async function waitForMetadataCoverage(page: Page) {
-  await expect
-    .poll(
-      async () =>
-        page.evaluate(async () => {
-          const seam = window.__inboxZeroMailInspect;
-          if (!seam) return { present: false, coverageComplete: false };
-          const diagnostics = (await seam.read()) as {
-            coverage?: Array<{ metadata: string }>;
-          };
-          return {
-            present: true,
-            coverageComplete:
-              (diagnostics.coverage?.length ?? 0) > 0 &&
-              diagnostics.coverage?.every(
-                (item) => item.metadata === "complete",
-              ),
-          };
-        }),
-      { timeout: 60_000 },
-    )
-    .toMatchObject({ present: true, coverageComplete: true });
-}

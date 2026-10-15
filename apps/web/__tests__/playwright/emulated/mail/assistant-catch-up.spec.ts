@@ -7,6 +7,7 @@ import {
   conversationWithSubject,
   insertInboxMailInConversation,
   openMail,
+  waitForMetadataCoverage,
   withClient,
 } from "./mail-test-helpers";
 
@@ -168,30 +169,6 @@ test("applies assistant archive after the mail client was stopped", async ({
   }
   expect(cleanupErrors).toEqual([]);
 });
-
-async function waitForMetadataCoverage(page: Page) {
-  await expect
-    .poll(
-      async () =>
-        page.evaluate(async () => {
-          const seam = window.__inboxZeroMailInspect;
-          if (!seam) return { present: false, coverageComplete: false };
-          const diagnostics = (await seam.read()) as {
-            coverage?: Array<{ metadata: string }>;
-          };
-          return {
-            present: true,
-            coverageComplete:
-              (diagnostics.coverage?.length ?? 0) > 0 &&
-              diagnostics.coverage?.every(
-                (item) => item.metadata === "complete",
-              ),
-          };
-        }),
-      { timeout: 60_000 },
-    )
-    .toMatchObject({ present: true, coverageComplete: true });
-}
 
 async function readAssistantCatchUp(page: Page) {
   try {

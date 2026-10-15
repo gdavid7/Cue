@@ -242,6 +242,31 @@ export async function requestMailSync(page: Page) {
     });
 }
 
+/** Waits until the engine has listed every scope of the mailbox. */
+export async function waitForMetadataCoverage(page: Page) {
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async () => {
+          const seam = window.__inboxZeroMailInspect;
+          if (!seam) return { present: false, coverageComplete: false };
+          const diagnostics = (await seam.read()) as {
+            coverage?: Array<{ metadata: string }>;
+          };
+          return {
+            present: true,
+            coverageComplete:
+              (diagnostics.coverage?.length ?? 0) > 0 &&
+              diagnostics.coverage?.every(
+                (item) => item.metadata === "complete",
+              ),
+          };
+        }),
+      { timeout: 60_000 },
+    )
+    .toMatchObject({ present: true, coverageComplete: true });
+}
+
 export async function seedDefaultSplitRule(emailAccountId: string) {
   await withClient(async (client) => {
     await deleteDefaultSplitRule(client, emailAccountId);

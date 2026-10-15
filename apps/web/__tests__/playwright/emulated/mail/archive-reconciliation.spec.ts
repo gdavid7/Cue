@@ -7,6 +7,7 @@ import {
   openMail,
   readLatestMailMutation,
   requestMailSync,
+  waitForMetadataCoverage,
 } from "./mail-test-helpers";
 
 const THREAD_ID = "thr_playwright_archive";
@@ -168,6 +169,9 @@ test("drops Inbox and Unread counts when an unread conversation is archived", as
   const { conversations, emailAccountId } = await openMail(page);
   const conversation = conversationWithSubject(page, conversations, subject);
   await expect(conversation).toBeVisible();
+  // The counts are compared against this baseline, so the first sync must
+  // have finished filling the inbox before it is read.
+  await waitForMetadataCoverage(page);
   await expect.poll(() => inboxUnreadBadge(page)).toBeGreaterThan(0);
   const before = await inboxUnreadBadge(page);
 
