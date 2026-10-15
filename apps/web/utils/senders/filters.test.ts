@@ -31,7 +31,8 @@ describe("getEmailFilters", () => {
 
   it("still reports a real provider failure as an error", async () => {
     const logger = createScopedLogger("test");
-    const errorSpy = vi.spyOn(logger, "error");
+    // Silent, so a run with an Axiom token never ships this fake error.
+    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
     const provider = {
       getFiltersList: vi.fn().mockRejectedValue(new Error("Backend Error")),
     } as unknown as EmailProvider;
