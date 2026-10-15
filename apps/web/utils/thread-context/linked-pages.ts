@@ -161,7 +161,7 @@ async function readPage(
 }
 
 /** HTML links with their words, then URLs written out in the plain text. */
-function linksIn(
+export function linksIn(
   message: Pick<ParsedMessage, "textHtml" | "textPlain">,
 ): { href: string; text: string }[] {
   const $ = load(message.textHtml ?? "");
@@ -198,7 +198,7 @@ function isNoise(url: URL, senderDomain: string | null) {
   );
 }
 
-function parseUrl(href: string): URL | null {
+export function parseUrl(href: string): URL | null {
   try {
     const url = new URL(href);
     return url.protocol === "https:" || url.protocol === "http:" ? url : null;

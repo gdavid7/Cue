@@ -179,7 +179,7 @@ export async function suggestReply({
   if (!hasAccess) return { status: "unavailable" };
 
   const context = await contextSources({
-    items: items.slice(0, MAX_CONTEXT_SOURCES),
+    items,
     emailProvider,
     timezone: emailAccount.timezone,
     logger,
@@ -390,7 +390,7 @@ function normalize(text: string) {
     .trim();
 }
 
-async function contextSources({
+export async function contextSources({
   items,
   emailProvider,
   timezone,
@@ -401,9 +401,17 @@ async function contextSources({
   timezone: string | null;
   logger: Logger;
 }): Promise<Source[]> {
+  // Tasks and contacts come only from links and the sender's address, which
+  // anyone can choose, so they are shown to the user but aren't evidence.
+  const evidence = items
+    .filter(
+      (item): item is typeof item & { kind: Source["kind"] } =>
+        item.kind !== "task" && item.kind !== "contact",
+    )
+    .slice(0, MAX_CONTEXT_SOURCES);
   // Ranking ran on headers and snippets; the reply needs what was actually said.
   return Promise.all(
-    items.map(async (item, i) => {
+    evidence.map(async (item, i) => {
       const id = `c${i + 1}`;
       if (item.kind === "event") {
         return {

@@ -224,6 +224,60 @@ describe("rankContext", () => {
     expect(ranked[0]?.reasons).toEqual([{ type: "linked" }]);
   });
 
+  describe("items the thread points to directly", () => {
+    const strong = candidate({
+      id: "terms",
+      title: focus.subject,
+      text: focus.text,
+      at: "2026-10-12T12:00:00Z",
+      people: [NORA, ME],
+    });
+
+    it("keeps a year-old task the thread links to and says it's linked", () => {
+      const task = candidate({
+        id: "jira:OPS-12",
+        kind: "task",
+        title: "OPS-12 Rotate staging keys",
+        at: "2025-10-01T00:00:00Z",
+        linkedBy: "url",
+      });
+
+      const ranked = rankContext({
+        focus,
+        candidates: [strong, task],
+        selfEmails: [ME.email],
+        now: NOW,
+      });
+
+      expect(ranked.find((r) => r.candidate.id === task.id)?.reasons).toEqual([
+        { type: "linked" },
+      ]);
+    });
+
+    it("keeps the sender's record in a connected app however long ago it changed", () => {
+      const contact = candidate({
+        id: "hubspot:contact:1",
+        kind: "contact",
+        title: "Nora Patel",
+        text: "VP Finance at Northwind",
+        at: "2024-10-01T00:00:00Z",
+        people: [NORA],
+        linkedBy: "sender",
+      });
+
+      const ranked = rankContext({
+        focus,
+        candidates: [strong, contact],
+        selfEmails: [ME.email],
+        now: NOW,
+      });
+
+      expect(
+        ranked.find((r) => r.candidate.id === contact.id)?.reasons,
+      ).toEqual([{ type: "person", label: "Nora Patel" }]);
+    });
+  });
+
   it("excludes the open thread itself", () => {
     expect(
       ids([candidate({ id: focus.id, title: focus.subject, people: [NORA] })]),
