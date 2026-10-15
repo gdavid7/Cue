@@ -29,8 +29,14 @@ export async function updateEmailOtpSetting({
   }
   const user = await prisma.user.findUniqueOrThrow({
     where: { id: userId },
-    select: { email: true },
+    select: { email: true, emailVerified: true },
   });
+  // Sign-in refuses codes for these accounts (see utils/auth/email-otp.ts).
+  if (enabled && !user.emailVerified) {
+    throw new SafeError(
+      "Email codes need an email address that your sign-in provider has verified.",
+    );
+  }
   // Version changes also invalidate sessions inserted after the revocation delete.
   await prisma.$transaction([
     prisma.user.update({
