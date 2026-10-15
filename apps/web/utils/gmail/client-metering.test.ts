@@ -73,7 +73,7 @@ describe("Gmail client metering", () => {
     expect(stats.admittedCost).toBe(2 * MESSAGE_GET_UNITS);
   });
 
-  it.skip("charges each attempt the client retries after a server error", async () => {
+  it("charges each attempt the client retries after a server error", async () => {
     const gmail = await fakeGmail([
       jsonResponse(503, { error: { code: 503, message: "Backend Error" } }),
       jsonResponse(200, { id: "m1" }),
