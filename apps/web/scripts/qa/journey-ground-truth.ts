@@ -158,16 +158,27 @@ export function buildGroundTruth({
       id: "deadlines",
       question:
         "Which emails from the last day ask me to respond or pay by a deadline in the next two weeks?",
+      // An answer may name each email by any of its facts: the sender, the
+      // role or invoice number, the amount, or the deadline itself.
       facts: [
         {
           key: "offer",
           required: true,
-          anyOf: [normalizeForMatch(companyWord)],
+          anyOf: [
+            normalizeForMatch(companyWord),
+            normalizeForMatch(role),
+            ...dateForms(offerDeadline),
+          ],
         },
         {
           key: "invoice",
           required: true,
-          anyOf: [normalizeForMatch(vendorWord)],
+          anyOf: [
+            normalizeForMatch(vendorWord),
+            normalizeForMatch(invoiceNumber),
+            ...amountForms(dollars, cents),
+            ...dateForms(invoiceDue),
+          ],
         },
       ],
     },

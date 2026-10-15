@@ -167,6 +167,22 @@ export function rowWithSubjectAbsent(subject: string) {
   return performance.now();
 }
 
+/**
+ * A conversation row is on screen, counting only the server-seeded
+ * placeholder rows (`preview`) or only the mail engine's own list.
+ */
+export function firstRowShown(preview: boolean) {
+  for (const row of document.querySelectorAll(
+    '[role="listbox"][aria-label="Conversations"] [data-mail-thread-row]',
+  )) {
+    const inPreview = row.closest("[data-mail-inbox-preview]") !== null;
+    if (inPreview === preview && row.getBoundingClientRect().height > 0) {
+      return performance.now();
+    }
+  }
+  return false;
+}
+
 /** Rows are listed and every one has `word` in its subject. */
 export function onlyRowsMatching(word: string) {
   const subjects = Array.from(
