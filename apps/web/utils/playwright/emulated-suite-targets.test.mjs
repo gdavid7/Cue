@@ -265,3 +265,29 @@ if (process.argv.includes("test")) {
   for (const spec of specs)
     expect(readFileSync(summary, "utf8")).toContain(spec);
 });
+
+test("an unlisted spec can't join a group that chooses its providers", () => {
+  const groups = [
+    {
+      name: "settings",
+      providers: ["google", "microsoft"],
+      specs: ["settings/sign-out.spec.ts"],
+    },
+  ];
+  const target = {
+    name: getPlaywrightTargetName("settings/new-behavior.spec.ts"),
+    path: "__tests__/playwright/emulated/settings/new-behavior.spec.ts",
+  };
+  expect(() => batchPlaywrightTargets([target], groups)).toThrow(
+    "settings/new-behavior.spec.ts",
+  );
+});
+
+test("every spec in the repo that falls into a provider-choosing group is listed in it", () => {
+  const webRoot = path.resolve(import.meta.dirname, "../..");
+  const targets = expandPlaywrightTargets(
+    ["__tests__/playwright/emulated"],
+    webRoot,
+  );
+  expect(() => batchPlaywrightTargets(targets)).not.toThrow();
+});

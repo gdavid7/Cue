@@ -1,6 +1,7 @@
 import { isTransactionalEmailConfigured } from "@inboxzero/transactional-email/src/delivery";
 import prisma from "@/utils/prisma";
 import { SafeError } from "@/utils/error";
+import { UNVERIFIED_EMAIL_OTP_MESSAGE } from "@/utils/auth/email-otp-availability";
 
 export async function updateEmailOtpSetting({
   userId,
@@ -33,9 +34,7 @@ export async function updateEmailOtpSetting({
   });
   // Sign-in refuses codes for these accounts (see utils/auth/email-otp.ts).
   if (enabled && !user.emailVerified) {
-    throw new SafeError(
-      "Email codes need an email address that your sign-in provider has verified.",
-    );
+    throw new SafeError(UNVERIFIED_EMAIL_OTP_MESSAGE);
   }
   // Version changes also invalidate sessions inserted after the revocation delete.
   await prisma.$transaction([

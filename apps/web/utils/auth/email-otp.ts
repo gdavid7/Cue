@@ -127,8 +127,9 @@ export async function emailOtpSessionCreationHook<T extends { userId: string }>(
 }
 
 // A code that signs into an unverified account makes better-auth delete all of
-// its sign-in links (and so its mailboxes). Microsoft sign-ins never verify the
-// address, so those accounts can't use codes.
+// its sign-in links (and so its mailboxes). Unverified accounts include every
+// Microsoft sign-in and Google sign-ins for addresses Google isn't
+// authoritative for (not Gmail or Workspace), so those accounts can't use codes.
 async function isEmailOtpEnabled(email: string) {
   const user = await prisma.user.findUnique({
     where: { email },

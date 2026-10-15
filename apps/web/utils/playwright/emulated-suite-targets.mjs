@@ -174,6 +174,13 @@ export function batchPlaywrightTargets(targets, groups = featureGroups) {
     const group = groups.find(({ specs }) => specs.includes(specPath));
     // New specs remain covered before an explicit feature group is assigned.
     const name = group?.name ?? specPath.split("/")[0];
+    // A group that chooses its providers was checked spec by spec, so a new
+    // spec must be listed rather than inherit Outlook coverage it never had.
+    if (!group && groups.some((g) => g.name === name && g.providers)) {
+      throw new Error(
+        `Add ${specPath} to the "${name}" group in emulated-suite-targets.mjs.`,
+      );
+    }
     if (!batches.has(name)) {
       batches.set(name, { name, paths: [], providers: group?.providers });
     }

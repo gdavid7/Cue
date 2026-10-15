@@ -453,9 +453,6 @@ function writeEmulateSeed({
   return outputPath;
 }
 
-// Keep in sync with teammateEmail in team-comments-test-helpers.ts. The role
-// goes at the end of the local part so the publisher's address is never a
-// substring of a teammate's, which the OAuth account picker matches on.
 function writeLinkedMicrosoftSeed({ baseURL, linkedOutlookEmail, runId }) {
   const outputDir = path.join(process.cwd(), ".tmp", "playwright", runId);
   const outputPath = path.join(
@@ -497,6 +494,9 @@ function writeLinkedMicrosoftSeed({ baseURL, linkedOutlookEmail, runId }) {
   return outputPath;
 }
 
+// Keep in sync with teammateEmail in team-comments-test-helpers.ts. The role
+// goes at the end of the local part so the publisher's address is never a
+// substring of a teammate's, which the OAuth account picker matches on.
 function teammateEmail(publisherEmail, role) {
   const at = publisherEmail.lastIndexOf("@");
   return `${publisherEmail.slice(0, at)}+team-${role}${publisherEmail.slice(at)}`;
