@@ -68,13 +68,12 @@ export function followMailboxChanges({
       return;
     }
     open();
-    // A reconnecting stream catches up on `ready`.
-    if (!source) syncShown();
+    // The reconnect's `ready` catches up too, but only once the stream
+    // connects; a broken stream would leave the shown tab stale until a poll.
+    syncShown();
   };
   const onFocus = () => {
-    if (document.visibilityState === "hidden") return;
-    if (source && !connected) return;
-    syncShown();
+    if (document.visibilityState !== "hidden") syncShown();
   };
   const poll = setInterval(() => {
     if (!connected && document.visibilityState !== "hidden") onChange();

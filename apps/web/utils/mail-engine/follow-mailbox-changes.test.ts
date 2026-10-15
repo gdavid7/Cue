@@ -90,16 +90,17 @@ describe("followMailboxChanges", () => {
     expect(sources).toHaveLength(2);
   });
 
-  it("catches up once when a hidden tab is shown, through the reconnect", () => {
+  it("catches up as soon as a hidden tab is shown, without waiting on the stream", () => {
     const { onChange } = follow();
     sources[0].emit("ready");
     onChange.mockClear();
 
     setVisibility("hidden");
     setVisibility("visible");
-    window.dispatchEvent(new Event("focus"));
-    sources[1].emit("ready");
+    expect(onChange).toHaveBeenCalledTimes(1);
 
+    // The focus that comes with showing the tab adds no catch-up of its own.
+    window.dispatchEvent(new Event("focus"));
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
