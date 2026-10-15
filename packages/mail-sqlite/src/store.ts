@@ -778,11 +778,7 @@ export async function createSqliteMailStore(
         for (const change of input.changes) {
           if (
             change.kind === "message_patch" &&
-            (await isStaleMessageVersion(
-              tx,
-              change.key,
-              change.reference.version,
-            ))
+            (await isStaleMessagePatch(tx, change))
           ) {
             continue;
           }
@@ -802,6 +798,69 @@ export async function createSqliteMailStore(
         }
         const revision = await bumpRevision(tx);
         return { status: "committed", revision };
+      });
+    },
+    async applyConversationMembership(input) {
+      return driver.write(async (tx) => {
+        const { accountId } = input.session;
+        const { conversationId } = input.page.conversation;
+        if (
+          !(await accountGenerationMatches(tx, input.session)) ||
+          input.page.conversation.accountId !== accountId ||
+          input.page.changes.some(
+            (change) => !providerChangeBelongsToAccount(change, accountId),
+          )
+        ) {
+          return { status: "stale" as const };
+        }
+        // A command admitted on the messages stored so far (archive right
+        // after opening) covers the ones this page adds, so they don't show
+        // it undone until its own preparation lands.
+        const preparing = await tx.query(
+          `SELECT c.command_id FROM operation_conversations c
+           JOIN operations o
+             ON o.account_id = c.account_id AND o.command_id = c.command_id
+           WHERE c.account_id = ? AND c.conversation_id = ? AND c.complete = 0
+             AND o.status = 'preparing'`,
+          [accountId, conversationId],
+        );
+        const newTargets: MessageKey[] = [];
+        for (const row of preparing) {
+          for (const key of input.page.keys) {
+            if (key.accountId !== accountId) continue;
+            const inserted = await tx.execute(
+              `INSERT OR IGNORE INTO operation_targets(account_id, command_id, message_id, conversation_id)
+               VALUES (?, ?, ?, ?)`,
+              [
+                accountId,
+                String(row.command_id),
+                key.messageId,
+                conversationId,
+              ],
+            );
+            if (inserted.changedRows > 0) newTargets.push(key);
+          }
+        }
+        for (const change of input.page.changes) {
+          if (
+            change.kind === "message_patch" &&
+            (await isStaleMessagePatch(tx, change))
+          ) {
+            continue;
+          }
+          await applyChange(tx, change);
+        }
+        await recomputeTargets(tx, newTargets);
+        if (!input.page.nextPage) {
+          await tx.execute(
+            `INSERT INTO conversation_completeness(account_id, conversation_id, complete)
+             VALUES (?, ?, 1)
+             ON CONFLICT(account_id, conversation_id) DO UPDATE SET complete = 1`,
+            [accountId, conversationId],
+          );
+        }
+        const revision = await bumpRevision(tx);
+        return { status: "committed" as const, revision };
       });
     },
     async settleAttempt(input) {
@@ -1329,6 +1388,19 @@ export async function createSqliteMailStore(
             coverage: await readCoverage(tx, [key.accountId]),
           },
         };
+      });
+    },
+    async readConversationComplete(key) {
+      return driver.read(async (tx) => {
+        const coverage = await readCoverage(tx, [key.accountId]);
+        if (coverage.every((scope) => scope.metadata === "complete")) {
+          return true;
+        }
+        const flag = await tx.query(
+          "SELECT complete FROM conversation_completeness WHERE account_id = ? AND conversation_id = ?",
+          [key.accountId, key.conversationId],
+        );
+        return Number(flag[0]?.complete) === 1;
       });
     },
     async readOperation(key) {
@@ -3190,6 +3262,23 @@ async function insertMessageContent(
   // Indexed from what is stored, so a later rebuild from the stored body
   // produces the same search row.
   await indexMessageContent(tx, body.key, stored);
+}
+
+// A read outside sync can return a message deleted since; only a strictly
+// newer copy brings it back.
+async function isStaleMessagePatch(
+  tx: SqlTransaction,
+  change: Extract<ProviderChange, { kind: "message_patch" }>,
+) {
+  const incoming = change.reference.version;
+  if (await isStaleMessageVersion(tx, change.key, incoming)) return true;
+  const current = await loadConfirmed(tx, change.key);
+  if (!current?.deleted) return false;
+  return (
+    !incoming ||
+    !current.version ||
+    compareProviderVersions(incoming, current.version) !== "newer"
+  );
 }
 
 async function isStaleMessageVersion(

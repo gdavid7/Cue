@@ -225,6 +225,16 @@ export interface MailStore {
   }): Promise<
     { status: "committed"; revision: LocalRevision } | { status: "stale" }
   >;
+  /**
+   * Merges one page of a conversation's membership read outside any command,
+   * as when a reader opens it. The last page marks the conversation complete.
+   */
+  applyConversationMembership(input: {
+    session: AccountSession;
+    page: ConversationMembershipPage;
+  }): Promise<
+    { status: "committed"; revision: LocalRevision } | { status: "stale" }
+  >;
   applyHydration(input: {
     session: AccountSession;
     requestId: string;
@@ -363,6 +373,11 @@ export interface MailStore {
     key: ConversationKey,
     page: { after: string | null; pageSize: number },
   ): Promise<{ revision: LocalRevision; view: ConversationView }>;
+  /**
+   * Whether every message of the conversation is local: sync has covered the
+   * whole mailbox, or its membership was merged.
+   */
+  readConversationComplete(key: ConversationKey): Promise<boolean>;
   readDraft(key: DraftKey): Promise<DraftReadResult>;
   /**
    * A send already handed to the server to deliver at its `sendAtMs`, which

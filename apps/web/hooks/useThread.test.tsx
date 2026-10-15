@@ -10,6 +10,8 @@ const mail = vi.hoisted(() => ({
   client: {
     observeConversation: vi.fn(),
     ensureMessageContent: vi.fn(),
+    ensureConversationMessages: vi.fn(),
+    releaseConversationMessages: vi.fn(),
     requestSync: vi.fn(),
   },
 }));
@@ -26,6 +28,10 @@ describe("useThread", () => {
     vi.clearAllMocks();
     mail.client.ensureMessageContent.mockResolvedValue({ status: "scheduled" });
     mail.client.requestSync.mockResolvedValue({ status: "scheduled" });
+    mail.client.ensureConversationMessages.mockResolvedValue({
+      status: "complete",
+    });
+    mail.client.releaseConversationMessages.mockResolvedValue(undefined);
   });
 
   it("projects an engine conversation onto the reader thread", async () => {
@@ -152,6 +158,110 @@ describe("useThread", () => {
     ).toEqual([["outgoing:send-1", "<p>On my way</p>"]]);
   });
 
+  it("shows earlier messages loading while a first sync fills in the conversation", async () => {
+    let complete: (value: { status: "complete" }) => void = () => undefined;
+    mail.client.ensureConversationMessages.mockReturnValue(
+      new Promise((resolve) => {
+        complete = resolve;
+      }),
+    );
+    mail.client.observeConversation.mockReturnValue(
+      handle(readySnapshot(view({ coverage: [partialCoverage] }))),
+    );
+    const { result } = renderHook(() =>
+      useThread({ id: "c-1" }, { fillConversation: true }),
+    );
+    await waitFor(() => expect(result.current.data?.thread.id).toBe("c-1"));
+
+    expect(mail.client.ensureConversationMessages).toHaveBeenCalledWith({
+      accountId: "account",
+      conversationId: "c-1",
+    });
+    expect(result.current.localAvailability).toMatchObject({
+      hasMore: true,
+      loadingMore: true,
+    });
+
+    await act(async () => complete({ status: "complete" }));
+    expect(result.current.localAvailability).toMatchObject({
+      hasMore: false,
+      loadingMore: false,
+    });
+  });
+
+  it("shows nothing loading for a mailbox sync has fully covered", async () => {
+    mail.client.ensureConversationMessages.mockReturnValue(
+      new Promise(() => undefined),
+    );
+    mail.client.observeConversation.mockReturnValue(
+      handle(readySnapshot(view())),
+    );
+    const { result } = renderHook(() =>
+      useThread({ id: "c-1" }, { fillConversation: true }),
+    );
+    await waitFor(() => expect(result.current.data?.thread.id).toBe("c-1"));
+
+    expect(result.current.localAvailability).toMatchObject({
+      hasMore: false,
+      loadingMore: false,
+    });
+  });
+
+  it("stops showing earlier messages loading when the fill gives up", async () => {
+    mail.client.ensureConversationMessages.mockResolvedValue({
+      status: "unavailable",
+    });
+    mail.client.observeConversation.mockReturnValue(
+      handle(readySnapshot(view({ coverage: [partialCoverage] }))),
+    );
+    const { result } = renderHook(() =>
+      useThread({ id: "c-1" }, { fillConversation: true }),
+    );
+
+    await waitFor(() =>
+      expect(result.current.localAvailability).toMatchObject({
+        hasMore: false,
+        loadingMore: false,
+      }),
+    );
+  });
+
+  it("stops waiting for a fill when the reader moves on", async () => {
+    mail.client.ensureConversationMessages.mockReturnValue(
+      new Promise(() => undefined),
+    );
+    mail.client.observeConversation.mockImplementation((key) =>
+      handle(readySnapshot(view({ key, coverage: [partialCoverage] }))),
+    );
+    const { rerender, result } = renderHook(
+      ({ id }) => useThread({ id }, { fillConversation: true }),
+      { initialProps: { id: "c-1" } },
+    );
+    await waitFor(() => expect(result.current.data?.thread.id).toBe("c-1"));
+    expect(mail.client.releaseConversationMessages).not.toHaveBeenCalled();
+
+    rerender({ id: "c-2" });
+
+    expect(mail.client.releaseConversationMessages).toHaveBeenCalledWith({
+      accountId: "account",
+      conversationId: "c-1",
+    });
+  });
+
+  it("leaves filling in the conversation to the reader that asks for it", async () => {
+    mail.client.observeConversation.mockReturnValue(
+      handle(readySnapshot(view({ coverage: [partialCoverage] }))),
+    );
+    const { result } = renderHook(() => useThread({ id: "c-1" }));
+    await waitFor(() => expect(result.current.data?.thread.id).toBe("c-1"));
+
+    expect(mail.client.ensureConversationMessages).not.toHaveBeenCalled();
+    expect(result.current.localAvailability).toMatchObject({
+      hasMore: false,
+      loadingMore: false,
+    });
+  });
+
   it("does not load a reader without a thread id", () => {
     const { result } = renderHook(() => useThread({ id: null }));
     expect(result.current.data).toBeUndefined();
@@ -202,6 +312,15 @@ function readySnapshot(
     error: null,
   };
 }
+
+const partialCoverage: ConversationView["coverage"][number] = {
+  accountId: "account",
+  scopeId: "primary",
+  metadata: "partial",
+  content: "partial",
+  indexedContent: "partial",
+  lastCompletedSyncAtMs: null,
+};
 
 function view(overrides: Partial<ConversationView> = {}): ConversationView {
   return {

@@ -243,6 +243,10 @@ async function createWorkerOwnedEngine(
       callWorker<void>(worker, pending, "ensureAccount", [account]),
     ensureMessageContent: (key) =>
       callWorker(worker, pending, "ensureMessageContent", [key]),
+    ensureConversationMessages: (key) =>
+      callWorker(worker, pending, "ensureConversationMessages", [key]),
+    releaseConversationMessages: (key) =>
+      callWorker<void>(worker, pending, "releaseConversationMessages", [key]),
     getDiagnostics: (accountId) =>
       callWorker(worker, pending, "getDiagnostics", [accountId]),
     purgeAccount: (accountId) =>

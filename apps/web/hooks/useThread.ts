@@ -29,6 +29,11 @@ export function useThread(
   }: { id: string | null; emailAccountId?: string },
   options?: {
     includeDrafts?: boolean;
+    /**
+     * Fetches the conversation's older messages if sync hasn't reached them.
+     * Costs a provider read per conversation, so only the reader sets it.
+     */
+    fillConversation?: boolean;
     localMail?: boolean;
     parseReplies?: boolean;
   },
@@ -37,6 +42,7 @@ export function useThread(
   const emailAccountId = explicitEmailAccountId ?? currentEmailAccountId;
   const client = useOptionalMailClient();
   const includeDrafts = options?.includeDrafts;
+  const fillConversation = options?.fillConversation === true;
   const [pagination, setPagination] = useState({
     accountId: emailAccountId,
     id,
@@ -73,6 +79,46 @@ export function useThread(
     requestMissingMessageContent(client, view, requestedContent.current.ids);
   }, [client, createHandle, view]);
 
+  // Until sync covers the whole mailbox, older messages of an opened
+  // conversation may not be local yet; the engine fetches them once.
+  const [completedConversations, setCompletedConversations] = useState(
+    () => new Set<string>(),
+  );
+  useEffect(() => {
+    if (!fillConversation || !client || !emailAccountId || !id) return;
+    const key = conversationKey(emailAccountId, id);
+    const conversation = { accountId: emailAccountId, conversationId: id };
+    let current = true;
+    let settled = false;
+    client
+      .ensureConversationMessages(conversation)
+      .catch(() => undefined)
+      .finally(() => {
+        settled = true;
+        if (!current) return;
+        setCompletedConversations((completed) =>
+          completed.has(key) ? completed : new Set(completed).add(key),
+        );
+      });
+    return () => {
+      current = false;
+      // Moving on through threads must not leave the one opened next queued
+      // behind fills nobody will read.
+      if (!settled) {
+        client.releaseConversationMessages(conversation).catch(() => undefined);
+      }
+    };
+  }, [client, emailAccountId, fillConversation, id]);
+  const openKey =
+    fillConversation && emailAccountId && id
+      ? conversationKey(emailAccountId, id)
+      : null;
+  const completing = Boolean(
+    openKey &&
+      !completedConversations.has(openKey) &&
+      view?.coverage.some((coverage) => coverage.metadata !== "complete"),
+  );
+
   const data = useMemo<ThreadResponse | undefined>(() => {
     if (!id || !view) return;
     return conversationViewToThreadResponse(view, { includeDrafts });
@@ -104,8 +150,10 @@ export function useThread(
       missingBodyIds: missingConversationBodyIds(view),
       outgoing: conversationOutgoingMessages(view),
       sendOperationIds: conversationSendOperationIds(view),
-      hasMore: Boolean(view.nextPage),
-      loadingMore,
+      // The messages being fetched are the conversation's earlier ones, so
+      // they load where earlier pages do.
+      hasMore: Boolean(view.nextPage) || completing,
+      loadingMore: loadingMore || completing,
       loadMore: () =>
         setPagination({
           accountId: emailAccountId,
@@ -113,7 +161,7 @@ export function useThread(
           pageSize: pageSize + CONVERSATION_PAGE_SIZE,
         }),
     };
-  }, [data, emailAccountId, id, loadingMore, pageSize, view]);
+  }, [completing, data, emailAccountId, id, loadingMore, pageSize, view]);
 
   return {
     data,
@@ -123,6 +171,10 @@ export function useThread(
     mutate,
     localAvailability,
   };
+}
+
+function conversationKey(emailAccountId: string, id: string) {
+  return `${emailAccountId}\u0000${id}`;
 }
 
 function conversationQueryError(
