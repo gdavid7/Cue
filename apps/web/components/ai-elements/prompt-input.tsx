@@ -58,7 +58,10 @@ export const PromptInputTextarea = ({
         return;
       }
 
-      if (e.shiftKey || isCoarsePointer) {
+      // Cmd/Ctrl+Return sends even on a touchscreen, for a tablet with a
+      // hardware keyboard.
+      const sendShortcut = e.metaKey || e.ctrlKey;
+      if (e.shiftKey || (isCoarsePointer && !sendShortcut)) {
         // Allow newline
         return;
       }

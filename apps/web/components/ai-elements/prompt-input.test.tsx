@@ -54,6 +54,15 @@ describe("PromptInputTextarea", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     expect(onSubmit).toHaveBeenCalledTimes(1);
   });
+
+  // A tablet with a hardware keyboard still reports a touchscreen.
+  it("sends on Cmd+Return or Ctrl+Return on a touchscreen", () => {
+    const { onSubmit, textarea } = renderPrompt({ coarsePointer: true });
+
+    expect(pressReturn(textarea, { metaKey: true })).toBe(false);
+    expect(pressReturn(textarea, { ctrlKey: true })).toBe(false);
+    expect(onSubmit).toHaveBeenCalledTimes(2);
+  });
 });
 
 function renderPrompt({ coarsePointer }: { coarsePointer: boolean }) {
@@ -74,6 +83,9 @@ function renderPrompt({ coarsePointer }: { coarsePointer: boolean }) {
 }
 
 /** Whether the browser would go on to insert the newline. */
-function pressReturn(target: HTMLElement, init: { shiftKey?: boolean } = {}) {
+function pressReturn(
+  target: HTMLElement,
+  init: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean } = {},
+) {
   return fireEvent.keyDown(target, { key: "Enter", ...init });
 }
