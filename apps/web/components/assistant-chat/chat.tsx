@@ -246,7 +246,8 @@ export function Chat({
         tabIndex={-1}
       />
 
-      <div className="flex items-center justify-end gap-1 px-2 pb-2 sm:absolute sm:right-2 sm:bottom-2 sm:p-0">
+      {/* Their own row on a phone has room for 44px touch targets. */}
+      <div className="flex items-center justify-end gap-1 px-2 pb-2 max-sm:[&_button]:size-11 sm:absolute sm:right-2 sm:bottom-2 sm:p-0">
         <VoiceInput
           liveEnabled
           liveHistory={liveHistoryFromUiMessages(messages)}
