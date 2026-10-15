@@ -1323,7 +1323,7 @@ function PendingRuleConfirmation({
         <AlertTriangleIcon className="size-4 text-amber-600 dark:text-amber-400" />
         <AlertTitle>{title}</AlertTitle>
         <AlertDescription className="space-y-3 text-sm">
-          <p>{description}</p>
+          <p className="break-words [overflow-wrap:anywhere]">{description}</p>
           <OutboundDestinations actions={actions} />
           {riskMessages.length === 1 ? (
             <p className="text-muted-foreground">{riskMessages[0]}</p>
