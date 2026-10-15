@@ -44,6 +44,7 @@ export function createMockEmailProvider(
 
   const baseMock: EmailProvider = {
     name: "google",
+    localMailSyncStrategy: "account-history",
     toJSON: vi.fn(() => ({ name: "google", type: "mock" })),
 
     // Message operations
@@ -65,6 +66,7 @@ export function createMockEmailProvider(
     getThreadMessages: vi.fn().mockResolvedValue([defaultMessage]),
     getThreadMessagesInInbox: vi.fn().mockResolvedValue([defaultMessage]),
     getThreadsWithQuery: vi.fn().mockResolvedValue({ threads: [] }),
+    searchThreads: vi.fn().mockResolvedValue({ threads: [] }),
     getThreadsWithLabel: vi.fn().mockResolvedValue([]),
     getThreadsWithParticipant: vi.fn().mockResolvedValue([]),
     getThreadsFromSenderWithSubject: vi.fn().mockResolvedValue([]),
@@ -112,6 +114,8 @@ export function createMockEmailProvider(
       .fn()
       .mockResolvedValue({ id: "label-123", name: "Test Label", type: "user" }),
     deleteLabel: vi.fn().mockResolvedValue(undefined),
+    renameFolder: vi.fn().mockResolvedValue(undefined),
+    deleteFolder: vi.fn().mockResolvedValue(undefined),
     updateLabel: vi.fn().mockResolvedValue(undefined),
     getOrCreateInboxZeroLabel: vi
       .fn()
@@ -130,12 +134,15 @@ export function createMockEmailProvider(
     trashMessages: vi.fn().mockResolvedValue(undefined),
     untrashMessages: vi.fn().mockResolvedValue(undefined),
     trashThread: vi.fn().mockResolvedValue(undefined),
+    untrashThread: vi.fn().mockResolvedValue(undefined),
     unarchiveThread: vi.fn().mockResolvedValue(undefined),
     markSpam: vi.fn().mockResolvedValue(undefined),
+    markNotSpam: vi.fn().mockResolvedValue(undefined),
     starMessage: vi.fn().mockResolvedValue(undefined),
     markRead: vi.fn().mockResolvedValue(undefined),
     markReadThread: vi.fn().mockResolvedValue(undefined),
     markMessagesReadState: vi.fn().mockResolvedValue(undefined),
+    markMessagesStarredState: vi.fn().mockResolvedValue(undefined),
     moveThreadToFolder: vi.fn().mockResolvedValue(undefined),
 
     // Labeling
@@ -147,6 +154,10 @@ export function createMockEmailProvider(
     draftEmail: vi.fn().mockResolvedValue({ draftId: "draft-123" }),
     getDraft: vi.fn().mockResolvedValue(null),
     getDraftReferenceForMessage: vi.fn().mockResolvedValue(null),
+    getDraftAttachments: vi.fn().mockResolvedValue(null),
+    addDraftAttachment: vi.fn(),
+    removeDraftAttachment: vi.fn(),
+    startDraftAttachmentUpload: vi.fn(),
     deleteDraft: vi.fn().mockResolvedValue(true),
     createDraft: vi.fn().mockResolvedValue({ id: "draft-new" }),
     updateDraft: vi.fn().mockResolvedValue(undefined),
@@ -160,6 +171,7 @@ export function createMockEmailProvider(
 
     // Bulk operations
     bulkArchiveFromSenders: vi.fn().mockResolvedValue(undefined),
+    bulkArchiveSenderOrThrow: vi.fn().mockResolvedValue(0),
     bulkTrashFromSenders: vi.fn().mockResolvedValue(undefined),
     blockUnsubscribedEmail: vi.fn().mockResolvedValue(undefined),
 
@@ -174,7 +186,10 @@ export function createMockEmailProvider(
     getAccessToken: vi.fn().mockReturnValue("mock-access-token"),
     checkIfReplySent: vi.fn().mockResolvedValue(false),
     countReceivedMessages: vi.fn().mockResolvedValue(0),
+    countMessages: vi.fn().mockResolvedValue(0),
     getAttachment: vi.fn().mockResolvedValue({ data: "", size: 0 }),
+    getAttachmentStream: vi.fn(),
+    syncLocalMail: vi.fn(),
     hasPreviousCommunicationsWithSenderOrDomain: vi
       .fn()
       .mockResolvedValue(false),
@@ -185,7 +200,6 @@ export function createMockEmailProvider(
     getInboxStats: vi.fn().mockResolvedValue({ total: 0, unread: 0 }),
 
     // Watch/webhooks
-    processHistory: vi.fn().mockResolvedValue(undefined),
     watchEmails: vi.fn().mockResolvedValue({
       expirationDate: new Date(),
       subscriptionId: "sub-123",
