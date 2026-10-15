@@ -28,6 +28,11 @@ import { createScopedLogger } from "@/utils/logger";
 import { booleanString } from "@/utils/zod";
 import { getOrderedEmailAccounts } from "@/utils/mail-url.server";
 import { THEME_COLOR } from "@/components/theme-options";
+import { premiumEntitlementSelect } from "@/utils/premium";
+import {
+  getAiAccess,
+  NO_AI_BANNER_DISMISSED_COOKIE,
+} from "@/utils/premium/ai-access";
 
 const logger = createScopedLogger("AppLayout");
 
@@ -63,9 +68,10 @@ export default async function AppLayout({
 
   if (!session?.user.email) redirect("/login");
 
-  const [cookieStore, accounts] = await Promise.all([
+  const [cookieStore, accounts, aiAccess] = await Promise.all([
     cookies(),
     getOrderedEmailAccounts(session.user.id),
+    getUserAiAccess(session.user.id),
   ]);
   const isClosed = cookieStore.get("left-sidebar:state")?.value === "false";
   const bypassPremiumChecks =
@@ -96,7 +102,12 @@ export default async function AppLayout({
               feedbackEnabled={feedbackEnabled}
             >
               <DesktopMailIndicators />
-              <AiAutomationStatusBanner />
+              <AiAutomationStatusBanner
+                aiAccess={aiAccess}
+                dismissed={
+                  cookieStore.get(NO_AI_BANNER_DISMISSED_COOKIE)?.value === "1"
+                }
+              />
               <ErrorMessages />
               <ProviderRateLimitBanner />
               {children}
@@ -117,4 +128,15 @@ export default async function AppLayout({
       </div>
     </div>
   );
+}
+
+async function getUserAiAccess(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { aiApiKey: true, premium: { select: premiumEntitlementSelect } },
+  });
+  return getAiAccess({
+    premium: user?.premium,
+    hasAiApiKey: Boolean(user?.aiApiKey),
+  });
 }

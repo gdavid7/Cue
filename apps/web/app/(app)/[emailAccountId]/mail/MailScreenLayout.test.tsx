@@ -17,6 +17,6 @@ describe("MailScreenLayout", () => {
 
     // Unread dots and links read the palette's blue at first paint, not the
     // app's slate until the page has hydrated.
-    expect(html).toMatch(/data-theme="mail"[^>]*>.*<p>inbox<\/p>/s);
+    expect(html).toMatch(/data-theme="mail"[^>]*>[\s\S]*<p>inbox<\/p>/);
   });
 });

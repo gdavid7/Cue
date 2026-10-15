@@ -3,14 +3,35 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { SparklesIcon, XIcon } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useLocalStorage } from "usehooks-ts";
 import { AppAlertBanner } from "@/app/(app)/AppAlertBanner";
 import { EndTrialButton } from "@/components/EndTrialButton";
 import { Button } from "@/components/ui/button";
 import { useAiAutomationStatus } from "@/hooks/useAiAutomationStatus";
+import { useHydrated } from "@/hooks/useHydrated";
 import { usePremium } from "@/hooks/usePremium";
+import {
+  type AiAccess,
+  NO_AI_BANNER_DISMISSED_COOKIE,
+} from "@/utils/premium/ai-access";
 
-export function AiAutomationStatusBanner() {
+// Where dismissals were kept before the server could read them.
+const LEGACY_DISMISSED_KEY = "cue-no-ai-access-banner-dismissed";
+const DISMISSED_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
+
+/**
+ * The server passes what it knows of the plan and the dismissal, so the
+ * banner is in the page's first HTML instead of pushing the page down once
+ * the account loads.
+ */
+export function AiAutomationStatusBanner({
+  aiAccess,
+  dismissed,
+}: {
+  aiAccess: AiAccess;
+  dismissed: boolean;
+}) {
   const { data: status } = useAiAutomationStatus();
 
   if (status?.status === "trial_ai_limit_reached") {
@@ -23,7 +44,7 @@ export function AiAutomationStatusBanner() {
     );
   }
 
-  return <NoAiAccessBanner />;
+  return <NoAiAccessBanner aiAccess={aiAccess} dismissed={dismissed} />;
 }
 
 /**
@@ -31,18 +52,33 @@ export function AiAutomationStatusBanner() {
  * reply tab would look like a verdict. Say so where people read mail, calmly,
  * since it's a plan choice rather than a fault.
  */
-function NoAiAccessBanner() {
-  const { hasAiAccess, isLoading, isProPlanWithoutApiKey } = usePremium();
+function NoAiAccessBanner({
+  aiAccess,
+  dismissed: dismissedOnServer,
+}: {
+  aiAccess: AiAccess;
+  dismissed: boolean;
+}) {
+  const premium = usePremium();
+  const hydrated = useHydrated();
   const pathname = usePathname();
-  const [dismissed, setDismissed] = useLocalStorage(
-    "cue-no-ai-access-banner-dismissed",
-    false,
-  );
+  const [dismissed, setDismissed] = useState(dismissedOnServer);
+  const [legacyDismissed] = useLocalStorage(LEGACY_DISMISSED_KEY, false, {
+    initializeWithValue: false,
+  });
+  useEffect(() => {
+    if (legacyDismissed) rememberDismissal();
+  }, [legacyDismissed]);
 
+  // The server's answer until the account has loaded here, and while
+  // hydrating, so the page hydrates what the server sent.
+  const { hasAiAccess, isProPlanWithoutApiKey } =
+    hydrated && !premium.isLoading ? premium : aiAccess;
   // Today and the plans page already explain this in place.
   const explainedInPage =
     pathname?.endsWith("/home") || pathname?.startsWith("/premium");
-  if (isLoading || hasAiAccess || dismissed || explainedInPage) return null;
+  if (hasAiAccess || dismissed || legacyDismissed || explainedInPage)
+    return null;
 
   return (
     <div
@@ -64,7 +100,10 @@ function NoAiAccessBanner() {
       <Button
         aria-label="Dismiss"
         className="size-8 shrink-0"
-        onClick={() => setDismissed(true)}
+        onClick={() => {
+          rememberDismissal();
+          setDismissed(true);
+        }}
         size="icon"
         type="button"
         variant="ghost"
@@ -73,4 +112,8 @@ function NoAiAccessBanner() {
       </Button>
     </div>
   );
+}
+
+function rememberDismissal() {
+  document.cookie = `${NO_AI_BANNER_DISMISSED_COOKIE}=1; path=/; max-age=${DISMISSED_MAX_AGE_SECONDS}; SameSite=Lax${location.protocol === "https:" ? "; Secure" : ""}`;
 }
