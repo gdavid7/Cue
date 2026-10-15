@@ -220,6 +220,8 @@ export function Chat({
       )}
 
       <PromptInputTextarea
+        // The placeholder disappears once the user types.
+        aria-label="Message Cue"
         data-testid="chat-input"
         value={input}
         placeholder="Ask Cue about your mail, or tell it what to do"
