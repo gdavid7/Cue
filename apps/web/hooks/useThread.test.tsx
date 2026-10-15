@@ -166,7 +166,9 @@ describe("useThread", () => {
     mail.client.observeConversation.mockReturnValue(
       handle(readySnapshot(view({ coverage: [partialCoverage] }))),
     );
-    const { result } = renderHook(() => useThread({ id: "c-1" }));
+    const { result } = renderHook(() =>
+      useThread({ id: "c-1" }, { fillConversation: true }),
+    );
     await waitFor(() => expect(result.current.data?.thread.id).toBe("c-1"));
 
     expect(mail.client.ensureConversationMessages).toHaveBeenCalledWith({
@@ -192,9 +194,25 @@ describe("useThread", () => {
     mail.client.observeConversation.mockReturnValue(
       handle(readySnapshot(view())),
     );
+    const { result } = renderHook(() =>
+      useThread({ id: "c-1" }, { fillConversation: true }),
+    );
+    await waitFor(() => expect(result.current.data?.thread.id).toBe("c-1"));
+
+    expect(result.current.localAvailability).toMatchObject({
+      hasMore: false,
+      loadingMore: false,
+    });
+  });
+
+  it("leaves filling in the conversation to the reader that asks for it", async () => {
+    mail.client.observeConversation.mockReturnValue(
+      handle(readySnapshot(view({ coverage: [partialCoverage] }))),
+    );
     const { result } = renderHook(() => useThread({ id: "c-1" }));
     await waitFor(() => expect(result.current.data?.thread.id).toBe("c-1"));
 
+    expect(mail.client.ensureConversationMessages).not.toHaveBeenCalled();
     expect(result.current.localAvailability).toMatchObject({
       hasMore: false,
       loadingMore: false,

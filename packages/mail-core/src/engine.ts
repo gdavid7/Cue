@@ -78,6 +78,9 @@ const SEARCH_PAGE_SIZE = 50;
 // A provider search page costs Gmail about 1000 of its 6000 units a minute,
 // so one view's demand for rows never fetches more than this many pages.
 const MAX_SEARCH_PAGES_PER_DEMAND = 2;
+// Each conversation fill is an interactive provider read; anything past this
+// waits its turn instead of crowding out sync and commands.
+const MAX_CONVERSATION_FETCHES = 2;
 
 export type WorkAdmission =
   | { status: "scheduled" | "already_satisfied" }
@@ -218,6 +221,8 @@ export function createMailEngine(input: {
     Promise<ConversationCompletion>
   >();
   const completeConversations = new Set<string>();
+  let runningConversationFetches = 0;
+  const queuedConversationFetches: Array<() => void> = [];
 
   async function refreshViews() {
     refreshQueued = true;
@@ -381,7 +386,9 @@ export function createMailEngine(input: {
       }
       const inFlight = conversationFetches.get(id);
       if (inFlight) return inFlight;
-      const fetched = fetchConversationMessages(key)
+      const fetched = inConversationFetchSlot(() =>
+        fetchConversationMessages(key),
+      )
         .catch((): ConversationCompletion => ({ status: "unavailable" }))
         .then((result) => {
           if (result.status === "complete") completeConversations.add(id);
@@ -764,6 +771,24 @@ export function createMailEngine(input: {
       page = membership.value.page.nextPage;
     } while (page);
     return { status: "complete" };
+  }
+
+  async function inConversationFetchSlot<T>(run: () => Promise<T>) {
+    if (runningConversationFetches < MAX_CONVERSATION_FETCHES) {
+      runningConversationFetches += 1;
+    } else {
+      // A finishing fetch hands its slot straight to the next in line.
+      await new Promise<void>((resolve) =>
+        queuedConversationFetches.push(resolve),
+      );
+    }
+    try {
+      return await run();
+    } finally {
+      const next = queuedConversationFetches.shift();
+      if (next) next();
+      else runningConversationFetches -= 1;
+    }
   }
 
   function forgetCompleteConversations(accountId: string) {

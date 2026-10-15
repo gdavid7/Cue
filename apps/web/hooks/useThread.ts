@@ -29,6 +29,11 @@ export function useThread(
   }: { id: string | null; emailAccountId?: string },
   options?: {
     includeDrafts?: boolean;
+    /**
+     * Fetches the conversation's older messages if sync hasn't reached them.
+     * Costs a provider read per conversation, so only the reader sets it.
+     */
+    fillConversation?: boolean;
     localMail?: boolean;
     parseReplies?: boolean;
   },
@@ -37,6 +42,7 @@ export function useThread(
   const emailAccountId = explicitEmailAccountId ?? currentEmailAccountId;
   const client = useOptionalMailClient();
   const includeDrafts = options?.includeDrafts;
+  const fillConversation = options?.fillConversation === true;
   const [pagination, setPagination] = useState({
     accountId: emailAccountId,
     id,
@@ -79,7 +85,7 @@ export function useThread(
     () => new Set<string>(),
   );
   useEffect(() => {
-    if (!client || !emailAccountId || !id) return;
+    if (!fillConversation || !client || !emailAccountId || !id) return;
     const key = conversationKey(emailAccountId, id);
     let current = true;
     client
@@ -97,9 +103,11 @@ export function useThread(
     return () => {
       current = false;
     };
-  }, [client, emailAccountId, id]);
+  }, [client, emailAccountId, fillConversation, id]);
   const openKey =
-    emailAccountId && id ? conversationKey(emailAccountId, id) : null;
+    fillConversation && emailAccountId && id
+      ? conversationKey(emailAccountId, id)
+      : null;
   const completing = Boolean(
     openKey &&
       !completedConversations.has(openKey) &&
