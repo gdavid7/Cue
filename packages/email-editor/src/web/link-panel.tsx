@@ -105,7 +105,7 @@ export function openSafeLink(value: string) {
   window.open(href, "_blank", "noopener,noreferrer");
 }
 
-function normalizeLinkHref(value: string) {
+export function normalizeLinkHref(value: string) {
   const href = value.trim();
   if (!href) return "";
   if (/^(?:https?:\/\/|mailto:|tel:|#)/iu.test(href)) return href;

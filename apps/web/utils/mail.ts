@@ -199,6 +199,9 @@ export function convertEmailHtmlToText({
           : { ignoreHref: true }, // Remove links entirely: "Text"
       },
       { selector: "img", format: "skip" },
+      // A table drawn with borders holds data, like the ones the composer
+      // makes from markdown; borderless tables are usually layout.
+      { selector: 'table[border="1"]', format: "dataTable" },
     ],
   });
 

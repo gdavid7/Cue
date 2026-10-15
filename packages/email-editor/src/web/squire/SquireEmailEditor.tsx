@@ -13,6 +13,11 @@ import {
 } from "react";
 import Squire from "squire-rte";
 import type { EmailBodyMode } from "../../core/email-html";
+import {
+  looksLikeMarkdown,
+  markdownToEmailHtml,
+} from "../../core/email-markdown";
+import { EMAIL_ELEMENT_STYLES } from "../../core/email-styles";
 import { SIGNATURE_CONTAINER_ATTRIBUTE } from "../../core/email-profile";
 import type {
   EmailEditorAssistContext,
@@ -46,6 +51,7 @@ import {
   showAssistHighlight,
   splitDraftText,
 } from "./assist";
+import { attachMarkdownShortcuts } from "./markdown-shortcuts";
 import { placePopover, visibleBounds } from "./placement";
 import { findSlashTrigger, type SlashTriggerMatch } from "./slash-trigger";
 
@@ -454,6 +460,9 @@ export const SquireEmailEditor = forwardRef<
       willCutCopy: restoreOriginalImageSources,
       tagAttributes: {
         a: { rel: "noopener noreferrer", target: "_blank" },
+        blockquote: { style: EMAIL_ELEMENT_STYLES.blockquote },
+        code: { style: EMAIL_ELEMENT_STYLES.code },
+        pre: { style: EMAIL_ELEMENT_STYLES.pre },
       },
     });
     editorRef.current = squire;
@@ -463,6 +472,7 @@ export const SquireEmailEditor = forwardRef<
       event.preventDefault();
       openLinkPanel();
     });
+    const detachMarkdownShortcuts = attachMarkdownShortcuts(squire);
 
     // Loading body and signature together lets Squire normalise both into
     // valid blocks before the signature is detached. A restored draft already
@@ -563,6 +573,33 @@ export const SquireEmailEditor = forwardRef<
       event.stopImmediatePropagation();
       onImageFiles(files);
     };
+    // Markdown copied as plain text (from a chat, an editor or a README)
+    // arrives formatted. Shift pastes it as typed, and clipboard HTML keeps
+    // Squire's own path.
+    const pasteMarkdown = (event: ClipboardEvent) => {
+      const clipboard = event.clipboardData;
+      if (
+        !clipboard ||
+        squire._isShiftDown ||
+        !(event.target instanceof Node && root.contains(event.target))
+      ) {
+        return;
+      }
+      const types = [...clipboard.types];
+      if (
+        !types.includes("text/plain") ||
+        types.includes("text/html") ||
+        types.includes("Files") ||
+        closestWithin(squire.getSelection().startContainer, "pre, code", root)
+      ) {
+        return;
+      }
+      const text = clipboard.getData("text/plain");
+      if (!looksLikeMarkdown(text)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      squire.insertHTML(markdownToEmailHtml(text), true);
+    };
     const onClick = (event: MouseEvent) => {
       if (!(event.metaKey || event.ctrlKey)) return;
       const link = (event.target as Element | null)?.closest?.("a");
@@ -572,6 +609,10 @@ export const SquireEmailEditor = forwardRef<
     };
     root.addEventListener("paste", interceptImageFiles, true);
     root.addEventListener("drop", interceptImageFiles, true);
+    // Listening above the root guarantees this runs before Squire's own
+    // paste handler, even when the root itself is the event target.
+    const body = root.parentElement;
+    body?.addEventListener("paste", pasteMarkdown, true);
     root.addEventListener("click", onClick);
 
     // Window capture runs before Radix's document listener, so Escape closes
@@ -625,8 +666,10 @@ export const SquireEmailEditor = forwardRef<
       window.removeEventListener("keydown", onWindowKeyDown, true);
       root.removeEventListener("paste", interceptImageFiles, true);
       root.removeEventListener("drop", interceptImageFiles, true);
+      body?.removeEventListener("paste", pasteMarkdown, true);
       root.removeEventListener("click", onClick);
       root.removeEventListener("compositionend", onCompositionEnd);
+      detachMarkdownShortcuts();
       squire.destroy();
       showAssistHighlight(null);
       editorRef.current = null;
