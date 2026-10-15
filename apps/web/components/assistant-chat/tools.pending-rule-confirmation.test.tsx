@@ -167,4 +167,6 @@ function expectDestinationsVisible() {
   }
   expect(screen.getByText("Forward")).toBeTruthy();
   expect(screen.getByText("Webhook")).toBeTruthy();
+  // The proposal isn't applied yet, so no controls for the live rule
+  expect(screen.queryByRole("switch")).toBeNull();
 }

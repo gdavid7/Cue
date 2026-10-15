@@ -839,11 +839,14 @@ export function CreatedRuleToolCard({
   args,
   ruleId,
   preview,
+  pending,
   status,
 }: {
   args: CreateRuleTool["input"];
   ruleId?: string;
   preview?: boolean;
+  /** An unconfirmed proposal: there is no live rule to act on yet. */
+  pending?: boolean;
   status?: "created" | "pending";
 }) {
   const conditionText = buildConditionText(args.condition);
@@ -859,7 +862,7 @@ export function CreatedRuleToolCard({
         />
       }
       actions={
-        preview ? (
+        pending ? null : preview ? (
           <RuleActionsPreview />
         ) : ruleId ? (
           <RuleActions ruleId={ruleId} />
@@ -1013,7 +1016,7 @@ export function PendingUpdateRuleToolCard({
       disableConfirm={disableConfirm}
       onConfirm={handleConfirm}
     >
-      <UpdatedRule args={args} output={output} preview />
+      <UpdatedRule args={args} output={output} pending />
     </PendingRuleConfirmation>
   );
 }
@@ -1287,7 +1290,7 @@ function PendingCreateRuleCardContent({
       disableConfirm={disableConfirm}
       onConfirm={onConfirm}
     >
-      <CreatedRuleToolCard args={args} preview />
+      <CreatedRuleToolCard args={args} pending />
     </PendingRuleConfirmation>
   );
 }
@@ -1542,10 +1545,13 @@ export function UpdatedRule({
   args,
   output,
   preview,
+  pending,
 }: {
   args: UpdateRuleTool["input"];
   output: UpdateRuleOutput;
   preview?: boolean;
+  /** An unconfirmed proposal: the live rule's controls don't apply to it. */
+  pending?: boolean;
 }) {
   const ruleId = output.ruleId;
   const title = output.updatedName || args.updates.name || args.ruleName;
@@ -1573,7 +1579,7 @@ export function UpdatedRule({
     !output.updatedConditions &&
     !output.updatedActions;
   const status = getRuleUpdateStatus({
-    pending: preview && output.requiresConfirmation === true,
+    pending,
     alreadyApplied: output.alreadyApplied,
     onlyEnabledChanged,
     updatedEnabled: output.updatedEnabled,
@@ -1585,7 +1591,7 @@ export function UpdatedRule({
         title={title}
         status={<RuleStatusBadge label={status.label} color={status.color} />}
         actions={
-          preview ? (
+          pending ? null : preview ? (
             <RuleActionsPreview />
           ) : ruleId ? (
             <RuleActions ruleId={ruleId} />
