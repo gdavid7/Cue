@@ -32,10 +32,7 @@ import {
   isLocalPageToken,
   SEARCH_INBOX_MAX_RESULTS,
 } from "@/utils/actions/assistant-local-search.validation";
-import type {
-  LocalMailSearch,
-  LocalMailSearchAnswer,
-} from "@/utils/ai/assistant/local-mail-search";
+import type { LocalMailSearch } from "@/utils/ai/assistant/local-mail-search";
 import { archiveCategory } from "@/utils/categorize/senders/archive-category";
 import { getCategoryOverview } from "@/utils/categorize/senders/get-category-overview";
 import { startBulkCategorization } from "@/utils/categorize/senders/start-bulk-categorization";
@@ -624,7 +621,7 @@ const gmailSearchInboxTool = ({
         });
         const searchResult = local
           ? {
-              messages: local.messages.map(searchSourceFromLocal),
+              messages: local.messages,
               nextPageToken: local.nextPageToken,
             }
           : await emailProvider
@@ -1621,12 +1618,6 @@ function searchSourceFromMessage(message: ParsedMessage): SearchResultSource {
     labelIds: message.labelIds || [],
     hasAttachments: Boolean(message.attachments?.length),
   };
-}
-
-function searchSourceFromLocal(
-  message: LocalMailSearchAnswer["messages"][number],
-): SearchResultSource {
-  return message;
 }
 
 function formatSearchInboxResult({

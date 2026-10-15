@@ -13,7 +13,11 @@ import {
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/redis", () => ({
-  redis: { get: vi.fn(async () => null), set: vi.fn(async () => "OK") },
+  redis: {
+    get: vi.fn(async () => null),
+    set: vi.fn(async () => "OK"),
+    del: vi.fn(async () => 1),
+  },
 }));
 const { mockExecuteTool } = vi.hoisted(() => ({ mockExecuteTool: vi.fn() }));
 vi.mock("@/utils/mcp/providers/registry", () => ({
@@ -319,6 +323,10 @@ describe("fetchConnectorCandidates with an app that keeps failing", () => {
       store.set(key as string, value);
       return "OK";
     });
+    vi.mocked(redis.del).mockImplementation(async (key) => {
+      store.delete(key as string);
+      return 1;
+    });
     prisma.mcpConnection.findMany.mockResolvedValue([
       {
         id: "connection-slack",
@@ -334,7 +342,7 @@ describe("fetchConnectorCandidates with an app that keeps failing", () => {
     vi.mocked(redis.set).mockImplementation(async () => "OK");
   });
 
-  it("doesn't wait on it again right after it failed, and says the result is partial", async () => {
+  it("doesn't wait on it again after it failed twice in a row, and says the result is partial", async () => {
     mockExecuteTool.mockRejectedValue(new Error("internal_server_error"));
     const search = () =>
       fetchConnectorCandidates({
@@ -345,12 +353,37 @@ describe("fetchConnectorCandidates with an app that keeps failing", () => {
       });
 
     await search();
-    expect(mockExecuteTool).toHaveBeenCalledTimes(1);
+    await search();
+    expect(mockExecuteTool).toHaveBeenCalledTimes(2);
 
     const again = await search();
 
-    expect(mockExecuteTool).toHaveBeenCalledTimes(1);
+    expect(mockExecuteTool).toHaveBeenCalledTimes(2);
     expect(again).toEqual({ candidates: [], complete: false });
+  });
+
+  it("asks again after a single failure", async () => {
+    mockExecuteTool
+      .mockRejectedValueOnce(new Error("internal_server_error"))
+      .mockResolvedValueOnce({ messages: { matches: [] } })
+      .mockRejectedValueOnce(new Error("internal_server_error"))
+      .mockResolvedValue({ messages: { matches: [] } });
+    const search = () =>
+      fetchConnectorCandidates({
+        emailAccountId: "school",
+        keywords: ["milestone"],
+        logger,
+        now: NOW,
+      });
+
+    // Failures that a success separates never add up to a cooldown.
+    await search();
+    await search();
+    await search();
+    const fourth = await search();
+
+    expect(mockExecuteTool).toHaveBeenCalledTimes(4);
+    expect(fourth.complete).toBe(true);
   });
 
   it("keeps asking an app whose last search worked", async () => {

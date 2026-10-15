@@ -275,9 +275,14 @@ async function searchEmailThreads(
       .then((r) => r.threads);
   const all = await search(terms.join(" "), SEARCH_THREADS);
   if (terms.length < 2 || all.length >= SEARCH_THREADS) return all;
+  // The newest any-word matches usually include the every-word ones, so a
+  // full page is asked for and the repeats dropped.
   const seen = new Set(all.map((t) => t.id));
-  const any = await search(terms.join(" OR "), SEARCH_THREADS - all.length);
-  return [...all, ...any.filter((t) => !seen.has(t.id))];
+  const any = await search(terms.join(" OR "), SEARCH_THREADS);
+  return [...all, ...any.filter((t) => !seen.has(t.id))].slice(
+    0,
+    SEARCH_THREADS,
+  );
 }
 
 function words(text: string) {

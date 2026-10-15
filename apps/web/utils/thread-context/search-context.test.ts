@@ -118,6 +118,49 @@ describe("searchContext", () => {
     expect(results.map((r) => r.id)).toContain("match");
   });
 
+  it("fills the page with any-word threads even when they repeat every-word ones", async () => {
+    const shared = Array.from({ length: 10 }, (_, i) =>
+      thread(`shared-${i}`, {
+        from: `Sender ${i} <sender${i}@example.com>`,
+        subject: "Analyst superday",
+        snippet: "Superday on Thursday",
+      }),
+    );
+    const extra = Array.from({ length: 5 }, (_, i) =>
+      thread(`extra-${i}`, {
+        from: `Other ${i} <other${i}@example.com>`,
+        subject: "Superday",
+        snippet: "Superday",
+      }),
+    );
+    const searchThreads = vi.fn(
+      async ({ query, maxResults }: { query: string; maxResults: number }) => ({
+        // Newest first, so any-word matches start with the every-word ones.
+        threads: (query.includes(" OR ")
+          ? [...shared, ...extra]
+          : shared
+        ).slice(0, maxResults),
+      }),
+    );
+    const provider = {
+      searchThreads,
+      getThreadsWithParticipant: vi.fn(async () => []),
+    } as unknown as EmailProvider;
+
+    await searchContext({
+      emailAccountId: "account-1",
+      userEmail: USER,
+      query: "analyst superday",
+      emailProvider: provider,
+      logger: createTestLogger(),
+      now: NOW,
+    });
+
+    expect(searchThreads).toHaveBeenLastCalledWith(
+      expect.objectContaining({ query: "analyst OR superday", maxResults: 15 }),
+    );
+  });
+
   it("searches once when threads with every word fill the page", async () => {
     const full = Array.from({ length: 15 }, (_, i) =>
       thread(`t${i}`, {
