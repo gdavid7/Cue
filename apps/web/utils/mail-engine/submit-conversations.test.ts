@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  readOptimisticTriage,
+  subscribeOptimisticTriage,
+} from "./optimistic-triage";
 import { submitConversationChanges } from "./submit-conversations";
 
 describe("submitConversationChanges", () => {
@@ -124,6 +128,80 @@ describe("observed revision", () => {
     const [rejected, retried] = client.submitConversations.mock.calls.slice(1);
     expect(rejected[0].observedRevision).toBe(4);
     expect(retried[0]).toEqual({ ...rejected[0], observedRevision: 5 });
+  });
+});
+
+describe("optimistic triage", () => {
+  it("shows the change in the keypress's own task, before the engine answers", () => {
+    const client = createClient();
+    // The engine has not even reported its revision yet.
+    client.getDiagnostics.mockReturnValue(new Promise(() => {}));
+    const listener = vi.fn();
+    const unsubscribe = subscribeOptimisticTriage(client as never, listener);
+
+    const submitted = submitConversationChanges({
+      accountId: "account",
+      change: { kind: "archive" },
+      client: client as never,
+      conversationIds: ["one", "two"],
+    });
+
+    expect(readOptimisticTriage(client as never)).toEqual([
+      expect.objectContaining({
+        accountId: "account",
+        conversationIds: new Set(["one", "two"]),
+        change: { kind: "archive" },
+      }),
+    ]);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(submitted).toBeInstanceOf(Promise);
+    unsubscribe();
+  });
+
+  it("clears the change once the engine has admitted it", async () => {
+    const client = createClient();
+
+    await submitConversationChanges({
+      accountId: "account",
+      change: { kind: "set_starred", starred: true },
+      client: client as never,
+      conversationIds: ["one"],
+    });
+
+    expect(readOptimisticTriage(client as never)).toEqual([]);
+  });
+
+  it("rolls the change back when the engine rejects it", async () => {
+    const client = createClient();
+    client.submitConversations.mockResolvedValue({
+      status: "rejected",
+      code: "queue_full",
+    });
+
+    await submitConversationChanges({
+      accountId: "account",
+      change: { kind: "archive" },
+      client: client as never,
+      conversationIds: ["one"],
+    });
+
+    expect(readOptimisticTriage(client as never)).toEqual([]);
+  });
+
+  it("rolls the change back when the engine fails", async () => {
+    const client = createClient();
+    client.submitConversations.mockRejectedValue(new Error("worker gone"));
+
+    await expect(
+      submitConversationChanges({
+        accountId: "account",
+        change: { kind: "archive" },
+        client: client as never,
+        conversationIds: ["one"],
+      }),
+    ).rejects.toThrow("worker gone");
+
+    expect(readOptimisticTriage(client as never)).toEqual([]);
   });
 });
 

@@ -16,7 +16,10 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from "@/utils/mail-engine/worker-protocol";
-import { finishPendingLocalMailboxWipe } from "@/utils/mail-engine/wipe-local-mailbox";
+import {
+  finishPendingLocalMailboxWipe,
+  isLocalMailboxWipePending,
+} from "@/utils/mail-engine/wipe-local-mailbox";
 import { createClientLogger } from "@/utils/logger-client";
 
 export { browserMailEngineCapabilities };
@@ -29,6 +32,14 @@ const BUSY_START_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 4000];
 // A start can itself wait out another tab's file lock, so retries stop once
 // the whole start has taken this long rather than multiplying that wait.
 const BUSY_START_BUDGET_MS = 10_000;
+// An early worker this tab never starts, as when another tab owns the engine,
+// is let go after this long.
+const PREWARMED_WORKER_IDLE_MS = 30_000;
+
+let prewarmed: {
+  worker: Worker;
+  timer: ReturnType<typeof setTimeout>;
+} | null = null;
 
 export type BrowserEngineHooks = {
   /** Called when a corrupt mailbox is being rebuilt during start. */
@@ -93,14 +104,35 @@ async function startBrowserEngine(
   return createInTabEngine(start, hooks);
 }
 
+/**
+ * Starts loading the engine worker and SQLite while the page is still
+ * hydrating, so the engine can open the mailbox as soon as it starts. The
+ * worker opens nothing until then, and none is started while a sign-out wipe
+ * is unfinished, since that wipe must come before any mailbox opens.
+ */
+export function prewarmMailEngineWorker() {
+  if (
+    prewarmed ||
+    !browserMailEngineCapabilities().worker ||
+    isLocalMailboxWipePending()
+  ) {
+    return;
+  }
+  const worker = createEngineWorker();
+  const timer = setTimeout(() => {
+    if (prewarmed?.worker !== worker) return;
+    prewarmed = null;
+    worker.terminate();
+  }, PREWARMED_WORKER_IDLE_MS);
+  prewarmed = { worker, timer };
+}
+
 async function createWorkerOwnedEngine(
   input: BrowserEngineStart,
   hooks: BrowserEngineHooks,
 ): Promise<BrowserMailEngine> {
   performance.mark("mail-engine:worker-create");
-  const worker = new Worker(new URL("./engine-worker.ts", import.meta.url), {
-    type: "module",
-  });
+  const worker = takePrewarmedWorker() ?? createEngineWorker();
   const pending = new Map<
     string,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
@@ -319,4 +351,18 @@ export function logDroppedWork(drop: DroppedMailWork) {
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function takePrewarmedWorker() {
+  if (!prewarmed) return null;
+  clearTimeout(prewarmed.timer);
+  const { worker } = prewarmed;
+  prewarmed = null;
+  return worker;
+}
+
+function createEngineWorker() {
+  return new Worker(new URL("./engine-worker.ts", import.meta.url), {
+    type: "module",
+  });
 }

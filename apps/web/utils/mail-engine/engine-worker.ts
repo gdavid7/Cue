@@ -3,7 +3,7 @@ import {
   createMailEngine,
 } from "@inboxzero/mail-core/engine";
 import { createMailHttpRequest } from "./http";
-import { createWasmMailStore } from "./wasm-sqlite";
+import { createWasmMailStore, preloadSqlite } from "./wasm-sqlite";
 import {
   shouldReleaseDeferredOnStart,
   type BrowserEngineStart,
@@ -14,6 +14,10 @@ import { browserStoragePressure } from "./storage-pressure";
 import { createMailWorkerHost } from "./worker-session";
 import type { BrowserMailEngine } from "./create-browser-engine";
 import { createRoutedBackendAdapter } from "@inboxzero/mail-core/protocol/routed-backend-adapter";
+
+// Compiling sqlite-wasm takes a while and opens no files, so it starts as
+// soon as the worker loads rather than when the engine starts.
+preloadSqlite().catch(() => undefined);
 
 const host = createMailWorkerHost({
   createEngine: createWorkerEngine,

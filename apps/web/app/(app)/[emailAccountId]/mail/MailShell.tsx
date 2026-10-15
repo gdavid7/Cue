@@ -48,10 +48,7 @@ import { InboxStyleCard } from "@/app/(app)/[emailAccountId]/mail/InboxStylePick
 import { CueLabelsCard } from "@/components/CueLabelsCleanup";
 import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
 import { TodayIntroLine } from "@/app/(app)/[emailAccountId]/mail/TodayIntroLine";
-import {
-  MailListPlaceholder,
-  MailLoadingNote,
-} from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
+import { MailLoadingNote } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
 import { useTranslateThread } from "@/app/(app)/[emailAccountId]/mail/use-thread-translation";
 import { printThread } from "@/app/(app)/[emailAccountId]/mail/print-thread";
@@ -130,9 +127,15 @@ import {
   mailSplitToThreadsQuery,
   mailTypeToThreadsQuery,
 } from "@/utils/split-inbox/split-query";
-import { isInboxStyleLandingSplit } from "@/utils/split-inbox/inbox-styles";
+import { findLandingSplit } from "@/utils/split-inbox/inbox-styles";
 import { getActionErrorMessage } from "@/utils/error";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
+import {
+  InboxPreviewList,
+  useFetchOpenedPreviewThreads,
+  useRetireInboxPreview,
+} from "@/app/(app)/[emailAccountId]/mail/InboxPreviewList";
+import { markLocalMailboxSynced } from "@/utils/mail-engine/local-mailbox-cookie";
 import { showMailView } from "@/app/(app)/[emailAccountId]/mail/show-mail-view";
 import {
   getMailNavView,
@@ -558,14 +561,12 @@ export function MailShell() {
   );
   // With an inbox style chosen, mail opens on its Primary or Focused tab
   // rather than All, which shows the same mail and more.
+  const landingSplit = findLandingSplit(splits);
   const activeSplit =
-    splits.find((split) => split.id === activeSplitId) ??
-    splits.find(isInboxStyleLandingSplit) ??
-    splits[0];
+    splits.find((split) => split.id === activeSplitId) ?? landingSplit;
   const displayedActiveSplitId = activeSplit?.id ?? null;
   // The tab mail opens on reads as plain `/inbox`; the others by their slug.
-  const landingSplitId =
-    (splits.find(isInboxStyleLandingSplit) ?? splits[0])?.id ?? null;
+  const landingSplitId = landingSplit?.id ?? null;
   const setActiveSplitId = useCallback(
     (splitId: string | null) => {
       // A tab created a moment ago has no slug until settings reload; its id
@@ -650,6 +651,24 @@ export function MailShell() {
   const isFirstSync = isAllAccounts
     ? Boolean(allInboxesFirstSyncMessage)
     : accountThreadState.isFirstSync;
+  // Only the whole inbox can be shown from the server's newest-first list
+  // while the engine syncs; a tab or search would show different mail.
+  const showsWholeInbox =
+    !isAllAccounts &&
+    !searchQuery &&
+    query.type === "inbox" &&
+    Object.keys(query).length === 1;
+  // Once the local mailbox has this account's mail, later visits read it from
+  // there, so the server stops fetching the inbox for them, and the rows it
+  // fetched at sign-in are put away for good.
+  const hasLocalMail = !isAllAccounts && accountThreadState.threads.length > 0;
+  const retireInboxPreview = useRetireInboxPreview();
+  useEffect(() => {
+    if (!hasLocalMail) return;
+    markLocalMailboxSynced(emailAccountId);
+    retireInboxPreview();
+  }, [hasLocalMail, emailAccountId, retireInboxPreview]);
+  useFetchOpenedPreviewThreads();
   const listPlaceholderMessage = getListPlaceholderMessage({
     isAllAccounts,
     allInboxesFirstSyncMessage,
@@ -1982,9 +2001,10 @@ export function MailShell() {
                     }
                     loadingComponent={
                       searchQuery ? undefined : (
-                        <MailListPlaceholder
+                        <InboxPreviewList
                           message={listPlaceholderMessage}
                           layout={layout}
+                          enabled={showsWholeInbox}
                         />
                       )
                     }
