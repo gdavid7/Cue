@@ -214,13 +214,12 @@ export function createMailEngine(input: {
   // as they need rows; a page left in the store by an earlier session or a
   // closed view is dropped instead of walking the whole result set.
   const providerSearches = new Map<string, ProviderSearch>();
-  // Keyed by account and conversation. Each is fetched at most once per
-  // engine: incremental sync keeps it complete from then on.
+  // Keyed by account and conversation, so concurrent opens share one read.
+  // Completion itself is stored, and resets with the account.
   const conversationFetches = new Map<
     string,
     Promise<ConversationCompletion>
   >();
-  const completeConversations = new Set<string>();
   let runningConversationFetches = 0;
   const queuedConversationFetches: Array<() => void> = [];
 
@@ -381,19 +380,10 @@ export function createMailEngine(input: {
     },
     ensureConversationMessages(key) {
       const id = conversationFetchKey(key);
-      if (completeConversations.has(id)) {
-        return Promise.resolve({ status: "complete" });
-      }
       const inFlight = conversationFetches.get(id);
       if (inFlight) return inFlight;
-      const fetched = inConversationFetchSlot(() =>
-        fetchConversationMessages(key),
-      )
+      const fetched = fetchConversationMessages(key)
         .catch((): ConversationCompletion => ({ status: "unavailable" }))
-        .then((result) => {
-          if (result.status === "complete") completeConversations.add(id);
-          return result;
-        })
         .finally(() => conversationFetches.delete(id));
       conversationFetches.set(id, fetched);
       return fetched;
@@ -404,7 +394,6 @@ export function createMailEngine(input: {
     async purgeAccount(accountId) {
       stopSyncLane(accountId);
       idleCatchUpGates.delete(accountId);
-      forgetCompleteConversations(accountId);
       const revision = await store.purgeAccount(accountId);
       await refreshViews();
       return revision;
@@ -419,7 +408,6 @@ export function createMailEngine(input: {
         if (retained.has(account.accountId)) continue;
         stopSyncLane(account.accountId);
         idleCatchUpGates.delete(account.accountId);
-        forgetCompleteConversations(account.accountId);
         await store.purgeAccount(account.accountId);
         purged = true;
       }
@@ -720,21 +708,21 @@ export function createMailEngine(input: {
     },
   };
 
-  // One provider read (Gmail's threads.get) per page of up to 100 messages.
-  // Its patches pass the same version check as hydration, so an older copy
-  // never overwrites what a sync page committed in the meantime.
   async function fetchConversationMessages(
     key: ConversationKey,
   ): Promise<ConversationCompletion> {
-    const local = await store.readConversation(key, {
-      after: null,
-      pageSize: 1,
-    });
-    if (
-      local.view.coverage.every((coverage) => coverage.metadata === "complete")
-    ) {
+    if (await store.readConversationComplete(key)) {
       return { status: "complete" };
     }
+    return inConversationFetchSlot(() => readConversationMembers(key));
+  }
+
+  // One provider read (Gmail's threads.get) per page of up to 100 messages.
+  // Its patches pass the same version check as hydration, so an older copy
+  // never overwrites what a sync page committed in the meantime.
+  async function readConversationMembers(
+    key: ConversationKey,
+  ): Promise<ConversationCompletion> {
     const account = (await store.readAccountSyncStates()).find(
       (candidate) => candidate.accountId === key.accountId,
     );
@@ -746,10 +734,9 @@ export function createMailEngine(input: {
     const resolutionId = runtime.randomId();
     let page: string | null = null;
     do {
-      const requestId = runtime.randomId();
       const membership = await source.readConversationMembership({
         session,
-        requestId,
+        requestId: runtime.randomId(),
         signal: new AbortController().signal,
         conversation: key,
         resolutionId,
@@ -761,13 +748,13 @@ export function createMailEngine(input: {
         return { status: "unavailable" };
       }
       if (membership.value.status !== "page") return { status: "unavailable" };
-      const applied = await store.applyHydration({
+      const applied = await store.applyConversationMembership({
         session,
-        requestId,
-        changes: membership.value.page.changes,
-        bodies: [],
+        page: membership.value.page,
       });
-      if (applied.status === "committed") await refreshViews();
+      // The account was reset or removed while the provider answered.
+      if (applied.status === "stale") return { status: "unavailable" };
+      await refreshViews();
       page = membership.value.page.nextPage;
     } while (page);
     return { status: "complete" };
@@ -788,13 +775,6 @@ export function createMailEngine(input: {
       const next = queuedConversationFetches.shift();
       if (next) next();
       else runningConversationFetches -= 1;
-    }
-  }
-
-  function forgetCompleteConversations(accountId: string) {
-    const prefix = conversationFetchKey({ accountId, conversationId: "" });
-    for (const id of completeConversations) {
-      if (id.startsWith(prefix)) completeConversations.delete(id);
     }
   }
 

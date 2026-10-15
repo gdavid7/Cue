@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createHostRuntime,
   createMailEngine,
+  type MailEngine,
 } from "@inboxzero/mail-core/engine";
 import type { ConversationKey } from "@inboxzero/mail-core/identities";
 import type { ConversationView } from "@inboxzero/mail-core/ports/mail-store";
@@ -126,6 +127,55 @@ describe("opening a conversation a first sync has not fully reached", () => {
     await engine.close();
   });
 
+  it("lets an archive after the fill skip its own membership read", async () => {
+    const source = firstSyncSource({ firstPage: replies });
+    const { engine } = await startFirstSync(source);
+    await engine.ensureConversationMessages(thread);
+
+    const admission = await archive(engine, "archive-1");
+
+    expect(admission.status).toBe("queued");
+    await engine.close();
+  });
+
+  it("does not count a conversation filled for an account reset meanwhile", async () => {
+    let release: () => void = () => undefined;
+    let held = true;
+    const source = firstSyncSource({
+      firstPage: replies,
+      async readMembership(answer) {
+        if (held) {
+          held = false;
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        }
+        return answer();
+      },
+    });
+    const { engine, store } = await startFirstSync(source);
+
+    const filling = engine.ensureConversationMessages(thread);
+    while (source.membershipReads === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    await store.ensureAccount({
+      accountId: "acc-1",
+      generation: "g2",
+      provider: "google",
+    });
+    release();
+
+    await expect(filling).resolves.toEqual({ status: "unavailable" });
+    const inspection = await engine.inspect();
+    expect(
+      inspection.messages.some((row) => row.messageId === "original"),
+    ).toBe(false);
+    await engine.ensureConversationMessages(thread);
+    expect(source.membershipReads).toBe(2);
+    await engine.close();
+  });
+
   it("asks the provider for at most two conversations at a time", async () => {
     let inFlight = 0;
     let maxInFlight = 0;
@@ -158,6 +208,16 @@ describe("opening a conversation a first sync has not fully reached", () => {
     await engine.close();
   });
 });
+
+async function archive(engine: MailEngine, commandId: string) {
+  return engine.submitConversations({
+    accountId: "acc-1",
+    commandId,
+    conversations: [thread],
+    change: { kind: "archive" },
+    observedRevision: (await engine.inspect()).revision,
+  });
+}
 
 async function startFirstSync(source: MailboxSource) {
   const store = await createSqliteMailStore(createNodeSqliteDriver());

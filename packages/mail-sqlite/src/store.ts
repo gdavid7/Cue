@@ -804,6 +804,44 @@ export async function createSqliteMailStore(
         return { status: "committed", revision };
       });
     },
+    async applyConversationMembership(input) {
+      return driver.write(async (tx) => {
+        const { accountId } = input.session;
+        const { conversationId } = input.page.conversation;
+        if (
+          !(await accountGenerationMatches(tx, input.session)) ||
+          input.page.conversation.accountId !== accountId ||
+          input.page.changes.some(
+            (change) => !providerChangeBelongsToAccount(change, accountId),
+          )
+        ) {
+          return { status: "stale" as const };
+        }
+        for (const change of input.page.changes) {
+          if (
+            change.kind === "message_patch" &&
+            (await isStaleMessageVersion(
+              tx,
+              change.key,
+              change.reference.version,
+            ))
+          ) {
+            continue;
+          }
+          await applyChange(tx, change);
+        }
+        if (!input.page.nextPage) {
+          await tx.execute(
+            `INSERT INTO conversation_completeness(account_id, conversation_id, complete)
+             VALUES (?, ?, 1)
+             ON CONFLICT(account_id, conversation_id) DO UPDATE SET complete = 1`,
+            [accountId, conversationId],
+          );
+        }
+        const revision = await bumpRevision(tx);
+        return { status: "committed" as const, revision };
+      });
+    },
     async settleAttempt(input) {
       return driver.write(async (tx) => {
         const current = await tx.query(
@@ -1329,6 +1367,19 @@ export async function createSqliteMailStore(
             coverage: await readCoverage(tx, [key.accountId]),
           },
         };
+      });
+    },
+    async readConversationComplete(key) {
+      return driver.read(async (tx) => {
+        const coverage = await readCoverage(tx, [key.accountId]);
+        if (coverage.every((scope) => scope.metadata === "complete")) {
+          return true;
+        }
+        const flag = await tx.query(
+          "SELECT complete FROM conversation_completeness WHERE account_id = ? AND conversation_id = ?",
+          [key.accountId, key.conversationId],
+        );
+        return Number(flag[0]?.complete) === 1;
       });
     },
     async readOperation(key) {
