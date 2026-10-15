@@ -112,14 +112,14 @@ describe("outlook client emulator configuration", () => {
 
     const clientOptions = vi.mocked(Client.initWithMiddleware).mock
       .calls[0]?.[0];
-    const rewriteMiddleware = clientOptions?.middleware?.[1];
+    const rewriteMiddleware = clientOptions?.middleware?.[2];
     const executeNext = vi.fn();
     const nextMiddleware: Middleware = { execute: executeNext };
     const context: Context = {
       request: "https://graph.microsoft.com/v1.0/me/messages",
     };
 
-    expect(clientOptions?.middleware).toHaveLength(3);
+    expect(clientOptions?.middleware).toHaveLength(4);
     rewriteMiddleware?.setNext?.(nextMiddleware);
     await rewriteMiddleware?.execute(context);
 

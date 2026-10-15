@@ -19,11 +19,10 @@ import {
 } from "@/utils/outlook/retry";
 import { isNotFoundError } from "@/utils/outlook/errors";
 import { mapWithConcurrency } from "@/utils/async";
+import { MICROSOFT_MAILBOX_CONCURRENCY_LIMIT } from "@/utils/outlook/mailbox-concurrency";
 
 const MESSAGE_SELECT_FIELDS =
   "id,conversationId,conversationIndex,internetMessageId,subject,bodyPreview,from,toRecipients,ccRecipients,receivedDateTime,isDraft,isRead,flag,categories,parentFolderId,hasAttachments,webLink,inferenceClassification";
-
-const PARTIAL_MESSAGE_REFETCH_CONCURRENCY = 5;
 
 type DeltaMessage = Message & {
   "@removed"?: { reason?: string };
@@ -238,7 +237,7 @@ async function withPartialMessagesRefetched({
 
   const refetched = await mapWithConcurrency(
     messages,
-    PARTIAL_MESSAGE_REFETCH_CONCURRENCY,
+    MICROSOFT_MAILBOX_CONCURRENCY_LIMIT,
     async (message) =>
       isPartialMessage(message)
         ? getSyncMessage({ client, logger, messageId: message.id })

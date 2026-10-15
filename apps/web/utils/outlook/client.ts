@@ -16,6 +16,7 @@ import {
 } from "@/utils/outlook/oauth";
 import { SCOPES } from "@/utils/outlook/scopes";
 import { isInvalidGrantError, SafeError } from "@/utils/error";
+import { MailboxConcurrencyMiddleware } from "@/utils/outlook/mailbox-concurrency";
 
 // Add buffer time to prevent token expiry during long-running operations
 const TOKEN_REFRESH_BUFFER_MS = 10 * 60 * 1000; // 10 minutes
@@ -31,9 +32,11 @@ export class OutlookClient {
   constructor(accessToken: string, logger: Logger) {
     this.accessToken = accessToken;
     this.logger = logger;
-    this.client = createMicrosoftGraphClient(() => this.accessToken, {
-      Prefer: 'IdType="ImmutableId"',
-    });
+    this.client = createMicrosoftGraphClient(
+      () => this.accessToken,
+      { Prefer: 'IdType="ImmutableId"' },
+      { limitMailboxConcurrency: true },
+    );
   }
 
   getClient(): Client {
@@ -129,33 +132,44 @@ class OutlookEmulatorUrlMiddleware implements Middleware {
 export function createMicrosoftGraphClient(
   getAccessToken: () => string,
   headers?: Record<string, string>,
+  {
+    limitMailboxConcurrency = false,
+  }: { limitMailboxConcurrency?: boolean } = {},
 ): Client {
   const graphClientOptions = getMicrosoftGraphClientOptions(getAccessToken());
   const fetchOptions = headers ? { headers } : undefined;
+  const isEmulator = graphClientOptions.baseUrl?.startsWith("http://");
 
-  if (graphClientOptions.baseUrl?.startsWith("http://")) {
-    const middleware = MiddlewareFactory.getDefaultMiddlewareChain({
-      getAccessToken: async () => getAccessToken(),
+  if (!isEmulator && !limitMailboxConcurrency) {
+    return Client.init({
+      authProvider: (done) => {
+        done(null, getAccessToken());
+      },
+      defaultVersion: "v1.0",
+      ...graphClientOptions,
+      fetchOptions,
     });
+  }
+
+  const middleware = MiddlewareFactory.getDefaultMiddlewareChain({
+    getAccessToken: async () => getAccessToken(),
+  });
+  if (graphClientOptions.baseUrl && isEmulator) {
     middleware.splice(
       1,
       0,
       new OutlookEmulatorUrlMiddleware(graphClientOptions.baseUrl),
     );
-    return Client.initWithMiddleware({
-      defaultVersion: graphClientOptions.defaultVersion,
-      fetchOptions,
-      middleware,
-    });
+  }
+  if (limitMailboxConcurrency) {
+    middleware.unshift(new MailboxConcurrencyMiddleware(getAccessToken));
   }
 
-  return Client.init({
-    authProvider: (done) => {
-      done(null, getAccessToken());
-    },
-    defaultVersion: "v1.0",
-    ...graphClientOptions,
+  return Client.initWithMiddleware({
+    defaultVersion: graphClientOptions.defaultVersion ?? "v1.0",
+    ...(isEmulator ? {} : graphClientOptions),
     fetchOptions,
+    middleware,
   });
 }
 
