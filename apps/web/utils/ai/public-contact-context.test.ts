@@ -113,6 +113,26 @@ describe("getPublicContactContext", () => {
       }),
     ).rejects.toMatchObject({ statusCode: 429 });
     expect(generateTextMock).not.toHaveBeenCalled();
+    // The lock is released so the user can retry once the window passes
+    expect(redis.eval).toHaveBeenLastCalledWith(
+      expect.any(String),
+      [expect.stringContaining("public-contact-context:v1:lock")],
+      expect.anything(),
+    );
+  });
+
+  it("does not count polls while research is in progress", async () => {
+    vi.mocked(redis.set).mockResolvedValue(null);
+
+    for (let poll = 0; poll < 5; poll++) {
+      await getPublicContactContext({
+        email: "john@acme.com",
+        name: "John Smith",
+        emailAccount: getEmailAccount(),
+      });
+    }
+
+    expect(redis.eval).not.toHaveBeenCalled();
   });
 
   it("does not count stored profiles against the research rate limit", async () => {

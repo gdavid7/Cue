@@ -89,16 +89,6 @@ export async function getPublicContactContext({
     return { status: "unavailable", reason: "search_unavailable" };
   }
 
-  // Counted here, not per request: the panel polls while research runs, and
-  // only starting research is costly (a model call with web search).
-  await assertWithinUserRateLimit({
-    scope: "public-contact-research",
-    userId: emailAccount.userId,
-    limit: 20,
-    windowSeconds: 5 * 60,
-    logger,
-  });
-
   const researchLock = await acquirePublicContactResearchLock(
     identity.data.email,
   );
@@ -107,6 +97,25 @@ export async function getPublicContactContext({
   }
   if (researchLock.status === "unavailable") {
     return { status: "unavailable", reason: "cache_unavailable" };
+  }
+
+  // Counted once the lock is held, so only a request that would start
+  // research (a model call with web search) counts; the panel's polls while
+  // research runs find the lock busy and never get here.
+  try {
+    await assertWithinUserRateLimit({
+      scope: "public-contact-research",
+      userId: emailAccount.userId,
+      limit: 20,
+      windowSeconds: 5 * 60,
+      logger,
+    });
+  } catch (error) {
+    await releasePublicContactResearchLock(
+      identity.data.email,
+      researchLock.lockToken,
+    );
+    throw error;
   }
 
   try {
