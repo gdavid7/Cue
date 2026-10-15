@@ -53,12 +53,31 @@ describe("mailbox thread list", () => {
     const search = document.createElement("input");
     document.body.append(search);
     const { rerender } = render(<RowList focusedIndex={0} />);
+    screen.getByRole("option", { name: /First/ }).focus();
     search.focus();
 
     rerender(<RowList focusedIndex={2} />);
 
     expect(document.activeElement).toBe(search);
     search.remove();
+  });
+
+  // Archiving the focused row removes it, which drops focus to the page;
+  // J/K and Enter then had nothing to act on until the user clicked a row.
+  it("focuses the next row when the focused row goes", () => {
+    const { rerender } = render(<RowList focusedIndex={1} />);
+    screen.getByRole("option", { name: /Second/ }).focus();
+
+    rerender(
+      <RowList
+        focusedIndex={1}
+        items={ITEMS.filter((item) => item.id !== "Second")}
+      />,
+    );
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("option", { name: /Third/ }),
+    );
   });
 });
 
@@ -86,9 +105,11 @@ function KeyboardList({ onOpen }: { onOpen: (index: number) => void }) {
 
 function RowList({
   focusedIndex,
+  items = ITEMS,
   onOpen = vi.fn(),
 }: {
   focusedIndex: number;
+  items?: Item[];
   onOpen?: (index: number) => void;
 }) {
   return (
@@ -98,7 +119,7 @@ function RowList({
       getKey={(item) => item.id}
       isLoadingMore={false}
       isSelected={() => false}
-      items={ITEMS}
+      items={items}
       listKey="inbox"
       onLoadMore={vi.fn()}
       onOpen={onOpen}
