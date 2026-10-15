@@ -2,7 +2,12 @@
 
 import { type FormEvent, type ReactNode, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CheckIcon, CopyIcon, ExternalLinkIcon } from "lucide-react";
+import {
+  CheckIcon,
+  CopyIcon,
+  ExternalLinkIcon,
+  TriangleAlertIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,6 +26,7 @@ import {
 import {
   BETA_SIGN_IN_URL,
   GOOGLE_OAUTH_TEST_USERS_URL,
+  GMAIL_DOMAINS,
   GOOGLE_OAUTH_TESTING_MODE,
 } from "@/utils/access/config";
 import { BRAND_NAME } from "@/utils/branding";
@@ -65,7 +71,7 @@ export function AddToBeta() {
         <CardTitle className="text-lg">Add someone to the beta</CardTitle>
         <CardDescription>
           They can sign up as soon as you add them. They sign in with Google, so
-          use their Gmail or their school or work Google address.
+          use their Gmail or a Google Workspace (school or work) account.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5 p-4 pt-0 sm:p-6 sm:pt-0">
@@ -107,6 +113,13 @@ function AddedChecklist({ added }: { added: Added }) {
           ? `${added.email} is already in the beta`
           : `${added.email} is in`}
       </p>
+      {!isGmailAddress(added.email) && (
+        <p className="mt-2 flex gap-2 text-amber-700 text-sm dark:text-amber-400">
+          <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" aria-hidden />
+          Not a Gmail address — they&apos;ll need a Google Workspace account at
+          that address to sign in.
+        </p>
+      )}
       <ol className="mt-4 space-y-4">
         <Step number={1} done title="Approved in Cue" />
         {GOOGLE_OAUTH_TESTING_MODE && (
@@ -223,4 +236,8 @@ function Step({
 
 function getInviteText(email: string) {
   return `You're in the ${BRAND_NAME} beta! Sign in with Google as ${email}: ${BETA_SIGN_IN_URL}`;
+}
+
+function isGmailAddress(email: string) {
+  return GMAIL_DOMAINS.includes(email.split("@").pop() ?? "");
 }
