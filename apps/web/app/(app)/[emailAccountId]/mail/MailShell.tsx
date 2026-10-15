@@ -746,18 +746,18 @@ export function MailShell() {
     : undefined;
   const readAttemptedForOpenThread = useRef<string | null>(null);
   useWarmNeighbourThreads({ threads, openThreadKey, emailAccountId });
-  const {
-    listRef: listSectionRef,
-    readerRef: readerColumnRef,
-    focusReaderWhenShown,
-    focusListWhenShown,
-  } = useReaderFocusHandoff();
 
   // Defer the pair as one value: rendering a new id with the previous account
   // would be worse than fetching eagerly when J/K moves between account rows.
   const deferredReaderSelection = useDeferredValue(openThreadSelection);
   const readerThreadKey = getThreadSelectionKey(deferredReaderSelection);
   const openReaderThreadKey = getThreadSelectionKey(openThreadSelection);
+  const {
+    listRef: listSectionRef,
+    readerRef: readerColumnRef,
+    focusReaderWhenShown,
+    focusListWhenShown,
+  } = useReaderFocusHandoff(openReaderThreadKey);
   useLayoutEffect(() => {
     if (openReaderThreadKey) setIsMenuOpen(false);
   }, [openReaderThreadKey]);
@@ -1107,9 +1107,11 @@ export function MailShell() {
     setReplyToMessageId(undefined);
     setForwardToMessageId(undefined);
     selection.clear();
+    const nextSelection = getListThreadSelection(thread, emailAccountId);
+    const nextKey = getThreadSelectionKey(nextSelection);
     // Split layout keeps the list, and focus with it.
-    if (layout === "list") focusReaderWhenShown();
-    setOpenThread(getListThreadSelection(thread, emailAccountId));
+    if (layout === "list" && nextKey) focusReaderWhenShown(nextKey);
+    setOpenThread(nextSelection);
   });
 
   const move = useCallback(
