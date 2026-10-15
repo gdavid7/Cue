@@ -259,7 +259,10 @@ test("captures the rich message reader states", async ({ page }, testInfo) => {
     .getByText("Me", { exact: true })
     .first()
     .locator("..");
-  await expect(sentMessage.locator("img")).toBeVisible();
+  // The emulated account has no profile photo, so its own messages carry
+  // its initials rather than an image.
+  await expect(sentMessage.getByText("ME", { exact: true })).toBeVisible();
+  await expect(sentMessage.locator("img")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Show quoted content" }),
   ).toBeVisible();
