@@ -61,13 +61,14 @@ import { withChatToolRuntime } from "@/utils/ai/assistant/chat-tool-runtime";
 
 export const maxDuration = 300;
 // Increment when chat prompts, tools, or routing change so run quality remains attributable.
-export const ASSISTANT_CHAT_PIPELINE_VERSION = 18;
-// The web chat route is stopped at its 300s maxDuration; tools are switched off
-// with room left for the model to answer from what they found.
+export const ASSISTANT_CHAT_PIPELINE_VERSION = 19;
+// Someone is watching the reply, so past these the model stops looking and
+// answers from what it found rather than searching on for minutes.
 const ASSISTANT_CHAT_TOOL_BUDGET_MS = {
-  web: 210_000,
+  web: 45_000,
   messaging: 60_000,
 } satisfies Record<"web" | "messaging", number>;
+const ASSISTANT_CHAT_MAX_TOOL_STEPS = 6;
 
 type AssistantChatOnStepEnd = NonNullable<
   Parameters<typeof toolCallAgentStream>[0]["onStepEnd"]
@@ -436,14 +437,14 @@ export async function aiProcessAssistantChat({
     },
     onEnd,
     stopWhen: () => false,
-    prepareStep: ({ messages: stepMessages }) => {
+    prepareStep: ({ messages: stepMessages, stepNumber }) => {
       const trimmedMessages = trimStaleToolResults(stepMessages);
       const messages =
         trimmedMessages === stepMessages ? undefined : trimmedMessages;
 
       if (
-        Date.now() - startedAt <
-        ASSISTANT_CHAT_TOOL_BUDGET_MS[responseSurface]
+        stepNumber < ASSISTANT_CHAT_MAX_TOOL_STEPS &&
+        Date.now() - startedAt < ASSISTANT_CHAT_TOOL_BUDGET_MS[responseSurface]
       )
         return messages && { messages };
 

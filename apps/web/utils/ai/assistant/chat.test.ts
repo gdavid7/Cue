@@ -410,3 +410,54 @@ describe("aiProcessAssistantChat inbox snapshot", () => {
     ).toBe(false);
   });
 });
+
+describe("aiProcessAssistantChat turn limits", () => {
+  async function prepareStepFor() {
+    vi.clearAllMocks();
+    vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
+    await aiProcessAssistantChat({
+      messages: [{ role: "user", content: "what's new?" }],
+      emailAccountId: "email-account-id",
+      user: getEmailAccount(),
+      logger: createTestLogger(),
+    });
+    const [options] = vi.mocked(toolCallAgentStream).mock.calls[0];
+    const prepareStep = options.prepareStep!;
+    return (stepNumber: number) =>
+      prepareStep({
+        stepNumber,
+        steps: [],
+        messages: [{ role: "user", content: "what's new?" }],
+        model: {
+          provider: "google.generative-ai",
+          modelId: "gemini-3.8-flash",
+        },
+      } as never);
+  }
+
+  it("answers without more tools after six steps", async () => {
+    const step = await prepareStepFor();
+
+    expect(await step(5)).not.toMatchObject({ toolChoice: "none" });
+    expect(await step(6)).toMatchObject({
+      activeTools: [],
+      toolChoice: "none",
+    });
+  });
+
+  it("answers without more tools once a web turn has spent 45 seconds", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const step = await prepareStepFor();
+      vi.setSystemTime(Date.now() + 44_000);
+      expect(await step(1)).not.toMatchObject({ toolChoice: "none" });
+      vi.setSystemTime(Date.now() + 2000);
+      expect(await step(1)).toMatchObject({
+        activeTools: [],
+        toolChoice: "none",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
