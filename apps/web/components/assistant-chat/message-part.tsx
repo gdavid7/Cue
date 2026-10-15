@@ -16,6 +16,7 @@ import {
   PendingSaveMemoryToolCard,
   PendingCreateRuleToolCard,
   PendingUpdateRuleToolCard,
+  PendingLearnedPatternsToolCard,
   ForwardEmailResult,
   getManageInboxActionLabel,
   ManageInboxResult,
@@ -42,6 +43,7 @@ import {
 import type { DeleteRuleOutput } from "@/utils/ai/assistant/tools/rules/delete-rule-tool";
 import { getUserVisibleToolFailureMessage } from "@/utils/ai/assistant/chat-response-guard";
 import { pluralize } from "@/utils/string";
+import { pendingLearnedPatternsToolOutputSchema } from "@/utils/actions/assistant-chat.validation";
 
 interface MessagePartProps {
   disableConfirm: boolean;
@@ -726,6 +728,23 @@ export function MessagePart({
       const { output } = part;
       if (isOutputWithError(output)) {
         return renderToolError(toolCallId, output);
+      }
+      const pendingPatterns =
+        pendingLearnedPatternsToolOutputSchema.safeParse(output);
+      if (
+        pendingPatterns.success &&
+        pendingPatterns.data.confirmationState !== "confirmed"
+      ) {
+        return (
+          <PendingLearnedPatternsToolCard
+            key={toolCallId}
+            args={part.input}
+            output={pendingPatterns.data}
+            chatMessageId={messageId}
+            toolCallId={toolCallId}
+            disableConfirm={disableConfirm || !isPersistedMessage}
+          />
+        );
       }
       const ruleId = getOutputField<string>(output, "ruleId");
       if (!ruleId)

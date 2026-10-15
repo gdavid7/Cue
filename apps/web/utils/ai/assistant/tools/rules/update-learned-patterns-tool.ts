@@ -2,8 +2,10 @@ import { type InferUITool, tool } from "ai";
 import { z } from "zod";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
+import { filterNullProperties } from "@/utils";
 import { GroupItemType } from "@/generated/prisma/enums";
 import { saveLearnedPatterns } from "@/utils/rule/learned-patterns";
+import { isOutboundRuleAction } from "@/utils/rule/outbound-actions";
 import { hideToolErrorFromUser } from "../../tool-error-visibility";
 import type { RuleReadState } from "../../chat-rule-state";
 import {
@@ -87,6 +89,9 @@ export const updateLearnedPatternsTool = ({
             name: true,
             updatedAt: true,
             organizationRuleId: true,
+            actions: {
+              select: { type: true, to: true, cc: true, bcc: true, url: true },
+            },
             emailAccount: {
               select: {
                 rulesRevision: true,
@@ -162,6 +167,39 @@ export const updateLearnedPatternsTool = ({
             error:
               "No learned patterns were saved because no sender or subject pattern was provided.",
           });
+        }
+
+        // Including more mail in a rule that forwards, replies or calls a
+        // webhook sends that mail out, and the patterns match by substring,
+        // so the user confirms them like any other outbound change.
+        const outboundActions = rule.actions
+          .filter((action) => isOutboundRuleAction(action.type))
+          .map((action) => ({
+            type: action.type,
+            fields: filterNullProperties({
+              to: action.to,
+              cc: action.cc,
+              bcc: action.bcc,
+              webhookUrl: action.url,
+            }),
+          }));
+        if (
+          outboundActions.length &&
+          patternsToSave.some((pattern) => !pattern.exclude)
+        ) {
+          return {
+            success: true,
+            actionType: "update_learned_patterns" as const,
+            requiresConfirmation: true as const,
+            confirmationState: "pending" as const,
+            riskMessages: [
+              "This rule sends email or data automatically, so every message these patterns match will be sent too. Check each pattern before confirming.",
+            ],
+            ruleId: rule.id,
+            ruleName: rule.name,
+            patterns: patternsToSave,
+            outboundActions,
+          };
         }
 
         const result = await saveLearnedPatterns({

@@ -8,6 +8,7 @@ vi.mock("@/utils/actions/assistant-chat", () => ({
   confirmAssistantEmailAction: vi.fn(),
   confirmAssistantSaveMemory: vi.fn(),
   confirmAssistantUpdateRule: vi.fn(),
+  confirmAssistantLearnedPatterns: vi.fn(),
 }));
 vi.mock("@/utils/actions/rule", () => ({
   deleteRuleAction: vi.fn(),
@@ -42,6 +43,7 @@ vi.mock("@/components/assistant-chat/inline-email-card", () => ({
 
 import {
   PendingCreateRuleToolCard,
+  PendingLearnedPatternsToolCard,
   PendingUpdateRuleToolCard,
 } from "@/components/assistant-chat/tools";
 
@@ -120,6 +122,41 @@ describe("pending rule confirmations", () => {
     );
 
     expectDestinationsVisible();
+  });
+
+  it("shows the patterns and where the rule sends before saving them", () => {
+    render(
+      <PendingLearnedPatternsToolCard
+        args={{
+          ruleName: "Vendor Billing",
+          learnedPatterns: [{ include: { from: "@" } }],
+        }}
+        output={{
+          success: true,
+          actionType: "update_learned_patterns",
+          requiresConfirmation: true,
+          confirmationState: "pending",
+          riskMessages: ["Check each pattern"],
+          ruleId: "rule-1",
+          ruleName: "Vendor Billing",
+          patterns: [
+            { type: "FROM", value: "@", exclude: false },
+            { type: "SUBJECT", value: "invoice", exclude: true },
+          ],
+          outboundActions: [
+            { type: "FORWARD", fields: { to: FORWARD_TO, cc: CC, bcc: BCC } },
+            { type: "CALL_WEBHOOK", fields: { webhookUrl: WEBHOOK } },
+          ],
+        }}
+        chatMessageId="message-1"
+        toolCallId="tool-1"
+        disableConfirm={false}
+      />,
+    );
+
+    expectDestinationsVisible();
+    expect(screen.getByText("Include sender: @")).toBeTruthy();
+    expect(screen.getByText("Exclude subject: invoice")).toBeTruthy();
   });
 });
 

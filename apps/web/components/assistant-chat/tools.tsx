@@ -5,6 +5,7 @@ import type { AddToKnowledgeBaseTool } from "@/utils/ai/assistant/tools/rules/ad
 import type { CreateRuleTool } from "@/utils/ai/assistant/tools/rules/create-rule-tool";
 import type { UpdatePersonalInstructionsTool } from "@/utils/ai/assistant/tools/rules/update-personal-instructions-tool";
 import type { UpdateLearnedPatternsTool } from "@/utils/ai/assistant/tools/rules/update-learned-patterns-tool";
+import type { PendingLearnedPatternsToolOutput } from "@/utils/actions/assistant-chat.validation";
 import type {
   UpdateRuleOutput,
   UpdateRuleTool,
@@ -42,6 +43,7 @@ import {
   confirmAssistantCreateRule,
   confirmAssistantEmailAction,
   confirmAssistantSaveMemory,
+  confirmAssistantLearnedPatterns,
   confirmAssistantUpdateRule,
 } from "@/utils/actions/assistant-chat";
 import { deleteRuleAction, toggleRuleAction } from "@/utils/actions/rule";
@@ -1012,6 +1014,86 @@ export function PendingUpdateRuleToolCard({
       onConfirm={handleConfirm}
     >
       <UpdatedRule args={args} output={output} preview />
+    </PendingRuleConfirmation>
+  );
+}
+
+export function PendingLearnedPatternsToolCard({
+  args,
+  output,
+  chatMessageId,
+  toolCallId,
+  disableConfirm,
+}: {
+  args: UpdateLearnedPatternsTool["input"];
+  output: PendingLearnedPatternsToolOutput;
+  chatMessageId: string;
+  toolCallId: string;
+  disableConfirm: boolean;
+}) {
+  const { emailAccountId } = useAccount();
+  const { chatId } = useChat();
+  const [isConfirming, setIsConfirming] = useState(false);
+  const [isConfirmed, setIsConfirmed] = useState(false);
+
+  if (isConfirmed) {
+    return <UpdatedLearnedPatterns args={args} ruleId={output.ruleId} />;
+  }
+
+  const handleConfirm = async () => {
+    setIsConfirming(true);
+    try {
+      if (!chatId) {
+        toastError({ description: "Could not save these patterns." });
+        return;
+      }
+
+      const input = { chatId, chatMessageId, toolCallId };
+      const result = await confirmAssistantLearnedPatterns(
+        emailAccountId,
+        input,
+      );
+
+      if (result?.serverError) {
+        toastError({ description: result.serverError });
+        return;
+      }
+      if (result?.data?.confirmationState !== "confirmed") {
+        toastError({ description: "Could not save these patterns." });
+        return;
+      }
+
+      setIsConfirmed(true);
+      toastSuccess({ description: "Patterns saved." });
+    } catch {
+      toastError({ description: "Could not save these patterns." });
+    } finally {
+      setIsConfirming(false);
+    }
+  };
+
+  return (
+    <PendingRuleConfirmation
+      title="Review before saving"
+      description={`"${output.ruleName}" sends email or data automatically. Mail these patterns match will be sent too.`}
+      riskMessages={output.riskMessages.filter(Boolean)}
+      actions={output.outboundActions}
+      confirmLabel="Save patterns"
+      busyLabel="Saving..."
+      isConfirming={isConfirming}
+      isProcessing={output.confirmationState === "processing"}
+      disableConfirm={disableConfirm}
+      onConfirm={handleConfirm}
+    >
+      <ToolPanel className="space-y-1 text-sm">
+        {output.patterns.map((pattern, index) => (
+          <p key={index} className="break-all text-foreground">
+            {`${pattern.exclude ? "Exclude" : "Include"} ${
+              pattern.type === "SUBJECT" ? "subject" : "sender"
+            }: ${pattern.value}`}
+          </p>
+        ))}
+      </ToolPanel>
     </PendingRuleConfirmation>
   );
 }

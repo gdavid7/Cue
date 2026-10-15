@@ -5,12 +5,14 @@ import {
   confirmAssistantCreateRuleBody,
   confirmAssistantEmailActionBody,
   confirmAssistantSaveMemoryBody,
+  confirmAssistantLearnedPatternsBody,
   confirmAssistantUpdateRuleBody,
 } from "./assistant-chat.validation";
 import {
   confirmAssistantCreateRuleForAccount,
   confirmAssistantEmailActionForAccount,
   confirmAssistantSaveMemoryForAccount,
+  confirmAssistantLearnedPatternsForAccount,
   confirmAssistantUpdateRuleForAccount,
 } from "./assistant-chat-confirmation";
 
@@ -75,6 +77,24 @@ export const confirmAssistantUpdateRule = actionClient
         waitForPersistence: true,
         emailAccountId,
         provider,
+        logger,
+      }),
+  );
+
+export const confirmAssistantLearnedPatterns = actionClient
+  .metadata({ name: "confirmAssistantLearnedPatterns" })
+  .inputSchema(confirmAssistantLearnedPatternsBody)
+  .action(
+    async ({
+      ctx: { emailAccountId, logger },
+      parsedInput: { chatId, chatMessageId, toolCallId },
+    }) =>
+      confirmAssistantLearnedPatternsForAccount({
+        chatId,
+        chatMessageId,
+        toolCallId,
+        waitForPersistence: true,
+        emailAccountId,
         logger,
       }),
   );

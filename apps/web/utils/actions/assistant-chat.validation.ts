@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { ActionType, LogicalOperator } from "@/generated/prisma/enums";
+import {
+  ActionType,
+  GroupItemType,
+  LogicalOperator,
+} from "@/generated/prisma/enums";
 import { messageContextSchema } from "@/utils/ai/assistant/chat-context-validation";
 import { inlineEmailActionSchema } from "@/utils/ai/assistant/inline-email-actions";
 
@@ -198,6 +202,41 @@ export const pendingUpdateRuleToolOutputSchema = z.object({
 });
 
 export const confirmAssistantUpdateRuleBody = confirmAssistantActionBaseBody;
+
+export const pendingLearnedPatternsToolOutputSchema = z.object({
+  success: z.literal(true),
+  actionType: z.literal("update_learned_patterns"),
+  requiresConfirmation: z.literal(true),
+  confirmationState: z.enum(["pending", "processing", "confirmed"]),
+  confirmationProcessingAt: z.string().optional(),
+  riskMessages: z.array(z.string()),
+  ruleId: z.string().trim().min(1),
+  ruleName: z.string(),
+  patterns: z
+    .array(
+      z.object({
+        type: z.nativeEnum(GroupItemType),
+        value: z.string().min(1),
+        exclude: z.boolean().optional(),
+      }),
+    )
+    .min(1),
+  outboundActions: z.array(
+    z.object({
+      type: z.string(),
+      fields: z.record(z.string(), z.string().nullable()).nullish(),
+    }),
+  ),
+  confirmationResult: z
+    .object({ ruleId: z.string(), confirmedAt: z.string().min(1) })
+    .optional(),
+});
+export type PendingLearnedPatternsToolOutput = z.infer<
+  typeof pendingLearnedPatternsToolOutputSchema
+>;
+
+export const confirmAssistantLearnedPatternsBody =
+  confirmAssistantActionBaseBody;
 
 export const pendingSaveMemoryToolOutputSchema = z.object({
   success: z.literal(true),

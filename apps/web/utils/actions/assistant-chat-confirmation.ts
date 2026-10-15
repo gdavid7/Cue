@@ -15,6 +15,7 @@ import {
   type AssistantPendingEmailActionType,
   type AssistantPendingEmailToolOutput,
   pendingCreateRuleToolOutputSchema,
+  pendingLearnedPatternsToolOutputSchema,
   pendingForwardEmailToolOutputSchema,
   pendingReplyEmailToolOutputSchema,
   pendingSaveMemoryToolOutputSchema,
@@ -29,6 +30,7 @@ import {
   type ChatCreateRuleToolInvocation,
 } from "@/utils/ai/assistant/tools/rules/shared";
 import { createRule } from "@/utils/rule/rule";
+import { saveLearnedPatterns } from "@/utils/rule/learned-patterns";
 import { applyRuleUpdate } from "@/utils/ai/assistant/tools/rules/update-rule-tool";
 
 const CONFIRMATION_IN_PROGRESS_ERROR =
@@ -479,6 +481,125 @@ export async function confirmAssistantUpdateRuleForAccount({
   };
 }
 
+export async function confirmAssistantLearnedPatternsForAccount({
+  chatId,
+  chatMessageId,
+  toolCallId,
+  waitForPersistence,
+  emailAccountId,
+  logger,
+}: {
+  chatId: string;
+  chatMessageId?: string;
+  toolCallId: string;
+  waitForPersistence?: boolean;
+  emailAccountId: string;
+  logger: Logger;
+}) {
+  const findPart = (parts: unknown) =>
+    findPendingAssistantLearnedPatternsPart({ parts, toolCallId });
+
+  const reservation = await reservePendingAssistantPart({
+    chatId,
+    chatMessageId,
+    emailAccountId,
+    logger,
+    findPart,
+    getConfirmed: (lookup) =>
+      lookup.output.confirmationState === "confirmed"
+        ? lookup.output.ruleId
+        : null,
+    logPrefix: "Assistant learned patterns confirmation",
+    waitForPersistenceMs: waitForPersistence
+      ? PENDING_ACTION_PERSIST_WAIT_MS
+      : undefined,
+    inProgressError: CONFIRMATION_IN_PROGRESS_ERROR,
+    onMessageNotFound: () => {
+      throw new SafeError("Chat message not found");
+    },
+    onPartNotFound: () => {
+      throw new SafeError("Pending learned patterns not found");
+    },
+    onRaceMessageNotFound: () => {
+      throw new SafeError("Chat message not found");
+    },
+  });
+
+  if (reservation.status === "confirmed") {
+    return {
+      success: true,
+      confirmationState: "confirmed" as const,
+      ruleId: reservation.value,
+    };
+  }
+
+  const { output } = reservation.lookup;
+  try {
+    const rule = await prisma.rule.findUnique({
+      where: { id: output.ruleId, emailAccountId },
+      select: { id: true, name: true, organizationRuleId: true },
+    });
+    if (!rule || rule.organizationRuleId) {
+      throw new SafeError("Rule not found");
+    }
+
+    const result = await saveLearnedPatterns({
+      emailAccountId,
+      ruleName: rule.name,
+      patterns: output.patterns,
+      logger,
+    });
+    if (result?.error) throw new SafeError(result.error);
+  } catch (error) {
+    await clearPendingPartProcessing({
+      chatMessageId: reservation.chatMessageId,
+      emailAccountId,
+      findPart,
+    }).catch((processingError) => {
+      logger.error("Failed to clear processing state for learned patterns", {
+        error: processingError,
+      });
+    });
+    logger.error("Failed to confirm assistant learned patterns", { error });
+    if (error instanceof SafeError) throw error;
+    throw new SafeError("Failed to update learned patterns");
+  }
+
+  const confirmedAt = new Date().toISOString();
+  try {
+    await persistConfirmedAssistantPart({
+      chatMessageId: reservation.chatMessageId,
+      emailAccountId,
+      logger: logger.with({ toolCallId, ruleId: output.ruleId }),
+      findPart,
+      isConfirmed: (lookup) => lookup.output.confirmationState === "confirmed",
+      buildParts: ({ parts, partIndex }) =>
+        updateAssistantEmailPartOutput({
+          parts,
+          partIndex,
+          outputPatch: {
+            confirmationState: "confirmed",
+            confirmationResult: { ruleId: output.ruleId, confirmedAt },
+          },
+        }),
+    });
+  } catch (persistError) {
+    logger.error("Failed to persist confirmed assistant learned patterns", {
+      error: persistError,
+    });
+    throw new SafeError(
+      "Patterns were saved but confirmation state could not be saved. Please refresh and try again.",
+    );
+  }
+
+  return {
+    success: true,
+    confirmationState: "confirmed" as const,
+    ruleId: output.ruleId,
+    confirmationResult: { ruleId: output.ruleId, confirmedAt },
+  };
+}
+
 export async function confirmAssistantSaveMemoryForAccount({
   chatId,
   chatMessageId,
@@ -816,6 +937,35 @@ function findPendingAssistantUpdateRulePart({
     }
 
     const parsed = pendingUpdateRuleToolOutputSchema.safeParse(part.output);
+    if (!parsed.success) continue;
+
+    return { index, output: parsed.data, parts };
+  }
+
+  return null;
+}
+
+function findPendingAssistantLearnedPatternsPart({
+  parts,
+  toolCallId,
+}: {
+  parts: unknown;
+  toolCallId: string;
+}) {
+  if (!Array.isArray(parts)) return null;
+
+  for (const [index, part] of parts.entries()) {
+    if (
+      !isRecord(part) ||
+      part.type !== "tool-updateLearnedPatterns" ||
+      part.toolCallId !== toolCallId
+    ) {
+      continue;
+    }
+
+    const parsed = pendingLearnedPatternsToolOutputSchema.safeParse(
+      part.output,
+    );
     if (!parsed.success) continue;
 
     return { index, output: parsed.data, parts };
