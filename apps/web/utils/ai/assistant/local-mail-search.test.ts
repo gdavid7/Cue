@@ -2,15 +2,23 @@ import type { UIMessageStreamWriter } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestLogger } from "@/__tests__/helpers";
 import {
+  acceptLocalMailSearchResult,
   createLocalMailSearch,
   saveLocalMailSearchResult,
 } from "./local-mail-search";
 
-const { store } = vi.hoisted(() => ({ store: new Map<string, unknown>() }));
+const { mockAssertWithinUserRateLimit } = vi.hoisted(() => ({
+  mockAssertWithinUserRateLimit: vi.fn(async () => {}),
+}));
+vi.mock("@/utils/rate-limit", () => ({
+  assertWithinUserRateLimit: mockAssertWithinUserRateLimit,
+}));
+
+// Follows the module's two Lua scripts, told apart by their first line.
+const { store } = vi.hoisted(() => ({ store: new Map<string, string>() }));
 vi.mock("@/utils/redis", () => ({
   redis: {
-    get: vi.fn(async (key: string) => store.get(key) ?? null),
-    set: vi.fn(async (key: string, value: unknown) => {
+    set: vi.fn(async (key: string, value: string) => {
       store.set(key, value);
       return "OK";
     }),
@@ -18,6 +26,18 @@ vi.mock("@/utils/redis", () => ({
       store.delete(key);
       return 1;
     }),
+    eval: vi.fn(
+      async (script: string, [key]: string[], [pending, value]: string[]) => {
+        const current = store.get(key) ?? null;
+        if (script.startsWith("-- answer")) {
+          if (current !== pending) return 0;
+          store.set(key, value);
+          return 1;
+        }
+        if (current !== null && current !== pending) store.delete(key);
+        return current;
+      },
+    ),
   },
 }));
 
@@ -138,6 +158,68 @@ describe("createLocalMailSearch", () => {
     );
 
     expect(await search.search({ query: "x", limit: 20 })).toBeNull();
+  });
+
+  it("won't take an answer for a request it never sent", async () => {
+    expect(
+      await saveLocalMailSearchResult({
+        emailAccountId: ACCOUNT,
+        requestId: "8d4a1f8e-5f5c-4b9b-9a51-4f1f0e7a2c11",
+        result: answer,
+      }),
+    ).toBe(false);
+    expect(store.size).toBe(0);
+  });
+
+  it("takes one answer per request", async () => {
+    const search = createLocalMailSearch({
+      emailAccountId: ACCOUNT,
+      logger: createTestLogger(),
+      pollIntervalMs: 5,
+    });
+    const saved: boolean[] = [];
+    search.attach({
+      write: vi.fn((part: { data: { requestId: string } }) => {
+        setTimeout(async () => {
+          for (const result of [
+            answer,
+            { status: "unavailable", reason: "error" },
+          ])
+            saved.push(
+              await saveLocalMailSearchResult({
+                emailAccountId: ACCOUNT,
+                requestId: part.data.requestId,
+                result: result as never,
+              }),
+            );
+        }, 5);
+      }),
+    } as unknown as UIMessageStreamWriter);
+
+    expect(await search.search({ query: "x", limit: 20 })).toEqual(answer);
+    expect(saved).toEqual([true, false]);
+  });
+
+  it("limits how often one person can send answers", async () => {
+    mockAssertWithinUserRateLimit.mockRejectedValueOnce(
+      new Error("Cue needs a short break."),
+    );
+
+    await expect(
+      acceptLocalMailSearchResult({
+        userId: "user-1",
+        emailAccountId: ACCOUNT,
+        requestId: "8d4a1f8e-5f5c-4b9b-9a51-4f1f0e7a2c11",
+        result: answer,
+      }),
+    ).rejects.toThrow("short break");
+    expect(mockAssertWithinUserRateLimit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "assistant-local-search",
+        userId: "user-1",
+      }),
+    );
+    expect(store.size).toBe(0);
   });
 
   it("asks nothing before the reply stream is attached", async () => {

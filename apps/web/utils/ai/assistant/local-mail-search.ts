@@ -4,6 +4,7 @@ import {
   localMailSearchResultSchema,
 } from "@/utils/actions/assistant-local-search.validation";
 import type { Logger } from "@/utils/logger";
+import { assertWithinUserRateLimit } from "@/utils/rate-limit";
 import { redis } from "@/utils/redis";
 import { sleep } from "@/utils/sleep";
 
@@ -11,7 +12,25 @@ import { sleep } from "@/utils/sleep";
 // Gmail search is the faster way to an answer.
 const LOCAL_SEARCH_WAIT_MS = 2500;
 const POLL_INTERVAL_MS = 50;
-const RESULT_TTL_SECONDS = 60;
+// A request is open for answers this long; the key then expires on its own.
+const PENDING_TTL_SECONDS = 10;
+const PENDING = "pending";
+// Six steps of a few searches each, across a person's tabs and turns.
+const ANSWERS_PER_MINUTE = 60;
+
+// Stores an answer only over this run's open request, once.
+const answerScript = `-- answer
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+redis.call('SET', KEYS[1], ARGV[2], 'KEEPTTL')
+return 1
+`;
+
+// Returns the key's value and deletes it once it holds an answer.
+const takeScript = `-- take
+local value = redis.call('GET', KEYS[1])
+if value and value ~= ARGV[1] then redis.call('DEL', KEYS[1]) end
+return value
+`;
 
 export type LocalMailSearchAnswer = Extract<
   LocalMailSearchResult,
@@ -60,6 +79,13 @@ export function createLocalMailSearch({
       const requestId = crypto.randomUUID();
       const key = resultKey(emailAccountId, requestId);
       const startedAt = Date.now();
+      try {
+        // Only a request this run opened can be answered.
+        await redis.set(key, PENDING, { ex: PENDING_TTL_SECONDS });
+      } catch (error) {
+        logger.warn("Could not open a local mail search", { error });
+        return null;
+      }
       writer.write({
         type: "data-local-mail-search",
         data: { requestId, ...input },
@@ -68,10 +94,13 @@ export function createLocalMailSearch({
 
       while (Date.now() - startedAt < waitMs) {
         await sleep(pollIntervalMs);
-        const stored = await redis.get<unknown>(key).catch(() => null);
-        if (!stored) continue;
-        redis.del(key).catch(() => undefined);
-        const parsed = localMailSearchResultSchema.safeParse(stored);
+        const stored = await redis
+          .eval<string[], unknown>(takeScript, [key], [PENDING])
+          .catch(() => null);
+        if (!stored || stored === PENDING) continue;
+        const parsed = localMailSearchResultSchema.safeParse(
+          parseStored(stored),
+        );
         const durationMs = Date.now() - startedAt;
         if (!parsed.success) {
           logger.warn("Local mail search answer was malformed", { durationMs });
@@ -87,12 +116,41 @@ export function createLocalMailSearch({
         return parsed.data.status === "ok" ? parsed.data : null;
       }
 
+      redis.del(key).catch(() => undefined);
       logger.info("Local mail search timed out", { durationMs: waitMs });
       return null;
     },
   };
 }
 
+/**
+ * The server action's side: a browser answers at most a few searches per
+ * assistant turn, so a steady stream of answers is turned away.
+ */
+export async function acceptLocalMailSearchResult({
+  userId,
+  emailAccountId,
+  requestId,
+  result,
+  logger,
+}: {
+  userId: string;
+  emailAccountId: string;
+  requestId: string;
+  result: LocalMailSearchResult;
+  logger?: Logger;
+}) {
+  await assertWithinUserRateLimit({
+    scope: "assistant-local-search",
+    userId,
+    limit: ANSWERS_PER_MINUTE,
+    windowSeconds: 60,
+    logger,
+  });
+  return saveLocalMailSearchResult({ emailAccountId, requestId, result });
+}
+
+/** Stores the browser's answer if its request is still open; false if not. */
 export async function saveLocalMailSearchResult({
   emailAccountId,
   requestId,
@@ -101,10 +159,23 @@ export async function saveLocalMailSearchResult({
   emailAccountId: string;
   requestId: string;
   result: LocalMailSearchResult;
-}) {
-  await redis.set(resultKey(emailAccountId, requestId), result, {
-    ex: RESULT_TTL_SECONDS,
-  });
+}): Promise<boolean> {
+  const stored = await redis.eval<string[], number>(
+    answerScript,
+    [resultKey(emailAccountId, requestId)],
+    [PENDING, JSON.stringify(result)],
+  );
+  return Number(stored) === 1;
+}
+
+// The client returns JSON as a string, or already parsed.
+function parseStored(stored: unknown): unknown {
+  if (typeof stored !== "string") return stored;
+  try {
+    return JSON.parse(stored);
+  } catch {
+    return null;
+  }
 }
 
 // The request id is random and only sent to this account's chat, so the key

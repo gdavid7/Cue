@@ -16,7 +16,7 @@ import {
   confirmAssistantUpdateRuleForAccount,
 } from "./assistant-chat-confirmation";
 import { submitLocalMailSearchResultBody } from "./assistant-local-search.validation";
-import { saveLocalMailSearchResult } from "@/utils/ai/assistant/local-mail-search";
+import { acceptLocalMailSearchResult } from "@/utils/ai/assistant/local-mail-search";
 
 export const confirmAssistantEmailAction = actionClient
   .metadata({ name: "confirmAssistantEmail" })
@@ -106,8 +106,18 @@ export const submitLocalMailSearchResult = actionClient
   .metadata({ name: "submitLocalMailSearchResult" })
   .inputSchema(submitLocalMailSearchResultBody)
   .action(
-    async ({ ctx: { emailAccountId }, parsedInput: { requestId, result } }) =>
-      saveLocalMailSearchResult({ emailAccountId, requestId, result }),
+    async ({
+      ctx: { userId, emailAccountId, logger },
+      parsedInput: { requestId, result },
+    }) => ({
+      accepted: await acceptLocalMailSearchResult({
+        userId,
+        emailAccountId,
+        requestId,
+        result,
+        logger,
+      }),
+    }),
   );
 
 export const confirmAssistantSaveMemory = actionClient
