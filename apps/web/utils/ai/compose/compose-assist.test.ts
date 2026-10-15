@@ -147,23 +147,26 @@ describe("compose assist prompt", () => {
     expect(prompt).toContain("mention Friday");
   });
 
-  it("routes rewrites to the economy use case and writing to the draft one", async () => {
+  it("uses the draft model only to write from a request or notes", async () => {
     mockChatCompletionStream.mockResolvedValue({});
 
-    await aiComposeAssist({
-      emailAccount,
-      request: rewrite({ action: "grammar" }),
-      context: EMPTY_CONTEXT,
-    });
-    await aiComposeAssist({
-      emailAccount,
-      request: composeAssistBody.parse({ mode: "continue", before: "Hi" }),
-      context: EMPTY_CONTEXT,
-    });
+    for (const request of [
+      rewrite({ action: "grammar" }),
+      composeAssistBody.parse({ mode: "continue", before: "Hi" }),
+      composeAssistBody.parse({ mode: "write", instruction: "say yes" }),
+      composeAssistBody.parse({ mode: "expand-notes", text: "- a\n- b" }),
+    ]) {
+      await aiComposeAssist({ emailAccount, request, context: EMPTY_CONTEXT });
+    }
 
     expect(
       mockChatCompletionStream.mock.calls.map(([call]) => call.useCase),
-    ).toEqual([LlmUseCase.ComposeRewrite, LlmUseCase.ComposeWrite]);
+    ).toEqual([
+      LlmUseCase.ComposeRewrite,
+      LlmUseCase.ComposeRewrite,
+      LlmUseCase.ComposeWrite,
+      LlmUseCase.ComposeWrite,
+    ]);
     for (const [call] of mockChatCompletionStream.mock.calls) {
       expect(call.promptHardening).toMatchObject({ trust: "untrusted" });
     }

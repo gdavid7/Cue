@@ -66,10 +66,12 @@ export async function aiComposeAssist({
     userId: emailAccount.userId,
     emailAccountId: emailAccount.id,
     userEmail: emailAccount.email,
+    // Rewriting and continuing a sentence or two are small jobs for the
+    // economy model; writing from a request or notes gets the draft model.
     useCase:
-      request.mode === "rewrite"
-        ? LlmUseCase.ComposeRewrite
-        : LlmUseCase.ComposeWrite,
+      request.mode === "write" || request.mode === "expand-notes"
+        ? LlmUseCase.ComposeWrite
+        : LlmUseCase.ComposeRewrite,
     // The thread and the draft hold text other people wrote.
     promptHardening: { trust: "untrusted", level: "compact" },
     messages: [
