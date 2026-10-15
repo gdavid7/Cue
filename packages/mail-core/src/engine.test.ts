@@ -366,6 +366,25 @@ describe("mail engine idle catch-up scheduling", () => {
     await harness.engine.close();
   });
 
+  it("retries a throttled catch-up when the provider allows, not on the idle clock", async () => {
+    const harness = idleCatchUpHarness({ streamIds: ["inbox"] });
+    let throttle = true;
+    const readChanges = harness.source.readChanges;
+    harness.source.readChanges = async (request) => {
+      if (!throttle) return readChanges(request);
+      throttle = false;
+      harness.readChangeStreams.push("throttled");
+      return { status: "paused", retryAfterMs: 5000, reason: "throttled" };
+    };
+    await harness.engine.runUntil(10_000);
+
+    harness.advance(5000);
+    await harness.engine.runUntil(harness.nowMs + 1000);
+
+    expect(harness.readChangeStreams).toEqual(["throttled", "inbox"]);
+    await harness.engine.close();
+  });
+
   it("retries a failed scope discovery on the normal clock", async () => {
     const harness = idleCatchUpHarness({ streamIds: ["inbox"] });
     let failDiscovery = true;

@@ -90,6 +90,44 @@ describe("followMailboxChanges", () => {
     expect(sources).toHaveLength(2);
   });
 
+  it("catches up as soon as a hidden tab is shown, before the stream reconnects", () => {
+    const { onChange } = follow();
+    sources[0].emit("ready");
+    onChange.mockClear();
+
+    setVisibility("hidden");
+    setVisibility("visible");
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("catches up once when the window regains focus repeatedly", () => {
+    const { onChange } = follow();
+    sources[0].emit("ready");
+    onChange.mockClear();
+
+    window.dispatchEvent(new Event("focus"));
+    window.dispatchEvent(new Event("focus"));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps catching up while visible without a working stream", () => {
+    vi.useFakeTimers();
+    const { onChange } = follow();
+    sources[0].readyState = 2;
+    sources[0].emit("error");
+
+    vi.advanceTimersByTime(29_000);
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(1000);
+    sources[1].emit("ready");
+    onChange.mockClear();
+    vi.advanceTimersByTime(60_000);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("does not connect while starting hidden", () => {
     setVisibility("hidden");
     follow();

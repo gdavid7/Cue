@@ -689,11 +689,8 @@ export function createMailEngine(input: {
       closed = true;
       for (const queued of queuedConversationFetches.splice(0)) queued.drop();
       stopConversationFetches(null);
-      const lanes = [...syncLanes.keys()].map((accountId) => {
-        const done = syncLanes.get(accountId)?.done;
-        stopSyncLane(accountId);
-        return done;
-      });
+      const lanes = [...syncLanes.values()].map((lane) => lane.done);
+      for (const laneKey of [...syncLanes.keys()]) stopSyncLane(laneKey);
       await Promise.allSettled(lanes);
       queries.closeAll();
       await store.close();
@@ -1244,61 +1241,91 @@ export function createMailEngine(input: {
   async function startSyncLanes() {
     const accounts = await store.readAccountSyncStates();
     for (const account of accounts) {
-      const { accountId } = account;
-      if (closed || syncLanes.has(accountId)) continue;
-      const retry = syncLaneRetries.get(accountId);
-      if (retry && retry.retryAtMs > runtime.nowMs()) continue;
-      const abort = new AbortController();
-      let timedOut = false;
-      const timeout = setTimeout(() => {
-        timedOut = true;
-        abort.abort();
-      }, syncLaneTimeoutMs);
-      // The lane settles on abort even if a request ignores the signal.
-      const aborted = new Promise<void>((resolve) => {
-        abort.signal.addEventListener("abort", () => resolve(), { once: true });
-      });
-      const lane: SyncLane = {
-        abort,
-        done: Promise.race([catchUpAccount(account, abort.signal), aborted])
-          .then(() => {
-            if (timedOut) {
-              failSyncLane(accountId, new Error("Mail sync lane timed out"));
-            } else {
-              syncLaneRetries.delete(accountId);
-            }
-          })
-          .catch((error: unknown) => {
-            // A purge or close stopped the lane on purpose.
-            if (abort.signal.aborted && !timedOut) return;
-            failSyncLane(accountId, error);
-          })
-          .finally(() => {
-            clearTimeout(timeout);
-            if (syncLanes.get(accountId) === lane) syncLanes.delete(accountId);
-          }),
-      };
-      syncLanes.set(accountId, lane);
+      startLane(account.accountId, (signal) => catchUpAccount(account, signal));
     }
   }
 
-  function failSyncLane(accountId: string, error: unknown) {
+  // A low-priority scope's backfill pages wait behind everything else for
+  // quota, so one page can take tens of seconds. It runs in a lane of its own
+  // so the account's lane stays free to read new mail the moment it is asked.
+  function startBackfill(input: {
+    session: { accountId: string; generation: string };
+    idleGate: IdleCatchUpGate;
+    stream: AccountSyncState["streams"][number];
+  }) {
+    const { session, idleGate, stream } = input;
+    startLane(backfillLaneKey(session.accountId), async (signal) => {
+      await ingestBootstrap({
+        session,
+        from: stream,
+        deadlineMs: runtime.nowMs() + SYNC_LANE_BOOTSTRAP_SLICE_MS,
+        signal,
+        requestId: runtime.randomId(),
+        scopeId: stream.streamId,
+        scope: idleGate.activeBootstrapScopes.get(stream.streamId),
+      });
+      if (signal.aborted) return;
+      await rememberBootstrapContinuation(idleGate, session, stream.streamId);
+    });
+  }
+
+  function startLane(laneKey: string, run: (signal: AbortSignal) => unknown) {
+    if (closed || syncLanes.has(laneKey)) return;
+    const retry = syncLaneRetries.get(laneKey);
+    if (retry && retry.retryAtMs > runtime.nowMs()) return;
+    const abort = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      abort.abort();
+    }, syncLaneTimeoutMs);
+    // The lane settles on abort even if a request ignores the signal.
+    const aborted = new Promise<void>((resolve) => {
+      abort.signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    const lane: SyncLane = {
+      abort,
+      done: Promise.race([run(abort.signal), aborted])
+        .then(() => {
+          if (timedOut) {
+            failSyncLane(laneKey, new Error("Mail sync lane timed out"));
+          } else {
+            syncLaneRetries.delete(laneKey);
+          }
+        })
+        .catch((error: unknown) => {
+          // A purge or close stopped the lane on purpose.
+          if (abort.signal.aborted && !timedOut) return;
+          failSyncLane(laneKey, error);
+        })
+        .finally(() => {
+          clearTimeout(timeout);
+          if (syncLanes.get(laneKey) === lane) syncLanes.delete(laneKey);
+        }),
+    };
+    syncLanes.set(laneKey, lane);
+  }
+
+  function failSyncLane(laneKey: string, error: unknown) {
     const delayMs = Math.min(
       SYNC_LANE_RETRY_MAX_MS,
-      (syncLaneRetries.get(accountId)?.delayMs ?? 0) * 2 ||
+      (syncLaneRetries.get(laneKey)?.delayMs ?? 0) * 2 ||
         SYNC_LANE_RETRY_MIN_MS,
     );
-    syncLaneRetries.set(accountId, {
+    syncLaneRetries.set(laneKey, {
       retryAtMs: runtime.nowMs() + delayMs,
       delayMs,
     });
     syncLaneErrors.push(error);
   }
 
-  function stopSyncLane(accountId: string) {
-    syncLanes.get(accountId)?.abort.abort();
-    syncLanes.delete(accountId);
-    syncLaneRetries.delete(accountId);
+  // Stopping an account's lane also stops its backfill.
+  function stopSyncLane(laneKey: string) {
+    for (const key of [laneKey, backfillLaneKey(laneKey)]) {
+      syncLanes.get(key)?.abort.abort();
+      syncLanes.delete(key);
+      syncLaneRetries.delete(key);
+    }
   }
 
   async function waitForSyncLanes(deadlineMs: number, signal?: AbortSignal) {
@@ -1431,6 +1458,10 @@ export function createMailEngine(input: {
         !stream.checkpoint ||
         (await resumesBootstrap(idleGate, session, stream.streamId, catchUpDue))
       ) {
+        if (idleGate.lowPriorityStreams.has(stream.streamId)) {
+          startBackfill({ session, idleGate, stream });
+          continue;
+        }
         await ingestBootstrap({
           session,
           from: stream,
@@ -1565,9 +1596,16 @@ export function createMailEngine(input: {
       });
       await rememberBootstrapContinuation(idleGate, session, changes.scopeId);
     } else {
+      // A throttled read comes back as soon as the provider allows, so new
+      // mail waits out the quota window rather than a whole idle interval.
+      const intervalMs = streamCatchUpInterval(idleGate, stream.streamId);
+      const retryMs =
+        changes.status === "paused" && changes.reason === "throttled"
+          ? Math.max(SYNC_LANE_RETRY_MIN_MS, changes.retryAfterMs)
+          : intervalMs;
       idleGate.nextStreamCatchUpAtMs.set(
         stream.streamId,
-        runtime.nowMs() + streamCatchUpInterval(idleGate, stream.streamId),
+        runtime.nowMs() + Math.min(retryMs, intervalMs),
       );
       await noteConnection(session.accountId, changes);
     }
@@ -1857,6 +1895,10 @@ type IdleCatchUpGate = {
 };
 
 type CheckStamp = { atMs: number; requestCount: number };
+
+function backfillLaneKey(accountId: string) {
+  return `${accountId}\u0000backfill`;
+}
 
 function idleGateDue(nextAtMs: number, nowMs: number, intervalMs: number) {
   return nextAtMs <= nowMs || nextAtMs - nowMs > intervalMs;

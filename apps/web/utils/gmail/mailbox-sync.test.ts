@@ -258,6 +258,84 @@ describe("getGmailMailboxSyncPage", () => {
     expect(gmail.users.getProfile).toHaveBeenCalled();
   });
 
+  it("catches up a long history backlog newest first, fetching each message once", async () => {
+    const ids = Array.from({ length: 30 }, (_, index) => `m${index + 1}`);
+    const touched = (id: string) => ({
+      messages: [{ id, threadId: `t-${id}` }],
+      labelsAdded: [{ message: { id, threadId: `t-${id}` } }],
+    });
+    vi.mocked(getHistory).mockImplementation(async (_gmail, options) => {
+      if (options.startHistoryId === "300") return { historyId: "300" };
+      return options.pageToken === "history-2"
+        ? {
+            // m1 changed again after everything else, so it is the newest.
+            history: [...ids.slice(20).map(touched), touched("m1")],
+            historyId: "300",
+          }
+        : {
+            history: ids.slice(0, 20).map(touched),
+            historyId: "250",
+            nextPageToken: "history-2",
+          };
+    });
+    vi.mocked(getMessagesBatch).mockImplementation(async ({ messageIds }) =>
+      messageIds.map((id) => ({
+        ...getMockMessage({ id, labelIds: ["INBOX"] }),
+        internalDate: new Date("2026-07-02T00:00:00.000Z").getTime().toString(),
+      })),
+    );
+    const read = (cursor: string) =>
+      getGmailMailboxSyncPage({
+        gmail: {} as never,
+        accessToken: "access-token",
+        logger,
+        cursor,
+        limit: 50,
+      });
+
+    const first = await read(
+      encodeMailboxSyncCursor({
+        version: 1,
+        provider: "google",
+        phase: "delta",
+        historyId: "100",
+        after: "2026-07-01T00:00:00.000Z",
+      }),
+    );
+
+    expect(first.upsertedMessages.map((message) => message.id)).toEqual([
+      "m1",
+      "m30",
+      "m29",
+      "m28",
+      "m27",
+      "m26",
+      "m25",
+      "m24",
+      "m23",
+      "m22",
+    ]);
+    expect(first.hasMore).toBe(true);
+
+    const fetched = [...first.upsertedMessages.map((message) => message.id)];
+    let page = first;
+    while (page.hasMore) {
+      page = await read(page.cursor);
+      fetched.push(...page.upsertedMessages.map((message) => message.id));
+    }
+
+    expect(getHistory).toHaveBeenCalledTimes(2);
+    expect(fetched).toHaveLength(30);
+    expect(new Set(fetched)).toEqual(new Set(ids));
+    const caughtUp = await read(page.cursor);
+    expect(getHistory).toHaveBeenLastCalledWith(
+      {},
+      expect.objectContaining({ startHistoryId: "300" }),
+      logger,
+    );
+    expect(caughtUp.upsertedMessages).toEqual([]);
+  });
+
   it("writes current labels for an archived message instead of deleting it", async () => {
     vi.mocked(getHistory).mockResolvedValue({
       history: [

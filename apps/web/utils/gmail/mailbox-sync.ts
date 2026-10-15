@@ -3,6 +3,7 @@ import {
   compactMailboxSyncMessage,
   decodeMailboxSyncCursor,
   encodeMailboxSyncCursor,
+  type MailboxSyncCursor,
 } from "@/utils/email/mailbox-sync";
 import type { MailboxSyncPage } from "@/utils/email/types";
 import { getGmailSyncMessages } from "@/utils/gmail/sync-messages";
@@ -18,6 +19,20 @@ const GMAIL_MAILBOX_HISTORY_TYPES = [
   "labelAdded",
   "labelRemoved",
 ] as const;
+// A catch-up reads the history backlog first, at 2 units a call, so it can
+// fetch the most recently changed messages first: new mail shows after one
+// small fetch instead of after every older change has been replayed under the
+// account's Gmail quota. The scan stops once it holds enough unfetched
+// messages, which keeps the cursor that carries them (at most 400 ids, about
+// 10 KB) inside the protocol's 16 KB checkpoint.
+const HISTORY_SCAN_PAGE_SIZE = 100;
+const HISTORY_SCAN_MAX_CALLS = 20;
+const HISTORY_SCAN_MAX_MESSAGES = 300;
+// About 200 units, which the quota gate admits within a second or so.
+const DELTA_FIRST_FETCH_SIZE = 10;
+const DELTA_FETCH_PAGE_SIZE = 25;
+
+type GmailDeltaCursor = Extract<MailboxSyncCursor, { provider: "google" }>;
 
 export async function getGmailMailboxSyncPage({
   gmail,
@@ -60,55 +75,33 @@ export async function getGmailMailboxSyncPage({
     });
   }
 
-  try {
-    const response = await getHistory(
+  if (decoded.pending?.length) {
+    return fetchDeltaMessages({
       gmail,
-      {
-        startHistoryId: decoded.historyId,
-        historyTypes: [...GMAIL_MAILBOX_HISTORY_TYPES],
-        maxResults: limit,
-        pageToken: decoded.pageToken,
-      },
-      logger,
-    );
-    const { upsertIds, deletedIds, changedThreadIds } =
-      getGmailMailboxChangeIds(response.history ?? []);
-    const fetched = await getGmailSyncMessages({
-      gmail,
-      messageIds: upsertIds,
       accessToken,
       logger,
+      cursor: decoded,
+      upsertIds: decoded.pending,
+      deletedIds: new Set(),
+      changedThreadIds: new Set(),
+      count: Math.min(limit, DELTA_FETCH_PAGE_SIZE),
     });
-    const fetchedMessages = fetched.messages.map(compactMailboxSyncMessage);
-    const afterTimestamp = new Date(decoded.after).getTime();
-    const upsertedMessages = fetchedMessages.filter((message) => {
-      const inTimeWindow = Number(message.internalDate) >= afterTimestamp;
-      if (!inTimeWindow) deletedIds.add(message.id);
-      return inTimeWindow;
-    });
-    const fetchedIds = new Set(fetchedMessages.map((message) => message.id));
-    for (const messageId of upsertIds) {
-      if (!fetchedIds.has(messageId)) deletedIds.add(messageId);
-    }
+  }
 
-    const nextHistoryId = response.nextPageToken
-      ? decoded.historyId
-      : (response.historyId ?? decoded.historyId);
-    return {
-      cursor: encodeMailboxSyncCursor({
-        version: 1,
-        provider: "google",
-        phase: "delta",
-        historyId: nextHistoryId,
-        after: decoded.after,
-        pageToken: response.nextPageToken ?? undefined,
-      }),
-      changedThreadIds: [...changedThreadIds],
-      deletedMessageIds: [...deletedIds],
-      hasMore: Boolean(response.nextPageToken),
-      reset: false,
-      upsertedMessages,
-    };
+  try {
+    const scan = await scanGmailHistory({ gmail, logger, cursor: decoded });
+    return await fetchDeltaMessages({
+      gmail,
+      accessToken,
+      logger,
+      cursor: {
+        ...decoded,
+        historyId: scan.historyId,
+        pageToken: scan.pageToken,
+      },
+      ...scan.changes,
+      count: Math.min(limit, DELTA_FIRST_FETCH_SIZE),
+    });
   } catch (error) {
     if (extractErrorInfo(error).status !== 404) throw error;
 
@@ -150,6 +143,131 @@ export async function advanceGmailMailboxSyncCursor({
     if (extractErrorInfo(error).status !== 404) throw error;
     return null;
   }
+}
+
+async function scanGmailHistory({
+  gmail,
+  logger,
+  cursor,
+}: {
+  gmail: gmail_v1.Gmail;
+  logger: Logger;
+  cursor: GmailDeltaCursor;
+}) {
+  const history: gmail_v1.Schema$History[] = [];
+  let pageToken = cursor.pageToken;
+  let historyId = cursor.historyId;
+  for (let call = 0; call < HISTORY_SCAN_MAX_CALLS; call++) {
+    const response = await getHistory(
+      gmail,
+      {
+        startHistoryId: cursor.historyId,
+        historyTypes: [...GMAIL_MAILBOX_HISTORY_TYPES],
+        maxResults: HISTORY_SCAN_PAGE_SIZE,
+        pageToken,
+      },
+      logger,
+    );
+    history.push(...(response.history ?? []));
+    pageToken = response.nextPageToken ?? undefined;
+    if (!pageToken) {
+      historyId = response.historyId ?? cursor.historyId;
+      break;
+    }
+    if (
+      getGmailMailboxChangeIds(history).upsertIds.length >=
+      HISTORY_SCAN_MAX_MESSAGES
+    )
+      break;
+  }
+  const changes = getGmailMailboxChangeIds(history);
+  return {
+    historyId,
+    pageToken,
+    changes: {
+      ...changes,
+      upsertIds: newestChangeFirst(changes.upsertIds, history),
+    },
+  };
+}
+
+async function fetchDeltaMessages({
+  gmail,
+  accessToken,
+  logger,
+  cursor,
+  upsertIds,
+  deletedIds,
+  changedThreadIds,
+  count,
+}: {
+  gmail: gmail_v1.Gmail;
+  accessToken: string;
+  logger: Logger;
+  cursor: GmailDeltaCursor;
+  upsertIds: string[];
+  deletedIds: Set<string>;
+  changedThreadIds: Set<string>;
+  count: number;
+}): Promise<MailboxSyncPage> {
+  const batch = upsertIds.slice(0, count);
+  const pending = upsertIds.slice(count);
+  const fetched = await getGmailSyncMessages({
+    gmail,
+    messageIds: batch,
+    accessToken,
+    logger,
+  });
+  const fetchedMessages = fetched.messages.map(compactMailboxSyncMessage);
+  const afterTimestamp = new Date(cursor.after).getTime();
+  const upsertedMessages = fetchedMessages.filter((message) => {
+    const inTimeWindow = Number(message.internalDate) >= afterTimestamp;
+    if (!inTimeWindow) deletedIds.add(message.id);
+    return inTimeWindow;
+  });
+  const fetchedIds = new Set(fetchedMessages.map((message) => message.id));
+  for (const messageId of batch) {
+    if (!fetchedIds.has(messageId)) deletedIds.add(messageId);
+  }
+
+  return {
+    cursor: encodeMailboxSyncCursor({
+      version: 1,
+      provider: "google",
+      phase: "delta",
+      historyId: cursor.historyId,
+      after: cursor.after,
+      pageToken: cursor.pageToken,
+      pending: pending.length > 0 ? pending : undefined,
+    }),
+    changedThreadIds: [...changedThreadIds],
+    deletedMessageIds: [...deletedIds],
+    hasMore: pending.length > 0 || Boolean(cursor.pageToken),
+    reset: false,
+    upsertedMessages,
+  };
+}
+
+// Orders message ids by the latest history record that touched each one,
+// newest first, keeping their order within a record.
+function newestChangeFirst(
+  messageIds: string[],
+  history: gmail_v1.Schema$History[],
+) {
+  const lastTouched = new Map<string, number>();
+  history.forEach((record, index) => {
+    const touched = [
+      ...(record.messagesAdded ?? []),
+      ...(record.labelsAdded ?? []),
+      ...(record.labelsRemoved ?? []),
+    ].map((change) => change.message);
+    for (const message of [...touched, ...(record.messages ?? [])]) {
+      if (message?.id) lastTouched.set(message.id, index);
+    }
+  });
+  return [...messageIds].sort(
+    (a, b) => (lastTouched.get(b) ?? -1) - (lastTouched.get(a) ?? -1),
+  );
 }
 
 export function getGmailMailboxChangeIds(history: gmail_v1.Schema$History[]): {
