@@ -113,11 +113,13 @@ test("Today says what needs you in one place: busy, all clear, and new", async (
   await page.route("**/api/user/home*", async (route) => {
     const response = await route.fetch();
     const home = await response.json();
-    if (state === "clear") home.needsYou = [];
-    if (state === "new") {
-      home.needsYou = [];
-      home.cue = { ...home.cue, hasReadMail: false };
-    }
+    // Cue is checking (the emulated account has no AI plan); only "new" hasn't read mail yet.
+    home.cue = {
+      aiAccess: true,
+      replyTracking: true,
+      hasReadMail: state !== "new",
+    };
+    if (state !== "busy") home.needsYou = [];
     await route.fulfill({ response, json: home });
   });
   const main = page.getByRole("main");

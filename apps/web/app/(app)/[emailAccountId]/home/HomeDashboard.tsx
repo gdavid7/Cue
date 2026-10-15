@@ -360,8 +360,6 @@ export function HomeDashboard() {
         ) : null}
       </header>
 
-      <BeforeYourMeeting emailAccountId={emailAccountId} />
-
       <LoadingContent
         error={error}
         loading={isLoading}
@@ -490,6 +488,8 @@ function HomeLanes({
           </ThreadList>
         </AllClear>
       ) : null}
+      {/* What needs the user comes first; meeting news sits with what's next. */}
+      {allClear ? <BeforeYourMeeting emailAccountId={emailAccountId} /> : null}
 
       {lanes.needsYou.length > 0 ? (
         <Section
@@ -548,6 +548,7 @@ function HomeLanes({
           ) : null}
         </Section>
       ) : null}
+      {allClear ? null : <BeforeYourMeeting emailAccountId={emailAccountId} />}
 
       {!allClear && lanes.waiting.length > 0 ? (
         <Section
