@@ -56,9 +56,11 @@ const ACCEPTED_IMAGE_TYPES = [
 export function Chat({
   open,
   onClose,
+  topBarStart,
 }: {
   open: boolean;
   onClose?: () => void;
+  topBarStart?: React.ReactNode;
 }) {
   const analytics = useProductAnalytics("assistant_chat");
   const {
@@ -315,7 +317,11 @@ export function Chat({
         } as React.CSSProperties
       }
     >
-      <ChatTopBar hasMessages={hasMessages} onClose={onClose} />
+      <ChatTopBar
+        hasMessages={hasMessages}
+        onClose={onClose}
+        start={topBarStart}
+      />
       {hasMessages ? (
         <ChatMessagesView
           status={status}
@@ -442,16 +448,21 @@ function NewChatView({
 function ChatTopBar({
   hasMessages,
   onClose,
+  start,
 }: {
   hasMessages: boolean;
   onClose?: () => void;
+  start?: React.ReactNode;
 }) {
   return (
     <div className="relative mx-auto w-full max-w-[calc(var(--chat-max-w)+var(--chat-px)*2)] px-[var(--chat-px)] pt-2">
-      <div className="flex items-center justify-end gap-1">
-        {hasMessages ? <NewChatButton /> : null}
-        <ChatHistoryDropdown />
-        {onClose ? <CloseChatButton onClose={onClose} /> : null}
+      <div className="flex items-center gap-1">
+        {start}
+        <div className="ml-auto flex items-center gap-1">
+          {hasMessages ? <NewChatButton /> : null}
+          <ChatHistoryDropdown />
+          {onClose ? <CloseChatButton onClose={onClose} /> : null}
+        </div>
       </div>
     </div>
   );

@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { PermissionsCheck } from "@/app/(app)/[emailAccountId]/PermissionsCheck";
 import { EmailLabelsProvider } from "@/providers/EmailLabelsProvider";
 import { Chat } from "@/components/assistant-chat/chat";
+import { SidebarTrigger } from "@/components/ui/sidebar";
 import { checkUserOwnsEmailAccount } from "@/utils/email-account";
 
 export const maxDuration = 300; // Applies to the actions
@@ -20,7 +21,15 @@ export default async function AssistantPage({
         <PermissionsCheck />
 
         <div className="flex h-[calc(100dvh-theme(spacing.10)-theme(spacing.14)-env(safe-area-inset-bottom))] md:h-screen flex-col">
-          <Chat open />
+          <Chat
+            open
+            topBarStart={
+              <SidebarTrigger
+                className="-ml-2 size-10 md:hidden"
+                name="left-sidebar"
+              />
+            }
+          />
         </div>
       </Suspense>
     </EmailLabelsProvider>

@@ -20,12 +20,10 @@ function ContentWrapper({ children }: { children: React.ReactNode }) {
   const isRightSidebarOpen =
     !isAssistantRoute && state.includes("chat-sidebar");
 
-  // The padding only exists to clear the fixed MobileHeader. Mail renders no
-  // MobileHeader, and the chat page lays out its own header around it; the
-  // rule editor pages under /assistant need the padding like any other page.
-  const isChatRoute =
-    pathname?.split("/").filter(Boolean).at(-1) === "assistant";
-  const noTopPadding = isChatRoute || isMailRoute;
+  // The padding only exists to clear the fixed MobileHeader. Mail and the
+  // chat page render none; the rule editor pages under /assistant need the
+  // padding like any other page.
+  const noTopPadding = isChatPagePath(pathname) || isMailRoute;
 
   return (
     <div
@@ -91,10 +89,12 @@ export function SideNavWithTopNav({
       keyboardShortcutName="left-sidebar"
     >
       {/* Mail supplies its own sidebar and trigger for this shared state, so
-          the global navigation and its mobile header would be duplicates. */}
+          the global navigation and its mobile header would be duplicates.
+          The chat page puts the trigger in its own top bar, where a layout
+          banner above it can't end up underneath a fixed one. */}
       {!isMailRoute && (
         <>
-          <MobileHeader />
+          {!isChatPagePath(pathname) && <MobileHeader />}
           <SideNav name="left-sidebar" feedbackEnabled={feedbackEnabled} />
         </>
       )}
@@ -115,4 +115,8 @@ function MobileHeader() {
       </div>
     </header>
   );
+}
+
+function isChatPagePath(pathname: string | null) {
+  return pathname?.split("/").filter(Boolean).at(-1) === "assistant";
 }
