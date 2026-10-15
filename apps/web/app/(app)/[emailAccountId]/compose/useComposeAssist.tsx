@@ -225,20 +225,19 @@ export function useComposeAssist({
   }, [begin, run]);
 
   /**
-   * ⌘↵ and the Send button while Cue is open: never send. A ready
-   * suggestion is accepted instead; anything else stays as it is.
+   * ⌘↵ while Cue is open: never send, and never change the draft either.
+   * Cue takes focus so the person decides with Enter or Escape.
    */
   const interceptSend = useCallback(() => {
-    const current = stateRef.current;
-    if (current.status === "closed") return false;
-    if (current.status === "ready") accept();
-    else focusPanel(panelRef.current);
+    if (stateRef.current.status === "closed") return false;
+    focusPanel(panelRef.current);
     return true;
-  }, [accept]);
+  }, []);
 
   // Keys the panel owns even where the compose dialog or the browser would
-  // otherwise take them: Escape, ⌘↵ and ⌘R. Escape anywhere in the composer
-  // closes Cue rather than the composer.
+  // otherwise take them: Escape, ⌘↵ (which does nothing here: a send
+  // keystroke must not send or change the draft) and ⌘R. Escape anywhere in
+  // the composer closes Cue rather than the composer.
   useEffect(() => {
     if (state.status === "closed") return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -261,7 +260,6 @@ export function useComposeAssist({
       } else if (mod && event.key === "Enter") {
         event.preventDefault();
         event.stopPropagation();
-        accept();
       } else if (mod && event.key.toLowerCase() === "r" && !event.shiftKey) {
         event.preventDefault();
         event.stopPropagation();
@@ -270,7 +268,7 @@ export function useComposeAssist({
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [accept, close, formRef, retry, state.status]);
+  }, [close, formRef, retry, state.status]);
 
   // A menu or prompt left behind by a click elsewhere goes away; a
   // suggestion stays until it is accepted or discarded.

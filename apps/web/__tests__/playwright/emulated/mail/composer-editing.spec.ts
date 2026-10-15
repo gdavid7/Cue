@@ -647,7 +647,7 @@ test.describe("Cue writing partner", () => {
     await expect(dialog).toBeHidden();
   });
 
-  test("writes at the caret with ⌘J, where ⌘↵ accepts and never sends", async ({
+  test("writes at the caret with ⌘J, where the send shortcut changes nothing", async ({
     page,
   }, testInfo) => {
     await scriptLlmReply(
@@ -677,12 +677,19 @@ test.describe("Cue writing partner", () => {
     await expect(suggestion).toContainText("Count me in!");
     await expect(page.getByRole("button", { name: /Accept/ })).toBeEnabled();
 
-    // The send shortcut accepts the suggestion; the message stays a draft.
+    // The send shortcut neither sends nor accepts: Cue keeps the decision.
+    await editor.focus();
     await page.keyboard.press("ControlOrMeta+Enter");
+    await expect(
+      page.getByRole("textbox", { name: "Ask Cue for changes" }),
+    ).toBeFocused();
+    await expect(editor).not.toContainText("Count me in!");
+    await expect(dialog).toBeVisible();
+
+    await page.keyboard.press("Enter");
     await expect(editor).toContainText(
       "Count me in! Could you share the planning doc?",
     );
-    await expect(dialog).toBeVisible();
     await expect(page.getByRole("dialog", { name: "Cue" })).toBeHidden();
 
     await dialog.getByRole("button", { name: "Discard draft" }).click();

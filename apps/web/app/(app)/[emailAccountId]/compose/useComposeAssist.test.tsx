@@ -184,7 +184,7 @@ describe("useComposeAssist", { timeout: 20_000 }, () => {
     });
   });
 
-  it("never sends while Cue is open, and ⌘↵ accepts a finished suggestion", async () => {
+  it("never sends while Cue is open, and a send keystroke never changes the draft", async () => {
     const { editor, interceptSend } = renderAssist(SELECTION);
     openAssist();
     await screen.findByRole("menu");
@@ -201,8 +201,16 @@ describe("useComposeAssist", { timeout: 20_000 }, () => {
       streams[0].push("Can you send the doc, please?");
       streams[0].end();
     });
+    refineInput().blur();
+    expect(interceptSend()).toBe(true);
     fireEvent.keyDown(refineInput(), { key: "Enter", metaKey: true });
 
+    // Both only bring the suggestion back into focus for a decision.
+    expect(editor.commitAssist).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(refineInput());
+    expect(screen.getByRole("dialog", { name: "Cue" })).toBeTruthy();
+
+    fireEvent.keyDown(refineInput(), { key: "Enter" });
     expect(editor.commitAssist).toHaveBeenCalledTimes(1);
     expect(interceptSend()).toBe(false);
   });
