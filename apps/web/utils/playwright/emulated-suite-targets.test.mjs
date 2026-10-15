@@ -101,7 +101,66 @@ test("focused selections keep their feature names without adding unselected spec
     path: "__tests__/playwright/emulated/mail/contact-autocomplete.spec.ts",
   };
   expect(batchPlaywrightTargets([target])).toEqual([
-    { name: "mail-send", paths: [target.path], timeoutMinutes: 12 },
+    {
+      name: "mail-send",
+      paths: [target.path],
+      timeoutMinutes: 12,
+      providers: ["google", "microsoft"],
+    },
+  ]);
+});
+
+test("mail batches run on both providers and other batches on Google by default", () => {
+  const targets = [
+    "mail/compose-and-reply.spec.ts",
+    "mail/new-behavior.spec.ts",
+    "billing/upgrade-to-paid.spec.ts",
+    "settings/new-behavior.spec.ts",
+  ].map((spec) => ({
+    name: getPlaywrightTargetName(spec),
+    path: `__tests__/playwright/emulated/${spec}`,
+  }));
+  const providersByBatch = Object.fromEntries(
+    batchPlaywrightTargets(targets).map(({ name, providers }) => [
+      name,
+      providers,
+    ]),
+  );
+  expect(providersByBatch).toEqual({
+    "mail-send": ["google", "microsoft"],
+    mail: ["google", "microsoft"],
+    "account-features": ["google"],
+    settings: ["google"],
+  });
+});
+
+test("a feature group's providers override the default", () => {
+  const groups = [
+    {
+      name: "outlook-ready",
+      providers: ["google", "microsoft"],
+      specs: ["settings/sign-out.spec.ts"],
+    },
+    {
+      name: "gmail-only-mail",
+      providers: ["google"],
+      specs: ["mail/gmail-only.spec.ts"],
+    },
+  ];
+  const targets = ["settings/sign-out.spec.ts", "mail/gmail-only.spec.ts"].map(
+    (spec) => ({
+      name: getPlaywrightTargetName(spec),
+      path: `__tests__/playwright/emulated/${spec}`,
+    }),
+  );
+  expect(
+    batchPlaywrightTargets(targets, groups).map(({ name, providers }) => ({
+      name,
+      providers,
+    })),
+  ).toEqual([
+    { name: "outlook-ready", providers: ["google", "microsoft"] },
+    { name: "gmail-only-mail", providers: ["google"] },
   ]);
 });
 

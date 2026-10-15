@@ -3,6 +3,9 @@ import path from "node:path";
 
 // Keep related behavior together. Mail groups are sized to roughly equal CI
 // time because the slowest batch sets the wall-clock time for every PR.
+// `providers` lists the mail providers a group runs against in CI; without it,
+// mail specs run on Google and Microsoft and everything else on Google only.
+// Add "microsoft" to a group once its specs pass against the Outlook emulator.
 const featureGroups = [
   {
     name: "onboarding",
@@ -144,22 +147,25 @@ export function expandPlaywrightTargets(paths, appRoot) {
   }));
 }
 
-export function batchPlaywrightTargets(targets) {
+export function batchPlaywrightTargets(targets, groups = featureGroups) {
   const batches = new Map();
   for (const target of targets) {
     const specPath = target.path.replace(
       /^__tests__\/playwright\/emulated\//,
       "",
     );
-    const group = featureGroups.find(({ specs }) => specs.includes(specPath));
+    const group = groups.find(({ specs }) => specs.includes(specPath));
     // New specs remain covered before an explicit feature group is assigned.
     const name = group?.name ?? specPath.split("/")[0];
-    if (!batches.has(name)) batches.set(name, { name, paths: [] });
+    if (!batches.has(name)) {
+      batches.set(name, { name, paths: [], providers: group?.providers });
+    }
     batches.get(name).paths.push(target.path);
   }
-  return [...batches.values()].map((batch) => ({
+  return [...batches.values()].map(({ providers, ...batch }) => ({
     ...batch,
     timeoutMinutes: 4 + batch.paths.length * 8,
+    providers: providers ?? getDefaultProviders(batch.paths),
   }));
 }
 
@@ -193,6 +199,14 @@ export function getPlaywrightSpecPathFromTargetName(targetName) {
     }
   }
   return specPath;
+}
+
+function getDefaultProviders(paths) {
+  return paths.some((specPath) =>
+    specPath.startsWith("__tests__/playwright/emulated/mail/"),
+  )
+    ? ["google", "microsoft"]
+    : ["google"];
 }
 
 function getSpecFiles(targetPath, appRoot) {
