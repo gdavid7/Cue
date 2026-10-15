@@ -1105,14 +1105,13 @@ describe("createEmailProviderMailboxSource", () => {
   it.each([
     [401, "blocked_auth"],
     [503, "paused"],
-    [404, "ok"],
   ])("preserves hydration failures (%s)", async (status, expected) => {
     const source = createEmailProviderMailboxSource({
       logger,
       accountId: "acc-1",
       provider: {
         name: "microsoft",
-        async getMessage() {
+        async getMessagesBatch() {
           throw Object.assign(new Error(`Provider returned ${status}`), {
             status,
           });
@@ -1132,6 +1131,44 @@ describe("createEmailProviderMailboxSource", () => {
         { key: { accountId: "acc-1", messageId: "m1" }, reason: "not_found" },
       ]);
     }
+  });
+
+  it("hydrates Outlook messages through the provider batch instead of one read per message", async () => {
+    const getMessage = vi.fn();
+    const getMessagesBatch = vi.fn(async (ids: string[]) =>
+      ids
+        .filter((id) => id !== "gone")
+        .map((id) => ({ ...searchMessage(id), textHtml: `<p>${id}</p>` })),
+    );
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "microsoft",
+        getMessage,
+        getMessagesBatch,
+      } as unknown as EmailProvider,
+    });
+    const ids = [
+      ...Array.from({ length: 19 }, (_, index) => `m-${index}`),
+      "gone",
+    ];
+
+    const result = await source.hydrate({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      keys: ids.map((messageId) => ({ accountId: "acc-1", messageId })),
+      purpose: "body",
+    });
+
+    if (result.status !== "ok") throw new Error("expected ok");
+    expect(result.value.bodies).toHaveLength(19);
+    expect(result.value.unresolved).toEqual([
+      { key: { accountId: "acc-1", messageId: "gone" }, reason: "not_found" },
+    ]);
+    expect(getMessagesBatch).toHaveBeenCalledTimes(1);
+    expect(getMessage).not.toHaveBeenCalled();
   });
 
   it("hydrates Gmail messages in one batch and reports the ones it could not read", async () => {

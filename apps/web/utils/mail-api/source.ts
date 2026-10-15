@@ -400,7 +400,7 @@ export function createEmailProviderMailboxSource(input: {
               { priority: isMessageOpen ? "interactive" : "sync" },
               () => batchedMessages(provider, keys),
             )
-          : await sequentialMessages(provider, keys);
+          : await batchedMessages(provider, keys);
         return {
           status: "ok" as const,
           value: {
@@ -857,20 +857,6 @@ async function batchedMessages(provider: EmailProvider, keys: MessageKey[]) {
     // The batch path drops parts that failed for good, such as deleted mail.
     if (message) messages.push(message);
     else unresolved.push({ key, reason: "not_found" });
-  }
-  return { messages, unresolved };
-}
-
-async function sequentialMessages(provider: EmailProvider, keys: MessageKey[]) {
-  const messages: ParsedMessage[] = [];
-  const unresolved: HydrationUnresolved[] = [];
-  for (const key of keys) {
-    try {
-      messages.push(await provider.getMessage(key.messageId));
-    } catch (error) {
-      if (!isMissingProviderResource(error)) throw error;
-      unresolved.push({ key, reason: "not_found" });
-    }
   }
   return { messages, unresolved };
 }

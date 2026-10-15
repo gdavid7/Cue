@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OutlookClient } from "@/utils/outlook/client";
 import { createTestLogger } from "@/__tests__/helpers";
+import { getProviderRateLimitDelayMs } from "@/utils/email/rate-limit";
 import {
+  getMessagesInBatches,
   getThreadParticipantMessagesInBatches,
   moveMessagesForSenders,
   moveThreadsInBatches,
@@ -11,7 +13,8 @@ const mockGetFolderIds = vi.fn();
 const mockUpdateEmailMessagesForSender = vi.fn();
 const mockPublishBulkActionToTinybird = vi.fn();
 
-vi.mock("@/utils/outlook/message", () => ({
+vi.mock("@/utils/outlook/message", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/outlook/message")>()),
   getFolderIds: (...args: Parameters<typeof mockGetFolderIds>) =>
     mockGetFolderIds(...args),
 }));
@@ -304,6 +307,198 @@ describe("moveThreadsInBatches", () => {
     });
   });
 });
+
+describe("getMessagesInBatches", () => {
+  beforeEach(() => {
+    mockGetFolderIds.mockResolvedValue({ inbox: "inbox-folder" });
+  });
+
+  it("reads messages in $batch calls of at most four items, one call at a time", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const batchPost = vi.fn(async (body: { requests: BatchItem[] }) => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      inFlight--;
+      return {
+        responses: body.requests.map((request) => ({
+          id: request.id,
+          status: 200,
+          body: graphMessage(messageIdFromUrl(request.url)),
+        })),
+      };
+    });
+    const ids = Array.from({ length: 10 }, (_, index) => `message-${index}`);
+
+    const messages = await getMessagesInBatches({
+      client: createMessageBatchClient(batchPost),
+      messageIds: ids,
+      logger: createTestLogger(),
+    });
+
+    expect(messages.map((message) => message.id)).toEqual(ids);
+    expect(messages[0]).toMatchObject({
+      threadId: "conversation-message-0",
+      textHtml: "<p>body of message-0</p>",
+      labelIds: expect.arrayContaining(["INBOX"]),
+    });
+    expect(maxInFlight).toBe(1);
+    const sizes = batchPost.mock.calls.map(([body]) => body.requests.length);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(4);
+    const [item] = batchPost.mock.calls[0][0].requests;
+    expect(item).toMatchObject({
+      method: "GET",
+      headers: { Prefer: 'IdType="ImmutableId"' },
+    });
+    const url = new URL(item.url, "https://graph.microsoft.com");
+    expect(url.searchParams.get("$select")).toContain("body");
+    expect(url.searchParams.get("$expand")).toContain("attachments");
+  });
+
+  it("leaves out messages Graph no longer has", async () => {
+    const batchPost = vi.fn(async (body: { requests: BatchItem[] }) => ({
+      responses: body.requests.map((request) => {
+        const messageId = messageIdFromUrl(request.url);
+        return messageId === "gone"
+          ? {
+              id: request.id,
+              status: 404,
+              body: { error: { code: "ErrorItemNotFound" } },
+            }
+          : { id: request.id, status: 200, body: graphMessage(messageId) };
+      }),
+    }));
+
+    const messages = await getMessagesInBatches({
+      client: createMessageBatchClient(batchPost),
+      messageIds: ["a", "gone", "b"],
+      logger: createTestLogger(),
+    });
+
+    expect(messages.map((message) => message.id)).toEqual(["a", "b"]);
+  });
+
+  it("retries only the items Graph throttled once Retry-After has passed", async () => {
+    const throttledOnce = new Set(["b"]);
+    const batchPost = vi.fn(async (body: { requests: BatchItem[] }) => ({
+      responses: body.requests.map((request) => {
+        const messageId = messageIdFromUrl(request.url);
+        if (throttledOnce.delete(messageId)) {
+          return {
+            id: request.id,
+            status: 429,
+            headers: { "Retry-After": "0" },
+            body: {
+              error: {
+                code: "ApplicationThrottled",
+                message: "Application is over its MailboxConcurrency limit.",
+              },
+            },
+          };
+        }
+        return { id: request.id, status: 200, body: graphMessage(messageId) };
+      }),
+    }));
+
+    const messages = await getMessagesInBatches({
+      client: createMessageBatchClient(batchPost),
+      messageIds: ["a", "b", "c"],
+      logger: createTestLogger(),
+    });
+
+    expect(messages.map((message) => message.id)).toEqual(["a", "b", "c"]);
+    const requested = batchPost.mock.calls.flatMap(([body]) =>
+      body.requests.map((request) => messageIdFromUrl(request.url)),
+    );
+    expect(requested).toEqual(["a", "b", "c", "b"]);
+  });
+
+  it("surfaces a throttled item as a Graph rate limit carrying its Retry-After", async () => {
+    const batchPost = vi.fn(async (body: { requests: BatchItem[] }) => ({
+      responses: body.requests.map((request) => ({
+        id: request.id,
+        status: 429,
+        headers: { "Retry-After": "30" },
+        body: { error: { code: "ApplicationThrottled", message: "Throttled" } },
+      })),
+    }));
+
+    const error = await getMessagesInBatches({
+      client: createMessageBatchClient(batchPost),
+      messageIds: ["a"],
+      logger: createTestLogger(),
+    }).catch((caught: unknown) => caught);
+
+    expect(
+      getProviderRateLimitDelayMs({
+        error,
+        provider: "microsoft",
+        attemptNumber: 1,
+      }),
+    ).toBe(30_000);
+  });
+
+  it("fails on an item error that is neither missing nor transient", async () => {
+    const batchPost = vi.fn(async (body: { requests: BatchItem[] }) => ({
+      responses: body.requests.map((request) => ({
+        id: request.id,
+        status: 403,
+        body: { error: { code: "ErrorAccessDenied", message: "Denied" } },
+      })),
+    }));
+
+    await expect(
+      getMessagesInBatches({
+        client: createMessageBatchClient(batchPost),
+        messageIds: ["a"],
+        logger: createTestLogger(),
+      }),
+    ).rejects.toMatchObject({ statusCode: 403, code: "ErrorAccessDenied" });
+  });
+});
+
+type BatchItem = {
+  id: string;
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+};
+
+function messageIdFromUrl(url: string) {
+  return decodeURIComponent(
+    new URL(url, "https://graph.microsoft.com").pathname.split("/").at(-1) ??
+      "",
+  );
+}
+
+function graphMessage(id: string) {
+  return {
+    id,
+    conversationId: `conversation-${id}`,
+    subject: `Subject ${id}`,
+    receivedDateTime: "2026-10-15T10:00:00Z",
+    parentFolderId: "inbox-folder",
+    isDraft: false,
+    isRead: true,
+    from: { emailAddress: { address: "ada@example.com", name: "Ada" } },
+    body: { contentType: "html", content: `<p>body of ${id}</p>` },
+  };
+}
+
+function createMessageBatchClient(
+  batchPost: (body: { requests: BatchItem[] }) => Promise<unknown>,
+): OutlookClient {
+  return {
+    getClient: () => ({
+      api: (path: string) => {
+        if (path !== "/$batch") throw new Error(`Unexpected path ${path}`);
+        return { post: batchPost };
+      },
+    }),
+    getCategoryMapCache: () => new Map<string, string>(),
+  } as unknown as OutlookClient;
+}
 
 function createMockOutlookClient({
   listMessages,
