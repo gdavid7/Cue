@@ -13,6 +13,7 @@ import {
   vi,
 } from "vitest";
 import { adminSso } from "@/utils/auth/sso";
+import { ACCOUNT_LINKING } from "@/utils/auth/account-linking";
 
 vi.mock("@/env", () => ({ env: { ADMINS: ["admin@example.com"] } }));
 
@@ -221,7 +222,7 @@ async function setup(adminEmail = "admin@example.com") {
         organizationProvisioning: { disabled: true },
       }),
     ],
-    account: { accountLinking: { trustedProviders: ["google", "apple"] } },
+    account: { accountLinking: ACCOUNT_LINKING },
     rateLimit: { enabled: false },
   });
   const context = await auth.$context;

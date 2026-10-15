@@ -16,6 +16,7 @@ import {
   handleReferralOnSignUp,
 } from "@/utils/auth";
 import prisma from "@/utils/__mocks__/prisma";
+import { ACCOUNT_LINKING } from "@/utils/auth/account-linking";
 import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
 
 const { mockAfter, mockAssertSignUpAllowed } = vi.hoisted(() => ({
@@ -132,10 +133,11 @@ describe("betterAuthConfig", () => {
     await expect(runHooks()).rejects.toMatchObject({ statusCode: 403 });
   });
 
-  it("does not trust Microsoft for implicit social account linking", () => {
-    expect(
-      (betterAuthConfig as any).options.account.accountLinking.trustedProviders,
-    ).toEqual(["google", "apple"]);
+  // Their behavior is covered in utils/auth/account-linking.test.ts.
+  it("uses the shared account-linking settings", () => {
+    expect((betterAuthConfig as any).options.account.accountLinking).toBe(
+      ACCOUNT_LINKING,
+    );
   });
 
   describe("inline profile photos", () => {

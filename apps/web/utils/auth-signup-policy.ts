@@ -23,11 +23,20 @@ export function isAllowedAuthSignupEmail(
   } = getAuthSignupPolicy(),
 ) {
   if (!normalizeEmail(email)) return false;
-  const { allowedEmails, allowedDomains } = normalizeAllowlist(options);
-  // No allow-list means open sign-up.
-  if (allowedEmails.length === 0 && allowedDomains.length === 0) return true;
+  if (isAuthSignupOpen(options)) return true;
 
   return isListedInAuthAllowlist(email, options);
+}
+
+/** No allow-list means open sign-up. */
+export function isAuthSignupOpen(
+  options: {
+    allowedEmails?: readonly string[];
+    allowedDomains?: readonly string[];
+  } = getAuthSignupPolicy(),
+) {
+  const { allowedEmails, allowedDomains } = normalizeAllowlist(options);
+  return allowedEmails.length === 0 && allowedDomains.length === 0;
 }
 
 /** Whether the email is named by the allow-lists; empty lists name nobody. */

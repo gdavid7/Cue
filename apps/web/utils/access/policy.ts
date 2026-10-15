@@ -5,6 +5,7 @@ import { posthogCaptureEvent } from "@/utils/posthog";
 import { ONBOARDING_ANALYTICS_EVENTS } from "@/utils/analytics/product";
 import {
   isAllowedAuthSignupEmail,
+  isAuthSignupOpen,
   createSignupNotAllowedError,
   isListedInAuthAllowlist,
 } from "@/utils/auth-signup-policy";
@@ -12,8 +13,8 @@ import { GMAIL_DOMAINS } from "@/utils/access/config";
 
 /**
  * Sign-in providers whose email claim proves the person owns the address.
- * Microsoft's can be set by a tenant admin (see `trustedProviders` in
- * utils/auth.ts), so it can't stand in for an approved Gmail address.
+ * Microsoft's can be set by a tenant admin (see utils/auth/account-linking.ts),
+ * so it can't stand in for an approved or allow-listed address.
  */
 const PROVIDERS_THAT_PROVE_EMAIL = new Set(["google", "apple"]);
 
@@ -27,8 +28,9 @@ type AccessPolicy = {
 /**
  * Runs where a new `User` row would be created, so people who already have an
  * account are never checked again. With the waitlist off and no allow-list,
- * sign-up stays open (local dev and self-hosting). An allow-list on its own
- * gates sign-up as before, and also admits people approved on /admin/access.
+ * sign-up stays open to any provider (local dev and self-hosting). Otherwise a
+ * Google or Apple sign-in that proves the address must be allow-listed or
+ * approved on /admin/access.
  */
 export async function assertSignUpAllowed(
   {
@@ -45,21 +47,20 @@ export async function assertSignUpAllowed(
   },
   policy: AccessPolicy = getAccessPolicy(),
 ) {
-  // The env allow-list predates approvals and admits any provider.
-  if (!policy.waitlistEnabled && isAllowedAuthSignupEmail(email, policy))
-    return;
+  if (!policy.waitlistEnabled && isAuthSignupOpen(policy)) return;
 
-  // Approval belongs to an address, so only a sign-in that proves the address
-  // can use it. An unproven claim isn't recorded as that person's request.
-  // Google's claim is narrowed to addresses it is authoritative for when its
-  // profile is mapped (see utils/auth.ts).
+  // Approvals and the allow-list both name an address, so only a sign-in that
+  // proves the address can use them. An unproven claim isn't recorded as that
+  // person's request. Google's claim is narrowed to addresses it is
+  // authoritative for when its profile is mapped (utils/auth/account-linking).
   const provesEmail =
     !!provider &&
     PROVIDERS_THAT_PROVE_EMAIL.has(provider) &&
     emailVerified === true;
   if (!provesEmail) throw createSignupNotAllowedError();
 
-  if (await isAllowedProvenEmail(email, policy)) return;
+  // Covers AUTH_ALLOWED_EMAILS (and domains with the waitlist off) too.
+  if (await isApprovedForAccess(email, policy)) return;
 
   // The person tried to get in, so that counts as asking. Google has already
   // shown its consent screen, but nothing from it is kept.

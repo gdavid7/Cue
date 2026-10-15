@@ -354,14 +354,45 @@ describe("assertSignUpAllowed with the waitlist off and an allow-list", () => {
     expect(prisma.accessRequest.create).not.toHaveBeenCalled();
   });
 
-  it("still admits AUTH_ALLOWED_EMAILS with any provider and no lookup", async () => {
+  it("still admits AUTH_ALLOWED_EMAILS without an approval", async () => {
     await expect(
       assertSignUpAllowed(
-        { email: "Founder@Gmail.com", provider: "microsoft" },
+        { email: "Founder@Gmail.com", ...google },
         allowlisted,
       ),
     ).resolves.toBeUndefined();
     expect(prisma.accessRequest.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("admits everyone at an allowed domain", async () => {
+    await expect(
+      assertSignUpAllowed(
+        { email: "pal@company.com", ...google },
+        { ...allowlisted, allowedDomains: ["company.com"] },
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  // The allow-list names addresses just like an approval does, so it needs the
+  // same proof; a tenant can put any address in a Microsoft email claim.
+  it.each([
+    { provider: "microsoft", emailVerified: true },
+    { provider: "google", emailVerified: false },
+    { provider: undefined, emailVerified: true },
+  ])("refuses an allow-listed address claimed by $provider (verified: $emailVerified)", async (identity) => {
+    await expect(
+      assertSignUpAllowed(
+        { email: "founder@gmail.com", ...identity },
+        allowlisted,
+      ),
+    ).rejects.toThrow("signup_not_allowed");
+    await expect(
+      assertSignUpAllowed(
+        { email: "pal@company.com", ...identity },
+        { ...allowlisted, allowedDomains: ["company.com"] },
+      ),
+    ).rejects.toThrow("signup_not_allowed");
+    expect(prisma.accessRequest.create).not.toHaveBeenCalled();
   });
 
   it("keeps sign-up open when the allow-list is empty", async () => {
