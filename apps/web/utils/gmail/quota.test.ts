@@ -36,6 +36,7 @@ const PACE_ACCOUNT = "account-pace";
 const YIELD_ACCOUNT = "account-yield";
 const LARGE_ACCOUNT = "account-large";
 const OPEN_ACCOUNT = "account-open";
+const WAITING_ACCOUNT = "account-waiting";
 // Gmail refuses short bursts past this many units a second, per user.
 const GMAIL_UNITS_PER_SECOND = 250;
 const logger = createScopedLogger("gmail-quota-test");
@@ -550,6 +551,42 @@ describe("Gmail quota gate", () => {
     // ...and its full 160 a second once they have been.
     expect(units("sync", 2500, 3500)).toBeGreaterThan(120);
     expect(insight).toBe(true);
+  });
+
+  it("makes sync give way as soon as a person's first inbox page starts waiting", async () => {
+    const admissions: Array<{ at: number; priority: string; cost: number }> =
+      [];
+    const admit = (priority: "sync" | "interactive", cost: number) =>
+      runWithGmailQuota({ caller: `test/${priority}`, priority }, () =>
+        meterGmailCall({ emailAccountId: WAITING_ACCOUNT, cost }, async () => {
+          admissions.push({ at: Date.now(), priority, cost });
+        }),
+      );
+    // Another session's sync keeps every second at its 160 units, in the
+    // 80-unit batches it sends.
+    let stop = false;
+    const scans = [0, 1].map(async () => {
+      while (!stop) await admit("sync", 80);
+    });
+    await vi.advanceTimersByTimeAsync(2500);
+
+    // The inbox preview's two batches of five messages, 100 units each.
+    const startedAt = Date.now();
+    let shownIn: number | null = null;
+    (async () => {
+      await admit("interactive", 100);
+      await admit("interactive", 100);
+      shownIn = Date.now() - startedAt;
+    })();
+    await vi.advanceTimersByTimeAsync(2500);
+    stop = true;
+    await vi.advanceTimersByTimeAsync(2000);
+    await Promise.all(scans);
+
+    // Sync would otherwise refill each second before the batch fits, and a
+    // waiting batch never started the yield that admission starts.
+    expect(shownIn).not.toBeNull();
+    expect(shownIn).toBeLessThanOrEqual(2000);
   });
 
   it("keeps sync's full share while a person opens a thread", async () => {

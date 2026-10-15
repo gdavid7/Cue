@@ -253,6 +253,17 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       ).toBe(0);
     });
 
+    it("starts a person's demand while their request still waits for room", async () => {
+      const person = { key: keys.demand, markMs: 2000, everyMs: 3000 };
+      expect(await take({ cost: 160, floor: 200, paceCap: 160 })).toBe(0);
+      // The second is too full for the person's batch, so it waits...
+      expect(
+        await take({ cost: 100, floor: -200, paceCap: 200, demand: person }),
+      ).toBeGreaterThan(0);
+      // ...but sync already gives way while it does.
+      expect(await redis!.pttl(keys.demand)).toBeGreaterThan(2900);
+    });
+
     it("hands a minute's usage to exactly one caller", async () => {
       await gmailQuotaStore.note({
         usageKey: keys.usage,

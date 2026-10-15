@@ -64,16 +64,16 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
           yieldWait < 0 || yieldWait > afterDemand ? afterDemand : yieldWait;
       }
       wait = Math.max(wait, paceWait);
-      if (wait > 0) return { waitMs: wait, defer };
-
-      buckets.set(input.bucketKey, { tokens: tokens - input.cost, at: now });
-      recent.push({ at: now, cost: input.cost });
       const episode = demands.get(pace.demand.key);
       if (pace.demand.markMs && (!episode || episode.renewsAt <= now))
         demands.set(pace.demand.key, {
           endsAt: now + pace.demand.markMs,
           renewsAt: now + (pace.demand.everyMs ?? pace.demand.markMs),
         });
+      if (wait > 0) return { waitMs: wait, defer };
+
+      buckets.set(input.bucketKey, { tokens: tokens - input.cost, at: now });
+      recent.push({ at: now, cost: input.cost });
       const fields = usage.get(input.usageKey) ?? {};
       fields[input.usageField] = (fields[input.usageField] ?? 0) + input.cost;
       fields["peak:second"] = Math.max(

@@ -13,8 +13,9 @@ export type GmailQuotaStore = {
    * (a request larger than the cap needs an empty window) and no `blockers`
    * key exists. During a demand episode on `pace.demand.key` the cap is
    * `pace.demand.yieldCap` instead, when given (0 holds the caller until the
-   * episode ends). An admission with `pace.demand.markMs` starts an episode
-   * of that length unless one started within `pace.demand.everyMs`, so
+   * episode ends). A request with `pace.demand.markMs` starts an episode of
+   * that length as it arrives, while it still waits for room as much as once
+   * admitted, unless one started within `pace.demand.everyMs`, so
    * back-to-back episodes always leave the others a gap. Records the
    * busiest window in the usage hash's
    * `peak:second` field. Returns `waitMs` 0 when admitted,
@@ -126,6 +127,10 @@ if yieldCap >= 0 and demandTtl > 0 then
   end
 end
 wait = math.max(wait, paceWait)
+-- Marked on arrival, so others yield while this request waits for room.
+if demandMs > 0 then
+  redis.call('SET', KEYS[5], tostring(now + demandMs), 'PX', demandEvery, 'NX')
+end
 if wait > 0 then return {wait, defer} end
 redis.call('HSET', KEYS[1], 'tokens', tostring(tokens - cost), 'at', tostring(now))
 redis.call('PEXPIRE', KEYS[1], 300000)
@@ -133,9 +138,6 @@ local seq = redis.call('INCR', KEYS[4])
 redis.call('PEXPIRE', KEYS[4], 300000)
 redis.call('ZADD', KEYS[3], now, seq .. ':' .. cost)
 redis.call('PEXPIRE', KEYS[3], paceWindow * 2)
-if demandMs > 0 then
-  redis.call('SET', KEYS[5], tostring(now + demandMs), 'PX', demandEvery, 'NX')
-end
 redis.call('HINCRBY', KEYS[2], ARGV[5], cost)
 local peak = tonumber(redis.call('HGET', KEYS[2], 'peak:second')) or 0
 if inWindow + cost > peak then
