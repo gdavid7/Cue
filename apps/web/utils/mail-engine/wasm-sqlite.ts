@@ -78,7 +78,10 @@ export async function createWasmMailStore(input: {
           // Each archive or star commits a transaction. Keeping the rollback
           // journal between them, instead of creating and deleting a pool
           // file for every one, saves the pool's header writes and flushes.
+          // A kept journal never shrinks on its own, so a large write's
+          // journal is truncated back to this size after it commits.
           database.exec("PRAGMA journal_mode=PERSIST");
+          database.exec("PRAGMA journal_size_limit=1048576");
           return createDatabaseDriver(database, release);
         } catch (error) {
           // The pool cannot wipe the files for a rebuild while this is open.

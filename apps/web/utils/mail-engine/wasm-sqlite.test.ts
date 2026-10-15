@@ -482,7 +482,7 @@ describe("createWasmMailStore", () => {
     await store.close();
   });
 
-  it("keeps the OPFS mailbox's rollback journal between commits", async () => {
+  it("keeps the OPFS mailbox's rollback journal between commits, capped in size", async () => {
     vi.stubGlobal("navigator", { storage: { getDirectory: async () => ({}) } });
     const pool = notADatabasePool({ failOnSetup: false });
     opfsPool.install = pool.install;
@@ -497,6 +497,8 @@ describe("createWasmMailStore", () => {
     await store.close();
 
     expect(pool.journalModes.at(-1)).toBe("persist");
+    // A kept journal never shrinks unless its size is limited.
+    expect(pool.journalSizeLimits.at(-1)).toBe(1_048_576);
   });
 });
 
@@ -512,6 +514,7 @@ function notADatabasePool({ failOnSetup }: { failOnSetup: boolean }) {
   const state = {
     wipes: 0,
     journalModes: [] as string[],
+    journalSizeLimits: [] as number[],
     install(sqlite: Sqlite) {
       sqlite.capi.sqlite3_js_posix_create_file(
         path,
@@ -537,6 +540,9 @@ function notADatabasePool({ failOnSetup }: { failOnSetup: boolean }) {
             try {
               state.journalModes.push(
                 String(this.selectValue("PRAGMA journal_mode")),
+              );
+              state.journalSizeLimits.push(
+                Number(this.selectValue("PRAGMA journal_size_limit")),
               );
             } catch {
               // A file that is not a database has no journal mode.
