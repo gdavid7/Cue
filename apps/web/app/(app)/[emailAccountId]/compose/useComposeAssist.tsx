@@ -48,15 +48,14 @@ export function useComposeAssist({
   emailAccountId,
   threadId,
   getEnvelope,
-  getContainer,
+  formRef,
 }: {
   editorRef: RefObject<EmailEditorHandle | null>;
   emailAccountId: string;
   threadId?: string;
   getEnvelope: () => { to?: string; subject?: string };
-  // Where the panel renders: inside a compose dialog, which keeps focus
-  // within itself, or the page.
-  getContainer: () => HTMLElement;
+  // The composer Cue works in. Escape inside it closes Cue first.
+  formRef: RefObject<HTMLElement | null>;
 }) {
   const [state, dispatch] = useReducer(assistReducer, { status: "closed" });
   const stateRef = useRef(state);
@@ -66,13 +65,8 @@ export function useComposeAssist({
   const [container, setContainer] = useState<HTMLElement | null>(null);
   // Outlives the panel, so the outcome of accepting is still announced.
   const [announcement, setAnnouncement] = useState("");
-  const contextRef = useRef({
-    emailAccountId,
-    threadId,
-    getEnvelope,
-    getContainer,
-  });
-  contextRef.current = { emailAccountId, threadId, getEnvelope, getContainer };
+  const contextRef = useRef({ emailAccountId, threadId, getEnvelope });
+  contextRef.current = { emailAccountId, threadId, getEnvelope };
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -96,10 +90,14 @@ export function useComposeAssist({
       const editor = editorRef.current;
       const context = editor?.beginAssist(scope);
       if (!context) return null;
-      setContainer(contextRef.current.getContainer());
+      // Inside a compose dialog, which keeps focus within itself.
+      setContainer(
+        formRef.current?.closest<HTMLElement>("[role='dialog']") ??
+          document.body,
+      );
       return context;
     },
-    [editorRef, stop],
+    [editorRef, formRef, stop],
   );
 
   const run = useCallback(
@@ -237,14 +235,22 @@ export function useComposeAssist({
   }, [accept]);
 
   // Keys the panel owns even where the compose dialog or the browser would
-  // otherwise take them: Escape, ⌘↵ and ⌘R.
+  // otherwise take them: Escape, ⌘↵ and ⌘R. Escape anywhere in the composer
+  // closes Cue rather than the composer.
   useEffect(() => {
     if (state.status === "closed") return;
     const onKeyDown = (event: KeyboardEvent) => {
       const panel = panelRef.current;
       if (!panel || !(event.target instanceof Node)) return;
-      if (!panel.contains(event.target)) return;
       if (event.isComposing) return;
+      if (!panel.contains(event.target)) {
+        if (event.key === "Escape" && formRef.current?.contains(event.target)) {
+          event.preventDefault();
+          event.stopPropagation();
+          close();
+        }
+        return;
+      }
       const mod = event.metaKey || event.ctrlKey;
       if (event.key === "Escape") {
         event.preventDefault();
@@ -262,7 +268,7 @@ export function useComposeAssist({
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [accept, close, retry, state.status]);
+  }, [accept, close, formRef, retry, state.status]);
 
   // A menu or prompt left behind by a click elsewhere goes away; a
   // suggestion stays until it is accepted or discarded.

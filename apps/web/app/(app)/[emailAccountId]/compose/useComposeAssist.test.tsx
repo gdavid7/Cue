@@ -127,6 +127,27 @@ describe("useComposeAssist", { timeout: 20_000 }, () => {
     expect(screen.queryByRole("dialog", { name: "Cue" })).toBeNull();
   });
 
+  it("closes Cue, not the composer, on Escape from the draft", async () => {
+    const { editor } = renderAssist(SELECTION);
+    openAssist();
+    fireEvent.keyDown(
+      await screen.findByRole("menuitem", { name: /Improve/ }),
+      { key: "i" },
+    );
+    await waitFor(() => expect(requests).toHaveLength(1));
+    const outerEscape = vi.fn();
+    document.addEventListener("keydown", outerEscape);
+
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Draft" }), {
+      key: "Escape",
+    });
+
+    document.removeEventListener("keydown", outerEscape);
+    expect(outerEscape).not.toHaveBeenCalled();
+    expect(editor.endAssist).toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Cue" })).toBeNull();
+  });
+
   it("retries with ⌘R and sends what the user typed to refine it", async () => {
     renderAssist(SELECTION);
     openAssist();
@@ -361,21 +382,23 @@ function renderAssist(context: EmailEditorAssistContext) {
   let interceptSend = () => false;
   function Harness() {
     const editorRef = useRef(editor as unknown as EmailEditorHandle);
+    const formRef = useRef<HTMLFormElement>(null);
     const assist = useComposeAssist({
       editorRef,
       emailAccountId: "account-1",
       threadId: "thread-1",
       getEnvelope: () => ({ to: "sam@example.com" }),
-      getContainer: () => document.body,
+      formRef,
     });
     interceptSend = assist.interceptSend;
     return (
-      <>
+      <form ref={formRef}>
         <button onClick={assist.open} type="button">
           Ask Cue
         </button>
+        <textarea aria-label="Draft" />
         {assist.panel}
-      </>
+      </form>
     );
   }
   const view = render(<Harness />);

@@ -531,8 +531,7 @@ function ComposeEmailFormContent({
       to: getValues("to") || undefined,
       subject: getValues("subject") || undefined,
     }),
-    getContainer: () =>
-      formRef.current?.closest<HTMLElement>("[role='dialog']") ?? document.body,
+    formRef,
   });
   const { isOpen: assistIsOpen, focus: focusAssist } = assist;
   const {
