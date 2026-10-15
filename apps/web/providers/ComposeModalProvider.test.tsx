@@ -8,10 +8,22 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { SWRConfig } from "swr";
+import { Tooltip } from "@/components/Tooltip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ComposeModalProvider, useComposeModal } from "./ComposeModalProvider";
 import { EmailAccountProvider, useAccount } from "./EmailAccountProvider";
+
+// The real tooltip positions itself with floating-ui, which observes size.
+class MockResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+(globalThis as { ResizeObserver?: typeof MockResizeObserver }).ResizeObserver =
+  MockResizeObserver;
 
 const navigation = vi.hoisted(() => ({
   pathname: "/account-a/mail",
@@ -174,14 +186,47 @@ describe("ComposeModalProvider focus", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(document.activeElement).toBe(elsewhere);
   });
+
+  // The sidebar's Compose tooltip opens below it, over the Inbox link, and
+  // swallowed clicks there until focus moved on.
+  it("returns focus to Compose without opening its tooltip", async () => {
+    renderProvider({ withTooltip: true });
+    const opener = await screen.findByRole("button", { name: "Compose" });
+    opener.focus();
+    fireEvent.click(opener);
+    await screen.findByTestId("composer");
+
+    fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
+
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("still shows the Compose tooltip when Tab lands on it", async () => {
+    renderProvider({ withTooltip: true });
+    const opener = await screen.findByRole("button", { name: "Compose" });
+
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    opener.focus();
+
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "Write a new email",
+    );
+  });
 });
 
-function renderProvider() {
+function renderProvider({ withTooltip = false } = {}) {
   render(
     <SWRConfig value={{ provider: () => new Map() }}>
       <EmailAccountProvider>
         <ComposeModalProvider>
-          <ComposeButton />
+          {withTooltip ? (
+            <Tooltip content="Write a new email">
+              <ComposeButton />
+            </Tooltip>
+          ) : (
+            <ComposeButton />
+          )}
           <PopOutButton />
         </ComposeModalProvider>
       </EmailAccountProvider>
@@ -189,10 +234,17 @@ function renderProvider() {
   );
 }
 
-function ComposeButton() {
+function ComposeButton(props: ComponentProps<"button">) {
   const { onOpen } = useComposeModal();
   return (
-    <button onClick={onOpen} type="button">
+    <button
+      {...props}
+      onClick={(event) => {
+        props.onClick?.(event);
+        onOpen();
+      }}
+      type="button"
+    >
       Compose
     </button>
   );
