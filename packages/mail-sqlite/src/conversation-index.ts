@@ -64,13 +64,9 @@ export async function migrateIncrementalConversationIndex(tx: SqlTransaction) {
   );
   if (applied.length) return;
 
-  const indexed = await tx.query(
-    "SELECT 1 FROM schema_migrations WHERE id = 2",
-  );
-  if (indexed.length) {
-    await dropConversationTriggers(tx);
-    await installConversationTriggers(tx);
-  }
+  // migrateMailbox always installs the index (migration 2) before this runs.
+  await dropConversationTriggers(tx);
+  await installConversationTriggers(tx);
   await tx.execute(
     "INSERT INTO schema_migrations(id, name) VALUES (11, '0011-incremental-conversation-index')",
   );
@@ -132,7 +128,11 @@ async function installConversationTriggers(tx: SqlTransaction) {
   `);
 }
 
-// Every column rebuildConversations reads from effective_messages.
+// Every column rebuildConversations and countsTowardRole read from
+// effective_messages; an update touching none of them cannot change the index.
+// Keep in sync: "keeps the role index equal to a full rebuild through inserts,
+// updates and deletes" in conversation-index.test.ts changes each column alone
+// and fails if one is missing here.
 const AGGREGATED_COLUMNS = [
   "account_id",
   "conversation_id",

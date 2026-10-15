@@ -453,7 +453,21 @@ describe("transactional conversation index", () => {
     }
   });
 
-  it("adds a message to a large conversation without rereading the conversation", async () => {
+  it("adds a message to a conversation without rereading the conversation", async () => {
+    const driver = createNodeSqliteDriver();
+    const store = await createSqliteMailStore(driver);
+    try {
+      // Rebuilding on insert read every message in the conversation, which
+      // made syncing an n-message conversation O(n^2).
+      expect(await insertTriggerBody(driver)).not.toContain(
+        "effective_messages",
+      );
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("replaces rebuild-on-insert triggers when an existing mailbox opens", async () => {
     const driver = createNodeSqliteDriver();
     const store = await createSqliteMailStore(driver);
     try {
@@ -462,34 +476,53 @@ describe("transactional conversation index", () => {
         provider: "google",
         generation: "g",
       });
-      const elapsed = await driver.write(async (tx) => {
-        for (let index = 0; index < 2000; index += 1) {
-          await insertMessage(tx, `big-${index}`, "big", index, 0);
+      const conversation =
+        "(account_id = NEW.account_id AND conversation_id = NEW.conversation_id)";
+      await driver.write(async (tx) => {
+        for (const event of ["insert", "update"]) {
+          await tx.exec(`DROP TRIGGER effective_conversations_after_${event}`);
+          await tx.exec(`
+            CREATE TRIGGER effective_conversations_after_${event}
+            AFTER ${event.toUpperCase()} ON effective_messages
+            BEGIN
+              DELETE FROM effective_role_conversations WHERE ${conversation};
+              INSERT INTO effective_role_conversations(
+                account_id, conversation_id, role, latest_at_ms, unread, starred
+              )
+              SELECT account_id, conversation_id, roles.value,
+                     MAX(received_at_ms), MAX(1 - read), MAX(starred)
+              FROM effective_messages, json_each(roles_json) AS roles
+              WHERE ${conversation}
+              GROUP BY account_id, conversation_id, roles.value;
+            END;
+          `);
         }
-        const timeInserts = async (
-          conversationFor: (index: number) => string,
-        ) => {
-          const started = performance.now();
-          for (let index = 0; index < 200; index += 1) {
-            const conversation = conversationFor(index);
-            await insertMessage(
-              tx,
-              `added-${conversation}-${index}`,
-              conversation,
-              index,
-              0,
-            );
-          }
-          return performance.now() - started;
-        };
-        return {
-          large: await timeInserts(() => "big"),
-          fresh: await timeInserts((index) => `fresh-${index}`),
-        };
+        await tx.execute("DELETE FROM schema_migrations WHERE id = 11");
       });
-      // Rebuilding on every write made each insert here read all 2,000 rows
-      // (about 90x the fresh case); folding the row in keeps them comparable.
-      expect(elapsed.large).toBeLessThan(elapsed.fresh * 3);
+      expect(await insertTriggerBody(driver)).toContain("effective_messages");
+
+      await createSqliteMailStore(driver);
+
+      expect(await insertTriggerBody(driver)).not.toContain(
+        "effective_messages",
+      );
+      await driver.write(async (tx) => {
+        await insertMessage(tx, "m1", "c1", 20, 0);
+        await insertMessage(tx, "m2", "c1", 10, 1);
+        await tx.execute(
+          "UPDATE effective_messages SET read = 1 WHERE message_id = 'm1'",
+        );
+      });
+      expect(await roleIndexRows(driver)).toEqual([
+        {
+          account_id: "a",
+          conversation_id: "c1",
+          role: "inbox",
+          latest_at_ms: 20,
+          unread: 0,
+          starred: 0,
+        },
+      ]);
     } finally {
       await store.close();
     }
@@ -579,4 +612,14 @@ async function roleIndexRows(driver: SqliteDriver) {
        ORDER BY account_id, conversation_id, role`,
     ),
   );
+}
+
+async function insertTriggerBody(driver: SqliteDriver) {
+  const [trigger] = await driver.read((tx) =>
+    tx.query(
+      "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'effective_conversations_after_insert'",
+    ),
+  );
+  const sql = String(trigger?.sql);
+  return sql.slice(sql.indexOf("BEGIN"));
 }
