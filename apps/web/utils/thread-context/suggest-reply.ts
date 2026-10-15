@@ -4,9 +4,14 @@ import he from "he";
 import { z } from "zod";
 import { getTodayForLLM, getWritingStylePrompt } from "@/utils/ai/helpers";
 import { getReplyMemoriesForPrompt } from "@/utils/ai/reply/reply-memory";
-import { extractEmailAddress, isSameEmailAddress } from "@/utils/email";
+import {
+  extractEmailAddress,
+  isSameEmailAddress,
+  splitRecipientList,
+} from "@/utils/email";
 import { getMessageTimestamp } from "@/utils/email/message-timestamp";
-import type { EmailProvider } from "@/utils/email/types";
+import type { EmailProvider, EmailThread } from "@/utils/email/types";
+import { GmailLabel } from "@/utils/gmail/label";
 import { createGenerateObject } from "@/utils/llms";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
@@ -16,7 +21,12 @@ import { assertHasAiAccess } from "@/utils/premium/limits";
 import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
-import { collectThreadContext } from "@/utils/thread-context/get-thread-context";
+import {
+  collectThreadContext,
+  latestSenderMessage,
+} from "@/utils/thread-context/get-thread-context";
+import { isAuthenticatedSender } from "@/utils/email/sender-authentication";
+import { isSameOrganization } from "@/utils/email/organization";
 import type { ParsedMessage } from "@/utils/types";
 import { isExaSearchEnabled, searchExa } from "@/utils/exa/search";
 import { domainOf } from "@/utils/thread-context/linked-pages";
@@ -29,6 +39,8 @@ const CONNECTOR_SOURCE_LABEL = {
   assignment: "Assignment",
   chat: "Message",
   web: "Web page",
+  task: "Task",
+  contact: "Contact",
 } as const;
 const MAX_SOURCE_TEXT = 2000;
 const WEB_SEARCH_RESULTS = 3;
@@ -86,6 +98,8 @@ export type Source = {
     | "assignment"
     | "chat"
     | "web"
+    | "task"
+    | "contact"
     | "memory";
   title: string;
   text: string;
@@ -178,8 +192,14 @@ export async function suggestReply({
     .catch(() => false);
   if (!hasAccess) return { status: "unavailable" };
 
+  const sender = latestSenderMessage(thread, userEmail);
   const context = await contextSources({
     items,
+    senderAuthenticated: !!sender && isAuthenticatedSender(sender),
+    // Only a task card needs vouching, and checking may read stored mail.
+    vouchedLinkMessageIds: items.some((item) => item.kind === "task")
+      ? await vouchedLinkMessageIds({ thread, userEmail, emailAccountId })
+      : new Set(),
     emailProvider,
     timezone: emailAccount.timezone,
     logger,
@@ -390,24 +410,97 @@ function normalize(text: string) {
     .trim();
 }
 
+/**
+ * Messages whose links may back a reply. Authentication only proves who sent
+ * a message, and anyone can authenticate their own domain and send a guessed
+ * task link, so the sender must also be someone the user already deals with:
+ * the user themselves (Gmail's SENT label, which no one else can set), a
+ * colleague at the user's own organization (see `isSameOrganization`), or
+ * someone the user has emailed. The last is read from this thread and from
+ * stored sent mail, once per sender, never by asking the mail provider.
+ *
+ * One message from the user to an address vouches for that address for
+ * good, even a reply to someone the user doesn't know well; a stranger the
+ * user has never written to can't get a task into a reply this way.
+ */
+export async function vouchedLinkMessageIds({
+  thread,
+  userEmail,
+  emailAccountId,
+}: {
+  thread: EmailThread;
+  userEmail: string;
+  emailAccountId: string;
+}): Promise<Set<string>> {
+  const isOwn = (m: ParsedMessage) =>
+    !!m.labelIds?.includes(GmailLabel.SENT) &&
+    isSameEmailAddress(m.headers.from, userEmail);
+  const writtenToInThread = new Set(
+    thread.messages
+      .filter(isOwn)
+      .flatMap((m) => [
+        ...splitRecipientList(m.headers.to),
+        ...splitRecipientList(m.headers.cc ?? ""),
+      ])
+      .map((recipient) => extractEmailAddress(recipient).toLowerCase()),
+  );
+
+  const senderOf = (m: ParsedMessage) =>
+    extractEmailAddress(m.headers.from).toLowerCase();
+  const known = (sender: string) =>
+    isSameOrganization(sender, userEmail) || writtenToInThread.has(sender);
+  const authenticated = thread.messages.filter(
+    (m) => !isOwn(m) && isAuthenticatedSender(m),
+  );
+  const toLookUp = [
+    ...new Set(authenticated.map(senderOf).filter((s) => !known(s))),
+  ];
+  const emailed = new Set(
+    (
+      await Promise.all(
+        toLookUp.map(async (email) =>
+          (await hasEmailed({ emailAccountId, email })) ? email : null,
+        ),
+      )
+    ).filter((email) => email !== null),
+  );
+
+  return new Set([
+    ...thread.messages.filter(isOwn).map((m) => m.id),
+    ...authenticated
+      .filter((m) => known(senderOf(m)) || emailed.has(senderOf(m)))
+      .map((m) => m.id),
+  ]);
+}
+
 export async function contextSources({
   items,
+  senderAuthenticated,
+  vouchedLinkMessageIds,
   emailProvider,
   timezone,
   logger,
 }: {
   items: Awaited<ReturnType<typeof collectThreadContext>>["items"];
+  /** Whether the thread's latest sender passed DMARC, or aligned DKIM, at Gmail. */
+  senderAuthenticated: boolean;
+  /** Messages whose links may back a reply; see `vouchedLinkMessageIds`. */
+  vouchedLinkMessageIds: ReadonlySet<string>;
   emailProvider: EmailProvider;
   timezone: string | null;
   logger: Logger;
 }): Promise<Source[]> {
-  // Tasks and contacts come only from links and the sender's address, which
-  // anyone can choose, so they are shown to the user but aren't evidence.
+  // A contact is looked up by the From address, which anyone can forge to
+  // pull in the record of whoever they impersonate, and a task by a link,
+  // whose id can be guessed. A contact backs a reply only when the sender was
+  // authenticated, a task only when the message that links to it is vouched for.
   const evidence = items
-    .filter(
-      (item): item is typeof item & { kind: Source["kind"] } =>
-        item.kind !== "task" && item.kind !== "contact",
-    )
+    .filter((item) => {
+      if (item.kind === "contact") return senderAuthenticated;
+      if (item.kind === "task")
+        return !!item.linkedFrom && vouchedLinkMessageIds.has(item.linkedFrom);
+      return true;
+    })
     .slice(0, MAX_CONTEXT_SOURCES);
   // Ranking ran on headers and snippets; the reply needs what was actually said.
   return Promise.all(
@@ -587,4 +680,25 @@ function formatTime(iso: string, timezone: string | null) {
     minute: "2-digit",
     timeZone: timezone || "UTC",
   });
+}
+
+/** Whether stored sent mail shows the user writing to `email`. */
+async function hasEmailed({
+  emailAccountId,
+  email,
+}: {
+  emailAccountId: string;
+  email: string;
+}) {
+  const sent = await prisma.emailMessage
+    .findFirst({
+      where: {
+        emailAccountId,
+        sent: true,
+        to: { equals: email, mode: "insensitive" },
+      },
+      select: { id: true },
+    })
+    .catch(() => null);
+  return !!sent;
 }

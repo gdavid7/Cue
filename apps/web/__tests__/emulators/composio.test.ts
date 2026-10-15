@@ -101,6 +101,11 @@ beforeAll(async () => {
         Status: "Working",
       },
     ],
+    hubspotAccount: { hub_id: 48_211, hub_domain: "brightline.io" },
+    salesforceUserInfo: {
+      user_id: "005B",
+      profile: "https://brightline.my.salesforce.com/005B",
+    },
     slackMessages: [
       {
         text: "I'll make the plots for milestone 2 tonight",
@@ -226,6 +231,8 @@ describe("Composio emulator with links and the sender in a thread", () => {
   function connected(...apps: string[]) {
     prisma.mcpConnection.findMany.mockResolvedValue(
       apps.map((name) => ({
+        id: `connection-${name}`,
+        updatedAt: new Date(0),
         emailAccountId: ACCOUNT,
         integration: { name },
       })) as never,
@@ -244,7 +251,7 @@ describe("Composio emulator with links and the sender in a thread", () => {
           "https://acme.atlassian.net/browse/OPS-12",
           "https://app.asana.com/0/1199999999999999/1200000000000001/f",
           "https://app.clickup.com/t/86abc123",
-        ],
+        ].map((url) => ({ url, messageId: "m1" })),
       },
       logger,
       now: NOW,
@@ -271,10 +278,29 @@ describe("Composio emulator with links and the sender in a thread", () => {
       now: NOW,
     });
 
-    expect(candidates.map((c) => [c.id, c.snippet]).sort()).toEqual([
-      ["hubspot:501", "Head of Procurement · Brightline · opportunity"],
-      ["salesforce:00QB", "Brightline · Lead: Working"],
+    expect(candidates.map((c) => [c.id, c.snippet, c.url]).sort()).toEqual([
+      [
+        "hubspot:501",
+        "Head of Procurement · Brightline · opportunity",
+        "https://app.hubspot.com/contacts/48211/record/0-1/501",
+      ],
+      [
+        "salesforce:00QB",
+        "Brightline · Lead: Working",
+        "https://brightline.my.salesforce.com/lightning/r/Lead/00QB/view",
+      ],
     ]);
+  });
+
+  it("refuses arguments the account lookups don't document", async () => {
+    await expect(
+      executor("hubspot")("HUBSPOT_GET_ACCOUNT_INFO", { portal: "1" }),
+    ).rejects.toThrow("unknown argument portal");
+    await expect(
+      executor("salesforce")("SALESFORCE_GET_USER_INFO", {
+        include_permissions: "yes",
+      }),
+    ).rejects.toThrow("include_permissions must be a boolean");
   });
 
   it("refuses arguments a tool doesn't document", async () => {

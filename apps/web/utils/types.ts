@@ -98,6 +98,8 @@ interface Headers {
 }
 
 export interface ParsedMessageHeaders {
+  /** The receiving server's SPF/DKIM/DMARC verdict, where the provider gives it. */
+  "authentication-results"?: string;
   bcc?: string;
   cc?: string;
   date: string; // the date supplied by the email. internally we rely on message.internalDate provided by the gmail api

@@ -20,6 +20,14 @@ const LINKS_PER_APP = 3;
 const JIRA_SITE = /^[a-z0-9-]+\.atlassian\.net$/;
 const JIRA_TENANT_TIMEOUT_MS = 2000;
 const JIRA_CLOUD_ID_CACHE_SECONDS = 30 * 24 * 60 * 60;
+// A reconnect to another HubSpot portal or Salesforce org is rare; a week
+// bounds how long a link could point at the old one.
+const CONNECTION_DETAIL_CACHE_SECONDS = 7 * 24 * 60 * 60;
+// An org's own My Domain host, e.g. acme.my.salesforce.com, not login hosts.
+// Salesforce's userinfo names the org's domain in urls.custom_domain; its
+// OAuth token response calls the org instance_url.
+const SALESFORCE_ORG_FIELDS = ["custom_domain", "instance_url"];
+const SALESFORCE_ORG_HOST = /^[a-z0-9-]+(\.[a-z0-9-]+)*\.my\.salesforce\.com$/;
 const RESULTS_PER_SOURCE = 10;
 const MAX_TEXT = 600;
 const ASSIGNMENT_PAST_DAYS = 7;
@@ -44,9 +52,21 @@ type Search = {
   now: Date;
 };
 
+type SenderLookup = {
+  now: Date;
+  /**
+   * The connection and when it last changed, which keys its cached details:
+   * a reconnect, perhaps to another account, updates the connection, so
+   * details of the account connected before are never reused.
+   */
+  connectionId: string;
+  logger: Logger;
+};
+
 /** What a thread points at directly, read from its links and headers. */
 export type ThreadSignals = {
-  links: string[];
+  /** Each link with the message it is in, which vouches for it or doesn't. */
+  links: { url: string; messageId: string }[];
   /** The latest sender other than the user, unless automated; lowercase. */
   senderEmail?: string;
 };
@@ -75,8 +95,8 @@ export async function fetchConnectorCandidates({
   now?: Date;
 }): Promise<{ candidates: ContextCandidate[]; complete: boolean }> {
   const links = signals.links.flatMap((link) => {
-    const url = parseUrl(link);
-    return url ? [url] : [];
+    const url = parseUrl(link.url);
+    return url ? [{ url, messageId: link.messageId }] : [];
   });
   const apps = new Set([
     ...(keywords.length ? Object.keys(SOURCES) : []),
@@ -93,6 +113,8 @@ export async function fetchConnectorCandidates({
         ...ownedBySameUser(emailAccountId),
       },
       select: {
+        id: true,
+        updatedAt: true,
         emailAccountId: true,
         integration: { select: { name: true } },
       },
@@ -161,22 +183,38 @@ export async function fetchConnectorCandidates({
       const linkSource = LINK_SOURCES[name];
       const linked = linkSource
         ? uniqueBy(
-            links.flatMap((url) => {
+            links.flatMap(({ url, messageId }) => {
               const key = linkSource.match(url);
-              return key ? [{ key, url }] : [];
+              return key ? [{ key, url, messageId }] : [];
             }),
             (link) => link.key,
           )
             .slice(0, LINKS_PER_APP)
             .map((link) =>
-              lookup(() => linkSource.fetch(execute, link.key, link.url, now)),
+              lookup(async () => {
+                const item = await linkSource.fetch(
+                  execute,
+                  link.key,
+                  link.url,
+                  now,
+                );
+                return item && { ...item, linkedFrom: link.messageId };
+              }),
             )
         : [];
       const senderSource = SENDER_SOURCES[name];
       const { senderEmail } = signals;
       const sender =
         senderSource && senderEmail
-          ? [lookup(() => senderSource(execute, senderEmail, now))]
+          ? [
+              lookup(() =>
+                senderSource(execute, senderEmail, {
+                  now,
+                  connectionId: `${connection.id}:${connection.updatedAt.getTime()}`,
+                  logger,
+                }),
+              ),
+            ]
           : [];
 
       return (await Promise.all([...linked, ...sender, search()])).flat();
@@ -234,7 +272,7 @@ const SENDER_SOURCES: Partial<
     (
       execute: Execute,
       email: string,
-      now: Date,
+      context: SenderLookup,
     ) => Promise<ContextCandidate | null>
   >
 > = {
@@ -551,9 +589,39 @@ async function fetchClickUpTask(
 async function findHubSpotContact(
   execute: Execute,
   email: string,
-  now: Date,
+  lookup: SenderLookup,
 ): Promise<ContextCandidate | null> {
-  const { results } = parseToolResult(
+  const [{ results }, portalId] = await Promise.all([
+    searchHubSpotContacts(execute, email),
+    cachedForConnection(
+      `hubspot-portal-id:${lookup.connectionId}`,
+      lookup,
+      () => hubSpotPortalId(execute),
+    ),
+  ]);
+  const contact = results.find(
+    (result) => result.properties.email?.toLowerCase() === email,
+  );
+  if (!contact) return null;
+  const p = contact.properties;
+  const name = [p.firstname, p.lastname].filter(Boolean).join(" ") || email;
+  return {
+    ...card(name, [p.jobtitle, p.company, p.lifecyclestage]),
+    id: `hubspot:${contact.id}`,
+    kind: "contact",
+    source: "HubSpot",
+    at: isoTime(p.lastmodifieddate, lookup.now),
+    // 0-1 is HubSpot's object type id for contacts.
+    url: portalId
+      ? `https://app.hubspot.com/contacts/${portalId}/record/0-1/${encodeURIComponent(contact.id)}`
+      : undefined,
+    people: [{ email, name }],
+    linkedBy: "sender",
+  };
+}
+
+async function searchHubSpotContacts(execute: Execute, email: string) {
+  return parseToolResult(
     "HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA",
     hubSpotContactsSchema,
     await execute("HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA", {
@@ -572,29 +640,30 @@ async function findHubSpotContact(
       limit: 1,
     }),
   );
-  const contact = results.find(
-    (result) => result.properties.email?.toLowerCase() === email,
+}
+
+/** The HubSpot account (portal) the connection belongs to. */
+async function hubSpotPortalId(execute: Execute): Promise<string | null> {
+  const account = parseToolResult(
+    "HUBSPOT_GET_ACCOUNT_INFO",
+    hubSpotAccountSchema,
+    await execute("HUBSPOT_GET_ACCOUNT_INFO", {}),
   );
-  if (!contact) return null;
-  const p = contact.properties;
-  const name = [p.firstname, p.lastname].filter(Boolean).join(" ") || email;
-  return {
-    ...card(name, [p.jobtitle, p.company, p.lifecyclestage]),
-    id: `hubspot:${contact.id}`,
-    kind: "contact",
-    source: "HubSpot",
-    at: isoTime(p.lastmodifieddate, now),
-    people: [{ email, name }],
-    linkedBy: "sender",
-  };
+  const id = String(account.hub_id ?? account.hubId ?? account.portalId ?? "");
+  return /^\d+$/.test(id) ? id : null;
 }
 
 /** The sender's Salesforce contact, or else their lead. */
 async function findSalesforceContact(
   execute: Execute,
   email: string,
-  now: Date,
+  lookup: SenderLookup,
 ): Promise<ContextCandidate | null> {
+  const instance = cachedForConnection(
+    `salesforce-instance:${lookup.connectionId}`,
+    lookup,
+    () => salesforceInstance(execute),
+  );
   // Salesforce matches emails partially, so only an exact one counts.
   const exact = (records: SalesforcePerson[]) =>
     records.find((record) => record.Email?.toLowerCase() === email);
@@ -612,6 +681,7 @@ async function findSalesforceContact(
   const person = contact ?? lead;
   if (!person) return null;
   const name = person.Name || email;
+  const origin = await instance;
   return {
     ...card(name, [
       person.Title,
@@ -621,7 +691,10 @@ async function findSalesforceContact(
     id: `salesforce:${person.Id}`,
     kind: "contact",
     source: "Salesforce",
-    at: isoTime(person.LastModifiedDate, now),
+    at: isoTime(person.LastModifiedDate, lookup.now),
+    url: origin
+      ? `${origin}/lightning/r/${lead ? "Lead" : "Contact"}/${encodeURIComponent(person.Id)}/view`
+      : undefined,
     people: [{ email, name }],
     linkedBy: "sender",
   };
@@ -720,6 +793,68 @@ function card(title: string, details: (string | null | undefined)[]) {
     text: [title, line].filter(Boolean).join("\n").slice(0, MAX_TEXT),
     snippet: line || undefined,
   };
+}
+
+/**
+ * A detail of the connected account that doesn't change, such as the HubSpot
+ * portal, fetched once per connection. It only adds a link, so a failure
+ * just leaves the link off and is tried again next time.
+ */
+async function cachedForConnection(
+  key: string,
+  { logger }: SenderLookup,
+  fetch: () => Promise<string | null>,
+): Promise<string | null> {
+  const cached = await redis.get<string>(key).catch(() => null);
+  if (cached) return String(cached);
+  try {
+    const value = await fetch();
+    if (value) {
+      await redis
+        .set(key, value, { ex: CONNECTION_DETAIL_CACHE_SECONDS })
+        .catch(() => null);
+    }
+    return value;
+  } catch (error) {
+    logger.trace("Connected account detail unavailable", { key, error });
+    return null;
+  }
+}
+
+/**
+ * The origin of the person's Salesforce org, e.g. `https://acme.my.salesforce.com`.
+ * Composio documents only that the answer describes the user, so any https
+ * address it gives on the org's own Salesforce host counts; login hosts and
+ * other domains never do.
+ */
+async function salesforceInstance(execute: Execute): Promise<string | null> {
+  const info = await execute("SALESFORCE_GET_USER_INFO", {});
+  // Fields that name the org itself come first; any other address after.
+  const named = SALESFORCE_ORG_FIELDS.flatMap((field) =>
+    stringsIn(info, 0, field),
+  );
+  for (const value of [...named, ...stringsIn(info)]) {
+    const url = parseUrl(value);
+    if (
+      url?.protocol === "https:" &&
+      !url.port &&
+      SALESFORCE_ORG_HOST.test(url.hostname)
+    ) {
+      return url.origin;
+    }
+  }
+  return null;
+}
+
+/** The strings in a response, or only those under the key `only`. */
+function stringsIn(value: unknown, depth = 0, only?: string): string[] {
+  if (typeof value === "string") return only ? [] : [value];
+  if (!value || typeof value !== "object" || depth > 4) return [];
+  return Object.entries(value).flatMap(([key, v]) =>
+    only && key === only && typeof v === "string"
+      ? [v]
+      : stringsIn(v, depth + 1, only),
+  );
 }
 
 function isoTime(value: string | number | null | undefined, fallback: Date) {
@@ -943,6 +1078,14 @@ const hubSpotContactsSchema = z.object({
       }),
     }),
   ),
+});
+
+// Composio describes the answer only as "email, hubId, user details";
+// HubSpot's own token lookup calls the portal `hub_id`.
+const hubSpotAccountSchema = z.object({
+  hub_id: z.union([z.number(), z.string()]).nullish(),
+  hubId: z.union([z.number(), z.string()]).nullish(),
+  portalId: z.union([z.number(), z.string()]).nullish(),
 });
 
 // Contacts and leads share the fields used here; leads have Company and Status.

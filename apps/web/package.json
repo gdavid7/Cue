@@ -173,6 +173,7 @@
     "encoding": "0.1.13",
     "fast-xml-parser": "5.10.1",
     "framer-motion": "12.43.0",
+    "free-email-domains": "1.12.14",
     "gaxios": "7.3.0",
     "gmail-api-parse-message": "2.1.2",
     "google": "link:@next/third-parties/google",

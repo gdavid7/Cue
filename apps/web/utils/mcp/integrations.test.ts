@@ -128,6 +128,7 @@ describe("Composio allowlists", () => {
         "SALESFORCE_GET_ACCOUNT",
         "SALESFORCE_GET_OPPORTUNITY",
         "SALESFORCE_GET_LEAD",
+        "SALESFORCE_GET_USER_INFO",
       ],
     ],
   ])("%s allows exactly its read tools", (name, tools) => {

@@ -91,6 +91,7 @@ import { MailLayout, MailSplitFilterKind } from "@/generated/prisma/enums";
 import { useSidebar } from "@/components/ui/sidebar";
 import { useChat } from "@/providers/ChatProvider";
 import { useAtomValue, useSetAtom } from "jotai";
+import { openThreadAtom } from "@/store/open-thread";
 import {
   commandPaletteOpenAtom,
   mailCommandContextAtom,
@@ -759,6 +760,21 @@ export function MailShell() {
   const openMessages = readerSelectionSettled
     ? (openThreadData?.thread.messages ?? NO_MESSAGES)
     : NO_MESSAGES;
+  // The assistant chat lives outside this screen; it reads the open thread
+  // from here so a question about "this email" names it.
+  const setReaderOpenThread = useSetAtom(openThreadAtom);
+  const latestOpenMessageId = openMessages
+    .filter((message) => !message.labelIds?.includes(GmailLabel.DRAFT))
+    .at(-1)?.id;
+  useEffect(() => {
+    setReaderOpenThread(
+      openThreadSelection && {
+        ...openThreadSelection,
+        messageId: latestOpenMessageId,
+      },
+    );
+    return () => setReaderOpenThread(null);
+  }, [openThreadSelection, latestOpenMessageId, setReaderOpenThread]);
   const openExternalUrl = useMemo(() => {
     const message = openMessages.at(-1);
     if (!message || !readerEmailAccount) return;

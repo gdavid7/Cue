@@ -16,6 +16,15 @@ const searchContextInputSchema = z.object({
     .describe(
       'A few distinctive words: names of people or organizations and topic words, e.g. "Nora start date" or "Citadel superday". Not a full sentence.',
     ),
+  threadId: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .nullish()
+    .describe(
+      "Optional. The threadId of the one email thread the question is about, taken from a searchInbox or readEmail result or from the context naming the thread the user has open. With it, results also include what that email links to in the user's connected apps (Google Drive files; Jira, Asana or ClickUp tasks) and its sender's contact record in HubSpot or Salesforce. Omit it for questions that are not about a single email.",
+    ),
 });
 
 export const searchContextTool = ({
@@ -34,7 +43,7 @@ export const searchContextTool = ({
 Use for questions about a person, organization, or topic that may span email and calendar ("what did Nora say about the start date", "when is my Citadel interview", "what's happening with Acme"). Use searchInbox instead for exact mailbox filters such as unread, a date range, a sender address, or a label.
 Results have short snippets only: call readEmail with an email result's messageId before relying on details. In the answer, say which emails or meetings it comes from, and say plainly when the results don't answer the question rather than guessing.`,
     inputSchema: searchContextInputSchema,
-    execute: async ({ query }) => {
+    execute: async ({ query, threadId }) => {
       logger.trace("Tracking tool call", { tool: "search_context", email });
       posthogCaptureEvent(email, "AI Assistant Chat Tool Call", {
         tool: "search_context",
@@ -50,6 +59,7 @@ Results have short snippets only: call readEmail with an email result's messageI
           emailAccountId,
           userEmail: email,
           query,
+          threadId: threadId ?? undefined,
           emailProvider,
           logger,
         });
