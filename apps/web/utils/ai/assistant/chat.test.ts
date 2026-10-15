@@ -329,6 +329,35 @@ describe("aiProcessAssistantChat setup", () => {
   });
 });
 
+describe("aiProcessAssistantChat open thread", () => {
+  async function modelMessagesFor(openThreadId?: string) {
+    vi.clearAllMocks();
+    vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
+    await aiProcessAssistantChat({
+      messages: [{ role: "user", content: "what's this about?" }],
+      emailAccountId: "email-account-id",
+      user: getEmailAccount(),
+      openThreadId,
+      logger: createTestLogger(),
+    });
+    const [options] = vi.mocked(toolCallAgentStream).mock.calls[0];
+    return JSON.stringify(options.messages);
+  }
+
+  it("tells the model which thread the user has open, for searchContext", async () => {
+    const messages = await modelMessagesFor("thread-42");
+
+    expect(messages).toContain("threadId thread-42");
+    expect(messages).toContain("searchContext");
+  });
+
+  it("says nothing about an open thread when none is open", async () => {
+    expect(await modelMessagesFor()).not.toContain(
+      "has this email thread open",
+    );
+  });
+});
+
 describe("aiProcessAssistantChat inbox snapshot", () => {
   it("follows the caller's first-turn flag rather than counting user-role messages", async () => {
     vi.clearAllMocks();

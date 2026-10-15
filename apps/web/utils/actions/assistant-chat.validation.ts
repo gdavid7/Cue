@@ -210,6 +210,14 @@ export const assistantInputSchema = z.object({
   // Clients that can't render the assistant's inline email card markup would
   // show it as raw XML, so cards are opt-in per client.
   supportsInlineEmailCards: z.boolean().optional().default(false),
+  // The thread open in the reader as the message is sent, so "this email"
+  // has an id the assistant can use. It goes into the model's context, so it
+  // may only contain the characters provider thread ids use.
+  openThreadId: z
+    .string()
+    .trim()
+    .regex(/^[\w=+/.-]{1,200}$/)
+    .optional(),
 });
 
 export type AssistantInput = z.infer<typeof assistantInputSchema>;

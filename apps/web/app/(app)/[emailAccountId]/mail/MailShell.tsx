@@ -91,6 +91,7 @@ import { MailLayout, MailSplitFilterKind } from "@/generated/prisma/enums";
 import { useSidebar } from "@/components/ui/sidebar";
 import { useChat } from "@/providers/ChatProvider";
 import { useAtomValue, useSetAtom } from "jotai";
+import { openThreadAtom } from "@/store/open-thread";
 import {
   commandPaletteOpenAtom,
   mailCommandContextAtom,
@@ -703,6 +704,13 @@ export function MailShell() {
       threadId: openThreadId,
     };
   }, [emailAccountId, isAllAccounts, openThreadAccountId, openThreadId]);
+  // The assistant chat lives outside this screen; it reads the open thread
+  // from here so a question about "this email" names it.
+  const setReaderOpenThread = useSetAtom(openThreadAtom);
+  useEffect(() => {
+    setReaderOpenThread(openThreadSelection);
+    return () => setReaderOpenThread(null);
+  }, [openThreadSelection, setReaderOpenThread]);
   const openThreadKey = isAllAccounts
     ? getThreadSelectionKey(openThreadSelection)
     : openThreadId;

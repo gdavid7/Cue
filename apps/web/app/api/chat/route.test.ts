@@ -239,6 +239,16 @@ describe("chat route rule freshness persistence", () => {
     );
   });
 
+  it("passes on the thread the user has open, when the client sends one", async () => {
+    await POST(createRequest("What's this about?", { openThreadId: "t-42" }), {
+      params: Promise.resolve({}),
+    });
+
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ openThreadId: "t-42" }),
+    );
+  });
+
   it("returns 404 when the email account cannot be loaded", async () => {
     mockGetEmailAccountWithAi.mockResolvedValueOnce(null);
 

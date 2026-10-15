@@ -23,7 +23,7 @@ const searchContextInputSchema = z.object({
     .max(200)
     .nullish()
     .describe(
-      "Optional. The threadId of the one email thread the question is about, taken from a searchInbox or readEmail result. With it, results also include what that email links to in the user's connected apps (Google Drive files; Jira, Asana or ClickUp tasks) and its sender's contact record in HubSpot or Salesforce. Omit it for questions that are not about a single email.",
+      "Optional. The threadId of the one email thread the question is about, taken from a searchInbox or readEmail result or from the context naming the thread the user has open. With it, results also include what that email links to in the user's connected apps (Google Drive files; Jira, Asana or ClickUp tasks) and its sender's contact record in HubSpot or Salesforce. Omit it for questions that are not about a single email.",
     ),
 });
 
