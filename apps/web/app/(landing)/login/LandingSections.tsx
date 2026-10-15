@@ -33,9 +33,8 @@ const KEEP_GMAIL_POINTS = [
   },
   {
     icon: LogOutIcon,
-    title: "Leave any time",
-    description:
-      "Disconnect in one step. Your inbox is right where it was, because it never moved.",
+    title: "Stop any time",
+    description: `If you stop using ${BRAND_NAME}, nothing changes. Your emails were in Gmail all along.`,
   },
 ];
 
@@ -119,7 +118,7 @@ const FAQS: { question: string; answer: string }[] = [
   },
   {
     question: `What does ${BRAND_NAME} do with my email?`,
-    answer: `${BRAND_NAME} reads your mail to write each email's next step, find related context and suggest replies. Parts of your mail are processed by AI providers to do that, and your mail is never used to train AI models. Nothing sends without you.`,
+    answer: `${BRAND_NAME} reads your mail to tell you what each email needs from you, find related files and messages, and suggest replies. Parts of your mail are processed by AI providers to do that, and your mail is never used to train AI models. Nothing sends without you.`,
   },
   {
     question: "Does it work with Outlook?",
@@ -153,7 +152,7 @@ export function IntelligenceSection() {
     <LandingSection
       id="intelligence"
       title="Email has worked the same way for over 50 years."
-      description={`A list of messages, newest first, and the rest is up to you: what each one wants, where the file is, what your team already said. ${BRAND_NAME} does a lot more than sorting. It tells you what every email needs and brings everything related to it.`}
+      description={`A list of messages, newest first, and the rest is up to you: what each one wants, where the file is, what your team already said. ${BRAND_NAME} does a lot more than sorting. It tells you what each email needs from you, like “Reply with your flight time” or “Confirm Wednesday 4 PM”, right under the email, and brings everything related to it.`}
     >
       <h3 className="mb-3 font-medium text-foreground">
         Intelligence, not just sorting.
