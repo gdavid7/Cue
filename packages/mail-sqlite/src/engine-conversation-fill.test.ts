@@ -19,6 +19,13 @@ type MembershipResult = Awaited<
 
 const session = { accountId: "acc-1", generation: "g1" };
 const thread = { accountId: "acc-1", conversationId: "thread-1" };
+const inboxQuery = {
+  accountIds: ["acc-1"],
+  predicate: { kind: "role" as const, role: "inbox" as const },
+  order: "newest_first" as const,
+  pageSize: 25,
+  after: null,
+};
 const original = threadPatch("original", 1000, ["inbox"]);
 const replies = [
   threadPatch("reply-1", 2000, ["sent"]),
@@ -173,6 +180,38 @@ describe("opening a conversation a first sync has not fully reached", () => {
     ).toBe(false);
     await engine.ensureConversationMessages(thread);
     expect(source.membershipReads).toBe(2);
+    await engine.close();
+  });
+
+  it("keeps a conversation archived while the fill brings in its inbox message", async () => {
+    let release: () => void = () => undefined;
+    const source = firstSyncSource({
+      firstPage: [...replies, threadPatch("reply-3", 4000, ["inbox"])],
+      membership: [
+        original,
+        ...replies,
+        threadPatch("reply-3", 4000, ["inbox"]),
+      ],
+      async readMembership(answer) {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return answer();
+      },
+    });
+    const { engine, store } = await startFirstSync(source);
+
+    const filling = engine.ensureConversationMessages(thread);
+    while (source.membershipReads === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const admission = await archive(engine, "archive-1");
+    expect(admission.status).toBe("preparing");
+    release();
+    await filling;
+
+    const inbox = await store.readMailboxView(inboxQuery);
+    expect(inbox.view.conversations).toEqual([]);
     await engine.close();
   });
 

@@ -817,6 +817,34 @@ export async function createSqliteMailStore(
         ) {
           return { status: "stale" as const };
         }
+        // A command admitted on the messages stored so far (archive right
+        // after opening) covers the ones this page adds, so they don't show
+        // it undone until its own preparation lands.
+        const preparing = await tx.query(
+          `SELECT c.command_id FROM operation_conversations c
+           JOIN operations o
+             ON o.account_id = c.account_id AND o.command_id = c.command_id
+           WHERE c.account_id = ? AND c.conversation_id = ? AND c.complete = 0
+             AND o.status = 'preparing'`,
+          [accountId, conversationId],
+        );
+        const newTargets: MessageKey[] = [];
+        for (const row of preparing) {
+          for (const key of input.page.keys) {
+            if (key.accountId !== accountId) continue;
+            const inserted = await tx.execute(
+              `INSERT OR IGNORE INTO operation_targets(account_id, command_id, message_id, conversation_id)
+               VALUES (?, ?, ?, ?)`,
+              [
+                accountId,
+                String(row.command_id),
+                key.messageId,
+                conversationId,
+              ],
+            );
+            if (inserted.changedRows > 0) newTargets.push(key);
+          }
+        }
         for (const change of input.page.changes) {
           if (
             change.kind === "message_patch" &&
@@ -830,6 +858,7 @@ export async function createSqliteMailStore(
           }
           await applyChange(tx, change);
         }
+        await recomputeTargets(tx, newTargets);
         if (!input.page.nextPage) {
           await tx.execute(
             `INSERT INTO conversation_completeness(account_id, conversation_id, complete)
