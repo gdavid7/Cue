@@ -10,14 +10,9 @@ import { archiveThenNewMailScenario } from "@inboxzero/mail-core/test-support/sc
 import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
 import type { SqliteDriver } from "@inboxzero/mail-sqlite/driver";
-import { classifyMailboxError } from "@inboxzero/mail-sqlite/recovery";
+import { classifyMailboxError } from "@inboxzero/mail-sqlite/mailbox-errors";
 import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
-import {
-  MAIL_ENGINE_OPFS_DIRECTORY,
-  createWasmMailStore,
-  createWasmMemoryDriver,
-  wipeOpfsMailEngine,
-} from "./wasm-sqlite";
+import { createWasmMailStore, createWasmMemoryDriver } from "./wasm-sqlite";
 
 type Sqlite = Awaited<
   ReturnType<typeof import("@sqlite.org/sqlite-wasm").default>
@@ -486,78 +481,24 @@ describe("createWasmMailStore", () => {
     expect(pool.wipes).toBe(1);
     await store.close();
   });
-});
 
-describe("wipeOpfsMailEngine", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
+  it("keeps the OPFS mailbox's rollback journal between commits, capped in size", async () => {
+    vi.stubGlobal("navigator", { storage: { getDirectory: async () => ({}) } });
+    const pool = notADatabasePool({ failOnSetup: false });
+    opfsPool.install = pool.install;
 
-  it("removes the mail-engine OPFS directory", async () => {
-    const removeEntry = vi.fn();
-    vi.stubGlobal("navigator", {
-      storage: {
-        getDirectory: async () => ({ removeEntry }),
-      },
+    const store = await createWasmMailStore({ ownedAccountIds: ["acc-1"] });
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
     });
-    await wipeOpfsMailEngine();
-    expect(removeEntry).toHaveBeenCalledWith(MAIL_ENGINE_OPFS_DIRECTORY, {
-      recursive: true,
-    });
-  });
 
-  it("ignores a missing OPFS directory", async () => {
-    vi.stubGlobal("navigator", {
-      storage: {
-        getDirectory: async () => ({
-          removeEntry: async () => {
-            throw Object.assign(new Error("missing"), {
-              name: "NotFoundError",
-            });
-          },
-        }),
-      },
-    });
-    await expect(wipeOpfsMailEngine()).resolves.toBe(true);
-  });
+    await store.close();
 
-  it("reports a directory that stays locked through every retry", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal("navigator", {
-      storage: {
-        getDirectory: async () => ({
-          removeEntry: async () => {
-            throw Object.assign(new Error("busy"), {
-              name: "InvalidStateError",
-            });
-          },
-        }),
-      },
-    });
-    const done = wipeOpfsMailEngine();
-    await vi.runAllTimersAsync();
-    await expect(done).resolves.toBe(false);
-  });
-
-  it("retries removeEntry while the SAHPool still holds the directory", async () => {
-    vi.useFakeTimers();
-    const removeEntry = vi
-      .fn()
-      .mockRejectedValueOnce(
-        Object.assign(new Error("busy"), { name: "InvalidStateError" }),
-      )
-      .mockResolvedValueOnce(undefined);
-    vi.stubGlobal("navigator", {
-      storage: {
-        getDirectory: async () => ({ removeEntry }),
-      },
-    });
-    const done = wipeOpfsMailEngine();
-    await vi.runAllTimersAsync();
-    await done;
-    expect(removeEntry).toHaveBeenCalledTimes(2);
-    vi.useRealTimers();
+    expect(pool.journalModes.at(-1)).toBe("persist");
+    // A kept journal never shrinks unless its size is limited.
+    expect(pool.journalSizeLimits.at(-1)).toBe(1_048_576);
   });
 });
 
@@ -572,6 +513,8 @@ function notADatabasePool({ failOnSetup }: { failOnSetup: boolean }) {
   let paused = false;
   const state = {
     wipes: 0,
+    journalModes: [] as string[],
+    journalSizeLimits: [] as number[],
     install(sqlite: Sqlite) {
       sqlite.capi.sqlite3_js_posix_create_file(
         path,
@@ -593,6 +536,18 @@ function notADatabasePool({ failOnSetup }: { failOnSetup: boolean }) {
           }
         }
         override close() {
+          if (this.isOpen()) {
+            try {
+              state.journalModes.push(
+                String(this.selectValue("PRAGMA journal_mode")),
+              );
+              state.journalSizeLimits.push(
+                Number(this.selectValue("PRAGMA journal_size_limit")),
+              );
+            } catch {
+              // A file that is not a database has no journal mode.
+            }
+          }
           open.delete(this);
           return super.close();
         }

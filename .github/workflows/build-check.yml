@@ -77,3 +77,6 @@ jobs:
 
       - name: Build app
         run: pnpm turbo run build:ci --filter=./apps/web
+
+      - name: Check first-load JavaScript budgets
+        run: pnpm -F inbox-zero-ai check-bundle-budgets

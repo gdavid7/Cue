@@ -131,6 +131,7 @@ import {
 import { isInboxStyleLandingSplit } from "@/utils/split-inbox/inbox-styles";
 import { getActionErrorMessage } from "@/utils/error";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
+import { showMailView } from "@/app/(app)/[emailAccountId]/mail/show-mail-view";
 import {
   getMailNavView,
   type MailSlugs,
@@ -1521,12 +1522,11 @@ export function MailShell() {
 
   // Same destination as the sidebar row, so the view starts fresh.
   function goToMailbox(type: string) {
-    router.push(
-      buildMailPath({
-        accountIndex: mailLocation.accountIndex,
-        view: getMailNavView({ kind: "type", type }, mailSlugs),
-      }),
-    );
+    const href = buildMailPath({
+      accountIndex: mailLocation.accountIndex,
+      view: getMailNavView({ kind: "type", type }, mailSlugs),
+    });
+    if (!showMailView(href)) router.push(href);
   }
 
   function openReply(toEveryone: boolean) {

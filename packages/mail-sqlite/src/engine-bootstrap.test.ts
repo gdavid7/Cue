@@ -58,6 +58,65 @@ describe("engine bootstrap coverage", () => {
     await engine.close();
   });
 
+  it("shows a first sync's first page before the next page arrives", async () => {
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    const pages = slowBootstrapSource({
+      onBootstrap: () => {},
+      onEnumerate: () => {},
+      pages: ["page-1", "page-2"],
+    });
+    let releaseSecondPage = () => {};
+    const secondPageHeld = new Promise<void>((resolve) => {
+      releaseSecondPage = resolve;
+    });
+    const engine = createMailEngine({
+      store,
+      source: {
+        ...pages,
+        async enumerate(input) {
+          if (input.page === "page-2") await secondPageHeld;
+          return pages.enumerate(input);
+        },
+      },
+      executor: {
+        async execute() {
+          return { status: "uncertain", receiptId: null };
+        },
+        async inspect() {
+          return { status: "uncertain", receiptId: null };
+        },
+      },
+      runtime: createHostRuntime({ nowMs: () => 1000 }),
+    });
+    const inbox = engine.observeMailbox({
+      accountIds: ["acc-1"],
+      predicate: { kind: "role", role: "inbox" },
+      order: "newest_first",
+      pageSize: 25,
+      after: null,
+    });
+    await engine.requestSync(["acc-1"]);
+    const run = engine.runUntil(5000);
+
+    await vi.waitFor(() =>
+      expect(
+        inbox
+          .getSnapshot()
+          .data?.conversations.map((item) => item.key.conversationId),
+      ).toEqual(["c1"]),
+    );
+
+    releaseSecondPage();
+    await run;
+    inbox.close();
+    await engine.close();
+  });
+
   it("stores enumerated bodies so bootstrap content is available without hydrate", async () => {
     const store = await createSqliteMailStore(createNodeSqliteDriver());
     await store.ensureAccount({

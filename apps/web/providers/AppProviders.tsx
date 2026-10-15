@@ -6,20 +6,23 @@ import { MotionConfig } from "motion/react";
 import { ComposeModalProvider } from "@/providers/ComposeModalProvider";
 import { jotaiStore } from "@/store";
 import { ChatProvider } from "@/providers/ChatProvider";
-import { EmailAccountProvider } from "@/providers/EmailAccountProvider";
+import {
+  EmailAccountProvider,
+  type ServerEmailAccount,
+} from "@/providers/EmailAccountProvider";
 import { StatLoaderProvider } from "@/providers/StatLoaderProvider";
 import { SWRProvider } from "@/providers/SWRProvider";
 import { MailEngineRuntime } from "@/utils/mail-engine/MailEngineHost";
 
 export function AppProviders(props: {
   children: React.ReactNode;
-  accountIds: string[];
+  accounts: ServerEmailAccount[];
 }) {
   return (
     // JS-driven animations follow the OS "reduce motion" setting, as CSS does.
     <MotionConfig reducedMotion="user">
       <Provider store={jotaiStore}>
-        <EmailAccountProvider accountIds={props.accountIds}>
+        <EmailAccountProvider accounts={props.accounts}>
           <SWRProvider>
             <StatLoaderProvider>
               <ChatProvider>

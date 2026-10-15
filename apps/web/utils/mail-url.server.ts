@@ -15,14 +15,21 @@ import { isInboxStyleLandingSplit } from "@/utils/split-inbox/inbox-styles";
  * breaks ties between accounts created in the same instant. Removing an
  * account shifts the ones after it down, as signing out of one does in Gmail.
  */
-export const getOrderedEmailAccountIds = cache(async (userId: string) => {
+export const getOrderedEmailAccounts = cache(async (userId: string) => {
   const accounts = await prisma.emailAccount.findMany({
     where: { userId },
-    select: { id: true },
+    select: { id: true, account: { select: { provider: true } } },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
-  return accounts.map((account) => account.id);
+  return accounts.map((account) => ({
+    id: account.id,
+    provider: account.account.provider,
+  }));
 });
+
+export const getOrderedEmailAccountIds = cache(async (userId: string) =>
+  (await getOrderedEmailAccounts(userId)).map((account) => account.id),
+);
 
 /** Parameters the old `/{emailAccountId}/mail` address carried its view in. */
 const LEGACY_MAIL_PARAMS = [

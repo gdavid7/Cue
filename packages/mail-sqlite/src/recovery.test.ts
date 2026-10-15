@@ -6,8 +6,8 @@ import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
 import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import type { SqliteDriver } from "./driver";
 import { createNodeSqliteDriver, wipeNodeMailbox } from "./node-sqlite";
+import { classifyMailboxError } from "./mailbox-errors";
 import {
-  classifyMailboxError,
   openMailStoreWithRecovery,
   readPendingMailWork,
   type PendingMailWork,

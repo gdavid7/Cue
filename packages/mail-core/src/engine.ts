@@ -894,6 +894,9 @@ export function createMailEngine(input: {
       });
       if (applied.status === "stale") break;
       processedPages += 1;
+      // A first sync shows each page as it lands rather than after the whole
+      // slice, so a new mailbox fills in from its first page of mail.
+      refreshViews().catch(() => undefined);
       if (repeatedCursor) {
         await store.deferBootstrapScan({
           session: input.session,

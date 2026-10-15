@@ -28,6 +28,11 @@ into the app, so a spec can follow a real checkout through to the `Premium`
 row. Specs drive Stripe-side events through its control endpoints; run it
 outside Playwright with `pnpm emulate:stripe`.
 
+`mail/perf-budgets.spec.ts` holds speed budgets for opening Cue, opening a
+conversation, triage, switching views, search, compose and the main screens.
+`perf/` reruns it against a mailbox of a few thousand messages and reports
+medians; see `perf/README.md`.
+
 Every model role is pointed at the in-repo LLM emulator in
 `__tests__/emulators/llm.ts`, an OpenAI-compatible server the app reaches
 through the real AI SDK. By default it returns the smallest answer that

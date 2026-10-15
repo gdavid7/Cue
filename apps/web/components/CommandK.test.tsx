@@ -1,10 +1,16 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { getDefaultStore } from "jotai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ShortcutHandlers } from "@/lib/shortcuts/registry";
 import { CommandK } from "./CommandK";
 import { admissionRejectionCopy } from "@/utils/mail-engine/admission-notice";
+import {
+  commandPaletteOpenAtom,
+  mailCommandContextAtom,
+} from "@/store/command-palette";
+import { useSnoozeDateParser } from "@/hooks/useSnoozeDateParser";
 
 const displayedEmail = vi.hoisted(() => ({
   showEmail: vi.fn(),
@@ -77,6 +83,9 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/snooze-command-palette", () => ({
   buildSnoozeCommandPalette: () => [],
 }));
 vi.mock("@/lib/commands/fuzzy-search", () => ({ fuzzySearch: () => [] }));
+vi.mock("@/hooks/useSnoozeDateParser", () => ({
+  useSnoozeDateParser: vi.fn(() => null),
+}));
 vi.mock("@/components/ui/command", () => ({
   CommandDialog: ({ children }: { children: React.ReactNode }) => children,
   CommandEmpty: () => null,
@@ -210,5 +219,30 @@ describe("CommandK side-panel actions", () => {
       autoOpenForwardForMessageId: "message-2",
       showReplyButton: true,
     });
+  });
+});
+
+describe("CommandK snooze date parser", () => {
+  afterEach(() => {
+    cleanup();
+    const store = getDefaultStore();
+    store.set(commandPaletteOpenAtom, false);
+    store.set(mailCommandContextAtom, null);
+  });
+
+  it("starts loading as the palette opens where mail can be snoozed", () => {
+    displayedEmail.threadId = null;
+    const store = getDefaultStore();
+    store.set(mailCommandContextAtom, {
+      actions: { archive: vi.fn(), snooze: vi.fn() },
+      hasRead: false,
+      hasUnread: false,
+      targetCount: 1,
+    });
+    store.set(commandPaletteOpenAtom, true);
+
+    render(<CommandK feedbackEnabled />);
+
+    expect(vi.mocked(useSnoozeDateParser)).toHaveBeenLastCalledWith(true);
   });
 });

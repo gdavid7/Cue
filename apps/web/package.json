@@ -8,6 +8,7 @@
     "check-client-redirects": "node scripts/check-client-redirects.js",
     "check-enums": "node scripts/check-enum-imports.js",
     "check-server-actions": "node scripts/check-server-action-exports.js",
+    "check-bundle-budgets": "tsx scripts/check-bundle-budgets.ts",
     "check-test-fixtures": "tsx scripts/check-test-fixtures.ts",
     "dev": "cross-env NODE_OPTIONS=--max_old_space_size=6144 next dev --turbopack",
     "dev:e2e": "dotenv -e .env.e2e -- cross-env NODE_OPTIONS=--max_old_space_size=6144 next dev --turbopack",

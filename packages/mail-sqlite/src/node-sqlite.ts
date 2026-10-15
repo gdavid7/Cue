@@ -5,7 +5,7 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
 import type { HostRuntime } from "@inboxzero/mail-core/ports/runtime";
 import type { SqlTransaction, SqlValue, SqliteDriver } from "./driver";
 import type { MessageBodyCodec } from "./message-body-codec";
-import { classifyMailboxError } from "./recovery";
+import { classifyMailboxError } from "./mailbox-errors";
 
 export function nodeMailCrypto(): Pick<HostRuntime, "randomId" | "sha256"> {
   return {

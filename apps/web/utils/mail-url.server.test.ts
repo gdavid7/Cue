@@ -27,8 +27,8 @@ describe("getMailRedirectPath", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.findMany.mockResolvedValue([
-      { id: "acc_first" },
-      { id: "acc_second" },
+      { id: "acc_first", account: { provider: "google" } },
+      { id: "acc_second", account: { provider: "google" } },
     ]);
     mocks.getMailSettings.mockResolvedValue({
       splits: [
@@ -48,7 +48,7 @@ describe("getMailRedirectPath", () => {
     await getMailRedirectPath({ userId: USER_ID, emailAccountId: null });
     expect(mocks.findMany).toHaveBeenCalledWith({
       where: { userId: USER_ID },
-      select: { id: true },
+      select: { id: true, account: { select: { provider: true } } },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
   });

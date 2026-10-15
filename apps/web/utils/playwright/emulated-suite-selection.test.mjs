@@ -54,9 +54,12 @@ describe("emulated Playwright suite selection", () => {
     );
     expect(
       expandPlaywrightTargets(selection.targetFiles, appRoot),
-    ).toHaveLength(5);
+    ).toHaveLength(6);
     expect(selection.targetFiles).toContain(
       "__tests__/playwright/emulated/mail/layout.spec.ts",
+    );
+    expect(selection.targetFiles).toContain(
+      "__tests__/playwright/emulated/mail/perf-budgets.spec.ts",
     );
     expect(selection.reason).toContain("hooks/useCommandPaletteCommands.ts");
   });

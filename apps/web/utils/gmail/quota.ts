@@ -119,6 +119,8 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     "user/senders/unsubscribe",
     "v1/senders/unsubscribe",
     "user/search-answer",
+    // An open composer waits on it before showing its editor.
+    "user/signature",
     "user/drafts",
     "user/drafts/attachments/add",
     "user/drafts/attachments/list",
