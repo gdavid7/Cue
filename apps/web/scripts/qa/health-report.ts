@@ -86,6 +86,10 @@ export type SentryIssue = {
  * "Unhandled error" logs its message as `fields.error` and its stack as
  * `fields.stack`. next-axiom files its platform metadata under `vercel.*`
  * only on Vercel, so the sample also says whether the event came from there.
+ * It computes its columns with `project`, not `extend`: Axiom planned the
+ * extended expressions as temporaries `arg_max` could not see ("field '_tmp28'
+ * not found in current projection"), and `extend message = ...` shadowed the
+ * dataset's own `message`. After `project`, `arg_max` only names real columns.
  */
 export function buildAxiomQueries(dataset: string) {
   const source = `['${dataset.replaceAll("'", "")}'] | where _time > ago(1h)`;
@@ -115,7 +119,7 @@ export function buildAxiomQueries(dataset: string) {
     gmailQuotaUsage: `${source} | where ${message} == "Gmail quota usage" | summarize samples = count(), maxUnits = max(${totalUnits}), avgUnits = avg(${totalUnits}), limitUnits = max(${limitUnits})`,
     gmailDeferred: `${source} | where ${message} == "Gmail call deferred by the account's quota budget" | summarize events = count()`,
     slowestRoutes: `${source} | where isnotnull(${durationMs}) | summarize p95Ms = percentile(${durationMs}, 95), maxMs = max(${durationMs}), events = count() by route = ${route} | top ${MAX_LIST_ITEMS} by p95Ms`,
-    errorSamples: `${source} | where ${level} == "error" | extend route = ${route}, message = ${message}, ${Object.entries(
+    errorSamples: `${source} | where ${level} == "error" | project _time, route = ${route}, message = ${message}, ${Object.entries(
       sampleColumns,
     )
       .map(([name, expression]) => `${name} = ${expression}`)

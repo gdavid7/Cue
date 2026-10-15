@@ -10,6 +10,7 @@ import { AlertError } from "@/components/Alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useHydrated } from "@/hooks/useHydrated";
 import { WELCOME_PATH } from "@/utils/config";
 import { normalizeInternalPath } from "@/utils/path";
 import { redirectToSafeUrl } from "@/utils/redirect";
@@ -25,6 +26,7 @@ export function ReviewSignInForm() {
   const searchParams = useSearchParams();
   const nextPath = normalizeInternalPath(searchParams?.get("next"));
   const [error, setError] = useState<string | null>(null);
+  const hydrated = useHydrated();
   const {
     register,
     handleSubmit,
@@ -71,6 +73,7 @@ export function ReviewSignInForm() {
         className="mt-2 w-full"
         Icon={LogInIcon}
         loading={isSubmitting}
+        disabled={!hydrated}
         type="submit"
       >
         Sign in

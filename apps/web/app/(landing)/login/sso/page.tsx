@@ -8,6 +8,7 @@ import { z } from "zod";
 import { Button } from "@/components/Button";
 import { Input } from "@/components/Input";
 import { toastError, toastSuccess } from "@/components/Toast";
+import { useHydrated } from "@/hooks/useHydrated";
 import { useRouter, useSearchParams } from "next/navigation";
 import { normalizeInternalPath } from "@/utils/path";
 import type {
@@ -55,6 +56,7 @@ function SSOLoginForm() {
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const hydrated = useHydrated();
 
   const onSubmit: SubmitHandler<SsoLoginBody> = useCallback(
     async (data) => {
@@ -158,7 +160,13 @@ function SSOLoginForm() {
                 error={errors.organizationSlug}
               />
 
-              <Button type="submit" size="lg" full loading={isSubmitting}>
+              <Button
+                type="submit"
+                size="lg"
+                full
+                loading={isSubmitting}
+                disabled={!hydrated}
+              >
                 Continue with SSO
               </Button>
             </form>

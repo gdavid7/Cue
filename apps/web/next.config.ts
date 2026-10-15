@@ -16,6 +16,11 @@ const withMDX = nextMdx({
 const isDevelopment = process.env.NODE_ENV === "development";
 const isProductionBuild = process.env.NODE_ENV === "production";
 const playwrightRunId = process.env.PLAYWRIGHT_RUN_ID;
+// Decided here, at build time, where Vercel sets VERCEL=1. At function runtime
+// Vercel only exposes VERCEL (like VERCEL_ENV and VERCEL_URL) while the
+// project's "Automatically expose System Environment Variables" setting is
+// on, so the server logger reads this inlined flag instead.
+const shipLogsToAxiom = process.env.VERCEL === "1";
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const nextPackageRoot = path.dirname(
   realpathSync(require.resolve("next/package.json")),
@@ -33,6 +38,7 @@ const microsoftEmulatorOrigin = env.MICROSOFT_BASE_URL
   : null;
 
 const nextConfig: NextConfig = {
+  env: { SHIP_LOGS_TO_AXIOM: shipLogsToAxiom ? "1" : "" },
   allowedDevOrigins: [
     "127.0.0.1",
     ...(URL.canParse(env.NEXT_PUBLIC_BASE_URL)
@@ -509,9 +515,7 @@ if (env.MICROSOFT_CLIENT_ID && !env.MICROSOFT_WEBHOOK_CLIENT_STATE) {
 
 // Off Vercel, skip next-axiom's /_axiom rewrites so browser logs and web
 // vitals from local or self-hosted servers never reach the Axiom dataset.
-export default process.env.VERCEL === "1"
-  ? withAxiom(exportConfig)
-  : exportConfig;
+export default shipLogsToAxiom ? withAxiom(exportConfig) : exportConfig;
 
 function commonAncestorPath(firstPath: string, secondPath: string) {
   const [firstParts, secondParts] = [firstPath, secondPath].map((value) =>
