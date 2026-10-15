@@ -100,7 +100,9 @@ export function ComposeAssistPanel({
       aria-describedby={statusId}
       aria-label="Cue"
       className={cn(
-        "z-[100] w-[min(30rem,calc(100vw-1rem))] origin-top rounded-lg border bg-popover text-popover-foreground text-sm shadow-lg",
+        "z-[100] w-[min(30rem,calc(100vw-1rem))] rounded-lg border bg-popover text-popover-foreground text-sm shadow-lg",
+        // Grows out of the text it is about.
+        position?.above ? "origin-bottom-left" : "origin-top-left",
         "motion-safe:fade-in-0 motion-safe:zoom-in-95 motion-safe:animate-in motion-reduce:fade-in-0 motion-reduce:animate-in",
         container === document.body ? "fixed" : "absolute",
       )}
@@ -637,6 +639,7 @@ function usePanelPosition({
   panelRef: RefObject<HTMLDivElement | null>;
 }) {
   const [position, setPosition] = useState<{
+    above: boolean;
     left: number;
     top: number;
   } | null>(null);
@@ -661,15 +664,16 @@ function usePanelPosition({
       const gap = 8;
       const { offsetHeight: height, offsetWidth: width } = panel;
       const below = anchor.bottom + gap;
-      const top =
-        below + height <= box.bottom - gap
-          ? below
-          : Math.max(box.top + gap, anchor.top - height - gap);
+      const above = below + height > box.bottom - gap;
+      const top = above
+        ? Math.max(box.top + gap, anchor.top - height - gap)
+        : below;
       const left = Math.max(
         box.left + gap,
         Math.min(anchor.left, box.right - width - gap),
       );
       setPosition({
+        above,
         left: fixed ? left : left - box.left,
         top: fixed ? top : top - box.top,
       });
@@ -689,10 +693,14 @@ function usePanelPosition({
   return position;
 }
 
-// The preview shows the words, not the markdown that formats them.
+// The preview shows the words, not the markdown that formats them. A link
+// keeps its address in view: it may come from a message someone else wrote,
+// and its text alone could disguise where it goes.
 function toPlainText(markdown: string) {
   return markdown
-    .replace(/\[([^\]\n]+)\]\([^)\s]+\)/gu, "$1")
+    .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/gu, (_match, text, href) =>
+      text === href ? text : `${text} (${href})`,
+    )
     .replace(/\*\*([^*\n]+)\*\*/gu, "$1")
     .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/gu, "$1$2")
     .trim();

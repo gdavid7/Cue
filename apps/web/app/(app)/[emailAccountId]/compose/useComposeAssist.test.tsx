@@ -287,6 +287,24 @@ describe("useComposeAssist", { timeout: 20_000 }, () => {
     });
   });
 
+  it("shows where a suggested link goes, not just its text", async () => {
+    renderAssist(SELECTION);
+    openAssist();
+    fireEvent.keyDown(
+      await screen.findByRole("menuitem", { name: /Improve/ }),
+      { key: "i" },
+    );
+    await waitFor(() => expect(requests).toHaveLength(1));
+    await act(async () => {
+      streams[0].push("Please [pay here](https://pay.example.test/x).");
+      streams[0].end();
+    });
+
+    expect(screen.getByLabelText("Suggested text").textContent).toContain(
+      "pay here (https://pay.example.test/x)",
+    );
+  });
+
   it("refuses to rewrite a selection that holds images", async () => {
     renderAssist({ ...SELECTION, containsImages: true });
     openAssist();
