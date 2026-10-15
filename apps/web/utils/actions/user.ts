@@ -30,7 +30,7 @@ import {
   getConfiguredDraftCleanupDays,
 } from "@/utils/ai/draft-cleanup";
 import { isDuplicateError, isNotFoundError } from "@/utils/prisma-helpers";
-import type { Logger } from "@/utils/logger";
+import { type Logger, toLogJson } from "@/utils/logger";
 import { invalidateAccountValidation } from "@/utils/redis/account-validation";
 import { prepareMemberRemovalNotifications } from "@/utils/team-comments/member-removal";
 import {
@@ -312,7 +312,7 @@ async function runDeleteEmailAccountTransaction(
       error,
       emailAccountId: context.emailAccountId,
       prismaCode: getPrismaErrorCode(error),
-      prismaMeta: getPrismaErrorMeta(error),
+      prismaMeta: toLogJson(getPrismaErrorMeta(error)),
     });
 
     if (isNotFoundError(error)) {

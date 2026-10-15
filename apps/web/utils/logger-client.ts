@@ -1,6 +1,7 @@
 /** biome-ignore-all lint/suspicious/noConsole: we use console.log for development logs */
 import { log } from "next-axiom";
 import { env } from "@/env";
+import { capLogFields } from "@/utils/log-fields";
 
 /**
  * Client-safe logger that doesn't access server-side env vars.
@@ -13,19 +14,19 @@ export function createClientLogger(scope: string) {
   if (hasAxiom) {
     return {
       info: (message: string, args?: Record<string, unknown>) =>
-        log.info(message, { scope, ...(args ?? {}) }),
+        log.info(message, capLogFields({ scope, ...(args ?? {}) })),
       error: (message: string, args?: Record<string, unknown>) =>
-        log.error(message, { scope, ...(args ?? {}) }),
+        log.error(message, capLogFields({ scope, ...(args ?? {}) })),
       warn: (message: string, args?: Record<string, unknown>) =>
-        log.warn(message, { scope, ...(args ?? {}) }),
+        log.warn(message, capLogFields({ scope, ...(args ?? {}) })),
       trace: (
         message: string,
         args?: Record<string, unknown> | (() => Record<string, unknown>),
       ) => {
-        log.debug(message, {
-          scope,
-          ...(resolveTraceArgs(args) ?? {}),
-        });
+        log.debug(
+          message,
+          capLogFields({ scope, ...(resolveTraceArgs(args) ?? {}) }),
+        );
       },
       flush: () => log.flush(),
     };

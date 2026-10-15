@@ -1,6 +1,7 @@
 import { log } from "next-axiom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createScopedLogger } from "./logger";
+import { LOG_FIELDS_OVERFLOW_KEY, MAX_LOG_FIELD_PATHS } from "./log-fields";
+import { createScopedLogger, toLogJson } from "./logger";
 
 const { mockedEnv } = vi.hoisted(() => ({
   mockedEnv: (() => {
@@ -397,6 +398,44 @@ describe("Logger", () => {
     expect(loggedMessage).toContain("/api/endpoint");
   });
 
+  it("caps the key paths an Axiom event adds and still redacts what overflows", () => {
+    mockedEnv.NODE_ENV = "production";
+    mockedEnv.AXIOM_TOKEN = "server-token";
+    const recipients = Object.fromEntries(
+      Array.from({ length: 80 }, (_, index) => [
+        `thread-${index}`,
+        { subject: `Private subject ${index}` },
+      ]),
+    );
+
+    createScopedLogger("test")
+      .with({ requestId: "req_1" })
+      .info("Sent replies", { recipients });
+
+    const [, shipped] = vi.mocked(log.info).mock.calls[0];
+    expect(flattenKeys(shipped).length).toBeLessThanOrEqual(
+      MAX_LOG_FIELD_PATHS,
+    );
+    expect(shipped).toMatchObject({ scope: "test", requestId: "req_1" });
+    const overflow = String(
+      (shipped as Record<string, unknown>)[LOG_FIELDS_OVERFLOW_KEY],
+    );
+    expect(overflow).toContain("thread-79");
+    expect(JSON.stringify(shipped)).not.toContain("Private subject");
+  });
+
+  it("redacts sensitive fields inside a JSON log field", () => {
+    mockedEnv.NODE_ENV = "production";
+
+    const json = toLogJson({
+      "thread-1": { subject: "Private subject", accessToken: "secret-token" },
+    });
+
+    expect(JSON.parse(json)).toEqual({
+      "thread-1": { subject: true, accessToken: true },
+    });
+  });
+
   it("always redacts received OAuth state values", () => {
     const logger = createScopedLogger("test");
     const receivedState = "signed-oauth-state-secret";
@@ -444,3 +483,12 @@ describe("Logger", () => {
     expect(loggedMessage).toContain("retriesLeft");
   });
 });
+
+function flattenKeys(value: unknown, prefix = ""): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return prefix ? [prefix] : [];
+  }
+  return Object.entries(value).flatMap(([key, child]) =>
+    flattenKeys(child, prefix ? `${prefix}.${key}` : key),
+  );
+}

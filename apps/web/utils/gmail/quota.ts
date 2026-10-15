@@ -626,40 +626,46 @@ async function summarizeEndedMinutes(
   });
 }
 
+// Callers are data, so each breakdown is a list rather than an object keyed by
+// caller: Axiom gives every key path its own column.
 function logMinuteUsage(
   emailAccountId: string,
   minute: number,
   usage: Record<string, number>,
 ) {
-  const units: Record<string, number> = {};
-  const deferred: Record<string, number> = {};
-  const refused: Record<string, number> = {};
-  const storeUnavailable: Record<string, number> = {};
-  let totalUnits = 0;
-  let storeUnavailableCalls = 0;
+  const unitsByCaller: { priority: string; caller: string; units: number }[] =
+    [];
+  const deferredByCaller: { caller: string; calls: number }[] = [];
+  const refusedByCaller: { caller: string; calls: number }[] = [];
+  const storeUnavailableByCaller: { caller: string; calls: number }[] = [];
   for (const [field, value] of Object.entries(usage)) {
-    if (field.startsWith("deferred:")) deferred[field.slice(9)] = value;
-    else if (field.startsWith("refused:")) refused[field.slice(8)] = value;
-    else if (field.startsWith("unavailable:")) {
-      storeUnavailable[field.slice(12)] = value;
-      storeUnavailableCalls += value;
-    } else {
-      units[field] = value;
-      totalUnits += value;
-    }
+    const separator = field.indexOf(":");
+    const kind = field.slice(0, separator);
+    const caller = field.slice(separator + 1);
+    if (kind === "deferred") deferredByCaller.push({ caller, calls: value });
+    else if (kind === "refused") refusedByCaller.push({ caller, calls: value });
+    else if (kind === "unavailable")
+      storeUnavailableByCaller.push({ caller, calls: value });
+    else unitsByCaller.push({ priority: kind, caller, units: value });
   }
   logger.info("Gmail quota usage", {
     emailAccountId,
     minute: new Date(minute * 60_000).toISOString(),
-    totalUnits,
+    totalUnits: sumOf(unitsByCaller.map((entry) => entry.units)),
     limitUnits: GMAIL_USER_UNITS_PER_MINUTE,
-    unitsByCaller: units,
-    deferredByCaller: deferred,
-    refusedByCaller: refused,
+    unitsByCaller: unitsByCaller.sort((a, b) => b.units - a.units),
+    deferredByCaller,
+    refusedByCaller,
     // Calls admitted without the gate because its store failed or was slow.
-    storeUnavailableCalls,
-    storeUnavailableByCaller: storeUnavailable,
+    storeUnavailableCalls: sumOf(
+      storeUnavailableByCaller.map((entry) => entry.calls),
+    ),
+    storeUnavailableByCaller,
   });
+}
+
+function sumOf(values: number[]) {
+  return values.reduce((sum, value) => sum + value, 0);
 }
 
 function rememberUnsummarizedAccount(emailAccountId: string) {

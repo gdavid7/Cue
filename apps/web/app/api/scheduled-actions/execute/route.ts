@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { toLogJson } from "@/utils/logger";
 import { withError } from "@/utils/middleware";
 import { markQStashActionAsExecuting } from "@/utils/scheduled-actions/scheduler";
 import {
@@ -35,7 +36,7 @@ export const POST = withError(
       if (!validationResult.success) {
         logger.error("Invalid payload structure", {
           errors: validationResult.error.issues,
-          receivedPayload: rawPayload,
+          receivedPayload: toLogJson(rawPayload),
         });
         return new Response("Invalid payload structure", { status: 400 });
       }

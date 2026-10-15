@@ -59,7 +59,11 @@ ${cleanedPromptFile}
   });
 
   if (!aiResponse.object) {
-    logger.error("No rules found in AI response", { aiResponse });
+    logger.error("No rules found in AI response", {
+      finishReason: aiResponse.finishReason,
+      modelId: aiResponse.response.modelId,
+      totalTokens: aiResponse.usage.totalTokens,
+    });
     throw new Error("No rules found in AI response");
   }
 

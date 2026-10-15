@@ -132,7 +132,11 @@ export async function aiGenerateArgs({
   const result = aiResponse.object;
 
   if (!result) {
-    logger.warn("No tool call found", { aiResponse });
+    logger.warn("No tool call found", {
+      finishReason: aiResponse.finishReason,
+      modelId: aiResponse.response.modelId,
+      totalTokens: aiResponse.usage.totalTokens,
+    });
     return {
       args: undefined,
       attribution: attributionTracker.attribution,

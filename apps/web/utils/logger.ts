@@ -3,6 +3,7 @@ import get from "lodash/get";
 import { log } from "next-axiom";
 import { serializeError } from "serialize-error";
 import { env } from "@/env";
+import { capLogFields } from "@/utils/log-fields";
 import {
   CONTENT_FIELD_NAMES,
   normalizeRedactionFieldName,
@@ -116,45 +117,49 @@ function createAxiomLogger(
   const createLogger = (
     fields: Record<string, unknown> = {},
     mirror = consoleLogger,
-  ) => ({
-    info: (message: string, args?: Record<string, unknown>) => {
-      mirror.info(message, ...(args ? [args] : []));
-      log.info(
-        message,
+  ) => {
+    const toAxiomFields = (args?: Record<string, unknown>) =>
+      capLogFields(
         hashSensitiveFields({ scope, ...fields, ...formatError(args) }),
       );
-    },
-    error: (message: string, args?: Record<string, unknown>) => {
-      mirror.error(message, ...(args ? [args] : []));
-      log.error(
-        message,
-        hashSensitiveFields({ scope, ...fields, ...formatError(args) }),
-      );
-    },
-    warn: (message: string, args?: Record<string, unknown>) => {
-      mirror.warn(message, ...(args ? [args] : []));
-      log.warn(
-        message,
-        hashSensitiveFields({ scope, ...fields, ...formatError(args) }),
-      );
-    },
-    trace: (
-      message: string,
-      args?: Record<string, unknown> | (() => Record<string, unknown>),
-    ) => {
-      if (!env.ENABLE_DEBUG_LOGS) return;
-      const resolved = typeof args === "function" ? args() : args;
-      log.debug(
-        message,
-        hashSensitiveFields({ scope, ...fields, ...formatError(resolved) }),
-      );
-    },
-    with: (newFields: Record<string, unknown>) =>
-      createLogger({ ...fields, ...newFields }, mirror.with(newFields)),
-    flush: () => log.flush(),
-  });
+    return {
+      info: (message: string, args?: Record<string, unknown>) => {
+        mirror.info(message, ...(args ? [args] : []));
+        log.info(message, toAxiomFields(args));
+      },
+      error: (message: string, args?: Record<string, unknown>) => {
+        mirror.error(message, ...(args ? [args] : []));
+        log.error(message, toAxiomFields(args));
+      },
+      warn: (message: string, args?: Record<string, unknown>) => {
+        mirror.warn(message, ...(args ? [args] : []));
+        log.warn(message, toAxiomFields(args));
+      },
+      trace: (
+        message: string,
+        args?: Record<string, unknown> | (() => Record<string, unknown>),
+      ) => {
+        if (!env.ENABLE_DEBUG_LOGS) return;
+        const resolved = typeof args === "function" ? args() : args;
+        log.debug(message, toAxiomFields(resolved));
+      },
+      with: (newFields: Record<string, unknown>) =>
+        createLogger({ ...fields, ...newFields }, mirror.with(newFields)),
+      flush: () => log.flush(),
+    };
+  };
 
   return createLogger();
+}
+
+/**
+ * One log field holding `value` as a JSON string, for records whose keys are
+ * data (callers, ids, header names, third-party payloads): Axiom would give
+ * every such key its own column. Sensitive fields are hashed or redacted
+ * first, as they would be in a structured field.
+ */
+export function toLogJson(value: unknown): string {
+  return JSON.stringify(hashSensitiveFields(value)) ?? "";
 }
 
 function createNullLogger() {

@@ -192,7 +192,9 @@ describe("Gmail quota gate", () => {
     expect(JSON.parse(summary!.slice(summary!.indexOf("{")))).toMatchObject({
       minute: "2026-10-14T12:00:00.000Z",
       storeUnavailableCalls: 2,
-      storeUnavailableByCaller: { "mail/v1/conversation-membership": 2 },
+      storeUnavailableByCaller: [
+        { caller: "mail/v1/conversation-membership", calls: 2 },
+      ],
     });
   });
 
@@ -231,8 +233,26 @@ describe("Gmail quota gate", () => {
       expect.objectContaining({
         minute: "2026-10-14T13:00:00.000Z",
         totalUnits: 120,
-        unitsByCaller: { "interactive:mail/v1/conversation-membership": 120 },
+        unitsByCaller: [
+          {
+            priority: "interactive",
+            caller: "mail/v1/conversation-membership",
+            units: 120,
+          },
+        ],
       }),
+    ]);
+    // Callers are values, never keys: each key path is an Axiom column.
+    expect(Object.keys(summaries()[0]).sort()).toEqual([
+      "deferredByCaller",
+      "emailAccountId",
+      "limitUnits",
+      "minute",
+      "refusedByCaller",
+      "storeUnavailableByCaller",
+      "storeUnavailableCalls",
+      "totalUnits",
+      "unitsByCaller",
     ]);
   });
 

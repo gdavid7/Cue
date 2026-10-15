@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { after } from "next/server";
 import { auth } from "@/utils/auth";
-import { createScopedLogger } from "@/utils/logger";
+import { createScopedLogger, toLogJson } from "@/utils/logger";
 import { flushLoggerSafely } from "@/utils/logger-flush";
 import prisma from "@/utils/prisma";
 import { isAdmin } from "@/utils/admin";
@@ -139,7 +139,8 @@ const baseClient = createSafeActionClient({
           if (result.validationErrors) {
             logger.warn("Action validation error", {
               action: metadata.name,
-              validationErrors: result.validationErrors,
+              // Keyed by input field paths, array indexes included.
+              validationErrors: toLogJson(result.validationErrors),
             });
           }
 

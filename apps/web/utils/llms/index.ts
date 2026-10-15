@@ -69,7 +69,7 @@ import {
   appendOllamaOnlySystemGuidance,
   OLLAMA_STRUCTURED_OUTPUT_GUIDANCE,
 } from "@/utils/llms/ollama-guidance";
-import { createScopedLogger } from "@/utils/logger";
+import { createScopedLogger, toLogJson } from "@/utils/logger";
 import { getPosthogLlmClient, isPosthogLlmEvalApproved } from "@/utils/posthog";
 import {
   applyPromptHardeningToMessages,
@@ -405,7 +405,8 @@ export function createGenerateText({
         const toolCallInput = result.toolCalls?.[0]?.input;
         logger.trace("Result", {
           label,
-          result: toolCallInput,
+          // Tool inputs can be keyed by ids, such as per-action arguments.
+          result: toLogJson(toolCallInput),
         });
       }
 
@@ -852,7 +853,10 @@ export async function chatCompletionStream(
               userEmail,
               error,
             });
-            logger.trace("Result", { result });
+            logger.trace("Result", {
+              finishReason: result.finishReason,
+              totalTokens: result.usage.totalTokens,
+            });
             captureException(error, {
               userEmail,
               extra: { label },
@@ -1097,7 +1101,10 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
           userEmail,
           error,
         });
-        logger.trace("Result", { result });
+        logger.trace("Result", {
+          finishReason: result.finishReason,
+          totalTokens: result.usage.totalTokens,
+        });
         captureException(error, {
           userEmail,
           extra: { label },

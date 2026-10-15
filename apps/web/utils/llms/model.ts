@@ -15,7 +15,7 @@ import { createCerebras } from "@ai-sdk/cerebras";
 import { env } from "@/env";
 import { Provider } from "@/utils/llms/config";
 import type { UserAIFields } from "@/utils/llms/types";
-import { createScopedLogger } from "@/utils/logger";
+import { createScopedLogger, toLogJson } from "@/utils/logger";
 import { SafeError } from "../error";
 import { assertCliLlmEnabled, createCliLanguageModel } from "./cli-provider";
 
@@ -78,7 +78,8 @@ export function getModel(
     modelType,
     provider: primaryModel.provider,
     model: primaryModel.modelName,
-    providerOptions: primaryModel.providerOptions,
+    // Keyed by provider name, with provider-specific settings nested below.
+    providerOptions: toLogJson(primaryModel.providerOptions),
     fallbackModels: fallbackModels.map(
       (fallback) => `${fallback.provider}:${fallback.modelName}`,
     ),

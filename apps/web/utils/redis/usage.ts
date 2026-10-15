@@ -223,11 +223,13 @@ export async function saveUsage(options: {
   const results = await Promise.allSettled(operations);
   const failedCount = results.filter((r) => r.status === "rejected").length;
   if (failedCount > 0) {
+    // `raw` is the provider's own usage payload, keyed differently per provider.
+    const { raw: _raw, ...loggedUsage } = usage;
     logger.error("Error saving usage increments", {
       failedCount,
       totalCount: results.length,
       cost,
-      usage,
+      usage: loggedUsage,
     });
   }
 
