@@ -90,7 +90,6 @@ export const updateLearnedPatternsTool = ({
           where: { name_emailAccountId: { name: ruleName, emailAccountId } },
           select: {
             id: true,
-            name: true,
             updatedAt: true,
             organizationRuleId: true,
             ...RULE_FINGERPRINT_SELECT,
