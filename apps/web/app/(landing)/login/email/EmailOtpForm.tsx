@@ -42,7 +42,9 @@ export function EmailOtpForm({ callbackURL }: { callbackURL: string }) {
         });
         if (result.error) {
           setError(
-            "Invalid or expired code. Check the code or request a new one.",
+            result.error.status === 429
+              ? "Too many sign-in attempts. Try again later."
+              : "Invalid or expired code. Check the code or request a new one.",
           );
           return;
         }

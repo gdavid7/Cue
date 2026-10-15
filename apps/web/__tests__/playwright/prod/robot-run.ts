@@ -70,7 +70,15 @@ export class RobotRun {
       page,
       testInfo,
       requires = "session",
-    }: { page: Page; testInfo: TestInfo; requires?: StepRequirement },
+      describePageOnFailure = false,
+    }: {
+      page: Page;
+      testInfo: TestInfo;
+      requires?: StepRequirement;
+      // Only for pages without mail content: a thread's heading is its subject,
+      // and the report is public.
+      describePageOnFailure?: boolean;
+    },
     run: (metrics: RobotStep["metrics"] & object) => Promise<void>,
   ) {
     const step: RobotStep = {
@@ -95,6 +103,8 @@ export class RobotRun {
     } catch (error) {
       step.status = "failed";
       step.error = describeError(error);
+      if (describePageOnFailure)
+        step.error += ` (on ${await describePage(page)})`;
       if (this.status === "passed") this.status = "failed";
     } finally {
       step.durationMs = Math.round(performance.now() - started);
@@ -154,6 +164,20 @@ function describeError(error: unknown) {
   // colors the text with ANSI escapes.
   const firstLine = stripVTControlCharacters(message).split("\n")[0];
   return sanitizeBrowserDiagnosticText(firstLine || "Unknown error");
+}
+
+/** The path and main heading, so a failed step says what was on screen. */
+async function describePage(page: Page) {
+  const path = new URL(page.url()).pathname;
+  const heading = await page
+    .getByRole("heading", { level: 1 })
+    .first()
+    .innerText({ timeout: 2000 })
+    .catch(() => null);
+  const text = heading?.replaceAll(/\s+/g, " ").trim().slice(0, 80);
+  return sanitizeBrowserDiagnosticText(
+    text ? `${path}, heading "${text}"` : `${path}, no main heading`,
+  );
 }
 
 function sanitizeUrl(value: string) {

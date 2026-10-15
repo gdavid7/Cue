@@ -54,21 +54,40 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
     return account;
   };
 
-  await step("sign in with email code", async (metrics) => {
+  const signIn = { page, testInfo, describePageOnFailure: true };
+  await run.step("sign in with email code", signIn, async (metrics) => {
     await page.goto("/login/email?next=%2Fsettings", {
       waitUntil: "domcontentloaded",
     });
-    await page.getByLabel("Email", { exact: true }).fill(credentials.email);
+    const emailField = page.getByLabel("Email", { exact: true });
+    await expect(
+      emailField,
+      "the Email field is on /login/email",
+    ).toBeVisible();
+    // The form is server-rendered and visible about a second before React
+    // hydrates it. A click in that window submits it natively as a GET, which
+    // reloads the empty form without `next` and never sends a code.
+    await page
+      .waitForFunction(isFormHydrated, null, { timeout: 30_000 })
+      .catch(() => {
+        throw new Error("The sign-in form never hydrated");
+      });
+    await emailField.fill(credentials.email);
     const requestedAt = new Date();
     await page.getByRole("button", { name: "Send code", exact: true }).click();
     const codeField = page.getByLabel("Sign-in code", { exact: true });
-    const refused = page.getByText("Could not send a code");
-    await expect(codeField.or(refused)).toBeVisible();
-    if (await refused.isVisible()) {
+    // The form's own error line; Next's route announcer is outside <main>.
+    const formError = page.getByRole("main").getByRole("alert");
+    await expect(
+      codeField.or(formError),
+      "after Send code, the Sign-in code field or a form error appears",
+    ).toBeVisible();
+    if (await formError.isVisible()) {
+      const copy = await formError.innerText();
       run.signInFailed(
-        "Cue refused to send a sign-in code (rate limited or an error).",
+        `Refused: Cue would not send a sign-in code and showed "${copy}". It allows 5 code requests a minute per address, so this is a rate limit or a server error; the next hourly run retries.`,
       );
-      throw new Error("Cue refused to send a sign-in code");
+      throw new Error(`Cue refused to send a sign-in code: ${copy}`);
     }
     const code = await waitForSignInCode(credentials, {
       since: requestedAt,
@@ -77,21 +96,35 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
     metrics.codeDeliveryMs = Date.now() - requestedAt.getTime();
     if (!code) {
       run.signInFailed(
-        "No sign-in code email arrived. Check that email-code sign-in is on for the QA account (Settings) and that production has RESEND_API_KEY and a verified RESEND_FROM_EMAIL.",
+        "No sign-in code email arrived. Check that email-code sign-in is on for the QA account (Settings) and that production has RESEND_API_KEY and a verified RESEND_FROM_EMAIL. Cue also answers as if it sent a code when one was sent to the address less than a minute earlier.",
       );
       throw new Error("No sign-in code arrived within the timeout");
     }
     const submittedAt = Date.now();
     await codeField.fill(code);
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    const settings = page.getByRole("heading", {
+      name: "Settings",
+      exact: true,
+    });
     await expect(
-      page.getByRole("heading", { name: "Settings", exact: true }),
-      "signed in and landed on Settings",
+      settings.or(formError),
+      "after Sign in, the Settings heading or a form error appears",
     ).toBeVisible({ timeout: 60_000 });
+    if (await formError.isVisible()) {
+      const copy = await formError.innerText();
+      run.signInFailed(
+        `Refused: Cue rejected the emailed sign-in code and showed "${copy}". Cue caps code sign-in attempts at 20 per address per day; past the cap it refuses even a fresh code until the 24-hour window frees up.`,
+      );
+      throw new Error(`Cue refused the sign-in code: ${copy}`);
+    }
     metrics.signInMs = Date.now() - submittedAt;
   });
   if (run.status === "failed") {
-    run.signInFailed("Signing in with the email code failed.");
+    const error = run.steps.at(-1)?.error;
+    run.signInFailed(
+      `Signing in with the email code failed${error ? `: ${error}` : "."}`,
+    );
   }
 
   await step("gmail connection", async (metrics) => {
@@ -424,4 +457,13 @@ async function revokeSession(page: Page) {
       }).then(() => undefined),
     )
     .catch(() => undefined);
+}
+
+/** Runs in the page: React attaches its props to an element when it hydrates. */
+function isFormHydrated() {
+  const form = document.querySelector("main form");
+  return (
+    form !== null &&
+    Object.keys(form).some((key) => key.startsWith("__reactProps$"))
+  );
 }
