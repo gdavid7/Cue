@@ -36,6 +36,12 @@ describe("local mailbox cookie", () => {
     expect(hasLocalMailbox(undefined, "acc-1")).toBe(false);
     expect(hasLocalMailbox("acc-10", "acc-1")).toBe(false);
   });
+
+  it("treats a cookie value that is not valid percent-encoding as no local mailbox", () => {
+    // The server hands the value over already decoded, so "%25" arrives as "%".
+    expect(hasLocalMailbox("%", "acc-1")).toBe(false);
+    expect(hasLocalMailbox("acc-1.%E0%A4%A", "acc-1")).toBe(true);
+  });
 });
 
 function readCookie() {

@@ -26,8 +26,10 @@ export function clearLocalMailboxCookie() {
   writeCookie("", 0);
 }
 
+// Account ids are cuids, safe in a cookie as they are, so the value is never
+// percent-encoded: decoding it here again would throw on a stray "%".
 function readAccountIds(cookieValue: string | undefined) {
-  return cookieValue ? decodeURIComponent(cookieValue).split(".") : [];
+  return cookieValue ? cookieValue.split(".") : [];
 }
 
 function readCookie() {
@@ -40,5 +42,5 @@ function readCookie() {
 
 function writeCookie(value: string, maxAgeSeconds: number) {
   if (typeof document === "undefined") return;
-  document.cookie = `${LOCAL_MAILBOX_COOKIE}=${encodeURIComponent(value)}; path=/; max-age=${maxAgeSeconds}; SameSite=Lax${location.protocol === "https:" ? "; Secure" : ""}`;
+  document.cookie = `${LOCAL_MAILBOX_COOKIE}=${value}; path=/; max-age=${maxAgeSeconds}; SameSite=Lax${location.protocol === "https:" ? "; Secure" : ""}`;
 }
