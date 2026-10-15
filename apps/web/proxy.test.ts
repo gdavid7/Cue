@@ -65,6 +65,31 @@ describe("proxy mail links", () => {
       response.headers.get(`x-middleware-request-${MAIL_PATH_HEADER}`),
     ).toBe("/mail/u/0/search?q=x");
   });
+
+  it.each([
+    ["an RSC request", "GET", { RSC: "1" }],
+    ["a server action", "POST", {}],
+    ["a HEAD request", "HEAD", {}],
+  ])("drops a mail address the client sent with %s, and sets none", (_, method, extra) => {
+    const response = proxy(
+      new NextRequest("https://www.getinboxzero.com/mail/u/0/inbox", {
+        method,
+        headers: {
+          cookie: "better-auth.session_token=abc.def",
+          [MAIL_PATH_HEADER]: "/mail/u/0/sent",
+          ...extra,
+        },
+      }),
+    );
+
+    expect(
+      response.headers.get(`x-middleware-request-${MAIL_PATH_HEADER}`),
+    ).toBeNull();
+    // Next forwards exactly the request headers listed here.
+    const forwarded = response.headers.get("x-middleware-override-headers");
+    expect(forwarded).not.toBeNull();
+    expect(forwarded).not.toContain(MAIL_PATH_HEADER);
+  });
 });
 
 describe("proxy content negotiation", () => {

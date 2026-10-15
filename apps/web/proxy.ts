@@ -14,8 +14,18 @@ import { MAIL_PATH_HEADER, MAIL_PATH_PREFIX } from "@/utils/mail-url";
 import { buildLoginRedirectUrl } from "@/utils/redirect";
 
 export function proxy(request: NextRequest) {
+  // Only the proxy says which mail address a layout renders under, so a value
+  // the client sent never reaches the app.
+  const headers = new Headers(request.headers);
+  const sentMailPath = headers.has(MAIL_PATH_HEADER);
+  headers.delete(MAIL_PATH_HEADER);
+  const next = () =>
+    sentMailPath
+      ? NextResponse.next({ request: { headers } })
+      : NextResponse.next();
+
   if (isNextInternalRequest(request)) {
-    return withVaryAccept(NextResponse.next());
+    return withVaryAccept(next());
   }
 
   // The app's layouts can't see the address they render under, so a signed-out
@@ -30,20 +40,18 @@ export function proxy(request: NextRequest) {
   }
 
   if (request.method !== "GET" && request.method !== "HEAD") {
-    return withVaryAccept(NextResponse.next());
+    return withVaryAccept(next());
   }
 
-  // The mail layout starts the inbox from the server only on the inbox, and
-  // layouts are not told their address. Always set here, so it is never the
-  // client's own value.
-  if (isMailPath(pathname)) {
-    const headers = new Headers(request.headers);
+  // The mail layout starts the inbox from the server when the document is
+  // the inbox, and layouts are not told their address.
+  if (request.method === "GET" && isMailPath(pathname)) {
     headers.set(MAIL_PATH_HEADER, `${pathname}${search}`);
     return withVaryAccept(NextResponse.next({ request: { headers } }));
   }
 
   if (!prefersMarkdown(request.headers.get("accept"))) {
-    return withVaryAccept(NextResponse.next());
+    return withVaryAccept(next());
   }
 
   const pageMarkdown = getMarkdownForPath(
@@ -55,7 +63,7 @@ export function proxy(request: NextRequest) {
     return markdownResponse(pageMarkdown);
   }
 
-  return withVaryAccept(NextResponse.next());
+  return withVaryAccept(next());
 }
 
 export const config = {
