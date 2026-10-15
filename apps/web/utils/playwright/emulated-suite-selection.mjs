@@ -138,6 +138,8 @@ const directSuiteMappings = [
   ["components/email-list/", ["mail"]],
 ];
 
+const importSpecifiersByPath = new Map();
+
 const sourceExtensions = [
   "",
   ".ts",
@@ -411,18 +413,37 @@ function getLocalImports(file, appRoot, importsByFile) {
   if (cachedImports) return cachedImports;
 
   const absolutePath = path.join(appRoot, file);
-  if (!existsSync(absolutePath) || !statSync(absolutePath).isFile()) {
+  const stats = statSync(absolutePath, { throwIfNoEntry: false });
+  if (!stats?.isFile()) {
     importsByFile.set(file, []);
     return [];
   }
 
-  const source = readFileSync(absolutePath, "utf8");
-  const importedFiles = ts.preProcessFile(source, true, true).importedFiles;
-  const resolvedImports = importedFiles
-    .map(({ fileName }) => resolveLocalImport(fileName, file, appRoot))
+  const resolvedImports = getImportSpecifiers(absolutePath, stats)
+    .map((specifier) => resolveLocalImport(specifier, file, appRoot))
     .filter(Boolean);
   importsByFile.set(file, resolvedImports);
   return resolvedImports;
+}
+
+// Scanning sources dominates the graph build. Reuse a file's scan while its
+// size and mtime are unchanged, so repeated selections in one process (tests,
+// scripts/measure-playwright-selection.mjs) stay cheap without going stale.
+function getImportSpecifiers(absolutePath, stats) {
+  const cached = importSpecifiersByPath.get(absolutePath);
+  if (cached?.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
+    return cached.specifiers;
+  }
+
+  const specifiers = ts
+    .preProcessFile(readFileSync(absolutePath, "utf8"), true, true)
+    .importedFiles.map(({ fileName }) => fileName);
+  importSpecifiersByPath.set(absolutePath, {
+    mtimeMs: stats.mtimeMs,
+    size: stats.size,
+    specifiers,
+  });
+  return specifiers;
 }
 
 function resolveLocalImport(importPath, importer, appRoot) {

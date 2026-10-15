@@ -23,7 +23,7 @@ import {
   unsubscribeSenderRequestSchema,
   unsubscribeSenderResponseSchema,
 } from "@/app/api/v1/senders/unsubscribe/validation";
-import { API_KEY_HEADER } from "@/utils/api-auth";
+import { API_KEY_HEADER } from "@/utils/api-key";
 import {
   API_KEY_SCOPE_OPTIONS,
   type ApiKeyScopeValue,

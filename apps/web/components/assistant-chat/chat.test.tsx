@@ -9,6 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Chat } from "@/components/assistant-chat/chat";
 import type { ChatHistoryEntry } from "@/components/assistant-chat/chat-history-types";
 import type { Chat as ChatHelpers } from "@/providers/ChatProvider";
 
@@ -224,8 +225,6 @@ describe("Chat history", () => {
   });
 
   it("loads previous chats when the history menu is opened without hover", async () => {
-    const { Chat } = await import("@/components/assistant-chat/chat");
-
     render(<Chat open />);
 
     fireEvent.pointerDown(
@@ -253,12 +252,11 @@ describe("Chat input draft", () => {
     });
   });
 
-  it("keeps up with a rapid burst of input and saves the draft", async () => {
+  it("keeps up with a rapid burst of input and saves the draft", () => {
     mockUseChatInput.mockImplementation(() => {
       const [input, setInput] = React.useState("");
       return { input, setInput };
     });
-    const { Chat } = await import("@/components/assistant-chat/chat");
     render(<Chat open />);
     const textarea = screen.getByTestId("chat-input") as HTMLTextAreaElement;
     const setNativeValue = Object.getOwnPropertyDescriptor(
@@ -268,11 +266,14 @@ describe("Chat input draft", () => {
 
     // Outside act, React commits each controlled update synchronously, like a
     // text expander or dictation tool typing faster than React schedules work.
+    // React's nested-update guard trips after 50 such updates, so a burst of
+    // 100 still catches an extra render per keystroke at half the cost of 200.
+    const burstLength = 100;
     const actEnvironment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
     const previous = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
     actEnvironment.IS_REACT_ACT_ENVIRONMENT = false;
     try {
-      for (let i = 0; i < 200; i++) {
+      for (let i = 0; i < burstLength; i++) {
         setNativeValue?.call(textarea, `${textarea.value}x`);
         textarea.dispatchEvent(new Event("input", { bubbles: true }));
       }
@@ -280,16 +281,14 @@ describe("Chat input draft", () => {
       actEnvironment.IS_REACT_ACT_ENVIRONMENT = previous;
     }
 
-    expect(textarea.value).toBe("x".repeat(200));
+    expect(textarea.value).toBe("x".repeat(burstLength));
     expect(window.localStorage.getItem("input")).toBe(
-      JSON.stringify("x".repeat(200)),
+      JSON.stringify("x".repeat(burstLength)),
     );
   });
 
-  it("restores a saved draft on mount", async () => {
+  it("restores a saved draft on mount", () => {
     window.localStorage.setItem("input", JSON.stringify("Saved draft"));
-    const { Chat } = await import("@/components/assistant-chat/chat");
-
     render(<Chat open />);
 
     expect(mockSetInput).toHaveBeenCalledWith("Saved draft");
@@ -307,10 +306,8 @@ describe("Chat stop", () => {
     });
   });
 
-  it("stops the run on the server, not just the local stream", async () => {
+  it("stops the run on the server, not just the local stream", () => {
     chatState.status = "streaming";
-    const { Chat } = await import("@/components/assistant-chat/chat");
-
     const { container } = render(<Chat open />);
     const submitButton = container.querySelector('button[type="submit"]');
     if (!submitButton) throw new Error("Submit button not found");
