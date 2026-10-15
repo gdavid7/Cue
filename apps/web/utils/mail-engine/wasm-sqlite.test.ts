@@ -10,7 +10,7 @@ import { archiveThenNewMailScenario } from "@inboxzero/mail-core/test-support/sc
 import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
 import type { SqliteDriver } from "@inboxzero/mail-sqlite/driver";
-import { classifyMailboxError } from "@inboxzero/mail-sqlite/recovery";
+import { classifyMailboxError } from "@inboxzero/mail-sqlite/mailbox-errors";
 import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
 import { createWasmMailStore, createWasmMemoryDriver } from "./wasm-sqlite";
 

@@ -3,9 +3,6 @@ import type { SqlRow, SqlTransaction, SqliteDriver } from "./driver";
 import { createSqliteMailStore, type SqliteMailStoreOptions } from "./store";
 import { classifyMailboxError, MailboxCorruptError } from "./mailbox-errors";
 
-// Callers that already open the store may keep classifying from here.
-export { classifyMailboxError };
-
 /** The user's unsent work, kept outside the mailbox while it is rebuilt. */
 export type PendingMailWork = {
   accounts: Array<{ accountId: string; provider: string; generation: string }>;
