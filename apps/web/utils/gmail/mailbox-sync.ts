@@ -38,6 +38,7 @@ export async function getGmailMailboxSyncPage({
   logger,
   cursor,
   after,
+  includeBodies = false,
   limit,
 }: {
   gmail: gmail_v1.Gmail;
@@ -45,6 +46,7 @@ export async function getGmailMailboxSyncPage({
   logger: Logger;
   cursor?: string;
   after?: Date;
+  includeBodies?: boolean;
   limit: number;
 }): Promise<MailboxSyncPage> {
   if (!cursor) {
@@ -74,13 +76,20 @@ export async function getGmailMailboxSyncPage({
   }
 
   try {
-    return await getGmailDeltaPage({
+    const page = await getGmailDeltaPage({
       gmail,
       accessToken,
       logger,
       cursor: decoded,
       limit,
     });
+    // The delta fetched each message in full, so a caller that stores bodies
+    // keeps them rather than fetching every message a second time.
+    if (includeBodies) return { ...page, includesBodies: true };
+    return {
+      ...page,
+      upsertedMessages: page.upsertedMessages.map(compactMailboxSyncMessage),
+    };
   } catch (error) {
     if (extractErrorInfo(error).status !== 404) throw error;
 
@@ -326,7 +335,7 @@ async function fetchDeltaPage({
     accessToken,
     logger,
   });
-  const fetchedMessages = fetched.messages.map(compactMailboxSyncMessage);
+  const fetchedMessages = fetched.messages;
   const afterTimestamp = new Date(cursor.after).getTime();
   const upsertedMessages = fetchedMessages.filter((message) => {
     const inTimeWindow = Number(message.internalDate) >= afterTimestamp;

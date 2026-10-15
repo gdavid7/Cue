@@ -72,6 +72,8 @@ export type MailboxSyncPage = {
   cursor: string;
   deletedMessageIds: string[];
   hasMore: boolean;
+  /** The upserted messages carry their full bodies, not just metadata. */
+  includesBodies?: boolean;
   removedMessageIds?: string[];
   reset: boolean;
   upsertedMessages: ParsedMessage[];
@@ -310,6 +312,8 @@ export interface EmailProvider {
     after?: Date;
     cursor?: string;
     folderId?: string;
+    /** Keep bodies the provider fetched anyway; see `includesBodies`. */
+    includeBodies?: boolean;
     limit: number;
   }): Promise<MailboxSyncPage>;
   getMessage(

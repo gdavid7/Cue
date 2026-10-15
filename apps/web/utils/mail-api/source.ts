@@ -326,11 +326,23 @@ export function createEmailProviderMailboxSource(input: {
             provider.name === "microsoft" && position.streamId !== "primary"
               ? position.streamId
               : undefined,
+          includeBodies: isGmail,
           limit: pageSize,
         });
         if (page.reset) {
           return { status: "reset_required", scopeId: position.streamId };
         }
+        // A page without bodies carries metadata only, so a body-derived flag
+        // such as a meeting invitation must not stand in for the body.
+        const { requiredHydration, bodies } = page.includesBodies
+          ? parsedMessageBodies(accountId, page.upsertedMessages)
+          : {
+              requiredHydration: page.upsertedMessages.map((message) => ({
+                accountId,
+                messageId: message.id,
+              })),
+              bodies: [],
+            };
         return {
           status: "page" as const,
           page: {
@@ -359,12 +371,8 @@ export function createEmailProviderMailboxSource(input: {
                 scopeId: position.streamId,
               })),
             ],
-            // Delta pages carry metadata only, so a body-derived flag such as
-            // a meeting invitation must not stand in for the body.
-            requiredHydration: page.upsertedMessages.map((message) => ({
-              accountId,
-              messageId: message.id,
-            })),
+            requiredHydration,
+            bodies,
             roundComplete: !page.hasMore,
           },
         };
