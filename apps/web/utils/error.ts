@@ -203,8 +203,8 @@ export function isInvalidGrantError(error: unknown): boolean {
 }
 
 export function isGmailInsufficientPermissionsError(error: unknown): boolean {
-  // biome-ignore lint/suspicious/noExplicitAny: existing loose external shape
-  return (error as any)?.errors?.[0]?.reason === "insufficientPermissions";
+  // gaxios 7 puts the API's `errors` array on `cause`.
+  return extractErrorInfo(error).reason === "insufficientPermissions";
 }
 
 export function isGmailRateLimitExceededError(error: unknown): boolean {
