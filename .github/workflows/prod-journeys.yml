@@ -1,0 +1,187 @@
+name: Production Journeys
+
+# The journeys robot: times the flows people use all day on
+# https://cue-inbox.vercel.app as the QA account (new mail arriving, chat
+# answers graded against planted facts, triage, search, compose) and judges
+# each against a budget. Setup, journeys and budgets:
+# apps/web/__tests__/playwright/prod/README.md
+#
+# Only schedule and manual dispatch trigger this workflow, so pull requests
+# never run it or see its secrets. The repository is public: logs, the job
+# summary and the metrics artifact hold numbers and statuses only, and
+# screenshots, traces and video are uploaded only when a journey is not PASS.
+
+on:
+  schedule:
+    # Every three hours, clear of the hourly health robot at :17.
+    - cron: "41 1-23/4 * * *"
+  workflow_dispatch:
+    inputs:
+      journeys:
+        description: 'Comma list of inbox-load, new-mail, triage, search, compose-send, chat; or "all"'
+        type: string
+        default: all
+      budgets:
+        description: 'Optional JSON budget overrides, e.g. {"newMailWhileOpenMs":{"target":5000}}'
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+# Shares the health robot's group: both sign in as the QA account by email
+# code, and two code requests within a minute leave one without a code.
+concurrency:
+  group: prod-health
+  cancel-in-progress: false
+
+jobs:
+  prod-journeys:
+    if: github.repository == 'gdavid7/Cue'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/web
+    env:
+      CUE_QA_BASE_URL: https://cue-inbox.vercel.app
+      CUE_QA_EMAIL: ${{ secrets.CUE_QA_EMAIL }}
+      CUE_QA_IMAP_APP_PASSWORD: ${{ secrets.CUE_QA_IMAP_APP_PASSWORD }}
+      CUE_JOURNEYS: ${{ inputs.journeys || 'all' }}
+      CUE_JOURNEY_BUDGETS: ${{ inputs.budgets }}
+      CUE_JOURNEYS_RESULTS_FILE: ${{ github.workspace }}/apps/web/.tmp/journeys/results.json
+      CUE_JOURNEYS_OUTPUT_DIR: ${{ github.workspace }}/apps/web/.tmp/journeys/output
+      CUE_JOURNEYS_REPORT_DIR: ${{ github.workspace }}/apps/web/.tmp/journeys/report
+      JOURNEYS_REPORT_FILE: ${{ github.workspace }}/apps/web/.tmp/journeys/journeys-report.json
+      AXIOM_QUERY_TOKEN: ${{ secrets.AXIOM_QUERY_TOKEN }}
+      AXIOM_DATASET: ${{ secrets.AXIOM_DATASET }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Check configuration
+        id: config
+        shell: bash
+        run: |
+          mkdir -p .tmp/journeys
+          if [ -n "$CUE_QA_EMAIL" ] && [ -n "$CUE_QA_IMAP_APP_PASSWORD" ]; then
+            echo "Robot: configured"
+            echo "robot=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Robot: NOT CONFIGURED (missing CUE_QA_EMAIL or CUE_QA_IMAP_APP_PASSWORD); skipping"
+            echo "robot=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$AXIOM_QUERY_TOKEN" ] && [ -n "$AXIOM_DATASET" ]; then
+            echo "Axiom: configured"
+          else
+            echo "Axiom: NOT CONFIGURED; the report skips server logs"
+          fi
+          echo "Journeys: $CUE_JOURNEYS"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      - name: Install dependencies
+        working-directory: .
+        run: bash scripts/pnpm-install-without-desktop.sh --frozen-lockfile
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Read Playwright version
+        if: steps.config.outputs.robot == 'true'
+        id: playwright
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright Chromium
+        if: steps.config.outputs.robot == 'true'
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-${{ steps.playwright.outputs.version }}
+
+      - name: Install Playwright Chromium
+        if: steps.config.outputs.robot == 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Install Chromium system dependencies
+        if: steps.config.outputs.robot == 'true' && steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+
+      - name: Run journeys
+        if: steps.config.outputs.robot == 'true'
+        id: robot
+        shell: bash
+        timeout-minutes: 17
+        run: |
+          set +e
+          pnpm exec playwright test -c __tests__/playwright/prod/journeys/playwright.journeys.config.ts
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Journeys report
+        if: always()
+        id: report
+        timeout-minutes: 3
+        run: pnpm exec tsx scripts/qa/run-journeys-report.ts "$CUE_JOURNEYS_RESULTS_FILE"
+
+      - name: Upload metrics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: prod-journeys-metrics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            apps/web/.tmp/journeys/results.json
+            apps/web/.tmp/journeys/journeys-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      # Screenshots show the QA inbox, so they are published only when they
+      # are needed to look into a journey that did not pass.
+      - name: Upload screenshots, trace and video
+        if: always() && steps.config.outputs.robot == 'true' && steps.report.outputs.overall != 'PASS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: prod-journeys-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            apps/web/.tmp/journeys/output/
+            apps/web/.tmp/journeys/report/
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: Verdict
+        if: always()
+        shell: bash
+        env:
+          ROBOT_ENABLED: ${{ steps.config.outputs.robot }}
+          OVERALL: ${{ steps.report.outputs.overall }}
+          OUTCOME: ${{ steps.report.outputs.outcome }}
+          REPORT_STATUS: ${{ steps.report.outcome }}
+        run: |
+          if [ "$REPORT_STATUS" != "success" ]; then
+            echo "::error title=Journeys report failed::The report step did not complete; see its log."
+            exit 1
+          fi
+          if [ "$ROBOT_ENABLED" != "true" ]; then
+            echo "Robot NOT CONFIGURED; nothing ran."
+            exit 0
+          fi
+          if [ "$OUTCOME" = "needs_reconnect" ]; then
+            echo "::warning title=Cue QA test account needs reconnecting::Sign into Cue as the QA account with Google and reconnect Gmail."
+            exit 0
+          fi
+          case "$OVERALL" in
+            PASS) echo "Every journey passed." ;;
+            SLOW) echo "::warning title=Journeys over budget::At least one journey was SLOW; see the report." ;;
+            *)
+              echo "::error title=Journeys failed::Overall ${OVERALL:-unknown} (${OUTCOME:-no outcome}); see the report and artifacts."
+              exit 1 ;;
+          esac

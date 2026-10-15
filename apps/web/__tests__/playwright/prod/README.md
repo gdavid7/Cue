@@ -139,3 +139,61 @@ The repository is public, so anyone signed in to GitHub can read the job logs,
 summary and artifacts. Screenshots show the seeded inbox and the QA address.
 The robot ends its session server-side when it finishes, so a trace's cookies
 cannot be replayed, and the one-time code it typed is already spent.
+
+## Journeys robot
+
+`.github/workflows/prod-journeys.yml` runs `journeys/journeys.journey.ts` every
+three hours (at :41) and on demand. Where the health robot checks that pages
+work, the journeys robot times what people do all day, checks what it can know
+for certain, and judges each journey **PASS**, **SLOW** (over its target) or
+**FAIL** (an error, a wrong answer, or over its limit):
+
+| Journey | What it does | Metrics (budget target / limit, ms) |
+| --- | --- | --- |
+| `inbox-load` | opens the inbox in a fresh document | `firstRowMs` 5000/30000, `clsX1000` 100/250 |
+| `new-mail` | delivers mail while the inbox is open (IMAP APPEND from an example.com sender, and SMTP to itself) and times each until its row shows, without reloading; then delivers while the app is closed and times opening it | `newMailWhileOpenMs:append` and `:smtp` 10000/60000, `newMailOnOpenMs` 3000/15000; `pushEventMs` (until the mail stream reported the change) and `mailStreamConnected` for diagnosis |
+| `chat` | asks four questions, each in a new chat, whose answers only mail planted for this run holds (a job offer, a meeting, an invoice, and one across them), and grades each answer by its facts | per question `chatFirstTokenMs` 8000/45000, `chatTotalMs` 40000/150000, `chatToolCalls`; fails on a missing fact, a tool error or a failed request |
+| `triage` | opens planted mail, archives it and undoes the archive | `openEmailMs` 1500/10000, `archiveMs` 1000/5000, `undoMs` 1500/8000 |
+| `search` | searches for a word only the planted invoice has | `searchMs` 3000/15000 |
+| `compose-send` | composes a message to itself and follows it back into the Inbox | `composeOpenMs` 1000/5000, `sendToInboxMs` 45000/120000 (includes the 30 s undo window) |
+
+Every journey also fails on an uncaught page error, a hydration error or a 5xx
+from Cue, and reports other console errors and 4xx responses as warnings. A
+failed journey is retried once in the same session; one that passes on retry
+is reported as **flaky**. The run stops starting journeys after 12.5 minutes.
+
+Run it from Actions → Production Journeys → Run workflow, or through the API:
+
+```sh
+gh workflow run prod-journeys.yml -f journeys=new-mail,chat \
+  -f budgets='{"newMailWhileOpenMs":{"target":5000}}'
+```
+
+`journeys` is a comma list or `all`; `budgets` overrides targets or limits.
+The "Journeys report" step prints the human report between
+`=== CUE JOURNEYS REPORT START ===` and `=== CUE JOURNEYS REPORT END ===` and
+the full metrics JSON between `=== CUE JOURNEYS METRICS START ===` and
+`=== CUE JOURNEYS METRICS END ===`; with the Axiom secrets set it also counts
+the server errors and warnings logged during the run. The
+`prod-journeys-metrics-<run>` artifact holds both JSON files; screenshots,
+traces, video and the chat's answers (`chat-answers-attempt-<n>.json` in the
+Playwright report) are uploaded only when the run is not PASS.
+
+Mail: every message the robot creates has `cqj <run tag>` in its subject and
+comes from `example.com` or the QA account itself. It is moved to Trash at the
+end of the run, and anything an earlier run left behind is moved at the start.
+A run creates about eight messages. The workflow shares the health robot's
+concurrency group, so the two never request sign-in codes at the same time.
+
+Code sign-ins are capped at 20 per address per day, and every robot run uses
+one: the hourly health robot alone uses 24.
+
+```sh
+# Against production (or CUE_QA_BASE_URL) as the QA account
+CUE_JOURNEYS=new-mail pnpm -F inbox-zero-ai exec playwright test -c __tests__/playwright/prod/journeys/playwright.journeys.config.ts
+pnpm -F inbox-zero-ai exec tsx scripts/qa/run-journeys-report.ts .tmp/journeys/results.json
+
+# Against the local emulated stack (Gmail and LLM emulators), to check the
+# journeys' logic; its timings say nothing about production
+pnpm -F inbox-zero-ai exec playwright test -c __tests__/playwright/prod/journeys/playwright.emulated.config.mjs
+```
