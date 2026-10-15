@@ -1,44 +1,63 @@
 "use client";
 
 import {
+  Component,
   createContext,
   type ReactNode,
   Suspense,
   use,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
+  useState,
 } from "react";
 import { usePathname } from "next/navigation";
-import useSWR, { useSWRConfig } from "swr";
+import type { MessageKey } from "@inboxzero/mail-core/identities";
+import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import type { ThreadsListResponse } from "@/app/api/threads/route";
 import {
   MailListPlaceholder,
   MailLoadingNote,
   PlaceholderChrome,
 } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
+import { showMailView } from "@/app/(app)/[emailAccountId]/mail/show-mail-view";
 import { ThreadList } from "@/app/(app)/[emailAccountId]/mail/ThreadList";
 import type { MailLayoutMode } from "@/app/(app)/[emailAccountId]/mail/types";
 import { useEmailLabels } from "@/providers/EmailLabelsProvider";
 import { useAccount } from "@/providers/EmailAccountProvider";
-import { showMailView } from "@/app/(app)/[emailAccountId]/mail/show-mail-view";
 import { buildMailPath, parseMailPath, withPageParams } from "@/utils/mail-url";
-import { getAccountScopedKey } from "@/utils/swr";
 
-const PREVIEW_PATH = "/api/threads?view=list&type=inbox&limit=25";
 const NO_SELECTION = () => false;
 const IGNORE = () => undefined;
+// Enough of a clicked conversation to read it; at about five Gmail units a
+// message, a long thread's earlier messages wait for the sync.
+const OPENED_MESSAGES = 10;
 
 type InboxPreview = ThreadsListResponse | null;
+type Seed = { emailAccountId: string; preview: Promise<InboxPreview> };
 
 const InboxPreviewSeedContext = createContext<{
-  emailAccountId: string;
-  preview: Promise<InboxPreview>;
-} | null>(null);
+  seed: Seed | null;
+  retired: boolean;
+  retire: () => void;
+  opened: MessageKey[];
+  open: (keys: MessageKey[]) => void;
+  settleOpened: (keys: MessageKey[]) => void;
+}>({
+  seed: null,
+  retired: false,
+  retire: IGNORE,
+  opened: [],
+  open: IGNORE,
+  settleOpened: IGNORE,
+});
 
 /**
  * The inbox the server began fetching while it rendered the page, for a
- * browser with no local mailbox yet. Rows stream in with the page itself.
+ * browser with no local mailbox yet; the rows stream in with the page. Always
+ * rendered, so the mail screen keeps its place in the tree, and it keeps the
+ * last seed when a later render, such as after a server action, carries none.
  */
 export function InboxPreviewSeed({
   emailAccountId,
@@ -46,30 +65,34 @@ export function InboxPreviewSeed({
   children,
 }: {
   emailAccountId: string;
-  preview: Promise<InboxPreview>;
+  preview: Promise<InboxPreview> | null;
   children: ReactNode;
 }) {
-  const value = useMemo(
-    () => ({ emailAccountId, preview }),
-    [emailAccountId, preview],
+  const [seed, setSeed] = useState<Seed | null>(() =>
+    preview ? { emailAccountId, preview } : null,
   );
-  const { mutate } = useSWRConfig();
-  // A later render without the seed, such as after a server action, reads the
-  // rows from the browser's cache instead of asking again.
-  useEffect(() => {
-    let current = true;
-    preview
-      .then((data) => {
-        if (current && data)
-          mutate(getAccountScopedKey(PREVIEW_PATH, emailAccountId), data, {
-            revalidate: false,
-          });
-      })
-      .catch(() => undefined);
-    return () => {
-      current = false;
-    };
-  }, [emailAccountId, mutate, preview]);
+  if (
+    preview &&
+    (seed?.preview !== preview || seed.emailAccountId !== emailAccountId)
+  ) {
+    setSeed({ emailAccountId, preview });
+  }
+  const [retired, setRetired] = useState(false);
+  const retire = useCallback(() => setRetired(true), []);
+  const [opened, setOpened] = useState<MessageKey[]>([]);
+  const open = useCallback(
+    (keys: MessageKey[]) => setOpened((current) => [...current, ...keys]),
+    [],
+  );
+  const settleOpened = useCallback(
+    (keys: MessageKey[]) =>
+      setOpened((current) => current.filter((key) => !keys.includes(key))),
+    [],
+  );
+  const value = useMemo(
+    () => ({ seed, retired, retire, opened, open, settleOpened }),
+    [seed, retired, retire, opened, open, settleOpened],
+  );
   return (
     <InboxPreviewSeedContext.Provider value={value}>
       {children}
@@ -78,12 +101,37 @@ export function InboxPreviewSeed({
 }
 
 /**
- * Stands in for the inbox while the local mailbox opens or first syncs. The
- * newest conversations come from the server, started with the page when it
- * could be or fetched once here otherwise, so the inbox reads at once rather
- * than after the engine has booted and synced. The engine's own list replaces
- * this as soon as it has rows. Elsewhere, or with `enabled` off, it is the
- * usual skeleton.
+ * Puts the server's rows away for good once the mail engine has shown this
+ * account's mail, so rows from sign-in time never come back later.
+ */
+export function useRetireInboxPreview() {
+  return useContext(InboxPreviewSeedContext).retire;
+}
+
+/**
+ * Has the mail engine fetch each conversation opened from the server's rows,
+ * once it is running. The rows can reach back further than the engine's first
+ * sync, which leaves older inbox mail to the backfill, so without this such a
+ * conversation would open empty until the backfill got to it.
+ */
+export function useFetchOpenedPreviewThreads() {
+  const { opened, settleOpened } = useContext(InboxPreviewSeedContext);
+  const client = useOptionalMailClient();
+  useEffect(() => {
+    if (!client || opened.length === 0) return;
+    for (const key of opened) {
+      client.ensureMessageContent(key).catch(IGNORE);
+    }
+    settleOpened(opened);
+  }, [client, opened, settleOpened]);
+}
+
+/**
+ * Stands in for the inbox while the local mailbox opens or first syncs,
+ * showing the newest conversations the server fetched with the page, so the
+ * inbox reads at once rather than after the engine has booted and synced.
+ * Without them, as on every warm open, or elsewhere, or with `enabled` off, it
+ * is the usual skeleton and asks the provider for nothing.
  */
 export function InboxPreviewList({
   message,
@@ -99,18 +147,9 @@ export function InboxPreviewList({
 }) {
   const { emailAccountId } = useAccount();
   const pathname = usePathname();
+  const { seed, retired } = useContext(InboxPreviewSeedContext);
   const isInbox =
     enabled ?? parseMailPath(pathname ?? "")?.view?.kind === "inbox";
-  const seed = useContext(InboxPreviewSeedContext);
-  // Only ever the open account's mail.
-  const seeded =
-    isInbox && seed?.emailAccountId === emailAccountId ? seed.preview : null;
-  const { data } = useSWR<ThreadsListResponse>(
-    isInbox && !seeded
-      ? getAccountScopedKey(PREVIEW_PATH, emailAccountId)
-      : null,
-    { revalidateOnFocus: false, revalidateIfStale: false },
-  );
   const placeholder = (
     <MailListPlaceholder
       message={message}
@@ -118,28 +157,22 @@ export function InboxPreviewList({
       withChrome={withChrome}
     />
   );
-
-  if (seeded) {
-    return (
+  // Only ever the open account's mail.
+  if (!isInbox || retired || seed?.emailAccountId !== emailAccountId) {
+    return placeholder;
+  }
+  return (
+    <PreviewErrorBoundary fallback={placeholder}>
       <Suspense fallback={placeholder}>
         <SeededPreviewRows
-          preview={seeded}
+          preview={seed.preview}
           placeholder={placeholder}
           message={message}
           layout={layout}
           withChrome={withChrome}
         />
       </Suspense>
-    );
-  }
-  if (!data?.threads.length) return placeholder;
-  return (
-    <PreviewRows
-      preview={data}
-      message={message}
-      layout={layout}
-      withChrome={withChrome}
-    />
+    </PreviewErrorBoundary>
   );
 }
 
@@ -172,6 +205,18 @@ function PreviewRows({
 }) {
   const { emailAccountId, userEmail } = useAccount();
   const { userLabels } = useEmailLabels();
+  const { open } = useContext(InboxPreviewSeedContext);
+  const openThread = (index: number) => {
+    const thread = preview.threads[index];
+    if (!thread) return;
+    open(
+      thread.messages.slice(-OPENED_MESSAGES).map((message) => ({
+        accountId: emailAccountId,
+        messageId: message.id,
+      })),
+    );
+    openInAddress(thread.id);
+  };
   return (
     <div
       className="flex min-h-0 flex-1 flex-col overflow-hidden"
@@ -189,7 +234,7 @@ function PreviewRows({
         focusedIndex={-1}
         isSelected={NO_SELECTION}
         selectedCount={0}
-        onOpenThread={(index) => openInAddress(preview.threads[index]?.id)}
+        onOpenThread={openThread}
         onToggleSelect={IGNORE}
         onSelectRangeTo={IGNORE}
         showLoadMore={false}
@@ -202,16 +247,32 @@ function PreviewRows({
   );
 }
 
+/** A seed that failed to arrive shows the skeleton instead of breaking mail. */
+class PreviewErrorBoundary extends Component<
+  { fallback: ReactNode; children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
 /**
  * Puts a conversation clicked here in the address, from which the mail screen
  * opens it as soon as the engine is ready, so an early click is never lost.
  */
-function openInAddress(threadId: string | undefined) {
+function openInAddress(threadId: string) {
   const current = parseMailPath(
     window.location.pathname,
     window.location.search,
   );
-  if (!threadId || !current) return;
+  if (!current) return;
   showMailView(
     withPageParams(
       buildMailPath({ ...current, threadId }),

@@ -43,6 +43,7 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/MailScreenLayout", () => ({
   MailScreenLayout: ({ children }: { children: React.ReactNode }) => children,
 }));
 
+import { InboxPreviewSeed } from "@/app/(app)/[emailAccountId]/mail/InboxPreviewList";
 import MailRouteLayout from "./layout";
 
 function renderAt(accountIndex: string) {
@@ -88,6 +89,20 @@ describe("MailRouteLayout", () => {
     await renderAt("1");
 
     expect(mocks.loadInboxPreview).not.toHaveBeenCalled();
+  });
+
+  it("keeps the mail screen in the same place whether or not it seeds the inbox", async () => {
+    const seeded = await renderAt("1");
+    mocks.localMailCookie = "acc_b";
+    const unseeded = await renderAt("1");
+
+    const screenOf = (layout: Awaited<ReturnType<typeof renderAt>>) =>
+      (layout as React.ReactElement<{ children: React.ReactElement[] }>).props
+        .children[0] as React.ReactElement<{ preview: unknown }>;
+    expect(screenOf(seeded).type).toBe(InboxPreviewSeed);
+    expect(screenOf(unseeded).type).toBe(InboxPreviewSeed);
+    expect(screenOf(seeded).props.preview).toBeInstanceOf(Promise);
+    expect(screenOf(unseeded).props.preview).toBeNull();
   });
 
   it.each([

@@ -6,15 +6,27 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
 } from "@testing-library/react";
-import type { ReactNode } from "react";
-import { SWRConfig } from "swr";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { InboxPreviewList, InboxPreviewSeed } from "./InboxPreviewList";
+import { useState } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ThreadsListResponse } from "@/app/api/threads/route";
+import {
+  InboxPreviewList,
+  InboxPreviewSeed,
+  useFetchOpenedPreviewThreads,
+  useRetireInboxPreview,
+} from "./InboxPreviewList";
 
 const account = vi.hoisted(() => ({ emailAccountId: "acc-1" }));
 const navigation = vi.hoisted(() => ({ pathname: "/mail/u/0/inbox" }));
+const engine = vi.hoisted(() => ({ client: null as unknown }));
+const mailClient = vi.hoisted(() => ({
+  ensureMessageContent: vi.fn(async () => ({ status: "scheduled" })),
+}));
+
+vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
+  useOptionalMailClient: () => engine.client,
+}));
 
 vi.mock("@/providers/EmailAccountProvider", () => ({
   useAccount: () => ({
@@ -52,169 +64,171 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/ThreadList", () => ({
   ),
 }));
 
+const fetchMock = vi.fn();
+
+beforeEach(() => {
+  vi.stubGlobal("fetch", fetchMock);
+});
+
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
+  fetchMock.mockReset();
+  mailClient.ensureMessageContent.mockClear();
+  engine.client = null;
   account.emailAccountId = "acc-1";
   navigation.pathname = "/mail/u/0/inbox";
 });
 
 describe("InboxPreviewList", () => {
-  it("shows the inbox's newest conversations from one server call while mail loads", async () => {
-    const fetcher = vi.fn(async () => ({
-      threads: [thread("t1"), thread("t2")],
-      nextPageToken: null,
-    }));
-    renderWithSwr(
-      <InboxPreviewList message="Opening your mailbox…" />,
-      fetcher,
-    );
+  it("shows the inbox the server started fetching with the page", async () => {
+    await renderSeeded(previewOf("s1", "s2"));
 
-    expect(screen.getByText("Opening your mailbox…")).toBeTruthy();
-    await waitFor(() =>
-      expect(
-        screen.getAllByText(/^t\d$/).map((row) => row.textContent),
-      ).toEqual(["t1", "t2"]),
-    );
-    expect(fetcher).toHaveBeenCalledOnce();
-    expect(fetcher).toHaveBeenCalledWith([
-      "/api/threads?view=list&type=inbox&limit=25",
-      "acc-1",
+    expect(screen.getAllByText(/^s\d$/).map((row) => row.textContent)).toEqual([
+      "s1",
+      "s2",
     ]);
+  });
+
+  it("asks the provider for nothing on a warm open, which has no seed", async () => {
+    await act(async () => {
+      render(seeded(null));
+    });
+
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByText("Opening your mailbox…")).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("never shows rows the server fetched for another account", async () => {
+    account.emailAccountId = "acc-2";
+
+    await renderSeeded(previewOf("s1"));
+
+    expect(screen.queryByText("s1")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the rows and the mail screen when the layout re-renders without a seed", async () => {
+    const view = await renderSeeded(previewOf("s1"));
+
+    // A server action re-renders the layout, which then carries no seed.
+    await act(async () => {
+      view.rerender(seeded(null));
+    });
+
+    expect(screen.getByText("s1")).toBeTruthy();
+    expect(screen.getByTestId("screen").textContent).toBe("mounted 1");
+  });
+
+  it("puts the seeded rows away for good once the engine has shown mail", async () => {
+    await renderSeeded(previewOf("s1"));
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("engine has mail"));
+    });
+
+    expect(screen.queryByText("s1")).toBeNull();
+    expect(screen.getByText("Opening your mailbox…")).toBeTruthy();
+  });
+
+  it("falls back to the skeleton when the seed fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await renderSeeded(Promise.reject(new Error("stream broke")));
+
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByText("Opening your mailbox…")).toBeTruthy();
+  });
+
+  it("keeps the skeleton for views other than the inbox", async () => {
+    navigation.pathname = "/mail/u/0/sent";
+
+    await renderSeeded(previewOf("s1"));
+
+    expect(screen.queryByText("s1")).toBeNull();
   });
 
   it("opens a conversation clicked before the engine is ready once it is", async () => {
     window.history.replaceState(null, "", "/mail/u/0/inbox");
-    const fetcher = vi.fn(async () => ({
-      threads: [thread("t1"), thread("t2")],
-      nextPageToken: null,
-    }));
-    renderWithSwr(
-      <InboxPreviewList message="Opening your mailbox…" />,
-      fetcher,
-    );
+    await renderSeeded(previewOf("t1", "t2"));
 
-    fireEvent.click(await screen.findByText("t2"));
+    fireEvent.click(screen.getByText("t2"));
 
     // The mail screen opens the conversation in the address when it mounts.
     expect(window.location.pathname).toBe("/mail/u/0/inbox/t2");
   });
 
-  it("asks for the open account's mail only", async () => {
-    account.emailAccountId = "acc-2";
-    const fetcher = vi.fn(async () => ({ threads: [], nextPageToken: null }));
-    renderWithSwr(
-      <InboxPreviewList message="Opening your mailbox…" />,
-      fetcher,
-    );
+  it("has the engine fetch a conversation clicked before its sync reaches it", async () => {
+    window.history.replaceState(null, "", "/mail/u/0/inbox");
+    const view = await renderSeeded(previewOf("t1", "t2"));
 
-    await waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
-    expect(fetcher).toHaveBeenCalledWith([
-      "/api/threads?view=list&type=inbox&limit=25",
-      "acc-2",
-    ]);
-  });
+    fireEvent.click(screen.getByText("t2"));
+    expect(mailClient.ensureMessageContent).not.toHaveBeenCalled();
 
-  it("keeps the skeleton for views other than the inbox", () => {
-    navigation.pathname = "/mail/u/0/sent";
-    const fetcher = vi.fn();
-    renderWithSwr(
-      <InboxPreviewList message="Opening your mailbox…" />,
-      fetcher,
-    );
-
-    expect(fetcher).not.toHaveBeenCalled();
-    expect(screen.queryByRole("listbox")).toBeNull();
-  });
-
-  it("shows rows the server started fetching with the page, without asking again", async () => {
-    const fetcher = vi.fn();
-    const preview = Promise.resolve({
-      threads: [thread("s1")],
-      nextPageToken: null,
-    });
-    // Suspense resolves inside an async act.
+    // The engine opens later; older inbox mail syncs only in the backfill.
+    engine.client = mailClient;
     await act(async () => {
-      renderWithSwr(
-        <InboxPreviewSeed emailAccountId="acc-1" preview={preview}>
-          <InboxPreviewList message="Opening your mailbox…" />
-        </InboxPreviewSeed>,
-        fetcher,
-      );
+      view.rerender(seeded(null));
     });
 
-    expect(await screen.findByText("s1")).toBeTruthy();
-    expect(fetcher).not.toHaveBeenCalled();
-  });
-
-  it("keeps the server's rows when a later render arrives without them", async () => {
-    const fetcher = vi.fn();
-    const preview = Promise.resolve({
-      threads: [thread("s1")],
-      nextPageToken: null,
+    expect(mailClient.ensureMessageContent.mock.calls).toEqual([
+      [{ accountId: "acc-1", messageId: "t2-m" }],
+    ]);
+    await act(async () => {
+      view.rerender(seeded(null));
     });
-    const cache = new Map();
-    const view = await act(async () =>
-      render(
-        <SWRConfig value={{ fetcher, provider: () => cache }}>
-          <InboxPreviewSeed emailAccountId="acc-1" preview={preview}>
-            <InboxPreviewList message="Opening your mailbox…" />
-          </InboxPreviewSeed>
-        </SWRConfig>,
-      ),
-    );
-    await screen.findByText("s1");
-
-    // A server action re-rendered the layout, which no longer seeds.
-    await act(async () =>
-      view.rerender(
-        <SWRConfig value={{ fetcher, provider: () => cache }}>
-          <InboxPreviewList message="Opening your mailbox…" />
-        </SWRConfig>,
-      ),
-    );
-
-    expect(screen.getByText("s1")).toBeTruthy();
-    expect(fetcher).not.toHaveBeenCalled();
-  });
-
-  it("never shows rows the server fetched for another account", async () => {
-    account.emailAccountId = "acc-2";
-    const fetcher = vi.fn(async () => ({
-      threads: [thread("own")],
-      nextPageToken: null,
-    }));
-    renderWithSwr(
-      <InboxPreviewSeed
-        emailAccountId="acc-1"
-        preview={Promise.resolve({
-          threads: [thread("s1")],
-          nextPageToken: null,
-        })}
-      >
-        <InboxPreviewList message="Opening your mailbox…" />
-      </InboxPreviewSeed>,
-      fetcher,
-    );
-
-    expect(await screen.findByText("own")).toBeTruthy();
-    expect(screen.queryByText("s1")).toBeNull();
-  });
-
-  it("keeps the skeleton when the caller turns the preview off", () => {
-    const fetcher = vi.fn();
-    renderWithSwr(
-      <InboxPreviewList enabled={false} message="Loading your mail…" />,
-      fetcher,
-    );
-
-    expect(fetcher).not.toHaveBeenCalled();
+    expect(mailClient.ensureMessageContent).toHaveBeenCalledTimes(1);
   });
 });
 
-function renderWithSwr(ui: ReactNode, fetcher: (...args: never[]) => unknown) {
-  return render(
-    <SWRConfig value={{ fetcher, provider: () => new Map() }}>{ui}</SWRConfig>,
+let mounts = 0;
+
+function Screen() {
+  const [mountedAs] = useState(() => {
+    mounts += 1;
+    return mounts;
+  });
+  const retire = useRetireInboxPreview();
+  useFetchOpenedPreviewThreads();
+  return (
+    <>
+      <span data-testid="screen">{`mounted ${mountedAs}`}</span>
+      <button onClick={retire} type="button">
+        engine has mail
+      </button>
+      <InboxPreviewList message="Opening your mailbox…" />
+    </>
   );
+}
+
+function seeded(preview: Promise<ThreadsListResponse | null> | null) {
+  return (
+    <InboxPreviewSeed emailAccountId="acc-1" preview={preview}>
+      <Screen />
+    </InboxPreviewSeed>
+  );
+}
+
+async function renderSeeded(preview: Promise<ThreadsListResponse | null>) {
+  mounts = 0;
+  let view: ReturnType<typeof render> | undefined;
+  // Suspense resolves inside an async act.
+  await act(async () => {
+    view = render(seeded(preview));
+  });
+  await act(async () => {
+    await preview.catch(() => undefined);
+  });
+  if (!view) throw new Error("not rendered");
+  return view;
+}
+
+function previewOf(...ids: string[]) {
+  return Promise.resolve({
+    threads: ids.map((id) => thread(id)),
+    nextPageToken: null,
+  } as unknown as ThreadsListResponse);
 }
 
 function thread(id: string) {

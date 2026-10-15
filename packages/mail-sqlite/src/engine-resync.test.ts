@@ -195,10 +195,47 @@ describe("engine resync after a long time offline", () => {
   });
 });
 
+describe("opening a conversation the sync has not reached", () => {
+  it("fetches a message the store has never seen when its content is asked for", async () => {
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({ ...session, provider: "google" });
+    const engine = createMailEngine({
+      store,
+      source: expiredHistorySource({
+        enumerated: [],
+        resets: false,
+        hydrated: [gmailPatch("older", 1000)],
+      }),
+      executor: noExecutor,
+      runtime: createHostRuntime({ nowMs: () => 10_000 }),
+    });
+
+    await engine.ensureMessageContent({
+      accountId: "acc-1",
+      messageId: "older",
+    });
+    await engine.runUntil(Date.now() + 2000);
+
+    const conversation = await store.readConversation(
+      { accountId: "acc-1", conversationId: "c-older" },
+      { after: null, pageSize: 50 },
+    );
+    expect(conversation.view.messages).toMatchObject([
+      {
+        key: { accountId: "acc-1", messageId: "older" },
+        content: { status: "available", text: "body of older" },
+      },
+    ]);
+    await engine.close();
+  });
+});
+
 function expiredHistorySource(input: {
   enumerated: Array<Extract<ProviderChange, { kind: "message_patch" }>>;
   resets?: boolean;
   onHydrate?: (messageIds: string[]) => void;
+  /** Messages the provider has; any other asked for is gone. */
+  hydrated?: Array<Extract<ProviderChange, { kind: "message_patch" }>>;
   onBegin?: (initial: boolean | undefined) => void;
 }): MailboxSource {
   let reset = input.resets !== false;
@@ -273,15 +310,24 @@ function expiredHistorySource(input: {
     },
     async hydrate({ keys }) {
       input.onHydrate?.(keys.map((key) => key.messageId));
+      const found = (input.hydrated ?? []).filter((patch) =>
+        keys.some((key) => key.messageId === patch.key.messageId),
+      );
       return {
         status: "ok",
         value: {
-          changes: [],
-          bodies: [],
-          unresolved: keys.map((key) => ({
-            key,
-            reason: "not_found" as const,
+          changes: found,
+          bodies: found.map((patch) => ({
+            key: patch.key,
+            version: patch.reference.version,
+            html: null,
+            text: `body of ${patch.key.messageId}`,
           })),
+          unresolved: keys
+            .filter((key) =>
+              found.every((patch) => patch.key.messageId !== key.messageId),
+            )
+            .map((key) => ({ key, reason: "not_found" as const })),
         },
       };
     },

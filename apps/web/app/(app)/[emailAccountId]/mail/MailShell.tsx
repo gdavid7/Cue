@@ -128,7 +128,11 @@ import {
 import { isInboxStyleLandingSplit } from "@/utils/split-inbox/inbox-styles";
 import { getActionErrorMessage } from "@/utils/error";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
-import { InboxPreviewList } from "@/app/(app)/[emailAccountId]/mail/InboxPreviewList";
+import {
+  InboxPreviewList,
+  useFetchOpenedPreviewThreads,
+  useRetireInboxPreview,
+} from "@/app/(app)/[emailAccountId]/mail/InboxPreviewList";
 import { markLocalMailboxSynced } from "@/utils/mail-engine/local-mailbox-cookie";
 import { showMailView } from "@/app/(app)/[emailAccountId]/mail/show-mail-view";
 import {
@@ -655,11 +659,16 @@ export function MailShell() {
     query.type === "inbox" &&
     Object.keys(query).length === 1;
   // Once the local mailbox has this account's mail, later visits read it from
-  // there, so the server stops fetching the inbox for them.
+  // there, so the server stops fetching the inbox for them, and the rows it
+  // fetched at sign-in are put away for good.
   const hasLocalMail = !isAllAccounts && accountThreadState.threads.length > 0;
+  const retireInboxPreview = useRetireInboxPreview();
   useEffect(() => {
-    if (hasLocalMail) markLocalMailboxSynced(emailAccountId);
-  }, [hasLocalMail, emailAccountId]);
+    if (!hasLocalMail) return;
+    markLocalMailboxSynced(emailAccountId);
+    retireInboxPreview();
+  }, [hasLocalMail, emailAccountId, retireInboxPreview]);
+  useFetchOpenedPreviewThreads();
   const listPlaceholderMessage = getListPlaceholderMessage({
     isAllAccounts,
     allInboxesFirstSyncMessage,

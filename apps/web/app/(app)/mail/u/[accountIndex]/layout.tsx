@@ -48,16 +48,12 @@ export default async function MailRouteLayout({
   if (!account) redirect(buildMailPath({ accountIndex: 0 }));
 
   const { preview } = await startInboxPreview(account);
-  const screen = <MailScreen />;
   return (
     <MailScreenLayout>
-      {preview ? (
-        <InboxPreviewSeed emailAccountId={account.id} preview={preview}>
-          {screen}
-        </InboxPreviewSeed>
-      ) : (
-        screen
-      )}
+      {/* Always here, so the mail screen keeps its place in the tree. */}
+      <InboxPreviewSeed emailAccountId={account.id} preview={preview}>
+        <MailScreen />
+      </InboxPreviewSeed>
       {children}
     </MailScreenLayout>
   );
