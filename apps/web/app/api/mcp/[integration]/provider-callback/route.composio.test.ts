@@ -150,6 +150,29 @@ describe("provider callback with Composio", () => {
     ).not.toContain(victimAccountId);
   });
 
+  it("discards the attacker's link even when the victim has their own connect in progress", async () => {
+    const attackerLink = await startConnect("attacker-account");
+    await startConnect("victim-account");
+    // The victim opens the attacker's link in the browser holding their own state
+    const callbackUrl = emulator.authorizeLink(attackerLink);
+    const attackerAccountId = connectedAccountIdOf(callbackUrl);
+    mockAuth.mockResolvedValue({ user: { id: "victim" } });
+
+    const response = await GET(
+      callbackRequest(callbackUrl, stateFor("victim", "victim-account")),
+      params,
+    );
+
+    expect(response.headers.get("location")).toContain(
+      "error=connection_failed",
+    );
+    expect(
+      emulator
+        .connectedAccounts("attacker-account")
+        .map((account) => account.id),
+    ).not.toContain(attackerAccountId);
+  });
+
   it("does not adopt an active account the user did not start a link for", async () => {
     // An account already ACTIVE under the user id, e.g. one the attacker had
     // a victim authorize earlier, with no connect started in this session

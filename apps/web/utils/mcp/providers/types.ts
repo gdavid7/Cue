@@ -10,8 +10,8 @@ export type IntegrationProvider = {
     args: ProviderAppArgs & { userId: string; callbackUrl: string },
   ): Promise<string>;
   // Called when the user who started the link returns from the provider.
-  // Completes only the connection their link created (and that the callback
-  // names, when the provider names one), replacing any older account.
+  // Completes only the connection their link created, and only when the
+  // callback names that same connection; anything else fails closed.
   completeConnection(
     args: ProviderAppArgs & {
       userId: string;

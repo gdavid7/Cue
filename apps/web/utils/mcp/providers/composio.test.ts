@@ -150,6 +150,47 @@ describe("composioProvider", () => {
     expect(connected).toBe(false);
   });
 
+  it("fails closed when the callback names no connected account", async () => {
+    await createAuthConfig("app-no-id");
+    const linkAccountId = await startLink("app-no-id");
+    activate(linkAccountId);
+
+    const connected = await composioProvider.completeConnection({
+      app: "app-no-id",
+      emailAccountId: "email-account-1",
+      userId: "user-1",
+      connectedAccountId: null,
+    });
+
+    expect(connected).toBe(false);
+    expect(api.state.accounts.map((a) => a.id)).not.toContain(linkAccountId);
+  });
+
+  it("discards the account a mismatched callback names when another user's link created it", async () => {
+    await createAuthConfig("app-crossed");
+    await composioProvider.getConnectUrl({
+      app: "app-crossed",
+      emailAccountId: "email-account-2",
+      userId: "user-2",
+      callbackUrl: "http://localhost:3000/callback",
+    });
+    const othersAccountId = api.state.accounts.at(-1)!.id;
+    activate(othersAccountId);
+    const ownAccountId = await startLink("app-crossed");
+
+    const connected = await composioProvider.completeConnection({
+      app: "app-crossed",
+      emailAccountId: "email-account-1",
+      userId: "user-1",
+      connectedAccountId: othersAccountId,
+    });
+
+    expect(connected).toBe(false);
+    const remaining = api.state.accounts.map((a) => a.id);
+    expect(remaining).not.toContain(othersAccountId);
+    expect(remaining).not.toContain(ownAccountId);
+  });
+
   it("only discards connections from links it issued", async () => {
     const authConfigId = await createAuthConfig("app-discard");
     api.state.accounts.push(

@@ -79,8 +79,14 @@ export const composioProvider: IntegrationProvider = {
     const pendingId = await redis.getdel<string>(
       pendingByStarterKey({ app, emailAccountId, userId }),
     );
+    if (pendingId) await redis.del(pendingByAccountKey(pendingId));
+
+    // Composio always names the account it just authorized. One this user's
+    // link didn't create was authorized from someone else's link.
+    if (connectedAccountId && connectedAccountId !== pendingId) {
+      await discardPendingConnection(connectedAccountId);
+    }
     if (!pendingId) return false;
-    await redis.del(pendingByAccountKey(pendingId));
 
     const accounts = await listConnectedAccounts({
       app,
@@ -88,9 +94,10 @@ export const composioProvider: IntegrationProvider = {
       authScheme,
     });
     const pendingAccount = accounts.find((account) => account.id === pendingId);
-    const matchesCallback =
-      !connectedAccountId || connectedAccountId === pendingId;
-    if (!matchesCallback || pendingAccount?.status !== "ACTIVE") {
+    if (
+      connectedAccountId !== pendingId ||
+      pendingAccount?.status !== "ACTIVE"
+    ) {
       if (pendingAccount) await deleteConnectedAccounts([pendingAccount]);
       return false;
     }
@@ -102,16 +109,8 @@ export const composioProvider: IntegrationProvider = {
     return true;
   },
 
-  async discardConnection({ connectedAccountId }) {
-    const pending = await redis.getdel<PendingConnection>(
-      pendingByAccountKey(connectedAccountId),
-    );
-    // Only links we issued; an arbitrary id in a callback URL deletes nothing.
-    if (!pending) return;
-
-    await redis.del(pendingByStarterKey(pending));
-    await deleteConnectedAccounts([{ id: connectedAccountId }]);
-  },
+  discardConnection: ({ connectedAccountId }) =>
+    discardPendingConnection(connectedAccountId),
 
   async connectWithCredentials({
     app,
@@ -398,6 +397,17 @@ function newestActive<T extends { status: string; created_at: string }>(
   return accounts
     .filter((account) => account.status === "ACTIVE")
     .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+}
+
+// Only links we issued; an arbitrary id in a callback URL deletes nothing.
+async function discardPendingConnection(connectedAccountId: string) {
+  const pending = await redis.getdel<PendingConnection>(
+    pendingByAccountKey(connectedAccountId),
+  );
+  if (!pending) return;
+
+  await redis.del(pendingByStarterKey(pending));
+  await deleteConnectedAccounts([{ id: connectedAccountId }]);
 }
 
 type PendingConnection = {
