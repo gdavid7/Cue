@@ -58,6 +58,7 @@ import { LlmUseCase } from "@/utils/llms/use-cases";
 import { isIntegrationActionEnabledForUserId } from "@/utils/integration-action.server";
 import { trimStaleToolResults } from "@/utils/ai/assistant/trim-stale-tool-results";
 import { withChatToolRuntime } from "@/utils/ai/assistant/chat-tool-runtime";
+import { getLowThinkingStepOptions } from "@/utils/llms/model";
 
 export const maxDuration = 300;
 // Increment when chat prompts, tools, or routing change so run quality remains attributable.
@@ -437,16 +438,26 @@ export async function aiProcessAssistantChat({
     },
     onEnd,
     stopWhen: () => false,
-    prepareStep: ({ messages: stepMessages, stepNumber }) => {
+    prepareStep: ({ messages: stepMessages, stepNumber, model }) => {
       const trimmedMessages = trimStaleToolResults(stepMessages);
       const messages =
         trimmedMessages === stepMessages ? undefined : trimmedMessages;
 
+      // Most steps only pick the next lookup, so they think briefly; the
+      // answer forced below keeps the model's full thinking. A step can't
+      // be known to be the last one before the model runs, so an answer the
+      // model chooses to give while tools are still on also thinks briefly.
       if (
         stepNumber < ASSISTANT_CHAT_MAX_TOOL_STEPS &&
         Date.now() - startedAt < ASSISTANT_CHAT_TOOL_BUDGET_MS[responseSurface]
-      )
-        return messages && { messages };
+      ) {
+        const providerOptions =
+          typeof model === "string"
+            ? undefined
+            : getLowThinkingStepOptions(model);
+        if (!messages && !providerOptions) return;
+        return { messages, providerOptions };
+      }
 
       return {
         messages,

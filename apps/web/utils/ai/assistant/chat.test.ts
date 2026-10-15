@@ -423,17 +423,39 @@ describe("aiProcessAssistantChat turn limits", () => {
     });
     const [options] = vi.mocked(toolCallAgentStream).mock.calls[0];
     const prepareStep = options.prepareStep!;
-    return (stepNumber: number) =>
+    return (
+      stepNumber: number,
+      model = { provider: "google.generative-ai", modelId: "gemini-3.8-flash" },
+    ) =>
       prepareStep({
         stepNumber,
         steps: [],
         messages: [{ role: "user", content: "what's new?" }],
-        model: {
-          provider: "google.generative-ai",
-          modelId: "gemini-3.8-flash",
-        },
+        model,
       } as never);
   }
+
+  it("thinks briefly while it can still call tools and fully for the forced answer", async () => {
+    const step = await prepareStepFor();
+    const lowThinking = {
+      providerOptions: { google: { thinkingConfig: { thinkingLevel: "low" } } },
+    };
+
+    expect(await step(0)).toMatchObject(lowThinking);
+    expect(await step(5)).toMatchObject(lowThinking);
+    expect(await step(6)).not.toHaveProperty("providerOptions");
+  });
+
+  it("keeps a non-Gemini model's own reasoning settings", async () => {
+    const step = await prepareStepFor();
+
+    const result = await step(1, {
+      provider: "anthropic.messages",
+      modelId: "claude-sonnet-5",
+    });
+
+    expect(result?.providerOptions).toBeUndefined();
+  });
 
   it("answers without more tools after six steps", async () => {
     const step = await prepareStepFor();
