@@ -778,11 +778,7 @@ export async function createSqliteMailStore(
         for (const change of input.changes) {
           if (
             change.kind === "message_patch" &&
-            (await isStaleMessageVersion(
-              tx,
-              change.key,
-              change.reference.version,
-            ))
+            (await isStaleMessagePatch(tx, change))
           ) {
             continue;
           }
@@ -848,11 +844,7 @@ export async function createSqliteMailStore(
         for (const change of input.page.changes) {
           if (
             change.kind === "message_patch" &&
-            (await isStaleMessageVersion(
-              tx,
-              change.key,
-              change.reference.version,
-            ))
+            (await isStaleMessagePatch(tx, change))
           ) {
             continue;
           }
@@ -3270,6 +3262,23 @@ async function insertMessageContent(
   // Indexed from what is stored, so a later rebuild from the stored body
   // produces the same search row.
   await indexMessageContent(tx, body.key, stored);
+}
+
+// A read outside sync can return a message deleted since; only a strictly
+// newer copy brings it back.
+async function isStaleMessagePatch(
+  tx: SqlTransaction,
+  change: Extract<ProviderChange, { kind: "message_patch" }>,
+) {
+  const incoming = change.reference.version;
+  if (await isStaleMessageVersion(tx, change.key, incoming)) return true;
+  const current = await loadConfirmed(tx, change.key);
+  if (!current?.deleted) return false;
+  return (
+    !incoming ||
+    !current.version ||
+    compareProviderVersions(incoming, current.version) !== "newer"
+  );
 }
 
 async function isStaleMessageVersion(

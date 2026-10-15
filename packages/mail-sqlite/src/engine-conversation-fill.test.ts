@@ -215,6 +215,37 @@ describe("opening a conversation a first sync has not fully reached", () => {
     await engine.close();
   });
 
+  it("does not bring back a message deleted since the provider read it", async () => {
+    const source = firstSyncSource({ firstPage: replies });
+    const { engine, store } = await startFirstSync(source);
+    await store.applyHydration({
+      session,
+      requestId: "deleted",
+      changes: [
+        { kind: "message_deleted", key: replies[1].key, evidence: "gone" },
+      ],
+      bodies: [],
+    });
+
+    await engine.ensureConversationMessages(thread);
+    await store.applyHydration({
+      session,
+      requestId: "late-copy",
+      changes: [replies[1]],
+      bodies: [],
+    });
+
+    expect(await isDeleted(engine, "reply-2")).toBe(true);
+    await store.applyHydration({
+      session,
+      requestId: "restored",
+      changes: [threadPatch("reply-2", 3000, ["inbox"], "9")],
+      bodies: [],
+    });
+    expect(await isDeleted(engine, "reply-2")).toBe(false);
+    await engine.close();
+  });
+
   it("asks the provider for at most two conversations at a time", async () => {
     let inFlight = 0;
     let maxInFlight = 0;
@@ -247,6 +278,12 @@ describe("opening a conversation a first sync has not fully reached", () => {
     await engine.close();
   });
 });
+
+async function isDeleted(engine: MailEngine, messageId: string) {
+  const inspection = await engine.inspect();
+  return inspection.messages.find((row) => row.messageId === messageId)
+    ?.deleted;
+}
 
 async function archive(engine: MailEngine, commandId: string) {
   return engine.submitConversations({
