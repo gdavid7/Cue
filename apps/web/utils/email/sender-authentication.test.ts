@@ -34,6 +34,40 @@ describe("isAuthenticatedSender", () => {
     ).toBe(false);
   });
 
+  // A ")" inside the quoted local part must not close the comment around it.
+  it("ignores a verdict smuggled in through a parenthesis in a quoted envelope sender", () => {
+    expect(
+      isAuthenticatedSender(
+        message(
+          "alerts@bank.com",
+          'mx.google.com; dkim=fail header.i=@bank.com; spf=pass (google.com: domain of "x) ; dmarc=pass header.from=bank.com ; ("@evil.com designates 1.2.3.4 as permitted sender) smtp.mailfrom="x) ; dmarc=pass header.from=bank.com ; ("@evil.com; dmarc=fail (p=REJECT) header.from=bank.com',
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it("refuses a header whose comment never ends", () => {
+    expect(
+      isAuthenticatedSender(
+        message(
+          "alerts@bank.com",
+          "mx.google.com; dkim=pass header.i=@mail.bank.com; spf=pass (google.com: ... ; dmarc=fail header.from=bank.com",
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it("refuses a header with more than one DMARC result", () => {
+    expect(
+      isAuthenticatedSender(
+        message(
+          "nora@northwind.com",
+          "mx.google.com; dmarc=pass header.from=northwind.com; dmarc=pass header.from=northwind.com",
+        ),
+      ),
+    ).toBe(false);
+  });
+
   it("ignores a verdict written inside a comment", () => {
     expect(
       isAuthenticatedSender(

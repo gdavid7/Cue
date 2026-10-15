@@ -20,16 +20,23 @@ export function isAuthenticatedSender(message: {
   const fromDomain = extractEmailAddress(message.headers.from)
     .split("@")[1]
     ?.toLowerCase();
-  if (!header || !fromDomain) return false;
+  // Quoted strings are where a sender's own text appears (an envelope address
+  // Gmail echoes), and quoting interacts with comments in ways that have let
+  // that text read as a result. A header with any is refused, not parsed.
+  if (!header || !fromDomain || header.includes('"')) return false;
+  const stripped = withoutComments(header);
+  if (stripped === null) return false;
 
-  const [authservId, ...clauses] = withoutCommentsOrQuotes(header)
-    .split(";")
-    .map(parseClause);
+  const [authservId, ...clauses] = stripped.split(";").map(parseClause);
   if (authservId?.method !== TRUSTED_AUTHSERV_ID) return false;
 
-  const dmarc = clauses.find((clause) => clause.method === "dmarc");
-  if (dmarc) {
-    return dmarc.result === "pass" && dmarc.props["header.from"] === fromDomain;
+  const dmarc = clauses.filter((clause) => clause.method === "dmarc");
+  // Gmail records one DMARC result; more means the header isn't Gmail's alone.
+  if (dmarc.length > 1) return false;
+  if (dmarc[0]) {
+    return (
+      dmarc[0].result === "pass" && dmarc[0].props["header.from"] === fromDomain
+    );
   }
   return clauses.some((clause) => {
     if (clause.method !== "dkim" || clause.result !== "pass") return false;
@@ -40,40 +47,28 @@ export function isAuthenticatedSender(message: {
 }
 
 /**
- * The header with comments (which may nest) and quoted strings removed, so
- * text the sender chose, such as a quoted envelope address Gmail echoes, can't
- * read as a result of its own.
+ * The header with its comments (which may nest) removed, or null when they
+ * don't balance: an unclosed comment would hide the rest of the header, and
+ * a stray ")" means the header isn't shaped as Gmail writes it.
  */
-function withoutCommentsOrQuotes(header: string) {
+function withoutComments(header: string): string | null {
   let out = "";
   let depth = 0;
-  let quoted = false;
   for (let i = 0; i < header.length; i++) {
     const char = header[i];
-    if (char === "\\" && (quoted || depth > 0)) {
+    if (char === "\\" && depth > 0) {
       i++;
-      continue;
-    }
-    if (quoted) {
-      if (char === '"') quoted = false;
-      continue;
-    }
-    if (depth > 0) {
-      if (char === "(") depth++;
-      else if (char === ")") depth--;
-      continue;
-    }
-    if (char === '"') {
-      quoted = true;
-      out += '""';
     } else if (char === "(") {
-      depth = 1;
-      out += " ";
-    } else {
+      if (depth === 0) out += " ";
+      depth++;
+    } else if (char === ")") {
+      if (depth === 0) return null;
+      depth--;
+    } else if (depth === 0) {
       out += char;
     }
   }
-  return out;
+  return depth === 0 ? out : null;
 }
 
 /** `method=result ptype.property=value …`; the first clause is the server id. */
