@@ -100,9 +100,12 @@ import { getLabelsFromDb } from "@/utils/reply-tracker/label-helpers";
 
 const logger = createTestLogger();
 
-const OLD_DATE = "1700000000000"; // Nov 2023 - well past any threshold
-const RECENT_DATE = String(Date.now()); // Now - within threshold
 const MINUTE_MS = 60_000;
+// Business-day counting walks every day since the message, so a fixed date
+// years back made each thread cost more every day the suite ran. Thirty days
+// is well past every threshold here and keeps that walk short.
+const OLD_DATE = String(Date.now() - 30 * 24 * 60 * MINUTE_MS);
+const RECENT_DATE = String(Date.now()); // Now - within threshold
 
 afterEach(() => {
   vi.useRealTimers();

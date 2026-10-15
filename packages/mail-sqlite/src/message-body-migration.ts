@@ -5,7 +5,7 @@ import {
   type MessageBodyCodec,
 } from "./message-body-codec";
 
-const BATCH_ROWS = 500;
+export const BATCH_ROWS = 500;
 const MIGRATION_ID = 8;
 
 // Bodies used to be stored as TEXT, and messages with HTML also kept their

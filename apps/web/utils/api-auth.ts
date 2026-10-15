@@ -1,13 +1,11 @@
 import type { NextRequest } from "next/server";
 import prisma from "@/utils/prisma";
-import { hashApiKey } from "@/utils/api-key";
+import { API_KEY_HEADER, hashApiKey } from "@/utils/api-key";
 import { SafeError } from "@/utils/error";
 import { createEmailProvider } from "@/utils/email/provider";
 import type { EmailProvider } from "@/utils/email/types";
 import type { RequestWithLogger } from "@/utils/middleware";
 import type { ApiKeyScopeValue } from "@/utils/api-key-scopes";
-
-export const API_KEY_HEADER = "API-Key";
 
 export type AccountApiKeyPrincipal = {
   apiKeyId: string;

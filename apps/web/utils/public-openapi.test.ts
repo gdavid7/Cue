@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import staticOpenApiDocument from "../../../docs/openapi.json";
+import { createPublicOpenApiDocument } from "@/utils/public-openapi";
 
 vi.mock("@/env", () => ({
   env: {
@@ -16,14 +17,7 @@ vi.mock("@/utils/branding", () => ({
 }));
 
 describe("createPublicOpenApiDocument", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
-  it("includes unique operationIds, scopes, and typed error responses", async () => {
-    const { createPublicOpenApiDocument } = await import(
-      "@/utils/public-openapi"
-    );
+  it("includes unique operationIds, scopes, and typed error responses", () => {
     const docs = createPublicOpenApiDocument();
 
     expect(docs.openapi).toBe("3.1.0");
@@ -85,10 +79,7 @@ describe("createPublicOpenApiDocument", () => {
     expect(JSON.stringify(docs)).not.toContain('"nullable"');
   });
 
-  it("only advertises configured servers", async () => {
-    const { createPublicOpenApiDocument } = await import(
-      "@/utils/public-openapi"
-    );
+  it("only advertises configured servers", () => {
     const docs = createPublicOpenApiDocument();
 
     expect(docs.servers).toEqual([
@@ -99,10 +90,7 @@ describe("createPublicOpenApiDocument", () => {
     ]);
   });
 
-  it("keeps the checked-in document in sync", async () => {
-    const { createPublicOpenApiDocument } = await import(
-      "@/utils/public-openapi"
-    );
+  it("keeps the checked-in document in sync", () => {
     const docs = createPublicOpenApiDocument();
     const openApiPath = path.join(
       fileURLToPath(new URL(".", import.meta.url)),
