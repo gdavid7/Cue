@@ -13,6 +13,14 @@ export const FIRST_LOAD_JS_BUDGETS_KB: Record<string, number> = {
   "/settings": 1045,
 };
 
+// The mail engine, its store and SQLite run in a dedicated worker. Text that
+// survives minification marks each, so finding it in a page's first load
+// means an import pulled the worker's code onto the page.
+const WORKER_ONLY_CODE_MARKERS: Record<string, string> = {
+  installOpfsSAHPoolVfs: "sqlite-wasm",
+  "CREATE TABLE IF NOT EXISTS": "the mail store's SQL",
+};
+
 type RouteBundleStats = {
   route: string;
   firstLoadChunkPaths: string[];
@@ -33,6 +41,23 @@ export function findBudgetOverruns(
     const sizeKb = Math.round(bytes / 1024);
     return { route, budgetKb, sizeKb, over: sizeKb > budgetKb };
   });
+}
+
+export function findWorkerOnlyCode(
+  stats: RouteBundleStats[],
+  routes: string[],
+  readChunk: (chunkPath: string) => string,
+) {
+  return stats
+    .filter((entry) => routes.includes(entry.route))
+    .flatMap((entry) =>
+      entry.firstLoadChunkPaths.flatMap((chunk) => {
+        const source = readChunk(chunk);
+        return Object.entries(WORKER_ONLY_CODE_MARKERS)
+          .filter(([marker]) => source.includes(marker))
+          .map(([, code]) => ({ route: entry.route, chunk, code }));
+      }),
+    );
 }
 
 /** The per-route first-load chunks a Turbopack production build records. */
@@ -68,10 +93,25 @@ function main() {
       `${over ? "OVER" : "ok  "} ${String(sizeKb ?? "missing").padStart(5)} / ${budgetKb} KB gzip  ${route}`,
     );
   }
+  const workerCode = findWorkerOnlyCode(
+    stats,
+    Object.keys(FIRST_LOAD_JS_BUDGETS_KB),
+    (chunk) => readFileSync(path.join(appRoot, chunk), "utf8"),
+  );
+  for (const { route, chunk, code } of workerCode) {
+    console.log(`WORKER-ONLY ${code} in ${chunk}  ${route}`);
+  }
   if (results.some((result) => result.over)) {
     console.error(
       "First-load JavaScript is over budget. Lazy-load what the first screen does not need, or raise the budget deliberately.",
     );
+  }
+  if (workerCode.length) {
+    console.error(
+      "A page's first load carries the mail worker's code. Import what the page needs from a module that does not bring the store or SQLite with it.",
+    );
+  }
+  if (results.some((result) => result.over) || workerCode.length) {
     process.exit(1);
   }
 }

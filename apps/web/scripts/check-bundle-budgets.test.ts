@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   findBudgetOverruns,
+  findWorkerOnlyCode,
   readRouteBundleStats,
 } from "./check-bundle-budgets";
 
@@ -47,5 +48,25 @@ describe("readRouteBundleStats", () => {
     } finally {
       rmSync(appRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("findWorkerOnlyCode", () => {
+  it("names a first-load chunk that carries code meant for the mail worker", () => {
+    const chunks: Record<string, string> = {
+      "shared.js": "console.log('page')",
+      "mail.js": 'db.exec("CREATE TABLE IF NOT EXISTS messages (id)")',
+      "worker.js": "sqlite.installOpfsSAHPoolVfs({})",
+    };
+    const stats = [
+      { route: "/login", firstLoadChunkPaths: ["shared.js"] },
+      { route: "/mail", firstLoadChunkPaths: ["shared.js", "mail.js"] },
+    ];
+
+    expect(
+      findWorkerOnlyCode(stats, ["/login", "/mail"], (chunk) => chunks[chunk]),
+    ).toEqual([
+      { route: "/mail", chunk: "mail.js", code: "the mail store's SQL" },
+    ]);
   });
 });
