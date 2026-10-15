@@ -81,6 +81,7 @@ vi.mock("@/utils/upstash", () => ({
 describe("processHistoryForUser - 404 Handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(processHistoryItem).mockReset().mockResolvedValue(undefined);
     vi.mocked(getEmailProviderRateLimitState).mockResolvedValue(null);
   });
 
@@ -313,7 +314,7 @@ describe("processHistoryForUser - 404 Handling", () => {
     );
   });
 
-  it("advances cursor when large-gap history is truncated", async () => {
+  it("reads a large gap from the cursor and advances to the push when it is empty", async () => {
     const email = "user@test.com";
     const historyId = 5000;
     const emailAccount = {
@@ -346,10 +347,11 @@ describe("processHistoryForUser - 404 Handling", () => {
 
     expect(getHistory).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ startHistoryId: "2000" }),
+      expect.objectContaining({ startHistoryId: "1000" }),
       expect.any(Object),
     );
     expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(prisma.$executeRaw).mock.calls[0]).toContain("5000");
   });
 
   it("catches up on history skipped during a Gmail rate limit", async () => {
@@ -439,13 +441,12 @@ describe("processHistoryForUser - 404 Handling", () => {
         },
       ],
     } as any);
-    vi.mocked(processHistoryItem)
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(
-        new Error(
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      if (event.item.message?.id === "m2")
+        throw new Error(
           "User-rate limit exceeded.  Retry after 2026-01-01T00:00:00Z",
-        ),
-      );
+        );
+    });
 
     await processHistoryForUser(
       { emailAddress: email, historyId: 1200 },
@@ -510,14 +511,13 @@ describe("processHistoryForUser - 404 Handling", () => {
         },
       ],
     } as any);
-    vi.mocked(processHistoryItem)
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      if (event.item.message?.id === "m2")
         // Gaxios wraps errors thrown below it, as the gate's deferral is.
-        Object.assign(new Error("request failed"), {
+        throw Object.assign(new Error("request failed"), {
           cause: new GmailCallDeferredError(15_000, "sync"),
-        }),
-      );
+        });
+    });
 
     await processHistoryForUser(
       { emailAddress: email, historyId: 1200 },
@@ -631,7 +631,7 @@ describe("processHistoryForUser - 404 Handling", () => {
 
     expect(getHistory).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ startHistoryId: "90071992547409931000" }),
+      expect.objectContaining({ startHistoryId: "90071992547409930000" }),
       expect.any(Object),
     );
   });
@@ -779,3 +779,199 @@ describe("processHistoryForUser - authentication failures", () => {
     expect(cleanupInvalidTokens).not.toHaveBeenCalled();
   });
 });
+
+describe("processHistoryForUser - backlogs", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getEmailProviderRateLimitState).mockResolvedValue(null);
+    vi.mocked(processHistoryItem).mockReset().mockResolvedValue(undefined);
+    vi.mocked(getWebhookEmailAccount).mockResolvedValue(backlogAccount as any);
+    vi.mocked(validateWebhookAccount).mockResolvedValue({
+      success: true,
+      data: {
+        emailAccount: {
+          ...backlogAccount,
+          account: {
+            access_token: "token",
+            refresh_token: "refresh",
+            expires_at: new Date(Date.now() + 3_600_000),
+          },
+          rules: [],
+        },
+        hasAutomationRules: true,
+        hasAiAccess: true,
+      },
+    } as any);
+  });
+
+  it("reads every history record after a silent period instead of skipping the oldest", async () => {
+    vi.mocked(getHistory).mockResolvedValue({
+      history: inboxHistory(["1100", "m1"], ["4900", "m2"]),
+    } as any);
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 5000 },
+      {},
+      logger,
+    );
+
+    expect(getHistory).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ startHistoryId: "1000" }),
+      expect.any(Object),
+    );
+    expect(processedMessageIds()).toEqual(expect.arrayContaining(["m1", "m2"]));
+    expect(lastCursorUpdate()).toBe("4900");
+    expect(publishToQstashAt).not.toHaveBeenCalled();
+  });
+
+  it("processes new inbox mail newest first, a few messages at a time", async () => {
+    vi.mocked(getHistory).mockResolvedValue({
+      history: inboxHistory(
+        ["1100", "m1"],
+        ["1200", "m2"],
+        ["1300", "m3"],
+        ["1400", "m4"],
+        ["1500", "m5"],
+      ),
+    } as any);
+    let inFlight = 0;
+    let maxInFlight = 0;
+    vi.mocked(processHistoryItem).mockImplementation(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1500 },
+      {},
+      logger,
+    );
+
+    expect(processedMessageIds()).toEqual(["m5", "m4", "m3", "m2", "m1"]);
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(maxInFlight).toBeLessThanOrEqual(4);
+    expect(lastCursorUpdate()).toBe("1500");
+  });
+
+  it("never moves the cursor past an older message that is still unprocessed", async () => {
+    vi.mocked(getHistory).mockResolvedValue({
+      history: inboxHistory(["1100", "m1"], ["1200", "m2"], ["1300", "m3"]),
+    } as any);
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      if (event.item.message?.id === "m2")
+        throw new Error(
+          "User-rate limit exceeded.  Retry after 2026-01-01T00:00:00Z",
+        );
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1300 },
+      {},
+      logger,
+    );
+
+    expect(cursorUpdates()).toEqual(["1100"]);
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/api/google/webhook/catch-up" }),
+    );
+  });
+
+  it("continues a backlog in a scheduled catch-up once the run's time budget is spent", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.mocked(getHistory).mockResolvedValue({
+      history: inboxHistory(["1100", "m1"], ["1200", "m2"], ["1300", "m3"]),
+    } as any);
+    vi.mocked(processHistoryItem).mockImplementation(async () => {
+      vi.setSystemTime(Date.now() + 10 * 60_000);
+    });
+
+    try {
+      await processHistoryForUser(
+        { emailAddress: backlogAccount.email, historyId: 1300 },
+        {},
+        logger,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // Only the newest message fit; the older ones wait for the catch-up.
+    expect(processedMessageIds()).toEqual(["m3"]);
+    expect(cursorUpdates()).toEqual([]);
+    expect(markGmailHistoryCatchUp).toHaveBeenCalledWith(
+      "account-123",
+      expect.anything(),
+    );
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/google/webhook/catch-up",
+        body: { emailAccountId: "account-123", historyId: "1300" },
+      }),
+    );
+    expect(clearGmailHistoryCatchUp).not.toHaveBeenCalled();
+  });
+
+  it("continues in a scheduled catch-up when the history is longer than one run reads", async () => {
+    let page = 0;
+    vi.mocked(getHistory).mockImplementation(async () => {
+      page += 1;
+      return {
+        history: inboxHistory([String(1000 + page), `m${page}`]),
+        nextPageToken: `page-${page + 1}`,
+      } as any;
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 900_000 },
+      {},
+      logger,
+    );
+
+    expect(page).toBeGreaterThan(1);
+    expect(page).toBeLessThan(100);
+    expect(lastCursorUpdate()).toBe(String(1000 + page));
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/api/google/webhook/catch-up" }),
+    );
+  });
+});
+
+const backlogAccount = {
+  id: "account-123",
+  email: "user@test.com",
+  lastSyncedHistoryId: "1000",
+};
+
+function inboxHistory(...entries: [historyId: string, messageId: string][]) {
+  return entries.map(([id, messageId]) => ({
+    id,
+    messagesAdded: [
+      {
+        message: {
+          id: messageId,
+          threadId: `t-${messageId}`,
+          labelIds: ["INBOX"],
+        },
+      },
+    ],
+  }));
+}
+
+function processedMessageIds() {
+  return vi
+    .mocked(processHistoryItem)
+    .mock.calls.map(([event]) => event.item.message?.id);
+}
+
+function cursorUpdates() {
+  return vi
+    .mocked(prisma.$executeRaw)
+    .mock.calls.map((call) => call[1] as unknown as string);
+}
+
+function lastCursorUpdate() {
+  return cursorUpdates().at(-1);
+}
