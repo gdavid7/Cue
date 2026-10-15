@@ -168,6 +168,11 @@ export const PromptInputSubmit = ({
 
   return (
     <Button
+      aria-label={
+        status === "submitted" || status === "streaming"
+          ? "Stop generating"
+          : "Send message"
+      }
       className={cn(
         variant === "default" &&
           size === "icon" &&
