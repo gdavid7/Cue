@@ -10,7 +10,8 @@ import {
 } from "@/utils/ai/rule/create-rule-schema";
 import { isDuplicateError } from "@/utils/prisma-helpers";
 import {
-  changedRuleActionsNeedChatConfirmation,
+  isOutboundRuleAction,
+  outboundActionsNeedChatConfirmation,
   partialUpdateRule,
   setRuleEnabled,
   updateRuleActions,
@@ -246,7 +247,7 @@ export const updateRuleTool = ({
         }
 
         const { needsConfirmation, riskMessages } =
-          changedRuleActionsNeedChatConfirmation(
+          outboundActionsNeedChatConfirmation(
             buildRiskCheckInput({
               rule,
               effectiveUpdates,
@@ -440,6 +441,7 @@ function buildRiskCheckInput({
 }: {
   rule: {
     conditionalOperator: LogicalOperator | null;
+    enabled: boolean;
     from: string | null;
     instructions: string | null;
     subject: string | null;
@@ -454,15 +456,27 @@ function buildRiskCheckInput({
       JSON.stringify(normalizeActionForComparison(action)),
     ),
   );
-  const changedActions = (effectiveUpdates.actions ?? []).filter(
+  const resultingActions: RuleAction[] =
+    effectiveUpdates.actions ??
+    originalActions.map((action) => ({
+      ...action,
+      type: action.type as RuleAction["type"],
+    }));
+  // Turning a rule back on, or changing which mail it matches, changes where
+  // its existing outbound actions send mail, so those count as changed too.
+  const reachChanges =
+    !!effectiveUpdates.condition ||
+    (effectiveUpdates.enabled === true && !rule.enabled);
+  const changedActions = resultingActions.filter(
     (action) =>
+      (reachChanges && isOutboundRuleAction(action.type)) ||
       !originalActionKeys.has(
         JSON.stringify(normalizeActionForComparison(action)),
       ),
   );
 
   return {
-    changedActions: changedActions.map((action) => ({
+    actions: changedActions.map((action) => ({
       type: action.type,
       fields: buildProviderRuleActionFields({
         provider,

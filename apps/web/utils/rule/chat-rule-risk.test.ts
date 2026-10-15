@@ -44,7 +44,7 @@ describe("actionsNeedChatRiskConfirmation", () => {
     expect(result.riskMessages.length).toBeGreaterThan(0);
   });
 
-  it("returns needsConfirmation false for static reply body and implicit recipient", () => {
+  it("returns needsConfirmation true even for a static reply body and implicit recipient", () => {
     const result = actionsNeedChatRiskConfirmation({
       name: "x",
       condition: {
@@ -63,7 +63,7 @@ describe("actionsNeedChatRiskConfirmation", () => {
         },
       ],
     });
-    expect(result.needsConfirmation).toBe(false);
+    expect(result.needsConfirmation).toBe(true);
   });
 
   it("returns needsConfirmation true for webhook actions", () => {

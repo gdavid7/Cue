@@ -11,14 +11,12 @@ import { deleteRuleTool } from "./tools/rules/delete-rule-tool";
 
 const {
   mockCreateRule,
-  mockActionsNeedChatRiskConfirmation,
   mockPartialUpdateRule,
   mockPrisma,
   mockSetRuleEnabled,
   mockUpdateRuleActions,
 } = vi.hoisted(() => ({
   mockCreateRule: vi.fn(),
-  mockActionsNeedChatRiskConfirmation: vi.fn(),
   mockPartialUpdateRule: vi.fn(),
   mockSetRuleEnabled: vi.fn(),
   mockUpdateRuleActions: vi.fn(),
@@ -43,7 +41,6 @@ vi.mock("@/utils/rule/rule", async (importOriginal) => {
   return {
     ...actual,
     createRule: mockCreateRule,
-    actionsNeedChatRiskConfirmation: mockActionsNeedChatRiskConfirmation,
     partialUpdateRule: mockPartialUpdateRule,
     setRuleEnabled: mockSetRuleEnabled,
     updateRuleActions: mockUpdateRuleActions,
@@ -63,10 +60,6 @@ const defaultActions = [
 describe("createRuleTool overlap guard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockActionsNeedChatRiskConfirmation.mockReturnValue({
-      needsConfirmation: false,
-      riskMessages: [],
-    });
     mockCreateRule.mockResolvedValue({ id: "new-rule-id" });
     mockAssistantRuleSnapshot([
       {
@@ -133,10 +126,6 @@ describe("createRuleTool overlap guard", () => {
   });
 
   it("waits for confirmation instead of creating a risky rule", async () => {
-    mockActionsNeedChatRiskConfirmation.mockReturnValue({
-      needsConfirmation: true,
-      riskMessages: ["Review the generated recipients and content"],
-    });
     const result = await createRuleTool({
       email: "user@example.com",
       emailAccountId: "email-account-id",
@@ -161,6 +150,38 @@ describe("createRuleTool overlap guard", () => {
       requiresConfirmation: true,
       confirmationState: "pending",
     });
+    expect(mockCreateRule).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [ActionType.FORWARD, { to: "audit@attacker.example" }],
+    [ActionType.SEND_EMAIL, { to: "a@attacker.example", content: "hi" }],
+    [ActionType.REPLY, { content: "Thanks, we received your message." }],
+    [ActionType.CALL_WEBHOOK, { webhookUrl: "https://hooks.example/c" }],
+  ])("waits for confirmation before creating a rule with a fixed %s action", async (type, fields) => {
+    const result = await createRuleTool({
+      email: "user@example.com",
+      emailAccountId: "email-account-id",
+      provider: "google",
+      logger,
+    }).execute({
+      name: "Newsletter routing",
+      condition: {
+        aiInstructions: "Newsletters",
+        static: null,
+        conditionalOperator: null,
+      },
+      actions: [{ type, fields, delayInMinutes: null }],
+    });
+
+    expect(result).toMatchObject({
+      actionType: "create_rule",
+      requiresConfirmation: true,
+      confirmationState: "pending",
+    });
+    expect(
+      (result as { riskMessages?: string[] }).riskMessages?.length,
+    ).toBeGreaterThan(0);
     expect(mockCreateRule).not.toHaveBeenCalled();
   });
 
@@ -600,6 +621,69 @@ describe("updateRuleTool", () => {
     expect(mockUpdateRuleActions).toHaveBeenCalledTimes(1);
   });
 
+  it("returns a pending confirmation for re-enabling a disabled forwarding rule", async () => {
+    const rule = vendorBillingRuleWithForward();
+    mockPrisma.rule.findUnique.mockResolvedValue({ ...rule, enabled: false });
+
+    const result = await vendorBillingUpdateTool().execute({
+      ruleName: "Vendor Billing",
+      updates: { enabled: true },
+    });
+
+    expect(result).toMatchObject({
+      requiresConfirmation: true,
+      confirmationState: "pending",
+      updatedEnabled: true,
+    });
+    expect(mockSetRuleEnabled).not.toHaveBeenCalled();
+  });
+
+  it("returns a pending confirmation for changing the conditions of a forwarding rule", async () => {
+    mockPrisma.rule.findUnique.mockResolvedValue(
+      vendorBillingRuleWithForward(),
+    );
+
+    const result = await vendorBillingUpdateTool().execute({
+      ruleName: "Vendor Billing",
+      updates: { condition: { static: { from: null } } },
+    });
+
+    expect(result).toMatchObject({
+      requiresConfirmation: true,
+      confirmationState: "pending",
+    });
+    expect(mockPartialUpdateRule).not.toHaveBeenCalled();
+  });
+
+  it("disables a forwarding rule without asking", async () => {
+    mockPrisma.rule.findUnique.mockResolvedValue(
+      vendorBillingRuleWithForward(),
+    );
+
+    const result = await vendorBillingUpdateTool().execute({
+      ruleName: "Vendor Billing",
+      updates: { enabled: false },
+    });
+
+    expect(result).not.toHaveProperty("requiresConfirmation");
+    expect(mockSetRuleEnabled).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-enables a rule without outbound actions directly", async () => {
+    mockPrisma.rule.findUnique.mockResolvedValue({
+      ...vendorBillingRuleWithActions(),
+      enabled: false,
+    });
+
+    const result = await vendorBillingUpdateTool().execute({
+      ruleName: "Vendor Billing",
+      updates: { enabled: true },
+    });
+
+    expect(result).not.toHaveProperty("requiresConfirmation");
+    expect(mockSetRuleEnabled).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks updates after deletion is pending for the same rule", async () => {
     const result = await updateRuleTool({
       email: "user@example.com",
@@ -917,6 +1001,28 @@ function vendorBillingRuleWithActions() {
         content: null,
         label: null,
         to: null,
+        cc: null,
+        bcc: null,
+        subject: null,
+        url: null,
+        folderName: null,
+        delayInMinutes: null,
+      },
+    ],
+  };
+}
+
+function vendorBillingRuleWithForward() {
+  const rule = vendorBillingRuleWithActions();
+  return {
+    ...rule,
+    actions: [
+      ...rule.actions,
+      {
+        type: ActionType.FORWARD,
+        content: null,
+        label: null,
+        to: "accountant@example.com",
         cc: null,
         bcc: null,
         subject: null,

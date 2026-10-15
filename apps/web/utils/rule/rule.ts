@@ -79,36 +79,29 @@ function addNestedActionOwnershipToInput<T extends Record<string, unknown>>(
 export function actionsNeedChatRiskConfirmation(
   result: CreateOrUpdateRuleSchema,
 ): { needsConfirmation: boolean; riskMessages: string[] } {
-  const riskMessages = getChatRiskMessages(
-    result.actions,
-    ruleConditionsForRisk(result),
-  );
-  return {
-    needsConfirmation: riskMessages.length > 0,
-    riskMessages,
-  };
+  return outboundActionsNeedChatConfirmation({
+    actions: result.actions,
+    conditions: ruleConditionsForRisk(result),
+  });
 }
 
-// A static recipient scores "low" in the risk model, but an existing rule
-// changed from chat could have been steered by an email the assistant read,
-// so any new outbound action still needs the user's confirmation.
-export function changedRuleActionsNeedChatConfirmation({
-  changedActions,
+// A static recipient scores "low" in the risk model, but a rule written from
+// chat could have been steered by an email the assistant read, so any action
+// that sends email or calls a webhook needs the user's confirmation.
+export function outboundActionsNeedChatConfirmation({
+  actions,
   conditions,
 }: {
-  changedActions: CreateOrUpdateRuleSchema["actions"];
+  actions: CreateOrUpdateRuleSchema["actions"];
   conditions: RuleConditions;
 }): { needsConfirmation: boolean; riskMessages: string[] } {
-  const riskMessages = getChatRiskMessages(changedActions, conditions);
-  const sendsEmail = changedActions.some(
-    (action) =>
-      action.type === ActionType.FORWARD ||
-      action.type === ActionType.SEND_EMAIL ||
-      action.type === ActionType.REPLY,
+  const riskMessages = getChatRiskMessages(actions, conditions);
+  const sendsEmail = actions.some((action) =>
+    isOutboundEmailAction(action.type),
   );
   if (sendsEmail && riskMessages.length === 0) {
     riskMessages.push(
-      "This change makes the rule send or forward email automatically. Check every recipient, and only confirm if you asked for this change.",
+      "This rule sends or forwards email automatically. Check every recipient, and only confirm if you asked for this.",
     );
   }
 
@@ -116,6 +109,18 @@ export function changedRuleActionsNeedChatConfirmation({
     needsConfirmation: riskMessages.length > 0,
     riskMessages,
   };
+}
+
+export function isOutboundRuleAction(type: ActionType) {
+  return isOutboundEmailAction(type) || type === ActionType.CALL_WEBHOOK;
+}
+
+function isOutboundEmailAction(type: ActionType) {
+  return (
+    type === ActionType.FORWARD ||
+    type === ActionType.SEND_EMAIL ||
+    type === ActionType.REPLY
+  );
 }
 
 function getChatRiskMessages(
