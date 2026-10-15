@@ -166,7 +166,7 @@ describe("actionsNeedChatRiskConfirmation", () => {
     });
 
     expect(result.riskMessages).toEqual([
-      expect.stringContaining("sends or forwards email"),
+      expect.stringContaining("sent or forwarded automatically"),
       expect.stringContaining("Webhook actions can send email data"),
     ]);
   });
