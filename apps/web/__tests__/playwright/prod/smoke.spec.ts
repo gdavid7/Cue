@@ -1,12 +1,21 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { cueDemoChat } from "@/__tests__/fixtures/inboxes/cue-demo-inbox";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
+import { OUTLOOK_STEP_PREFIX } from "@/scripts/qa/health-report";
 import {
   pruneReplyProbes,
   QA_PROBE_SUBJECT_PREFIX,
   readQaMailboxCredentials,
+  readQaOutlookEmail,
+  sendOutlookProbe,
   sendSelfMessage,
+  waitForMessageFrom,
 } from "@/scripts/qa/qa-mailbox";
+import {
+  findMailAccount,
+  replyToGmailQa,
+  trashOpenThread,
+} from "./outlook-probe";
 import {
   assertOnlySelfRecipients,
   guardRecipients,
@@ -23,6 +32,7 @@ import { RobotRun } from "./robot-run";
 // report turns the results into one machine-readable summary.
 
 const credentials = readQaMailboxCredentials();
+const outlookEmail = credentials ? readQaOutlookEmail(credentials.email) : null;
 const baseUrl = process.env.CUE_QA_BASE_URL || "https://cue-inbox.vercel.app";
 const run = new RobotRun(
   baseUrl,
@@ -41,6 +51,11 @@ if (!credentials) {
   );
 }
 test.skip(!credentials, "QA account secrets are not configured");
+if (credentials && !outlookEmail) {
+  console.log(
+    "NOT CONFIGURED: CUE_QA_OUTLOOK_EMAIL is not set; skipping the Outlook steps.",
+  );
+}
 
 test.afterEach(async ({ page }) => {
   if (run.status !== "sign_in_failed") await revokeSession(page);
@@ -230,60 +245,133 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
 
   await step(
     "Today shows its sections",
-    async (metrics) => {
-      const started = Date.now();
-      await page.goto(`/${qaAccount().id}/home`);
-      const lane = page.getByRole("heading", {
-        level: 2,
-        name: /Needs reply|Waiting on|Next up|All clear|Also in your inbox|Drafts ready for you|Cue is working on/,
-      });
-      // Today often shows both, such as a notice above "Also in your inbox".
-      await expect(
-        lane.or(page.getByRole("main").getByRole("status")).first(),
-        "Today shows a lane or a status line",
-      ).toBeVisible({ timeout: 60_000 });
-      metrics.todayLoadMs = Date.now() - started;
-      metrics.todaySections = await lane.count();
-      await expect(page.getByText("Something went wrong")).toHaveCount(0);
-    },
+    (metrics) => checkToday(page, qaAccount().id, metrics),
     "gmail",
   );
 
   await step(
     "chat answers about seeded mail",
     async (metrics) => {
-      await page.goto(`/${qaAccount().id}/assistant`);
-      const input = page.getByTestId("chat-input");
-      await expect(input).toBeVisible({ timeout: 60_000 });
-      const answers = page.locator(".is-assistant");
-      // With an empty input the submit button is enabled only while an
-      // answer is being generated (it doubles as Stop).
-      const submit = page
-        .locator("form")
-        .filter({ has: input })
-        .locator('button[type="submit"]');
-      const before = await answers.count();
-      const started = Date.now();
-      await input.fill(cueDemoChat.question);
-      await input.press("Enter");
-      const failure = page.getByText("We couldn't send your message");
-      await expect(
-        answers.nth(before).or(failure).first(),
-        "the answer starts",
-      ).toBeVisible({ timeout: 60_000 });
-      await expect(submit, "the answer finishes").toBeDisabled({
-        timeout: 180_000,
-      });
-      await expect(failure, "the chat request succeeds").toHaveCount(0);
-      const answer = (await answers.nth(before).innerText()).trim();
-      expect(answer.length, "the answer has text").toBeGreaterThan(0);
-      metrics.chatAnswerMs = Date.now() - started;
-      metrics.chatAnswerChars = answer.length;
+      const answer = await askChat(
+        page,
+        qaAccount().id,
+        cueDemoChat.question,
+        metrics,
+      );
       // Informational only: whether the answer used the seeded due date.
       metrics.chatMentionsDueDay = /friday/i.test(answer);
     },
     "gmail",
   );
+
+  if (outlookEmail) {
+    let outlook: { id: string; index: number } | null = null;
+    const outlookAccount = () => {
+      if (!outlook) throw new Error("No Outlook QA mailbox; see its step");
+      return outlook;
+    };
+    const outlookStep = (
+      name: string,
+      body: (metrics: Record<string, number | boolean>) => Promise<void>,
+    ) =>
+      run.step(
+        `${OUTLOOK_STEP_PREFIX}${name}`,
+        { page, testInfo, requires: "outlook" },
+        body,
+      );
+
+    await outlookStep("mailbox is connected", async () => {
+      const found = await findMailAccount(page, outlookEmail);
+      if (!found || found.disconnected) {
+        const problem = found
+          ? "Cue marked the Outlook QA mailbox as disconnected."
+          : "the Outlook QA mailbox is not linked to the QA user in Cue.";
+        run.outlookUnavailable(problem);
+        throw new Error(`Outlook: ${problem}`);
+      }
+      outlook = found;
+    });
+
+    await outlookStep("inbox shows mail", async (metrics) => {
+      const started = Date.now();
+      await page.goto(`/mail/u/${outlookAccount().index}/inbox`, {
+        waitUntil: "commit",
+      });
+      const conversations = page.getByRole("listbox", {
+        name: "Conversations",
+      });
+      await expect(
+        conversations.getByRole("option").first(),
+        "an Outlook inbox row appears",
+      ).toBeVisible({ timeout: 90_000 });
+      metrics.timeToFirstRowMs = Date.now() - started;
+      await expect(
+        page.getByText(/Reconnect (this|your) account/i),
+        "the Outlook mailbox does not ask to reconnect",
+      ).toHaveCount(0);
+    });
+
+    await outlookStep(
+      "probe arrives and the reply reaches Gmail",
+      async (metrics) => {
+        const subject = `${QA_PROBE_SUBJECT_PREFIX} outlook ${runId}`;
+        const token = `Cue QA Outlook reply ${runId}`;
+        await sendOutlookProbe(credentials, outlookEmail, {
+          subject,
+          text: "Automated Cue QA probe. Safe to ignore.",
+        });
+        const sentAt = Date.now();
+        const inboxPath = `/mail/u/${outlookAccount().index}/inbox`;
+        await page.goto(inboxPath);
+        const probe = page
+          .getByRole("listbox", { name: "Conversations" })
+          .getByRole("option")
+          .filter({ hasText: subject })
+          .first();
+        await expect(async () => {
+          if (!(await probe.isVisible())) await page.reload();
+          await expect(probe).toBeVisible({ timeout: 20_000 });
+        }, "the probe email reaches the Outlook inbox").toPass({
+          timeout: PROBE_ARRIVAL_TIMEOUT_MS,
+        });
+        metrics.inboundSyncMs = Date.now() - sentAt;
+
+        await probe.click();
+        const clickedAt = new Date();
+        await replyToGmailQa(page, {
+          gmail: credentials.email,
+          outlook: outlookEmail,
+          token,
+        });
+        const received = await waitForMessageFrom(credentials, {
+          from: outlookEmail,
+          subject,
+          token,
+          since: clickedAt,
+          timeoutMs: SENT_TIMEOUT_MS,
+        });
+        expect(received, "the reply reaches the Gmail QA inbox").not.toBeNull();
+        metrics.replyDeliveredMs = Math.max(
+          0,
+          (received?.getTime() ?? 0) - clickedAt.getTime(),
+        );
+        await trashOpenThread(page, outlookAccount().id).catch(() => undefined);
+      },
+    );
+
+    await outlookStep("Today shows its sections", (metrics) =>
+      checkToday(page, outlookAccount().id, metrics),
+    );
+
+    await outlookStep("chat answers", async (metrics) => {
+      await askChat(
+        page,
+        outlookAccount().id,
+        "What is the most recent email in my inbox about?",
+        metrics,
+      );
+    });
+  }
 
   await step("Settings opens", async () => {
     await page.goto("/settings");
@@ -332,3 +420,61 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
   const failed = run.failedSteps.map((s) => s.name);
   expect(failed, "every robot step passed").toEqual([]);
 });
+
+async function checkToday(
+  page: Page,
+  accountId: string,
+  metrics: Record<string, number | boolean>,
+) {
+  const started = Date.now();
+  await page.goto(`/${accountId}/home`);
+  const lane = page.getByRole("heading", {
+    level: 2,
+    name: /Needs reply|Waiting on|Next up|All clear|Also in your inbox|Drafts ready for you|Cue is working on/,
+  });
+  // Today often shows both, such as a notice above "Also in your inbox".
+  await expect(
+    lane.or(page.getByRole("main").getByRole("status")).first(),
+    "Today shows a lane or a status line",
+  ).toBeVisible({ timeout: 60_000 });
+  metrics.todayLoadMs = Date.now() - started;
+  metrics.todaySections = await lane.count();
+  await expect(page.getByText("Something went wrong")).toHaveCount(0);
+}
+
+/** Asks the account's assistant one question and returns its answer. */
+async function askChat(
+  page: Page,
+  accountId: string,
+  question: string,
+  metrics: Record<string, number | boolean>,
+) {
+  await page.goto(`/${accountId}/assistant`);
+  const input = page.getByTestId("chat-input");
+  await expect(input).toBeVisible({ timeout: 60_000 });
+  const answers = page.locator(".is-assistant");
+  // With an empty input the submit button is enabled only while an
+  // answer is being generated (it doubles as Stop).
+  const submit = page
+    .locator("form")
+    .filter({ has: input })
+    .locator('button[type="submit"]');
+  const before = await answers.count();
+  const started = Date.now();
+  await input.fill(question);
+  await input.press("Enter");
+  const failure = page.getByText("We couldn't send your message");
+  await expect(
+    answers.nth(before).or(failure).first(),
+    "the answer starts",
+  ).toBeVisible({ timeout: 60_000 });
+  await expect(submit, "the answer finishes").toBeDisabled({
+    timeout: 180_000,
+  });
+  await expect(failure, "the chat request succeeds").toHaveCount(0);
+  const answer = (await answers.nth(before).innerText()).trim();
+  expect(answer.length, "the answer has text").toBeGreaterThan(0);
+  metrics.chatAnswerMs = Date.now() - started;
+  metrics.chatAnswerChars = answer.length;
+  return answer;
+}

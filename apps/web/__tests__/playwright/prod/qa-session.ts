@@ -90,8 +90,15 @@ export async function signInWithEmailCode(
   metrics.signInMs = Date.now() - submittedAt;
 }
 
-/** Fails before Send if the reply is addressed to anyone but the QA account. */
-export async function assertOnlySelfRecipients(page: Page, self: string) {
+/**
+ * Fails before Send if the reply is addressed to anyone but the QA account
+ * (or, for an Outlook probe's reply, the Gmail QA account it came from).
+ */
+export async function assertOnlySelfRecipients(
+  page: Page,
+  allowed: string | readonly string[],
+) {
+  const own = new Set([allowed].flat());
   const labels = await page
     .getByRole("button", { name: /^Remove .+@/ })
     .evaluateAll((buttons) =>
@@ -104,7 +111,7 @@ export async function assertOnlySelfRecipients(page: Page, self: string) {
         .trim()
         .toLowerCase(),
     )
-    .filter((address) => address !== self);
+    .filter((address) => !own.has(address));
   expect(others.length, "the reply is addressed only to the QA account").toBe(
     0,
   );
@@ -112,10 +119,14 @@ export async function assertOnlySelfRecipients(page: Page, self: string) {
 
 /**
  * While a reply is in flight, aborts any app write whose body names an
- * address other than the QA account or the reserved seed domains, so a UI
+ * address other than the QA accounts or the reserved seed domains, so a UI
  * regression can never send mail to a real person.
  */
-export async function guardRecipients(page: Page, self: string) {
+export async function guardRecipients(
+  page: Page,
+  allowed: string | readonly string[],
+) {
+  const own = new Set([allowed].flat());
   const origin = new URL(page.url()).origin;
   const matches = (url: URL) =>
     url.origin === origin && url.pathname.startsWith("/api/");
@@ -130,7 +141,7 @@ export async function guardRecipients(page: Page, self: string) {
         : [];
     const foreign = addresses.some(
       (address) =>
-        address !== self &&
+        !own.has(address) &&
         !address.endsWith("@example.com") &&
         !address.endsWith("@cue-qa.invalid"),
     );

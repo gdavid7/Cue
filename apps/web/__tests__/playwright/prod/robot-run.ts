@@ -12,18 +12,20 @@ import { sanitizeBrowserDiagnosticText } from "@/utils/playwright/browser-diagno
 
 const MAX_DIAGNOSTICS_PER_STEP = 20;
 
-type StepRequirement = "session" | "gmail";
+type StepRequirement = "session" | "gmail" | "outlook";
 
 /**
  * Records each robot step's outcome, timing, console errors and HTTP errors.
  * Steps keep going after a failure so one broken page does not hide the rest,
- * except that nothing runs without a session and Gmail-backed steps skip when
- * the QA account's Gmail connection has lapsed.
+ * except that nothing runs without a session, Gmail-backed steps skip when
+ * the QA account's Gmail connection has lapsed, and Outlook steps skip once
+ * the Outlook QA mailbox turned out to be missing from Cue.
  */
 export class RobotRun {
   readonly steps: RobotStep[] = [];
   status: RobotResults["status"] = "passed";
   note: string | undefined;
+  private outlookBlocked: string | null = null;
   private current: RobotStep | null = null;
   private readonly startedAt = new Date();
   private attached = false;
@@ -126,6 +128,11 @@ export class RobotRun {
     this.note = note;
   }
 
+  /** Later Outlook steps skip, saying why; the failed step reports it. */
+  outlookUnavailable(reason: string) {
+    this.outlookBlocked = reason;
+  }
+
   needsReconnect(note: string) {
     this.status = "needs_reconnect";
     this.note = note;
@@ -153,6 +160,8 @@ export class RobotRun {
       return "Skipped: the robot has no session.";
     if (requires === "gmail" && this.status === "needs_reconnect")
       return "Skipped: the QA account's Gmail connection needs reconnecting.";
+    if (requires === "outlook" && this.outlookBlocked)
+      return `Skipped: ${this.outlookBlocked}`;
     return null;
   }
 }

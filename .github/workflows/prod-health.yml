@@ -37,6 +37,9 @@ jobs:
       CUE_QA_BASE_URL: https://cue-inbox.vercel.app
       CUE_QA_EMAIL: ${{ secrets.CUE_QA_EMAIL }}
       CUE_QA_IMAP_APP_PASSWORD: ${{ secrets.CUE_QA_IMAP_APP_PASSWORD }}
+      # Optional: the Outlook QA mailbox linked to the QA user; unset skips
+      # the robot's Outlook steps.
+      CUE_QA_OUTLOOK_EMAIL: ${{ secrets.CUE_QA_OUTLOOK_EMAIL }}
       CUE_QA_RESULTS_FILE: ${{ github.workspace }}/apps/web/.tmp/qa-robot/results.json
       CUE_QA_OUTPUT_DIR: ${{ github.workspace }}/apps/web/.tmp/qa-robot/output
       CUE_QA_REPORT_DIR: ${{ github.workspace }}/apps/web/.tmp/qa-robot/report
@@ -75,6 +78,7 @@ jobs:
           else
             echo "robot=false" >> "$GITHUB_OUTPUT"
           fi
+          check "Outlook steps" CUE_QA_OUTLOOK_EMAIL || true
           check "Axiom" AXIOM_QUERY_TOKEN AXIOM_DATASET || true
           check "Sentry" SENTRY_AUTH_TOKEN SENTRY_ORGANIZATION SENTRY_PROJECT || true
 

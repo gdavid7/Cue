@@ -13,6 +13,25 @@ export const QA_PROBE_SUBJECT_PREFIX = "Cue QA reply probe";
 
 export type QaMailboxCredentials = { email: string; appPassword: string };
 
+/**
+ * The Outlook QA mailbox linked to the QA user in Cue, or null when the robots
+ * have no Outlook steps. Probes go only from the Gmail QA account to this
+ * address and back, so anything but one address of its own is refused.
+ */
+export function readQaOutlookEmail(gmailEmail: string): string | null {
+  const email = process.env.CUE_QA_OUTLOOK_EMAIL?.trim().toLowerCase();
+  if (!email) return null;
+  if (!/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(email)) {
+    throw new Error("CUE_QA_OUTLOOK_EMAIL must be one email address");
+  }
+  if (email === gmailEmail.trim().toLowerCase()) {
+    throw new Error(
+      "CUE_QA_OUTLOOK_EMAIL must be the Outlook QA mailbox, not the Gmail one",
+    );
+  }
+  return email;
+}
+
 export function readQaMailboxCredentials(): QaMailboxCredentials | null {
   const email = process.env.CUE_QA_EMAIL?.trim().toLowerCase();
   // Google shows app passwords in groups of four; the spaces are cosmetic.
@@ -81,25 +100,80 @@ export async function sendSelfMessage(
   credentials: QaMailboxCredentials,
   message: { subject: string; text: string; messageId?: string },
 ) {
-  const transport = createTransport({
-    host: SMTP_HOST,
-    port: 465,
-    secure: true,
-    auth: { user: credentials.email, pass: credentials.appPassword },
-  });
-  try {
-    await transport.sendMail({
-      from: credentials.email,
-      // Only ever the robot's own address: nothing it sends can reach a person.
-      to: credentials.email,
-      subject: message.subject,
-      text: message.text,
-      ...(message.messageId ? { messageId: message.messageId } : {}),
-      headers: { [QA_SEED_HEADER]: "probe" },
-    });
-  } finally {
-    transport.close();
+  // Only ever the robot's own address: nothing it sends can reach a person.
+  await sendQaMail(credentials, credentials.email, message);
+}
+
+/** Sends a probe from the Gmail QA account to the Outlook QA mailbox. */
+export async function sendOutlookProbe(
+  credentials: QaMailboxCredentials,
+  outlookEmail: string,
+  message: { subject: string; text: string; messageId?: string },
+) {
+  // Re-read rather than trusted, so only the configured address is reachable.
+  if (readQaOutlookEmail(credentials.email) !== outlookEmail) {
+    throw new Error("Refusing to send a probe to an unconfigured address");
   }
+  await sendQaMail(credentials, outlookEmail, message);
+}
+
+/**
+ * Polls the Gmail QA inbox for mail from `from` whose subject contains
+ * `subject` and whose text contains `token`, delivered after `since`.
+ * Resolves with when Gmail received it, or null at the timeout.
+ */
+export async function waitForMessageFrom(
+  credentials: QaMailboxCredentials,
+  {
+    from,
+    subject,
+    token,
+    since,
+    timeoutMs,
+  }: {
+    from: string;
+    subject: string;
+    token: string;
+    since: Date;
+    timeoutMs: number;
+  },
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const receivedAt = await withImap(credentials, async (client) => {
+      const lock = await client.getMailboxLock("INBOX");
+      try {
+        const uids = await client.search(
+          { from, subject, since: new Date(since.getTime() - 86_400_000) },
+          { uid: true },
+        );
+        for (const uid of [...(uids || [])].reverse()) {
+          const message =
+            (await client.fetchOne(
+              String(uid),
+              { internalDate: true, bodyStructure: true },
+              { uid: true },
+            )) || null;
+          if (!message?.bodyStructure) continue;
+          const received = new Date(message.internalDate ?? 0);
+          if (received.getTime() < since.getTime() - 30_000) continue;
+          const part = findTextPart(message.bodyStructure);
+          if (!part) continue;
+          const { content } = await client.download(String(uid), part, {
+            uid: true,
+          });
+          if (content && (await streamToString(content)).includes(token))
+            return received;
+        }
+        return null;
+      } finally {
+        lock.release();
+      }
+    });
+    if (receivedAt) return receivedAt;
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
+  return null;
 }
 
 /** Moves reply probes older than `olderThanDays` to Trash so the inbox stays small. */
@@ -196,6 +270,31 @@ export async function trashMessagesWithSubject(
       lock.release();
     }
   });
+}
+
+async function sendQaMail(
+  credentials: QaMailboxCredentials,
+  to: string,
+  message: { subject: string; text: string; messageId?: string },
+) {
+  const transport = createTransport({
+    host: SMTP_HOST,
+    port: 465,
+    secure: true,
+    auth: { user: credentials.email, pass: credentials.appPassword },
+  });
+  try {
+    await transport.sendMail({
+      from: credentials.email,
+      to,
+      subject: message.subject,
+      text: message.text,
+      ...(message.messageId ? { messageId: message.messageId } : {}),
+      headers: { [QA_SEED_HEADER]: "probe" },
+    });
+  } finally {
+    transport.close();
+  }
 }
 
 async function takeSignInCode(client: ImapFlow, path: string, since: Date) {
