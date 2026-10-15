@@ -8,7 +8,7 @@ import { THEME_OPTIONS } from "@/components/theme-options";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { buildMailCommandPalette } from "@/app/(app)/[emailAccountId]/mail/mail-command-palette";
 import { buildSnoozeCommandPalette } from "@/app/(app)/[emailAccountId]/mail/snooze-command-palette";
-import type { SnoozeDateParser } from "@/app/(app)/[emailAccountId]/mail/snooze-date-parse";
+import { useSnoozeDateParser } from "@/hooks/useSnoozeDateParser";
 import { ShortcutsDialog } from "@/app/(app)/[emailAccountId]/mail/ShortcutsDialog";
 import {
   CommandDialog,
@@ -133,7 +133,11 @@ function CommandPaletteContent({
     activePage === "snooze" && !mailCommandContext?.actions.snooze
       ? "root"
       : activePage;
-  const parseSnoozeDate = useSnoozeDateParser(page === "snooze");
+  // Loading starts as the palette opens, so the parser is usually ready by
+  // the time someone types a snooze time.
+  const parseSnoozeDate = useSnoozeDateParser(
+    open && Boolean(mailCommandContext?.actions.snooze),
+  );
   const { setTheme } = useTheme();
 
   const { emailAccountId } = useAccount();
@@ -468,24 +472,6 @@ function CommandPaletteContent({
       </CommandList>
     </CommandDialog>
   );
-}
-
-/** Loads the natural-language date parser the first time snooze opens. */
-function useSnoozeDateParser(needed: boolean) {
-  const [parser, setParser] = React.useState<SnoozeDateParser | null>(null);
-  React.useEffect(() => {
-    if (!needed || parser) return;
-    let cancelled = false;
-    import("@/app/(app)/[emailAccountId]/mail/snooze-date-parse")
-      .then(({ parseSnoozeDate }) => {
-        if (!cancelled) setParser(() => parseSnoozeDate);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [needed, parser]);
-  return parser;
 }
 
 function groupCommands(commands: Command[]) {
