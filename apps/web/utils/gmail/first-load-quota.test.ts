@@ -293,10 +293,7 @@ describe("Gmail quota on a first load", () => {
       at(45_000, () => openThread("t20")),
     ]);
 
-    for (let elapsed = 0; elapsed < END_MS + 60_000; elapsed += 100) {
-      await vi.advanceTimersByTimeAsync(100);
-    }
-    await actors;
+    await advanceUntilSettled(actors, END_MS + 60_000);
 
     expect(gmail.limitedCalls()).toEqual([]);
     expect(rateLimitModes).toEqual([]);
@@ -372,6 +369,43 @@ describe("Gmail quota on a first load", () => {
     expect(
       gmail.unitsByCaller(start, start + 60_000)["mail/v1/enumeration"],
     ).toBeGreaterThan(2000);
+  }, 60_000);
+
+  // The inbox's first page is one interactive request for 25 messages:
+  // about 505 units, two and a half seconds of the per-second cap.
+  it("serves a first inbox page within the per-second cap's time while a first sync runs", async () => {
+    const { gmail, provider, route, engineScope, sleep, rateLimitModes } =
+      await startReplay(STEADY_MS, { unitsPerSecond: GMAIL_UNITS_PER_SECOND });
+    let firstPage: { ok: boolean; ms: number; count: number } | null = null;
+    const actors = Promise.all([
+      engineScope("a", "primary"),
+      engineScope("a", "history"),
+      // Five seconds in, the sync has filled the second with its share.
+      sleep(5000).then(async () => {
+        const askedAt = Date.now();
+        const result = await route("threads", () =>
+          runWithGmailQuota({ priority: "interactive" }, () =>
+            provider.getMessagesWithPagination({ maxResults: 25 }),
+          ),
+        );
+        firstPage = {
+          ok: result.ok,
+          ms: Date.now() - askedAt,
+          count: result.ok ? result.value.messages.length : 0,
+        };
+      }),
+    ]);
+
+    for (let elapsed = 0; elapsed < STEADY_MS + 60_000; elapsed += 100) {
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    await actors;
+
+    expect(gmail.limitedCalls()).toEqual([]);
+    expect(rateLimitModes).toEqual([]);
+    expect(gmail.peakSecondUnits()).toBeLessThanOrEqual(GMAIL_UNITS_PER_SECOND);
+    expect(firstPage).toMatchObject({ ok: true, count: 25 });
+    expect(firstPage?.ms).toBeLessThanOrEqual(2600);
   }, 60_000);
 
   it("keeps the backfill moving while someone opens threads at nearly the bucket's refill rate", async () => {
@@ -606,4 +640,26 @@ async function startReplay(
     sleep,
     rateLimitModes,
   };
+}
+
+/**
+ * Advances the fake clock through the replay, then on until every actor has
+ * finished: a call made near the end can still be waiting its turn.
+ */
+async function advanceUntilSettled(
+  actors: Promise<unknown>,
+  throughMs: number,
+) {
+  let settled = false;
+  const done = actors.finally(() => {
+    settled = true;
+  });
+  for (
+    let elapsed = 0;
+    elapsed < throughMs || (!settled && elapsed < throughMs + 120_000);
+    elapsed += 100
+  ) {
+    await vi.advanceTimersByTimeAsync(100);
+  }
+  await done;
 }

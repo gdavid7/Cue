@@ -11,7 +11,12 @@ export type GmailQuotaStore = {
    * (a request larger than the bucket only needs the bucket above `floor`),
    * the units admitted in the last `pace.windowMs` stay within `pace.cap`
    * (a request larger than the cap needs an empty window) and no `blockers`
-   * key exists. Records the busiest window in the usage hash's
+   * key exists. During a demand episode on `pace.demand.key` the cap is
+   * `pace.demand.yieldCap` instead, when given (0 holds the caller until the
+   * episode ends). An admission with `pace.demand.markMs` starts an episode
+   * of that length unless one started within `pace.demand.everyMs`, so
+   * back-to-back episodes always leave the others a gap. Records the
+   * busiest window in the usage hash's
    * `peak:second` field. Returns `waitMs` 0 when admitted,
    * otherwise the milliseconds to wait before asking again. A blocker with
    * `deferMs` is lifted explicitly, usually long before it expires, so a
@@ -27,7 +32,17 @@ export type GmailQuotaStore = {
     capacity: number;
     perMinute: number;
     floor: number;
-    pace: { key: string; cap: number; windowMs: number };
+    pace: {
+      key: string;
+      cap: number;
+      windowMs: number;
+      demand: {
+        key: string;
+        yieldCap?: number;
+        markMs?: number;
+        everyMs?: number;
+      };
+    };
   }): Promise<{ waitMs: number; defer: boolean }>;
   /** Sets `key` for `ms` unless it is already set for longer. */
   block(input: { key: string; ms: number }): Promise<void>;
@@ -56,11 +71,14 @@ local rate = tonumber(ARGV[3]) / 60000
 local floor = tonumber(ARGV[4])
 local paceCap = tonumber(ARGV[6])
 local paceWindow = tonumber(ARGV[7])
+local yieldCap = tonumber(ARGV[8])
+local demandMs = tonumber(ARGV[9])
+local demandEvery = tonumber(ARGV[10])
 local wait = 0
 local defer = 0
-for i = 5, #KEYS do
+for i = 6, #KEYS do
   local ttl = redis.call('PTTL', KEYS[i])
-  local deferMs = tonumber(ARGV[i + 3])
+  local deferMs = tonumber(ARGV[i + 5])
   if ttl > 0 and deferMs and deferMs > 0 then
     ttl = deferMs
     defer = 1
@@ -81,17 +99,33 @@ local inWindow = 0
 for j = 1, #recent, 2 do
   inWindow = inWindow + tonumber(string.match(recent[j], ':(%d+)$'))
 end
-local excess = inWindow + math.min(cost, paceCap) - paceCap
-if excess > 0 then
+-- How long until the window has room for this request under cap; -1 never.
+local function windowWait(cap)
+  if cap <= 0 then return -1 end
+  local excess = inWindow + math.min(cost, cap) - cap
+  if excess <= 0 then return 0 end
   local freed = 0
   for j = 1, #recent, 2 do
     freed = freed + tonumber(string.match(recent[j], ':(%d+)$'))
     if freed >= excess then
-      wait = math.max(wait, tonumber(recent[j + 1]) + paceWindow - now + 1)
-      break
+      return tonumber(recent[j + 1]) + paceWindow - now + 1
     end
   end
+  return paceWindow
 end
+local paceWait = windowWait(paceCap)
+local demandEnds = tonumber(redis.call('GET', KEYS[5])) or 0
+local demandTtl = demandEnds - now
+if yieldCap >= 0 and demandTtl > 0 then
+  local afterDemand = math.max(demandTtl, paceWait)
+  local yieldWait = windowWait(yieldCap)
+  if yieldWait < 0 or yieldWait > afterDemand then
+    paceWait = afterDemand
+  else
+    paceWait = yieldWait
+  end
+end
+wait = math.max(wait, paceWait)
 if wait > 0 then return {wait, defer} end
 redis.call('HSET', KEYS[1], 'tokens', tostring(tokens - cost), 'at', tostring(now))
 redis.call('PEXPIRE', KEYS[1], 300000)
@@ -99,6 +133,9 @@ local seq = redis.call('INCR', KEYS[4])
 redis.call('PEXPIRE', KEYS[4], 300000)
 redis.call('ZADD', KEYS[3], now, seq .. ':' .. cost)
 redis.call('PEXPIRE', KEYS[3], paceWindow * 2)
+if demandMs > 0 then
+  redis.call('SET', KEYS[5], tostring(now + demandMs), 'PX', demandEvery, 'NX')
+end
 redis.call('HINCRBY', KEYS[2], ARGV[5], cost)
 local peak = tonumber(redis.call('HGET', KEYS[2], 'peak:second')) or 0
 if inWindow + cost > peak then
@@ -143,6 +180,7 @@ export const gmailQuotaStore: GmailQuotaStore = {
         input.usageKey,
         input.pace.key,
         `${input.pace.key}:seq`,
+        input.pace.demand.key,
         ...input.blockers.map((blocker) => blocker.key),
       ],
       [
@@ -153,6 +191,9 @@ export const gmailQuotaStore: GmailQuotaStore = {
         input.usageField,
         String(input.pace.cap),
         String(input.pace.windowMs),
+        String(input.pace.demand.yieldCap ?? -1),
+        String(input.pace.demand.markMs ?? 0),
+        String(input.pace.demand.everyMs ?? input.pace.demand.markMs ?? 0),
         ...input.blockers.map((blocker) => String(blocker.deferMs ?? 0)),
       ],
     );

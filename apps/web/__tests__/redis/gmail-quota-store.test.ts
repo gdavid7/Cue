@@ -47,6 +47,7 @@ const keys = {
   usage: "gmail-quota:test:usage:1",
   pause: "gmail-quota:test:background-pause",
   pace: "gmail-quota:test:pace",
+  demand: "gmail-quota:test:interactive-demand",
 };
 const take = (input: {
   cost: number;
@@ -54,6 +55,12 @@ const take = (input: {
   blockers?: { key: string; deferMs?: number }[];
   usageField?: string;
   paceCap?: number;
+  demand?: {
+    key: string;
+    yieldCap?: number;
+    markMs?: number;
+    everyMs?: number;
+  };
 }) => admit(input).then(({ waitMs }) => waitMs);
 const admit = (input: {
   cost: number;
@@ -61,6 +68,12 @@ const admit = (input: {
   blockers?: { key: string; deferMs?: number }[];
   usageField?: string;
   paceCap?: number;
+  demand?: {
+    key: string;
+    yieldCap?: number;
+    markMs?: number;
+    everyMs?: number;
+  };
 }) =>
   gmailQuotaStore.take({
     bucketKey: keys.bucket,
@@ -72,7 +85,12 @@ const admit = (input: {
     perMinute: 3600,
     floor: input.floor,
     // Out of the way unless a case is about the per-second pace.
-    pace: { key: keys.pace, cap: input.paceCap ?? 100_000, windowMs: 1000 },
+    pace: {
+      key: keys.pace,
+      cap: input.paceCap ?? 100_000,
+      windowMs: 1000,
+      demand: input.demand ?? { key: keys.demand },
+    },
   });
 
 let server: ChildProcess | null = null;
@@ -199,6 +217,40 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       // A higher cap still has room in the same second.
       expect(await take({ cost: 60, floor: -200, paceCap: 200 })).toBe(0);
       expect(Number(await redis!.hget(keys.usage, "peak:second"))).toBe(180);
+    });
+
+    it("holds others to their yield cap while a person's demand lasts", async () => {
+      const person = { key: keys.demand, markMs: 2000, everyMs: 3000 };
+      const sync = { key: keys.demand, yieldCap: 40 };
+      const background = { key: keys.demand, yieldCap: 0 };
+      expect(
+        await take({ cost: 20, floor: -200, paceCap: 200, demand: person }),
+      ).toBe(0);
+      expect(await redis!.pttl(keys.demand)).toBeGreaterThan(2900);
+      // Sync fits 20 more units this second, not the 100 its cap would allow.
+      expect(
+        await take({ cost: 20, floor: 200, paceCap: 120, demand: sync }),
+      ).toBe(0);
+      const held = await take({
+        cost: 40,
+        floor: 200,
+        paceCap: 120,
+        demand: sync,
+      });
+      expect(held).toBeGreaterThan(0);
+      expect(held).toBeLessThanOrEqual(1001);
+      // Background waits until the demand ends.
+      const waiting = await take({
+        cost: 20,
+        floor: 500,
+        paceCap: 80,
+        demand: background,
+      });
+      expect(waiting).toBeGreaterThan(1900);
+      await redis!.del(keys.demand);
+      expect(
+        await take({ cost: 20, floor: 500, paceCap: 80, demand: background }),
+      ).toBe(0);
     });
 
     it("hands a minute's usage to exactly one caller", async () => {

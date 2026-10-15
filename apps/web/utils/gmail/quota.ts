@@ -35,6 +35,14 @@ const PACE_CAP: Record<GmailQuotaPriority, number> = {
   sync: 120,
   background: 80,
 };
+// For two seconds after a person's call, sync drops to 40 units a second
+// and background waits, so a first inbox page of 25 messages (about 505
+// units) takes the two and a half seconds the cap allows, not longer. A new
+// episode starts at most every three seconds, so someone clicking all the
+// time still leaves sync and background one second in three.
+const INTERACTIVE_DEMAND_MS = 2000;
+const INTERACTIVE_DEMAND_EVERY_MS = 3000;
+const PACE_YIELD_CAP = { sync: 40, background: 0 };
 const MAX_WAIT_MS: Record<GmailQuotaPriority, number> = {
   interactive: 10_000,
   sync: 15_000,
@@ -407,6 +415,17 @@ export async function admitGmailCall({
             key: keys.pace,
             cap: PACE_CAP[priority],
             windowMs: PACE_WINDOW_MS,
+            demand:
+              priority === "interactive"
+                ? {
+                    key: keys.interactiveDemand,
+                    markMs: INTERACTIVE_DEMAND_MS,
+                    everyMs: INTERACTIVE_DEMAND_EVERY_MS,
+                  }
+                : {
+                    key: keys.interactiveDemand,
+                    yieldCap: PACE_YIELD_CAP[priority],
+                  },
           },
         }),
       );
@@ -794,6 +813,7 @@ function accountKeys(emailAccountId: string) {
   return {
     bucket: `${prefix}:bucket`,
     pace: `${prefix}:pace`,
+    interactiveDemand: `${prefix}:interactive-demand`,
     syncPause: `${prefix}:sync-pause`,
     initialSync: `${prefix}:initial-sync`,
     backgroundPause: `${prefix}:background-pause`,
