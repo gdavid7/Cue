@@ -31,9 +31,26 @@ export const MAIL_ENGINE_SAH_POOL_RETRY = {
   forceReinitIfPreviouslyFailed: true,
 };
 
+type Sqlite = Awaited<ReturnType<typeof initSqlite>>;
+
+let sqliteLoad: Promise<Sqlite> | undefined;
+
+/**
+ * Starts compiling sqlite-wasm before the engine needs it, as the worker does
+ * when it loads. Every database shares the one load; a failed load is tried
+ * again by the next caller.
+ */
+export function preloadSqlite(): Promise<Sqlite> {
+  sqliteLoad ??= initSqlite().catch((error: unknown) => {
+    sqliteLoad = undefined;
+    throw error;
+  });
+  return sqliteLoad;
+}
+
 /** An in-memory mailbox database, for hosts that cannot persist one. */
 export async function createWasmMemoryDriver(): Promise<SqliteDriver> {
-  return createMemoryDriver(await initSqlite());
+  return createMemoryDriver(await preloadSqlite());
 }
 
 /**
@@ -47,7 +64,7 @@ export async function createWasmMailStore(input: {
   onRebuild?: () => void;
   onDropped?: (drop: DroppedMailWork) => void;
 }): Promise<MailStore> {
-  const sqlite = await initSqlite();
+  const sqlite = await preloadSqlite();
   if (!canPersist(input.persist)) {
     return createSqliteMailStore(createMemoryDriver(sqlite), input.options);
   }
@@ -124,7 +141,7 @@ function canPersist(persist: boolean | undefined) {
   );
 }
 
-function createMemoryDriver(sqlite: Awaited<ReturnType<typeof initSqlite>>) {
+function createMemoryDriver(sqlite: Sqlite) {
   const database = new sqlite.oo1.DB(":memory:");
   return createDatabaseDriver(database, async () => {
     database.close();

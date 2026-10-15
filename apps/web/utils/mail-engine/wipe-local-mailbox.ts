@@ -22,7 +22,7 @@ export async function wipeLocalMailbox() {
 }
 
 export async function finishPendingLocalMailboxWipe() {
-  if (isWipePending()) await removeLocalMail(Promise.resolve());
+  if (isLocalMailboxWipePending()) await removeLocalMail(Promise.resolve());
 }
 
 async function removeLocalMail(engineClosed: Promise<void>) {
@@ -49,7 +49,8 @@ async function wipeMailboxStore() {
   return wipeOpfsMailEngine();
 }
 
-function isWipePending() {
+/** A sign-out wipe that has not finished yet; it must finish before any mailbox opens. */
+export function isLocalMailboxWipePending() {
   try {
     return window.localStorage.getItem(WIPE_PENDING_KEY) === "1";
   } catch {
