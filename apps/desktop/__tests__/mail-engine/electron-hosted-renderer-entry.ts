@@ -2324,9 +2324,9 @@ async function waitForReconnectBanner(window: BrowserWindow) {
   const deadline = Date.now() + HOSTED_IDLE_PROOF_TIMEOUT_MS;
   for (;;) {
     const visible = (await window.webContents.executeJavaScript(`
-      [...document.querySelectorAll("h2")].some(
+      [...document.querySelectorAll("h1, h2, h3, h4, [role=heading]")].some(
         (heading) =>
-          heading.textContent === "Reconnect this account to continue syncing.",
+          heading.textContent?.trim() === "Sign in again to reconnect Gmail",
       )
     `)) as boolean;
     if (visible) return;
@@ -2395,7 +2395,7 @@ async function clickReconnect(window: BrowserWindow) {
   const clicked = (await window.webContents.executeJavaScript(`
     (() => {
       const button = [...document.querySelectorAll("button")].find(
-        (item) => item.textContent?.trim() === "Reconnect",
+        (item) => item.textContent?.trim() === "Sign in again",
       );
       if (!(button instanceof HTMLElement)) return false;
       button.click();
