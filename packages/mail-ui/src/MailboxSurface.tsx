@@ -111,6 +111,13 @@ export function MailboxThreadList<T>({
     const row = focusedRowRef.current;
     if (!row) return;
     scrollElementIntoContainer(scrollRoot, row);
+    // Screen readers and Enter follow DOM focus, so it moves with the
+    // highlight, but only from inside the list: J/K must not pull focus out
+    // of the search box or the reader.
+    const active = row.ownerDocument.activeElement;
+    if (active !== row && scrollRoot.contains(active)) {
+      row.focus({ preventScroll: true });
+    }
   }, [focusedIndex, focusedKey, scrollRoot]);
 
   useEffect(() => {
