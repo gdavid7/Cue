@@ -41,9 +41,9 @@ const PACE_CAP: Record<GmailQuotaPriority, number> = {
 // inbox page or an assistant search, sync drops to 40 units a second and
 // background waits, so a first page of 25 messages (about 505 units) takes the
 // two and a half seconds the cap allows. It starts on arrival, not admission:
-// otherwise sync refills each second before a waiting batch fits. Opening a thread is a few small reads and
-// starts no episode: the sync that fills that thread's older messages keeps
-// its share. A new episode starts at most every three seconds, so someone
+// otherwise sync refills each second before a waiting batch fits. Opening a
+// thread is a few small reads and starts no episode: the sync that fills that
+// thread's older messages keeps its share. A new episode starts at most every three seconds, so someone
 // working all the time still leaves sync and background one second in three.
 const INTERACTIVE_DEMAND_MIN_UNITS = 100;
 const INTERACTIVE_DEMAND_MS = 2000;

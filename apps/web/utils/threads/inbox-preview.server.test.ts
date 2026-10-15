@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 describe("loadInboxPreview", () => {
-  it("reads the newest inbox messages, about 205 Gmail units, at interactive priority", async () => {
+  it("reads the newest inbox messages as headers, at interactive priority, waiting up to four seconds", async () => {
     passPlansThrough();
     mocks.getMessagesWithPagination.mockResolvedValue({ messages: [] });
 
@@ -56,6 +56,7 @@ describe("loadInboxPreview", () => {
       expect.objectContaining({
         caller: "mail/inbox-preview",
         priority: "interactive",
+        maxTotalWaitMs: 4000,
       }),
     ]);
   });
