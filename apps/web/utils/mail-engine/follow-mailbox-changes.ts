@@ -67,11 +67,14 @@ export function followMailboxChanges({
       close();
       return;
     }
-    syncShown();
     open();
+    // A reconnecting stream catches up on `ready`.
+    if (!source) syncShown();
   };
   const onFocus = () => {
-    if (document.visibilityState !== "hidden") syncShown();
+    if (document.visibilityState === "hidden") return;
+    if (source && !connected) return;
+    syncShown();
   };
   const poll = setInterval(() => {
     if (!connected && document.visibilityState !== "hidden") onChange();

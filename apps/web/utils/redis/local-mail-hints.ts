@@ -11,9 +11,9 @@ export async function refreshLocalMailInterest(emailAccountId: string) {
 }
 
 // Not coalesced here: a dropped hint leaves a second email unseen until the
-// client's idle catch-up. Gmail already caps a watched mailbox at one push a
-// second, and the client's engine folds hints that arrive during a sync into
-// one more read.
+// client's idle catch-up. Each provider push costs one publish, and the
+// client's engine folds hints that arrive during a sync into one more read, so
+// a burst of pushes still costs the mailbox a single catch-up.
 export async function publishLocalMailHint(
   emailAccountId: string,
   logger: Logger,

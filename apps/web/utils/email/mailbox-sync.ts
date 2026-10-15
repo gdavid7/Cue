@@ -8,9 +8,10 @@ const gmailCursorSchema = z.object({
   historyId: z.string().regex(/^\d+$/),
   after: z.string().datetime(),
   pageToken: z.string().min(1).optional(),
-  // Changed messages a delta catch-up found but has not fetched yet, newest
-  // first; the history scan resumes from historyId once they are fetched.
-  pending: z.array(z.string().min(1).max(64)).max(1000).optional(),
+  // The history a delta catch-up has already fetched the newest changes of,
+  // while its replay from historyId is still behind it. Readers that ignore it
+  // just replay.
+  previewedThrough: z.string().regex(/^\d+$/).optional(),
 });
 
 const microsoftCursorSchema = z.object({

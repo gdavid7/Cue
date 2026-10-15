@@ -1459,6 +1459,8 @@ export function createMailEngine(input: {
         (await resumesBootstrap(idleGate, session, stream.streamId, catchUpDue))
       ) {
         if (idleGate.lowPriorityStreams.has(stream.streamId)) {
+          // A purge or close during the scan read must not restart the backfill.
+          if (signal.aborted) return;
           startBackfill({ session, idleGate, stream });
           continue;
         }

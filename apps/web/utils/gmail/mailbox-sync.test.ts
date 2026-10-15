@@ -258,82 +258,63 @@ describe("getGmailMailboxSyncPage", () => {
     expect(gmail.users.getProfile).toHaveBeenCalled();
   });
 
-  it("catches up a long history backlog newest first, fetching each message once", async () => {
-    const ids = Array.from({ length: 30 }, (_, index) => `m${index + 1}`);
-    const touched = (id: string) => ({
-      messages: [{ id, threadId: `t-${id}` }],
-      labelsAdded: [{ message: { id, threadId: `t-${id}` } }],
-    });
-    vi.mocked(getHistory).mockImplementation(async (_gmail, options) => {
-      if (options.startHistoryId === "300") return { historyId: "300" };
-      return options.pageToken === "history-2"
-        ? {
-            // m1 changed again after everything else, so it is the newest.
-            history: [...ids.slice(20).map(touched), touched("m1")],
-            historyId: "300",
-          }
-        : {
-            history: ids.slice(0, 20).map(touched),
-            historyId: "250",
-            nextPageToken: "history-2",
-          };
-    });
-    vi.mocked(getMessagesBatch).mockImplementation(async ({ messageIds }) =>
-      messageIds.map((id) => ({
-        ...getMockMessage({ id, labelIds: ["INBOX"] }),
-        internalDate: new Date("2026-07-02T00:00:00.000Z").getTime().toString(),
-      })),
+  it("shows the newest mail of a large backlog first and still applies every change", async () => {
+    // 300 records naming 5 messages each: 1500 changed messages.
+    const gmail = fakeGmailHistory(300, 5);
+
+    const pages = await readUntilCaughtUp(gmail.read, startCursor());
+
+    expect(ids(pages[0])).toEqual(
+      expect.arrayContaining(gmail.messagesOf(gmail.records.length - 1)),
     );
-    const read = (cursor: string) =>
-      getGmailMailboxSyncPage({
-        gmail: {} as never,
-        accessToken: "access-token",
-        logger,
-        cursor,
-        limit: 50,
-      });
-
-    const first = await read(
-      encodeMailboxSyncCursor({
-        version: 1,
-        provider: "google",
-        phase: "delta",
-        historyId: "100",
-        after: "2026-07-01T00:00:00.000Z",
-      }),
-    );
-
-    expect(first.upsertedMessages.map((message) => message.id)).toEqual([
-      "m1",
-      "m30",
-      "m29",
-      "m28",
-      "m27",
-      "m26",
-      "m25",
-      "m24",
-      "m23",
-      "m22",
-    ]);
-    expect(first.hasMore).toBe(true);
-
-    const fetched = [...first.upsertedMessages.map((message) => message.id)];
-    let page = first;
-    while (page.hasMore) {
-      page = await read(page.cursor);
-      fetched.push(...page.upsertedMessages.map((message) => message.id));
+    expect(pages[0].hasMore).toBe(true);
+    for (const page of pages) {
+      expect(page.cursor.length).toBeLessThanOrEqual(16_384);
     }
+    expect(new Set(pages.flatMap(ids))).toEqual(new Set(gmail.allMessages()));
+    expect(pages.at(-1)?.hasMore).toBe(false);
+  });
 
-    expect(getHistory).toHaveBeenCalledTimes(2);
-    expect(fetched).toHaveLength(30);
-    expect(new Set(fetched)).toEqual(new Set(ids));
-    const caughtUp = await read(page.cursor);
-    expect(getHistory).toHaveBeenLastCalledWith(
-      {},
-      expect.objectContaining({ startHistoryId: "300" }),
-      logger,
-    );
-    expect(caughtUp.upsertedMessages).toEqual([]);
+  it("previews the newest mail of a backlog too long to scan", async () => {
+    const gmail = fakeGmailHistory(6000, 1);
+    const listed = gmail.messagesOf(gmail.records.length - 1);
+    const client = {
+      users: {
+        getProfile: vi.fn().mockResolvedValue({ data: { historyId: "9000" } }),
+        messages: {
+          list: vi.fn().mockResolvedValue({
+            data: { messages: listed.map((id) => ({ id })) },
+          }),
+        },
+      },
+    };
+
+    const first = await gmail.read(startCursor(), client);
+
+    expect(ids(first)).toEqual(listed);
+    expect(first.hasMore).toBe(true);
+    expect(first.cursor.length).toBeLessThanOrEqual(16_384);
+  });
+
+  it("shows mail that arrives during a replay before the rest of the replay", async () => {
+    const gmail = fakeGmailHistory(300, 5);
+    const first = await gmail.read(startCursor());
+
+    gmail.addRecord(["fresh"]);
+    const second = await gmail.read(first.cursor);
+
+    expect(ids(second)).toContain("fresh");
+    expect(second.cursor.length).toBeLessThanOrEqual(16_384);
+  });
+
+  it("catches up a short backlog in one history read", async () => {
+    const gmail = fakeGmailHistory(3, 2);
+
+    const page = await gmail.read(startCursor());
+
+    expect(new Set(ids(page))).toEqual(new Set(gmail.allMessages()));
+    expect(page.hasMore).toBe(false);
+    expect(getHistory).toHaveBeenCalledTimes(1);
   });
 
   it("writes current labels for an archived message instead of deleting it", async () => {
@@ -415,3 +396,84 @@ describe("getGmailMailboxChangeIds", () => {
     expect(result.changedThreadIds).toEqual(new Set(["alert-thread"]));
   });
 });
+
+const RECENT = new Date("2026-07-02T00:00:00.000Z").getTime().toString();
+
+// Gmail history whose records each name `perRecord` messages, paged by
+// `maxResults` from `startHistoryId` like the real API.
+function fakeGmailHistory(recordCount: number, perRecord: number) {
+  const records: { id: number; messages: string[] }[] = [];
+  let nextMessage = 0;
+  const addRecord = (messages?: string[]) => {
+    records.push({
+      id: 101 + records.length,
+      messages:
+        messages ??
+        Array.from({ length: perRecord }, () =>
+          (nextMessage++).toString(16).padStart(16, "0"),
+        ),
+    });
+  };
+  for (let index = 0; index < recordCount; index++) addRecord();
+  vi.mocked(getHistory).mockImplementation(async (_gmail, options) => {
+    const eligible = records.filter(
+      (record) => record.id > Number(options.startHistoryId),
+    );
+    const offset = Number(options.pageToken ?? 0);
+    const slice = eligible.slice(offset, offset + (options.maxResults ?? 100));
+    const end = offset + slice.length;
+    return {
+      history: slice.map((record) => ({
+        id: String(record.id),
+        messages: record.messages.map((id) => ({ id, threadId: `t-${id}` })),
+      })),
+      historyId: String(records.at(-1)?.id ?? 100),
+      nextPageToken: end < eligible.length ? String(end) : undefined,
+    };
+  });
+  vi.mocked(getMessagesBatch).mockImplementation(async ({ messageIds }) =>
+    messageIds.map((id) => ({
+      ...getMockMessage({ id, labelIds: ["INBOX"] }),
+      internalDate: RECENT,
+    })),
+  );
+  return {
+    records,
+    addRecord: (messages: string[]) => addRecord(messages),
+    messagesOf: (index: number) => records[index]?.messages ?? [],
+    allMessages: () => records.flatMap((record) => record.messages),
+    read: (cursor: string, gmail: unknown = {}) =>
+      getGmailMailboxSyncPage({
+        gmail: gmail as never,
+        accessToken: "access-token",
+        logger,
+        cursor,
+        limit: 50,
+      }),
+  };
+}
+
+async function readUntilCaughtUp(
+  read: (cursor: string) => ReturnType<typeof getGmailMailboxSyncPage>,
+  cursor: string,
+) {
+  const pages = [await read(cursor)];
+  while (pages.at(-1)?.hasMore && pages.length < 1000) {
+    pages.push(await read(pages.at(-1)?.cursor ?? cursor));
+  }
+  return pages;
+}
+
+function startCursor() {
+  return encodeMailboxSyncCursor({
+    version: 1,
+    provider: "google",
+    phase: "delta",
+    historyId: "100",
+    after: "2026-07-01T00:00:00.000Z",
+  });
+}
+
+function ids(page: { upsertedMessages: { id: string }[] }) {
+  return page.upsertedMessages.map((message) => message.id);
+}

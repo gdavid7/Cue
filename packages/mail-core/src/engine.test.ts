@@ -385,6 +385,53 @@ describe("mail engine idle catch-up scheduling", () => {
     await harness.engine.close();
   });
 
+  it("starts no backfill for an account purged while its catch-up runs", async () => {
+    const harness = idleCatchUpHarness({
+      streamIds: ["inbox", "projects"],
+      lowPriority: ["projects"],
+    });
+    let releaseScan = () => {};
+    const scanHeld = new Promise<void>((resolve) => {
+      releaseScan = resolve;
+    });
+    let scanReads = 0;
+    harness.store.readBootstrapScan = async ({ scopeId }) => {
+      if (scopeId !== "projects") return null;
+      scanReads += 1;
+      if (scanReads === 1) await scanHeld;
+      return {
+        accountId: "acc-1",
+        scopeId,
+        bootstrapId: "boot",
+        page: "page-1",
+        from: {
+          streamId: scopeId,
+          generation: "g1",
+          checkpoint: "start",
+        },
+        catchUpFrom: null,
+        nextAttemptAtMs: null,
+        errorCode: null,
+      };
+    };
+    harness.store.purgeAccount = async () => ({
+      databaseEpoch: "test",
+      sequence: 0,
+    });
+    const enumerate = vi.fn(harness.source.enumerate);
+    harness.source.enumerate = enumerate;
+    const run = harness.engine.runUntil(10_000);
+    await vi.waitFor(() => expect(scanReads).toBe(1));
+
+    await harness.engine.purgeAccount("acc-1");
+    releaseScan();
+    await run;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(enumerate).not.toHaveBeenCalled();
+    await harness.engine.close();
+  });
+
   it("retries a failed scope discovery on the normal clock", async () => {
     const harness = idleCatchUpHarness({ streamIds: ["inbox"] });
     let failDiscovery = true;
