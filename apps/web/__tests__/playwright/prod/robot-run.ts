@@ -158,7 +158,7 @@ export class RobotRun {
 }
 
 /** First line of a Playwright error, without mail content or addresses. */
-function describeError(error: unknown) {
+export function describeError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   // Playwright appends call logs and locator dumps after the first line, and
   // colors the text with ANSI escapes.
