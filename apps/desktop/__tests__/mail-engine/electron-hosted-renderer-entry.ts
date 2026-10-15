@@ -1285,12 +1285,14 @@ async function waitForSignedOut(window: BrowserWindow) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const state = (await window.webContents
       .executeJavaScript(`
-      (() => {
-        const text = (document.body?.innerText ?? "").replace(/\\s+/g, " ");
-        return {
-          loggedOut: /\\bLog in\\b/.test(text) || /\\bLogged out\\b/.test(text),
-        };
-      })()
+      (() => ({
+        // Sign out lands on /login, Cue's first screen.
+        loggedOut:
+          /^\\/login\\/?$/.test(location.pathname) &&
+          [...document.querySelectorAll("button")].some((button) =>
+            /Continue with Google/.test(button.innerText ?? ""),
+          ),
+      }))()
     `)
       .catch(() => null)) as { loggedOut: boolean } | null;
     if (state?.loggedOut) return;
@@ -1530,7 +1532,7 @@ async function openNamedMailbox(window: BrowserWindow, name: string) {
         (() => {
           const mail = [...document.querySelectorAll("button")].find((button) =>
             [...button.querySelectorAll("span")].some(
-              (span) => span.textContent?.trim() === "Mail",
+              (span) => span.textContent?.trim() === "More",
             ),
           );
           if (mail instanceof HTMLElement) mail.click();
@@ -1853,7 +1855,7 @@ async function openDraftsMailbox(window: BrowserWindow) {
         (() => {
           const mail = [...document.querySelectorAll("button")].find((button) =>
             [...button.querySelectorAll("span")].some(
-              (span) => span.textContent?.trim() === "Mail",
+              (span) => span.textContent?.trim() === "More",
             ),
           );
           if (mail instanceof HTMLElement) mail.click();
@@ -1891,7 +1893,7 @@ async function openSentMailbox(window: BrowserWindow) {
         (() => {
           const mail = [...document.querySelectorAll("button")].find((button) =>
             [...button.querySelectorAll("span")].some(
-              (span) => span.textContent?.trim() === "Mail",
+              (span) => span.textContent?.trim() === "More",
             ),
           );
           if (mail instanceof HTMLElement) mail.click();
