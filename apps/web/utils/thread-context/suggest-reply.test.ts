@@ -440,6 +440,59 @@ describe("vouchedLinkMessageIds", () => {
     ).toEqual([]);
   });
 
+  it.each([
+    ["web.de"],
+    ["qq.com"],
+    ["yahoo.co.jp"],
+  ])("never counts the mailbox provider %s as one organization", async (domain) => {
+    expect(
+      await vouched(`me@${domain}`, [authenticated("m1", `nora@${domain}`)]),
+    ).toEqual([]);
+  });
+
+  // A university's domain is shared by everyone who studies or works there.
+  it.each([
+    ["ucsd.edu"],
+    ["ox.ac.uk"],
+    ["unimelb.edu.au"],
+  ])("never counts the academic domain %s as one organization", async (domain) => {
+    expect(
+      await vouched(`me@${domain}`, [
+        authenticated("m1", `someone@cs.${domain}`),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("still vouches for a professor at the user's university whom the user has written to", async () => {
+    const question = getMockMessage({
+      id: "m1",
+      from: "me@ucsd.edu",
+      to: "Prof. Lee <lee@cs.ucsd.edu>",
+      labelIds: ["SENT"],
+    });
+
+    expect(
+      await vouched("me@ucsd.edu", [
+        question,
+        authenticated("m2", "lee@cs.ucsd.edu"),
+      ]),
+    ).toEqual(["m1", "m2"]);
+  });
+
+  it("asks stored mail once per sender, however many of their messages are in the thread", async () => {
+    await vouched("me@acme.com", [
+      authenticated("m1", "nora@northwind.com"),
+      authenticated("m2", "Nora@Northwind.com"),
+      authenticated("m3", "kai@other.example"),
+    ]);
+
+    expect(
+      prisma.emailMessage.findFirst.mock.calls.map(
+        ([args]) => (args?.where?.to as { equals: string }).equals,
+      ),
+    ).toEqual(["nora@northwind.com", "kai@other.example"]);
+  });
+
   it("keeps organizations under a shared hosting suffix apart", async () => {
     expect(
       await vouched("alice@alice.github.io", [

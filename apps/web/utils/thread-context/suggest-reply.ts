@@ -4,11 +4,8 @@ import he from "he";
 import { z } from "zod";
 import { getTodayForLLM, getWritingStylePrompt } from "@/utils/ai/helpers";
 import { getReplyMemoriesForPrompt } from "@/utils/ai/reply/reply-memory";
-import { getDomain } from "tldts";
 import {
-  extractDomainFromEmail,
   extractEmailAddress,
-  isPublicEmailDomain,
   isSameEmailAddress,
   splitRecipientList,
 } from "@/utils/email";
@@ -29,6 +26,7 @@ import {
   latestSenderMessage,
 } from "@/utils/thread-context/get-thread-context";
 import { isAuthenticatedSender } from "@/utils/email/sender-authentication";
+import { isSameOrganization } from "@/utils/email/organization";
 import type { ParsedMessage } from "@/utils/types";
 import { isExaSearchEnabled, searchExa } from "@/utils/exa/search";
 import { domainOf } from "@/utils/thread-context/linked-pages";
@@ -417,9 +415,13 @@ function normalize(text: string) {
  * a message, and anyone can authenticate their own domain and send a guessed
  * task link, so the sender must also be someone the user already deals with:
  * the user themselves (Gmail's SENT label, which no one else can set), a
- * colleague at the user's own organization, or someone the user has emailed.
- * The last is read from this thread and from stored sent mail, never by
- * asking the mail provider.
+ * colleague at the user's own organization (see `isSameOrganization`), or
+ * someone the user has emailed. The last is read from this thread and from
+ * stored sent mail, once per sender, never by asking the mail provider.
+ *
+ * One message from the user to an address vouches for that address for
+ * good, even a reply to someone the user doesn't know well; a stranger the
+ * user has never written to can't get a task into a reply this way.
  */
 export async function vouchedLinkMessageIds({
   thread,
@@ -443,19 +445,32 @@ export async function vouchedLinkMessageIds({
       .map((recipient) => extractEmailAddress(recipient).toLowerCase()),
   );
 
-  const vouched = await Promise.all(
-    thread.messages.map(async (m) => {
-      if (isOwn(m)) return true;
-      if (!isAuthenticatedSender(m)) return false;
-      const sender = extractEmailAddress(m.headers.from).toLowerCase();
-      return (
-        sameOrganization(sender, userEmail) ||
-        writtenToInThread.has(sender) ||
-        (await hasEmailed({ emailAccountId, email: sender }))
-      );
-    }),
+  const senderOf = (m: ParsedMessage) =>
+    extractEmailAddress(m.headers.from).toLowerCase();
+  const known = (sender: string) =>
+    isSameOrganization(sender, userEmail) || writtenToInThread.has(sender);
+  const authenticated = thread.messages.filter(
+    (m) => !isOwn(m) && isAuthenticatedSender(m),
   );
-  return new Set(thread.messages.filter((_, i) => vouched[i]).map((m) => m.id));
+  const toLookUp = [
+    ...new Set(authenticated.map(senderOf).filter((s) => !known(s))),
+  ];
+  const emailed = new Set(
+    (
+      await Promise.all(
+        toLookUp.map(async (email) =>
+          (await hasEmailed({ emailAccountId, email })) ? email : null,
+        ),
+      )
+    ).filter((email) => email !== null),
+  );
+
+  return new Set([
+    ...thread.messages.filter(isOwn).map((m) => m.id),
+    ...authenticated
+      .filter((m) => known(senderOf(m)) || emailed.has(senderOf(m)))
+      .map((m) => m.id),
+  ]);
 }
 
 export async function contextSources({
@@ -665,23 +680,6 @@ function formatTime(iso: string, timezone: string | null) {
     minute: "2-digit",
     timeZone: timezone || "UTC",
   });
-}
-
-/**
- * Whether two addresses belong to one organization: the same registrable
- * domain, with private suffixes (github.io) counted, and never a free-mail
- * provider, whose users have nothing else in common.
- */
-function sameOrganization(a: string, b: string) {
-  const orgOf = (email: string) => {
-    const domain = extractDomainFromEmail(email).toLowerCase();
-    const org = getDomain(domain, { allowPrivateDomains: true });
-    return !org || isPublicEmailDomain(domain) || isPublicEmailDomain(org)
-      ? null
-      : org;
-  };
-  const org = orgOf(a);
-  return !!org && org === orgOf(b);
 }
 
 /** Whether stored sent mail shows the user writing to `email`. */
