@@ -110,6 +110,7 @@ export async function aiProcessAssistantChat({
   onEnd,
   abortSignal,
   localMailSearch,
+  registerCleanup,
   logger,
 }: {
   messages: ModelMessage[];
@@ -137,6 +138,11 @@ export async function aiProcessAssistantChat({
   abortSignal?: AbortSignal;
   /** The chat's browser, when it can answer inbox searches locally. */
   localMailSearch?: LocalMailSearch;
+  /**
+   * Takes a function the caller runs once the turn is over, however it
+   * ended, including a reply stream that failed before the model finished.
+   */
+  registerCleanup?: (cleanup: () => void) => void;
   logger: Logger;
 }) {
   const startedAt = Date.now();
@@ -165,7 +171,6 @@ export async function aiProcessAssistantChat({
     hasConnectedDrive,
     freshRuleState,
     expectedFixSystemType,
-    releaseGmailDemand,
   ] = await Promise.all([
     isIntegrationActionEnabledForUserId(user.userId),
     hasUsableCalendarConnection(emailAccountId).then(
@@ -202,22 +207,17 @@ export async function aiProcessAssistantChat({
           logger,
         })
       : null,
-    // Someone is waiting on this turn's Gmail calls, so background sync
-    // yields for as long as tools can run, not just two seconds per search.
-    isGoogleProvider(user.account.provider)
-      ? holdGmailInteractiveDemand(
-          emailAccountId,
-          ASSISTANT_CHAT_TOOL_BUDGET_MS[responseSurface],
-        )
-      : async () => {},
   ]);
-  let gmailDemandReleased = false;
-  const endGmailDemand = () => {
-    if (gmailDemandReleased) return;
-    gmailDemandReleased = true;
-    releaseGmailDemand().catch(() => undefined);
-  };
-  abortSignal?.addEventListener("abort", endGmailDemand, { once: true });
+  // Someone is waiting on this turn's Gmail calls, so from its first one
+  // background sync yields for as long as tools can run, not just two
+  // seconds per search. A turn that never calls Gmail holds nothing.
+  const gmailDemand = createTurnGmailDemand({
+    emailAccountId,
+    maxMs: ASSISTANT_CHAT_TOOL_BUDGET_MS[responseSurface],
+    enabled: isGoogleProvider(user.account.provider),
+  });
+  abortSignal?.addEventListener("abort", gmailDemand.end, { once: true });
+  registerCleanup?.(gmailDemand.end);
   let ruleReadState: RuleReadState | null = null;
   const pendingRuleDeletionNames = new Set<string>();
   const memoryConversationMessages = conversationMessagesForMemory ?? messages;
@@ -344,6 +344,7 @@ export async function aiProcessAssistantChat({
 
   const allTools = withChatToolRuntime({
     logger,
+    onGmailCall: gmailDemand.take,
     tools: {
       getAssistantCapabilities: getAssistantCapabilitiesTool(toolOptions),
       getAccountOverview: getAccountOverviewTool(toolOptions),
@@ -460,7 +461,7 @@ export async function aiProcessAssistantChat({
       onModelResolved?.(resolvedModel);
     },
     onEnd: async (event) => {
-      endGmailDemand();
+      gmailDemand.end();
       await onEnd?.(event);
     },
     stopWhen: () => false,
@@ -485,7 +486,7 @@ export async function aiProcessAssistantChat({
         return { messages, providerOptions };
       }
 
-      endGmailDemand();
+      gmailDemand.end();
       return {
         messages,
         activeTools: [],
@@ -495,7 +496,7 @@ export async function aiProcessAssistantChat({
     tools: allTools,
     abortSignal,
   });
-  result.catch(endGmailDemand);
+  result.catch(gmailDemand.end);
 
   return result;
 }
@@ -1037,4 +1038,30 @@ Inline email cards:
 - The UI resolves sender, subject, and date from the threadId — don't repeat them.
 - Group <emails> blocks under markdown ## headers when triage has categories.
 - Only render email widgets when they add clarity, not for every search result.`;
+}
+
+function createTurnGmailDemand({
+  emailAccountId,
+  maxMs,
+  enabled,
+}: {
+  emailAccountId: string;
+  maxMs: number;
+  enabled: boolean;
+}) {
+  let hold: Promise<() => Promise<void>> | null = null;
+  let ended = false;
+  return {
+    take: () => {
+      if (!enabled || hold || ended) return;
+      hold = holdGmailInteractiveDemand(emailAccountId, maxMs).catch(
+        () => async () => {},
+      );
+    },
+    end: () => {
+      if (ended) return;
+      ended = true;
+      hold?.then((release) => release()).catch(() => undefined);
+    },
+  };
 }

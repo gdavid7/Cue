@@ -97,6 +97,8 @@ type GmailQuotaContext = {
   stats?: GmailQuotaStats;
   /** Caps the gate waits of every call in this context together. */
   maxTotalWaitMs?: number;
+  /** Told before each Gmail call this context makes, admitted or not. */
+  onAdmit?: () => void;
 };
 
 // Route scopes, matched exactly so a route added under a background path is
@@ -254,6 +256,7 @@ export function runWithGmailQuota<T>(
     priority: GmailQuotaPriority;
     stats?: GmailQuotaStats;
     maxTotalWaitMs?: number;
+    onAdmit?: () => void;
   },
   operation: () => T,
 ): T {
@@ -264,6 +267,7 @@ export function runWithGmailQuota<T>(
       priority: context.priority,
       stats: context.stats ?? current.stats,
       maxTotalWaitMs: context.maxTotalWaitMs ?? current.maxTotalWaitMs,
+      onAdmit: context.onAdmit ?? current.onAdmit,
     },
     operation,
   );
@@ -376,6 +380,7 @@ export async function admitGmailCall({
 }): Promise<GmailQuotaTicket> {
   const context = currentGmailQuotaContext();
   const priority = priorityOverride ?? context.priority;
+  context.onAdmit?.();
   const ticket = { emailAccountId, caller: context.caller, priority };
   const admitted = () => {
     if (context.stats) context.stats.admittedCost += cost;

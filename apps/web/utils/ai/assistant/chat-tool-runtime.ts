@@ -22,9 +22,12 @@ export const CHAT_TOOL_GMAIL_WAIT_BUDGET_MS = 10_000;
 export function withChatToolRuntime<T extends Record<string, Tool>>({
   tools,
   logger,
+  onGmailCall,
 }: {
   tools: T;
   logger: Logger;
+  /** Told before each Gmail call any tool makes. */
+  onGmailCall?: () => void;
 }): T {
   return Object.fromEntries(
     Object.entries(tools).map(([name, definition]) => {
@@ -43,6 +46,7 @@ export function withChatToolRuntime<T extends Record<string, Tool>>({
                 priority: "interactive",
                 stats: gmail,
                 maxTotalWaitMs: CHAT_TOOL_GMAIL_WAIT_BUDGET_MS,
+                onAdmit: onGmailCall,
               },
               () => execute(...args),
             );

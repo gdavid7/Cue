@@ -489,6 +489,31 @@ describe("chat route rule freshness persistence", () => {
     });
   });
 
+  it("lets go of what the turn holds when the reply ends", async () => {
+    const cleanup = vi.fn();
+    mockAiProcessAssistantChat.mockImplementationOnce(async (args) => {
+      args.registerCleanup(cleanup);
+      return createAssistantStreamResult();
+    });
+
+    await POST(createRequest());
+
+    await vi.waitFor(() => expect(cleanup).toHaveBeenCalledTimes(1));
+  });
+
+  it("lets go of what the turn holds when setting it up fails", async () => {
+    const cleanup = vi.fn();
+    mockAiProcessAssistantChat.mockImplementationOnce(async (args) => {
+      args.registerCleanup(cleanup);
+      throw new Error("model down");
+    });
+
+    const response = await POST(createRequest());
+
+    expect(response.status).toBe(500);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
   it("marks chats with prior messages as having history", async () => {
     prisma.chat.findUnique.mockResolvedValueOnce({
       id: "chat-1",

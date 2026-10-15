@@ -180,6 +180,13 @@ export const POST = withEmailAccount("chat", async (request) => {
     );
   }
 
+  // Whatever the turn holds (such as Gmail's demand signal) is let go when
+  // the reply ends, and also when setting it up or streaming it fails.
+  const turnCleanups: Array<() => void> = [];
+  const runTurnCleanups = () => {
+    for (const cleanup of turnCleanups.splice(0)) cleanup();
+  };
+
   try {
     const hiddenInlineActionMessage =
       buildHiddenInlineActionMessage(inlineActions);
@@ -350,6 +357,7 @@ export const POST = withEmailAccount("chat", async (request) => {
         : undefined;
     const result = await aiProcessAssistantChat({
       localMailSearch,
+      registerCleanup: (cleanup) => turnCleanups.push(cleanup),
       messages: modelMessages,
       conversationMessagesForMemory: conversationModelMessages,
       emailAccountId,
@@ -480,6 +488,7 @@ export const POST = withEmailAccount("chat", async (request) => {
             insertedMessageCount,
           });
         } finally {
+          runTurnCleanups();
           chatRun.end();
           await clearActiveStream({ chatId: chat.id, streamId });
         }
@@ -512,6 +521,7 @@ export const POST = withEmailAccount("chat", async (request) => {
       },
     });
   } catch (error) {
+    runTurnCleanups();
     chatRun.end();
     await clearActiveStream({ chatId: chat.id, streamId });
     runLogger.error("Error in assistant chat", { error });
