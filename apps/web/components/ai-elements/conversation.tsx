@@ -3,21 +3,25 @@
 import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/index";
 import { ArrowDownIcon } from "lucide-react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import type { ComponentProps } from "react";
 import { useCallback } from "react";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
 export type ConversationProps = ComponentProps<typeof StickToBottom>;
 
-export const Conversation = ({ className, ...props }: ConversationProps) => (
-  <StickToBottom
-    className={cn("relative flex-1 overflow-y-auto", className)}
-    initial="smooth"
-    resize="smooth"
-    {...props}
-  />
-);
+export const Conversation = ({ className, ...props }: ConversationProps) => {
+  // A JS spring scroll, which the CSS reduced-motion rule can't reach.
+  const scroll = useReducedMotion() ? "instant" : "smooth";
+  return (
+    <StickToBottom
+      className={cn("relative flex-1 overflow-y-auto", className)}
+      initial={scroll}
+      resize={scroll}
+      {...props}
+    />
+  );
+};
 
 export type ConversationContentProps = ComponentProps<
   typeof StickToBottom.Content
