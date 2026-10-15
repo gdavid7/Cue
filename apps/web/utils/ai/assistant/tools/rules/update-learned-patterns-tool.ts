@@ -6,6 +6,10 @@ import { filterNullProperties } from "@/utils";
 import { GroupItemType } from "@/generated/prisma/enums";
 import { saveLearnedPatterns } from "@/utils/rule/learned-patterns";
 import { isOutboundRuleAction } from "@/utils/rule/outbound-actions";
+import {
+  getRuleFingerprint,
+  RULE_FINGERPRINT_SELECT,
+} from "./update-rule-tool";
 import { hideToolErrorFromUser } from "../../tool-error-visibility";
 import type { RuleReadState } from "../../chat-rule-state";
 import {
@@ -89,9 +93,7 @@ export const updateLearnedPatternsTool = ({
             name: true,
             updatedAt: true,
             organizationRuleId: true,
-            actions: {
-              select: { type: true, to: true, cc: true, bcc: true, url: true },
-            },
+            ...RULE_FINGERPRINT_SELECT,
             emailAccount: {
               select: {
                 rulesRevision: true,
@@ -197,6 +199,7 @@ export const updateLearnedPatternsTool = ({
             ],
             ruleId: rule.id,
             ruleName: rule.name,
+            ruleFingerprint: getRuleFingerprint(rule),
             patterns: patternsToSave,
             outboundActions,
           };

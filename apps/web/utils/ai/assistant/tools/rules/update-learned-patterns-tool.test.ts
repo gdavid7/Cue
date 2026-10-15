@@ -165,6 +165,7 @@ describe("updateLearnedPatternsTool", () => {
         { type: "FROM", value: "@", exclude: false },
         { type: "FROM", value: "noreply@shop.example", exclude: true },
       ],
+      ruleFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
       outboundActions: [
         { type: "FORWARD", fields: { to: "accountant@example.com" } },
       ],

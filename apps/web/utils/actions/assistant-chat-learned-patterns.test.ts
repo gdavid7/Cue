@@ -16,6 +16,33 @@ vi.mock("@/utils/auth", () => ({
 import prisma from "@/utils/__mocks__/prisma";
 import { confirmAssistantLearnedPatterns } from "@/utils/actions/assistant-chat";
 import { confirmAssistantLearnedPatternsForAccount } from "@/utils/actions/assistant-chat-confirmation";
+import { getRuleFingerprint } from "@/utils/ai/assistant/tools/rules/update-rule-tool";
+
+const STORED_RULE = {
+  id: "rule-1",
+  name: "Forward receipts",
+  organizationRuleId: null,
+  enabled: true,
+  instructions: "Receipts",
+  from: null,
+  to: null,
+  subject: null,
+  conditionalOperator: "AND",
+  actions: [
+    {
+      type: "FORWARD",
+      content: null,
+      label: null,
+      to: "accountant@example.com",
+      cc: null,
+      bcc: null,
+      subject: null,
+      url: null,
+      folderName: null,
+      delayInMinutes: null,
+    },
+  ],
+};
 
 const PATTERNS = [
   { type: "FROM", value: "boss@company.example", exclude: false },
@@ -26,11 +53,7 @@ describe("confirmAssistantLearnedPatterns", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     prisma.chatMessage.updateMany.mockResolvedValue({ count: 1 } as never);
-    prisma.rule.findUnique.mockResolvedValue({
-      id: "rule-1",
-      name: "Forward receipts",
-      organizationRuleId: null,
-    } as never);
+    prisma.rule.findUnique.mockResolvedValue(STORED_RULE as never);
     saveLearnedPatternsMock.mockResolvedValue({});
   });
 
@@ -71,6 +94,25 @@ describe("confirmAssistantLearnedPatterns", () => {
       }
     ).data.parts;
     expect(updatedParts[0].output.confirmationState).toBe("confirmed");
+  });
+
+  it("refuses when the rule's destination changed after the patterns were proposed", async () => {
+    mockStoredMessage(buildPendingPart());
+    prisma.rule.findUnique.mockResolvedValue({
+      ...STORED_RULE,
+      actions: [{ ...STORED_RULE.actions[0], to: "someone-else@example.com" }],
+    } as never);
+
+    await expect(
+      confirmAssistantLearnedPatternsForAccount({
+        chatId: "chat-1",
+        chatMessageId: "cm-1",
+        toolCallId: "tool-lp-1",
+        emailAccountId: "ea_1",
+        logger: createTestLogger(),
+      }),
+    ).rejects.toThrow("changed");
+    expect(saveLearnedPatternsMock).not.toHaveBeenCalled();
   });
 
   it("refuses a rule that does not belong to the confirming account", async () => {
@@ -116,6 +158,7 @@ function buildPendingPart() {
       riskMessages: ["This rule forwards mail."],
       ruleId: "rule-1",
       ruleName: "Forward receipts",
+      ruleFingerprint: getRuleFingerprint(STORED_RULE as never),
       patterns: PATTERNS,
       outboundActions: [
         { type: "FORWARD", fields: { to: "accountant@example.com" } },

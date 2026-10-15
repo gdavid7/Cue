@@ -540,10 +540,21 @@ export async function confirmAssistantLearnedPatternsForAccount({
   try {
     const rule = await prisma.rule.findUnique({
       where: { id: output.ruleId, emailAccountId },
-      select: { id: true, name: true, organizationRuleId: true },
+      select: {
+        id: true,
+        organizationRuleId: true,
+        ...RULE_FINGERPRINT_SELECT,
+      },
     });
     if (!rule || rule.organizationRuleId) {
       throw new SafeError("Rule not found");
+    }
+    // The card showed where the rule sends; a rule edited since then would
+    // send matched mail somewhere the user never saw.
+    if (getRuleFingerprint(rule) !== output.ruleFingerprint) {
+      throw new SafeError(
+        "This rule changed after the assistant proposed these patterns. Ask the assistant to propose them again.",
+      );
     }
 
     const result = await saveLearnedPatterns({

@@ -212,6 +212,7 @@ export const pendingLearnedPatternsToolOutputSchema = z.object({
   riskMessages: z.array(z.string()),
   ruleId: z.string().trim().min(1),
   ruleName: z.string(),
+  ruleFingerprint: z.string().min(1),
   patterns: z
     .array(
       z.object({

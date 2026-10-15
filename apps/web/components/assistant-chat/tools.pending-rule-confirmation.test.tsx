@@ -139,6 +139,7 @@ describe("pending rule confirmations", () => {
           riskMessages: ["Check each pattern"],
           ruleId: "rule-1",
           ruleName: "Vendor Billing",
+          ruleFingerprint: "fingerprint",
           patterns: [
             { type: "FROM", value: "@", exclude: false },
             { type: "SUBJECT", value: "invoice", exclude: true },
