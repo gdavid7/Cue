@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ActionType } from "@/generated/prisma/enums";
 import prisma from "@/utils/__mocks__/prisma";
 import { getMockMessage } from "@/__tests__/helpers";
@@ -11,7 +11,7 @@ import {
   renderSource,
   type Source,
   suggestReply,
-  trustedMessageIds,
+  vouchedLinkMessageIds,
   webSearchQuery,
   webSource,
 } from "./suggest-reply";
@@ -340,7 +340,7 @@ describe("contextSources", () => {
     return contextSources({
       items: from,
       senderAuthenticated,
-      trustedMessageIds: new Set(trusted),
+      vouchedLinkMessageIds: new Set(trusted),
       emailProvider: {} as EmailProvider,
       timezone: null,
       logger: createScopedLogger("suggest-reply-test"),
@@ -399,36 +399,98 @@ describe("contextSources", () => {
   });
 });
 
-describe("trustedMessageIds", () => {
-  it("trusts messages from authenticated senders and the user's own sent mail", () => {
-    const authenticated = {
-      ...getMockMessage({ id: "m1", from: "nora@northwind.com" }),
+describe("vouchedLinkMessageIds", () => {
+  function authenticated(id: string, from: string) {
+    const domain = from.split("@")[1];
+    return {
+      ...getMockMessage({ id, from }),
       headers: {
-        ...getMockMessage().headers,
-        from: "nora@northwind.com",
-        "authentication-results":
-          "mx.google.com; dmarc=pass header.from=northwind.com",
+        ...getMockMessage({ from }).headers,
+        "authentication-results": `mx.google.com; dmarc=pass header.from=${domain}`,
       },
     };
-    const forged = getMockMessage({ id: "m2", from: "nora@northwind.com" });
-    const sent = getMockMessage({
-      id: "m3",
-      from: "me@example.com",
+  }
+
+  function vouched(
+    userEmail: string,
+    messages: ReturnType<typeof getMockMessage>[],
+  ) {
+    return vouchedLinkMessageIds({
+      thread: { id: "t", snippet: "", messages },
+      userEmail,
+      emailAccountId: "a1",
+    }).then((ids) => [...ids]);
+  }
+
+  beforeEach(() => {
+    prisma.emailMessage.findFirst.mockReset();
+    prisma.emailMessage.findFirst.mockResolvedValue(null);
+  });
+
+  it("vouches for an authenticated colleague in the user's own organization", async () => {
+    expect(
+      await vouched("me@acme.com", [authenticated("m1", "nora@eng.acme.com")]),
+    ).toEqual(["m1"]);
+    expect(prisma.emailMessage.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("never counts a free-mail domain as one organization", async () => {
+    expect(
+      await vouched("me@gmail.com", [authenticated("m1", "nora@gmail.com")]),
+    ).toEqual([]);
+  });
+
+  it("keeps organizations under a shared hosting suffix apart", async () => {
+    expect(
+      await vouched("alice@alice.github.io", [
+        authenticated("m1", "bob@bob.github.io"),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("vouches for an authenticated outsider the user wrote to earlier in the thread", async () => {
+    const reply = getMockMessage({
+      id: "m1",
+      from: "me@acme.com",
+      to: "Nora <nora@northwind.com>",
       labelIds: ["SENT"],
     });
-    // Mail claiming to be from the user that the user didn't send.
-    const spoofed = getMockMessage({ id: "m4", from: "me@example.com" });
 
-    expect([
-      ...trustedMessageIds(
-        {
-          id: "t",
-          snippet: "",
-          messages: [authenticated, forged, sent, spoofed],
-        },
-        "me@example.com",
-      ),
-    ]).toEqual(["m1", "m3"]);
+    expect(
+      await vouched("me@acme.com", [
+        reply,
+        authenticated("m2", "nora@northwind.com"),
+      ]),
+    ).toEqual(["m1", "m2"]);
+    expect(prisma.emailMessage.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("vouches for an authenticated outsider the user has emailed before, from stored mail", async () => {
+    prisma.emailMessage.findFirst.mockResolvedValue({ id: "e1" } as never);
+
+    expect(
+      await vouched("me@acme.com", [authenticated("m1", "nora@northwind.com")]),
+    ).toEqual(["m1"]);
+    expect(prisma.emailMessage.findFirst).toHaveBeenCalledWith({
+      where: {
+        emailAccountId: "a1",
+        sent: true,
+        to: { equals: "nora@northwind.com", mode: "insensitive" },
+      },
+      select: { id: true },
+    });
+  });
+
+  it("doesn't vouch for an authenticated stranger, or for anyone unauthenticated", async () => {
+    expect(
+      await vouched("me@acme.com", [
+        authenticated("m1", "mallory@evil.example"),
+        // Claims to be a colleague, but Gmail didn't authenticate it.
+        getMockMessage({ id: "m2", from: "nora@acme.com" }),
+        // Claims to be the user, who didn't send it.
+        getMockMessage({ id: "m3", from: "me@acme.com" }),
+      ]),
+    ).toEqual([]);
   });
 });
 

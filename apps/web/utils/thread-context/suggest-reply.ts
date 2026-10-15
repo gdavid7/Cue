@@ -4,7 +4,14 @@ import he from "he";
 import { z } from "zod";
 import { getTodayForLLM, getWritingStylePrompt } from "@/utils/ai/helpers";
 import { getReplyMemoriesForPrompt } from "@/utils/ai/reply/reply-memory";
-import { extractEmailAddress, isSameEmailAddress } from "@/utils/email";
+import { getDomain } from "tldts";
+import {
+  extractDomainFromEmail,
+  extractEmailAddress,
+  isPublicEmailDomain,
+  isSameEmailAddress,
+  splitRecipientList,
+} from "@/utils/email";
 import { getMessageTimestamp } from "@/utils/email/message-timestamp";
 import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import { GmailLabel } from "@/utils/gmail/label";
@@ -191,7 +198,10 @@ export async function suggestReply({
   const context = await contextSources({
     items,
     senderAuthenticated: !!sender && isAuthenticatedSender(sender),
-    trustedMessageIds: trustedMessageIds(thread, userEmail),
+    // Only a task card needs vouching, and checking may read stored mail.
+    vouchedLinkMessageIds: items.some((item) => item.kind === "task")
+      ? await vouchedLinkMessageIds({ thread, userEmail, emailAccountId })
+      : new Set(),
     emailProvider,
     timezone: emailAccount.timezone,
     logger,
@@ -403,29 +413,55 @@ function normalize(text: string) {
 }
 
 /**
- * Messages whose sender is vouched for: Gmail authenticated the From domain,
- * or the user sent it (Gmail's SENT label, which no one else can set).
+ * Messages whose links may back a reply. Authentication only proves who sent
+ * a message, and anyone can authenticate their own domain and send a guessed
+ * task link, so the sender must also be someone the user already deals with:
+ * the user themselves (Gmail's SENT label, which no one else can set), a
+ * colleague at the user's own organization, or someone the user has emailed.
+ * The last is read from this thread and from stored sent mail, never by
+ * asking the mail provider.
  */
-export function trustedMessageIds(
-  thread: EmailThread,
-  userEmail: string,
-): Set<string> {
-  return new Set(
+export async function vouchedLinkMessageIds({
+  thread,
+  userEmail,
+  emailAccountId,
+}: {
+  thread: EmailThread;
+  userEmail: string;
+  emailAccountId: string;
+}): Promise<Set<string>> {
+  const isOwn = (m: ParsedMessage) =>
+    !!m.labelIds?.includes(GmailLabel.SENT) &&
+    isSameEmailAddress(m.headers.from, userEmail);
+  const writtenToInThread = new Set(
     thread.messages
-      .filter(
-        (m) =>
-          isAuthenticatedSender(m) ||
-          (m.labelIds?.includes(GmailLabel.SENT) &&
-            isSameEmailAddress(m.headers.from, userEmail)),
-      )
-      .map((m) => m.id),
+      .filter(isOwn)
+      .flatMap((m) => [
+        ...splitRecipientList(m.headers.to),
+        ...splitRecipientList(m.headers.cc ?? ""),
+      ])
+      .map((recipient) => extractEmailAddress(recipient).toLowerCase()),
   );
+
+  const vouched = await Promise.all(
+    thread.messages.map(async (m) => {
+      if (isOwn(m)) return true;
+      if (!isAuthenticatedSender(m)) return false;
+      const sender = extractEmailAddress(m.headers.from).toLowerCase();
+      return (
+        sameOrganization(sender, userEmail) ||
+        writtenToInThread.has(sender) ||
+        (await hasEmailed({ emailAccountId, email: sender }))
+      );
+    }),
+  );
+  return new Set(thread.messages.filter((_, i) => vouched[i]).map((m) => m.id));
 }
 
 export async function contextSources({
   items,
   senderAuthenticated,
-  trustedMessageIds,
+  vouchedLinkMessageIds,
   emailProvider,
   timezone,
   logger,
@@ -433,8 +469,8 @@ export async function contextSources({
   items: Awaited<ReturnType<typeof collectThreadContext>>["items"];
   /** Whether the thread's latest sender passed DMARC, or aligned DKIM, at Gmail. */
   senderAuthenticated: boolean;
-  /** Messages whose sender is vouched for; see `trustedMessageIds`. */
-  trustedMessageIds: ReadonlySet<string>;
+  /** Messages whose links may back a reply; see `vouchedLinkMessageIds`. */
+  vouchedLinkMessageIds: ReadonlySet<string>;
   emailProvider: EmailProvider;
   timezone: string | null;
   logger: Logger;
@@ -442,12 +478,12 @@ export async function contextSources({
   // A contact is looked up by the From address, which anyone can forge to
   // pull in the record of whoever they impersonate, and a task by a link,
   // whose id can be guessed. A contact backs a reply only when the sender was
-  // authenticated, a task only when the message that links to it was.
+  // authenticated, a task only when the message that links to it is vouched for.
   const evidence = items
     .filter((item) => {
       if (item.kind === "contact") return senderAuthenticated;
       if (item.kind === "task")
-        return !!item.linkedFrom && trustedMessageIds.has(item.linkedFrom);
+        return !!item.linkedFrom && vouchedLinkMessageIds.has(item.linkedFrom);
       return true;
     })
     .slice(0, MAX_CONTEXT_SOURCES);
@@ -629,4 +665,42 @@ function formatTime(iso: string, timezone: string | null) {
     minute: "2-digit",
     timeZone: timezone || "UTC",
   });
+}
+
+/**
+ * Whether two addresses belong to one organization: the same registrable
+ * domain, with private suffixes (github.io) counted, and never a free-mail
+ * provider, whose users have nothing else in common.
+ */
+function sameOrganization(a: string, b: string) {
+  const orgOf = (email: string) => {
+    const domain = extractDomainFromEmail(email).toLowerCase();
+    const org = getDomain(domain, { allowPrivateDomains: true });
+    return !org || isPublicEmailDomain(domain) || isPublicEmailDomain(org)
+      ? null
+      : org;
+  };
+  const org = orgOf(a);
+  return !!org && org === orgOf(b);
+}
+
+/** Whether stored sent mail shows the user writing to `email`. */
+async function hasEmailed({
+  emailAccountId,
+  email,
+}: {
+  emailAccountId: string;
+  email: string;
+}) {
+  const sent = await prisma.emailMessage
+    .findFirst({
+      where: {
+        emailAccountId,
+        sent: true,
+        to: { equals: email, mode: "insensitive" },
+      },
+      select: { id: true },
+    })
+    .catch(() => null);
+  return !!sent;
 }
