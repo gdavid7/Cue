@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { finalizeEditableEmailHtml } from "@inboxzero/email-editor/core";
+import { markdownToEmailHtml } from "@inboxzero/email-editor/markdown";
 import {
   getEmailClient,
   emailToContent,
@@ -265,6 +267,42 @@ describe("convertEmailHtmlToText", () => {
     });
     expect(result).toContain("Click here");
     expect(result).not.toContain("https://example.com");
+  });
+
+  it("reads composer markdown as a plain-text reader would", () => {
+    const sentHtml = finalizeEditableEmailHtml({
+      html: markdownToEmailHtml(
+        [
+          "## Plan",
+          "",
+          "- Budget approved",
+          "- See [notes](https://example.com/notes)",
+          "",
+          "1. Draft",
+          "2. Review",
+          "",
+          "| Item | Owner |",
+          "| --- | --- |",
+          "| Copy | Ada |",
+          "| Design | Grace |",
+        ].join("\n"),
+      ),
+      inlineAttachments: [],
+      mode: "edited",
+    });
+
+    const lines = convertEmailHtmlToText({ htmlText: sentHtml })
+      .split("\n")
+      .map((line) => line.trimEnd());
+
+    expect(lines).toContain(" * Budget approved");
+    expect(lines).toContain(" * See notes [https://example.com/notes]");
+    expect(lines).toContain(" 1. Draft");
+    expect(lines).toContain(" 2. Review");
+    // Each row stays on its own line with its cells apart.
+    expect(lines).toContainEqual(expect.stringMatching(/^ITEM\s+OWNER$/u));
+    expect(lines).toContainEqual(expect.stringMatching(/^Copy\s+Ada$/u));
+    expect(lines).toContainEqual(expect.stringMatching(/^Design\s+Grace$/u));
   });
 
   it("removes images", () => {
