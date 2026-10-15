@@ -49,7 +49,10 @@ import {
 } from "@/utils/ai/assistant/chat-response-guard";
 import { flushLoggerSafely } from "@/utils/logger-flush";
 import { createLocalMailSearch } from "@/utils/ai/assistant/local-mail-search";
-import { isGoogleProvider } from "@/utils/email/provider-types";
+import {
+  isGoogleProvider,
+  isMicrosoftProvider,
+} from "@/utils/email/provider-types";
 import {
   claimActiveStream,
   clearActiveStream,
@@ -346,9 +349,12 @@ export const POST = withEmailAccount("chat", async (request) => {
       visibleTextProduced: false,
     };
     // Searches are answered locally only by a browser that says it can,
-    // and only for Gmail, whose query syntax the local search reads.
+    // and only for Gmail and Outlook, whose search syntax the local search
+    // reads.
     const localMailSearch =
-      data.localMailSearch && isGoogleProvider(user.account.provider)
+      data.localMailSearch &&
+      (isGoogleProvider(user.account.provider) ||
+        isMicrosoftProvider(user.account.provider))
         ? createLocalMailSearch({
             emailAccountId,
             logger: runLogger,

@@ -4,6 +4,7 @@ import {
   localMailSearchResultSchema,
 } from "@/utils/actions/assistant-local-search.validation";
 import type { Logger } from "@/utils/logger";
+import type { AssistantSearchSyntax } from "@/utils/mail-engine/assistant-search";
 import { assertWithinUserRateLimit } from "@/utils/rate-limit";
 import { redis } from "@/utils/redis";
 import { sleep } from "@/utils/sleep";
@@ -45,11 +46,13 @@ export type LocalMailSearch = {
    * local mail store. Resolves with its answer, or null when it can't answer
    * (or doesn't in time) and the caller should search the provider.
    */
-  search(input: {
-    query: string;
-    limit: number;
-    pageToken?: string;
-  }): Promise<LocalMailSearchAnswer | null>;
+  search(
+    input: {
+      query: string;
+      limit: number;
+      pageToken?: string;
+    } & AssistantSearchSyntax,
+  ): Promise<LocalMailSearchAnswer | null>;
 };
 
 /**

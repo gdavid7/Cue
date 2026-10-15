@@ -15,6 +15,7 @@ import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
 import {
   answerAssistantSearch,
   gmailQueryToLocalSearch,
+  outlookQueryToLocalSearch,
   searchLocalMail,
 } from "./assistant-search";
 
@@ -110,6 +111,161 @@ describe("gmailQueryToLocalSearch", () => {
     "is:important",
   ])("leaves %s to Gmail, which understands it exactly", (query) => {
     expect(gmailQueryToLocalSearch(query, NOW)).toBeNull();
+  });
+});
+
+// Graph's message search covers every folder but leaves drafts out.
+const OUTLOOK_SCOPE = {
+  kind: "not",
+  predicate: { kind: "role", role: "draft" },
+} as const;
+const NEW_YORK = "America/New_York";
+
+// Queries are written as Graph receives them: free text inside Graph's
+// $search quotes, or one bare field restriction.
+describe("outlookQueryToLocalSearch", () => {
+  function outlook(
+    query: string,
+    options: { fromEmail?: string; readState?: "read" | "unread" } = {},
+  ) {
+    return outlookQueryToLocalSearch({ query, ...options, timeZone: NEW_YORK });
+  }
+
+  it("matches every word, in any folder but drafts, like Graph's free text", () => {
+    expect(outlook('"offer letter"')).toEqual({
+      predicate: {
+        kind: "all",
+        predicates: [
+          OUTLOOK_SCOPE,
+          { kind: "text", field: "any", value: "offer letter", match: "term" },
+        ],
+      },
+      fromAddress: null,
+    });
+  });
+
+  it("matches any clause of an OR", () => {
+    expect(
+      outlook('"reply OR respond OR subject:approval"')?.predicate,
+    ).toEqual({
+      kind: "all",
+      predicates: [
+        OUTLOOK_SCOPE,
+        {
+          kind: "any",
+          predicates: [
+            { kind: "text", field: "any", value: "reply", match: "term" },
+            { kind: "text", field: "any", value: "respond", match: "term" },
+            {
+              kind: "text",
+              field: "subject",
+              value: "approval",
+              match: "term",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("restricts words and phrases to the subject or body", () => {
+    expect(outlook('subject:"next steps"')?.predicate).toEqual({
+      kind: "all",
+      predicates: [
+        OUTLOOK_SCOPE,
+        {
+          kind: "text",
+          field: "subject",
+          value: "next steps",
+          match: "phrase",
+        },
+      ],
+    });
+    expect(outlook('"body:invoice AND subject:march"')?.predicate).toEqual({
+      kind: "all",
+      predicates: [
+        OUTLOOK_SCOPE,
+        { kind: "text", field: "body", value: "invoice", match: "term" },
+        { kind: "text", field: "subject", value: "march", match: "term" },
+      ],
+    });
+  });
+
+  it.each([
+    ["received>=2026-10-01", "2026-10-01T04:00:00Z", null],
+    ["received>2026-10-01", "2026-10-02T04:00:00Z", null],
+    ["received<2026-10-08", null, "2026-10-08T04:00:00Z"],
+    ["received<=2026-10-08", null, "2026-10-09T04:00:00Z"],
+    ["received:2026-11-01", "2026-11-01T04:00:00Z", "2026-11-02T05:00:00Z"],
+  ])("reads %s as whole days in the user's time zone", (clause, after, before) => {
+    expect(outlook(`"${clause}"`)?.predicate).toEqual({
+      kind: "all",
+      predicates: [
+        OUTLOOK_SCOPE,
+        {
+          kind: "received",
+          afterMs: after && Date.parse(after),
+          beforeMs: before && Date.parse(before),
+        },
+      ],
+    });
+  });
+
+  it("maps attachments and the structured sender and read state", () => {
+    expect(
+      outlook('"hasattachments:true invoice"', {
+        fromEmail: "Billing@Acme.com",
+        readState: "unread",
+      }),
+    ).toEqual({
+      predicate: {
+        kind: "all",
+        predicates: [
+          OUTLOOK_SCOPE,
+          { kind: "has_attachment", value: true },
+          { kind: "text", field: "any", value: "invoice", match: "term" },
+          { kind: "read", value: false },
+        ],
+      },
+      fromAddress: "billing@acme.com",
+    });
+    expect(outlook("", { readState: "read" })?.predicate).toEqual({
+      kind: "all",
+      predicates: [OUTLOOK_SCOPE, { kind: "read", value: true }],
+    });
+  });
+
+  it("takes a whole sender address from the query when it agrees", () => {
+    expect(
+      outlook('"from:jobs@acme.com offer"', { fromEmail: "jobs@acme.com" })
+        ?.fromAddress,
+    ).toBe("jobs@acme.com");
+    expect(
+      outlook('"from:jobs@acme.com offer"', { fromEmail: "hr@acme.com" }),
+    ).toBeNull();
+  });
+
+  it.each([
+    "",
+    '"NOT newsletter"',
+    '"-newsletter"',
+    '"reply OR respond invoice"',
+    '"reply or respond"',
+    '"from:greenhouse"',
+    '"from:a@x.com OR invoice"',
+    '"to:me@example.com"',
+    "participants:me@example.com",
+    '"sent>=2026-01-01"',
+    '"received>=2026/10/01"',
+    '"received>=today"',
+    '"subject: question"',
+    '"category:Red invoice"',
+    '"importance:high"',
+    '"inv*"',
+    '"interview \\\\ offer"',
+    'subject:"say \\"hi\\""',
+  ])("leaves %s to Graph, which understands it exactly", (query) => {
+    expect(outlook(query)).toBeNull();
   });
 });
 
@@ -283,6 +439,97 @@ describe("searchLocalMail against the local store", () => {
       await close();
     }
   }, 60_000);
+});
+
+describe("searchLocalMail for Outlook against the local store", () => {
+  it("searches deleted items and junk but not drafts, as Graph does", async () => {
+    const { client, close } = await engineWith([
+      message("inbox", "c-1", {
+        receivedAtMs: Date.parse("2026-10-01T12:00:00Z"),
+        read: false,
+      }),
+      message("deleted", "c-2", {
+        receivedAtMs: Date.parse("2026-10-02T12:00:00Z"),
+        roles: ["trash"],
+        read: false,
+      }),
+      message("junk", "c-3", {
+        receivedAtMs: Date.parse("2026-10-03T12:00:00Z"),
+        roles: ["spam"],
+        read: false,
+      }),
+      message("draft", "c-4", {
+        receivedAtMs: Date.parse("2026-10-04T12:00:00Z"),
+        roles: ["draft"],
+        read: false,
+      }),
+    ]);
+    try {
+      const result = await searchLocalMail({
+        client,
+        accountId: ACCOUNT,
+        query: "",
+        syntax: "outlook",
+        readState: "unread",
+        limit: 20,
+        now: NOW,
+        timeZone: NEW_YORK,
+      });
+
+      expect(
+        result.status === "ok" && result.messages.map((m) => m.id),
+      ).toEqual(["junk", "deleted", "inbox"]);
+    } finally {
+      await close();
+    }
+  });
+
+  it("finds an exact sender's mail from a date on", async () => {
+    const { client, close } = await engineWith([
+      message("before", "c-1", {
+        from: "Jobs <jobs@acme.com>",
+        receivedAtMs: Date.parse("2026-10-01T03:59:00Z"),
+      }),
+      message("in-range", "c-2", {
+        from: "Jobs <jobs@acme.com>",
+        receivedAtMs: Date.parse("2026-10-01T04:00:00Z"),
+      }),
+      message("other-sender", "c-3", {
+        receivedAtMs: Date.parse("2026-10-02T12:00:00Z"),
+      }),
+    ]);
+    try {
+      const result = await searchLocalMail({
+        client,
+        accountId: ACCOUNT,
+        query: '"received>=2026-10-01"',
+        syntax: "outlook",
+        fromEmail: "jobs@acme.com",
+        limit: 20,
+        now: NOW,
+        timeZone: NEW_YORK,
+      });
+
+      expect(
+        result.status === "ok" && result.messages.map((m) => m.id),
+      ).toEqual(["in-range"]);
+    } finally {
+      await close();
+    }
+  });
+
+  it("leaves Outlook queries it can't answer exactly to Graph", async () => {
+    expect(
+      await searchLocalMail({
+        client: clientWith({ coverage: [coverage({})] }),
+        accountId: ACCOUNT,
+        query: '"to:me@example.com"',
+        syntax: "outlook",
+        limit: 20,
+        now: NOW,
+      }),
+    ).toEqual({ status: "unavailable", reason: "unsupported_query" });
+  });
 });
 
 describe("searchLocalMail gating", () => {
@@ -470,7 +717,7 @@ function message(
     from?: string;
     receivedAtMs: number;
     read?: boolean;
-    roles?: Array<"inbox" | "sent" | "draft">;
+    roles?: Array<"inbox" | "sent" | "draft" | "trash" | "spam">;
   },
 ) {
   const roles = fields.roles ?? ["inbox"];

@@ -5,6 +5,7 @@ import {
   buildOutlookSearchFallbackQuery,
   getOutlookComparisonFilters,
   getStandaloneOutlookStateTerms,
+  outlookSearchKql,
   sanitizeKqlTextQuery,
   stripStandaloneOutlookStateTerms,
   stripOutlookComparisonFilters,
@@ -245,6 +246,25 @@ export function normalizeOutlookSearchInput({
       scopeCandidate?.field === "category" ? scopeCandidate.name : categoryName,
     folderName:
       scopeCandidate?.field === "folder" ? scopeCandidate.name : folderName,
+  };
+}
+
+/**
+ * What the browser's local mail store is asked for an Outlook search: the
+ * KQL Graph would receive, with the sender and read state Graph applies as
+ * filters. Folder and category scopes are resolved by name on Graph, so
+ * those searches stay there.
+ */
+export function getOutlookLocalSearch(input: NormalizedOutlookSearchInput) {
+  if (input.folderName || input.categoryName) return null;
+  return {
+    request: {
+      query: outlookSearchKql(input.query),
+      syntax: "outlook" as const,
+      ...(input.fromEmail && { fromEmail: input.fromEmail }),
+      ...(input.readState && { readState: input.readState }),
+    },
+    queryUsed: formatQueryWithFromEmail(input.query, input.fromEmail),
   };
 }
 

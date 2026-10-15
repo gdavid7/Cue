@@ -1274,6 +1274,125 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     });
   });
 
+  describe("Outlook searchInbox with the browser's local mail store", () => {
+    const localMessage = {
+      id: "m-local",
+      threadId: "t-local",
+      subject: "March invoice",
+      from: "Billing <billing@acme.com>",
+      to: TEST_EMAIL,
+      snippet: "Your invoice is attached",
+      date: "2026-10-02T12:00:00.000Z",
+      labelIds: ["INBOX", "UNREAD", "cat-finance"],
+      hasAttachments: true,
+    };
+
+    function setup(local: unknown) {
+      const searchMessages = vi.fn().mockResolvedValue({ messages: [] });
+      (createEmailProvider as any).mockResolvedValue({
+        searchMessages,
+        getLabels: vi
+          .fn()
+          .mockResolvedValue([{ id: "cat-finance", name: "Finance" }]),
+        getFolders: vi.fn().mockResolvedValue([]),
+      });
+      const localMailSearch = { search: vi.fn().mockResolvedValue(local) };
+      const toolInstance = searchInboxTool({
+        email: TEST_EMAIL,
+        emailAccountId: "email-account-1",
+        provider: "microsoft",
+        logger,
+        localMailSearch,
+      });
+      return { searchMessages, localMailSearch, toolInstance };
+    }
+
+    it("asks for the KQL Graph would get, with the sender and read state as filters", async () => {
+      const { searchMessages, localMailSearch, toolInstance } = setup({
+        status: "ok",
+        messages: [localMessage],
+        nextPageToken: "local:abc",
+      });
+
+      const result: any = await (toolInstance.execute as any)({
+        query: "invoice unread",
+        fromEmail: "billing@acme.com",
+        limit: 20,
+      });
+
+      expect(localMailSearch.search).toHaveBeenCalledWith({
+        query: '"invoice"',
+        syntax: "outlook",
+        fromEmail: "billing@acme.com",
+        readState: "unread",
+        limit: 20,
+        pageToken: undefined,
+      });
+      expect(searchMessages).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        queryUsed: "from:billing@acme.com invoice",
+        totalReturned: 1,
+        nextPageToken: "local:abc",
+        hasMore: true,
+        messages: [
+          {
+            messageId: "m-local",
+            threadId: "t-local",
+            categoryNames: ["INBOX", "UNREAD", "Finance"],
+            isUnread: true,
+            hasAttachments: true,
+          },
+        ],
+      });
+    });
+
+    it("keeps folder and category searches on Graph", async () => {
+      const { searchMessages, localMailSearch, toolInstance } = setup({
+        status: "ok",
+        messages: [localMessage],
+      });
+
+      await (toolInstance.execute as any)({
+        query: "invoice",
+        categoryName: "Finance",
+        limit: 20,
+      });
+
+      expect(localMailSearch.search).not.toHaveBeenCalled();
+      expect(searchMessages).toHaveBeenCalled();
+    });
+
+    it("searches Graph when the local store can't answer", async () => {
+      const { searchMessages, toolInstance } = setup(null);
+
+      await (toolInstance.execute as any)({ query: "invoice", limit: 20 });
+
+      expect(searchMessages).toHaveBeenCalledWith(
+        expect.objectContaining({ query: "invoice" }),
+      );
+    });
+
+    it("keeps a Graph page walk on Graph and a local one local", async () => {
+      const graph = setup({ status: "ok", messages: [localMessage] });
+      await (graph.toolInstance.execute as any)({
+        query: "invoice",
+        limit: 20,
+        pageToken: "https://graph.microsoft.com/v1.0/me/messages?$skiptoken=2",
+      });
+      expect(graph.localMailSearch.search).not.toHaveBeenCalled();
+      expect(graph.searchMessages).toHaveBeenCalled();
+
+      const local = setup(null);
+      const result: any = await (local.toolInstance.execute as any)({
+        query: "invoice",
+        limit: 20,
+        pageToken: "local:abc",
+      });
+      expect(local.searchMessages).not.toHaveBeenCalled();
+      expect(result.searchFeedback).toMatchObject({ retryable: true });
+    });
+  });
+
   it("searchInbox says nothing about missing messages when all loaded", async () => {
     (createEmailProvider as any).mockResolvedValue({
       searchMessages: vi.fn().mockResolvedValue({

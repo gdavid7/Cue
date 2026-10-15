@@ -347,6 +347,16 @@ export function sanitizeOutlookSearchQuery(query: string): {
   };
 }
 
+/**
+ * The $search text Graph receives for a chat search query. Read state is
+ * applied as a filter, so its terms are not searched for.
+ */
+export function outlookSearchKql(query: string): string {
+  return sanitizeOutlookSearchQuery(
+    stripStandaloneOutlookStateTerms(query.trim()).trim(),
+  ).sanitized;
+}
+
 function collapseOutlookSearchQueryToText(query: string): string {
   return stripStandaloneOutlookStateTerms(query)
     .replace(
@@ -622,9 +632,10 @@ export async function queryBatchMessages(
   const rawSearchQuery = options.mailboxSearch
     ? outlookMailboxText(options.mailboxSearch)
     : stripStandaloneOutlookStateTerms(searchQuery?.trim() || "").trim();
-  const { sanitized: cleanedSearchQuery, wasSanitized } = options.mailboxSearch
-    ? { sanitized: rawSearchQuery, wasSanitized: false }
-    : sanitizeOutlookSearchQuery(rawSearchQuery);
+  const cleanedSearchQuery = options.mailboxSearch
+    ? rawSearchQuery
+    : outlookSearchKql(searchQuery ?? "");
+  const wasSanitized = !options.mailboxSearch && Boolean(cleanedSearchQuery);
   const effectiveSearchQuery = cleanedSearchQuery || undefined;
 
   logger.info("Building Outlook request", {
