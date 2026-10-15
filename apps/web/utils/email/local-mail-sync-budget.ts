@@ -29,8 +29,11 @@ type Input = {
   provider: keyof typeof policies;
   priority: "backfill" | "current";
   cost: number;
-  /** Errors after which none of the reserved work reached the provider. */
-  refundOn?: (error: unknown) => boolean;
+  /**
+   * How much of `cost` a failure shows never reached the provider; that much
+   * is returned to the budget. Anything that may have reached it stays spent.
+   */
+  unspentCost?: (error: unknown) => number;
 };
 
 export class LocalMailSyncPausedError extends Error {
@@ -205,12 +208,15 @@ export async function withLocalMailSyncBudget<T>(
     return result;
   } catch (error) {
     if (pauseError) throw pauseError;
-    if (input.refundOn?.(error)) {
+    const unspent = Math.min(
+      input.cost,
+      Math.max(0, input.unspentCost?.(error) ?? 0),
+    );
+    if (unspent > 0) {
       const debited = background ? keys.slice(0, 4) : keys.slice(0, 2);
       await redis
-        .eval(refundScript, debited, [String(input.cost)])
+        .eval(refundScript, debited, [String(unspent)])
         .catch(() => undefined);
-      throw error;
     }
     const delay = getProviderRateLimitDelayMs({
       error: normalizeThrottleHeaders(error),

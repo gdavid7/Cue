@@ -58,6 +58,8 @@ export type GmailQuotaStats = {
   deferred: number;
   refused: number;
   rateLimitMode: number;
+  /** Units of the calls the gate let through to Gmail, retries included. */
+  admittedCost: number;
 };
 
 type GmailQuotaContext = {
@@ -254,7 +256,13 @@ export async function runGmailQuotaRequest<T>(
 }
 
 export function createGmailQuotaStats(): GmailQuotaStats {
-  return { waitMs: 0, deferred: 0, refused: 0, rateLimitMode: 0 };
+  return {
+    waitMs: 0,
+    deferred: 0,
+    refused: 0,
+    rateLimitMode: 0,
+    admittedCost: 0,
+  };
 }
 
 /** Counts a call skipped because the account is in provider rate-limit mode. */
@@ -338,8 +346,12 @@ export async function admitGmailCall({
   const context = currentGmailQuotaContext();
   const priority = priorityOverride ?? context.priority;
   const ticket = { emailAccountId, caller: context.caller, priority };
-  if (!emailAccountId || !isEmailProviderRateLimitRedisConfigured())
+  const admitted = () => {
+    if (context.stats) context.stats.admittedCost += cost;
     return ticket;
+  };
+  if (!emailAccountId || !isEmailProviderRateLimitRedisConfigured())
+    return admitted();
 
   rememberUnsummarizedAccount(emailAccountId);
   const keys = accountKeys(emailAccountId);
@@ -380,10 +392,10 @@ export async function admitGmailCall({
       // Without the shared store nothing can be coordinated; Gmail's own
       // limit still protects the account, so the call goes ahead.
       noteStoreUnavailable(emailAccountId, context.caller, error);
-      return ticket;
+      return admitted();
     }
     const wait = admission.waitMs;
-    if (wait === 0) return ticket;
+    if (wait === 0) return admitted();
     if (admission.defer || Date.now() + wait > deadline) {
       withinStoreTimeout(
         gmailQuotaStore.note({

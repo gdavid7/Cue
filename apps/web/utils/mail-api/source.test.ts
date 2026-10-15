@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { GmailCallDeferredError } from "@/utils/gmail/quota";
+import { admitGmailCall, GmailCallDeferredError } from "@/utils/gmail/quota";
 import {
   compactMailboxSyncMessage,
   decodeMailboxSyncCursor,
@@ -1249,16 +1249,23 @@ describe("createEmailProviderMailboxSource", () => {
     expect(redis.set).not.toHaveBeenCalled();
   });
 
-  it("gives the sync budget back when the quota gate turns a page away", async () => {
-    // A page reserves its share of the sync budget before its Gmail calls
-    // reach the gate, so a page the gate turns away must not keep it.
-    const deferred = new GmailCallDeferredError(90_000, "background");
+  it("gives back only the part of a page's sync budget the gate never let through", async () => {
+    // A page reserves its whole cost before its Gmail calls reach the gate,
+    // one admission at a time: the list, then each batch of messages. When a
+    // later batch is turned away, what the earlier calls spent stays spent.
+    const deferred = new GmailCallDeferredError(5000, "background");
+    const getMessagesWithPagination = vi.fn(async () => {
+      await admitGmailCall({ emailAccountId: "acc-1", cost: 5 });
+      for (let batch = 0; batch < 3; batch++)
+        await admitGmailCall({ emailAccountId: "acc-1", cost: 200 });
+      throw deferred;
+    });
     const source = createEmailProviderMailboxSource({
       logger,
       accountId: "acc-1",
       provider: {
         name: "google",
-        getMessagesWithPagination: vi.fn().mockRejectedValue(deferred),
+        getMessagesWithPagination,
       } as unknown as EmailProvider,
     });
     const result = await source.enumerate({
@@ -1266,15 +1273,17 @@ describe("createEmailProviderMailboxSource", () => {
       requestId: "r1",
       signal: new AbortController().signal,
       bootstrapId: "mailbox",
-      page: JSON.stringify({ scopeId: "history" }),
+      page: JSON.stringify({ scopeId: "history", pageToken: "page-2" }),
       pageSize: 50,
     });
 
     expect(result).toMatchObject({ status: "paused", reason: "throttled" });
     const [reservation] =
       vi.mocked(withLocalMailSyncBudget).mock.calls[0] ?? [];
-    expect(reservation?.refundOn?.(deferred)).toBe(true);
-    expect(reservation?.refundOn?.(new Error("Gmail failed"))).toBe(false);
+    expect(reservation?.cost).toBe(1005);
+    expect(reservation?.unspentCost?.(deferred)).toBe(1005 - 605);
+    // Any other failure may have reached Gmail, so nothing is given back.
+    expect(reservation?.unspentCost?.(new Error("Gmail failed"))).toBe(0);
   });
 
   it("returns the sync budget's wait as a throttled pause", async () => {

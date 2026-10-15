@@ -37,6 +37,8 @@ import type { ParsedMessage } from "@/utils/types";
 import { mapWithConcurrency } from "@/utils/async";
 import { convertEmailHtmlToText } from "@/utils/mail";
 import {
+  createGmailQuotaStats,
+  currentGmailQuotaContext,
   getGmailCallDeferredError,
   isGmailCallDeferredError,
   runWithGmailQuota,
@@ -804,11 +806,24 @@ function withGmailSyncBudget<T>(
   operation: () => Promise<T>,
 ) {
   if (!isEmailProviderRateLimitRedisConfigured()) return operation();
-  // The quota gate turns calls away before they reach Gmail, so a page it
-  // defers spent nothing and keeps nothing of the budget.
-  return withLocalMailSyncBudget(
-    { ...input, provider: "google", refundOn: isGmailCallDeferredError },
-    operation,
+  // A page reaches Gmail one admission at a time (the list, each batch and
+  // their retries). When the gate turns one away, what it had already let
+  // through stays spent and the rest of the reservation is returned.
+  const page = createGmailQuotaStats();
+  return runWithGmailQuota(
+    { priority: currentGmailQuotaContext().priority, stats: page },
+    () =>
+      withLocalMailSyncBudget(
+        {
+          ...input,
+          provider: "google",
+          unspentCost: (error) =>
+            isGmailCallDeferredError(error)
+              ? input.cost - page.admittedCost
+              : 0,
+        },
+        operation,
+      ),
   );
 }
 

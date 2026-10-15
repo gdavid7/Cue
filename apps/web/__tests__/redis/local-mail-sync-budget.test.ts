@@ -90,7 +90,7 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       ).resolves.toBe("current");
     });
 
-    it("returns a reservation whose work never reached the provider", async () => {
+    it("returns the part of a reservation that never reached the provider", async () => {
       const keys = [
         "local-mail-budget:google:account-1:total",
         "local-mail-budget:google:account-1:backfill",
@@ -100,26 +100,31 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
           keys.map(async (key) => Number(await command("HGET", key, "tokens"))),
         );
       const turnedAway = new Error("turned away before the provider");
-      const refundOn = (error: unknown) => error === turnedAway;
+      const partly = new Error("turned away after 700 units reached it");
+      const unspentCost = (error: unknown) => {
+        if (error === turnedAway) return input.cost;
+        if (error === partly) return input.cost - 700;
+        return 0;
+      };
+      const failWith = (error: Error) =>
+        withLocalMailSyncBudget({ ...input, unspentCost }, async () => {
+          throw error;
+        });
 
-      await expect(
-        withLocalMailSyncBudget({ ...input, refundOn }, async () => {
-          throw turnedAway;
-        }),
-      ).rejects.toBe(turnedAway);
+      await expect(failWith(turnedAway)).rejects.toBe(turnedAway);
       // The bucket is back to full, so the reservation cost nothing.
       expect(await tokens()).toEqual([4000, 2000]);
 
+      // Only what the provider never saw comes back.
+      await expect(failWith(partly)).rejects.toBe(partly);
+      expect(await tokens()).toEqual([3300, 1300]);
+
       // Work that may have reached the provider keeps its reservation spent.
       const failed = new Error("provider failure");
-      await expect(
-        withLocalMailSyncBudget({ ...input, refundOn }, async () => {
-          throw failed;
-        }),
-      ).rejects.toBe(failed);
+      await expect(failWith(failed)).rejects.toBe(failed);
       const [total, backfill] = await tokens();
-      expect(total).toBeLessThan(4000 - 1000);
-      expect(backfill).toBeLessThan(2000 - 1000);
+      expect(total).toBeLessThan(3300 - 1000);
+      expect(backfill).toBeLessThan(1300 - 1000);
     });
 
     it("applies the shared app limit before debiting an account and refills from Redis time", async () => {
