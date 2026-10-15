@@ -14,7 +14,7 @@ name: Production Journeys
 on:
   schedule:
     # Every three hours, clear of the hourly health robot at :17.
-    - cron: "41 */3 * * *"
+    - cron: "41 1-23/4 * * *"
   workflow_dispatch:
     inputs:
       journeys:
