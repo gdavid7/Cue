@@ -23,23 +23,62 @@ afterEach(() => {
 describe("parseMessage", () => {
   // A sender can write their own Authentication-Results lower in the
   // message; the receiving server's verdict is the one it adds on top.
-  it("keeps the topmost Authentication-Results, the one Gmail added", () => {
+  describe("Authentication-Results", () => {
     const gmail =
       "mx.google.com; dkim=fail header.i=@acme.com; dmarc=fail header.from=acme.com";
     const forged = "mx.google.com; dmarc=pass header.from=acme.com";
-    const message = parseMessage({
-      payload: {
-        headers: [
+    const receivedByGmail = {
+      name: "Received",
+      value:
+        "from mail.acme.com (mail.acme.com. [1.2.3.4]) by mx.google.com with ESMTPS id x1si; Tue, 13 Oct 2026 09:00:00 -0700 (PDT)",
+    };
+
+    function parsed(headers: { name: string; value: string }[]) {
+      return parseMessage({
+        payload: { headers },
+        // What gmail-api-parse-message makes of them: the last one wins.
+        headers: { from: "nora@acme.com", "authentication-results": forged },
+      } as never).headers["authentication-results"];
+    }
+
+    it("keeps the topmost one, which Gmail added on receipt", () => {
+      expect(
+        parsed([
+          { name: "Received", value: "by 2002:a05:6a10:1 with SMTP id x" },
+          receivedByGmail,
+          { name: "Received-SPF", value: "pass (google.com: ...)" },
           { name: "Authentication-Results", value: gmail },
           { name: "From", value: "nora@acme.com" },
           { name: "authentication-results", value: forged },
-        ],
-      },
-      // What gmail-api-parse-message makes of them: the last one wins.
-      headers: { from: "nora@acme.com", "authentication-results": forged },
-    } as never);
+        ]),
+      ).toBe(gmail);
+    });
 
-    expect(message.headers["authentication-results"]).toBe(gmail);
+    // Imported, inserted or fetched (POP) mail never passed Gmail's checks;
+    // its headers are whatever the original carried.
+    it("keeps none when Gmail's servers didn't receive the message", () => {
+      expect(
+        parsed([
+          {
+            name: "Received",
+            value: "from a by mx.other.example with ESMTP id y",
+          },
+          { name: "Authentication-Results", value: forged },
+        ]),
+      ).toBeUndefined();
+      expect(
+        parsed([{ name: "Authentication-Results", value: forged }]),
+      ).toBeUndefined();
+    });
+
+    it("keeps none when Gmail's Received header comes only below it", () => {
+      expect(
+        parsed([
+          { name: "Authentication-Results", value: forged },
+          receivedByGmail,
+        ]),
+      ).toBeUndefined();
+    });
   });
 
   it("detects calendar MIME parts without decoding their contents in lists", () => {

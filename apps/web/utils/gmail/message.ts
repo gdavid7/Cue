@@ -39,14 +39,11 @@ export function parseMessage(
     restoreTextBodies(hiddenText);
   }
   if (parsed.headers) {
-    // Gmail adds its verdict on top; a sender can write their own lower down,
-    // and the parser keeps the last header of a name.
     parsed.headers = {
       ...parsed.headers,
-      "authentication-results":
-        message.payload?.headers?.find(
-          (header) => header.name?.toLowerCase() === "authentication-results",
-        )?.value ?? undefined,
+      "authentication-results": gmailAuthenticationResults(
+        message.payload?.headers ?? [],
+      ),
     };
   }
   if (message.payload) {
@@ -389,4 +386,27 @@ function getCalendarParts(
     if (parts.length > 1) break;
   }
   return parts;
+}
+
+/**
+ * Gmail's verdict on the sender, if Gmail's servers received the message.
+ * Gmail adds its Received line and its Authentication-Results on top, above
+ * anything the sender wrote; mail imported, inserted or fetched by POP has
+ * no such Received line, and its results are whatever the original carried.
+ */
+function gmailAuthenticationResults(
+  headers: gmail_v1.Schema$MessagePartHeader[],
+): string | undefined {
+  const index = headers.findIndex(
+    (header) => header.name?.toLowerCase() === "authentication-results",
+  );
+  if (index < 0) return;
+  const receivedByGmail = headers
+    .slice(0, index)
+    .some(
+      (header) =>
+        header.name?.toLowerCase() === "received" &&
+        /\bby mx\.google\.com\b/i.test(header.value ?? ""),
+    );
+  return receivedByGmail ? (headers[index]?.value ?? undefined) : undefined;
 }
