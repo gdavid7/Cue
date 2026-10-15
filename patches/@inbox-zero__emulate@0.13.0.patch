@@ -38,10 +38,27 @@ index 0cf536b906f2aa9107e78b84112329f4684937bf..1a23c0f6ac1e8e33a7fc05d847325a16
  function buildRawMessage(message) {
    const headers = [
 diff --git a/dist/dist-ZATTDANE.js b/dist/dist-ZATTDANE.js
-index fb4e1a679969c34f7a9636e37d47839b9f1e0898..a973271b3d36614fdfa653904c5f2a5760b18e99 100644
+index fb4e1a679969c34f7a9636e37d47839b9f1e0898..22a6e8099c7c90dbcc1ac1d034effb92bb6c5c63 100644
 --- a/dist/dist-ZATTDANE.js
 +++ b/dist/dist-ZATTDANE.js
-@@ -1833,7 +1833,7 @@ function graphRoutes(ctx) {
+@@ -1323,6 +1323,16 @@ function graphRoutes(ctx) {
+     moveMessage(ms, message, deletedItems.microsoft_id);
+     return c.body(null, 204);
+   });
++  // Cue: Graph's permanentDelete removes the item instead of moving it to Deleted Items.
++  app.post("/v1.0/me/messages/:messageId/permanentDelete", (c) => {
++    const authEmail = requireAuthEmail(ctx, c);
++    if (authEmail instanceof Response) return authEmail;
++    const ms = getMicrosoftStore(ctx.store);
++    const message = resolveMessage(ctx, authEmail, c.req.param("messageId"));
++    if (!message) return microsoftGraphError(c, 404, "ErrorItemNotFound", "Message not found.");
++    ms.messages.delete(message.id);
++    return c.body(null, 204);
++  });
+   app.post("/v1.0/me/messages/:messageId/send", (c) => {
+     const authEmail = requireAuthEmail(ctx, c);
+     if (authEmail instanceof Response) return authEmail;
+@@ -1833,7 +1843,7 @@ function graphRoutes(ctx) {
      const body = await parseJsonBody(c);
      const requests = Array.isArray(body.requests) ? body.requests : [];
      const ms = getMicrosoftStore(ctx.store);
@@ -50,7 +67,7 @@ index fb4e1a679969c34f7a9636e37d47839b9f1e0898..a973271b3d36614fdfa653904c5f2a57
        if (!request || typeof request !== "object" || Array.isArray(request)) {
          return { id: "unknown", status: 400, body: { error: { message: "Invalid batch request." } } };
        }
-@@ -1841,6 +1841,20 @@ function graphRoutes(ctx) {
+@@ -1841,6 +1851,20 @@ function graphRoutes(ctx) {
        const id = typeof entry.id === "string" ? entry.id : generateMicrosoftId("batch");
        const method = typeof entry.method === "string" ? entry.method.toUpperCase() : "";
        const url = typeof entry.url === "string" ? entry.url : "";
@@ -71,7 +88,7 @@ index fb4e1a679969c34f7a9636e37d47839b9f1e0898..a973271b3d36614fdfa653904c5f2a57
        if (method === "POST" && url.match(/^\/me\/messages\/[^/]+\/move$/)) {
          const messageId = url.split("/")[3] ?? "";
          const message = resolveMessage(ctx, authEmail, messageId);
-@@ -1856,7 +1870,7 @@ function graphRoutes(ctx) {
+@@ -1856,7 +1880,7 @@ function graphRoutes(ctx) {
          }
        }
        return { id, status: 400, body: { error: { message: `Unsupported batch request: ${method} ${url}` } } };
