@@ -126,6 +126,7 @@ import {
 } from "./compose-recipients";
 import { DeliveryOptions, type DeliveryOptionsHandle } from "./DeliveryOptions";
 import { resolveRemoteImages } from "./resolve-remote-images";
+import { useComposeAssist } from "./useComposeAssist";
 import { useComposeSnippets } from "./useComposeSnippets";
 import {
   getReminderAfterSendTimeChange,
@@ -522,12 +523,25 @@ function ComposeEmailFormContent({
     shownRecipientRows[field] ||
     Boolean(watch(field)) ||
     activeRecipientField === field;
+  const assist = useComposeAssist({
+    editorRef,
+    emailAccountId: selectedEmailAccountId,
+    threadId: replyingToEmail?.threadId,
+    getEnvelope: () => ({
+      to: getValues("to") || undefined,
+      subject: getValues("subject") || undefined,
+    }),
+    getContainer: () =>
+      formRef.current?.closest<HTMLElement>("[role='dialog']") ?? document.body,
+  });
+  const { isOpen: assistIsOpen, focus: focusAssist } = assist;
   const {
     onSlashKeyDown,
     onSlashTrigger,
     toolbar: snippetToolbar,
   } = useComposeSnippets({
     editorRef,
+    onAskCue: assist.openPrompt,
     to: watch("to"),
   });
 
@@ -984,6 +998,15 @@ function ComposeEmailFormContent({
 
   const onSubmit: SubmitHandler<ComposeFormValues> = useCallback(
     async (data, event) => {
+      // Cue's suggestion is never sent unseen: it has to be accepted or
+      // discarded first.
+      if (assistIsOpen) {
+        focusAssist();
+        toastError({
+          description: "Accept or discard Cue's suggestion before sending.",
+        });
+        return;
+      }
       const submitter = (event?.nativeEvent as SubmitEvent | undefined)
         ?.submitter;
       const markDoneAfterSend = submitter === sendAndMarkDoneButtonRef.current;
@@ -1294,6 +1317,8 @@ function ComposeEmailFormContent({
       refetch?.();
     },
     [
+      assistIsOpen,
+      focusAssist,
       stopProviderAutosave,
       resumeProviderAutosave,
       canScheduleDelivery,
@@ -1502,6 +1527,7 @@ function ComposeEmailFormContent({
         isSubmitting
       )
         return;
+      if (assist.interceptSend()) return;
       formRef.current?.requestSubmit();
     },
     sendAndMarkDone: onMarkDone
@@ -1511,6 +1537,7 @@ function ComposeEmailFormContent({
             isSubmitting
           )
             return;
+          if (assist.interceptSend()) return;
           const submitter = sendAndMarkDoneButtonRef.current;
           if (submitter) formRef.current?.requestSubmit(submitter);
         }
@@ -1529,6 +1556,15 @@ function ComposeEmailFormContent({
               deliveryOptionsRef.current?.open("remindMe");
           }
         : undefined,
+    askCue: (event) => {
+      if (
+        !isShortcutForForm(event, formRef.current, shortcutOwnerId) ||
+        isSubmitting
+      )
+        return;
+      event?.preventDefault();
+      assist.open();
+    },
     attachFiles: (event) => {
       if (
         !isShortcutForForm(event, formRef.current, shortcutOwnerId) ||
@@ -1755,6 +1791,7 @@ function ComposeEmailFormContent({
         // Cue's reply is full of course codes and times a dictionary flags.
         // Checking comes back with the user's first edit.
         spellCheck={!isCueSuggestion}
+        onAssist={assist.open}
         onSlashKeyDown={onSlashKeyDown}
         onSlashTrigger={onSlashTrigger}
         ref={editorRef}
@@ -1868,6 +1905,22 @@ function ComposeEmailFormContent({
         </div>
 
         <div className="flex items-center gap-0.5 text-muted-foreground">
+          {assist.panel}
+          {/* Phones have no shortcut keys and a cramped selection bubble. */}
+          <Button
+            aria-label="Ask Cue"
+            className="hover:bg-transparent sm:hidden"
+            disabled={isSubmitting}
+            onClick={assist.open}
+            onPointerDown={(event) => event.preventDefault()}
+            size="icon"
+            type="button"
+            variant="ghostMuted"
+          >
+            <span aria-hidden="true" className="text-base leading-none">
+              ✦
+            </span>
+          </Button>
           {snippetToolbar}
           <VoiceInput
             onInsert={(text) => {

@@ -441,6 +441,15 @@ const SHORTCUT_DEFINITIONS = [
     capture: true,
   },
   {
+    id: "askCue",
+    keys: ["mod+j"],
+    scope: "mail",
+    group: "Compose",
+    label: "Ask Cue to write or rewrite",
+    allowWhileTyping: true,
+    capture: true,
+  },
+  {
     id: "sendLater",
     keys: ["mod+shift+l"],
     scope: "mail",
