@@ -8,6 +8,8 @@ export type ProviderRetryPolicy = "all" | "rate-limit-only";
 
 interface ProviderRetryDecision {
   delayMs: number;
+  /** An outcome callers handle themselves, rethrown without a warning. */
+  expected?: boolean;
   isRateLimit: boolean;
   logFields: Record<string, unknown>;
   retryable: boolean;
@@ -34,7 +36,9 @@ export async function withProviderRetry<T>(
   return pRetry(operation, {
     retries: maxRetries,
     onFailedAttempt: async (attempt) => {
-      const { retryable, isRateLimit, delayMs, logFields } = classify(attempt);
+      const { retryable, isRateLimit, delayMs, logFields, expected } =
+        classify(attempt);
+      if (expected) throw attempt.error;
 
       if (!retryable || (retryPolicy === "rate-limit-only" && !isRateLimit)) {
         logger.warn("Non-retryable error encountered", {

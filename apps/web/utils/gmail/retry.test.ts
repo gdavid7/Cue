@@ -8,6 +8,8 @@ import {
   MAX_GMAIL_BLOCKING_RETRY_DELAY_MS,
 } from "./retry";
 import { sleep } from "@/utils/sleep";
+import { GmailCallDeferredError } from "@/utils/gmail/quota";
+import { createScopedLogger } from "@/utils/logger";
 
 vi.mock("@/utils/sleep", () => ({
   sleep: vi.fn().mockResolvedValue(undefined),
@@ -299,6 +301,22 @@ describe("Gmail retry helpers", () => {
 
       expect(operation).toHaveBeenCalledTimes(1);
       expect(sleep).not.toHaveBeenCalled();
+    });
+
+    it("passes the quota gate's deferral through without a warning", async () => {
+      // A deferral is the gate working as intended, many times a minute
+      // during a first sync, not an error worth a warning.
+      const logger = createScopedLogger("gmail-retry-test");
+      const warn = vi.spyOn(logger, "warn");
+      const deferred = new GmailCallDeferredError(5000, "background");
+      const operation = vi.fn().mockRejectedValue(deferred);
+
+      await expect(withGmailRetry(operation, 5, { logger })).rejects.toBe(
+        deferred,
+      );
+
+      expect(operation).toHaveBeenCalledTimes(1);
+      expect(warn).not.toHaveBeenCalled();
     });
 
     it("rethrows original non-retryable errors", async () => {

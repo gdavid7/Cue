@@ -9,6 +9,8 @@ import {
 
 const logger = createScopedLogger("gmail-retry");
 export const MAX_GMAIL_BLOCKING_RETRY_DELAY_MS = 10_000;
+// GmailCallDeferredError's code; quota.ts imports this module.
+const GMAIL_CALL_DEFERRED_CODE = "GMAIL_CALL_DEFERRED";
 
 interface RetryLogContext {
   logger?: Logger;
@@ -68,6 +70,8 @@ async function withGmailRetryPolicy<T>(
       const retryAfterHeader = getRetryAfterHeaderFromError(attempt.error);
 
       return {
+        // The quota gate held the call back on purpose; callers handle it.
+        expected: errorInfo.code === GMAIL_CALL_DEFERRED_CODE,
         retryable,
         isRateLimit,
         delayMs: calculateRetryDelay(
