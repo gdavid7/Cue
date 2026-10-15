@@ -317,6 +317,8 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
   function connected(...apps: string[]) {
     prisma.mcpConnection.findMany.mockResolvedValue(
       apps.map((name) => ({
+        id: `connection-${name}`,
+        updatedAt: new Date(1000),
         emailAccountId: "school",
         integration: { name },
       })) as never,
@@ -727,7 +729,7 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
     expect(calls()).toHaveLength(2);
     expect(calls()).toContainEqual(["HUBSPOT_GET_ACCOUNT_INFO", {}]);
     expect(redis.set).toHaveBeenCalledWith(
-      "hubspot-portal-id:school",
+      "hubspot-portal-id:connection-hubspot:1000",
       "4211",
       expect.anything(),
     );
@@ -776,7 +778,7 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
   it("links a HubSpot contact through the connection's cached portal without asking again", async () => {
     connected("hubspot");
     vi.mocked(redis.get).mockImplementation(async (key: string) =>
-      key === "hubspot-portal-id:school" ? "4211" : null,
+      key === "hubspot-portal-id:connection-hubspot:1000" ? "4211" : null,
     );
     answer({
       HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA: () => ({
@@ -850,6 +852,31 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
         linkedBy: "sender",
       },
     ]);
+  });
+
+  it("links through the org's named domain before any other Salesforce address, cached by connection", async () => {
+    connected("salesforce");
+    answer({
+      SALESFORCE_SEARCH_CONTACTS: () => ({
+        totalSize: 1,
+        records: [{ Id: "003A", Name: "Nora", Email: "nora@northwind.com" }],
+      }),
+      SALESFORCE_GET_USER_INFO: () => ({
+        profile: "https://login-sandbox.my.salesforce.com/005A",
+        urls: { custom_domain: "https://acme.my.salesforce.com" },
+      }),
+    });
+
+    const { candidates } = await lookup({ senderEmail: "nora@northwind.com" });
+
+    expect(candidates[0]?.url).toBe(
+      "https://acme.my.salesforce.com/lightning/r/Contact/003A/view",
+    );
+    expect(redis.set).toHaveBeenCalledWith(
+      "salesforce-instance:connection-salesforce:1000",
+      "https://acme.my.salesforce.com",
+      expect.anything(),
+    );
   });
 
   it("links nowhere when Salesforce names an address outside its own domains", async () => {

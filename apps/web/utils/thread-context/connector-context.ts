@@ -24,6 +24,9 @@ const JIRA_CLOUD_ID_CACHE_SECONDS = 30 * 24 * 60 * 60;
 // bounds how long a link could point at the old one.
 const CONNECTION_DETAIL_CACHE_SECONDS = 7 * 24 * 60 * 60;
 // An org's own My Domain host, e.g. acme.my.salesforce.com, not login hosts.
+// Salesforce's userinfo names the org's domain in urls.custom_domain; its
+// OAuth token response calls the org instance_url.
+const SALESFORCE_ORG_FIELDS = ["custom_domain", "instance_url"];
 const SALESFORCE_ORG_HOST = /^[a-z0-9-]+(\.[a-z0-9-]+)*\.my\.salesforce\.com$/;
 const RESULTS_PER_SOURCE = 10;
 const MAX_TEXT = 600;
@@ -51,8 +54,12 @@ type Search = {
 
 type SenderLookup = {
   now: Date;
-  /** The account the app was connected from, which keys its cached details. */
-  connectionAccountId: string;
+  /**
+   * The connection and when it last changed, which keys its cached details:
+   * a reconnect, perhaps to another account, updates the connection, so
+   * details of the account connected before are never reused.
+   */
+  connectionId: string;
   logger: Logger;
 };
 
@@ -106,6 +113,8 @@ export async function fetchConnectorCandidates({
         ...ownedBySameUser(emailAccountId),
       },
       select: {
+        id: true,
+        updatedAt: true,
         emailAccountId: true,
         integration: { select: { name: true } },
       },
@@ -201,7 +210,7 @@ export async function fetchConnectorCandidates({
               lookup(() =>
                 senderSource(execute, senderEmail, {
                   now,
-                  connectionAccountId,
+                  connectionId: `${connection.id}:${connection.updatedAt.getTime()}`,
                   logger,
                 }),
               ),
@@ -585,7 +594,7 @@ async function findHubSpotContact(
   const [{ results }, portalId] = await Promise.all([
     searchHubSpotContacts(execute, email),
     cachedForConnection(
-      `hubspot-portal-id:${lookup.connectionAccountId}`,
+      `hubspot-portal-id:${lookup.connectionId}`,
       lookup,
       () => hubSpotPortalId(execute),
     ),
@@ -651,7 +660,7 @@ async function findSalesforceContact(
   lookup: SenderLookup,
 ): Promise<ContextCandidate | null> {
   const instance = cachedForConnection(
-    `salesforce-instance:${lookup.connectionAccountId}`,
+    `salesforce-instance:${lookup.connectionId}`,
     lookup,
     () => salesforceInstance(execute),
   );
@@ -820,7 +829,11 @@ async function cachedForConnection(
  */
 async function salesforceInstance(execute: Execute): Promise<string | null> {
   const info = await execute("SALESFORCE_GET_USER_INFO", {});
-  for (const value of stringsIn(info)) {
+  // Fields that name the org itself come first; any other address after.
+  const named = SALESFORCE_ORG_FIELDS.flatMap((field) =>
+    stringsIn(info, 0, field),
+  );
+  for (const value of [...named, ...stringsIn(info)]) {
     const url = parseUrl(value);
     if (
       url?.protocol === "https:" &&
@@ -833,10 +846,15 @@ async function salesforceInstance(execute: Execute): Promise<string | null> {
   return null;
 }
 
-function stringsIn(value: unknown, depth = 0): string[] {
-  if (typeof value === "string") return [value];
+/** The strings in a response, or only those under the key `only`. */
+function stringsIn(value: unknown, depth = 0, only?: string): string[] {
+  if (typeof value === "string") return only ? [] : [value];
   if (!value || typeof value !== "object" || depth > 4) return [];
-  return Object.values(value).flatMap((v) => stringsIn(v, depth + 1));
+  return Object.entries(value).flatMap(([key, v]) =>
+    only && key === only && typeof v === "string"
+      ? [v]
+      : stringsIn(v, depth + 1, only),
+  );
 }
 
 function isoTime(value: string | number | null | undefined, fallback: Date) {

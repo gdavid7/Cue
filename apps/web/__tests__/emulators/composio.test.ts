@@ -231,6 +231,8 @@ describe("Composio emulator with links and the sender in a thread", () => {
   function connected(...apps: string[]) {
     prisma.mcpConnection.findMany.mockResolvedValue(
       apps.map((name) => ({
+        id: `connection-${name}`,
+        updatedAt: new Date(0),
         emailAccountId: ACCOUNT,
         integration: { name },
       })) as never,
