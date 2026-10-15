@@ -90,7 +90,6 @@ const INTEGRATION_GROUPS: { label: string; apps: IntegrationTile[] }[] = [
     label: "Calendar",
     apps: [
       { name: "Google Calendar", domain: "google.com" },
-      { name: "Outlook Calendar", domain: "outlook.com" },
       fromConnector("calendly"),
     ],
   },
@@ -112,7 +111,7 @@ const FAQS: { question: string; answer: string }[] = [
   },
   {
     question: `How is ${BRAND_NAME} different from other AI email apps like Superhuman?`,
-    answer: `Superhuman is a fast, polished email app with years of work behind it, Outlook support and mobile apps. Its integrations lean toward sales tools like CRMs. ${BRAND_NAME} is built for students, freelancers, founders and small teams. It connects your email to tools like Canvas, Google Drive, Slack, Jira and Asana, and shows what each email needs with the related files, assignments, messages and tasks next to it. Put simply: Superhuman connects your email to your sales tools. ${BRAND_NAME} connects it to everything else. (Based on Superhuman's public website, October 2026.)`,
+    answer: `Superhuman is a fast, polished email app with years of work behind it, Outlook support and mobile apps. Its integrations lean toward sales tools like CRMs. ${BRAND_NAME} is built for students, freelancers, founders and small teams. It connects your email to tools like Canvas, Google Drive, Slack, Jira and Asana, and shows what each email needs with the related files, assignments, messages and tasks next to it. ${BRAND_NAME} doesn't have a phone app yet, but it works in your phone's browser. Put simply: Superhuman connects your email to your sales tools. ${BRAND_NAME} connects it to everything else. (Based on Superhuman's public website, October 2026.)`,
   },
   {
     question: `Who is ${BRAND_NAME} for?`,
@@ -124,7 +123,7 @@ const FAQS: { question: string; answer: string }[] = [
   },
   {
     question: "Does it work with Outlook?",
-    answer: `Not yet. ${BRAND_NAME} works with Gmail accounts today. You can connect an Outlook calendar.`,
+    answer: `Not yet. ${BRAND_NAME} works with Gmail accounts today.`,
   },
   {
     question: "Why is there a waitlist?",
@@ -156,6 +155,9 @@ export function IntelligenceSection() {
       title="Email has worked the same way for over 50 years."
       description={`A list of messages, newest first, and the rest is up to you: what each one wants, where the file is, what your team already said. ${BRAND_NAME} does a lot more than sorting. It tells you what every email needs and brings everything related to it.`}
     >
+      <h3 className="mb-3 font-medium text-foreground">
+        Intelligence, not just sorting.
+      </h3>
       <IntelligenceDemo />
       <ul className="mt-10 grid gap-x-8 gap-y-6 sm:grid-cols-2">
         {MORE_THAN_SORTING.map((item) => (
