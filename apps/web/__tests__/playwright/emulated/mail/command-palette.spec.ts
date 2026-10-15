@@ -125,8 +125,10 @@ test("Command K acts on highlighted and selected conversations", async ({
       { timeout: 60_000 },
     )
     .toBeGreaterThanOrEqual(3);
-  await ensureReadState(page, conversations, "Alice Example", false);
+  // A checkbox click also moves the highlight to its row, so Alice goes last:
+  // the palette below acts on her as the highlighted, unread conversation.
   await ensureReadState(page, conversations, "Bob Example", true);
+  await ensureReadState(page, conversations, "Alice Example", false);
 
   await page.keyboard.press(`${commandModifier}+KeyK`);
   const palette = page.getByRole("dialog");
