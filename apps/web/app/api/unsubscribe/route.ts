@@ -186,47 +186,7 @@ function renderConfirmationPage(token: string) {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="referrer" content="no-referrer" />
     <title>Confirm unsubscribe</title>
-    <style>
-      body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        background: linear-gradient(135deg, #fff7ed 0%, #ffffff 100%);
-        color: #1f2937;
-        font-family: ui-sans-serif, system-ui, sans-serif;
-      }
-      main {
-        width: min(100%, 30rem);
-        margin: 2rem;
-        padding: 2rem;
-        border-radius: 1rem;
-        border: 1px solid #fed7aa;
-        background: rgba(255, 255, 255, 0.96);
-        box-shadow: 0 24px 60px rgba(251, 146, 60, 0.12);
-      }
-      h1 {
-        margin: 0 0 0.75rem;
-        font-size: 1.75rem;
-      }
-      p {
-        margin: 0 0 1.5rem;
-        line-height: 1.6;
-      }
-      button {
-        border: 0;
-        border-radius: 999px;
-        background: #ea580c;
-        color: white;
-        cursor: pointer;
-        font: inherit;
-        font-weight: 600;
-        padding: 0.875rem 1.25rem;
-      }
-      button:hover {
-        background: #c2410c;
-      }
-    </style>
+    <style>${PAGE_STYLES}</style>
   </head>
   <body>
     <main>
@@ -249,34 +209,7 @@ function renderStatusPage(title: string, message: string) {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="referrer" content="no-referrer" />
     <title>${escapeHtml(title)}</title>
-    <style>
-      body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        background: #fffaf5;
-        color: #1f2937;
-        font-family: ui-sans-serif, system-ui, sans-serif;
-      }
-      main {
-        width: min(100%, 30rem);
-        margin: 2rem;
-        padding: 2rem;
-        border-radius: 1rem;
-        border: 1px solid #fed7aa;
-        background: white;
-        box-shadow: 0 20px 50px rgba(251, 146, 60, 0.1);
-      }
-      h1 {
-        margin: 0 0 0.75rem;
-        font-size: 1.75rem;
-      }
-      p {
-        margin: 0;
-        line-height: 1.6;
-      }
-    </style>
+    <style>${PAGE_STYLES}</style>
   </head>
   <body>
     <main>
@@ -286,3 +219,85 @@ function renderStatusPage(title: string, message: string) {
   </body>
 </html>`;
 }
+
+// The app's own light and dark tokens, chosen by the visitor's OS setting
+// since this page renders outside the app and its theme preference.
+const PAGE_STYLES = `
+      :root {
+        color-scheme: light dark;
+        --background: #fdfdfd;
+        --card: #ffffff;
+        --border: #e6e6e6;
+        --foreground: #242424;
+        --muted: #737373;
+        --primary: #2563eb;
+        --primary-hover: #1d4ed8;
+        --primary-foreground: #ffffff;
+        --shadow: rgba(0, 0, 0, 0.06);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --background: #26282c;
+          --card: #2d2f34;
+          --border: #3a3d42;
+          --foreground: #e9eaec;
+          --muted: #a7a9af;
+          --primary: #60a5fa;
+          --primary-hover: #93c5fd;
+          --primary-foreground: #1c1e21;
+          --shadow: rgba(0, 0, 0, 0.3);
+        }
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: var(--background);
+        color: var(--foreground);
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+      main {
+        box-sizing: border-box;
+        width: min(calc(100% - 2rem), 30rem);
+        margin: 1rem;
+        padding: 2rem;
+        border-radius: 1rem;
+        border: 1px solid var(--border);
+        background: var(--card);
+        box-shadow: 0 20px 50px var(--shadow);
+      }
+      h1 {
+        margin: 0 0 0.75rem;
+        font-size: 1.75rem;
+        letter-spacing: -0.02em;
+      }
+      p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+      p:not(:last-child) {
+        margin-bottom: 1.5rem;
+      }
+      button {
+        border: 0;
+        border-radius: 999px;
+        background: var(--primary);
+        color: var(--primary-foreground);
+        cursor: pointer;
+        font: inherit;
+        font-weight: 600;
+        padding: 0.875rem 1.25rem;
+      }
+      button:hover {
+        background: var(--primary-hover);
+      }
+      button:active {
+        transform: scale(0.97);
+      }
+      button:focus-visible {
+        outline: 2px solid var(--primary);
+        outline-offset: 2px;
+      }
+`;

@@ -80,7 +80,9 @@ export function CancelBookingClient({
                   registerProps={register("reason")}
                   error={errors.reason}
                 />
-                {error ? <p className="text-sm text-red-500">{error}</p> : null}
+                {error ? (
+                  <p className="text-sm text-destructive">{error}</p>
+                ) : null}
                 <div className="flex flex-wrap items-center gap-3">
                   <Button type="submit" loading={isSubmitting}>
                     Cancel booking
@@ -88,7 +90,7 @@ export function CancelBookingClient({
                   {rescheduleHref ? (
                     <a
                       href={rescheduleHref}
-                      className="text-sm font-medium text-blue-600 underline"
+                      className="text-sm font-medium text-blue-600 underline dark:text-blue-400"
                     >
                       Reschedule instead
                     </a>
