@@ -7,7 +7,7 @@ import {
   withPageParams,
 } from "@/utils/mail-url";
 import { getMailSettings } from "@/utils/split-inbox/settings.server";
-import { isInboxStyleLandingSplit } from "@/utils/split-inbox/inbox-styles";
+import { findLandingSplit } from "@/utils/split-inbox/inbox-styles";
 
 /**
  * The signed-in user's accounts in the order they were connected. Position in
@@ -103,7 +103,7 @@ async function getLegacyView(
   if (!splitId) return { kind: "inbox" };
   const { splits } = await getMailSettings({ emailAccountId });
   const slug = getSplitSlugs(splits).get(splitId);
-  const landing = splits.find(isInboxStyleLandingSplit) ?? splits[0];
+  const landing = findLandingSplit(splits);
   if (!slug || landing?.id === splitId) return { kind: "inbox" };
   return { kind: "split", slug };
 }

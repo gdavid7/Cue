@@ -27,6 +27,7 @@
   "exports": {
     "./core": "./src/core/email-html.ts",
     "./fixtures": "./src/fixtures/email-html.ts",
+    "./markdown": "./src/core/email-markdown.ts",
     "./web": "./src/web/EmailEditor.tsx"
   },
   "scripts": {
@@ -36,6 +37,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "marked": "17.0.6",
     "parse5": "8.0.1"
   },
   "peerDependencies": {

@@ -214,6 +214,8 @@ describe("HomeDashboard notices", () => {
     expect(
       within(notice).getByRole("link", { name: "See plans" }),
     ).toBeTruthy();
+    // A nag, not a section: it stays out of the heading outline.
+    expect(within(notice).queryByRole("heading")).toBeNull();
   });
 
   it("asks to turn on the assistant when nothing has been tracked", () => {
@@ -351,7 +353,7 @@ describe("HomeDashboard states", () => {
     renderToday();
 
     expect(onlyStatus().textContent).toBe(
-      "Cue is reading your recent mail. What needs a reply will appear here.",
+      "Cue is reading your recent mail.What needs a reply will appear here.",
     );
     expect(screen.queryByText("All clear.")).toBeNull();
     expect(lanes()).toEqual([]);
@@ -386,6 +388,7 @@ describe("HomeDashboard states", () => {
   it("busy with deadlines: lists what's next, soonest first, each with its source", () => {
     mocks.home.data = {
       ...homeData([thread("a", "Quarterly numbers")]),
+      calendar: { connected: true, next: nextEvent(false) },
       nextUp: [
         {
           id: "event:review",
@@ -408,6 +411,8 @@ describe("HomeDashboard states", () => {
 
     renderToday();
 
+    // The meeting is in the list below, so the summary doesn't repeat it.
+    expect(onlyStatus().textContent).toBe("1 needs a reply");
     const nextUp = screen.getByRole("region", { name: "Next up" });
     expect(
       within(nextUp)
