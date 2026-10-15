@@ -1128,6 +1128,175 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     expect(result.hasMore).toBe(true);
   });
 
+  it("searchInbox returns the messages that loaded and says how many could not", async () => {
+    const searchMessages = vi.fn().mockResolvedValue({
+      messages: [getMockMessage({ id: "m1", threadId: "t1" })],
+      unloadedMessages: 4,
+    });
+    (createEmailProvider as any).mockResolvedValue({
+      searchMessages,
+      getLabels: vi.fn().mockResolvedValue([]),
+    });
+
+    const toolInstance = searchInboxTool({
+      email: TEST_EMAIL,
+      emailAccountId: "email-account-1",
+      provider: "google",
+      logger,
+    });
+
+    const result: any = await (toolInstance.execute as any)({
+      query: "from:jobs@example.com",
+      limit: 20,
+    });
+
+    expect(searchMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ allowPartial: true }),
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.messages.map((m: any) => m.messageId)).toEqual(["m1"]);
+    expect(result.incomplete).toEqual({ unloadedMessages: 4 });
+  });
+
+  describe("searchInbox with the browser's local mail store", () => {
+    const localMessage = {
+      id: "m-local",
+      threadId: "t-local",
+      subject: "Next steps",
+      from: "jobs@acme.com",
+      to: TEST_EMAIL,
+      snippet: "Thanks for applying",
+      date: "2026-10-02T12:00:00.000Z",
+      labelIds: ["INBOX", "UNREAD", "Label_7"],
+      hasAttachments: true,
+    };
+
+    function setup(local: unknown) {
+      const searchMessages = vi.fn().mockResolvedValue({ messages: [] });
+      (createEmailProvider as any).mockResolvedValue({
+        searchMessages,
+        getLabels: vi
+          .fn()
+          .mockResolvedValue([{ id: "Label_7", name: "Recruiting" }]),
+      });
+      const localMailSearch = { search: vi.fn().mockResolvedValue(local) };
+      const toolInstance = searchInboxTool({
+        email: TEST_EMAIL,
+        emailAccountId: "email-account-1",
+        provider: "google",
+        logger,
+        localMailSearch,
+      });
+      return { searchMessages, localMailSearch, toolInstance };
+    }
+
+    it("answers from the local store in the same shape as a Gmail search", async () => {
+      const { searchMessages, localMailSearch, toolInstance } = setup({
+        status: "ok",
+        messages: [localMessage],
+        nextPageToken: "local:abc",
+      });
+
+      const result: any = await (toolInstance.execute as any)({
+        query: "from:jobs@acme.com",
+        limit: 20,
+      });
+
+      expect(localMailSearch.search).toHaveBeenCalledWith({
+        query: "from:jobs@acme.com",
+        limit: 20,
+        pageToken: undefined,
+      });
+      expect(searchMessages).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        queryUsed: "from:jobs@acme.com",
+        totalReturned: 1,
+        nextPageToken: "local:abc",
+        hasMore: true,
+        messages: [
+          {
+            messageId: "m-local",
+            threadId: "t-local",
+            subject: "Next steps",
+            from: "jobs@acme.com",
+            to: TEST_EMAIL,
+            snippet: "Thanks for applying",
+            date: "2026-10-02T12:00:00.000Z",
+            labelNames: ["INBOX", "UNREAD", "Recruiting"],
+            isUnread: true,
+            hasAttachments: true,
+          },
+        ],
+      });
+    });
+
+    it("searches Gmail when the local store can't answer", async () => {
+      const { searchMessages, toolInstance } = setup(null);
+
+      await (toolInstance.execute as any)({
+        query: "label:Recruiting",
+        limit: 20,
+      });
+
+      expect(searchMessages).toHaveBeenCalledWith(
+        expect.objectContaining({ query: "label:Recruiting" }),
+      );
+    });
+
+    it("keeps a Gmail page walk on Gmail", async () => {
+      const { searchMessages, localMailSearch, toolInstance } = setup({
+        status: "ok",
+        messages: [localMessage],
+      });
+
+      await (toolInstance.execute as any)({
+        query: "from:jobs@acme.com",
+        limit: 20,
+        pageToken: "gmail-page-2",
+      });
+
+      expect(localMailSearch.search).not.toHaveBeenCalled();
+      expect(searchMessages).toHaveBeenCalled();
+    });
+
+    it("says a local page can't be continued rather than restarting on Gmail", async () => {
+      const { searchMessages, toolInstance } = setup(null);
+
+      const result: any = await (toolInstance.execute as any)({
+        query: "from:jobs@acme.com",
+        limit: 20,
+        pageToken: "local:abc",
+      });
+
+      expect(searchMessages).not.toHaveBeenCalled();
+      expect(result.error).toBeTruthy();
+      expect(result.searchFeedback).toMatchObject({ retryable: true });
+    });
+  });
+
+  it("searchInbox says nothing about missing messages when all loaded", async () => {
+    (createEmailProvider as any).mockResolvedValue({
+      searchMessages: vi.fn().mockResolvedValue({
+        messages: [getMockMessage({ id: "m1", threadId: "t1" })],
+      }),
+      getLabels: vi.fn().mockResolvedValue([]),
+    });
+
+    const toolInstance = searchInboxTool({
+      email: TEST_EMAIL,
+      emailAccountId: "email-account-1",
+      provider: "google",
+      logger,
+    });
+
+    const result: any = await (toolInstance.execute as any)({
+      query: "from:jobs@example.com",
+      limit: 20,
+    });
+
+    expect(result).not.toHaveProperty("incomplete");
+  });
+
   it("searchInbox uses the capped default page size when limit is omitted", async () => {
     const searchMessages = vi.fn().mockResolvedValue({
       messages: [
@@ -1173,6 +1342,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
       query: "older_than:3y is:unread",
       maxResults: 20,
       pageToken: undefined,
+      allowPartial: true,
     });
   });
 
@@ -1998,6 +2168,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
       query: "newsletter",
       maxResults: 20,
       pageToken: undefined,
+      allowPartial: true,
     });
   });
 

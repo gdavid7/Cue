@@ -313,6 +313,9 @@ export const assistantInputSchema = z.object({
   openThreadId: providerIdSchema.optional(),
   // Its latest message, so the assistant can read the email itself.
   openMessageId: providerIdSchema.optional(),
+  // The browser holds this account's mail locally and can answer the
+  // assistant's inbox searches from it.
+  localMailSearch: z.boolean().optional().default(false),
 });
 
 export type AssistantInput = z.infer<typeof assistantInputSchema>;

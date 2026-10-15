@@ -14,6 +14,12 @@ import { redis } from "@/utils/redis";
 
 // A slow app shouldn't hold up the panel: its items just don't show.
 const SOURCE_TIMEOUT_MS = 8000;
+// An app that keeps failing or timing out usually does so again: an
+// assistant turn can search several times in a minute, and each would
+// otherwise wait seconds for the same error before answering. One failure
+// may be a blip, so it takes this many in a row.
+const FAILED_SOURCE_COOLDOWN_SECONDS = 5 * 60;
+const FAILURES_BEFORE_COOLDOWN = 2;
 // Fetching one known item should be quick; a slow one is left out.
 const LOOKUP_TIMEOUT_MS = 5000;
 const LINKS_PER_APP = 3;
@@ -144,8 +150,15 @@ export async function fetchConnectorCandidates({
       const search = async (): Promise<ContextCandidate[]> => {
         const source = SOURCES[name];
         if (!source || !keywords.length) return [];
+        const failuresKey = `connector-search-failures:${connection.id}`;
+        const failures =
+          Number(await redis.get<number>(failuresKey).catch(() => 0)) || 0;
+        if (failures >= FAILURES_BEFORE_COOLDOWN) {
+          complete = false;
+          return [];
+        }
         try {
-          return await withTimeout(
+          const found = await withTimeout(
             source(execute, {
               emailAccountId: connectionAccountId,
               keywords,
@@ -153,9 +166,16 @@ export async function fetchConnectorCandidates({
             }),
             SOURCE_TIMEOUT_MS,
           );
+          if (failures) await redis.del(failuresKey).catch(() => null);
+          return found;
         } catch (error) {
           logger.warn("Connected app search failed", { app: name, error });
           complete = false;
+          await redis
+            .set(failuresKey, failures + 1, {
+              ex: FAILED_SOURCE_COOLDOWN_SECONDS,
+            })
+            .catch(() => null);
           return [];
         }
       };

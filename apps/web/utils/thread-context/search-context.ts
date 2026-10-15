@@ -99,13 +99,7 @@ export async function searchContext({
   let emailFailed = false;
   let calendarFailed = false;
   const [hits, events, connectors] = await Promise.all([
-    emailProvider
-      .searchThreads({
-        query: terms.join(" OR "),
-        maxResults: SEARCH_THREADS,
-        messageFormat: "metadata",
-      })
-      .then((r) => r.threads)
+    searchEmailThreads(emailProvider, terms)
       .catch((error) => {
         // Empty results would read as "nothing about this"; a limited mailbox
         // has to be reported so the assistant can say to try again.
@@ -262,6 +256,32 @@ export function queryTerms(query: string) {
   return [...new Set(words(query).filter((w) => w.length >= 2))].slice(
     0,
     MAX_TERMS,
+  );
+}
+
+/**
+ * Threads with every word first, then any word to fill the page. Mail search
+ * returns newest first, so asking for any word alone fills the page with
+ * recent mail that only shares a common word and leaves out the older thread
+ * that has them all.
+ */
+async function searchEmailThreads(
+  emailProvider: EmailProvider,
+  terms: string[],
+): Promise<EmailThread[]> {
+  const search = (query: string, maxResults: number) =>
+    emailProvider
+      .searchThreads({ query, maxResults, messageFormat: "metadata" })
+      .then((r) => r.threads);
+  const all = await search(terms.join(" "), SEARCH_THREADS);
+  if (terms.length < 2 || all.length >= SEARCH_THREADS) return all;
+  // The newest any-word matches usually include the every-word ones, so a
+  // full page is asked for and the repeats dropped.
+  const seen = new Set(all.map((t) => t.id));
+  const any = await search(terms.join(" OR "), SEARCH_THREADS);
+  return [...all, ...any.filter((t) => !seen.has(t.id))].slice(
+    0,
+    SEARCH_THREADS,
   );
 }
 

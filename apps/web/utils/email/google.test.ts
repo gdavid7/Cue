@@ -40,7 +40,10 @@ const {
     publishBulkActionToTinybird: vi.fn().mockResolvedValue(undefined),
     updateEmailMessagesForSender: vi.fn().mockResolvedValue(undefined),
   },
-  gmailMessageBatchMock: { getMessagesBatch: vi.fn() },
+  gmailMessageBatchMock: {
+    getMessagesBatch: vi.fn(),
+    getMessagesBatchPartial: vi.fn(),
+  },
 }));
 
 vi.mock("@/env", () => ({
@@ -155,6 +158,49 @@ describe("GmailProvider.getMessagesWithPagination", () => {
     for (const [input] of gmailMessageBatchMock.getMessagesBatch.mock.calls) {
       expect(input.messageIds.length).toBeLessThanOrEqual(100);
     }
+  });
+});
+
+describe("GmailProvider.searchMessages with partial results allowed", () => {
+  function providerListing(ids: string[]) {
+    const list = vi.fn().mockResolvedValue({
+      data: { messages: ids.map((id) => ({ id, threadId: `t-${id}` })) },
+    });
+    return new GmailProvider({
+      ...createGmailClient({ list }),
+      context: { _options: { auth: { credentials: { access_token: "t" } } } },
+    } as unknown as gmail_v1.Gmail);
+  }
+
+  it("returns the messages that loaded and counts the rest", async () => {
+    gmailMessageBatchMock.getMessagesBatchPartial.mockResolvedValue({
+      messages: [{ id: "m1", threadId: "t-m1" }],
+      unloadedCount: 2,
+      unloadedError: { code: 403, message: "Quota exceeded" },
+    });
+
+    const result = await providerListing(["m1", "m2", "m3"]).searchMessages({
+      query: "invoice",
+      allowPartial: true,
+    });
+
+    expect(result.messages.map((m) => m.id)).toEqual(["m1"]);
+    expect(result.unloadedMessages).toBe(2);
+  });
+
+  it("fails like a full search when nothing loaded", async () => {
+    gmailMessageBatchMock.getMessagesBatchPartial.mockResolvedValue({
+      messages: [],
+      unloadedCount: 3,
+      unloadedError: { code: 403, message: "Quota exceeded" },
+    });
+
+    await expect(
+      providerListing(["m1", "m2", "m3"]).searchMessages({
+        query: "invoice",
+        allowPartial: true,
+      }),
+    ).rejects.toThrow("Quota exceeded");
   });
 });
 

@@ -5,7 +5,10 @@ import {
   readCompleteThreadJson,
 } from "@/utils/email/complete-thread";
 import type { gmail_v1 } from "@googleapis/gmail";
-import { getBatchWithRetry } from "@/utils/gmail/batch-with-retry";
+import {
+  getBatchWithRetry,
+  requireCompleteBatch,
+} from "@/utils/gmail/batch-with-retry";
 import {
   isDefined,
   type ThreadWithPayloadMessages,
@@ -140,17 +143,19 @@ export async function getThreadsBatch(
 ): Promise<ThreadWithPayloadMessages[]> {
   if (!threadIds.length) return [];
 
-  return getBatchWithRetry<
-    ThreadWithPayloadMessages,
-    ThreadWithPayloadMessages
-  >({
-    ids: threadIds,
-    endpoint: "/gmail/v1/users/me/threads",
-    accessToken,
-    parse: (thread) => thread,
-    logger,
-    queryString: threadBatchQueryString(options),
-  });
+  return requireCompleteBatch(
+    await getBatchWithRetry<
+      ThreadWithPayloadMessages,
+      ThreadWithPayloadMessages
+    >({
+      ids: threadIds,
+      endpoint: "/gmail/v1/users/me/threads",
+      accessToken,
+      parse: (thread) => thread,
+      logger,
+      queryString: threadBatchQueryString(options),
+    }),
+  );
 }
 
 function threadBatchQueryString(options?: {
