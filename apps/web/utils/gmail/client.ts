@@ -18,6 +18,7 @@ import {
   meterGmailCall,
   rememberGmailAccessToken,
 } from "@/utils/gmail/quota";
+import { extractErrorInfo } from "@/utils/gmail/retry";
 
 type AuthOptions = {
   accessToken?: string | null;
@@ -84,8 +85,11 @@ export const getGmailClientWithRefresh = async ({
     throw new SafeError("No refresh token");
   }
 
-  // we handle refresh ourselves so not passing in expiresAt
-  const auth = getAuth({ accessToken, refreshToken });
+  // Without the token's expiry, the auth client refreshes the token and
+  // resends any call Gmail answers 401 or 403, so every quota refusal reached
+  // Gmail twice and the resend went past the quota gate. Knowing the expiry,
+  // it refreshes ahead of it instead; a 401 is handled in meterGmailRequests.
+  const auth = getAuth({ accessToken, refreshToken, expiresAt });
   meterGmailRequests(auth, emailAccountId);
   const g = gmail({
     version: "v1",
@@ -220,7 +224,7 @@ function meterGmailRequests(
   const request = client.request.bind(client) as (
     options: GaxiosOptions,
   ) => Promise<unknown>;
-  const metered = (options: GaxiosOptions) =>
+  const send = (options: GaxiosOptions) =>
     meterGmailCall(
       {
         emailAccountId,
@@ -228,6 +232,17 @@ function meterGmailRequests(
       },
       () => request(options),
     );
+  const metered = async (options: GaxiosOptions) => {
+    try {
+      return await send(options);
+    } catch (error) {
+      if (extractErrorInfo(error).status !== 401) throw error;
+      // Gmail rejected a token before its recorded expiry: it was revoked or
+      // the stored expiry is wrong. One refresh and a charged resend.
+      await client.refreshAccessToken();
+      return send(options);
+    }
+  };
   client.request = metered as typeof client.request;
   meteredAccounts.set(client, emailAccountId);
 }
