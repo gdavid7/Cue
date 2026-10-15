@@ -51,6 +51,26 @@ describe("buildAxiomQueries", () => {
     expect(queries.totals.startsWith("['vercel] | delete']")).toBe(true);
   });
 
+  it("samples errors with arg_max over projected columns only", () => {
+    const apl = buildAxiomQueries("cue").errorSamples;
+    const [, projected, aggregation] =
+      apl.match(/\| project (.+) \| summarize (.+)$/) ?? [];
+    expect(apl).not.toContain("| extend ");
+    expect(aggregation).toMatch(/^arg_max\(_time, .+\) by route, message$/);
+    const projectedNames = new Set(
+      [...(projected ?? "").matchAll(/(?:^|, )(\w+)(?= = |,|$)/g)].map(
+        (match) => match[1],
+      ),
+    );
+    const sampled = aggregation
+      ?.replace(/^arg_max\(/, "")
+      .replace(/\) by route, message$/, "")
+      .split(", ");
+    for (const name of [...(sampled ?? []), "route", "message"]) {
+      expect(projectedNames, name).toContain(name);
+    }
+  });
+
   it("only names fields that next-axiom ships for Cue's logger calls", () => {
     const logger = new Logger({ autoFlush: false, logLevel: LogLevel.debug });
     logger.error("Request failed", {
