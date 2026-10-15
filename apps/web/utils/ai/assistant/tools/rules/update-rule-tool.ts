@@ -9,8 +9,8 @@ import {
   type RuleAction,
 } from "@/utils/ai/rule/create-rule-schema";
 import { isDuplicateError } from "@/utils/prisma-helpers";
+import { isOutboundRuleAction } from "@/utils/rule/outbound-actions";
 import {
-  isOutboundRuleAction,
   outboundActionsNeedChatConfirmation,
   partialUpdateRule,
   setRuleEnabled,

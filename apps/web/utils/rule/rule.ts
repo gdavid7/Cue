@@ -25,6 +25,7 @@ import {
 } from "@/utils/rule/static-from-risk";
 import type { RuleWithRelations } from "@/utils/rule/types";
 import type { RuleConditions } from "@/utils/condition";
+import { isOutboundEmailAction } from "@/utils/rule/outbound-actions";
 import {
   assertRuleActionUpdateEnabled,
   assertRuleActionsEnabled,
@@ -109,18 +110,6 @@ export function outboundActionsNeedChatConfirmation({
     needsConfirmation: riskMessages.length > 0,
     riskMessages,
   };
-}
-
-export function isOutboundRuleAction(type: ActionType) {
-  return isOutboundEmailAction(type) || type === ActionType.CALL_WEBHOOK;
-}
-
-function isOutboundEmailAction(type: ActionType) {
-  return (
-    type === ActionType.FORWARD ||
-    type === ActionType.SEND_EMAIL ||
-    type === ActionType.REPLY
-  );
 }
 
 function getChatRiskMessages(
