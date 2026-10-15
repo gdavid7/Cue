@@ -253,6 +253,33 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       ).toBe(0);
     });
 
+    it("holds a person's demand for a whole turn and releases only its own hold", async () => {
+      const background = { key: keys.demand, yieldCap: 0 };
+      const endsAt = await gmailQuotaStore.holdDemand({
+        key: keys.demand,
+        ms: 45_000,
+      });
+      expect(endsAt).toBeGreaterThan(0);
+      expect(
+        await take({ cost: 20, floor: 500, paceCap: 80, demand: background }),
+      ).toBeGreaterThan(40_000);
+      // A shorter hold doesn't cut the longer one short.
+      expect(
+        await gmailQuotaStore.holdDemand({ key: keys.demand, ms: 1000 }),
+      ).toBe(0);
+      await gmailQuotaStore.releaseDemand({
+        key: keys.demand,
+        endsAt: endsAt - 1,
+      });
+      expect(await redis!.exists(keys.demand)).toBe(1);
+
+      await gmailQuotaStore.releaseDemand({ key: keys.demand, endsAt });
+
+      expect(
+        await take({ cost: 20, floor: 500, paceCap: 80, demand: background }),
+      ).toBe(0);
+    });
+
     it("hands a minute's usage to exactly one caller", async () => {
       await gmailQuotaStore.note({
         usageKey: keys.usage,

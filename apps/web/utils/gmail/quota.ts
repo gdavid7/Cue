@@ -523,6 +523,37 @@ export function gmailRequestUnitsFor(priority: GmailQuotaPriority) {
 }
 
 /**
+ * Holds sync and background back, as one large interactive request does for
+ * two seconds, for as long as someone waits on a longer piece of work such as
+ * an assistant turn, up to `maxMs` so a turn that never ends can't starve
+ * sync. Call the returned function when the work ends.
+ */
+export async function holdGmailInteractiveDemand(
+  emailAccountId: string,
+  maxMs: number,
+): Promise<() => Promise<void>> {
+  const done = async () => {};
+  if (!isEmailProviderRateLimitRedisConfigured()) return done;
+  const key = accountKeys(emailAccountId).interactiveDemand;
+  try {
+    const endsAt = await withinStoreTimeout(
+      gmailQuotaStore.holdDemand({ key, ms: maxMs }),
+    );
+    if (!endsAt) return done;
+    return async () => {
+      await withinStoreTimeout(
+        gmailQuotaStore.releaseDemand({ key, endsAt }),
+      ).catch((error) => {
+        logger.warn("Failed to release Gmail interactive demand", { error });
+      });
+    };
+  } catch (error) {
+    logger.warn("Failed to hold Gmail interactive demand", { error });
+    return done;
+  }
+}
+
+/**
  * Marks a primary scan in progress. Background callers wait until it ends so
  * the inbox fills before anything spends quota on analysis. Every page of a
  * scan calls this; the marker is only written when it is due for a refresh.

@@ -59,6 +59,8 @@ import { isIntegrationActionEnabledForUserId } from "@/utils/integration-action.
 import { trimStaleToolResults } from "@/utils/ai/assistant/trim-stale-tool-results";
 import { withChatToolRuntime } from "@/utils/ai/assistant/chat-tool-runtime";
 import { getLowThinkingStepOptions } from "@/utils/llms/model";
+import { holdGmailInteractiveDemand } from "@/utils/gmail/quota";
+import { isGoogleProvider } from "@/utils/email/provider-types";
 
 export const maxDuration = 300;
 // Increment when chat prompts, tools, or routing change so run quality remains attributable.
@@ -159,6 +161,7 @@ export async function aiProcessAssistantChat({
     hasConnectedDrive,
     freshRuleState,
     expectedFixSystemType,
+    releaseGmailDemand,
   ] = await Promise.all([
     isIntegrationActionEnabledForUserId(user.userId),
     hasUsableCalendarConnection(emailAccountId).then(
@@ -195,7 +198,22 @@ export async function aiProcessAssistantChat({
           logger,
         })
       : null,
+    // Someone is waiting on this turn's Gmail calls, so background sync
+    // yields for as long as tools can run, not just two seconds per search.
+    isGoogleProvider(user.account.provider)
+      ? holdGmailInteractiveDemand(
+          emailAccountId,
+          ASSISTANT_CHAT_TOOL_BUDGET_MS[responseSurface],
+        )
+      : async () => {},
   ]);
+  let gmailDemandReleased = false;
+  const endGmailDemand = () => {
+    if (gmailDemandReleased) return;
+    gmailDemandReleased = true;
+    releaseGmailDemand().catch(() => undefined);
+  };
+  abortSignal?.addEventListener("abort", endGmailDemand, { once: true });
   let ruleReadState: RuleReadState | null = null;
   const pendingRuleDeletionNames = new Set<string>();
   const memoryConversationMessages = conversationMessagesForMemory ?? messages;
@@ -436,7 +454,10 @@ export async function aiProcessAssistantChat({
       });
       onModelResolved?.(resolvedModel);
     },
-    onEnd,
+    onEnd: async (event) => {
+      endGmailDemand();
+      await onEnd?.(event);
+    },
     stopWhen: () => false,
     prepareStep: ({ messages: stepMessages, stepNumber, model }) => {
       const trimmedMessages = trimStaleToolResults(stepMessages);
@@ -459,6 +480,7 @@ export async function aiProcessAssistantChat({
         return { messages, providerOptions };
       }
 
+      endGmailDemand();
       return {
         messages,
         activeTools: [],
@@ -468,6 +490,7 @@ export async function aiProcessAssistantChat({
     tools: allTools,
     abortSignal,
   });
+  result.catch(endGmailDemand);
 
   return result;
 }

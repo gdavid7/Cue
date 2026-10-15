@@ -9,7 +9,10 @@ import {
   loadFreshRuleContext,
 } from "@/utils/ai/assistant/chat";
 import { runWithAuditContext } from "@/utils/audit/context";
-import { currentGmailQuotaContext } from "@/utils/gmail/quota";
+import {
+  currentGmailQuotaContext,
+  holdGmailInteractiveDemand,
+} from "@/utils/gmail/quota";
 import { toolCallAgentStream } from "@/utils/llms";
 
 const {
@@ -25,6 +28,13 @@ const {
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/llms", () => ({ toolCallAgentStream: vi.fn() }));
+const { mockReleaseDemand } = vi.hoisted(() => ({
+  mockReleaseDemand: vi.fn(async () => {}),
+}));
+vi.mock("@/utils/gmail/quota", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/gmail/quota")>()),
+  holdGmailInteractiveDemand: vi.fn(async () => mockReleaseDemand),
+}));
 vi.mock("@/utils/integration-action.server", () => ({
   isIntegrationActionEnabledForUserId: mockIsIntegrationActionEnabledForUserId,
 }));
@@ -481,5 +491,50 @@ describe("aiProcessAssistantChat turn limits", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("aiProcessAssistantChat Gmail demand", () => {
+  async function run() {
+    vi.clearAllMocks();
+    vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
+    await aiProcessAssistantChat({
+      messages: [{ role: "user", content: "what's new?" }],
+      emailAccountId: "email-account-id",
+      user: getEmailAccount(),
+      logger: createTestLogger(),
+    });
+    return vi.mocked(toolCallAgentStream).mock.calls[0][0];
+  }
+
+  it("holds background Gmail work back for the turn, capped at its tool budget", async () => {
+    await run();
+
+    expect(holdGmailInteractiveDemand).toHaveBeenCalledWith(
+      "email-account-id",
+      45_000,
+    );
+    expect(mockReleaseDemand).not.toHaveBeenCalled();
+  });
+
+  it("lets background Gmail work go once the turn ends", async () => {
+    const options = await run();
+
+    await options.onEnd?.({} as never);
+
+    expect(mockReleaseDemand).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets background Gmail work go once tools are switched off", async () => {
+    const options = await run();
+
+    await options.prepareStep?.({
+      stepNumber: 6,
+      steps: [],
+      messages: [],
+      model: { provider: "google.generative-ai", modelId: "gemini-3.8-flash" },
+    } as never);
+
+    expect(mockReleaseDemand).toHaveBeenCalledTimes(1);
   });
 });
