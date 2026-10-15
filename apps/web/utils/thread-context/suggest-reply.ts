@@ -16,7 +16,11 @@ import { assertHasAiAccess } from "@/utils/premium/limits";
 import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
-import { collectThreadContext } from "@/utils/thread-context/get-thread-context";
+import {
+  collectThreadContext,
+  latestSenderMessage,
+} from "@/utils/thread-context/get-thread-context";
+import { isAuthenticatedSender } from "@/utils/email/sender-authentication";
 import type { ParsedMessage } from "@/utils/types";
 import { isExaSearchEnabled, searchExa } from "@/utils/exa/search";
 import { domainOf } from "@/utils/thread-context/linked-pages";
@@ -29,6 +33,8 @@ const CONNECTOR_SOURCE_LABEL = {
   assignment: "Assignment",
   chat: "Message",
   web: "Web page",
+  task: "Task",
+  contact: "Contact",
 } as const;
 const MAX_SOURCE_TEXT = 2000;
 const WEB_SEARCH_RESULTS = 3;
@@ -86,6 +92,8 @@ export type Source = {
     | "assignment"
     | "chat"
     | "web"
+    | "task"
+    | "contact"
     | "memory";
   title: string;
   text: string;
@@ -178,8 +186,10 @@ export async function suggestReply({
     .catch(() => false);
   if (!hasAccess) return { status: "unavailable" };
 
+  const sender = latestSenderMessage(thread, userEmail);
   const context = await contextSources({
     items,
+    senderAuthenticated: !!sender && isAuthenticatedSender(sender),
     emailProvider,
     timezone: emailAccount.timezone,
     logger,
@@ -392,22 +402,24 @@ function normalize(text: string) {
 
 export async function contextSources({
   items,
+  senderAuthenticated,
   emailProvider,
   timezone,
   logger,
 }: {
   items: Awaited<ReturnType<typeof collectThreadContext>>["items"];
+  /** Whether the sender whose record a contact item is passed SPF/DKIM/DMARC. */
+  senderAuthenticated: boolean;
   emailProvider: EmailProvider;
   timezone: string | null;
   logger: Logger;
 }): Promise<Source[]> {
-  // Tasks and contacts come only from links and the sender's address, which
-  // anyone can choose, so they are shown to the user but aren't evidence.
+  // A contact is looked up by the From address, which anyone can forge to
+  // pull in the record of whoever they impersonate. Tasks need no such check:
+  // a Jira link counts only on the connected site, and Asana and ClickUp
+  // tasks come from the person's own workspace.
   const evidence = items
-    .filter(
-      (item): item is typeof item & { kind: Source["kind"] } =>
-        item.kind !== "task" && item.kind !== "contact",
-    )
+    .filter((item) => item.kind !== "contact" || senderAuthenticated)
     .slice(0, MAX_CONTEXT_SOURCES);
   // Ranking ran on headers and snippets; the reply needs what was actually said.
   return Promise.all(

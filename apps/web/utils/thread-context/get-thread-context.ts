@@ -334,22 +334,40 @@ function messageTime(m: ParsedMessage) {
  * Every link in the thread, and the latest person other than the user who
  * wrote in it, so connected apps can show what the thread points at.
  */
-function threadSignals(thread: EmailThread, userEmail: string): ThreadSignals {
+export function threadSignals(
+  thread: EmailThread,
+  userEmail: string,
+): ThreadSignals {
   const links = [
     ...new Set(
       thread.messages.flatMap((m) => linksIn(m).map((link) => link.href)),
     ),
   ];
-  const senderEmail = [...thread.messages]
-    .reverse()
-    .map((m) => extractEmailAddress(m.headers.from).toLowerCase())
-    .find(
-      (email) =>
-        email &&
-        !isSameEmailAddress(email, userEmail) &&
-        !isAutomatedAddress(email),
+  const sender = latestSenderMessage(thread, userEmail);
+  return sender
+    ? {
+        links,
+        senderEmail: extractEmailAddress(sender.headers.from).toLowerCase(),
+      }
+    : { links };
+}
+
+/**
+ * The latest message from a person other than the user, whose sender a
+ * connected CRM is asked about. Automated senders have no record worth finding.
+ */
+export function latestSenderMessage(
+  thread: EmailThread,
+  userEmail: string,
+): ParsedMessage | undefined {
+  return [...thread.messages].reverse().find((m) => {
+    const email = extractEmailAddress(m.headers.from);
+    return (
+      !!email &&
+      !isSameEmailAddress(email, userEmail) &&
+      !isAutomatedAddress(email.toLowerCase())
     );
-  return senderEmail ? { links, senderEmail } : { links };
+  });
 }
 
 function uniqueById<T extends { id: string }>(items: T[]): T[] {

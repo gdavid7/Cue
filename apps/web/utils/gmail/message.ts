@@ -38,6 +38,17 @@ export function parseMessage(
   } finally {
     restoreTextBodies(hiddenText);
   }
+  if (parsed.headers) {
+    // Gmail adds its verdict on top; a sender can write their own lower down,
+    // and the parser keeps the last header of a name.
+    parsed.headers = {
+      ...parsed.headers,
+      "authentication-results":
+        message.payload?.headers?.find(
+          (header) => header.name?.toLowerCase() === "authentication-results",
+        )?.value ?? undefined,
+    };
+  }
   if (message.payload) {
     const bodies = gmailMessageBodies(message.payload, message.snippet);
     parsed.textHtml = bodies.html;

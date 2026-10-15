@@ -21,6 +21,27 @@ afterEach(() => {
 });
 
 describe("parseMessage", () => {
+  // A sender can write their own Authentication-Results lower in the
+  // message; the receiving server's verdict is the one it adds on top.
+  it("keeps the topmost Authentication-Results, the one Gmail added", () => {
+    const gmail =
+      "mx.google.com; dkim=fail header.i=@acme.com; dmarc=fail header.from=acme.com";
+    const forged = "mx.google.com; dmarc=pass header.from=acme.com";
+    const message = parseMessage({
+      payload: {
+        headers: [
+          { name: "Authentication-Results", value: gmail },
+          { name: "From", value: "nora@acme.com" },
+          { name: "authentication-results", value: forged },
+        ],
+      },
+      // What gmail-api-parse-message makes of them: the last one wins.
+      headers: { from: "nora@acme.com", "authentication-results": forged },
+    } as never);
+
+    expect(message.headers["authentication-results"]).toBe(gmail);
+  });
+
   it("detects calendar MIME parts without decoding their contents in lists", () => {
     const message = parseMessage({
       payload: {

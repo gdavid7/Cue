@@ -305,33 +305,64 @@ describe("getCachedSuggestedReply", () => {
 });
 
 describe("contextSources", () => {
-  // Anyone can send a guessable link or forge a From: header, so the records
-  // they pull in are shown to the user but aren't evidence for a reply.
-  it("leaves out tasks and contacts found from links or the sender, keeping linked files", async () => {
-    const item = (kind: "file" | "task" | "contact", title: string) => ({
-      id: `${kind}:1`,
-      kind,
-      title,
-      snippet: "",
-      text: title,
-      at: "2026-10-12T00:00:00.000Z",
-      reasons: [],
-    });
+  const item = (
+    kind: "file" | "task" | "contact",
+    title: string,
+    source: string,
+  ) => ({
+    id: `${kind}:1`,
+    kind,
+    title,
+    snippet: "",
+    text: `${title}\nIn Progress`,
+    at: "2026-10-12T00:00:00.000Z",
+    source,
+    reasons: [],
+  });
+  const items = [
+    item("task", "OPS-12 Rotate staging keys", "Jira"),
+    item("contact", "Nora Patel", "HubSpot"),
+    item("file", "Milestone 2 write-up", "Google Drive"),
+  ];
 
-    const sources = await contextSources({
-      items: [
-        item("task", "OPS-12 Rotate staging keys"),
-        item("contact", "Nora Patel"),
-        item("file", "Milestone 2 write-up"),
-      ],
+  function sourcesFor(senderAuthenticated: boolean) {
+    return contextSources({
+      items,
+      senderAuthenticated,
       emailProvider: {} as EmailProvider,
       timezone: null,
       logger: createScopedLogger("suggest-reply-test"),
     });
+  }
 
-    expect(sources.map((s) => [s.id, s.kind, s.title])).toEqual([
-      ["c1", "file", "Milestone 2 write-up"],
+  it("backs a reply with linked tasks and the authenticated sender's record, labelled as such", async () => {
+    const sources = await sourcesFor(true);
+
+    expect(sources.map((s) => [s.id, s.kind, s.text])).toEqual([
+      [
+        "c1",
+        "task",
+        "Task: OPS-12 Rotate staging keys (Jira)\nOPS-12 Rotate staging keys\nIn Progress",
+      ],
+      [
+        "c2",
+        "contact",
+        "Contact: Nora Patel (HubSpot)\nNora Patel\nIn Progress",
+      ],
+      [
+        "c3",
+        "file",
+        "File: Milestone 2 write-up (Google Drive)\nMilestone 2 write-up\nIn Progress",
+      ],
     ]);
+  });
+
+  // Anyone can put someone else's address in From:, which would pull the
+  // record of the person they impersonate into the reply.
+  it("leaves out the sender's record when the sender's address wasn't authenticated", async () => {
+    const sources = await sourcesFor(false);
+
+    expect(sources.map((s) => s.kind)).toEqual(["task", "file"]);
   });
 });
 
