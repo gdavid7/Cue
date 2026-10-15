@@ -97,11 +97,16 @@ export function outboundActionsNeedChatConfirmation({
   conditions: RuleConditions;
 }): { needsConfirmation: boolean; riskMessages: string[] } {
   const riskMessages = getChatRiskMessages(actions, conditions);
-  const sendsEmail = actions.some((action) =>
+  const emailActions = actions.filter((action) =>
     isOutboundEmailAction(action.type),
   );
-  if (sendsEmail && riskMessages.length === 0) {
-    riskMessages.push(
+  // A webhook or integration note says nothing about mail being sent, so
+  // email actions get their own note unless the risk model already wrote one.
+  if (
+    emailActions.length &&
+    getChatRiskMessages(emailActions, conditions).length === 0
+  ) {
+    riskMessages.unshift(
       "This rule sends or forwards email automatically. Check every recipient, and only confirm if you asked for this.",
     );
   }
