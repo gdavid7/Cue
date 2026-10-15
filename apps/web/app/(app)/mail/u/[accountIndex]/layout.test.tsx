@@ -134,6 +134,15 @@ describe("MailRouteLayout", () => {
     await vi.waitFor(() => expect(mocks.loadInboxPreview).toHaveBeenCalled());
   });
 
+  it("shows no preview, rather than failing, when the tab settings fail to load", async () => {
+    mocks.getMailSettings.mockRejectedValue(new Error("database down"));
+
+    const layout = await renderAt("1");
+
+    await expect(screenOf(layout).props.preview).resolves.toBeNull();
+    expect(mocks.loadInboxPreview).not.toHaveBeenCalled();
+  });
+
   it("sends the page without waiting on the inbox or on the tab settings", async () => {
     mocks.getMailSettings.mockReturnValue(new Promise(() => {}));
 

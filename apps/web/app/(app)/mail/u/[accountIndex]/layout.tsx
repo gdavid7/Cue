@@ -19,6 +19,9 @@ import { buildLoginRedirectUrl } from "@/utils/redirect";
 import { findLandingSplit } from "@/utils/split-inbox/inbox-styles";
 import { getMailSettings } from "@/utils/split-inbox/settings.server";
 import { loadInboxPreview } from "@/utils/threads/inbox-preview.server";
+import { createScopedLogger } from "@/utils/logger";
+
+const logger = createScopedLogger("mail/route-layout");
 
 // The mail screen lives in the layout, not the page: a layout persists while
 // the view below it (`inbox`, `sent`, a thread) changes, so switching views
@@ -88,8 +91,17 @@ async function loadLandingInboxPreview(account: {
   id: string;
   provider: string;
 }) {
-  const { splits } = await getMailSettings({ emailAccountId: account.id });
-  if (findLandingSplit(splits)?.filters.length) return null;
+  const settings = await getMailSettings({ emailAccountId: account.id }).catch(
+    (error: unknown) => {
+      logger.warn("Could not read the inbox's tabs for its preview", {
+        emailAccountId: account.id,
+        error,
+      });
+      return null;
+    },
+  );
+  if (!settings || findLandingSplit(settings.splits)?.filters.length)
+    return null;
   return loadInboxPreview({
     emailAccountId: account.id,
     provider: account.provider,
