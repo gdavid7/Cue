@@ -426,6 +426,9 @@ export async function admitGmailCall({
           capacity: BUCKET.capacity,
           perMinute: BUCKET.perMinute,
           floor: FLOOR[priority],
+          waitBudgetMs: Number.isFinite(deadline)
+            ? Math.max(0, deadline - Date.now())
+            : undefined,
           pace: {
             key: keys.pace,
             cap: PACE_CAP[priority],

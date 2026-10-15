@@ -33,6 +33,11 @@ export type GmailQuotaStore = {
     capacity: number;
     perMinute: number;
     floor: number;
+    /**
+     * How long the caller will still wait. A wait past it on anything but
+     * the pace means the caller gives up, so it starts no demand episode.
+     */
+    waitBudgetMs?: number;
     pace: {
       key: string;
       cap: number;
@@ -94,11 +99,12 @@ local paceWindow = tonumber(ARGV[7])
 local yieldCap = tonumber(ARGV[8])
 local demandMs = tonumber(ARGV[9])
 local demandEvery = tonumber(ARGV[10])
+local waitBudget = tonumber(ARGV[11])
 local wait = 0
 local defer = 0
 for i = 6, #KEYS do
   local ttl = redis.call('PTTL', KEYS[i])
-  local deferMs = tonumber(ARGV[i + 5])
+  local deferMs = tonumber(ARGV[i + 6])
   if ttl > 0 and deferMs and deferMs > 0 then
     ttl = deferMs
     defer = 1
@@ -113,6 +119,8 @@ local need = floor + math.min(cost, capacity - floor)
 if tokens < need then
   wait = math.max(wait, math.ceil((need - tokens) / rate))
 end
+-- The pace is what others yielding frees; nothing frees the rest sooner.
+local unpacedWait = wait
 redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', now - paceWindow)
 local recent = redis.call('ZRANGE', KEYS[3], 0, -1, 'WITHSCORES')
 local inWindow = 0
@@ -146,8 +154,9 @@ if yieldCap >= 0 and demandTtl > 0 then
   end
 end
 wait = math.max(wait, paceWait)
--- Marked on arrival, so others yield while this request waits for room.
-if demandMs > 0 then
+-- Marked on arrival, so others yield while this request waits for room,
+-- unless it will give up before anything but the pace lets it in.
+if demandMs > 0 and (waitBudget < 0 or unpacedWait <= waitBudget) then
   redis.call('SET', KEYS[5], tostring(now + demandMs), 'PX', demandEvery, 'NX')
 end
 if wait > 0 then return {wait, defer} end
@@ -237,6 +246,7 @@ export const gmailQuotaStore: GmailQuotaStore = {
         String(input.pace.demand.yieldCap ?? -1),
         String(input.pace.demand.markMs ?? 0),
         String(input.pace.demand.everyMs ?? input.pace.demand.markMs ?? 0),
+        String(input.waitBudgetMs ?? -1),
         ...input.blockers.map((blocker) => String(blocker.deferMs ?? 0)),
       ],
     );

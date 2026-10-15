@@ -37,6 +37,7 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
         input.floor + Math.min(input.cost, input.capacity - input.floor);
       if (tokens < need)
         wait = Math.max(wait, Math.ceil((need - tokens) / rate));
+      const unpacedWait = wait;
 
       const { pace } = input;
       const recent = (windows.get(pace.key) ?? []).filter(
@@ -65,7 +66,13 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
       }
       wait = Math.max(wait, paceWait);
       const episode = demands.get(pace.demand.key);
-      if (pace.demand.markMs && (!episode || episode.renewsAt <= now))
+      const willWait =
+        input.waitBudgetMs === undefined || unpacedWait <= input.waitBudgetMs;
+      if (
+        pace.demand.markMs &&
+        willWait &&
+        (!episode || episode.renewsAt <= now)
+      )
         demands.set(pace.demand.key, {
           endsAt: now + pace.demand.markMs,
           renewsAt: now + (pace.demand.everyMs ?? pace.demand.markMs),

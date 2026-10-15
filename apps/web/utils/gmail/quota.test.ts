@@ -41,6 +41,7 @@ const WAITING_ACCOUNT = "account-waiting";
 const TURN_ACCOUNT = "account-turn";
 const STUCK_TURN_ACCOUNT = "account-stuck-turn";
 const TURN_GAP_ACCOUNT = "account-turn-gap";
+const GIVE_UP_ACCOUNT = "account-give-up";
 // Gmail refuses short bursts past this many units a second, per user.
 const GMAIL_UNITS_PER_SECOND = 250;
 const logger = createScopedLogger("gmail-quota-test");
@@ -805,6 +806,46 @@ describe("Gmail quota gate", () => {
           entry.at < endedAt + 1000,
       )
       .reduce((sum, entry) => sum + entry.cost, 0);
+    expect(syncUnits).toBeGreaterThan(40);
+  });
+
+  it("starts no yield for a request that gives up before the bucket refills", async () => {
+    const admissions: Array<{ priority: string; cost: number }> = [];
+    const admit = (
+      priority: "sync" | "interactive",
+      cost: number,
+      maxTotalWaitMs?: number,
+    ) =>
+      runWithGmailQuota(
+        { caller: `test/${priority}`, priority, maxTotalWaitMs },
+        () =>
+          meterGmailCall(
+            { emailAccountId: GIVE_UP_ACCOUNT, cost },
+            async () => {
+              admissions.push({ priority, cost });
+            },
+          ),
+      );
+    // The bucket is spent down, and that request's own yield is long over.
+    await admit("interactive", 800);
+    await vi.advanceTimersByTimeAsync(3100);
+
+    // A person's batch that won't wait for the refill it needs.
+    await expect(admit("interactive", 600, 100)).rejects.toBeInstanceOf(
+      GmailCallDeferredError,
+    );
+    // Sync spends what the bucket has rather than yielding to nobody.
+    let stop = false;
+    const scan = (async () => {
+      while (!stop) await admit("sync", 20);
+    })();
+    await vi.advanceTimersByTimeAsync(1000);
+    stop = true;
+    const syncUnits = admissions
+      .filter((entry) => entry.priority === "sync")
+      .reduce((sum, entry) => sum + entry.cost, 0);
+    await vi.advanceTimersByTimeAsync(2000);
+    await scan;
     expect(syncUnits).toBeGreaterThan(40);
   });
 

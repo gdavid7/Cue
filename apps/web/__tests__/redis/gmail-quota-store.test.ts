@@ -55,6 +55,7 @@ const take = (input: {
   blockers?: { key: string; deferMs?: number }[];
   usageField?: string;
   paceCap?: number;
+  waitBudgetMs?: number;
   demand?: {
     key: string;
     yieldCap?: number;
@@ -68,6 +69,7 @@ const admit = (input: {
   blockers?: { key: string; deferMs?: number }[];
   usageField?: string;
   paceCap?: number;
+  waitBudgetMs?: number;
   demand?: {
     key: string;
     yieldCap?: number;
@@ -84,6 +86,7 @@ const admit = (input: {
     capacity: 1000,
     perMinute: 3600,
     floor: input.floor,
+    waitBudgetMs: input.waitBudgetMs,
     // Out of the way unless a case is about the per-second pace.
     pace: {
       key: keys.pace,
@@ -262,6 +265,22 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       ).toBeGreaterThan(0);
       // ...but sync already gives way while it does.
       expect(await redis!.pttl(keys.demand)).toBeGreaterThan(2900);
+    });
+
+    it("starts no yield for a request that will give up before it is admitted", async () => {
+      const person = { key: keys.demand, markMs: 2000, everyMs: 3000 };
+      await gmailQuotaStore.block({ key: keys.pause, ms: 5000 });
+      expect(
+        await take({
+          cost: 100,
+          floor: -200,
+          paceCap: 200,
+          blockers: [{ key: keys.pause }],
+          demand: person,
+          waitBudgetMs: 1000,
+        }),
+      ).toBeGreaterThan(1000);
+      expect(await redis!.exists(keys.demand)).toBe(0);
     });
 
     it("holds a person's demand for a whole turn and releases only its own hold", async () => {
