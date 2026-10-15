@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadInboxPreview } from "./inbox-preview.server";
+import { parsedMessagePatch } from "@/utils/mail-api/observations";
+import type { ParsedMessage } from "@/utils/types";
 
 const mocks = vi.hoisted(() => ({
   getMessagesWithPagination: vi.fn(),
@@ -89,6 +91,29 @@ describe("loadInboxPreview", () => {
       { id: "t1", messages: ["m1", "m3"], snippet: "m3 snippet" },
       { id: "t2", messages: ["m2"], snippet: "m2 snippet" },
     ]);
+  });
+
+  it("keys each row by the id the mail engine gives its conversation, for Outlook too", async () => {
+    passPlansThrough();
+    // Outlook's conversationId, as the message parser sets it.
+    const outlook = message("AAMk-msg", "AAQk-conversation=", 1000);
+    mocks.getMessagesWithPagination.mockResolvedValue({ messages: [outlook] });
+
+    const preview = await loadInboxPreview({
+      emailAccountId: "acc-1",
+      provider: "microsoft",
+    });
+
+    const patch = parsedMessagePatch(
+      "acc-1",
+      "microsoft",
+      outlook as unknown as ParsedMessage,
+    );
+    // A click opens the row's id, which the engine must know by that id.
+    expect(patch.kind === "message_patch" && patch.reference).toMatchObject({
+      conversationId: preview?.threads[0]?.id,
+      messageId: preview?.threads[0]?.messages[0]?.id,
+    });
   });
 
   it("gives up after a few seconds so the page is never held open for long", async () => {
