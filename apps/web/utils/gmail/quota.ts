@@ -30,6 +30,10 @@ const MAX_WAIT_MS: Record<GmailQuotaPriority, number> = {
 // Refreshed while a primary scan pages through, so a scan that stops clears it.
 const INITIAL_SYNC_TTL_MS = 90_000;
 const INITIAL_SYNC_REFRESH_MS = 30_000;
+// The scan clears the marker the moment it ends, long before it expires, so
+// callers held behind it, the history backfill among them, ask again this
+// often instead of waiting out the expiry.
+const INITIAL_SYNC_POLL_MS = 5000;
 // The REST client retries for seconds; a gate that cannot coordinate within
 // this long lets the call through rather than stall every Gmail call.
 const STORE_TIMEOUT_MS = 300;
@@ -337,7 +341,12 @@ export async function admitGmailCall({
   rememberUnsummarizedAccount(emailAccountId);
   const keys = accountKeys(emailAccountId);
   const blockers =
-    priority === "background" ? [keys.initialSync, keys.backgroundPause] : [];
+    priority === "background"
+      ? [
+          { key: keys.initialSync, pollMs: INITIAL_SYNC_POLL_MS },
+          { key: keys.backgroundPause },
+        ]
+      : [];
   const { stats, maxTotalWaitMs } = context;
   const deadline =
     Date.now() +

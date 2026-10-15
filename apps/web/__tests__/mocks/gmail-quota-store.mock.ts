@@ -16,7 +16,12 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
   return {
     async take(input) {
       const now = Date.now();
-      let wait = Math.max(0, ...input.blockers.map(ttl));
+      let wait = Math.max(
+        0,
+        ...input.blockers.map(({ key, pollMs }) =>
+          pollMs ? Math.min(ttl(key), pollMs) : ttl(key),
+        ),
+      );
       const rate = input.perMinute / 60_000;
       const stored = buckets.get(input.bucketKey);
       const tokens = Math.min(

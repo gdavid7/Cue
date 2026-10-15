@@ -10,13 +10,14 @@ export type GmailQuotaStore = {
    * Debits `cost` when the bucket keeps at least `floor` tokens afterwards
    * (a request larger than the bucket only needs the bucket above `floor`)
    * and no `blockers` key exists. Returns 0 when admitted, otherwise the
-   * milliseconds to wait before asking again.
+   * milliseconds to wait before asking again. A blocker with `pollMs` can be
+   * cleared before it expires, so it asks for at most that long a wait.
    */
   take(input: {
     bucketKey: string;
     usageKey: string;
     usageField: string;
-    blockers: string[];
+    blockers: { key: string; pollMs?: number }[];
     cost: number;
     capacity: number;
     perMinute: number;
@@ -54,6 +55,8 @@ local floor = tonumber(ARGV[4])
 local wait = 0
 for i = 3, #KEYS do
   local ttl = redis.call('PTTL', KEYS[i])
+  local poll = tonumber(ARGV[i + 3])
+  if poll and poll > 0 and ttl > poll then ttl = poll end
   if ttl > wait then wait = ttl end
 end
 local stored = redis.call('HMGET', KEYS[1], 'tokens', 'at')
@@ -110,13 +113,18 @@ export const gmailQuotaStore: GmailQuotaStore = {
   async take(input) {
     const wait = await redis.eval<string[], number>(
       takeScript,
-      [input.bucketKey, input.usageKey, ...input.blockers],
+      [
+        input.bucketKey,
+        input.usageKey,
+        ...input.blockers.map((blocker) => blocker.key),
+      ],
       [
         String(input.cost),
         String(input.capacity),
         String(input.perMinute),
         String(input.floor),
         input.usageField,
+        ...input.blockers.map((blocker) => String(blocker.pollMs ?? 0)),
       ],
     );
     return typeof wait === "number" && Number.isFinite(wait) && wait > 0

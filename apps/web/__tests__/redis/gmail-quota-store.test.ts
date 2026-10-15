@@ -50,7 +50,7 @@ const keys = {
 const take = (input: {
   cost: number;
   floor: number;
-  blockers?: string[];
+  blockers?: { key: string; pollMs?: number }[];
   usageField?: string;
 }) =>
   gmailQuotaStore.take({
@@ -142,16 +142,28 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
 
     it("holds callers behind a blocker for its remaining time", async () => {
       await gmailQuotaStore.block({ key: keys.pause, ms: 20_000 });
-      const wait = await take({ cost: 10, floor: 500, blockers: [keys.pause] });
+      const wait = await take({
+        cost: 10,
+        floor: 500,
+        blockers: [{ key: keys.pause }],
+      });
       expect(wait).toBeGreaterThan(19_000);
       expect(wait).toBeLessThanOrEqual(20_000);
       // A shorter block never shortens a longer one.
       await gmailQuotaStore.block({ key: keys.pause, ms: 1000 });
       expect(await redis!.pttl(keys.pause)).toBeGreaterThan(19_000);
       await gmailQuotaStore.clear(keys.pause);
-      expect(await take({ cost: 10, floor: 500, blockers: [keys.pause] })).toBe(
-        0,
-      );
+      expect(
+        await take({ cost: 10, floor: 500, blockers: [{ key: keys.pause }] }),
+      ).toBe(0);
+    });
+
+    it("asks callers behind a blocker that lifts early to come back within its poll interval", async () => {
+      await gmailQuotaStore.block({ key: keys.pause, ms: 90_000 });
+      const blockers = [{ key: keys.pause, pollMs: 5000 }];
+      expect(await take({ cost: 10, floor: 500, blockers })).toBe(5000);
+      await gmailQuotaStore.clear(keys.pause);
+      expect(await take({ cost: 10, floor: 500, blockers })).toBe(0);
     });
 
     it("empties the bucket when a refusal drains it, and keeps an overdraft", async () => {
