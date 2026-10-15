@@ -2,10 +2,15 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
 
-const { mockCompleteConnection, mockSyncMcpTools } = vi.hoisted(() => ({
-  mockCompleteConnection: vi.fn(),
-  mockSyncMcpTools: vi.fn(),
-}));
+const { mockAuth, mockCompleteConnection, mockSyncMcpTools } = vi.hoisted(
+  () => ({
+    mockAuth: vi.fn(),
+    mockCompleteConnection: vi.fn(),
+    mockSyncMcpTools: vi.fn(),
+  }),
+);
+
+vi.mock("@/utils/auth", () => ({ auth: mockAuth }));
 
 vi.mock("@/env", () => ({
   env: {
@@ -27,6 +32,7 @@ vi.mock("@/utils/prisma");
 vi.mock("@/utils/mcp/providers/registry", () => ({
   getIntegrationProvider: () => ({
     completeConnection: mockCompleteConnection,
+    discardConnection: vi.fn(async () => {}),
   }),
 }));
 
@@ -71,6 +77,7 @@ describe("mcp provider callback route", () => {
     prisma.mcpIntegration.upsert.mockResolvedValue({
       id: "integration-1",
     } as Awaited<ReturnType<typeof prisma.mcpIntegration.upsert>>);
+    mockAuth.mockResolvedValue({ user: { id: "user-123" } });
     mockCompleteConnection.mockResolvedValue(true);
     mockSyncMcpTools.mockResolvedValue({ toolsCount: 3 });
   });
@@ -84,6 +91,8 @@ describe("mcp provider callback route", () => {
     expect(mockCompleteConnection).toHaveBeenCalledWith({
       app: "hubspot",
       emailAccountId: "email-account-123",
+      userId: "user-123",
+      connectedAccountId: null,
     });
     expect(prisma.mcpConnection.upsert).toHaveBeenCalled();
     expect(mockSyncMcpTools).toHaveBeenCalledWith(

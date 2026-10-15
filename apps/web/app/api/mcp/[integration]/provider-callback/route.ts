@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { env } from "@/env";
+import { auth } from "@/utils/auth";
 import { withError } from "@/utils/middleware";
 import {
   getMcpOAuthStateType,
@@ -15,7 +16,8 @@ import { syncMcpTools } from "@/utils/mcp/sync-tools";
 
 // The provider ran the app's OAuth and holds the tokens. We only record that the
 // connection exists and sync its tools. The provider does not echo our state, so
-// the signed state cookie set when the connection started identifies the account.
+// the signed state cookie set when the connection started identifies the account,
+// and the provider only completes the connection that user's link created.
 export const GET = withError(
   "mcp/provider-callback",
   async (request, { params }) => {
@@ -30,10 +32,22 @@ export const GET = withError(
     };
 
     const fallbackUrl = new URL("/integrations", env.NEXT_PUBLIC_BASE_URL);
+    const integrationConfig = findIntegration(integration);
+    const connectedAccountId =
+      request.nextUrl.searchParams.get("connected_account_id") ||
+      request.nextUrl.searchParams.get("connectedAccountId");
 
     const state = readState(request.cookies.get(stateCookieName)?.value);
     if (!state || state.type !== getMcpOAuthStateType(integration)) {
       logger.warn("Invalid state during provider callback");
+      // Whoever authorized this did not start the link, e.g. a forwarded one.
+      if (connectedAccountId && integrationConfig?.provider) {
+        await getIntegrationProvider(integrationConfig.provider.id)
+          .discardConnection({ connectedAccountId })
+          .catch((error) => {
+            logger.error("Failed to discard provider connection", { error });
+          });
+      }
       fallbackUrl.searchParams.set("error", "invalid_state");
       return redirect(fallbackUrl);
     }
@@ -44,14 +58,18 @@ export const GET = withError(
       env.NEXT_PUBLIC_BASE_URL,
     );
 
-    const emailAccount = await prisma.emailAccount.findFirst({
-      where: { id: emailAccountId, userId },
-      select: { id: true },
-    });
-    const integrationConfig = findIntegration(integration);
+    const session = await auth();
+    const emailAccount =
+      session?.user.id === userId
+        ? await prisma.emailAccount.findFirst({
+            where: { id: emailAccountId, userId },
+            select: { id: true },
+          })
+        : null;
     if (!emailAccount || !integrationConfig?.provider) {
       logger.warn("Rejected provider callback", {
         hasEmailAccount: !!emailAccount,
+        sessionMatches: session?.user.id === userId,
       });
       redirectUrl.searchParams.set("error", "forbidden");
       return redirect(redirectUrl);
@@ -63,6 +81,8 @@ export const GET = withError(
         app: integrationConfig.provider.app,
         authScheme: integrationConfig.provider.authScheme,
         emailAccountId,
+        userId,
+        connectedAccountId,
       })
       .catch((error) => {
         logger.error("Failed to confirm provider connection", { error });

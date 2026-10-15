@@ -3,12 +3,24 @@
 // the provider behind an app only changes the app's registry entry.
 export type IntegrationProvider = {
   isConfigured(): boolean;
+  // The hosted link is a bearer link: whoever opens it authorizes their app
+  // under our account id. The provider remembers which connection the link
+  // creates for the user who started it, so only that one can be completed.
   getConnectUrl(
-    args: ProviderAppArgs & { callbackUrl: string },
+    args: ProviderAppArgs & { userId: string; callbackUrl: string },
   ): Promise<string>;
-  // Called when the user returns from the provider; keeps only the newest
-  // active connection so reconnecting replaces the old account
-  completeConnection(args: ProviderAppArgs): Promise<boolean>;
+  // Called when the user who started the link returns from the provider.
+  // Completes only the connection their link created (and that the callback
+  // names, when the provider names one), replacing any older account.
+  completeConnection(
+    args: ProviderAppArgs & {
+      userId: string;
+      connectedAccountId: string | null;
+    },
+  ): Promise<boolean>;
+  // Called when a callback arrives without its starter's state: someone else
+  // opened the link, so the connection they authorized is thrown away.
+  discardConnection(args: { connectedAccountId: string }): Promise<void>;
   // Apps that take a key instead of OAuth (e.g. Canvas: a school's address and
   // a personal access token). Throws CredentialsRejectedError when the app
   // turns the credentials down, and keeps nothing in that case.

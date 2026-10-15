@@ -14,6 +14,9 @@ import type { AddressInfo } from "node:net";
  * Every account starts out connected to every app, so a demo only has to
  * record the connection on its own side. Disconnecting deletes the account,
  * and connecting with credentials creates a new one, as Composio does.
+ * A hosted connect link creates an INITIATED account; whoever opens the link
+ * authorizes it, and the browser goes on to the link's callback URL with
+ * `status` and `connected_account_id`, as Composio's does.
  *
  * Tools enforce the argument rules the apps document where Cue has tripped on
  * them: Drive refuses to sort a full-text search, and Canvas lists only the
@@ -251,6 +254,11 @@ export interface ComposioEmulatorOptions {
 
 export interface ComposioEmulator {
   apiKey: string;
+  /**
+   * Opens a hosted connect link as a person's browser would: the account
+   * becomes ACTIVE and the URL the browser is sent back to is returned.
+   */
+  authorizeLink(redirectUrl: string): string;
   close(): Promise<void>;
   /** A user's connected accounts, oldest first. */
   connectedAccounts(userId: string): ConnectedAccount[];
@@ -274,6 +282,9 @@ export interface ComposioEmulator {
 type RequestBody = {
   arguments?: Record<string, unknown>;
   auth_config?: { id?: string; name?: string };
+  auth_config_id?: string;
+  callback_url?: string;
+  user_id?: string;
   connected_account_id?: string;
   connection?: { user_id?: string };
   filename?: string;
@@ -284,7 +295,7 @@ type ConnectedAccount = {
   id: string;
   user_id: string;
   auth_config_id: string;
-  status: "ACTIVE" | "EXPIRED";
+  status: "ACTIVE" | "EXPIRED" | "INITIATED";
   created_at: string;
 };
 
@@ -318,6 +329,7 @@ export async function createComposioEmulator(
   // (user, auth config) pairs already given their default connection, so a
   // deleted one stays deleted.
   const seenPairs = new Set<string>();
+  const linkCallbacks = new Map<string, string>();
   let sequence = 0;
 
   function createAccount(userId: string, authConfigId: string) {
@@ -331,6 +343,19 @@ export async function createComposioEmulator(
     };
     accounts.set(account.id, account);
     return account;
+  }
+
+  function authorizeLink(connectedAccountId: string) {
+    const account = accounts.get(connectedAccountId);
+    const callbackUrl = linkCallbacks.get(connectedAccountId);
+    if (!account || !callbackUrl) {
+      throw new Error(`No connect link for ${connectedAccountId}`);
+    }
+    account.status = "ACTIVE";
+    const callback = new URL(callbackUrl);
+    callback.searchParams.set("status", "success");
+    callback.searchParams.set("connected_account_id", account.id);
+    return callback.toString();
   }
 
   const tools: Record<string, (args: Record<string, unknown>) => unknown> = {
@@ -520,6 +545,14 @@ export async function createComposioEmulator(
 
     if (path === "/health") return respondJson(response, 200, { ok: true });
 
+    // A person's browser opening a hosted connect link, so no API key.
+    const linkMatch = /^\/__link\/([^/]+)$/.exec(path);
+    if (linkMatch && method === "GET") {
+      const location = authorizeLink(linkMatch[1]);
+      response.writeHead(302, { location });
+      return response.end();
+    }
+
     // Files reach tools through Composio's storage: request a slot, then PUT.
     if (path === "/files/upload/request" && method === "POST") {
       const key = `emulated/${++sequence}/${body.filename ?? "file"}`;
@@ -570,6 +603,22 @@ export async function createComposioEmulator(
             account.user_id === userId &&
             account.auth_config_id === authConfigId,
         ),
+      });
+    }
+
+    if (path === "/connected_accounts/link" && method === "POST") {
+      const account = createAccount(
+        String(body.user_id),
+        String(body.auth_config_id),
+      );
+      account.status = "INITIATED";
+      linkCallbacks.set(account.id, String(body.callback_url));
+      const port = (server.address() as AddressInfo).port;
+      return respondJson(response, 200, {
+        link_token: `lt_${account.id}`,
+        redirect_url: `http://127.0.0.1:${port}/__link/${account.id}`,
+        expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+        connected_account_id: account.id,
       });
     }
 
@@ -652,6 +701,8 @@ export async function createComposioEmulator(
 
   return {
     apiKey,
+    authorizeLink: (redirectUrl) =>
+      authorizeLink(new URL(redirectUrl).pathname.replace(/^\/__link\//, "")),
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
     connectedAccounts: (userId) =>
       [...accounts.values()].filter((account) => account.user_id === userId),
