@@ -486,12 +486,21 @@ describe("ChatProvider", () => {
   });
 
   it.each([
-    ["names the thread open in this account", "account-a", "t-42"],
-    ["leaves out a thread open in another account", "account-b", undefined],
+    [
+      "names the thread open in this account and its latest message",
+      "account-a",
+      { openThreadId: "t-42", openMessageId: "m-7" },
+    ],
+    [
+      "leaves out a thread open in another account",
+      "account-b",
+      { openThreadId: undefined, openMessageId: undefined },
+    ],
   ])("%s", async (_name, ownerAccountId, expected) => {
     getDefaultStore().set(openThreadAtom, {
       emailAccountId: ownerAccountId,
       threadId: "t-42",
+      messageId: "m-7",
     });
     renderWithProvider(null);
     const transport = mockChatTransport.mock.results.at(-1)
@@ -514,7 +523,11 @@ describe("ChatProvider", () => {
     getDefaultStore().set(openThreadAtom, null);
 
     const [, request] = vi.mocked(fetch).mock.calls.at(-1)!;
-    expect(JSON.parse(request?.body as string).openThreadId).toBe(expected);
+    const body = JSON.parse(request?.body as string);
+    expect({
+      openThreadId: body.openThreadId,
+      openMessageId: body.openMessageId,
+    }).toEqual(expected);
   });
 
   it("resumes the existing reply without starting another generation", async () => {

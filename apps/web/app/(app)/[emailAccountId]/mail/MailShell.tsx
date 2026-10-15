@@ -704,13 +704,6 @@ export function MailShell() {
       threadId: openThreadId,
     };
   }, [emailAccountId, isAllAccounts, openThreadAccountId, openThreadId]);
-  // The assistant chat lives outside this screen; it reads the open thread
-  // from here so a question about "this email" names it.
-  const setReaderOpenThread = useSetAtom(openThreadAtom);
-  useEffect(() => {
-    setReaderOpenThread(openThreadSelection);
-    return () => setReaderOpenThread(null);
-  }, [openThreadSelection, setReaderOpenThread]);
   const openThreadKey = isAllAccounts
     ? getThreadSelectionKey(openThreadSelection)
     : openThreadId;
@@ -766,6 +759,21 @@ export function MailShell() {
   const openMessages = readerSelectionSettled
     ? (openThreadData?.thread.messages ?? NO_MESSAGES)
     : NO_MESSAGES;
+  // The assistant chat lives outside this screen; it reads the open thread
+  // from here so a question about "this email" names it.
+  const setReaderOpenThread = useSetAtom(openThreadAtom);
+  const latestOpenMessageId = openMessages
+    .filter((message) => !message.labelIds?.includes(GmailLabel.DRAFT))
+    .at(-1)?.id;
+  useEffect(() => {
+    setReaderOpenThread(
+      openThreadSelection && {
+        ...openThreadSelection,
+        messageId: latestOpenMessageId,
+      },
+    );
+    return () => setReaderOpenThread(null);
+  }, [openThreadSelection, latestOpenMessageId, setReaderOpenThread]);
   const openExternalUrl = useMemo(() => {
     const message = openMessages.at(-1);
     if (!message || !readerEmailAccount) return;

@@ -86,7 +86,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [inlineActions, setInlineActions] = useState<InlineEmailAction[]>([]);
   const inlineActionsRef = useRef(inlineActions);
   const openThread = useAtomValue(openThreadAtom);
-  const openThreadIdRef = useRef<string | undefined>(undefined);
+  const openThreadRef = useRef<typeof openThread>(null);
   const pendingInlineActionsRef = useRef<InlineEmailAction[] | null>(null);
   const pendingRequestRef = useRef<PendingChatRequest | null>(null);
   const pendingRequestContextRef = useRef<MessageContext | null>(null);
@@ -133,7 +133,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             message: messages.at(-1),
             supportsInlineEmailCards: true,
             inlineActions: pendingInlineActionsRef.current ?? undefined,
-            openThreadId: openThreadIdRef.current,
+            openThreadId: openThreadRef.current?.threadId,
+            openMessageId: openThreadRef.current?.messageId,
             ...body,
           },
         };
@@ -277,10 +278,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     // A thread from another account means nothing to this account's chat.
-    openThreadIdRef.current =
-      openThread?.emailAccountId === emailAccountId
-        ? openThread.threadId
-        : undefined;
+    openThreadRef.current =
+      openThread?.emailAccountId === emailAccountId ? openThread : null;
   }, [openThread, emailAccountId]);
 
   useEffect(() => {

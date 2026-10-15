@@ -97,7 +97,7 @@ export async function aiProcessAssistantChat({
   isFirstUserTurn,
   responseSurface = "web",
   supportsInlineEmailCards = false,
-  openThreadId,
+  openThread,
   messagingPlatform,
   onRulesStateExposed,
   onStepEnd,
@@ -122,7 +122,7 @@ export async function aiProcessAssistantChat({
   responseSurface?: "web" | "messaging";
   supportsInlineEmailCards?: boolean;
   /** The thread open in the reader, if the client says one is. */
-  openThreadId?: string;
+  openThread?: { threadId: string; messageId?: string };
   messagingPlatform?: MessagingPlatform;
   onRulesStateExposed?: (rulesRevision: number) => void;
   onStepEnd?: AssistantChatOnStepEnd;
@@ -281,11 +281,11 @@ export async function aiProcessAssistantChat({
         ]
       : [];
 
-  const openThreadMessage = openThreadId
+  const openThreadMessage = openThread
     ? [
         {
           role: "user" as const,
-          content: `[Automated context — not a message from the user] The user has this email thread open: threadId ${openThreadId}. When they ask about the email they have open, pass this threadId to searchContext.`,
+          content: `[Automated context — not a message from the user] The user has this email open: threadId ${openThread.threadId}${openThread.messageId ? `, latest messageId ${openThread.messageId}` : ""}.`,
         },
       ]
     : [];

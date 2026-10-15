@@ -194,6 +194,11 @@ const assistantChatMessagePartSchema = z.discriminatedUnion("type", [
   assistantChatFilePartSchema,
 ]);
 
+const providerIdSchema = z
+  .string()
+  .trim()
+  .regex(/^[\w=+/.-]{1,200}$/);
+
 export const assistantInputSchema = z.object({
   id: z.string().trim().min(1),
   message: z.object({
@@ -213,11 +218,9 @@ export const assistantInputSchema = z.object({
   // The thread open in the reader as the message is sent, so "this email"
   // has an id the assistant can use. It goes into the model's context, so it
   // may only contain the characters provider thread ids use.
-  openThreadId: z
-    .string()
-    .trim()
-    .regex(/^[\w=+/.-]{1,200}$/)
-    .optional(),
+  openThreadId: providerIdSchema.optional(),
+  // Its latest message, so the assistant can read the email itself.
+  openMessageId: providerIdSchema.optional(),
 });
 
 export type AssistantInput = z.infer<typeof assistantInputSchema>;

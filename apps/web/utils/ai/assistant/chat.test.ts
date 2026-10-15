@@ -330,31 +330,44 @@ describe("aiProcessAssistantChat setup", () => {
 });
 
 describe("aiProcessAssistantChat open thread", () => {
-  async function modelMessagesFor(openThreadId?: string) {
+  async function modelMessagesFor(openThread?: {
+    threadId: string;
+    messageId?: string;
+  }) {
     vi.clearAllMocks();
     vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
     await aiProcessAssistantChat({
       messages: [{ role: "user", content: "what's this about?" }],
       emailAccountId: "email-account-id",
       user: getEmailAccount(),
-      openThreadId,
+      openThread,
       logger: createTestLogger(),
     });
     const [options] = vi.mocked(toolCallAgentStream).mock.calls[0];
     return JSON.stringify(options.messages);
   }
 
-  it("tells the model which thread the user has open, for searchContext", async () => {
-    const messages = await modelMessagesFor("thread-42");
+  it("names the open thread and its latest message, and nothing more", async () => {
+    const messages = await modelMessagesFor({
+      threadId: "thread-42",
+      messageId: "msg-7",
+    });
 
-    expect(messages).toContain("threadId thread-42");
-    expect(messages).toContain("searchContext");
+    expect(messages).toContain(
+      "[Automated context — not a message from the user] The user has this email open: threadId thread-42, latest messageId msg-7.",
+    );
+    // When to use the ids is the tools' to say.
+    expect(messages).not.toContain("pass this threadId");
+  });
+
+  it("names just the thread when its messages aren't known", async () => {
+    expect(await modelMessagesFor({ threadId: "thread-42" })).toContain(
+      "The user has this email open: threadId thread-42.",
+    );
   });
 
   it("says nothing about an open thread when none is open", async () => {
-    expect(await modelMessagesFor()).not.toContain(
-      "has this email thread open",
-    );
+    expect(await modelMessagesFor()).not.toContain("has this email open");
   });
 });
 
