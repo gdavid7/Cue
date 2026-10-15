@@ -10,6 +10,7 @@ import {
   DraftEmailStatus,
   GroupItemType,
 } from "@/generated/prisma/enums";
+import { aiProcessAssistantChat as processAssistantChat } from "@/utils/ai/assistant/chat";
 
 const {
   envState,
@@ -154,8 +155,9 @@ async function loadAssistantChatModule({
   envState.sendEmailEnabled = emailSend;
   envState.autoDraftDisabled = autoDraftDisabled;
   envState.webhookActionsEnabled = webhookActions;
-  vi.resetModules();
-  return await import("@/utils/ai/assistant/chat");
+  // The env mock reads envState lazily, so the module is imported once
+  // instead of re-imported per test (the cold import alone took ~5s).
+  return { aiProcessAssistantChat: processAssistantChat };
 }
 
 async function captureToolSet(
