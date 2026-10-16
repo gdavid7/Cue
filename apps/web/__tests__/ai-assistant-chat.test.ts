@@ -1525,8 +1525,8 @@ describe("aiProcessAssistantChat", () => {
         message.content.includes("[Fresh rule state update"),
     );
 
-    expect(freshRuleContext?.content).toContain('"rulesRevision": 2');
-    expect(freshRuleContext?.content).toContain('"name": "To Reply"');
+    expect(freshRuleContext?.content).toContain('"rulesRevision":2');
+    expect(freshRuleContext?.content).toContain('"name":"To Reply"');
     expect(onRulesStateExposed).toHaveBeenCalledWith(2);
 
     const result = await args.tools.updateRule.execute({
@@ -1689,8 +1689,8 @@ describe("aiProcessAssistantChat", () => {
         message.content.includes("[Fresh rule state update"),
     );
 
-    expect(freshRuleContext?.content).toContain('"rulesRevision": 0');
-    expect(freshRuleContext?.content).toContain('"name": "Newsletter"');
+    expect(freshRuleContext?.content).toContain('"rulesRevision":0');
+    expect(freshRuleContext?.content).toContain('"name":"Newsletter"');
     expect(onRulesStateExposed).toHaveBeenCalledWith(0);
   });
 
