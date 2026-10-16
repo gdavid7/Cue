@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { announceTodayChanged } from "@/utils/home/today-changes";
-import { useHome } from "./useHome";
+import { useHome, useWarmHome } from "./useHome";
 
 vi.mock("@/utils/swr", () => ({
   getAccountScopedKey: (path: string, emailAccountId: string) => [
@@ -103,11 +103,54 @@ describe("useHome", () => {
   });
 });
 
-function wrapper(fetcher: () => Promise<unknown>) {
+describe("useWarmHome", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("loads nothing until Today is wanted, then opens Today on that one load", async () => {
+    let resolve: (value: unknown) => void = () => {};
+    const fetcher = vi.fn(
+      () =>
+        new Promise((resolveLoad) => {
+          resolve = resolveLoad;
+        }),
+    );
+    const { result, rerender } = renderHook(
+      ({ wanted, open }: { wanted: boolean; open: boolean }) => {
+        useWarmHome("account", wanted);
+        return useHome(open ? "account" : null);
+      },
+      {
+        initialProps: { wanted: false, open: false },
+        wrapper: wrapper(fetcher, 2000),
+      },
+    );
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    expect(fetcher).not.toHaveBeenCalled();
+
+    rerender({ wanted: true, open: false });
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    // Today opens while the load is still on its way, and shares it.
+    rerender({ wanted: true, open: true });
+    await act(async () => {
+      resolve({ pending: [] });
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(result.current.data).toEqual({ pending: [] });
+  });
+});
+
+function wrapper(fetcher: () => Promise<unknown>, dedupingInterval = 0) {
   return ({ children }: { children: ReactNode }) => (
-    <SWRConfig
-      value={{ fetcher, provider: () => new Map(), dedupingInterval: 0 }}
-    >
+    <SWRConfig value={{ fetcher, provider: () => new Map(), dedupingInterval }}>
       {children}
     </SWRConfig>
   );

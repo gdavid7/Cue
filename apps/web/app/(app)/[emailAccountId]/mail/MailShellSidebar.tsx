@@ -8,6 +8,7 @@ import {
   type ReactNode,
   useCallback,
   useMemo,
+  useState,
 } from "react";
 import { toast } from "sonner";
 import { AllInboxesSidebarSections } from "@/app/(app)/[emailAccountId]/mail/AllInboxesSidebarSections";
@@ -35,6 +36,7 @@ import {
   useMailSlugs,
 } from "@/app/(app)/[emailAccountId]/mail/use-mail-route";
 import { useMailHref } from "@/hooks/useMailHref";
+import { useWarmHome } from "@/hooks/useHome";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Sidebar, useSidebar } from "@/components/ui/sidebar";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
@@ -105,6 +107,9 @@ export const MailShellSidebar = memo(function MailShellSidebar({
   onMobileOpenChange?: (open: boolean) => void;
 }) {
   const { emailAccountId, provider } = useAccount();
+  // Reaching for Today starts its load, so it opens on data already coming.
+  const [todayWanted, setTodayWanted] = useState(false);
+  useWarmHome(emailAccountId, todayWanted);
   const isGoogle = isGoogleProvider(provider);
   const isOutlook = isMicrosoftProvider(provider);
   const terminology = getEmailTerminology(provider);
@@ -274,6 +279,7 @@ export const MailShellSidebar = memo(function MailShellSidebar({
         ) : undefined
       }
       todayHref={prefixPath(emailAccountId, "/home")}
+      onTodayIntent={() => setTodayWanted(true)}
       appLinks={appLinks}
       toolLinks={toolLinks}
       allInboxesHref={

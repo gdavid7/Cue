@@ -25,26 +25,16 @@ export function useHome(emailAccountId?: string | null) {
     pendingLoadsRef.current = loads;
     setPendingLoads(loads);
   };
-  const home = useSWR<GetHomeResponse>(
-    emailAccountId
-      ? getAccountScopedKey(
-          `/api/user/home?tz=${encodeURIComponent(browserTimeZone())}`,
-          emailAccountId,
-        )
-      : null,
-    {
-      // Each load spends Gmail quota, so tab switches share one.
-      focusThrottleInterval: FOCUS_REFRESH_MIN_MS,
-      onSuccess: (data) =>
-        countPendingLoads(
-          data.pending.length ? pendingLoadsRef.current + 1 : 0,
-        ),
-      refreshInterval: (data) =>
-        data?.pending.length && pendingLoadsRef.current < PENDING_LOAD_LIMIT
-          ? PENDING_REFRESH_MS
-          : 0,
-    },
-  );
+  const home = useSWR<GetHomeResponse>(homeKey(emailAccountId), {
+    // Each load spends Gmail quota, so tab switches share one.
+    focusThrottleInterval: FOCUS_REFRESH_MIN_MS,
+    onSuccess: (data) =>
+      countPendingLoads(data.pending.length ? pendingLoadsRef.current + 1 : 0),
+    refreshInterval: (data) =>
+      data?.pending.length && pendingLoadsRef.current < PENDING_LOAD_LIMIT
+        ? PENDING_REFRESH_MS
+        : 0,
+  });
   const { mutate } = home;
 
   // Cue sorted new mail or the user's reply changed a lane: show it now
@@ -85,6 +75,31 @@ export function useHome(emailAccountId?: string | null) {
       mutate();
     },
   };
+}
+
+/**
+ * Starts loading Today once `enabled`, as when the pointer reaches its link,
+ * so the page opens on data that is already on its way or here. Loaded data
+ * is left as it is: Today refreshes it when it opens.
+ */
+export function useWarmHome(
+  emailAccountId: string | null | undefined,
+  enabled: boolean,
+) {
+  useSWR<GetHomeResponse>(enabled ? homeKey(emailAccountId) : null, {
+    revalidateIfStale: false,
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+  });
+}
+
+function homeKey(emailAccountId: string | null | undefined) {
+  return emailAccountId
+    ? getAccountScopedKey(
+        `/api/user/home?tz=${encodeURIComponent(browserTimeZone())}`,
+        emailAccountId,
+      )
+    : null;
 }
 
 function browserTimeZone() {
