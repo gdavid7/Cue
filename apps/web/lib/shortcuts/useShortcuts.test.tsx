@@ -240,6 +240,26 @@ describe("useShortcuts", () => {
     expect(dialogSearchEvent.defaultPrevented).toBe(false);
   });
 
+  it("leaves Enter to a focused control that activates on it", () => {
+    const open = vi.fn();
+    renderShortcuts({ open });
+    const controls = [
+      appendElement("button"),
+      appendElement("a", { href: "/elsewhere" }),
+      appendElement("div", { role: "button", tabindex: "0" }),
+      appendElement("div", { role: "menuitem", tabindex: "-1" }),
+    ];
+
+    for (const control of controls) {
+      const event = press({ key: "Enter", code: "Enter" }, control);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(open).not.toHaveBeenCalled();
+
+    press({ key: "Enter", code: "Enter" }, optionElement({ mailRow: true }));
+    expect(open).toHaveBeenCalledOnce();
+  });
+
   it("ignores modified presses of a plain shortcut", () => {
     const archive = vi.fn();
     renderShortcuts({ archive });
@@ -480,6 +500,18 @@ function optionElement({ mailRow }: { mailRow: boolean }) {
   if (mailRow) option.setAttribute("data-mail-thread-row", "");
   document.body.append(option);
   return option;
+}
+
+function appendElement(
+  tagName: string,
+  attributes: Record<string, string> = {},
+) {
+  const element = document.createElement(tagName);
+  for (const [name, value] of Object.entries(attributes)) {
+    element.setAttribute(name, value);
+  }
+  document.body.append(element);
+  return element;
 }
 
 function SuspendingShortcuts({

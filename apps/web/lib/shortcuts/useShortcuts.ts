@@ -249,6 +249,7 @@ function resolveTarget(
   hotkeysEvent: HotkeysEvent,
 ): ShortcutTarget | undefined {
   if (!bucket.allowWhileTyping && isTypingTarget(event.target)) return;
+  if (isActivationKey(event) && activatesOnEnter(event.target)) return;
   const target = bucket.targets.get(hotkeysEvent.hotkey);
   if (
     target?.type === "entry" &&
@@ -267,6 +268,34 @@ function resolveTarget(
     return;
   }
   return target;
+}
+
+// A plain Enter on a focused button, link or menu item is that control's own
+// activation; a shortcut bound to Enter must not run in its place.
+const ACTIVATES_ON_ENTER = [
+  "button",
+  "a[href]",
+  "summary",
+  '[role="button"]',
+  '[role="link"]',
+  '[role="menuitem"]',
+  '[role="menuitemcheckbox"]',
+  '[role="menuitemradio"]',
+  '[role="tab"]',
+].join(",");
+
+function isActivationKey(event: KeyboardEvent) {
+  return (
+    event.key === "Enter" &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.shiftKey
+  );
+}
+
+function activatesOnEnter(target: EventTarget | null) {
+  return target instanceof Element && target.matches(ACTIVATES_ON_ENTER);
 }
 
 function isNonMailOption(target: EventTarget | null) {

@@ -77,9 +77,9 @@ test.describe("on a phone", () => {
     await seedChat(emailAccountId);
     const askCue = page.getByRole("button", { name: "Ask Cue" });
 
-    // Clicking focuses the button, which is where focus should come back to.
-    // (Enter on it would also be mail's "open" shortcut.)
-    await askCue.click();
+    // Enter on the button is its own activation, not mail's "open" shortcut.
+    await askCue.focus();
+    await page.keyboard.press("Enter");
     const panel = page.getByRole("dialog", { name: "Chat" });
     await expect(panel).toBeFocused();
     await expect(
