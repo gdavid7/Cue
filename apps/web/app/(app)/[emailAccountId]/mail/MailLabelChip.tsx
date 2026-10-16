@@ -12,7 +12,7 @@ export type MailLabelChipProps = {
   color?: EmailLabel["color"];
   /** Interactive: the chip navigates to that label's view. */
   href?: string;
-  /** Interactive: reveals a `×` on hover that removes the label. */
+  /** Interactive: a `×` that removes the label, revealed on hover where there is one. */
   onRemove?: () => void;
   className?: string;
 };
@@ -21,7 +21,7 @@ export type MailLabelChipProps = {
  * A label pill. Provider colors take precedence; otherwise its color comes from
  * the name, so a label reads the same everywhere. Without `href` or `onRemove`
  * the chip is inert; each adds its own affordance — a link on the name, and a
- * `×` revealed on hover.
+ * `×` revealed on hover, or always shown on touch.
  */
 export function MailLabelChip({
   name,
@@ -40,7 +40,7 @@ export function MailLabelChip({
           ? "text-[var(--mail-label-text-color)] before:border-[var(--mail-label-background-color)] before:bg-[var(--mail-label-background-color)]"
           : CHIP_CLASSES[chipColorForLabel(name)],
         onRemove
-          ? "before:right-3 hover:before:right-0 focus-within:before:right-0"
+          ? "before:right-3 hover:before:right-0 focus-within:before:right-0 pointer-coarse:before:right-0"
           : "before:right-0",
         className,
       )}
@@ -56,7 +56,9 @@ export function MailLabelChip({
       {onRemove ? (
         <button
           aria-label={`Remove ${name} label`}
-          className="pointer-events-none -mr-0.5 shrink-0 rounded-sm opacity-0 transition-opacity focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/chip:pointer-events-auto group-hover/chip:opacity-100"
+          // Touch has no hover to reveal it, so there it's always shown, with
+          // a hit area larger than the glyph.
+          className="pointer-events-none relative -mr-0.5 shrink-0 rounded-sm opacity-0 transition-opacity focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/chip:pointer-events-auto group-hover/chip:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 pointer-coarse:after:absolute pointer-coarse:after:-inset-y-2 pointer-coarse:after:-right-1 pointer-coarse:after:left-0 pointer-coarse:after:content-['']"
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
