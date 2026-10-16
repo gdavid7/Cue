@@ -9,7 +9,7 @@ const { mockEnv } = vi.hoisted(() => ({
 
 vi.mock("@/env", () => ({ env: mockEnv }));
 
-import { getMcpFetch } from "./safe-fetch";
+import { getMcpFetch, safeExternalFetch } from "./safe-fetch";
 
 describe("getMcpFetch", () => {
   let server: Server | undefined;
@@ -79,6 +79,49 @@ describe("getMcpFetch", () => {
     const { port } = server.address() as AddressInfo;
     return `http://127.0.0.1:${port}/mcp`;
   }
+});
+
+describe("safeExternalFetch", () => {
+  let server: Server | undefined;
+
+  afterEach(async () => {
+    if (!server) return;
+    await new Promise<void>((resolve) => server?.close(() => resolve()));
+    server = undefined;
+  });
+
+  it("refuses private, loopback and link-local addresses", async () => {
+    for (const url of [
+      "https://10.0.0.1/api",
+      "https://127.0.0.1/api",
+      "https://169.254.169.254/latest",
+      "https://localhost/api",
+    ]) {
+      await expect(safeExternalFetch(url)).rejects.toThrow(
+        "not a public address",
+      );
+    }
+  });
+
+  it("hands a redirect back instead of following it", async () => {
+    server = createServer((_request, response) => {
+      response.writeHead(302, { Location: "http://169.254.169.254/" });
+      response.end();
+    });
+    await new Promise<void>((resolve) =>
+      server?.listen(0, "127.0.0.1", () => resolve()),
+    );
+    const { port } = server.address() as AddressInfo;
+
+    const response = await safeExternalFetch(
+      `http://127.0.0.1:${port}/`,
+      {},
+      { allowPrivateIps: true },
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("http://169.254.169.254/");
+  });
 });
 
 function integration({
