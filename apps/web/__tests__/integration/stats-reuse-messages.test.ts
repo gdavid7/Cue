@@ -138,7 +138,7 @@ describe.skipIf(!RUN_INTEGRATION_TESTS)(
       expect(rawCall).toContain("true");
     });
 
-    test("no batch API call is made", async () => {
+    test("fetches the page's messages once, with no second batch", async () => {
       fetchSpy.mockClear();
 
       const logger = createTestLogger();
@@ -152,7 +152,8 @@ describe.skipIf(!RUN_INTEGRATION_TESTS)(
         after: undefined,
       });
 
-      // Batch endpoint would be a fetch to /batch/gmail/v1
+      // Pagination hydrates its listed IDs in one batch request (up to 100
+      // per batch); saveBatch must reuse those messages, not fetch them again.
       // Extract URL string from any input type (string, URL, or Request)
       const batchCalls = fetchSpy.mock.calls.filter((call) => {
         const input = call[0];
@@ -166,7 +167,7 @@ describe.skipIf(!RUN_INTEGRATION_TESTS)(
                 : "";
         return url.includes("/batch/gmail/");
       });
-      expect(batchCalls).toHaveLength(0);
+      expect(batchCalls).toHaveLength(1);
     });
   },
 );
