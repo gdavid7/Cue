@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { env } from "@/env";
 import { getAuditContext } from "@/utils/audit/context";
 import { gmailQuotaStore } from "@/utils/gmail/quota-store";
 import { extractErrorInfo, isRetryableError } from "@/utils/gmail/retry";
@@ -237,6 +238,7 @@ const unsummarizedAccounts = new Map<string, number>();
 const summaryCheckedMinute = new Map<string, number>();
 const storeUnavailableLoggedMinute = new Map<string, number>();
 const initialSyncMarkedAt = new Map<string, number>();
+let gateOffReported = false;
 
 export class GmailCallDeferredError extends Error {
   readonly code = "GMAIL_CALL_DEFERRED";
@@ -413,8 +415,11 @@ export async function admitGmailCall({
     if (context.stats) context.stats.admittedCost += cost;
     return ticket;
   };
-  if (!emailAccountId || !isEmailProviderRateLimitRedisConfigured())
+  if (!isEmailProviderRateLimitRedisConfigured()) {
+    reportGateOff();
     return admitted();
+  }
+  if (!emailAccountId) return admitted();
 
   rememberUnsummarizedAccount(emailAccountId);
   const keys = accountKeys(emailAccountId);
@@ -840,6 +845,16 @@ function trimOldest(map: Map<string, unknown>) {
  * off. The count usually still lands: a slow store finishes the write after
  * the gate stopped waiting.
  */
+// Without Redis nothing paces Gmail calls, which against real Google ends in
+// per-minute refusals for whole accounts. The emulator has no such limit.
+function reportGateOff() {
+  if (gateOffReported || env.GOOGLE_BASE_URL) return;
+  gateOffReported = true;
+  logger.error(
+    "Gmail quota gate is off: real Google is configured but Redis is not, so Gmail calls are not paced",
+  );
+}
+
 function noteStoreUnavailable(
   emailAccountId: string,
   caller: string,
