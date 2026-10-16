@@ -288,6 +288,90 @@ describe("calculateUsageCost", () => {
     ).toBeCloseTo(1000 * (3 / 1_000_000) + 500 * (15 / 1_000_000));
   });
 
+  it.each([
+    // [model, input, output, cache read, cache write] in $ per million tokens
+    ["claude-sonnet-5-5", 2, 10, 0.1, 2.5],
+    ["claude-opus-5-5", 4, 20, 0.2, 5],
+    ["claude-haiku-5-5", 0.1, 0.5, 0.01, 0.125],
+  ])("prices current Claude model %s on the Anthropic API", (model, input, output, cacheRead, cacheWrite) => {
+    const usage = languageModelUsage({
+      inputTokens: 40_000,
+      cachedInputTokens: 25_000,
+      cacheWriteTokens: 10_000,
+      outputTokens: 2000,
+      totalTokens: 42_000,
+    });
+
+    expect(
+      calculateUsageCost({ provider: "anthropic", model, usage }),
+    ).toBeCloseTo(
+      (5000 * input +
+        25_000 * cacheRead +
+        10_000 * cacheWrite +
+        2000 * output) /
+        1_000_000,
+      10,
+    );
+  });
+
+  it.each([
+    "anthropic/claude-sonnet-5.5",
+    "anthropic/claude-opus-5.5",
+    "anthropic/claude-haiku-5.5",
+  ])("prices %s on OpenRouter", (model) => {
+    const usage = languageModelUsage({
+      inputTokens: 1000,
+      outputTokens: 100,
+      totalTokens: 1100,
+    });
+
+    expect(
+      calculateUsageCost({ provider: "openrouter", model, usage }),
+    ).toBeGreaterThan(0);
+  });
+
+  it("bills a Claude Haiku 5.5 request over 100K prompt tokens at the long-prompt rate", () => {
+    const usage = languageModelUsage({
+      inputTokens: 150_000,
+      cachedInputTokens: 100_000,
+      outputTokens: 1000,
+      totalTokens: 151_000,
+    });
+
+    // $0.50 input, $2.50 output, cache reads at 0.1x the long-prompt input rate
+    expect(
+      calculateUsageCost({
+        provider: "anthropic",
+        model: "claude-haiku-5-5",
+        usage,
+      }),
+    ).toBeCloseTo((50_000 * 0.5 + 100_000 * 0.05 + 1000 * 2.5) / 1_000_000, 10);
+  });
+
+  it("picks each step's Claude Haiku 5.5 rate from that step's own prompt size", () => {
+    const step = languageModelUsage({
+      inputTokens: 60_000,
+      outputTokens: 500,
+      totalTokens: 60_500,
+    });
+    const runTotal = languageModelUsage({
+      inputTokens: 120_000,
+      outputTokens: 1000,
+      totalTokens: 121_000,
+    });
+
+    // Two 60K-token requests, both under the 100K threshold, even though the
+    // run's summed input is 120K.
+    expect(
+      calculateUsageCost({
+        provider: "anthropic",
+        model: "claude-haiku-5-5",
+        usage: runTotal,
+        stepUsages: [step, step],
+      }),
+    ).toBeCloseTo((120_000 * 0.1 + 1000 * 0.5) / 1_000_000, 10);
+  });
+
   it("resolves prefixed OpenRouter pricing for non-prefixed model names", () => {
     const usage = languageModelUsage({
       inputTokens: 100,
@@ -335,6 +419,37 @@ describe("saveAiUsage", () => {
 
     expect(publishAiCall).toHaveBeenCalledWith(
       expect.objectContaining({ cacheWriteTokens: 1024 }),
+    );
+  });
+
+  it("prices a multi-step run from each step's own usage", async () => {
+    const step = languageModelUsage({
+      inputTokens: 60_000,
+      outputTokens: 500,
+      totalTokens: 60_500,
+    });
+
+    await saveAiUsage({
+      email: "user@example.com",
+      emailAccountId: "email-account-1",
+      provider: "anthropic",
+      model: "claude-haiku-5-5",
+      usage: languageModelUsage({
+        inputTokens: 120_000,
+        outputTokens: 1000,
+        totalTokens: 121_000,
+      }),
+      stepUsages: [step, step],
+      label: "Reply context collector",
+    });
+
+    expect(publishAiCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        estimatedCost: expect.closeTo(
+          (120_000 * 0.1 + 1000 * 0.5) / 1_000_000,
+          10,
+        ),
+      }),
     );
   });
 

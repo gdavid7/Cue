@@ -11,10 +11,10 @@ export type ModelPricing = {
 
 export const OPENROUTER_MODEL_PRICING: Record<string, ModelPricing> = {
   "~deepseek/deepseek-v4-flash-latest": {
-    input: 1.52e-8,
-    output: 0.000_001_28,
-    cachedInput: 1.52e-8,
-    cacheWrite: 1.52e-8,
+    input: 8e-9,
+    output: 6.4e-7,
+    cachedInput: 8e-9,
+    cacheWrite: 8e-9,
   },
   "anthropic.claude-3-5-haiku-20241022-v1:0": {
     input: 8.000_000_000_000_001e-7,
@@ -64,11 +64,23 @@ export const OPENROUTER_MODEL_PRICING: Record<string, ModelPricing> = {
     cachedInput: 1e-7,
     cacheWrite: 0.000_001_25,
   },
+  "anthropic/claude-haiku-5.5": {
+    input: 1e-7,
+    output: 5e-7,
+    cachedInput: 1e-8,
+    cacheWrite: 1.25e-7,
+  },
   "anthropic/claude-opus-5": {
     input: 0.000_005,
     output: 0.000_025,
     cachedInput: 5e-7,
     cacheWrite: 0.000_006_25,
+  },
+  "anthropic/claude-opus-5.5": {
+    input: 0.000_004,
+    output: 0.000_02,
+    cachedInput: 2e-7,
+    cacheWrite: 0.000_005,
   },
   "anthropic/claude-sonnet-4": {
     input: 0.000_003,
@@ -112,6 +124,12 @@ export const OPENROUTER_MODEL_PRICING: Record<string, ModelPricing> = {
     cachedInput: 2e-7,
     cacheWrite: 0.000_002_5,
   },
+  "anthropic/claude-sonnet-5.5": {
+    input: 0.000_002,
+    output: 0.000_01,
+    cachedInput: 1e-7,
+    cacheWrite: 0.000_002_5,
+  },
   "au.anthropic.claude-sonnet-5": {
     input: 0.000_002,
     output: 0.000_01,
@@ -148,11 +166,23 @@ export const OPENROUTER_MODEL_PRICING: Record<string, ModelPricing> = {
     cachedInput: 1e-7,
     cacheWrite: 0.000_001_25,
   },
+  "claude-haiku-5-5": {
+    input: 1e-7,
+    output: 5e-7,
+    cachedInput: 1e-8,
+    cacheWrite: 1.25e-7,
+  },
   "claude-opus-5": {
     input: 0.000_005,
     output: 0.000_025,
     cachedInput: 5e-7,
     cacheWrite: 0.000_006_25,
+  },
+  "claude-opus-5-5": {
+    input: 0.000_004,
+    output: 0.000_02,
+    cachedInput: 2e-7,
+    cacheWrite: 0.000_005,
   },
   "claude-sonnet-4-20250514": {
     input: 0.000_003,
@@ -184,6 +214,12 @@ export const OPENROUTER_MODEL_PRICING: Record<string, ModelPricing> = {
     cachedInput: 2e-7,
     cacheWrite: 0.000_002_5,
   },
+  "claude-sonnet-5-5": {
+    input: 0.000_002,
+    output: 0.000_01,
+    cachedInput: 1e-7,
+    cacheWrite: 0.000_002_5,
+  },
   "DeepSeek-V4-Flash": {
     input: 1.9e-7,
     output: 5.1e-7,
@@ -197,10 +233,10 @@ export const OPENROUTER_MODEL_PRICING: Record<string, ModelPricing> = {
     cacheWrite: 0.000_001_925,
   },
   "deepseek/deepseek-v4-flash": {
-    input: 3e-8,
-    output: 0.000_001_28,
-    cachedInput: 3e-8,
-    cacheWrite: 3e-8,
+    input: 9.1e-8,
+    output: 1.82e-7,
+    cachedInput: 1.82e-8,
+    cacheWrite: 9.1e-8,
   },
   "eu.anthropic.claude-sonnet-4-6": {
     input: 0.000_003,
@@ -275,9 +311,9 @@ export const OPENROUTER_MODEL_PRICING: Record<string, ModelPricing> = {
     cacheWrite: 8.333_333_333_333_33e-8,
   },
   "gemini-3.8-flash": {
-    input: 7.5e-7,
-    output: 0.000_003_75,
-    cachedInput: 7.5e-8,
+    input: 8.25e-7,
+    output: 0.000_004_125,
+    cachedInput: 8.25e-8,
     cacheWrite: 4.166_666_666_666_67e-8,
   },
   "global.anthropic.claude-haiku-4-5-20251001-v1:0": {
@@ -377,9 +413,9 @@ export const OPENROUTER_MODEL_PRICING: Record<string, ModelPricing> = {
     cacheWrite: 8.333_333_333_333_33e-8,
   },
   "google/gemini-3.8-flash": {
-    input: 7.5e-7,
-    output: 0.000_003_75,
-    cachedInput: 7.5e-8,
+    input: 8.25e-7,
+    output: 0.000_004_125,
+    cachedInput: 8.25e-8,
     cacheWrite: 4.166_666_666_666_67e-8,
   },
   "gpt-3.5-turbo-0125": {
@@ -449,10 +485,10 @@ export const OPENROUTER_MODEL_PRICING: Record<string, ModelPricing> = {
     cacheWrite: 2.5e-7,
   },
   "gpt-5.6-sol": {
-    input: 0.000_002,
-    output: 0.000_01,
-    cachedInput: 2e-7,
-    cacheWrite: 0.000_002_5,
+    input: 0.000_004,
+    output: 0.000_02,
+    cachedInput: 4e-7,
+    cacheWrite: 0.000_005,
   },
   "gpt-5.6-terra": {
     input: 0.000_002,
@@ -467,10 +503,10 @@ export const OPENROUTER_MODEL_PRICING: Record<string, ModelPricing> = {
     cacheWrite: 1.25e-7,
   },
   "gpt-oss-120b": {
-    input: 3.7e-8,
-    output: 1.7e-7,
-    cachedInput: 3.7e-8,
-    cacheWrite: 3.7e-8,
+    input: 1.5e-7,
+    output: 6e-7,
+    cachedInput: 7.5e-8,
+    cacheWrite: 1.5e-7,
   },
   "jev-latest": {
     input: 4.2e-8,
@@ -487,7 +523,7 @@ export const OPENROUTER_MODEL_PRICING: Record<string, ModelPricing> = {
   "meta-llama/llama-4-maverick": {
     input: 1.875e-7,
     output: 6.525e-7,
-    cachedInput: 1.875e-7,
+    cachedInput: 5e-8,
     cacheWrite: 1.875e-7,
   },
   "moonshotai/kimi-k2": {

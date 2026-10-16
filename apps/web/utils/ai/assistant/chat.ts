@@ -1,4 +1,4 @@
-import type { JSONValue, ModelMessage } from "ai";
+import type { JSONValue, ModelMessage, Tool } from "ai";
 import type { Logger } from "@/utils/logger";
 import type { MessageContext } from "@/utils/ai/assistant/chat-context-validation";
 import { stringifyEmail } from "@/utils/stringify-email";
@@ -235,7 +235,6 @@ export async function aiProcessAssistantChat({
     supportsInlineEmailCards,
     messagingPlatform,
     userTimezone,
-    currentTimestamp,
   });
   const toolOptions = {
     email: user.email,
@@ -317,7 +316,13 @@ export async function aiProcessAssistantChat({
       ]
     : [];
 
+  const currentTimeMessage: ModelMessage = {
+    role: "user",
+    content: `[Automated context — not a message from the user] Current timestamp: ${currentTimestamp}.`,
+  };
+
   const contextMessages = [
+    currentTimeMessage,
     ...inboxContextMessage,
     ...(memories && memories.length > 0
       ? [
@@ -344,7 +349,7 @@ export async function aiProcessAssistantChat({
     stablePrefixEndIndex,
   );
 
-  const allTools = withChatToolRuntime({
+  const runtimeTools = withChatToolRuntime({
     logger,
     onGmailCall: gmailDemand.take,
     tools: {
@@ -412,6 +417,8 @@ export async function aiProcessAssistantChat({
         : {}),
     },
   });
+
+  const allTools = addAnthropicToolCacheControl(runtimeTools);
 
   logger.trace("Resolved system prompt", {
     systemPromptLength: system.length,
@@ -489,9 +496,16 @@ export async function aiProcessAssistantChat({
       }
 
       gmailDemand.end();
+      // Anthropic rejects a request whose history holds tool calls but that
+      // defines no tools, and a changed tool list invalidates the run's
+      // cached prompt and thinking, so Claude keeps its tools switched off.
+      const keepsToolDefinitions =
+        !!model &&
+        typeof model !== "string" &&
+        model.provider.startsWith("anthropic");
       return {
         messages,
-        activeTools: [],
+        ...(keepsToolDefinitions ? {} : { activeTools: [] }),
         toolChoice: "none",
       };
     },
@@ -597,6 +611,31 @@ function addAnthropicCacheControl(
       },
     };
   });
+}
+
+// Anthropic renders tools ahead of the system prompt, so a breakpoint on the
+// last tool keeps the large tool definitions cached on their own whenever the
+// system prompt changes, such as after a calendar or send setting changes.
+function addAnthropicToolCacheControl<T extends Record<string, Tool>>(
+  tools: T,
+): T {
+  const lastToolName = Object.keys(tools).at(-1);
+  if (!lastToolName) return tools;
+
+  const lastTool = tools[lastToolName];
+  return {
+    ...tools,
+    [lastToolName]: {
+      ...lastTool,
+      providerOptions: {
+        ...lastTool.providerOptions,
+        anthropic: {
+          ...lastTool.providerOptions?.anthropic,
+          cacheControl: { type: "ephemeral" },
+        },
+      },
+    },
+  };
 }
 
 function formatFixRuleResultContext({
@@ -828,7 +867,6 @@ export function buildResolvedSystemPrompt({
   supportsInlineEmailCards,
   messagingPlatform,
   userTimezone,
-  currentTimestamp,
 }: {
   emailSendToolsEnabled: boolean;
   draftReplyActionsEnabled: boolean;
@@ -839,7 +877,6 @@ export function buildResolvedSystemPrompt({
   supportsInlineEmailCards: boolean;
   messagingPlatform?: MessagingPlatform;
   userTimezone: string;
-  currentTimestamp: string;
 }) {
   const providerPolicy = getAssistantChatProvider(provider);
   const sections = [
@@ -903,7 +940,6 @@ export function buildResolvedSystemPrompt({
     getProviderContextSection({
       provider,
       userTimezone,
-      currentTimestamp,
       calendarConnection,
     }),
     providerPolicy.searchSyntaxPolicy,
@@ -955,18 +991,16 @@ export function buildResolvedSystemPrompt({
 function getProviderContextSection({
   provider,
   userTimezone,
-  currentTimestamp,
   calendarConnection,
 }: {
   provider: string;
   userTimezone: string;
-  currentTimestamp: string;
   calendarConnection: CalendarConnectionStatus;
 }) {
   const lines = [
     "Provider context:",
     `- Current provider: ${provider}.`,
-    `- User timezone: ${userTimezone}. Current timestamp: ${currentTimestamp}. Resolve relative dates like today, tomorrow, this afternoon, Monday, or Friday from this timezone before calling calendar or inbox date-range tools.`,
+    `- User timezone: ${userTimezone}. The current timestamp is in the automated context message. Resolve relative dates like today, tomorrow, this afternoon, Monday, or Friday from this timezone before calling calendar or inbox date-range tools.`,
   ];
 
   if (calendarConnection.state === "disconnected") {

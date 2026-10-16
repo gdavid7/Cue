@@ -1,4 +1,4 @@
-import type { ModelMessage, Tool } from "ai";
+import { asSchema, type ModelMessage, type Tool } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestLogger, getEmailAccount } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
@@ -231,7 +231,6 @@ function buildPrompt(
     responseSurface: "web",
     supportsInlineEmailCards: false,
     userTimezone: "UTC",
-    currentTimestamp: "2026-05-12T00:00:00.000Z",
     ...overrides,
   });
 }
@@ -308,6 +307,51 @@ describe("aiProcessAssistantChat tools", () => {
   });
 });
 
+describe("aiProcessAssistantChat tool definitions", () => {
+  async function chatTools() {
+    vi.clearAllMocks();
+    vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
+    await aiProcessAssistantChat({
+      messages: [{ role: "user", content: "what's new?" }],
+      emailAccountId: "email-account-id",
+      user: getEmailAccount(),
+      logger: createTestLogger(),
+    });
+    const [options] = vi.mocked(toolCallAgentStream).mock.calls[0];
+    return Object.entries(options.tools as Record<string, Tool>);
+  }
+
+  it("caches the tool definitions separately from the per-turn system prompt", async () => {
+    const tools = await chatTools();
+    const cached = tools.filter(
+      ([, definition]) => definition.providerOptions?.anthropic?.cacheControl,
+    );
+
+    expect(cached.map(([name]) => name)).toEqual([tools.at(-1)?.[0]]);
+    expect(cached[0][1].providerOptions?.anthropic?.cacheControl).toEqual({
+      type: "ephemeral",
+    });
+  });
+
+  it("gives every tool a flat object input schema", async () => {
+    const tools = await chatTools();
+
+    for (const [name, definition] of tools) {
+      const schema = (await asSchema(definition.inputSchema).jsonSchema) as {
+        type?: unknown;
+        anyOf?: unknown;
+        oneOf?: unknown;
+        allOf?: unknown;
+      };
+      expect(schema.type, name).toBe("object");
+      expect(
+        schema.anyOf ?? schema.oneOf ?? schema.allOf,
+        name,
+      ).toBeUndefined();
+    }
+  });
+});
+
 describe("aiProcessAssistantChat setup", () => {
   it("runs its account lookups together before starting the model", async () => {
     vi.clearAllMocks();
@@ -337,6 +381,49 @@ describe("aiProcessAssistantChat setup", () => {
     await run;
 
     expect(toolCallAgentStream).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("aiProcessAssistantChat current time", () => {
+  async function modelMessagesAt(time: string) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(time));
+    try {
+      vi.mocked(toolCallAgentStream).mockClear();
+      vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
+      await aiProcessAssistantChat({
+        messages: [{ role: "user", content: "what came in today?" }],
+        emailAccountId: "email-account-id",
+        user: getEmailAccount(),
+        logger: createTestLogger(),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    const [options] = vi.mocked(toolCallAgentStream).mock.calls[0];
+    return options.messages as ModelMessage[];
+  }
+
+  it("keeps the system prompt identical across turns at different times", async () => {
+    const morning = await modelMessagesAt("2026-10-16T08:00:00.000Z");
+    const evening = await modelMessagesAt("2026-10-16T19:30:12.345Z");
+
+    const systemOf = (messages: ModelMessage[]) =>
+      messages.filter((message) => message.role === "system");
+    expect(systemOf(morning)).toHaveLength(1);
+    expect(systemOf(evening)).toEqual(systemOf(morning));
+    expect(JSON.stringify(systemOf(evening))).not.toContain("2026-10-16");
+  });
+
+  it("gives the current time as the first automated context message", async () => {
+    const messages = await modelMessagesAt("2026-10-16T19:30:12.345Z");
+    const [, firstContext] = messages;
+
+    expect(firstContext).toEqual({
+      role: "user",
+      content:
+        "[Automated context — not a message from the user] Current timestamp: 2026-10-16T19:30:12.345Z.",
+    });
   });
 });
 
@@ -457,15 +544,35 @@ describe("aiProcessAssistantChat turn limits", () => {
     expect(await step(6)).not.toHaveProperty("providerOptions");
   });
 
-  it("keeps a non-Gemini model's own reasoning settings", async () => {
+  it("keeps the reasoning settings of a model without a thinking level", async () => {
     const step = await prepareStepFor();
 
     const result = await step(1, {
-      provider: "anthropic.messages",
-      modelId: "claude-sonnet-5",
+      provider: "openai.responses",
+      modelId: "gpt-6-luna",
     });
 
     expect(result?.providerOptions).toBeUndefined();
+  });
+
+  it("lowers Claude's effort while it can still call tools", async () => {
+    const step = await prepareStepFor();
+
+    expect(await step(1, CLAUDE_STEP_MODEL)).toMatchObject({
+      providerOptions: { anthropic: { effort: "low" } },
+    });
+    expect(await step(6, CLAUDE_STEP_MODEL)).not.toHaveProperty(
+      "providerOptions",
+    );
+  });
+
+  it("keeps Claude's tool definitions when it forces the answer", async () => {
+    const step = await prepareStepFor();
+
+    const forced = await step(6, CLAUDE_STEP_MODEL);
+
+    expect(forced).toMatchObject({ toolChoice: "none" });
+    expect(forced).not.toHaveProperty("activeTools");
   });
 
   it("answers without more tools after six steps", async () => {
@@ -607,3 +714,8 @@ describe("aiProcessAssistantChat Gmail demand", () => {
     await vi.waitFor(() => expect(mockReleaseDemand).toHaveBeenCalledTimes(1));
   });
 });
+
+const CLAUDE_STEP_MODEL = {
+  provider: "anthropic.messages",
+  modelId: "claude-sonnet-5-5",
+};

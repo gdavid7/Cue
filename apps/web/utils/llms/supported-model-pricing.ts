@@ -4,6 +4,15 @@ export type ModelPricing = {
   output: number;
   cachedInput?: number;
   cacheWrite?: number;
+  // Rates for a request whose prompt (cached and uncached input together)
+  // exceeds the threshold. They replace the base rates for the whole request.
+  longPrompt?: {
+    thresholdTokens: number;
+    input: number;
+    output: number;
+    cachedInput?: number;
+    cacheWrite?: number;
+  };
 };
 
 const sonnet = {
@@ -23,6 +32,33 @@ const haiku = {
   output: 5 / 1_000_000,
   cachedInput: 0.1 / 1_000_000,
   cacheWrite: 1.25 / 1_000_000,
+};
+// Claude Sonnet 5.5 and Opus 5.5 read their cache at 0.05x the input rate,
+// not 0.1x. https://platform.claude.com/docs/en/about-claude/pricing
+const sonnet5_5 = {
+  input: 2 / 1_000_000,
+  output: 10 / 1_000_000,
+  cachedInput: 0.1 / 1_000_000,
+  cacheWrite: 2.5 / 1_000_000,
+};
+const opus5_5 = {
+  input: 4 / 1_000_000,
+  output: 20 / 1_000_000,
+  cachedInput: 0.2 / 1_000_000,
+  cacheWrite: 5 / 1_000_000,
+};
+const haiku5_5 = {
+  input: 0.1 / 1_000_000,
+  output: 0.5 / 1_000_000,
+  cachedInput: 0.01 / 1_000_000,
+  cacheWrite: 0.125 / 1_000_000,
+  longPrompt: {
+    thresholdTokens: 100_000,
+    input: 0.5 / 1_000_000,
+    output: 2.5 / 1_000_000,
+    cachedInput: 0.05 / 1_000_000,
+    cacheWrite: 0.625 / 1_000_000,
+  },
 };
 const opus5 = {
   input: 5 / 1_000_000,
@@ -143,6 +179,9 @@ export const STATIC_MODEL_PRICING: Record<string, ModelPricing> = {
   "claude-3-5-sonnet-20240620": sonnet,
   "claude-3-5-sonnet-20241022": sonnet,
   "claude-3-7-sonnet-20250219": sonnet,
+  "claude-sonnet-5-5": sonnet5_5,
+  "claude-opus-5-5": opus5_5,
+  "claude-haiku-5-5": haiku5_5,
   "claude-sonnet-5": sonnet5,
   "claude-sonnet-4-6": sonnet,
   "claude-sonnet-4-5-20250929": sonnet,
@@ -154,6 +193,9 @@ export const STATIC_MODEL_PRICING: Record<string, ModelPricing> = {
   "anthropic/claude-sonnet-4": sonnet,
   "anthropic/claude-sonnet-4.5": sonnet,
   "anthropic/claude-sonnet-4.6": sonnet,
+  "anthropic/claude-sonnet-5.5": sonnet5_5,
+  "anthropic/claude-opus-5.5": opus5_5,
+  "anthropic/claude-haiku-5.5": haiku5_5,
   "anthropic/claude-sonnet-5": sonnet5,
   "anthropic/claude-opus-5": opus5,
   "anthropic/claude-haiku-4.5": haiku,
@@ -294,6 +336,9 @@ export const OPENROUTER_MODEL_ID_BY_SUPPORTED_MODEL: Partial<
   "claude-3-7-sonnet-20250219": "anthropic/claude-3.7-sonnet",
   "claude-sonnet-4-6": "anthropic/claude-sonnet-4.6",
   "claude-sonnet-4-5-20250929": "anthropic/claude-sonnet-4.5",
+  "claude-sonnet-5-5": "anthropic/claude-sonnet-5.5",
+  "claude-opus-5-5": "anthropic/claude-opus-5.5",
+  "claude-haiku-5-5": "anthropic/claude-haiku-5.5",
   "claude-sonnet-5": "anthropic/claude-sonnet-5",
   "claude-opus-5": "anthropic/claude-opus-5",
   "claude-haiku-4-5": "anthropic/claude-haiku-4.5",
