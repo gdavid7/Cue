@@ -1579,7 +1579,6 @@ function ComposeEmailFormContent({
       // The old account keeps an up-to-date copy in case the move fails.
       captureLocalDraft();
       await flushDraft();
-      const content = getDraftContent();
       const local = localDraftIdentity
         ? await getReplyDraft(localDraftIdentity)
         : undefined;
@@ -1601,6 +1600,8 @@ function ComposeEmailFormContent({
               })),
             })
           : [];
+      // Read last, so nothing in the message is older than the hand-off.
+      const content = getDraftContent();
       previewsMoved.current = true;
       onSelectEmailAccount(nextEmailAccountId, {
         values: content?.values ?? getValues(),
@@ -1716,6 +1717,8 @@ function ComposeEmailFormContent({
   return (
     <form
       data-inline-reply={isInlineReply || undefined}
+      // Nothing can change while the draft moves, so nothing typed is lost.
+      inert={isMovingDraft}
       ref={formRef}
       style={
         isInlineReply && !isComposeWindow

@@ -167,6 +167,80 @@ test("returns the message to its account when the new From can't load", async ({
   }
 });
 
+test("keeps text typed while the message moves to another From", async ({
+  page,
+}) => {
+  test.skip(
+    isMicrosoftPlaywright(),
+    "Reads the mailbox drafts back from the Gmail emulator.",
+  );
+  test.setTimeout(240_000);
+  const { emailAccountId } = await openMail(page);
+  const secondAccount = await createSecondEmailAccount(emailAccountId);
+  const subject = `From switch typing ${Date.now()}`;
+
+  try {
+    await page.goto(`/${emailAccountId}/mail?accountScope=all`);
+    await page.getByRole("button", { name: /^Compose/ }).click();
+    const dialog = page.getByRole("dialog", { name: "New Message" });
+    const from = dialog.getByRole("combobox", { name: "From" });
+    await dialog
+      .getByRole("combobox", { name: "To", exact: true })
+      .fill("recipient@example.com");
+    await page.keyboard.press("Enter");
+    await dialog.getByPlaceholder("Subject").fill(subject);
+    const editor = dialog.getByRole("textbox", { name: "Email message" });
+    await editor.fill("Before the switch.");
+    await expect
+      .poll(() => readDraftFiles(page, subject), { timeout: 60_000 })
+      .toEqual([[]]);
+
+    // Hold the next mailbox save, so the move waits on it while typing goes on.
+    let releaseSave = () => {};
+    const saveHeld = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    let saveStarted = false;
+    await page.route("**/*", async (route) => {
+      const request = route.request();
+      if (
+        request.method() !== "POST" ||
+        !(await request.headerValue("next-action"))
+      )
+        return route.fallback();
+      saveStarted = true;
+      await saveHeld;
+      await route.fallback();
+    });
+    await editor.press("End");
+    await editor.pressSequentially(" More.");
+    await expect.poll(() => saveStarted, { timeout: 30_000 }).toBe(true);
+
+    await from.click();
+    await page
+      .getByRole("option", {
+        name: `${secondAccount.name} (${secondAccount.email})`,
+        exact: true,
+      })
+      .click();
+    // While the move waits, the message can't be edited.
+    const form = dialog.locator("form");
+    await expect(form).toHaveAttribute("inert", "");
+    await page.keyboard.type(" Lost?");
+    releaseSave();
+
+    await expect(from).toContainText(secondAccount.email, { timeout: 60_000 });
+    await expect(editor).toContainText("Before the switch. More.");
+    await expect(editor).not.toContainText("Lost?");
+    await expect(form).not.toHaveAttribute("inert");
+    await page.unroute("**/*");
+    await dialog.getByRole("button", { name: "Discard draft" }).click();
+    await expect(dialog).toBeHidden();
+  } finally {
+    await deleteSecondEmailAccount(secondAccount.accountId);
+  }
+});
+
 async function setSignature(emailAccountId: string, signature: string | null) {
   return withClient(async (client) => {
     const previous = await client.query<{ signature: string | null }>(
