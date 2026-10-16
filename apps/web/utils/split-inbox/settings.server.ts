@@ -1,6 +1,9 @@
-import { SystemType } from "@/generated/prisma/enums";
 import { ensureAllMailSplit } from "@/utils/split-inbox/initial-splits";
 import prisma from "@/utils/prisma";
+import {
+  isReplyTrackingOn,
+  REPLY_TRACKING_RULES,
+} from "@/utils/reply-tracker/reply-tracking-status";
 
 export async function getMailSettings({
   emailAccountId,
@@ -26,10 +29,7 @@ export async function getMailSettings({
           },
         },
       },
-      rules: {
-        where: { systemType: SystemType.TO_REPLY },
-        select: { enabled: true },
-      },
+      rules: REPLY_TRACKING_RULES,
     },
   });
 
@@ -37,6 +37,6 @@ export async function getMailSettings({
     layout: emailAccount?.mailLayout ?? null,
     expandedPreview: emailAccount?.mailExpandedPreview ?? false,
     splits: ensureAllMailSplit(emailAccount?.mailSplits ?? []),
-    replyTracking: emailAccount?.rules.some((rule) => rule.enabled) ?? false,
+    replyTracking: isReplyTrackingOn(emailAccount?.rules),
   };
 }
