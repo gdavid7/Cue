@@ -25,6 +25,45 @@ describe("createRedisUsageMeter", () => {
     ]);
   });
 
+  // SCAN's first argument is a cursor; its match pattern names the feature.
+  it("counts a scan under its match prefix", async () => {
+    const meter = createRedisUsageMeter();
+    const client = meter.wrap({
+      scan: async (_cursor: string, _options: { match?: string }) => ["0", []],
+    });
+
+    await client.scan("0", { match: "usage-weekly-cost:*" });
+    await client.scan("0", {});
+
+    expect(meter.snapshot()).toEqual([
+      { feature: "usage-weekly-cost", commands: 1, bytesRead: 8 },
+      { feature: "scan", commands: 1, bytesRead: 8 },
+    ]);
+  });
+
+  // Each command in a pipeline is billed, so a pipeline counts as many.
+  it("counts a pipeline's commands when it runs", async () => {
+    const meter = createRedisUsageMeter();
+    const queued: string[] = [];
+    const pipeline = {
+      set(key: string) {
+        queued.push(key);
+        return pipeline;
+      },
+      exec: async () => queued.map(() => "OK"),
+    };
+    const client = meter.wrap({ pipeline: () => pipeline });
+
+    const batch = client.pipeline();
+    batch.set("gmail-thread-metadata:a1:t1").set("gmail-thread-metadata:a1:t2");
+    expect(meter.snapshot()).toEqual([]);
+    await batch.exec();
+
+    expect(meter.snapshot()).toEqual([
+      { feature: "gmail-thread-metadata", commands: 2, bytesRead: 4 },
+    ]);
+  });
+
   // Logged from request flushes, so a busy instance logs at most every few
   // minutes and Axiom can sum commands per feature per day.
   it("logs a summary at most once per interval, then starts over", () => {

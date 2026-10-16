@@ -35,10 +35,9 @@ export function createRedisUsageMeter() {
             return value;
           return (...args: unknown[]) => {
             const result = value.apply(target, args);
-            // eval(script, keys, args): its first key names the feature.
-            const key = property.startsWith("eval")
-              ? (args[1] as unknown[] | undefined)?.[0]
-              : args[0];
+            if (property === "pipeline" || property === "multi")
+              return meterBatch(result as object, count);
+            const key = commandKey(property, args);
             if (!(result instanceof Promise)) {
               count(property, key);
               return result;
@@ -79,6 +78,53 @@ export function createRedisUsageMeter() {
 export function getRedisUsageMeter() {
   global.redisUsageMeter ??= createRedisUsageMeter();
   return global.redisUsageMeter;
+}
+
+// Each queued command is billed, so a batch counts them when it runs.
+function meterBatch<T extends object>(
+  batch: T,
+  count: (command: string, key: unknown, bytesRead?: number) => void,
+): T {
+  const queued: { command: string; key: unknown }[] = [];
+  const proxy: T = new Proxy(batch, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function" || typeof property !== "string")
+        return value;
+      if (property === "exec")
+        return async (...args: unknown[]) => {
+          const results: unknown = await value.apply(target, args);
+          queued.forEach(({ command, key }, index) => {
+            count(
+              command,
+              key,
+              sizeOf(Array.isArray(results) ? results[index] : null),
+            );
+          });
+          queued.length = 0;
+          return results;
+        };
+      return (...args: unknown[]) => {
+        const result = value.apply(target, args);
+        if (result !== target) return result;
+        queued.push({ command: property, key: commandKey(property, args) });
+        return proxy;
+      };
+    },
+  });
+  return proxy;
+}
+
+// The key that names a command's feature: eval's first key, or the prefix a
+// SCAN matches (its first argument is a cursor).
+function commandKey(command: string, args: unknown[]): unknown {
+  if (command.startsWith("eval"))
+    return (args[1] as unknown[] | undefined)?.[0];
+  if (command === "scan") {
+    const match = (args[1] as { match?: unknown } | undefined)?.match;
+    return typeof match === "string" ? match : "scan";
+  }
+  return args[0];
 }
 
 function featureOf(key: unknown) {
