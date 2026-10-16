@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { SiteIcon } from "@/components/charts/SiteIcon";
+import { SiteIcon } from "@/components/SiteIcon";
 
 /**
  * An app's own logo when we ship one; otherwise its site's favicon, which for
