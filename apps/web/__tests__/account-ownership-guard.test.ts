@@ -112,6 +112,11 @@ const OWNERSHIP_CHECKS: Record<string, OwnershipCheck> = {
         /export async function shareConversation\([\s\S]*?getOwnedMember\(actor\);\s*if \(member\.emailAccountId !== input\.source\.emailAccountId\)/,
     },
   },
+  "app/api/threads/all/route.ts#GET": {
+    how: "its query schema can't be read in full (threadsQuery uses imported helpers), but it only loads the user's own accounts",
+    check:
+      /getConnectedEmailAccounts\(\{\s*userId: request\.auth\.userId,\s*includeInAllAccounts: true,/,
+  },
   "app/api/user/email-accounts/[emailAccountId]/route.ts#DELETE": {
     how: "delegates to deleteEmailAccountAction, checked above",
     check: /deleteEmailAccountAction\(\{ emailAccountId \}\)/,
@@ -144,9 +149,6 @@ const ACCOUNT_PATH_SEGMENT = /\[\w*[aA]ccountId\]/;
 const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 // Imports whose names are never schemas that could hold an account id.
 const NON_SCHEMA_MODULES = /^(?:zod|zod\/.*|@\/generated\/prisma.*)$/;
-const SCHEMA_NAME = /(?:Schema|Input|Body|Query|Params)$/;
-const SCHEMA_METHOD_CALL =
-  /^\s*\.\s*(?:optional|nullish|nullable|array|omit|pick|extend|merge|partial|required|refine|superRefine|transform|or|and|default|parse|safeParse)\(/;
 const WEB_ROOT = path.resolve(import.meta.dirname, "..");
 
 describe("user-level handlers that take an account id", () => {
@@ -175,59 +177,69 @@ describe("user-level handlers that take an account id", () => {
 });
 
 describe("schema reading", () => {
-  const schemas: Schemas = new Map([
-    [
-      "sourceSchema",
-      {
-        source: "z.object({ emailAccountId: id })",
-        imports: new Set<string>(),
+  const modules = fakeModules({
+    "schemas.ts": {
+      schemas: {
+        sourceSchema: "z.object({ emailAccountId: id })",
+        plainSchema: "z.object({ name: z.string() })",
+        refinedSchema:
+          "z.object({ name: z.string() }).refine((value) => isAllowed(value))",
       },
-    ],
-    [
-      "importsAnUnknownSchema",
-      {
-        source: "z.object({ target: externalSchema })",
-        imports: new Set(["externalSchema"]),
+      imports: { isAllowed: { module: "helpers.ts", name: "isAllowed" } },
+    },
+    "route.ts": {
+      imports: {
+        sourceSchema: { module: "schemas.ts", name: "sourceSchema" },
+        plainSchema: { module: "schemas.ts", name: "plainSchema" },
+        refinedSchema: { module: "schemas.ts", name: "refinedSchema" },
+        externalSchema: { module: null, name: "externalSchema" },
+        renamedSchema: { module: "schemas.ts", name: "sourceSchema" },
       },
-    ],
-  ]);
+    },
+    "helpers.ts": {},
+  });
+  const route = modules.load("route.ts");
 
-  it("follows named schemas to an account id at any depth", () => {
+  it("follows named schemas, by module, to an account id at any depth", () => {
     expect(
       inputSchemaText(
-        ".inputSchema(z.object({ source: sourceSchema })).action(",
-        schemas,
-        new Set(),
+        ".inputSchema(z.object({ source: renamedSchema })).action(",
+        route,
+        modules.load,
       ),
     ).toMatch(SCHEMA_ACCOUNT_KEY);
   });
 
-  it("calls a schema unreadable when part of it comes from outside the actions", () => {
+  it("calls a schema unreadable when any imported part isn't a known schema", () => {
     expect(
       inputSchemaText(
-        ".inputSchema(importsAnUnknownSchema).action(",
-        schemas,
-        new Set(),
+        ".inputSchema(externalSchema).action(",
+        route,
+        modules.load,
+      ),
+    ).toBeNull();
+    expect(
+      inputSchemaText(
+        ".inputSchema(refinedSchema).action(",
+        route,
+        modules.load,
       ),
     ).toBeNull();
   });
 
-  it("counts a route that parses an imported schema holding an account id", () => {
+  it("counts a route that parses a schema holding an account id, body or query", () => {
     expect(
       routeTakesAccountId(
         "const body = sourceSchema.parse(await request.json());",
-        schemas,
-        new Set(["sourceSchema"]),
+        route,
+        modules.load,
       ),
     ).toBe(true);
-  });
-
-  it("counts a route that parses its query with a schema holding an account id", () => {
     expect(
       routeTakesAccountId(
         "const query = sourceSchema.parse(Object.fromEntries(url.searchParams));",
-        schemas,
-        new Set(["sourceSchema"]),
+        route,
+        modules.load,
       ),
     ).toBe(true);
   });
@@ -236,15 +248,15 @@ describe("schema reading", () => {
     expect(
       routeTakesAccountId(
         "const body = await request.json(); use(body.thing);",
-        schemas,
-        new Set(),
+        route,
+        modules.load,
       ),
     ).toBe(true);
     expect(
       routeTakesAccountId(
         "const body = externalSchema.parse(await request.json());",
-        schemas,
-        new Set(["externalSchema"]),
+        route,
+        modules.load,
       ),
     ).toBe(true);
   });
@@ -253,43 +265,35 @@ describe("schema reading", () => {
     expect(
       routeTakesAccountId(
         "const body = plainSchema.parse(await request.json());",
-        new Map([
-          [
-            "plainSchema",
-            {
-              source: "z.object({ name: z.string() })",
-              imports: new Set<string>(),
-            },
-          ],
-        ]),
-        new Set(),
+        route,
+        modules.load,
       ),
     ).toBe(false);
   });
 });
 
-type Schemas = Map<string, { source: string; imports: Set<string> }>;
+/** A module's schemas and imports, so names resolve where they are defined. */
+type ModuleInfo = {
+  file: string;
+  schemas: Map<string, string>;
+  /** Imported name → its module (null for a package) and exported name. */
+  imports: Map<string, { module: string | null; name: string }>;
+};
+type LoadModule = (file: string) => ModuleInfo;
 
 function findUserLevelHandlers() {
   const handlers: { key: string; source: string; takesAccountId: boolean }[] =
     [];
-  const actionFiles = listFiles(path.join(WEB_ROOT, "utils/actions")).filter(
-    (file) => file.endsWith(".ts") && !file.endsWith(".test.ts"),
-  );
-  // Schemas live with the actions and in modules across utils.
-  const utilFiles = listFiles(path.join(WEB_ROOT, "utils")).filter(
-    (file) => file.endsWith(".ts") && !/\.test\.ts$|\.d\.ts$/.test(file),
-  );
-  const schemas: Schemas = new Map();
-  for (const file of utilFiles) addSchemas(schemas, readFileSync(file, "utf8"));
+  const load = createModuleLoader();
 
-  for (const file of actionFiles) {
+  for (const file of listFiles(path.join(WEB_ROOT, "utils/actions"))) {
+    if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue;
     const source = readFileSync(file, "utf8");
     if (!source.includes("actionClientUser")) continue;
-    const imports = importedNames(source);
+    const module = load(file);
     for (const declaration of topLevelDeclarations(source)) {
       if (!/=\s*actionClientUser\b/.test(declaration.source)) continue;
-      const schema = inputSchemaText(declaration.source, schemas, imports);
+      const schema = inputSchemaText(declaration.source, module, load);
       handlers.push({
         key: `${relative(file)}#${declaration.name}`,
         source: declaration.source,
@@ -307,10 +311,7 @@ function findUserLevelHandlers() {
     if (path.basename(file) !== "route.ts") continue;
     const source = readFileSync(file, "utf8");
     const declarations = topLevelDeclarations(source);
-    // The route's own schemas join the actions' for this file.
-    const routeSchemas: Schemas = new Map(schemas);
-    addSchemas(routeSchemas, source);
-    const imports = importedNames(source);
+    const module = load(file);
     for (const declaration of declarations) {
       if (!HTTP_METHODS.includes(declaration.name)) continue;
       if (!/=\s*withAuth\(/.test(declaration.source)) continue;
@@ -320,7 +321,7 @@ function findUserLevelHandlers() {
         source: reached,
         takesAccountId:
           ACCOUNT_PATH_SEGMENT.test(relative(file)) ||
-          routeTakesAccountId(reached, routeSchemas, imports),
+          routeTakesAccountId(reached, module, load),
       });
     }
   }
@@ -330,8 +331,8 @@ function findUserLevelHandlers() {
 
 function routeTakesAccountId(
   handler: string,
-  schemas: Schemas,
-  imports: Set<string>,
+  module: ModuleInfo,
+  load: LoadModule,
 ) {
   if (ROUTE_ACCOUNT_INPUT.test(handler)) return true;
   const parseCalls = [...handler.matchAll(SCHEMA_PARSE_CALL)].filter(
@@ -343,7 +344,8 @@ function routeTakesAccountId(
     match[1] ? [match[1]] : [],
   );
   const parsesAccountId = parsedWith.some((name) => {
-    const text = expandSchema(name, schemas, imports);
+    if (!module.schemas.has(name) && !module.imports.has(name)) return false;
+    const text = expandText(name, module, load, new Set());
     return text === null || SCHEMA_ACCOUNT_KEY.test(text);
   });
   if (parsesAccountId) return true;
@@ -352,11 +354,7 @@ function routeTakesAccountId(
 }
 
 /** The schema an action validates, with the named schemas it is built from. */
-function inputSchemaText(
-  action: string,
-  schemas: Schemas,
-  imports: Set<string>,
-) {
+function inputSchemaText(action: string, module: ModuleInfo, load: LoadModule) {
   const start = action.indexOf(".inputSchema(");
   if (start < 0) return "";
   const end = action.indexOf(".action(", start);
@@ -364,42 +362,43 @@ function inputSchemaText(
     start + ".inputSchema(".length,
     end < 0 ? undefined : end,
   );
-  return expandText(expression, schemas, imports, new Set());
-}
-
-function expandSchema(name: string, schemas: Schemas, imports: Set<string>) {
-  return expandText(name, schemas, imports, new Set());
+  return expandText(expression, module, load, new Set());
 }
 
 /**
- * Replaces each named schema with its definition. Returns null when a part
- * comes from a module this test does not read, which may hold anything.
+ * Replaces each named schema with its definition, looked up in the module
+ * that defines it. Returns null when a part is imported from anything but a
+ * known schema, since it may hold anything.
  */
 function expandText(
   text: string,
-  schemas: Schemas,
-  imports: Set<string>,
+  module: ModuleInfo,
+  load: LoadModule,
   seen: Set<string>,
 ): string | null {
   let unreadable = false;
   const code = text.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
-  const expanded = code.replace(/\b\w+\b/g, (word, offset: number) => {
-    const schema = schemas.get(word);
-    if (schema) {
-      if (seen.has(word)) return word;
-      seen.add(word);
-      const inner = expandText(schema.source, schemas, schema.imports, seen);
-      if (inner === null) unreadable = true;
-      return inner ?? word;
-    }
-    // An imported part of a schema is named as one or used as one; imported
-    // functions, enums and limits in refinements are not schemas.
-    if (
-      imports.has(word) &&
-      (SCHEMA_NAME.test(word) ||
-        SCHEMA_METHOD_CALL.test(code.slice(offset + word.length)))
-    )
-      unreadable = true;
+  const expandIn = (target: ModuleInfo, name: string) => {
+    const key = `${target.file}#${name}`;
+    if (seen.has(key)) return name;
+    seen.add(key);
+    const inner = expandText(
+      target.schemas.get(name) ?? "",
+      target,
+      load,
+      seen,
+    );
+    if (inner === null) unreadable = true;
+    return inner ?? name;
+  };
+  const expanded = code.replace(/\b\w+\b/g, (word) => {
+    if (module.schemas.has(word)) return expandIn(module, word);
+    const imported = module.imports.get(word);
+    if (!imported) return word;
+    const target = imported.module === null ? null : load(imported.module);
+    if (target?.schemas.has(imported.name))
+      return expandIn(target, imported.name);
+    unreadable = true;
     return word;
   });
   return unreadable ? null : expanded;
@@ -409,30 +408,95 @@ function expandText(
 const SCHEMA_DECLARATION =
   /^[^=]*=\s*(?:z\s*\.|\w+\s*\.(?:omit|pick|extend|merge|partial|required|and|or|array|optional|nullable|refine|superRefine|transform)\()/;
 
-function addSchemas(schemas: Schemas, source: string) {
-  const imports = importedNames(source);
-  for (const declaration of topLevelDeclarations(source)) {
-    if (SCHEMA_DECLARATION.test(declaration.source))
-      schemas.set(declaration.name, { source: declaration.source, imports });
-  }
+function createModuleLoader(): LoadModule {
+  const modules = new Map<string, ModuleInfo>();
+  const empty = (file: string): ModuleInfo => ({
+    file,
+    schemas: new Map(),
+    imports: new Map(),
+  });
+  const load: LoadModule = (file) => {
+    const cached = modules.get(file);
+    if (cached) return cached;
+    let source: string;
+    try {
+      source = readFileSync(file, "utf8");
+    } catch {
+      const missing = empty(file);
+      modules.set(file, missing);
+      return missing;
+    }
+    const module = empty(file);
+    modules.set(file, module);
+    for (const declaration of topLevelDeclarations(source)) {
+      if (SCHEMA_DECLARATION.test(declaration.source))
+        module.schemas.set(declaration.name, declaration.source);
+    }
+    for (const [local, imported] of importsOf(source, file))
+      module.imports.set(local, imported);
+    return module;
+  };
+  return load;
 }
 
-/** Names a file imports, except from modules that cannot hold a schema. */
-function importedNames(source: string) {
-  const names = new Set<string>();
+/** Each imported name, resolved to the file it comes from. */
+function importsOf(source: string, file: string) {
+  const imports = new Map<string, { module: string | null; name: string }>();
   for (const match of source.matchAll(
     /import\s+(type\s+)?(?:(\w+)\s*,?\s*)?(?:\{([^}]*)\})?\s*from\s+["']([^"']+)["']/g,
   )) {
-    const [, typeOnly, defaultName, named, module] = match;
-    if (typeOnly || NON_SCHEMA_MODULES.test(module)) continue;
-    if (defaultName) names.add(defaultName);
+    const [, typeOnly, defaultName, named, specifier] = match;
+    // Zod and Prisma's generated enums are never schemas holding an id.
+    if (typeOnly || NON_SCHEMA_MODULES.test(specifier)) continue;
+    const module = resolveModule(specifier, file);
+    if (defaultName) imports.set(defaultName, { module, name: "default" });
     for (const part of named?.split(",") ?? []) {
       const trimmed = part.trim();
       if (!trimmed || trimmed.startsWith("type ")) continue;
-      names.add(trimmed.split(/\s+as\s+/).at(-1) ?? trimmed);
+      const [name, local = name] = trimmed.split(/\s+as\s+/);
+      imports.set(local, { module, name });
     }
   }
-  return names;
+  return imports;
+}
+
+/** The file an import names, or null for a package. */
+function resolveModule(specifier: string, fromFile: string) {
+  const base = specifier.startsWith("@/")
+    ? path.join(WEB_ROOT, specifier.slice(2))
+    : specifier.startsWith(".")
+      ? path.resolve(path.dirname(fromFile), specifier)
+      : null;
+  if (!base) return null;
+  for (const candidate of [
+    base,
+    `${base}.ts`,
+    `${base}.tsx`,
+    path.join(base, "index.ts"),
+  ]) {
+    try {
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {}
+  }
+  return null;
+}
+
+/** Modules for the tests above, by file name. */
+function fakeModules(
+  files: Record<
+    string,
+    {
+      schemas?: Record<string, string>;
+      imports?: Record<string, { module: string | null; name: string }>;
+    }
+  >,
+) {
+  const load: LoadModule = (file) => ({
+    file,
+    schemas: new Map(Object.entries(files[file]?.schemas ?? {})),
+    imports: new Map(Object.entries(files[file]?.imports ?? {})),
+  });
+  return { load };
 }
 
 type Declaration = { name: string; source: string };
