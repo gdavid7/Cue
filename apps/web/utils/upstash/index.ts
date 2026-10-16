@@ -93,6 +93,7 @@ export async function bulkPublishToQstash<T>({
     path: string;
     body: T;
     flowControl?: FlowControl;
+    deduplicationId?: string;
   }[];
 }) {
   const client = getQstashClient();
