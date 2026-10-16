@@ -209,6 +209,50 @@ describe("searchInbox across the user's accounts", () => {
     expect(providers["account-2"].searchMessages).not.toHaveBeenCalled();
   });
 
+  it("rewrites a Gmail chat's search for an Outlook account", async () => {
+    const result = await search("google", {
+      query: "from:legal@acme.example is:unread label:work renewal",
+      allAccounts: true,
+    });
+
+    expect(providers["account-2"].searchMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "from:legal@acme.example is:unread label:work renewal",
+      }),
+    );
+    const [outlookSearch] = providers["account-3"].searchMessages.mock.calls[0];
+    expect(outlookSearch).toMatchObject({
+      fromEmail: "legal@acme.example",
+      readState: "unread",
+    });
+    expect(outlookSearch.query).not.toMatch(/label:|is:|from:/);
+    expect(outlookSearch.query).toContain("renewal");
+    expect(result.accounts).toContainEqual(
+      expect.objectContaining({
+        account: "three@example.com",
+        keywordsOnly: true,
+      }),
+    );
+    expect(
+      result.accounts.find(
+        (entry: { account: string }) => entry.account === "two@example.com",
+      ),
+    ).not.toHaveProperty("keywordsOnly");
+  });
+
+  it("does not search an account the search has nothing for", async () => {
+    const result = await search("google", {
+      query: "in:inbox label:work",
+      allAccounts: true,
+    });
+
+    expect(providers["account-3"].searchMessages).not.toHaveBeenCalled();
+    expect(result.accounts).toContainEqual({
+      account: "three@example.com",
+      error: expect.any(String),
+    });
+  });
+
   it("reports an account that could not be searched as unsearched, not empty", async () => {
     providers["account-2"].searchMessages.mockRejectedValue(
       new Error("invalid_grant"),

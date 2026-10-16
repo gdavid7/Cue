@@ -69,6 +69,10 @@ import {
   runOnOtherAccounts,
 } from "@/utils/ai/assistant/chat-other-accounts";
 import { toOtherAccountEmailId } from "@/utils/ai/assistant/other-account-email-id";
+import {
+  type AccountSearch,
+  translateAccountSearch,
+} from "@/utils/ai/assistant/cross-provider-search";
 
 const MAX_SENDER_CATEGORIZATION_WAIT_MS = 1500;
 const recipientListSchema = z
@@ -1851,19 +1855,16 @@ const OTHER_ACCOUNT_EMAIL_NOT_FOUND =
 
 type SearchResultItem = ReturnType<typeof mapMessageForSearchResult>;
 
-type OtherAccountSearchResult = {
-  messages: Array<SearchResultItem & { account: string }>;
-  hasMore: boolean;
-};
+type OtherAccountSearchResult =
+  | {
+      messages: Array<SearchResultItem & { account: string }>;
+      hasMore: boolean;
+      /** The other provider could only search the chat's search's keywords. */
+      keywordsOnly: boolean;
+    }
+  | { nothingToSearch: true };
 
 type OtherAccount = { id: string; email: string; provider: string };
-
-/** What the chat's search asks for, as the other accounts are asked it. */
-type AccountSearch = {
-  query: string;
-  fromEmail?: string | null;
-  readState?: "read" | "unread" | null;
-};
 
 type OtherAccountSearch = Promise<
   OtherAccountResult<OtherAccountSearchResult>[] | null
@@ -1874,7 +1875,7 @@ type OtherAccountSearch = Promise<
  * account's own, when the model asked for all accounts.
  */
 function startOtherAccountSearch({
-  options: { userId, emailAccountId, logger },
+  options: { userId, emailAccountId, provider, logger },
   abortSignal,
   input,
 }: {
@@ -1909,6 +1910,7 @@ function startOtherAccountSearch({
     run: (account, signal) =>
       searchOtherAccount({
         account,
+        chatProvider: provider,
         search,
         signal,
         logger: logger.with({ otherEmailAccountId: account.id }),
@@ -1921,15 +1923,25 @@ function startOtherAccountSearch({
 
 async function searchOtherAccount({
   account,
-  search,
+  chatProvider,
+  search: chatSearch,
   signal,
   logger,
 }: {
   account: OtherAccount;
+  chatProvider: string;
   search: AccountSearch;
   signal: AbortSignal;
   logger: Logger;
 }): Promise<OtherAccountSearchResult> {
+  const translated = translateAccountSearch({
+    search: chatSearch,
+    from: chatProvider,
+    to: account.provider,
+  });
+  if (!translated) return { nothingToSearch: true };
+  const { search, keywordsOnly } = translated;
+
   const emailProvider = await createEmailProvider({
     emailAccountId: account.id,
     provider: account.provider,
@@ -1941,7 +1953,7 @@ async function searchOtherAccount({
   const result = isOutlook
     ? await searchOtherOutlookAccount({ emailProvider, search, signal, logger })
     : await emailProvider.searchMessages({
-        query: toGmailQuery(search),
+        query: search.query,
         maxResults: OTHER_ACCOUNT_MAX_RESULTS,
         allowPartial: true,
         signal,
@@ -1949,6 +1961,7 @@ async function searchOtherAccount({
   const labelsById = createLabelLookupMap(await labelsPromise);
 
   return {
+    keywordsOnly,
     hasMore: Boolean(result.nextPageToken),
     messages: result.messages.map((message) => ({
       ...mapMessageForSearchResult(
@@ -1985,17 +1998,6 @@ async function searchOtherOutlookAccount({
   });
   if (!result) throw lastError ?? new Error("Outlook search failed");
   return result;
-}
-
-// An Outlook chat's structured sender and read state, in Gmail's syntax.
-function toGmailQuery({ query, fromEmail, readState }: AccountSearch) {
-  return [
-    fromEmail && `from:${fromEmail}`,
-    readState && `is:${readState}`,
-    query?.trim(),
-  ]
-    .filter(Boolean)
-    .join(" ");
 }
 
 function otherAccountEmailFields(
@@ -2043,7 +2045,9 @@ async function withOtherAccountResults<
   const messages = [
     ...chatMessages,
     ...(otherAccounts ?? []).flatMap((entry) =>
-      "result" in entry ? entry.result.messages : [],
+      "result" in entry && "messages" in entry.result
+        ? entry.result.messages
+        : [],
     ),
   ];
 
@@ -2060,15 +2064,7 @@ async function withOtherAccountResults<
             returned: chatMessages.length,
             hasMore: Boolean(result.hasMore),
           },
-      ...(otherAccounts ?? []).map((entry) =>
-        "result" in entry
-          ? {
-              account: entry.account.email,
-              returned: entry.result.messages.length,
-              hasMore: entry.result.hasMore,
-            }
-          : { account: entry.account.email, error: entry.error },
-      ),
+      ...(otherAccounts ?? []).map(describeOtherAccount),
     ],
     ...(otherAccounts
       ? {}
@@ -2076,6 +2072,25 @@ async function withOtherAccountResults<
           otherAccountsError:
             "The user's other accounts could not be searched.",
         }),
+  };
+}
+
+function describeOtherAccount(
+  entry: OtherAccountResult<OtherAccountSearchResult>,
+) {
+  const account = entry.account.email;
+  if ("error" in entry) return { account, error: entry.error };
+  if ("nothingToSearch" in entry.result) {
+    return {
+      account,
+      error: "Nothing in this search applies to this account.",
+    };
+  }
+  return {
+    account,
+    returned: entry.result.messages.length,
+    hasMore: entry.result.hasMore,
+    ...(entry.result.keywordsOnly && { keywordsOnly: true }),
   };
 }
 
