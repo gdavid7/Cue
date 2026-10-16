@@ -206,13 +206,15 @@ test("keeps the old mailbox draft while the new mailbox can't save it", async ({
       .poll(() => readDraftFiles(page, subject), { timeout: 60_000 })
       .toEqual([[]]);
 
-    // Every mailbox save from here on fails.
+    // The new account's draft is created, but every save into it fails.
+    // (A failed creation is left unconfirmed and never retried, by design.)
     let refusedSaves = 0;
     await page.route("**/*", async (route) => {
       const request = route.request();
       if (
         request.method() !== "POST" ||
-        !(await request.headerValue("next-action"))
+        !(await request.headerValue("next-action")) ||
+        !request.postData()?.includes('"draftId"')
       )
         return route.fallback();
       refusedSaves += 1;
@@ -230,8 +232,9 @@ test("keeps the old mailbox draft while the new mailbox can't save it", async ({
       .poll(() => refusedSaves, { timeout: 30_000 })
       .toBeGreaterThan(0);
 
+    // The old draft stays next to the new account's, which lacks the text.
     await expect(page.getByText(/^Draft moved to /)).toHaveCount(0);
-    expect(await readDraftFiles(page, subject)).toEqual([[]]);
+    expect(await readDraftFiles(page, subject)).toEqual([[], []]);
 
     // Once the new mailbox saves it, the move finishes on its own: the old
     // draft goes and only the new account's remains.
