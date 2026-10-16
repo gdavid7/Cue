@@ -81,7 +81,7 @@ export const GET = withEmailProvider(
 
     return NextResponse.json(response);
   },
-  { requestTiming: {} },
+  { requestTiming: {}, maxDuration },
 );
 
 async function getCounts({

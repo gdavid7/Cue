@@ -90,7 +90,7 @@ export const GET = withEmailProvider(
       );
     }
   },
-  { requestTiming: {} },
+  { requestTiming: {}, maxDuration },
 );
 
 export type ThreadsResponse = Awaited<ReturnType<typeof loadThreads>>;

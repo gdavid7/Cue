@@ -28,78 +28,84 @@ export type GetAllThreadsResponse = Awaited<
   ReturnType<typeof loadCombinedThreads>
 >;
 
-export const GET = withAuth("threads/all", async (request) => {
-  const { searchParams } = new URL(request.url);
-  const { cursor, limit, isUnread, labelNames, q } = querySchema.parse({
-    ...Object.fromEntries(searchParams),
-    labelNames: searchParams.getAll("labelNames"),
-  });
-  const accounts = await getConnectedEmailAccounts({
-    userId: request.auth.userId,
-    includeInAllAccounts: true,
-  });
-  const result = await loadCombinedThreads({
-    accounts,
-    pageBuffer: createPageBuffer({
-      kind: "combined",
+export const GET = withAuth(
+  "threads/all",
+  async (request) => {
+    const { searchParams } = new URL(request.url);
+    const { cursor, limit, isUnread, labelNames, q } = querySchema.parse({
+      ...Object.fromEntries(searchParams),
+      labelNames: searchParams.getAll("labelNames"),
+    });
+    const accounts = await getConnectedEmailAccounts({
       userId: request.auth.userId,
-      query: { q, labelNames, isUnread, limit },
-    }),
-    cursor: cursor ?? null,
-    limit,
-    logger: request.logger,
-    loadPage: async ({ account, pageToken }) => {
-      const logger = request.logger.with({ emailAccountId: account.id });
-      const emailProvider = await createEmailProvider({
-        emailAccountId: account.id,
-        provider: account.provider,
-        logger,
-      });
-      if (labelNames.length && !q) {
-        const labels = await emailProvider.getLabels();
-        const wanted = new Set(
-          labelNames.map((labelName) => labelName.toLowerCase()),
-        );
-        const matchingLabelIds = labels
-          .filter((label) => wanted.has(label.name.trim().toLowerCase()))
-          .map((label) => label.id);
-        // An account missing every one of the split's labels contributes nothing.
-        if (!matchingLabelIds.length) {
-          return { threads: [], nextPageToken: null, labels };
+      includeInAllAccounts: true,
+    });
+    const result = await loadCombinedThreads({
+      accounts,
+      pageBuffer: createPageBuffer({
+        kind: "combined",
+        userId: request.auth.userId,
+        query: { q, labelNames, isUnread, limit },
+      }),
+      cursor: cursor ?? null,
+      limit,
+      logger: request.logger,
+      loadPage: async ({ account, pageToken }) => {
+        const logger = request.logger.with({ emailAccountId: account.id });
+        const emailProvider = await createEmailProvider({
+          emailAccountId: account.id,
+          provider: account.provider,
+          logger,
+        });
+        if (labelNames.length && !q) {
+          const labels = await emailProvider.getLabels();
+          const wanted = new Set(
+            labelNames.map((labelName) => labelName.toLowerCase()),
+          );
+          const matchingLabelIds = labels
+            .filter((label) => wanted.has(label.name.trim().toLowerCase()))
+            .map((label) => label.id);
+          // An account missing every one of the split's labels contributes nothing.
+          if (!matchingLabelIds.length) {
+            return { threads: [], nextPageToken: null, labels };
+          }
+
+          const loaded = await loadThreads({
+            query: threadsQuery.parse({
+              ...labelIdsToThreadsQuery(matchingLabelIds),
+              limit,
+              nextPageToken: pageToken,
+            }),
+            emailAccountId: account.id,
+            emailProvider,
+            messageFormat: "metadata",
+          });
+          return { ...toListThreads(loaded), labels };
         }
 
-        const loaded = await loadThreads({
-          query: threadsQuery.parse({
-            ...labelIdsToThreadsQuery(matchingLabelIds),
-            limit,
-            nextPageToken: pageToken,
+        const [loaded, labels] = await Promise.all([
+          loadThreads({
+            query: threadsQuery.parse({
+              ...(q ? { q } : { type: "inbox", isUnread }),
+              limit,
+              nextPageToken: pageToken,
+            }),
+            emailAccountId: account.id,
+            emailProvider,
+            messageFormat: "metadata",
           }),
-          emailAccountId: account.id,
-          emailProvider,
-          messageFormat: "metadata",
-        });
+          emailProvider.getLabels().catch((error) => {
+            logger.warn("Failed to load labels for combined mailbox", {
+              error,
+            });
+            return [];
+          }),
+        ]);
         return { ...toListThreads(loaded), labels };
-      }
+      },
+    });
 
-      const [loaded, labels] = await Promise.all([
-        loadThreads({
-          query: threadsQuery.parse({
-            ...(q ? { q } : { type: "inbox", isUnread }),
-            limit,
-            nextPageToken: pageToken,
-          }),
-          emailAccountId: account.id,
-          emailProvider,
-          messageFormat: "metadata",
-        }),
-        emailProvider.getLabels().catch((error) => {
-          logger.warn("Failed to load labels for combined mailbox", { error });
-          return [];
-        }),
-      ]);
-      return { ...toListThreads(loaded), labels };
-    },
-  });
-
-  return NextResponse.json(result);
-});
+    return NextResponse.json(result);
+  },
+  { maxDuration },
+);

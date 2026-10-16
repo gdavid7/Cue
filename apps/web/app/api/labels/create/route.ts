@@ -9,15 +9,18 @@ const createLabelBody = z.object({
 
 export const maxDuration = 30;
 
-export const POST = withEmailProvider(async (request) => {
-  const { emailProvider } = request;
-  const body = await request.json();
-  const { name, description } = createLabelBody.parse(body);
+export const POST = withEmailProvider(
+  async (request) => {
+    const { emailProvider } = request;
+    const body = await request.json();
+    const { name, description } = createLabelBody.parse(body);
 
-  const label = await emailProvider.createLabel(
-    name,
-    description ? description : undefined,
-  );
+    const label = await emailProvider.createLabel(
+      name,
+      description ? description : undefined,
+    );
 
-  return NextResponse.json({ label });
-});
+    return NextResponse.json({ label });
+  },
+  { maxDuration },
+);
