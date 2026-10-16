@@ -6,6 +6,8 @@ import { auth } from "@/utils/auth";
 import { BRAND_NAME, getBrandTitle } from "@/utils/branding";
 import { getConnectMailboxNextPath } from "@/utils/connect-mailbox";
 import prisma from "@/utils/prisma";
+import { MailboxProvidersProvider } from "@/providers/MailboxProvidersProvider";
+import { getEnabledMailboxProviders } from "@/utils/oauth/provider-config";
 
 export const metadata: Metadata = {
   title: getBrandTitle("Connect Mailbox"),
@@ -41,7 +43,11 @@ export default async function ConnectMailboxPage(props: {
           </p>
         </div>
 
-        <AddAccount helperText="You can add more mailboxes later from Accounts." />
+        <MailboxProvidersProvider
+          enabledProviders={getEnabledMailboxProviders()}
+        >
+          <AddAccount helperText="You can add more mailboxes later from Accounts." />
+        </MailboxProvidersProvider>
 
         <MutedText className="text-center">
           Google and Microsoft are used here only to connect your inbox data.

@@ -26,6 +26,7 @@ import type { ActionableThread } from "@/app/(app)/[emailAccountId]/mail/types";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
 import { useThreadActions } from "@/app/(app)/[emailAccountId]/mail/use-thread-actions";
 import { PlaceholderRow } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
+import { ErrorDisplay } from "@/components/ErrorDisplay";
 import { LoadingContent } from "@/components/LoadingContent";
 import { toastError, toastSuccess, undoLatestToast } from "@/components/Toast";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -40,7 +41,7 @@ import { markNoReplyNeededAction } from "@/utils/actions/rule-feedback";
 import { markNeedsReplyAction } from "@/utils/actions/thread-assist";
 import { formatShortDate } from "@/utils/date";
 import { getActionErrorMessage } from "@/utils/error";
-import type { AgentTask, HomeThread } from "@/utils/home/get-home";
+import type { AgentTask, HomeLane, HomeThread } from "@/utils/home/get-home";
 import { prefixPath } from "@/utils/path";
 import { AllClear, CueChecked } from "./AllClear";
 import { BeforeYourMeeting } from "./BeforeYourMeeting";
@@ -55,6 +56,7 @@ import {
 
 const ALSO_IN_INBOX_LIMIT = 5;
 const NO_THREADS: ReadonlySet<string> = new Set();
+const NO_LANES: ReadonlySet<HomeLane> = new Set();
 const SKELETON_ROWS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2"];
 
 /**
@@ -66,7 +68,8 @@ const SKELETON_ROWS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2"];
  */
 export function HomeDashboard() {
   const { emailAccountId, emailAccount } = useAccount();
-  const { data, isLoading, error, mutate } = useHome(emailAccountId);
+  const { data, isLoading, error, mutate, gaveUp, retry } =
+    useHome(emailAccountId);
   const greetingText = useGreeting();
   const firstName = (emailAccount?.name || "").split(" ")[0];
   const mailHref = useMailHref();
@@ -98,8 +101,16 @@ export function HomeDashboard() {
             lanes.needsYou.length > 0 || lanes.waiting.length > 0,
         })
       : null;
+  // Gmail couldn't serve these in time; they load on the next refresh.
+  const pending = useMemo(() => new Set(data?.pending), [data]);
+  const failed = useMemo(() => new Set(data?.failed), [data]);
+  // Whether the Needs reply lane is what Cue knows, rather than empty because
+  // it hasn't loaded.
+  const needsYouLoaded = !pending.has("needsYou") && !failed.has("needsYou");
   // Nothing needs a reply: who you're waiting on folds into the All clear.
-  const allClear = Boolean(lanes && !notice && lanes.needsYou.length === 0);
+  const allClear = Boolean(
+    lanes && !notice && needsYouLoaded && lanes.needsYou.length === 0,
+  );
   // Keyboard order, top to bottom, as the lanes render.
   const rows = useMemo(
     () =>
@@ -366,7 +377,7 @@ export function HomeDashboard() {
           {greetingText}
           {firstName ? `, ${firstName}` : ""}
         </PageHeading>
-        {data && lanes && !notice && !allClear ? (
+        {data && lanes && !notice && !allClear && needsYouLoaded ? (
           <p className="mt-1 text-muted-foreground text-sm" role="status">
             {busySummary(data, lanes.needsYou.length)}
           </p>
@@ -394,7 +405,19 @@ export function HomeDashboard() {
             canChange={engineReady}
             layout={isLargeScreen ? "list" : "split"}
             onCorrect={correct}
+            // Past the last refresh a pending lane would load forever.
+            pending={gaveUp ? NO_LANES : pending}
             threadHref={threadHref}
+          />
+        ) : null}
+        {gaveUp || failed.size > 0 ? (
+          <ErrorDisplay
+            error={{
+              error: gaveUp
+                ? "Today's lanes didn't load in time"
+                : "Some of Today's lanes didn't load",
+            }}
+            onRetry={retry}
           />
         ) : null}
       </LoadingContent>
@@ -416,6 +439,7 @@ function HomeLanes({
   layout,
   threadHref,
   onCorrect,
+  pending,
 }: {
   data: GetHomeResponse;
   lanes: {
@@ -436,6 +460,7 @@ function HomeLanes({
   layout: "list" | "split";
   threadHref: (threadId: string) => string;
   onCorrect: (thread: HomeThread, needsReply: boolean) => Promise<void>;
+  pending: ReadonlySet<HomeLane>;
 }) {
   const { cue, stats } = data;
   const mailHref = useMailHref();
@@ -498,6 +523,7 @@ function HomeLanes({
       {/* What needs the user comes first; meeting news sits with what's next. */}
       {allClear ? <BeforeYourMeeting emailAccountId={emailAccountId} /> : null}
 
+      {pending.has("needsYou") ? <HomeSkeleton layout={layout} /> : null}
       {lanes.needsYou.length > 0 ? (
         <Section
           title="Needs reply"
@@ -557,6 +583,7 @@ function HomeLanes({
       ) : null}
       {allClear ? null : <BeforeYourMeeting emailAccountId={emailAccountId} />}
 
+      {pending.has("waiting") ? <HomeSkeleton layout={layout} /> : null}
       {!allClear && lanes.waiting.length > 0 ? (
         <Section
           title="Waiting on"
@@ -577,6 +604,7 @@ function HomeLanes({
         </p>
       ) : null}
 
+      {pending.has("alsoInInbox") ? <HomeSkeleton layout={layout} /> : null}
       {lanes.alsoInInbox.length > 0 ? (
         <Section
           title="Also in your inbox"

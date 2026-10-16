@@ -1,9 +1,14 @@
 import { publishLocalMailHint } from "@/utils/redis/local-mail-hints";
 import { markGmailHistoryCatchUp } from "@/utils/redis/gmail-history-catch-up";
+import { scheduleGmailHistoryCatchUp } from "@/utils/webhook/google/history-catch-up";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/utils/redis/gmail-history-catch-up", () => ({
   markGmailHistoryCatchUp: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("@/utils/webhook/google/history-catch-up", () => ({
+  scheduleGmailHistoryCatchUp: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/utils/redis/local-mail-hints", () => ({
@@ -193,9 +198,10 @@ describe("Google webhook route", () => {
 
   it("skips enqueueing background processing while provider rate limit is active", async () => {
     getWebhookEmailAccountMock.mockResolvedValue({ id: "account-1" });
+    const retryAt = new Date(Date.now() + 60_000);
     getEmailProviderRateLimitStateMock.mockResolvedValue({
       provider: "google",
-      retryAt: new Date(Date.now() + 60_000),
+      retryAt,
       source: "google/webhook",
     });
 
@@ -222,6 +228,13 @@ describe("Google webhook route", () => {
       "account-1",
       expect.anything(),
     );
+    // The skipped mail must not wait for the account's next push.
+    expect(scheduleGmailHistoryCatchUp).toHaveBeenCalledWith({
+      emailAccountId: "account-1",
+      historyId: "123",
+      retryAt,
+      logger: expect.anything(),
+    });
     expect(runWithBackgroundLoggerFlushMock).not.toHaveBeenCalled();
     expect(processHistoryForUserMock).not.toHaveBeenCalled();
   });

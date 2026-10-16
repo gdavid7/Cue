@@ -1,17 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadInboxPreview } from "./inbox-preview.server";
+import { parsedMessagePatch } from "@/utils/mail-api/observations";
+import type { ParsedMessage } from "@/utils/types";
 
 const mocks = vi.hoisted(() => ({
-  loadThreads: vi.fn(),
+  getMessagesWithPagination: vi.fn(),
+  getThreadsWithQuery: vi.fn(),
+  attachThreadPlans: vi.fn(),
   quotaContexts: [] as unknown[],
 }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/email/provider", () => ({
-  createEmailProvider: async () => ({ name: "google" }),
-}));
-vi.mock("@/utils/split-inbox/native-categories", () => ({
-  resolveNativeThreadsQuery: async ({ query }: { query: unknown }) => query,
+  createEmailProvider: async () => ({
+    name: "google",
+    getMessagesWithPagination: mocks.getMessagesWithPagination,
+    getThreadsWithQuery: mocks.getThreadsWithQuery,
+  }),
 }));
 vi.mock("@/utils/gmail/quota", () => ({
   runWithGmailQuota: (context: unknown, operation: () => unknown) => {
@@ -20,55 +25,139 @@ vi.mock("@/utils/gmail/quota", () => ({
   },
 }));
 vi.mock("@/utils/threads/load", () => ({
-  loadThreads: (input: unknown) => mocks.loadThreads(input),
+  attachThreadPlans: (input: unknown) => mocks.attachThreadPlans(input),
   toListThreads: (loaded: unknown) => loaded,
 }));
 
 afterEach(() => {
   vi.useRealTimers();
-  mocks.loadThreads.mockReset();
+  vi.clearAllMocks();
   mocks.quotaContexts = [];
 });
 
 describe("loadInboxPreview", () => {
-  it("asks for the first screen of the inbox at interactive priority, waiting little", async () => {
-    mocks.loadThreads.mockResolvedValue({ threads: [], nextPageToken: null });
+  it("reads the newest inbox messages as headers, at interactive priority, waiting up to four seconds", async () => {
+    passPlansThrough();
+    mocks.getMessagesWithPagination.mockResolvedValue({ messages: [] });
 
     await loadInboxPreview({ emailAccountId: "acc-1", provider: "google" });
 
-    // Ten conversations fit Gmail's per-second pacing; the engine fills the rest.
-    expect(mocks.loadThreads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        query: expect.objectContaining({ type: "inbox", limit: 10 }),
-        messageFormat: "metadata",
-      }),
-    );
+    // A list (5 units) and ten message reads (20 each), in two batches of
+    // 100 that each start the person's priority over sync. Whole threads
+    // cost 40 each, 410 for ten, more than two seconds of Gmail's pace.
+    expect(mocks.getMessagesWithPagination).toHaveBeenCalledWith({
+      inboxOnly: true,
+      maxResults: 10,
+      // Headers are all a row shows, and a batch Gmail stops short still
+      // shows what loaded.
+      format: "metadata",
+      allowPartial: true,
+    });
+    expect(mocks.getThreadsWithQuery).not.toHaveBeenCalled();
     expect(mocks.quotaContexts).toEqual([
       expect.objectContaining({
+        caller: "mail/inbox-preview",
         priority: "interactive",
-        maxTotalWaitMs: 2500,
+        maxTotalWaitMs: 4000,
       }),
     ]);
   });
 
-  it("gives up after a few seconds so the page is never held open", async () => {
+  it("lists each conversation once, newest first, its messages oldest first", async () => {
+    passPlansThrough();
+    mocks.getMessagesWithPagination.mockResolvedValue({
+      messages: [
+        message("m3", "t1", 3000),
+        message("m2", "t2", 2000),
+        message("m1", "t1", 1000),
+      ],
+    });
+
+    const preview = await loadInboxPreview({
+      emailAccountId: "acc-1",
+      provider: "google",
+    });
+
+    expect(mocks.attachThreadPlans).toHaveBeenCalledWith(
+      expect.objectContaining({ emailAccountId: "acc-1" }),
+    );
+    expect(
+      preview?.threads.map((thread) => ({
+        id: thread.id,
+        messages: thread.messages.map((entry) => entry.id),
+        snippet: thread.snippet,
+      })),
+    ).toEqual([
+      { id: "t1", messages: ["m1", "m3"], snippet: "m3 snippet" },
+      { id: "t2", messages: ["m2"], snippet: "m2 snippet" },
+    ]);
+  });
+
+  it("keys each row by the id the mail engine gives its conversation, for Outlook too", async () => {
+    passPlansThrough();
+    // Outlook's conversationId, as the message parser sets it.
+    const outlook = message("AAMk-msg", "AAQk-conversation=", 1000);
+    mocks.getMessagesWithPagination.mockResolvedValue({ messages: [outlook] });
+
+    const preview = await loadInboxPreview({
+      emailAccountId: "acc-1",
+      provider: "microsoft",
+    });
+
+    const patch = parsedMessagePatch(
+      "acc-1",
+      "microsoft",
+      outlook as unknown as ParsedMessage,
+    );
+    // A click opens the row's id, which the engine must know by that id.
+    expect(patch.kind === "message_patch" && patch.reference).toMatchObject({
+      conversationId: preview?.threads[0]?.id,
+      messageId: preview?.threads[0]?.messages[0]?.id,
+    });
+  });
+
+  it("gives up after a few seconds so the page is never held open for long", async () => {
     vi.useFakeTimers();
-    mocks.loadThreads.mockReturnValue(new Promise(() => {}));
+    mocks.getMessagesWithPagination.mockReturnValue(new Promise(() => {}));
 
     const preview = loadInboxPreview({
       emailAccountId: "acc-1",
       provider: "google",
     });
-    await vi.advanceTimersByTimeAsync(3000);
+    await vi.advanceTimersByTimeAsync(6000);
 
     await expect(preview).resolves.toBeNull();
   });
 
   it("resolves to nothing when the provider fails", async () => {
-    mocks.loadThreads.mockRejectedValue(new Error("Gmail call deferred"));
+    mocks.getMessagesWithPagination.mockRejectedValue(
+      new Error("Gmail call deferred"),
+    );
 
     await expect(
       loadInboxPreview({ emailAccountId: "acc-1", provider: "google" }),
     ).resolves.toBeNull();
   });
 });
+
+function passPlansThrough() {
+  mocks.attachThreadPlans.mockImplementation(
+    async ({ threads }: { threads: unknown[] }) => ({
+      threads,
+      nextPageToken: undefined,
+    }),
+  );
+}
+
+function message(id: string, threadId: string, receivedAtMs: number) {
+  return {
+    id,
+    threadId,
+    snippet: `${id} snippet`,
+    subject: id,
+    date: new Date(receivedAtMs).toISOString(),
+    internalDate: String(receivedAtMs),
+    labelIds: ["INBOX"],
+    headers: { from: "a@example.com", to: "me@example.com", subject: id },
+  };
+}

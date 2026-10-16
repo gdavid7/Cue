@@ -13,6 +13,7 @@ import {
 import { getEmailProviderRateLimitState } from "@/utils/email/rate-limit";
 import { isGoogleProvider } from "@/utils/email/provider-types";
 import { markGmailHistoryCatchUp } from "@/utils/redis/gmail-history-catch-up";
+import { scheduleGmailHistoryCatchUp } from "@/utils/webhook/google/history-catch-up";
 
 import { notifyMailboxChanged } from "@/utils/mailbox-push";
 
@@ -67,9 +68,19 @@ export const POST = withError("google/webhook", async (request) => {
   );
 
   logger = logger.with({ emailAccountId: emailAccount?.id });
+  const publishedAt = Date.parse(body.message?.publishTime ?? "");
+  const lastSyncedHistoryId = emailAccount?.lastSyncedHistoryId;
   logger.info("Gmail webhook account lookup completed", {
     emailAccountFound: !!emailAccount,
-    lastSyncedHistoryId: emailAccount?.lastSyncedHistoryId,
+    lastSyncedHistoryId,
+    // How late Pub/Sub delivered this push, and how much history it covers.
+    pushAgeMs: Number.isFinite(publishedAt) ? Date.now() - publishedAt : null,
+    historyIdGap:
+      lastSyncedHistoryId && /^\d+$/.test(lastSyncedHistoryId)
+        ? (
+            BigInt(decodedData.historyId) - BigInt(lastSyncedHistoryId)
+          ).toString()
+        : null,
   });
 
   if (emailAccount) {
@@ -103,6 +114,12 @@ export const POST = withError("google/webhook", async (request) => {
         },
       );
       await markGmailHistoryCatchUp(emailAccount.id, logger);
+      await scheduleGmailHistoryCatchUp({
+        emailAccountId: emailAccount.id,
+        historyId: decodedData.historyId,
+        retryAt: activeRateLimit.retryAt,
+        logger,
+      });
       logger.warn("Skipping webhook enqueue due to active Gmail rate limit", {
         retryAt: activeRateLimit.retryAt.toISOString(),
         rateLimitSource: activeRateLimit.source,

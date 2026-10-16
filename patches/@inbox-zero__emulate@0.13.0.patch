@@ -38,10 +38,32 @@ index 0cf536b906f2aa9107e78b84112329f4684937bf..1a23c0f6ac1e8e33a7fc05d847325a16
  function buildRawMessage(message) {
    const headers = [
 diff --git a/dist/dist-ZATTDANE.js b/dist/dist-ZATTDANE.js
-index fb4e1a679969c34f7a9636e37d47839b9f1e0898..22a6e8099c7c90dbcc1ac1d034effb92bb6c5c63 100644
+index fb4e1a679969c34f7a9636e37d47839b9f1e0898..2c9272aed31daca9fa4bc9f88b4254805afe8218 100644
 --- a/dist/dist-ZATTDANE.js
 +++ b/dist/dist-ZATTDANE.js
-@@ -1323,6 +1323,16 @@ function graphRoutes(ctx) {
+@@ -265,7 +265,10 @@ function createMessageRecord(ms, input) {
+     parent_folder_id: input.parent_folder_id,
+     has_attachments: false,
+     web_link: buildMessageWebLink(input.web_link_base, messageId),
+-    in_reply_to_microsoft_id: input.in_reply_to_microsoft_id ?? null
++    in_reply_to_microsoft_id: input.in_reply_to_microsoft_id ?? null,
++    // Graph's derived message types, such as a meeting request's
++    // "#microsoft.graph.eventMessageRequest"; null is a plain message.
++    odata_type: input.odata_type ?? null
+   });
+   return message;
+ }
+@@ -449,7 +452,8 @@ function formatMessageResource(ms, message) {
+       content: message.body_content
+     },
+     attachments: attachments.map(formatAttachmentResource),
+-    webLink: message.web_link
++    webLink: message.web_link,
++    ...message.odata_type ? { "@odata.type": message.odata_type } : {}
+   };
+ }
+ function formatSender(name, address) {
+@@ -1323,6 +1327,16 @@ function graphRoutes(ctx) {
      moveMessage(ms, message, deletedItems.microsoft_id);
      return c.body(null, 204);
    });
@@ -58,7 +80,7 @@ index fb4e1a679969c34f7a9636e37d47839b9f1e0898..22a6e8099c7c90dbcc1ac1d034effb92
    app.post("/v1.0/me/messages/:messageId/send", (c) => {
      const authEmail = requireAuthEmail(ctx, c);
      if (authEmail instanceof Response) return authEmail;
-@@ -1833,7 +1843,7 @@ function graphRoutes(ctx) {
+@@ -1833,7 +1847,7 @@ function graphRoutes(ctx) {
      const body = await parseJsonBody(c);
      const requests = Array.isArray(body.requests) ? body.requests : [];
      const ms = getMicrosoftStore(ctx.store);
@@ -67,7 +89,7 @@ index fb4e1a679969c34f7a9636e37d47839b9f1e0898..22a6e8099c7c90dbcc1ac1d034effb92
        if (!request || typeof request !== "object" || Array.isArray(request)) {
          return { id: "unknown", status: 400, body: { error: { message: "Invalid batch request." } } };
        }
-@@ -1841,6 +1851,20 @@ function graphRoutes(ctx) {
+@@ -1841,6 +1855,20 @@ function graphRoutes(ctx) {
        const id = typeof entry.id === "string" ? entry.id : generateMicrosoftId("batch");
        const method = typeof entry.method === "string" ? entry.method.toUpperCase() : "";
        const url = typeof entry.url === "string" ? entry.url : "";
@@ -88,7 +110,7 @@ index fb4e1a679969c34f7a9636e37d47839b9f1e0898..22a6e8099c7c90dbcc1ac1d034effb92
        if (method === "POST" && url.match(/^\/me\/messages\/[^/]+\/move$/)) {
          const messageId = url.split("/")[3] ?? "";
          const message = resolveMessage(ctx, authEmail, messageId);
-@@ -1856,7 +1880,7 @@ function graphRoutes(ctx) {
+@@ -1856,7 +1884,7 @@ function graphRoutes(ctx) {
          }
        }
        return { id, status: 400, body: { error: { message: `Unsupported batch request: ${method} ${url}` } } };
@@ -97,3 +119,13 @@ index fb4e1a679969c34f7a9636e37d47839b9f1e0898..22a6e8099c7c90dbcc1ac1d034effb92
      return c.json({ responses });
    });
    app.get("/v1.0/me/calendars", (c) => {
+@@ -3335,7 +3363,8 @@ function seedFromConfig(store, baseUrl, config) {
+         importance: message.importance,
+         categories: message.categories,
+         parent_folder_id: message.parent_folder_id ?? (message.is_draft ? folders.drafts.microsoft_id : folders.inbox.microsoft_id),
+-        web_link_base: baseUrl
++        web_link_base: baseUrl,
++        odata_type: message.odata_type
+       });
+     }
+   }

@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { redis } from "@/utils/redis";
 import {
+  acquireMessageProcessing,
+  markMessageProcessed,
   acquireOutboundMessageLock,
   clearOutboundMessageLock,
   markMessageAsProcessing,
@@ -14,6 +16,7 @@ vi.mock("node:crypto", () => ({
 vi.mock("@/utils/redis", () => ({
   redis: {
     set: vi.fn(),
+    get: vi.fn(),
     eval: vi.fn(),
   },
 }));
@@ -69,6 +72,43 @@ describe("message-processing redis locks", () => {
       expect.stringContaining('redis.call("SET"'),
       ["reply-tracker:outbound-message:account-1:message-1"],
       ["lock-token-1", "processed", "2592000"],
+    );
+  });
+
+  it.each([
+    [null, "processed", { status: "processed" }],
+    [null, "true", { status: "held" }],
+    ["OK", null, { status: "acquired", lockToken: "lock-uuid" }],
+  ] as const)("tells a webhook whether a message is free, held or already processed (set %s, stored %s)", async (setResult, stored, expected) => {
+    vi.mocked(redis.set).mockResolvedValue(setResult);
+    vi.mocked(redis.get).mockResolvedValue(stored);
+
+    const result = await acquireMessageProcessing({
+      userEmail: "user@example.com",
+      messageId: "message-1",
+    });
+
+    expect(result).toEqual(expected);
+    expect(redis.set).toHaveBeenCalledWith(
+      "processing-message:user@example.com:message-1",
+      "lock-uuid",
+      { ex: 300, nx: true },
+    );
+  });
+
+  it("remembers a handled message for longer than Gmail keeps history", async () => {
+    vi.mocked(redis.eval).mockResolvedValue(1);
+
+    await markMessageProcessed({
+      userEmail: "user@example.com",
+      messageId: "message-1",
+      lockToken: "lock-uuid",
+    });
+
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.stringContaining('redis.call("SET"'),
+      ["processing-message:user@example.com:message-1"],
+      ["lock-uuid", "processed", "691200"],
     );
   });
 

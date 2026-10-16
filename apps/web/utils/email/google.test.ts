@@ -161,6 +161,35 @@ describe("GmailProvider.getMessagesWithPagination", () => {
   });
 });
 
+describe("GmailProvider.getMessagesWithPagination for a first screen", () => {
+  it("reads headers only and keeps the messages that loaded", async () => {
+    const list = vi.fn().mockResolvedValue({
+      data: { messages: ["m1", "m2"].map((id) => ({ id, threadId: "t" })) },
+    });
+    gmailMessageBatchMock.getMessagesBatchPartial.mockResolvedValue({
+      messages: [{ id: "m1", threadId: "t" }],
+      unloadedCount: 1,
+      unloadedError: { code: 403, message: "Quota exceeded" },
+    });
+    const provider = new GmailProvider({
+      ...createGmailClient({ list }),
+      context: { _options: { auth: { credentials: { access_token: "t" } } } },
+    } as unknown as gmail_v1.Gmail);
+
+    const page = await provider.getMessagesWithPagination({
+      inboxOnly: true,
+      maxResults: 2,
+      format: "metadata",
+      allowPartial: true,
+    });
+
+    expect(page.messages.map((message) => message.id)).toEqual(["m1"]);
+    expect(gmailMessageBatchMock.getMessagesBatchPartial).toHaveBeenCalledWith(
+      expect.objectContaining({ messageIds: ["m1", "m2"], format: "metadata" }),
+    );
+  });
+});
+
 describe("GmailProvider.searchMessages with partial results allowed", () => {
   function providerListing(ids: string[]) {
     const list = vi.fn().mockResolvedValue({

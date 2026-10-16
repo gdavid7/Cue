@@ -43,6 +43,13 @@ export const robotResultsSchema = z.object({
 export type RobotResults = z.infer<typeof robotResultsSchema>;
 export type RobotStep = z.infer<typeof robotStepSchema>;
 
+/** Robot steps on the Outlook QA mailbox carry this prefix in their name. */
+export const OUTLOOK_STEP_PREFIX = "Outlook: ";
+
+type OutlookConfiguration =
+  | { status: "not_configured"; missing: string[] }
+  | { status: "configured" };
+
 type SectionStatus<T> =
   | { status: "not_configured"; missing: string[] }
   | { status: "error"; error: string }
@@ -285,16 +292,20 @@ export type HealthReport = ReturnType<typeof buildHealthReport>;
 
 export function buildHealthReport({
   robot,
+  outlook,
   axiom,
   sentry,
   now = new Date(),
 }: {
   robot: SectionStatus<{ results: RobotResults }> | { status: "no_results" };
+  /** Whether the robot has Outlook steps; left out, the report has none. */
+  outlook?: OutlookConfiguration;
   axiom: SectionStatus<{ summary: ReturnType<typeof summarizeAxiom> }>;
   sentry: SectionStatus<{ summary: ReturnType<typeof summarizeSentry> }>;
   now?: Date;
 }) {
   const robotSection = summarizeRobot(robot);
+  const outlookSection = outlook && summarizeOutlook(outlook, robot);
   const axiomSection =
     axiom.status === "ok" ? { status: "ok", ...axiom.summary } : axiom;
   const sentrySection =
@@ -303,6 +314,7 @@ export function buildHealthReport({
     version: 1,
     generatedAt: now.toISOString(),
     robot: robotSection,
+    ...(outlookSection ? { outlook: outlookSection } : {}),
     axiom: axiomSection,
     sentry: sentrySection,
     problems: listProblems({ robot: robotSection, axiom, sentry }),
@@ -333,6 +345,22 @@ export function formatHumanSummary(report: HealthReport) {
           : `, first inbox row ${robot.timeToFirstRowMs} ms`
       })`,
     );
+  }
+  const outlook = report.outlook;
+  if (outlook?.status === "ok") {
+    const timings = [
+      outlook.inboundSyncMs === undefined
+        ? null
+        : `probe arrived in ${outlook.inboundSyncMs} ms`,
+      outlook.replyDeliveredMs === undefined
+        ? null
+        : `reply reached Gmail in ${outlook.replyDeliveredMs} ms`,
+    ].filter(Boolean);
+    lines.push(
+      `Outlook: ${outlook.passed}/${outlook.total} steps passed${timings.length ? ` (${timings.join(", ")})` : ""}`,
+    );
+  } else if (outlook) {
+    lines.push(`Outlook: ${describeUnavailable(outlook)}`);
   }
   const axiom = report.axiom;
   if (axiom.status === "ok" && "errors" in axiom) {
@@ -431,6 +459,32 @@ function summarizeRobot(
             `${request.status} ${request.method} ${normalizeRoute(request.url)}`,
         ),
     })),
+  };
+}
+
+function summarizeOutlook(
+  outlook: OutlookConfiguration,
+  robot: SectionStatus<{ results: RobotResults }> | { status: "no_results" },
+) {
+  if (outlook.status === "not_configured") return outlook;
+  // Without robot results there is nothing to say beyond the robot section.
+  if (robot.status !== "ok") return { status: robot.status };
+  const steps = robot.results.steps.filter((step) =>
+    step.name.startsWith(OUTLOOK_STEP_PREFIX),
+  );
+  const metric = (name: string) => {
+    for (const step of steps) {
+      const value = step.metrics?.[name];
+      if (typeof value === "number") return Math.round(value);
+    }
+    return;
+  };
+  return {
+    status: "ok" as const,
+    passed: steps.filter((step) => step.status === "passed").length,
+    total: steps.length,
+    inboundSyncMs: metric("inboundSyncMs"),
+    replyDeliveredMs: metric("replyDeliveredMs"),
   };
 }
 

@@ -1451,6 +1451,7 @@ export class OutlookProvider implements EmailProvider {
     folderId?: string;
     labelIds?: string[];
     includeSpamTrash?: boolean;
+    excludeSpamTrash?: boolean;
     folder?: "spam" | "trash";
   }): Promise<{ messages: ParsedMessage[]; nextPageToken?: string }> {
     const categoryName = await resolveOutlookCategoryName({
@@ -1491,6 +1492,7 @@ export class OutlookProvider implements EmailProvider {
         categoryNames,
         mailboxSearch: options.mailboxSearch,
         includeDrafts: options.mailboxSearch !== undefined,
+        excludeSpamTrash: options.excludeSpamTrash,
       },
       this.logger,
     );

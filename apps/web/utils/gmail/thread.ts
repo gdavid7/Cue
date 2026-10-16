@@ -14,7 +14,7 @@ import {
   type ThreadWithPayloadMessages,
   type MessageWithPayload,
 } from "@/utils/types";
-import { parseMessage } from "@/utils/gmail/message";
+import { GMAIL_METADATA_HEADERS, parseMessage } from "@/utils/gmail/message";
 import { GmailLabel } from "@/utils/gmail/label";
 import { withGmailRetry } from "@/utils/gmail/retry";
 import type { Logger } from "@/utils/logger";
@@ -165,7 +165,7 @@ function threadBatchQueryString(options?: {
   const searchParams = new URLSearchParams();
   if (options?.format === "metadata") {
     searchParams.set("format", "metadata");
-    for (const header of THREAD_METADATA_HEADERS) {
+    for (const header of GMAIL_METADATA_HEADERS) {
       searchParams.append("metadataHeaders", header);
     }
   }
@@ -173,19 +173,6 @@ function threadBatchQueryString(options?: {
   const query = searchParams.toString();
   return query || undefined;
 }
-
-const THREAD_METADATA_HEADERS = [
-  "From",
-  "To",
-  "Cc",
-  "Bcc",
-  "Subject",
-  "Date",
-  "Message-ID",
-  "In-Reply-To",
-  "References",
-  "Reply-To",
-];
 
 async function getThreadsFromSender(
   gmail: gmail_v1.Gmail,

@@ -182,7 +182,7 @@ describe("redirectToEmailAccountPath", () => {
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ id: "account_remaining" });
 
-    mocks.findMany.mockResolvedValue([{ id: "account_remaining" }]);
+    mocks.findMany.mockResolvedValue([accountRow("account_remaining")]);
 
     await expect(redirectToEmailAccountPath("/mail")).rejects.toThrow(
       "redirect:/mail/u/0/inbox",
@@ -211,8 +211,8 @@ describe("redirectToEmailAccountPath", () => {
   it("addresses mail by the account's position among the user's accounts", async () => {
     mocks.findFirst.mockResolvedValue({ id: "account_second" });
     mocks.findMany.mockResolvedValue([
-      { id: "account_first" },
-      { id: "account_second" },
+      accountRow("account_first"),
+      accountRow("account_second"),
     ]);
 
     await expect(redirectToEmailAccountPath("/mail")).rejects.toThrow(
@@ -220,14 +220,18 @@ describe("redirectToEmailAccountPath", () => {
     );
     expect(mocks.findMany).toHaveBeenCalledWith({
       where: { userId: "user_123" },
-      select: { id: true },
+      select: {
+        id: true,
+        email: true,
+        account: { select: { provider: true } },
+      },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
   });
 
   it("keeps a mail view and unrelated params when redirecting to mail", async () => {
     mocks.findFirst.mockResolvedValue({ id: "account_123" });
-    mocks.findMany.mockResolvedValue([{ id: "account_123" }]);
+    mocks.findMany.mockResolvedValue([accountRow("account_123")]);
 
     await expect(
       redirectToEmailAccountPath("/mail", { type: "sent", checkout: "done" }),
@@ -253,4 +257,8 @@ function getAccountRedirectLog(consoleLogSpy: ReturnType<typeof vi.spyOn>) {
   expect(jsonStart).toBeGreaterThanOrEqual(0);
 
   return JSON.parse((message as string).slice(jsonStart));
+}
+
+function accountRow(id: string) {
+  return { id, email: `${id}@example.com`, account: { provider: "google" } };
 }

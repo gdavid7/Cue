@@ -8,6 +8,7 @@ import { SystemType, ThreadTrackerType } from "@/generated/prisma/enums";
 import prisma from "@/utils/prisma";
 import { sortByInternalDate } from "@/utils/date";
 import { withPrismaRetry } from "@/utils/prisma-retry";
+import { publishTrackerHint } from "@/utils/redis/local-mail-hints";
 import {
   buildThreadStatusMessagesForLLM,
   excludeAssistantMessages,
@@ -174,5 +175,16 @@ export async function updateThreadTrackers({
         sentAt,
       },
     });
+    // How long after the message arrived it reached Today.
+    logger.info("Thread tracker set", {
+      emailAccountId,
+      messageId,
+      trackerType,
+      latencyMs: Number.isFinite(sentAt.getTime())
+        ? Date.now() - sentAt.getTime()
+        : null,
+    });
   }
+
+  await publishTrackerHint(emailAccountId, logger);
 }

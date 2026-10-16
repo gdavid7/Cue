@@ -13,8 +13,9 @@ export type GmailQuotaStore = {
    * (a request larger than the cap needs an empty window) and no `blockers`
    * key exists. During a demand episode on `pace.demand.key` the cap is
    * `pace.demand.yieldCap` instead, when given (0 holds the caller until the
-   * episode ends). An admission with `pace.demand.markMs` starts an episode
-   * of that length unless one started within `pace.demand.everyMs`, so
+   * episode ends). A request with `pace.demand.markMs` starts an episode of
+   * that length as it arrives, while it still waits for room as much as once
+   * admitted, unless one started within `pace.demand.everyMs`, so
    * back-to-back episodes always leave the others a gap. Records the
    * busiest window in the usage hash's
    * `peak:second` field. Returns `waitMs` 0 when admitted,
@@ -32,6 +33,11 @@ export type GmailQuotaStore = {
     capacity: number;
     perMinute: number;
     floor: number;
+    /**
+     * How long the caller will still wait. A wait past it on anything but
+     * the pace means the caller gives up, so it starts no demand episode.
+     */
+    waitBudgetMs?: number;
     pace: {
       key: string;
       cap: number;
@@ -47,12 +53,24 @@ export type GmailQuotaStore = {
   /** Sets `key` for `ms` unless it is already set for longer. */
   block(input: { key: string; ms: number }): Promise<void>;
   /**
-   * Makes the demand episode on `key` last at least `ms` from now. Returns
+   * Makes the demand episode on `key` last at least `ms` from now, then
+   * starts no other for `gapMs`, as between two requests' episodes. Returns
    * when this hold ends, or 0 when a longer one was already running.
    */
-  holdDemand(input: { key: string; ms: number }): Promise<number>;
-  /** Ends the hold that ends at `endsAt`, unless another replaced it. */
-  releaseDemand(input: { key: string; endsAt: number }): Promise<void>;
+  holdDemand(input: {
+    key: string;
+    ms: number;
+    gapMs: number;
+  }): Promise<number>;
+  /**
+   * Ends the hold that ends at `endsAt`, unless another replaced it, leaving
+   * the `gapMs` before another episode may start.
+   */
+  releaseDemand(input: {
+    key: string;
+    endsAt: number;
+    gapMs: number;
+  }): Promise<void>;
   clear(key: string): Promise<void>;
   /** Adds `amount` to a usage field without admitting anything. */
   note(input: {
@@ -81,11 +99,12 @@ local paceWindow = tonumber(ARGV[7])
 local yieldCap = tonumber(ARGV[8])
 local demandMs = tonumber(ARGV[9])
 local demandEvery = tonumber(ARGV[10])
+local waitBudget = tonumber(ARGV[11])
 local wait = 0
 local defer = 0
 for i = 6, #KEYS do
   local ttl = redis.call('PTTL', KEYS[i])
-  local deferMs = tonumber(ARGV[i + 5])
+  local deferMs = tonumber(ARGV[i + 6])
   if ttl > 0 and deferMs and deferMs > 0 then
     ttl = deferMs
     defer = 1
@@ -100,6 +119,8 @@ local need = floor + math.min(cost, capacity - floor)
 if tokens < need then
   wait = math.max(wait, math.ceil((need - tokens) / rate))
 end
+-- The pace is what others yielding frees; nothing frees the rest sooner.
+local unpacedWait = wait
 redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', now - paceWindow)
 local recent = redis.call('ZRANGE', KEYS[3], 0, -1, 'WITHSCORES')
 local inWindow = 0
@@ -133,6 +154,11 @@ if yieldCap >= 0 and demandTtl > 0 then
   end
 end
 wait = math.max(wait, paceWait)
+-- Marked on arrival, so others yield while this request waits for room,
+-- unless it will give up before anything but the pace lets it in.
+if demandMs > 0 and (waitBudget < 0 or unpacedWait <= waitBudget) then
+  redis.call('SET', KEYS[5], tostring(now + demandMs), 'PX', demandEvery, 'NX')
+end
 if wait > 0 then return {wait, defer} end
 redis.call('HSET', KEYS[1], 'tokens', tostring(tokens - cost), 'at', tostring(now))
 redis.call('PEXPIRE', KEYS[1], 300000)
@@ -140,9 +166,6 @@ local seq = redis.call('INCR', KEYS[4])
 redis.call('PEXPIRE', KEYS[4], 300000)
 redis.call('ZADD', KEYS[3], now, seq .. ':' .. cost)
 redis.call('PEXPIRE', KEYS[3], paceWindow * 2)
-if demandMs > 0 then
-  redis.call('SET', KEYS[5], tostring(now + demandMs), 'PX', demandEvery, 'NX')
-end
 redis.call('HINCRBY', KEYS[2], ARGV[5], cost)
 local peak = tonumber(redis.call('HGET', KEYS[2], 'peak:second')) or 0
 if inWindow + cost > peak then
@@ -164,16 +187,20 @@ const holdDemandScript = `
 local time = redis.call('TIME')
 local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
 local ms = tonumber(ARGV[1])
+local gap = tonumber(ARGV[2])
 local ends = now + ms
 local current = tonumber(redis.call('GET', KEYS[1])) or 0
 if current >= ends then return 0 end
-redis.call('SET', KEYS[1], tostring(ends), 'PX', ms)
+redis.call('SET', KEYS[1], tostring(ends), 'PX', ms + gap)
 return ends
 `;
 
+// Ended rather than deleted, so the next episode still waits out the gap.
 const releaseDemandScript = `
 if redis.call('GET', KEYS[1]) == ARGV[1] then
-  redis.call('DEL', KEYS[1])
+  local time = redis.call('TIME')
+  local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
+  redis.call('SET', KEYS[1], tostring(now), 'PX', tonumber(ARGV[2]))
 end
 return 1
 `;
@@ -219,6 +246,7 @@ export const gmailQuotaStore: GmailQuotaStore = {
         String(input.pace.demand.yieldCap ?? -1),
         String(input.pace.demand.markMs ?? 0),
         String(input.pace.demand.everyMs ?? input.pace.demand.markMs ?? 0),
+        String(input.waitBudgetMs ?? -1),
         ...input.blockers.map((blocker) => String(blocker.deferMs ?? 0)),
       ],
     );
@@ -233,16 +261,20 @@ export const gmailQuotaStore: GmailQuotaStore = {
   async clear(key) {
     await redis.del(key);
   },
-  async holdDemand({ key, ms }) {
+  async holdDemand({ key, ms, gapMs }) {
     const endsAt = await redis.eval<string[], number>(
       holdDemandScript,
       [key],
-      [String(Math.max(1, Math.ceil(ms)))],
+      [String(Math.max(1, Math.ceil(ms))), String(Math.max(1, gapMs))],
     );
     return Number(endsAt) || 0;
   },
-  async releaseDemand({ key, endsAt }) {
-    await redis.eval(releaseDemandScript, [key], [String(endsAt)]);
+  async releaseDemand({ key, endsAt, gapMs }) {
+    await redis.eval(
+      releaseDemandScript,
+      [key],
+      [String(endsAt), String(Math.max(1, gapMs))],
+    );
   },
   async note({ usageKey, field, amount }) {
     await redis.eval(noteScript, [usageKey], [field, String(amount)]);

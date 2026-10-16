@@ -7,6 +7,18 @@ export function getPlaywrightTargetName(specPath: string): string;
 
 export function getPlaywrightSpecPathFromTargetName(targetName: string): string;
 
+type PlaywrightMailProvider = "google" | "microsoft";
+
 export function batchPlaywrightTargets(
   targets: ReadonlyArray<{ name: string; path: string }>,
-): Array<{ name: string; paths: string[]; timeoutMinutes: number }>;
+  groups?: ReadonlyArray<{
+    name: string;
+    specs: readonly string[];
+    providers?: readonly PlaywrightMailProvider[];
+  }>,
+): Array<{
+  name: string;
+  paths: string[];
+  timeoutMinutes: number;
+  providers: PlaywrightMailProvider[];
+}>;

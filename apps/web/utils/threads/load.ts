@@ -1,4 +1,4 @@
-import type { EmailProvider } from "@/utils/email/types";
+import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import { isIgnoredSender } from "@/utils/filter-ignored-senders";
 import { isDefined } from "@/utils/types";
 import prisma from "@/utils/prisma";
@@ -45,7 +45,22 @@ export async function loadThreads({
     pageToken,
     messageFormat,
   });
+  return attachThreadPlans({ emailAccountId, threads, nextPageToken });
+}
 
+/**
+ * Adds what Cue's rules decided for each thread, as the mail list shows it,
+ * and drops ignored senders' messages.
+ */
+export async function attachThreadPlans({
+  emailAccountId,
+  threads,
+  nextPageToken,
+}: {
+  emailAccountId: string;
+  threads: EmailThread[];
+  nextPageToken?: string;
+}) {
   const threadIds = threads.map((thread) => thread.id);
   const executedRules = await prisma.executedRule.findMany({
     where: {

@@ -1,4 +1,5 @@
 import { expect } from "@playwright/test";
+import { isMicrosoftPlaywright } from "../mail-provider";
 import { test } from "../playwright-test";
 import { openSettings } from "./settings-test-helpers";
 
@@ -7,6 +8,10 @@ test("an assistant signs in after owner opt-in and loses access when it is disab
   browser,
   request,
 }) => {
+  test.skip(
+    isMicrosoftPlaywright(),
+    "Microsoft sign-in doesn't verify the address, so email codes are refused (utils/auth/email-otp.ts).",
+  );
   await openSettings(page);
   const toggle = page.getByRole("switch", {
     name: "Allow sign-in with a one-time email code",

@@ -3,6 +3,7 @@
 import React from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MailboxProvidersProvider } from "@/providers/MailboxProvidersProvider";
 import { MailAccountSwitcher } from "./MailAccountSwitcher";
 
 (globalThis as { React?: typeof React }).React = React;
@@ -240,13 +241,15 @@ function renderSwitcher({
   variant?: "compact" | "sidebar" | "bar";
 }) {
   return render(
-    <MailAccountSwitcher
-      isAllAccounts={false}
-      isDesktopApp
-      onSelectAccount={onSelectAccount}
-      onSelectAll={vi.fn()}
-      variant={variant}
-    />,
+    <MailboxProvidersProvider enabledProviders={["google", "microsoft"]}>
+      <MailAccountSwitcher
+        isAllAccounts={false}
+        isDesktopApp
+        onSelectAccount={onSelectAccount}
+        onSelectAll={vi.fn()}
+        variant={variant}
+      />
+    </MailboxProvidersProvider>,
   );
 }
 

@@ -63,6 +63,20 @@ describe("parseJourneySelection", () => {
   it("rejects unknown journeys instead of silently skipping them", () => {
     expect(() => parseJourneySelection("new-mail,chatt")).toThrow(/chatt/);
   });
+
+  it("adds the Outlook journey only when its mailbox is configured", () => {
+    expect(parseJourneySelection("all", { outlookConfigured: true })).toEqual(
+      expect.arrayContaining(["outlook"]),
+    );
+    expect(
+      parseJourneySelection("all", { outlookConfigured: true }),
+    ).toHaveLength(7);
+    expect(parseJourneySelection("all")).not.toContain("outlook");
+    expect(parseJourneySelection("outlook,new-mail")).toEqual(["new-mail"]);
+    expect(
+      parseJourneySelection("outlook", { outlookConfigured: true }),
+    ).toEqual(["outlook"]);
+  });
 });
 
 describe("resolveBudgets", () => {

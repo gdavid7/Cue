@@ -18,6 +18,9 @@ export const JOURNEY_NAMES = [
   "search",
   "compose-send",
   "chat",
+  // Runs only with CUE_QA_OUTLOOK_EMAIL set: the Outlook QA mailbox, reached
+  // through the same QA user.
+  "outlook",
 ] as const;
 export type JourneyName = (typeof JOURNEY_NAMES)[number];
 
@@ -98,6 +101,9 @@ export const DEFAULT_BUDGETS: Budgets = {
   // From Send until the message to itself is back in the mailbox; includes
   // the 30-second undo-send window.
   sendToInboxMs: { target: 45_000, limit: 120_000 },
+  // From Send in the Outlook mailbox until the reply is in the Gmail QA
+  // inbox; includes the undo-send window and delivery between providers.
+  replyDeliveredMs: { target: 60_000, limit: 180_000 },
   chatFirstTokenMs: { target: 8000, limit: 45_000 },
   chatTotalMs: { target: 40_000, limit: 150_000 },
   // Cumulative layout shift during the journey, times 1000.
@@ -129,12 +135,19 @@ export function resolveBudgets(override: string | undefined): Budgets {
   return budgets;
 }
 
-/** Which journeys to run from a `journeys` input: a comma list or "all". */
+/**
+ * Which journeys to run from a `journeys` input: a comma list or "all". The
+ * Outlook journey is left out while its mailbox is not configured.
+ */
 export function parseJourneySelection(
   input: string | undefined,
+  { outlookConfigured = false }: { outlookConfigured?: boolean } = {},
 ): JourneyName[] {
+  const available = JOURNEY_NAMES.filter(
+    (name) => outlookConfigured || name !== "outlook",
+  );
   const value = input?.trim().toLowerCase() ?? "";
-  if (!value || value === "all") return [...JOURNEY_NAMES];
+  if (!value || value === "all") return available;
   const requested = value.split(/[\s,]+/).filter(Boolean);
   const unknown = requested.filter(
     (name) => !(JOURNEY_NAMES as readonly string[]).includes(name),
@@ -144,7 +157,7 @@ export function parseJourneySelection(
       `Unknown journeys: ${unknown.join(", ")}. Choose from ${JOURNEY_NAMES.join(", ")} or "all".`,
     );
   }
-  return JOURNEY_NAMES.filter((name) => requested.includes(name));
+  return available.filter((name) => requested.includes(name));
 }
 
 export type Verdict = "PASS" | "SLOW" | "FAIL";

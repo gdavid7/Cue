@@ -35,6 +35,7 @@ import {
 } from "@/utils/mail-engine/runtime-mode";
 import { fetchEmailAccounts } from "@/utils/fetch-email-accounts";
 import { followMailboxChanges } from "@/utils/mail-engine/follow-mailbox-changes";
+import { announceTodayChanged } from "@/utils/home/today-changes";
 import { browserMailEngineCapabilities } from "@/utils/mail-engine/worker-protocol";
 import {
   MAIL_ENGINE_OWNER_LOCK,
@@ -395,6 +396,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
       onChange: () => {
         client.requestSync([emailAccountId]).catch(() => undefined);
       },
+      onTrackersChange: announceTodayChanged,
     });
   }, [client, emailAccountId]);
 

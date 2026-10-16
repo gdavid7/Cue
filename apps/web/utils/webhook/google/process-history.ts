@@ -10,7 +10,10 @@ import {
   HistoryEventType,
   type ProcessHistoryOptions,
 } from "@/utils/webhook/google/types";
-import { processHistoryItem } from "@/utils/webhook/google/process-history-item";
+import {
+  MESSAGE_HELD_ELSEWHERE,
+  processHistoryItem,
+} from "@/utils/webhook/google/process-history-item";
 import { getHistory } from "@/utils/gmail/history";
 import {
   validateWebhookAccount,
@@ -23,7 +26,9 @@ import {
 } from "@/utils/email/rate-limit";
 import prisma from "@/utils/prisma";
 import {
+  clearEmptyGmailHistoryRuns,
   clearGmailHistoryCatchUp,
+  countEmptyGmailHistoryRun,
   getGmailHistoryCatchUp,
   markGmailHistoryCatchUp,
 } from "@/utils/redis/gmail-history-catch-up";
@@ -31,12 +36,26 @@ import type { Logger } from "@/utils/logger";
 import type { gmail_v1 } from "@googleapis/gmail";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import { scheduleGmailHistoryCatchUp } from "@/utils/webhook/google/history-catch-up";
+import { mapWithConcurrency } from "@/utils/async";
+import {
+  acquireGmailHistoryLease,
+  releaseGmailHistoryLease,
+} from "@/utils/redis/gmail-history-lease";
 
-const MAX_GMAIL_HISTORY_ID_GAP = 3000;
-// History skipped while Gmail rate limited the account is mail the user is
-// still waiting on, so it gets a wider window than a long-disconnected account.
-const MAX_GMAIL_CATCH_UP_HISTORY_ID_GAP = 30_000;
 const GMAIL_HISTORY_PAGE_SIZE = 500;
+// History after a silent period is mail the user is still waiting on, so it is
+// never skipped. A run reads and processes what fits in its share of the
+// route's 300s and leaves the rest to a scheduled catch-up from its cursor.
+const MAX_GMAIL_HISTORY_PAGES_PER_RUN = 20;
+// Pages without records cost 2 quota units and no processing, so a run reads
+// on through them to the records after.
+const MAX_EMPTY_GMAIL_HISTORY_PAGES_PER_RUN = 100;
+const MAX_EMPTY_HISTORY_RUNS = 5;
+const HISTORY_RUN_BUDGET_MS = 180_000;
+// Each new message is seconds of AI work. A few at a time clears a backlog
+// several times faster while the account's Gmail quota gate paces the calls.
+const NEW_MESSAGE_CONCURRENCY = 3;
+const PROGRESS_SAVE_INTERVAL_MS = 10_000;
 
 export async function processHistoryForUser(
   decodedData: {
@@ -49,6 +68,9 @@ export async function processHistoryForUser(
   },
   logger: Logger,
 ) {
+  const deadline = Date.now() + HISTORY_RUN_BUDGET_MS;
+  // How far this run read Gmail history, for a catch-up to aim past.
+  let readThrough = BigInt(0);
   const { emailAddress } = decodedData;
   const historyId = normalizeHistoryId(decodedData.historyId);
   // All emails in the database are stored in lowercase
@@ -130,7 +152,33 @@ export async function processHistoryForUser(
       return NextResponse.json({ ok: true });
     }
 
-    return await withRateLimitRecording(
+    const lease = await acquireGmailHistoryLease(
+      validatedEmailAccount.id,
+      logger,
+    );
+    if (!lease.acquired) {
+      // That run may stop before this push's history, so it isn't lost.
+      logger.info("Another run holds the account's history; catching up");
+      await markGmailHistoryCatchUp(validatedEmailAccount.id, logger);
+      await scheduleGmailHistoryCatchUp({
+        emailAccountId: validatedEmailAccount.id,
+        historyId,
+        logger,
+      });
+      return NextResponse.json({ ok: true });
+    }
+
+    try {
+      return await processWithRateLimitRecording();
+    } finally {
+      await releaseGmailHistoryLease(validatedEmailAccount.id, lease, logger);
+    }
+  } catch (error) {
+    return await handleHistoryError(error);
+  }
+
+  function processWithRateLimitRecording() {
+    return withRateLimitRecording(
       {
         emailAccountId: validatedEmailAccount.id,
         provider: "google",
@@ -162,16 +210,13 @@ export async function processHistoryForUser(
           validatedEmailAccount.id,
           logger,
         );
-        const maxHistoryIdGap = catchUpToken
-          ? MAX_GMAIL_CATCH_UP_HISTORY_ID_GAP
-          : MAX_GMAIL_HISTORY_ID_GAP;
 
         const historyResult = await fetchGmailHistoryResilient({
           gmail,
           emailAccount: validatedEmailAccount,
           webhookHistoryId: historyId,
-          maxHistoryIdGap,
           options,
+          deadline,
           logger,
         });
 
@@ -191,19 +236,26 @@ export async function processHistoryForUser(
         }
 
         const historyEntries = historyResult.history;
+        let complete = !historyResult.hasMore;
+        const lastReadId = historyEntries.at(-1)?.id;
+        if (lastReadId)
+          readThrough =
+            BigInt(lastReadId) + BigInt(historyResult.hasMore ? 1 : 0);
 
         if (historyEntries.length > 0) {
+          // Empty runs only count in a row.
+          await clearEmptyGmailHistoryRuns(validatedEmailAccount.id, logger);
           logger.info("Processing history", {
             startHistoryId: historyResult.startHistoryId,
             historyIdGap: historyResult.historyIdGap,
-            maxHistoryIdGap,
-            skippedHistoryIds: historyResult.skippedHistoryIds,
             pageCount: historyResult.pageCount,
             historyItemCount: historyResult.historyItemCount,
+            hasMoreHistory: historyResult.hasMore,
           });
 
-          await processHistory(
+          const processed = await processHistory(
             {
+              deadline,
               history: historyEntries,
               spamLearnedThreadIds: new Set<string>(),
               gmail,
@@ -220,15 +272,11 @@ export async function processHistoryForUser(
             },
             logger,
           );
-        } else {
-          // When we truncate a large gap, Gmail can return an empty recent window.
-          // We still need to advance to the webhook historyId so we don't stay
-          // permanently behind and keep skipping.
+          complete &&= processed.complete;
+        } else if (complete) {
           logger.info("No history", {
             startHistoryId: historyResult.startHistoryId,
             historyIdGap: historyResult.historyIdGap,
-            maxHistoryIdGap,
-            skippedHistoryIds: historyResult.skippedHistoryIds,
             pageCount: historyResult.pageCount,
           });
 
@@ -237,9 +285,52 @@ export async function processHistoryForUser(
             emailAccountId: validatedEmailAccount.id,
             lastSyncedHistoryId: historyId,
           });
+        } else if (!historyResult.outOfTime) {
+          // Every page this run could read held no records, and Gmail offers
+          // more. The cursor stays: Gmail's current history id could skip
+          // records on pages not read yet, so a catch-up reads on. Only after
+          // several such runs in a row does it move past them. A run that ran
+          // out of time before its page limit doesn't count.
+          const emptyRuns = await countEmptyGmailHistoryRun(
+            validatedEmailAccount.id,
+            logger,
+          );
+          if (
+            emptyRuns >= MAX_EMPTY_HISTORY_RUNS &&
+            historyResult.lastPageHistoryId
+          ) {
+            logger.error("Gmail history held no records; moving past it", {
+              startHistoryId: historyResult.startHistoryId,
+              pageCount: historyResult.pageCount,
+              emptyRuns,
+              lastPageHistoryId: historyResult.lastPageHistoryId,
+            });
+            await updateLastSyncedHistoryId({
+              emailAccountId: validatedEmailAccount.id,
+              lastSyncedHistoryId: historyResult.lastPageHistoryId,
+            });
+            await clearEmptyGmailHistoryRuns(validatedEmailAccount.id, logger);
+            complete = true;
+          }
         }
 
-        if (catchUpToken) {
+        if (!complete) {
+          // The cursor stops before the first history left unprocessed, so the
+          // catch-up (or, without a scheduler, the next push) resumes there.
+          logger.warn("Gmail history backlog continues in a catch-up", {
+            startHistoryId: historyResult.startHistoryId,
+            historyIdGap: historyResult.historyIdGap,
+            pageCount: historyResult.pageCount,
+            historyItemCount: historyResult.historyItemCount,
+            hasMoreHistory: historyResult.hasMore,
+          });
+          await markGmailHistoryCatchUp(validatedEmailAccount.id, logger);
+          await scheduleGmailHistoryCatchUp({
+            emailAccountId: validatedEmailAccount.id,
+            historyId: catchUpHistoryId(),
+            logger,
+          });
+        } else if (catchUpToken) {
           await clearGmailHistoryCatchUp({
             emailAccountId: validatedEmailAccount.id,
             token: catchUpToken,
@@ -250,7 +341,16 @@ export async function processHistoryForUser(
         return NextResponse.json({ ok: true });
       },
     );
-  } catch (error) {
+  }
+
+  // The catch-up skips history the cursor already covers, so it asks for
+  // everything this run read (and past it, when pages were left), which can
+  // be newer than this push.
+  function catchUpHistoryId() {
+    return maxBigInt(BigInt(historyId), readThrough).toString();
+  }
+
+  async function handleHistoryError(error: unknown) {
     if (isInvalidGrantError(error)) {
       logger.warn("Invalid grant", { email });
       await cleanupInvalidTokens({
@@ -274,7 +374,7 @@ export async function processHistoryForUser(
       logger.info("Webhook history deferred by Gmail rate limiting");
       await scheduleGmailHistoryCatchUp({
         emailAccountId: validatedEmailAccount.id,
-        historyId,
+        historyId: catchUpHistoryId(),
         logger,
       });
       return NextResponse.json({ ok: true });
@@ -296,87 +396,189 @@ export async function processHistoryForUser(
   }
 }
 
-async function processHistory(options: ProcessHistoryOptions, logger: Logger) {
-  const { history, emailAccount } = options;
+async function processHistory(
+  options: ProcessHistoryOptions & { deadline: number },
+  logger: Logger,
+): Promise<{ complete: boolean }> {
+  const { history, emailAccount, deadline } = options;
   const { email: userEmail, id: emailAccountId } = emailAccount;
 
-  if (!history?.length) return;
+  const entries = history.map((h) => ({
+    id: h.id,
+    ...getHistoryEvents(h, logger),
+  }));
+  const done = new Set<HistoryEvent>();
+  let stopError: unknown;
 
-  for (const h of history) {
-    const historyMessages = [
-      ...(h.messagesAdded || []),
-      ...(h.labelsAdded || []),
-      ...(h.labelsRemoved || []),
-    ];
-
-    if (!historyMessages.length) continue;
-
-    const allEvents = [
-      ...(h.messagesAdded || [])
-        .filter((m) => {
-          const isRelevant = isInboxOrSentMessage(m);
-          if (!isRelevant) {
-            logger.info("Skipping message not in inbox or sent", {
-              messageId: m.message?.id,
-              labelIds: m.message?.labelIds,
-            });
-          }
-          return isRelevant;
-        })
-        .map((m) => ({ type: HistoryEventType.MESSAGE_ADDED, item: m })),
-      ...(h.labelsAdded || []).map((m) => ({
-        type: HistoryEventType.LABEL_ADDED,
-        item: m,
-      })),
-      ...(h.labelsRemoved || []).map((m) => ({
-        type: HistoryEventType.LABEL_REMOVED,
-        item: m,
-      })),
-    ];
-
-    const uniqueEvents = uniqBy(
-      allEvents,
-      (e) => `${e.type}:${e.item.message?.id}`,
-    );
-
-    for (const event of uniqueEvents) {
-      const log = logger.with({
-        messageId: event.item.message?.id,
-        threadId: event.item.message?.threadId,
-      });
-
-      try {
-        await processHistoryItem(event, options, log);
-      } catch (error) {
-        // Stop before the cursor passes mail Gmail refused (or the quota gate
-        // held back), so the catch-up picks it up again.
-        if (
-          isEmailProviderRateLimitError({ error, provider: "google" }) ||
-          isGmailCallDeferredError(error)
-        ) {
-          throw error;
-        }
-        captureException(error, {
-          userEmail,
-          extra: { messageId: event.item.message?.id },
-        });
-        logger.error("Error processing history item", { error });
+  const run = async (event: HistoryEvent) => {
+    if (stopError !== undefined || Date.now() >= deadline) return;
+    const log = logger.with({
+      messageId: event.item.message?.id,
+      threadId: event.item.message?.threadId,
+    });
+    try {
+      const outcome = await processHistoryItem(event, options, log);
+      if (outcome === MESSAGE_HELD_ELSEWHERE) return;
+    } catch (error) {
+      // Stop before the cursor passes mail Gmail refused (or the quota gate
+      // held back), so the catch-up picks it up again.
+      if (
+        isEmailProviderRateLimitError({ error, provider: "google" }) ||
+        isGmailCallDeferredError(error)
+      ) {
+        stopError ??= error;
+        return;
       }
+      captureException(error, {
+        userEmail,
+        extra: { messageId: event.item.message?.id },
+      });
+      log.error("Error processing history item", { error });
     }
+    done.add(event);
+    await saveProgress();
+  };
 
-    // A catch-up can outlast the function timeout, so keep the progress made.
+  // A run can be cut off by the function timeout, so the cursor follows the
+  // processed history as it goes, not only at the end.
+  let savedCount = 0;
+  let savedAt = Date.now();
+  const processedCount = () => {
+    const firstUnprocessed = entries.findIndex(
+      (entry) =>
+        !entry.threadEvents.every((event) => done.has(event)) ||
+        !entry.labelEvents.every((event) => done.has(event)),
+    );
+    return firstUnprocessed === -1 ? entries.length : firstUnprocessed;
+  };
+  const saveProgress = async ({ final = false } = {}) => {
+    const count = processedCount();
+    if (count <= savedCount) return;
+    if (!final && Date.now() - savedAt < PROGRESS_SAVE_INTERVAL_MS) return;
+    savedCount = count;
+    savedAt = Date.now();
     await updateLastSyncedHistoryId({
       emailAccountId,
-      lastSyncedHistoryId: h.id,
+      lastSyncedHistoryId: entries[count - 1]?.id,
     });
+  };
+
+  // Threads with the newest mail first, so a backlog surfaces the mail the
+  // user is waiting on first. Within a thread, oldest first and one at a
+  // time: an older sent reply handled after a newer inbound one would resolve
+  // that one's Needs reply. Replies sent from elsewhere (SENT being added)
+  // run here too, in their place.
+  const threads = new Map<string, HistoryEvent[]>();
+  for (const event of entries.flatMap((entry) => entry.threadEvents)) {
+    const threadId = event.item.message?.threadId ?? "";
+    // Re-inserting moves the thread to the end, so the map ends up ordered by
+    // each thread's newest message.
+    const thread = threads.get(threadId) ?? [];
+    threads.delete(threadId);
+    threads.set(threadId, [...thread, event]);
   }
+  // Other label changes run one at a time in history order, each as soon as
+  // the thread events up to its history are processed, alongside the threads
+  // still going. They have no processed marker: a run cut off before saving
+  // its cursor leaves them to be applied again by the next run.
+  let labelsFrom = 0;
+  let labelsBlocked = false;
+  let labelError: unknown;
+  let labelDrain = Promise.resolve();
+  const applyReadyLabels = async () => {
+    while (!labelsBlocked && labelsFrom < entries.length) {
+      const entry = entries[labelsFrom];
+      if (!entry.threadEvents.every((event) => done.has(event))) return;
+      for (const event of entry.labelEvents) {
+        await run(event);
+        if (!done.has(event)) {
+          labelsBlocked = true;
+          return;
+        }
+      }
+      labelsFrom += 1;
+    }
+  };
+  // One chain, so label changes never overlap or reorder.
+  const drainLabels = () => {
+    labelDrain = labelDrain.then(applyReadyLabels).catch((error) => {
+      labelsBlocked = true;
+      labelError ??= error;
+    });
+  };
 
-  const lastSyncedHistoryId = history[history.length - 1].id;
+  try {
+    drainLabels();
+    await mapWithConcurrency(
+      [...threads.values()].reverse(),
+      NEW_MESSAGE_CONCURRENCY,
+      async (thread) => {
+        for (const event of thread) {
+          await run(event);
+          if (!done.has(event)) return;
+          drainLabels();
+        }
+      },
+    );
+    drainLabels();
+    await labelDrain;
+  } finally {
+    // The label chain must not outlive the run or its lease, even when a
+    // thread fails and others are still finishing.
+    labelsBlocked = true;
+    await labelDrain;
+  }
+  if (labelError !== undefined) throw labelError;
 
-  await updateLastSyncedHistoryId({
-    emailAccountId,
-    lastSyncedHistoryId,
-  });
+  await saveProgress({ final: true });
+
+  if (stopError !== undefined) throw stopError;
+  return { complete: processedCount() === entries.length };
+}
+
+type HistoryEvent = Parameters<typeof processHistoryItem>[0];
+
+function getHistoryEvents(h: gmail_v1.Schema$History, logger: Logger) {
+  const newMessages: HistoryEvent[] = uniqBy(
+    (h.messagesAdded || []).filter((m) => {
+      const isRelevant = isInboxOrSentMessage(m);
+      if (!isRelevant) {
+        logger.info("Skipping message not in inbox or sent", {
+          messageId: m.message?.id,
+          labelIds: m.message?.labelIds,
+        });
+      }
+      return isRelevant;
+    }),
+    (m) => m.message?.id,
+  ).map((item) => ({ type: HistoryEventType.MESSAGE_ADDED, item }));
+
+  // SENT being added is a reply sent from elsewhere, handled as outbound mail,
+  // so it keeps its place among the thread's messages.
+  const isSentLabelAdd = (item: gmail_v1.Schema$HistoryLabelAdded) =>
+    item.labelIds?.includes(GmailLabel.SENT) ?? false;
+  const sentReplies: HistoryEvent[] = uniqBy(
+    (h.labelsAdded || []).filter(isSentLabelAdd),
+    (item) => item.message?.id,
+  ).map((item) => ({ type: HistoryEventType.LABEL_ADDED, item }));
+
+  const labelEvents: HistoryEvent[] = uniqBy(
+    [
+      ...(h.labelsAdded || [])
+        .filter((item) => !isSentLabelAdd(item))
+        .map((item) => ({
+          type: HistoryEventType.LABEL_ADDED,
+          item,
+        })),
+      ...(h.labelsRemoved || []).map((item) => ({
+        type: HistoryEventType.LABEL_REMOVED,
+        item,
+      })),
+    ],
+    (e) => `${e.type}:${e.item.message?.id}`,
+  );
+
+  return { threadEvents: [...newMessages, ...sentReplies], labelEvents };
 }
 
 /**
@@ -435,23 +637,23 @@ function isHistoryIdExpiredError(error: unknown): boolean {
 }
 
 /**
- * Fetches history from Gmail with resilience:
- * 1. Limits how far back we go to avoid processing massive gaps (e.g. if a user is disconnected for months).
- * 2. Handles expired history IDs (404s) by resetting the sync point.
+ * Reads Gmail history from the account's cursor, never skipping any, up to a
+ * bounded number of pages per run; `hasMore` says a catch-up must continue.
+ * Handles expired history IDs (404s) by resetting the sync point.
  */
 async function fetchGmailHistoryResilient({
   gmail,
   emailAccount,
   webhookHistoryId,
-  maxHistoryIdGap,
   options,
+  deadline,
   logger,
 }: {
   gmail: gmail_v1.Gmail;
   emailAccount: ValidatedWebhookAccountData;
   webhookHistoryId: string;
-  maxHistoryIdGap: number;
   options: { startHistoryId?: string };
+  deadline: number;
   logger: Logger;
 }): Promise<
   | {
@@ -459,64 +661,39 @@ async function fetchGmailHistoryResilient({
       startHistoryId: string;
       history: gmail_v1.Schema$History[];
       historyIdGap: number;
-      skippedHistoryIds: number;
       pageCount: number;
       historyItemCount: number;
+      hasMore: boolean;
+      /** The mailbox's history id as of the last page read. */
+      lastPageHistoryId: string | null;
+      /** Reading stopped at the run's deadline rather than a page limit. */
+      outOfTime: boolean;
     }
   | { status: "expired" }
 > {
   const lastSyncedHistoryId = normalizeHistoryId(
     emailAccount?.lastSyncedHistoryId || "0",
   );
-  const lastSyncedHistoryIdBig = BigInt(lastSyncedHistoryId);
-  const webhookHistoryIdBig = BigInt(webhookHistoryId);
-  const maxGap = BigInt(maxHistoryIdGap);
-
-  const historyIdGap = boundedHistoryCount(
-    maxBigInt(BigInt(0), webhookHistoryIdBig - lastSyncedHistoryIdBig),
-  );
-
-  // History IDs are not item counts, so keep this window large enough for normal
-  // active-account bursts while still bounding old/disconnected-account catch-up.
-  const startHistoryIdBig = maxBigInt(
-    lastSyncedHistoryIdBig,
-    webhookHistoryIdBig - maxGap,
-  );
   const startHistoryId = options?.startHistoryId
     ? normalizeHistoryId(options.startHistoryId)
-    : startHistoryIdBig.toString();
-  const skippedHistoryIds = options?.startHistoryId
-    ? 0
-    : boundedHistoryCount(
-        maxBigInt(BigInt(0), startHistoryIdBig - lastSyncedHistoryIdBig),
-      );
-
-  // Log if we are intentionally skipping Gmail history IDs to keep the system stable.
-  if (skippedHistoryIds > 0) {
-    logger.warn("Skipping Gmail history IDs due to large gap", {
-      lastSyncedHistoryId,
-      webhookHistoryId,
-      historyIdGap,
-      maxHistoryIdGap,
-      effectiveStartHistoryId: startHistoryId,
-      skippedHistoryIds,
-    });
-  }
+    : lastSyncedHistoryId;
+  const historyIdGap = boundedHistoryCount(
+    maxBigInt(BigInt(0), BigInt(webhookHistoryId) - BigInt(startHistoryId)),
+  );
 
   logger.info("Listing history", {
     startHistoryId,
     lastSyncedHistoryId: emailAccount?.lastSyncedHistoryId,
-    gmailHistoryId: startHistoryId,
     webhookHistoryId,
     historyIdGap,
-    maxHistoryIdGap,
-    skippedHistoryIds,
   });
 
   try {
     const historyEntries: gmail_v1.Schema$History[] = [];
     let pageToken: string | undefined;
     let pageCount = 0;
+    let lastPageHistoryId: string | null = null;
+    let outOfTime = false;
 
     do {
       const data = await getHistory(
@@ -534,6 +711,8 @@ async function fetchGmailHistoryResilient({
       historyEntries.push(...pageHistory);
       pageCount += 1;
       pageToken = data.nextPageToken || undefined;
+      if (data.historyId && /^\d+$/.test(data.historyId))
+        lastPageHistoryId = data.historyId;
 
       logger.info("Fetched Gmail history page", {
         startHistoryId,
@@ -542,25 +721,40 @@ async function fetchGmailHistoryResilient({
         accumulatedHistoryItemCount: historyEntries.length,
         hasNextPage: !!pageToken,
       });
-    } while (pageToken);
+      // Reading leaves the rest of the run's time to processing and saving.
+      outOfTime = Date.now() >= deadline;
+    } while (
+      pageToken &&
+      !outOfTime &&
+      pageCount <
+        (historyEntries.length
+          ? MAX_GMAIL_HISTORY_PAGES_PER_RUN
+          : MAX_EMPTY_GMAIL_HISTORY_PAGES_PER_RUN)
+    );
 
     return {
       status: "success",
       history: historyEntries,
       startHistoryId,
       historyIdGap,
-      skippedHistoryIds,
       pageCount,
       historyItemCount: historyEntries.length,
+      hasMore: !!pageToken,
+      lastPageHistoryId,
+      outOfTime,
     };
   } catch (error) {
     // Gmail history IDs are typically valid for ~1 week. If older, Gmail returns a 404.
     // In this case, we reset the sync point to the current history ID.
     if (isHistoryIdExpiredError(error)) {
-      logger.warn("HistoryId expired, resetting to current", {
-        expiredHistoryId: startHistoryId,
-        newHistoryId: webhookHistoryId,
-      });
+      logger.error(
+        "Gmail history expired; mail in the gap is not processed by automation",
+        {
+          expiredHistoryId: startHistoryId,
+          newHistoryId: webhookHistoryId,
+          historyIdGap,
+        },
+      );
       return { status: "expired" };
     }
     throw error;
