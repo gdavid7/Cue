@@ -35,9 +35,10 @@ const DEFAULT_RATE_LIMIT_DELAY_MS = 30_000;
 // Gmail's weighted-units quota is a per-minute budget, so a retry within
 // seconds only spends units that are not back yet and extends the outage.
 const GMAIL_PER_MINUTE_QUOTA_MIN_DELAY_MS = 30_000;
-// Rate-limit mode skips every call for the account, reads included, so it
-// never outlasts a couple of per-minute windows; the gate paces the rest.
-const MAX_RATE_LIMIT_MODE_MS = 2 * 60_000;
+// Rate-limit mode skips every call for the account, reads included, so for
+// Gmail it never outlasts a couple of per-minute windows; the quota gate
+// paces the rest. Microsoft Graph's Retry-After is honoured as given.
+const MAX_GMAIL_RATE_LIMIT_MODE_MS = 2 * 60_000;
 const RETRY_AT_BUFFER_SECONDS = 5;
 
 export type EmailProviderRateLimitState = {
@@ -257,7 +258,10 @@ export async function recordProviderRateLimitFromError({
   if (!delayMs) return null;
 
   const retryAt = new Date(
-    Date.now() + Math.min(delayMs, MAX_RATE_LIMIT_MODE_MS),
+    Date.now() +
+      (provider === "google"
+        ? Math.min(delayMs, MAX_GMAIL_RATE_LIMIT_MODE_MS)
+        : delayMs),
   );
   return setEmailProviderRateLimitState({
     emailAccountId,

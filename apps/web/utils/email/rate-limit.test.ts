@@ -338,6 +338,24 @@ describe("email provider rate-limit state", () => {
     );
   });
 
+  it("honours Microsoft Graph's full Retry-After", async () => {
+    vi.mocked(redis.get).mockResolvedValueOnce(null);
+
+    const state = await recordProviderRateLimitFromError({
+      emailAccountId: "account-1",
+      provider: "microsoft",
+      error: {
+        statusCode: 429,
+        code: "TooManyRequests",
+        response: { headers: { "retry-after": "600" } },
+      },
+      source: "test-outlook",
+      logger,
+    });
+
+    expect(state!.retryAt.getTime() - Date.now()).toBeGreaterThan(590_000);
+  });
+
   it("records rate-limit state from mapped API error type", async () => {
     vi.mocked(redis.get).mockResolvedValueOnce(null);
 
