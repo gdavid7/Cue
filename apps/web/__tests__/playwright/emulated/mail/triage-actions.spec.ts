@@ -338,7 +338,7 @@ test("selects and clears all conversations from the split tabs row", async ({
 }, testInfo) => {
   const { conversations } = await openMail(page);
   const options = conversations.getByRole("option");
-  const conversationCount = await options.count();
+  const conversationCount = await settledRowCount(page, options);
   expect(conversationCount).toBeGreaterThan(1);
 
   const selectAll = page.getByRole("checkbox", {
@@ -352,18 +352,14 @@ test("selects and clears all conversations from the split tabs row", async ({
 
   await selectAll.click();
 
-  await expect(
-    page.getByText(`${conversationCount} selected`, { exact: true }),
-  ).toBeVisible();
+  await expectSelectedCount(page, conversationCount);
   await expect(selectAll).toBeChecked();
   await expect.poll(() => allRowsAreSelected(options, true)).toBe(true);
   await capturePlaywrightCheckpoint(page, testInfo, "select-all-conversations");
 
   await options.nth(1).getByRole("checkbox", { includeHidden: true }).click();
 
-  await expect(
-    page.getByText(`${conversationCount - 1} selected`, { exact: true }),
-  ).toBeVisible();
+  await expectSelectedCount(page, conversationCount - 1);
   await expect(selectAll).toHaveAttribute("aria-checked", "mixed");
 
   await selectAll.click();
@@ -379,7 +375,7 @@ test("selects and clears all conversations from the split tabs row", async ({
 test("selects every conversation with Command A", async ({ page }) => {
   const { conversations } = await openMail(page);
   const options = conversations.getByRole("option");
-  const conversationCount = await options.count();
+  const conversationCount = await settledRowCount(page, options);
   expect(conversationCount).toBeGreaterThan(1);
 
   // The toolbar slot is the mail search input now, so open the palette with
@@ -407,9 +403,7 @@ test("selects every conversation with Command A", async ({ page }) => {
 
   await page.keyboard.press(`${commandModifier}+KeyA`);
 
-  await expect(
-    page.getByText(`${conversationCount} selected`, { exact: true }),
-  ).toBeVisible();
+  await expectSelectedCount(page, conversationCount);
   await expect(options).toHaveCount(conversationCount);
   await expect.poll(() => allRowsAreSelected(options, true)).toBe(true);
 });
@@ -447,6 +441,56 @@ async function undoLastTriage(page: Page) {
     return;
   }
   await page.keyboard.press("z");
+}
+
+/**
+ * The list keeps filling after it first shows: the engine's first sync and
+ * further pages add rows, more slowly on Outlook. Counting before then
+ * compares a selection of every row with a partial count.
+ */
+async function settledRowCount(page: Page, rows: Locator) {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async () => {
+          const diagnostics = (await window.__inboxZeroMailInspect
+            ?.read()
+            .catch(() => null)) as {
+            coverage?: { lastCompletedSyncAtMs?: number | null }[];
+          } | null;
+          return Boolean(
+            diagnostics?.coverage?.some((c) => c.lastCompletedSyncAtMs),
+          );
+        }),
+      { message: "the mail engine finishes its first sync", timeout: 60_000 },
+    )
+    .toBe(true);
+  let previous = -1;
+  await expect
+    .poll(
+      async () => {
+        const count = await rows.count();
+        const settled = count > 0 && count === previous;
+        previous = count;
+        return settled;
+      },
+      { message: "the row count holds for a second", intervals: [1000] },
+    )
+    .toBe(true);
+  return previous;
+}
+
+// Polls the label itself, so a failure prints the count the toolbar showed.
+async function expectSelectedCount(page: Page, count: number) {
+  await expect
+    .poll(() =>
+      page
+        .getByText(/^\d+ selected$/)
+        .first()
+        .textContent({ timeout: 1000 })
+        .catch(() => "no selection label"),
+    )
+    .toBe(`${count} selected`);
 }
 
 function allRowsAreSelected(rows: Locator, selected: boolean) {
