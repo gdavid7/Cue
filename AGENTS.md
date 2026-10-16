@@ -22,7 +22,7 @@
 - Do not run `dev` or `build` unless explicitly asked
 - Run `pnpm install` before running tests or build if not already done
 - Before writing or updating tests, review `.claude/skills/testing/SKILL.md`.
-- `.claude/settings.json` hooks: cloud sessions install dependencies on start, edited files are formatted with Biome (remaining lint errors are reported back), and the rules here marked as hook-enforced are blocked before they run.
+- `.claude/settings.json` hooks: cloud sessions install dependencies on start, edited files are formatted with Biome (remaining lint errors are reported back), the rules here marked as hook-enforced are blocked before they run, and ending a turn runs the unit tests related to uncommitted `apps/web` changes (60 s cap; failures are reported back once).
 - For core bug-fix tasks, default to TDD when practical (red/green/refactor); AI prompt improvements should generally be backed by evals too, and TDD is often useful there as well.
 - When adding a new workspace package, add its `package.json` COPY line to `docker/Dockerfile.prod` and `docker/Dockerfile.local`.
 
@@ -79,6 +79,13 @@
 - For UI and interaction work, follow `.claude/skills/apple-design/SKILL.md` (Apple-style response, spatial consistency, reduced motion, typography and wayfinding; vendored from emilkowalski/skills under MIT). Apply it with the existing shadcn/Radix components rather than new animation libraries.
 - Before shipping a user-facing UI change, run a review pass with `.claude/skills/ux-review/SKILL.md` (10-expert UX panel; vendored from noodlemind under MIT) and fix what it finds.
 - Use `LoadingContent` component for async data: `<LoadingContent loading={isLoading} error={error}>{data && <YourComponent data={data} />}</LoadingContent>`
+
+## Issues, Errors and PRs
+See `docs/dev-infra/PLAN.md` for the reasoning.
+- GitHub issues are for product work only. This repository is public: an issue never contains user data (addresses, names, subjects, message bodies, tokens, log lines, screenshots of real inboxes). Reproduce with fixtures.
+- Production errors stay in Sentry. An issue that needs code work describes the failure generally and cites the Sentry issue ID, never the event payload.
+- Work lands as small PRs into the integration branch (`claude/upbeat-sagan-6c5ed8`). CI (unit tests, lint, the production build) runs on every PR; dispatch browser QA for the groups it touches. Releases stay batched: the tested integration sha is pushed to `production`, never merged into it by PR.
+- `.github/CODEOWNERS` lists founder-owned paths (prompts and tools in `apps/web/utils/ai`, `env.ts`, workflows, `.claude/settings.json`, the Prisma schema, user-facing copy).
 
 ## Feature Docs
 Read the matching guide before changing one of these features:

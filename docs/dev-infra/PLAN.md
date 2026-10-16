@@ -25,7 +25,8 @@ recommendation.
   The repository is public, so Actions minutes are free; nothing needs a
   secret (`test.yml` uses fixed test values only).
 - **Decision:** turn them on? **Recommend yes.** Expect the first runs to be
-  red where local-only checks drifted; that is the point.
+  red where local-only checks drifted; that is the point. (Done; see the
+  status table.)
 
 ### B. Two dispatches compete for runners
 
@@ -242,25 +243,76 @@ recommendation.
 - **Decision:** move from local merges to PRs into the integration branch?
   **Recommend yes**, starting with the next workstream, once item A is on.
 
-## Founder decisions at a glance
+## Founder decisions and status
 
-| # | Decision | Recommendation |
+Decided 2026-10-16.
+
+| # | Decision | Status |
 |---|---|---|
-| A | Run unit tests, lint and build check in CI on this fork | Yes |
-| 1 | `OPENROUTER_API_KEY` secret and a budget for path-triggered eval subsets | Yes, capped (for example $50/month), default model only |
-| 2 | Delete upstream-only workflows, including `e2e-flows.yml` | Yes |
-| 3 | `ANTHROPIC_API_KEY` secret and write permissions for `@claude` | Yes, with branch protection on `production` and a collaborator-only gate |
-| 5 | GitHub issues as the public product backlog | Yes, product work only |
-| 6 | CODEOWNERS paths and agent auto-merge outside them | Yes, after A |
-| 7 | Private error queue | Sentry issues |
-| 8 | PRs into the integration branch instead of local merges | Yes, after A |
+| A | Run unit tests, lint and build check in CI | **Done.** `test.yml` and `build-check.yml` run on pushes and pull requests to the integration branch, `production` and `claude/**`, and on dispatch |
+| 1 | `OPENROUTER_API_KEY` and a budget for eval subsets | **Open** |
+| 2 | Delete upstream-only workflows | **Done.** Removed `e2e-flows`, `api-release`, `cli-release`, `desktop-release`, `mail-packages-release`, `deploy-image-proxy`, `build_and_publish_docker`, `publish-playwright-report` (and its script). `build-changelog` stays: it validates, it doesn't publish |
+| 3 | `@claude` pushing fixes (key and write permissions) | **Deferred.** Only the trigger restriction is done: every `claude.yml` trigger requires an OWNER, MEMBER or COLLABORATOR author |
+| 5 | GitHub issues for product work only | **Yes**, conventions below |
+| 6 | CODEOWNERS; auto-merge outside founder-owned paths | **CODEOWNERS added** (`.github/CODEOWNERS`). Auto-merge is **not enabled**; steps below |
+| 7 | Production errors stay in Sentry | **Yes**, conventions below |
+| 8 | Small PRs into the integration branch | **Yes**, conventions below |
 
-## Proposed but not built: a Stop hook that runs tests
+## Conventions (also in AGENTS.md)
 
-A Stop hook could run the unit tests for changed files before an agent ends
-its turn. A targeted Vitest run here takes 2 to 5 seconds, but the
-`typecheck:web` check takes about 2.5 minutes. **Recommend** a Stop hook
-limited to `vitest related --run` on the files changed since the last commit,
-with a 60-second cap, and leaving the type check to CI. It is not built in
-phase 1 because a hook that slows every turn should be tried on one session
-before it goes into project settings.
+**Issues (5).** GitHub issues track product work only: features, bugs found
+in development, chores. The repository is public, so an issue never contains
+user data: no email addresses, names, subjects, message bodies, tokens, log
+lines or screenshots of real inboxes. Reproduce with fixture data instead.
+
+**Production errors (7).** Production errors stay in Sentry, which is private,
+grouped and already read by the production robots. When an error needs code
+work, the issue describes the failure in general terms and cites the Sentry
+issue ID, never the event payload.
+
+**PRs and releases (8).** Each workstream opens a small PR into the
+integration branch (`claude/upbeat-sagan-6c5ed8`).
+- CI runs on every PR: unit tests, lint, package type checks and the
+  production build.
+- Browser QA is dispatched for the groups the PR touches.
+- An independent reviewer's GO goes on the PR.
+- Merge with a merge commit, so the integration history records what landed
+  together.
+
+Releases stay batched: the coordinator runs browser QA on the integration
+head and pushes that exact sha to `production`. Nothing merges into
+`production` through a PR.
+
+## Turning on auto-merge (not done; for the founder)
+
+These are repository settings; nothing in this branch changes them.
+
+1. **Settings → General → Pull Requests:** enable "Allow auto-merge" and
+   "Always suggest updating pull request branches".
+2. **Settings → Branches → Add branch ruleset** for the integration branch:
+   - require a pull request before merging, with 1 approval;
+   - require review from Code Owners (this makes `.github/CODEOWNERS`
+     binding);
+   - require status checks to pass, with these checks: `Tests 1/2`,
+     `Tests 2/2`, `Electron mail runtime` (Run Tests) and `build` (Build
+     Check);
+   - block force pushes.
+3. **A second ruleset for `production`:** restrict pushes to the founder and
+   the coordinator's identity and block force pushes. Releases remain a
+   direct push of a tested sha.
+4. **Per PR:** an agent enables auto-merge (`gh pr merge --auto --merge`)
+   only after the reviewer's GO. GitHub then merges once checks pass, and
+   waits for the founder when the PR touches a founder-owned path.
+
+## Stop hook (built)
+
+`.claude/hooks/stop-related-tests.sh` runs `vitest related --run` on the
+`apps/web` files changed since the last commit when an agent ends a turn.
+- Failures go back to the agent once; the next stop always ends the turn.
+- It skips Playwright, E2E, eval and AI test files.
+- Capped at 60 seconds, and a timeout never blocks.
+
+Measured: about 20 seconds for a small change (Vitest start-up dominates). A
+change to a widely imported module, such as provider retry, hits the cap, so
+that case falls back to CI. The type check (about 2.5 minutes) stays in CI and
+in `pnpm typecheck:web`.
