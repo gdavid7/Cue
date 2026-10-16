@@ -15,8 +15,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/Input";
 import { toastError, toastSuccess } from "@/components/Toast";
-import { useAccount } from "@/providers/EmailAccountProvider";
 import { renameChatAction } from "@/utils/actions/chat";
+import { chatMessagesKey } from "@/hooks/useChatMessages";
 import {
   renameChatFormBody,
   type RenameChatFormBody,
@@ -27,6 +27,7 @@ export function RenameChatDialog({
   open,
   onOpenChange,
   chatId,
+  emailAccountId,
   currentName,
   defaultLabel,
   onRenamed,
@@ -34,11 +35,12 @@ export function RenameChatDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   chatId: string;
+  /** The account the chat belongs to, which may not be the page's. */
+  emailAccountId: string;
   currentName: string;
   defaultLabel: string;
   onRenamed: () => void;
 }) {
-  const { emailAccountId } = useAccount();
   const { mutate: globalMutate } = useSWRConfig();
 
   const {
@@ -62,7 +64,7 @@ export function RenameChatDialog({
       onSuccess: () => {
         toastSuccess({ description: "Chat renamed." });
         onRenamed();
-        globalMutate(`/api/chats/${chatId}`);
+        globalMutate(chatMessagesKey(chatId, emailAccountId));
         onOpenChange(false);
       },
       onError: (error) => {

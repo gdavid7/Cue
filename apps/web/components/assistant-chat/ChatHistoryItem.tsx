@@ -33,7 +33,12 @@ export function ChatHistoryItem({
           if (menuOpen) e.preventDefault();
         }}
       >
-        <span className="truncate">{getChatHistoryLabel(chat)}</span>
+        <span className="flex min-w-0 flex-col">
+          <span className="truncate">{getChatHistoryLabel(chat)}</span>
+          <span className="truncate text-muted-foreground text-xs">
+            {chat.disconnected ? `${chat.email} · Disconnected` : chat.email}
+          </span>
+        </span>
       </DropdownMenuItem>
       <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen} modal={false}>
         <DropdownMenuTrigger asChild>

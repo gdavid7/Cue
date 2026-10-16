@@ -19,7 +19,8 @@ import { captureException } from "@/utils/error";
 import { toastError } from "@/components/Toast";
 import { convertToUIMessages } from "@/components/assistant-chat/helpers";
 import type { ChatMessage } from "@/components/assistant-chat/types";
-import { useChatMessages } from "@/hooks/useChatMessages";
+import { chatMessagesKey, useChatMessages } from "@/hooks/useChatMessages";
+import { useAccounts } from "@/hooks/useAccounts";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import type { MessageContext } from "@/utils/ai/assistant/chat-context-validation";
@@ -60,8 +61,23 @@ type PendingChatRequest = {
   textLength: number;
 };
 
+type ChatAccount = { id: string; email: string; disconnected: boolean };
+
 type ChatContextType = {
   chat: Chat;
+  /** The account this chat reads and acts in; tools never reach another. */
+  chatAccount: ChatAccount | null;
+  /** The chat works in an account other than the page's. */
+  switchedAccount: boolean;
+  /**
+   * The open email's account, when the conversation stays in another one
+   * because it already has messages.
+   */
+  openThreadAccountId: string | null;
+  /** Starts a new conversation in another of the user's accounts. */
+  switchChatAccount: (emailAccountId: string) => void;
+  /** Opens a saved chat in the account it belongs to. */
+  openChat: (chat: { id: string; emailAccountId: string }) => void;
   input: string;
   chatId: string | null;
   persistedMessageIds: Set<string>;
@@ -80,8 +96,30 @@ type ChatContextType = {
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
-  const { emailAccountId } = useAccount();
+  const { emailAccountId: routeAccountId, accountIds } = useAccount();
+  const { data: accountsData } = useAccounts();
   const { mutate } = useSWRConfig();
+  // Chats are stored per account. In All inboxes the chat can work in another
+  // account than the page's, until the page's account changes.
+  const [chatScope, setChatScope] = useState<{
+    routeAccountId: string;
+    accountId: string;
+  } | null>(null);
+  const emailAccountId =
+    chatScope?.routeAccountId === routeAccountId
+      ? chatScope.accountId
+      : routeAccountId;
+  const chatAccount = useMemo<ChatAccount | null>(() => {
+    const account = accountsData?.emailAccounts.find(
+      (candidate) => candidate.id === emailAccountId,
+    );
+    if (!account) return null;
+    return {
+      id: account.id,
+      email: account.email,
+      disconnected: Boolean(account.account.disconnectedAt),
+    };
+  }, [accountsData, emailAccountId]);
 
   const [input, setInput] = useState<string>("");
   const [chatId, setChatId] = useQueryState("chatId", parseAsString);
@@ -95,7 +133,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const pendingRequestRef = useRef<PendingChatRequest | null>(null);
   const pendingRequestContextRef = useRef<MessageContext | null>(null);
   const previousChatIdRef = useRef(chatId);
-  const previousEmailAccountIdRef = useRef<string | null>(null);
+  const previousRouteAccountIdRef = useRef<string | null>(null);
+  const followedThreadRef = useRef<string | null>(null);
   // After an explicit stop, don't reattach until the user sends again.
   const stoppedRef = useRef(false);
   // A send failed or dropped mid-reply; the run may still be going server-side.
@@ -104,7 +143,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const resumedStreamIdRef = useRef<string | null>(null);
   const messagesAtHideRef = useRef<unknown>(null);
 
-  const { data } = useChatMessages(chatId);
+  const { data } = useChatMessages(chatId, emailAccountId);
   const persistedMessageIds = useMemo(
     () => new Set(data?.messages.map((message) => message.id) ?? []),
     [data?.messages],
@@ -177,7 +216,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // saved the reply; refetching now would drop the partial one shown.
       await Promise.all([
         mutate("/api/user/rules"),
-        chatId && !isAbort ? mutate(`/api/chats/${chatId}`) : Promise.resolve(),
+        chatId && !isAbort
+          ? mutate(chatMessagesKey(chatId, emailAccountId))
+          : Promise.resolve(),
       ]);
     },
     onError: (error) => {
@@ -262,8 +303,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     } finally {
       resumingRef.current = false;
     }
-    await mutate(`/api/chats/${chatId}`);
-  }, [chat.resumeStream, chat.stop, chatId, mutate]);
+    await mutate(chatMessagesKey(chatId, emailAccountId));
+  }, [chat.resumeStream, chat.stop, chatId, emailAccountId, mutate]);
 
   // Reattach to a reply still running for this chat, e.g. after a reload or
   // when opening the chat mid-run, once its saved messages are shown.
@@ -322,17 +363,78 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setInlineActions([]);
   }, [chatId]);
 
-  useEffect(() => {
-    if (!emailAccountId) return;
+  // Moves the chat to another account. The conversation shown belongs to the
+  // old one, so it is replaced by the chat to open, or a new one.
+  const moveChatToAccount = useCallback(
+    (accountId: string, nextChatId: string | null) => {
+      setChatScope(
+        accountId === routeAccountId ? null : { routeAccountId, accountId },
+      );
+      pendingInlineActionsRef.current = null;
+      pendingRequestRef.current = null;
+      pendingRequestContextRef.current = null;
+      setChatId(nextChatId);
+      chat.setMessages([]);
+      setContext(null);
+      setInlineActions([]);
+    },
+    [chat.setMessages, routeAccountId, setChatId],
+  );
 
-    if (previousEmailAccountIdRef.current === null) {
-      previousEmailAccountIdRef.current = emailAccountId;
+  const switchChatAccount = useCallback(
+    (accountId: string) => {
+      if (accountId === emailAccountId) return;
+      moveChatToAccount(accountId, null);
+    },
+    [emailAccountId, moveChatToAccount],
+  );
+
+  const openChat = useCallback(
+    (saved: { id: string; emailAccountId: string }) => {
+      if (saved.emailAccountId === emailAccountId) {
+        setChatId(saved.id);
+        return;
+      }
+      moveChatToAccount(saved.emailAccountId, saved.id);
+    },
+    [emailAccountId, moveChatToAccount, setChatId],
+  );
+
+  // A thread opened from another account in All inboxes brings an empty
+  // chat with it. A conversation already under way stays in its account, and
+  // the chat offers the switch instead.
+  const hasConversation =
+    chat.messages.length > 0 || Boolean(data?.messages.length);
+  useEffect(() => {
+    const threadKey = openThread
+      ? `${openThread.emailAccountId}:${openThread.threadId}`
+      : null;
+    if (followedThreadRef.current === threadKey) return;
+    followedThreadRef.current = threadKey;
+    if (!openThread || openThread.emailAccountId === emailAccountId) return;
+    if (!accountIds.includes(openThread.emailAccountId)) return;
+    if (isRunActive || hasConversation) return;
+    moveChatToAccount(openThread.emailAccountId, null);
+  }, [
+    accountIds,
+    emailAccountId,
+    hasConversation,
+    isRunActive,
+    moveChatToAccount,
+    openThread,
+  ]);
+
+  useEffect(() => {
+    if (!routeAccountId) return;
+
+    if (previousRouteAccountIdRef.current === null) {
+      previousRouteAccountIdRef.current = routeAccountId;
       return;
     }
 
-    if (previousEmailAccountIdRef.current === emailAccountId) return;
+    if (previousRouteAccountIdRef.current === routeAccountId) return;
 
-    previousEmailAccountIdRef.current = emailAccountId;
+    previousRouteAccountIdRef.current = routeAccountId;
     pendingInlineActionsRef.current = null;
     pendingRequestRef.current = null;
     pendingRequestContextRef.current = null;
@@ -342,7 +444,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setContext(null);
     setAttachments([]);
     setInlineActions([]);
-  }, [chat.setMessages, emailAccountId, setChatId]);
+  }, [chat.setMessages, routeAccountId, setChatId]);
+
+  // Fix context comes from the page's account (its rules and mail).
+  const setContextForPage = useCallback(
+    (nextContext: MessageContext | null) => {
+      if (nextContext && emailAccountId !== routeAccountId)
+        moveChatToAccount(routeAccountId, null);
+      setContext(nextContext);
+    },
+    [emailAccountId, moveChatToAccount, routeAccountId],
+  );
 
   const sendMessageParts = useCallback(
     (parts: ChatMessagePart[]) => {
@@ -350,6 +462,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const attachmentCount = parts.filter(
         (part) => part.type === "file",
       ).length;
+
+      if (chatAccount?.disconnected) {
+        toastError({
+          description: `Reconnect ${chatAccount.email} to continue`,
+        });
+        throw new ChatInputValidationError();
+      }
 
       if (textLength > ASSISTANT_CHAT_MAX_TEXT_LENGTH) {
         logger.warn("Assistant chat input rejected", {
@@ -396,7 +515,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
       return sendPromise;
     },
-    [chat.id, chat.sendMessage, chatId, context, emailAccountId, setChatId],
+    [
+      chat.id,
+      chat.sendMessage,
+      chatAccount,
+      chatId,
+      context,
+      emailAccountId,
+      setChatId,
+    ],
   );
 
   const submitTextMessage = useCallback(
@@ -446,7 +573,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         errorName: error instanceof Error ? error.name : "UnknownError",
       });
     }
-    await mutate(`/api/chats/${chatId}`);
+    await mutate(chatMessagesKey(chatId, emailAccountId));
   }, [
     chat.messages,
     chat.stop,
@@ -506,6 +633,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     <ChatContext.Provider
       value={{
         chat,
+        chatAccount,
+        switchedAccount: emailAccountId !== routeAccountId,
+        openThreadAccountId:
+          openThread && openThread.emailAccountId !== emailAccountId
+            ? openThread.emailAccountId
+            : null,
+        switchChatAccount,
+        openChat,
         chatId,
         input,
         persistedMessageIds,
@@ -516,7 +651,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         handleSubmit,
         stop,
         context,
-        setContext,
+        setContext: setContextForPage,
         attachments,
         setAttachments,
       }}

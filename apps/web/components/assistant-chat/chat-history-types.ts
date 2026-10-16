@@ -1,6 +1,6 @@
-import type { GetChatsResponse } from "@/app/api/chats/route";
+import type { GetUserChatsResponse } from "@/app/api/user/chats/route";
 
-export type ChatHistoryEntry = GetChatsResponse["chats"][number];
+export type ChatHistoryEntry = GetUserChatsResponse["chats"][number];
 
 export function getChatHistoryLabel(
   chat: Pick<ChatHistoryEntry, "name" | "createdAt">,

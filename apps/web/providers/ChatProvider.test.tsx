@@ -47,6 +47,7 @@ const {
   mockResumeStream: vi.fn(),
   accountState: {
     emailAccountId: "account-a",
+    disconnectedB: null as string | null,
   },
   chatState: {
     id: "new-chat-id",
@@ -129,12 +130,37 @@ vi.mock("swr", () => ({
 }));
 
 vi.mock("@/hooks/useChatMessages", () => ({
-  useChatMessages: (chatId: string | null) => mockUseChatMessages(chatId),
+  useChatMessages: (chatId: string | null, emailAccountId: string) =>
+    mockUseChatMessages(chatId, emailAccountId),
+  chatMessagesKey: (chatId: string, emailAccountId: string) => [
+    `/api/chats/${chatId}`,
+    emailAccountId,
+  ],
 }));
 
 vi.mock("@/providers/EmailAccountProvider", () => ({
   useAccount: () => ({
     emailAccountId: accountState.emailAccountId,
+    accountIds: ["account-a", "account-b"],
+  }),
+}));
+
+vi.mock("@/hooks/useAccounts", () => ({
+  useAccounts: () => ({
+    data: {
+      emailAccounts: [
+        {
+          id: "account-a",
+          email: "a@example.com",
+          account: { disconnectedAt: null },
+        },
+        {
+          id: "account-b",
+          email: "b@example.com",
+          account: { disconnectedAt: accountState.disconnectedB },
+        },
+      ],
+    },
   }),
 }));
 
@@ -167,6 +193,7 @@ describe("ChatProvider", () => {
     vi.clearAllMocks();
 
     accountState.emailAccountId = "account-a";
+    accountState.disconnectedB = null;
     chatState.id = "new-chat-id";
     chatState.status = "ready";
     chatState.messages = [];
@@ -778,6 +805,171 @@ describe("ChatProvider interrupted replies", () => {
     expect(mockResumeStream).not.toHaveBeenCalled();
   });
 });
+
+describe("ChatProvider across accounts", () => {
+  let latestContext: ReturnType<typeof useChat> | undefined;
+
+  function Consumer() {
+    latestContext = useChat();
+    return null;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    latestContext = undefined;
+    accountState.emailAccountId = "account-a";
+    accountState.disconnectedB = null;
+    queryState.initialChatId = null;
+    chatState.id = "new-chat-id";
+    chatState.status = "ready";
+    chatState.messages = [];
+    setVisibility("visible");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null)));
+    mockUseSWRConfig.mockReturnValue({ mutate: vi.fn() });
+    mockUseChatMessages.mockReturnValue({ data: undefined });
+    mockConvertToUIMessages.mockReturnValue([]);
+    mockSendMessage.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    getDefaultStore().set(openThreadAtom, null);
+  });
+
+  it("works in the account the chat belongs to", () => {
+    renderWithProvider(<Consumer />);
+
+    expect(latestContext?.chatAccount).toEqual({
+      id: "account-a",
+      email: "a@example.com",
+      disconnected: false,
+    });
+    expect(latestContext?.switchedAccount).toBe(false);
+  });
+
+  it("follows a thread from another account opened in All inboxes, and says so", async () => {
+    getDefaultStore().set(openThreadAtom, {
+      emailAccountId: "account-b",
+      threadId: "t-b",
+      messageId: "m-b",
+    });
+    renderWithProvider(<Consumer />);
+
+    await waitFor(() =>
+      expect(latestContext?.chatAccount?.id).toBe("account-b"),
+    );
+    expect(latestContext?.switchedAccount).toBe(true);
+    expect(latestContext?.openThreadAccountId).toBeNull();
+
+    const body = await sendThroughTransport();
+    expect(body.headers[EMAIL_ACCOUNT_HEADER.toLowerCase()]).toBe("account-b");
+    expect(body.json.openThreadId).toBe("t-b");
+  });
+
+  it("keeps a conversation in its account and offers the switch when another account's thread opens", async () => {
+    chatState.messages = [{ id: "m1", role: "user" }];
+    renderWithProvider(<Consumer />);
+
+    act(() => {
+      getDefaultStore().set(openThreadAtom, {
+        emailAccountId: "account-b",
+        threadId: "t-b",
+      });
+    });
+
+    await waitFor(() =>
+      expect(latestContext?.openThreadAccountId).toBe("account-b"),
+    );
+    expect(latestContext?.chatAccount?.id).toBe("account-a");
+    const body = await sendThroughTransport();
+    expect(body.headers[EMAIL_ACCOUNT_HEADER.toLowerCase()]).toBe("account-a");
+    expect(body.json.openThreadId).toBeUndefined();
+
+    act(() => latestContext?.switchChatAccount("account-b"));
+
+    expect(latestContext?.chatAccount?.id).toBe("account-b");
+    expect(latestContext?.chatId).toBeNull();
+    expect(mockSetMessages).toHaveBeenLastCalledWith([]);
+  });
+
+  it("switches to a resumed chat's account before sending", async () => {
+    renderWithProvider(<Consumer />);
+
+    act(() =>
+      latestContext?.openChat({
+        id: "chat-from-b",
+        emailAccountId: "account-b",
+      }),
+    );
+
+    expect(latestContext?.chatId).toBe("chat-from-b");
+    expect(latestContext?.chatAccount?.id).toBe("account-b");
+    expect(mockUseChatMessages).toHaveBeenLastCalledWith(
+      "chat-from-b",
+      "account-b",
+    );
+
+    const body = await sendThroughTransport();
+    expect(body.headers[EMAIL_ACCOUNT_HEADER.toLowerCase()]).toBe("account-b");
+  });
+
+  it("goes back to the page's account when the page's account changes", async () => {
+    const { rerender } = renderWithProvider(<Consumer />);
+    act(() => latestContext?.switchChatAccount("account-b"));
+    expect(latestContext?.chatAccount?.id).toBe("account-b");
+
+    accountState.emailAccountId = "account-a2";
+    rerender(
+      <ChatProvider>
+        <Consumer />
+      </ChatProvider>,
+    );
+
+    await waitFor(() =>
+      expect(latestContext?.chatAccount?.id ?? "account-a2").toBe("account-a2"),
+    );
+  });
+
+  it("does not send from a disconnected account's chat", async () => {
+    accountState.disconnectedB = "2026-09-01T00:00:00.000Z";
+    renderWithProvider(<Consumer />);
+    act(() =>
+      latestContext?.openChat({
+        id: "chat-from-b",
+        emailAccountId: "account-b",
+      }),
+    );
+
+    expect(latestContext?.chatAccount?.disconnected).toBe(true);
+    await act(async () => {
+      await latestContext?.submitTextMessage("Archive this").catch(() => {});
+    });
+    expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+});
+
+async function sendThroughTransport() {
+  const transport = mockChatTransport.mock.results.at(-1)
+    ?.value as DefaultChatTransport<ChatMessage>;
+  vi.mocked(fetch).mockResolvedValueOnce(new Response("data: [DONE]\n\n"));
+  await transport.sendMessages({
+    trigger: "submit-message",
+    chatId: "chat-1",
+    messageId: undefined,
+    abortSignal: undefined,
+    messages: [
+      {
+        id: "user-message",
+        role: "user",
+        parts: [{ type: "text", text: "Summarize this" }],
+      },
+    ],
+  });
+  const [, request] = vi.mocked(fetch).mock.calls.at(-1)!;
+  return {
+    headers: Object.fromEntries(new Headers(request?.headers).entries()),
+    json: JSON.parse(request?.body as string),
+  };
+}
 
 async function hideAndShowTab() {
   setVisibility("hidden");

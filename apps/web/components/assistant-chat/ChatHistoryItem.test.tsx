@@ -32,12 +32,9 @@ describe("ChatHistoryItem", () => {
       name: "Project update",
       createdAt: new Date("2026-05-23T00:00:00.000Z"),
       updatedAt: new Date("2026-05-23T00:00:00.000Z"),
-      deletedAt: null,
-      compactionCount: 0,
-      lastSeenRulesRevision: null,
-      activeStreamId: null,
-      activeStreamStartedAt: null,
       emailAccountId: "email-account-1",
+      email: "a@example.com",
+      disconnected: false,
     } satisfies ChatHistoryEntry;
 
     render(

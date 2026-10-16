@@ -55,6 +55,36 @@ const {
   mockUseChats: vi.fn(),
   chatState: { status: "ready" as ChatHelpers["status"] },
 }));
+const accountChat = vi.hoisted(() => ({
+  chatAccount: {
+    id: "email-account-1",
+    email: "a@example.com",
+    disconnected: false,
+  } as { id: string; email: string; disconnected: boolean } | null,
+  switchedAccount: false,
+  openThreadAccountId: null as string | null,
+  openChat: vi.fn(),
+  switchChatAccount: vi.fn(),
+}));
+
+vi.mock("@/hooks/useAccounts", () => ({
+  useAccounts: () => ({
+    data: {
+      emailAccounts: [
+        {
+          id: "email-account-1",
+          email: "a@example.com",
+          account: { disconnectedAt: null },
+        },
+        {
+          id: "email-account-2",
+          email: "b@example.com",
+          account: { disconnectedAt: null },
+        },
+      ],
+    },
+  }),
+}));
 
 vi.mock("@/components/assistant-chat/messages", () => ({
   Messages: ({ footer }: { footer?: React.ReactNode }) => (
@@ -194,6 +224,7 @@ vi.mock("@/providers/ChatProvider", () => ({
     setChatId: mockSetChatId,
     submitTextMessage: vi.fn(),
     stop: mockStop,
+    ...accountChat,
   }),
 }));
 
@@ -209,6 +240,13 @@ afterEach(() => {
 
 beforeEach(() => {
   chatState.status = "ready";
+  accountChat.chatAccount = {
+    id: "email-account-1",
+    email: "a@example.com",
+    disconnected: false,
+  };
+  accountChat.switchedAccount = false;
+  accountChat.openThreadAccountId = null;
   window.localStorage.clear();
   mockUseChatInput.mockReturnValue({ input: "", setInput: mockSetInput });
 });
@@ -217,7 +255,9 @@ describe("Chat history", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseChats.mockImplementation((shouldFetch: boolean) => ({
-      data: shouldFetch ? { chats: [chatHistoryEntry] } : undefined,
+      data: shouldFetch
+        ? { chats: [chatHistoryEntry, otherAccountChat] }
+        : undefined,
       error: undefined,
       isLoading: false,
       mutate: mockMutate,
@@ -236,8 +276,93 @@ describe("Chat history", () => {
     fireEvent.click(screen.getByText("Project update"));
 
     await waitFor(() => {
-      expect(mockSetChatId).toHaveBeenCalledWith("chat-1");
+      expect(accountChat.openChat).toHaveBeenCalledWith({
+        id: "chat-1",
+        emailAccountId: "email-account-1",
+      });
     });
+  });
+
+  it("lists every account's chats with the account each works in, and resumes one in its account", async () => {
+    render(<Chat open />);
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: /chat history/i }),
+    );
+
+    const otherRow = (await screen.findByText("Travel plans")).closest(
+      "[role=menuitem]",
+    );
+    expect(otherRow?.textContent).toContain("b@example.com");
+
+    fireEvent.click(screen.getByText("Travel plans"));
+
+    await waitFor(() =>
+      expect(accountChat.openChat).toHaveBeenCalledWith({
+        id: "chat-2",
+        emailAccountId: "email-account-2",
+      }),
+    );
+  });
+});
+
+describe("Chat account", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseChats.mockReturnValue({
+      data: undefined,
+      error: undefined,
+      isLoading: false,
+      mutate: mockMutate,
+    });
+  });
+
+  it("names the account the chat works in", () => {
+    render(<Chat open />);
+
+    expect(screen.getByText("Chat for a@example.com")).toBeTruthy();
+    expect(screen.queryByText(/Switched to/)).toBeNull();
+  });
+
+  it("says when it switched to another account for this conversation", () => {
+    accountChat.chatAccount = {
+      id: "email-account-2",
+      email: "b@example.com",
+      disconnected: false,
+    };
+    accountChat.switchedAccount = true;
+    render(<Chat open />);
+
+    expect(
+      screen.getByText("Switched to b@example.com for this conversation"),
+    ).toBeTruthy();
+  });
+
+  it("offers to move to the open email's account when a conversation is under way", () => {
+    accountChat.openThreadAccountId = "email-account-2";
+    render(<Chat open />);
+
+    expect(screen.getByText("The open email is in b@example.com")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+
+    expect(accountChat.switchChatAccount).toHaveBeenCalledWith(
+      "email-account-2",
+    );
+  });
+
+  it("keeps a disconnected account's chat read-only with a way to reconnect", () => {
+    accountChat.chatAccount = {
+      id: "email-account-2",
+      email: "b@example.com",
+      disconnected: true,
+    };
+    render(<Chat open />);
+
+    expect(
+      screen.getByText("Reconnect b@example.com to continue"),
+    ).toBeTruthy();
+    expect(
+      (screen.getByTestId("chat-input") as HTMLTextAreaElement).disabled,
+    ).toBe(true);
   });
 });
 
@@ -322,10 +447,15 @@ const chatHistoryEntry = {
   name: "Project update",
   createdAt: new Date("2026-05-23T00:00:00.000Z"),
   updatedAt: new Date("2026-05-23T00:00:00.000Z"),
-  deletedAt: null,
-  compactionCount: 0,
-  lastSeenRulesRevision: null,
-  activeStreamId: null,
-  activeStreamStartedAt: null,
   emailAccountId: "email-account-1",
+  email: "a@example.com",
+  disconnected: false,
+} satisfies ChatHistoryEntry;
+
+const otherAccountChat = {
+  ...chatHistoryEntry,
+  id: "chat-2",
+  name: "Travel plans",
+  emailAccountId: "email-account-2",
+  email: "b@example.com",
 } satisfies ChatHistoryEntry;

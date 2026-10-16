@@ -12,7 +12,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toastError, toastSuccess } from "@/components/Toast";
-import { useAccount } from "@/providers/EmailAccountProvider";
 import { deleteChatAction } from "@/utils/actions/chat";
 import { getActionErrorMessage } from "@/utils/error";
 
@@ -20,16 +19,18 @@ export function DeleteChatDialog({
   open,
   onOpenChange,
   chatId,
+  emailAccountId,
   label,
   onDeleted,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   chatId: string;
+  /** The account the chat belongs to, which may not be the page's. */
+  emailAccountId: string;
   label: string;
   onDeleted: () => void;
 }) {
-  const { emailAccountId } = useAccount();
   const { execute, isExecuting } = useAction(
     deleteChatAction.bind(null, emailAccountId),
     {
