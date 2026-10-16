@@ -10,9 +10,10 @@ import { redis } from "@/utils/redis";
 const RATE_LIMIT_KEY_PREFIX = "email-provider-rate-limit";
 
 // Read for every provider a request creates. An instance rereads an account
-// at most every few seconds and sees its own writes at once; another
-// instance's new state reaches it within that window, while the quota gate
-// keeps pacing the calls in between.
+// at most every few seconds. Its own writes through this module update the
+// memo at once; a write made elsewhere (another instance, or a script that
+// sets the key directly, which then calls forgetEmailProviderRateLimitState)
+// reaches it within that window, while the quota gate keeps pacing calls.
 const recentStates = createMemoCache<RedisEmailProviderRateLimitState | null>({
   ttlMs: 5000,
   maxEntries: 5000,
@@ -110,6 +111,14 @@ export async function deleteEmailProviderRateLimitStateFromRedis({
 }) {
   if (!isEmailProviderRateLimitRedisConfigured()) return;
   await redis.del(getRateLimitKey(emailAccountId));
+  recentStates.delete(emailAccountId);
+}
+
+/**
+ * For code that writes the rate-limit key without going through this module
+ * (a Lua script): makes this instance read it again on the next check.
+ */
+export function forgetEmailProviderRateLimitState(emailAccountId: string) {
   recentStates.delete(emailAccountId);
 }
 

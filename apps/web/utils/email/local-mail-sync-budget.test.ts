@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { redis } from "@/utils/redis";
 import {
+  forgetEmailProviderRateLimitState,
   getEmailProviderRateLimitStateFromRedis,
   isEmailProviderRateLimitRedisConfigured,
 } from "@/utils/redis/email-provider-rate-limit";
@@ -113,6 +114,34 @@ describe("local mail sync admission", () => {
       source: "local-mail",
     });
     expect(Number(args[2])).toBeGreaterThanOrEqual(120_000);
+  });
+  // The script writes account-wide rate-limit mode behind the instance's
+  // memo of that state, so the memo must reread it rather than serve "none".
+  it("makes this instance reread rate-limit mode after current work sets it", async () => {
+    const error = {
+      status: 429,
+      message: "Rate limit exceeded",
+      response: { headers: { "retry-after": "120" } },
+    };
+    await expect(
+      withLocalMailSyncBudget({ ...input, priority: "current" }, async () => {
+        throw error;
+      }),
+    ).rejects.toBe(error);
+    expect(forgetEmailProviderRateLimitState).toHaveBeenCalledWith("account-1");
+  });
+  it("leaves rate-limit mode alone when a backfill is throttled", async () => {
+    const error = {
+      status: 429,
+      message: "Rate limit exceeded",
+      response: { headers: { "retry-after": "120" } },
+    };
+    await expect(
+      withLocalMailSyncBudget(input, async () => {
+        throw error;
+      }),
+    ).rejects.toBe(error);
+    expect(forgetEmailProviderRateLimitState).not.toHaveBeenCalled();
   });
   it("records the Graph SDK's direct response headers", async () => {
     const error = {

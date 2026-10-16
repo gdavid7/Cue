@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { getProviderRateLimitDelayMs } from "@/utils/email/rate-limit";
 import { redis } from "@/utils/redis";
 import {
+  forgetEmailProviderRateLimitState,
   getEmailProviderRateLimitStateFromRedis,
   isEmailProviderRateLimitRedisConfigured,
 } from "@/utils/redis/email-provider-rate-limit";
@@ -300,6 +301,8 @@ export async function withLocalMailSyncBudget<T>(
             input.priority === "current" ? "1" : "0",
           ],
         );
+        if (input.priority === "current")
+          forgetEmailProviderRateLimitState(input.emailAccountId);
       } catch {
         throw new LocalMailSyncPausedError(Math.max(60_000, delay));
       }
