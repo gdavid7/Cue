@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, renderHook, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useReaderReplySuggestion } from "@/app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion";
 import type { ThreadMessage } from "@/components/email-list/types";
@@ -148,6 +154,60 @@ describe("useReaderReplySuggestion", () => {
     rerender();
 
     expect(lastEnabled()).toBe(true);
+  });
+
+  describe("asked for from the Cue strip", () => {
+    it("writes a reply to mail from a person that isn't labelled To Reply", () => {
+      const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
+      expect(lastEnabled()).toBe(false);
+
+      act(() => result.current.reply.request());
+
+      expect(lastEnabled()).toBe(true);
+      expect(mocks.useReplySuggestion).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          emailAccountId: "account-1",
+          threadId: "thread-1",
+        }),
+      );
+    });
+
+    it("writes one even while Auto draft replies is off", () => {
+      mocks.draftReplies = { enabled: false, loading: false };
+      const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
+
+      act(() => result.current.reply.request());
+
+      expect(lastEnabled()).toBe(true);
+    });
+
+    it("isn't offered when the user wrote the newest message", () => {
+      const { result } = renderSuggestion([
+        incoming("ask", ["INBOX"]),
+        {
+          ...incoming("sent", ["SENT"]),
+          headers: { from: "user@example.com" },
+        },
+      ] as ThreadMessage[]);
+
+      act(() => result.current.reply.request());
+
+      expect(result.current.reply.canRequest).toBe(false);
+      expect(lastEnabled()).toBe(false);
+    });
+
+    it("reports the newest message once its suggestion settles", () => {
+      mocks.useReplySuggestion.mockImplementation(({ enabled }) => ({
+        phase: enabled ? "done" : "idle",
+        suggestion: undefined,
+      }));
+      const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
+      expect(result.current.reply.settledFor).toBeUndefined();
+
+      act(() => result.current.reply.request());
+
+      expect(result.current.reply.settledFor).toBe("ask");
+    });
   });
 });
 

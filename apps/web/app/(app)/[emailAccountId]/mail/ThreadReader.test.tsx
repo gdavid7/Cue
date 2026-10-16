@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThreadReader } from "@/app/(app)/[emailAccountId]/mail/ThreadReader";
 import type { ThreadMessage } from "@/components/email-list/types";
 import { hideSendingDraftMessages } from "@/hooks/useHiddenDraftMessageIds";
@@ -25,16 +25,53 @@ vi.mock("@/components/email-list/EmailThread", () => ({
   EmailThread: ({
     renderToolbar,
     afterLatestMessage,
+    autoOpenReplyForMessageId,
+    focusAutoOpenedReply,
   }: {
     renderToolbar: () => ReactNode;
     afterLatestMessage?: ReactNode;
+    autoOpenReplyForMessageId?: string;
+    focusAutoOpenedReply?: boolean;
   }) => (
     <>
       {renderToolbar()}
       {afterLatestMessage}
+      {autoOpenReplyForMessageId ? (
+        <div
+          data-focused={String(Boolean(focusAutoOpenedReply))}
+          data-testid="composer"
+        >
+          {autoOpenReplyForMessageId}
+        </div>
+      ) : null}
     </>
   ),
 }));
+vi.mock("@/app/(app)/[emailAccountId]/mail/CueStrip", () => ({
+  CueStrip: ({
+    emailAccountId,
+    onDraftReply,
+  }: {
+    emailAccountId: string;
+    onDraftReply: () => void;
+  }) => (
+    <section aria-label="Cue summary" data-account={emailAccountId}>
+      <button onClick={onDraftReply} type="button">
+        Draft reply
+      </button>
+    </section>
+  ),
+}));
+vi.mock(
+  "@/app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion",
+  () => ({
+    useReaderReplySuggestion: () => ({
+      assist: null,
+      replyStatus: null,
+      reply: replyState,
+    }),
+  }),
+);
 vi.mock("@/components/thread-context/ThreadContextList", () => ({
   ThreadContextList: () => <section aria-label="Related" />,
 }));
@@ -45,6 +82,13 @@ vi.mock("@/utils/actions/thread-assist", () => ({
   markNeedsReplyAction: vi.fn(),
   saveSuggestedReplyAction: vi.fn(),
 }));
+
+const replyState = {
+  canRequest: true,
+  pending: false,
+  settledFor: undefined as string | undefined,
+  request: vi.fn(),
+};
 
 class MockResizeObserver {
   observe() {}
@@ -119,6 +163,54 @@ describe("ThreadReader", () => {
 
     expect(screen.queryByRole("region", { name: "Related" })).toBeNull();
   });
+
+  describe("Draft reply from the Cue strip", () => {
+    beforeEach(() => {
+      replyState.settledFor = undefined;
+      replyState.request.mockClear();
+    });
+
+    it("asks for Cue's reply, then opens the composer on it once it settles", () => {
+      const view = renderReader({
+        refetch: vi.fn(),
+        messages: [createMessage("message-1", "Start date", ["INBOX"])],
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Draft reply" }));
+      expect(replyState.request).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId("composer")).toBeNull();
+
+      replyState.settledFor = "message-1";
+      view.rerender(view.element());
+
+      const composer = screen.getByTestId("composer");
+      expect(composer.textContent).toBe("message-1");
+      expect(composer.getAttribute("data-focused")).toBe("true");
+    });
+
+    it("leaves the composer closed when Cue settles a reply nobody asked for", () => {
+      replyState.settledFor = "message-1";
+      renderReader({
+        refetch: vi.fn(),
+        messages: [createMessage("message-1", "Start date", ["INBOX"])],
+      });
+
+      expect(screen.queryByTestId("composer")).toBeNull();
+    });
+
+    it("scopes the strip to the reader's account", () => {
+      renderReader({
+        refetch: vi.fn(),
+        messages: [createMessage("message-1", "Start date", ["INBOX"])],
+      });
+
+      expect(
+        screen
+          .getByRole("region", { name: "Cue summary" })
+          .getAttribute("data-account"),
+      ).toBe("account-1");
+    });
+  });
 });
 
 function renderReader({
@@ -130,7 +222,7 @@ function renderReader({
   refetch: () => void;
   messages?: ThreadMessage[];
 }) {
-  return render(
+  const element = () => (
     <NuqsTestingAdapter>
       <ThreadReader
         detailSelectionSettled
@@ -150,8 +242,9 @@ function renderReader({
         threadId="thread-1"
         userLabels={{}}
       />
-    </NuqsTestingAdapter>,
+    </NuqsTestingAdapter>
   );
+  return { ...render(element()), element };
 }
 
 function createMessage(id: string, subject: string, labelIds: string[]) {

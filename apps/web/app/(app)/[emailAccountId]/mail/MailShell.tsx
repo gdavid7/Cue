@@ -1718,9 +1718,27 @@ export function MailShell() {
       });
     },
   );
+  // The assistant chat belongs to the screen's account; in All inboxes a
+  // thread from another account is invisible to it, so nothing offers it.
+  const threadInChatAccount =
+    !isAllAccounts || openThreadSelection?.emailAccountId === emailAccountId;
   const onToggleAssistant = useStableCallback(() =>
     toggleSidebar(["chat-sidebar"]),
   );
+  // The chat already reads the open thread, so asking about this email is
+  // opening it with the cursor in place.
+  const onAskCueAboutThread = useStableCallback(() => {
+    setSidebarOpen((open) =>
+      open.includes("chat-sidebar") ? open : [...open, "chat-sidebar"],
+    );
+    requestAnimationFrame(() =>
+      document
+        .querySelector<HTMLTextAreaElement>(
+          'textarea[aria-label="Message Cue"]',
+        )
+        ?.focus(),
+    );
+  });
   const onContinueInChat = useStableCallback((question: string) => {
     setSidebarOpen((open) =>
       open.includes("chat-sidebar") ? open : [...open, "chat-sidebar"],
@@ -2089,10 +2107,8 @@ export function MailShell() {
                 }
                 onReady={setVisibleReaderThreadKey}
                 onClose={closeReader}
-                showFixWithChat={
-                  !isAllAccounts ||
-                  openThreadSelection?.emailAccountId === emailAccountId
-                }
+                showFixWithChat={threadInChatAccount}
+                onAskCue={threadInChatAccount ? onAskCueAboutThread : undefined}
                 lastMessage={openMessages.at(-1) ?? null}
                 isStarred={allStarred}
                 onToggleStar={starTargets}

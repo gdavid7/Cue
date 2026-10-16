@@ -102,6 +102,13 @@ export function useReaderReplySuggestion({
   }
 
   const run = Boolean(current?.run);
+  // Asked for by the user, so it runs for any message someone else sent,
+  // whatever the setting and whether or not Cue thinks it needs a reply.
+  const canRequestReply = Boolean(latest) && !latestIsFromUser && !hasDraft;
+  const requestReply = () => {
+    if (!latest || !canRequestReply || run) return;
+    setDecision({ id: latest.id, eligible: true, run: true });
+  };
   const { phase, suggestion } = useReplySuggestion({
     threadId,
     emailAccountId,
@@ -149,5 +156,16 @@ export function useReaderReplySuggestion({
     );
   }
 
-  return { assist, replyStatus };
+  return {
+    assist,
+    replyStatus,
+    reply: {
+      canRequest: canRequestReply,
+      request: requestReply,
+      /** Whether Cue is still working out the reply. */
+      pending: phase === "checking-mail" || phase === "checking-web",
+      /** The newest message once its suggestion has settled, either way. */
+      settledFor: run && phase === "done" ? latest?.id : undefined,
+    },
+  };
 }

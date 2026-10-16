@@ -10,6 +10,7 @@ import dynamic from "next/dynamic";
 import { useMailRoute } from "@/app/(app)/[emailAccountId]/mail/use-mail-route";
 import { AlertCircleIcon, Loader2Icon, MailIcon } from "lucide-react";
 import { AddToCalendarButton } from "@/app/(app)/[emailAccountId]/mail/AddToCalendarButton";
+import { CueStrip } from "@/app/(app)/[emailAccountId]/mail/CueStrip";
 import { ReaderToolbar } from "@/app/(app)/[emailAccountId]/mail/ReaderToolbar";
 import { useReaderReplySuggestion } from "@/app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion";
 import { MailReaderSurface } from "@inboxzero/mail-ui/MailReaderSurface";
@@ -103,6 +104,11 @@ export type ThreadReaderProps = {
   autoOpenReplyForMessageId?: string;
   autoOpenReplyAll?: boolean;
   autoOpenForwardForMessageId?: string;
+  /**
+   * Opens the assistant on this conversation. Unset when the assistant belongs
+   * to another account than the thread, as in All inboxes.
+   */
+  onAskCue?: () => void;
   /** The ⋯ dropdown, i.e. `ThreadActionsMenu`, composed by the shell. */
   menu?: ReactNode;
   renderMessageMenu?: (message: ThreadMessage) => ReactNode;
@@ -135,12 +141,14 @@ export function ThreadReader({
   autoOpenReplyForMessageId,
   autoOpenReplyAll,
   autoOpenForwardForMessageId,
+  onAskCue,
   menu,
   renderMessageMenu,
 }: ThreadReaderProps) {
-  const lastReceived = messages.findLast(
+  const receivedMessages = messages.filter(
     (message) => !message.labelIds?.includes(GmailLabel.DRAFT),
   );
+  const lastReceived = receivedMessages.at(-1);
   const lastReceivedId = lastReceived?.id;
   const [senderContext, setSenderContext] = useState<{
     messageId: string;
@@ -177,7 +185,7 @@ export function ThreadReader({
   const canAssist = Boolean(
     detailSelectionSettled && emailAccountId && threadId,
   );
-  const { assist, replyStatus } = useReaderReplySuggestion({
+  const { assist, replyStatus, reply } = useReaderReplySuggestion({
     emailAccountId,
     threadId,
     messages,
@@ -185,6 +193,17 @@ export function ThreadReader({
     enabled: canAssist,
     onOpenThread: openThread,
   });
+  // The strip's Draft reply opens the composer once Cue's suggestion settles:
+  // filled when every fact in it is backed, empty with a reason otherwise.
+  const [draftRequestedFor, setDraftRequestedFor] = useState<string>();
+  const stripReplyFor =
+    draftRequestedFor && draftRequestedFor === reply.settledFor
+      ? draftRequestedFor
+      : undefined;
+  const requestDraftReply = () => {
+    setDraftRequestedFor(lastReceivedId);
+    reply.request();
+  };
   const hiddenDraftMessageIds = useHiddenDraftMessageIds(emailAccountId);
   const headerMessage =
     latestShownMessage(thread?.messages ?? [], hiddenDraftMessageIds) ??
@@ -236,38 +255,60 @@ export function ThreadReader({
   const renderToolbar = (
     messageExpansion?: ComponentProps<typeof ReaderToolbar>["messageExpansion"],
   ) => (
-    <ReaderToolbar
-      isStarred={isThreadStarred(
-        thread?.messages.length ? thread.messages : messages,
-      )}
-      isUnread={isUnread}
-      messageExpansion={messageExpansion}
-      labelHref={labelHref}
-      labels={labels}
-      menu={menu}
-      extraAction={
-        emailAccountId && threadId && lastReceivedId ? (
-          <AddToCalendarButton
-            emailAccountId={emailAccountId}
-            messageId={lastReceivedId}
-            subject={headerMessage?.headers.subject ?? ""}
-            threadId={threadId}
-          />
-        ) : null
-      }
-      onArchive={onArchive}
-      onMoveToInbox={onMoveToInbox}
-      onRestore={onRestore}
-      onNotSpam={onNotSpam}
-      onSnooze={onSnooze}
-      onMarkRead={onMarkRead}
-      onMarkUnread={onMarkUnread}
-      onBackToInbox={onBackToInbox}
-      onRemoveLabel={onRemoveLabel}
-      subject={
-        translatedSubject ?? headerMessage?.headers.subject ?? "Conversation"
-      }
-    />
+    <>
+      <ReaderToolbar
+        isStarred={isThreadStarred(
+          thread?.messages.length ? thread.messages : messages,
+        )}
+        isUnread={isUnread}
+        messageExpansion={messageExpansion}
+        labelHref={labelHref}
+        labels={labels}
+        menu={menu}
+        extraAction={
+          emailAccountId && threadId && lastReceivedId ? (
+            <AddToCalendarButton
+              emailAccountId={emailAccountId}
+              messageId={lastReceivedId}
+              subject={headerMessage?.headers.subject ?? ""}
+              threadId={threadId}
+            />
+          ) : null
+        }
+        onArchive={onArchive}
+        onMoveToInbox={onMoveToInbox}
+        onRestore={onRestore}
+        onNotSpam={onNotSpam}
+        onSnooze={onSnooze}
+        onMarkRead={onMarkRead}
+        onMarkUnread={onMarkUnread}
+        onBackToInbox={onBackToInbox}
+        onRemoveLabel={onRemoveLabel}
+        subject={
+          translatedSubject ?? headerMessage?.headers.subject ?? "Conversation"
+        }
+      />
+      {emailAccountId && threadId && lastReceived ? (
+        <CueStrip
+          // Its chosen actions and loaded answers belong to one thread.
+          key={`${emailAccountId}:${threadId}`}
+          emailAccountId={emailAccountId}
+          enabled={canAssist}
+          messages={receivedMessages}
+          // Mail already out of the inbox has nothing to archive.
+          onArchive={
+            onMoveToInbox || onRestore || onNotSpam ? undefined : onArchive
+          }
+          onAskCue={onAskCue}
+          onDraftReply={requestDraftReply}
+          onSnooze={onSnooze}
+          reply={reply}
+          subject={headerMessage?.headers.subject ?? ""}
+          threadId={threadId}
+          userLabels={userLabels}
+        />
+      ) : null}
+    </>
   );
 
   return (
@@ -306,9 +347,11 @@ export function ThreadReader({
             renderMessageMenu={renderMessageMenu}
             enableMessageNavigation={enableMessageNavigation}
             autoOpenReplyForMessageId={
-              autoOpenReplyForMessageId ?? assist?.messageId
+              autoOpenReplyForMessageId ?? stripReplyFor ?? assist?.messageId
             }
-            focusAutoOpenedReply={Boolean(autoOpenReplyForMessageId)}
+            focusAutoOpenedReply={Boolean(
+              autoOpenReplyForMessageId ?? stripReplyFor,
+            )}
             afterLatestMessage={
               canAssist && newestIsIncoming && emailAccountId && threadId ? (
                 <div className="mt-4 -mx-2">
