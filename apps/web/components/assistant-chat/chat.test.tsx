@@ -72,6 +72,7 @@ const accountChat = vi.hoisted(() => ({
     providerRateLimit: null;
   } | null,
   switchedAccount: false,
+  chatAccountError: undefined as Error | undefined,
   openThreadAccountId: null as string | null,
   openChat: vi.fn(),
   switchChatAccount: vi.fn(),
@@ -270,6 +271,7 @@ beforeEach(() => {
     providerRateLimit: null,
   };
   accountChat.switchedAccount = false;
+  accountChat.chatAccountError = undefined;
   accountChat.openThreadAccountId = null;
   window.localStorage.clear();
   mockUseChatInput.mockReturnValue({ input: "", setInput: mockSetInput });
@@ -411,6 +413,25 @@ describe("Chat account", () => {
     // The page's account must never stand in for the chat's.
     expect(screen.queryByTestId("messages")).toBeNull();
     expect(screen.getByRole("status", { name: "Loading chat" })).toBeTruthy();
+  });
+
+  it("says the chat's account couldn't load instead of waiting for it", () => {
+    accountChat.chatAccount = null;
+    accountChat.switchedAccount = true;
+    accountChat.chatAccountError = new Error("Failed to fetch");
+    chatState.messages = [
+      { id: "m1", role: "user", parts: [{ type: "text", text: "Hi" }] },
+    ];
+    render(
+      <EmailAccountPreviewProvider>
+        <Chat open />
+      </EmailAccountPreviewProvider>,
+    );
+
+    expect(screen.queryByTestId("messages")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Couldn't load this",
+    );
   });
 
   it("keeps a disconnected account's chat read-only with a way to reconnect", () => {

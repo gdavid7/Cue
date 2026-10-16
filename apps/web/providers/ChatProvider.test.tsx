@@ -51,6 +51,7 @@ const {
     accountsLoading: false,
     accountsError: undefined as Error | undefined,
     accountsWithoutB: false,
+    keepDataOnError: false,
   },
   chatState: {
     id: "new-chat-id",
@@ -157,7 +158,8 @@ vi.mock("@/hooks/useAccounts", () => ({
   useAccounts: () => ({
     error: accountState.accountsError,
     data:
-      accountState.accountsLoading || accountState.accountsError
+      accountState.accountsLoading ||
+      (accountState.accountsError && !accountState.keepDataOnError)
         ? undefined
         : {
             emailAccounts: [
@@ -213,6 +215,7 @@ describe("ChatProvider", () => {
     accountState.accountsLoading = false;
     accountState.accountsError = undefined;
     accountState.accountsWithoutB = false;
+    accountState.keepDataOnError = false;
     chatState.id = "new-chat-id";
     chatState.status = "ready";
     chatState.messages = [];
@@ -845,6 +848,7 @@ describe("ChatProvider across accounts", () => {
     accountState.accountsLoading = false;
     accountState.accountsError = undefined;
     accountState.accountsWithoutB = false;
+    accountState.keepDataOnError = false;
     queryState.initialChatId = null;
     queryState.initial = {};
     queryState.set = {};
@@ -944,21 +948,8 @@ describe("ChatProvider across accounts", () => {
     expect(body.headers[EMAIL_ACCOUNT_HEADER.toLowerCase()]).toBe("account-b");
   });
 
-  it.each([
-    [
-      "the accounts list loads without it",
-      () => {
-        accountState.accountsWithoutB = true;
-      },
-    ],
-    [
-      "the accounts list fails to load",
-      () => {
-        accountState.accountsError = new Error("Failed to fetch");
-      },
-    ],
-  ])("goes back to the page's account when %s", (_name, arrange) => {
-    arrange();
+  it("goes back to the page's account when the accounts list loads without it", () => {
+    accountState.accountsWithoutB = true;
     queryState.initialChatId = "chat-from-b";
     queryState.initial = { chatAccountId: "account-b" };
     renderWithProvider(<Consumer />);
@@ -967,6 +958,31 @@ describe("ChatProvider across accounts", () => {
     expect(latestContext?.switchedAccount).toBe(false);
     expect(latestContext?.chatAccount?.id ?? "account-a").toBe("account-a");
     expect(queryState.set.chatAccountId).toBeNull();
+  });
+
+  it("keeps the chat when refreshing the accounts list fails", () => {
+    // SWR keeps the loaded list and reports the failed revalidation.
+    accountState.accountsError = new Error("Failed to fetch");
+    accountState.keepDataOnError = true;
+    queryState.initialChatId = "chat-from-b";
+    queryState.initial = { chatAccountId: "account-b" };
+    renderWithProvider(<Consumer />);
+
+    expect(latestContext?.chatAccount?.id).toBe("account-b");
+    expect(latestContext?.chatId).toBe("chat-from-b");
+    expect(queryState.set.chatAccountId).toBeUndefined();
+  });
+
+  it("keeps the chat and reports the error when the accounts list can't load", () => {
+    accountState.accountsError = new Error("Failed to fetch");
+    queryState.initialChatId = "chat-from-b";
+    queryState.initial = { chatAccountId: "account-b" };
+    renderWithProvider(<Consumer />);
+
+    expect(latestContext?.switchedAccount).toBe(true);
+    expect(latestContext?.chatId).toBe("chat-from-b");
+    expect(latestContext?.chatAccountError).toBe(accountState.accountsError);
+    expect(queryState.set.chatAccountId).toBeUndefined();
   });
 
   it("reopens a chat from another account after a reload", () => {

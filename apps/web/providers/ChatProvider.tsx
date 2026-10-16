@@ -71,6 +71,8 @@ type ChatContextType = {
   chatAccount: ChatAccount | null;
   /** The chat works in an account other than the page's. */
   switchedAccount: boolean;
+  /** The accounts list failed before the chat's account row loaded. */
+  chatAccountError: Error | undefined;
   /**
    * The open email's account, when the conversation stays in another one
    * because it already has messages.
@@ -109,9 +111,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     CHAT_ACCOUNT_PARAM,
     parseAsString,
   );
-  // The chat's account was removed, or the address names another user's, or
-  // its row can't be loaded to scope the chat's cards: its chat can't be
-  // used here, so the chat starts over in the page's account.
+  // The chat's account was removed, or the address names another user's:
+  // its chat can't be used here, so the chat starts over in the page's
+  // account. A list that failed to load says nothing about the account, so
+  // the chat waits for it rather than losing the conversation.
   const chatAccountMissing =
     Boolean(chatAccountIdParam) &&
     ((accountIds.length > 0 &&
@@ -121,8 +124,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           !accountsData.emailAccounts.some(
             (account) => account.id === chatAccountIdParam,
           ),
-      ) ||
-      Boolean(accountsError));
+      ));
   const emailAccountId =
     chatAccountIdParam && !chatAccountMissing
       ? chatAccountIdParam
@@ -668,6 +670,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         chat,
         chatAccount,
         switchedAccount: emailAccountId !== routeAccountId,
+        chatAccountError: chatAccount ? undefined : accountsError,
         openThreadAccountId:
           openThread && openThread.emailAccountId !== emailAccountId
             ? openThread.emailAccountId

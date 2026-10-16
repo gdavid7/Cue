@@ -46,6 +46,7 @@ import { VoiceInput } from "@/components/voice/VoiceInput";
 import { liveHistoryFromUiMessages } from "@/utils/voice/live-history";
 import { PageHeading } from "@/components/Typography";
 import { Loading } from "@/components/Loading";
+import { ErrorDisplay } from "@/components/ErrorDisplay";
 import { useAccounts } from "@/hooks/useAccounts";
 import { EmailAccountScopeProvider } from "@/providers/EmailAccountProvider";
 import { getPermissionsConsentPath } from "@/utils/permissions-consent";
@@ -85,6 +86,7 @@ export function Chat({
     stop,
     chatAccount,
     switchedAccount,
+    chatAccountError,
   } = useChat();
   const { messages, status, regenerate, setMessages } = chat;
   // Tools would run on the dead account's tokens, so the chat is read-only.
@@ -347,9 +349,13 @@ export function Chat({
       />
       <ChatAccountNotice />
       {chatAccountLoading ? (
-        <div role="status" aria-label="Loading chat" className="flex-1">
-          <Loading />
-        </div>
+        chatAccountError ? (
+          <ErrorDisplay error={chatAccountError} />
+        ) : (
+          <div role="status" aria-label="Loading chat" className="flex-1">
+            <Loading />
+          </div>
+        )
       ) : hasMessages ? (
         // Cards and actions in the conversation act in the chat's account,
         // which in All inboxes may not be the page's.
