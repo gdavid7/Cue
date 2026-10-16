@@ -84,6 +84,21 @@ describe("translateAccountSearch", () => {
     it("has nothing to search for when only mailbox scopes were asked", () => {
       expect(gmailToOutlook("in:inbox label:work")).toBeNull();
     });
+
+    it("drops dates that don't exist and searches the keywords", () => {
+      expect(gmailToOutlook("after:2024/13/45 invoice")).toEqual({
+        search: { query: "invoice" },
+        keywordsOnly: true,
+      });
+      expect(gmailToOutlook("before:2026/02/30 invoice")).toEqual({
+        search: { query: "invoice" },
+        keywordsOnly: true,
+      });
+      expect(gmailToOutlook("newer_than:99999999y invoice")).toEqual({
+        search: { query: "invoice" },
+        keywordsOnly: true,
+      });
+    });
   });
 
   describe("from Outlook to Gmail", () => {
@@ -115,6 +130,15 @@ describe("translateAccountSearch", () => {
         search: { query: "dana renewal" },
         keywordsOnly: true,
       });
+    });
+
+    it("drops received dates that don't exist and searches the keywords", () => {
+      expect(outlookToGmail({ query: "invoice received>=2024-13-45" })).toEqual(
+        {
+          search: { query: "invoice" },
+          keywordsOnly: true,
+        },
+      );
     });
   });
 });

@@ -243,11 +243,21 @@ function quote(value: string) {
   return /\s/.test(value) ? `"${value}"` : value;
 }
 
+// Dates that don't exist, such as month 13 or a February 30, are left out
+// rather than rolled over into another date.
 function toIsoDate(value: string) {
   const match = value.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/);
   if (!match) return;
-  const [, year, month, day] = match;
-  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  const [year, month, day] = match.slice(1).map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return;
+  }
+  return date.toISOString().slice(0, 10);
 }
 
 function relativeDate(value: string, now: Date) {
@@ -259,6 +269,9 @@ function relativeDate(value: string, now: Date) {
   if (unit === "d") date.setUTCDate(date.getUTCDate() - amount);
   else if (unit === "m") date.setUTCMonth(date.getUTCMonth() - amount);
   else date.setUTCFullYear(date.getUTCFullYear() - amount);
+  // An age past what a date can hold leaves no date to search from.
+  const year = date.getUTCFullYear();
+  if (!Number.isFinite(date.getTime()) || year < 1 || year > 9999) return;
   return date.toISOString().slice(0, 10);
 }
 
