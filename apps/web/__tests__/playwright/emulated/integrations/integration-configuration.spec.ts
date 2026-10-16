@@ -87,5 +87,10 @@ test("persists pause state and disconnects the integration", async ({
   await expect(
     page.getByText("No integrations found", { exact: true }),
   ).toBeVisible({ timeout: 60_000 });
+  // Notion isn't a featured connector, so a disconnect that left it listed
+  // would hide it behind the collapsed "more apps" group.
+  await expect(
+    page.getByRole("button", { name: /^Show \d+ more apps$/ }),
+  ).toHaveCount(0);
   await expect(notionRow).toHaveCount(0);
 });
