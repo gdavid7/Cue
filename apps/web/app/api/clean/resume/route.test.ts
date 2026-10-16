@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CleanAction } from "@/generated/prisma/enums";
 import prisma from "@/utils/__mocks__/prisma";
 import { queueCleanInboxThreads } from "@/app/api/clean/queue-inbox";
+import { isCleanerApiEnabled } from "@/utils/cleaner-feature";
 import { POST } from "./route";
 
 vi.mock("@/utils/prisma");
@@ -11,11 +12,17 @@ vi.mock("@/utils/middleware", async () => {
   >("@/__tests__/helpers");
   return createWithErrorTestMiddleware();
 });
+// Stands in for QStash signature or internal key verification.
 vi.mock("@/utils/qstash", () => ({
-  withQstashOrInternal: (handler: unknown) => handler,
+  withQstashOrInternal:
+    (handler: (...args: unknown[]) => unknown) =>
+    (request: Request, ...rest: unknown[]) =>
+      request.headers.get("x-test-verified")
+        ? handler(request, ...rest)
+        : new Response("Unauthorized", { status: 401 }),
 }));
 vi.mock("@/utils/cleaner-feature", () => ({
-  assertCleanerApiEnabled: vi.fn(),
+  isCleanerApiEnabled: vi.fn(),
 }));
 vi.mock("@/utils/email/provider", () => ({
   createEmailProvider: vi.fn().mockResolvedValue({ name: "google" }),
@@ -42,11 +49,11 @@ const job = {
 describe("clean job resume", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(isCleanerApiEnabled).mockReturnValue(true);
+    prisma.cleanupJob.findFirst.mockResolvedValue({ id: "job-1" } as never);
   });
 
   it("resumes the job from the page it stopped at", async () => {
-    prisma.cleanupJob.findFirst.mockResolvedValue({ id: "job-1" } as never);
-
     const response = await POST(resume(), {} as never);
 
     expect(response.status).toBe(200);
@@ -68,11 +75,29 @@ describe("clean job resume", () => {
     expect(response.status).toBe(200);
     expect(queueCleanInboxThreads).not.toHaveBeenCalled();
   });
+
+  it("acknowledges the delivery without resuming once the cleaner is off", async () => {
+    vi.mocked(isCleanerApiEnabled).mockReturnValue(false);
+
+    const response = await POST(resume(), {} as never);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(queueCleanInboxThreads).not.toHaveBeenCalled();
+  });
+
+  it("refuses a request that is neither signed nor internal", async () => {
+    const response = await POST(resume({ verified: false }), {} as never);
+
+    expect(response.status).toBe(401);
+    expect(queueCleanInboxThreads).not.toHaveBeenCalled();
+  });
 });
 
-function resume() {
+function resume({ verified = true } = {}) {
   return new Request("http://localhost/api/clean/resume", {
     method: "POST",
+    headers: verified ? { "x-test-verified": "1" } : {},
     body: JSON.stringify(job),
   }) as never;
 }

@@ -110,19 +110,71 @@ describe("queueCleanInboxThreads", () => {
     ]);
   });
 
-  it("gives up after repeated deferrals", async () => {
+  it("gives up after five deferrals in a row without progress", async () => {
     getThreadsWithQuery.mockRejectedValue(
       new GmailCallDeferredError(20_000, "background"),
     );
 
     await queueCleanInboxThreads({
       ...job,
+      labelType: "inbox",
       deferrals: 5,
       emailProvider,
       logger,
     });
 
     expect(publishToQstashAt).not.toHaveBeenCalled();
+  });
+
+  it("starts the deferral count over once a run queued more threads", async () => {
+    getThreadsWithQuery
+      .mockResolvedValueOnce({ threads: [{ id: "t2" }], nextPageToken: "p3" })
+      .mockRejectedValueOnce(new GmailCallDeferredError(20_000, "background"));
+
+    await queueCleanInboxThreads({
+      ...job,
+      labelType: "inbox",
+      pageToken: "p2",
+      queuedCount: 1,
+      deferrals: 5,
+      emailProvider,
+      logger,
+    });
+
+    expect(publishToQstashAt).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(publishToQstashAt).mock.calls[0][0].body).toMatchObject({
+      pageToken: "p3",
+      queuedCount: 2,
+      deferrals: 1,
+    });
+  });
+
+  it("does not collapse a resume after progress into an earlier one", async () => {
+    getThreadsWithQuery.mockRejectedValueOnce(
+      new GmailCallDeferredError(20_000, "background"),
+    );
+    await queueCleanInboxThreads({
+      ...job,
+      labelType: "inbox",
+      emailProvider,
+      logger,
+    });
+
+    getThreadsWithQuery
+      .mockResolvedValueOnce({ threads: [{ id: "t1" }], nextPageToken: "p2" })
+      .mockRejectedValueOnce(new GmailCallDeferredError(20_000, "background"));
+    await queueCleanInboxThreads({
+      ...job,
+      labelType: "inbox",
+      deferrals: 1,
+      emailProvider,
+      logger,
+    });
+
+    const [first, second] = vi
+      .mocked(publishToQstashAt)
+      .mock.calls.map(([options]) => options.deduplicationId);
+    expect(first).not.toBe(second);
   });
 });
 

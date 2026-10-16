@@ -99,8 +99,8 @@ export async function queueCleanInboxThreads({
               key: `ai-clean-${emailAccountId}`,
               parallelism: 3,
             },
-            // A resumed job can read a page again if the inbox shifted under
-            // its page token.
+            // When QStash redelivers a resume whose run already published
+            // this page, the thread is still cleaned only once.
             deduplicationId: `clean-${jobId}-${thread.id}`,
           };
         })
@@ -117,8 +117,9 @@ export async function queueCleanInboxThreads({
       error,
       path: CLEAN_INBOX_RESUME_PATH,
       body: { ...job, labelType, pageToken, queuedCount },
-      deferrals: job.deferrals,
-      jobKey: `clean-inbox-${jobId}`,
+      // The cap is for deferrals in a row that get nowhere.
+      deferrals: queuedCount > job.queuedCount ? 0 : job.deferrals,
+      jobKey: `clean-inbox-${jobId}-${queuedCount}`,
       job: "queueing inbox threads to clean",
       logger,
     });

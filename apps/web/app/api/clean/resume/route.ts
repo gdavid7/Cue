@@ -3,7 +3,7 @@ import {
   cleanInboxQueueBody,
   queueCleanInboxThreads,
 } from "@/app/api/clean/queue-inbox";
-import { assertCleanerApiEnabled } from "@/utils/cleaner-feature";
+import { isCleanerApiEnabled } from "@/utils/cleaner-feature";
 import { createEmailProvider } from "@/utils/email/provider";
 import { withError } from "@/utils/middleware";
 import prisma from "@/utils/prisma";
@@ -16,7 +16,12 @@ export const maxDuration = 300;
 export const POST = withError(
   "clean/resume",
   withQstashOrInternal(async (request) => {
-    assertCleanerApiEnabled();
+    // A delivery QStash sees fail is retried, and turning the cleaner off is
+    // not something a retry fixes.
+    if (!isCleanerApiEnabled()) {
+      request.logger.info("Cleaner is not enabled; not resuming clean job");
+      return NextResponse.json({ ok: true });
+    }
 
     const parsed = cleanInboxQueueBody.safeParse(await request.json());
     if (!parsed.success) {
