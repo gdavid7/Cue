@@ -33,6 +33,34 @@ it("saves the latest content now and says whether the mailbox has it", async () 
   unmount();
 });
 
+// Every save made by this composer already holds the moved message, so
+// typing while it runs doesn't make the mailbox copy any less complete.
+it("counts a save now as landed when typing continued during it", async () => {
+  let content = "moved";
+  let typeMore = () => {};
+  const save = vi.fn().mockImplementation(async () => {
+    content = "moved and more";
+    typeMore();
+  });
+  const { result, unmount } = renderHook(() =>
+    useProviderDraftAutosave({
+      enabled: true,
+      getContent: () => content,
+      save,
+    }),
+  );
+  typeMore = () => result.current.capture();
+
+  let saved: boolean | undefined;
+  await act(async () => {
+    saved = await result.current.saveNow();
+  });
+
+  expect(save).toHaveBeenCalledWith("moved");
+  expect(saved).toBe(true);
+  unmount();
+});
+
 it("reports a failed save now", async () => {
   const save = vi.fn().mockRejectedValue(new Error("Gmail is unavailable."));
   const { result, unmount } = renderHook(() =>

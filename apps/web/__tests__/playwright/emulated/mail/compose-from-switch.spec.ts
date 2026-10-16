@@ -75,6 +75,9 @@ test("keeps a new message's text, recipients and files when From changes", async
       .click();
 
     await expect(from).toContainText(secondAccount.email);
+    // Typing on while the file goes to the new mailbox still completes the move.
+    await editor.press("End");
+    await editor.pressSequentially(" Typed during the hand-off.");
     // Said only once the new account holds the whole message.
     await expect(
       page.getByText(`Draft moved to ${secondAccount.email}`, { exact: true }),
