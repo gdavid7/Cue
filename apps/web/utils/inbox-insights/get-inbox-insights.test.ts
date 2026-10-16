@@ -20,14 +20,18 @@ vi.mock("@/utils/redis", () => ({
       redisCalls.push("mget");
       return keys.map((key) => cache.get(key) ?? null);
     },
-    set: async () => {
+    set: async (key: string, value: unknown) => {
       redisCalls.push("set");
+      cache.set(key, value);
       return "OK";
     },
   },
 }));
 vi.mock("@/utils/calendar/fetch-events-in-window", () => ({
   fetchCalendarEventsInWindow: async () => ({ events: [] }),
+}));
+vi.mock("@/utils/user/get", () => ({
+  getEmailAccountWithAi: async () => null,
 }));
 vi.mock("@/utils/thread-context/suggest-reply", () => ({
   getSuggestedReplySettings: async () => ({
@@ -69,6 +73,34 @@ describe("getInboxInsights", () => {
     expect(insights["t-m2"]?.insight).toMatchObject({ text: "About m2" });
     expect(getMessage).not.toHaveBeenCalled();
     expect(redisCalls).toEqual(["mget"]);
+  });
+
+  // Each entry is kept for a month; a mailing to hundreds of recipients must
+  // not store all of them, since only a handful can share a meeting.
+  it("stores a bounded list of the people on an email", async () => {
+    const recipients = Array.from(
+      { length: 300 },
+      (_, i) => `Person ${i} <person${i}@example.com>`,
+    ).join(", ");
+    const getMessage = vi.fn(async () => ({
+      id: "m-big",
+      headers: { from: "host@example.com", to: recipients },
+      labelIds: ["INBOX"],
+    }));
+
+    await getInboxInsights({
+      emailAccountId: "a1",
+      userEmail: "me@example.com",
+      items: [{ threadId: "t-big", messageId: "m-big" }],
+      emailProvider: { getMessage } as unknown as EmailProvider,
+      logger: createScopedLogger("test"),
+    });
+
+    const stored = cache.get("inbox-insight:a1:m-big") as {
+      people: unknown[];
+    };
+    expect(stored.people.length).toBeGreaterThan(0);
+    expect(stored.people.length).toBeLessThanOrEqual(25);
   });
 });
 

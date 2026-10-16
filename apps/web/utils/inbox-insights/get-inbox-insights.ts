@@ -33,6 +33,9 @@ const CACHE_TTL_SECONDS = 30 * 24 * 60 * 60;
 const NO_AI_CACHE_TTL_SECONDS = 24 * 60 * 60;
 const MEETING_WINDOW_DAYS = 14;
 const SKIP_LABELS = ["SPAM", "TRASH", "DRAFT"];
+// Kept with each cached insight for a month; a mailing's full recipient list
+// would make one entry many kilobytes for meetings it can't usefully match.
+const MAX_PEOPLE = 25;
 
 type CachedMessage = {
   insight: EmailInsight | null;
@@ -272,6 +275,7 @@ function peopleOn(message: ParsedMessage, userEmail: string) {
       continue;
     if (!people.has(email))
       people.set(email, { email, name: extractNameFromEmail(r) || "" });
+    if (people.size >= MAX_PEOPLE) break;
   }
   return [...people.values()];
 }
