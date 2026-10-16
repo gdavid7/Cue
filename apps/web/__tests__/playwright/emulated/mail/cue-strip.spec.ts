@@ -187,9 +187,19 @@ test("the conversation doesn't move when the strip settles", async ({
   await page.addInitScript(() => {
     const tops: number[] = [];
     (window as unknown as { __messageTops: number[] }).__messageTops = tops;
+    // Measured from the subject above it, so the page settling around the
+    // reader (banners, the list loading) doesn't count; only what sits
+    // between the subject and the first message, which is the strip.
     const sample = () => {
+      const subject = document.querySelector("[data-mail-reader-subject]");
       const message = document.querySelector("[data-thread-message-id]");
-      if (message) tops.push(Math.round(message.getBoundingClientRect().top));
+      if (subject && message)
+        tops.push(
+          Math.round(
+            message.getBoundingClientRect().top -
+              subject.getBoundingClientRect().top,
+          ),
+        );
       requestAnimationFrame(sample);
     };
     requestAnimationFrame(sample);
@@ -384,7 +394,9 @@ async function ensureMessage(
   const headers = await gmailHeaders();
   const search = await page.request.get(
     `${gmailBaseUrl()}/gmail/v1/users/me/messages`,
-    { headers, params: { q: `subject:"${input.subject}"` } },
+    // Every inbox message, not a search: the emulator's search can't be
+    // relied on to find these by subject.
+    { headers, params: { labelIds: "INBOX", maxResults: "500" } },
   );
   expect(search.ok(), await search.text()).toBe(true);
   const found = (await search.json()) as {
