@@ -594,6 +594,18 @@ export async function noteGmailQuotaRefusal(
       });
 }
 
+/**
+ * A Gmail refusal that says nothing about the account's volume this minute:
+ * too many requests at once, a sending limit, or a retry time more than a
+ * few minutes away. Nothing that reads mail should wait it out.
+ */
+export function isGmailNonVolumeRefusal(error: unknown) {
+  const { errorMessage } = extractErrorInfo(error);
+  if (/too many concurrent requests/i.test(errorMessage)) return true;
+  if (/mail sending/i.test(errorMessage)) return true;
+  return (retryAfterFromMessage(error) ?? 0) > VOLUME_RETRY_MAX_MS;
+}
+
 export function isGmailQuotaRefusal(error: unknown) {
   if (isGmailCallDeferredError(error)) return false;
   const info = extractErrorInfo(error);
@@ -952,15 +964,11 @@ async function withinStoreTimeout<T>(operation: Promise<T>): Promise<T> {
 }
 
 function isVolumeRefusal(error: unknown) {
-  const info = extractErrorInfo(error);
-  if (
-    info.reason !== "rateLimitExceeded" &&
-    info.reason !== "userRateLimitExceeded"
-  )
-    return false;
-  if (/too many concurrent requests/i.test(info.errorMessage)) return false;
-  if (/mail sending/i.test(info.errorMessage)) return false;
-  return (retryAfterFromMessage(error) ?? 0) <= VOLUME_RETRY_MAX_MS;
+  const { reason } = extractErrorInfo(error);
+  return (
+    (reason === "rateLimitExceeded" || reason === "userRateLimitExceeded") &&
+    !isGmailNonVolumeRefusal(error)
+  );
 }
 
 function retryAfterFromMessage(error: unknown) {

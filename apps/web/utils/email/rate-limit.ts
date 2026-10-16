@@ -27,6 +27,7 @@ import { getRetryAfterHeaderFromError } from "@/utils/retry/get-retry-after-head
 import {
   currentGmailQuotaContext,
   getGmailCallDeferredError,
+  isGmailNonVolumeRefusal,
   noteRateLimitModeSkip,
 } from "@/utils/gmail/quota";
 
@@ -34,6 +35,9 @@ const DEFAULT_RATE_LIMIT_DELAY_MS = 30_000;
 // Gmail's weighted-units quota is a per-minute budget, so a retry within
 // seconds only spends units that are not back yet and extends the outage.
 const GMAIL_PER_MINUTE_QUOTA_MIN_DELAY_MS = 30_000;
+// Rate-limit mode skips every call for the account, reads included, so it
+// never outlasts a couple of per-minute windows; the gate paces the rest.
+const MAX_RATE_LIMIT_MODE_MS = 2 * 60_000;
 const RETRY_AT_BUFFER_SECONDS = 5;
 
 export type EmailProviderRateLimitState = {
@@ -240,6 +244,10 @@ export async function recordProviderRateLimitFromError({
     currentGmailQuotaContext().priority === "background"
   )
     return null;
+  // Account-wide mode blocks the user's reads too, so a refusal that says
+  // nothing about reading volume (a sending limit, too many requests at
+  // once, a retry time hours away) never starts it.
+  if (provider === "google" && isGmailNonVolumeRefusal(error)) return null;
 
   const delayMs = getProviderRateLimitDelayMs({
     error,
@@ -248,7 +256,9 @@ export async function recordProviderRateLimitFromError({
   });
   if (!delayMs) return null;
 
-  const retryAt = new Date(Date.now() + delayMs);
+  const retryAt = new Date(
+    Date.now() + Math.min(delayMs, MAX_RATE_LIMIT_MODE_MS),
+  );
   return setEmailProviderRateLimitState({
     emailAccountId,
     provider,
