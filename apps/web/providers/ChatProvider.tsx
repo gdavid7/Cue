@@ -450,6 +450,19 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setInlineActions([]);
   }, [chat.setMessages, routeAccountId, setChatAccountIdParam, setChatId]);
 
+  // The chat's account was removed, or the address names another user's:
+  // its chat can't be opened here, so start over in the page's account.
+  const chatAccountMissing =
+    Boolean(chatAccountIdParam) &&
+    accountIds.length > 0 &&
+    !accountIds.includes(chatAccountIdParam ?? "");
+  useEffect(() => {
+    if (!chatAccountMissing) return;
+    setChatAccountIdParam(null);
+    setChatId(null);
+    chat.setMessages([]);
+  }, [chat.setMessages, chatAccountMissing, setChatAccountIdParam, setChatId]);
+
   // Fix context comes from the page's account (its rules and mail).
   const setContextForPage = useCallback(
     (nextContext: MessageContext | null) => {

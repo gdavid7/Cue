@@ -942,10 +942,14 @@ describe("ChatProvider across accounts", () => {
   });
 
   it("ignores a chat account in the address that is not one of the user's", () => {
+    queryState.initialChatId = "chat-of-a-removed-account";
     queryState.initial = { chatAccountId: "someone-elses-account" };
     renderWithProvider(<Consumer />);
 
     expect(latestContext?.chatAccount?.id).toBe("account-a");
+    // Its chat is not this account's, so it is not shown as one.
+    expect(latestContext?.chatId).toBeNull();
+    expect(queryState.set.chatAccountId).toBeNull();
   });
 
   it("does not move a saved chat while its messages are still loading", () => {
