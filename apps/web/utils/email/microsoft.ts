@@ -136,6 +136,7 @@ import {
 } from "@/utils/outlook/folders";
 import { extractSignatureFromHtml } from "@/utils/email/signature-extraction";
 import {
+  getMessagesInBatches,
   getThreadParticipantMessagesInBatches,
   moveMessagesForSenders,
   moveThreadsInBatches,
@@ -1730,11 +1731,11 @@ export class OutlookProvider implements EmailProvider {
   }
 
   async getMessagesBatch(messageIds: string[]): Promise<ParsedMessage[]> {
-    // For Outlook, we need to fetch messages individually since there's no batch endpoint
-    const messagePromises = messageIds.map((messageId) =>
-      this.getMessage(messageId),
-    );
-    return Promise.all(messagePromises);
+    return getMessagesInBatches({
+      client: this.client,
+      messageIds,
+      logger: this.logger,
+    });
   }
 
   async syncLocalMail(
@@ -1822,6 +1823,7 @@ export class OutlookProvider implements EmailProvider {
     after?: Date;
     cursor?: string;
     folderId?: string;
+    includeBodies?: boolean;
     limit: number;
   }) {
     return getOutlookMailboxSyncPage({

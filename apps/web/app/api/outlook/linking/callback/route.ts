@@ -49,6 +49,7 @@ import {
 } from "@/utils/outlook/scopes";
 import type { Logger } from "@/utils/logger";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
+import { scheduleWatchAfterLinking } from "@/utils/email/watch-after-linking";
 
 export const GET = withError("outlook/linking/callback", async (request) => {
   const actorSession = await auth(request.headers);
@@ -290,6 +291,7 @@ export const GET = withError("outlook/linking/callback", async (request) => {
         logger,
         providerEmail,
         providerAccountId,
+        targetUserId,
       });
     }
 
@@ -409,11 +411,12 @@ export const GET = withError("outlook/linking/callback", async (request) => {
         }
       }
 
-      await connectCalendarAtSignIn({ accountId: linkedAccountId, logger });
-      await setOAuthCodeResult(code, { success: "account_created_and_linked" });
-      return createAccountLinkingRedirect({
-        query: { success: "account_created_and_linked" },
-        stateCookieName: OUTLOOK_LINKING_STATE_COOKIE_NAME,
+      return completeMicrosoftAccountLinking({
+        accountId: linkedAccountId,
+        code,
+        logger,
+        success: "account_created_and_linked",
+        targetUserId,
       });
     }
 
@@ -441,6 +444,7 @@ export const GET = withError("outlook/linking/callback", async (request) => {
         logger,
         providerEmail,
         providerAccountId,
+        targetUserId,
       });
     }
 
@@ -490,14 +494,12 @@ export const GET = withError("outlook/linking/callback", async (request) => {
       sourceUserId: linkingResult.sourceUserId,
     });
 
-    await connectCalendarAtSignIn({
+    return completeMicrosoftAccountLinking({
       accountId: linkingResult.sourceAccountId,
+      code,
       logger,
-    });
-    await setOAuthCodeResult(code, { success: successMessage });
-    return createAccountLinkingRedirect({
-      query: { success: successMessage },
-      stateCookieName: OUTLOOK_LINKING_STATE_COOKIE_NAME,
+      success: successMessage,
+      targetUserId,
     });
   } catch (error) {
     await clearOAuthCode(code);
@@ -532,12 +534,14 @@ async function completeMicrosoftTokenUpdate({
   logger,
   providerAccountId,
   providerEmail,
+  targetUserId,
 }: {
   accountId: string;
   code: string;
   logger: Logger;
   providerAccountId: string;
   providerEmail: string;
+  targetUserId: string;
 }) {
   logger.info("OAuth linking callback completed", {
     accountId,
@@ -546,10 +550,37 @@ async function completeMicrosoftTokenUpdate({
     providerSubjectHash: hashOAuthAuditIdentifier(providerAccountId),
   });
 
+  return completeMicrosoftAccountLinking({
+    accountId,
+    code,
+    logger,
+    success: "tokens_updated",
+    targetUserId,
+  });
+}
+
+// Subscribe right away so new mail is pushed from the moment the mailbox is
+// linked instead of waiting for the daily watch cron.
+async function completeMicrosoftAccountLinking({
+  accountId,
+  code,
+  logger,
+  success,
+  targetUserId,
+}: {
+  accountId: string;
+  code: string;
+  logger: Logger;
+  success: "account_created_and_linked" | "account_merged" | "tokens_updated";
+  targetUserId: string;
+}) {
   await connectCalendarAtSignIn({ accountId, logger });
-  await setOAuthCodeResult(code, { success: "tokens_updated" });
+  await setOAuthCodeResult(code, { success });
+
+  scheduleWatchAfterLinking({ targetUserId, logger });
+
   return createAccountLinkingRedirect({
-    query: { success: "tokens_updated" },
+    query: { success },
     stateCookieName: OUTLOOK_LINKING_STATE_COOKIE_NAME,
   });
 }

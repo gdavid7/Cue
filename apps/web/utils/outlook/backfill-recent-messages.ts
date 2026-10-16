@@ -9,9 +9,9 @@ import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import type { ParsedMessage } from "@/utils/types";
 import { runWithBoundedConcurrency } from "@/utils/async";
+import { MICROSOFT_MAILBOX_CONCURRENCY_LIMIT } from "@/utils/outlook/mailbox-concurrency";
 
 const OUTLOOK_RECONCILE_PAGE_SIZE = 50;
-const OUTLOOK_RECONCILE_MESSAGE_CONCURRENCY = 5;
 
 export async function backfillRecentOutlookMessages({
   emailAccountId,
@@ -83,7 +83,7 @@ export async function backfillRecentOutlookMessages({
   let rateLimitError: ProviderRateLimitModeError | undefined;
   const results = await runWithBoundedConcurrency({
     items: unseenThreads,
-    concurrency: OUTLOOK_RECONCILE_MESSAGE_CONCURRENCY,
+    concurrency: MICROSOFT_MAILBOX_CONCURRENCY_LIMIT,
     run: async (message) => {
       if (rateLimitError) throw rateLimitError;
 

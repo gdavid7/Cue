@@ -207,18 +207,24 @@ describe("outlook/draft", () => {
 
 function createOutlookClient(deleteRequest: () => Promise<unknown>) {
   const request = {
-    delete: deleteRequest,
+    // A plain DELETE moves a message to Deleted Items, where a discarded draft
+    // would show up again in its conversation; only permanentDelete is used.
+    delete: vi.fn().mockRejectedValue(new Error("moved to Deleted Items")),
+    post: deleteRequest,
     header: vi.fn(),
   };
   request.header.mockReturnValue(request);
+  const api = vi.fn((path: string) => {
+    if (!path.endsWith("/permanentDelete"))
+      throw new Error(`Unexpected path ${path}`);
+    return request;
+  });
 
   const client = {
-    getClient: () => ({
-      api: vi.fn(() => request),
-    }),
+    getClient: () => ({ api }),
   } as unknown as OutlookClient;
 
-  return { client, header: request.header };
+  return { client, header: request.header, api };
 }
 
 function createOutlookReadClient(message: object) {

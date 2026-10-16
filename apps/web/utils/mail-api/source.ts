@@ -120,14 +120,18 @@ export function createEmailProviderMailboxSource(input: {
     },
     async discoverScopes() {
       if (provider.name === "microsoft") {
-        const folders = await provider.getFolders();
-        return {
-          status: "ok",
-          value: {
-            scopes: flattenFolderScopes(folders),
-            nextPage: null,
-          },
-        };
+        try {
+          const folders = await provider.getFolders();
+          return {
+            status: "ok",
+            value: {
+              scopes: flattenFolderScopes(folders),
+              nextPage: null,
+            },
+          };
+        } catch (error) {
+          return mapProviderError(error);
+        }
       }
       return {
         status: "ok",
@@ -327,7 +331,7 @@ export function createEmailProviderMailboxSource(input: {
             provider.name === "microsoft" && position.streamId !== "primary"
               ? position.streamId
               : undefined,
-          includeBodies: isGmail,
+          includeBodies: true,
           limit: pageSize,
         });
         if (page.reset) {
@@ -400,7 +404,7 @@ export function createEmailProviderMailboxSource(input: {
               { priority: isMessageOpen ? "interactive" : "sync" },
               () => batchedMessages(provider, keys),
             )
-          : await sequentialMessages(provider, keys);
+          : await batchedMessages(provider, keys);
         return {
           status: "ok" as const,
           value: {
@@ -689,6 +693,8 @@ async function catchUpCheckpoint(
     const page = await provider.getMailboxSyncPage({
       after: new Date(afterMs),
       folderId,
+      // The cursor this starts is the one catch-up follows.
+      includeBodies: true,
       limit: 1,
     });
     if (page.cursor) {
@@ -857,20 +863,6 @@ async function batchedMessages(provider: EmailProvider, keys: MessageKey[]) {
     // The batch path drops parts that failed for good, such as deleted mail.
     if (message) messages.push(message);
     else unresolved.push({ key, reason: "not_found" });
-  }
-  return { messages, unresolved };
-}
-
-async function sequentialMessages(provider: EmailProvider, keys: MessageKey[]) {
-  const messages: ParsedMessage[] = [];
-  const unresolved: HydrationUnresolved[] = [];
-  for (const key of keys) {
-    try {
-      messages.push(await provider.getMessage(key.messageId));
-    } catch (error) {
-      if (!isMissingProviderResource(error)) throw error;
-      unresolved.push({ key, reason: "not_found" });
-    }
   }
   return { messages, unresolved };
 }

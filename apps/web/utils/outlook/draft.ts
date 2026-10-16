@@ -123,12 +123,14 @@ export async function deleteDraft({
   try {
     logger.info("Deleting draft", { draftId });
 
+    // A plain DELETE moves the draft to Deleted Items, which keeps it in its
+    // conversation; a discarded draft is gone for good, as in Gmail.
     const request = client
       .getClient()
-      .api(`/me/messages/${draftId}`)
+      .api(`/me/messages/${draftId}/permanentDelete`)
       .header("If-Match", version);
 
-    await withMicrosoftGraphWriteRetry(() => request.delete(), logger);
+    await withMicrosoftGraphWriteRetry(() => request.post({}), logger);
 
     logger.info("Draft deleted successfully", { draftId });
     return true;

@@ -93,6 +93,21 @@ export function extractErrorInfo(error: unknown): ErrorInfo {
 }
 
 /**
+ * The Graph SDK puts response headers on the error itself, not on a
+ * `response` like other HTTP clients, so look there too.
+ */
+export function getGraphRetryAfterHeader(error: unknown): string | undefined {
+  const headers =
+    error && typeof error === "object" && "headers" in error
+      ? error.headers
+      : undefined;
+  return (
+    getRetryAfterHeaderFromError(error) ??
+    getRetryAfterHeaderFromError({ response: { headers } })
+  );
+}
+
+/**
  * Determines if an error is retryable (rate limit, server error, conflict, or network error)
  */
 export function isRetryableError(errorInfo: ErrorInfo): {
@@ -195,7 +210,7 @@ async function withMicrosoftGraphRetryPolicy<T>(
       const errorInfo = extractErrorInfo(attempt);
       const { retryable, isRateLimit, isServerError, isConflictError } =
         isRetryableError(errorInfo);
-      const retryAfterHeader = getRetryAfterHeaderFromError(attempt);
+      const retryAfterHeader = getGraphRetryAfterHeader(attempt.error);
 
       return {
         retryable,

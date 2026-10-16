@@ -2,8 +2,21 @@ import type { Message } from "@microsoft/microsoft-graph-types";
 import type { Logger } from "@/utils/logger";
 import type { OutlookClient } from "@/utils/outlook/client";
 import type { BulkArchiveResult, BulkArchiveThread } from "@/utils/email/types";
+import type { ParsedMessage } from "@/utils/types";
 import { escapeODataString } from "@/utils/outlook/odata-escape";
-import { getFolderIds } from "@/utils/outlook/message";
+import {
+  convertMessage,
+  getCategoryMap,
+  getFolderIds,
+  MESSAGE_EXPAND_ATTACHMENTS,
+  MESSAGE_SELECT_FIELDS,
+} from "@/utils/outlook/message";
+import { MICROSOFT_MAILBOX_CONCURRENCY_LIMIT } from "@/utils/outlook/mailbox-concurrency";
+import {
+  extractErrorInfo,
+  isRetryableError,
+  withMicrosoftGraphRetry,
+} from "@/utils/outlook/retry";
 import { resolveMicrosoftGraphNextLink } from "@/utils/outlook/page-token";
 import {
   publishBulkActionToTinybird,
@@ -11,7 +24,6 @@ import {
 } from "@/utils/email/bulk-action-tracking";
 
 const GRAPH_JSON_BATCH_LIMIT = 20; // Microsoft Graph JSON batching limit
-const GRAPH_MOVE_BATCH_LIMIT = 4;
 const THREAD_PARTICIPANT_SELECT_FIELDS =
   "id,conversationId,from,toRecipients,receivedDateTime";
 
@@ -102,6 +114,79 @@ async function batch<TRequestBody = unknown, TResponseBody = unknown>({
   }
 
   return aggregatedResponses;
+}
+
+/**
+ * Reads full messages (body and attachment list) through Graph `$batch`.
+ * Graph runs a batch's items concurrently, so each batch carries at most the
+ * mailbox's concurrency limit. Messages Graph no longer has are left out.
+ */
+export async function getMessagesInBatches({
+  client,
+  messageIds,
+  logger,
+}: {
+  client: OutlookClient;
+  messageIds: string[];
+  logger: Logger;
+}): Promise<ParsedMessage[]> {
+  const ids = [...new Set(messageIds)];
+  if (ids.length === 0) return [];
+
+  const query = new URLSearchParams({
+    $select: MESSAGE_SELECT_FIELDS,
+    $expand: MESSAGE_EXPAND_ATTACHMENTS,
+  });
+  const fetched = new Map<string, Message>();
+  const missing = new Set<string>();
+
+  // A retry after throttling asks only for what has not arrived yet.
+  await withMicrosoftGraphRetry(async () => {
+    const pending = ids.filter((id) => !fetched.has(id) && !missing.has(id));
+    const responses = await batch<never, Message>({
+      client,
+      requests: pending.map((messageId, index) => ({
+        id: String(index),
+        method: "GET",
+        url: `/me/messages/${encodeURIComponent(messageId)}?${query}`,
+        // Batch items do not inherit the outer request's headers.
+        headers: { Prefer: 'IdType="ImmutableId"' },
+      })),
+      chunkSize: MICROSOFT_MAILBOX_CONCURRENCY_LIMIT,
+      context: { messageCount: pending.length },
+      logger,
+      shouldStop: (chunk) => chunk.some(isRetryableBatchFailure),
+    });
+
+    let retryableError: Error | undefined;
+    for (const response of responses) {
+      const messageId = pending[Number(response.id)];
+      if (messageId === undefined) continue;
+      if (response.status < 300) {
+        if (response.body) fetched.set(messageId, response.body);
+        continue;
+      }
+      if (response.status === 404) {
+        missing.add(messageId);
+        continue;
+      }
+      const error = toBatchItemError(response);
+      if (!isRetryableBatchFailure(response)) throw error;
+      retryableError ??= error;
+    }
+    if (retryableError) throw retryableError;
+  }, logger);
+
+  const [folderIds, categoryMap] = await Promise.all([
+    getFolderIds(client, logger, { includeDrafts: false }),
+    getCategoryMap(client, logger),
+  ]);
+  return ids.flatMap((messageId) => {
+    const message = fetched.get(messageId);
+    return message
+      ? [convertMessage(message, folderIds, categoryMap, logger)]
+      : [];
+  });
 }
 
 export async function getThreadParticipantMessagesInBatches({
@@ -224,7 +309,7 @@ async function moveMessagesInBatches({
   const responses = await batch({
     client,
     requests,
-    chunkSize: GRAPH_MOVE_BATCH_LIMIT,
+    chunkSize: MICROSOFT_MAILBOX_CONCURRENCY_LIMIT,
     context: {
       action,
       destinationId,
@@ -521,4 +606,31 @@ function toGraphBatchUrl(nextLink: string): string {
   const url = new URL(resolvedNextLink);
   const pathname = url.pathname.replace(/^\/(?:v1\.0|beta)(?=\/)/, "");
   return `${pathname}${url.search}`;
+}
+
+function isRetryableBatchFailure(response: GraphBatchResponseItem) {
+  return (
+    response.status >= 400 &&
+    response.status !== 404 &&
+    isRetryableError(extractErrorInfo(toBatchItemError(response))).retryable
+  );
+}
+
+// Shaped like the Graph SDK's errors, so retry, rate-limit mode and the mail
+// engine's throttling read the item's status, code and Retry-After as usual.
+function toBatchItemError(response: GraphBatchResponseItem) {
+  const graphError = (
+    response.body as { error?: { code?: string; message?: string } } | null
+  )?.error;
+  return Object.assign(
+    new Error(
+      graphError?.message ||
+        `Graph batch item failed with status ${response.status}`,
+    ),
+    {
+      statusCode: response.status,
+      code: graphError?.code,
+      response: { headers: response.headers ?? {} },
+    },
+  );
 }

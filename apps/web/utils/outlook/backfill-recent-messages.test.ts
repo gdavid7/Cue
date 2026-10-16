@@ -215,7 +215,7 @@ describe("backfillRecentOutlookMessages", () => {
       rateLimited: false,
     });
     expect(processHistoryForUser).toHaveBeenCalledTimes(6);
-    expect(maxActive).toBe(5);
+    expect(maxActive).toBe(4);
   });
 
   it("stops processing and logs once when the provider rate limits the account", async () => {
@@ -249,17 +249,17 @@ describe("backfillRecentOutlookMessages", () => {
     });
 
     expect(result).toEqual({
-      processedCount: 4,
+      processedCount: 3,
       candidateCount: 12,
       rateLimited: true,
     });
-    expect(processHistoryForUser).toHaveBeenCalledTimes(5);
+    expect(processHistoryForUser).toHaveBeenCalledTimes(4);
     expect(errorSpy).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(warnSpy).toHaveBeenCalledWith(
       "Stopped Outlook backfill because the account is rate limited",
       expect.objectContaining({
-        rateLimitedCount: 8,
+        rateLimitedCount: 9,
         retryAt: "2026-04-16T12:00:00.000Z",
       }),
     );

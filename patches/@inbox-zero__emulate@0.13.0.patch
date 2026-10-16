@@ -38,7 +38,7 @@ index 0cf536b906f2aa9107e78b84112329f4684937bf..1a23c0f6ac1e8e33a7fc05d847325a16
  function buildRawMessage(message) {
    const headers = [
 diff --git a/dist/dist-ZATTDANE.js b/dist/dist-ZATTDANE.js
-index fb4e1a679969c34f7a9636e37d47839b9f1e0898..f8433d0e5db28a89bfe16711725df80125e0b39f 100644
+index fb4e1a679969c34f7a9636e37d47839b9f1e0898..2c9272aed31daca9fa4bc9f88b4254805afe8218 100644
 --- a/dist/dist-ZATTDANE.js
 +++ b/dist/dist-ZATTDANE.js
 @@ -265,7 +265,10 @@ function createMessageRecord(ms, input) {
@@ -63,7 +63,63 @@ index fb4e1a679969c34f7a9636e37d47839b9f1e0898..f8433d0e5db28a89bfe16711725df801
    };
  }
  function formatSender(name, address) {
-@@ -3335,7 +3339,8 @@ function seedFromConfig(store, baseUrl, config) {
+@@ -1323,6 +1327,16 @@ function graphRoutes(ctx) {
+     moveMessage(ms, message, deletedItems.microsoft_id);
+     return c.body(null, 204);
+   });
++  // Cue: Graph's permanentDelete removes the item instead of moving it to Deleted Items.
++  app.post("/v1.0/me/messages/:messageId/permanentDelete", (c) => {
++    const authEmail = requireAuthEmail(ctx, c);
++    if (authEmail instanceof Response) return authEmail;
++    const ms = getMicrosoftStore(ctx.store);
++    const message = resolveMessage(ctx, authEmail, c.req.param("messageId"));
++    if (!message) return microsoftGraphError(c, 404, "ErrorItemNotFound", "Message not found.");
++    ms.messages.delete(message.id);
++    return c.body(null, 204);
++  });
+   app.post("/v1.0/me/messages/:messageId/send", (c) => {
+     const authEmail = requireAuthEmail(ctx, c);
+     if (authEmail instanceof Response) return authEmail;
+@@ -1833,7 +1847,7 @@ function graphRoutes(ctx) {
+     const body = await parseJsonBody(c);
+     const requests = Array.isArray(body.requests) ? body.requests : [];
+     const ms = getMicrosoftStore(ctx.store);
+-    const responses = requests.map((request) => {
++    const responses = await Promise.all(requests.map(async (request) => {
+       if (!request || typeof request !== "object" || Array.isArray(request)) {
+         return { id: "unknown", status: 400, body: { error: { message: "Invalid batch request." } } };
+       }
+@@ -1841,6 +1855,20 @@ function graphRoutes(ctx) {
+       const id = typeof entry.id === "string" ? entry.id : generateMicrosoftId("batch");
+       const method = typeof entry.method === "string" ? entry.method.toUpperCase() : "";
+       const url = typeof entry.url === "string" ? entry.url : "";
++      // Cue: serve GET items through the regular routes, like Graph does.
++      if (method === "GET" && url.startsWith("/")) {
++        const itemResponse = await app.fetch(new Request(new URL(`/v1.0${url}`, c.req.url), {
++          headers: c.req.header("Authorization") ? { Authorization: c.req.header("Authorization") } : {}
++        }));
++        const text = await itemResponse.text();
++        let itemBody = null;
++        try {
++          itemBody = text ? JSON.parse(text) : null;
++        } catch {
++          itemBody = text;
++        }
++        return { id, status: itemResponse.status, headers: { "Content-Type": "application/json" }, body: itemBody };
++      }
+       if (method === "POST" && url.match(/^\/me\/messages\/[^/]+\/move$/)) {
+         const messageId = url.split("/")[3] ?? "";
+         const message = resolveMessage(ctx, authEmail, messageId);
+@@ -1856,7 +1884,7 @@ function graphRoutes(ctx) {
+         }
+       }
+       return { id, status: 400, body: { error: { message: `Unsupported batch request: ${method} ${url}` } } };
+-    });
++    }));
+     return c.json({ responses });
+   });
+   app.get("/v1.0/me/calendars", (c) => {
+@@ -3335,7 +3363,8 @@ function seedFromConfig(store, baseUrl, config) {
          importance: message.importance,
          categories: message.categories,
          parent_folder_id: message.parent_folder_id ?? (message.is_draft ? folders.drafts.microsoft_id : folders.inbox.microsoft_id),

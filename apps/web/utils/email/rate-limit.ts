@@ -21,6 +21,7 @@ import {
 import {
   calculateRetryDelay as calculateOutlookRetryDelay,
   extractErrorInfo as extractOutlookErrorInfo,
+  getGraphRetryAfterHeader,
   isRetryableError as isOutlookRetryableError,
 } from "@/utils/outlook/retry";
 import { getRetryAfterHeaderFromError } from "@/utils/retry/get-retry-after-header";
@@ -384,13 +385,13 @@ function getMicrosoftRateLimitDelayMs(error: unknown, attemptNumber: number) {
     extractErrorInfo: extractOutlookErrorInfo,
     isRateLimitError: (errorInfo) =>
       isOutlookRetryableError(errorInfo).isRateLimit,
-    calculateDelayMs: ({ attemptNumber, retryAfterHeader }) =>
+    calculateDelayMs: ({ attemptNumber }) =>
       calculateOutlookRetryDelay(
         true,
         false,
         false,
         attemptNumber,
-        retryAfterHeader,
+        getGraphRetryAfterHeader(error),
       ),
   });
 }

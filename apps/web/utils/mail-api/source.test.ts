@@ -1,3 +1,4 @@
+import { GraphError } from "@microsoft/microsoft-graph-client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { admitGmailCall, GmailCallDeferredError } from "@/utils/gmail/quota";
 import {
@@ -327,6 +328,137 @@ describe("createEmailProviderMailboxSource", () => {
     });
   });
 
+  describe("Graph throttling", () => {
+    const session = { accountId: "acc-1", generation: "g1" };
+    const signal = new AbortController().signal;
+    const calls: Array<
+      [
+        string,
+        (
+          source: ReturnType<typeof createEmailProviderMailboxSource>,
+        ) => Promise<unknown>,
+      ]
+    > = [
+      [
+        "discovering folders",
+        (source) =>
+          source.discoverScopes({ session, page: null, signal } as never),
+      ],
+      [
+        "starting a folder bootstrap",
+        (source) =>
+          source.beginBootstrap({
+            session,
+            scope: { id: "inbox-id", kind: "folder", folderId: "inbox-id" },
+            afterMs: 0,
+            signal,
+          } as never),
+      ],
+      [
+        "enumerating a folder",
+        (source) =>
+          source.enumerate({
+            session,
+            page: JSON.stringify({ scopeId: "inbox-id", folderId: "inbox-id" }),
+            pageSize: 20,
+            signal,
+          } as never),
+      ],
+      [
+        "reading folder changes",
+        (source) =>
+          source.readChanges({
+            session,
+            requestId: "r1",
+            position: {
+              streamId: "inbox-id",
+              generation: "g1",
+              checkpoint: "1",
+            },
+            pageSize: 20,
+            signal,
+          }),
+      ],
+      [
+        "hydrating bodies",
+        (source) =>
+          source.hydrate({
+            session,
+            requestId: "r1",
+            signal,
+            keys: [{ accountId: "acc-1", messageId: "m1" }],
+            purpose: "body",
+          }),
+      ],
+      [
+        "reading a conversation",
+        (source) =>
+          source.readConversationMembership({
+            session,
+            conversation: { accountId: "acc-1", conversationId: "c1" },
+            resolutionId: "res-1",
+            page: null,
+            pageSize: 20,
+            signal,
+          } as never),
+      ],
+      [
+        "searching",
+        (source) =>
+          source.search({
+            session,
+            predicate: { kind: "text", field: "any", value: "invoice" },
+            page: null,
+            pageSize: 20,
+            signal,
+          } as never),
+      ],
+    ];
+
+    it.each(
+      calls,
+    )("pauses for Graph's Retry-After when %s is throttled", async (_name, call) => {
+      vi.mocked(redis.set).mockClear();
+      const throttle = () => {
+        const error = new GraphError(
+          429,
+          "Application is over its MailboxConcurrency limit.",
+        );
+        error.code = "ApplicationThrottled";
+        error.headers = new Headers({ "Retry-After": "7" });
+        throw error;
+      };
+      const source = createEmailProviderMailboxSource({
+        logger,
+        accountId: "acc-1",
+        provider: {
+          name: "microsoft",
+          localMailSyncStrategy: "folder-delta",
+          getFolders: throttle,
+          getMailboxSyncPage: throttle,
+          getMessagesWithPagination: throttle,
+          getMessagesBatch: throttle,
+          getThread: throttle,
+          getThreadMessages: throttle,
+          searchMessages: throttle,
+        } as unknown as EmailProvider,
+      });
+
+      const result = await call(source);
+
+      expect(result).toEqual({
+        status: "paused",
+        reason: "throttled",
+        retryAfterMs: 7000,
+      });
+      expect(redis.set).toHaveBeenCalledWith(
+        "email-provider-rate-limit:acc-1",
+        expect.any(String),
+        expect.anything(),
+      );
+    });
+  });
+
   it("does not replace a failed delta cursor with a mailbox list page token", async () => {
     const getMessagesWithPagination = vi.fn();
     const source = createEmailProviderMailboxSource({
@@ -471,6 +603,7 @@ describe("createEmailProviderMailboxSource", () => {
     expect(getMailboxSyncPage).toHaveBeenCalledWith({
       after: new Date(0),
       folderId: "archive",
+      includeBodies: true,
       limit: 1,
     });
   });
@@ -889,6 +1022,7 @@ describe("createEmailProviderMailboxSource", () => {
     });
     expect(getMailboxSyncPage).toHaveBeenCalledWith({
       after: new Date(0),
+      includeBodies: true,
       limit: 1,
     });
   });
@@ -1105,14 +1239,13 @@ describe("createEmailProviderMailboxSource", () => {
   it.each([
     [401, "blocked_auth"],
     [503, "paused"],
-    [404, "ok"],
   ])("preserves hydration failures (%s)", async (status, expected) => {
     const source = createEmailProviderMailboxSource({
       logger,
       accountId: "acc-1",
       provider: {
         name: "microsoft",
-        async getMessage() {
+        async getMessagesBatch() {
           throw Object.assign(new Error(`Provider returned ${status}`), {
             status,
           });
@@ -1132,6 +1265,44 @@ describe("createEmailProviderMailboxSource", () => {
         { key: { accountId: "acc-1", messageId: "m1" }, reason: "not_found" },
       ]);
     }
+  });
+
+  it("hydrates Outlook messages through the provider batch instead of one read per message", async () => {
+    const getMessage = vi.fn();
+    const getMessagesBatch = vi.fn(async (ids: string[]) =>
+      ids
+        .filter((id) => id !== "gone")
+        .map((id) => ({ ...searchMessage(id), textHtml: `<p>${id}</p>` })),
+    );
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "microsoft",
+        getMessage,
+        getMessagesBatch,
+      } as unknown as EmailProvider,
+    });
+    const ids = [
+      ...Array.from({ length: 19 }, (_, index) => `m-${index}`),
+      "gone",
+    ];
+
+    const result = await source.hydrate({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      keys: ids.map((messageId) => ({ accountId: "acc-1", messageId })),
+      purpose: "body",
+    });
+
+    if (result.status !== "ok") throw new Error("expected ok");
+    expect(result.value.bodies).toHaveLength(19);
+    expect(result.value.unresolved).toEqual([
+      { key: { accountId: "acc-1", messageId: "gone" }, reason: "not_found" },
+    ]);
+    expect(getMessagesBatch).toHaveBeenCalledTimes(1);
+    expect(getMessage).not.toHaveBeenCalled();
   });
 
   it("hydrates Gmail messages in one batch and reports the ones it could not read", async () => {
@@ -1906,6 +2077,44 @@ describe("Gmail history expiry", () => {
     const hydrated = result.page.requiredHydration.map((key) => key.messageId);
     expect(withBody.length).toBeLessThanOrEqual(50);
     expect([...withBody, ...hydrated].sort()).toEqual([...ids].sort());
+  });
+
+  it("asks Outlook folder deltas for the bodies they carry", async () => {
+    const getMailboxSyncPage = vi.fn(async () => ({
+      cursor: "next",
+      reset: false,
+      upsertedMessages: [
+        { ...searchMessage("new-1"), textHtml: "<p>body of new-1</p>" },
+      ],
+      includesBodies: true,
+      deletedMessageIds: [],
+      hasMore: false,
+    }));
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "a",
+      provider: {
+        name: "microsoft",
+        getMailboxSyncPage,
+      } as unknown as EmailProvider,
+    });
+
+    const result = await source.readChanges({
+      session: { accountId: "a", generation: "g1" },
+      requestId: "r1",
+      position: { streamId: "inbox-id", generation: "g1", checkpoint: "1" },
+      pageSize: 20,
+      signal: new AbortController().signal,
+    });
+
+    if (result.status !== "page") throw new Error("expected a page");
+    expect(getMailboxSyncPage).toHaveBeenCalledWith(
+      expect.objectContaining({ includeBodies: true, folderId: "inbox-id" }),
+    );
+    expect(result.page.bodies?.map((body) => body.html)).toEqual([
+      "<p>body of new-1</p>",
+    ]);
+    expect(result.page.requiredHydration).toEqual([]);
   });
 
   it("fetches each Gmail message a catch-up brings in once, body included", async () => {

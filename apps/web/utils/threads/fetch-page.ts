@@ -35,8 +35,6 @@ export async function fetchThreadsPage({
   messageFormat: "full" | "metadata";
 }): Promise<{ threads: EmailThread[]; nextPageToken?: string }> {
   if (query.excludeSplits?.length) {
-    if (emailProvider.name !== "google")
-      throw new Error("Other split exclusions are only supported for Gmail");
     const { excludeSplits, ...base } = query;
     const usesCue = excludeSplits.some((split) =>
       split.filters.some((filter) => filter.kind === "CUE"),

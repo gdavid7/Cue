@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
+import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
 import { env } from "@/env";
 
 const {
@@ -13,6 +14,8 @@ const {
   mockClearOAuthCode,
   mockCaptureException,
   mockAuth,
+  mockAfter,
+  mockEnsureEmailAccountsWatched,
 } = vi.hoisted(() => ({
   mockValidateOAuthCallback: vi.fn(),
   mockHandleAccountLinking: vi.fn(),
@@ -22,6 +25,21 @@ const {
   mockClearOAuthCode: vi.fn(),
   mockCaptureException: vi.fn(),
   mockAuth: vi.fn(),
+  mockAfter: vi.fn(),
+  mockEnsureEmailAccountsWatched: vi.fn(),
+}));
+
+vi.mock("next/server", async (importActual) => ({
+  ...(await importActual<typeof import("next/server")>()),
+  after: mockAfter,
+}));
+
+vi.mock("@/utils/email/watch-manager", () => ({
+  ensureEmailAccountsWatched: mockEnsureEmailAccountsWatched,
+}));
+
+vi.mock("@/utils/error-messages", () => ({
+  clearAccountDisconnectedErrorIfResolved: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/env", () => ({
@@ -161,6 +179,7 @@ describe("outlook linking callback route", () => {
       session: { emailOtp: false },
     });
     prisma.account.findUnique.mockResolvedValue(null);
+    mockEnsureEmailAccountsWatched.mockResolvedValue([]);
   });
 
   it("does not let an email code session link a mailbox", async () => {
@@ -302,6 +321,7 @@ describe("outlook linking callback route", () => {
       accountId: "account-123",
       logger: expect.anything(),
     });
+    await expectWatchScheduledForUser("user-123");
   });
 
   // Parallel auth URLs all pass the check there, so each callback checks again
@@ -639,6 +659,7 @@ describe("outlook linking callback route", () => {
         provider: "microsoft",
       }),
     );
+    await expectWatchScheduledForUser("user-123");
   });
 
   it("fails the callback when Microsoft returns no object id", async () => {
@@ -920,4 +941,19 @@ function createFetchFailedError(code: string) {
   error.cause = new AggregateError([connectError], `connect ${code}`);
 
   return error;
+}
+
+async function expectWatchScheduledForUser(userId: string) {
+  expect(mockEnsureEmailAccountsWatched).not.toHaveBeenCalled();
+  const callback = mockAfter.mock.calls.at(-1)?.[0];
+  expect(callback).toBeTypeOf("function");
+  await callback();
+  expect(mockEnsureEmailAccountsWatched).toHaveBeenCalledWith({
+    userIds: [userId],
+    logger: expect.anything(),
+  });
+  expect(clearAccountDisconnectedErrorIfResolved).toHaveBeenCalledWith({
+    userId,
+    logger: expect.anything(),
+  });
 }

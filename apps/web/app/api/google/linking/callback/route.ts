@@ -1,5 +1,3 @@
-import { after } from "next/server";
-import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
 import { env } from "@/env";
 import { auth } from "@/utils/auth";
 import { hash } from "@/utils/hash";
@@ -34,7 +32,7 @@ import {
 } from "@/utils/redis/oauth-code";
 import { isDuplicateError } from "@/utils/prisma-helpers";
 import { SafeError } from "@/utils/error";
-import { ensureEmailAccountsWatched } from "@/utils/email/watch-manager";
+import { scheduleWatchAfterLinking } from "@/utils/email/watch-after-linking";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 
 export const GET = withError("google/linking/callback", async (request) => {
@@ -477,23 +475,7 @@ async function completeGoogleAccountLinking({
   await connectCalendarAtSignIn({ accountId, logger });
   await setOAuthCodeResult(code, { success });
 
-  after(() =>
-    ensureEmailAccountsWatched({ userIds: [targetUserId], logger })
-      .finally(() =>
-        clearAccountDisconnectedErrorIfResolved({
-          userId: targetUserId,
-          logger,
-        }),
-      )
-      .catch((error) => {
-        logger.error(
-          "Failed to re-register email watches after account linking",
-          {
-            error,
-          },
-        );
-      }),
-  );
+  scheduleWatchAfterLinking({ targetUserId, logger });
 
   return createAccountLinkingRedirect({
     query: { success },

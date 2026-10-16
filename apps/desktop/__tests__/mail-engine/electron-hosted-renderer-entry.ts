@@ -1183,23 +1183,30 @@ async function clearSearch(window: BrowserWindow) {
 }
 
 async function clickArchive(window: BrowserWindow, subject: string) {
-  const selection = (await window.webContents.executeJavaScript(`
-    (() => {
-      const list = document.querySelector('[role="listbox"][aria-label="Conversations"]');
-      const option = [...(list?.querySelectorAll('[role="option"]') ?? [])]
-        .find((item) => (item.textContent ?? "").includes(${JSON.stringify(subject)}));
-      const checkbox = option?.querySelector('[role="checkbox"]');
-      if (!(checkbox instanceof HTMLElement)) {
-        return {
-          ok: false,
-          optionCount: list?.querySelectorAll('[role="option"]').length ?? 0,
-          checkboxCount: document.querySelectorAll('[role="checkbox"]').length,
-        };
-      }
-      checkbox.click();
-      return { ok: true };
-    })()
-  `)) as { ok: boolean; optionCount?: number; checkboxCount?: number };
+  // Until the local mailbox has synced, the list is the server's inbox
+  // preview, whose rows can't be selected, so wait for the synced rows.
+  let selection: { ok: boolean; optionCount?: number; checkboxCount?: number } =
+    { ok: false };
+  for (let attempt = 0; attempt < 120 && !selection.ok; attempt += 1) {
+    if (attempt > 0) await delay(250);
+    selection = (await window.webContents.executeJavaScript(`
+      (() => {
+        const list = document.querySelector('[role="listbox"][aria-label="Conversations"]');
+        const option = [...(list?.querySelectorAll('[role="option"]') ?? [])]
+          .find((item) => (item.textContent ?? "").includes(${JSON.stringify(subject)}));
+        const checkbox = option?.querySelector('[role="checkbox"]');
+        if (!(checkbox instanceof HTMLElement)) {
+          return {
+            ok: false,
+            optionCount: list?.querySelectorAll('[role="option"]').length ?? 0,
+            checkboxCount: document.querySelectorAll('[role="checkbox"]').length,
+          };
+        }
+        checkbox.click();
+        return { ok: true };
+      })()
+    `)) as { ok: boolean; optionCount?: number; checkboxCount?: number };
+  }
   if (!selection.ok) {
     await captureWindow(window, process.env.ELECTRON_SCREENSHOT_PATH);
     throw new Error(
@@ -1716,10 +1723,12 @@ async function openCompose(window: BrowserWindow) {
           (item) => (item.textContent ?? "").includes("New Message"),
         );
         if (!(dialog instanceof HTMLElement)) return false;
+        // The message editor mounts after the To field, so wait for both.
         return Boolean(
-          dialog.querySelector('input[aria-label="To"]') ??
+          (dialog.querySelector('input[aria-label="To"]') ??
             dialog.querySelector('input[name="to"]') ??
-            dialog.querySelector('input[role="combobox"]'),
+            dialog.querySelector('input[role="combobox"]')) &&
+            dialog.querySelector('[role="textbox"][aria-label="Email message"]'),
         );
       })()
     `)) as boolean;
@@ -2326,7 +2335,9 @@ async function waitForReconnectBanner(window: BrowserWindow) {
     const visible = (await window.webContents.executeJavaScript(`
       [...document.querySelectorAll("h1, h2, h3, h4, [role=heading]")].some(
         (heading) =>
-          heading.textContent?.trim() === "Sign in again to reconnect Gmail",
+          /^Sign in again to reconnect (Gmail|Outlook)$/.test(
+            heading.textContent?.trim() ?? "",
+          ),
       )
     `)) as boolean;
     if (visible) return;

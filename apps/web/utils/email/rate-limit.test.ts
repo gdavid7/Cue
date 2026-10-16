@@ -1,3 +1,4 @@
+import { GraphError } from "@microsoft/microsoft-graph-client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { redis } from "@/utils/redis";
 import { ProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
@@ -362,6 +363,23 @@ describe("email provider rate-limit state", () => {
 });
 
 describe("getProviderRateLimitDelayMs", () => {
+  it("uses the Retry-After of a throttled Graph SDK request", () => {
+    const error = new GraphError(
+      429,
+      "Application is over its MailboxConcurrency limit.",
+    );
+    error.code = "ApplicationThrottled";
+    error.headers = new Headers({ "Retry-After": "7" });
+
+    expect(
+      getProviderRateLimitDelayMs({
+        error,
+        provider: "microsoft",
+        attemptNumber: 1,
+      }),
+    ).toBe(7000);
+  });
+
   const perMinuteQuotaError = {
     cause: {
       status: 403,

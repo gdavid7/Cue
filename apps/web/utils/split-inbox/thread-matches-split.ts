@@ -10,7 +10,7 @@ import type {
 
 type SplitMessage = Pick<
   ParsedMessage,
-  "id" | "labelIds" | "headers" | "internalDate"
+  "id" | "labelIds" | "headers" | "internalDate" | "inboxSection"
 >;
 type SplitThread = { messages: SplitMessage[] };
 
@@ -78,6 +78,8 @@ function matchesMessage(
     return false;
   if (query.labelId && !labels.includes(query.labelId)) return false;
   if (query.isUnread && !labels.includes("UNREAD")) return false;
+  if (query.inboxSection && message.inboxSection !== query.inboxSection)
+    return false;
   if (
     query.fromEmail &&
     !matchesSenderFilter(message.headers.from, query.fromEmail)

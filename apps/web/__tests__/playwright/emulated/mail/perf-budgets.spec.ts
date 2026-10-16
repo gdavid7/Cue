@@ -365,7 +365,10 @@ async function registerLlmReply(reply: { match: string; text: string }) {
 const searchTerms =
   process.env.PERF_MAILBOX === "large"
     ? ["invoice", "meeting", "launch", "travel", "hiring"]
-    : ["Archive Action", "Playwright Test", "Reader Navigation"];
+    : // Not "Playwright Test": the account's own address contains it, so on
+      // Outlook newer drafts and sent mail to that address rightly lead
+      // the results.
+      ["Archive Action", "Keyboard Navigation", "Reader Navigation"];
 
 function firstRowSubjectIs(subject: string) {
   const first = document.querySelector(

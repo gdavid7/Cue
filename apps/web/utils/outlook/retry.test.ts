@@ -1,3 +1,4 @@
+import { GraphError } from "@microsoft/microsoft-graph-client";
 import { describe, it, expect, vi } from "vitest";
 import { createTestLogger } from "@/__tests__/helpers";
 import {
@@ -221,6 +222,24 @@ describe("calculateRetryDelay", () => {
 });
 
 describe("withMicrosoftGraphRetry", () => {
+  it("waits out the Retry-After the Graph SDK reports for a throttled request", async () => {
+    const throttled = new GraphError(
+      429,
+      "Application is over its MailboxConcurrency limit.",
+    );
+    throttled.code = "ApplicationThrottled";
+    throttled.headers = new Headers({ "Retry-After": "0" });
+    const operation = vi
+      .fn()
+      .mockRejectedValueOnce(throttled)
+      .mockResolvedValue("ok");
+
+    await expect(
+      withMicrosoftGraphRetry(operation, createTestLogger()),
+    ).resolves.toBe("ok");
+    expect(operation).toHaveBeenCalledTimes(2);
+  });
+
   it("aborts retries when backoff exceeds max blocking delay", async () => {
     const operation = vi.fn().mockRejectedValue(
       Object.assign(new Error("Throttled"), {

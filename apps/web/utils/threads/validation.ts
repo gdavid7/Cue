@@ -41,15 +41,7 @@ export const threadsQuery = z
         .array(
           z.object({
             matchAll: z.boolean(),
-            filters: mailSplitFiltersSchema.refine(
-              (filters) =>
-                filters.every(
-                  (filter) =>
-                    filter.kind !== "CATEGORY" ||
-                    !["focused", "other"].includes(filter.value ?? ""),
-                ),
-              { message: "Other split exclusions require Gmail conditions" },
-            ),
+            filters: mailSplitFiltersSchema,
           }),
         )
         .max(MAX_MAIL_SPLITS)
