@@ -356,6 +356,84 @@ describe("EmailAccountProvider", () => {
     expect(toast.info).toHaveBeenCalledTimes(1);
   });
 
+  it("moves an open All Inboxes thread's account when only an account before it is removed", async () => {
+    navigation.accountIndex = "0";
+    window.history.replaceState(
+      null,
+      "",
+      "/mail/u/0/all-inboxes/inbox/thread-c?account=2",
+    );
+    const fourAccounts = ["account-1", "account-2", "account-3", "account-4"];
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(listResponse(fourAccounts))
+        .mockResolvedValueOnce(
+          listResponse(fourAccounts.filter((id) => id !== "account-2")),
+        ),
+    );
+
+    render(
+      <EmailAccountProvider>
+        <AccountState />
+      </EmailAccountProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("account-ids").textContent).toBe(
+        fourAccounts.join(","),
+      ),
+    );
+
+    await fetchEmailAccounts();
+
+    await waitFor(() =>
+      expect(navigation.replace).toHaveBeenCalledWith(
+        "/mail/u/0/all-inboxes/inbox/thread-c?account=1",
+      ),
+    );
+    expect(screen.getByTestId("account-id").textContent).toBe("account-1");
+  });
+
+  it("never shows the account that moves into the open position while the address is rewritten", async () => {
+    navigation.accountIndex = "2";
+    window.history.replaceState(null, "", "/mail/u/2/inbox");
+    const fourAccounts = ["account-1", "account-2", "account-3", "account-4"];
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(listResponse(fourAccounts))
+        .mockResolvedValueOnce(
+          listResponse(fourAccounts.filter((id) => id !== "account-2")),
+        ),
+    );
+    const shown: string[] = [];
+    function RecordAccount() {
+      shown.push(useAccount().emailAccountId);
+      return null;
+    }
+
+    render(
+      <EmailAccountProvider>
+        <RecordAccount />
+        <AccountState />
+      </EmailAccountProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("account-id").textContent).toBe("account-3"),
+    );
+
+    await fetchEmailAccounts();
+
+    await waitFor(() =>
+      expect(navigation.replace).toHaveBeenCalledWith("/mail/u/1/inbox"),
+    );
+    // The router mock leaves the old position in place, as a slow router does.
+    expect(screen.getByTestId("account-id").textContent).toBe("account-3");
+    expect(shown).not.toContain("account-4");
+  });
+
   it("does not replace a global route when remaining accounts exist", async () => {
     navigation.emailAccountId = "deleted-account";
     window.history.replaceState(null, "", "/accounts");
@@ -424,6 +502,21 @@ function threeAccountsResponse() {
     json: async () => ({
       emailAccounts: threeAccountsList(),
       lastEmailAccountId: "account-2",
+    }),
+  };
+}
+
+function listResponse(ids: string[]) {
+  return {
+    ok: true,
+    json: async () => ({
+      emailAccounts: ids.map((id) => ({
+        id,
+        email: `${id}@example.com`,
+        account: { provider: "google" },
+        providerRateLimit: null,
+      })),
+      lastEmailAccountId: ids[0],
     }),
   };
 }

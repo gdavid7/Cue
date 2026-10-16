@@ -83,7 +83,11 @@ export function EmailAccountProvider({
   // `/mail/u/{n}` is a position, and removing an earlier account (in another
   // tab or device) shifts the list. The page stays on the account it opened.
   const [pin, setPin] = useState<IndexPin | null>(null);
-  const activePin = pin?.accountIndex === params.accountIndex ? pin : null;
+  const activePin =
+    params.accountIndex !== undefined &&
+    pin?.accountIndexes.includes(params.accountIndex)
+      ? pin
+      : null;
   const indexedAccountId =
     params.accountIndex === undefined
       ? undefined
@@ -149,23 +153,33 @@ export function EmailAccountProvider({
   }, [data, emailAccount?.id, emailAccountId, ownedRouteId, router]);
 
   useEffect(() => {
-    if (params.accountIndex === undefined || activePin) return;
+    if (params.accountIndex === undefined) return;
+    if (activePin) {
+      // The rewritten address has arrived; the old position no longer names
+      // this account.
+      if (activePin.accountIndexes.length > 1)
+        setPin({ ...activePin, accountIndexes: [params.accountIndex] });
+      return;
+    }
     const accountId = accountIds[Number(params.accountIndex)];
     if (accountId)
-      setPin({ accountIndex: params.accountIndex, accountId, accountIds });
+      setPin({ accountIndexes: [params.accountIndex], accountId, accountIds });
   }, [accountIds, activePin, params.accountIndex]);
 
   useEffect(() => {
     if (!data || !activePin || !emailAccount) return;
+    // Positions in the address, the page's and an open thread's, refer to
+    // the list the pin was made from.
+    if (activePin.accountIds.join() === accountIds.join()) return;
     const pinnedIndex = accountIds.indexOf(activePin.accountId);
-    const accountIndex =
-      pinnedIndex >= 0 ? pinnedIndex : accountIds.indexOf(emailAccount.id);
-    if (String(accountIndex) === activePin.accountIndex) return;
+    const accountId = pinnedIndex >= 0 ? activePin.accountId : emailAccount.id;
+    const accountIndex = accountIds.indexOf(accountId);
     if (pinnedIndex < 0)
       toastInfo({
         title: "That account is no longer connected",
         description: `Now showing ${emailAccount.email}`,
       });
+    const current = `${window.location.pathname}${window.location.search}`;
     const next = reindexMailPath({
       pathname: window.location.pathname,
       search: window.location.search,
@@ -173,7 +187,14 @@ export function EmailAccountProvider({
       previousAccountIds: activePin.accountIds,
       accountIds,
     });
-    if (next) router.replace(next);
+    // Until the router updates the address, its old position stays this
+    // account's, so the page never shows whoever moved into it.
+    setPin({
+      accountIndexes: [...activePin.accountIndexes, String(accountIndex)],
+      accountId,
+      accountIds,
+    });
+    if (next && next !== current) router.replace(next);
   }, [accountIds, activePin, data, emailAccount, router]);
 
   const resolvedEmailAccountId =
@@ -250,7 +271,8 @@ export function EmailAccountScopeProvider({
 }
 
 type IndexPin = {
-  accountIndex: string;
+  /** The address positions that name this account. */
+  accountIndexes: string[];
   accountId: string;
   /** The list the address's indexes referred to when the page opened it. */
   accountIds: readonly string[];
