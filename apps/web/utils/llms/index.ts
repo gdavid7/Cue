@@ -36,6 +36,7 @@ import {
   attachLlmRepairMetadata,
   captureException,
   getAIApiCallError,
+  isAnthropicBillingLimitError,
   isAnthropicInsufficientBalanceError,
   isContentFilterRefusal,
   isIncorrectAPIKeyError,
@@ -1551,6 +1552,9 @@ function shouldFallbackToNextModel(error: unknown): boolean {
   ) {
     return true;
   }
+
+  const apiCallError = getAIApiCallError(unwrappedError);
+  if (apiCallError && isAnthropicBillingLimitError(apiCallError)) return true;
 
   const llmErrorInfo = extractLLMErrorInfo(error);
   if (llmErrorInfo.retryable) return true;

@@ -4,6 +4,7 @@ import { RetryError } from "ai";
 import pRetry from "p-retry";
 import { createScopedLogger } from "@/utils/logger";
 import { sleep } from "@/utils/sleep";
+import { getAIApiCallError, isAnthropicBillingLimitError } from "@/utils/error";
 
 const logger = createScopedLogger("llms");
 
@@ -220,8 +221,12 @@ export function extractLLMErrorInfo(error: unknown): LLMErrorInfo {
     }
   }
 
+  const apiCallError = getAIApiCallError(original);
+  const isBillingLimit =
+    !!apiCallError && isAnthropicBillingLimitError(apiCallError);
+
   return {
-    retryable: isRateLimit || isServerError,
+    retryable: (isRateLimit || isServerError) && !isBillingLimit,
     isRateLimit,
     retryAfterMs,
   };

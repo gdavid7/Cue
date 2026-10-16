@@ -280,6 +280,17 @@ export function isAnthropicInsufficientBalanceError(
   );
 }
 
+// The Anthropic account is out of prepaid credit, or over its tier's monthly
+// spend cap or a spend limit set in the Console. Retrying fails until billing
+// changes, but another provider can still answer.
+export function isAnthropicBillingLimitError(error: APICallError): boolean {
+  return (
+    isAnthropicInsufficientBalanceError(error) ||
+    error.message.includes("You have reached your specified") ||
+    getProviderErrorCode(error) === "enforced_spend_limit_reached"
+  );
+}
+
 export function isInsufficientCreditsError(error: APICallError): boolean {
   // OpenAI reports an exhausted balance as a 429 with this error type.
   return (
@@ -674,6 +685,14 @@ function isNoObjectGeneratedError(
   error: unknown,
 ): error is NoObjectGeneratedError {
   return AiSdkErrorMarker.matches(error, "AI_NoObjectGeneratedError");
+}
+
+function getProviderErrorCode(error: APICallError): string | undefined {
+  const data = error.data as
+    | { error?: { details?: { error_code?: unknown } } }
+    | undefined;
+  const errorCode = data?.error?.details?.error_code;
+  return typeof errorCode === "string" ? errorCode : undefined;
 }
 
 function getProviderErrorType(error: APICallError): string | undefined {

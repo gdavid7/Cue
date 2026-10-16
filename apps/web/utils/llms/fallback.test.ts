@@ -247,6 +247,76 @@ describe("createGenerateText fallback chain", () => {
     expect(mockGenerateText.mock.calls[1][0].model).toBe(fallbackModel);
   });
 
+  it.each([
+    {
+      reason: "has no prepaid credit left",
+      statusCode: 400,
+      message:
+        "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
+      data: undefined,
+    },
+    {
+      reason: "reached a spend limit set in the Console",
+      statusCode: 400,
+      message:
+        "You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.",
+      data: undefined,
+    },
+    {
+      reason: "reached its tier's monthly spend cap",
+      statusCode: 429,
+      message: "You have reached your API usage limits.",
+      data: {
+        error: {
+          type: "rate_limit_error",
+          details: { error_code: "enforced_spend_limit_reached" },
+        },
+      },
+    },
+  ])("falls back when the Anthropic account $reason", async ({
+    statusCode,
+    message,
+    data,
+  }) => {
+    const primaryModel = createModel("primary-model");
+    const fallbackModel = createModel("fallback-model");
+    const modelOptions = createModelOptions({
+      provider: "anthropic",
+      modelName: "claude-sonnet-5-5",
+      model: primaryModel,
+      fallbackModels: [
+        createResolvedModel({
+          provider: "google",
+          modelName: "gemini-3.8-flash",
+          model: fallbackModel,
+        }),
+      ],
+    });
+
+    mockGenerateText
+      .mockRejectedValueOnce(
+        new APICallError({
+          message,
+          url: "https://api.anthropic.com/v1/messages",
+          requestBodyValues: {},
+          statusCode,
+          responseHeaders: {},
+          data,
+        }),
+      )
+      .mockResolvedValueOnce(createTextResult({ text: "fallback success" }));
+
+    const generateText = createGenerateTextForTest({
+      label: "Billing limit fallback",
+      modelOptions,
+    });
+
+    const result = await generateText({ prompt: "hello", model: primaryModel });
+
+    expect(result.text).toBe("fallback success");
+    expect(mockGenerateText.mock.calls[1][0].model).toBe(fallbackModel);
+  });
+
   it("injects centralized hardening into the text generation system prompt", async () => {
     const model = createModel("openai-model");
     mockGenerateText.mockResolvedValue(createTextResult());
