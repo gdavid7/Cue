@@ -2,6 +2,7 @@ import type Redis from "ioredis";
 import { createScopedLogger } from "@/utils/logger";
 import { RedisSubscriber } from "@/utils/redis/subscriber";
 import { logRedisFailureOnce } from "@/utils/redis/unavailable-log";
+import { getRedisUsageMeter } from "@/utils/redis/usage-meter";
 
 const logger = createScopedLogger("redis/shared-subscriber");
 
@@ -43,6 +44,7 @@ export function createSharedSubscriber(createClient: () => Redis) {
     if (client) return client;
     const created = createClient();
     created.on("message", (channel: string, message: string) => {
+      getRedisUsageMeter().count("message", channel, message.length);
       for (const listener of channels.get(channel)?.listeners ?? [])
         listener.onMessage(message);
     });
@@ -71,6 +73,7 @@ export function createSharedSubscriber(createClient: () => Redis) {
           live: new Set(),
           subscribed: redis.subscribe(channelName),
         };
+        getRedisUsageMeter().count("subscribe", channelName);
         created.subscribed.catch(() => {
           if (channels.get(channelName) === created)
             channels.delete(channelName);
@@ -93,6 +96,7 @@ export function createSharedSubscriber(createClient: () => Redis) {
           if (joined.listeners.size > 0 || channels.get(channelName) !== joined)
             return;
           channels.delete(channelName);
+          getRedisUsageMeter().count("unsubscribe", channelName);
           redis.unsubscribe(channelName).catch(() => undefined);
         },
       };
