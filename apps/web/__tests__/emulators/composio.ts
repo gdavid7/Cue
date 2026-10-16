@@ -682,7 +682,7 @@ export async function createComposioEmulator(
           error: { message: "Internal server error" },
         });
       }
-      if (tool && failure && failure !== "server_error") {
+      if (tool && failure) {
         return respondJson(response, 200, {
           data: {},
           successful: false,
