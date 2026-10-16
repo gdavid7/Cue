@@ -38,7 +38,9 @@ type ThreadActionTarget = Omit<ThreadSnapshot, "mutationId">;
 
 type UndoableBatch = {
   action: UndoableAction;
-  snapshots: ThreadSnapshot[];
+  // Resolves once the engine has admitted the command, so an undo pressed
+  // while it is still being admitted waits for it instead of getting lost.
+  snapshots: Promise<ThreadSnapshot[]>;
   undone: boolean;
 };
 
@@ -142,6 +144,8 @@ export function useThreadActions({
       if (batch.undone || !client) return [];
       batch.undone = true;
       if (lastAction.current === batch) lastAction.current = null;
+      const snapshots = await batch.snapshots;
+      if (!snapshots.length) return [];
 
       const compensation = mutationPayloadToChange({
         kind: UNDOABLE_COPY[batch.action].compensation,
@@ -149,7 +153,7 @@ export function useThreadActions({
       if (!compensation) return [];
       const results = await Promise.allSettled(
         Object.values(
-          groupBy(batch.snapshots, (snapshot) => snapshot.mutationId),
+          groupBy(snapshots, (snapshot) => snapshot.mutationId),
         ).map(async (snapshots) => {
           const { emailAccountId, mutationId } = snapshots[0];
           const cancelled =
@@ -181,7 +185,7 @@ export function useThreadActions({
       const restoredKeys = results.flatMap((result) =>
         result.status === "fulfilled" ? result.value : [],
       );
-      const failedCount = batch.snapshots.length - restoredKeys.length;
+      const failedCount = snapshots.length - restoredKeys.length;
 
       if (restoredKeys.length) {
         notifyRestored(restoredKeys);
@@ -189,9 +193,9 @@ export function useThreadActions({
       }
       if (failedCount) {
         toast.error(
-          failedCount === batch.snapshots.length
+          failedCount === snapshots.length
             ? "Couldn't restore"
-            : `Couldn't restore ${failedCount} of ${batch.snapshots.length}`,
+            : `Couldn't restore ${failedCount} of ${snapshots.length}`,
         );
       }
       if (!restoredKeys.length) {
@@ -211,10 +215,25 @@ export function useThreadActions({
   const runUndoable = useCallback(
     async (action: UndoableAction, threadKeys: string[]) => {
       const targets = resolveTargets(threadKeys);
-      const { snapshots, rejectionCodes } = await enqueueTargets(targets, {
-        kind: action,
+      const enqueued = enqueueTargets(targets, { kind: action });
+      // The row leaves on the keypress, before the engine admits the command,
+      // so the batch is the one to undo from that moment on.
+      const previous = lastAction.current;
+      const batch: UndoableBatch = {
+        action,
+        snapshots: enqueued.then(
+          (result) => result.snapshots,
+          () => [],
+        ),
+        undone: false,
+      };
+      lastAction.current = batch;
+      const { snapshots, rejectionCodes } = await enqueued.catch((error) => {
+        if (lastAction.current === batch) lastAction.current = previous;
+        throw error;
       });
       if (!snapshots.length) {
+        if (lastAction.current === batch) lastAction.current = previous;
         if (threadKeys.length) {
           toast.error(
             enqueueFailureCopy(
@@ -226,8 +245,6 @@ export function useThreadActions({
         return [];
       }
 
-      const batch: UndoableBatch = { action, snapshots, undone: false };
-      lastAction.current = batch;
       const failedCount = threadKeys.length - snapshots.length;
       toastUndo({
         message: UNDOABLE_COPY[action].done(snapshots.length),
