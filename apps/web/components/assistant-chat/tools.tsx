@@ -437,6 +437,8 @@ export function ReadEmailResult({ output }: { output: unknown }) {
   const threadId = getOutputField<string>(output, "threadId");
   const outputExternalUrl = getOutputField<string>(output, "externalUrl");
   const account = getOutputField<string>(output, "account");
+  // Another account's email names its own provider; the chat's own does not.
+  const emailProvider = getOutputField<string>(output, "provider") ?? provider;
   const externalUrl = getExternalMessageUrl({
     messageId,
     threadId,
@@ -477,7 +479,7 @@ export function ReadEmailResult({ output }: { output: unknown }) {
         )}
         {externalUrl && (
           <ToolExternalLink href={externalUrl}>
-            Open in {provider === "microsoft" ? "Outlook" : "Gmail"}
+            Open in {emailProvider === "microsoft" ? "Outlook" : "Gmail"}
           </ToolExternalLink>
         )}
       </div>

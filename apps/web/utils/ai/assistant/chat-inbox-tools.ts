@@ -699,7 +699,11 @@ export const readEmailTool = ({
 
         return {
           ...(target.otherAccount
-            ? otherAccountEmailFields(target.otherAccount, message)
+            ? {
+                ...otherAccountEmailFields(target.otherAccount, message),
+                // Its link opens in this provider, not the chat's.
+                provider: target.provider,
+              }
             : {
                 messageId: message.id,
                 threadId: message.threadId,

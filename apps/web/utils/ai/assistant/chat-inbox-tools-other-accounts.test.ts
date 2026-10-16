@@ -355,6 +355,7 @@ describe("reading another account's email", () => {
       messageId: toOtherAccountEmailId("account-2", "gmail-msg"),
       threadId: toOtherAccountEmailId("account-2", "gmail-thread"),
       account: "two@example.com",
+      provider: "google",
     });
   });
 
