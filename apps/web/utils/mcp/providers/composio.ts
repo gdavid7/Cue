@@ -3,6 +3,7 @@ import { z } from "zod";
 import { env } from "@/env";
 import { createScopedLogger } from "@/utils/logger";
 import {
+  AppToolError,
   ConnectionExpiredError,
   CredentialsRejectedError,
   type IntegrationProvider,
@@ -21,9 +22,10 @@ const PENDING_CONNECTION_SECONDS = 15 * 60;
 // the user reconnects.
 const ACTIVE_STATUS_CACHE_SECONDS = 10 * 60;
 const LAPSED_STATUS_CACHE_SECONDS = 24 * 60 * 60;
-// How apps word a lapsed authorization in a failed tool result
+// How apps word a lapsed authorization in a failed tool result. Canvas answers
+// a revoked or expired token with "Invalid access token." and no status code.
 const AUTH_FAILURE =
-  /\b401\b|unauthori[sz]ed|invalid_grant|invalid_auth|token_revoked|token[ _-]?expired|expired[ _-]?token|reauthori[sz]/i;
+  /\b401\b|unauthori[sz]ed|invalid_grant|invalid_auth|token_revoked|token[ _-]?expired|expired[ _-]?token|reauthori[sz]|invalid access token/i;
 
 type ConnectionStatus = "active" | "needs_reconnect";
 
@@ -177,7 +179,9 @@ export const composioProvider: IntegrationProvider = {
     );
     if (!account) {
       await rememberStatus(app, emailAccountId, "needs_reconnect");
-      throw new ConnectionExpiredError(app, `No active ${app} connection`);
+      throw new ConnectionExpiredError(app, `No active ${app} connection`, {
+        confirmed: true,
+      });
     }
 
     const result = executeResultSchema.parse(
@@ -193,14 +197,27 @@ export const composioProvider: IntegrationProvider = {
     if (!result.successful) {
       const message = `${tool} failed: ${result.error ?? "unknown error"}`;
       // Composio can keep an account ACTIVE after the app revoked its token;
-      // the app's auth error is the only sign.
+      // the app's auth error is the only sign. It can also mean one resource
+      // is off limits to a working token, so it isn't remembered here: the
+      // caller confirms it with the app's check tool and records the lapse.
       if (result.error && AUTH_FAILURE.test(result.error)) {
-        await rememberStatus(app, emailAccountId, "needs_reconnect");
         throw new ConnectionExpiredError(app, message);
       }
-      throw new Error(message);
+      throw new AppToolError(app, tool, message);
     }
     return result.data;
+  },
+
+  async checkConnection({ app, emailAccountId, authScheme, tool }) {
+    const data = await composioProvider.executeTool({
+      app,
+      emailAccountId,
+      authScheme,
+      tool,
+      args: {},
+    });
+    await forgetStatus(app, emailAccountId);
+    return data;
   },
 
   async getConnectionStatus({ app, emailAccountId, authScheme }) {

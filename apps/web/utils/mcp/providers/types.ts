@@ -36,6 +36,9 @@ export type IntegrationProvider = {
   executeTool(
     args: ProviderAppArgs & { tool: string; args: Record<string, unknown> },
   ): Promise<unknown>;
+  // Runs a read-only tool to confirm the connection still works, and forgets
+  // any remembered lapse when it does. Throws like executeTool.
+  checkConnection(args: ProviderAppArgs & { tool: string }): Promise<unknown>;
   // Whether the provider still holds a working authorization for the app
   getConnectionStatus(
     args: ProviderAppArgs,
@@ -57,13 +60,36 @@ type ProviderAppArgs = {
 
 export class CredentialsRejectedError extends Error {}
 
+// The app answered a tool call with its own error (e.g. a 500 from Canvas).
+// Not an authorization problem: retrying later may work.
+export class AppToolError extends Error {
+  readonly app: string;
+  readonly tool: string;
+
+  constructor(app: string, tool: string, message: string) {
+    super(message);
+    this.name = "AppToolError";
+    this.app = app;
+    this.tool = tool;
+  }
+}
+
 // The app's authorization expired or was revoked; only reconnecting fixes it.
+// `confirmed` when the provider itself holds no working authorization; an
+// app's auth-looking error alone can also mean one resource is off limits
+// (Canvas answers both with a 401), so it needs re-checking.
 export class ConnectionExpiredError extends Error {
   readonly app: string;
+  readonly confirmed: boolean;
 
-  constructor(app: string, message: string) {
+  constructor(
+    app: string,
+    message: string,
+    { confirmed = false }: { confirmed?: boolean } = {},
+  ) {
     super(message);
     this.name = "ConnectionExpiredError";
     this.app = app;
+    this.confirmed = confirmed;
   }
 }

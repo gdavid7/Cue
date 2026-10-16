@@ -43,6 +43,9 @@ export async function createMcpToolsForAgent(
       where: {
         ...ownedBySameUser(emailAccountId),
         isActive: true,
+        // The app turned its credentials away; every call would fail the
+        // same way until the person reconnects.
+        needsReconnectAt: null,
         tools: {
           some: {
             isEnabled: true,

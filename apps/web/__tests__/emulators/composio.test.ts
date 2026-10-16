@@ -4,7 +4,10 @@ import {
   composioProvider,
   uploadComposioFile,
 } from "@/utils/mcp/providers/composio";
-import { ConnectionExpiredError } from "@/utils/mcp/providers/types";
+import {
+  AppToolError,
+  ConnectionExpiredError,
+} from "@/utils/mcp/providers/types";
 import prisma from "@/utils/__mocks__/prisma";
 import { createScopedLogger } from "@/utils/logger";
 import {
@@ -457,6 +460,40 @@ describe("Composio emulator connection health", () => {
       ).rejects.toBeInstanceOf(ConnectionExpiredError);
     } finally {
       emulator.failTool("GOOGLEDRIVE_UPLOAD_FILE", null);
+    }
+  });
+
+  it("asks the user to reconnect when Canvas no longer accepts the token", async () => {
+    emulator.failTool("CANVAS_GET_CURRENT_USER", "canvas_revoked");
+    try {
+      await expect(
+        composioProvider.executeTool({
+          app: "canvas",
+          authScheme: "API_KEY",
+          emailAccountId: "revoked-canvas",
+          tool: "CANVAS_GET_CURRENT_USER",
+          args: {},
+        }),
+      ).rejects.toBeInstanceOf(ConnectionExpiredError);
+    } finally {
+      emulator.failTool("CANVAS_GET_CURRENT_USER", null);
+    }
+  });
+
+  it("reports Canvas's own internal error as an app error, not a lapsed token", async () => {
+    emulator.failTool("CANVAS_LIST_CALENDAR_EVENTS_FOR_USER", "canvas_error");
+    try {
+      const failure = composioProvider.executeTool({
+        app: "canvas",
+        authScheme: "API_KEY",
+        emailAccountId: "canvas-500",
+        tool: "CANVAS_LIST_CALENDAR_EVENTS_FOR_USER",
+        args: { user_id: 1 },
+      });
+      await expect(failure).rejects.toBeInstanceOf(AppToolError);
+      await expect(failure).rejects.not.toBeInstanceOf(ConnectionExpiredError);
+    } finally {
+      emulator.failTool("CANVAS_LIST_CALENDAR_EVENTS_FOR_USER", null);
     }
   });
 });

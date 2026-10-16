@@ -21,6 +21,7 @@ import { ConnectWithCredentialsDialog } from "@/components/connectors/ConnectWit
 import {
   disconnectMcpConnectionAction,
   removeCustomMcpServerAction,
+  testMcpConnectionAction,
   toggleMcpConnectionAction,
   toggleMcpToolAction,
 } from "@/utils/actions/mcp";
@@ -45,6 +46,7 @@ export function IntegrationRow({
   const [connecting, setConnecting] = useState(false);
   const [keyFormOpen, setKeyFormOpen] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [expandedTools, setExpandedTools] = useState(false);
   const { confirm, dialog } = useConfirmDialog();
 
@@ -60,6 +62,35 @@ export function IntegrationRow({
   const viaTitle = conn?.connectedVia
     ? `Connected via ${conn.connectedVia}`
     : undefined;
+  const connectedAs =
+    isActive && !conn?.needsReconnect ? conn?.verifiedAs : null;
+
+  const handleTestConnection = async () => {
+    if (!connectionId) return;
+    setTesting(true);
+    try {
+      const result = await testMcpConnectionAction(emailAccountId, {
+        connectionId,
+      });
+      if (result?.serverError) {
+        toastError({ description: result.serverError });
+      } else {
+        toastSuccess({
+          description: result?.data?.name
+            ? `Connected as ${result.data.name}`
+            : `${integration.displayName} is working`,
+        });
+      }
+      // A rejected key now shows Reconnect; a working one, who it opens.
+      onConnectionChange();
+    } catch {
+      toastError({
+        description: `Couldn't reach ${integration.displayName}. Try again.`,
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const handleConnect = async () => {
     analytics.captureAction("integration_connect_started", {
@@ -258,6 +289,7 @@ export function IntegrationRow({
           onConnected={onConnectionChange}
           onOpenChange={setKeyFormOpen}
           open={keyFormOpen}
+          reconnect={!!conn?.needsReconnect}
         />
       ) : null}
       <TableRow>
@@ -276,8 +308,12 @@ export function IntegrationRow({
                 )}
                 {isCustom && <Badge variant="secondary">Custom</Badge>}
               </div>
-              {integration.description && (
-                <MutedText>{integration.description}</MutedText>
+              {connectedAs ? (
+                <MutedText>Connected as {connectedAs}</MutedText>
+              ) : (
+                integration.description && (
+                  <MutedText>{integration.description}</MutedText>
+                )
               )}
             </div>
           </div>
@@ -368,9 +404,17 @@ export function IntegrationRow({
                       </DropdownMenuItem>
                     )}
                     {!!integration.credentialFields?.length && (
-                      <DropdownMenuItem onClick={handleConnect}>
-                        Update key
-                      </DropdownMenuItem>
+                      <>
+                        <DropdownMenuItem
+                          onClick={handleTestConnection}
+                          disabled={testing}
+                        >
+                          {testing ? "Testing..." : "Test connection"}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={handleConnect}>
+                          Update key
+                        </DropdownMenuItem>
+                      </>
                     )}
                   </>
                 )}

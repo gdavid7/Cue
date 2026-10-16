@@ -234,6 +234,23 @@ export type ComposioEmulatorSalesforcePerson = {
   LastModifiedDate?: string;
 };
 
+type ToolFailureMode =
+  | "revoked"
+  | "server_error"
+  | "canvas_revoked"
+  | "canvas_error";
+
+const TOOL_FAILURE_ERRORS: Record<
+  Exclude<ToolFailureMode, "server_error">,
+  string
+> = {
+  revoked: "401 Unauthorized: invalid_grant",
+  canvas_revoked: '{"errors":[{"message":"Invalid access token."}]}',
+  // As production logged it for CANVAS_LIST_CALENDAR_EVENTS_FOR_USER
+  canvas_error:
+    '{"errors":[{"message":"An error occurred.","error_code":"internal_server_error"}],"error_report_id":1}',
+};
+
 export interface ComposioEmulatorOptions {
   apiKey?: string;
   asanaTasks?: ComposioEmulatorAsanaTask[];
@@ -270,9 +287,12 @@ export interface ComposioEmulator {
   /**
    * Makes a tool fail from now on: `revoked` answers as Composio does once
    * the app's token is revoked (unsuccessful, with the app's auth error);
-   * `server_error` answers HTTP 500. `null` makes it work again.
+   * `server_error` answers HTTP 500. `canvas_revoked` and `canvas_error`
+   * relay Canvas's own answers to a revoked token and to an internal error,
+   * which Composio passes through as the failed result's error.
+   * `null` makes it work again.
    */
-  failTool(slug: string, how: "revoked" | "server_error" | null): void;
+  failTool(slug: string, how: ToolFailureMode | null): void;
   /** Every tool execution, in order. */
   toolCalls: { tool: string; connectedAccountId: string }[];
   /** The v3 base URL, for `COMPOSIO_API_URL`. */
@@ -315,7 +335,7 @@ export async function createComposioEmulator(
   const hubspotContacts = options.hubspotContacts ?? [];
   const salesforceContacts = options.salesforceContacts ?? [];
   const salesforceLeads = options.salesforceLeads ?? [];
-  const failingTools = new Map<string, "revoked" | "server_error">();
+  const failingTools = new Map<string, ToolFailureMode>();
   const toolCalls: ComposioEmulator["toolCalls"] = [];
 
   const authConfigs: {
@@ -662,11 +682,11 @@ export async function createComposioEmulator(
           error: { message: "Internal server error" },
         });
       }
-      if (tool && failure === "revoked") {
+      if (tool && failure) {
         return respondJson(response, 200, {
           data: {},
           successful: false,
-          error: "401 Unauthorized: invalid_grant",
+          error: TOOL_FAILURE_ERRORS[failure],
         });
       }
       if (tool) {

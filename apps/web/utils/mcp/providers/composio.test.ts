@@ -4,7 +4,10 @@ import {
   composioProvider,
   uploadComposioFile,
 } from "@/utils/mcp/providers/composio";
-import { CredentialsRejectedError } from "@/utils/mcp/providers/types";
+import {
+  ConnectionExpiredError,
+  CredentialsRejectedError,
+} from "@/utils/mcp/providers/types";
 
 vi.mock("@/env", () => ({
   env: {
@@ -255,6 +258,53 @@ describe("composioProvider", () => {
 
     // The new connection replaces the old one.
     expect(api.state.accounts.map((a) => a.id)).toEqual(["ca_2"]);
+  });
+
+  it("doesn't remember an app's auth-looking tool error as a lapsed connection", async () => {
+    api.state.authConfigs.push({
+      id: "ac_resource_401",
+      name: "inbox-zero-app-resource-401",
+      status: "ENABLED",
+      created_at: "2026-01-01T00:00:00Z",
+    });
+    api.state.accounts.push(
+      account(
+        "ca_r",
+        "email-account-1",
+        "ac_resource_401",
+        "ACTIVE",
+        "2026-01",
+      ),
+    );
+
+    await expect(
+      composioProvider.executeTool({
+        app: "app-resource-401",
+        emailAccountId: "email-account-1",
+        tool: "APP_LIST",
+        args: {},
+      }),
+    ).rejects.toBeInstanceOf(ConnectionExpiredError);
+
+    // One resource off limits isn't a dead token; the caller confirms first.
+    expect(
+      redisStore.get("composio-status:app-resource-401:email-account-1"),
+    ).toBeUndefined();
+  });
+
+  it("remembers a connection the provider no longer holds as lapsed", async () => {
+    await expect(
+      composioProvider.executeTool({
+        app: "app-no-account",
+        emailAccountId: "email-account-1",
+        tool: "APP_LIST",
+        args: {},
+      }),
+    ).rejects.toMatchObject({ confirmed: true });
+
+    expect(
+      redisStore.get("composio-status:app-no-account:email-account-1"),
+    ).toBe("needs_reconnect");
   });
 
   it("keeps nothing when the app rejects the key", async () => {

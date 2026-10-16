@@ -3,6 +3,7 @@ import { createTestLogger, getMockMessage } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
 import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import { GmailCallDeferredError } from "@/utils/gmail/quota";
+import { ConnectionExpiredError } from "@/utils/mcp/providers/types";
 import { getHomeData, priorityOf } from "./get-home";
 
 vi.mock("server-only", () => ({}));
@@ -565,6 +566,41 @@ describe("getHomeData: what's next", () => {
     }
   });
 
+  it("doesn't ask an app whose connection needs reconnecting, nor suggest connecting it", async () => {
+    prisma.mcpConnection.findMany.mockResolvedValue([
+      { ...connection("canvas"), needsReconnectAt: new Date(0) },
+    ] as never);
+    prisma.emailMessage.findMany.mockResolvedValue([
+      { fromDomain: "sfu.instructure.com" },
+    ] as never);
+
+    const home = await run(mockProvider({}));
+
+    expect(mocks.executeTool).not.toHaveBeenCalled();
+    expect(home.nextUp).toEqual([]);
+    expect(home.suggestion).toBeNull();
+  });
+
+  it("marks a connection for reconnecting when the app turns its token away", async () => {
+    prisma.mcpConnection.findMany.mockResolvedValue([
+      connection("canvas"),
+    ] as never);
+    mocks.executeTool.mockRejectedValue(
+      new ConnectionExpiredError("canvas", "Invalid access token."),
+    );
+
+    await run(mockProvider({}));
+
+    expect(prisma.mcpConnection.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "connection-canvas",
+        needsReconnectAt: null,
+        updatedAt: { lt: expect.any(Date) },
+      },
+      data: { needsReconnectAt: expect.any(Date) },
+    });
+  });
+
   it("suggests connecting an app the user already gets mail from, by sender domain", async () => {
     prisma.emailMessage.findMany.mockResolvedValue([
       { fromDomain: "sfu.instructure.com" },
@@ -625,6 +661,8 @@ const TOOL_RESULTS: Record<string, unknown> = {
 
 function connection(app: string) {
   return {
+    id: `connection-${app}`,
+    needsReconnectAt: null,
     emailAccountId: "account-1",
     emailAccount: { email: USER },
     integration: { name: app },

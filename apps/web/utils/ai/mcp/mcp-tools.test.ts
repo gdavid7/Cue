@@ -139,6 +139,18 @@ describe("createMcpToolsForAgent", () => {
     expect(Object.keys(result.tools)).toEqual(["notion-search"]);
   });
 
+  it("leaves out connections the app turned away until they're reconnected", async () => {
+    mockConnections([]);
+
+    await createMcpToolsForAgent("email-account-1");
+
+    expect(prisma.mcpConnection.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ needsReconnectAt: null }),
+      }),
+    );
+  });
+
   it("re-syncs a connection missing a newly allowed tool, keeping this run to its stored tools", async () => {
     mockConnections([
       {

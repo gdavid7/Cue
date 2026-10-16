@@ -317,7 +317,7 @@ export const MCP_INTEGRATIONS: Record<
         secret: true,
       },
     ],
-    verifyTool: "CANVAS_LIST_COURSES",
+    verifyTool: "CANVAS_GET_CURRENT_USER",
     allowedTools: [
       "CANVAS_LIST_COURSES",
       "CANVAS_GET_ALL_ASSIGNMENTS",

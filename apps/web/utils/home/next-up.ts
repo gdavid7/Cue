@@ -5,6 +5,7 @@ import { fetchCalendarEventsInWindow } from "@/utils/calendar/fetch-events-in-wi
 import type { CalendarEvent } from "@/utils/calendar/event-types";
 import type { Logger } from "@/utils/logger";
 import { findIntegration } from "@/utils/mcp/integrations";
+import { connectionExecutor } from "@/utils/mcp/provider-connection";
 import { getIntegrationProvider } from "@/utils/mcp/providers/registry";
 import {
   onePerIntegration,
@@ -200,6 +201,8 @@ async function getDeadlines({
         ...ownedBySameUser(emailAccountId),
       },
       select: {
+        id: true,
+        needsReconnectAt: true,
         emailAccountId: true,
         emailAccount: { select: { email: true } },
         integration: { select: { name: true } },
@@ -217,9 +220,17 @@ async function getDeadlines({
     onePerIntegration(connections, emailAccountId).map(async (connection) => {
       const app = connection.integration.name;
       const source = DEADLINE_SOURCES[app];
-      const provider = findIntegration(app)?.provider;
-      if (!source || !provider || !connection.emailAccountId) return [];
+      // Still connected, so nothing to suggest, but the app turned its
+      // credentials away: Integrations asks the person to reconnect it.
+      if (!source || !connection.emailAccountId || connection.needsReconnectAt)
+        return [];
       const accountId = connection.emailAccountId;
+      const execute: Execute | null = connectionExecutor({
+        id: connection.id,
+        integrationName: app,
+        emailAccountId: accountId,
+      });
+      if (!execute) return [];
       const inWindow = (items: NextUpItem[]) =>
         items.filter(
           (item) => new Date(item.at) > now && new Date(item.at) < windowEnd,
@@ -229,14 +240,6 @@ async function getDeadlines({
       const cached = await redis.get<NextUpItem[]>(key).catch(() => null);
       if (Array.isArray(cached)) return inWindow(cached);
 
-      const execute: Execute = (tool, args) =>
-        getIntegrationProvider(provider.id).executeTool({
-          app: provider.app,
-          authScheme: provider.authScheme,
-          emailAccountId: accountId,
-          tool,
-          args,
-        });
       const fetching = source
         .fetch(execute, {
           accountId,
