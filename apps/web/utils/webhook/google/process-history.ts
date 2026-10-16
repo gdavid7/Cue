@@ -32,6 +32,10 @@ import type { gmail_v1 } from "@googleapis/gmail";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import { scheduleGmailHistoryCatchUp } from "@/utils/webhook/google/history-catch-up";
 import { mapWithConcurrency } from "@/utils/async";
+import {
+  acquireGmailHistoryLease,
+  releaseGmailHistoryLease,
+} from "@/utils/redis/gmail-history-lease";
 
 const GMAIL_HISTORY_PAGE_SIZE = 500;
 // History after a silent period is mail the user is still waiting on, so it is
@@ -136,7 +140,33 @@ export async function processHistoryForUser(
       return NextResponse.json({ ok: true });
     }
 
-    return await withRateLimitRecording(
+    const lease = await acquireGmailHistoryLease(
+      validatedEmailAccount.id,
+      logger,
+    );
+    if (!lease.acquired) {
+      // That run may stop before this push's history, so it isn't lost.
+      logger.info("Another run holds the account's history; catching up");
+      await markGmailHistoryCatchUp(validatedEmailAccount.id, logger);
+      await scheduleGmailHistoryCatchUp({
+        emailAccountId: validatedEmailAccount.id,
+        historyId,
+        logger,
+      });
+      return NextResponse.json({ ok: true });
+    }
+
+    try {
+      return await processWithRateLimitRecording();
+    } finally {
+      await releaseGmailHistoryLease(validatedEmailAccount.id, lease, logger);
+    }
+  } catch (error) {
+    return await handleHistoryError(error);
+  }
+
+  function processWithRateLimitRecording() {
+    return withRateLimitRecording(
       {
         emailAccountId: validatedEmailAccount.id,
         provider: "google",
@@ -265,7 +295,9 @@ export async function processHistoryForUser(
         return NextResponse.json({ ok: true });
       },
     );
-  } catch (error) {
+  }
+
+  async function handleHistoryError(error: unknown) {
     if (isInvalidGrantError(error)) {
       logger.warn("Invalid grant", { email });
       await cleanupInvalidTokens({

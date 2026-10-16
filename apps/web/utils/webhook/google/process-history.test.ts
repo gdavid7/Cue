@@ -18,8 +18,19 @@ import {
   getGmailHistoryCatchUp,
   markGmailHistoryCatchUp,
 } from "@/utils/redis/gmail-history-catch-up";
+import {
+  acquireGmailHistoryLease,
+  releaseGmailHistoryLease,
+} from "@/utils/redis/gmail-history-lease";
 
 const logger = createTestLogger();
+
+beforeEach(() => {
+  vi.mocked(acquireGmailHistoryLease).mockResolvedValue({
+    acquired: true,
+    token: "lease-token",
+  });
+});
 
 vi.mock("@/utils/gmail/client", () => ({
   getGmailClientWithRefresh: vi.fn().mockResolvedValue({}),
@@ -68,6 +79,11 @@ vi.mock("@/utils/redis/gmail-history-catch-up", () => ({
   markGmailHistoryCatchUp: vi.fn().mockResolvedValue(undefined),
   getGmailHistoryCatchUp: vi.fn().mockResolvedValue(null),
   clearGmailHistoryCatchUp: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("@/utils/redis/gmail-history-lease", () => ({
+  acquireGmailHistoryLease: vi.fn(),
+  releaseGmailHistoryLease: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/utils/webhook/google/process-history-item", () => ({
@@ -823,6 +839,48 @@ describe("processHistoryForUser - backlogs", () => {
     expect(processedMessageIds()).toEqual(expect.arrayContaining(["m1", "m2"]));
     expect(lastCursorUpdate()).toBe("4900");
     expect(publishToQstashAt).not.toHaveBeenCalled();
+  });
+
+  it("leaves the history to a catch-up while another run holds the account", async () => {
+    vi.mocked(acquireGmailHistoryLease).mockResolvedValue({ acquired: false });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1300 },
+      {},
+      logger,
+    );
+
+    expect(getHistory).not.toHaveBeenCalled();
+    expect(processHistoryItem).not.toHaveBeenCalled();
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+    expect(markGmailHistoryCatchUp).toHaveBeenCalledWith(
+      "account-123",
+      expect.anything(),
+    );
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/google/webhook/catch-up",
+        body: { emailAccountId: "account-123", historyId: "1300" },
+      }),
+    );
+  });
+
+  it("releases the account's history lease when the run ends", async () => {
+    vi.mocked(getHistory).mockResolvedValue({
+      history: inboxHistory(["1100", "m1"]),
+    } as any);
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1100 },
+      {},
+      logger,
+    );
+
+    expect(releaseGmailHistoryLease).toHaveBeenCalledWith(
+      "account-123",
+      { acquired: true, token: "lease-token" },
+      expect.anything(),
+    );
   });
 
   it("keeps a thread's messages in order, so a newer inbound reply isn't resolved by an older sent one", async () => {
