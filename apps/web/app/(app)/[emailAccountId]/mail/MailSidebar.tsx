@@ -5,12 +5,16 @@ import {
   type FormEvent,
   type MouseEvent,
   type ReactNode,
+  createContext,
   useCallback,
+  useContext,
   useEffect,
+  useMemo,
   useState,
   useSyncExternalStore,
 } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { getMailSidebarRowPresentation } from "@inboxzero/mail-ui/MailSidebarRow";
 import {
   ArchiveIcon,
@@ -58,6 +62,10 @@ import type { OutlookFolder } from "@/utils/outlook/folders";
 import { OUTLOOK_INBOX_SECTIONS } from "@/utils/outlook/inbox-sections";
 import { getLabelTree, type SidebarLabel } from "./label-tree";
 import { showMailView } from "./show-mail-view";
+import {
+  isSidebarRowActive,
+  type PendingNavigation,
+} from "./pending-navigation";
 import { splitLabelsByListVisibility } from "./label-visibility";
 import { getMailSidebarFolders } from "./outlook-folder-list";
 import {
@@ -112,6 +120,8 @@ export type MailSidebarProps = {
   allInboxesHref?: string;
   /** Today's briefing, which lives outside the mail view. */
   todayHref?: string;
+  /** The pointer or focus reached the Today row, so it may well open next. */
+  onTodayIntent?: () => void;
   /** The app's other places, such as Chat and Rules, above the footer. */
   appLinks?: { name: string; href: string; icon: ReactNode }[];
   /** The app's rarer tools, such as Unsubscribe, behind a Tools toggle. */
@@ -220,7 +230,15 @@ export const OUTLOOK_INBOX_CATEGORIES: MailCategory[] =
     Icon: section.type === "focused" ? SparklesIcon : InboxIcon,
   }));
 
-export function MailSidebar({
+export function MailSidebar(props: MailSidebarProps) {
+  return (
+    <PendingNavigationProvider>
+      <MailSidebarContent {...props} />
+    </PendingNavigationProvider>
+  );
+}
+
+function MailSidebarContent({
   activeType,
   activeLabelId,
   activeFolderId,
@@ -247,6 +265,7 @@ export function MailSidebar({
   unified = false,
   allInboxesHref,
   todayHref,
+  onTodayIntent,
   appLinks,
   toolLinks,
   showSidebarToggle = true,
@@ -360,6 +379,9 @@ export function MailSidebar({
               count={displayCount(countsById.get("INBOX"))}
               emphasizeCount
               collapsed={collapsed}
+              // Off the mail screen the inbox is a route away; fetched ahead,
+              // it opens without waiting on the server.
+              prefetch={activeType === "today" ? true : undefined}
             />
           )}
           {todayHref ? (
@@ -370,6 +392,8 @@ export function MailSidebar({
               name="Today"
               count={null}
               collapsed={collapsed}
+              prefetch
+              onIntent={onTodayIntent}
             />
           ) : null}
           {unified
@@ -986,9 +1010,14 @@ function NavRow({
   nested,
   collapsed,
   reloadDocument,
+  prefetch,
+  onIntent,
 }: {
   href?: string;
   reloadDocument?: boolean;
+  /** Overrides the default: mail views of the open mail screen skip it. */
+  prefetch?: boolean;
+  onIntent?: () => void;
   active: boolean;
   icon: ReactNode;
   name: string;
@@ -997,8 +1026,14 @@ function NavRow({
   nested?: boolean;
   collapsed?: boolean;
 }) {
+  const pendingNavigation = useContext(PendingNavigationContext);
   const presentation = getMailSidebarRowPresentation({
-    active,
+    active: isSidebarRowActive({
+      active,
+      href,
+      pending: pendingNavigation.pending,
+      pathname: pendingNavigation.pathname,
+    }),
     icon,
     name,
     count,
@@ -1025,7 +1060,11 @@ function NavRow({
         className={className}
         // Views of the open mail screen change on the client, so fetching
         // them from the server ahead of time would be wasted.
-        prefetch={parseMailPath(href.split("?")[0]) ? false : undefined}
+        prefetch={
+          prefetch ?? (parseMailPath(href.split("?")[0]) ? false : undefined)
+        }
+        onPointerEnter={onIntent}
+        onFocus={onIntent}
         onClick={(event: MouseEvent<HTMLAnchorElement>) => {
           if (
             event.button !== 0 ||
@@ -1036,6 +1075,7 @@ function NavRow({
           )
             return;
           if (showMailView(href)) event.preventDefault();
+          else pendingNavigation.start(href);
         }}
       >
         {content}
@@ -1053,6 +1093,31 @@ function NavRow({
     <RailTooltip label={count === null ? name : `${name} (${count})`}>
       {row}
     </RailTooltip>
+  );
+}
+
+const PendingNavigationContext = createContext<{
+  pending: PendingNavigation | null;
+  pathname: string;
+  start: (href: string) => void;
+}>({ pending: null, pathname: "", start: () => {} });
+
+/** Lets a row show as current as soon as it's clicked; see `isSidebarRowActive`. */
+function PendingNavigationProvider({ children }: { children: ReactNode }) {
+  const pathname = usePathname() ?? "";
+  const [pending, setPending] = useState<PendingNavigation | null>(null);
+  const value = useMemo(
+    () => ({
+      pending,
+      pathname,
+      start: (href: string) => setPending({ href, from: pathname }),
+    }),
+    [pending, pathname],
+  );
+  return (
+    <PendingNavigationContext.Provider value={value}>
+      {children}
+    </PendingNavigationContext.Provider>
   );
 }
 
