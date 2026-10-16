@@ -1,4 +1,4 @@
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { getEmailAccountId } from "../account-test-helpers";
 import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
@@ -34,7 +34,7 @@ const EMPTY_INSIGHT = {
 test.describe.configure({ mode: "serial" });
 
 // The emulator lives for the whole spec, while each test starts a new device.
-let seeded = false;
+const threads = { person: "", newsletter: "" };
 
 test.beforeEach(async ({ page }) => {
   test.skip(
@@ -68,21 +68,19 @@ test.beforeEach(async ({ page }) => {
       ],
     },
   });
-  if (seeded) return;
-  seeded = true;
   // FYI, not To Reply: Draft reply works for any email from a person, and
   // nothing drafts on its own before the user asks.
   const [fyi, newsletter] = await Promise.all([
     ensureLabel(page, "FYI"),
     ensureLabel(page, "Newsletter"),
   ]);
-  await insertMessage(page, {
+  threads.person = await ensureMessage(page, {
     from: "Maya Chen <maya@talent.example>",
     subject: PERSON_SUBJECT,
     body: PERSON_BODY,
     labelIds: ["INBOX", "UNREAD", fyi],
   });
-  await insertMessage(page, {
+  threads.newsletter = await ensureMessage(page, {
     from: "Field Notes <hello@fieldnotes.example>",
     subject: NEWSLETTER_SUBJECT,
     body: "This week: three essays on slow travel. Read online or unsubscribe.",
@@ -112,9 +110,12 @@ test("sums up a conversation with a person, not a newsletter, and drafts the rep
     if (request.url().includes("/api/user/thread-brief"))
       briefRequests.push(request.url());
   });
-  const { conversations } = await openMail(page);
+  const { conversations, emailAccountId } = await openMail(page);
 
-  await openConversation(page, conversations, PERSON_SUBJECT);
+  await conversationWithSubject(page, conversations, PERSON_SUBJECT).click();
+  await expect(page.getByRole("heading", { name: PERSON_SUBJECT })).toBeVisible(
+    { timeout: 60_000 },
+  );
   const strip = page.getByRole("region", { name: "Cue summary" });
   await expect(strip.getByText(SUMMARY)).toBeVisible({ timeout: 60_000 });
   await expect(
@@ -126,13 +127,18 @@ test("sums up a conversation with a person, not a newsletter, and drafts the rep
   expect(briefModelCalls).toBeGreaterThan(0);
   const briefRequestsBeforeNewsletter = briefRequests.length;
 
-  await openConversation(page, conversations, NEWSLETTER_SUBJECT);
+  await openThread(
+    page,
+    emailAccountId,
+    threads.newsletter,
+    NEWSLETTER_SUBJECT,
+  );
   await expectThreadReaderBody(page, "three essays on slow travel");
   await expect(strip).toHaveCount(0);
   expect(briefRequests).toHaveLength(briefRequestsBeforeNewsletter);
   await capturePlaywrightCheckpoint(page, testInfo, "cue-strip-newsletter");
 
-  await openConversation(page, conversations, PERSON_SUBJECT);
+  await openThread(page, emailAccountId, threads.person, PERSON_SUBJECT);
   const editor = page.locator(
     '[data-testid="thread-reader"] [data-email-editor-content]',
   );
@@ -150,6 +156,7 @@ test("the strip reads well in light and dark, on desktop and phones", async ({
   page,
 }, testInfo) => {
   test.setTimeout(480_000);
+  const emailAccountId = await getEmailAccountId(page);
   for (const theme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme: theme });
     await page.addInitScript((value) => {
@@ -160,8 +167,7 @@ test("the strip reads well in light and dark, on desktop and phones", async ({
       { width: 390, height: 844 },
     ]) {
       await page.setViewportSize(size);
-      const { conversations } = await openMail(page);
-      await openConversation(page, conversations, PERSON_SUBJECT);
+      await openThread(page, emailAccountId, threads.person, PERSON_SUBJECT);
       const strip = page.getByRole("region", { name: "Cue summary" });
       await expect(strip.getByText(SUMMARY)).toBeVisible({ timeout: 60_000 });
       expect(await hasHorizontalOverflow(page)).toBe(false);
@@ -174,12 +180,15 @@ test("the strip reads well in light and dark, on desktop and phones", async ({
   }
 });
 
-async function openConversation(
+async function openThread(
   page: Page,
-  conversations: Locator,
+  emailAccountId: string,
+  threadId: string,
   subject: string,
 ) {
-  await conversationWithSubject(page, conversations, subject).click();
+  await page.goto(`/${emailAccountId}/mail?thread-id=${threadId}`, {
+    waitUntil: "domcontentloaded",
+  });
   await expect(page.getByRole("heading", { name: subject })).toBeVisible({
     timeout: 60_000,
   });
@@ -245,10 +254,34 @@ async function ensureLabel(page: Page, name: string) {
 }
 
 // New messages, so what Cue caches for them can't reach another spec's mail.
-async function insertMessage(
+// A retry runs beforeEach again against the same mailbox, so each is made once.
+async function ensureMessage(
   page: Page,
   input: { from: string; subject: string; body: string; labelIds: string[] },
 ) {
+  const headers = await gmailHeaders();
+  const search = await page.request.get(
+    `${gmailBaseUrl()}/gmail/v1/users/me/messages`,
+    { headers, params: { q: `subject:"${input.subject}"` } },
+  );
+  expect(search.ok(), await search.text()).toBe(true);
+  const found = (await search.json()) as {
+    messages?: { id: string; threadId: string }[];
+  };
+  for (const candidate of found.messages ?? []) {
+    const message = await page.request.get(
+      `${gmailBaseUrl()}/gmail/v1/users/me/messages/${candidate.id}`,
+      { headers, params: { format: "metadata" } },
+    );
+    const { payload } = (await message.json()) as {
+      payload?: { headers?: { name: string; value: string }[] };
+    };
+    const subject = payload?.headers?.find(
+      (header) => header.name.toLowerCase() === "subject",
+    )?.value;
+    if (subject === input.subject) return candidate.threadId;
+  }
+
   const email = process.env.PLAYWRIGHT_TEST_EMAIL;
   if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
   const inserted = await page.request.post(
@@ -266,6 +299,7 @@ async function insertMessage(
     },
   );
   expect(inserted.ok(), await inserted.text()).toBe(true);
+  return ((await inserted.json()) as { threadId: string }).threadId;
 }
 
 async function gmailHeaders() {

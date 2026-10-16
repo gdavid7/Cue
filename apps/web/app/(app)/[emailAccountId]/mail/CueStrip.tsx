@@ -207,10 +207,10 @@ export function CueStrip({
     <section
       aria-busy={!briefSettled}
       aria-label="Cue summary"
-      className="fade-in mb-3 flex animate-in flex-col gap-1.5 rounded-lg border border-border/70 bg-muted/40 px-3 py-2 duration-200 motion-reduce:animate-none sm:flex-row sm:items-center sm:gap-3 sm:py-1.5"
+      className="fade-in mb-3 flex animate-in flex-col gap-1 rounded-lg border border-border/70 bg-muted/40 px-3 pt-2 pb-1.5 duration-200 motion-reduce:animate-none"
       data-cue-strip
     >
-      <div className="flex min-h-6 min-w-0 flex-1 items-center gap-2 pointer-coarse:min-h-9">
+      <div className="flex min-h-5 min-w-0 items-center gap-2">
         <SparklesIcon
           aria-hidden
           className="size-3.5 shrink-0 text-muted-foreground"
@@ -230,7 +230,8 @@ export function CueStrip({
           </>
         )}
       </div>
-      <div className="flex min-h-6 shrink-0 flex-wrap items-center gap-1 pointer-coarse:min-h-9">
+      {/* Under the summary, so the line gets the strip's full width. */}
+      <div className="ml-4 flex min-h-6 flex-wrap items-center gap-1 pointer-coarse:min-h-9">
         {actions.map(renderAction)}
         {onAskCue ? (
           <StripButton
@@ -271,7 +272,7 @@ function StripSummary({
     <button
       aria-expanded={expanded}
       className={cn(
-        "min-w-0 rounded-sm text-left text-foreground/90 text-xs leading-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-[13px]",
+        "min-w-0 rounded-sm text-left text-[13px] text-foreground/90 leading-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         expanded ? "whitespace-normal" : "truncate",
       )}
       onClick={() => setExpanded((value) => !value)}
