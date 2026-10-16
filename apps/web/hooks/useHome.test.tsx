@@ -245,6 +245,35 @@ describe("useWarmHome", () => {
     expect(result.current.data).toEqual({ pending: [] });
   });
 
+  it("opens on the saved copy after a hover, with one load", async () => {
+    window.localStorage.clear();
+    writeCachedToday({
+      userId: "user",
+      emailAccountId: "account",
+      data: todayData("cached"),
+      now: Date.now(),
+    });
+    const loads = pendingLoads();
+    const { result, rerender } = renderHook(
+      ({ open }: { open: boolean }) => {
+        useWarmHome("account", true, "user");
+        return useHome(open ? "account" : null, "user");
+      },
+      { initialProps: { open: false }, wrapper: wrapper(loads.fetcher, 2000) },
+    );
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+
+    rerender({ open: true });
+    expect(result.current.data).toEqual(todayData("cached"));
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    await act(async () => {
+      loads.resolve(todayData("fresh"));
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(loads.fetcher).toHaveBeenCalledTimes(1);
+    expect(result.current.data).toEqual(todayData("fresh"));
+  });
+
   it("refreshes a hover's load that something changed before Today opened", async () => {
     const fetcher = vi.fn(async () => ({ pending: [] }));
     const { result, rerender } = renderHook(

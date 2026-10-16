@@ -106,11 +106,11 @@ export const MailShellSidebar = memo(function MailShellSidebar({
   mobileOpen?: boolean;
   onMobileOpenChange?: (open: boolean) => void;
 }) {
-  const { emailAccountId, provider } = useAccount();
+  const { emailAccountId, provider, userId } = useAccount();
   // Reaching for Today starts its load, so it opens on data already coming.
   // A pointer that only passes over Today on its way elsewhere loads nothing.
   const todayIntent = useIntent();
-  useWarmHome(emailAccountId, todayIntent.intended);
+  useWarmHome(emailAccountId, todayIntent.intended, userId);
   const isGoogle = isGoogleProvider(provider);
   const isOutlook = isMicrosoftProvider(provider);
   const terminology = getEmailTerminology(provider);

@@ -13,6 +13,9 @@ const PENDING_LOAD_LIMIT = 12;
 const FOCUS_REFRESH_MIN_MS = 30_000;
 const CHANGE_REFRESH_MIN_MS = 10_000;
 
+// Saved copies as they went into SWR's cache, so they aren't saved back.
+const seededCopies = new WeakSet<GetHomeResponse>();
+
 /**
  * Today's data. It opens on what Today last showed in this browser, then
  * refreshes. `gaveUp` is set once a lane has stayed pending through every
@@ -28,22 +31,8 @@ export function useHome(emailAccountId?: string | null, userId?: string) {
     setPendingLoads(loads);
   };
   const key = homeKey(emailAccountId);
-  const { cache, mutate: mutateKey } = useSWRConfig();
-  // The saved copy as it went into SWR's cache, so it isn't saved back.
-  const seeded = useRef<GetHomeResponse | undefined>(undefined);
-  // Seeds SWR's own cache, so row actions change what is on screen. It runs
-  // before SWR's first load starts in this same commit (effects run in
-  // order), so that load isn't taken as overtaken by it. Effects only run in
-  // the browser, after hydration, so the server's render still matches.
-  const serializedKey = key ? unstable_serialize(key) : null;
-  useLayoutEffect(() => {
-    if (!serializedKey || !emailAccountId || !userId) return;
-    if (cache.get(serializedKey)?.data !== undefined) return;
-    const cached = readCachedToday({ userId, emailAccountId });
-    if (!cached) return;
-    seeded.current = cached;
-    mutateKey(serializedKey, cached, { revalidate: false });
-  }, [serializedKey, emailAccountId, userId, cache, mutateKey]);
+  const { mutate: mutateKey } = useSWRConfig();
+  useSavedHomeSeed(emailAccountId, userId);
   const home = useSWR<GetHomeResponse>(key, {
     // A row action while a load is on its way makes SWR drop that load's
     // answer; ask again so the fresh lanes still arrive.
@@ -62,12 +51,7 @@ export function useHome(emailAccountId?: string | null, userId?: string) {
   const { mutate } = home;
 
   useEffect(() => {
-    if (
-      !home.data ||
-      home.data === seeded.current ||
-      !emailAccountId ||
-      !userId
-    )
+    if (!home.data || seededCopies.has(home.data) || !emailAccountId || !userId)
       return;
     writeCachedToday({ userId, emailAccountId, data: home.data });
   }, [home.data, emailAccountId, userId]);
@@ -121,9 +105,14 @@ export function useHome(emailAccountId?: string | null, userId?: string) {
 export function useWarmHome(
   emailAccountId: string | null | undefined,
   enabled: boolean,
+  userId?: string,
 ) {
   const key = enabled ? homeKey(emailAccountId) : null;
   const { mutate } = useSWRConfig();
+  // With a saved copy, the hover puts it in place instead of loading: a
+  // load on its way when Today opened would be dropped as overtaken by the
+  // copy, and Today loads once itself.
+  useSavedHomeSeed(enabled ? emailAccountId : null, userId);
   useSWR<GetHomeResponse>(key, {
     revalidateIfStale: false,
     revalidateOnFocus: false,
@@ -133,6 +122,31 @@ export function useWarmHome(
       if (key) mutate(key);
     },
   });
+}
+
+/**
+ * Puts Today's saved copy in SWR's own cache when it holds nothing for the
+ * account, so row actions change what is on screen. Call it before the
+ * hook's useSWR: effects run in order, so the copy is in place before SWR
+ * starts its first load in the same commit, and that load isn't dropped as
+ * overtaken by it. Effects only run in the browser after hydration, so the
+ * server's render still matches.
+ */
+function useSavedHomeSeed(
+  emailAccountId: string | null | undefined,
+  userId: string | undefined,
+) {
+  const key = homeKey(emailAccountId);
+  const serializedKey = key ? unstable_serialize(key) : null;
+  const { cache, mutate } = useSWRConfig();
+  useLayoutEffect(() => {
+    if (!serializedKey || !emailAccountId || !userId) return;
+    if (cache.get(serializedKey)?.data !== undefined) return;
+    const saved = readCachedToday({ userId, emailAccountId });
+    if (!saved) return;
+    seededCopies.add(saved);
+    mutate(serializedKey, saved, { revalidate: false });
+  }, [serializedKey, emailAccountId, userId, cache, mutate]);
 }
 
 function homeKey(emailAccountId: string | null | undefined) {
