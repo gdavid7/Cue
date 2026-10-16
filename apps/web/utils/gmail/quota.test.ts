@@ -17,6 +17,7 @@ import {
   setGmailInitialSync,
 } from "@/utils/gmail/quota";
 import { gmailQuotaStore } from "@/utils/gmail/quota-store";
+import { withGmailRetry } from "@/utils/gmail/retry";
 import { runWithRequestDeadline } from "@/utils/request-deadline";
 import { sleep } from "@/utils/sleep";
 
@@ -47,6 +48,7 @@ const TURN_GAP_ACCOUNT = "account-turn-gap";
 const GIVE_UP_ACCOUNT = "account-give-up";
 const DEADLINE_ACCOUNT = "account-deadline";
 const BACKOFF_ACCOUNT = "account-backoff";
+const RETRY_ACCOUNT = "account-retry";
 const NO_DEADLINE_ACCOUNT = "account-no-deadline";
 // Gmail refuses short bursts well under its minute's limit; its minute spread
 // evenly is the most any second can safely carry.
@@ -470,6 +472,38 @@ describe("Gmail quota gate", () => {
     );
     await vi.advanceTimersByTimeAsync(5000);
     expect(insight).toBe(true);
+  });
+
+  it("holds a person's retry after Gmail refuses them instead of resending at once", async () => {
+    const sentAt: number[] = [];
+    const search = () =>
+      runWithGmailQuota(
+        { caller: "chat/searchInbox", priority: "interactive" },
+        () =>
+          withGmailRetry(() =>
+            meterGmailCall(
+              { emailAccountId: RETRY_ACCOUNT, cost: 5 },
+              async () => {
+                sentAt.push(Date.now());
+                if (sentAt.length === 1)
+                  throw Object.assign(new Error(quotaRefusal.message), {
+                    status: quotaRefusal.status,
+                    errors: quotaRefusal.errors,
+                  });
+                return "results";
+              },
+            ),
+          ),
+      );
+    const startedAt = Date.now();
+
+    const result = search();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await expect(result).resolves.toBe("results");
+    expect(sentAt).toHaveLength(2);
+    // Its own backoff would resend after two seconds, into the same refusal.
+    expect(sentAt[1] - startedAt).toBeGreaterThanOrEqual(5000);
   });
 
   it("halves background's pace for ten minutes after a refusal rather than pausing it and resuming at full pace", async () => {
