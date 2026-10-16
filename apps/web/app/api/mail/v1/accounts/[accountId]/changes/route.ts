@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { withEmailProvider } from "@/utils/middleware";
 import {
   changesRequestSchema,
@@ -12,6 +12,8 @@ import {
   unsupportedVersionResponse,
 } from "@/utils/mail-api/authorization";
 import { createEmailProviderMailboxSource } from "@/utils/mail-api/source";
+import { nudgeCatchUpForNewGmail } from "@/utils/mail-api/new-mail-catch-up";
+import { isGoogleProvider } from "@/utils/email/provider-types";
 
 export const POST = withEmailProvider(
   "mail/v1/changes",
@@ -49,6 +51,15 @@ export const POST = withEmailProvider(
       ...parsed.data,
       signal: request.signal,
     });
+    if (isGoogleProvider(request.emailProvider.name)) {
+      after(() =>
+        nudgeCatchUpForNewGmail({
+          emailAccountId: request.auth.emailAccountId,
+          results: [result],
+          logger: request.logger,
+        }),
+      );
+    }
     return NextResponse.json(
       changesResultSchema.parse({
         ...result,

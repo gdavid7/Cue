@@ -7,9 +7,13 @@ import { aiDetermineThreadStatus } from "@/utils/ai/reply/determine-thread-statu
 import { getEmailAccount, getMockMessage } from "@/__tests__/helpers";
 import { SystemType, ThreadTrackerType } from "@/generated/prisma/enums";
 import prisma from "@/utils/__mocks__/prisma";
+import { publishTrackerHint } from "@/utils/redis/local-mail-hints";
 
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/ai/reply/determine-thread-status");
+vi.mock("@/utils/redis/local-mail-hints", () => ({
+  publishTrackerHint: vi.fn().mockResolvedValue(undefined),
+}));
 
 describe("determineConversationStatus", () => {
   const emailAccount = getEmailAccount();
@@ -116,6 +120,26 @@ describe("updateThreadTrackers", () => {
       expect.objectContaining({
         update: { resolved: false, type: ThreadTrackerType.NEEDS_REPLY },
       }),
+    );
+  });
+
+  it.each([
+    SystemType.TO_REPLY,
+    SystemType.FYI,
+  ])("tells an open Today its lanes changed (%s)", async (status) => {
+    vi.mocked(publishTrackerHint).mockClear();
+
+    await updateThreadTrackers({
+      emailAccountId: "account",
+      threadId: "thread",
+      messageId: "message",
+      sentAt: new Date("2026-10-14T12:00:00Z"),
+      status,
+    });
+
+    expect(publishTrackerHint).toHaveBeenCalledWith(
+      "account",
+      expect.anything(),
     );
   });
 });

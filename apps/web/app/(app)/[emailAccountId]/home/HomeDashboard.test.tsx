@@ -473,6 +473,23 @@ describe("HomeDashboard states", () => {
     expect(mocks.home.retry).toHaveBeenCalled();
   });
 
+  it("needs reply failed to load: never claims nothing needs a reply", () => {
+    mocks.home.data = {
+      ...homeData([]),
+      alsoInInbox: [thread("b", "Dentist")],
+      failed: ["needsYou"],
+    };
+
+    renderToday();
+
+    expect(screen.queryByText("All clear.")).toBeNull();
+    expect(screen.queryAllByRole("status")).toEqual([]);
+    expect(lanes()).toEqual(["Also in your inbox"]);
+    expect(screen.getByText("Couldn't load this")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+    expect(mocks.home.retry).toHaveBeenCalled();
+  });
+
   it("error: shows the error alone, with no status or lanes", () => {
     mocks.home.data = undefined;
     mocks.home.error = { error: "Boom" };
@@ -556,6 +573,7 @@ function homeData(needsYou: HomeThread[]): GetHomeResponse {
     waiting: [],
     alsoInInbox: [],
     pending: [],
+    failed: [],
     agentTasks: [],
     cue: { aiAccess: true, replyTracking: true, hasReadMail: true },
     today: { checked: 0, filed: 0, filedLabel: null },

@@ -266,7 +266,7 @@ describe("getHomeData", () => {
     expect(home.pending).toEqual(["waiting"]);
   });
 
-  it("shows a lane Gmail failed for another reason as empty, not pending", async () => {
+  it("marks a lane Gmail failed for another reason failed, so empty isn't read as nothing there", async () => {
     const provider = mockProvider({});
     provider.getThreadsWithQuery.mockRejectedValue(new Error("Bad request"));
 
@@ -274,6 +274,7 @@ describe("getHomeData", () => {
 
     expect(home.alsoInInbox).toEqual([]);
     expect(home.pending).toEqual([]);
+    expect(home.failed).toEqual(["alsoInInbox"]);
   });
 
   it("holds back the rest of the inbox until the labels load, so filed mail isn't shown there", async () => {

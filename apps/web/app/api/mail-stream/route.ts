@@ -3,6 +3,7 @@ import { withAuth } from "@/utils/middleware";
 import { getEmailAccount } from "@/utils/redis/account-validation";
 import { RedisSubscriber } from "@/utils/redis/subscriber";
 import {
+  TRACKER_HINT_MESSAGE,
   localMailHintChannel,
   refreshLocalMailInterest,
 } from "@/utils/redis/local-mail-hints";
@@ -58,8 +59,13 @@ export const GET = withAuth("mail-stream", async (request) => {
           close();
         }
       };
-      const onMessage = (receivedChannel: string) => {
-        if (receivedChannel === channel) send("mailbox-change");
+      const onMessage = (receivedChannel: string, message: string) => {
+        if (receivedChannel !== channel) return;
+        send(
+          message === TRACKER_HINT_MESSAGE
+            ? "trackers-change"
+            : "mailbox-change",
+        );
       };
       const refresh = async () => {
         if (closed || refreshing) return;
