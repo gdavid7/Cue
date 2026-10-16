@@ -110,6 +110,47 @@ export function withPageParams(
 }
 
 /**
+ * The same mail address after the account list changed: the page's account
+ * and an All Inboxes thread's account move to their new positions. Returns
+ * null outside `/mail/u/{n}`.
+ */
+export function reindexMailPath({
+  pathname,
+  search,
+  accountIndex,
+  previousAccountIds,
+  accountIds,
+}: {
+  pathname: string;
+  search: string;
+  accountIndex: number;
+  previousAccountIds: readonly string[];
+  accountIds: readonly string[];
+}) {
+  const mail = parseMailPath(pathname, search);
+  if (!mail || accountIndex < 0) return null;
+  const threadAccountId =
+    mail.threadAccountIndex == null
+      ? undefined
+      : previousAccountIds[mail.threadAccountIndex];
+  const threadAccountIndex = threadAccountId
+    ? accountIds.indexOf(threadAccountId)
+    : -1;
+  // A thread whose account is gone would otherwise open as the page's.
+  const threadAccountGone =
+    mail.threadAccountIndex != null && threadAccountIndex < 0;
+  return withPageParams(
+    buildMailPath({
+      ...mail,
+      accountIndex,
+      threadId: threadAccountGone ? null : mail.threadId,
+      threadAccountIndex: threadAccountIndex >= 0 ? threadAccountIndex : null,
+    }),
+    search,
+  );
+}
+
+/**
  * Reads a mail address back. Returns null for anything outside `/mail/u/{n}`.
  * A thread id may contain `/` (Outlook's do), so whatever follows the view is
  * the thread, whether or not the router decoded `%2F`.

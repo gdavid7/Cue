@@ -6,9 +6,36 @@ import {
   mailPathForAccount,
   type MailUrl,
   parseMailPath,
+  reindexMailPath,
   resolveSlug,
 } from "./mail-url";
 import { OTHER_SPLIT_ID } from "@/utils/split-inbox/split-query";
+
+describe("reindexMailPath", () => {
+  it("moves an All Inboxes thread's account to its new position", () => {
+    expect(
+      reindexMailPath({
+        pathname: "/mail/u/2/all-inboxes/inbox/thread-1",
+        search: "?account=2&ref=mail",
+        accountIndex: 1,
+        previousAccountIds: ["a", "b", "c"],
+        accountIds: ["b", "c"],
+      }),
+    ).toBe("/mail/u/1/all-inboxes/inbox/thread-1?ref=mail&account=1");
+  });
+
+  it("closes a thread whose account is gone", () => {
+    expect(
+      reindexMailPath({
+        pathname: "/mail/u/2/all-inboxes/inbox/thread-1",
+        search: "?account=0",
+        accountIndex: 1,
+        previousAccountIds: ["a", "b", "c"],
+        accountIds: ["b", "c"],
+      }),
+    ).toBe("/mail/u/1/all-inboxes/inbox");
+  });
+});
 
 describe("buildMailPath", () => {
   it.each<[MailUrl, string]>([

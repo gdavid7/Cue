@@ -6,6 +6,8 @@ import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/rou
 import { setLastEmailAccountAction } from "@/utils/actions/email-account-cookie";
 import { unownedAccountRedirectUrl } from "@/utils/account-switch-url";
 import { ownedLastEmailAccountId } from "@/utils/cookies";
+import { reindexMailPath } from "@/utils/mail-url";
+import { toastInfo } from "@/components/Toast";
 import {
   fetchEmailAccounts,
   subscribeEmailAccounts,
@@ -78,10 +80,16 @@ export function EmailAccountProvider({
     [serverAccounts],
   );
   const accountIds = loadedAccountIds ?? serverAccountIds;
+  // `/mail/u/{n}` is a position, and removing an earlier account (in another
+  // tab or device) shifts the list. The page stays on the account it opened.
+  const [pin, setPin] = useState<IndexPin | null>(null);
+  const activePin = pin?.accountIndex === params.accountIndex ? pin : null;
   const indexedAccountId =
     params.accountIndex === undefined
       ? undefined
-      : accountIds[Number(params.accountIndex)];
+      : activePin
+        ? activePin.accountId
+        : accountIds[Number(params.accountIndex)];
   const ownedRouteId = ownedLastEmailAccountId(
     emailAccountId ?? indexedAccountId ?? null,
     accountIds,
@@ -139,6 +147,31 @@ export function EmailAccountProvider({
     });
     if (next) router.replace(next);
   }, [data, emailAccount?.id, emailAccountId, ownedRouteId, router]);
+
+  useEffect(() => {
+    if (params.accountIndex === undefined || activePin) return;
+    const accountId = accountIds[Number(params.accountIndex)];
+    if (accountId)
+      setPin({ accountIndex: params.accountIndex, accountId, accountIds });
+  }, [accountIds, activePin, params.accountIndex]);
+
+  useEffect(() => {
+    if (!data || !activePin || !emailAccount) return;
+    const pinnedIndex = accountIds.indexOf(activePin.accountId);
+    const accountIndex =
+      pinnedIndex >= 0 ? pinnedIndex : accountIds.indexOf(emailAccount.id);
+    if (String(accountIndex) === activePin.accountIndex) return;
+    if (pinnedIndex < 0)
+      toastInfo({ description: "That account is no longer connected" });
+    const next = reindexMailPath({
+      pathname: window.location.pathname,
+      search: window.location.search,
+      accountIndex,
+      previousAccountIds: activePin.accountIds,
+      accountIds,
+    });
+    if (next) router.replace(next);
+  }, [accountIds, activePin, data, emailAccount, router]);
 
   const resolvedEmailAccountId =
     ownedRouteId ?? (data ? (emailAccount?.id ?? "") : (emailAccountId ?? ""));
@@ -212,6 +245,13 @@ export function EmailAccountScopeProvider({
     </EmailAccountContext.Provider>
   );
 }
+
+type IndexPin = {
+  accountIndex: string;
+  accountId: string;
+  /** The list the address's indexes referred to when the page opened it. */
+  accountIds: readonly string[];
+};
 
 export function useAccount() {
   const context = useContext(EmailAccountContext);

@@ -18,6 +18,9 @@ const navigation = vi.hoisted(() => ({
   replace: vi.fn(),
 }));
 const cookie = vi.hoisted(() => ({ setLastAccount: vi.fn() }));
+const toast = vi.hoisted(() => ({ info: vi.fn() }));
+
+vi.mock("@/components/Toast", () => ({ toastInfo: toast.info }));
 
 vi.mock("next/navigation", () => ({
   useParams: () => ({
@@ -262,6 +265,97 @@ describe("EmailAccountProvider", () => {
     );
   });
 
+  it("stays on the open account when an earlier account is removed", async () => {
+    navigation.accountIndex = "1";
+    window.history.replaceState(
+      null,
+      "",
+      "/mail/u/1/sent/thread-9?ref=bookmark",
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(threeAccountsResponse())
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            emailAccounts: threeAccountsList().slice(1),
+            lastEmailAccountId: "account-2",
+          }),
+        }),
+    );
+
+    render(
+      <EmailAccountProvider accounts={THREE_SERVER_ACCOUNTS}>
+        <AccountState />
+      </EmailAccountProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("account-ids").textContent).toBe(
+        "account-1,account-2,account-3",
+      ),
+    );
+    expect(screen.getByTestId("account-id").textContent).toBe("account-2");
+
+    await fetchEmailAccounts();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("account-ids").textContent).toBe(
+        "account-2,account-3",
+      ),
+    );
+    expect(screen.getByTestId("account-id").textContent).toBe("account-2");
+    await waitFor(() =>
+      expect(navigation.replace).toHaveBeenCalledWith(
+        "/mail/u/0/sent/thread-9?ref=bookmark",
+      ),
+    );
+    expect(toast.info).not.toHaveBeenCalled();
+  });
+
+  it("leaves a removed account's page with a notice instead of showing the next account", async () => {
+    navigation.accountIndex = "1";
+    window.history.replaceState(null, "", "/mail/u/1");
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(threeAccountsResponse())
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            emailAccounts: [threeAccountsList()[0], threeAccountsList()[2]],
+            lastEmailAccountId: null,
+          }),
+        }),
+    );
+
+    render(
+      <EmailAccountProvider accounts={THREE_SERVER_ACCOUNTS}>
+        <AccountState />
+      </EmailAccountProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("account-ids").textContent).toBe(
+        "account-1,account-2,account-3",
+      ),
+    );
+
+    await fetchEmailAccounts();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("account-ids").textContent).toBe(
+        "account-1,account-3",
+      ),
+    );
+    expect(screen.getByTestId("account-id").textContent).not.toBe("account-3");
+    await waitFor(() =>
+      expect(navigation.replace).toHaveBeenCalledWith("/mail/u/0/inbox"),
+    );
+    expect(toast.info).toHaveBeenCalledTimes(1);
+  });
+
   it("does not replace a global route when remaining accounts exist", async () => {
     navigation.emailAccountId = "deleted-account";
     window.history.replaceState(null, "", "/accounts");
@@ -309,6 +403,30 @@ const SERVER_ACCOUNTS = [
   { id: "account-1", email: "one@example.com", provider: "google" },
   { id: "account-2", email: "two@example.com", provider: "microsoft" },
 ];
+
+const THREE_SERVER_ACCOUNTS = [
+  ...SERVER_ACCOUNTS,
+  { id: "account-3", email: "three@example.com", provider: "google" },
+];
+
+function threeAccountsList() {
+  return THREE_SERVER_ACCOUNTS.map((account) => ({
+    id: account.id,
+    email: account.email,
+    account: { provider: account.provider },
+    providerRateLimit: null,
+  }));
+}
+
+function threeAccountsResponse() {
+  return {
+    ok: true,
+    json: async () => ({
+      emailAccounts: threeAccountsList(),
+      lastEmailAccountId: "account-2",
+    }),
+  };
+}
 
 function AccountState() {
   const { accountIds, emailAccountId, isLoading, provider, userEmail } =
