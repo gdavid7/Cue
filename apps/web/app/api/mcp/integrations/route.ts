@@ -29,6 +29,8 @@ async function getData(emailAccountId: string, logger: Logger) {
         id: true,
         name: true,
         isActive: true,
+        verifiedAs: true,
+        needsReconnectAt: true,
         emailAccountId: true,
         emailAccount: { select: { email: true } },
         integration: { select: { id: true, name: true } },
@@ -56,6 +58,7 @@ async function getData(emailAccountId: string, logger: Logger) {
       async ({
         emailAccountId: connectionAccountId,
         emailAccount,
+        needsReconnectAt,
         ...connection
       }) => ({
         ...connection,
@@ -64,11 +67,15 @@ async function getData(emailAccountId: string, logger: Logger) {
           connectionAccountId === emailAccountId
             ? null
             : (emailAccount?.email ?? null),
-        needsReconnect: await needsReconnect(
-          connection.integration.name,
-          connectionAccountId,
-          logger,
-        ),
+        // The app turned the credentials away (recorded by Cue), or the
+        // provider lost its authorization
+        needsReconnect:
+          !!needsReconnectAt ||
+          (await needsReconnect(
+            connection.integration.name,
+            connectionAccountId,
+            logger,
+          )),
       }),
     ),
   );

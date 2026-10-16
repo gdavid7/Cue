@@ -2106,6 +2106,13 @@ model McpConnection {
   apiKey       String?
   expiresAt    DateTime?
 
+  // The app's own account, as the app last confirmed it (e.g. the Canvas user)
+  verifiedAt   DateTime?
+  verifiedAs   String?
+  verifiedAsId String?
+  // The app turned the stored credentials away; left alone until reconnected
+  needsReconnectAt DateTime?
+
   integrationId  String
   integration    McpIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
   emailAccountId String?

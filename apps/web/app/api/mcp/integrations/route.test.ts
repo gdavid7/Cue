@@ -80,6 +80,31 @@ describe("GET /api/mcp/integrations", () => {
     );
     expect(status).toEqual({ googledrive: true, slack: false });
   });
+
+  it("asks to reconnect Canvas once Canvas turned its token away, and names the verified account", async () => {
+    prisma.mcpConnection.findMany.mockResolvedValue([
+      {
+        ...connectionRow("canvas-connection", "canvas", "school"),
+        verifiedAs: "Ada Lovelace",
+        needsReconnectAt: new Date("2026-10-15T00:00:00Z"),
+      },
+    ] as never);
+    prisma.mcpIntegration.findMany.mockResolvedValue([]);
+
+    const response = await GET(
+      new NextRequest("http://localhost/api/mcp/integrations"),
+    );
+    const body = await response.json();
+
+    const canvas = body.integrations.find(
+      (integration: { name: string }) => integration.name === "canvas",
+    );
+    expect(canvas.connection).toMatchObject({
+      needsReconnect: true,
+      verifiedAs: "Ada Lovelace",
+    });
+    expect(canvas.connection).not.toHaveProperty("needsReconnectAt");
+  });
 });
 
 function connectionRow(id: string, name: string, emailAccountId: string) {
@@ -91,5 +116,7 @@ function connectionRow(id: string, name: string, emailAccountId: string) {
     emailAccount: { email: `${emailAccountId}@example.com` },
     integration: { id: `${name}-integration`, name },
     tools: [],
+    verifiedAs: null,
+    needsReconnectAt: null,
   };
 }

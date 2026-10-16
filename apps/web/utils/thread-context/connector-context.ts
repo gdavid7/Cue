@@ -1,8 +1,10 @@
 import type { ContextCandidate, Person } from "@cue/context";
 import { z } from "zod";
-import { findIntegration } from "@/utils/mcp/integrations";
-import { getIntegrationProvider } from "@/utils/mcp/providers/registry";
-import { ConnectionExpiredError } from "@/utils/mcp/providers/types";
+import { connectionExecutor } from "@/utils/mcp/provider-connection";
+import {
+  AppToolError,
+  ConnectionExpiredError,
+} from "@/utils/mcp/providers/types";
 import { parseUrl } from "@/utils/thread-context/linked-pages";
 import {
   onePerIntegration,
@@ -115,6 +117,9 @@ export async function fetchConnectorCandidates({
     .findMany({
       where: {
         isActive: true,
+        // The app turned its credentials away: asking again only waits on
+        // the same refusal until the person reconnects.
+        needsReconnectAt: null,
         integration: { name: { in: [...apps] } },
         ...ownedBySameUser(emailAccountId),
       },
@@ -135,18 +140,15 @@ export async function fetchConnectorCandidates({
   const results = await Promise.all(
     onePerIntegration(connections, emailAccountId).map(async (connection) => {
       const name = connection.integration.name;
-      const provider = findIntegration(name)?.provider;
-      if (!apps.has(name) || !provider || !connection.emailAccountId) return [];
+      if (!apps.has(name) || !connection.emailAccountId) return [];
       // The provider knows the connection by the account it was made from.
       const connectionAccountId = connection.emailAccountId;
-      const execute: Execute = (tool, args) =>
-        getIntegrationProvider(provider.id).executeTool({
-          app: provider.app,
-          authScheme: provider.authScheme,
-          emailAccountId: connectionAccountId,
-          tool,
-          args,
-        });
+      const execute: Execute | null = connectionExecutor({
+        id: connection.id,
+        integrationName: name,
+        emailAccountId: connectionAccountId,
+      });
+      if (!execute) return [];
       const search = async (): Promise<ContextCandidate[]> => {
         const source = SOURCES[name];
         if (!source || !keywords.length) return [];
@@ -171,6 +173,8 @@ export async function fetchConnectorCandidates({
         } catch (error) {
           logger.warn("Connected app search failed", { app: name, error });
           complete = false;
+          // Marked for reconnecting, so it isn't asked again anyway
+          if (error instanceof ConnectionExpiredError) return [];
           await redis
             .set(failuresKey, failures + 1, {
               ex: FAILED_SOURCE_COOLDOWN_SECONDS,
@@ -887,6 +891,7 @@ function isoTime(value: string | number | null | undefined, fallback: Date) {
 function failureReason(error: unknown) {
   if (error instanceof TimeoutError) return "timeout";
   if (error instanceof ConnectionExpiredError) return "needs_reconnect";
+  if (error instanceof AppToolError) return "app_error";
   return "error";
 }
 

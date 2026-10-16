@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
 import { createScopedLogger } from "@/utils/logger";
+import {
+  AppToolError,
+  ConnectionExpiredError,
+} from "@/utils/mcp/providers/types";
 import { redis } from "@/utils/redis";
 import {
   fetchConnectorCandidates,
@@ -1076,5 +1080,77 @@ describe("fetchConnectorCandidates with links and the sender in the thread", () 
       ]),
     );
     expect(JSON.stringify(warn.mock.calls)).not.toContain("nora@");
+  });
+});
+
+describe("fetchConnectorCandidates with a connection the app turned away", () => {
+  const logger = createScopedLogger("connector-context-test");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    prisma.mcpConnection.findMany.mockResolvedValue([
+      {
+        id: "connection-canvas",
+        updatedAt: new Date(1000),
+        emailAccountId: "school",
+        integration: { name: "canvas" },
+      },
+    ] as never);
+  });
+
+  it("marks the connection for reconnecting when Canvas rejects the token", async () => {
+    mockExecuteTool.mockRejectedValue(
+      new ConnectionExpiredError(
+        "canvas",
+        'CANVAS_GET_CURRENT_USER failed: {"errors":[{"message":"Invalid access token."}]}',
+      ),
+    );
+
+    await fetchConnectorCandidates({
+      emailAccountId: "school",
+      keywords: ["milestone"],
+      logger,
+      now: NOW,
+    });
+
+    expect(prisma.mcpConnection.updateMany).toHaveBeenCalledWith({
+      where: { id: "connection-canvas", needsReconnectAt: null },
+      data: { needsReconnectAt: expect.any(Date) },
+    });
+  });
+
+  it("doesn't ask apps whose connection needs reconnecting", async () => {
+    await fetchConnectorCandidates({
+      emailAccountId: "school",
+      keywords: ["milestone"],
+      logger,
+      now: NOW,
+    });
+
+    expect(prisma.mcpConnection.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ needsReconnectAt: null }),
+      }),
+    );
+  });
+
+  it("leaves the connection alone when Canvas fails with its own error", async () => {
+    mockExecuteTool.mockRejectedValue(
+      new AppToolError(
+        "canvas",
+        "CANVAS_LIST_CALENDAR_EVENTS_FOR_USER",
+        "internal_server_error",
+      ),
+    );
+
+    const result = await fetchConnectorCandidates({
+      emailAccountId: "school",
+      keywords: ["milestone"],
+      logger,
+      now: NOW,
+    });
+
+    expect(result.complete).toBe(false);
+    expect(prisma.mcpConnection.updateMany).not.toHaveBeenCalled();
   });
 });
