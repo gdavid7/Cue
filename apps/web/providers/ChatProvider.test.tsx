@@ -49,6 +49,8 @@ const {
     emailAccountId: "account-a",
     disconnectedB: null as string | null,
     accountsLoading: false,
+    accountsError: undefined as Error | undefined,
+    accountsWithoutB: false,
   },
   chatState: {
     id: "new-chat-id",
@@ -153,22 +155,28 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
 
 vi.mock("@/hooks/useAccounts", () => ({
   useAccounts: () => ({
-    data: accountState.accountsLoading
-      ? undefined
-      : {
-          emailAccounts: [
-            {
-              id: "account-a",
-              email: "a@example.com",
-              account: { disconnectedAt: null },
-            },
-            {
-              id: "account-b",
-              email: "b@example.com",
-              account: { disconnectedAt: accountState.disconnectedB },
-            },
-          ],
-        },
+    error: accountState.accountsError,
+    data:
+      accountState.accountsLoading || accountState.accountsError
+        ? undefined
+        : {
+            emailAccounts: [
+              {
+                id: "account-a",
+                email: "a@example.com",
+                account: { disconnectedAt: null },
+              },
+              ...(accountState.accountsWithoutB
+                ? []
+                : [
+                    {
+                      id: "account-b",
+                      email: "b@example.com",
+                      account: { disconnectedAt: accountState.disconnectedB },
+                    },
+                  ]),
+            ],
+          },
   }),
 }));
 
@@ -203,6 +211,8 @@ describe("ChatProvider", () => {
     accountState.emailAccountId = "account-a";
     accountState.disconnectedB = null;
     accountState.accountsLoading = false;
+    accountState.accountsError = undefined;
+    accountState.accountsWithoutB = false;
     chatState.id = "new-chat-id";
     chatState.status = "ready";
     chatState.messages = [];
@@ -833,6 +843,8 @@ describe("ChatProvider across accounts", () => {
     accountState.emailAccountId = "account-a";
     accountState.disconnectedB = null;
     accountState.accountsLoading = false;
+    accountState.accountsError = undefined;
+    accountState.accountsWithoutB = false;
     queryState.initialChatId = null;
     queryState.initial = {};
     queryState.set = {};
@@ -930,6 +942,31 @@ describe("ChatProvider across accounts", () => {
     expect(latestContext?.chatAccount).toBeNull();
     const body = await sendThroughTransport();
     expect(body.headers[EMAIL_ACCOUNT_HEADER.toLowerCase()]).toBe("account-b");
+  });
+
+  it.each([
+    [
+      "the accounts list loads without it",
+      () => {
+        accountState.accountsWithoutB = true;
+      },
+    ],
+    [
+      "the accounts list fails to load",
+      () => {
+        accountState.accountsError = new Error("Failed to fetch");
+      },
+    ],
+  ])("goes back to the page's account when %s", (_name, arrange) => {
+    arrange();
+    queryState.initialChatId = "chat-from-b";
+    queryState.initial = { chatAccountId: "account-b" };
+    renderWithProvider(<Consumer />);
+
+    // Never left waiting on an account row that won't come.
+    expect(latestContext?.switchedAccount).toBe(false);
+    expect(latestContext?.chatAccount?.id ?? "account-a").toBe("account-a");
+    expect(queryState.set.chatAccountId).toBeNull();
   });
 
   it("reopens a chat from another account after a reload", () => {

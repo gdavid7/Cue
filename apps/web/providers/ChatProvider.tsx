@@ -99,7 +99,7 @@ const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
   const { emailAccountId: routeAccountId, accountIds } = useAccount();
-  const { data: accountsData } = useAccounts();
+  const { data: accountsData, error: accountsError } = useAccounts();
   const { mutate } = useSWRConfig();
   // Chats are stored per account. In All inboxes the chat can work in another
   // account than the page's; the address names it, so a reload or a shared
@@ -109,8 +109,22 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     CHAT_ACCOUNT_PARAM,
     parseAsString,
   );
+  // The chat's account was removed, or the address names another user's, or
+  // its row can't be loaded to scope the chat's cards: its chat can't be
+  // used here, so the chat starts over in the page's account.
+  const chatAccountMissing =
+    Boolean(chatAccountIdParam) &&
+    ((accountIds.length > 0 &&
+      !accountIds.includes(chatAccountIdParam ?? "")) ||
+      Boolean(
+        accountsData &&
+          !accountsData.emailAccounts.some(
+            (account) => account.id === chatAccountIdParam,
+          ),
+      ) ||
+      Boolean(accountsError));
   const emailAccountId =
-    chatAccountIdParam && accountIds.includes(chatAccountIdParam)
+    chatAccountIdParam && !chatAccountMissing
       ? chatAccountIdParam
       : routeAccountId;
   const chatAccount = useMemo<ChatAccount | null>(
@@ -457,12 +471,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setInlineActions([]);
   }, [chat.setMessages, routeAccountId, setChatAccountIdParam, setChatId]);
 
-  // The chat's account was removed, or the address names another user's:
-  // its chat can't be opened here, so start over in the page's account.
-  const chatAccountMissing =
-    Boolean(chatAccountIdParam) &&
-    accountIds.length > 0 &&
-    !accountIds.includes(chatAccountIdParam ?? "");
   useEffect(() => {
     if (!chatAccountMissing) return;
     setChatAccountIdParam(null);
