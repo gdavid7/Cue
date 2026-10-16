@@ -24,6 +24,7 @@ import {
   recordProviderRateLimitFromError,
 } from "@/utils/email/rate-limit";
 import {
+  debitLocalMailSyncBudget,
   gmailMailSyncCosts,
   LocalMailSyncPausedError,
   normalizeThrottleHeaders,
@@ -560,15 +561,11 @@ export function createEmailProviderMailboxSource(input: {
     if (!isGmail || !isEmailProviderRateLimitRedisConfigured()) {
       return Promise.resolve();
     }
-    return withLocalMailSyncBudget(
-      {
-        emailAccountId: accountId,
-        provider: "google",
-        priority: "current",
-        cost: Math.max(1, Math.min(cost, gmailPageCost(maxPageSize))),
-      },
-      async () => undefined,
-    ).catch(() => undefined);
+    return debitLocalMailSyncBudget({
+      emailAccountId: accountId,
+      provider: "google",
+      cost: Math.max(1, Math.min(cost, gmailPageCost(maxPageSize))),
+    }).catch(() => undefined);
   }
 
   async function mapProviderError(

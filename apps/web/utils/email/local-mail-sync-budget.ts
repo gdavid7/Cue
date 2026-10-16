@@ -130,6 +130,59 @@ redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])
 return 1
 `;
 
+// A foreground read's debit: the same account and app buckets as current
+// work, all or nothing, with no lease since nothing is reserved.
+const debitScript = `
+local time = redis.call('TIME')
+local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
+local cost = tonumber(ARGV[1])
+local recovery = 1
+if redis.call('EXISTS', KEYS[3]) == 1 then recovery = 0.5 end
+local buckets = {}
+for i = 1, 2 do
+  local capacity = tonumber(ARGV[i + 1])
+  local stored = redis.call('HMGET', KEYS[i], 'tokens', 'at')
+  local tokens = tonumber(stored[1]) or capacity
+  local at = tonumber(stored[2]) or now
+  tokens = math.min(capacity, tokens + math.max(0, now - at) * capacity * recovery / 60000)
+  if tokens < cost then return 0 end
+  buckets[i] = tokens
+end
+for i = 1, 2 do
+  redis.call('HSET', KEYS[i], 'tokens', buckets[i] - cost, 'at', now)
+  redis.call('PEXPIRE', KEYS[i], 120000)
+end
+return 1
+`;
+
+/**
+ * Charges a foreground read to the sync budget so background scans slow down
+ * while someone uses the mailbox. Foreground reads are never held back, so
+ * this only debits, in one Redis command, and skips when a bucket can't pay.
+ */
+export async function debitLocalMailSyncBudget({
+  emailAccountId,
+  provider,
+  cost,
+}: {
+  emailAccountId: string;
+  provider: keyof typeof policies;
+  cost: number;
+}) {
+  const policy = policies[provider];
+  const prefix = `local-mail-budget:${provider}`;
+  const account = `${prefix}:${emailAccountId}`;
+  await redis.eval(
+    debitScript,
+    [`${account}:total`, `${prefix}:total`, `${account}:recovery`],
+    [
+      String(Math.max(1, Math.min(cost, policy.maximumCost))),
+      String(policy.account),
+      String(policy.app),
+    ],
+  );
+}
+
 /** Each callback must honor its AbortSignal and perform only the reserved work.
  * No automatic retries: callers persist progress and schedule the next attempt.
  */
