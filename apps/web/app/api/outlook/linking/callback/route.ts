@@ -51,7 +51,7 @@ import type { Logger } from "@/utils/logger";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 import { scheduleWatchAfterLinking } from "@/utils/email/watch-after-linking";
 import { INITIAL_REPLY_TRACKING_RULES } from "@/utils/reply-tracker/initial-rules";
-import { logFirstSignIn } from "@/utils/analytics/activation";
+import { recordFirstSignIn } from "@/utils/analytics/activation";
 
 export const GET = withError("outlook/linking/callback", async (request) => {
   const actorSession = await auth(request.headers);
@@ -366,7 +366,8 @@ export const GET = withError("outlook/linking/callback", async (request) => {
         });
 
         linkedAccountId = newAccount.id;
-        if (newAccount.emailAccount) logFirstSignIn(newAccount.emailAccount.id);
+        if (newAccount.emailAccount)
+          await recordFirstSignIn(newAccount.emailAccount.id);
         logger.info("Successfully created and linked new Microsoft account", {
           email: providerEmail,
           targetUserId,

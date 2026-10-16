@@ -21,10 +21,12 @@ The unit is the mailbox, because `emailAccountId` is the only id the events
 carry. A person with two mailboxes counts as two.
 
 How each event fires only once:
-- `first_sign_in` fires only in the code that creates the mailbox, so it needs
-  no marker. The mailbox's first sign-in time is `EmailAccount.createdAt`.
-- The other "first" events claim a Redis key with `SET NX`, which never
-  expires: `activation:needs-reply-first-item:<id>` and
+- `first_sign_in` is only called in the code that creates the mailbox. The
+  mailbox's first sign-in time is `EmailAccount.createdAt`.
+- Each "first" event, `first_sign_in` included, also claims a Redis key with
+  `SET NX`, so a race still logs it once. The keys expire after 400 days,
+  long past every metric window: `activation:first-sign-in:<id>`,
+  `activation:needs-reply-first-item:<id>` and
   `activation:first-suggested-reply-sent:<id>`.
 - `active_day` claims `activation:active-day:<id>:<day>`, which expires after
   two days.

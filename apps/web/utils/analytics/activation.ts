@@ -21,6 +21,8 @@ export const ACTIVATION_EVENTS = {
 
 const logger = createScopedLogger("product");
 
+// A first's key outlives every metric window by far, then expires.
+const FIRST_EVENT_TTL_SECONDS = 400 * 24 * 60 * 60;
 // One day key outlives its UTC day wherever the request lands, then expires.
 const ACTIVE_DAY_TTL_SECONDS = 2 * 24 * 60 * 60;
 const MAX_CLAIMED_KEYS = 1000;
@@ -28,14 +30,23 @@ const MAX_CLAIMED_KEYS = 1000;
 const claimedKeys = new Map<string, true>();
 
 /**
- * Called only where a mailbox is created, so it fires once per mailbox
- * without any stored marker.
+ * Called only where a mailbox is created. The claim still guards it, so two
+ * racing creations log it once.
  */
-export function logFirstSignIn(emailAccountId: string) {
-  logger.info(ACTIVATION_EVENTS.firstSignIn, {
-    emailAccountId,
-    at: new Date().toISOString(),
-  });
+export async function recordFirstSignIn(emailAccountId: string) {
+  try {
+    if (!(await claimOnce(`activation:first-sign-in:${emailAccountId}`)))
+      return;
+    logger.info(ACTIVATION_EVENTS.firstSignIn, {
+      emailAccountId,
+      at: new Date().toISOString(),
+    });
+  } catch (error) {
+    logger.warn("Failed to record activation event", {
+      event: ACTIVATION_EVENTS.firstSignIn,
+      error,
+    });
+  }
 }
 
 /** The first time Needs reply has an item, measured from first sign-in. */
@@ -111,17 +122,10 @@ export async function recordActiveDay(emailAccountId: string) {
   }
 }
 
-/**
- * Whether this call is the first to claim the key across all instances.
- * First-time keys never expire, so a "first" can't fire twice.
- */
-async function claimOnce(key: string, ttlSeconds?: number) {
+/** Whether this call is the first to claim the key across all instances. */
+async function claimOnce(key: string, ttlSeconds = FIRST_EVENT_TTL_SECONDS) {
   if (claimedKeys.has(key)) return false;
-  const claimed = await redis.set(
-    key,
-    "1",
-    ttlSeconds ? { nx: true, ex: ttlSeconds } : { nx: true },
-  );
+  const claimed = await redis.set(key, "1", { nx: true, ex: ttlSeconds });
   claimedKeys.set(key, true);
   if (claimedKeys.size > MAX_CLAIMED_KEYS) {
     const oldest = claimedKeys.keys().next().value;

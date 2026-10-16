@@ -5,7 +5,7 @@ import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calend
 import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
 import { env } from "@/env";
 import { expectReplyTrackingOn } from "@/__tests__/helpers";
-import { logFirstSignIn } from "@/utils/analytics/activation";
+import { recordFirstSignIn } from "@/utils/analytics/activation";
 
 const {
   mockValidateOAuthCallback,
@@ -64,7 +64,9 @@ vi.mock("@/utils/middleware", async () => {
 });
 
 vi.mock("@/utils/prisma");
-vi.mock("@/utils/analytics/activation", () => ({ logFirstSignIn: vi.fn() }));
+vi.mock("@/utils/analytics/activation", () => ({
+  recordFirstSignIn: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock("@/utils/error", async (importActual) => {
   const actual = await importActual<typeof import("@/utils/error")>();
@@ -321,7 +323,7 @@ describe("outlook linking callback route", () => {
     expectReplyTrackingOn(
       prisma.account.create.mock.calls[0]?.[0].data.emailAccount?.create?.rules,
     );
-    expect(logFirstSignIn).toHaveBeenCalledWith("email-account-new");
+    expect(recordFirstSignIn).toHaveBeenCalledWith("email-account-new");
     expect(mockSetOAuthCodeResult).toHaveBeenCalledWith("valid-auth-code", {
       success: "account_created_and_linked",
     });

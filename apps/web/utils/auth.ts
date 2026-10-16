@@ -1,7 +1,7 @@
 import { mcpOAuthPlugins } from "@/utils/mcp/oauth-provider";
 import { INITIAL_MAIL_SPLITS } from "@/utils/split-inbox/initial-splits";
 import { INITIAL_REPLY_TRACKING_RULES } from "@/utils/reply-tracker/initial-rules";
-import { logFirstSignIn } from "@/utils/analytics/activation";
+import { recordFirstSignIn } from "@/utils/analytics/activation";
 import { adminSso } from "@/utils/auth/sso";
 import { scim } from "@better-auth/scim";
 import { genericOAuth } from "better-auth/plugins/generic-oauth";
@@ -866,7 +866,7 @@ export async function handleLinkAccount(
 
     // No mailbox matched by account or address, so the upsert created one.
     if (!existingEmailAccount && !renamedMailbox) {
-      logFirstSignIn(upsertedEmailAccount.id);
+      await recordFirstSignIn(upsertedEmailAccount.id);
     }
 
     if (env.AUTO_JOIN_ORGANIZATION_ENABLED) {

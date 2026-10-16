@@ -10,7 +10,7 @@ import {
 import prisma from "@/utils/__mocks__/prisma";
 import {
   ACTIVATION_EVENTS,
-  logFirstSignIn,
+  recordFirstSignIn,
   recordActiveDay,
   recordFirstSuggestedReplySent,
   recordNeedsReplyFirstItem,
@@ -41,8 +41,8 @@ describe("activation events", () => {
     logSpy.mockRestore();
   });
 
-  it("logs a mailbox's first sign-in with only its id and the time", () => {
-    logFirstSignIn("account-1");
+  it("logs a mailbox's first sign-in with only its id and the time", async () => {
+    await recordFirstSignIn("account-1");
 
     expect(loggedEvents()).toEqual([
       {
@@ -69,6 +69,7 @@ describe("activation events", () => {
   });
 
   it.each([
+    ["sign-in", recordFirstSignIn],
     ["needs reply", recordNeedsReplyFirstItem],
     ["suggested reply", recordFirstSuggestedReplySent],
   ])("logs the first %s event only once per mailbox", async (_, record) => {
@@ -80,7 +81,12 @@ describe("activation events", () => {
     expect(loggedEvents()).toHaveLength(1);
     const keys = vi.mocked(redis.set).mock.calls.map(([key]) => key);
     expect(new Set(keys).size).toBe(1);
-    expect(vi.mocked(redis.set).mock.calls[0]?.[2]).toEqual({ nx: true });
+    // Kept for over a year, so a first can't fire again within any metric
+    // window, without keys piling up forever.
+    expect(vi.mocked(redis.set).mock.calls[0]?.[2]).toEqual({
+      nx: true,
+      ex: 400 * 24 * 60 * 60,
+    });
   });
 
   it("skips the event when another instance already logged it", async () => {

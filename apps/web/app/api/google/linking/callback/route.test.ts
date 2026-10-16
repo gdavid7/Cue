@@ -5,7 +5,7 @@ import prisma from "@/utils/__mocks__/prisma";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 import { env } from "@/env";
 import { expectReplyTrackingOn } from "@/__tests__/helpers";
-import { logFirstSignIn } from "@/utils/analytics/activation";
+import { recordFirstSignIn } from "@/utils/analytics/activation";
 
 const {
   mockValidateOAuthCallback,
@@ -58,7 +58,9 @@ vi.mock("@/utils/middleware", async () => {
 });
 
 vi.mock("@/utils/prisma");
-vi.mock("@/utils/analytics/activation", () => ({ logFirstSignIn: vi.fn() }));
+vi.mock("@/utils/analytics/activation", () => ({
+  recordFirstSignIn: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("@/utils/calendar/connect-sign-in-calendar", () => ({
   connectCalendarAtSignIn: vi.fn(),
 }));
@@ -319,7 +321,7 @@ describe("google linking callback route", () => {
     expectReplyTrackingOn(
       prisma.account.create.mock.calls[0]?.[0].data.emailAccount?.create?.rules,
     );
-    expect(logFirstSignIn).toHaveBeenCalledWith("email-account-new");
+    expect(recordFirstSignIn).toHaveBeenCalledWith("email-account-new");
     expect(prisma.account.update).not.toHaveBeenCalled();
     expect(connectCalendarAtSignIn).toHaveBeenCalledWith({
       accountId: "account-123",
