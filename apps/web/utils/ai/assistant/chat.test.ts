@@ -655,6 +655,48 @@ describe("aiProcessAssistantChat turn limits", () => {
     }
   });
 
+  it("moves Claude's fourth cache breakpoint to the end of each step's prompt", async () => {
+    vi.clearAllMocks();
+    vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
+    await aiProcessAssistantChat({
+      messages: [
+        { role: "user", content: "what's new?" },
+        { role: "assistant", content: "Two newsletters." },
+        { role: "user", content: "and from Acme?" },
+      ],
+      emailAccountId: "email-account-id",
+      user: getEmailAccount(),
+      logger: createTestLogger(),
+    });
+    const [options] = vi.mocked(toolCallAgentStream).mock.calls[0];
+    const toolBreakpoints = Object.values(
+      options.tools as Record<string, Tool>,
+    ).filter((tool) => tool.providerOptions?.anthropic?.cacheControl).length;
+
+    let messages = options.messages as ModelMessage[];
+    for (let stepNumber = 0; stepNumber < 4; stepNumber++) {
+      const prepared = await options.prepareStep!({
+        stepNumber,
+        steps: [],
+        messages,
+        model: CLAUDE_STEP_MODEL,
+      } as never);
+      // The AI SDK carries a step's prepared messages into the next step.
+      messages = [
+        ...(prepared?.messages ?? messages),
+        ...toolRound(`call-${stepNumber}`),
+      ];
+      const stepPrompt = prepared?.messages ?? [];
+      const breakpoints = stepPrompt.flatMap((message, index) =>
+        message.providerOptions?.anthropic?.cacheControl ? [index] : [],
+      );
+
+      expect(toolBreakpoints + breakpoints.length).toBeLessThanOrEqual(4);
+      expect(breakpoints).toContain(stepPrompt.length - 1);
+      expect(breakpoints).toContain(0);
+    }
+  });
+
   it("drops the tools of other providers when it forces the answer", async () => {
     const step = await prepareStepFor();
 
@@ -806,3 +848,30 @@ const GEMINI_STEP_MODEL = {
   provider: "google.generative-ai",
   modelId: "gemini-3.8-flash",
 };
+
+function toolRound(toolCallId: string): ModelMessage[] {
+  return [
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "tool-call",
+          toolCallId,
+          toolName: "searchInbox",
+          input: { query: "from:acme" },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId,
+          toolName: "searchInbox",
+          output: { type: "json", value: { messages: [] } },
+        },
+      ],
+    },
+  ];
+}
