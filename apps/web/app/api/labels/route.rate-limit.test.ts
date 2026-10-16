@@ -82,7 +82,8 @@ describe("GET /api/labels under a Gmail rate limit", () => {
 
     expect(gmail.gmailRequests()).toBeGreaterThan(0);
     expect(elapsedMs).toBeLessThanOrEqual(maxDuration * 1000 - 10_000);
-    expect([429, 503]).toContain(response.status);
+    // Gmail's own refusal, given up on before the deadline: a rate limit.
+    expect(response.status).toBe(429);
     expect(Number(response.headers.get("Retry-After"))).toBeGreaterThan(0);
   });
 });
@@ -104,6 +105,9 @@ async function fakeGmailRefusingEveryCall() {
     emailAccountId: EMAIL_ACCOUNT_ID,
     logger: createScopedLogger("labels-rate-limit-test"),
   });
+  // googleapis has no public hook for its transport, so this reaches into
+  // the auth client's transporter, as client-metering.test.ts does, to send
+  // every call (the token refresh included) to the fake.
   const gmailAuth = client.context._options.auth as {
     transporter: { defaults: { fetchImplementation?: unknown } };
   };
