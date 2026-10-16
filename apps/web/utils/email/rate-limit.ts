@@ -331,6 +331,18 @@ export function describeProviderRateLimitError(
   return `${getProviderRateLimitMessageLabel(rateLimitProvider)} is temporarily limiting requests; try again in about ${seconds} ${seconds === 1 ? "second" : "seconds"}.`;
 }
 
+/** How long a client should wait before retrying what a provider refused. */
+export function getProviderRateLimitRetryAfterSeconds(
+  error: unknown,
+  provider: EmailProviderRateLimitProvider,
+): number | undefined {
+  const delayMs = isProviderRateLimitModeError(error)
+    ? Date.parse(error.retryAt ?? "") - Date.now()
+    : getProviderRateLimitDelayMs({ error, provider, attemptNumber: 1 });
+  if (!delayMs || !(delayMs > 0)) return;
+  return Math.ceil(delayMs / 1000);
+}
+
 export function getProviderRateLimitDelayMs({
   error,
   provider,

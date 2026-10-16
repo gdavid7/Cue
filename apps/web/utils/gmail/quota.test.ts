@@ -16,6 +16,8 @@ import {
   setGmailInitialSync,
 } from "@/utils/gmail/quota";
 import { gmailQuotaStore } from "@/utils/gmail/quota-store";
+import { runWithRequestDeadline } from "@/utils/request-deadline";
+import { sleep } from "@/utils/sleep";
 
 vi.mock("@/utils/gmail/quota-store", async () => {
   const { createMemoryGmailQuotaStore } = await import(
@@ -42,6 +44,8 @@ const TURN_ACCOUNT = "account-turn";
 const STUCK_TURN_ACCOUNT = "account-stuck-turn";
 const TURN_GAP_ACCOUNT = "account-turn-gap";
 const GIVE_UP_ACCOUNT = "account-give-up";
+const DEADLINE_ACCOUNT = "account-deadline";
+const NO_DEADLINE_ACCOUNT = "account-no-deadline";
 // Gmail refuses short bursts past this many units a second, per user.
 const GMAIL_UNITS_PER_SECOND = 250;
 const logger = createScopedLogger("gmail-quota-test");
@@ -847,6 +851,30 @@ describe("Gmail quota gate", () => {
     await vi.advanceTimersByTimeAsync(2000);
     await scan;
     expect(syncUnits).toBeGreaterThan(40);
+  });
+
+  it("defers a person's call rather than wait past their request's deadline", async () => {
+    const admit = (emailAccountId: string, cost: number) =>
+      runWithGmailQuota(
+        { caller: "test/interactive", priority: "interactive" },
+        () => meterGmailCall({ emailAccountId, cost }, async () => "ok"),
+      );
+    // Late in a 30s request, with the bucket spent down to what it can give.
+    const lateCall = (emailAccountId: string) => async () => {
+      await sleep(19_500);
+      await admit(emailAccountId, 800);
+      return admit(emailAccountId, 600);
+    };
+
+    const withinDeadline = runWithRequestDeadline(
+      30,
+      lateCall(DEADLINE_ACCOUNT),
+    ).catch((error: unknown) => error);
+    const withoutDeadline = lateCall(NO_DEADLINE_ACCOUNT)();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(await withinDeadline).toBeInstanceOf(GmailCallDeferredError);
+    await expect(withoutDeadline).resolves.toBe("ok");
   });
 
   it("lets go of a turn that never ends once its cap runs out", async () => {

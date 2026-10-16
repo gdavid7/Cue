@@ -4,6 +4,7 @@ import { gmailQuotaStore } from "@/utils/gmail/quota-store";
 import { extractErrorInfo, isRetryableError } from "@/utils/gmail/retry";
 import { createScopedLogger } from "@/utils/logger";
 import { isEmailProviderRateLimitRedisConfigured } from "@/utils/redis/email-provider-rate-limit";
+import { getRequestDeadline } from "@/utils/request-deadline";
 import { sleep } from "@/utils/sleep";
 
 // Gmail allows 6,000 units per user per minute for each Google Cloud project,
@@ -407,14 +408,16 @@ export async function admitGmailCall({
     ],
   }[priority];
   const { stats, maxTotalWaitMs } = context;
-  const deadline =
+  const deadline = Math.min(
     Date.now() +
-    Math.min(
-      MAX_WAIT_MS[priority],
-      maxTotalWaitMs === undefined
-        ? Number.POSITIVE_INFINITY
-        : Math.max(0, maxTotalWaitMs - (stats?.waitMs ?? 0)),
-    );
+      Math.min(
+        MAX_WAIT_MS[priority],
+        maxTotalWaitMs === undefined
+          ? Number.POSITIVE_INFINITY
+          : Math.max(0, maxTotalWaitMs - (stats?.waitMs ?? 0)),
+      ),
+    getRequestDeadline() ?? Number.POSITIVE_INFINITY,
+  );
   for (;;) {
     let admission: { waitMs: number; defer: boolean };
     try {

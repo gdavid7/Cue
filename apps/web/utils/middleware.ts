@@ -15,7 +15,10 @@ import { flushLoggerSafely } from "@/utils/logger-flush";
 import { auth } from "@/utils/auth";
 import { getEmailAccount } from "@/utils/redis/account-validation";
 import { getCallerEmailAccount } from "@/utils/organizations/access";
-import { recordRateLimitFromApiError } from "@/utils/email/rate-limit";
+import {
+  getProviderRateLimitRetryAfterSeconds,
+  recordRateLimitFromApiError,
+} from "@/utils/email/rate-limit";
 import { isProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
 import { getGmailCallDeferredError } from "@/utils/gmail/quota";
 import {
@@ -28,6 +31,7 @@ import { isAdmin } from "@/utils/admin";
 import prisma from "@/utils/prisma";
 import { createEmailProvider } from "@/utils/email/provider";
 import type { EmailProvider } from "@/utils/email/types";
+import { runWithRequestDeadline } from "@/utils/request-deadline";
 import { startRequestTimer } from "@/utils/request-timing";
 import {
   type AuditActorType,
@@ -68,6 +72,11 @@ export interface RequestWithEmailProvider extends RequestWithEmailAccount {
 
 export interface MiddlewareOptions {
   allowOrgAdmins?: boolean;
+  /**
+   * The route's `maxDuration` in seconds. Its provider retries and Gmail
+   * quota waits then give up in time to answer before the platform kills it.
+   */
+  maxDuration?: number;
   requestTiming?: {
     runningWarnAfterMs?: number;
     slowWarnAfterMs?: number;
@@ -112,28 +121,36 @@ function withMiddleware<T extends NextRequest>(
       },
       async () => {
         try {
-          // Apply middleware if provided
-          let enhancedReq = reqWithLogger;
-          if (middleware) {
-            const middlewareResult = await middleware(reqWithLogger, options);
+          return await runWithRequestDeadline(
+            options?.maxDuration,
+            async () => {
+              // Apply middleware if provided
+              let enhancedReq = reqWithLogger;
+              if (middleware) {
+                const middlewareResult = await middleware(
+                  reqWithLogger,
+                  options,
+                );
 
-            // If middleware returned a Response, return it directly
-            if (middlewareResult instanceof Response) {
-              flushLogger(reqWithLogger);
-              return middlewareResult;
-            }
+                // If middleware returned a Response, return it directly
+                if (middlewareResult instanceof Response) {
+                  flushLogger(reqWithLogger);
+                  return middlewareResult;
+                }
 
-            // Otherwise, continue with the enhanced request
-            enhancedReq = middlewareResult;
-          }
-          requestForError = enhancedReq;
+                // Otherwise, continue with the enhanced request
+                enhancedReq = middlewareResult;
+              }
+              requestForError = enhancedReq;
 
-          // Execute the handler with the (potentially) enhanced request
-          const response = await handler(enhancedReq as T, context);
+              // Execute the handler with the (potentially) enhanced request
+              const response = await handler(enhancedReq as T, context);
 
-          flushLogger(enhancedReq);
+              flushLogger(enhancedReq);
 
-          return response;
+              return response;
+            },
+          );
         } catch (error) {
           flushLogger(requestForError);
 
@@ -231,13 +248,16 @@ function withMiddleware<T extends NextRequest>(
 
           const apiError = checkCommonErrors(error, requestPath, reqLogger);
           if (apiError) {
-            await recordRateLimitFromApiError({
+            const rateLimitProvider = await recordRateLimitFromApiError({
               apiErrorType: apiError.type,
               error,
               emailAccountId: getEmailAccountId(requestForError),
               logger: reqLogger,
               source: scope || new URL(requestForError.url).pathname,
             });
+            const retryAfterSeconds = rateLimitProvider
+              ? getProviderRateLimitRetryAfterSeconds(error, rateLimitProvider)
+              : undefined;
 
             await logErrorToPosthog(
               "api",
@@ -256,7 +276,12 @@ function withMiddleware<T extends NextRequest>(
 
             return NextResponse.json(
               { error: apiError.message, isKnownError: true },
-              { status: apiError.code },
+              {
+                status: apiError.code,
+                headers: retryAfterSeconds
+                  ? { "Retry-After": String(retryAfterSeconds) }
+                  : undefined,
+              },
             );
           }
 
@@ -658,14 +683,16 @@ export function withError(
 export function withAuth(
   scope: string,
   handler: NextHandler<RequestWithAuth>,
+  options?: Pick<MiddlewareOptions, "maxDuration">,
 ): NextHandler;
 export function withAuth(handler: NextHandler<RequestWithAuth>): NextHandler;
 export function withAuth(
   scopeOrHandler: string | NextHandler<RequestWithAuth>,
   handler?: NextHandler<RequestWithAuth>,
+  options?: Pick<MiddlewareOptions, "maxDuration">,
 ): NextHandler {
   if (typeof scopeOrHandler === "string") {
-    return withMiddleware(handler!, authMiddleware, undefined, scopeOrHandler);
+    return withMiddleware(handler!, authMiddleware, options, scopeOrHandler);
   }
   return withMiddleware(scopeOrHandler, authMiddleware);
 }

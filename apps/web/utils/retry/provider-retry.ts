@@ -1,5 +1,6 @@
 import pRetry, { type RetryContext } from "p-retry";
 import type { Logger } from "@/utils/logger";
+import { getRequestDeadline } from "@/utils/request-deadline";
 import { sleep } from "@/utils/sleep";
 
 // "rate-limit-only" is for non-idempotent writes: network, server, and conflict
@@ -67,6 +68,19 @@ export async function withProviderRetry<T>(
           "Aborting retry due to long backoff in serverless",
           retryLogFields,
         );
+        throw attempt.error;
+      }
+
+      // p-retry waits its own backoff (`retryDelay`) after this callback.
+      const deadlineAt = getRequestDeadline();
+      if (
+        deadlineAt !== undefined &&
+        Date.now() + delayMs + attempt.retryDelay > deadlineAt
+      ) {
+        logger.warn("Aborting retry that would pass the request deadline", {
+          ...retryLogFields,
+          remainingMs: Math.max(0, deadlineAt - Date.now()),
+        });
         throw attempt.error;
       }
 
