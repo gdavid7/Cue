@@ -1,7 +1,7 @@
 import path from "node:path";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
 import {
   fullSuites,
   selectChangedPlaywrightTargets,
@@ -11,6 +11,13 @@ import { expandPlaywrightTargets } from "./emulated-suite-targets.mjs";
 const appRoot = path.resolve(import.meta.dirname, "../..");
 
 describe("emulated Playwright suite selection", () => {
+  // The first import-based selection parses the app's imports (3 s idle, past
+  // the 5 s test timeout under a full parallel run); later ones reuse that
+  // cache, so warm it outside any one test's budget.
+  beforeAll(() => {
+    selectChangedPlaywrightTargets("apps/web/components/CommandK.tsx", appRoot);
+  }, 60_000);
+
   test.each([
     "packages/mail-core/src/engine.ts",
     "packages/mail-sqlite/src/store.ts",

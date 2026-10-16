@@ -25,6 +25,8 @@ class MockResizeObserver {
 (globalThis as { ResizeObserver?: typeof MockResizeObserver }).ResizeObserver =
   MockResizeObserver;
 
+const COLD_RENDER_TIMEOUT_MS = 5000;
+
 const navigation = vi.hoisted(() => ({
   pathname: "/account-a/mail",
   search: "",
@@ -99,11 +101,25 @@ describe("ComposeModalProvider popped-out reply", () => {
     navigation.pathname = "/mail/u/0/all-inboxes";
     renderProvider();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Pop out" }));
-
-    expect((await screen.findByTestId("composer")).textContent).toBe(
-      "account-b b@outlook.com",
+    // The file's first render pays the cold start (1.3 s idle), which can pass
+    // findBy's 1 s default when the whole suite runs in parallel.
+    fireEvent.click(
+      await screen.findByRole(
+        "button",
+        { name: "Pop out" },
+        { timeout: COLD_RENDER_TIMEOUT_MS },
+      ),
     );
+
+    expect(
+      (
+        await screen.findByTestId(
+          "composer",
+          {},
+          { timeout: COLD_RENDER_TIMEOUT_MS },
+        )
+      ).textContent,
+    ).toBe("account-b b@outlook.com");
   });
 
   it("never opens another account's reply under the account in the URL", async () => {
