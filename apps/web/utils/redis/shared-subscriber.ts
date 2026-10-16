@@ -46,13 +46,13 @@ export function createSharedSubscriber(createClient: () => Redis) {
     created.on("message", (channel: string, message: string) => {
       getRedisUsageMeter().count("message", channel, message.length);
       for (const listener of channels.get(channel)?.listeners ?? [])
-        listener.onMessage(message);
+        notify(() => listener.onMessage(message));
     });
     // ioredis reconnects and resubscribes on its own; what was published
     // meanwhile is lost, so live listeners hear about it.
     created.on("close", () => {
       for (const channel of channels.values()) {
-        for (const listener of channel.live) listener.onLost();
+        for (const listener of channel.live) notify(() => listener.onLost());
         channel.live.clear();
       }
     });
@@ -102,4 +102,16 @@ export function createSharedSubscriber(createClient: () => Redis) {
       };
     },
   };
+}
+
+// Listeners belong to separate streams; one that throws must not keep the
+// others from hearing, or escape into the connection's event handlers.
+function notify(deliver: () => void) {
+  try {
+    deliver();
+  } catch (error) {
+    logRedisFailureOnce(logger, "Shared Redis subscriber listener failed", {
+      error,
+    });
+  }
 }

@@ -66,6 +66,34 @@ describe("createSharedSubscriber", () => {
     expect(waitingLost).not.toHaveBeenCalled();
   });
 
+  // One stream's failing handler must not cost every other stream on the
+  // instance its message, or crash the connection's event loop.
+  it("keeps delivering to other listeners when one throws", async () => {
+    const { client, createClient } = fakeRedis();
+    const shared = createSharedSubscriber(createClient);
+    const after = vi.fn();
+    const lostAfter = vi.fn();
+    const failing = shared.listen("local-mail:a", {
+      onMessage: () => {
+        throw new Error("closed stream");
+      },
+      onLost: () => {
+        throw new Error("closed stream");
+      },
+    });
+    const healthy = shared.listen("local-mail:a", {
+      onMessage: after,
+      onLost: lostAfter,
+    });
+    await Promise.all([failing.ready, healthy.ready]);
+
+    expect(() => client.emit("message", "local-mail:a", "{}")).not.toThrow();
+    expect(() => client.emit("close")).not.toThrow();
+
+    expect(after).toHaveBeenCalledWith("{}");
+    expect(lostAfter).toHaveBeenCalledOnce();
+  });
+
   it("lets the next listener retry a subscription that failed", async () => {
     const { client, createClient } = fakeRedis();
     const shared = createSharedSubscriber(createClient);
