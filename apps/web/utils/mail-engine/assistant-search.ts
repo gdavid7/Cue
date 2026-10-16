@@ -64,17 +64,31 @@ export async function answerAssistantSearch({
     result: LocalMailSearchResult;
   }) => Promise<unknown>;
 }) {
-  const { requestId, ...search } = request;
+  // Only the fields a search needs: the request arrives over the reply
+  // stream and must not choose the account, store or timeout.
+  const syntax: AssistantSearchSyntax =
+    request.syntax === "outlook"
+      ? {
+          syntax: "outlook",
+          fromEmail: request.fromEmail,
+          readState: request.readState,
+        }
+      : { syntax: "gmail" };
   const result: LocalMailSearchResult = client
-    ? await searchLocalMail({ client, accountId, ...search }).catch(
-        () => ({ status: "unavailable", reason: "error" }) as const,
-      )
+    ? await searchLocalMail({
+        client,
+        accountId,
+        query: request.query,
+        limit: request.limit,
+        pageToken: request.pageToken,
+        ...syntax,
+      }).catch(() => ({ status: "unavailable", reason: "error" }) as const)
     : { status: "unavailable", reason: "no_engine" };
   // An answer the server would reject is worth less than a quick handback.
   const accepted = localMailSearchResultSchema.safeParse(result).success
     ? result
     : ({ status: "unavailable", reason: "error" } as const);
-  await submit({ requestId, result: accepted });
+  await submit({ requestId: request.requestId, result: accepted });
 }
 
 /**

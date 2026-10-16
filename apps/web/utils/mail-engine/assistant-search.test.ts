@@ -694,6 +694,32 @@ describe("answerAssistantSearch", () => {
     });
   });
 
+  it("searches this tab's account whatever else the streamed request carries", async () => {
+    const searchMessages = vi.fn(
+      async (): Promise<MessageSearchPage> => ({
+        messages: [],
+        nextPage: null,
+        coverage: [coverage({})],
+      }),
+    );
+
+    await answerAssistantSearch({
+      request: {
+        ...request,
+        accountId: "someone-else",
+        client: null,
+        timeoutMs: 1,
+      } as typeof request,
+      accountId: ACCOUNT,
+      client: { searchMessages } as unknown as MailClient,
+      submit: vi.fn(async () => {}),
+    });
+
+    expect(searchMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: ACCOUNT }),
+    );
+  });
+
   it("hands the search back when the local store fails", async () => {
     const submit = vi.fn(async () => {});
     const broken = {
