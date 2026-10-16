@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Loader2Icon,
   MailMinusIcon,
@@ -23,6 +23,8 @@ import type { EmailLabels } from "@/providers/email-label-types";
 import { cn } from "@/utils";
 
 const NO_PLANS: never[] = [];
+// How long the strip's space waits on Cue deciding before it folds away.
+const DECIDE_LIMIT_MS = 10_000;
 
 /**
  * Cue's read of the open conversation, above the messages: what the sender
@@ -94,12 +96,9 @@ export function CueStrip({
         : [],
     [enabled, messageId, needsInsight, threadId, emailAccountId],
   );
-  const { data: insights, error: insightsError } =
-    useInboxInsights(insightItems);
-  const insight =
-    insights || insightsError
-      ? (insights?.[threadId]?.insight ?? null)
-      : undefined;
+  // A failed lookup isn't an answer; SWR retries it, and the space stays held.
+  const { data: insights } = useInboxInsights(insightItems);
+  const insight = insights ? (insights[threadId]?.insight ?? null) : undefined;
 
   const visibility = getCueStripVisibility({
     categories,
@@ -108,21 +107,35 @@ export function CueStrip({
     insight,
   });
 
-  const { data: briefData, error: briefError } = useThreadBrief({
-    emailAccountId,
-    threadId,
-    messageId,
-    enabled: enabled && visibility === "show",
-  });
-  const briefSettled = Boolean(briefData || briefError);
-
   // Held from the first render that could show it, so a strip that lands late
   // never pushes the messages down; one that won't show folds away instead.
   const [heldFor, setHeldFor] = useState<string>();
   if (messageId && visibility !== "hide" && heldFor !== messageId)
     setHeldFor(messageId);
-  if (!messageId || heldFor !== messageId) return null;
-  const open = visibility !== "hide";
+  // Once folded it stays folded for this message: opening again when a slow
+  // answer lands would move the messages a second time.
+  const [foldedFor, setFoldedFor] = useState<string>();
+  const held = Boolean(messageId) && heldFor === messageId;
+  if (held && visibility === "hide" && foldedFor !== messageId)
+    setFoldedFor(messageId);
+  const deciding = held && enabled && visibility === "pending";
+  useEffect(() => {
+    if (!deciding || !messageId) return;
+    const timer = setTimeout(() => setFoldedFor(messageId), DECIDE_LIMIT_MS);
+    return () => clearTimeout(timer);
+  }, [deciding, messageId]);
+  const folded = foldedFor === messageId;
+
+  const { data: briefData, error: briefError } = useThreadBrief({
+    emailAccountId,
+    threadId,
+    messageId,
+    enabled: enabled && visibility === "show" && !folded,
+  });
+  const briefSettled = Boolean(briefData || briefError);
+
+  if (!messageId || !held) return null;
+  const open = visibility !== "hide" && !folded;
 
   const brief = briefData?.brief;
   const unsubscribeMessage =

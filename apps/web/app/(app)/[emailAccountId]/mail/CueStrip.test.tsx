@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -18,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   requests: [] as { url: string; emailAccountId: string | undefined }[],
   plans: [] as { status: string; rule: { systemType: string } }[],
   insight: null as { action: "reply" | "do" | "none" } | null,
+  insightFailures: 0,
 }));
 
 vi.mock("@/env", () => ({ env: {} }));
@@ -43,6 +45,7 @@ describe("CueStrip", () => {
     mocks.requests = [];
     mocks.plans = [];
     mocks.insight = null;
+    mocks.insightFailures = 0;
   });
   afterEach(cleanup);
 
@@ -93,6 +96,37 @@ describe("CueStrip", () => {
     renderStrip({ labels: [] });
 
     expect(await screen.findByText(SUMMARY)).toBeTruthy();
+  });
+
+  // A failed lookup isn't an answer: folding and then reopening when a retry
+  // lands would move the messages twice.
+  it("keeps holding the space while Cue's note fails to load, then shows", async () => {
+    mocks.insight = { action: "reply" };
+    mocks.insightFailures = 1;
+    renderStrip({ labels: [] }, { errorRetryInterval: 10 });
+
+    await waitForRequest("/api/user/inbox-insights");
+    expect(screen.getByRole("region", { name: "Cue summary" })).toBeTruthy();
+    expect(await screen.findByText(SUMMARY)).toBeTruthy();
+  });
+
+  it("folds away if Cue can't decide in time, and stays folded", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mocks.insight = { action: "reply" };
+      mocks.insightFailures = 1000;
+      renderStrip({ labels: [] }, { errorRetryInterval: 60_000 });
+      expect(screen.getByRole("region", { name: "Cue summary" })).toBeTruthy();
+
+      await act(() => vi.advanceTimersByTimeAsync(11_000));
+      expect(screen.queryByRole("region", { name: "Cue summary" })).toBeNull();
+
+      mocks.insightFailures = 0;
+      await act(() => vi.advanceTimersByTimeAsync(180_000));
+      expect(screen.queryByRole("region", { name: "Cue summary" })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("holds no space for machine mail and asks nothing about it", async () => {
@@ -200,19 +234,22 @@ describe("CueStrip", () => {
   });
 });
 
-function renderStrip({
-  labels,
-  enabled = true,
-  from = "Maya Patel <maya@example.com>",
-  reply = { canRequest: true, drafts: true, pending: false },
-  ...overrides
-}: {
-  labels: string[];
-  enabled?: boolean;
-  from?: string;
-  reply?: { canRequest: boolean; drafts: boolean; pending: boolean };
-  onAskCue?: (() => void) | undefined;
-}) {
+function renderStrip(
+  {
+    labels,
+    enabled = true,
+    from = "Maya Patel <maya@example.com>",
+    reply = { canRequest: true, drafts: true, pending: false },
+    ...overrides
+  }: {
+    labels: string[];
+    enabled?: boolean;
+    from?: string;
+    reply?: { canRequest: boolean; drafts: boolean; pending: boolean };
+    onAskCue?: (() => void) | undefined;
+  },
+  swr: { errorRetryInterval?: number } = {},
+) {
   const props: ComponentProps<typeof CueStrip> = {
     emailAccountId: THREAD_ACCOUNT,
     threadId: "t1",
@@ -229,7 +266,8 @@ function renderStrip({
     <SWRConfig
       value={{
         provider: () => new Map(),
-        shouldRetryOnError: false,
+        shouldRetryOnError: swr.errorRetryInterval !== undefined,
+        errorRetryInterval: swr.errorRetryInterval,
         dedupingInterval: 0,
         fetcher,
       }}
@@ -246,6 +284,10 @@ async function fetcher(key: string | [string, string]) {
   if (url.startsWith("/api/user/thread-plans")) return { plans: mocks.plans };
   if (url.startsWith("/api/user/thread-brief"))
     return { brief: { summary: SUMMARY, keyPoints: [], source: "ai" } };
+  if (url.startsWith("/api/user/inbox-insights") && mocks.insightFailures > 0) {
+    mocks.insightFailures -= 1;
+    throw new Error("Gmail is busy for this account");
+  }
   if (url.startsWith("/api/user/inbox-insights"))
     return {
       insights: mocks.insight
