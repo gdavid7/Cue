@@ -144,8 +144,8 @@ describe("searchInbox across the user's accounts", () => {
     }
   });
 
-  it("walks later pages in the chat's account only", async () => {
-    await search("google", {
+  it("walks later pages in the chat's account only, and says so", async () => {
+    const result = await search("google", {
       query: "contract renewal",
       pageToken: "PAGE_2",
       allAccounts: true,
@@ -153,6 +153,40 @@ describe("searchInbox across the user's accounts", () => {
 
     expect(providers["account-2"].searchMessages).not.toHaveBeenCalled();
     expect(providers["account-3"].searchMessages).not.toHaveBeenCalled();
+    expect(result.otherAccountsSkipped).toEqual(expect.any(String));
+  });
+
+  it("reports the chat account's failed search only for that account when others found mail", async () => {
+    providers["account-1"].searchMessages.mockRejectedValue(
+      new Error("Gmail unavailable"),
+    );
+
+    const result = await search("google", {
+      query: "contract renewal",
+      allAccounts: true,
+    });
+
+    expect(result).not.toHaveProperty("error");
+    expect(result.accounts[0]).toEqual({
+      account: CHAT_EMAIL,
+      error: expect.any(String),
+    });
+    expect(result.messages).toHaveLength(2);
+  });
+
+  it("keeps the chat account's failure as the result's error when nothing else was found", async () => {
+    providers["account-1"].searchMessages.mockRejectedValue(
+      new Error("Gmail unavailable"),
+    );
+    providers["account-2"].searchMessages.mockResolvedValue({ messages: [] });
+    providers["account-3"].searchMessages.mockResolvedValue({ messages: [] });
+
+    const result = await search("google", {
+      query: "contract renewal",
+      allAccounts: true,
+    });
+
+    expect(result.error).toEqual(expect.any(String));
   });
 
   it("carries an Outlook chat's sender and read state to a Gmail account", async () => {
@@ -195,7 +229,7 @@ describe("searchInbox across the user's accounts", () => {
         { id: "folder-legal", displayName: "Legal", childFolders: [] },
       ]);
 
-    await searchInboxTool({
+    const result = await searchInboxTool({
       email: "three@example.com",
       emailAccountId: "account-3",
       userId: USER_ID,
@@ -207,6 +241,7 @@ describe("searchInbox across the user's accounts", () => {
     );
 
     expect(providers["account-2"].searchMessages).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ otherAccountsSkipped: expect.any(String) });
   });
 
   it("says how many of the user's accounts it did not search", async () => {

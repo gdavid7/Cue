@@ -1869,6 +1869,8 @@ type OtherAccount = { id: string; email: string; provider: string };
 type OtherAccountSearch = Promise<{
   results: OtherAccountResult<OtherAccountSearchResult>[];
   notSearchedCount: number;
+  /** Why the other accounts were not searched at all. */
+  skipped?: string;
 } | null> | null;
 
 /**
@@ -1892,10 +1894,21 @@ function startOtherAccountSearch({
   abortSignal?: AbortSignal;
 }): OtherAccountSearch {
   if (!input.allAccounts) return null;
-  // Folders and categories are the chat account's own, and a page walk
-  // continues the chat account's search, so those stay in it.
-  if (input.pageToken || input.folderName || input.categoryName) {
-    return Promise.resolve({ results: [], notSearchedCount: 0 });
+  // A page walk continues the chat account's search, and folders and
+  // categories are the chat account's own, so those stay in it.
+  if (input.pageToken) {
+    return Promise.resolve({
+      results: [],
+      notSearchedCount: 0,
+      skipped: "Later pages search only this chat's account.",
+    });
+  }
+  if (input.folderName || input.categoryName) {
+    return Promise.resolve({
+      results: [],
+      notSearchedCount: 0,
+      skipped: "Folder and category filters apply only to this chat's account.",
+    });
   }
 
   const search: AccountSearch = {
@@ -2044,17 +2057,19 @@ async function withOtherAccountResults<
     ...message,
     account: chatEmail,
   }));
-  const messages = [
-    ...chatMessages,
-    ...(otherAccounts ?? []).flatMap((entry) =>
-      "result" in entry && "messages" in entry.result
-        ? entry.result.messages
-        : [],
-    ),
-  ];
+  const otherMessages = (otherAccounts ?? []).flatMap((entry) =>
+    "result" in entry && "messages" in entry.result
+      ? entry.result.messages
+      : [],
+  );
+  const messages = [...chatMessages, ...otherMessages];
+  // With mail found elsewhere, the chat account's failure is that account's
+  // alone, not the result's.
+  const { error: _chatAccountError, ...resultWithoutError } = result;
+  const merged = otherMessages.length > 0 ? resultWithoutError : result;
 
   return {
-    ...result,
+    ...merged,
     totalReturned: messages.length,
     summary: summarizeSearchResults(messages),
     messages,
@@ -2071,6 +2086,7 @@ async function withOtherAccountResults<
     ...(otherSearch?.notSearchedCount && {
       accountsNotSearched: otherSearch.notSearchedCount,
     }),
+    ...(otherSearch?.skipped && { otherAccountsSkipped: otherSearch.skipped }),
     ...(otherSearch
       ? {}
       : {
