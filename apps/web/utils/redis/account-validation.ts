@@ -1,17 +1,71 @@
 import "server-only";
+import { env } from "@/env";
 import { redis } from "@/utils/redis";
 import prisma from "@/utils/prisma";
 import { createMemoCache } from "@/utils/memo-cache";
+import { getSharedSubscriber } from "@/utils/redis/shared-subscriber";
 
 const EXPIRATION = 60 * 60; // 1 hour
+const INVALIDATION_CHANNEL = "account-validation:invalidate";
 
-// Most authenticated requests check the account. Ownership rarely changes,
-// so each instance trusts an owned account for a minute; invalidation clears
-// this instance at once and the others within the minute.
-const ownedAccounts = createMemoCache<string | null>({
-  ttlMs: 60_000,
-  maxEntries: 5000,
-  keep: (email) => email !== null,
+type Listen = (
+  channel: string,
+  listener: { onMessage: (message: string) => void; onLost: () => void },
+) => { ready: Promise<unknown> };
+
+/**
+ * Most authenticated requests check the account, so each instance trusts an
+ * owned account for 15 seconds. An invalidation (a merge, transfer or
+ * deletion) is published to every instance, which drops it at once; the TTL
+ * bounds staleness when that message is missed, and an instance whose
+ * subscription dropped forgets everything.
+ */
+export function createOwnedAccountMemo({
+  listen,
+  publish,
+}: {
+  listen: Listen;
+  publish: (channel: string, message: string) => Promise<unknown>;
+}) {
+  const memo = createMemoCache<string | null>({
+    ttlMs: 15_000,
+    maxEntries: 5000,
+    keep: (email) => email !== null,
+  });
+  let listening = false;
+  const listenForInvalidations = () => {
+    if (listening) return;
+    listening = true;
+    try {
+      listen(INVALIDATION_CHANNEL, {
+        onMessage: (key) => memo.delete(key),
+        onLost: () => memo.clear(),
+      }).ready.catch(() => {
+        listening = false;
+      });
+    } catch {
+      listening = false;
+    }
+  };
+  return {
+    get(key: string, load: () => Promise<string | null>) {
+      listenForInvalidations();
+      return memo.get(key, load);
+    },
+    async invalidate(key: string) {
+      memo.delete(key);
+      await publish(INVALIDATION_CHANNEL, key);
+    },
+  };
+}
+
+const ownedAccounts = createOwnedAccountMemo({
+  // Without a pub/sub connection the 15-second TTL is the bound.
+  listen: (channel, listener) =>
+    env.REDIS_URL
+      ? getSharedSubscriber().listen(channel, listener)
+      : { ready: Promise.resolve() },
+  publish: (channel, message) => redis.publish(channel, message),
 });
 
 /**
@@ -91,10 +145,12 @@ export async function invalidateAccountValidation({
   emailAccountId: string;
 }): Promise<void> {
   const key = getValidationKey({ userId, emailAccountId });
-  ownedAccounts.delete(key);
   try {
     await redis.del(key);
   } catch {
     // Redis unavailable — skip invalidation
   }
+  await ownedAccounts.invalidate(key).catch(() => {
+    // Other instances drop it when their 15-second memo expires.
+  });
 }

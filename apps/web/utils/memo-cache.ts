@@ -47,5 +47,8 @@ export function createMemoCache<T>({
     delete(key: string) {
       entries.delete(key);
     },
+    clear() {
+      entries.clear();
+    },
   };
 }
