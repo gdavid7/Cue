@@ -1,3 +1,4 @@
+import { ExecutedRuleStatus } from "@/generated/prisma/enums";
 import prisma from "@/utils/prisma";
 import { createEmailProvider } from "@/utils/email/provider";
 import { runRules } from "@/utils/ai/choose-rule/run-rules";
@@ -15,6 +16,7 @@ export async function bulkProcessInboxEmails({
   maxEmails,
   skipArchive,
   logger: log,
+  startedAt: resumedStartedAt,
   deferrals = 0,
 }: {
   emailAccount: EmailAccountForDrafting;
@@ -22,9 +24,16 @@ export async function bulkProcessInboxEmails({
   maxEmails: number;
   skipArchive: boolean;
   logger: Logger;
+  /** When the first run of this job started; set on resumes. */
+  startedAt?: number;
+  /** Deferrals in a row without progress; set on resumes. */
   deferrals?: number;
 }) {
+  const isResume = resumedStartedAt !== undefined;
+  const startedAt = resumedStartedAt ?? Date.now();
   const logger = log.with({ module: "bulk-process-emails", deferrals });
+  let sortedCount = 0;
+  let processedCount = 0;
 
   logger.info("Starting bulk inbox email processing");
 
@@ -58,29 +67,26 @@ export async function bulkProcessInboxEmails({
       return;
     }
 
-    // A resumed run, or a push that got there first, already sorted some of
-    // this mail; running the rules on it again would act on it twice.
     const latestMessages = getLatestMessagePerThread(messages);
-    const alreadySorted = await prisma.executedRule.findMany({
-      where: {
-        emailAccountId: emailAccount.id,
-        messageId: { in: latestMessages.map((message) => message.id) },
-      },
-      select: { messageId: true },
-    });
-    const sortedIds = new Set(alreadySorted.map((rule) => rule.messageId));
+    const sortedIds = isResume
+      ? await getSortedSince({
+          emailAccountId: emailAccount.id,
+          messageIds: latestMessages.map((message) => message.id),
+          startedAt,
+        })
+      : new Set<string>();
     const uniqueMessages = latestMessages.filter(
       (message) => !sortedIds.has(message.id),
     );
+    sortedCount = latestMessages.length - uniqueMessages.length;
 
     logger.info("Processing emails with rules", {
       ruleCount: rules.length,
       emailCount: uniqueMessages.length,
-      alreadySortedCount: latestMessages.length - uniqueMessages.length,
+      alreadySortedCount: sortedCount,
       totalFetched: messages.length,
     });
 
-    let processedCount = 0;
     let errorCount = 0;
 
     for (const message of uniqueMessages) {
@@ -122,14 +128,45 @@ export async function bulkProcessInboxEmails({
         provider,
         maxEmails,
         skipArchive,
+        startedAt,
       },
-      deferrals,
-      jobKey: `bulk-process-inbox-${emailAccount.id}`,
+      // The cap is for deferrals in a row that get nowhere.
+      deferrals: processedCount > 0 ? 0 : deferrals,
+      jobKey: `bulk-process-inbox-${emailAccount.id}-${startedAt}-${sortedCount + processedCount}`,
       job: "sorting existing inbox mail",
       logger,
     });
     if (!resumed) logger.error("Failed to process emails", { error });
   }
+}
+
+/**
+ * Mail this job already sorted before it was deferred. Rows from before the
+ * job started (say, a push that skipped the mail before these rules existed)
+ * and rows that ended in an error do not count, so that mail is sorted now.
+ */
+async function getSortedSince({
+  emailAccountId,
+  messageIds,
+  startedAt,
+}: {
+  emailAccountId: string;
+  messageIds: string[];
+  startedAt: number;
+}) {
+  const rows = await prisma.executedRule.findMany({
+    where: { emailAccountId, messageId: { in: messageIds } },
+    select: { messageId: true, status: true, createdAt: true },
+  });
+  return new Set(
+    rows
+      .filter(
+        (row) =>
+          row.status !== ExecutedRuleStatus.ERROR &&
+          row.createdAt.getTime() >= startedAt,
+      )
+      .map((row) => row.messageId),
+  );
 }
 
 function getLatestMessagePerThread(messages: ParsedMessage[]): ParsedMessage[] {

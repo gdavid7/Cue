@@ -9,8 +9,14 @@ vi.mock("@/utils/middleware", async () => {
   >("@/__tests__/helpers");
   return createWithErrorTestMiddleware();
 });
+// Stands in for QStash signature or internal key verification.
 vi.mock("@/utils/qstash", () => ({
-  withQstashOrInternal: (handler: unknown) => handler,
+  withQstashOrInternal:
+    (handler: (...args: unknown[]) => unknown) =>
+    (request: Request, ...rest: unknown[]) =>
+      request.headers.get("x-test-verified")
+        ? handler(request, ...rest)
+        : new Response("Unauthorized", { status: 401 }),
 }));
 vi.mock("@/utils/ai/choose-rule/bulk-process-emails", () => ({
   bulkProcessInboxEmails: vi.fn(),
@@ -24,7 +30,7 @@ describe("bulk inbox processing resume", () => {
     vi.clearAllMocks();
   });
 
-  it("resumes the deferred sort with its deferral count", async () => {
+  it("resumes the deferred sort with its start time and deferral count", async () => {
     vi.mocked(getEmailAccountForRuleExecution).mockResolvedValue({
       id: "account-1",
     } as never);
@@ -38,6 +44,7 @@ describe("bulk inbox processing resume", () => {
         provider: "google",
         maxEmails: 20,
         skipArchive: true,
+        startedAt: 1_700_000_000_000,
         deferrals: 2,
       }),
     );
@@ -51,16 +58,25 @@ describe("bulk inbox processing resume", () => {
     expect(response.status).toBe(200);
     expect(bulkProcessInboxEmails).not.toHaveBeenCalled();
   });
+
+  it("refuses a request that is neither signed nor internal", async () => {
+    const response = await POST(resume({ verified: false }), {} as never);
+
+    expect(response.status).toBe(401);
+    expect(bulkProcessInboxEmails).not.toHaveBeenCalled();
+  });
 });
 
-function resume() {
+function resume({ verified = true } = {}) {
   return new Request("http://localhost/api/ai/bulk-process-inbox", {
     method: "POST",
+    headers: verified ? { "x-test-verified": "1" } : {},
     body: JSON.stringify({
       emailAccountId: "account-1",
       provider: "google",
       maxEmails: 20,
       skipArchive: true,
+      startedAt: 1_700_000_000_000,
       deferrals: 2,
     }),
   }) as never;
