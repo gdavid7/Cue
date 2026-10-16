@@ -1082,6 +1082,34 @@ describe("processHistoryForUser - backlogs", () => {
       expect.objectContaining({ path: "/api/google/webhook/catch-up" }),
     );
   });
+
+  it("asks the catch-up for history past what it read, so it doesn't look caught up", async () => {
+    // The push is older than the history read since; the cursor passes it.
+    let page = 0;
+    vi.mocked(getHistory).mockImplementation(async () => {
+      page += 1;
+      return {
+        history: inboxHistory([String(2000 + page), `m${page}`]),
+        nextPageToken: `page-${page + 1}`,
+      } as any;
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1500 },
+      {},
+      logger,
+    );
+
+    expect(lastCursorUpdate()).toBe(String(2000 + page));
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: {
+          emailAccountId: "account-123",
+          historyId: String(2000 + page + 1),
+        },
+      }),
+    );
+  });
 });
 
 const backlogAccount = {

@@ -33,9 +33,20 @@ export const POST = withError(
 
     const emailAccount = await prisma.emailAccount.findUnique({
       where: { id: emailAccountId },
-      select: { email: true },
+      select: { email: true, lastSyncedHistoryId: true },
     });
     if (!emailAccount) return NextResponse.json({ ok: true });
+
+    // A push or another catch-up already processed this far.
+    const { lastSyncedHistoryId } = emailAccount;
+    if (
+      lastSyncedHistoryId &&
+      /^\d+$/.test(lastSyncedHistoryId) &&
+      BigInt(lastSyncedHistoryId) >= BigInt(historyId)
+    ) {
+      logger.info("Gmail history already caught up", { lastSyncedHistoryId });
+      return NextResponse.json({ ok: true });
+    }
 
     await processHistoryForUser(
       { emailAddress: emailAccount.email, historyId },

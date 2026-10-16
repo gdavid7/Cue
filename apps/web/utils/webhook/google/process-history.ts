@@ -283,9 +283,16 @@ export async function processHistoryForUser(
             hasMoreHistory: historyResult.hasMore,
           });
           await markGmailHistoryCatchUp(validatedEmailAccount.id, logger);
+          // The catch-up skips history the cursor already covers, so it asks
+          // for everything read (and past it, when pages are left), which can
+          // be newer than this push.
+          const lastReadId = historyEntries.at(-1)?.id;
+          const leftThrough = lastReadId
+            ? BigInt(lastReadId) + BigInt(historyResult.hasMore ? 1 : 0)
+            : BigInt(0);
           await scheduleGmailHistoryCatchUp({
             emailAccountId: validatedEmailAccount.id,
-            historyId,
+            historyId: maxBigInt(BigInt(historyId), leftThrough).toString(),
             logger,
           });
         } else if (catchUpToken) {

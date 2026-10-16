@@ -51,6 +51,22 @@ describe("Gmail history catch-up", () => {
     expect(processHistoryForUser).not.toHaveBeenCalled();
   });
 
+  it.each([
+    "1200",
+    "1300",
+  ])("does nothing when the account's cursor (%s) already covers the history", async (lastSyncedHistoryId) => {
+    vi.mocked(getGmailHistoryCatchUp).mockResolvedValue("token-1");
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      email: "user@example.com",
+      lastSyncedHistoryId,
+    } as never);
+
+    const response = await POST(catchUp(), {} as never);
+
+    expect(response.status).toBe(200);
+    expect(processHistoryForUser).not.toHaveBeenCalled();
+  });
+
   it("rejects a malformed delivery", async () => {
     const response = await POST(
       catchUp({ emailAccountId: "account-1", historyId: "abc" }),
