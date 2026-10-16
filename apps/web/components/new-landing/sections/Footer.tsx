@@ -22,8 +22,6 @@ const selfHostedFooter = {
       target: "_blank",
     },
     { name: "Contact us", href: `mailto:${env.NEXT_PUBLIC_SUPPORT_EMAIL}` },
-    { name: "GitHub", href: "/github", target: "_blank" },
-    { name: "Discord", href: "/discord", target: "_blank" },
   ],
   legal: [
     { name: "Terms", href: "/terms" },
@@ -110,20 +108,8 @@ export function Footer({ className, variant = "default" }: FooterProps) {
             </div>
           </div>
         </nav>
-        <div className="mt-40 flex items-center justify-between">
+        <div className="mt-40">
           <Logo />
-          <div className="flex items-center gap-4">
-            {footerNavigation.social.map((item) => (
-              <Link
-                key={item.name}
-                href={item.href}
-                className="text-gray-400 hover:text-gray-500"
-              >
-                <span className="sr-only">{item.name}</span>
-                <item.icon className="h-6 w-6" aria-hidden="true" />
-              </Link>
-            ))}
-          </div>
         </div>
       </div>
       {variant === "default" && !BRAND_LOGO_URL ? (
