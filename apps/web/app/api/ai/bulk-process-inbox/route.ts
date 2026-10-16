@@ -13,6 +13,7 @@ const bodySchema = z.object({
   maxEmails: z.number().int().positive(),
   skipArchive: z.boolean(),
   startedAt: z.number().int().positive(),
+  processedTotal: z.number().int().nonnegative(),
   deferrals: z.number().int().nonnegative(),
 });
 
@@ -25,14 +26,7 @@ export const POST = withError(
     if (!parsed.success) {
       return new Response("Invalid payload structure", { status: 400 });
     }
-    const {
-      emailAccountId,
-      provider,
-      maxEmails,
-      skipArchive,
-      startedAt,
-      deferrals,
-    } = parsed.data;
+    const { emailAccountId, ...job } = parsed.data;
     const logger = request.logger.with({ emailAccountId });
 
     const emailAccount = await getEmailAccountForRuleExecution({
@@ -40,15 +34,7 @@ export const POST = withError(
     });
     if (!emailAccount) return NextResponse.json({ ok: true });
 
-    await bulkProcessInboxEmails({
-      emailAccount,
-      provider,
-      maxEmails,
-      skipArchive,
-      logger,
-      startedAt,
-      deferrals,
-    });
+    await bulkProcessInboxEmails({ ...job, emailAccount, logger });
     return NextResponse.json({ ok: true });
   }),
 );

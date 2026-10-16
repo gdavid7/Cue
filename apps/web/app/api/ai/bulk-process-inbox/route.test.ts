@@ -45,6 +45,7 @@ describe("bulk inbox processing resume", () => {
         maxEmails: 20,
         skipArchive: true,
         startedAt: 1_700_000_000_000,
+        processedTotal: 3,
         deferrals: 2,
       }),
     );
@@ -77,6 +78,7 @@ function resume({ verified = true } = {}) {
       maxEmails: 20,
       skipArchive: true,
       startedAt: 1_700_000_000_000,
+      processedTotal: 3,
       deferrals: 2,
     }),
   }) as never;
