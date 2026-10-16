@@ -90,6 +90,8 @@ export async function runOutlookSearch({
       executedQuery = candidateQuery;
       break;
     } catch (error) {
+      // A stopped search has nobody waiting on a fallback.
+      if (signal?.aborted) throw error;
       lastError = error;
       failures.push({ query: candidateQuery, error });
 
@@ -109,9 +111,11 @@ export async function runOutlookSearch({
       if (i === searchQueries.length - 1) break;
 
       logger.warn("Search query failed; retrying with Outlook fallback", {
+        error,
+      });
+      logger.trace("Outlook search fallback queries", {
         query: candidateQuery,
         fallbackQuery: searchQueries[i + 1],
-        error,
       });
     }
   }
