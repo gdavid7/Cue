@@ -823,8 +823,10 @@ function withBillingLimitsNotRetried(model: LanguageModelV4): LanguageModelV4 {
     get supportedUrls() {
       return model.supportedUrls;
     },
-    doGenerate: (options) => model.doGenerate(options).catch(rethrow),
-    doStream: (options) => model.doStream(options).catch(rethrow),
+    doGenerate: (options) =>
+      Promise.resolve(model.doGenerate(options)).catch(rethrow),
+    doStream: (options) =>
+      Promise.resolve(model.doStream(options)).catch(rethrow),
   };
 }
 
