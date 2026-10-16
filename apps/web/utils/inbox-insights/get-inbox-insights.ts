@@ -18,7 +18,7 @@ import { assertHasAiAccess } from "@/utils/premium/limits";
 import { redis } from "@/utils/redis";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import {
-  getCachedSuggestedReply,
+  getCachedSuggestedReplies,
   getSuggestedReplySettings,
   type SuggestedReply,
 } from "@/utils/thread-context/suggest-reply";
@@ -67,13 +67,13 @@ export async function getInboxInsights({
   logger: Logger;
   now?: Date;
 }): Promise<{ insights: Record<string, ThreadInsightData> }> {
-  const cached = await Promise.all(
-    items.map((item) =>
-      redis
-        .get<CachedMessage>(cacheKey(emailAccountId, item.messageId))
-        .catch(() => null),
-    ),
-  );
+  const cached = items.length
+    ? await redis
+        .mget<(CachedMessage | null)[]>(
+          ...items.map((item) => cacheKey(emailAccountId, item.messageId)),
+        )
+        .catch(() => [] as (CachedMessage | null)[])
+    : [];
   const missing = items
     .filter((_, i) => !cached[i])
     .slice(0, MAX_NEW_PER_REQUEST);
@@ -102,22 +102,19 @@ export async function getInboxInsights({
       : [],
     // The same answer the reader shows: a reply Cue verified, maybe saved
     // as a draft, reads "Draft ready" here too.
-    getSuggestedReplySettings(emailAccountId).then((settings) =>
-      Promise.all(
-        items.map((item) =>
-          getCachedSuggestedReply(
-            {
-              emailAccountId,
-              threadId: item.threadId,
-              messageId: item.messageId,
-            },
-            settings,
-          )
-            .then((s) => replyState(s))
-            .catch(() => null),
+    getSuggestedReplySettings(emailAccountId)
+      .then((settings) =>
+        getCachedSuggestedReplies(
+          items.map((item) => ({
+            emailAccountId,
+            threadId: item.threadId,
+            messageId: item.messageId,
+          })),
+          settings,
         ),
-      ),
-    ),
+      )
+      .then((stored) => stored.map(replyState))
+      .catch(() => [] as ReturnType<typeof replyState>[]),
   ]);
 
   return {

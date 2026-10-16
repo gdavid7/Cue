@@ -7,6 +7,7 @@ import type { EmailProvider } from "@/utils/email/types";
 import {
   checkSuggestion,
   contextSources,
+  getCachedSuggestedReplies,
   getCachedSuggestedReply,
   renderSource,
   type Source,
@@ -18,15 +19,24 @@ import {
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
-const { cache, collectThreadContext, getEmailAccountWithAi } = vi.hoisted(
-  () => ({
+const { cache, redisCalls, collectThreadContext, getEmailAccountWithAi } =
+  vi.hoisted(() => ({
     cache: new Map<string, unknown>(),
+    redisCalls: [] as string[],
     collectThreadContext: vi.fn(),
     getEmailAccountWithAi: vi.fn(),
-  }),
-);
+  }));
 vi.mock("@/utils/redis", () => ({
-  redis: { get: async (key: string) => cache.get(key) ?? null },
+  redis: {
+    get: async (key: string) => {
+      redisCalls.push("get");
+      return cache.get(key) ?? null;
+    },
+    mget: async (...keys: string[]) => {
+      redisCalls.push("mget");
+      return keys.map((key) => cache.get(key) ?? null);
+    },
+  },
 }));
 vi.mock("@/utils/thread-context/get-thread-context", () => ({
   collectThreadContext,
@@ -286,6 +296,51 @@ describe("getCachedSuggestedReply", () => {
         webLookupEnabled: false,
       }),
     ).toMatchObject({ status: "insufficient" });
+  });
+
+  // An inbox page asks for up to 50 rows at once; each Redis command is
+  // billed, so the whole page is one read.
+  it("reads a page of messages' replies in one Redis command", async () => {
+    cache.clear();
+    redisCalls.length = 0;
+    cache.set("suggested-reply:v2:a1:t1:m1", {
+      status: "suggested",
+      reply: "Yes.",
+      citations: [],
+    });
+    cache.set("suggested-reply-web:v2:a1:t2:m2", {
+      status: "suggested",
+      reply: "Landing at 6:35 PM.",
+      citations: [],
+    });
+
+    const replies = await getCachedSuggestedReplies(
+      [
+        key,
+        { emailAccountId: "a1", threadId: "t2", messageId: "m2" },
+        { emailAccountId: "a1", threadId: "t3", messageId: "m3" },
+      ],
+      enabled,
+    );
+
+    expect(replies).toMatchObject([
+      { status: "suggested", reply: "Yes." },
+      { status: "suggested", reply: "Landing at 6:35 PM." },
+      null,
+    ]);
+    expect(redisCalls).toEqual(["mget"]);
+  });
+
+  it("reads nothing while auto draft replies are off", async () => {
+    redisCalls.length = 0;
+
+    expect(
+      await getCachedSuggestedReplies([key], {
+        ...enabled,
+        draftRepliesEnabled: false,
+      }),
+    ).toEqual([{ status: "unavailable" }]);
+    expect(redisCalls).toEqual([]);
   });
 
   it("falls back to the first answer, and to nothing for a new message", async () => {
