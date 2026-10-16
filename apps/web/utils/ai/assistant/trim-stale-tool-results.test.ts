@@ -127,6 +127,32 @@ describe("trimStaleToolResults", () => {
   });
 });
 
+describe("trimStaleToolResults write sources", () => {
+  it.each([
+    "getUserRulesAndSettings",
+    "getLearnedPatterns",
+    "getAssistantCapabilities",
+  ])("never shortens a stale %s result, since a later write can save it back", (toolName) => {
+    const messages = [
+      userMessage("Show my rules, then clean up"),
+      ...toolRound(toolName, "settings-0", {
+        personalInstructions: "p".repeat(2000),
+        rules: [{ name: "Newsletters", aiInstructions: "a".repeat(1500) }],
+      }),
+      ...buildLargeTurn(),
+    ];
+
+    const trimmed = trimStaleToolResults(messages);
+
+    expect(getToolOutputValue(trimmed, "call-0")).toHaveProperty(
+      "trimmedForContext",
+    );
+    expect(getToolOutputValue(trimmed, "settings-0")).toEqual(
+      getToolOutputValue(messages, "settings-0"),
+    );
+  });
+});
+
 describe("projectEarlierTurnToolResults", () => {
   it("replays earlier turns' searches in the model's view and leaves the latest turn alone", () => {
     const messages = [
