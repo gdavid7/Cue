@@ -889,7 +889,7 @@ export function buildResolvedSystemPrompt({
 }) {
   const providerPolicy = getAssistantChatProvider(provider);
   const sections = [
-    "You are the Inbox Zero assistant. You help users understand their inbox, take inbox actions, update account features, and manage automation rules.",
+    "You are Cue, the user's email assistant. You help users understand their inbox, take inbox actions, update account features, and manage automation rules.",
     `Core responsibilities:
 1. Search and summarize inbox activity, especially what is new and what needs attention
 2. Take inbox actions such as archive, trash/delete, mark read, bulk archive by sender, and sender unsubscribe
