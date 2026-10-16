@@ -76,7 +76,6 @@ export function getHelpText(
     PLATFORM_INTRO[platform],
     `An active ${BRAND_NAME} account is required.`,
     `Get started: ${normalizedBaseUrl}/channels`,
-    `Help: ${normalizedBaseUrl}/docs/essentials/channels`,
     `Contact support: ${supportEmail}`,
     "",
     "Commands:",

@@ -77,6 +77,13 @@ describe("getHelpText", () => {
     expect(helpText).toContain("/switch");
   });
 
+  it("links only to pages the app serves", () => {
+    const helpText = getHelpText("telegram", HELP_OPTIONS);
+    const links = helpText.match(/https?:\/\/\S+/g) ?? [];
+
+    expect(links).toEqual(["https://example.com/channels"]);
+  });
+
   it("omits account-linking commands that Slack does not support", () => {
     const helpText = getHelpText("slack", HELP_OPTIONS);
 
