@@ -242,9 +242,21 @@ test("the conversation doesn't move when the strip settles", async ({
   const samples = await page.evaluate(
     () => (window as unknown as { __messageTops: string[] }).__messageTops,
   );
-  const offsets = samples.map((sample) => sample.split(":")[0]);
-  expect(offsets.length).toBeGreaterThan(0);
-  expect(new Set(offsets), samples.join(" → ")).toEqual(new Set([offsets[0]]));
+  // The strip is held from its first frame at the height it settles at, and
+  // settling doesn't move the message: the offset just before it settles is
+  // the offset after. (The reader's own first layout may move things before
+  // that; that isn't the strip's doing.)
+  const parsed = samples.map((sample) => {
+    const [offset, state, height] = sample.split(":");
+    return { offset, state, height };
+  });
+  const trail = samples.join(" → ");
+  const firstShown = parsed.findIndex((sample) => sample.state === "show");
+  expect(firstShown, trail).toBeGreaterThanOrEqual(0);
+  const settled = parsed.slice(Math.max(firstShown - 1, 0));
+  expect(new Set(settled.map((sample) => sample.offset)).size, trail).toBe(1);
+  const held = parsed.filter((sample) => sample.state !== "none");
+  expect(new Set(held.map((sample) => sample.height)).size, trail).toBe(1);
   await capturePlaywrightCheckpoint(page, testInfo, "cue-strip-settled-late");
 
   // Ask Cue opens the assistant on this email with the cursor in it.
