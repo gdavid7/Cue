@@ -105,7 +105,8 @@
       "!.next",
       "!sw.js",
       "!.vscode",
-      "!.claude"
+      "!.claude",
+      "!prototype"
     ]
   },
   "assist": {
