@@ -1,6 +1,5 @@
 import { chatCompletionStream } from "@/utils/llms";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
-import { expire } from "@/utils/redis";
 import { saveSummary } from "@/utils/redis/summary";
 import { LlmUseCase } from "@/utils/llms/use-cases";
 
@@ -38,9 +37,9 @@ export async function summarise({
     userEmail,
     usageLabel: "Summarise",
     sensitiveDataPolicy: userAi.sensitiveDataPolicy,
+    // Saved under the text the route looks up before calling the model.
     onEnd: async (result) => {
-      await saveSummary(prompt, result.text);
-      await expire(prompt, 60 * 60 * 24);
+      await saveSummary(text, result.text);
     },
   });
 

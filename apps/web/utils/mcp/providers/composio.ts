@@ -9,6 +9,7 @@ import {
   type IntegrationProvider,
 } from "@/utils/mcp/providers/types";
 import { redis } from "@/utils/redis";
+import { logRedisFailureOnce } from "@/utils/redis/unavailable-log";
 
 const logger = createScopedLogger("composio");
 
@@ -462,7 +463,10 @@ async function rememberStatus(
           : LAPSED_STATUS_CACHE_SECONDS,
     })
     .catch((error) => {
-      logger.warn("Failed to cache connection status", { app, error });
+      logRedisFailureOnce(logger, "Failed to cache connection status", {
+        app,
+        error,
+      });
     });
 }
 

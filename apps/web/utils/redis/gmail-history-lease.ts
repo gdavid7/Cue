@@ -24,7 +24,9 @@ export async function acquireGmailHistoryLease(
     });
     return token ? { acquired: true, token } : { acquired: false };
   } catch (error) {
-    // Without Redis the per-message locks are gone too; run as before.
+    // Run anyway: without Redis each message's claim fails too, which stops
+    // the run before that message and leaves it for a catch-up, so nothing
+    // is processed twice or skipped.
     logger.warn("Failed to acquire Gmail history lease", { error });
     return { acquired: true, token: null };
   }

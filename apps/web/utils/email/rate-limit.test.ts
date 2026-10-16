@@ -21,6 +21,15 @@ vi.mock("@/utils/redis", () => ({
   },
 }));
 
+// These cases are about the state, not the per-instance memo in front of it.
+vi.mock("@/utils/memo-cache", () => ({
+  createMemoCache: () => ({
+    get: (_key: string, load: () => Promise<unknown>) => load(),
+    set: () => {},
+    delete: () => {},
+  }),
+}));
+
 const logger = createTestLogger();
 
 describe("email provider rate-limit state", () => {

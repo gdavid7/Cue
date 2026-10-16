@@ -325,15 +325,8 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       });
 
       try {
-        await vi.waitFor(async () => {
-          expect(
-            await redisState.client!.exists(
-              `local-mail-interest:${GMAIL_ACCOUNT}`,
-            ),
-          ).toBe(1);
-          // Connecting triggers a catch-up of its own.
-          expect(changes).toEqual([GMAIL_ACCOUNT]);
-        });
+        // Connecting (once subscribed) triggers a catch-up of its own.
+        await vi.waitFor(() => expect(changes).toEqual([GMAIL_ACCOUNT]));
         const response = await postGoogleWebhook(gmailWebhook("2"));
         expect(response.status).toBe(200);
         await flushAfter();

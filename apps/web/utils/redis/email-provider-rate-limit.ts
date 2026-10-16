@@ -4,9 +4,20 @@ import {
   type EmailProviderRateLimitProvider,
   toRateLimitProvider,
 } from "@/utils/email/rate-limit-mode-error";
+import { createMemoCache } from "@/utils/memo-cache";
 import { redis } from "@/utils/redis";
 
 const RATE_LIMIT_KEY_PREFIX = "email-provider-rate-limit";
+
+// Read for every provider a request creates. An instance rereads an account
+// at most every few seconds. Its own writes through this module update the
+// memo at once; a write made elsewhere (another instance, or a script that
+// sets the key directly, which then calls forgetEmailProviderRateLimitState)
+// reaches it within that window, while the quota gate keeps pacing calls.
+const recentStates = createMemoCache<RedisEmailProviderRateLimitState | null>({
+  ttlMs: 5000,
+  maxEntries: 5000,
+});
 
 type StoredEmailProviderRateLimitState = {
   provider: EmailProviderRateLimitProvider;
@@ -32,6 +43,16 @@ export async function getEmailProviderRateLimitStateFromRedis({
 }) {
   if (!isEmailProviderRateLimitRedisConfigured()) return null;
 
+  const state = await recentStates.get(emailAccountId, () =>
+    readRateLimitState(emailAccountId),
+  );
+  if (state && state.retryAt.getTime() <= Date.now()) return null;
+  return state;
+}
+
+async function readRateLimitState(
+  emailAccountId: string,
+): Promise<RedisEmailProviderRateLimitState | null> {
   const key = getRateLimitKey(emailAccountId);
   const value = await redis.get<StoredEmailProviderRateLimitState | string>(
     key,
@@ -80,6 +101,7 @@ export async function setEmailProviderRateLimitStateInRedis({
   await redis.set(getRateLimitKey(emailAccountId), JSON.stringify(value), {
     ex: ttlSeconds,
   });
+  recentStates.set(emailAccountId, { provider, retryAt, source });
 }
 
 export async function deleteEmailProviderRateLimitStateFromRedis({
@@ -89,6 +111,15 @@ export async function deleteEmailProviderRateLimitStateFromRedis({
 }) {
   if (!isEmailProviderRateLimitRedisConfigured()) return;
   await redis.del(getRateLimitKey(emailAccountId));
+  recentStates.delete(emailAccountId);
+}
+
+/**
+ * For code that writes the rate-limit key without going through this module
+ * (a Lua script): makes this instance read it again on the next check.
+ */
+export function forgetEmailProviderRateLimitState(emailAccountId: string) {
+  recentStates.delete(emailAccountId);
 }
 
 export function isEmailProviderRateLimitRedisConfigured() {

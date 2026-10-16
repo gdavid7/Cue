@@ -2,12 +2,41 @@ import "server-only";
 import type { LanguageModelUsage } from "ai";
 import { redis } from "@/utils/redis";
 import { createScopedLogger } from "@/utils/logger";
+import { logRedisFailureOnce } from "@/utils/redis/unavailable-log";
 
 const logger = createScopedLogger("redis/usage");
 const WEEKLY_USAGE_COST_DAYS = 7;
 const WEEKLY_USAGE_COST_TTL_SECONDS = 8 * 24 * 60 * 60;
 const WEEKLY_USAGE_COST_KEY_PREFIX = "usage-weekly-cost";
 const USAGE_MIGRATION_LOCK_TTL_SECONDS = 5 * 60;
+
+// KEYS: the usage hashes, then the weekly cost hash when ARGV[1] is '1'.
+// ARGV: that flag, the cost, the weekly TTL, then field/increment pairs.
+const saveUsageScript = `
+local weekly = ARGV[1] == '1'
+local cost = tonumber(ARGV[2])
+local hashes = #KEYS
+if weekly then hashes = hashes - 1 end
+for i = 1, hashes do
+  for j = 4, #ARGV, 2 do
+    redis.call('HINCRBY', KEYS[i], ARGV[j], ARGV[j + 1])
+  end
+  if cost > 0 then redis.call('HINCRBYFLOAT', KEYS[i], 'cost', ARGV[2]) end
+end
+if weekly then
+  redis.call('HINCRBYFLOAT', KEYS[#KEYS], 'cost', ARGV[2])
+  redis.call('EXPIRE', KEYS[#KEYS], tonumber(ARGV[3]))
+end
+return 1
+`;
+
+const readCostsScript = `
+local costs = {}
+for i = 1, #KEYS do
+  costs[i] = redis.call('HGET', KEYS[i], 'cost') or ''
+end
+return costs
+`;
 
 export type RedisUsage = {
   calls?: number;
@@ -212,37 +241,31 @@ export async function saveUsage(options: {
     getUsageKey({ type: "email-account", id: emailAccountId }),
     ...(userId ? [getUsageKey({ type: "user", id: userId })] : []),
   ];
-  const weeklyCostKey = userId ? getWeeklyUsageCostKey(userId, now) : null;
+  const weeklyCostKey =
+    userId && cost ? getWeeklyUsageCostKey(userId, now) : null;
 
-  const operations = usageKeys
-    .flatMap((key) => getUsageIncrementOperations(key, usage, cost))
-    .filter(Boolean);
-
-  // Best-effort: a failed increment must not break the AI call. Use allSettled
-  // so one rejection doesn't mask the others, and surface how many failed.
-  const results = await Promise.allSettled(operations);
-  const failedCount = results.filter((r) => r.status === "rejected").length;
-  if (failedCount > 0) {
+  // One command for every hash: each Redis command is billed, and this runs
+  // on every AI call.
+  const fields = getUsageIncrementFields(usage);
+  try {
+    await redis.eval(
+      saveUsageScript,
+      weeklyCostKey ? [...usageKeys, weeklyCostKey] : usageKeys,
+      [
+        weeklyCostKey ? "1" : "0",
+        String(cost || 0),
+        String(WEEKLY_USAGE_COST_TTL_SECONDS),
+        ...fields.flatMap(([field, value]) => [field, String(value)]),
+      ],
+    );
+  } catch (error) {
     // `raw` is the provider's own usage payload, keyed differently per provider.
     const { raw: _raw, ...loggedUsage } = usage;
-    logger.error("Error saving usage increments", {
-      failedCount,
-      totalCount: results.length,
+    logRedisFailureOnce(logger, "Error saving AI usage", {
+      error,
       cost,
       usage: loggedUsage,
     });
-  }
-
-  // Increment the weekly cost, then set its TTL — sequenced so the key exists
-  // before expire runs (a concurrent expire can no-op on the first write of the
-  // week, leaving the key without a TTL).
-  if (cost && weeklyCostKey) {
-    try {
-      await redis.hincrbyfloat(weeklyCostKey, "cost", cost);
-      await redis.expire(weeklyCostKey, WEEKLY_USAGE_COST_TTL_SECONDS);
-    } catch (error) {
-      logger.error("Error saving weekly usage cost", { error, cost });
-    }
   }
 }
 
@@ -460,38 +483,23 @@ export function getWeeklyUsageCostWindow(now: Date) {
   };
 }
 
-function getUsageIncrementOperations(
-  key: string,
+function getUsageIncrementFields(
   usage: LanguageModelUsage,
-  cost: number,
-) {
-  return [
-    redis.hincrby(key, "calls", 1),
-    usage.totalTokens
-      ? redis.hincrby(key, "tokensUsed", usage.totalTokens)
-      : null,
-    usage.outputTokens
-      ? redis.hincrby(key, "completionTokensUsed", usage.outputTokens)
-      : null,
-    usage.inputTokens
-      ? redis.hincrby(key, "promptTokensUsed", usage.inputTokens)
-      : null,
-    usage.inputTokenDetails?.cacheReadTokens
-      ? redis.hincrby(
-          key,
-          "cachedInputTokensUsed",
-          usage.inputTokenDetails.cacheReadTokens,
-        )
-      : null,
-    usage.outputTokenDetails?.reasoningTokens
-      ? redis.hincrby(
-          key,
-          "reasoningTokensUsed",
-          usage.outputTokenDetails.reasoningTokens,
-        )
-      : null,
-    cost ? redis.hincrbyfloat(key, "cost", cost) : null,
+): [keyof RedisUsage, number][] {
+  const fields: [keyof RedisUsage, number | undefined][] = [
+    ["calls", 1],
+    ["tokensUsed", usage.totalTokens],
+    ["completionTokensUsed", usage.outputTokens],
+    ["promptTokensUsed", usage.inputTokens],
+    ["cachedInputTokensUsed", usage.inputTokenDetails?.cacheReadTokens],
+    ["reasoningTokensUsed", usage.outputTokenDetails?.reasoningTokens],
   ];
+  // HINCRBY takes whole numbers only, and a rejected increment aborts the
+  // script's other writes too.
+  return fields.flatMap(([field, value]) => {
+    const whole = Math.round(value ?? 0);
+    return whole > 0 ? [[field, whole] as [keyof RedisUsage, number]] : [];
+  });
 }
 
 function getUsageDataIncrementOperations(
@@ -529,14 +537,21 @@ function hasUsageData(usage: RedisUsage | null | undefined) {
 }
 
 async function getWeeklyUsageCostTotal(keys: string[]) {
-  const weeklyCosts = await Promise.all(
-    keys.map(async (key) => {
-      const data = await redis.hgetall<{ cost?: string | number }>(key);
-      return parseRedisNumber(data?.cost);
-    }),
-  );
-
+  const weeklyCosts = await readWeeklyCosts(keys);
   return weeklyCosts.reduce((sum, value) => sum + value, 0);
+}
+
+// Any number of daily hashes in one command.
+async function readWeeklyCosts(keys: string[]): Promise<number[]> {
+  if (!keys.length) return [];
+  const costs = await redis.eval<string[], unknown[]>(
+    readCostsScript,
+    keys,
+    [],
+  );
+  return keys.map((_, index) =>
+    parseRedisNumber(Array.isArray(costs) ? costs[index] : null),
+  );
 }
 
 function getWeeklyUsageCostKeys(userId: string, now: Date) {
@@ -576,16 +591,15 @@ async function getLegacyWeeklyUsageCostsByKey({
   const costsByKey = new Map<string, number>();
   if (!emails.length) return costsByKey;
 
-  await Promise.all(
-    emails.flatMap((email) =>
-      getWeeklyUsageCostDays(now).map(async (day) => {
-        const key = getLegacyWeeklyUsageCostKey(email, day);
-        const data = await redis.hgetall<{ cost?: string | number }>(key);
-        const cost = parseRedisNumber(data?.cost);
-        if (cost > 0) costsByKey.set(key, cost);
-      }),
+  const keys = emails.flatMap((email) =>
+    getWeeklyUsageCostDays(now).map((day) =>
+      getLegacyWeeklyUsageCostKey(email, day),
     ),
   );
+  const costs = await readWeeklyCosts(keys);
+  keys.forEach((key, index) => {
+    if (costs[index] > 0) costsByKey.set(key, costs[index]);
+  });
 
   return costsByKey;
 }

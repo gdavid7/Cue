@@ -639,14 +639,35 @@ export async function getCachedSuggestedReply(
   },
   settings: SuggestedReplySettings,
 ): Promise<SuggestedReply | null> {
-  if (!settings.draftRepliesEnabled) return { status: "unavailable" };
-  const [web, plain] = await Promise.all([
+  const [reply] = await getCachedSuggestedReplies([key], settings);
+  return reply ?? null;
+}
+
+/**
+ * `getCachedSuggestedReply` for many messages in one Redis command, as an
+ * inbox page asks for every row at once.
+ */
+export async function getCachedSuggestedReplies(
+  keys: { emailAccountId: string; threadId: string; messageId: string }[],
+  settings: SuggestedReplySettings,
+): Promise<(SuggestedReply | null)[]> {
+  if (!settings.draftRepliesEnabled)
+    return keys.map(() => ({ status: "unavailable" }));
+  if (keys.length === 0) return [];
+  const perKey = settings.webLookupEnabled ? 2 : 1;
+  const cacheKeys = keys.flatMap((key) =>
     settings.webLookupEnabled
-      ? getCached(suggestionCacheKey({ ...key, web: true }))
-      : null,
-    getCached(suggestionCacheKey(key)),
-  ]);
-  return web ?? plain;
+      ? [suggestionCacheKey({ ...key, web: true }), suggestionCacheKey(key)]
+      : [suggestionCacheKey(key)],
+  );
+  const stored = await redis
+    .mget<(SuggestedReply | null)[]>(...cacheKeys)
+    .catch(() => [] as (SuggestedReply | null)[]);
+  // The web pass's answer, when there is one, comes first for each message.
+  return keys.map((_, index) => {
+    const at = index * perKey;
+    return stored[at] ?? (perKey === 2 ? stored[at + 1] : undefined) ?? null;
+  });
 }
 
 function suggestionCacheKey({

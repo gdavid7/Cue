@@ -7,7 +7,8 @@ const logger = createScopedLogger("redis/research-cache");
 
 const CACHE_KEY_PREFIX = "research";
 const CACHE_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
-const MAX_CONTENT_SIZE = 1024 * 1024; // 1MB
+// Kept per contact per user for a month; a research write-up is a few KB.
+const MAX_CONTENT_SIZE = 64 * 1024;
 
 export type ResearchSource = "perplexity" | "websearch";
 

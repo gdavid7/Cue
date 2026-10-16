@@ -5,12 +5,11 @@ import {
   TRACKER_HINT_MESSAGE,
   publishLocalMailHint,
   publishTrackerHint,
-  refreshLocalMailInterest,
 } from "./local-mail-hints";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/redis", () => ({
-  redis: { exists: vi.fn(), set: vi.fn(), publish: vi.fn() },
+  redis: { publish: vi.fn() },
 }));
 const logger = createScopedLogger("local-mail-hints-test");
 
@@ -18,22 +17,13 @@ describe("local mail hints", () => {
   beforeEach(() => {
     vi.resetAllMocks();
   });
-  it("does not publish without a connected Mail client", async () => {
-    vi.mocked(redis.exists).mockResolvedValue(0);
-    await publishLocalMailHint("account-a", logger);
-    expect(redis.publish).not.toHaveBeenCalled();
-  });
   it("publishes every change, without message data, so a quick second email is not dropped", async () => {
-    vi.mocked(redis.exists).mockResolvedValue(1);
     await publishLocalMailHint("account-a", logger);
     await publishLocalMailHint("account-a", logger);
     expect(redis.publish).toHaveBeenCalledTimes(2);
     expect(redis.publish).toHaveBeenCalledWith("local-mail:account-a", "{}");
   });
-  it("publishes a tracker hint Today can tell apart from new mail, only while a client is connected", async () => {
-    vi.mocked(redis.exists).mockResolvedValueOnce(0).mockResolvedValue(1);
-    await publishTrackerHint("account-a", logger);
-    expect(redis.publish).not.toHaveBeenCalled();
+  it("publishes a tracker hint Today can tell apart from new mail", async () => {
     await publishTrackerHint("account-a", logger);
     expect(redis.publish).toHaveBeenCalledWith(
       "local-mail:account-a",
@@ -41,20 +31,8 @@ describe("local mail hints", () => {
     );
     expect(TRACKER_HINT_MESSAGE).not.toBe("{}");
   });
-  it("bounds interest after disconnect without deleting other clients' leases", async () => {
-    await refreshLocalMailInterest("account-a");
-    expect(redis.set).toHaveBeenCalledWith(
-      "local-mail-interest:account-a",
-      "1",
-      { ex: 75 },
-    );
-  });
-  it.each([
-    "exists",
-    "publish",
-  ] as const)("fails open when Redis %s fails", async (method) => {
-    vi.mocked(redis.exists).mockResolvedValue(1);
-    vi.mocked(redis[method]).mockRejectedValue(new Error("Unavailable"));
+  it("fails open when Redis publish fails", async () => {
+    vi.mocked(redis.publish).mockRejectedValue(new Error("Unavailable"));
     await expect(
       publishLocalMailHint("account-a", logger),
     ).resolves.toBeUndefined();

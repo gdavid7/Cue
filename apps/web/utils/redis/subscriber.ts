@@ -1,6 +1,7 @@
 import Redis from "ioredis";
 import { env } from "@/env";
 import { createScopedLogger } from "@/utils/logger";
+import { logRedisFailureOnce } from "@/utils/redis/unavailable-log";
 
 const logger = createScopedLogger("ioredis");
 
@@ -14,8 +15,10 @@ class RedisSubscriber {
     logger.info("Initializing Redis subscriber connection");
     const redisSubscriber = new Redis(env.REDIS_URL);
 
+    // ioredis reports every failed reconnect attempt; an outage would log
+    // one line per attempt per instance.
     redisSubscriber.on("error", (error) => {
-      logger.error("Redis connection error", { error });
+      logRedisFailureOnce(logger, "Redis connection error", { error });
     });
 
     redisSubscriber.on("connect", () => {
