@@ -27,12 +27,17 @@ test("keeps keyboard focus in the composer and follows the message field order",
   const dialog = page.getByRole("dialog", { name: "New Message" });
   const toField = dialog.getByRole("combobox", { name: "To" });
   await expect(toField).toBeFocused();
+  // The message body loads after the header on a cold open, and until then
+  // its placeholder has nothing to take focus. This spec is about tab order
+  // once the composer is ready, not about the load.
+  const body = dialog.getByRole("textbox", { name: "Email message" });
+  await expect(body).toBeVisible();
 
   for (const field of [
     dialog.getByRole("button", { exact: true, name: "Add Cc recipients" }),
     dialog.getByRole("button", { exact: true, name: "Add Bcc recipients" }),
     dialog.getByPlaceholder("Subject"),
-    dialog.getByRole("textbox", { name: "Email message" }),
+    body,
     dialog.getByRole("button", { name: "Show signature" }),
     dialog.getByRole("button", { exact: true, name: "Send" }),
     dialog.getByRole("button", { name: "Send later" }),
