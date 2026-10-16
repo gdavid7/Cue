@@ -131,11 +131,11 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
     timeMax?: Date;
     maxResults?: number;
   }): Promise<CalendarEvent[]> {
-    this.logger.info("Starting Google calendar client setup");
+    this.logger.trace("Starting Google calendar client setup");
     const client = await this.getClient();
-    this.logger.info("Completed Google calendar client setup");
+    this.logger.trace("Completed Google calendar client setup");
 
-    this.logger.info("Starting Google calendar events request");
+    this.logger.trace("Starting Google calendar events request");
     const events = await this.listEvents(client, {
       timeMin: timeMin?.toISOString(),
       timeMax: timeMax?.toISOString(),
@@ -143,7 +143,7 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
       singleEvents: true,
       orderBy: "startTime",
     });
-    this.logger.info("Completed Google calendar events request", {
+    this.logger.trace("Completed Google calendar events request", {
       eventCount: events.length,
     });
 

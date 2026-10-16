@@ -132,21 +132,21 @@ export class MicrosoftCalendarEventProvider implements CalendarEventProvider {
     timeMax?: Date;
     maxResults?: number;
   }): Promise<CalendarEvent[]> {
-    this.logger.info("Starting Microsoft calendar client setup");
+    this.logger.trace("Starting Microsoft calendar client setup");
     const client = await this.getClient();
-    this.logger.info("Completed Microsoft calendar client setup");
+    this.logger.trace("Completed Microsoft calendar client setup");
 
     // calendarView requires both start and end times, default to 30 days from timeMin
     const effectiveTimeMax =
       timeMax ?? new Date(timeMin.getTime() + 30 * 24 * 60 * 60 * 1000);
 
-    this.logger.info("Starting Microsoft calendar events request");
+    this.logger.trace("Starting Microsoft calendar events request");
     const events = await this.listCalendarView(client, {
       timeMin,
       timeMax: effectiveTimeMax,
       top: maxResults || 100,
     });
-    this.logger.info("Completed Microsoft calendar events request", {
+    this.logger.trace("Completed Microsoft calendar events request", {
       eventCount: events.length,
     });
 
