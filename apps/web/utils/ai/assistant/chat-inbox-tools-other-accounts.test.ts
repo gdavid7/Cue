@@ -209,6 +209,22 @@ describe("searchInbox across the user's accounts", () => {
     expect(providers["account-2"].searchMessages).not.toHaveBeenCalled();
   });
 
+  it("says how many of the user's accounts it did not search", async () => {
+    prisma.emailAccount.findMany.mockResolvedValue([
+      accounts.chat,
+      accounts.gmail,
+      connectedAccount("account-3", "three@example.com", "microsoft", false),
+    ] as never);
+
+    const result = await search("google", {
+      query: "contract renewal",
+      allAccounts: true,
+    });
+
+    expect(providers["account-3"].searchMessages).not.toHaveBeenCalled();
+    expect(result.accountsNotSearched).toBe(1);
+  });
+
   it("rewrites a Gmail chat's search for an Outlook account", async () => {
     const result = await search("google", {
       query: "from:legal@acme.example is:unread label:work renewal",
@@ -374,8 +390,20 @@ async function search(provider: string, input: Record<string, unknown>) {
   return result as any;
 }
 
-function connectedAccount(id: string, email: string, provider: string) {
-  return { id, email, name: null, image: null, account: { provider } };
+function connectedAccount(
+  id: string,
+  email: string,
+  provider: string,
+  includeInAllAccounts = true,
+) {
+  return {
+    id,
+    email,
+    name: null,
+    image: null,
+    includeInAllAccounts,
+    account: { provider },
+  };
 }
 
 function fakeProvider(messageId: string, threadId: string) {

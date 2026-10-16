@@ -95,10 +95,20 @@ export async function runOnOtherAccounts<T>({
   logger: Logger;
   abortSignal?: AbortSignal;
   run: (account: ConnectedEmailAccount, signal: AbortSignal) => Promise<T>;
-}): Promise<OtherAccountResult<T>[]> {
-  const accounts = (await getConnectedEmailAccounts({ userId }))
-    .filter((account) => account.id !== emailAccountId)
-    .slice(0, MAX_OTHER_ACCOUNTS);
+}): Promise<{
+  results: OtherAccountResult<T>[];
+  /** The user's other accounts left out, by preference or by the cap. */
+  notSearchedCount: number;
+}> {
+  const otherAccounts = (await getConnectedEmailAccounts({ userId })).filter(
+    (account) => account.id !== emailAccountId,
+  );
+  // Pending a product decision: drop this line to search every connected
+  // account, not only those the user keeps in All inboxes.
+  const searchable = otherAccounts.filter(
+    (account) => account.includeInAllAccounts,
+  );
+  const accounts = searchable.slice(0, MAX_OTHER_ACCOUNTS);
 
   const controller = new AbortController();
   const stop = () => controller.abort();
@@ -144,13 +154,16 @@ export async function runOnOtherAccounts<T>({
     abortSignal?.removeEventListener("abort", stop);
   }
 
-  return accounts.map(
-    (account, index) =>
-      finished[index] ?? {
-        account,
-        error: "This account did not answer in time.",
-      },
-  );
+  return {
+    results: accounts.map(
+      (account, index) =>
+        finished[index] ?? {
+          account,
+          error: "This account did not answer in time.",
+        },
+    ),
+    notSearchedCount: otherAccounts.length - accounts.length,
+  };
 }
 
 /**

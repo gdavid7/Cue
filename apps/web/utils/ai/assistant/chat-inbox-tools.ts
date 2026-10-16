@@ -1866,9 +1866,10 @@ type OtherAccountSearchResult =
 
 type OtherAccount = { id: string; email: string; provider: string };
 
-type OtherAccountSearch = Promise<
-  OtherAccountResult<OtherAccountSearchResult>[] | null
-> | null;
+type OtherAccountSearch = Promise<{
+  results: OtherAccountResult<OtherAccountSearchResult>[];
+  notSearchedCount: number;
+} | null> | null;
 
 /**
  * Starts the search in the user's other accounts, alongside the chat
@@ -1894,7 +1895,7 @@ function startOtherAccountSearch({
   // Folders and categories are the chat account's own, and a page walk
   // continues the chat account's search, so those stay in it.
   if (input.pageToken || input.folderName || input.categoryName) {
-    return Promise.resolve([]);
+    return Promise.resolve({ results: [], notSearchedCount: 0 });
   }
 
   const search: AccountSearch = {
@@ -2036,7 +2037,8 @@ async function withOtherAccountResults<
   otherAccounts: OtherAccountSearch;
 }) {
   if (!otherAccountSearch) return result;
-  const otherAccounts = await otherAccountSearch;
+  const otherSearch = await otherAccountSearch;
+  const otherAccounts = otherSearch?.results;
 
   const chatMessages = (result.messages ?? []).map((message) => ({
     ...message,
@@ -2066,7 +2068,10 @@ async function withOtherAccountResults<
           },
       ...(otherAccounts ?? []).map(describeOtherAccount),
     ],
-    ...(otherAccounts
+    ...(otherSearch?.notSearchedCount && {
+      accountsNotSearched: otherSearch.notSearchedCount,
+    }),
+    ...(otherSearch
       ? {}
       : {
           otherAccountsError:

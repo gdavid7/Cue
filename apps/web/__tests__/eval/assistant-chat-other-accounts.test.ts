@@ -206,6 +206,7 @@ function mockAccounts({
       email: "user@test.com",
       name: null,
       image: null,
+      includeInAllAccounts: true,
       account: { provider: "google" },
     },
     {
@@ -213,6 +214,7 @@ function mockAccounts({
       email: OTHER_ACCOUNT_EMAIL,
       name: null,
       image: null,
+      includeInAllAccounts: true,
       account: { provider: "google" },
     },
   ] as never);

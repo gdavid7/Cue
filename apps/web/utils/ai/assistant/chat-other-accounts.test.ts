@@ -17,12 +17,18 @@ const OTHER_ACCOUNT = "account-2";
 const toolCallOptions = { toolCallId: "call-1", messages: [] } as never;
 const logger = createTestLogger();
 
-function connectedAccount(id: string, email: string, provider = "google") {
+function connectedAccount(
+  id: string,
+  email: string,
+  provider = "google",
+  includeInAllAccounts = true,
+) {
   return {
     id,
     email,
     name: null,
     image: null,
+    includeInAllAccounts,
     account: { provider },
   };
 }
@@ -171,7 +177,7 @@ describe("runOnOtherAccounts", () => {
     ] as never);
     const run = vi.fn(async (account: { id: string }) => account.id);
 
-    const results = await runOnOtherAccounts({
+    const { results } = await runOnOtherAccounts({
       userId: USER_ID,
       emailAccountId: CHAT_ACCOUNT,
       logger,
@@ -202,7 +208,7 @@ describe("runOnOtherAccounts", () => {
       connectedAccount("account-3", "three@example.com"),
     ] as never);
 
-    const results = await runOnOtherAccounts({
+    const { results } = await runOnOtherAccounts({
       userId: USER_ID,
       emailAccountId: CHAT_ACCOUNT,
       logger,
@@ -261,7 +267,7 @@ describe("runOnOtherAccounts", () => {
       });
       await vi.advanceTimersByTimeAsync(20_000);
 
-      await expect(pending).resolves.toEqual([
+      expect((await pending).results).toEqual([
         {
           account: expect.objectContaining({ id: OTHER_ACCOUNT }),
           error: expect.stringMatching(/time/i),
@@ -291,7 +297,7 @@ describe("runOnOtherAccounts", () => {
           signals.push(signal);
           return new Promise(() => undefined);
         },
-      }).then((results) => {
+      }).then(({ results }) => {
         settled = true;
         return results;
       });
@@ -317,6 +323,43 @@ describe("runOnOtherAccounts", () => {
     }
   });
 
+  it("leaves out accounts the user keeps out of All inboxes, and counts them", async () => {
+    prisma.emailAccount.findMany.mockResolvedValue([
+      connectedAccount("account-2", "two@example.com"),
+      connectedAccount("account-3", "three@example.com", "google", false),
+    ] as never);
+    const run = vi.fn(async () => "ok");
+
+    const { results, notSearchedCount } = await runOnOtherAccounts({
+      userId: USER_ID,
+      emailAccountId: CHAT_ACCOUNT,
+      logger,
+      run,
+    });
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(results.map((entry) => entry.account.id)).toEqual(["account-2"]);
+    expect(notSearchedCount).toBe(1);
+  });
+
+  it("counts the accounts past the cap as not searched", async () => {
+    prisma.emailAccount.findMany.mockResolvedValue(
+      Array.from({ length: 12 }, (_, index) =>
+        connectedAccount(`account-${index + 2}`, `a${index}@example.com`),
+      ) as never,
+    );
+
+    const { results, notSearchedCount } = await runOnOtherAccounts({
+      userId: USER_ID,
+      emailAccountId: CHAT_ACCOUNT,
+      logger,
+      run: async () => "ok",
+    });
+
+    expect(results).toHaveLength(10);
+    expect(notSearchedCount).toBe(2);
+  });
+
   it("stops the accounts' searches when the chat turn is stopped", async () => {
     prisma.emailAccount.findMany.mockResolvedValue([
       connectedAccount(OTHER_ACCOUNT, "other@example.com"),
@@ -337,7 +380,7 @@ describe("runOnOtherAccounts", () => {
     await vi.waitFor(() => expect(accountSignal).toBeDefined());
     turn.abort();
 
-    await expect(pending).resolves.toHaveLength(1);
+    expect((await pending).results).toHaveLength(1);
     expect(accountSignal?.aborted).toBe(true);
   });
 });
