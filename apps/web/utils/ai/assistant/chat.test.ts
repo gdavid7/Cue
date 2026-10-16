@@ -644,23 +644,30 @@ describe("aiProcessAssistantChat turn limits", () => {
     );
   });
 
-  it("keeps Claude's tool definitions when it forces the answer", async () => {
+  it("keeps Claude's and Gemini's tool definitions when it forces the answer", async () => {
     const step = await prepareStepFor();
 
-    const forced = await step(6, CLAUDE_STEP_MODEL);
+    for (const model of [CLAUDE_STEP_MODEL, GEMINI_STEP_MODEL]) {
+      const forced = await step(6, model);
 
-    expect(forced).toMatchObject({ toolChoice: "none" });
-    expect(forced).not.toHaveProperty("activeTools");
+      expect(forced, model.provider).toMatchObject({ toolChoice: "none" });
+      expect(forced, model.provider).not.toHaveProperty("activeTools");
+    }
+  });
+
+  it("drops the tools of other providers when it forces the answer", async () => {
+    const step = await prepareStepFor();
+
+    expect(
+      await step(6, { provider: "openai.responses", modelId: "gpt-6-luna" }),
+    ).toMatchObject({ activeTools: [], toolChoice: "none" });
   });
 
   it("answers without more tools after six steps", async () => {
     const step = await prepareStepFor();
 
     expect(await step(5)).not.toMatchObject({ toolChoice: "none" });
-    expect(await step(6)).toMatchObject({
-      activeTools: [],
-      toolChoice: "none",
-    });
+    expect(await step(6)).toMatchObject({ toolChoice: "none" });
   });
 
   it("caps Slack, Teams and Telegram turns at six tool steps too", async () => {
@@ -686,7 +693,7 @@ describe("aiProcessAssistantChat turn limits", () => {
           modelId: "gemini-3.8-flash",
         },
       } as never),
-    ).toMatchObject({ activeTools: [], toolChoice: "none" });
+    ).toMatchObject({ toolChoice: "none" });
   });
 
   it("answers without more tools once a web turn has spent 45 seconds", async () => {
@@ -696,10 +703,7 @@ describe("aiProcessAssistantChat turn limits", () => {
       vi.setSystemTime(Date.now() + 44_000);
       expect(await step(1)).not.toMatchObject({ toolChoice: "none" });
       vi.setSystemTime(Date.now() + 2000);
-      expect(await step(1)).toMatchObject({
-        activeTools: [],
-        toolChoice: "none",
-      });
+      expect(await step(1)).toMatchObject({ toolChoice: "none" });
     } finally {
       vi.useRealTimers();
     }
@@ -796,4 +800,9 @@ describe("aiProcessAssistantChat Gmail demand", () => {
 const CLAUDE_STEP_MODEL = {
   provider: "anthropic.messages",
   modelId: "claude-sonnet-5-5",
+};
+
+const GEMINI_STEP_MODEL = {
+  provider: "google.generative-ai",
+  modelId: "gemini-3.8-flash",
 };

@@ -508,13 +508,17 @@ export async function aiProcessAssistantChat({
       }
 
       gmailDemand.end();
+      // A changed tool list invalidates the run's cached prompt (and Claude's
+      // thinking), on the step that is usually the run's longest, and
       // Anthropic rejects a request whose history holds tool calls but that
-      // defines no tools, and a changed tool list invalidates the run's
-      // cached prompt and thinking, so Claude keeps its tools switched off.
+      // defines no tools. Claude and Gemini honour toolChoice "none", so they
+      // keep their tools defined but switched off. Other providers drop them,
+      // so a model that ignores the setting cannot run another tool.
       const keepsToolDefinitions =
         !!model &&
         typeof model !== "string" &&
-        model.provider.startsWith("anthropic");
+        (model.provider.startsWith("anthropic") ||
+          model.provider.startsWith("google"));
       return {
         messages,
         ...(keepsToolDefinitions ? {} : { activeTools: [] }),
