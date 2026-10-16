@@ -26,7 +26,9 @@ import {
 } from "@/utils/email/rate-limit";
 import prisma from "@/utils/prisma";
 import {
+  clearEmptyGmailHistoryRuns,
   clearGmailHistoryCatchUp,
+  countEmptyGmailHistoryRun,
   getGmailHistoryCatchUp,
   markGmailHistoryCatchUp,
 } from "@/utils/redis/gmail-history-catch-up";
@@ -45,6 +47,10 @@ const GMAIL_HISTORY_PAGE_SIZE = 500;
 // never skipped. A run reads and processes what fits in its share of the
 // route's 300s and leaves the rest to a scheduled catch-up from its cursor.
 const MAX_GMAIL_HISTORY_PAGES_PER_RUN = 20;
+// Pages without records cost 2 quota units and no processing, so a run reads
+// on through them to the records after.
+const MAX_EMPTY_GMAIL_HISTORY_PAGES_PER_RUN = 100;
+const MAX_EMPTY_HISTORY_RUNS = 5;
 const HISTORY_RUN_BUDGET_MS = 180_000;
 // Each new message is seconds of AI work. A few at a time clears a backlog
 // several times faster while the account's Gmail quota gate paces the calls.
@@ -270,20 +276,32 @@ export async function processHistoryForUser(
             emailAccountId: validatedEmailAccount.id,
             lastSyncedHistoryId: historyId,
           });
-        } else if (historyResult.lastPageHistoryId) {
-          // Every page read had no records of the kinds asked for. Moving to
-          // the mailbox history Gmail reported keeps catch-ups from reading
-          // the same empty pages again and again.
-          logger.warn("Gmail history pages held no records; moving past them", {
-            startHistoryId: historyResult.startHistoryId,
-            pageCount: historyResult.pageCount,
-            lastPageHistoryId: historyResult.lastPageHistoryId,
-          });
-          await updateLastSyncedHistoryId({
-            emailAccountId: validatedEmailAccount.id,
-            lastSyncedHistoryId: historyResult.lastPageHistoryId,
-          });
-          complete = true;
+        } else {
+          // Every page this run could read held no records, and Gmail offers
+          // more. The cursor stays: Gmail's current history id could skip
+          // records on pages not read yet, so a catch-up reads on. Only after
+          // several such runs in a row does it move past them.
+          const emptyRuns = await countEmptyGmailHistoryRun(
+            validatedEmailAccount.id,
+            logger,
+          );
+          if (
+            emptyRuns >= MAX_EMPTY_HISTORY_RUNS &&
+            historyResult.lastPageHistoryId
+          ) {
+            logger.error("Gmail history held no records; moving past it", {
+              startHistoryId: historyResult.startHistoryId,
+              pageCount: historyResult.pageCount,
+              emptyRuns,
+              lastPageHistoryId: historyResult.lastPageHistoryId,
+            });
+            await updateLastSyncedHistoryId({
+              emailAccountId: validatedEmailAccount.id,
+              lastSyncedHistoryId: historyResult.lastPageHistoryId,
+            });
+            await clearEmptyGmailHistoryRuns(validatedEmailAccount.id, logger);
+            complete = true;
+          }
         }
 
         if (!complete) {
@@ -659,7 +677,13 @@ async function fetchGmailHistoryResilient({
         accumulatedHistoryItemCount: historyEntries.length,
         hasNextPage: !!pageToken,
       });
-    } while (pageToken && pageCount < MAX_GMAIL_HISTORY_PAGES_PER_RUN);
+    } while (
+      pageToken &&
+      pageCount <
+        (historyEntries.length
+          ? MAX_GMAIL_HISTORY_PAGES_PER_RUN
+          : MAX_EMPTY_GMAIL_HISTORY_PAGES_PER_RUN)
+    );
 
     return {
       status: "success",

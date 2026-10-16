@@ -15,6 +15,7 @@ import { processHistoryItem } from "@/utils/webhook/google/process-history-item"
 import { publishToQstashAt } from "@/utils/upstash";
 import {
   clearGmailHistoryCatchUp,
+  countEmptyGmailHistoryRun,
   getGmailHistoryCatchUp,
   markGmailHistoryCatchUp,
 } from "@/utils/redis/gmail-history-catch-up";
@@ -26,6 +27,7 @@ import {
 const logger = createTestLogger();
 
 beforeEach(() => {
+  vi.mocked(countEmptyGmailHistoryRun).mockResolvedValue(1);
   vi.mocked(acquireGmailHistoryLease).mockResolvedValue({
     acquired: true,
     token: "lease-token",
@@ -79,6 +81,8 @@ vi.mock("@/utils/redis/gmail-history-catch-up", () => ({
   markGmailHistoryCatchUp: vi.fn().mockResolvedValue(undefined),
   getGmailHistoryCatchUp: vi.fn().mockResolvedValue(null),
   clearGmailHistoryCatchUp: vi.fn().mockResolvedValue(undefined),
+  countEmptyGmailHistoryRun: vi.fn().mockResolvedValue(1),
+  clearEmptyGmailHistoryRuns: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/utils/redis/gmail-history-lease", () => ({
@@ -1126,15 +1130,54 @@ describe("processHistoryForUser - backlogs", () => {
     );
   });
 
-  it("moves past pages with no history records instead of catching up on them forever", async () => {
-    vi.mocked(getHistory).mockImplementation(
-      async () =>
-        ({
-          history: [],
-          nextPageToken: "more",
-          historyId: "9000",
-        }) as any,
+  it("keeps reading past empty pages to the records after them", async () => {
+    let page = 0;
+    vi.mocked(getHistory).mockImplementation(async () => {
+      page += 1;
+      if (page < 30)
+        return { history: [], nextPageToken: `p${page + 1}` } as any;
+      return { history: inboxHistory(["1500", "m1"]) } as any;
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1500 },
+      {},
+      logger,
     );
+
+    expect(processedMessageIds()).toEqual(["m1"]);
+    expect(cursorUpdates()).toEqual(["1500"]);
+    expect(publishToQstashAt).not.toHaveBeenCalled();
+  });
+
+  it("keeps the cursor and continues later when no records turn up in a run", async () => {
+    vi.mocked(countEmptyGmailHistoryRun).mockResolvedValue(1);
+    vi.mocked(getHistory).mockResolvedValue({
+      history: [],
+      nextPageToken: "more",
+      historyId: "9000",
+    } as any);
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1500 },
+      {},
+      logger,
+    );
+
+    // Gmail's current history id could skip records on pages not read yet.
+    expect(cursorUpdates()).toEqual([]);
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/api/google/webhook/catch-up" }),
+    );
+  });
+
+  it("moves past empty history, with an error, only after several runs found none", async () => {
+    vi.mocked(countEmptyGmailHistoryRun).mockResolvedValue(5);
+    vi.mocked(getHistory).mockResolvedValue({
+      history: [],
+      nextPageToken: "more",
+      historyId: "9000",
+    } as any);
 
     await processHistoryForUser(
       { emailAddress: backlogAccount.email, historyId: 1500 },

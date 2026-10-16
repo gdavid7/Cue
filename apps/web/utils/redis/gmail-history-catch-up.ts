@@ -7,6 +7,8 @@ import { clearOwnedLock } from "@/utils/redis/owned-lock";
 
 const GMAIL_HISTORY_CATCH_UP_KEY_PREFIX = "gmail-history-catch-up";
 const GMAIL_HISTORY_CATCH_UP_TTL_SECONDS = 24 * 60 * 60;
+// Catch-ups come a minute or two apart, so runs within an hour are in a row.
+const EMPTY_HISTORY_RUNS_TTL_SECONDS = 60 * 60;
 
 // Failures only cost the wider catch-up window, so they never fail the webhook.
 // Shares the rate-limit state's Redis check: without that state, webhooks never
@@ -65,6 +67,41 @@ export async function clearGmailHistoryCatchUp({
   } catch (error) {
     logger.warn("Failed to clear Gmail history catch-up", { error });
   }
+}
+
+/**
+ * Counts runs in a row that read their page limit of Gmail history without
+ * finding a record, so they can stop retrying the same empty pages. Without
+ * Redis every run counts as the first.
+ */
+export async function countEmptyGmailHistoryRun(
+  emailAccountId: string,
+  logger: Logger,
+): Promise<number> {
+  try {
+    const key = getEmptyHistoryRunsKey(emailAccountId);
+    const count = await redis.incr(key);
+    if (count === 1) await redis.expire(key, EMPTY_HISTORY_RUNS_TTL_SECONDS);
+    return count;
+  } catch (error) {
+    logger.warn("Failed to count empty Gmail history run", { error });
+    return 1;
+  }
+}
+
+export async function clearEmptyGmailHistoryRuns(
+  emailAccountId: string,
+  logger: Logger,
+) {
+  try {
+    await redis.del(getEmptyHistoryRunsKey(emailAccountId));
+  } catch (error) {
+    logger.warn("Failed to clear empty Gmail history runs", { error });
+  }
+}
+
+function getEmptyHistoryRunsKey(emailAccountId: string) {
+  return `gmail-history-empty-runs:${emailAccountId}`;
 }
 
 function getGmailHistoryCatchUpKey(emailAccountId: string) {
