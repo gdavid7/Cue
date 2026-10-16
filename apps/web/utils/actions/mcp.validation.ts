@@ -42,3 +42,7 @@ export const connectWithCredentialsBody = z.object({
   integration: z.string().trim().min(1).max(100),
   credentials: z.record(z.string(), z.string().trim().max(4096)),
 });
+
+export const testMcpConnectionBody = z.object({
+  connectionId: z.string(),
+});

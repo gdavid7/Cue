@@ -7,6 +7,7 @@ import {
   createCustomMcpServerBody,
   disconnectMcpConnectionBody,
   removeCustomMcpServerBody,
+  testMcpConnectionBody,
   toggleMcpConnectionBody,
   toggleMcpToolBody,
 } from "@/utils/actions/mcp.validation";
@@ -17,9 +18,21 @@ import {
 } from "@/utils/mcp/resolve-integration";
 import { assertIntegrationsTierAccess } from "@/utils/mcp/tier-access";
 import { findIntegration } from "@/utils/mcp/integrations";
-import { saveProviderConnection } from "@/utils/mcp/provider-connection";
+import {
+  canvasCheckMessage,
+  normalizeSiteAddress,
+  readCanvasUser,
+  verifyCanvasToken,
+} from "@/utils/mcp/canvas";
+import {
+  markConnectionNeedsReconnect,
+  saveProviderConnection,
+} from "@/utils/mcp/provider-connection";
 import { getIntegrationProvider } from "@/utils/mcp/providers/registry";
-import { CredentialsRejectedError } from "@/utils/mcp/providers/types";
+import {
+  ConnectionExpiredError,
+  CredentialsRejectedError,
+} from "@/utils/mcp/providers/types";
 import { syncMcpTools } from "@/utils/mcp/sync-tools";
 import { getCustomMcpServerUrlError } from "@/utils/mcp/safe-fetch";
 import {
@@ -32,8 +45,9 @@ const MAX_CUSTOM_SERVERS_PER_USER = 10;
 
 /**
  * Connects an app that takes a key instead of OAuth (Canvas: the school's
- * address and a personal access token). The app checks the key before
- * anything is saved.
+ * address and a personal access token). Canvas itself confirms the token
+ * before anything is stored or saved, and the connection records whose
+ * account it opens.
  */
 export const connectWithCredentialsAction = actionClient
   .metadata({ name: "connectWithCredentials" })
@@ -66,6 +80,21 @@ export const connectWithCredentialsAction = actionClient
           field.kind === "url" ? normalizeAppUrl(value, field.label) : value;
       }
 
+      let verified: { id: string; name: string } | undefined;
+      if (integration === "canvas") {
+        const check = await verifyCanvasToken({
+          address: values.full,
+          token: values.generic_api_key,
+        });
+        if (!check.ok) {
+          logger.warn("Canvas didn't confirm the token", {
+            reason: check.reason,
+          });
+          throw new SafeError(canvasCheckMessage(check.reason));
+        }
+        verified = check.user;
+      }
+
       // Connecting again from another of their accounts replaces the
       // existing connection instead of adding a second one.
       const connectionAccountId =
@@ -81,20 +110,93 @@ export const connectWithCredentialsAction = actionClient
           verifyTool: config.verifyTool,
         });
       } catch (error) {
-        if (error instanceof CredentialsRejectedError) {
+        // A key the app itself already confirmed was turned away on the
+        // provider's side, so it isn't the person's key that's wrong.
+        if (error instanceof CredentialsRejectedError && !verified) {
           logger.warn("Credentials rejected", { integration });
           throw new SafeError(
             `${config.displayName} didn't accept that. Check the address and token, then try again.`,
           );
         }
-        throw error;
+        logger.error("Failed to store credentials", { integration, error });
+        throw new SafeError(`Couldn't reach ${config.displayName}. Try again.`);
       }
 
       await saveProviderConnection({
         integration,
         emailAccountId: connectionAccountId,
+        verified,
       });
       await syncMcpTools(integration, connectionAccountId, logger);
+      return { name: verified?.name ?? null };
+    },
+  );
+
+/**
+ * Asks the app whether the stored key still works, for a connection made
+ * with a key. A key the app turns away marks the connection for reconnecting.
+ */
+export const testMcpConnectionAction = actionClient
+  .metadata({ name: "testMcpConnection" })
+  .inputSchema(testMcpConnectionBody)
+  .action(
+    async ({
+      ctx: { emailAccountId, logger },
+      parsedInput: { connectionId },
+    }) => {
+      const connection = await prisma.mcpConnection.findFirst({
+        where: { id: connectionId, ...ownedBySameUser(emailAccountId) },
+        select: {
+          id: true,
+          emailAccountId: true,
+          integration: { select: { name: true } },
+        },
+      });
+      if (!connection?.emailAccountId) {
+        throw new SafeError("Connection not found");
+      }
+      const config = findIntegration(connection.integration.name);
+      if (!config?.provider || !config.verifyTool) {
+        throw new SafeError("This connection can't be tested");
+      }
+
+      let data: unknown;
+      try {
+        data = await getIntegrationProvider(config.provider.id).checkConnection(
+          {
+            app: config.provider.app,
+            authScheme: config.provider.authScheme,
+            emailAccountId: connection.emailAccountId,
+            tool: config.verifyTool,
+          },
+        );
+      } catch (error) {
+        if (error instanceof ConnectionExpiredError) {
+          logger.warn("Stored credentials rejected", {
+            integration: config.name,
+          });
+          await markConnectionNeedsReconnect(connection.id);
+          throw new SafeError(
+            `${config.displayName} rejected this token. Check it or create a new one.`,
+          );
+        }
+        logger.warn("Connection test failed", {
+          integration: config.name,
+          error,
+        });
+        throw new SafeError(`Couldn't reach ${config.displayName}. Try again.`);
+      }
+
+      const user = config.name === "canvas" ? readCanvasUser(data) : null;
+      await prisma.mcpConnection.update({
+        where: { id: connection.id },
+        data: {
+          verifiedAt: new Date(),
+          needsReconnectAt: null,
+          ...(user ? { verifiedAs: user.name, verifiedAsId: user.id } : {}),
+        },
+      });
+      return { name: user?.name ?? null };
     },
   );
 
@@ -252,17 +354,9 @@ export const removeCustomMcpServerAction = actionClient
     if (!count) throw new SafeError("Server not found");
   });
 
-/** "canvas.ucsd.edu/" becomes "https://canvas.ucsd.edu": the form the app expects. */
+/** "canvas.ucsd.edu/courses/1" becomes "https://canvas.ucsd.edu": the form the app expects. */
 function normalizeAppUrl(value: string, label: string) {
-  const withScheme = /^https?:\/\//i.test(value) ? value : `https://${value}`;
-  let url: URL;
-  try {
-    url = new URL(withScheme);
-  } catch {
-    throw new SafeError(`${label} isn't a valid address`);
-  }
-  if (url.protocol !== "https:") {
-    throw new SafeError(`${label} must start with https://`);
-  }
-  return url.origin;
+  const origin = normalizeSiteAddress(value);
+  if (!origin) throw new SafeError(`${label} isn't a valid address`);
+  return origin;
 }
