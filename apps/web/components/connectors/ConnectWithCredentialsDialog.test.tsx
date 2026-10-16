@@ -71,6 +71,7 @@ describe("ConnectWithCredentialsDialog", () => {
     expect(
       screen.getByRole("heading", { name: "Reconnect Canvas" }),
     ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy();
   });
 });
 

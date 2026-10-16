@@ -114,7 +114,7 @@ export function ConnectWithCredentialsDialog({
           ) : null}
           <DialogFooter>
             <Button loading={isExecuting} type="submit">
-              Connect
+              {reconnect ? "Reconnect" : "Connect"}
             </Button>
           </DialogFooter>
         </form>
