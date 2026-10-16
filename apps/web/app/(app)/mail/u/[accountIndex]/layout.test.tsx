@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   loadInboxPreview: vi.fn(),
   mailPath: "/mail/u/1/inbox" as string | null,
   localMailCookie: undefined as string | undefined,
+  lastAccountCookie: undefined as string | undefined,
   splits: [] as { id: string; filters: { kind: string; value: string }[] }[],
   getMailSettings: vi.fn(),
   redirect: vi.fn((url: string) => {
@@ -31,7 +32,10 @@ vi.mock("next/headers", () => ({
     get: (name: string) =>
       name === "cue-local-mail" && mocks.localMailCookie !== undefined
         ? { value: mocks.localMailCookie }
-        : undefined,
+        : name === "last_email_account_id" &&
+            mocks.lastAccountCookie !== undefined
+          ? { value: mocks.lastAccountCookie }
+          : undefined,
   }),
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/InboxPreviewList", () => ({
@@ -74,6 +78,7 @@ describe("MailRouteLayout", () => {
     mocks.loadInboxPreview.mockReturnValue(new Promise(() => {}));
     mocks.mailPath = "/mail/u/1/inbox";
     mocks.localMailCookie = undefined;
+    mocks.lastAccountCookie = undefined;
     mocks.splits = [{ id: "all", filters: [] }];
     mocks.getMailSettings.mockImplementation(async () => ({
       splits: mocks.splits,
@@ -184,6 +189,15 @@ describe("MailRouteLayout", () => {
     await expect(renderAt(accountIndex)).rejects.toThrow(
       "redirect:/mail/u/0/inbox",
     );
+  });
+
+  it("sends a removed position to the account this browser last used, at its new position", async () => {
+    // u/2 was acc_c until an earlier account was removed elsewhere.
+    mocks.lastAccountCookie = JSON.stringify({
+      userId: "user-1",
+      emailAccountId: "acc_b",
+    });
+    await expect(renderAt("2")).rejects.toThrow("redirect:/mail/u/1/inbox");
   });
 
   it("asks a signed-out visitor to log in", async () => {
