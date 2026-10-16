@@ -9,6 +9,12 @@ const specs = "apps/web/__tests__/playwright";
 test("denies a root tsc --noEmit but allows a project type check", () => {
   assert.equal(isDenied("pnpm exec tsc --noEmit"), true);
   assert.equal(isDenied("npx tsc --noEmit"), true);
+  assert.equal(isDenied("pnpm exec tsc --noEmit -p ."), true);
+  assert.equal(isDenied("npx tsc --noEmit --project=tsconfig.json"), true);
+  assert.equal(
+    isDenied("pnpm exec tsc --noEmit -p apps/web/tsconfig.json"),
+    false,
+  );
   assert.equal(
     isDenied("cd apps/web && pnpm exec tsc --noEmit -p tsconfig.json"),
     false,

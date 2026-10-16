@@ -33,7 +33,11 @@ function getDenyReason(command, cwd) {
       (segment) =>
         /\btsc\b/.test(segment) &&
         /--noEmit\b/.test(segment) &&
-        !/(^|\s)(-p|--project)(\s|=)/.test(segment),
+        // A project flag is fine unless it names the root config itself.
+        (!/(^|\s)(-p|--project)(\s|=)/.test(segment) ||
+          /(^|\s)(-p|--project)(\s+|=)(\.\/?|(\.\/)?tsconfig\.json)(\s|$)/.test(
+            segment,
+          )),
     );
   if (atRoot && typeChecksRoot && !/\bcd\s/.test(command)) {
     return 'Root `tsc --noEmit` is not a supported check here (AGENTS.md). Use `pnpm typecheck:web` for the non-test type check Vercel enforces, or `pnpm --filter inbox-zero-ai build:ci` only when asked.';
