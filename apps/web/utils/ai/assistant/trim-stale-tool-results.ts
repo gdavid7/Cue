@@ -49,8 +49,11 @@ export function trimStaleToolResults(messages: ModelMessage[]) {
 }
 
 // History is rebuilt from the stored UI messages, which hold each tool's full
-// output, so earlier turns' results get the same model view the live run gave
-// them through the tool's toModelOutput.
+// output, so earlier turns' results first get the same model view the live run
+// gave them through the tool's toModelOutput. They are then shortened like
+// stale results: every step of every later turn re-sends them, and a later
+// turn that needs one in full can run the tool again. Results of the latest
+// turn stay complete.
 export function projectEarlierTurnToolResults(messages: ModelMessage[]) {
   const latestUserIndex = messages.findLastIndex(
     (message) => message.role === "user",
@@ -62,7 +65,9 @@ export function projectEarlierTurnToolResults(messages: ModelMessage[]) {
     return {
       ...message,
       content: message.content.map((part) =>
-        part.type === "tool-result" ? projectEarlierTurnResult(part) : part,
+        part.type === "tool-result"
+          ? shortenEarlierTurnResult(projectEarlierTurnResult(part))
+          : part,
       ),
     };
   });
@@ -76,6 +81,12 @@ function projectEarlierTurnResult(part: ToolResultPart): ToolResultPart {
     ...part,
     output: { ...part.output, value: project(part.output.value) },
   };
+}
+
+function shortenEarlierTurnResult(part: ToolResultPart): ToolResultPart {
+  if (!isTrimmable(part)) return part;
+
+  return { ...part, output: trimOutput(part.toolName, part.output) };
 }
 
 function isTrimmable(part: ToolResultPart) {
