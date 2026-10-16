@@ -1578,6 +1578,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     });
 
     expect(searchMessages).toHaveBeenCalledWith({
+      excludeSpamTrash: true,
       query: "",
       fromEmail: "sender@example.com",
       maxResults: 20,
@@ -1632,6 +1633,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     });
 
     expect(searchMessages).toHaveBeenCalledWith({
+      excludeSpamTrash: true,
       query: "",
       fromEmail: "sender@example.com",
       maxResults: 20,
@@ -1694,6 +1696,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     });
 
     expect(searchMessages).toHaveBeenCalledWith({
+      excludeSpamTrash: true,
       query: "",
       fromEmail: "sender@example.com",
       maxResults: 20,
@@ -1754,6 +1757,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     });
 
     expect(searchMessages).toHaveBeenNthCalledWith(1, {
+      excludeSpamTrash: true,
       query: "",
       fromEmail: "sender@example.com",
       maxResults: 20,
@@ -1762,6 +1766,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
       labelName: undefined,
     });
     expect(searchMessages).toHaveBeenNthCalledWith(2, {
+      excludeSpamTrash: true,
       query: "",
       fromEmail: "sender@example.com",
       maxResults: 20,
@@ -1903,6 +1908,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     });
 
     expect(searchMessages).toHaveBeenCalledWith({
+      excludeSpamTrash: true,
       query: "",
       maxResults: 20,
       pageToken: undefined,
@@ -2008,6 +2014,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     });
 
     expect(searchMessages).toHaveBeenNthCalledWith(1, {
+      excludeSpamTrash: true,
       query: "Operations folder",
       maxResults: 20,
       pageToken: undefined,
@@ -2041,6 +2048,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     });
 
     expect(searchMessages).toHaveBeenCalledWith({
+      excludeSpamTrash: true,
       query: "newsletter",
       maxResults: 20,
       pageToken: undefined,
@@ -2079,6 +2087,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     });
 
     expect(searchMessages).toHaveBeenCalledWith({
+      excludeSpamTrash: true,
       query: "",
       maxResults: 20,
       pageToken: undefined,
@@ -2136,6 +2145,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     });
 
     expect(searchMessages).toHaveBeenNthCalledWith(1, {
+      excludeSpamTrash: true,
       query: "",
       maxResults: 20,
       pageToken: undefined,
@@ -2143,6 +2153,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
       labelName: "Operations",
     });
     expect(searchMessages).toHaveBeenNthCalledWith(2, {
+      excludeSpamTrash: true,
       query: "",
       maxResults: 20,
       pageToken: "PAGE_TOKEN_2",
@@ -2188,6 +2199,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     });
 
     expect(searchMessages).toHaveBeenNthCalledWith(1, {
+      excludeSpamTrash: true,
       query: "",
       maxResults: 20,
       pageToken: undefined,
@@ -2238,6 +2250,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     });
 
     expect(searchMessages).toHaveBeenNthCalledWith(1, {
+      excludeSpamTrash: true,
       query: "",
       maxResults: 20,
       pageToken: undefined,
@@ -2246,6 +2259,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
       folderId: "scoped-folder",
     });
     expect(searchMessages).toHaveBeenNthCalledWith(2, {
+      excludeSpamTrash: true,
       query: "",
       maxResults: 20,
       pageToken: "PAGE_TOKEN_2",

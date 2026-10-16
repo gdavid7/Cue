@@ -79,6 +79,9 @@ export async function runOutlookSearch({
         readState: normalizedInput.readState ?? undefined,
         labelName: normalizedInput.categoryName ?? undefined,
         ...(folderId && { folderId }),
+        // Matches Gmail, and the browser's local search, which never holds
+        // Junk or Deleted Items.
+        excludeSpamTrash: true,
       });
       executedQuery = candidateQuery;
       break;
@@ -189,6 +192,7 @@ async function skipEmptyOutlookSearchPages({
       readState: readState ?? undefined,
       labelName: categoryName ?? undefined,
       ...(folderId && { folderId }),
+      excludeSpamTrash: true,
     });
   }
 

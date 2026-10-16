@@ -201,11 +201,16 @@ export function gmailQueryToLocalSearch(
   };
 }
 
-// Graph's message search spans every folder, Deleted Items and Junk
-// included, and the server leaves drafts out of what it returns.
+// Chat's Outlook search leaves out Junk Email and Deleted Items, as Gmail's
+// leaves out spam and trash (the server asks Graph for `excludeSpamTrash`),
+// and drafts, which the server drops from Graph's answer. Outlook sync never
+// stores those folders, so this only matters for mail just moved there in Cue.
 const OUTLOOK_SEARCH_SCOPE: MailPredicate = {
-  kind: "not",
-  predicate: { kind: "role", role: "draft" },
+  kind: "all",
+  predicates: [
+    { kind: "mailbox", mailbox: "all" },
+    { kind: "not", predicate: { kind: "role", role: "draft" } },
+  ],
 };
 
 /**

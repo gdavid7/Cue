@@ -60,4 +60,21 @@ describe("normalizeOutlookSearchInput folder scope", () => {
     }
     expect(result.result?.nextPageToken).toBeUndefined();
   });
+
+  it("leaves out Junk and Deleted Items on every page, as Gmail's search does", async () => {
+    const searchMessages = vi
+      .fn<EmailProvider["searchMessages"]>()
+      .mockResolvedValueOnce({ messages: [], nextPageToken: "PAGE_TOKEN_2" })
+      .mockResolvedValueOnce({ messages: [], nextPageToken: undefined });
+    await runOutlookSearch({
+      emailProvider: createMockEmailProvider({ searchMessages }),
+      normalizedInput: { query: "invoice" },
+      limit: 20,
+      logger: createTestLogger(),
+    });
+    expect(searchMessages).toHaveBeenCalledTimes(2);
+    for (const [options] of searchMessages.mock.calls) {
+      expect(options).toMatchObject({ excludeSpamTrash: true });
+    }
+  });
 });

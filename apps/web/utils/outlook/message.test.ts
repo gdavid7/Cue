@@ -419,6 +419,72 @@ describe("queryBatchMessages", () => {
     }
   });
 
+  describe("leaving out Junk and Deleted Items, as Gmail's search does", () => {
+    const folderIds = {
+      inbox: "inbox-folder-id",
+      junkemail: "junk-folder-id",
+      deleteditems: "deleted-folder-id",
+      drafts: "drafts-folder-id",
+    };
+    const messages = [
+      { id: "inbox", parentFolderId: "inbox-folder-id" },
+      { id: "junk", parentFolderId: "junk-folder-id" },
+      { id: "deleted", parentFolderId: "deleted-folder-id" },
+      { id: "custom", parentFolderId: "custom-folder-id" },
+    ];
+
+    async function search(options: Parameters<typeof queryBatchMessages>[1]) {
+      const request = createMockMessagesRequest();
+      request.get.mockResolvedValue({ value: messages });
+      const client = {
+        ...createCachedOutlookClient(vi.fn().mockReturnValue(request)),
+        getFolderIdCache: () => folderIds,
+      } as unknown as OutlookClient;
+      const result = await queryBatchMessages(
+        client,
+        options,
+        createTestLogger(),
+      );
+      return result.messages.map((message) => message.id);
+    }
+
+    it.each([
+      ["a word search", { searchQuery: "invoice" }],
+      ["a filter-only search", { readState: "unread" }],
+      [
+        "a later page",
+        {
+          pageToken:
+            "https://graph.microsoft.com/v1.0/me/messages?$search=invoice&$skip=20",
+        },
+      ],
+    ] as const)("for %s when asked to", async (_name, options) => {
+      expect(await search({ ...options, excludeSpamTrash: true })).toEqual([
+        "inbox",
+        "custom",
+      ]);
+    });
+
+    it("keeps every folder for callers that do not ask", async () => {
+      expect(await search({ searchQuery: "invoice" })).toEqual([
+        "inbox",
+        "junk",
+        "deleted",
+        "custom",
+      ]);
+    });
+
+    it("searches a folder it was pointed at, even Deleted Items", async () => {
+      expect(
+        await search({
+          searchQuery: "invoice",
+          folderId: "deleted-folder-id",
+          excludeSpamTrash: true,
+        }),
+      ).toEqual(["deleted"]);
+    });
+  });
+
   it("sends one correctly quoted and URL-encoded expression through the real Graph SDK", async () => {
     const request = createMockMessagesRequest();
     await queryBatchMessages(

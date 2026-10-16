@@ -114,10 +114,14 @@ describe("gmailQueryToLocalSearch", () => {
   });
 });
 
-// Graph's message search covers every folder but leaves drafts out.
+// Chat's Outlook search, like Gmail's, leaves out Junk, Deleted Items and
+// drafts.
 const OUTLOOK_SCOPE = {
-  kind: "not",
-  predicate: { kind: "role", role: "draft" },
+  kind: "all",
+  predicates: [
+    { kind: "mailbox", mailbox: "all" },
+    { kind: "not", predicate: { kind: "role", role: "draft" } },
+  ],
 } as const;
 const NEW_YORK = "America/New_York";
 
@@ -442,25 +446,28 @@ describe("searchLocalMail against the local store", () => {
 });
 
 describe("searchLocalMail for Outlook against the local store", () => {
-  it("searches deleted items and junk but not drafts, as Graph does", async () => {
+  // Outlook sync stores every folder but Drafts, Junk and Deleted Items;
+  // mail the user just deleted in Cue is in the trash locally until the
+  // provider confirms the move.
+  it("searches every synced folder and leaves out mail just deleted, as Graph's chat search does", async () => {
     const { client, close } = await engineWith([
       message("inbox", "c-1", {
         receivedAtMs: Date.parse("2026-10-01T12:00:00Z"),
         read: false,
       }),
-      message("deleted", "c-2", {
+      message("sent", "c-2", {
         receivedAtMs: Date.parse("2026-10-02T12:00:00Z"),
-        roles: ["trash"],
+        roles: ["sent"],
         read: false,
       }),
-      message("junk", "c-3", {
+      message("custom-folder", "c-3", {
         receivedAtMs: Date.parse("2026-10-03T12:00:00Z"),
-        roles: ["spam"],
+        roles: [],
         read: false,
       }),
-      message("draft", "c-4", {
+      message("just-deleted", "c-4", {
         receivedAtMs: Date.parse("2026-10-04T12:00:00Z"),
-        roles: ["draft"],
+        roles: ["trash"],
         read: false,
       }),
     ]);
@@ -478,7 +485,7 @@ describe("searchLocalMail for Outlook against the local store", () => {
 
       expect(
         result.status === "ok" && result.messages.map((m) => m.id),
-      ).toEqual(["junk", "deleted", "inbox"]);
+      ).toEqual(["custom-folder", "sent", "inbox"]);
     } finally {
       await close();
     }
