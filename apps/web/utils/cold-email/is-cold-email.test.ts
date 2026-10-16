@@ -196,41 +196,94 @@ describe("isColdEmail", () => {
     ).not.toHaveBeenCalled();
   });
 
-  it("never classifies the user's own other address on a consumer domain as cold", async () => {
-    vi.mocked(getUserOwnAddresses).mockResolvedValue([
-      "user@gmail.com",
-      "user.other@gmail.com",
-    ]);
-    vi.mocked(prisma.groupItem.findFirst).mockResolvedValue({
-      id: "group-item-id",
-      type: GroupItemType.FROM,
-      value: "user.other@gmail.com",
-      exclude: false,
-      group: { id: "group-id", name: "Cold Email" },
-    } as any);
+  describe("the user's own other address", () => {
     const emailAccount = getEmailAccount({
       id: "test-account-id",
       email: "user@gmail.com",
     });
+    const ownEmail = {
+      id: "msg-own",
+      from: "Me <User.Other@gmail.com>",
+      to: "user@gmail.com",
+      subject: "Notes",
+      content: "Sending this to my other inbox.",
+      date: new Date(),
+    };
+    const learnedColdSender = {
+      id: "group-item-id",
+      type: GroupItemType.FROM,
+      value: "User.Other@gmail.com",
+      exclude: false,
+      group: { id: "group-id", name: "Cold Email" },
+    };
 
-    const result = await isColdEmail({
-      logger,
-      email: {
-        id: "msg-own",
-        from: "Me <User.Other@gmail.com>",
-        to: "user@gmail.com",
-        subject: "Notes",
-        content: "Sending this to my other inbox.",
-        date: new Date(),
-      },
-      emailAccount,
-      provider: mockProvider as never,
-      coldEmailRule: { instructions: "test instructions", groupId: "group-id" },
+    beforeEach(() => {
+      vi.mocked(getUserOwnAddresses).mockResolvedValue([
+        "user@gmail.com",
+        "user.other@gmail.com",
+      ]);
     });
 
-    expect(result.isColdEmail).toBe(false);
-    expect(getUserOwnAddresses).toHaveBeenCalledWith(emailAccount.userId);
-    expect(createGenerateObject).not.toHaveBeenCalled();
+    it("is never cold when its sender authenticated", async () => {
+      vi.mocked(prisma.groupItem.findFirst).mockResolvedValue(null);
+
+      const result = await checkColdEmailGuards({
+        logger,
+        email: ownEmail,
+        emailAccount,
+        provider: mockProvider as never,
+        coldEmailRule: {
+          instructions: "test instructions",
+          groupId: "group-id",
+        },
+        senderAuthenticated: true,
+      });
+
+      expect(result).toMatchObject({ isColdEmail: false });
+      expect(getUserOwnAddresses).toHaveBeenCalledWith(emailAccount.userId);
+      expect(
+        mockProvider.hasPreviousCommunicationsWithSenderOrDomain,
+      ).not.toHaveBeenCalled();
+    });
+
+    // A forged From could otherwise undo a sender the user marked as cold.
+    it("still follows a learned cold sender", async () => {
+      vi.mocked(prisma.groupItem.findFirst).mockResolvedValue(
+        learnedColdSender as any,
+      );
+
+      const result = await checkColdEmailGuards({
+        logger,
+        email: ownEmail,
+        emailAccount,
+        provider: mockProvider as never,
+        coldEmailRule: {
+          instructions: "test instructions",
+          groupId: "group-id",
+        },
+        senderAuthenticated: true,
+      });
+
+      expect(result).toMatchObject({ isColdEmail: true });
+    });
+
+    it("gets no pass when its sender did not authenticate", async () => {
+      vi.mocked(prisma.groupItem.findFirst).mockResolvedValue(null);
+
+      const result = await checkColdEmailGuards({
+        logger,
+        email: ownEmail,
+        emailAccount,
+        provider: mockProvider as never,
+        coldEmailRule: {
+          instructions: "test instructions",
+          groupId: "group-id",
+        },
+        senderAuthenticated: false,
+      });
+
+      expect(result).toBeNull();
+    });
   });
 
   it("should not classify a colleague as cold when a learned pattern exists", async () => {

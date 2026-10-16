@@ -45,6 +45,8 @@ type ColdEmailGuardsInput = {
   provider: EmailProvider;
   coldEmailRule: Pick<Rule, "instructions" | "groupId"> | null;
   logger: Logger;
+  /** Whether the From domain authenticated on arrival (DMARC or aligned DKIM). */
+  senderAuthenticated?: boolean;
 };
 
 /**
@@ -58,6 +60,7 @@ export async function checkColdEmailGuards({
   provider,
   coldEmailRule,
   logger,
+  senderAuthenticated = false,
 }: ColdEmailGuardsInput): Promise<ColdEmailResult | null> {
   logger.info("Checking is cold email");
 
@@ -73,15 +76,6 @@ export async function checkColdEmailGuards({
   // actions, so a colleague is never labelled or archived either.
   if (isSameOrganization(email.from, emailAccount.email)) {
     logger.info("Sender is internal");
-    return { isColdEmail: false, reason: "hasPreviousEmail" };
-  }
-
-  // Mail from another of the user's connected mailboxes is the user, even
-  // when an earlier mistake learned the address as a cold sender.
-  if (
-    isOwnAddress(email.from, await getUserOwnAddresses(emailAccount.userId))
-  ) {
-    logger.info("Sender is one of the user's own addresses");
     return { isColdEmail: false, reason: "hasPreviousEmail" };
   }
 
@@ -128,6 +122,16 @@ export async function checkColdEmailGuards({
     return { isColdEmail: false, reason: "excluded" };
   }
 
+  // Mail from another of the user's connected mailboxes is the user. From is
+  // easy to forge, so this only holds when the sender's domain authenticated.
+  if (
+    senderAuthenticated &&
+    isOwnAddress(email.from, await getUserOwnAddresses(emailAccount.userId))
+  ) {
+    logger.info("Sender is one of the user's own addresses");
+    return { isColdEmail: false, reason: "hasPreviousEmail" };
+  }
+
   const hasPreviousEmail = await hasPriorContactOrAssumeYes({
     provider,
     from: extractEmailAddress(email.from) || email.from,
@@ -151,6 +155,7 @@ export async function isColdEmail({
   modelType,
   coldEmailRule,
   logger,
+  senderAuthenticated,
 }: ColdEmailGuardsInput & {
   modelType?: ModelType;
 }): Promise<ColdEmailResult> {
@@ -160,6 +165,7 @@ export async function isColdEmail({
     provider,
     coldEmailRule,
     logger,
+    senderAuthenticated,
   });
 
   if (guardResult) return guardResult;
