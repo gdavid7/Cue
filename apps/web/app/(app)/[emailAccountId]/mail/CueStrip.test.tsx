@@ -20,9 +20,13 @@ const mocks = vi.hoisted(() => ({
   plans: [] as { status: string; rule: { systemType: string } }[],
   insight: null as { action: "reply" | "do" | "none" } | null,
   insightFailures: 0,
+  aiAccess: true,
 }));
 
 vi.mock("@/env", () => ({ env: {} }));
+vi.mock("@/hooks/usePremium", () => ({
+  usePremium: () => ({ hasAiAccess: mocks.aiAccess, isLoading: false }),
+}));
 vi.mock("@/utils/actions/calendar", () => ({ addToCalendarAction: vi.fn() }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/use-unsubscribe-sender", () => ({
   useUnsubscribeSender: () => ({
@@ -46,6 +50,7 @@ describe("CueStrip", () => {
     mocks.plans = [];
     mocks.insight = null;
     mocks.insightFailures = 0;
+    mocks.aiAccess = true;
   });
   afterEach(cleanup);
 
@@ -69,11 +74,7 @@ describe("CueStrip", () => {
     renderStrip({ labels: ["Label_reply"], enabled: false });
 
     await flush();
-    expect(
-      screen
-        .getByRole("region", { name: "Cue summary" })
-        .getAttribute("aria-busy"),
-    ).toBe("true");
+    expect(screen.getByRole("region", { name: "Cue summary" })).toBeTruthy();
     expect(mocks.requests).toEqual([]);
   });
 
@@ -127,6 +128,36 @@ describe("CueStrip", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // Without AI, Cue has no note to decide by, so only a category shows it.
+  it("holds no space for uncategorised mail when the account has no AI", async () => {
+    mocks.aiAccess = false;
+    renderStrip({ labels: [] });
+
+    expect(screen.queryByRole("region", { name: "Cue summary" })).toBeNull();
+    await flush();
+    expect(requested("/api/user/inbox-insights")).toBe(false);
+  });
+
+  it("still summarises a labelled conversation without AI", async () => {
+    mocks.aiAccess = false;
+    renderStrip({ labels: ["Label_reply"] });
+
+    expect(await screen.findByText(SUMMARY)).toBeTruthy();
+  });
+
+  // Busy means a summary is on its way, not that Cue is still deciding.
+  it("is busy only while its summary loads", async () => {
+    mocks.insight = { action: "none" };
+    const { container } = renderStripWithContainer({ labels: [] });
+
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+    await waitForRequest("/api/user/inbox-insights");
+    await vi.waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Cue summary" })).toBeNull(),
+    );
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
   });
 
   it("holds no space for machine mail and asks nothing about it", async () => {
@@ -233,6 +264,11 @@ describe("CueStrip", () => {
     ).toBeTruthy();
   });
 });
+
+function renderStripWithContainer(options: Parameters<typeof renderStrip>[0]) {
+  renderStrip(options);
+  return { container: document.body };
+}
 
 function renderStrip(
   {

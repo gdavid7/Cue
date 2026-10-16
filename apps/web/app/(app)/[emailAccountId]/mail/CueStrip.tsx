@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { threadInsightItem, useInboxInsights } from "@/hooks/useInboxInsights";
 import { useThreadBrief } from "@/hooks/useThreadBrief";
+import { usePremium } from "@/hooks/usePremium";
 import { useThreadPlans } from "@/hooks/useThreadPlans";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { cn } from "@/utils";
@@ -79,7 +80,12 @@ export function CueStrip({
     plans: planData?.plans ?? NO_PLANS,
   });
   const categoriesLoaded = Boolean(planData || plansError);
+  // Without AI access Cue writes no note, so the note can't decide anything:
+  // it's known to be absent rather than awaited.
+  const { hasAiAccess, isLoading: aiAccessLoading } = usePremium();
+  const notesPossible = hasAiAccess || aiAccessLoading;
   const needsInsight =
+    notesPossible &&
     getCueStripVisibility({
       categories,
       categoriesLoaded,
@@ -98,7 +104,8 @@ export function CueStrip({
   );
   // A failed lookup isn't an answer; SWR retries it, and the space stays held.
   const { data: insights } = useInboxInsights(insightItems);
-  const insight = insights ? (insights[threadId]?.insight ?? null) : undefined;
+  let insight = insights ? (insights[threadId]?.insight ?? null) : undefined;
+  if (!notesPossible) insight = null;
 
   const visibility = getCueStripVisibility({
     categories,
@@ -109,9 +116,11 @@ export function CueStrip({
 
   // Held from the first render that could show it, so a strip that lands late
   // never pushes the messages down; one that won't show folds away instead.
+  // Without AI only a category can show it, so nothing is held on a guess.
   const [heldFor, setHeldFor] = useState<string>();
-  if (messageId && visibility !== "hide" && heldFor !== messageId)
-    setHeldFor(messageId);
+  const couldShow =
+    visibility === "show" || (visibility === "pending" && notesPossible);
+  if (messageId && couldShow && heldFor !== messageId) setHeldFor(messageId);
   // Once folded it stays folded for this message: opening again when a slow
   // answer lands would move the messages a second time.
   const [foldedFor, setFoldedFor] = useState<string>();
@@ -155,7 +164,8 @@ export function CueStrip({
     >
       <div className="min-h-0 overflow-hidden">
         <section
-          aria-busy={!briefSettled}
+          // Busy while a summary is on its way, not while Cue decides.
+          aria-busy={open && visibility === "show" && enabled && !briefSettled}
           aria-label="Cue summary"
           className="mb-3 flex flex-col gap-1 rounded-lg border border-border/70 bg-muted/40 px-3 pt-2 pb-1.5"
           data-cue-strip
