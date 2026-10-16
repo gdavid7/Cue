@@ -1,6 +1,6 @@
 ---
 name: llm
-description: Guidelines for implementing LLM (Language Model) functionality in the application
+description: Conventions for LLM code in apps/web/utils/ai and utils/llms, covering structured outputs, model routing, AI-first behaviour, draft attribution versioning. Use when adding or changing an AI feature, prompt builder or model call.
 ---
 # LLM Implementation Guidelines
 

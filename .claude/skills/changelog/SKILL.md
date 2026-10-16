@@ -1,6 +1,6 @@
 ---
 name: changelog
-description: Add a new changelog entry to docs/changelog-entries/
+description: Add a user-facing changelog entry to docs/changelog-entries/ and regenerate docs/changelog.mdx. Use when the user asks for a changelog entry or release notes.
 disable-model-invocation: true
 ---
 

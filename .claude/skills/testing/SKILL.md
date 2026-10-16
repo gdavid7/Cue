@@ -1,6 +1,6 @@
 ---
 name: testing
-description: Guidelines for testing the application with Vitest, including unit tests, integration tests (emulator), AI tests, and eval suites for LLM features
+description: Index of testing guidance for Vitest unit tests, emulator integration tests, real-LLM tests and evals. Use before writing or updating any test, or when choosing which test type and command to run.
 ---
 # Testing
 

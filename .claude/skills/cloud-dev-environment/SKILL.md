@@ -1,6 +1,6 @@
 ---
 name: cloud-dev-environment
-description: Cursor Cloud VM setup and service startup instructions for local development
+description: Start Postgres, Redis and the web app in a cloud VM or container. Use when setting up a fresh cloud machine (Cursor Cloud, Claude Code cloud) for local development, or when the database or Redis isn't reachable.
 ---
 # Cloud Development Environment
 

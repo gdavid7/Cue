@@ -1,6 +1,6 @@
 ---
 name: project-structure
-description: Project structure and file organization guidelines
+description: Where code lives in the monorepo (apps/web, packages, server actions, components, tests). Use when deciding where a new file goes or how to name it.
 ---
 # Project Structure
 

@@ -1,6 +1,6 @@
 ---
 name: explain-changes
-description: Explain recent changes and provide a structured summary with security checks
+description: Summarise recent changes by area with a security checklist (auth, validation, secrets, inputs). Use when asked to explain, summarise or sanity-check what changed on a branch.
 ---
 
 Review the recent changes and provide:

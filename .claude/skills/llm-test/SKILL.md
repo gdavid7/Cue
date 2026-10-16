@@ -1,6 +1,6 @@
 ---
 name: llm-test
-description: Guidelines for writing tests for LLM-related functionality
+description: Write tests that call real LLMs (pnpm test-ai) without pinning a provider. Use when adding or changing tests for AI features, prompts or tool calls.
 ---
 Read and follow `.claude/skills/testing/llm.md`.
 

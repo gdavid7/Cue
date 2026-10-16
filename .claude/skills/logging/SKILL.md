@@ -1,6 +1,6 @@
 ---
 name: logging
-description: How to do backend logging
+description: Request-scoped backend logging with the middleware loggers, and what not to log. Use when adding logs to an API route, server action, job or utility, or when deciding a log level for PII.
 ---
 # Logging
 
