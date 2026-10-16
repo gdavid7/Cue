@@ -84,7 +84,7 @@ function projectEarlierTurnResult(part: ToolResultPart): ToolResultPart {
 }
 
 function shortenEarlierTurnResult(part: ToolResultPart): ToolResultPart {
-  if (!isTrimmable(part)) return part;
+  if (WRITE_SOURCE_TOOLS.has(part.toolName) || !isTrimmable(part)) return part;
 
   return { ...part, output: trimOutput(part.toolName, part.output) };
 }
@@ -131,6 +131,16 @@ const MODEL_OUTPUT_PROJECTIONS: Record<
 > = {
   searchInbox: toSearchInboxModelValue,
 };
+
+// Their results hold text a later write saves back whole: updateRule's
+// instructions and actions, updatePersonalInstructions' replace,
+// updateLearnedPatterns, and updateAssistantSettings' knowledge and prompts.
+// A shortened copy would be saved as the new value and lose the rest.
+const WRITE_SOURCE_TOOLS = new Set([
+  "getUserRulesAndSettings",
+  "getLearnedPatterns",
+  "getAssistantCapabilities",
+]);
 
 const STALE_RESULT_PROJECTIONS: Record<
   string,

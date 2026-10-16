@@ -191,6 +191,27 @@ describe("projectEarlierTurnToolResults", () => {
       getToolOutputValue(messages, "read-1"),
     );
   });
+
+  it.each([
+    "getUserRulesAndSettings",
+    "getLearnedPatterns",
+    "getAssistantCapabilities",
+  ])("keeps earlier turns' %s results whole, since a later write can save them back", (toolName) => {
+    const messages = [
+      userMessage("Show my rules"),
+      ...toolRound(toolName, "settings-0", {
+        personalInstructions: "p".repeat(2000),
+        rules: [{ name: "Newsletters", aiInstructions: "a".repeat(1500) }],
+      }),
+      userMessage("Now make the newsletter rule archive too"),
+    ];
+
+    const projected = projectEarlierTurnToolResults(messages);
+
+    expect(getToolOutputValue(projected, "settings-0")).toEqual(
+      getToolOutputValue(messages, "settings-0"),
+    );
+  });
 });
 
 const TURN_ROUNDS = RECENT_TOOL_RESULTS_TO_KEEP + 150;
@@ -260,6 +281,30 @@ function searchRound(
               ],
             },
           },
+        },
+      ],
+    },
+  ];
+}
+
+function toolRound(
+  toolName: string,
+  callId: string,
+  value: Record<string, unknown>,
+): ModelMessage[] {
+  return [
+    {
+      role: "assistant",
+      content: [{ type: "tool-call", toolCallId: callId, toolName, input: {} }],
+    },
+    {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: callId,
+          toolName,
+          output: { type: "json", value: value as never },
         },
       ],
     },
