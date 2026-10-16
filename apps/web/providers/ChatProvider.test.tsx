@@ -995,11 +995,13 @@ describe("ChatProvider across accounts", () => {
     expect(latestContext?.openThreadAccountId).toBe("account-b");
   });
 
-  it("follows the open thread when a chat's messages fail to load", async () => {
+  it.each([
+    404, 403,
+  ])("follows the open thread when the chat can't be read here (%i)", async (status) => {
     queryState.initialChatId = "unreadable-chat";
     mockUseChatMessages.mockReturnValue({
       data: undefined,
-      error: new Error("Chat not found"),
+      error: Object.assign(new Error("Chat unavailable"), { status }),
     });
     getDefaultStore().set(openThreadAtom, {
       emailAccountId: "account-b",
@@ -1010,6 +1012,25 @@ describe("ChatProvider across accounts", () => {
     await waitFor(() =>
       expect(latestContext?.chatAccount?.id).toBe("account-b"),
     );
+  });
+
+  it.each([
+    [
+      "a server error",
+      Object.assign(new Error("Server error"), { status: 500 }),
+    ],
+    ["a dropped connection", new TypeError("Failed to fetch")],
+  ])("keeps a saved chat through %s while loading it", (_name, error) => {
+    queryState.initialChatId = "saved-chat";
+    mockUseChatMessages.mockReturnValue({ data: undefined, error });
+    getDefaultStore().set(openThreadAtom, {
+      emailAccountId: "account-b",
+      threadId: "t-b",
+    });
+    renderWithProvider(<Consumer />);
+
+    expect(latestContext?.chatAccount?.id).toBe("account-a");
+    expect(latestContext?.chatId).toBe("saved-chat");
   });
 
   it("follows the open thread once an empty chat's messages have loaded", async () => {

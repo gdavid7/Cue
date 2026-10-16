@@ -409,8 +409,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const hasConversation =
     chat.messages.length > 0 || Boolean(data?.messages.length);
   // A saved chat whose messages haven't loaded may still hold a conversation.
+  // Only a definite "not here" ends the wait; a failed request may be
+  // retried, and the saved chat must survive it.
   const conversationUnknown =
-    Boolean(chatId) && data === undefined && !messagesError;
+    Boolean(chatId) && data === undefined && !isChatUnavailable(messagesError);
   useEffect(() => {
     const threadKey = openThread
       ? `${openThread.emailAccountId}:${openThread.threadId}`
@@ -770,6 +772,13 @@ function getRateLimitMessage(error: unknown) {
   } catch {
     return null;
   }
+}
+
+// The SWR fetcher puts the response status on the error.
+function isChatUnavailable(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const status = (error as Record<string, unknown>).status;
+  return status === 403 || status === 404;
 }
 
 function getErrorStatusCode(error: unknown) {
