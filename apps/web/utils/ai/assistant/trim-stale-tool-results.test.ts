@@ -154,6 +154,43 @@ describe("projectEarlierTurnToolResults", () => {
       getToolOutputValue(messages, "call-1"),
     );
   });
+
+  it("shortens earlier turns' large results however little output there is", () => {
+    const messages = [
+      userMessage("What did the contract say?"),
+      ...readEmailRound("read-0", "c".repeat(4000)),
+      ...searchRound(0, { snippetLength: 3000 }),
+      ...moveRound("move-0"),
+      userMessage("And the latest one?"),
+      ...readEmailRound("read-1", "d".repeat(4000)),
+    ];
+
+    const projected = projectEarlierTurnToolResults(messages);
+
+    const earlierRead = getToolOutputValue(projected, "read-0") as {
+      content: string;
+      attachments: unknown;
+      trimmedForContext?: string;
+    };
+    expect(earlierRead.content.length).toBeLessThan(1000);
+    expect(earlierRead.attachments).toEqual([
+      { attachmentId: "attachment-1", filename: "contract.pdf" },
+    ]);
+    expect(earlierRead.trimmedForContext).toBeDefined();
+    const earlierSearch = getToolOutputValue(projected, "call-0");
+    expect(earlierSearch).toMatchObject({
+      nextPageToken: "page-token-0",
+      messages: [{ messageId: "message-0", threadId: "thread-0" }],
+    });
+    expect(JSON.stringify(earlierSearch)).not.toContain("snippet-0");
+    expect(getToolOutputValue(projected, "move-0")).toEqual({
+      success: true,
+      movedCount: 1,
+    });
+    expect(getToolOutputValue(projected, "read-1")).toEqual(
+      getToolOutputValue(messages, "read-1"),
+    );
+  });
 });
 
 const TURN_ROUNDS = RECENT_TOOL_RESULTS_TO_KEEP + 150;
