@@ -46,6 +46,7 @@ import { VoiceInput } from "@/components/voice/VoiceInput";
 import { liveHistoryFromUiMessages } from "@/utils/voice/live-history";
 import { PageHeading } from "@/components/Typography";
 import { useAccounts } from "@/hooks/useAccounts";
+import { EmailAccountScopeProvider } from "@/providers/EmailAccountProvider";
 import { getPermissionsConsentPath } from "@/utils/permissions-consent";
 
 const MAX_FILE_SIZE = 4 * 1024 * 1024; // 4MB
@@ -86,6 +87,10 @@ export function Chat({
   const { messages, status, regenerate, setMessages } = chat;
   // Tools would run on the dead account's tokens, so the chat is read-only.
   const readOnly = Boolean(chatAccount?.disconnected);
+  const { data: accountsData } = useAccounts();
+  const scopedAccount = accountsData?.emailAccounts.find(
+    (account) => account.id === chatAccount?.id,
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadQueue, setUploadQueue] = useState<string[]>([]);
 
@@ -341,16 +346,20 @@ export function Chat({
       />
       <ChatAccountNotice />
       {hasMessages ? (
-        <ChatMessagesView
-          status={status}
-          messages={messages}
-          persistedMessageIds={persistedMessageIds}
-          setMessages={setMessages}
-          regenerate={regenerate}
-          context={context}
-          setContext={setContext}
-          inputArea={inputArea}
-        />
+        // Cards and actions in the conversation act in the chat's account,
+        // which in All inboxes may not be the page's.
+        <EmailAccountScopeProvider emailAccount={scopedAccount}>
+          <ChatMessagesView
+            status={status}
+            messages={messages}
+            persistedMessageIds={persistedMessageIds}
+            setMessages={setMessages}
+            regenerate={regenerate}
+            context={context}
+            setContext={setContext}
+            inputArea={inputArea}
+          />
+        </EmailAccountScopeProvider>
       ) : (
         <NewChatView
           inputArea={inputArea}

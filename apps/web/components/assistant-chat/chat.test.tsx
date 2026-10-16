@@ -9,6 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EmailAccountPreviewProvider } from "@/providers/EmailAccountProvider";
 import { Chat } from "@/components/assistant-chat/chat";
 import type { ChatHistoryEntry } from "@/components/assistant-chat/chat-history-types";
 import type { Chat as ChatHelpers } from "@/providers/ChatProvider";
@@ -53,7 +54,10 @@ const {
   mockSetNewChat: vi.fn(),
   mockStop: vi.fn(),
   mockUseChats: vi.fn(),
-  chatState: { status: "ready" as ChatHelpers["status"] },
+  chatState: {
+    status: "ready" as ChatHelpers["status"],
+    messages: [] as ChatHelpers["messages"],
+  },
 }));
 const accountChat = vi.hoisted(() => ({
   chatAccount: {
@@ -79,18 +83,30 @@ vi.mock("@/hooks/useAccounts", () => ({
         {
           id: "email-account-2",
           email: "b@example.com",
-          account: { disconnectedAt: null },
+          account: { disconnectedAt: null, provider: "google" },
+          providerRateLimit: null,
         },
       ],
     },
   }),
 }));
 
-vi.mock("@/components/assistant-chat/messages", () => ({
-  Messages: ({ footer }: { footer?: React.ReactNode }) => (
-    <div data-testid="messages">{footer}</div>
-  ),
-}));
+vi.mock("@/components/assistant-chat/messages", async () => {
+  const { useAccount } = await vi.importActual<
+    typeof import("@/providers/EmailAccountProvider")
+  >("@/providers/EmailAccountProvider");
+  return {
+    // Names the account the messages' cards and actions would act in.
+    Messages: ({ footer }: { footer?: React.ReactNode }) => (
+      <div data-testid="messages">
+        <span data-testid="messages-account">
+          {useAccount().emailAccountId}
+        </span>
+        {footer}
+      </div>
+    ),
+  };
+});
 
 vi.mock("@/components/assistant-chat/preview-attachment", () => ({
   PreviewAttachment: () => <div data-testid="preview-attachment" />,
@@ -205,7 +221,7 @@ vi.mock("@/hooks/useProductAnalytics", () => ({
 vi.mock("@/providers/ChatProvider", () => ({
   useChat: () => ({
     chat: {
-      messages: [],
+      messages: chatState.messages,
       status: chatState.status,
       stop: vi.fn(),
       regenerate: mockRegenerate,
@@ -240,6 +256,7 @@ afterEach(() => {
 
 beforeEach(() => {
   chatState.status = "ready";
+  chatState.messages = [];
   accountChat.chatAccount = {
     id: "email-account-1",
     email: "a@example.com",
@@ -345,6 +362,26 @@ describe("Chat account", () => {
     fireEvent.click(screen.getByRole("button", { name: "Switch" }));
 
     expect(accountChat.switchChatAccount).toHaveBeenCalledWith(
+      "email-account-2",
+    );
+  });
+
+  it("runs the conversation's cards and actions in the chat's account", () => {
+    accountChat.chatAccount = {
+      id: "email-account-2",
+      email: "b@example.com",
+      disconnected: false,
+    };
+    chatState.messages = [
+      { id: "m1", role: "user", parts: [{ type: "text", text: "Hi" }] },
+    ];
+    render(
+      <EmailAccountPreviewProvider>
+        <Chat open />
+      </EmailAccountPreviewProvider>,
+    );
+
+    expect(screen.getByTestId("messages-account").textContent).toBe(
       "email-account-2",
     );
   });
