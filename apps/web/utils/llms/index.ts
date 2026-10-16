@@ -263,6 +263,8 @@ type ChatCompletionStreamOptions = BaseStreamOptions & {
   tools?: Record<string, Tool>;
   onEnd?: StreamTextOnEndCallback<Record<string, Tool>>;
   onStepEnd?: GenerateTextOnStepEndCallback<Record<string, Tool>>;
+  // Stops generating once the caller has gone, e.g. a closed request.
+  abortSignal?: AbortSignal;
 };
 
 type ToolCallAgentStreamOptions = BaseStreamOptions & {
@@ -768,6 +770,7 @@ export async function chatCompletionStream(
     sensitiveDataPolicy,
     onEnd,
     onStepEnd,
+    abortSignal,
   } = options;
   const { modelOptions, modelCandidates } = await resolveModelCandidates({
     modelOptions: getModelOptionsForRoute(options),
@@ -820,6 +823,7 @@ export async function chatCompletionStream(
         model: bridgedChat.model,
         messages: protectedMessages as ModelMessage[],
         tools: bridgedChat.tools,
+        abortSignal,
         stopWhen: maxSteps ? isStepCount(maxSteps) : undefined,
         ...commonOptions,
         telemetry: buildLlmTelemetry({

@@ -119,6 +119,8 @@ describe("LLM use cases", () => {
       [LlmUseCase.ChatCompaction]: "economy",
       [LlmUseCase.ChatMemoryExtraction]: "economy",
       [LlmUseCase.CleanInbox]: "default",
+      [LlmUseCase.ComposeRewrite]: "economy",
+      [LlmUseCase.ComposeWrite]: "draft",
       [LlmUseCase.DetectRecurringPattern]: "chat",
       [LlmUseCase.DigestEmailSummary]: "economy",
       [LlmUseCase.DocumentFiling]: "economy",

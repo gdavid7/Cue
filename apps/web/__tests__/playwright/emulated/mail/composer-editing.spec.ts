@@ -7,6 +7,7 @@ import {
 } from "./account-test-helpers";
 import {
   conversationWithSubject,
+  grantAiAccess,
   openMail,
   openMailboxFromSidebar,
   setSentWithFooter,
@@ -769,6 +770,239 @@ test("pastes markdown as formatting that survives sending", async ({
   );
   await capturePlaywrightCheckpoint(page, testInfo, "markdown-sent");
 });
+
+test.describe("Cue writing partner", () => {
+  let restorePlans: (() => Promise<void>) | undefined;
+  test.beforeAll(async () => {
+    restorePlans = await grantAiAccess();
+  });
+  test.afterAll(async () => {
+    await restorePlans?.();
+  });
+
+  test("rewrites a selection from the selection toolbar, and undo takes it back", async ({
+    page,
+  }, testInfo) => {
+    await scriptLlmReply(
+      "can u send the doc pls",
+      "Could you send me the **doc**, please?",
+    );
+    await openMail(page);
+    await page.getByRole("button", { name: /^Compose/ }).click();
+    const dialog = page.getByRole("dialog", { name: "New Message" });
+    const editor = dialog.getByRole("textbox", { name: "Email message" });
+    await editor.pressSequentially("Hi Sam,");
+    await editor.press("Enter");
+    await editor.pressSequentially("can u send the doc pls");
+
+    await selectEditorText(editor, "can u send the doc pls");
+    await page
+      .getByRole("button", { name: "Ask Cue to rewrite the selection" })
+      .click();
+    const menu = page.getByRole("menu", { name: "Rewrite with Cue" });
+    await expect(menu).toBeVisible();
+    await expect(menu.getByRole("menuitem").first()).toBeFocused();
+    await capturePlaywrightCheckpoint(page, testInfo, "cue-rewrite-menu");
+
+    await page.keyboard.press("s");
+    const suggestion = page.getByRole("group", { name: "Suggested text" });
+    // The preview is a word diff: the suggestion reads without its deletions.
+    await expect
+      .poll(() =>
+        suggestion.evaluate((group) => {
+          const copy = group.cloneNode(true) as HTMLElement;
+          for (const removed of copy.querySelectorAll("del")) removed.remove();
+          return copy.textContent;
+        }),
+      )
+      .toBe("Could you send me the doc, please?");
+    await expect(suggestion.locator("del").first()).toHaveText("can u");
+    // Nothing reaches the draft until it is accepted.
+    await expect(editor).toContainText("can u send the doc pls");
+    await capturePlaywrightCheckpoint(page, testInfo, "cue-rewrite-preview");
+
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("dialog", { name: "Cue" })).toBeHidden();
+    await expect(editor).toContainText("Could you send me the doc, please?");
+    await expect(editor.locator("b, strong")).toHaveText("doc");
+    await expect(editor).not.toContainText("can u");
+
+    await page.keyboard.press("ControlOrMeta+z");
+    await expect(editor).toContainText("can u send the doc pls");
+    await expect(editor).not.toContainText("Could you send me");
+
+    await dialog.getByRole("button", { name: "Discard draft" }).click();
+    await expect(dialog).toBeHidden();
+  });
+
+  test("writes at the caret with ⌘J, where the send shortcut changes nothing", async ({
+    page,
+  }, testInfo) => {
+    await scriptLlmReply(
+      "say i'm in, ask for the planning doc",
+      "Count me in! Could you share the planning doc?",
+    );
+    await openMail(page);
+    await page.getByRole("button", { name: /^Compose/ }).click();
+    const dialog = page.getByRole("dialog", { name: "New Message" });
+    await dialog.getByRole("combobox", { name: "To" }).fill("sam@example.com");
+    await dialog.getByPlaceholder("Subject").fill("Working group");
+    const editor = dialog.getByRole("textbox", { name: "Email message" });
+    await editor.pressSequentially("Hi Sam,");
+    await editor.press("Enter");
+
+    await page.keyboard.press("ControlOrMeta+j");
+    const prompt = page.getByRole("textbox", { name: "Ask Cue to write" });
+    await expect(prompt).toBeFocused();
+    await expect(
+      page.getByRole("button", { name: "Continue writing" }),
+    ).toBeVisible();
+    await prompt.fill("say I'm in, ask for the planning doc");
+    await capturePlaywrightCheckpoint(page, testInfo, "cue-prompt-box");
+    await prompt.press("Enter");
+
+    const suggestion = page.getByRole("group", { name: "Suggested text" });
+    await expect(suggestion).toContainText("Count me in!");
+    await expect(page.getByRole("button", { name: /Accept/ })).toBeEnabled();
+
+    // The send shortcut neither sends nor accepts: Cue keeps the decision.
+    await editor.focus();
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await expect(
+      page.getByRole("textbox", { name: "Ask Cue for changes" }),
+    ).toBeFocused();
+    await expect(editor).not.toContainText("Count me in!");
+    await expect(dialog).toBeVisible();
+
+    await page.keyboard.press("Enter");
+    await expect(editor).toContainText(
+      "Count me in! Could you share the planning doc?",
+    );
+    await expect(page.getByRole("dialog", { name: "Cue" })).toBeHidden();
+
+    await dialog.getByRole("button", { name: "Discard draft" }).click();
+    await expect(dialog).toBeHidden();
+  });
+
+  test("discards with Escape and blocks Send while a suggestion is open", async ({
+    page,
+  }) => {
+    await scriptLlmReply(
+      "rough opener for escape check",
+      "A polished opener that should never land.",
+    );
+    await openMail(page);
+    await page.getByRole("button", { name: /^Compose/ }).click();
+    const dialog = page.getByRole("dialog", { name: "New Message" });
+    await dialog.getByRole("combobox", { name: "To" }).fill("sam@example.com");
+    await dialog.getByPlaceholder("Subject").fill("Escape check");
+    const editor = dialog.getByRole("textbox", { name: "Email message" });
+    await editor.pressSequentially("rough opener for escape check");
+
+    await selectEditorText(editor, "rough opener for escape check");
+    await page.keyboard.press("ControlOrMeta+j");
+    await page.keyboard.press("i");
+    const suggestion = page.getByRole("group", { name: "Suggested text" });
+    await expect(suggestion).toContainText("A polished opener");
+
+    await dialog.getByRole("button", { exact: true, name: "Send" }).click();
+    await expect(
+      page.getByText("Accept or discard Cue's suggestion before sending."),
+    ).toBeVisible();
+    await expect(dialog).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: "Cue" })).toBeHidden();
+    // Escape closed Cue only, not the composer.
+    await expect(dialog).toBeVisible();
+    await expect(editor).toHaveText("rough opener for escape check");
+    await expect(editor).toBeFocused();
+
+    await dialog.getByRole("button", { name: "Discard draft" }).click();
+    await expect(dialog).toBeHidden();
+  });
+
+  test("offers Ask Cue at the top of the slash menu", async ({ page }) => {
+    await openMail(page);
+    await page.getByRole("button", { name: /^Compose/ }).click();
+    const dialog = page.getByRole("dialog", { name: "New Message" });
+    const editor = dialog.getByRole("textbox", { name: "Email message" });
+    await editor.click();
+    await page.keyboard.type("/thanks");
+
+    const ask = page.getByRole("option", { name: /Ask Cue: thanks/ });
+    await expect(ask).toBeVisible();
+    await ask.click();
+
+    await expect(
+      page.getByRole("textbox", { name: "Ask Cue to write" }),
+    ).toHaveValue("thanks");
+    await expect(editor).not.toContainText("/thanks");
+    await page.keyboard.press("Escape");
+    await dialog.getByRole("button", { name: "Discard draft" }).click();
+    await expect(dialog).toBeHidden();
+  });
+
+  test("turns notes into an email from the phone button, in dark mode", async ({
+    page,
+  }, testInfo) => {
+    await scriptLlmReply(
+      "loved the demo",
+      "Hi Dana,\n\nWe loved the demo. Could you add an annual pricing option?\n\nThanks!",
+    );
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.emulateMedia({ colorScheme: "dark" });
+    await openMail(page);
+    await page.getByRole("button", { name: /^Compose/ }).click();
+    const dialog = page.getByRole("dialog", { name: "New Message" });
+    const editor = dialog.getByRole("textbox", { name: "Email message" });
+    await editor.click();
+    await editor.pressSequentially("loved the demo");
+    await editor.press("Enter");
+    await editor.pressSequentially("need annual pricing option");
+
+    await dialog.getByRole("button", { exact: true, name: "Ask Cue" }).click();
+    const chips = page
+      .getByRole("dialog", { name: "Cue" })
+      .getByRole("button", { name: /Turn notes into email|Continue writing/ });
+    await expect(chips.first()).toHaveText("Turn notes into email");
+    await capturePlaywrightCheckpoint(page, testInfo, "cue-phone-prompt-dark");
+
+    await chips.first().click();
+    const suggestion = page.getByRole("group", { name: "Suggested text" });
+    await expect(suggestion).toContainText("Could you add an annual pricing");
+    const panelBox = await page
+      .getByRole("dialog", { name: "Cue" })
+      .boundingBox();
+    expect(panelBox?.x ?? -1).toBeGreaterThanOrEqual(0);
+    expect((panelBox?.x ?? 0) + (panelBox?.width ?? 0)).toBeLessThanOrEqual(
+      390,
+    );
+    await capturePlaywrightCheckpoint(page, testInfo, "cue-phone-preview-dark");
+
+    await page.getByRole("button", { name: /Accept/ }).click();
+    await expect(editor).toContainText("We loved the demo.");
+    await expect(editor).not.toContainText("need annual pricing option");
+
+    await dialog.getByRole("button", { name: "Discard draft" }).click();
+    await expect(dialog).toBeHidden();
+  });
+});
+
+// Later registrations win, so each test matches on text only it types.
+async function scriptLlmReply(match: string, text: string) {
+  const baseUrl = process.env.PLAYWRIGHT_LLM_BASE_URL;
+  if (!baseUrl) throw new Error("PLAYWRIGHT_LLM_BASE_URL is not set");
+  const response = await fetch(
+    `${baseUrl.replace(/\/v1\/?$/u, "")}/__emulator/replies`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ match, text }),
+    },
+  );
+  if (!response.ok) throw new Error("Could not script the LLM emulator");
+}
 
 const TABLE_SIGNATURE_HTML = `<table cellpadding="0" cellspacing="0" border="0" role="presentation" style="border-collapse:collapse"><tbody><tr><td valign="top" style="padding-right:12px"><img src="https://assets.example.com/logo.png" width="48" height="48" alt="Example Company"></td><td valign="top" style="font-family:Arial,sans-serif;font-size:13px;color:#333333"><b>Example Person</b><br>Head of Examples<br><a href="https://example.com">example.com</a></td></tr></tbody></table>`;
 

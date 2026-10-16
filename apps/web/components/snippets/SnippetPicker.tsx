@@ -22,6 +22,8 @@ export type SnippetPickerRef = {
 };
 
 type SnippetPickerProps = {
+  // Shows "Ask Cue" as the first row, for writing with Cue instead.
+  onSelectAsk?: () => void;
   onQueryChange?: (query: string) => void;
   onSelectCreate: () => void;
   onSelectSnippet: (snippet: SnippetMatchItem) => void;
@@ -31,38 +33,55 @@ type SnippetPickerProps = {
 
 export const SnippetPicker = forwardRef<SnippetPickerRef, SnippetPickerProps>(
   function SnippetPicker(
-    { onQueryChange, onSelectCreate, onSelectSnippet, query, snippets },
+    {
+      onQueryChange,
+      onSelectAsk,
+      onSelectCreate,
+      onSelectSnippet,
+      query,
+      snippets,
+    },
     ref,
   ) {
+    // Ask Cue sits above the snippet rows without becoming the default, so
+    // Enter still does what it did before.
+    const askRows = onSelectAsk ? 1 : 0;
     const filteredSnippets = useMemo(
       () => filterSnippets(snippets, query),
       [query, snippets],
     );
-    const [selectedIndex, setSelectedIndex] = useState(() =>
-      initialSnippetSelectionIndex({
-        createItem: true,
-        query,
-        snippets: filteredSnippets,
-      }),
-    );
-    const itemCount = filteredSnippets.length + 1;
-
-    useEffect(() => {
-      setSelectedIndex(
+    const [selectedIndex, setSelectedIndex] = useState(
+      () =>
+        askRows +
         initialSnippetSelectionIndex({
           createItem: true,
           query,
           snippets: filteredSnippets,
         }),
+    );
+    const itemCount = askRows + filteredSnippets.length + 1;
+
+    useEffect(() => {
+      setSelectedIndex(
+        askRows +
+          initialSnippetSelectionIndex({
+            createItem: true,
+            query,
+            snippets: filteredSnippets,
+          }),
       );
-    }, [query, filteredSnippets]);
+    }, [askRows, query, filteredSnippets]);
 
     const selectItem = (index: number) => {
-      if (index === 0) {
+      if (askRows && index === 0) {
+        onSelectAsk?.();
+        return;
+      }
+      if (index === askRows) {
         onSelectCreate();
         return;
       }
-      const snippet = filteredSnippets[index - 1];
+      const snippet = filteredSnippets[index - askRows - 1];
       if (snippet) onSelectSnippet(snippet);
     };
 
@@ -112,9 +131,30 @@ export const SnippetPicker = forwardRef<SnippetPickerRef, SnippetPickerProps>(
           className="max-h-64 overflow-auto p-1"
           role="listbox"
         >
+          {onSelectAsk ? (
+            <PickerRow
+              selected={selectedIndex === 0}
+              onSelect={() => selectItem(0)}
+            >
+              <span
+                aria-hidden="true"
+                className="w-4 shrink-0 text-center text-muted-foreground"
+              >
+                ✦
+              </span>
+              <span className="min-w-0 truncate">
+                <span className="font-medium">Ask Cue</span>
+                {query ? (
+                  <span className="text-muted-foreground">: {query}…</span>
+                ) : (
+                  <span className="text-muted-foreground"> to write…</span>
+                )}
+              </span>
+            </PickerRow>
+          ) : null}
           <PickerRow
-            selected={selectedIndex === 0}
-            onSelect={() => selectItem(0)}
+            selected={selectedIndex === askRows}
+            onSelect={() => selectItem(askRows)}
           >
             <BracesIcon className="size-4 shrink-0 text-muted-foreground" />
             <span className="font-medium">Turn into snippet</span>
@@ -122,8 +162,8 @@ export const SnippetPicker = forwardRef<SnippetPickerRef, SnippetPickerProps>(
           {filteredSnippets.map((snippet, index) => (
             <PickerRow
               key={snippet.id}
-              selected={selectedIndex === index + 1}
-              onSelect={() => selectItem(index + 1)}
+              selected={selectedIndex === askRows + index + 1}
+              onSelect={() => selectItem(askRows + index + 1)}
             >
               <span className="w-24 shrink-0 truncate font-medium">
                 /{snippet.shortcut}

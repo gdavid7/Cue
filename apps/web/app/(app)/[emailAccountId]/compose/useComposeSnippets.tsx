@@ -33,9 +33,12 @@ const EMPTY_SNIPPETS: SnippetMatchItem[] = [];
 
 export function useComposeSnippets({
   editorRef,
+  onAskCue,
   to,
 }: {
   editorRef: RefObject<EmailEditorHandle | null>;
+  // Opens Cue at the caret with what was typed after "/".
+  onAskCue?: (text: string) => void;
   to?: string;
 }) {
   const { data, mutate } = useSnippets();
@@ -105,6 +108,14 @@ export function useComposeSnippets({
             }}
           >
             <SnippetPicker
+              onSelectAsk={
+                onAskCue
+                  ? () => {
+                      editorRef.current?.replaceSlashTrigger("");
+                      onAskCue(slashTrigger.query);
+                    }
+                  : undefined
+              }
               onSelectCreate={() => {
                 editorRef.current?.replaceSlashTrigger("");
                 openCreate(

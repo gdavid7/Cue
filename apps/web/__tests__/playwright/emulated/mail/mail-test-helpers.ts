@@ -102,6 +102,43 @@ export async function setSentWithFooter(enabled: boolean) {
 }
 
 /**
+ * The AI routes need a paid plan. Gives every user an admin-granted Plus plan
+ * and returns a function that puts back the plans they had.
+ */
+export async function grantAiAccess() {
+  const premiumId = `playwright_ai_access_${process.env.PLAYWRIGHT_RUN_ID ?? "local"}`;
+  const previous = await withClient(async (client) => {
+    await client.query(
+      `INSERT INTO "Premium"
+       (id, "createdAt", "updatedAt", "pendingInvites", tier, "adminGrantTier", "adminGrantExpiresAt")
+       VALUES ($1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ARRAY[]::text[],
+         'PLUS_MONTHLY', 'PLUS_MONTHLY', CURRENT_TIMESTAMP + INTERVAL '1 day')
+       ON CONFLICT (id) DO UPDATE
+       SET "adminGrantExpiresAt" = EXCLUDED."adminGrantExpiresAt",
+           "updatedAt" = CURRENT_TIMESTAMP`,
+      [premiumId],
+    );
+    const users = await client.query<{ id: string; premiumId: string | null }>(
+      `SELECT id, "premiumId" FROM "User" WHERE "premiumId" IS DISTINCT FROM $1`,
+      [premiumId],
+    );
+    await client.query(`UPDATE "User" SET "premiumId" = $1`, [premiumId]);
+    return users.rows;
+  });
+
+  return () =>
+    withClient(async (client) => {
+      for (const user of previous) {
+        await client.query(
+          `UPDATE "User" SET "premiumId" = $2 WHERE id = $1 AND "premiumId" = $3`,
+          [user.id, user.premiumId, premiumId],
+        );
+      }
+      await client.query(`DELETE FROM "Premium" WHERE id = $1`, [premiumId]);
+    });
+}
+
+/**
  * Inbox, Drafts and Sent sit at the top of the sidebar; the rarer mailboxes
  * sit behind the "More" group, which stays open once a view inside it shows.
  */

@@ -7,18 +7,21 @@ export function ToolbarButton({
   disabled = false,
   label,
   onPress,
+  wide = false,
 }: {
   active?: boolean;
   children: ReactNode;
   disabled?: boolean;
   label: string;
   onPress: () => void;
+  // Sized to a short text label rather than a single glyph.
+  wide?: boolean;
 }) {
   return (
     <button
       aria-label={label}
       aria-pressed={active}
-      className={`${styles.toolbarButton} ${active ? styles.toolbarButtonActive : ""}`}
+      className={`${styles.toolbarButton} ${active ? styles.toolbarButtonActive : ""} ${wide ? styles.toolbarButtonWide : ""}`}
       disabled={disabled}
       onClick={onPress}
       onMouseDown={(event) => event.preventDefault()}

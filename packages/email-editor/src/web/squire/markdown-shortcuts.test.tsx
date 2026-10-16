@@ -365,7 +365,13 @@ async function renderEditor(props: Partial<EmailEditorProps> = {}) {
   const ref = createRef<EmailEditorHandle>();
   render(<EmailEditor initialHtml="" ref={ref} {...props} />);
   // The Squire engine is loaded lazily.
-  await screen.findByRole("textbox", { name: "Email message" });
+  // The Squire engine loads lazily, which is slow the first time on a busy
+  // machine.
+  await screen.findByRole(
+    "textbox",
+    { name: "Email message" },
+    { timeout: 10_000 },
+  );
   const textbox = () => screen.getByRole("textbox", { name: "Email message" });
   const handle = () => {
     if (!ref.current) throw new Error("Editor handle is not ready");

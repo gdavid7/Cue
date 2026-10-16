@@ -23,6 +23,7 @@ import {
   SIGNATURE_CONTAINER_ATTRIBUTE,
 } from "../../core/email-profile";
 import type {
+  EmailEditorAssistContext,
   EmailEditorHandle,
   EmailEditorSlashTrigger,
   EmailEditorState,
@@ -47,6 +48,12 @@ import {
   readFormatState,
   SelectionToolbar,
 } from "./selection-toolbar";
+import {
+  editableContentRange,
+  joinWithSpaces,
+  showAssistHighlight,
+  splitDraftText,
+} from "./assist";
 import { closestWithin } from "./dom";
 import { attachMarkdownShortcuts } from "./markdown-shortcuts";
 import { placePopover, visibleBounds } from "./placement";
@@ -60,6 +67,7 @@ type SquireEmailEditorProps = {
   placeholder: string;
   preservedBlocks: RenderedPreservedEmailBlock[];
   spellCheck: boolean;
+  onAssist?: () => void;
   onImageFiles?: (files: File[]) => void;
   onSlashKeyDown?: (event: KeyboardEvent) => boolean;
   onSlashTrigger?: (trigger: EmailEditorSlashTrigger | null) => void;
@@ -180,6 +188,7 @@ export const SquireEmailEditor = forwardRef<
   const slashRef = useRef<SlashTriggerMatch | null>(null);
   const dismissedSlashRef = useRef<{ node: Node; offset: number } | null>(null);
   const imageSourcesRef = useRef(new Map<string, string | null>());
+  const assistRef = useRef<{ range: Range; text: string } | null>(null);
 
   const setSignaturePresent = useCallback((present: boolean) => {
     signaturePresentRef.current = present;
@@ -668,6 +677,7 @@ export const SquireEmailEditor = forwardRef<
       root.removeEventListener("compositionend", onCompositionEnd);
       detachMarkdownShortcuts();
       squire.destroy();
+      showAssistHighlight(null);
       editorRef.current = null;
       setEditor(null);
     };
@@ -726,12 +736,82 @@ export const SquireEmailEditor = forwardRef<
     return blocks;
   }, [quoteBlock, signaturePresent]);
 
+  const endAssist = useCallback(() => {
+    assistRef.current = null;
+    showAssistHighlight(null);
+  }, []);
+
   useImperativeHandle(
     ref,
     () => ({
       focus: () => {
         editorRef.current?.focus();
       },
+      beginAssist: (scope) => {
+        const currentEditor = editorRef.current;
+        const root = rootRef.current;
+        if (!currentEditor || !root) return null;
+        const signature = signaturePresentRef.current
+          ? signatureRef.current
+          : null;
+        const content = editableContentRange(root, signature);
+        let range = content;
+        let target: EmailEditorAssistContext["target"] = "body";
+        if (scope === "selection") {
+          range = currentEditor.getSelection().cloneRange();
+          if (!root.contains(range.commonAncestorContainer)) {
+            range = content.cloneRange();
+            range.collapse(false);
+          }
+          // The signature is never rewritten with the text above it.
+          if (signature && root.contains(signature)) {
+            if (signature.contains(range.startContainer)) {
+              range.setStartBefore(signature);
+              range.collapse(true);
+            } else if (range.intersectsNode(signature)) {
+              range.setEndBefore(signature);
+            }
+          }
+          target = range.toString().trim() ? "selection" : "cursor";
+          if (target === "cursor") range.collapse(false);
+        }
+        assistRef.current = { range, text: range.toString() };
+        showAssistHighlight(target === "cursor" ? null : range);
+        setToolbarPosition(null);
+        closeSlashTrigger();
+        return {
+          target,
+          ...splitDraftText({ root, signature, range }),
+          containsImages: Boolean(
+            target !== "cursor" && range.cloneContents().querySelector("img"),
+          ),
+        };
+      },
+      getAssistAnchor: () => {
+        const held = assistRef.current;
+        return held ? rangeAnchor(held.range) : null;
+      },
+      commitAssist: (html) => {
+        const currentEditor = editorRef.current;
+        const root = rootRef.current;
+        const held = assistRef.current;
+        if (!currentEditor || !root || !held) return false;
+        if (
+          !root.contains(held.range.startContainer) ||
+          held.range.toString() !== held.text
+        ) {
+          return false;
+        }
+        currentEditor.focus();
+        currentEditor.setSelection(held.range);
+        dirtyRef.current = true;
+        currentEditor.insertHTML(
+          joinWithSpaces(withoutSignatureMarkers(html), held.range),
+        );
+        endAssist();
+        return true;
+      },
+      endAssist,
       getSelectedText: () => editorRef.current?.getSelectedText() ?? "",
       getValue: readValue,
       insertHtml: (html) => {
@@ -803,7 +883,7 @@ export const SquireEmailEditor = forwardRef<
         return true;
       },
     }),
-    [closeSlashTrigger, emitState, readValue],
+    [closeSlashTrigger, emitState, endAssist, readValue],
   );
 
   return (
@@ -881,6 +961,7 @@ export const SquireEmailEditor = forwardRef<
       {editor && toolbarPosition && (
         <SelectionToolbar
           editor={editor}
+          onAssist={props.onAssist}
           onLink={openLinkPanel}
           position={toolbarPosition}
           state={formatState}
@@ -993,6 +1074,17 @@ function withoutSignatureMarkers(html: string) {
   template.innerHTML = html;
   removeSignatureMarkers(template.content);
   return template.innerHTML;
+}
+
+// A caret has no box of its own in an empty line; its line does.
+function rangeAnchor(range: Range) {
+  const rects =
+    typeof range.getClientRects === "function" ? range.getClientRects() : [];
+  const rect = range.collapsed ? rects[0] : range.getBoundingClientRect?.();
+  if (rect && (rect.width || rect.height)) return rect;
+  const node = range.endContainer;
+  const element = node instanceof Element ? node : node.parentElement;
+  return element?.getBoundingClientRect() ?? null;
 }
 
 // Squire needs at least one block to place the caret in.
