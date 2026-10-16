@@ -40,8 +40,9 @@ export async function markMessageAsProcessing({
 }
 
 const MESSAGE_PROCESSING_TTL_SECONDS = 60 * 5;
-// Past Gmail's history retention, so a catch-up never handles a message twice.
-const MESSAGE_PROCESSED_TTL_SECONDS = 60 * 60 * 24 * 30;
+// Just past Gmail's usual week of history, so a catch-up never handles a
+// message twice, without keeping a key per message for long after.
+const MESSAGE_PROCESSED_TTL_SECONDS = 60 * 60 * 24 * 8;
 const MESSAGE_PROCESSED_STATUS = "processed";
 
 /**

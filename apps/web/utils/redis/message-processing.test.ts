@@ -108,7 +108,7 @@ describe("message-processing redis locks", () => {
     expect(redis.eval).toHaveBeenCalledWith(
       expect.stringContaining('redis.call("SET"'),
       ["processing-message:user@example.com:message-1"],
-      ["lock-uuid", "processed", "2592000"],
+      ["lock-uuid", "processed", "691200"],
     );
   });
 
