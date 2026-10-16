@@ -1276,14 +1276,15 @@ export function MailShell() {
       : accountsData?.emailAccounts.find(
           (account) => account.id === labelAccountId,
         );
+  const mixedLabelAccounts = currentLabelTargets.some(
+    (target) => target.emailAccountId !== labelAccountId,
+  );
   // Outlook categories use the same engine membership command as Gmail labels.
   const canLabel =
     currentLabelTargets.length > 0 &&
     (isGoogleProvider(labelAccount?.account.provider) ||
       isMicrosoftProvider(labelAccount?.account.provider)) &&
-    currentLabelTargets.every(
-      (target) => target.emailAccountId === labelAccountId,
-    );
+    !mixedLabelAccounts;
   const openLabelPicker = useStableCallback(() => {
     if (canLabel)
       setLabelPicker({ mode: "label", targets: currentLabelTargets });
@@ -1931,9 +1932,7 @@ export function MailShell() {
                 onStarSelected={starTargets}
                 onLabelSelected={canLabel ? openLabelPicker : undefined}
                 labelUnavailableReason={
-                  currentLabelTargets.some(
-                    (target) => target.emailAccountId !== labelAccountId,
-                  )
+                  mixedLabelAccounts
                     ? "Labels belong to one account"
                     : undefined
                 }
