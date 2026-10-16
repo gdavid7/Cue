@@ -142,7 +142,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const resumedStreamIdRef = useRef<string | null>(null);
   const messagesAtHideRef = useRef<unknown>(null);
 
-  const { data } = useChatMessages(chatId, emailAccountId);
+  const { data, error: messagesError } = useChatMessages(
+    chatId,
+    emailAccountId,
+  );
   const persistedMessageIds = useMemo(
     () => new Set(data?.messages.map((message) => message.id) ?? []),
     [data?.messages],
@@ -405,7 +408,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const hasConversation =
     chat.messages.length > 0 || Boolean(data?.messages.length);
   // A saved chat whose messages haven't loaded may still hold a conversation.
-  const conversationUnknown = Boolean(chatId) && data === undefined;
+  const conversationUnknown =
+    Boolean(chatId) && data === undefined && !messagesError;
   useEffect(() => {
     const threadKey = openThread
       ? `${openThread.emailAccountId}:${openThread.threadId}`

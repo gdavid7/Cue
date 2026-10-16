@@ -995,6 +995,23 @@ describe("ChatProvider across accounts", () => {
     expect(latestContext?.openThreadAccountId).toBe("account-b");
   });
 
+  it("follows the open thread when a chat's messages fail to load", async () => {
+    queryState.initialChatId = "unreadable-chat";
+    mockUseChatMessages.mockReturnValue({
+      data: undefined,
+      error: new Error("Chat not found"),
+    });
+    getDefaultStore().set(openThreadAtom, {
+      emailAccountId: "account-b",
+      threadId: "t-b",
+    });
+    renderWithProvider(<Consumer />);
+
+    await waitFor(() =>
+      expect(latestContext?.chatAccount?.id).toBe("account-b"),
+    );
+  });
+
   it("follows the open thread once an empty chat's messages have loaded", async () => {
     queryState.initialChatId = "fresh-chat";
     mockUseChatMessages.mockReturnValue({ data: undefined });
