@@ -147,6 +147,37 @@ describe("buildOutlookMailboxSyncPage", () => {
     ]);
   });
 
+  it("sends a body with inline images to hydration, since Graph reports no attachments for them", () => {
+    const page = buildOutlookMailboxSyncPage({
+      response: {
+        value: [
+          {
+            id: "inline-image-message",
+            conversationId: "thread-1",
+            parentFolderId: "inbox-folder-id",
+            hasAttachments: false,
+            body: {
+              contentType: "html",
+              content: '<p>Logo</p><img src="CID:logo@example.com">',
+            },
+          },
+        ],
+        "@odata.deltaLink": DELTA_LINK,
+      },
+      after: "2026-07-01T00:00:00.000Z",
+      wasSnapshot: false,
+      reset: false,
+      includeBodies: true,
+      categoryMap: new Map(),
+      folderIds: { inbox: "inbox-folder-id" },
+    });
+
+    expect(page.upsertedMessages[0]).toMatchObject({
+      id: "inline-image-message",
+      textHtml: undefined,
+    });
+  });
+
   it("leaves bodies out unless asked", () => {
     const page = buildOutlookMailboxSyncPage({
       response: {

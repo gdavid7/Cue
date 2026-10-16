@@ -163,10 +163,8 @@ export function buildOutlookMailboxSyncPage({
     if (!message.conversationId) return [];
 
     const parsed = convertMessage(message, folderIds, categoryMap);
-    // Delta can't expand attachments, so a message with any still needs a
-    // full read before its body is complete.
     return [
-      includeBodies && message.hasAttachments === false
+      includeBodies && isBodyCompleteWithoutAttachments(message)
         ? parsed
         : compactMailboxSyncMessage(parsed),
     ];
@@ -314,4 +312,14 @@ async function getSyncMessage({
     if (isNotFoundError(error)) return null;
     throw error;
   }
+}
+
+// Delta can't expand attachments, so a body is complete only when the message
+// has none. Graph reports hasAttachments false for inline-only images, so a
+// cid: reference also means the attachment list must come from a full read.
+function isBodyCompleteWithoutAttachments(message: Message) {
+  return (
+    message.hasAttachments === false &&
+    !/\bcid:/i.test(message.body?.content ?? "")
+  );
 }
