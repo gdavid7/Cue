@@ -69,4 +69,23 @@ describe("SearchAnswerCard", () => {
     expect(screen.getByText("No emails match “offsite”.")).toBeTruthy();
     expect(screen.getByText("Reading your mail…")).toBeTruthy();
   });
+
+  it("names the account it answered from above mail from several accounts", () => {
+    swr.result = {
+      data: { answer: "The offsite is on Friday.", sources: [] },
+      isLoading: false,
+      error: undefined,
+    };
+    render(
+      <SearchAnswerCard
+        accountEmail="a@example.com"
+        emailAccountId="account"
+        noResults={false}
+        onContinueInChat={vi.fn()}
+        query="when is the offsite"
+      />,
+    );
+
+    expect(screen.getByText("From a@example.com")).toBeTruthy();
+  });
 });

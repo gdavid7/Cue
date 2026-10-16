@@ -195,7 +195,8 @@ export function MailShell() {
     mutate: mutateSettings,
   } = useMailSettings();
   const { toggleSidebar, setOpen: setSidebarOpen } = useSidebar();
-  const { submitTextMessage, chatId, setNewChat } = useChat();
+  const { submitTextMessage, chatId, setNewChat, switchChatAccount } =
+    useChat();
   // A question waits for a conversation to exist; sent before one, it's dropped.
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   useEffect(() => {
@@ -1725,6 +1726,8 @@ export function MailShell() {
     setSidebarOpen((open) =>
       open.includes("chat-sidebar") ? open : [...open, "chat-sidebar"],
     );
+    // The answer came from this page's account, so the follow-up runs there.
+    switchChatAccount(emailAccountId);
     if (!chatId) setNewChat();
     setPendingQuestion(question);
   });
@@ -1996,6 +1999,7 @@ export function MailShell() {
               ) : null}
               {searchParam && emailAccountId ? (
                 <SearchAnswerCard
+                  accountEmail={isAllAccounts ? userEmail : undefined}
                   emailAccountId={emailAccountId}
                   key={searchParam}
                   noResults={searchFoundNothing && isSearchCommitted}
