@@ -109,7 +109,14 @@ export async function verifyCanvasToken({
     await response.body?.cancel().catch(() => null);
     return { ok: false, reason: "not_canvas" };
   }
-  const text = await readCapped(response, MAX_RESPONSE_BYTES).catch(() => null);
+  let text: string | null;
+  try {
+    text = await readCapped(response, MAX_RESPONSE_BYTES);
+  } catch {
+    // The answer stopped partway (timeout, dropped connection)
+    return { ok: false, reason: "unreachable" };
+  }
+  // Far bigger than a user record
   if (text === null) return { ok: false, reason: "not_canvas" };
   const user = canvasUserSchema.safeParse(parseJson(text));
   if (!user.success) return { ok: false, reason: "not_canvas" };

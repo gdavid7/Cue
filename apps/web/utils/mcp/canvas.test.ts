@@ -186,6 +186,29 @@ describe("verifyCanvasToken", () => {
     expect(streamed).toEqual({ ok: false, reason: "not_canvas" });
   });
 
+  it("says Canvas couldn't be reached when its answer stops partway", async () => {
+    const result = await verifyCanvasToken({
+      address: "https://canvas.eee.uci.edu",
+      token: TOKEN,
+      fetch: mockFetch(
+        () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode('{"id":1,'));
+                controller.error(
+                  new DOMException("The operation timed out.", "TimeoutError"),
+                );
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    });
+
+    expect(result).toEqual({ ok: false, reason: "unreachable" });
+  });
+
   it("doesn't send the token to another site it redirects to", async () => {
     const fetch = mockFetch(() =>
       redirect("https://sso.example.edu/login?service=canvas"),
