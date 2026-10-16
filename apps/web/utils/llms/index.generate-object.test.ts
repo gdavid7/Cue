@@ -272,30 +272,43 @@ describe("createGenerateObject repairText", () => {
         options: {
           instructions: "Classify the email.",
           messages: [{ role: "user", content: "Hello" }],
+          output: "no-schema",
         },
         warned: false,
       },
       {
-        label: "prompt-shaped calls with no JSON mention",
+        label: "structured-output calls with no JSON mention",
         options: {
           instructions: "Classify the email.",
           prompt: "Hello there.",
+          schema: {},
+        },
+        warned: false,
+      },
+      {
+        label: "plain JSON mode calls with no JSON mention",
+        options: {
+          instructions: "Classify the email.",
+          prompt: "Hello there.",
+          output: "no-schema",
         },
         warned: true,
       },
       {
-        label: "prompt-shaped calls where the prompt mentions JSON",
+        label: "plain JSON mode calls where the prompt mentions JSON",
         options: {
           instructions: "Classify the email.",
           prompt: "Return JSON.",
+          output: "no-schema",
         },
         warned: false,
       },
       {
-        label: "prompt-shaped calls where the system mentions JSON",
+        label: "plain JSON mode calls where the system mentions JSON",
         options: {
           instructions: "Return JSON.",
           prompt: "Classify this.",
+          output: "no-schema",
         },
         warned: false,
       },
@@ -305,10 +318,7 @@ describe("createGenerateObject repairText", () => {
     }) => {
       const generateObject = await createTestGenerateObject();
 
-      await generateObject({
-        ...options,
-        schema: {} as any,
-      } as any);
+      await generateObject(options as any);
 
       expect(wasMissingJsonWarned()).toBe(warned);
     });

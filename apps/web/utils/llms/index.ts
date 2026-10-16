@@ -538,13 +538,16 @@ export function createGenerateObject({
         )?.slice(0, MAX_LOG_LENGTH),
       });
 
-      // Only warn for prompt-shaped calls. Messages-shaped callers (no
-      // `prompt` string) are out of scope; scanning every message for
-      // the literal "JSON" would be brittle and noisy.
+      // Some providers' plain JSON mode rejects prompts that never say
+      // "JSON"; schema-backed structured output has no such requirement.
+      // Messages-shaped callers (no `prompt` string) are out of scope;
+      // scanning every message for the literal would be brittle and noisy.
+      const usesPlainJsonMode = options.output === "no-schema";
       const systemIncludesJson =
         typeof protectedOptions.instructions === "string" &&
         protectedOptions.instructions.includes("JSON");
       if (
+        usesPlainJsonMode &&
         !systemIncludesJson &&
         typeof protectedOptions.prompt === "string" &&
         !protectedOptions.prompt.includes("JSON")
