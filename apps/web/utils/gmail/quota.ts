@@ -12,46 +12,60 @@ import { sleep } from "@/utils/sleep";
 // https://developers.google.com/workspace/gmail/api/reference/quota
 export const GMAIL_USER_UNITS_PER_MINUTE = 6000;
 
+// Gmail also refuses short bursts far below the minute's limit: in
+// production it refused the tail of each 25-message first-sync batch while
+// the minute held about 3,300 units, and a background backfill pacing 80
+// units a second about once a minute while the minute held only 2,000. So
+// the gate paces every second against the minute spread evenly.
+const GMAIL_USER_UNITS_PER_SECOND = GMAIL_USER_UNITS_PER_MINUTE / 60;
+
 // Any 60 seconds can spend at most the full bucket, the interactive overdraft
-// and one minute of refill: 1,000 + 200 + 3,600 = 4,800, 80% of Gmail's limit.
-const BUCKET = { capacity: 1000, perMinute: 3600 };
+// and one minute of refill: 300 + 60 + 4,200 = 4,560, 76% of Gmail's limit.
+const BUCKET = {
+  capacity: Math.round(GMAIL_USER_UNITS_PER_SECOND * 3),
+  perMinute: Math.round(GMAIL_USER_UNITS_PER_MINUTE * 0.7),
+};
 // What each priority must leave in the bucket after its debit. Sync leaves a
 // slice that only interactive calls may spend; background leaves more, so it
 // only runs on capacity nobody in front of the mailbox is using.
 const FLOOR: Record<GmailQuotaPriority, number> = {
-  interactive: -200,
-  sync: 200,
-  background: 500,
+  interactive: -Math.round(BUCKET.capacity * 0.2),
+  sync: Math.round(BUCKET.capacity * 0.2),
+  background: Math.round(BUCKET.capacity * 0.5),
 };
-// Gmail also refuses short bursts far below the minute's limit: in
-// production it refused the tail of each 25-message first-sync batch (500
-// units in one instant) while the minute held about 3,300 units. Its older
-// documentation put the per-user rate at 250 units a second, a moving
-// average; the current page lists only the minute. So any one second admits
-// at most `PACE_CAP` units in all, 80% of 250. Each priority may fill the
-// second up to its own level: sync leaves interactive calls room, and
-// background only runs below sync's level, so it never slows the sync that
-// fills the inbox.
+// What Gmail charges for one message and one thread read.
+const MESSAGE_READ_UNITS = 20;
+const THREAD_READ_UNITS = 40;
+// Any one second admits at most `PACE_CAP` units in all. Only a person's
+// reads may fill the whole even share, and only briefly, since the bucket
+// refills at 70 units a second. Each level sits far enough below the one
+// above that it always fits its usual request: a thread read (40 units)
+// above a full second of sync, a message read (20) above background. So sync
+// never starves a person opening a thread, and background never slows the
+// sync that fills the inbox.
 const PACE_WINDOW_MS = 1000;
 const PACE_CAP: Record<GmailQuotaPriority, number> = {
-  interactive: 200,
-  sync: 160,
-  background: 80,
+  interactive: GMAIL_USER_UNITS_PER_SECOND,
+  sync: Math.round(GMAIL_USER_UNITS_PER_SECOND * 0.6),
+  background: Math.round(GMAIL_USER_UNITS_PER_SECOND * 0.4),
 };
-// For two seconds from when a person's large request arrives, such as a first
-// inbox page or an assistant search, sync drops to 40 units a second and
-// background waits, so a first page of 25 messages (about 505 units) takes the
-// two and a half seconds the cap allows. It starts on arrival, not admission:
-// otherwise sync refills each second before a waiting batch fits. Opening a
-// thread is a few small reads and starts no episode: the sync that fills that
-// thread's older messages keeps its share. A new episode starts at most every three seconds, so someone
-// working all the time still leaves sync and background one second in three.
-const INTERACTIVE_DEMAND_MIN_UNITS = 100;
+// For two seconds from when a person's batch arrives, such as a first inbox
+// page or an assistant search, sync drops to one message read a second and
+// background waits. It starts on arrival, not admission: otherwise sync
+// refills each second before a waiting batch fits. Opening a thread is a few
+// reads of at most 40 units and starts no episode: the sync that fills that
+// thread's older messages keeps its share. A new episode starts at most every
+// three seconds, so someone working all the time still leaves sync and
+// background one second in three.
+const INTERACTIVE_DEMAND_MIN_UNITS = THREAD_READ_UNITS + 1;
 const INTERACTIVE_DEMAND_MS = 2000;
 const INTERACTIVE_DEMAND_EVERY_MS = 3000;
 // What sync and background get between two episodes.
 const DEMAND_GAP_MS = INTERACTIVE_DEMAND_EVERY_MS - INTERACTIVE_DEMAND_MS;
-const PACE_YIELD_CAP = { sync: 40, background: 0 };
+const PACE_YIELD_CAP = {
+  sync: Math.round(GMAIL_USER_UNITS_PER_SECOND * 0.2),
+  background: 0,
+};
 const MAX_WAIT_MS: Record<GmailQuotaPriority, number> = {
   interactive: 10_000,
   sync: 15_000,
@@ -530,12 +544,13 @@ export function isGmailQuotaRefusal(error: unknown) {
 }
 
 /**
- * The most units one Gmail request at `priority` should carry. Half its
- * per-second cap lets a request in while the second holds other traffic,
- * instead of waiting for a quiet second that steady sync never leaves.
+ * The most units one Gmail request at `priority` should carry. Leaving room
+ * under its per-second level for a person's thread read lets a request in
+ * while someone reads, instead of waiting for a quiet second that steady
+ * reading never leaves. Never less than one message.
  */
 export function gmailRequestUnitsFor(priority: GmailQuotaPriority) {
-  return PACE_CAP[priority] / 2;
+  return Math.max(PACE_CAP[priority] - THREAD_READ_UNITS, MESSAGE_READ_UNITS);
 }
 
 /**
