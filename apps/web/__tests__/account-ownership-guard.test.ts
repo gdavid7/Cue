@@ -102,6 +102,16 @@ const OWNERSHIP_CHECKS: Record<string, OwnershipCheck> = {
         /export async function getShareForSource\([\s\S]*?getOwnedMember\(actor\);\s*if \(member\.emailAccountId !== source\.emailAccountId\)/,
     },
   },
+  "app/api/team-comments/conversations/route.ts#POST": {
+    how: "shareConversation loads the user's own membership and requires the source account to be that membership's",
+    check:
+      /shareConversation\(\s*\{ userId: request\.auth\.userId, memberId \}/,
+    delegate: {
+      file: "utils/team-comments/conversations.ts",
+      check:
+        /export async function shareConversation\([\s\S]*?getOwnedMember\(actor\);\s*if \(member\.emailAccountId !== input\.source\.emailAccountId\)/,
+    },
+  },
   "app/api/user/email-accounts/[emailAccountId]/route.ts#DELETE": {
     how: "delegates to deleteEmailAccountAction, checked above",
     check: /deleteEmailAccountAction\(\{ emailAccountId \}\)/,
@@ -127,8 +137,13 @@ const ROUTE_ACCOUNT_INPUT = new RegExp(
     String.raw`${ACCOUNT_ID}\s*:\s*z\.`,
   ].join("|"),
 );
+const ROUTE_READS_BODY = /\b(?:request|req)\.json\(\)/;
+const SCHEMA_PARSE_CALL =
+  /(?:\b(\w+)|\))\s*\.(?:safeParse|parse|safeParseAsync|parseAsync)\(/g;
 const ACCOUNT_PATH_SEGMENT = /\[\w*[aA]ccountId\]/;
 const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+// Imports whose names are never schemas that could hold an account id.
+const NON_SCHEMA_MODULES = /^(?:zod|zod\/.*|@\/generated\/prisma.*)$/;
 const WEB_ROOT = path.resolve(import.meta.dirname, "..");
 
 describe("user-level handlers that take an account id", () => {
@@ -156,28 +171,109 @@ describe("user-level handlers that take an account id", () => {
   });
 });
 
+describe("schema reading", () => {
+  const schemas: Schemas = new Map([
+    [
+      "sourceSchema",
+      {
+        source: "z.object({ emailAccountId: id })",
+        imports: new Set<string>(),
+      },
+    ],
+    [
+      "importsAnUnknownSchema",
+      {
+        source: "z.object({ target: externalSchema })",
+        imports: new Set(["externalSchema"]),
+      },
+    ],
+  ]);
+
+  it("follows named schemas to an account id at any depth", () => {
+    expect(
+      inputSchemaText(
+        ".inputSchema(z.object({ source: sourceSchema })).action(",
+        schemas,
+        new Set(),
+      ),
+    ).toMatch(SCHEMA_ACCOUNT_KEY);
+  });
+
+  it("calls a schema unreadable when part of it comes from outside the actions", () => {
+    expect(
+      inputSchemaText(
+        ".inputSchema(importsAnUnknownSchema).action(",
+        schemas,
+        new Set(),
+      ),
+    ).toBeNull();
+  });
+
+  it("counts a route that parses an imported schema holding an account id", () => {
+    expect(
+      routeTakesAccountId(
+        "const body = sourceSchema.parse(await request.json());",
+        schemas,
+        new Set(["sourceSchema"]),
+      ),
+    ).toBe(true);
+  });
+
+  it("counts a route that reads its body without a schema it can read", () => {
+    expect(
+      routeTakesAccountId(
+        "const body = await request.json(); use(body.thing);",
+        schemas,
+        new Set(),
+      ),
+    ).toBe(true);
+    expect(
+      routeTakesAccountId(
+        "const body = externalSchema.parse(await request.json());",
+        schemas,
+        new Set(["externalSchema"]),
+      ),
+    ).toBe(true);
+  });
+
+  it("leaves a route alone whose body schema has no account id", () => {
+    expect(
+      routeTakesAccountId(
+        "const body = plainSchema.parse(await request.json());",
+        new Map([
+          [
+            "plainSchema",
+            {
+              source: "z.object({ name: z.string() })",
+              imports: new Set<string>(),
+            },
+          ],
+        ]),
+        new Set(),
+      ),
+    ).toBe(false);
+  });
+});
+
+type Schemas = Map<string, { source: string; imports: Set<string> }>;
+
 function findUserLevelHandlers() {
   const handlers: { key: string; source: string; takesAccountId: boolean }[] =
     [];
   const actionFiles = listFiles(path.join(WEB_ROOT, "utils/actions")).filter(
     (file) => file.endsWith(".ts") && !file.endsWith(".test.ts"),
   );
-  const schemas = new Map<string, string>();
-  for (const file of actionFiles) {
-    for (const declaration of topLevelDeclarations(
-      readFileSync(file, "utf8"),
-    )) {
-      if (/=\s*z\./.test(declaration.source))
-        schemas.set(declaration.name, declaration.source);
-    }
-  }
+  const schemas: Schemas = new Map();
+  for (const file of actionFiles)
+    addSchemas(schemas, readFileSync(file, "utf8"));
 
   for (const file of actionFiles) {
     const source = readFileSync(file, "utf8");
     if (!source.includes("actionClientUser")) continue;
+    const imports = importedNames(source);
     for (const declaration of topLevelDeclarations(source)) {
       if (!/=\s*actionClientUser\b/.test(declaration.source)) continue;
-      const schema = inputSchemaText(declaration.source, schemas);
+      const schema = inputSchemaText(declaration.source, schemas, imports);
       handlers.push({
         key: `${relative(file)}#${declaration.name}`,
         source: declaration.source,
@@ -195,6 +291,10 @@ function findUserLevelHandlers() {
     if (path.basename(file) !== "route.ts") continue;
     const source = readFileSync(file, "utf8");
     const declarations = topLevelDeclarations(source);
+    // The route's own schemas join the actions' for this file.
+    const routeSchemas: Schemas = new Map(schemas);
+    addSchemas(routeSchemas, source);
+    const imports = importedNames(source);
     for (const declaration of declarations) {
       if (!HTTP_METHODS.includes(declaration.name)) continue;
       if (!/=\s*withAuth\(/.test(declaration.source)) continue;
@@ -203,8 +303,8 @@ function findUserLevelHandlers() {
         key: `${relative(file)}#${declaration.name}`,
         source: reached,
         takesAccountId:
-          ROUTE_ACCOUNT_INPUT.test(reached) ||
-          ACCOUNT_PATH_SEGMENT.test(relative(file)),
+          ACCOUNT_PATH_SEGMENT.test(relative(file)) ||
+          routeTakesAccountId(reached, routeSchemas, imports),
       });
     }
   }
@@ -212,8 +312,34 @@ function findUserLevelHandlers() {
   return handlers;
 }
 
+function routeTakesAccountId(
+  handler: string,
+  schemas: Schemas,
+  imports: Set<string>,
+) {
+  if (ROUTE_ACCOUNT_INPUT.test(handler)) return true;
+  if (!ROUTE_READS_BODY.test(handler)) return false;
+  const parseCalls = [...handler.matchAll(SCHEMA_PARSE_CALL)].filter(
+    (match) => match[1] !== "JSON",
+  );
+  // A body read without a schema may hold anything.
+  if (!parseCalls.length) return true;
+  const parsedWith = parseCalls.flatMap((match) =>
+    match[1] ? [match[1]] : [],
+  );
+  // Schemas written inline are in the handler itself, read above.
+  return parsedWith.some((name) => {
+    const text = expandSchema(name, schemas, imports);
+    return text === null || SCHEMA_ACCOUNT_KEY.test(text);
+  });
+}
+
 /** The schema an action validates, with the named schemas it is built from. */
-function inputSchemaText(action: string, schemas: Map<string, string>) {
+function inputSchemaText(
+  action: string,
+  schemas: Schemas,
+  imports: Set<string>,
+) {
   const start = action.indexOf(".inputSchema(");
   if (start < 0) return "";
   const end = action.indexOf(".action(", start);
@@ -221,24 +347,77 @@ function inputSchemaText(action: string, schemas: Map<string, string>) {
     start + ".inputSchema(".length,
     end < 0 ? undefined : end,
   );
-  const named = /^\s*(\w+)\s*\)\s*$/.exec(expression)?.[1];
-  if (named && !schemas.has(named)) return null;
-  const seen = new Set<string>();
-  const expand = (text: string): string =>
-    text.replace(/\b\w+\b/g, (word) => {
-      const schema = schemas.get(word);
-      if (!schema || seen.has(word)) return word;
+  return expandText(expression, schemas, imports, new Set());
+}
+
+function expandSchema(name: string, schemas: Schemas, imports: Set<string>) {
+  return expandText(name, schemas, imports, new Set());
+}
+
+/**
+ * Replaces each named schema with its definition. Returns null when a part
+ * comes from a module this test does not read, which may hold anything.
+ */
+function expandText(
+  text: string,
+  schemas: Schemas,
+  imports: Set<string>,
+  seen: Set<string>,
+): string | null {
+  let unreadable = false;
+  const code = text.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+  const expanded = code.replace(/\b\w+\b/g, (word) => {
+    const schema = schemas.get(word);
+    if (schema) {
+      if (seen.has(word)) return word;
       seen.add(word);
-      return expand(schema);
-    });
-  return expand(expression);
+      const inner = expandText(schema.source, schemas, schema.imports, seen);
+      if (inner === null) unreadable = true;
+      return inner ?? word;
+    }
+    if (imports.has(word)) unreadable = true;
+    return word;
+  });
+  return unreadable ? null : expanded;
+}
+
+// `z.…`, or a schema derived from another (`commentInput.omit(…)`).
+const SCHEMA_DECLARATION =
+  /^[^=]*=\s*(?:z\s*\.|\w+\s*\.(?:omit|pick|extend|merge|partial|required|and|or|array|optional|nullable|refine|superRefine|transform)\()/;
+
+function addSchemas(schemas: Schemas, source: string) {
+  const imports = importedNames(source);
+  for (const declaration of topLevelDeclarations(source)) {
+    if (SCHEMA_DECLARATION.test(declaration.source))
+      schemas.set(declaration.name, { source: declaration.source, imports });
+  }
+}
+
+/** Names a file imports, except from modules that cannot hold a schema. */
+function importedNames(source: string) {
+  const names = new Set<string>();
+  for (const match of source.matchAll(
+    /import\s+(type\s+)?(?:(\w+)\s*,?\s*)?(?:\{([^}]*)\})?\s*from\s+["']([^"']+)["']/g,
+  )) {
+    const [, typeOnly, defaultName, named, module] = match;
+    if (typeOnly || NON_SCHEMA_MODULES.test(module)) continue;
+    if (defaultName) names.add(defaultName);
+    for (const part of named?.split(",") ?? []) {
+      const trimmed = part.trim();
+      if (!trimmed || trimmed.startsWith("type ")) continue;
+      names.add(trimmed.split(/\s+as\s+/).at(-1) ?? trimmed);
+    }
+  }
+  return names;
 }
 
 type Declaration = { name: string; source: string };
 
 function topLevelDeclarations(source: string): Declaration[] {
   return source
-    .split(/\n(?=(?:export )?(?:async )?(?:function|const|let|class) )/)
+    .split(
+      /\n(?=(?:export )?(?:async )?(?:function|const|let|class|type|interface) )/,
+    )
     .flatMap((part) => {
       const name =
         /^(?:export )?(?:async )?(?:function|const|let|class) (\w+)/.exec(
