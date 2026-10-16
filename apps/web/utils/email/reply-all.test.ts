@@ -599,6 +599,29 @@ describe("buildComposeReplyRecipients across the user's mailboxes (D5)", () => {
   });
 });
 
+describe("buildComposeReplyRecipients when only the user was addressed", () => {
+  it("promotes Cc to To when the user's other mailbox sent it only to the user", () => {
+    expect(
+      buildComposeReplyRecipients({
+        headers: {
+          from: "Me <me@gmail.com>",
+          to: "me@work.com",
+          cc: "Alex <alex@example.com>, sam@example.com, me@gmail.com",
+          subject: "Plans",
+          date: "2024-01-01",
+        },
+        sentFromUser: false,
+        replyAll: true,
+        ownEmails: ["me@work.com", "me@gmail.com"],
+      }),
+    ).toEqual({
+      to: "alex@example.com, sam@example.com",
+      cc: "",
+      bcc: "",
+    });
+  });
+});
+
 describe("hasReplyAllRecipients", () => {
   it("is false for a message only between the sender and the user", () => {
     expect(

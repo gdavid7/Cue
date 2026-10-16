@@ -96,6 +96,9 @@ export function buildComposeReplyRecipients({
         bcc: "",
       };
     }
+    // Only the user was on To, so the people copied become the recipients.
+    if (recipients.cc.length)
+      return { to: recipients.cc.join(", "), cc: "", bcc: "" };
   }
 
   return { to: recipients.to, cc: recipients.cc.join(", "), bcc: "" };
