@@ -1,6 +1,6 @@
 ---
 name: prisma
-description: How to use Prisma
+description: How to use Prisma 7, covering client and enum imports, queries, migrations and schema changes. Use when touching apps/web/prisma/schema.prisma, writing database queries or adding a migration.
 ---
 # Prisma Usage
 

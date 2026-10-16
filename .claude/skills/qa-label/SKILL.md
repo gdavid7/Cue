@@ -1,6 +1,6 @@
 ---
 name: qa-label
-description: Label a PR as ready for QA so the QA server picks it up automatically
+description: Label a PR ready-for-qa so a QA server runs browser tests on it. Use only where that QA server exists; for this fork, dispatch CI browser QA instead (docs/dev-infra/ci-browser-qa.md).
 ---
 
 To mark a PR ready for QA, run: `gh pr edit <PR_NUMBER> --add-label "ready-for-qa"`

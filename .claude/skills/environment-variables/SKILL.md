@@ -1,6 +1,6 @@
 ---
 name: environment-variables
-description: Add environment variable
+description: Add a new environment variable across .env.example, apps/web/env.ts and turbo.json. Use when a change needs a new env var or a new NEXT_PUBLIC_ flag.
 ---
 # Environment Variables
 

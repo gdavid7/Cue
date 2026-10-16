@@ -1,0 +1,33 @@
+name: Agent tooling
+
+on:
+  push:
+    paths:
+      - ".claude/skills/**"
+      - ".claude/hooks/**"
+      - "scripts/check-skill-links.mjs"
+      - ".github/workflows/skill-links.yml"
+  pull_request:
+    paths:
+      - ".claude/skills/**"
+      - ".claude/hooks/**"
+      - "scripts/check-skill-links.mjs"
+      - ".github/workflows/skill-links.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Skill links and agent hooks
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Relative links in .claude/skills resolve
+        run: node scripts/check-skill-links.mjs
+      - name: Bash guard hook allows and denies the right commands
+        run: node --test .claude/hooks/guard-bash.test.mjs

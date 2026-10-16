@@ -1,6 +1,6 @@
 ---
 name: ui-components
-description: UI component and styling guidelines using Shadcn UI, Radix UI, and Tailwind
+description: Shadcn UI, Radix and Tailwind conventions for components and styling. Use when building or changing React UI in apps/web.
 ---
 # UI Components and Styling
 

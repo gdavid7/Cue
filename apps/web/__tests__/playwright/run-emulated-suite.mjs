@@ -16,6 +16,7 @@ import {
 import {
   batchPlaywrightTargets,
   expandPlaywrightTargets,
+  getFeatureGroupTargetPaths,
 } from "../../utils/playwright/emulated-suite-targets.mjs";
 const listTargets = process.argv.includes("--list-targets");
 const listBatches = process.argv.includes("--list-batches");
@@ -229,7 +230,12 @@ function runPlaywright(args, extraEnv) {
 function getRequestedPlaywrightPaths(args) {
   return args
     .filter((argument) => argument !== "--")
-    .map((argument) => {
+    .flatMap((argument) => {
+      const groupPaths = getFeatureGroupTargetPaths(argument);
+      // An area or spec of the same name wins, so existing commands keep their meaning.
+      if (groupPaths && !existsSync(getPlaywrightTargetPath(argument))) {
+        return groupPaths;
+      }
       const normalizedArgument = argument
         .replace(/^\.\//, "")
         .replace(/^apps\/web\//, "")
@@ -244,7 +250,7 @@ function getRequestedPlaywrightPaths(args) {
         !isRequestedPlaywrightTarget(resolvedPath)
       ) {
         throw new Error(
-          `Unknown emulated Playwright target: ${argument}. Use an area such as "mail" or a spec path relative to __tests__/playwright/emulated.`,
+          `Unknown emulated Playwright target: ${argument}. Use an area such as "mail", a feature group such as "mail-triage", or a spec path relative to __tests__/playwright/emulated.`,
         );
       }
 

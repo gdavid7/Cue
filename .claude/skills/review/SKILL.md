@@ -1,6 +1,6 @@
 ---
 name: review
-description: Review code changes, auto-fix safe issues, and report bugs
+description: Review the current changes, auto-fix safe obvious issues and report real bugs for confirmation. Use when the user runs /review on their working changes.
 disable-model-invocation: true
 ---
 

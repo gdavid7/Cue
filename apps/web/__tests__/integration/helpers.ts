@@ -151,6 +151,29 @@ export async function createGmailTestHarness({
     rootUrl: emulator.url,
   });
 
+  // Batch reads go through fetch to GOOGLE_BASE_URL, which env fixes at import,
+  // so without this they reach real Gmail with the emulator token and get 401.
+  const realFetch = globalThis.fetch;
+  const gmailBatchUrl = "https://gmail.googleapis.com/batch/";
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+    if (!url.startsWith(gmailBatchUrl)) return realFetch(input, init);
+    const rewritten = url.replace(gmailBatchUrl, `${emulator.url}/batch/`);
+    return input instanceof Request
+      ? realFetch(new Request(rewritten, input), init)
+      : realFetch(rewritten, init);
+  }) as typeof fetch;
+  const closeEmulator = emulator.close.bind(emulator);
+  emulator.close = async () => {
+    globalThis.fetch = realFetch;
+    await closeEmulator();
+  };
+
   const logger = createTestLogger();
   const provider = new GmailProvider(gmailClient, logger, "test-account-id");
 

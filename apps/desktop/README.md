@@ -52,7 +52,7 @@ Installers land in `apps/desktop/release/`. macOS packaging requires a Developer
 
 ## Release
 
-Push a `desktop-v*` tag to build and publish a release, or run the [Desktop Release workflow](../../.github/workflows/desktop-release.yml) manually with optional publishing. It packages macOS (DMG/ZIP) and Windows (NSIS) for arm64 and x64.
+This fork has no desktop release workflow (the upstream one was removed); build installers locally with `pnpm desktop:dist`. Upstream packages macOS (DMG/ZIP) and Windows (NSIS) for arm64 and x64 from a `desktop-v*` tag.
 
 The macOS release requires these GitHub secrets:
 

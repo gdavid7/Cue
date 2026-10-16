@@ -1,0 +1,26 @@
+# Founder-gated areas (.claude/skills/agent-team/SKILL.md, "Founder gates").
+# Later lines override earlier ones; a pattern with no owner clears ownership.
+# Review is only required once branch protection turns on "Require review
+# from Code Owners" (docs/dev-infra/PLAN.md, item 6).
+
+# Model-facing surface: prompts are built inline across utils/ai, and the
+# assistant's tool definitions and descriptions live there too.
+/apps/web/utils/ai/ @gdavid7
+/apps/web/utils/ai/**/*.test.ts
+
+# Environment, CI and agent permissions
+/apps/web/env.ts @gdavid7
+/.github/workflows/ @gdavid7
+/.github/CODEOWNERS @gdavid7
+/.claude/settings.json @gdavid7
+/.claude/hooks/ @gdavid7
+/scripts/agent-run.sh @gdavid7
+
+# Database schema
+/apps/web/prisma/schema.prisma @gdavid7
+
+# User-facing copy: landing, pricing and upgrade pages, changelog, LLM summary
+/apps/web/app/(landing)/ @gdavid7
+/apps/web/app/(app)/premium/ @gdavid7
+/apps/web/app/llms.txt/ @gdavid7
+/docs/changelog-entries/ @gdavid7

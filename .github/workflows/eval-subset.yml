@@ -1,0 +1,145 @@
+name: Eval Subset
+
+# A small, single-model AI eval run when prompts, tool definitions or evals
+# change. The model under test is Claude (ANTHROPIC_API_KEY) and the judge is
+# Gemini (GOOGLE_API_KEY); both are repository secrets the founder adds under
+# Settings -> Secrets and variables -> Actions (docs/dev-infra/PLAN.md, item 1).
+#
+# Paid runs only start for this repository's own collaborators: pushes need
+# write access, pull requests must come from a branch here (never a fork) by an
+# OWNER, MEMBER or COLLABORATOR. This workflow never uses pull_request_target.
+
+on:
+  # Agent branches get CI from their pull request; pushing them too ran it twice.
+  push:
+    branches: [claude/upbeat-sagan-6c5ed8, production]
+    paths:
+      - "apps/web/utils/ai/**"
+      - "apps/web/utils/llms/**"
+      - "apps/web/__tests__/eval/**"
+      - "!apps/web/utils/ai/**/*.test.ts"
+      - "!apps/web/utils/llms/**/*.test.ts"
+      - ".github/workflows/eval-subset.yml"
+  pull_request:
+    branches: [claude/upbeat-sagan-6c5ed8, production, "claude/**"]
+    paths:
+      - "apps/web/utils/ai/**"
+      - "apps/web/utils/llms/**"
+      - "apps/web/__tests__/eval/**"
+      - "!apps/web/utils/ai/**/*.test.ts"
+      - "!apps/web/utils/llms/**/*.test.ts"
+      - ".github/workflows/eval-subset.yml"
+  workflow_dispatch:
+    inputs:
+      evals:
+        description: Eval files under apps/web/__tests__/eval to add to the default subset, space-separated (e.g. draft-reply.test.ts).
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-subset-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evals:
+    name: Eval subset (Claude, Gemini judge)
+    if: >-
+      github.repository == 'gdavid7/Cue' &&
+      (github.event_name != 'pull_request' ||
+        (github.event.pull_request.head.repo.full_name == github.repository &&
+          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Require the eval keys
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          missing=()
+          [[ -n "$ANTHROPIC_API_KEY" ]] || missing+=(ANTHROPIC_API_KEY)
+          [[ -n "$GOOGLE_API_KEY" ]] || missing+=(GOOGLE_API_KEY)
+          if ((${#missing[@]})); then
+            echo "::error::Missing repository secret(s): ${missing[*]}. Add them under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      # Checkout's recursive auth cleanup fails on this repository's unmapped gitlink.
+      - name: Remove checkout credentials
+        run: git config --local --unset-all "http.${GITHUB_SERVER_URL}/.extraheader"
+
+      - name: Select evals
+        id: select
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          REQUESTED: ${{ inputs.evals }}
+        run: |
+          set -euo pipefail
+          # Core rule choice, prompt-injection paths and the assistant's core tools.
+          selected=(choose-rule.test.ts prompt-security-core-paths.test.ts assistant-chat-core-tools.test.ts)
+          read -ra requested <<< "${REQUESTED:-}"
+          selected+=("${requested[@]}")
+          if [[ -n "${BASE_SHA:-}" && "$BASE_SHA" != "0000000000000000000000000000000000000000" ]] &&
+            git fetch --no-tags --depth=1 origin "$BASE_SHA" 2>/dev/null; then
+            while IFS= read -r file; do
+              selected+=("$(basename "$file")")
+            done < <(git diff --name-only --diff-filter=AM "$BASE_SHA" "$GITHUB_SHA" -- 'apps/web/__tests__/eval/*.test.ts')
+          fi
+          files=()
+          for name in $(printf '%s\n' "${selected[@]}" | awk 'NF && !seen[$0]++' | head -6); do
+            path="__tests__/eval/$name"
+            if [[ -f "apps/web/$path" ]]; then files+=("$path"); else echo "::warning::Skipping unknown eval $name"; fi
+          done
+          echo "Running: ${files[*]}"
+          echo "files=${files[*]}" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: bash scripts/pnpm-install-without-desktop.sh --frozen-lockfile
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+
+      - name: Run evals
+        working-directory: apps/web
+        env:
+          FILES: ${{ steps.select.outputs.files }}
+          RUN_AI_TESTS: "true"
+          EVAL_REPORT_PATH: eval-results/report.md
+          DEFAULT_LLMS: anthropic:claude-sonnet-5-5
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVAL_JUDGE_PROVIDER: google
+          EVAL_JUDGE_MODEL: gemini-3-flash
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          # Fixed values for env validation only; evals don't reach these.
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          AUTH_SECRET: test-secret
+          GOOGLE_CLIENT_ID: test
+          GOOGLE_CLIENT_SECRET: test
+          MICROSOFT_CLIENT_ID: test
+          MICROSOFT_CLIENT_SECRET: test
+          GOOGLE_PUBSUB_TOPIC_NAME: test
+          EMAIL_ENCRYPT_SECRET: test-encrypt-secret
+          EMAIL_ENCRYPT_SALT: test-encrypt-salt
+          INTERNAL_API_KEY: test
+          NEXT_PUBLIC_BASE_URL: https://app.example.com
+        run: |
+          read -ra files <<< "$FILES"
+          pnpm exec vitest --run "${files[@]}"
+
+      - name: Upload eval report
+        if: always() && hashFiles('apps/web/eval-results/**') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-subset-${{ github.run_id }}
+          path: apps/web/eval-results/
+          retention-days: 14

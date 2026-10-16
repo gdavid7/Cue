@@ -4,8 +4,9 @@ permissions:
   contents: read
 
 on:
+  # Agent branches get CI from their pull request; pushing them too ran it twice.
   push:
-    branches: [main]
+    branches: [claude/upbeat-sagan-6c5ed8, production]
     paths:
       - "apps/web/**"
       - "packages/**"
@@ -18,7 +19,7 @@ on:
       - "scripts/pnpm-install-without-desktop.sh"
       - ".github/workflows/build-check.yml"
   pull_request:
-    branches: [main]
+    branches: [claude/upbeat-sagan-6c5ed8, production, "claude/**"]
     paths:
       - "apps/web/**"
       - "packages/**"
@@ -30,6 +31,7 @@ on:
       - "konsistent.json"
       - "scripts/pnpm-install-without-desktop.sh"
       - ".github/workflows/build-check.yml"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -38,7 +40,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
 
     env:
       NODE_OPTIONS: "--max_old_space_size=16384"

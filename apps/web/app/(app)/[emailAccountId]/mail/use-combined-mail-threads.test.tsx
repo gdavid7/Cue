@@ -1,8 +1,9 @@
 /** @vitest-environment jsdom */
 
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { SWRConfig } from "swr";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MailClient } from "@inboxzero/mail-core/engine";
 import {
   mailPredicateSchema,
@@ -31,7 +32,19 @@ const OUTLOOK = {
   provider: "microsoft",
 };
 
+// Each fake engine's live mailbox subscriptions, so a test can't leave a
+// mounted hook behind to render after its jsdom environment is torn down.
+const liveSubscriptions = new Set<Set<() => void>>();
+
 describe("useCombinedMailThreads", () => {
+  // Vitest globals are off, so Testing Library doesn't unmount on its own.
+  afterEach(() => {
+    cleanup();
+    const leaked = [...liveSubscriptions].some((set) => set.size > 0);
+    liveSubscriptions.clear();
+    expect(leaked).toBe(false);
+  });
+
   it("starts the first sync for an included account this browser has never synced, and shows its mail once it lands", async () => {
     const engine = fakeEngine(
       mailboxSnapshot({
@@ -233,6 +246,7 @@ function fakeEngine(
 ) {
   let snapshot = initial;
   const listeners = new Set<() => void>();
+  liveSubscriptions.add(listeners);
   const client = {
     observeMailbox: vi.fn(() => ({
       getSnapshot: () => snapshot,
@@ -259,9 +273,11 @@ function fakeEngine(
     },
     wrapper({ children }: { children: ReactNode }) {
       return (
-        <MailEngineProvider client={client as unknown as MailClient}>
-          {children}
-        </MailEngineProvider>
+        <SWRConfig value={{ provider: () => new Map() }}>
+          <MailEngineProvider client={client as unknown as MailClient}>
+            {children}
+          </MailEngineProvider>
+        </SWRConfig>
       );
     },
   };
