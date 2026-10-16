@@ -395,6 +395,24 @@ describe("Chat account", () => {
     );
   });
 
+  it("waits for another account's details before showing its conversation", () => {
+    // A reload of ?chatAccountId=B: the accounts list is still loading.
+    accountChat.chatAccount = null;
+    accountChat.switchedAccount = true;
+    chatState.messages = [
+      { id: "m1", role: "user", parts: [{ type: "text", text: "Hi" }] },
+    ];
+    render(
+      <EmailAccountPreviewProvider>
+        <Chat open />
+      </EmailAccountPreviewProvider>,
+    );
+
+    // The page's account must never stand in for the chat's.
+    expect(screen.queryByTestId("messages")).toBeNull();
+    expect(screen.getByRole("status", { name: "Loading chat" })).toBeTruthy();
+  });
+
   it("keeps a disconnected account's chat read-only with a way to reconnect", () => {
     accountChat.chatAccount = {
       id: "email-account-2",

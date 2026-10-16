@@ -48,6 +48,7 @@ const {
   accountState: {
     emailAccountId: "account-a",
     disconnectedB: null as string | null,
+    accountsLoading: false,
   },
   chatState: {
     id: "new-chat-id",
@@ -152,20 +153,22 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
 
 vi.mock("@/hooks/useAccounts", () => ({
   useAccounts: () => ({
-    data: {
-      emailAccounts: [
-        {
-          id: "account-a",
-          email: "a@example.com",
-          account: { disconnectedAt: null },
+    data: accountState.accountsLoading
+      ? undefined
+      : {
+          emailAccounts: [
+            {
+              id: "account-a",
+              email: "a@example.com",
+              account: { disconnectedAt: null },
+            },
+            {
+              id: "account-b",
+              email: "b@example.com",
+              account: { disconnectedAt: accountState.disconnectedB },
+            },
+          ],
         },
-        {
-          id: "account-b",
-          email: "b@example.com",
-          account: { disconnectedAt: accountState.disconnectedB },
-        },
-      ],
-    },
   }),
 }));
 
@@ -199,6 +202,7 @@ describe("ChatProvider", () => {
 
     accountState.emailAccountId = "account-a";
     accountState.disconnectedB = null;
+    accountState.accountsLoading = false;
     chatState.id = "new-chat-id";
     chatState.status = "ready";
     chatState.messages = [];
@@ -828,6 +832,7 @@ describe("ChatProvider across accounts", () => {
     latestContext = undefined;
     accountState.emailAccountId = "account-a";
     accountState.disconnectedB = null;
+    accountState.accountsLoading = false;
     queryState.initialChatId = null;
     queryState.initial = {};
     queryState.set = {};
@@ -912,6 +917,19 @@ describe("ChatProvider across accounts", () => {
       latestContext?.chatId,
       "account-b",
     );
+  });
+
+  it("keeps a reloaded chat in its account while the accounts list loads", async () => {
+    accountState.accountsLoading = true;
+    queryState.initialChatId = "chat-from-b";
+    queryState.initial = { chatAccountId: "account-b" };
+    renderWithProvider(<Consumer />);
+
+    // Known to be another account's, though its row hasn't loaded.
+    expect(latestContext?.switchedAccount).toBe(true);
+    expect(latestContext?.chatAccount).toBeNull();
+    const body = await sendThroughTransport();
+    expect(body.headers[EMAIL_ACCOUNT_HEADER.toLowerCase()]).toBe("account-b");
   });
 
   it("reopens a chat from another account after a reload", () => {
