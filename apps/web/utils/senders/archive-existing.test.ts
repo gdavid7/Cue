@@ -1,17 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestLogger } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
+import { GmailCallDeferredError } from "@/utils/gmail/quota";
+import { publishToQstashAt } from "@/utils/upstash";
 import {
+  ARCHIVE_EXISTING_RESUME_PATH,
   INLINE_ARCHIVE_EXISTING_MESSAGE_LIMIT,
   archiveExistingSenderMail,
+  runQueuedSenderArchive,
 } from "./archive-existing";
 
 vi.mock("@/utils/prisma");
+vi.mock("@/utils/upstash", () => ({
+  publishToQstashAt: vi.fn().mockResolvedValue(true),
+}));
 
 const logger = createTestLogger();
 
 function provider() {
   return {
+    name: "google",
     bulkArchiveSenderOrThrow: vi.fn().mockResolvedValue(0),
   };
 }
@@ -96,5 +104,91 @@ describe("archiveExistingSenderMail", () => {
         logger,
       }),
     ).rejects.toThrow("later");
+  });
+});
+
+describe("archiveExistingSenderMail when the Gmail quota gate defers it", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    prisma.emailMessage.count.mockResolvedValue(0 as never);
+  });
+
+  it("schedules the queued archive again after the deferral passes", async () => {
+    const emailProvider = provider();
+    emailProvider.bulkArchiveSenderOrThrow.mockRejectedValue(
+      new GmailCallDeferredError(30_000, "background"),
+    );
+    const before = Date.now();
+
+    await archiveExistingSenderMail({
+      emailAccountId: "account-1",
+      emailProvider: emailProvider as never,
+      senderEmail: "news@example.com",
+      ownerEmail: "user@example.com",
+      logger,
+    });
+
+    await vi.waitFor(() => {
+      expect(publishToQstashAt).toHaveBeenCalledTimes(1);
+    });
+    const [{ path, body, notBefore }] =
+      vi.mocked(publishToQstashAt).mock.calls[0];
+    expect(path).toBe(ARCHIVE_EXISTING_RESUME_PATH);
+    expect(body).toEqual({
+      emailAccountId: "account-1",
+      provider: "google",
+      senderEmail: "news@example.com",
+      ownerEmail: "user@example.com",
+      startedAt: expect.any(Number),
+      deferrals: 1,
+    });
+    expect((body as { startedAt: number }).startedAt).toBeGreaterThanOrEqual(
+      before,
+    );
+    expect(notBefore.getTime()).toBeGreaterThanOrEqual(before + 30_000);
+  });
+
+  it("keeps the sender's address out of the deduplication id and tells runs apart", async () => {
+    const emailProvider = provider();
+    emailProvider.bulkArchiveSenderOrThrow.mockRejectedValue(
+      new GmailCallDeferredError(30_000, "background"),
+    );
+    const run = {
+      emailAccountId: "account-1",
+      emailProvider: emailProvider as never,
+      senderEmail: "news@example.com",
+      ownerEmail: "user@example.com",
+      logger,
+      deferrals: 0,
+    };
+
+    await runQueuedSenderArchive({ ...run, startedAt: 1_700_000_000_000 });
+    await runQueuedSenderArchive({ ...run, startedAt: 1_700_000_500_000 });
+
+    const [first, second] = vi
+      .mocked(publishToQstashAt)
+      .mock.calls.map(([options]) => options.deduplicationId);
+    expect(first).not.toContain("news@example.com");
+    expect(first).not.toBe(second);
+  });
+
+  it("gives up after repeated deferrals", async () => {
+    const emailProvider = provider();
+    emailProvider.bulkArchiveSenderOrThrow.mockRejectedValue(
+      new GmailCallDeferredError(30_000, "background"),
+    );
+
+    await runQueuedSenderArchive({
+      emailAccountId: "account-1",
+      emailProvider: emailProvider as never,
+      senderEmail: "news@example.com",
+      ownerEmail: "user@example.com",
+      logger,
+      startedAt: 1_700_000_000_000,
+      deferrals: 5,
+    });
+
+    expect(emailProvider.bulkArchiveSenderOrThrow).toHaveBeenCalled();
+    expect(publishToQstashAt).not.toHaveBeenCalled();
   });
 });
