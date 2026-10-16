@@ -56,7 +56,10 @@ import {
 import { getAssistantChatProvider } from "./chat-provider-shared";
 import { LlmUseCase } from "@/utils/llms/use-cases";
 import { isIntegrationActionEnabledForUserId } from "@/utils/integration-action.server";
-import { trimStaleToolResults } from "@/utils/ai/assistant/trim-stale-tool-results";
+import {
+  projectEarlierTurnToolResults,
+  trimStaleToolResults,
+} from "@/utils/ai/assistant/trim-stale-tool-results";
 import { withChatToolRuntime } from "@/utils/ai/assistant/chat-tool-runtime";
 import { withChatAccountScope } from "@/utils/ai/assistant/chat-other-accounts";
 import { getLowThinkingStepOptions } from "@/utils/llms/model";
@@ -341,7 +344,7 @@ export async function aiProcessAssistantChat({
   const { messages: cacheOptimizedMessages, stablePrefixEndIndex } =
     buildCacheOptimizedMessages({
       system,
-      conversationMessages: messages,
+      conversationMessages: projectEarlierTurnToolResults(messages),
       contextMessages,
     });
 

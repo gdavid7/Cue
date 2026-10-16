@@ -3,6 +3,7 @@ import {
   getToolOutputText,
   truncatePromptContent,
 } from "@/utils/ai/assistant/compact";
+import { toSearchInboxModelValue } from "@/utils/ai/assistant/search-inbox-model-output";
 
 export const RECENT_TOOL_RESULTS_TO_KEEP = 10;
 const UNTRIMMED_RESULT_CHAR_BUDGET = 200_000;
@@ -47,6 +48,36 @@ export function trimStaleToolResults(messages: ModelMessage[]) {
   });
 }
 
+// History is rebuilt from the stored UI messages, which hold each tool's full
+// output, so earlier turns' results get the same model view the live run gave
+// them through the tool's toModelOutput.
+export function projectEarlierTurnToolResults(messages: ModelMessage[]) {
+  const latestUserIndex = messages.findLastIndex(
+    (message) => message.role === "user",
+  );
+
+  return messages.map((message, index): ModelMessage => {
+    if (index > latestUserIndex || message.role !== "tool") return message;
+
+    return {
+      ...message,
+      content: message.content.map((part) =>
+        part.type === "tool-result" ? projectEarlierTurnResult(part) : part,
+      ),
+    };
+  });
+}
+
+function projectEarlierTurnResult(part: ToolResultPart): ToolResultPart {
+  const project = MODEL_OUTPUT_PROJECTIONS[part.toolName];
+  if (!project || part.output.type !== "json") return part;
+
+  return {
+    ...part,
+    output: { ...part.output, value: project(part.output.value) },
+  };
+}
+
 function isTrimmable(part: ToolResultPart) {
   const { output } = part;
   const canShorten =
@@ -82,6 +113,13 @@ function trimOutput(
     value: { ...projected, trimmedForContext: TRIMMED_NOTE },
   };
 }
+
+const MODEL_OUTPUT_PROJECTIONS: Record<
+  string,
+  (value: JSONValue) => JSONValue
+> = {
+  searchInbox: toSearchInboxModelValue,
+};
 
 const STALE_RESULT_PROJECTIONS: Record<
   string,
