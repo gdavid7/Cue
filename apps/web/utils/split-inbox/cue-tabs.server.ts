@@ -10,7 +10,10 @@ import { ONBOARDING_PROCESS_EMAILS_COUNT } from "@/utils/config";
 import { SafeError } from "@/utils/error";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
-import { CONVERSATION_STATUS_TYPES } from "@/utils/reply-tracker/conversation-status-config";
+import {
+  CONVERSATION_STATUS_TYPES,
+  isConversationStatusType,
+} from "@/utils/reply-tracker/conversation-status-config";
 import { getRuleConfig } from "@/utils/rule/consts";
 import { MAX_MAIL_SPLITS } from "@/utils/split-inbox/split-constants";
 import {
@@ -74,8 +77,10 @@ export async function setUpCueSorting({
       ],
     },
     select: {
+      id: true,
       name: true,
       systemType: true,
+      enabled: true,
       actions: { select: { id: true, type: true, label: true } },
     },
   });
@@ -133,11 +138,30 @@ export async function setUpCueSorting({
     }
   }
 
-  // New rules only sort mail as it arrives, so their tabs would sit empty
-  // until then. Sorting the latest inbox mail with just those rules fills them
-  // now, without re-running the person's other rules on old mail.
-  if (created.length) {
-    const ruleIds = created.map((rule) => rule.id);
+  // Rules only sort mail as it arrives, so Needs reply and the tabs would sit
+  // empty until then. Sorting the latest inbox mail with just the new rules
+  // fills them now, without re-running the person's other rules on old mail.
+  // A mailbox Cue has never sorted also gets the reply tracking rules it was
+  // created with, as long as they are on and have no actions, so the sort
+  // changes nothing in the mailbox.
+  const neverSorted = !(await prisma.executedRule.findFirst({
+    where: { emailAccountId },
+    select: { id: true },
+  }));
+  const ruleIds = [
+    ...(neverSorted
+      ? existingRules
+          .filter(
+            (rule) =>
+              isConversationStatusType(rule.systemType) &&
+              rule.enabled &&
+              !rule.actions.length,
+          )
+          .map((rule) => rule.id)
+      : []),
+    ...created.map((rule) => rule.id),
+  ];
+  if (ruleIds.length) {
     after(async () => {
       const emailAccount = await getEmailAccountForRuleExecution({
         emailAccountId,

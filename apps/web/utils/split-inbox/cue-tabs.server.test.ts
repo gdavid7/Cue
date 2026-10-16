@@ -60,6 +60,8 @@ describe("setUpCueSorting", () => {
     vi.clearAllMocks();
     afterCallbacks.length = 0;
     prisma.rule.findMany.mockResolvedValue([]);
+    // Most cases are accounts Cue has already sorted.
+    prisma.executedRule.findFirst.mockResolvedValue({ id: "run" } as never);
     prisma.rule.createManyAndReturn.mockImplementation((async (args: {
       data: { systemType: SystemType }[];
     }) =>
@@ -230,6 +232,66 @@ describe("setUpCueSorting", () => {
           `new-${SystemType.AWAITING_REPLY}`,
           `new-${SystemType.FYI}`,
           `new-${SystemType.ACTIONED}`,
+        ],
+      }),
+    );
+  });
+
+  it("sorts a never-sorted mailbox with the reply tracking rules it started with", async () => {
+    prisma.executedRule.findFirst.mockResolvedValue(null);
+    prisma.rule.findMany.mockResolvedValue(
+      REPLY_TRACKING_RULES.map((systemType) =>
+        existingRule(systemType),
+      ) as never,
+    );
+
+    await setUpCueSorting(WITHOUT_TABS);
+    for (const callback of afterCallbacks) await callback();
+
+    expect(prisma.rule.createManyAndReturn).not.toHaveBeenCalled();
+    expect(afterCallbacks).toHaveLength(1);
+    expect(bulkProcessInboxEmails).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ruleIds: REPLY_TRACKING_RULES.map((systemType) => `rule-${systemType}`),
+      }),
+    );
+  });
+
+  it("doesn't sort again a mailbox Cue has already sorted", async () => {
+    prisma.rule.findMany.mockResolvedValue(
+      REPLY_TRACKING_RULES.map((systemType) =>
+        existingRule(systemType),
+      ) as never,
+    );
+
+    await setUpCueSorting(WITHOUT_TABS);
+
+    expect(afterCallbacks).toHaveLength(0);
+  });
+
+  it("leaves disabled rules and rules with actions out of a first sort", async () => {
+    prisma.executedRule.findFirst.mockResolvedValue(null);
+    prisma.rule.findMany.mockResolvedValue(
+      REPLY_TRACKING_RULES.map((systemType) => {
+        if (systemType === SystemType.TO_REPLY)
+          return { ...existingRule(systemType), enabled: false };
+        if (systemType === SystemType.FYI)
+          return {
+            ...existingRule(systemType),
+            actions: [{ id: "archive", type: ActionType.ARCHIVE, label: null }],
+          };
+        return existingRule(systemType);
+      }) as never,
+    );
+
+    await setUpCueSorting(WITHOUT_TABS);
+    for (const callback of afterCallbacks) await callback();
+
+    expect(bulkProcessInboxEmails).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ruleIds: [
+          `rule-${SystemType.AWAITING_REPLY}`,
+          `rule-${SystemType.ACTIONED}`,
         ],
       }),
     );
