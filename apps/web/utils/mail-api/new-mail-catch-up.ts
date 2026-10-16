@@ -1,4 +1,4 @@
-import type { ProviderChange } from "@inboxzero/mail-core/sync";
+import type { SyncReadResult } from "@inboxzero/mail-core/ports/mailbox-source";
 import type { Logger } from "@/utils/logger";
 import { nudgeGmailHistoryCatchUp } from "@/utils/webhook/google/history-catch-up";
 
@@ -16,13 +16,13 @@ export async function nudgeCatchUpForNewGmail({
   logger,
 }: {
   emailAccountId: string;
-  results: ReadonlyArray<{ page?: { changes: ProviderChange[] } }>;
+  results: ReadonlyArray<SyncReadResult>;
   logger: Logger;
 }) {
   const newMailAfter = Date.now() - NEW_MAIL_WINDOW_MS;
   let newestHistoryId: bigint | null = null;
-  for (const change of results.flatMap(
-    (result) => result.page?.changes ?? [],
+  for (const change of results.flatMap((result) =>
+    result.status === "page" ? result.page.changes : [],
   )) {
     if (change.kind !== "message_patch") continue;
     const version = change.reference.version;

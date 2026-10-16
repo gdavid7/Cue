@@ -22,7 +22,7 @@ describe("nudgeCatchUpForNewGmail", () => {
           patch({ version: "1200", roles: ["inbox"] }),
           patch({ version: "1500", roles: ["inbox"] }),
         ]),
-        { status: "reset_required" },
+        { status: "reset_required", scopeId: "primary" },
       ],
       logger,
     });
@@ -56,7 +56,7 @@ describe("nudgeCatchUpForNewGmail", () => {
 });
 
 function page(changes: ReturnType<typeof patch>[]) {
-  return { status: "page", page: { changes } } as const;
+  return { status: "page", page: { changes } } as any;
 }
 
 function patch({
