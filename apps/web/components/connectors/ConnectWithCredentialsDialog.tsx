@@ -1,8 +1,9 @@
 "use client";
 
 import { useAction } from "next-safe-action/hooks";
+import { useState } from "react";
 import { useForm } from "react-hook-form";
-import { toastError, toastSuccess } from "@/components/Toast";
+import { toastSuccess } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,7 +26,7 @@ type CredentialField = NonNullable<
 /**
  * Connects an app that takes a key instead of a sign-in page, such as Canvas
  * with a school's address and a personal access token. The app checks the key
- * before anything is saved.
+ * before anything is saved; why it didn't take shows in the form, next to it.
  */
 export function ConnectWithCredentialsDialog({
   open,
@@ -34,6 +35,7 @@ export function ConnectWithCredentialsDialog({
   integration,
   displayName,
   fields,
+  reconnect = false,
   onConnected,
 }: {
   open: boolean;
@@ -42,34 +44,48 @@ export function ConnectWithCredentialsDialog({
   integration: string;
   displayName: string;
   fields: CredentialField[];
+  reconnect?: boolean;
   onConnected: () => void;
 }) {
   const { register, handleSubmit, reset } = useForm<Record<string, string>>();
+  const [error, setError] = useState<string | null>(null);
   const { executeAsync, isExecuting } = useAction(
     connectWithCredentialsAction.bind(null, emailAccountId),
   );
 
   const submit = handleSubmit(async (credentials) => {
+    setError(null);
     const result = await executeAsync({ integration, credentials });
     if (result?.serverError || result?.validationErrors) {
-      toastError({
-        description: getActionErrorMessage(result, {
-          prefix: `Couldn't connect ${displayName}`,
+      setError(
+        getActionErrorMessage(result, {
+          fallback: `Couldn't connect ${displayName}`,
         }),
-      });
+      );
       return;
     }
-    toastSuccess({ description: `${displayName} connected` });
+    const name = result?.data?.name;
+    toastSuccess({
+      description: name ? `Connected as ${name}` : `${displayName} connected`,
+    });
     reset();
     onOpenChange(false);
     onConnected();
   });
 
   return (
-    <Dialog onOpenChange={onOpenChange} open={open}>
+    <Dialog
+      onOpenChange={(next) => {
+        if (!next) setError(null);
+        onOpenChange(next);
+      }}
+      open={open}
+    >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Connect {displayName}</DialogTitle>
+          <DialogTitle>
+            {reconnect ? "Reconnect" : "Connect"} {displayName}
+          </DialogTitle>
           <DialogDescription>
             Cue reads {displayName} so related items show up next to your email.
             It never posts or changes anything there.
@@ -91,6 +107,11 @@ export function ConnectWithCredentialsDialog({
               </p>
             </div>
           ))}
+          {error ? (
+            <p className="text-destructive text-sm" role="alert">
+              {error}
+            </p>
+          ) : null}
           <DialogFooter>
             <Button loading={isExecuting} type="submit">
               Connect
