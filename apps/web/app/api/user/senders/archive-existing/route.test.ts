@@ -12,8 +12,14 @@ vi.mock("@/utils/middleware", async () => {
   >("@/__tests__/helpers");
   return createWithErrorTestMiddleware();
 });
+// Stands in for QStash signature or internal key verification.
 vi.mock("@/utils/qstash", () => ({
-  withQstashOrInternal: (handler: unknown) => handler,
+  withQstashOrInternal:
+    (handler: (...args: unknown[]) => unknown) =>
+    (request: Request, ...rest: unknown[]) =>
+      request.headers.get("x-test-verified")
+        ? handler(request, ...rest)
+        : new Response("Unauthorized", { status: 401 }),
 }));
 vi.mock("@/utils/email/provider", () => ({
   createEmailProvider: vi.fn().mockResolvedValue({ name: "google" }),
@@ -25,13 +31,12 @@ vi.mock("@/utils/senders/archive-existing", () => ({
 describe("queued sender archive resume", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("resumes the archive with its deferral count", async () => {
     prisma.newsletter.findFirst.mockResolvedValue({
       status: NewsletterStatus.AUTO_ARCHIVED,
     } as never);
+  });
 
+  it("resumes the archive with its start time and deferral count", async () => {
     const response = await POST(resume(), {} as never);
 
     expect(response.status).toBe(200);
@@ -46,6 +51,7 @@ describe("queued sender archive resume", () => {
         emailAccountId: "account-1",
         senderEmail: "news@example.com",
         ownerEmail: "user@example.com",
+        startedAt: 1_700_000_000_000,
         deferrals: 2,
       }),
     );
@@ -61,16 +67,25 @@ describe("queued sender archive resume", () => {
     expect(response.status).toBe(200);
     expect(runQueuedSenderArchive).not.toHaveBeenCalled();
   });
+
+  it("refuses a request that is neither signed nor internal", async () => {
+    const response = await POST(resume({ verified: false }), {} as never);
+
+    expect(response.status).toBe(401);
+    expect(runQueuedSenderArchive).not.toHaveBeenCalled();
+  });
 });
 
-function resume() {
+function resume({ verified = true } = {}) {
   return new Request("http://localhost/api/user/senders/archive-existing", {
     method: "POST",
+    headers: verified ? { "x-test-verified": "1" } : {},
     body: JSON.stringify({
       emailAccountId: "account-1",
       provider: "google",
       senderEmail: "news@example.com",
       ownerEmail: "user@example.com",
+      startedAt: 1_700_000_000_000,
       deferrals: 2,
     }),
   }) as never;

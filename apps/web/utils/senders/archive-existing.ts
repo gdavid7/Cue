@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { after } from "next/server";
 import prisma from "@/utils/prisma";
 import type { EmailProvider } from "@/utils/email/types";
@@ -50,6 +51,7 @@ export async function archiveExistingSenderMail({
       senderEmail,
       ownerEmail,
       logger,
+      startedAt: Date.now(),
       deferrals: 0,
     }),
   );
@@ -68,6 +70,7 @@ export async function runQueuedSenderArchive({
   senderEmail,
   ownerEmail,
   logger,
+  startedAt,
   deferrals,
 }: {
   emailAccountId: string;
@@ -75,6 +78,8 @@ export async function runQueuedSenderArchive({
   senderEmail: string;
   ownerEmail: string;
   logger: Logger;
+  /** When the first run of this archive started. */
+  startedAt: number;
   deferrals: number;
 }) {
   try {
@@ -92,9 +97,11 @@ export async function runQueuedSenderArchive({
         provider: emailProvider.name,
         senderEmail,
         ownerEmail,
+        startedAt,
       },
       deferrals,
-      jobKey: `archive-existing-${emailAccountId}-${senderEmail}`,
+      // QStash shows deduplication ids, so the sender's address is hashed.
+      jobKey: `archive-existing-${emailAccountId}-${hashSender(senderEmail)}-${startedAt}`,
       job: "archiving existing sender mail",
       logger,
     });
@@ -102,4 +109,11 @@ export async function runQueuedSenderArchive({
       logger.error("Failed to archive existing sender mail", { error });
     }
   }
+}
+
+function hashSender(senderEmail: string) {
+  return createHash("sha256")
+    .update(senderEmail.toLowerCase())
+    .digest("hex")
+    .slice(0, 16);
 }

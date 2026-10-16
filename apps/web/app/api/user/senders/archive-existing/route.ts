@@ -14,6 +14,7 @@ const bodySchema = z.object({
   provider: z.string().min(1),
   senderEmail: z.string().min(1),
   ownerEmail: z.string().min(1),
+  startedAt: z.number().int().positive(),
   deferrals: z.number().int().nonnegative(),
 });
 
@@ -26,8 +27,14 @@ export const POST = withError(
     if (!parsed.success) {
       return new Response("Invalid payload structure", { status: 400 });
     }
-    const { emailAccountId, provider, senderEmail, ownerEmail, deferrals } =
-      parsed.data;
+    const {
+      emailAccountId,
+      provider,
+      senderEmail,
+      ownerEmail,
+      startedAt,
+      deferrals,
+    } = parsed.data;
     const logger = request.logger.with({ emailAccountId });
 
     // The person may have stopped auto-archiving this sender while the
@@ -55,6 +62,7 @@ export const POST = withError(
       senderEmail,
       ownerEmail,
       logger,
+      startedAt,
       deferrals,
     });
     return NextResponse.json({ ok: true });
