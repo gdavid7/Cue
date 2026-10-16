@@ -494,9 +494,12 @@ function getUsageIncrementFields(
     ["cachedInputTokensUsed", usage.inputTokenDetails?.cacheReadTokens],
     ["reasoningTokensUsed", usage.outputTokenDetails?.reasoningTokens],
   ];
-  return fields.flatMap(([field, value]) =>
-    value ? [[field, value] as [keyof RedisUsage, number]] : [],
-  );
+  // HINCRBY takes whole numbers only, and a rejected increment aborts the
+  // script's other writes too.
+  return fields.flatMap(([field, value]) => {
+    const whole = Math.round(value ?? 0);
+    return whole > 0 ? [[field, whole] as [keyof RedisUsage, number]] : [];
+  });
 }
 
 function getUsageDataIncrementOperations(

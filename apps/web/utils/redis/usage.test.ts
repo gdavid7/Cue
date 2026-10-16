@@ -58,6 +58,22 @@ describe("redis usage tracking", () => {
       expect(redis.expire).not.toHaveBeenCalled();
     });
 
+    // HINCRBY rejects a fraction, and inside the script that aborts the
+    // whole save, cost and weekly spend included.
+    it("sends whole token counts even when a provider reports fractions", async () => {
+      await saveUsage({
+        userId: "user-1",
+        emailAccountId: "acc-1",
+        usage: { inputTokens: 10.6, outputTokens: 4.2, totalTokens: 14.8 },
+        cost: 1,
+        now: NOW,
+      });
+
+      const args = vi.mocked(redis.eval).mock.calls[0]?.[2] as string[];
+      const increments = args.slice(3).filter((_, index) => index % 2 === 1);
+      expect(increments).toEqual(["1", "15", "4", "11"]);
+    });
+
     it("does not throw when a usage write rejects", async () => {
       vi.mocked(redis.hincrby).mockRejectedValue(new Error("redis down"));
 
