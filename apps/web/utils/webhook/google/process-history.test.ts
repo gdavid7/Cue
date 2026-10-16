@@ -1019,6 +1019,51 @@ describe("processHistoryForUser - backlogs", () => {
     expect(lastCursorUpdate()).toBe("1300");
   });
 
+  it("applies label changes as soon as the history before them is processed, in order", async () => {
+    vi.mocked(getHistory).mockResolvedValue({
+      history: [
+        historyMessage("1100", "a", "thread-a", ["INBOX"]),
+        {
+          id: "1200",
+          labelsRemoved: [
+            {
+              message: { id: "z", threadId: "thread-z" },
+              labelIds: ["UNREAD"],
+            },
+          ],
+        },
+        {
+          id: "1250",
+          labelsAdded: [
+            {
+              message: { id: "y", threadId: "thread-z" },
+              labelIds: ["STARRED"],
+            },
+          ],
+        },
+        historyMessage("1300", "b", "thread-b", ["INBOX"]),
+      ],
+    } as any);
+    const timeline: string[] = [];
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      const id = event.item.message?.id;
+      timeline.push(`start ${id}`);
+      await new Promise((resolve) => setTimeout(resolve, id === "b" ? 50 : 5));
+      timeline.push(`end ${id}`);
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1300 },
+      {},
+      logger,
+    );
+
+    // The label changes don't wait for the slow newer message.
+    expect(timeline.indexOf("end y")).toBeLessThan(timeline.indexOf("end b"));
+    expect(timeline.indexOf("end z")).toBeLessThan(timeline.indexOf("start y"));
+    expect(lastCursorUpdate()).toBe("1300");
+  });
+
   it("processes new inbox mail newest first, a few messages at a time", async () => {
     vi.mocked(getHistory).mockResolvedValue({
       history: inboxHistory(

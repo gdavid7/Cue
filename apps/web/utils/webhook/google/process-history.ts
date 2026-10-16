@@ -475,6 +475,37 @@ async function processHistory(
     threads.delete(threadId);
     threads.set(threadId, [...thread, event]);
   }
+  // Other label changes run one at a time in history order, each as soon as
+  // the thread events up to its history are processed, alongside the threads
+  // still going. They have no processed marker: a run cut off before saving
+  // its cursor leaves them to be applied again by the next run.
+  let labelsFrom = 0;
+  let labelsBlocked = false;
+  let labelError: unknown;
+  let labelDrain = Promise.resolve();
+  const applyReadyLabels = async () => {
+    while (!labelsBlocked && labelsFrom < entries.length) {
+      const entry = entries[labelsFrom];
+      if (!entry.threadEvents.every((event) => done.has(event))) return;
+      for (const event of entry.labelEvents) {
+        await run(event);
+        if (!done.has(event)) {
+          labelsBlocked = true;
+          return;
+        }
+      }
+      labelsFrom += 1;
+    }
+  };
+  // One chain, so label changes never overlap or reorder.
+  const drainLabels = () => {
+    labelDrain = labelDrain.then(applyReadyLabels).catch((error) => {
+      labelsBlocked = true;
+      labelError ??= error;
+    });
+  };
+
+  drainLabels();
   await mapWithConcurrency(
     [...threads.values()].reverse(),
     NEW_MESSAGE_CONCURRENCY,
@@ -482,22 +513,13 @@ async function processHistory(
       for (const event of thread) {
         await run(event);
         if (!done.has(event)) return;
+        drainLabels();
       }
     },
   );
-
-  // Other label changes keep their order and only run for history whose
-  // thread events are all processed, so the cursor can move past them. They have
-  // no processed marker: a run cut off before saving its cursor leaves them
-  // to be applied again by the next run.
-  for (const entry of entries) {
-    if (!entry.threadEvents.every((event) => done.has(event))) break;
-    for (const event of entry.labelEvents) {
-      await run(event);
-      if (!done.has(event)) break;
-    }
-    if (!entry.labelEvents.every((event) => done.has(event))) break;
-  }
+  drainLabels();
+  await labelDrain;
+  if (labelError !== undefined) throw labelError;
 
   await saveProgress({ final: true });
 
