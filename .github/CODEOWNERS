@@ -13,6 +13,8 @@
 /.github/workflows/ @gdavid7
 /.github/CODEOWNERS @gdavid7
 /.claude/settings.json @gdavid7
+/.claude/hooks/ @gdavid7
+/scripts/agent-run.sh @gdavid7
 
 # Database schema
 /apps/web/prisma/schema.prisma @gdavid7
