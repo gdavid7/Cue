@@ -195,12 +195,22 @@ export function CueStrip({
           <SnoozeButton
             key={action}
             onSnooze={onSnooze}
-            trigger={<StripButton icon={Clock3Icon}>Snooze</StripButton>}
+            trigger={
+              // Below lg the bottom bar already has Snooze and Archive.
+              <StripButton className="max-lg:hidden" icon={Clock3Icon}>
+                Snooze
+              </StripButton>
+            }
           />
         ) : null;
       case "archive":
         return onArchive ? (
-          <StripButton icon={ArchiveIcon} key={action} onClick={onArchive}>
+          <StripButton
+            className="max-lg:hidden"
+            icon={ArchiveIcon}
+            key={action}
+            onClick={onArchive}
+          >
             Archive
           </StripButton>
         ) : null;
@@ -214,10 +224,10 @@ export function CueStrip({
       className="fade-in mb-3 flex animate-in flex-col gap-1 rounded-lg border border-border/70 bg-muted/40 px-3 pt-2 pb-1.5 duration-200 motion-reduce:animate-none"
       data-cue-strip
     >
-      <div className="flex min-h-5 min-w-0 items-center gap-2">
+      <div className="flex min-h-5 min-w-0 items-center gap-2 max-sm:min-h-10 max-sm:items-start">
         <SparklesIcon
           aria-hidden
-          className="size-3.5 shrink-0 text-muted-foreground"
+          className="size-3.5 shrink-0 text-muted-foreground max-sm:mt-[3px]"
         />
         {briefSettled ? (
           <StripSummary
@@ -252,8 +262,9 @@ export function CueStrip({
 }
 
 /**
- * One line, so the strip keeps its height; the whole of it is a press away and
- * always there for screen readers.
+ * One line (two on a phone, in space held from the start), so the strip keeps
+ * its height; the whole of it is a press away and always there for screen
+ * readers.
  */
 function StripSummary({
   summary,
@@ -277,7 +288,9 @@ function StripSummary({
       aria-expanded={expanded}
       className={cn(
         "min-w-0 rounded-sm text-left text-[13px] text-foreground/90 leading-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        expanded ? "whitespace-normal" : "truncate",
+        expanded
+          ? "whitespace-normal"
+          : "truncate max-sm:line-clamp-2 max-sm:whitespace-normal",
       )}
       onClick={() => setExpanded((value) => !value)}
       title={expanded ? undefined : summary}
