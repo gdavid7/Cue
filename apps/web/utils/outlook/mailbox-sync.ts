@@ -214,7 +214,7 @@ async function getInitialPage({
         // The selection is kept in every delta link that follows.
         .select(
           includeBodies
-            ? `${MESSAGE_SELECT_FIELDS},body`
+            ? `${MESSAGE_SELECT_FIELDS},bccRecipients,body`
             : MESSAGE_SELECT_FIELDS,
         )
         .filter(`receivedDateTime ge ${after.toISOString()}`)

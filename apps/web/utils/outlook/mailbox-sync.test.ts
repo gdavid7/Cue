@@ -274,7 +274,9 @@ describe("getOutlookMailboxSyncPage", () => {
       limit: 20,
     });
 
-    expect(selectedFields.get(initialUrl)?.split(",")).toContain("body");
+    expect(selectedFields.get(initialUrl)?.split(",")).toEqual(
+      expect.arrayContaining(["body", "bccRecipients"]),
+    );
   });
 
   it("refetches delta messages that omit their conversation", async () => {
