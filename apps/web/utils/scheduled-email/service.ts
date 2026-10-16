@@ -17,6 +17,7 @@ import { getMessageTimestamp } from "@/utils/email/message-timestamp";
 import { publishToQstashAt } from "@/utils/upstash";
 
 const LEASE_MS = 5 * 60 * 1000;
+const RECONNECT_REMINDER_DELAY_MS = 60 * 60 * 1000;
 const HELD_EMAIL_EXECUTE_PATH = "/api/scheduled-emails/execute";
 
 export async function scheduleEmail(
@@ -500,10 +501,26 @@ async function processReminder(row: ScheduledEmail, logger: Logger, now: Date) {
       data: { reminderStatus: "COMPLETED" },
     });
   } catch (error) {
-    // A conversation that is gone or an account that lost its connection
-    // won't recover on a retry, which would come every lease for good and
-    // keep a place in the cron batch.
-    if (isMissingConversation(error) || isInvalidGrantError(error)) {
+    // An account that lost its connection comes back when the user
+    // reconnects it, as a blocked send does, so the reminder waits an hour
+    // instead of retrying every lease and holding a place in the cron batch.
+    if (isInvalidGrantError(error)) {
+      logger.warn("Email reminder waiting for the account to reconnect", {
+        error,
+        scheduledEmailId: row.id,
+      });
+      await prisma.scheduledEmail.updateMany({
+        where,
+        data: {
+          reminderStatus: "PENDING",
+          reminderStartedAt: null,
+          remindAt: new Date(now.getTime() + RECONNECT_REMINDER_DELAY_MS),
+        },
+      });
+      return;
+    }
+    // A conversation that is gone won't come back on a retry.
+    if (isMissingConversation(error)) {
       logger.warn("Email reminder ended: it can no longer run", {
         error,
         scheduledEmailId: row.id,

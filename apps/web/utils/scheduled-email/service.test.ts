@@ -241,31 +241,33 @@ describe("scheduled replies", () => {
     expect(provider.unarchiveThread).toHaveBeenCalledTimes(12);
   });
 
-  // A reminder that can't run would otherwise retry every lease forever and
-  // keep its place in the cron batch.
-  it.each([
-    [
-      "its conversation is gone",
-      Object.assign(new Error("Not Found"), { status: 404 }),
-    ],
-    ["the account lost its connection", new Error("invalid_grant")],
-  ])("ends a reminder when %s", async (_label, failure) => {
-    prisma.scheduledEmail.findMany.mockResolvedValue([dueReminder()]);
-    prisma.scheduledEmail.updateMany.mockResolvedValue({ count: 1 });
-    prisma.emailAccount.findUniqueOrThrow.mockResolvedValue({
-      email: "me@example.com",
-      account: { provider: "google" },
-    } as never);
-    vi.mocked(createEmailProvider).mockResolvedValue(
-      createMockEmailProvider({
-        getThreadMessages: vi.fn().mockRejectedValue(failure),
-      }),
-    );
+  // A reminder whose conversation is gone can't run, and retrying it every
+  // lease would keep its place in the cron batch.
+  it("ends a reminder when its conversation is gone", async () => {
+    mockReminderFailure(Object.assign(new Error("Not Found"), { status: 404 }));
 
     await processDueScheduledEmails(logger, now);
 
     expect(prisma.scheduledEmail.updateMany).toHaveBeenLastCalledWith(
       expect.objectContaining({ data: { reminderStatus: "CANCELLED" } }),
+    );
+  });
+
+  // Reconnecting the account brings the reminder back, as it does a blocked
+  // send, so it waits an hour rather than retrying every lease.
+  it("holds a reminder off for an hour when the account lost its connection", async () => {
+    mockReminderFailure(new Error("invalid_grant"));
+
+    await processDueScheduledEmails(logger, now);
+
+    expect(prisma.scheduledEmail.updateMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: {
+          reminderStatus: "PENDING",
+          reminderStartedAt: null,
+          remindAt: new Date(now.getTime() + 60 * 60 * 1000),
+        },
+      }),
     );
   });
 
@@ -849,4 +851,18 @@ function dueReminder() {
     remindAt: now,
     reminderStatus: "PENDING",
   });
+}
+
+function mockReminderFailure(failure: Error) {
+  prisma.scheduledEmail.findMany.mockResolvedValue([dueReminder()]);
+  prisma.scheduledEmail.updateMany.mockResolvedValue({ count: 1 });
+  prisma.emailAccount.findUniqueOrThrow.mockResolvedValue({
+    email: "me@example.com",
+    account: { provider: "google" },
+  } as never);
+  vi.mocked(createEmailProvider).mockResolvedValue(
+    createMockEmailProvider({
+      getThreadMessages: vi.fn().mockRejectedValue(failure),
+    }),
+  );
 }
