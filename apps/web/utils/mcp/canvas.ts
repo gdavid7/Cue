@@ -5,6 +5,8 @@ import { safeExternalFetch } from "@/utils/mcp/safe-fetch";
 // Long enough for a slow school server, short enough to answer a form.
 const VERIFY_TIMEOUT_MS = 8000;
 const MAX_SAME_SITE_REDIRECTS = 3;
+// A Canvas user record is a few hundred bytes; anything far bigger isn't one.
+const MAX_RESPONSE_BYTES = 64 * 1024;
 
 export type CanvasCheckFailure =
   | "rejected"
@@ -29,7 +31,8 @@ type Fetch = (
 export function normalizeSiteAddress(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
-  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(trimmed)
+  // "canvas.school.edu:8443" has no scheme, though it reads like one
+  const withScheme = /^https?:\/\//i.test(trimmed)
     ? trimmed
     : `https://${trimmed}`;
   let url: URL;
@@ -47,7 +50,9 @@ export function normalizeSiteAddress(value: string): string | null {
 /**
  * Asks Canvas who the token belongs to (`GET /api/v1/users/self`), so a
  * connection is saved only for a token Canvas accepts. Only public https
- * hosts are called, and the token never follows a redirect to another site.
+ * hosts are called. A redirect within the same origin is followed (a few
+ * hops, all within one deadline); the token never follows one to another
+ * site. The answer is read only up to the size of a user record.
  */
 export async function verifyCanvasToken({
   address,
@@ -65,6 +70,7 @@ export async function verifyCanvasToken({
 
   let url = `${origin}/api/v1/users/self`;
   let response: Response | undefined;
+  const signal = AbortSignal.timeout(VERIFY_TIMEOUT_MS);
   try {
     for (let hop = 0; hop <= MAX_SAME_SITE_REDIRECTS; hop++) {
       response = await fetch(url, {
@@ -73,10 +79,12 @@ export async function verifyCanvasToken({
           accept: "application/json",
         },
         redirect: "manual",
-        signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
+        signal,
       });
       if (response.status < 300 || response.status >= 400) break;
+      await response.body?.cancel().catch(() => null);
       const next = redirectTarget(response, url);
+      // Same origin only: the token goes nowhere else
       if (!next || new URL(next).origin !== origin) {
         return { ok: false, reason: "redirected" };
       }
@@ -97,10 +105,13 @@ export async function verifyCanvasToken({
   if (!response.ok) return { ok: false, reason: "unreachable" };
 
   const contentType = response.headers.get("content-type") ?? "";
-  if (!contentType.includes("json")) return { ok: false, reason: "not_canvas" };
-  const user = canvasUserSchema.safeParse(
-    await response.json().catch(() => null),
-  );
+  if (!contentType.includes("json")) {
+    await response.body?.cancel().catch(() => null);
+    return { ok: false, reason: "not_canvas" };
+  }
+  const text = await readCapped(response, MAX_RESPONSE_BYTES).catch(() => null);
+  if (text === null) return { ok: false, reason: "not_canvas" };
+  const user = canvasUserSchema.safeParse(parseJson(text));
   if (!user.success) return { ok: false, reason: "not_canvas" };
 
   return { ok: true, origin, user: readUser(user.data) };
@@ -139,6 +150,41 @@ function readUser(user: z.infer<typeof canvasUserSchema>) {
     id: String(user.id),
     name: user.name || user.short_name || "your Canvas account",
   };
+}
+
+/** The body as text, or null once it is over `maxBytes`. */
+async function readCapped(
+  response: Response,
+  maxBytes: number,
+): Promise<string | null> {
+  const declared = Number(response.headers.get("content-length"));
+  if (declared > maxBytes) {
+    await response.body?.cancel().catch(() => null);
+    return null;
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => null);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 function redirectTarget(response: Response, from: string) {

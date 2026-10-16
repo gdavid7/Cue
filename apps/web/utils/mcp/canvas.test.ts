@@ -21,6 +21,8 @@ describe("normalizeSiteAddress", () => {
     ],
     ["http://canvas.eee.uci.edu", "https://canvas.eee.uci.edu"],
     ["HTTPS://Canvas.EEE.uci.edu", "https://canvas.eee.uci.edu"],
+    ["canvas.school.edu:8443", "https://canvas.school.edu:8443"],
+    ["canvas.school.edu:8443/courses/1", "https://canvas.school.edu:8443"],
   ])("turns %s into its https origin", (input, expected) => {
     expect(normalizeSiteAddress(input)).toBe(expected);
   });
@@ -130,6 +132,58 @@ describe("verifyCanvasToken", () => {
     expect(fetch.mock.calls[1][0]).toBe(
       "https://canvas.eee.uci.edu/api/v1/users/self/",
     );
+  });
+
+  it("shares one deadline across redirects and drops each redirect's body", async () => {
+    const cancel = vi.fn();
+    const fetch = mockFetch((url) =>
+      url.endsWith("/users/self")
+        ? new Response(new ReadableStream({ cancel }), {
+            status: 302,
+            headers: { location: "/api/v1/users/self/" },
+          })
+        : json(200, { id: 1, name: "Ada" }),
+    );
+
+    await verifyCanvasToken({
+      address: "https://canvas.eee.uci.edu",
+      token: TOKEN,
+      fetch,
+    });
+
+    expect(fetch.mock.calls[0][1].signal).toBe(fetch.mock.calls[1][1].signal);
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it("doesn't read an answer far bigger than a Canvas user", async () => {
+    const declared = await verifyCanvasToken({
+      address: "https://canvas.eee.uci.edu",
+      token: TOKEN,
+      fetch: mockFetch(
+        () =>
+          new Response("{}", {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+              "content-length": String(10 * 1024 * 1024),
+            },
+          }),
+      ),
+    });
+    const streamed = await verifyCanvasToken({
+      address: "https://canvas.eee.uci.edu",
+      token: TOKEN,
+      fetch: mockFetch(
+        () =>
+          new Response(
+            JSON.stringify({ id: 1, name: "Ada", bio: "x".repeat(200_000) }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    });
+
+    expect(declared).toEqual({ ok: false, reason: "not_canvas" });
+    expect(streamed).toEqual({ ok: false, reason: "not_canvas" });
   });
 
   it("doesn't send the token to another site it redirects to", async () => {
