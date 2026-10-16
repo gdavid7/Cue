@@ -7,6 +7,7 @@ import { captureException } from "@/utils/error";
 import { clearWatchLapsedErrorIfResolved } from "@/utils/error-messages";
 import { fetchGoogleOpenIdProfile } from "@/utils/gmail/oauth";
 import { GmailCallDeferredError } from "@/utils/gmail/quota";
+import { logErrorWithDedupe } from "@/utils/log-error-with-dedupe";
 import { publishToQstashAt } from "@/utils/upstash";
 import {
   ensureEmailAccountsWatched,
@@ -232,6 +233,48 @@ describe("ensureEmailAccountsWatched", () => {
       where: { id: "email-account-id", lastSyncedHistoryId: null },
       data: { lastSyncedHistoryId: "5000" },
     });
+    // The expiry marks the watch healthy, so the next renewal would not
+    // retry a cursor that failed to save after it.
+    expect(
+      prisma.emailAccount.updateMany.mock.invocationCallOrder[0],
+    ).toBeLessThan(prisma.emailAccount.update.mock.invocationCallOrder[0]);
+  });
+
+  it("never widens a single-mailbox watch to every mailbox", async () => {
+    vi.mocked(prisma.emailAccount.findMany).mockResolvedValue([]);
+
+    await ensureEmailAccountsWatched({
+      userIds: null,
+      emailAccountId: "",
+      logger,
+    });
+
+    expect(prisma.emailAccount.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: "" }),
+      }),
+    );
+  });
+
+  it("logs a deferred watch as a failure when no resume can be scheduled", async () => {
+    vi.mocked(prisma.emailAccount.findMany).mockResolvedValue([
+      getWatchedEmailAccount({ watchEmailsExpirationDate: null }),
+    ] as any);
+    vi.mocked(createEmailProvider).mockResolvedValue({
+      ...getGoogleProvider(),
+      watchEmails: vi
+        .fn()
+        .mockRejectedValue(new GmailCallDeferredError(9500, "sync")),
+    });
+    vi.mocked(publishToQstashAt).mockResolvedValueOnce(false);
+
+    await ensureEmailAccountsWatched({ userIds: ["user-id"], logger });
+
+    expect(logErrorWithDedupe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Failed to watch emails for account",
+      }),
+    );
   });
 
   it("resumes a Gmail watch the quota gate deferred once the deferral passes", async () => {
@@ -266,6 +309,7 @@ describe("ensureEmailAccountsWatched", () => {
     const { notBefore } = vi.mocked(publishToQstashAt).mock.calls[0][0];
     expect(notBefore.getTime()).toBeGreaterThanOrEqual(before + 9500);
     expect(captureException).not.toHaveBeenCalled();
+    expect(logErrorWithDedupe).not.toHaveBeenCalled();
   });
 
   it("stops resuming a watch the quota gate keeps deferring", async () => {
@@ -287,6 +331,7 @@ describe("ensureEmailAccountsWatched", () => {
     });
 
     expect(publishToQstashAt).not.toHaveBeenCalled();
+    expect(logErrorWithDedupe).toHaveBeenCalled();
   });
 
   it("still renews the watch when the mailbox address check fails", async () => {

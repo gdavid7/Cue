@@ -79,8 +79,8 @@ export async function nudgeGmailHistoryCatchUp({
  * window share a single delivery, and a delivery does nothing once a later
  * push has caught up.
  *
- * Resolves whether a catch-up will run: it needs a scheduler, and the mark it
- * checks is only kept in Redis.
+ * Resolves whether a delivery was scheduled. It only runs while the caller's
+ * catch-up mark is stored.
  */
 export async function scheduleGmailHistoryCatchUp({
   emailAccountId,
@@ -109,7 +109,7 @@ export async function scheduleGmailHistoryCatchUp({
       logger.info(
         "No scheduler for the Gmail history catch-up; the next push catches up",
       );
-    return scheduled && isEmailProviderRateLimitRedisConfigured();
+    return scheduled;
   } catch (error) {
     logger.warn("Failed to schedule Gmail history catch-up", { error });
     return false;

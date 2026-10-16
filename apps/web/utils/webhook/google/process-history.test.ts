@@ -80,7 +80,7 @@ vi.mock("@/utils/email/rate-limit", () => ({
 }));
 
 vi.mock("@/utils/redis/gmail-history-catch-up", () => ({
-  markGmailHistoryCatchUp: vi.fn().mockResolvedValue(undefined),
+  markGmailHistoryCatchUp: vi.fn().mockResolvedValue(true),
   getGmailHistoryCatchUp: vi.fn().mockResolvedValue(null),
   clearGmailHistoryCatchUp: vi.fn().mockResolvedValue(undefined),
   countEmptyGmailHistoryRun: vi.fn().mockResolvedValue(1),
@@ -1416,6 +1416,7 @@ describe("processHistoryForUser - mailbox without a history cursor", () => {
     vi.mocked(getEmailProviderRateLimitState).mockResolvedValue(null);
     vi.mocked(getGmailHistoryCatchUp).mockResolvedValue(null);
     vi.mocked(publishToQstashAt).mockResolvedValue(true);
+    vi.mocked(markGmailHistoryCatchUp).mockResolvedValue(true);
     givenAccountWithoutCursor();
   });
 
@@ -1443,12 +1444,30 @@ describe("processHistoryForUser - mailbox without a history cursor", () => {
     );
   });
 
-  it("starts from the push when a catch-up still finds no cursor, so later mail is processed", async () => {
+  it("leaves the cursor to a pending catch-up when another push arrives first", async () => {
+    vi.mocked(getGmailHistoryCatchUp).mockResolvedValue("catch-up-token");
+
+    await processHistoryForUser(
+      { emailAddress: "user@test.com", historyId: 2100 },
+      {},
+      logger,
+    );
+
+    expect(getHistory).not.toHaveBeenCalled();
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: { emailAccountId: "account-123", historyId: "2100" },
+      }),
+    );
+  });
+
+  it("starts from the push when the catch-up delivery still finds no cursor, so later mail is processed", async () => {
     vi.mocked(getGmailHistoryCatchUp).mockResolvedValue("catch-up-token");
 
     await processHistoryForUser(
       { emailAddress: "user@test.com", historyId: 2000 },
-      {},
+      { fromCatchUp: true },
       logger,
     );
 
@@ -1458,6 +1477,19 @@ describe("processHistoryForUser - mailbox without a history cursor", () => {
     expect(clearGmailHistoryCatchUp).toHaveBeenCalledWith(
       expect.objectContaining({ token: "catch-up-token" }),
     );
+  });
+
+  it("starts from the push when the catch-up mark cannot be stored", async () => {
+    vi.mocked(markGmailHistoryCatchUp).mockResolvedValue(false);
+
+    await processHistoryForUser(
+      { emailAddress: "user@test.com", historyId: 2000 },
+      {},
+      logger,
+    );
+
+    expect(getHistory).not.toHaveBeenCalled();
+    expect(lastCursorUpdate()).toBe("2000");
   });
 
   it("starts from the push when no catch-up can be scheduled", async () => {

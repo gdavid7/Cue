@@ -60,7 +60,7 @@ async function getEmailAccountsToWatch(
   return prisma.emailAccount.findMany({
     where: {
       ...(userIds ? { userId: { in: userIds } } : {}),
-      ...(emailAccountId ? { id: emailAccountId } : {}),
+      ...(emailAccountId !== undefined ? { id: emailAccountId } : {}),
       ...getPremiumUserFilter(),
       account: { disconnectedAt: null },
     },
@@ -210,7 +210,7 @@ async function watchEmailAccount(
   if (!result.success) {
     // Without push the mailbox gets no new mail until the next renewal, so a
     // watch the quota gate put off is tried again as soon as it allows.
-    const resumed = await resumeAfterGmailDeferral({
+    const resume = await resumeAfterGmailDeferral({
       error: result.error,
       path: WATCH_RESUME_PATH,
       body: { emailAccountId: emailAccount.id },
@@ -219,7 +219,7 @@ async function watchEmailAccount(
       job: "Gmail watch setup",
       logger,
     });
-    if (!resumed)
+    if (resume !== "scheduled")
       await logErrorWithDedupe({
         logger,
         message: "Failed to watch emails for account",
@@ -319,20 +319,22 @@ async function watchEmails({
       const result = await provider.watchEmails();
 
       if (result) {
-        await prisma.emailAccount.update({
-          where: { id: emailAccountId },
-          data: { watchEmailsExpirationDate: result.expirationDate },
-        });
         // A mailbox's first push reads history from its cursor; without one
         // it would read from 0, which Gmail reports as expired, and the mail
         // that sent the push would be skipped. An existing cursor is left
-        // alone so a renewal never moves past unprocessed history.
+        // alone so a renewal never moves past unprocessed history. It is
+        // saved before the expiry, which marks the watch healthy: a failure
+        // here leaves the watch to be set up, and the cursor saved, again.
         if (result.historyId) {
           await prisma.emailAccount.updateMany({
             where: { id: emailAccountId, lastSyncedHistoryId: null },
             data: { lastSyncedHistoryId: result.historyId },
           });
         }
+        await prisma.emailAccount.update({
+          where: { id: emailAccountId },
+          data: { watchEmailsExpirationDate: result.expirationDate },
+        });
         return { success: true, expirationDate: result.expirationDate };
       }
     }

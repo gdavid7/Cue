@@ -113,7 +113,7 @@ export async function queueCleanInboxThreads({
       pageToken = nextPageToken;
     } while (pageToken && !isMaxEmailsReached(queuedCount, maxEmails));
   } catch (error) {
-    const resumed = await resumeAfterGmailDeferral({
+    const resume = await resumeAfterGmailDeferral({
       error,
       path: CLEAN_INBOX_RESUME_PATH,
       body: { ...job, labelType, pageToken, queuedCount },
@@ -123,7 +123,7 @@ export async function queueCleanInboxThreads({
       job: "queueing inbox threads to clean",
       logger,
     });
-    if (!resumed)
+    if (resume === "not-deferred")
       logger.error("Failed to queue inbox threads to clean", { error });
   }
 }

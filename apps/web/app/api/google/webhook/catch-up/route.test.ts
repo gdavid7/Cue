@@ -41,7 +41,8 @@ describe("Gmail history catch-up", () => {
     expect(response.status).toBe(200);
     expect(processHistoryForUser).toHaveBeenCalledWith(
       { emailAddress: "user@example.com", historyId: "1200" },
-      {},
+      // Only this delivery may start a mailbox without a cursor from here.
+      { fromCatchUp: true },
       expect.anything(),
     );
   });
@@ -85,7 +86,7 @@ describe("Gmail history catch-up", () => {
 
     expect(processHistoryForUser).toHaveBeenCalledWith(
       { emailAddress: "user@example.com", historyId: "1500" },
-      {},
+      { fromCatchUp: true },
       expect.anything(),
     );
   });

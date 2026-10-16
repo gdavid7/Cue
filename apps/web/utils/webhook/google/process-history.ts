@@ -66,6 +66,8 @@ export async function processHistoryForUser(
   options: {
     startHistoryId?: string;
     preloadedEmailAccount?: ValidatedWebhookAccountData | null;
+    /** Delivered by the scheduled history catch-up, not by a push. */
+    fromCatchUp?: boolean;
   },
   logger: Logger,
 ) {
@@ -352,19 +354,25 @@ export async function processHistoryForUser(
   }
 
   // A mailbox's cursor starts at the history id its watch began at. Without
-  // one, history from 0 is always expired and jumping to this push would
-  // skip the mail that sent it, so a catch-up runs once the watch's history
-  // id is saved. A catch-up that still finds none, or no catch-up at all,
-  // starts from this push so later mail is processed.
+  // one, history from 0 is always expired, and jumping to this push would
+  // skip the mail that sent it. A push therefore leaves the cursor alone and
+  // schedules a catch-up about 90s later, which reads from the watch's
+  // history id if it was saved by then (a watch still in flight, or a
+  // deferred one resumed before the mail). Only that catch-up delivery, or a
+  // push when no catch-up can run, starts from the push's history id: later
+  // mail is then processed, but mail before it is not.
   async function startWithoutCursor(catchUpToken: string | null) {
-    if (!catchUpToken) {
-      await markGmailHistoryCatchUp(validatedEmailAccount.id, logger);
-      const willCatchUp = await scheduleGmailHistoryCatchUp({
+    if (!options.fromCatchUp) {
+      const marked = await markGmailHistoryCatchUp(
+        validatedEmailAccount.id,
+        logger,
+      );
+      const scheduled = await scheduleGmailHistoryCatchUp({
         emailAccountId: validatedEmailAccount.id,
         historyId,
         logger,
       });
-      if (willCatchUp) {
+      if (marked && scheduled) {
         logger.info("No Gmail history cursor yet; catching up shortly");
         return NextResponse.json({ ok: true });
       }
