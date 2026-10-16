@@ -32,7 +32,7 @@ test("chat works in the open thread's account and lists every account's chats", 
     await page.goto(`/${emailAccountId}/mail?accountScope=all`);
     const conversations = page.getByRole("listbox", { name: "Conversations" });
     await expect(conversations).toBeVisible({ timeout: 60_000 });
-    await page.getByRole("button", { name: "Ask Cue" }).click();
+    await page.getByRole("button", { name: "Ask Cue", exact: true }).click();
     await expect(page.getByText(`Chat for ${primary.email}`)).toBeVisible({
       timeout: 60_000,
     });

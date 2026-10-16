@@ -195,9 +195,19 @@ export function MailShell() {
     error: settingsError,
     mutate: mutateSettings,
   } = useMailSettings();
-  const { toggleSidebar, setOpen: setSidebarOpen } = useSidebar();
-  const { submitTextMessage, chatId, setNewChat, switchChatAccount } =
-    useChat();
+  const {
+    toggleSidebar,
+    setOpen: setSidebarOpen,
+    setOpenMobile: setOpenMobileSidebar,
+    isMobile: isMobileSidebar,
+  } = useSidebar();
+  const {
+    submitTextMessage,
+    chatId,
+    setNewChat,
+    switchChatAccount,
+    requestInputFocus: requestChatInputFocus,
+  } = useChat();
   // A question waits for a conversation to exist; sent before one, it's dropped.
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   useEffect(() => {
@@ -1723,9 +1733,23 @@ export function MailShell() {
       });
     },
   );
+  // The assistant chat belongs to the screen's account; in All inboxes a
+  // thread from another account is invisible to it, so nothing offers it.
+  const threadInChatAccount =
+    !isAllAccounts || openThreadSelection?.emailAccountId === emailAccountId;
   const onToggleAssistant = useStableCallback(() =>
     toggleSidebar(["chat-sidebar"]),
   );
+  // The chat already reads the open thread, so asking about this email is
+  // opening it with the cursor in place.
+  const onAskCueAboutThread = useStableCallback(() => {
+    const withChat = (open: string[]) =>
+      open.includes("chat-sidebar") ? open : [...open, "chat-sidebar"];
+    // Phones keep their own list of open panels.
+    if (isMobileSidebar) setOpenMobileSidebar(withChat);
+    else setSidebarOpen(withChat);
+    requestChatInputFocus();
+  });
   const onContinueInChat = useStableCallback((question: string) => {
     setSidebarOpen((open) =>
       open.includes("chat-sidebar") ? open : [...open, "chat-sidebar"],
@@ -2103,10 +2127,8 @@ export function MailShell() {
                 }
                 onReady={setVisibleReaderThreadKey}
                 onClose={closeReader}
-                showFixWithChat={
-                  !isAllAccounts ||
-                  openThreadSelection?.emailAccountId === emailAccountId
-                }
+                showFixWithChat={threadInChatAccount}
+                onAskCue={threadInChatAccount ? onAskCueAboutThread : undefined}
                 lastMessage={openMessages.at(-1) ?? null}
                 isStarred={allStarred}
                 onToggleStar={starTargets}

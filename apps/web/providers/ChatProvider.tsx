@@ -95,6 +95,14 @@ type ChatContextType = {
   setContext: (context: MessageContext | null) => void;
   attachments: Attachment[];
   setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>;
+  /**
+   * Set by something that opens the panel for the user to type, such as
+   * "Ask Cue about this email". The panel's input takes the cursor once it
+   * exists, then clears the request.
+   */
+  inputFocusRequested: boolean;
+  requestInputFocus: () => void;
+  clearInputFocusRequest: () => void;
 };
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -141,6 +149,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [chatId, setChatId] = useQueryState(CHAT_ID_PARAM, parseAsString);
   const [context, setContext] = useState<MessageContext | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [inputFocusRequested, setInputFocusRequested] = useState(false);
+  const requestInputFocus = useCallback(() => setInputFocusRequested(true), []);
+  const clearInputFocusRequest = useCallback(
+    () => setInputFocusRequested(false),
+    [],
+  );
   const [inlineActions, setInlineActions] = useState<InlineEmailAction[]>([]);
   const inlineActionsRef = useRef(inlineActions);
   const openThread = useAtomValue(openThreadAtom);
@@ -690,6 +704,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setContext: setContextForPage,
         attachments,
         setAttachments,
+        inputFocusRequested,
+        requestInputFocus,
+        clearInputFocusRequest,
       }}
     >
       <InlineEmailActionProvider value={{ queueAction: queueInlineAction }}>

@@ -12,7 +12,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { useInboxInsights } from "@/hooks/useInboxInsights";
+import { threadInsightItem, useInboxInsights } from "@/hooks/useInboxInsights";
 import { useSaveDestinations } from "@/hooks/useSaveDestinations";
 import { addToCalendarAction } from "@/utils/actions/calendar";
 import {
@@ -41,7 +41,7 @@ export function AddToCalendarButton({
   const insightItems = useMemo(
     () =>
       destinations?.calendar
-        ? [{ key: threadId, emailAccountId, threadId, messageId }]
+        ? [threadInsightItem({ emailAccountId, threadId, messageId })]
         : [],
     [destinations?.calendar, emailAccountId, threadId, messageId],
   );

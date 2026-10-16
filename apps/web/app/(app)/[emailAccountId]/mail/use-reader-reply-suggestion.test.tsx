@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, renderHook, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useReaderReplySuggestion } from "@/app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion";
 import type { ThreadMessage } from "@/components/email-list/types";
@@ -23,7 +29,8 @@ vi.mock("@/hooks/useSuggestedReply", () => ({
 vi.mock("@/app/(app)/[emailAccountId]/assistant/settings/DraftReplies", () => ({
   useDraftReplies: () => mocks.draftReplies,
 }));
-vi.mock("@/hooks/useInboxInsights", () => ({
+vi.mock("@/hooks/useInboxInsights", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useInboxInsights")>()),
   useInboxInsights: () => ({ data: mocks.insights }),
 }));
 vi.mock("@/providers/EmailAccountProvider", () => ({
@@ -148,6 +155,64 @@ describe("useReaderReplySuggestion", () => {
     rerender();
 
     expect(lastEnabled()).toBe(true);
+  });
+
+  describe("asked for from the Cue strip", () => {
+    it("writes a reply to mail from a person that isn't labelled To Reply", () => {
+      const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
+      expect(lastEnabled()).toBe(false);
+
+      act(() => result.current.reply.request());
+
+      expect(lastEnabled()).toBe(true);
+      expect(mocks.useReplySuggestion).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          emailAccountId: "account-1",
+          threadId: "thread-1",
+        }),
+      );
+    });
+
+    // The setting turns off every AI-written reply; asking opens the
+    // composer straight away instead of waiting on one.
+    it("writes none while Auto draft replies is off", () => {
+      mocks.draftReplies = { enabled: false, loading: false };
+      const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
+
+      act(() => result.current.reply.request());
+
+      expect(lastEnabled()).toBe(false);
+      expect(result.current.reply.drafts).toBe(false);
+      expect(result.current.reply.settledFor).toBe("ask");
+    });
+
+    it("isn't offered when the user wrote the newest message", () => {
+      const { result } = renderSuggestion([
+        incoming("ask", ["INBOX"]),
+        {
+          ...incoming("sent", ["SENT"]),
+          headers: { from: "user@example.com" },
+        },
+      ] as ThreadMessage[]);
+
+      act(() => result.current.reply.request());
+
+      expect(result.current.reply.canRequest).toBe(false);
+      expect(lastEnabled()).toBe(false);
+    });
+
+    it("reports the newest message once its suggestion settles", () => {
+      mocks.useReplySuggestion.mockImplementation(({ enabled }) => ({
+        phase: enabled ? "done" : "idle",
+        suggestion: undefined,
+      }));
+      const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
+      expect(result.current.reply.settledFor).toBeUndefined();
+
+      act(() => result.current.reply.request());
+
+      expect(result.current.reply.settledFor).toBe("ask");
+    });
   });
 });
 

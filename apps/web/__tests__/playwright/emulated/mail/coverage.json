@@ -5,6 +5,14 @@
     "components/SidebarRight.tsx",
     "components/SideNavWithTopNav.tsx"
   ],
+  "cue-strip.spec.ts": [
+    "app/(app)/[emailAccountId]/mail/CueStrip.tsx",
+    "app/(app)/[emailAccountId]/mail/cue-strip.ts",
+    "app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion.tsx",
+    "hooks/useThreadBrief.ts",
+    "utils/home/get-thread-brief.ts",
+    "app/api/user/thread-brief/route.ts"
+  ],
   "today.spec.ts": [
     "app/(app)/[emailAccountId]/home/HomeDashboard.tsx",
     "app/(app)/[emailAccountId]/home/TodayThreadRow.tsx",

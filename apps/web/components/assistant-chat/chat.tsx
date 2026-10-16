@@ -87,7 +87,15 @@ export function Chat({
     chatAccount,
     switchedAccount,
     chatAccountError,
+    inputFocusRequested,
+    clearInputFocusRequest,
   } = useChat();
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (!inputFocusRequested || !inputRef.current) return;
+    inputRef.current.focus();
+    clearInputFocusRequest();
+  }, [inputFocusRequested, clearInputFocusRequest]);
   const { messages, status, regenerate, setMessages } = chat;
   // Tools would run on the dead account's tokens, so the chat is read-only.
   const readOnly = Boolean(chatAccount?.account.disconnectedAt);
@@ -244,6 +252,7 @@ export function Chat({
         // The placeholder disappears once the user types.
         aria-label="Message Cue"
         data-testid="chat-input"
+        ref={inputRef}
         value={input}
         disabled={readOnly}
         placeholder="Ask Cue about your mail, or tell it what to do"

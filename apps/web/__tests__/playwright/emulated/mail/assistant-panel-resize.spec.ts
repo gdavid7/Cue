@@ -107,7 +107,7 @@ test.describe("on a phone", () => {
   }, testInfo) => {
     const { emailAccountId } = await openMail(page);
     await seedChat(emailAccountId);
-    const askCue = page.getByRole("button", { name: "Ask Cue" });
+    const askCue = page.getByRole("button", { name: "Ask Cue", exact: true });
 
     // Enter on the button is its own activation, not mail's "open" shortcut.
     await askCue.focus();
@@ -190,7 +190,7 @@ test.describe("on a phone", () => {
       ).toBe(true);
       await seedChat(emailAccountId);
 
-      await page.getByRole("button", { name: "Ask Cue" }).tap();
+      await page.getByRole("button", { name: "Ask Cue", exact: true }).tap();
       const panel = page.getByRole("dialog", { name: "Chat" });
       await panel.getByRole("button", { name: "Chat History" }).tap();
       const options = page
@@ -237,7 +237,7 @@ test.describe("on a phone", () => {
 });
 
 async function openAssistantPanel(page: Page) {
-  await page.getByRole("button", { name: "Ask Cue" }).click();
+  await page.getByRole("button", { name: "Ask Cue", exact: true }).click();
   const handle = page.getByRole("separator", {
     name: "Resize assistant panel",
   });

@@ -39,6 +39,7 @@ const {
   mockSetNewChat,
   mockStop,
   mockUseChats,
+  mockClearInputFocusRequest,
   chatState,
 } = vi.hoisted(() => ({
   mockCaptureAction: vi.fn(),
@@ -54,9 +55,11 @@ const {
   mockSetNewChat: vi.fn(),
   mockStop: vi.fn(),
   mockUseChats: vi.fn(),
+  mockClearInputFocusRequest: vi.fn(),
   chatState: {
     status: "ready" as ChatHelpers["status"],
     messages: [] as ChatHelpers["messages"],
+    inputFocusRequested: false,
   },
 }));
 const accountChat = vi.hoisted(() => ({
@@ -248,6 +251,8 @@ vi.mock("@/providers/ChatProvider", () => ({
     submitTextMessage: vi.fn(),
     stop: mockStop,
     ...accountChat,
+    inputFocusRequested: chatState.inputFocusRequested,
+    clearInputFocusRequest: mockClearInputFocusRequest,
   }),
 }));
 
@@ -273,6 +278,7 @@ beforeEach(() => {
   accountChat.switchedAccount = false;
   accountChat.chatAccountError = undefined;
   accountChat.openThreadAccountId = null;
+  chatState.inputFocusRequested = false;
   window.localStorage.clear();
   mockUseChatInput.mockReturnValue({ input: "", setInput: mockSetInput });
 });
@@ -528,6 +534,39 @@ describe("Chat stop", () => {
     fireEvent.click(submitButton);
 
     expect(mockStop).toHaveBeenCalledTimes(1);
+  });
+});
+
+// "Ask Cue about this email" opens the panel and asks for the cursor in it;
+// the panel takes the request once its input exists.
+describe("Chat input focus", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseChats.mockReturnValue({
+      data: undefined,
+      error: undefined,
+      isLoading: false,
+      mutate: mockMutate,
+    });
+  });
+
+  it("puts the cursor in the input when asked to, once", () => {
+    chatState.inputFocusRequested = true;
+    render(<Chat open />);
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("textbox", { name: "Message Cue" }),
+    );
+    expect(mockClearInputFocusRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves focus alone when nobody asked", () => {
+    render(<Chat open />);
+
+    expect(document.activeElement).not.toBe(
+      screen.getByRole("textbox", { name: "Message Cue" }),
+    );
+    expect(mockClearInputFocusRequest).not.toHaveBeenCalled();
   });
 });
 

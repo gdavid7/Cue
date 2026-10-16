@@ -9,6 +9,7 @@ import { parseReply } from "@/utils/mail";
 import { assertHasAiAccess } from "@/utils/premium/limits";
 import { redis } from "@/utils/redis";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
+import { GmailLabel } from "@/utils/gmail/label";
 import type { ParsedMessage } from "@/utils/types";
 import { getEmailAccountWithAi } from "@/utils/user/get";
 
@@ -16,6 +17,7 @@ const MAX_MESSAGES = 6;
 const MAX_MESSAGE_LENGTH = 1500;
 const MAX_KEY_POINTS = 4;
 const CACHE_TTL_SECONDS = 24 * 60 * 60;
+const EXTRACT_CACHE_TTL_SECONDS = 60 * 60;
 // The fallback quotes sentences that ask for something or set a date. English
 // only: it's a stand-in for when no model is available, not the main path.
 const ASK =
@@ -66,12 +68,19 @@ export async function getThreadBrief({
     logger.warn("Failed to load thread for brief", { error });
     return null;
   });
-  const messages = thread?.messages.slice(-MAX_MESSAGES) ?? [];
+  // An unsent draft is the user's own words, not what the thread asks of them.
+  const messages =
+    thread?.messages
+      .filter((message) => !message.labelIds?.includes(GmailLabel.DRAFT))
+      .slice(-MAX_MESSAGES) ?? [];
   const latest = messages.at(-1);
   if (!latest) return null;
 
-  // A new message changes the key, so a cached brief is never stale.
-  const cacheKey = `thread-brief:${emailAccountId}:${threadId}:${latest.id}`;
+  const cacheKey = briefCacheKey({
+    emailAccountId,
+    threadId,
+    messageId: latest.id,
+  });
   const cached = await redis.get<ThreadBrief>(cacheKey).catch(() => null);
   if (cached) return cached;
 
@@ -84,9 +93,29 @@ export async function getThreadBrief({
     return ai;
   }
   const extract = extractBrief(messages);
-  return extract && ai?.aiUnavailable
-    ? { ...extract, aiUnavailable: true }
-    : extract;
+  if (extract && ai?.aiUnavailable) {
+    const unavailable = { ...extract, aiUnavailable: true };
+    // Without AI access every open would read the thread again for the same
+    // words. Kept briefly, so an upgrade soon gets a written brief. A model
+    // failure isn't kept at all: the next open tries again.
+    await redis
+      .set(cacheKey, unavailable, { ex: EXTRACT_CACHE_TTL_SECONDS })
+      .catch(() => null);
+    return unavailable;
+  }
+  return extract;
+}
+
+/**
+ * The brief already written for a thread's latest message, without loading the
+ * thread or calling a model, so reopening a conversation costs one cache read.
+ */
+export async function getCachedThreadBrief(key: {
+  emailAccountId: string;
+  threadId: string;
+  messageId: string;
+}): Promise<ThreadBrief | null> {
+  return redis.get<ThreadBrief>(briefCacheKey(key)).catch(() => null);
 }
 
 async function aiBrief({
@@ -179,4 +208,18 @@ function splitSentences(text: string) {
           s,
         ),
     );
+}
+
+// Scoped to the account and keyed by the newest message: a new message gets a
+// fresh brief, and one account never reads another's.
+function briefCacheKey({
+  emailAccountId,
+  threadId,
+  messageId,
+}: {
+  emailAccountId: string;
+  threadId: string;
+  messageId: string;
+}) {
+  return `thread-brief:${emailAccountId}:${threadId}:${messageId}`;
 }
