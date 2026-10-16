@@ -1470,6 +1470,14 @@ export function MailShell() {
       ? senderCommandContext
       : null;
   // `useShortcuts` keeps handlers in a ref, so these need no memoization.
+  // Bound only while there is something to go back from, so a spare Escape
+  // stays with the page: the chat beside the list closes on it.
+  const getBackToList = () => {
+    if (isMailOverlayOpen) return;
+    if (selection.hasSelection) return () => selection.clear();
+    if (layout === "list" && openThreadId) return () => closeReader();
+    if (searchValue) return () => setSearch("");
+  };
   const handlers: ShortcutHandlers = (() => {
     if (sidePanelThreadId || labelPicker) return {};
     return {
@@ -1499,13 +1507,7 @@ export function MailShell() {
             requestReaderReply();
           }
         : () => openAt(clampedIndex),
-      backToList: isMailOverlayOpen
-        ? undefined
-        : () => {
-            if (selection.hasSelection) selection.clear();
-            else if (layout === "list" && openThreadId) closeReader();
-            else if (searchValue) setSearch("");
-          },
+      backToList: getBackToList(),
       nextSplit: () => {
         const index = splits.findIndex(
           (split) => split.id === displayedActiveSplitId,

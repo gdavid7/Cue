@@ -8,10 +8,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { SideNav } from "@/components/SideNav";
-import {
-  SidebarRight,
-  useSidebarRightCoversPage,
-} from "@/components/SidebarRight";
+import { BehindSidebarRight, SidebarRight } from "@/components/SidebarRight";
 import { bindChatPanelWidth } from "@/hooks/useChatPanelWidth";
 import { cn } from "@/utils";
 import { isMailShellPath } from "@/utils/path";
@@ -106,7 +103,7 @@ export function SideNavWithTopNav({
           the global navigation and its mobile header would be duplicates.
           The chat page puts the trigger in its own top bar, where a layout
           banner above it can't end up underneath a fixed one. */}
-      <BehindChatPanel hasChatPanel={!isAssistantRoute}>
+      <BehindSidebarRight name="chat-sidebar" disabled={isAssistantRoute}>
         {!isMailRoute && (
           <>
             {!isChatPagePath(pathname) && <MobileHeader />}
@@ -114,27 +111,9 @@ export function SideNavWithTopNav({
           </>
         )}
         <ContentWrapper>{children}</ContentWrapper>
-      </BehindChatPanel>
+      </BehindSidebarRight>
       {!isAssistantRoute ? <SidebarRight name="chat-sidebar" /> : null}
     </SidebarProvider>
-  );
-}
-
-// Where the chat panel covers the screen, the page behind it leaves the tab
-// order and the accessibility tree, as it would behind any dialog.
-function BehindChatPanel({
-  hasChatPanel,
-  children,
-}: {
-  hasChatPanel: boolean;
-  children: React.ReactNode;
-}) {
-  const chatCoversPage = useSidebarRightCoversPage("chat-sidebar");
-
-  return (
-    <div className="contents" inert={hasChatPanel && chatCoversPage}>
-      {children}
-    </div>
   );
 }
 

@@ -8,11 +8,9 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  SidebarRight,
-  useSidebarRightCoversPage,
-} from "@/components/SidebarRight";
+import { BehindSidebarRight, SidebarRight } from "@/components/SidebarRight";
 import { SidebarProvider, useSidebar } from "@/components/ui/sidebar";
 
 const screenSize = vi.hoisted(() => ({ isLarge: false }));
@@ -22,8 +20,8 @@ vi.mock("@/hooks/use-mobile", () => ({
   useIsLargeScreen: () => screenSize.isLarge,
 }));
 
-// Stands in for the chat, with an inner layer that handles Escape itself the
-// way Radix menus and dialogs do.
+// Stands in for the chat, with an inner layer that handles Escape itself and
+// is portaled out of the panel, the way Radix menus and dialogs are.
 vi.mock("@/components/assistant-chat/chat", () => ({
   Chat: () => <InnerLayer />,
 }));
@@ -101,6 +99,37 @@ describe("SidebarRight on a phone", () => {
 });
 
 describe("SidebarRight beside the page", () => {
+  it("closes on Escape from the page even when a page shortcut also claims it", async () => {
+    screenSize.isLarge = true;
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Ask Cue" }));
+    await screen.findByRole("button", { name: "Open layer" });
+    // Like mail's Escape shortcut, which handles the key before the window.
+    const pageShortcut = (event: KeyboardEvent) => {
+      if (event.key === "Escape") event.preventDefault();
+    };
+    document.addEventListener("keydown", pageShortcut);
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "Ask Cue" }), {
+      key: "Escape",
+    });
+    document.removeEventListener("keydown", pageShortcut);
+
+    expect(screen.queryByRole("button", { name: "Open layer" })).toBeNull();
+  });
+
+  it("leaves Escape in a portaled inner layer to that layer", async () => {
+    screenSize.isLarge = true;
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Ask Cue" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open layer" }));
+
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open layer" })).toBeTruthy();
+  });
+
   it("stays a side panel and leaves the page interactive", async () => {
     screenSize.isLarge = true;
     renderPanel();
@@ -119,7 +148,9 @@ describe("SidebarRight beside the page", () => {
 function renderPanel() {
   return render(
     <SidebarProvider defaultOpen={[]} sidebarNames={["chat-sidebar"]}>
-      <Page />
+      <BehindSidebarRight name="chat-sidebar">
+        <Page />
+      </BehindSidebarRight>
       <SidebarRight name="chat-sidebar" />
     </SidebarProvider>,
   );
@@ -127,14 +158,11 @@ function renderPanel() {
 
 function Page() {
   const { toggleSidebar } = useSidebar();
-  const coversPage = useSidebarRightCoversPage("chat-sidebar");
 
   return (
-    <div inert={coversPage}>
-      <button type="button" onClick={() => toggleSidebar(["chat-sidebar"])}>
-        Ask Cue
-      </button>
-    </div>
+    <button type="button" onClick={() => toggleSidebar(["chat-sidebar"])}>
+      Ask Cue
+    </button>
   );
 }
 
@@ -146,16 +174,19 @@ function InnerLayer() {
       <button type="button" onClick={() => setOpen(true)}>
         Open layer
       </button>
-      {open ? (
-        <div
-          role="menu"
-          onKeyDown={(event) => {
-            if (event.key !== "Escape") return;
-            event.preventDefault();
-            setOpen(false);
-          }}
-        />
-      ) : null}
+      {open
+        ? createPortal(
+            <div
+              role="menu"
+              onKeyDown={(event) => {
+                if (event.key !== "Escape") return;
+                event.preventDefault();
+                setOpen(false);
+              }}
+            />,
+            document.body,
+          )
+        : null}
     </>
   );
 }

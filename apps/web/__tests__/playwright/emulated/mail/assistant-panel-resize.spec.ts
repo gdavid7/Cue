@@ -63,6 +63,39 @@ test("drags the assistant panel wider, keeps the width after reload, and resets 
   await expectMailReflowed(page, conversations, DEFAULT_WIDTH);
 });
 
+test("closes the assistant with Escape from the mail list beside it", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const { conversations } = await openMail(page);
+  // Registered before the panel's own listener, so it sees what mail did.
+  await page.evaluate(() => {
+    window.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      (window as { escapeClaimed?: boolean }).escapeClaimed =
+        event.defaultPrevented;
+    });
+  });
+  const row = conversations.getByRole("option").first();
+
+  // With nothing selected, open or searched, mail's Escape has nothing to do
+  // and leaves the key alone.
+  await row.focus();
+  await page.keyboard.press("Escape");
+  expect(
+    await page.evaluate(
+      () => (window as { escapeClaimed?: boolean }).escapeClaimed,
+    ),
+  ).toBe(false);
+
+  await openAssistantPanel(page);
+  const input = page.getByRole("textbox", { name: "Message Cue" });
+  await expect(input).toBeVisible();
+  await row.focus();
+  await page.keyboard.press("Escape");
+  await expect(input).toBeHidden();
+});
+
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 

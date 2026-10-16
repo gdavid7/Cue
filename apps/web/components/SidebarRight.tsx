@@ -20,7 +20,7 @@ export function SidebarRight({
   name: string;
   className?: string;
 }) {
-  const { isOpen, close, closeOnEscape } = useSidebarPanel(name);
+  const { isOpen, close, onPanelKeyDown } = useSidebarPanel(name);
   const coversPage = useSidebarRightCoversPage(name);
   const panelId = useId();
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -56,9 +56,7 @@ export function SidebarRight({
       id={panelId}
       ref={setPanelRef}
       {...(coversPage ? MODAL_PROPS : undefined)}
-      // Handled here as well as on the window so an Escape typed in the chat
-      // closes it before the page's own Escape shortcut runs.
-      onKeyDown={(event) => closeOnEscape(event.nativeEvent)}
+      onKeyDown={(event) => onPanelKeyDown(event.nativeEvent)}
       className={cn(
         "fixed right-0 top-0 z-50 h-dvh border-l bg-background outline-none transition-transform duration-200 ease-linear motion-reduce:transition-none",
         // iOS keeps `dvh` full height under the keyboard; only the visual
@@ -80,8 +78,32 @@ export function SidebarRight({
   );
 }
 
-/** Below `lg` the open panel covers the whole screen, so the page behind it should be inert. */
-export function useSidebarRightCoversPage(name: string) {
+/**
+ * Wraps the page beside the panel. Where the open panel covers the screen, the
+ * page leaves the tab order and the accessibility tree, as it would behind any
+ * dialog.
+ */
+export function BehindSidebarRight({
+  name,
+  disabled = false,
+  children,
+}: {
+  name: string;
+  /** No panel is rendered with this page, so nothing covers it. */
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  const coversPage = useSidebarRightCoversPage(name);
+
+  return (
+    <div className="contents" inert={!disabled && coversPage}>
+      {children}
+    </div>
+  );
+}
+
+/** Below `lg` the open panel covers the whole screen. */
+function useSidebarRightCoversPage(name: string) {
   const isOpen = useIsSidebarPanelOpen(name);
   const isLargeScreen = useIsLargeScreen();
   return isOpen && !isLargeScreen;
@@ -98,9 +120,15 @@ function useSidebarPanel(name: string) {
     setOpenMobile(removeSidebar);
   }, [name, setOpen, setOpenMobile]);
 
-  const closeOnEscape = useCallback(
+  // React bubbles events from the panel's portaled menus and dialogs through
+  // the panel too, so this sees every Escape that belongs to the chat.
+  const panelEvent = useRef<KeyboardEvent | null>(null);
+  const onPanelKeyDown = useCallback(
     (event: KeyboardEvent) => {
+      panelEvent.current = event;
       // A menu or dialog inside the panel claims Escape for itself first.
+      // Claiming it here, before the page's shortcuts on the document, keeps
+      // mail's own Escape from also acting behind the chat.
       if (event.key !== "Escape" || event.defaultPrevented) return;
       event.preventDefault();
       close();
@@ -110,11 +138,17 @@ function useSidebarPanel(name: string) {
 
   useEffect(() => {
     if (!isOpen) return;
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [closeOnEscape, isOpen]);
+    // Escape from the page beside the panel closes it too, whatever the page
+    // did with the key.
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event === panelEvent.current) return;
+      close();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [close, isOpen]);
 
-  return { close, closeOnEscape, isOpen };
+  return { close, isOpen, onPanelKeyDown };
 }
 
 function useIsSidebarPanelOpen(name: string) {
