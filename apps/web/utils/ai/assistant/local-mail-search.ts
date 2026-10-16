@@ -7,6 +7,7 @@ import type { Logger } from "@/utils/logger";
 import type { AssistantSearchSyntax } from "@/utils/mail-engine/assistant-search";
 import { assertWithinUserRateLimit } from "@/utils/rate-limit";
 import { redis } from "@/utils/redis";
+import { logRedisFailureOnce } from "@/utils/redis/unavailable-log";
 import { sleep } from "@/utils/sleep";
 
 // The browser answers in tens of milliseconds plus a round trip; past this a
@@ -91,7 +92,9 @@ export function createLocalMailSearch({
         // Only a request this run opened can be answered.
         await redis.set(key, PENDING, { ex: PENDING_TTL_SECONDS });
       } catch (error) {
-        logger.warn("Could not open a local mail search", { error });
+        logRedisFailureOnce(logger, "Could not open a local mail search", {
+          error,
+        });
         return null;
       }
       writer.write({
@@ -109,9 +112,20 @@ export function createLocalMailSearch({
           abortSignal,
         );
         if (abortSignal?.aborted) break;
-        const stored = await redis
-          .eval<string[], unknown>(takeScript, [key], [PENDING])
-          .catch(() => null);
+        let stored: unknown;
+        try {
+          stored = await redis.eval<string[], unknown>(
+            takeScript,
+            [key],
+            [PENDING],
+          );
+        } catch (error) {
+          // The answer can't arrive without Redis; search the provider now.
+          logRedisFailureOnce(logger, "Could not read a local mail search", {
+            error,
+          });
+          return null;
+        }
         if (!stored || stored === PENDING) continue;
         const parsed = localMailSearchResultSchema.safeParse(
           parseStored(stored),
