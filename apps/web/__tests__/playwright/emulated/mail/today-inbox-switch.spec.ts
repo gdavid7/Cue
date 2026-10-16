@@ -67,27 +67,43 @@ test("switching between Today and the inbox answers at once", async ({
     });
     await waitForEngineIdle(page);
 
+    const switchTo = async (destination: Destination, phase: string) => {
+      await page.evaluate(tagMounted);
+      const before = await page.evaluate(snapshot);
+      requests.length = 0;
+      await armInteraction(page);
+      await page.evaluate(watchSwitch, destination);
+      await linkTo(page, destination).click();
+      const times = await readSwitch(page);
+      for (const [step, ms] of Object.entries(times))
+        recorder.add(`to-${destination}-${step}-${phase}`, ms);
+      // The row it left lets go of both the highlight and aria-current.
+      expect.soft(await page.evaluate(rowStillLit, destination)).toBe(false);
+      if (phase === "first")
+        await capturePlaywrightCheckpoint(
+          page,
+          testInfo,
+          `${destination}-after-switch`,
+        );
+      const homeLoads = await logSwitch(page, destination, before, requests);
+      // One open of Today is one Gmail read at most, however it was reached.
+      expect.soft(homeLoads).toBeLessThanOrEqual(1);
+    };
+
     for (let run = 0; run <= perfRuns; run++) {
       const phase = run === 0 ? "first" : "repeat";
-      for (const destination of ["today", "inbox"] as const) {
-        await page.evaluate(tagMounted);
-        const before = await page.evaluate(snapshot);
-        requests.length = 0;
-        await armInteraction(page);
-        await page.evaluate(watchSwitch, destination);
-        await linkTo(page, destination).click();
-        const times = await readSwitch(page);
-        for (const [step, ms] of Object.entries(times))
-          recorder.add(`to-${destination}-${step}-${phase}`, ms);
-        if (run === 0)
-          await capturePlaywrightCheckpoint(
-            page,
-            testInfo,
-            `${destination}-after-switch`,
-          );
-        await logSwitch(page, destination, before, requests);
-      }
+      for (const destination of ["today", "inbox"] as const)
+        await switchTo(destination, phase);
     }
+
+    // A new session in the same browser: Today opens on what it last showed.
+    await page.goto(inbox);
+    await page.waitForFunction(firstInboxRowVisible, undefined, {
+      timeout: 60_000,
+    });
+    await waitForEngineIdle(page);
+    await switchTo("today", "reload");
+    recorder.add("today-cache-bytes", await page.evaluate(cachedTodayBytes));
   } catch (error) {
     testInfo.annotations.push({ type: "failed-at", description: page.url() });
     await page.screenshot({ path: testInfo.outputPath("switch-failure.png") });
@@ -116,7 +132,31 @@ test("switching between Today and the inbox answers at once", async ({
   expect
     .soft(repeat("to-inbox-content"))
     .toBeLessThan(SWITCH_BUDGETS_MS.inboxContent);
+  expect
+    .soft(recorder.median("to-today-content-reload"))
+    .toBeLessThan(SWITCH_BUDGETS_MS.todayContent);
 });
+
+/** Whether the row the switch left still shows as current in any way. */
+function rowStillLit(destination: Destination) {
+  const left = destination === "today" ? /^Inbox/ : /^Today/;
+  for (const link of document.querySelectorAll(
+    'a[data-highlighted], a[aria-current="page"]',
+  ))
+    if (left.test(link.textContent?.trim() ?? "")) return true;
+  return false;
+}
+
+/** The size of Today's saved copy in this browser. */
+function cachedTodayBytes() {
+  let bytes = 0;
+  for (let index = 0; index < window.localStorage.length; index++) {
+    const key = window.localStorage.key(index);
+    if (key?.startsWith("cue:today:"))
+      bytes += key.length + (window.localStorage.getItem(key)?.length ?? 0);
+  }
+  return bytes;
+}
 
 function linkTo(page: Page, destination: Destination) {
   return destination === "today"
@@ -213,6 +253,7 @@ async function readSwitch(page: Page): Promise<SwitchTimes> {
 /**
  * Logs what the switch cost besides time: whether the sidebar and list were
  * rebuilt, whether the mail engine restarted, and what it asked the server.
+ * Returns how many times it loaded Today's lanes.
  */
 async function logSwitch(
   page: Page,
@@ -242,6 +283,9 @@ async function logSwitch(
       .filter((line) => /^(rsc|document|fetch)/.test(line)),
   };
   console.log(`SWITCH to-${destination} ${JSON.stringify(detail)}`);
+  return requests.filter(
+    (request) => new URL(request.url()).pathname === "/api/user/home",
+  ).length;
 }
 
 type Snapshot = {
