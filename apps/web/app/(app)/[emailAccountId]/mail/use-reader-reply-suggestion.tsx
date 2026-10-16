@@ -103,10 +103,12 @@ export function useReaderReplySuggestion({
 
   const run = Boolean(current?.run);
   // Asked for by the user, so it runs for any message someone else sent,
-  // whatever the setting and whether or not Cue thinks it needs a reply.
+  // whether or not Cue thinks it needs a reply. "Auto draft replies" off
+  // still means no AI-written reply at all; the server enforces it too.
   const canRequestReply = Boolean(latest) && !latestIsFromUser && !hasDraft;
+  const writesReplies = draftReplies.enabled || draftReplies.loading;
   const requestReply = () => {
-    if (!latest || !canRequestReply || run) return;
+    if (!latest || !canRequestReply || !writesReplies || run) return;
     setDecision({ id: latest.id, eligible: true, run: true });
   };
   const { phase, suggestion } = useReplySuggestion({
@@ -161,11 +163,17 @@ export function useReaderReplySuggestion({
     replyStatus,
     reply: {
       canRequest: canRequestReply,
+      /** Whether asking gets Cue's draft, or just the composer. */
+      drafts: writesReplies,
       request: requestReply,
       /** Whether Cue is still working out the reply. */
       pending: phase === "checking-mail" || phase === "checking-web",
-      /** The newest message once its suggestion has settled, either way. */
-      settledFor: run && phase === "done" ? latest?.id : undefined,
+      /**
+       * The newest message once there's nothing to wait for: its suggestion
+       * settled either way, or Cue doesn't write replies for this account.
+       */
+      settledFor:
+        (run && phase === "done") || !writesReplies ? latest?.id : undefined,
     },
   };
 }

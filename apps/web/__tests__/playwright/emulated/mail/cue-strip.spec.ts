@@ -20,6 +20,9 @@ const SUMMARY =
 const REPLY =
   "Hi Maya, my graduation date is still June 2027, and I'm not planning on grad school.";
 const PREMIUM_ID = "playwright-cue-strip-premium";
+const TO_REPLY_RULE_ID = "playwright-cue-strip-to-reply";
+const DRAFT_ACTION_ID = "playwright-cue-strip-draft";
+let restoreDrafting: (() => Promise<unknown>) | undefined;
 // Every other email gets an empty note, as a real model would give most mail;
 // otherwise the emulator's first enum value would say each one needs a reply.
 const EMPTY_INSIGHT = {
@@ -43,6 +46,8 @@ test.beforeEach(async ({ page }) => {
   );
   const emailAccountId = await getEmailAccountId(page);
   await grantAiAccess(emailAccountId);
+  // "Auto draft replies" off means Cue writes no reply, asked or not.
+  restoreDrafting = await enableDraftReplies(emailAccountId);
   await registerLlmReply({
     match: "You add a one-line note under an email",
     object: EMPTY_INSIGHT,
@@ -100,6 +105,8 @@ test.afterEach(async ({ page }) => {
     );
     await client.query(`DELETE FROM "Premium" WHERE id = $1`, [PREMIUM_ID]);
   });
+  await restoreDrafting?.();
+  restoreDrafting = undefined;
 });
 
 test("sums up a conversation with a person, not a newsletter, and drafts the reply", async ({
@@ -209,6 +216,64 @@ async function grantAiAccess(emailAccountId: string) {
         WHERE id = (SELECT "userId" FROM "EmailAccount" WHERE id = $1)`,
       [emailAccountId, PREMIUM_ID],
     );
+  });
+}
+
+// Drafting is the To Reply rule with a draft action. The database outlives
+// this spec, so whatever was there is put back.
+async function enableDraftReplies(emailAccountId: string) {
+  return withClient(async (client) => {
+    const existing = await client.query<{ id: string; enabled: boolean }>(
+      `SELECT id, enabled FROM "Rule"
+       WHERE "emailAccountId" = $1 AND "systemType" = 'TO_REPLY'`,
+      [emailAccountId],
+    );
+    const rule = existing.rows[0];
+    if (!rule) {
+      await client.query(
+        `INSERT INTO "Rule"
+          (id, name, enabled, automate, "runOnThreads", "systemType",
+           "emailAccountId", "createdAt", "updatedAt")
+         VALUES ($1, 'Cue strip To Reply', true, true, true, 'TO_REPLY', $2,
+                 CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT DO NOTHING`,
+        [TO_REPLY_RULE_ID, emailAccountId],
+      );
+    } else {
+      await client.query(`UPDATE "Rule" SET enabled = true WHERE id = $1`, [
+        rule.id,
+      ]);
+    }
+    const ruleId = rule?.id ?? TO_REPLY_RULE_ID;
+    const drafts = await client.query(
+      `SELECT 1 FROM "Action" WHERE "ruleId" = $1 AND type = 'DRAFT_EMAIL'`,
+      [ruleId],
+    );
+    if (!drafts.rowCount) {
+      await client.query(
+        `INSERT INTO "Action"
+          (id, type, "ruleId", "emailAccountId", "createdAt", "updatedAt")
+         VALUES ($1, 'DRAFT_EMAIL', $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT DO NOTHING`,
+        [DRAFT_ACTION_ID, ruleId, emailAccountId],
+      );
+    }
+    return () =>
+      withClient(async (cleanup) => {
+        await cleanup.query(`DELETE FROM "Action" WHERE id = $1`, [
+          DRAFT_ACTION_ID,
+        ]);
+        if (rule) {
+          await cleanup.query(`UPDATE "Rule" SET enabled = $2 WHERE id = $1`, [
+            rule.id,
+            rule.enabled,
+          ]);
+        } else {
+          await cleanup.query(`DELETE FROM "Rule" WHERE id = $1`, [
+            TO_REPLY_RULE_ID,
+          ]);
+        }
+      });
   });
 }
 

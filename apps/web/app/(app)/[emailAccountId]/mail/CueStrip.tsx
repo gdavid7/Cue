@@ -66,7 +66,7 @@ export function CueStrip({
    * with the keyboard never asks for a summary.
    */
   enabled: boolean;
-  reply: { canRequest: boolean; pending: boolean };
+  reply: { canRequest: boolean; drafts: boolean; pending: boolean };
   onDraftReply: () => void;
   onArchive?: () => void;
   onSnooze?: (until: Date) => void;
@@ -168,7 +168,11 @@ export function CueStrip({
             key={action}
             onClick={onDraftReply}
           >
-            {reply.pending ? "Drafting…" : "Draft reply"}
+            {reply.pending
+              ? "Drafting…"
+              : reply.drafts
+                ? "Draft reply"
+                : "Reply"}
           </StripButton>
         ) : null;
       case "add-to-calendar":

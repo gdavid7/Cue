@@ -85,6 +85,7 @@ vi.mock("@/utils/actions/thread-assist", () => ({
 
 const replyState = {
   canRequest: true,
+  drafts: true,
   pending: false,
   settledFor: undefined as string | undefined,
   request: vi.fn(),

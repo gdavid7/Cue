@@ -172,13 +172,17 @@ describe("useReaderReplySuggestion", () => {
       );
     });
 
-    it("writes one even while Auto draft replies is off", () => {
+    // The setting turns off every AI-written reply; asking opens the
+    // composer straight away instead of waiting on one.
+    it("writes none while Auto draft replies is off", () => {
       mocks.draftReplies = { enabled: false, loading: false };
       const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
 
       act(() => result.current.reply.request());
 
-      expect(lastEnabled()).toBe(true);
+      expect(lastEnabled()).toBe(false);
+      expect(result.current.reply.drafts).toBe(false);
+      expect(result.current.reply.settledFor).toBe("ask");
     });
 
     it("isn't offered when the user wrote the newest message", () => {

@@ -129,17 +129,28 @@ describe("CueStrip", () => {
   it("says Cue is drafting while the reply is being worked out", async () => {
     renderStrip({
       labels: ["Label_reply"],
-      reply: { canRequest: true, pending: true },
+      reply: { canRequest: true, drafts: true, pending: true },
     });
 
     const drafting = await screen.findByRole("button", { name: "Drafting…" });
     expect(drafting.getAttribute("aria-busy")).toBe("true");
   });
 
+  it("says Reply, not Draft reply, when Cue doesn't write replies here", async () => {
+    const props = renderStrip({
+      labels: ["Label_reply"],
+      reply: { canRequest: true, drafts: false, pending: false },
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Reply" }));
+    expect(props.onDraftReply).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Draft reply" })).toBeNull();
+  });
+
   it("offers no draft for a conversation the user spoke last in", async () => {
     renderStrip({
       labels: ["Label_reply"],
-      reply: { canRequest: false, pending: false },
+      reply: { canRequest: false, drafts: true, pending: false },
     });
     await screen.findByText(SUMMARY);
 
@@ -151,12 +162,12 @@ describe("CueStrip", () => {
 function renderStrip({
   labels,
   enabled = true,
-  reply = { canRequest: true, pending: false },
+  reply = { canRequest: true, drafts: true, pending: false },
   ...overrides
 }: {
   labels: string[];
   enabled?: boolean;
-  reply?: { canRequest: boolean; pending: boolean };
+  reply?: { canRequest: boolean; drafts: boolean; pending: boolean };
   onAskCue?: (() => void) | undefined;
 }) {
   const props: ComponentProps<typeof CueStrip> = {
