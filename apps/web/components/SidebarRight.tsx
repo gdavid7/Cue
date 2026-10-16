@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useId, useRef } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef } from "react";
 import { ChatPanelResizeHandle } from "@/components/ChatPanelResizeHandle";
 import { useSidebar } from "@/components/ui/sidebar";
 import { useIsLargeScreen } from "@/hooks/use-mobile";
@@ -35,13 +35,23 @@ export function SidebarRight({
 
   // Covering the page, the panel behaves as a dialog: what opened it is left
   // behind an inert page, so focus has to be carried in and brought back.
-  useEffect(() => {
+  // The opener is read before any effect inside the panel can move focus,
+  // such as the chat taking it for "Ask Cue about this email".
+  const openerRef = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
     if (!coversPage) return;
     const active = document.activeElement;
-    const opener = active instanceof HTMLElement ? active : null;
-    panelRef.current?.focus();
+    openerRef.current = active instanceof HTMLElement ? active : null;
+  }, [coversPage]);
+  useEffect(() => {
+    if (!coversPage) return;
+    const panel = panelRef.current;
+    // Child effects run first, so focus already placed inside stays there.
+    if (panel && !panel.contains(document.activeElement)) panel.focus();
 
     return () => {
+      const opener = openerRef.current;
+      openerRef.current = null;
       const focused = document.activeElement;
       const focusLeftWithPanel =
         !focused ||

@@ -7,27 +7,31 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BehindSidebarRight, SidebarRight } from "@/components/SidebarRight";
 import { SidebarProvider, useSidebar } from "@/components/ui/sidebar";
 
 const screenSize = vi.hoisted(() => ({ isLarge: false }));
+// Stands in for ChatProvider's input focus request.
+const chatInput = vi.hoisted(() => ({ focusRequested: false }));
 
 vi.mock("@/hooks/use-mobile", () => ({
   useIsMobile: () => !screenSize.isLarge,
   useIsLargeScreen: () => screenSize.isLarge,
 }));
 
-// Stands in for the chat, with an inner layer that handles Escape itself and
+// Stands in for the chat: an input that takes focus when asked to, as the real
+// one does in its own effect, and an inner layer that handles Escape itself and
 // is portaled out of the panel, the way Radix menus and dialogs are.
 vi.mock("@/components/assistant-chat/chat", () => ({
-  Chat: () => <InnerLayer />,
+  Chat: () => <MockChat />,
 }));
 
 beforeEach(() => {
   screenSize.isLarge = false;
+  chatInput.focusRequested = false;
 });
 
 afterEach(cleanup);
@@ -98,6 +102,44 @@ describe("SidebarRight on a phone", () => {
   });
 });
 
+describe("SidebarRight on a phone, asked to focus the chat input", () => {
+  it("leaves focus in the chat input and gives it back to Ask Cue on close", async () => {
+    await renderPanelWithChatLoaded();
+    const askAboutEmail = screen.getByRole("button", {
+      name: "Ask Cue about this email",
+    });
+
+    askAboutEmail.focus();
+    fireEvent.click(askAboutEmail);
+
+    const input = await screen.findByRole("textbox", { name: "Message Cue" });
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    // Focus has settled; nothing after the chat's own effect took it back.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(document.activeElement).toBe(input);
+
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(askAboutEmail);
+  });
+
+  it("leaves focus on the page when Ask Cue is gone by the time it closes", async () => {
+    const { rerender } = await renderPanelWithChatLoaded();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Ask Cue about this email" }),
+    );
+    const input = await screen.findByRole("textbox", { name: "Message Cue" });
+    await waitFor(() => expect(document.activeElement).toBe(input));
+
+    rerender(<PanelWithPage showAskAboutEmail={false} />);
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(document.body);
+  });
+});
+
 describe("SidebarRight beside the page", () => {
   it("closes on Escape from the page even when a page shortcut also claims it", async () => {
     screenSize.isLarge = true;
@@ -146,23 +188,67 @@ describe("SidebarRight beside the page", () => {
 });
 
 function renderPanel() {
-  return render(
+  return render(<PanelWithPage />);
+}
+
+// The chat loads lazily; once loaded it mounts in the same commit that opens
+// the panel, so its effects run before the panel's.
+async function renderPanelWithChatLoaded() {
+  const result = renderPanel();
+  fireEvent.click(screen.getByRole("button", { name: "Ask Cue" }));
+  await screen.findByRole("textbox", { name: "Message Cue" });
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  return result;
+}
+
+function PanelWithPage({ showAskAboutEmail = true }) {
+  return (
     <SidebarProvider defaultOpen={[]} sidebarNames={["chat-sidebar"]}>
       <BehindSidebarRight name="chat-sidebar">
-        <Page />
+        <Page showAskAboutEmail={showAskAboutEmail} />
       </BehindSidebarRight>
       <SidebarRight name="chat-sidebar" />
-    </SidebarProvider>,
+    </SidebarProvider>
   );
 }
 
-function Page() {
-  const { toggleSidebar } = useSidebar();
+function Page({ showAskAboutEmail }: { showAskAboutEmail: boolean }) {
+  const { toggleSidebar, setOpenMobile } = useSidebar();
 
   return (
-    <button type="button" onClick={() => toggleSidebar(["chat-sidebar"])}>
-      Ask Cue
-    </button>
+    <>
+      <button type="button" onClick={() => toggleSidebar(["chat-sidebar"])}>
+        Ask Cue
+      </button>
+      {showAskAboutEmail ? (
+        <button
+          type="button"
+          onClick={() => {
+            chatInput.focusRequested = true;
+            setOpenMobile((open) => [...open, "chat-sidebar"]);
+          }}
+        >
+          Ask Cue about this email
+        </button>
+      ) : null}
+    </>
+  );
+}
+
+function MockChat() {
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (!chatInput.focusRequested) return;
+    inputRef.current?.focus();
+    chatInput.focusRequested = false;
+  }, []);
+
+  return (
+    <>
+      <textarea aria-label="Message Cue" ref={inputRef} />
+      <InnerLayer />
+    </>
   );
 }
 
