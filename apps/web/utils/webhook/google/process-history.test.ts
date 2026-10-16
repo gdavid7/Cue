@@ -1064,6 +1064,52 @@ describe("processHistoryForUser - backlogs", () => {
     expect(lastCursorUpdate()).toBe("1300");
   });
 
+  it("never leaves label changes running after the run ends and releases its lease", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.mocked(getHistory).mockResolvedValue({
+      history: [
+        historyMessage("1100", "a", "thread-a", ["INBOX"]),
+        historyMessage("1200", "b", "thread-b", ["INBOX"]),
+        {
+          id: "1300",
+          labelsRemoved: [
+            { message: { id: "l2", threadId: "t-l" }, labelIds: ["UNREAD"] },
+          ],
+        },
+      ],
+    } as any);
+    // Saving progress after "a" fails, which ends the run with an error
+    // while "b" is still being processed.
+    vi.mocked(prisma.$executeRaw).mockRejectedValueOnce(new Error("db down"));
+    const timeline: string[] = [];
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      const id = event.item.message?.id;
+      timeline.push(`start ${id}`);
+      if (id === "a") vi.setSystemTime(Date.now() + 15_000);
+      await new Promise((resolve) => setTimeout(resolve, id === "b" ? 30 : 1));
+      timeline.push(`end ${id}`);
+    });
+    vi.mocked(releaseGmailHistoryLease).mockImplementation(async () => {
+      timeline.push("release lease");
+    });
+
+    try {
+      await processHistoryForUser(
+        { emailAddress: backlogAccount.email, historyId: 1300 },
+        {},
+        logger,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(timeline).toContain("release lease");
+    // "b" finishing after the run ended must not start the label change.
+    expect(timeline).toContain("end b");
+    expect(timeline).not.toContain("start l2");
+  });
+
   it("processes new inbox mail newest first, a few messages at a time", async () => {
     vi.mocked(getHistory).mockResolvedValue({
       history: inboxHistory(

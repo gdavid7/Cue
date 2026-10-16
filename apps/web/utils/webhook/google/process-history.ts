@@ -507,20 +507,27 @@ async function processHistory(
     });
   };
 
-  drainLabels();
-  await mapWithConcurrency(
-    [...threads.values()].reverse(),
-    NEW_MESSAGE_CONCURRENCY,
-    async (thread) => {
-      for (const event of thread) {
-        await run(event);
-        if (!done.has(event)) return;
-        drainLabels();
-      }
-    },
-  );
-  drainLabels();
-  await labelDrain;
+  try {
+    drainLabels();
+    await mapWithConcurrency(
+      [...threads.values()].reverse(),
+      NEW_MESSAGE_CONCURRENCY,
+      async (thread) => {
+        for (const event of thread) {
+          await run(event);
+          if (!done.has(event)) return;
+          drainLabels();
+        }
+      },
+    );
+    drainLabels();
+    await labelDrain;
+  } finally {
+    // The label chain must not outlive the run or its lease, even when a
+    // thread fails and others are still finishing.
+    labelsBlocked = true;
+    await labelDrain;
+  }
   if (labelError !== undefined) throw labelError;
 
   await saveProgress({ final: true });
