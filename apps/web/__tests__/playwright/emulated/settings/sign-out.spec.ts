@@ -8,8 +8,10 @@ const PLAYWRIGHT_TEST_EMAIL =
   process.env.PLAYWRIGHT_TEST_EMAIL || "playwright-test@gmail.com";
 // One click used to leave the page waiting forever on the mail engine. A dev
 // server renders /login on demand, so it gets more room than a production build.
+// The production budget catches that hang, not a slow redirect: loaded CI
+// runners have taken 3.1-3.2 s for a normal sign-out, so 4 s leaves headroom.
 const SIGN_OUT_BUDGET_MS =
-  process.env.PLAYWRIGHT_PRODUCTION === "1" ? 3000 : 15_000;
+  process.env.PLAYWRIGHT_PRODUCTION === "1" ? 4000 : 15_000;
 
 // Signing out ends the session, so each case signs in on its own instead of
 // spending the shared session every other spec runs on.
