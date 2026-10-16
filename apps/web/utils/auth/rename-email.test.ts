@@ -4,10 +4,14 @@ import { renameGoogleEmail } from "@/utils/auth/rename-email";
 import prisma from "@/utils/__mocks__/prisma";
 import { invalidateAccountValidation } from "@/utils/redis/account-validation";
 import { env } from "@/env";
+import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
 
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/redis/account-validation", () => ({
   invalidateAccountValidation: vi.fn(),
+}));
+vi.mock("@/utils/user/own-addresses", () => ({
+  invalidateUserOwnAddresses: vi.fn(),
 }));
 vi.mock("@/utils/posthog", () => ({ posthogCaptureEvent: vi.fn() }));
 
@@ -126,6 +130,20 @@ describe("renameGoogleEmail", () => {
       userId: "user",
       emailAccountId: "mailbox",
     });
+  });
+
+  // The watch cycle renames mailboxes too, outside any linking flow.
+  it("forgets the user's own addresses after a rename", async () => {
+    await renameGoogleEmail(input);
+    expect(invalidateUserOwnAddresses).toHaveBeenCalledWith("user");
+  });
+
+  it("keeps the user's own addresses when nothing is renamed", async () => {
+    await renameGoogleEmail({
+      ...input,
+      profile: { ...input.profile, email: input.mailbox.email },
+    });
+    expect(invalidateUserOwnAddresses).not.toHaveBeenCalled();
   });
 
   it("does not change the primary login when renaming a secondary mailbox", async () => {

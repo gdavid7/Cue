@@ -857,9 +857,8 @@ export async function handleLinkAccount(
         ])
       )[0];
 
-    // A token refresh keeps the same address; a new or renamed one changes them.
-    if (!linkedEmailAccount || renamedMailbox)
-      await invalidateUserOwnAddresses(account.userId);
+    // A renamed mailbox clears this itself; a token refresh changes nothing.
+    if (!linkedEmailAccount) await invalidateUserOwnAddresses(account.userId);
 
     await clearAccountDisconnectedErrorIfResolved({
       userId: account.userId,
