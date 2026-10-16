@@ -58,34 +58,55 @@ export function buildReplyAllRecipients(
 /**
  * Recipients the inline composer opens with. Following up on your own message
  * keeps its recipients; replying to someone else goes back to them, and reply
- * all also copies everyone else on the message except you.
+ * all also copies everyone else on the message except you. "You" is every
+ * address the user has connected, not only the one replying.
  */
 export function buildComposeReplyRecipients({
   headers,
   sentFromUser,
   replyAll,
-  userEmail,
+  ownEmails,
 }: {
   headers: ParsedMessageHeaders;
   sentFromUser: boolean;
   replyAll: boolean;
-  userEmail: string;
+  ownEmails: string[];
 }): { to: string; cc: string; bcc: string } {
   if (sentFromUser) {
     return { to: headers.to, cc: headers.cc ?? "", bcc: headers.bcc ?? "" };
   }
   if (!replyAll) return { to: headers.from, cc: headers.cc ?? "", bcc: "" };
 
-  const recipients = buildReplyAllRecipients(headers, undefined, userEmail);
+  const recipients = buildReplyAllRecipients(headers, undefined, ownEmails);
+  const ownKeys = new Set(ownEmails.map(addressKey));
+  const isOwn = (recipient: string) => ownKeys.has(addressKey(recipient));
+
+  // Sent from another of the user's mailboxes: reply all to everyone else.
+  if (isOwn(recipients.to)) {
+    const to = splitRecipientList(headers.to).filter(
+      (recipient) => !isOwn(recipient),
+    );
+    if (to.length) {
+      const toKeys = new Set(to.map(addressKey));
+      return {
+        to: to.join(", "),
+        cc: recipients.cc
+          .filter((recipient) => !toKeys.has(addressKey(recipient)))
+          .join(", "),
+        bcc: "",
+      };
+    }
+  }
+
   return { to: recipients.to, cc: recipients.cc.join(", "), bcc: "" };
 }
 
 /** Reply all only means something when someone besides the sender and you is on it. */
 export function hasReplyAllRecipients(
   headers: ParsedMessageHeaders,
-  userEmail: string,
+  ownEmails: string[],
 ) {
-  return buildReplyAllRecipients(headers, undefined, userEmail).cc.length > 0;
+  return buildReplyAllRecipients(headers, undefined, ownEmails).cc.length > 0;
 }
 
 /**
@@ -125,6 +146,10 @@ export function mergeAndDedupeRecipients(
   }
 
   return result;
+}
+
+function addressKey(recipient: string) {
+  return extractEmailAddress(recipient).toLowerCase();
 }
 
 function addHeaderRecipientsToCcSet({

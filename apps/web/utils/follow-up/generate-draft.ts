@@ -11,6 +11,7 @@ import prisma from "@/utils/prisma";
 import { withPrismaRetry } from "@/utils/prisma-retry";
 import { captureException } from "@/utils/error";
 import { shouldSkipAutoDraft } from "@/utils/auto-draft";
+import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 
 /**
  * Generates a follow-up draft for a thread that's awaiting a reply.
@@ -108,7 +109,7 @@ export async function generateFollowUpDraft({
         to: recipientOverride,
         content: draftContent,
       },
-      emailAccount.email,
+      [emailAccount.email, ...(await getUserOwnAddresses(emailAccount.userId))],
       undefined,
     );
 

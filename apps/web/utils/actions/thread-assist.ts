@@ -22,6 +22,7 @@ import {
   getSuggestedReplySettings,
 } from "@/utils/thread-context/suggest-reply";
 import type { ParsedMessage } from "@/utils/types";
+import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 
 /**
  * The user's correction when the AI got a conversation wrong: back in the
@@ -91,7 +92,7 @@ export const saveSuggestedReplyAction = actionClient
   .inputSchema(saveSuggestedReplyBody)
   .action(
     async ({
-      ctx: { emailAccountId, emailAccount, provider, logger },
+      ctx: { emailAccountId, emailAccount, provider, logger, userId },
       parsedInput: { threadId, content },
     }) => {
       const emailProvider = await createEmailProvider({
@@ -132,7 +133,7 @@ export const saveSuggestedReplyAction = actionClient
         const created = await emailProvider.draftEmail(
           replyTo,
           { content: body },
-          emailAccount.email,
+          [emailAccount.email, ...(await getUserOwnAddresses(userId))],
         );
         if (!created.draftId)
           throw new SafeError("Drafts are turned off on this server.");

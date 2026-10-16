@@ -55,6 +55,7 @@ import { HtmlEmail, PlainEmail } from "@/components/email-list/EmailContents";
 import { DarkEmailToggle } from "@/components/email-list/DarkEmailToggle";
 import { EmailAttachments } from "@/components/email-list/EmailAttachments";
 import { useAccount } from "@/providers/EmailAccountProvider";
+import { useOwnEmailAddresses } from "@/hooks/useOwnEmailAddresses";
 import { useComposeModal } from "@/providers/ComposeModalProvider";
 import { formatReplySubject } from "@/utils/email/subject";
 import {
@@ -190,6 +191,7 @@ export function EmailMessage({
   focusComposer?: boolean;
 }) {
   const { emailAccountId, userEmail } = useAccount();
+  const ownEmails = useOwnEmailAddresses();
   const { poppedOutDraftSessionId } = useComposeModal();
   const [replyAllOverride, setReplyAllOverride] = useState<boolean | null>(
     null,
@@ -542,7 +544,7 @@ export function EmailMessage({
               to the end of it always lands on a way to answer. */}
           {replyBarShown && (
             <ReplyBar
-              canReplyAll={canReplyAllTo(message, userEmail)}
+              canReplyAll={canReplyAllTo(message, ownEmails)}
               onForward={onForward}
               onReply={onReply}
               onReplyAll={onReplyAll}
@@ -706,10 +708,11 @@ function MessageHeader({
   hasDraft: boolean;
   sentMessageOpen?: SentMessageOpenState;
 }) {
-  const { emailAccount, emailAccountId, userEmail } = useAccount();
+  const { emailAccount, emailAccountId } = useAccount();
+  const ownEmails = useOwnEmailAddresses();
 
   const isSent = message.labelIds?.includes(GmailLabel.SENT) ?? false;
-  const canReplyAll = canReplyAllTo(message, userEmail);
+  const canReplyAll = canReplyAllTo(message, ownEmails);
   const senderEmail = extractEmailAddress(message.headers.from);
   const senderName = senderNameOf(message);
   const contactPhoto = useContactPhoto({
@@ -808,7 +811,7 @@ function MessageHeader({
           type="button"
         >
           <span className="hidden min-w-0 truncate text-muted-foreground text-xs sm:block">
-            {recipientSummary(message.headers, userEmail)}
+            {recipientSummary(message.headers, ownEmails)}
           </span>
           <span className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors group-hover/details:bg-muted group-hover/details:text-foreground">
             <ChevronDownIcon
@@ -987,7 +990,8 @@ function ReplyPanel({
   replyAnchor?: ParsedMessage;
   replyAll?: boolean;
 }) {
-  const { emailAccountId, userEmail } = useAccount();
+  const { emailAccountId } = useAccount();
+  const ownEmails = useOwnEmailAddresses();
   const { popOutReply } = useComposeModal();
   const replyTargetId = replyAnchor?.id ?? message.id;
   const replyAssist = useContext(ReplyAssistContext);
@@ -1045,7 +1049,7 @@ function ReplyPanel({
         message,
         threadOn: replyAnchor,
         replyAll,
-        userEmail,
+        ownEmails,
       });
     }
     return forwardSource
@@ -1058,7 +1062,7 @@ function ReplyPanel({
     forwardSource,
     replyAnchor,
     replyAll,
-    userEmail,
+    ownEmails,
   ]);
 
   const { executeAsync: discardDraft } = useAction(
@@ -1200,11 +1204,11 @@ function resolveComposeMode(
 
 function recipientSummary(
   { to, cc }: { to?: string; cc?: string },
-  userEmail: string,
+  ownEmails: string[],
 ) {
   const names = formatRecipientNames(
     [...splitRecipientList(to ?? ""), ...splitRecipientList(cc ?? "")],
-    userEmail,
+    ownEmails,
   );
   return names ? `to ${names}` : "";
 }
@@ -1213,12 +1217,12 @@ const prepareReplyingToEmail = ({
   message,
   threadOn = message,
   replyAll,
-  userEmail,
+  ownEmails,
 }: {
   message: ParsedMessage;
   threadOn?: ParsedMessage;
   replyAll: boolean;
-  userEmail: string;
+  ownEmails: string[];
 }): ReplyingToEmail => {
   const sentFromUser = message.labelIds?.includes("SENT") ?? false;
 
@@ -1227,7 +1231,7 @@ const prepareReplyingToEmail = ({
     headers: message.headers,
     sentFromUser,
     replyAll,
-    userEmail,
+    ownEmails,
   });
 
   return {
@@ -1409,9 +1413,9 @@ function canResearchSender(
   );
 }
 
-function canReplyAllTo(message: ParsedMessage, userEmail: string) {
+function canReplyAllTo(message: ParsedMessage, ownEmails: string[]) {
   return (
     !message.labelIds?.includes(GmailLabel.SENT) &&
-    hasReplyAllRecipients(message.headers, userEmail)
+    hasReplyAllRecipients(message.headers, ownEmails)
   );
 }

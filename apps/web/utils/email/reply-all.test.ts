@@ -509,7 +509,7 @@ describe("buildComposeReplyRecipients", () => {
         headers,
         sentFromUser: false,
         replyAll: false,
-        userEmail: "me@example.com",
+        ownEmails: ["me@example.com"],
       }),
     ).toEqual({
       to: "Dana <dana@example.com>",
@@ -523,7 +523,7 @@ describe("buildComposeReplyRecipients", () => {
       headers,
       sentFromUser: false,
       replyAll: true,
-      userEmail: "me@example.com",
+      ownEmails: ["me@example.com"],
     });
 
     expect(recipients.to).toBe("Dana <dana@example.com>");
@@ -543,12 +543,58 @@ describe("buildComposeReplyRecipients", () => {
         },
         sentFromUser: true,
         replyAll: true,
-        userEmail: "me@example.com",
+        ownEmails: ["me@example.com"],
       }),
     ).toEqual({
       to: headers.to,
       cc: headers.cc,
       bcc: "hidden@example.com",
+    });
+  });
+});
+
+describe("buildComposeReplyRecipients across the user's mailboxes (D5)", () => {
+  const ownEmails = ["me@work.com", "me@gmail.com"];
+
+  it("drops every connected address from Cc when replying all", () => {
+    const recipients = buildComposeReplyRecipients({
+      headers: {
+        from: "Dana <dana@example.com>",
+        to: "me@work.com, Me <ME@gmail.com>",
+        cc: "alex@example.com, me@gmail.com",
+        subject: "Plans",
+        date: "2024-01-01",
+      },
+      sentFromUser: false,
+      replyAll: true,
+      ownEmails,
+    });
+
+    expect(recipients).toEqual({
+      to: "Dana <dana@example.com>",
+      cc: "alex@example.com",
+      bcc: "",
+    });
+  });
+
+  it("replies all to everyone else when the user's other mailbox sent it", () => {
+    const recipients = buildComposeReplyRecipients({
+      headers: {
+        from: "Me <me@gmail.com>",
+        to: "me@work.com, Alex <alex@example.com>",
+        cc: "sam@example.com, me@gmail.com",
+        subject: "Plans",
+        date: "2024-01-01",
+      },
+      sentFromUser: false,
+      replyAll: true,
+      ownEmails,
+    });
+
+    expect(recipients).toEqual({
+      to: "Alex <alex@example.com>",
+      cc: "sam@example.com",
+      bcc: "",
     });
   });
 });
@@ -563,7 +609,7 @@ describe("hasReplyAllRecipients", () => {
           subject: "Hi",
           date: "2024-01-01",
         },
-        "me@example.com",
+        ["me@example.com"],
       ),
     ).toBe(false);
   });
@@ -578,8 +624,24 @@ describe("hasReplyAllRecipients", () => {
           subject: "Hi",
           date: "2024-01-01",
         },
-        "me@example.com",
+        ["me@example.com"],
       ),
     ).toBe(true);
+  });
+
+  // D5: the user's other connected mailbox is never someone else to copy.
+  it("is false when the only other recipient is the user's other mailbox", () => {
+    expect(
+      hasReplyAllRecipients(
+        {
+          from: "dana@example.com",
+          to: "me@example.com",
+          cc: "Me <me@gmail.com>",
+          subject: "Hi",
+          date: "2024-01-01",
+        },
+        ["me@example.com", "me@gmail.com"],
+      ),
+    ).toBe(false);
   });
 });

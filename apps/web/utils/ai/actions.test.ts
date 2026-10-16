@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 import {
   ActionType,
   AttachmentSourceType,
@@ -78,6 +79,10 @@ vi.mock("@/utils/cold-email/send-notification", () => ({
   sendColdEmailNotification: vi.fn().mockResolvedValue({ success: true }),
 }));
 
+vi.mock("@/utils/user/own-addresses", () => ({
+  getUserOwnAddresses: vi.fn(),
+}));
+
 vi.mock("@/utils/prisma", () => ({
   default: {
     executedAction: {
@@ -115,6 +120,9 @@ describe("runActionFunction", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getUserOwnAddresses).mockResolvedValue([
+      "me.elsewhere@gmail.com",
+    ]);
     vi.mocked(prisma.executedAction.update).mockResolvedValue({});
     vi.mocked(getMessagingRuleNotificationResult).mockResolvedValue({
       delivered: true,
@@ -190,7 +198,7 @@ describe("runActionFunction", () => {
           }),
         ],
       }),
-      emailAccount.email,
+      ["user@example.com", "me.elsewhere@gmail.com"],
     );
   });
 
@@ -223,7 +231,7 @@ describe("runActionFunction", () => {
         content: "Attached the requested PDF.",
         attachments: [],
       }),
-      emailAccount.email,
+      ["user@example.com", "me.elsewhere@gmail.com"],
     );
   });
 

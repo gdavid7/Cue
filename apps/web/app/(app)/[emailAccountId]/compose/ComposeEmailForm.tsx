@@ -82,6 +82,7 @@ import { MAIL_SHORTCUT_SCOPES } from "@/lib/shortcuts/registry";
 import { ShortcutsProvider } from "@/lib/shortcuts/ShortcutsProvider";
 import { useShortcuts } from "@/lib/shortcuts/useShortcuts";
 import { useAccount } from "@/providers/EmailAccountProvider";
+import { useOwnEmailAddresses } from "@/hooks/useOwnEmailAddresses";
 import { getAccountLinkingUrl } from "@/utils/account-linking";
 import {
   updateDraftAction,
@@ -359,7 +360,7 @@ function ComposeEmailFormContent({
   selectedEmailAccountId: string;
   onSelectEmailAccount: (emailAccountId: string) => void;
 }) {
-  const { userEmail } = useAccount();
+  const ownEmails = useOwnEmailAddresses();
   const isComposeWindow = layout === "window";
   const isInlineReply = Boolean(draftKeyMessageId && replyingToEmail?.threadId);
   const canScheduleDelivery = isInlineReply || isComposeWindow;
@@ -1636,7 +1637,7 @@ function ComposeEmailFormContent({
                       watch("cc") ?? replyingToEmail?.cc ?? "",
                     ),
                   ],
-                  userEmail,
+                  ownEmails,
                 ) || "recipients"}
               </span>
               <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />

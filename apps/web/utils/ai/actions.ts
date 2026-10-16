@@ -39,6 +39,7 @@ import { isMessagingDraftActionType } from "@/utils/actions/draft-reply";
 import { checkHasAccess } from "@/utils/premium/server";
 import { handlePreviousDraftDeletion } from "@/utils/ai/choose-rule/draft-management";
 import { isIntegrationActionEnabledForUserId } from "@/utils/integration-action.server";
+import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 
 const MODULE = "ai-actions";
 
@@ -286,7 +287,7 @@ const draft: ActionFunction<{
       attachments: email.attachments,
     },
     draftArgs,
-    emailAccount.email,
+    [emailAccount.email, ...(await getUserOwnAddresses(emailAccount.userId))],
   );
   return { draftId: result.draftId };
 };

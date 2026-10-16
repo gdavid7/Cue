@@ -60,9 +60,18 @@ describe("email utils", () => {
             "noname@example.com",
             "JOHN@example.com",
           ],
-          "user@example.com",
+          ["user@example.com"],
         ),
       ).toBe("me, John, Jane, noname@example.com");
+    });
+
+    it("names every one of the user's connected addresses as a single me", () => {
+      expect(
+        formatRecipientNames(
+          ["Alex <alex@example.com>", "me@work.com", "Me <me@gmail.com>"],
+          ["me@gmail.com", "me@work.com"],
+        ),
+      ).toBe("me, Alex");
     });
   });
 

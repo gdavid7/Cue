@@ -650,6 +650,30 @@ describe("GmailProvider.getLatestMessageInThread", () => {
       ["user@example.com", "alias@example.com"],
     );
   });
+
+  it("keeps every connected address of the user alongside the aliases", async () => {
+    gmailSignatureMock.getGmailSignatures.mockResolvedValue([
+      { email: "alias@example.com", signature: "", isDefault: false },
+    ]);
+    const provider = new GmailProvider({} as any);
+    const message = createParsedMessage({
+      id: "message-1",
+      internalDate: "1000",
+    });
+    const args = { content: "Follow up" };
+
+    await provider.draftEmail(message, args, [
+      "user@example.com",
+      "me@outlook.com",
+    ]);
+
+    expect(gmailMailMock.draftEmail).toHaveBeenCalledWith(
+      expect.anything(),
+      message,
+      args,
+      ["user@example.com", "me@outlook.com", "alias@example.com"],
+    );
+  });
 });
 
 describe("GmailProvider.getSentMessageIds", () => {

@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   toastError: vi.fn(),
   popOutReply: vi.fn(),
   poppedOutDraftSessionId: undefined as string | undefined,
+  connectedEmails: [] as string[],
 }));
 
 vi.mock("next-safe-action/hooks", () => ({
@@ -29,6 +30,13 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
     emailAccount: undefined,
     emailAccountId: "account-1",
     userEmail: "user@example.com",
+  }),
+}));
+vi.mock("@/hooks/useAccounts", () => ({
+  useAccounts: () => ({
+    data: {
+      emailAccounts: mocks.connectedEmails.map((email) => ({ email })),
+    },
   }),
 }));
 vi.mock("@/providers/ComposeModalProvider", () => ({
@@ -281,6 +289,62 @@ describe("EmailMessage reply", () => {
     );
 
     expect(screen.getByText("to me, Alex, Jane, Sam")).toBeTruthy();
+  });
+});
+
+// D5: the user's other connected mailbox is "me", never someone to copy.
+describe("EmailMessage reply across the user's mailboxes", () => {
+  afterEach(() => {
+    cleanup();
+    mocks.connectedEmails = [];
+  });
+
+  it("leaves the user's other address out of reply all and names it as me", () => {
+    mocks.connectedEmails = ["user@example.com", "me.elsewhere@gmail.com"];
+    const message = createMessage("message-1");
+    render(
+      <EmailMessage
+        expanded
+        message={{
+          ...message,
+          headers: {
+            ...message.headers,
+            to: "user@example.com, Me <me.elsewhere@gmail.com>",
+            cc: "Alex Kim <alex@example.com>",
+          },
+        }}
+        onSendSuccess={vi.fn()}
+        onToggle={vi.fn()}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+
+    expect(screen.getByText("to me, Alex")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Reply all" }));
+    expect(screen.getByTestId("composer").dataset.cc).toBe("alex@example.com");
+  });
+
+  it("offers no reply all when the only other recipient is the user's other address", () => {
+    mocks.connectedEmails = ["user@example.com", "me.elsewhere@gmail.com"];
+    const message = createMessage("message-1");
+    render(
+      <EmailMessage
+        expanded
+        message={{
+          ...message,
+          headers: {
+            ...message.headers,
+            to: "user@example.com, me.elsewhere@gmail.com",
+          },
+        }}
+        onSendSuccess={vi.fn()}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Reply all" })).toBeNull();
   });
 });
 

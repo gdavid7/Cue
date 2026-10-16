@@ -91,7 +91,10 @@ export function isSameEmailAddress(left: string, right: string) {
 }
 
 // "me, Dana, Alex": who a message goes to, short enough to scan in a header.
-export function formatRecipientNames(recipients: string[], userEmail: string) {
+export function formatRecipientNames(
+  recipients: string[],
+  ownEmails: string[],
+) {
   const seen = new Set<string>();
   let includesMe = false;
   const names: string[] = [];
@@ -100,13 +103,15 @@ export function formatRecipientNames(recipients: string[], userEmail: string) {
       canonicalizeEmailAddress(recipient) || recipient.trim().toLowerCase();
     if (!key || seen.has(key)) continue;
     seen.add(key);
-    if (userEmail && isSameEmailAddress(recipient, userEmail)) {
+    if (
+      ownEmails.some((email) => email && isSameEmailAddress(recipient, email))
+    ) {
       includesMe = true;
     } else {
       names.push(recipientFirstName(recipient));
     }
   }
-  // "me" leads however the account was addressed, so it's easy to spot.
+  // "me" leads however the user was addressed, so it's easy to spot.
   return (includesMe ? ["me", ...names] : names).join(", ");
 }
 
