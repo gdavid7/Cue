@@ -39,14 +39,60 @@ export async function markMessageAsProcessing({
   return result === "OK";
 }
 
-export async function clearMessageProcessing({
-  userEmail,
-  messageId,
+const MESSAGE_PROCESSING_TTL_SECONDS = 60 * 5;
+// Past Gmail's history retention, so a catch-up never handles a message twice.
+const MESSAGE_PROCESSED_TTL_SECONDS = 60 * 60 * 24 * 30;
+const MESSAGE_PROCESSED_STATUS = "processed";
+
+/**
+ * Claims a message for a Gmail history run. A message another run holds is
+ * `held`; one handled before is `processed`, so a catch-up skips it with one
+ * read instead of handling it again.
+ */
+export async function acquireMessageProcessing(key: {
+  userEmail: string;
+  messageId: string;
+}): Promise<
+  | { status: "acquired"; lockToken: string }
+  | { status: "held" }
+  | { status: "processed" }
+> {
+  const lockToken = await acquireOwnedLock({
+    key: getProcessingKey(key),
+    processingTtlSeconds: MESSAGE_PROCESSING_TTL_SECONDS,
+  });
+  if (lockToken) return { status: "acquired", lockToken };
+  const stored = await redis.get<string>(getProcessingKey(key));
+  return stored === MESSAGE_PROCESSED_STATUS
+    ? { status: "processed" }
+    : { status: "held" };
+}
+
+export async function markMessageProcessed({
+  lockToken,
+  ...key
 }: {
   userEmail: string;
   messageId: string;
+  lockToken: string;
 }) {
-  await redis.del(getProcessingKey({ userEmail, messageId }));
+  return markOwnedLockProcessed({
+    key: getProcessingKey(key),
+    lockToken,
+    processedStatus: MESSAGE_PROCESSED_STATUS,
+    processedTtlSeconds: MESSAGE_PROCESSED_TTL_SECONDS,
+  });
+}
+
+export async function releaseMessageProcessing({
+  lockToken,
+  ...key
+}: {
+  userEmail: string;
+  messageId: string;
+  lockToken: string;
+}) {
+  return clearOwnedLock({ key: getProcessingKey(key), lockToken });
 }
 
 type OutboundMessageKey = {

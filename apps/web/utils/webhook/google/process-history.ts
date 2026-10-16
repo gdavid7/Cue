@@ -49,6 +49,7 @@ const HISTORY_RUN_BUDGET_MS = 180_000;
 // Each new message is seconds of AI work. A few at a time clears a backlog
 // several times faster while the account's Gmail quota gate paces the calls.
 const NEW_MESSAGE_CONCURRENCY = 3;
+const PROGRESS_SAVE_INTERVAL_MS = 10_000;
 
 export async function processHistoryForUser(
   decodedData: {
@@ -386,6 +387,31 @@ async function processHistory(
       log.error("Error processing history item", { error });
     }
     done.add(event);
+    await saveProgress();
+  };
+
+  // A run can be cut off by the function timeout, so the cursor follows the
+  // processed history as it goes, not only at the end.
+  let savedCount = 0;
+  let savedAt = Date.now();
+  const processedCount = () => {
+    const firstUnprocessed = entries.findIndex(
+      (entry) =>
+        !entry.newMessages.every((event) => done.has(event)) ||
+        !entry.labelEvents.every((event) => done.has(event)),
+    );
+    return firstUnprocessed === -1 ? entries.length : firstUnprocessed;
+  };
+  const saveProgress = async ({ final = false } = {}) => {
+    const count = processedCount();
+    if (count <= savedCount) return;
+    if (!final && Date.now() - savedAt < PROGRESS_SAVE_INTERVAL_MS) return;
+    savedCount = count;
+    savedAt = Date.now();
+    await updateLastSyncedHistoryId({
+      emailAccountId,
+      lastSyncedHistoryId: entries[count - 1]?.id,
+    });
   };
 
   // Threads with the newest mail first, so a backlog surfaces the mail the
@@ -423,20 +449,10 @@ async function processHistory(
     if (!entry.labelEvents.every((event) => done.has(event))) break;
   }
 
-  const processedThrough = entries.findIndex(
-    (entry) =>
-      !entry.newMessages.every((event) => done.has(event)) ||
-      !entry.labelEvents.every((event) => done.has(event)),
-  );
-  const processedCount =
-    processedThrough === -1 ? entries.length : processedThrough;
-  await updateLastSyncedHistoryId({
-    emailAccountId,
-    lastSyncedHistoryId: entries[processedCount - 1]?.id,
-  });
+  await saveProgress({ final: true });
 
   if (stopError !== undefined) throw stopError;
-  return { complete: processedCount === entries.length };
+  return { complete: processedCount() === entries.length };
 }
 
 type HistoryEvent = Parameters<typeof processHistoryItem>[0];

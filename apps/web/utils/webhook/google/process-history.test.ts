@@ -904,6 +904,32 @@ describe("processHistoryForUser - backlogs", () => {
     );
   });
 
+  it("saves its progress as it goes, so a run cut short isn't repeated", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.mocked(getHistory).mockResolvedValue({
+      history: [
+        historyMessage("1100", "a", "shared", ["INBOX"]),
+        historyMessage("1200", "b", "shared", ["INBOX"]),
+        historyMessage("1300", "c", "shared", ["INBOX"]),
+      ],
+    } as any);
+    vi.mocked(processHistoryItem).mockImplementation(async () => {
+      vi.setSystemTime(Date.now() + 15_000);
+    });
+
+    try {
+      await processHistoryForUser(
+        { emailAddress: backlogAccount.email, historyId: 1300 },
+        {},
+        logger,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(cursorUpdates()).toEqual(["1100", "1200", "1300"]);
+  });
+
   it("keeps a thread's messages in order, so a newer inbound reply isn't resolved by an older sent one", async () => {
     // A (inbound), R (the user's reply), B (their answer) in one thread, plus
     // newer mail in another thread. Run out of order, R's outbound handling

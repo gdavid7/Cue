@@ -6,8 +6,9 @@ import { handleLabelRemovedEvent } from "@/utils/webhook/google/process-label-re
 import { handleLabelAddedEvent } from "@/utils/webhook/google/process-label-added-event";
 import { processHistoryItem as processHistoryItemShared } from "@/utils/webhook/process-history-item";
 import {
-  clearMessageProcessing,
-  markMessageAsProcessing,
+  acquireMessageProcessing,
+  markMessageProcessed,
+  releaseMessageProcessing,
 } from "@/utils/redis/message-processing";
 import { GmailLabel } from "@/utils/gmail/label";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
@@ -57,19 +58,22 @@ export async function processHistoryItem(
   });
 
   const lockAndProcessShared = async () => {
-    const isFree = await markMessageAsProcessing({
-      userEmail: emailAccount.email,
-      messageId,
-    });
-    if (!isFree) {
+    const lockKey = { userEmail: emailAccount.email, messageId };
+    const claim = await acquireMessageProcessing(lockKey);
+    if (claim.status === "processed") {
+      logger.info("Skipping. Message already processed.");
+      return;
+    }
+    if (claim.status === "held") {
       logger.info("Skipping. Message already being processed.");
       return MESSAGE_HELD_ELSEWHERE;
     }
+    const lock = { ...lockKey, lockToken: claim.lockToken };
 
     logger.info("Gmail lock acquired, calling shared processor");
 
     try {
-      return await processHistoryItemShared(
+      const result = await processHistoryItemShared(
         { messageId, threadId },
         {
           provider,
@@ -81,6 +85,10 @@ export async function processHistoryItem(
           logger,
         },
       );
+      await markMessageProcessed(lock).catch((error) =>
+        logger.warn("Failed to mark message processed", { error }),
+      );
+      return result;
     } catch (error) {
       // The history cursor stays before this message so a catch-up retries
       // it; the lock would make that catch-up skip it.
@@ -88,10 +96,7 @@ export async function processHistoryItem(
         isGmailCallDeferredError(error) ||
         isEmailProviderRateLimitError({ error, provider: "google" })
       ) {
-        await clearMessageProcessing({
-          userEmail: emailAccount.email,
-          messageId,
-        }).catch((clearError) =>
+        await releaseMessageProcessing(lock).catch((clearError) =>
           logger.warn("Failed to release message processing lock", {
             error: clearError,
           }),
