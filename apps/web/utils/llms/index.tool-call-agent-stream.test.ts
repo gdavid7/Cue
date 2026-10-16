@@ -140,6 +140,38 @@ describe("toolCallAgentStream model fallback", () => {
     );
   });
 
+  it("records a billing-limit outage under its own fallback reason", async () => {
+    const creditError = new APICallError({
+      message:
+        "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.",
+      url: "https://api.anthropic.com/v1/messages",
+      requestBodyValues: {},
+      statusCode: 400,
+      isRetryable: false,
+    });
+    const primary = createScriptedModel("primary", [
+      [STREAM_START, { type: "error", error: creditError }],
+    ]);
+    const fallback = createScriptedModel("fallback", [
+      [STREAM_START, ...textParts("Fallback answer"), finish("stop")],
+    ]);
+
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const run = await runAgent({ primary, fallback });
+
+    expect(run.text).toBe("Fallback answer");
+    expect(primary.doStreamCalls).toHaveLength(1);
+    expect(saveAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelFallbacks: [expect.objectContaining({ reason: "billing_limit" })],
+      }),
+    );
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.stringContaining("switching to fallback model"),
+    );
+    errorLog.mockRestore();
+  });
+
   it("answers from the primary when its quick retry succeeds", async () => {
     const primary = createScriptedModel("primary", [
       failedCall(),

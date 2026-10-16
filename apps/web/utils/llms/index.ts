@@ -193,6 +193,7 @@ type RepairAttemptState = {
 };
 
 type LlmFallbackFailureCategory =
+  | "billing_limit"
   | "content_filter"
   | "network"
   | "rate_limit"
@@ -429,13 +430,12 @@ export function createGenerateText({
         if (error instanceof SafeError) throw error;
 
         if (nextCandidate && shouldFallbackToNextModel(error)) {
-          logger.warn("LLM call failed, trying fallback model", {
+          logModelFallback("LLM call failed, trying fallback model", error, {
             label,
             provider: candidate.provider,
             model: candidate.modelName,
             fallbackProvider: nextCandidate.provider,
             fallbackModel: nextCandidate.modelName,
-            error,
           });
           continue;
         }
@@ -721,14 +721,17 @@ export function createGenerateObject({
             model: candidate.modelName,
             category: getLlmFallbackFailureCategory(error),
           });
-          logger.warn("LLM object generation failed, trying fallback model", {
-            label,
-            provider: candidate.provider,
-            model: candidate.modelName,
-            fallbackProvider: nextCandidate.provider,
-            fallbackModel: nextCandidate.modelName,
+          logModelFallback(
+            "LLM object generation failed, trying fallback model",
             error,
-          });
+            {
+              label,
+              provider: candidate.provider,
+              model: candidate.modelName,
+              fallbackProvider: nextCandidate.provider,
+              fallbackModel: nextCandidate.modelName,
+            },
+          );
           continue;
         }
 
@@ -880,14 +883,17 @@ export async function chatCompletionStream(
       });
     } catch (error) {
       if (nextCandidate && shouldFallbackToNextModel(error)) {
-        logger.warn("Chat completion failed, trying fallback model", {
-          label,
-          provider: candidate.provider,
-          model: candidate.modelName,
-          fallbackProvider: nextCandidate.provider,
-          fallbackModel: nextCandidate.modelName,
+        logModelFallback(
+          "Chat completion failed, trying fallback model",
           error,
-        });
+          {
+            label,
+            provider: candidate.provider,
+            model: candidate.modelName,
+            fallbackProvider: nextCandidate.provider,
+            fallbackModel: nextCandidate.modelName,
+          },
+        );
         continue;
       }
 
@@ -1016,16 +1022,15 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
               toModel: to.modelName,
               reason: getLlmFallbackFailureCategory(error),
             });
-            logger.warn(
+            logModelFallback(
               "Tool-call stream failed, switching to fallback model",
+              error,
               {
                 label,
                 provider: from.provider,
                 model: from.modelName,
                 fallbackProvider: to.provider,
                 fallbackModel: to.modelName,
-                failureCategory: getLlmFallbackFailureCategory(error),
-                error,
               },
             );
             onModelResolved?.({
@@ -1514,6 +1519,12 @@ function getResolvedModelKey({ provider, modelName }: ResolvedModel): string {
 function getLlmFallbackFailureCategory(
   error: unknown,
 ): LlmFallbackFailureCategory {
+  const apiCallError = getAIApiCallError(
+    (error as { error?: unknown })?.error ?? error,
+  );
+  if (apiCallError && isAnthropicBillingLimitError(apiCallError)) {
+    return "billing_limit";
+  }
   if (isContentFilterRefusal(error)) return "content_filter";
 
   const errorInfo = extractLLMErrorInfo(error);
@@ -1527,6 +1538,19 @@ function getLlmFallbackFailureCategory(
   if (errorInfo.retryable) return "server_error";
 
   return "unknown";
+}
+
+// A billing outage (no credit, spend cap) stops every call to that provider
+// until someone acts, so it is logged as an error rather than a routine
+// fallback warning.
+function logModelFallback(
+  message: string,
+  error: unknown,
+  fields: Record<string, unknown>,
+) {
+  const failureCategory = getLlmFallbackFailureCategory(error);
+  const log = failureCategory === "billing_limit" ? logger.error : logger.warn;
+  log(message, { ...fields, failureCategory, error });
 }
 
 function getQuickRetryDelayMs(error: unknown): number | undefined {

@@ -311,10 +311,16 @@ describe("createGenerateText fallback chain", () => {
       modelOptions,
     });
 
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     const result = await generateText({ prompt: "hello", model: primaryModel });
 
     expect(result.text).toBe("fallback success");
     expect(mockGenerateText.mock.calls[1][0].model).toBe(fallbackModel);
+    // A billing outage is logged as an error, not a routine fallback warning.
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.stringMatching(/trying fallback model[\s\S]*billing_limit/),
+    );
+    errorLog.mockRestore();
   });
 
   it("injects centralized hardening into the text generation system prompt", async () => {
