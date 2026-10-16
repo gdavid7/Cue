@@ -64,7 +64,14 @@ Without `gh` (cloud sessions), use the GitHub MCP tools:
 
 ## Timings
 
-About 3 minutes to select and build, then the jobs run in parallel. A small set
-finishes in roughly 8 to 10 minutes end to end, the full suite (32 jobs) in
-roughly 20. GitHub runs at most 20 jobs at once for this account, so the full
-suite queues its last jobs.
+Measured on 2026-10-16:
+
+- Select and build: about 3 minutes (install 35 s, build 2 min).
+- Each group job: about 1.5 minutes of setup, then its specs (1 to 4 minutes).
+- Two `mail` specs on both providers: 4 jobs, about 6 minutes of work. That run
+  took 16 minutes end to end because it waited 7 minutes for runners behind a
+  full-suite run.
+- Full suite: 32 jobs, 18.5 minutes end to end.
+
+GitHub runs about 20 jobs at once for this account. Dispatch a small set
+before, not alongside, a full-suite run when you need its answer fast.

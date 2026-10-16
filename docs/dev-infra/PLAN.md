@@ -42,8 +42,16 @@ recommendation.
   `mail/triage-actions.spec.ts:315` waiting for "1 selected" and `:157`
   waiting for the next conversation after delete. Those are spec or product
   assertions, not infrastructure.
-- **Proposal:** a QA engineer triages the groups that fail on the current
-  head (product bug vs stale spec), group by group, using CI dispatch.
+- **Current head:** the first full-suite dispatch
+  ([run 38867300934](https://github.com/gdavid7/Cue/actions/runs/38867300934),
+  18.5 minutes) passed 26 of 32 jobs. These failed:
+  - Google: `automation`, `connected-apps`, `mail`, `mail-desktop`,
+    `mail-reader`.
+  - Microsoft: `mail-triage`.
+
+  The build, database and report steps passed in every job.
+- **Proposal:** a QA engineer triages the six failing groups (product bug vs
+  stale spec), group by group, using CI dispatch.
 - **Decision:** none; this is ordinary engineering work for the coordinator to
   staff.
 
