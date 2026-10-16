@@ -151,16 +151,19 @@ describe("Apple Mail message bodies", () => {
     expect(parsed.textPlain).toContain(shelf);
   });
 
-  it("reads a megabyte of unclosed tags in linear time", () => {
-    const megabyte = readUnclosedTags(500_000);
+  // The bound is the ratio below. A loaded host can take several seconds of
+  // wall time for the runs, which says nothing about the parser.
+  it("reads a megabyte of unclosed tags in linear time", {
+    timeout: 30_000,
+  }, () => {
+    const [megabyte, fifth] = readUnclosedTags([500_000, 100_000]);
     expect(megabyte.bodies.html).toBe("<a".repeat(500_000));
     expect(megabyte.bodies.plain).toContain("tail");
 
-    // Compared with a tenth of the input in the same process, so a busy host
-    // slows both sides alike. Linear work grows about 10x; rescanning the
-    // rest of the input at every unclosed tag would grow about 100x.
-    const tenth = readUnclosedTags(50_000);
-    expect(megabyte.ms / tenth.ms).toBeLessThan(40);
+    // Compared with a fifth of the input rather than a fixed time, so a slow
+    // host doesn't fail it. Linear work grows about 5x; rescanning ahead of
+    // every unclosed tag would grow about 25x.
+    expect(megabyte.ms / fifth.ms).toBeLessThan(12);
   });
 
   it("ignores a named text part and an attached message", () => {
@@ -295,22 +298,35 @@ function message(
   };
 }
 
-/** Fastest of several runs, which drops pauses from GC and other processes. */
-function readUnclosedTags(tagCount: number) {
-  const html = "<a".repeat(tagCount);
-  const plain = `${"y".repeat(html.length)} tail`;
-  const payload = {
-    mimeType: "multipart/alternative",
-    parts: [textPart("text/plain", plain), textPart("text/html", html)],
-  };
-  let bodies = gmailMessageBodies(payload, "y");
-  let ms = Number.POSITIVE_INFINITY;
-  for (let run = 0; run < 3; run++) {
-    const start = performance.now();
-    bodies = gmailMessageBodies(payload, "y");
-    ms = Math.min(ms, performance.now() - start);
+/**
+ * Fastest of several runs per size, in this process's CPU time. Wall time
+ * on a loaded host counts the time the process waits for a core, which a
+ * long run almost always does and a short one often doesn't, so it skewed
+ * the ratio. The sizes take turns, so what slowness is left lands on both.
+ */
+function readUnclosedTags(tagCounts: number[]) {
+  const readings = tagCounts.map((tagCount) => {
+    const html = "<a".repeat(tagCount);
+    const plain = `${"y".repeat(html.length)} tail`;
+    const payload = {
+      mimeType: "multipart/alternative",
+      parts: [textPart("text/plain", plain), textPart("text/html", html)],
+    };
+    return {
+      payload,
+      bodies: gmailMessageBodies(payload, "y"),
+      ms: Number.POSITIVE_INFINITY,
+    };
+  });
+  for (let run = 0; run < 5; run++) {
+    for (const reading of readings) {
+      const start = process.cpuUsage();
+      reading.bodies = gmailMessageBodies(reading.payload, "y");
+      const { user, system } = process.cpuUsage(start);
+      reading.ms = Math.min(reading.ms, (user + system) / 1000);
+    }
   }
-  return { bodies, ms };
+  return readings;
 }
 
 function textPart(
