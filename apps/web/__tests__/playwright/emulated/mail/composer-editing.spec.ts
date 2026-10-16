@@ -7,6 +7,7 @@ import {
 } from "./account-test-helpers";
 import {
   conversationWithSubject,
+  grantAiAccess,
   openMail,
   openMailboxFromSidebar,
   setSentWithFooter,
@@ -771,6 +772,14 @@ test("pastes markdown as formatting that survives sending", async ({
 });
 
 test.describe("Cue writing partner", () => {
+  let restorePlans: (() => Promise<void>) | undefined;
+  test.beforeAll(async () => {
+    restorePlans = await grantAiAccess();
+  });
+  test.afterAll(async () => {
+    await restorePlans?.();
+  });
+
   test("rewrites a selection from the selection toolbar, and undo takes it back", async ({
     page,
   }, testInfo) => {
