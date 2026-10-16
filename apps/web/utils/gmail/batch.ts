@@ -54,7 +54,11 @@ export async function getBatch(
   const textRes = await res.text();
 
   const batch = parseBatchResponse(textRes, res.headers.get("Content-Type"));
-  if (batch.some(isQuotaRefusal)) await noteGmailQuotaRefusal(ticket);
+  // The refusal's own error says whether it was for volume, which decides
+  // whether the account's budget is cut and a person's reads held.
+  const refusal = batch.find(isQuotaRefusal);
+  if (refusal && isBatchError(refusal))
+    await noteGmailQuotaRefusal(ticket, refusal.error);
 
   return batch;
 }
