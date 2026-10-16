@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { env } from "@/env";
 import { withAuth } from "@/utils/middleware";
 import { getEmailAccount } from "@/utils/redis/account-validation";
 import { RedisSubscriber } from "@/utils/redis/subscriber";
@@ -9,6 +10,8 @@ import {
 } from "@/utils/redis/local-mail-hints";
 
 export const maxDuration = 300;
+
+let warnedRedisMissing = false;
 
 export const GET = withAuth("mail-stream", async (request) => {
   const emailAccountId = new URL(request.url).searchParams.get(
@@ -23,6 +26,19 @@ export const GET = withAuth("mail-stream", async (request) => {
     !(await getEmailAccount({ userId: request.auth.userId, emailAccountId }))
   ) {
     return NextResponse.json({ error: "Invalid account ID" }, { status: 403 });
+  }
+
+  // Hints travel over Redis. Without it there is nothing to stream, and
+  // clients poll for changes while the stream is down. A 204 tells
+  // EventSource to stop reconnecting rather than fail as a server error.
+  if (!env.REDIS_URL) {
+    if (!warnedRedisMissing) {
+      warnedRedisMissing = true;
+      request.logger.warn(
+        "Mail stream disabled: REDIS_URL is not set, so clients poll for changes",
+      );
+    }
+    return new Response(null, { status: 204 });
   }
 
   const subscriber = RedisSubscriber.createInstance();
