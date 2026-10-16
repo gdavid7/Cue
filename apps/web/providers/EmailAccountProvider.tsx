@@ -177,19 +177,22 @@ export function EmailAccountProvider({
   // Once the router lands anywhere, by a rewrite or by the user navigating,
   // only the latest rewrite and the address now showing can still be in
   // flight or current; older positions no longer name the pinned account.
-  const seenUrlRef = useRef<string | null>(null);
+  const seenPathRef = useRef<string | null>(null);
+  // Matched by path: a query change on the old path (the chat clearing its
+  // parameters) is not the router landing anywhere.
   const forgetLandedAddresses = useCallback(() => {
-    const current = currentUrl();
-    if (seenUrlRef.current === current) return;
-    seenUrlRef.current = current;
+    const current = window.location.pathname;
+    if (seenPathRef.current === current) return;
+    seenPathRef.current = current;
     setPin((previous) => {
       if (!previous || previous.addresses.length < 2) return previous;
       const latest = previous.addresses.at(-1);
       const kept =
-        latest?.url === current
+        latest && pathOf(latest.url) === current
           ? [latest]
           : previous.addresses.filter(
-              (address) => address === latest || address.url === current,
+              (address) =>
+                address === latest || pathOf(address.url) === current,
             );
       return kept.length === previous.addresses.length
         ? previous
@@ -371,6 +374,10 @@ function AddressWatcher({ onNavigate }: { onNavigate: () => void }) {
     onNavigate();
   }, [onNavigate, pathname, searchParams]);
   return null;
+}
+
+function pathOf(url: string) {
+  return url.split("?")[0];
 }
 
 function currentUrl() {

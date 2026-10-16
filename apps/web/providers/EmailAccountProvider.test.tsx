@@ -741,6 +741,48 @@ describe("EmailAccountProvider", () => {
     );
   });
 
+  it("keeps the pinned account when only the query changes before the rewrite lands", async () => {
+    navigation.accountIndex = "1";
+    window.history.replaceState(
+      null,
+      "",
+      "/mail/u/1/inbox?chatAccountId=account-1&chatId=c",
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          listResponse(["account-1", "account-2", "account-3"]),
+        )
+        .mockResolvedValueOnce(listResponse(["account-2", "account-3"])),
+    );
+    const tree = () => (
+      <EmailAccountProvider>
+        <AccountState />
+      </EmailAccountProvider>
+    );
+    const { rerender } = render(tree());
+    await waitFor(() =>
+      expect(screen.getByTestId("account-id").textContent).toBe("account-2"),
+    );
+
+    await fetchEmailAccounts();
+    await waitFor(() =>
+      expect(navigation.replace).toHaveBeenCalledWith("/mail/u/0/inbox"),
+    );
+    cookie.setLastAccount.mockClear();
+    // The chat clears its removed account from the query on the old path,
+    // before the router has moved.
+    window.history.replaceState(null, "", "/mail/u/1/inbox");
+    rerender(tree());
+
+    expect(screen.getByTestId("account-id").textContent).toBe("account-2");
+    expect(cookie.setLastAccount).not.toHaveBeenCalledWith({
+      emailAccountId: "account-3",
+    });
+  });
+
   it("does not replace a global route when remaining accounts exist", async () => {
     navigation.emailAccountId = "deleted-account";
     window.history.replaceState(null, "", "/accounts");
