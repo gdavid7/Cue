@@ -567,7 +567,7 @@ async function executeSend(
   if (operation.intent.kind !== "send") {
     return { status: "rejected" as const, code: "unsupported", targets: [] };
   }
-  if (operation.intent.sendAtMs !== undefined) {
+  if (isServerHeldSend(operation.intent)) {
     return driveHeldSend(provider, accountId, operation);
   }
   const outcome = await executeDurableEmailSend({
@@ -593,10 +593,7 @@ async function inspectSend(
   accountId: string,
   operation: PreparedOperation,
 ) {
-  if (
-    operation.intent.kind === "send" &&
-    operation.intent.sendAtMs !== undefined
-  ) {
+  if (operation.intent.kind === "send" && isServerHeldSend(operation.intent)) {
     return driveHeldSend(provider, accountId, operation);
   }
   return inspectSendOperation(provider, accountId, operation);
@@ -613,7 +610,7 @@ async function driveHeldSend(
   operation: PreparedOperation,
 ): Promise<ExecutionResult> {
   const { intent } = operation;
-  if (intent.kind !== "send" || intent.sendAtMs === undefined) {
+  if (intent.kind !== "send" || !isServerHeldSend(intent)) {
     return { status: "rejected", code: "unsupported", targets: [] };
   }
   const mutationId = sendMutationId(operation.key.operationId);
@@ -621,7 +618,9 @@ async function driveHeldSend(
   if (!row) {
     const held = await holdEngineSend(accountId, mutationId, {
       ...intent,
-      sendAtMs: intent.sendAtMs,
+      // A send queued offline has no undo window; it is due from when it
+      // was queued, which every attempt agrees on.
+      sendAtMs: intent.sendAtMs ?? intent.queuedAtMs,
     });
     if (held.status === "rejected") return held;
     row = held.row;
@@ -654,7 +653,15 @@ async function holdEngineSend(
     clientMutationId: mutationId,
     ...sendRequest(intent),
     sendAt: null,
-    remindAt: null,
+    // A reminder already due when the send reaches the server would fire on
+    // a reply nobody has had time to answer, so it is dropped. Attempts that
+    // straddle that moment can disagree; only one can create the hold, and a
+    // racing one fails this attempt and finds the hold on the next.
+    remindAt:
+      intent.remindAtMs !== undefined &&
+      intent.remindAtMs > Math.max(intent.sendAtMs, Date.now())
+        ? new Date(intent.remindAtMs).toISOString()
+        : null,
   });
   if (!input.success) {
     return { status: "rejected", code: "invalid", targets: [] };
@@ -960,4 +967,12 @@ function sentMessageIdFromResult(result: unknown) {
     return null;
   }
   return typeof result.messageId === "string" ? result.messageId : null;
+}
+
+/**
+ * The server holds a send through its undo window, and holds any send that
+ * carries a reminder, since the reminder lives on the hold.
+ */
+function isServerHeldSend(intent: SendIntent) {
+  return intent.sendAtMs !== undefined || intent.remindAtMs !== undefined;
 }

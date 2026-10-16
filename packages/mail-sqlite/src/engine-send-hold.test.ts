@@ -50,6 +50,51 @@ describe("engine undo-window sends", () => {
     await engine.close();
   });
 
+  // The server records the reminder on its hold of the send, so the send
+  // carries it however long it waited here. `sendAtMs` stays the undo window.
+  it.each([
+    ["an undo window", Date.now() + 30_000, expect.any(Number)],
+    ["no undo window", null, undefined],
+  ])("carries a send's reminder to the server with %s", async (_label, notBeforeMs, sendAtMs) => {
+    const remindAtMs = Date.now() + 86_400_000;
+    const { engine, executor } = await sendHarness({
+      cancel: { status: "cancelled" },
+      notBeforeMs,
+      remindAtMs,
+    });
+
+    await engine.runUntil(Date.now() + 200);
+
+    const intent = executor.execute.mock.calls[0]?.[0].operation.intent;
+    expect(intent).toMatchObject({ kind: "send", remindAtMs });
+    expect(intent?.kind === "send" ? intent.sendAtMs : null).toEqual(sendAtMs);
+    await engine.close();
+  });
+
+  it("keeps an offline send with a reminder here, then hands both over", async () => {
+    const yearMs = 365 * 24 * 60 * 60 * 1000;
+    const remindAtMs = Date.now() + 2 * yearMs;
+    let shiftMs = 0;
+    const host = createHostRuntime();
+    const { engine, executor } = await sendHarness({
+      cancel: { status: "cancelled" },
+      notBeforeMs: Date.now() + yearMs,
+      remindAtMs,
+      runtime: { ...host, nowMs: () => host.nowMs() + shiftMs },
+    });
+
+    await engine.runUntil(Date.now() + 200);
+    expect(executor.execute).not.toHaveBeenCalled();
+
+    shiftMs = yearMs + 1000;
+    await engine.runUntil(Date.now() + shiftMs + 200);
+
+    const intent = executor.execute.mock.calls[0]?.[0].operation.intent;
+    expect(intent).toMatchObject({ kind: "send", remindAtMs });
+    expect(intent?.kind === "send" ? intent.sendAtMs : null).toBeUndefined();
+    await engine.close();
+  });
+
   it("reports too late when the server has already started sending", async () => {
     const { engine } = await sendHarness({ cancel: { status: "too_late" } });
     await engine.runUntil(Date.now() + 200);
@@ -87,7 +132,17 @@ describe("engine undo-window sends", () => {
   });
 });
 
-async function sendHarness({ cancel }: { cancel: CancelResult }) {
+async function sendHarness({
+  cancel,
+  notBeforeMs = Date.now() + 30_000,
+  remindAtMs,
+  runtime = createHostRuntime(),
+}: {
+  cancel: CancelResult;
+  notBeforeMs?: number | null;
+  remindAtMs?: number;
+  runtime?: ReturnType<typeof createHostRuntime>;
+}) {
   const store = await createSqliteMailStore(createNodeSqliteDriver());
   await store.ensureAccount({
     accountId: "acc-1",
@@ -110,7 +165,7 @@ async function sendHarness({ cancel }: { cancel: CancelResult }) {
     store,
     source: idleSource(),
     executor,
-    runtime: createHostRuntime(),
+    runtime,
   });
   const saved = await engine.saveDraft({
     key: { accountId: "acc-1", draftId: "d1" },
@@ -123,7 +178,8 @@ async function sendHarness({ cancel }: { cancel: CancelResult }) {
     conversationId: "thread-1",
     draft: { accountId: "acc-1", draftId: "d1" },
     draftRevision: saved.draftRevision,
-    notBeforeMs: Date.now() + 30_000,
+    ...(notBeforeMs === null ? {} : { notBeforeMs }),
+    ...(remindAtMs === undefined ? {} : { remindAtMs }),
     replyTo: null,
   });
   expect(admission.status).toBe("queued");

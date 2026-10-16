@@ -9,6 +9,23 @@ vi.mock("@/utils/prisma");
 describe("deleteExpiredEmailSendOperations", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it("keeps a sent undo hold while its reminder is still to run", async () => {
+    const now = new Date("2026-08-25T12:00:00.000Z");
+    prisma.emailSendOperation.deleteMany.mockResolvedValue({ count: 0 });
+
+    await deleteExpiredEmailSendOperations(now);
+
+    expect(prisma.scheduledEmail.deleteMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        heldForUndo: true,
+        NOT: {
+          status: "SENT",
+          reminderStatus: { in: ["PENDING", "PROCESSING"] },
+        },
+      }),
+    });
+  });
+
   it("deletes only terminal operations outside the retry window", async () => {
     const now = new Date("2026-08-25T12:00:00.000Z");
     prisma.emailSendOperation.deleteMany.mockResolvedValue({ count: 2 });

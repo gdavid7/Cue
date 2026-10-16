@@ -4,7 +4,9 @@ import type { z } from "zod";
 import type { ScheduledEmail } from "@/generated/prisma/client";
 import prisma from "@/utils/prisma";
 import { isDuplicateError } from "@/utils/prisma-helpers";
-import { SafeError } from "@/utils/error";
+import { isInvalidGrantError, SafeError } from "@/utils/error";
+import { extractErrorInfo as extractGmailErrorInfo } from "@/utils/gmail/retry";
+import { extractErrorInfo as extractOutlookErrorInfo } from "@/utils/outlook/retry";
 import { scheduleEmailBody } from "@/utils/actions/scheduled-email.validation";
 import { executeDurableEmailSend } from "@/utils/email/durable-email-send";
 import { createEmailProvider } from "@/utils/email/provider";
@@ -15,6 +17,7 @@ import { getMessageTimestamp } from "@/utils/email/message-timestamp";
 import { publishToQstashAt } from "@/utils/upstash";
 
 const LEASE_MS = 5 * 60 * 1000;
+const RECONNECT_REMINDER_DELAY_MS = 60 * 60 * 1000;
 const HELD_EMAIL_EXECUTE_PATH = "/api/scheduled-emails/execute";
 
 export async function scheduleEmail(
@@ -95,6 +98,11 @@ export async function holdEmailForUndo({
       assertReusableRequest(existing, hashPayload(input));
     return existing;
   }
+  // A reply sent now with a reminder keeps it on the hold, where it runs once
+  // the hold has sent, the same as a scheduled send's.
+  const remindAt = input.remindAt ? new Date(input.remindAt) : null;
+  if (remindAt && remindAt <= sendAt)
+    throw new SafeError("The reminder must be after the send time.");
   let row: ScheduledEmail;
   try {
     row = await prisma.scheduledEmail.create({
@@ -106,6 +114,7 @@ export async function holdEmailForUndo({
         threadId: input.threadId,
         sendAt,
         heldForUndo: true,
+        ...(remindAt ? { remindAt, reminderStatus: "PENDING" as const } : {}),
       },
     });
   } catch (error) {
@@ -181,7 +190,12 @@ export async function cancelHeldEmail(
       heldForUndo: true,
       status: { in: ["PENDING", "BLOCKED_AUTH"] },
     },
-    data: { status: "CANCELLED", error: null, payload: {} },
+    data: {
+      status: "CANCELLED",
+      reminderStatus: "CANCELLED",
+      error: null,
+      payload: {},
+    },
   });
   if (cancelled.count) return "cancelled";
   const existing = await findScheduledEmail(emailAccountId, clientMutationId);
@@ -387,9 +401,17 @@ export async function processScheduledEmail(
         },
       });
     } else {
+      // A held send isn't retried once it fails or turns uncertain, so its
+      // reminder has nothing to follow up. A scheduled send keeps its
+      // reminder for a retry, and a reconnect resumes a blocked hold.
+      const reminderEnds =
+        row.heldForUndo &&
+        row.reminderStatus === "PENDING" &&
+        outcome.status !== "blocked_auth";
       await prisma.scheduledEmail.updateMany({
         where: claimedWhere,
         data: {
+          ...(reminderEnds ? { reminderStatus: "CANCELLED" as const } : {}),
           status:
             outcome.status === "blocked_auth"
               ? "BLOCKED_AUTH"
@@ -479,6 +501,36 @@ async function processReminder(row: ScheduledEmail, logger: Logger, now: Date) {
       data: { reminderStatus: "COMPLETED" },
     });
   } catch (error) {
+    // An account that lost its connection comes back when the user
+    // reconnects it, as a blocked send does, so the reminder waits an hour
+    // instead of retrying every lease and holding a place in the cron batch.
+    if (isInvalidGrantError(error)) {
+      logger.warn("Email reminder waiting for the account to reconnect", {
+        error,
+        scheduledEmailId: row.id,
+      });
+      await prisma.scheduledEmail.updateMany({
+        where,
+        data: {
+          reminderStatus: "PENDING",
+          reminderStartedAt: null,
+          remindAt: new Date(now.getTime() + RECONNECT_REMINDER_DELAY_MS),
+        },
+      });
+      return;
+    }
+    // A conversation that is gone won't come back on a retry.
+    if (isMissingConversation(error)) {
+      logger.warn("Email reminder ended: it can no longer run", {
+        error,
+        scheduledEmailId: row.id,
+      });
+      await prisma.scheduledEmail.updateMany({
+        where,
+        data: { reminderStatus: "CANCELLED" },
+      });
+      return;
+    }
     logger.error("Email reminder failed", { error, scheduledEmailId: row.id });
     // Retain the lease to avoid tight retries and recover on the next stale scan.
   }
@@ -503,7 +555,10 @@ export async function processDueScheduledEmails(
         },
       ],
     },
-    orderBy: { sendAt: "asc" },
+    // Sends first: Postgres orders the enum as declared, PENDING and
+    // PROCESSING before SENT. A reminder was sent long before it falls due,
+    // so by send time alone reminders would lead and could fill the batch.
+    orderBy: [{ status: "asc" }, { sendAt: "asc" }],
     take: 100,
   });
   await mapWithConcurrency(rows, 5, async (row) => {
@@ -519,6 +574,13 @@ export async function processDueScheduledEmails(
     }
   });
   return { processed: rows.length };
+}
+
+function isMissingConversation(error: unknown) {
+  return (
+    extractGmailErrorInfo(error).status === 404 ||
+    extractOutlookErrorInfo(error).status === 404
+  );
 }
 
 function getSentThreadId(result: unknown) {

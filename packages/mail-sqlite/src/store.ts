@@ -1225,6 +1225,9 @@ export async function createSqliteMailStore(
           replyToConversationId,
           queuedAtMs: nowMs,
           ...(sendAtMs === undefined ? {} : { sendAtMs }),
+          ...(input.remindAtMs === undefined
+            ? {}
+            : { remindAtMs: input.remindAtMs }),
         };
         const hash = await digest({
           ...payload,

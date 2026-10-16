@@ -39,6 +39,8 @@ export const submitSendSchema = z.object({
   replyTo: messageKeySchema.nullable(),
   conversationId: conversationIdSchema.optional(),
   notBeforeMs: z.number().int().nonnegative().optional(),
+  /** When to bring the conversation back if nobody has replied by then. */
+  remindAtMs: z.number().int().nonnegative().optional(),
 });
 export type SubmitSend = z.infer<typeof submitSendSchema>;
 

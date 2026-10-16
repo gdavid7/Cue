@@ -241,6 +241,63 @@ describe("scheduled replies", () => {
     expect(provider.unarchiveThread).toHaveBeenCalledTimes(12);
   });
 
+  // A reminder whose conversation is gone can't run, and retrying it every
+  // lease would keep its place in the cron batch.
+  it("ends a reminder when its conversation is gone", async () => {
+    mockReminderFailure(Object.assign(new Error("Not Found"), { status: 404 }));
+
+    await processDueScheduledEmails(logger, now);
+
+    expect(prisma.scheduledEmail.updateMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({ data: { reminderStatus: "CANCELLED" } }),
+    );
+  });
+
+  // Reconnecting the account brings the reminder back, as it does a blocked
+  // send, so it waits an hour rather than retrying every lease.
+  it("holds a reminder off for an hour when the account lost its connection", async () => {
+    mockReminderFailure(new Error("invalid_grant"));
+
+    await processDueScheduledEmails(logger, now);
+
+    expect(prisma.scheduledEmail.updateMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: {
+          reminderStatus: "PENDING",
+          reminderStartedAt: null,
+          remindAt: new Date(now.getTime() + 60 * 60 * 1000),
+        },
+      }),
+    );
+  });
+
+  it("keeps a reminder's lease for a retry after a passing failure", async () => {
+    prisma.scheduledEmail.findMany.mockResolvedValue([dueReminder()]);
+    prisma.scheduledEmail.updateMany.mockResolvedValue({ count: 1 });
+    prisma.emailAccount.findUniqueOrThrow.mockResolvedValue({
+      email: "me@example.com",
+      account: { provider: "google" },
+    } as never);
+    vi.mocked(createEmailProvider).mockResolvedValue(
+      createMockEmailProvider({
+        getThreadMessages: vi
+          .fn()
+          .mockRejectedValue(
+            Object.assign(new Error("Backend Error"), { status: 503 }),
+          ),
+      }),
+    );
+
+    await processDueScheduledEmails(logger, now);
+
+    expect(prisma.scheduledEmail.updateMany).toHaveBeenCalledOnce();
+    expect(prisma.scheduledEmail.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { reminderStatus: "PROCESSING", reminderStartedAt: now },
+      }),
+    );
+  });
+
   it("settles the remaining reminders when one initial claim fails", async () => {
     prisma.scheduledEmail.findMany.mockResolvedValue(
       Array.from({ length: 8 }, (_, index) =>
@@ -667,6 +724,37 @@ describe("releaseHeldEmail", () => {
 
 describe("holdEmailForUndo", () => {
   beforeEach(() => vi.resetAllMocks());
+  // A reply sent now with a reminder goes through the mail engine; its hold
+  // carries the reminder, which runs only once the hold has sent.
+  it("records a held send's reminder on the hold itself", async () => {
+    prisma.scheduledEmail.findUnique.mockResolvedValue(null);
+    prisma.scheduledEmail.create.mockResolvedValue(row({ heldForUndo: true }));
+    await holdEmailForUndo({
+      emailAccountId: "account",
+      input: { ...input, sendAt: null },
+      sendAt: now,
+      logger,
+    });
+    expect(prisma.scheduledEmail.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        heldForUndo: true,
+        remindAt: new Date(input.remindAt),
+        reminderStatus: "PENDING",
+      }),
+    });
+  });
+  it("rejects a held send whose reminder is not after it", async () => {
+    prisma.scheduledEmail.findUnique.mockResolvedValue(null);
+    await expect(
+      holdEmailForUndo({
+        emailAccountId: "account",
+        input: { ...input, sendAt: null, remindAt: now.toISOString() },
+        sendAt: now,
+        logger,
+      }),
+    ).rejects.toThrow("The reminder must be after the send time.");
+    expect(prisma.scheduledEmail.create).not.toHaveBeenCalled();
+  });
   it.each([
     false,
     true,
@@ -753,4 +841,28 @@ function row(overrides: Partial<ScheduledEmail> = {}): ScheduledEmail {
     heldForUndo: false,
     ...overrides,
   };
+}
+
+function dueReminder() {
+  return row({
+    id: "reminder",
+    status: "SENT",
+    sentAt: new Date(now.getTime() - 60_000),
+    remindAt: now,
+    reminderStatus: "PENDING",
+  });
+}
+
+function mockReminderFailure(failure: Error) {
+  prisma.scheduledEmail.findMany.mockResolvedValue([dueReminder()]);
+  prisma.scheduledEmail.updateMany.mockResolvedValue({ count: 1 });
+  prisma.emailAccount.findUniqueOrThrow.mockResolvedValue({
+    email: "me@example.com",
+    account: { provider: "google" },
+  } as never);
+  vi.mocked(createEmailProvider).mockResolvedValue(
+    createMockEmailProvider({
+      getThreadMessages: vi.fn().mockRejectedValue(failure),
+    }),
+  );
 }
