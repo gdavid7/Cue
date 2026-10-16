@@ -1,4 +1,10 @@
 {
+  "assistant-panel-resize.spec.ts": [
+    "components/ChatPanelResizeHandle.tsx",
+    "hooks/useChatPanelWidth.ts",
+    "components/SidebarRight.tsx",
+    "components/SideNavWithTopNav.tsx"
+  ],
   "today.spec.ts": [
     "app/(app)/[emailAccountId]/home/HomeDashboard.tsx",
     "app/(app)/[emailAccountId]/home/TodayThreadRow.tsx",
