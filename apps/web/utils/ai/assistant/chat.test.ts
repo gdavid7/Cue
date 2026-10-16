@@ -231,7 +231,6 @@ function buildPrompt(
     responseSurface: "web",
     supportsInlineEmailCards: false,
     userTimezone: "UTC",
-    currentTimestamp: "2026-05-12T00:00:00.000Z",
     ...overrides,
   });
 }
@@ -382,6 +381,49 @@ describe("aiProcessAssistantChat setup", () => {
     await run;
 
     expect(toolCallAgentStream).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("aiProcessAssistantChat current time", () => {
+  async function modelMessagesAt(time: string) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(time));
+    try {
+      vi.mocked(toolCallAgentStream).mockClear();
+      vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
+      await aiProcessAssistantChat({
+        messages: [{ role: "user", content: "what came in today?" }],
+        emailAccountId: "email-account-id",
+        user: getEmailAccount(),
+        logger: createTestLogger(),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    const [options] = vi.mocked(toolCallAgentStream).mock.calls[0];
+    return options.messages as ModelMessage[];
+  }
+
+  it("keeps the system prompt identical across turns at different times", async () => {
+    const morning = await modelMessagesAt("2026-10-16T08:00:00.000Z");
+    const evening = await modelMessagesAt("2026-10-16T19:30:12.345Z");
+
+    const systemOf = (messages: ModelMessage[]) =>
+      messages.filter((message) => message.role === "system");
+    expect(systemOf(morning)).toHaveLength(1);
+    expect(systemOf(evening)).toEqual(systemOf(morning));
+    expect(JSON.stringify(systemOf(evening))).not.toContain("2026-10-16");
+  });
+
+  it("gives the current time as the first automated context message", async () => {
+    const messages = await modelMessagesAt("2026-10-16T19:30:12.345Z");
+    const [, firstContext] = messages;
+
+    expect(firstContext).toEqual({
+      role: "user",
+      content:
+        "[Automated context — not a message from the user] Current timestamp: 2026-10-16T19:30:12.345Z.",
+    });
   });
 });
 

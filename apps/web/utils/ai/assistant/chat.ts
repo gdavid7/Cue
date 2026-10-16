@@ -235,7 +235,6 @@ export async function aiProcessAssistantChat({
     supportsInlineEmailCards,
     messagingPlatform,
     userTimezone,
-    currentTimestamp,
   });
   const toolOptions = {
     email: user.email,
@@ -317,7 +316,13 @@ export async function aiProcessAssistantChat({
       ]
     : [];
 
+  const currentTimeMessage: ModelMessage = {
+    role: "user",
+    content: `[Automated context — not a message from the user] Current timestamp: ${currentTimestamp}.`,
+  };
+
   const contextMessages = [
+    currentTimeMessage,
     ...inboxContextMessage,
     ...(memories && memories.length > 0
       ? [
@@ -862,7 +867,6 @@ export function buildResolvedSystemPrompt({
   supportsInlineEmailCards,
   messagingPlatform,
   userTimezone,
-  currentTimestamp,
 }: {
   emailSendToolsEnabled: boolean;
   draftReplyActionsEnabled: boolean;
@@ -873,7 +877,6 @@ export function buildResolvedSystemPrompt({
   supportsInlineEmailCards: boolean;
   messagingPlatform?: MessagingPlatform;
   userTimezone: string;
-  currentTimestamp: string;
 }) {
   const providerPolicy = getAssistantChatProvider(provider);
   const sections = [
@@ -937,7 +940,6 @@ export function buildResolvedSystemPrompt({
     getProviderContextSection({
       provider,
       userTimezone,
-      currentTimestamp,
       calendarConnection,
     }),
     providerPolicy.searchSyntaxPolicy,
@@ -989,18 +991,16 @@ export function buildResolvedSystemPrompt({
 function getProviderContextSection({
   provider,
   userTimezone,
-  currentTimestamp,
   calendarConnection,
 }: {
   provider: string;
   userTimezone: string;
-  currentTimestamp: string;
   calendarConnection: CalendarConnectionStatus;
 }) {
   const lines = [
     "Provider context:",
     `- Current provider: ${provider}.`,
-    `- User timezone: ${userTimezone}. Current timestamp: ${currentTimestamp}. Resolve relative dates like today, tomorrow, this afternoon, Monday, or Friday from this timezone before calling calendar or inbox date-range tools.`,
+    `- User timezone: ${userTimezone}. The current timestamp is in the automated context message. Resolve relative dates like today, tomorrow, this afternoon, Monday, or Friday from this timezone before calling calendar or inbox date-range tools.`,
   ];
 
   if (calendarConnection.state === "disconnected") {
