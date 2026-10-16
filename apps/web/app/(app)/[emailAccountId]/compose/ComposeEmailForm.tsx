@@ -1600,6 +1600,11 @@ function ComposeEmailFormContent({
               })),
             })
           : [];
+      for (const attachment of attachmentsRef.current)
+        if (!uploaded.some((item) => item.id === attachment.id))
+          toastError({
+            description: `Could not attach ${attachment.filename}.`,
+          });
       // Read last, so nothing in the message is older than the hand-off.
       const content = getDraftContent();
       previewsMoved.current = true;

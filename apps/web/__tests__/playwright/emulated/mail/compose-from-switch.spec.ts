@@ -241,6 +241,72 @@ test("keeps text typed while the message moves to another From", async ({
   }
 });
 
+test("says which files stay behind when the message moves", async ({
+  page,
+}) => {
+  test.skip(
+    isMicrosoftPlaywright(),
+    "Reads the mailbox drafts back from the Gmail emulator.",
+  );
+  test.setTimeout(240_000);
+  const { emailAccountId } = await openMail(page);
+  const secondAccount = await createSecondEmailAccount(emailAccountId);
+  const subject = `From switch failed file ${Date.now()}`;
+
+  try {
+    await page.route("**/api/user/drafts/*/attachments?*", (route) =>
+      route.request().method() === "POST"
+        ? route.fulfill({
+            status: 500,
+            json: { error: "Playwright: upload refused." },
+          })
+        : route.fallback(),
+    );
+    await page.goto(`/${emailAccountId}/mail?accountScope=all`);
+    await page.getByRole("button", { name: /^Compose/ }).click();
+    const dialog = page.getByRole("dialog", { name: "New Message" });
+    await dialog
+      .getByRole("combobox", { name: "To", exact: true })
+      .fill("recipient@example.com");
+    await page.keyboard.press("Enter");
+    await dialog.getByPlaceholder("Subject").fill(subject);
+    await dialog
+      .getByRole("textbox", { name: "Email message" })
+      .fill("The file did not upload.");
+    await dialog.getByTestId("compose-attachments-input").setInputFiles({
+      name: "left-behind.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("never uploaded"),
+    });
+    await expect(page.getByText("Playwright: upload refused.")).toBeVisible({
+      timeout: 60_000,
+    });
+
+    await dialog.getByRole("combobox", { name: "From" }).click();
+    await page
+      .getByRole("option", {
+        name: `${secondAccount.name} (${secondAccount.email})`,
+        exact: true,
+      })
+      .click();
+
+    await expect(
+      page.getByText("Could not attach left-behind.txt.", { exact: true }),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(dialog.getByRole("combobox", { name: "From" })).toContainText(
+      secondAccount.email,
+      { timeout: 60_000 },
+    );
+    await expect(dialog.getByRole("list", { name: "Attachments" })).toHaveCount(
+      0,
+    );
+    await dialog.getByRole("button", { name: "Discard draft" }).click();
+    await expect(dialog).toBeHidden();
+  } finally {
+    await deleteSecondEmailAccount(secondAccount.accountId);
+  }
+});
+
 async function setSignature(emailAccountId: string, signature: string | null) {
   return withClient(async (client) => {
     const previous = await client.query<{ signature: string | null }>(
