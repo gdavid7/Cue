@@ -291,6 +291,19 @@ describe("searchInbox across the user's accounts", () => {
     ).not.toHaveProperty("keywordsOnly");
   });
 
+  it("searches an Outlook account for a link from a Gmail chat", async () => {
+    const result = await search("google", {
+      query: "https://acme.example/invoice",
+      allAccounts: true,
+    });
+
+    const [outlookSearch] = providers["account-3"].searchMessages.mock.calls[0];
+    expect(outlookSearch.query).toBe("https://acme.example/invoice");
+    expect(result.accounts).toContainEqual(
+      expect.objectContaining({ account: "three@example.com", returned: 1 }),
+    );
+  });
+
   it("does not search an account the search has nothing for", async () => {
     const result = await search("google", {
       query: "in:inbox label:work",

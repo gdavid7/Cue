@@ -27,6 +27,56 @@ type Criteria = {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TOKEN_PATTERN =
   /(-?)(\w+)(:|>=|<=|>|<)(?:"([^"]*)"|(\S+))|"([^"]*)"|(\S+)/g;
+// Operators each provider reads as a filter. A word with a colon that is no
+// operator, such as a link or a time, is searched as it is written.
+const GMAIL_OPERATORS = new Set([
+  "from",
+  "to",
+  "cc",
+  "bcc",
+  "subject",
+  "label",
+  "in",
+  "is",
+  "has",
+  "after",
+  "before",
+  "older",
+  "newer",
+  "older_than",
+  "newer_than",
+  "category",
+  "filename",
+  "size",
+  "larger",
+  "smaller",
+  "list",
+  "deliveredto",
+  "rfc822msgid",
+]);
+const OUTLOOK_FIELDS = new Set([
+  "from",
+  "to",
+  "cc",
+  "bcc",
+  "subject",
+  "body",
+  "participants",
+  "recipients",
+  "attachment",
+  "attachments",
+  "hasattachment",
+  "hasattachments",
+  "received",
+  "receiveddatetime",
+  "sent",
+  "sentdatetime",
+  "category",
+  "importance",
+  "kind",
+  "size",
+  "isread",
+]);
 const COMPARISON_SPACING =
   /\b(received(?:datetime)?|sent(?:datetime)?)\s*(>=|<=|>|<)\s*/gi;
 
@@ -61,8 +111,8 @@ function parseGmailQuery(query: string, now: Date): Criteria {
   const criteria: Criteria = { words: [], dropped: false };
 
   for (const token of tokenize(query)) {
-    if (token.kind === "word") {
-      addWord(criteria, token.value);
+    if (token.kind === "word" || !GMAIL_OPERATORS.has(token.field)) {
+      addWord(criteria, token.raw);
       continue;
     }
     const { field, operator, value, negated } = token;
@@ -110,6 +160,10 @@ function parseOutlookSearch(search: AccountSearch): Criteria {
         continue;
       }
       addWord(criteria, token.value);
+      continue;
+    }
+    if (!OUTLOOK_FIELDS.has(token.field)) {
+      addWord(criteria, token.raw);
       continue;
     }
     const { field, operator, value, negated } = token;
@@ -201,9 +255,11 @@ function toOutlookSearch(criteria: Criteria) {
 }
 
 type Token =
-  | { kind: "word"; value: string }
+  | { kind: "word"; value: string; raw: string }
   | {
       kind: "field";
+      /** The token as it was written. */
+      raw: string;
       field: string;
       operator: string;
       value: string;
@@ -217,13 +273,15 @@ function tokenize(query: string): Token[] {
     if (field) {
       return {
         kind: "field",
+        raw: match[0],
         field: field.toLowerCase(),
         operator,
         value: quotedValue ?? bareValue ?? "",
         negated: negation === "-",
       };
     }
-    return { kind: "word", value: phrase !== undefined ? `"${phrase}"` : word };
+    const value = phrase !== undefined ? `"${phrase}"` : word;
+    return { kind: "word", value, raw: value };
   });
 }
 

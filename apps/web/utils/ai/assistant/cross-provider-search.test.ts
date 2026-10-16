@@ -85,6 +85,17 @@ describe("translateAccountSearch", () => {
       expect(gmailToOutlook("in:inbox label:work")).toBeNull();
     });
 
+    it("keeps a word with a colon that is no Gmail operator as a keyword", () => {
+      expect(gmailToOutlook("https://acme.example/invoice")).toEqual({
+        search: { query: "https://acme.example/invoice" },
+        keywordsOnly: false,
+      });
+      expect(gmailToOutlook("standup 10:30")).toEqual({
+        search: { query: "standup 10:30" },
+        keywordsOnly: false,
+      });
+    });
+
     it("drops dates that don't exist and searches the keywords", () => {
       expect(gmailToOutlook("after:2024/13/45 invoice")).toEqual({
         search: { query: "invoice" },
@@ -130,6 +141,15 @@ describe("translateAccountSearch", () => {
         search: { query: "dana renewal" },
         keywordsOnly: true,
       });
+    });
+
+    it("keeps a word with a colon that is no Outlook field as a keyword", () => {
+      expect(outlookToGmail({ query: "https://acme.example/invoice" })).toEqual(
+        {
+          search: { query: "https://acme.example/invoice" },
+          keywordsOnly: false,
+        },
+      );
     });
 
     it("drops received dates that don't exist and searches the keywords", () => {
