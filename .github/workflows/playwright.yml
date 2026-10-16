@@ -66,13 +66,31 @@ on:
       - ".github/workflows/publish-playwright-report.yml"
   schedule:
     - cron: "0 6 * * *"
+  # Browser QA on demand for any branch, with no repository secrets:
+  # docs/dev-infra/ci-browser-qa.md, scripts/dispatch-browser-qa.sh.
   workflow_dispatch:
+    inputs:
+      specs:
+        description: Areas (mail), feature groups (mail-triage) or spec paths under __tests__/playwright/emulated, space-separated. Empty runs everything.
+        required: false
+        default: ""
+        type: string
+      provider:
+        description: Mail provider emulator to run against.
+        required: false
+        default: both
+        type: choice
+        options:
+          - both
+          - google
+          - microsoft
 
 permissions:
   contents: read
 
 concurrency:
-  group: playwright-${{ github.event.pull_request.number || github.ref }}
+  # Each dispatch is its own QA request, so a second one never cancels the first.
+  group: playwright-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'auto' }}
   cancel-in-progress: true
 
 env:
@@ -170,10 +188,14 @@ jobs:
       - name: Select isolated spec batches
         id: targets
         working-directory: apps/web
+        env:
+          REQUESTED_SPECS: ${{ inputs.specs }}
+          REQUESTED_PROVIDER: ${{ inputs.provider || 'both' }}
         run: |
-          batches="$(node __tests__/playwright/run-emulated-suite.mjs --list-batches)"
+          read -ra requested <<< "${REQUESTED_SPECS//,/ }"
+          batches="$(node __tests__/playwright/run-emulated-suite.mjs --list-batches "${requested[@]}")"
           # Each batch lists its providers (utils/playwright/emulated-suite-targets.mjs).
-          batches="$(jq -c '[.[] | . as $batch | $batch.providers[] as $provider | ($batch | del(.providers)) + {provider: $provider}]' <<< "$batches")"
+          batches="$(jq -c --arg only "$REQUESTED_PROVIDER" '[.[] | . as $batch | $batch.providers[] as $provider | select($only == "both" or $only == $provider) | ($batch | del(.providers)) + {provider: $provider}]' <<< "$batches")"
           echo "batches=$batches" >> "$GITHUB_OUTPUT"
 
       - name: Build browser app once
