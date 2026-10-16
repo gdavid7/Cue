@@ -418,7 +418,7 @@ async function processHistory(
   const processedCount = () => {
     const firstUnprocessed = entries.findIndex(
       (entry) =>
-        !entry.newMessages.every((event) => done.has(event)) ||
+        !entry.threadEvents.every((event) => done.has(event)) ||
         !entry.labelEvents.every((event) => done.has(event)),
     );
     return firstUnprocessed === -1 ? entries.length : firstUnprocessed;
@@ -438,9 +438,10 @@ async function processHistory(
   // Threads with the newest mail first, so a backlog surfaces the mail the
   // user is waiting on first. Within a thread, oldest first and one at a
   // time: an older sent reply handled after a newer inbound one would resolve
-  // that one's Needs reply.
+  // that one's Needs reply. Replies sent from elsewhere (SENT being added)
+  // run here too, in their place.
   const threads = new Map<string, HistoryEvent[]>();
-  for (const event of entries.flatMap((entry) => entry.newMessages)) {
+  for (const event of entries.flatMap((entry) => entry.threadEvents)) {
     const threadId = event.item.message?.threadId ?? "";
     // Re-inserting moves the thread to the end, so the map ends up ordered by
     // each thread's newest message.
@@ -459,12 +460,12 @@ async function processHistory(
     },
   );
 
-  // Label changes keep their order and only run for history whose new
-  // messages are all processed, so the cursor can move past them. They have
+  // Other label changes keep their order and only run for history whose
+  // thread events are all processed, so the cursor can move past them. They have
   // no processed marker: a run cut off before saving its cursor leaves them
   // to be applied again by the next run.
   for (const entry of entries) {
-    if (!entry.newMessages.every((event) => done.has(event))) break;
+    if (!entry.threadEvents.every((event) => done.has(event))) break;
     for (const event of entry.labelEvents) {
       await run(event);
       if (!done.has(event)) break;
@@ -495,12 +496,23 @@ function getHistoryEvents(h: gmail_v1.Schema$History, logger: Logger) {
     (m) => m.message?.id,
   ).map((item) => ({ type: HistoryEventType.MESSAGE_ADDED, item }));
 
+  // SENT being added is a reply sent from elsewhere, handled as outbound mail,
+  // so it keeps its place among the thread's messages.
+  const isSentLabelAdd = (item: gmail_v1.Schema$HistoryLabelAdded) =>
+    item.labelIds?.includes(GmailLabel.SENT) ?? false;
+  const sentReplies: HistoryEvent[] = uniqBy(
+    (h.labelsAdded || []).filter(isSentLabelAdd),
+    (item) => item.message?.id,
+  ).map((item) => ({ type: HistoryEventType.LABEL_ADDED, item }));
+
   const labelEvents: HistoryEvent[] = uniqBy(
     [
-      ...(h.labelsAdded || []).map((item) => ({
-        type: HistoryEventType.LABEL_ADDED,
-        item,
-      })),
+      ...(h.labelsAdded || [])
+        .filter((item) => !isSentLabelAdd(item))
+        .map((item) => ({
+          type: HistoryEventType.LABEL_ADDED,
+          item,
+        })),
       ...(h.labelsRemoved || []).map((item) => ({
         type: HistoryEventType.LABEL_REMOVED,
         item,
@@ -509,7 +521,7 @@ function getHistoryEvents(h: gmail_v1.Schema$History, logger: Logger) {
     (e) => `${e.type}:${e.item.message?.id}`,
   );
 
-  return { newMessages, labelEvents };
+  return { threadEvents: [...newMessages, ...sentReplies], labelEvents };
 }
 
 /**

@@ -970,6 +970,49 @@ describe("processHistoryForUser - backlogs", () => {
     expect(lastCursorUpdate()).toBe("1400");
   });
 
+  it("handles a reply sent from another client in order with the thread's inbound mail", async () => {
+    // Gmail can report the user's reply as SENT being added to it rather
+    // than as a new message; it still runs the outbound handling.
+    vi.mocked(getHistory).mockResolvedValue({
+      history: [
+        historyMessage("1100", "a", "shared", ["INBOX"]),
+        {
+          id: "1200",
+          labelsAdded: [
+            {
+              message: { id: "r", threadId: "shared", labelIds: ["SENT"] },
+              labelIds: ["SENT"],
+            },
+          ],
+        },
+        historyMessage("1300", "b", "shared", ["INBOX"]),
+      ],
+    } as any);
+    const timeline: string[] = [];
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      const id = event.item.message?.id;
+      timeline.push(`start ${id}`);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      timeline.push(`end ${id}`);
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1300 },
+      {},
+      logger,
+    );
+
+    expect(timeline).toEqual([
+      "start a",
+      "end a",
+      "start r",
+      "end r",
+      "start b",
+      "end b",
+    ]);
+    expect(lastCursorUpdate()).toBe("1300");
+  });
+
   it("processes new inbox mail newest first, a few messages at a time", async () => {
     vi.mocked(getHistory).mockResolvedValue({
       history: inboxHistory(
