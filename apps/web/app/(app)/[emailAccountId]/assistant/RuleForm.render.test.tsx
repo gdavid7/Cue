@@ -51,7 +51,7 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
 }));
 
 vi.mock("@/hooks/useLabels", () => ({
-  useLabels: () => mockUseLabels(),
+  useLabels: (emailAccountId?: string) => mockUseLabels(emailAccountId),
 }));
 
 vi.mock("@/hooks/useMessagingChannels", () => ({
@@ -224,6 +224,27 @@ describe("RuleForm", () => {
     expect(screen.queryByText("You must have at least one condition")).toBe(
       null,
     );
+  });
+
+  it("offers the labels of the account the rule is shown in", () => {
+    // In a chat working in another account, the card's account is in scope.
+    mockUseAccount.mockReturnValue({
+      emailAccountId: "chat-account",
+      provider: "google",
+    });
+    render(
+      <RuleForm
+        alwaysEditMode
+        rule={{
+          name: "",
+          actions: [],
+          conditions: [],
+          runOnThreads: true,
+        }}
+      />,
+    );
+
+    expect(mockUseLabels).toHaveBeenCalledWith("chat-account");
   });
 
   function renderLabelRuleAndOpenActionTypeDropdown() {
