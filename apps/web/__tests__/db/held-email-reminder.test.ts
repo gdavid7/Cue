@@ -124,6 +124,31 @@ describe.skipIf(!RUN_DB_TESTS)(
       expect(await read(plain.id)).toBeNull();
     });
 
+    // Reminders are sent long before they fall due, so by send time they
+    // would always sort first and could fill the batch.
+    test("sends a due email ahead of a full batch of older due reminders", async () => {
+      const longAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      await prisma.scheduledEmail.createMany({
+        data: Array.from({ length: 100 }, () => ({
+          emailAccountId: auth.emailAccountId,
+          clientMutationId: crypto.randomUUID(),
+          payloadHash: "hash",
+          payload: {},
+          threadId: "thread-1",
+          status: "SENT" as const,
+          sendAt: longAgo,
+          sentAt: longAgo,
+          remindAt: new Date(Date.now() - 60_000),
+          reminderStatus: "PENDING" as const,
+        })),
+      });
+      const due = await hold({ remindAt: null });
+
+      await service.processDueScheduledEmails(logger, afterSendAt(due));
+
+      expect(await read(due.id)).toMatchObject({ status: "FAILED" });
+    });
+
     async function hold({
       remindAt = new Date(Date.now() + 86_400_000).toISOString(),
     }: {

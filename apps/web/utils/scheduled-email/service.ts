@@ -4,7 +4,9 @@ import type { z } from "zod";
 import type { ScheduledEmail } from "@/generated/prisma/client";
 import prisma from "@/utils/prisma";
 import { isDuplicateError } from "@/utils/prisma-helpers";
-import { SafeError } from "@/utils/error";
+import { isInvalidGrantError, SafeError } from "@/utils/error";
+import { extractErrorInfo as extractGmailErrorInfo } from "@/utils/gmail/retry";
+import { extractErrorInfo as extractOutlookErrorInfo } from "@/utils/outlook/retry";
 import { scheduleEmailBody } from "@/utils/actions/scheduled-email.validation";
 import { executeDurableEmailSend } from "@/utils/email/durable-email-send";
 import { createEmailProvider } from "@/utils/email/provider";
@@ -498,6 +500,20 @@ async function processReminder(row: ScheduledEmail, logger: Logger, now: Date) {
       data: { reminderStatus: "COMPLETED" },
     });
   } catch (error) {
+    // A conversation that is gone or an account that lost its connection
+    // won't recover on a retry, which would come every lease for good and
+    // keep a place in the cron batch.
+    if (isMissingConversation(error) || isInvalidGrantError(error)) {
+      logger.warn("Email reminder ended: it can no longer run", {
+        error,
+        scheduledEmailId: row.id,
+      });
+      await prisma.scheduledEmail.updateMany({
+        where,
+        data: { reminderStatus: "CANCELLED" },
+      });
+      return;
+    }
     logger.error("Email reminder failed", { error, scheduledEmailId: row.id });
     // Retain the lease to avoid tight retries and recover on the next stale scan.
   }
@@ -522,7 +538,10 @@ export async function processDueScheduledEmails(
         },
       ],
     },
-    orderBy: { sendAt: "asc" },
+    // Sends first: Postgres orders the enum as declared, PENDING and
+    // PROCESSING before SENT. A reminder was sent long before it falls due,
+    // so by send time alone reminders would lead and could fill the batch.
+    orderBy: [{ status: "asc" }, { sendAt: "asc" }],
     take: 100,
   });
   await mapWithConcurrency(rows, 5, async (row) => {
@@ -538,6 +557,13 @@ export async function processDueScheduledEmails(
     }
   });
   return { processed: rows.length };
+}
+
+function isMissingConversation(error: unknown) {
+  return (
+    extractGmailErrorInfo(error).status === 404 ||
+    extractOutlookErrorInfo(error).status === 404
+  );
 }
 
 function getSentThreadId(result: unknown) {
