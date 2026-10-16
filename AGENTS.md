@@ -10,16 +10,19 @@
 - Run AI tests: `pnpm --filter inbox-zero-ai test-ai`
 - Run single test: `pnpm test path/to/test-file.test.ts`
 - Run focused browser test: `pnpm -F inbox-zero-ai test:playwright:emulated <area-or-spec>`; for browser-facing UI changes, inspect the generated screenshots before finishing
-- Moving, renaming, or hiding a UI affordance breaks specs that select it by visible name. Grep `__tests__/playwright` for that name before pushing, and never pipe the grep through `head` — a truncated result read as complete misses call sites. Screenshots will not catch this; the UI still looks right.
+- Moving, renaming, or hiding a UI affordance breaks specs that select it by visible name. Grep `__tests__/playwright` for that name before pushing, and never pipe the grep through `head` (a hook blocks it) — a truncated result read as complete misses call sites. Screenshots will not catch this; the UI still looks right.
 - Waiting on slow work (CI, a Playwright run, a build): background one command that exits when the work is actually done. The harness notifies you when it exits, so a polling loop on top of it only duplicates that signal.
 - Bound anything that can hang so it always exits and reports rather than waiting forever. `timeout(1)` is not on macOS; use the Bash tool's own `timeout` parameter, or `perl -e 'alarm shift; exec @ARGV' <seconds> <command>`. If you must match on log output, anchor the pattern to the real summary line (`^\s+[0-9]+ (passed|failed)`), not a bare `failed` that startup banners also contain.
 - Run specific AI/eval test: `pnpm --filter inbox-zero-ai test-ai __tests__/eval/your-test.test.ts`
 - Evals in `apps/web/__tests__/eval/` must be run from repo root with `pnpm --filter inbox-zero-ai test-ai` (not `pnpm test`)
 - Type-check build (skips Prisma migrate): `pnpm --filter inbox-zero-ai exec next build`
-- Do not use root `tsc --noEmit`; it is not a supported validation step in this monorepo and surfaces unrelated repo-wide debt. If you need the app's CI-aligned type/build check, use `pnpm --filter inbox-zero-ai build:ci` instead, and only when explicitly asked.
+- Do not use root `tsc --noEmit`; it is not a supported validation step in this monorepo and surfaces unrelated repo-wide debt (a PreToolUse hook blocks it). For the non-test type check that Vercel's build enforces, run `pnpm typecheck:web`; it prints nothing and exits 0 when clean. If you need the app's CI-aligned type/build check, use `pnpm --filter inbox-zero-ai build:ci` instead, and only when explicitly asked.
+- Run local commands through `scripts/agent-run.sh <command>`. It strips Axiom, Exa and paid LLM keys so local runs never ship logs or spend money; `--keep-ai` keeps the LLM keys for AI tests you mean to pay for.
+- Browser QA without the shared machine: dispatch the emulated Playwright suite on GitHub Actions for any pushed branch (`scripts/dispatch-browser-qa.sh`, or the GitHub MCP tools). See `docs/dev-infra/ci-browser-qa.md`.
 - Do not run `dev` or `build` unless explicitly asked
 - Run `pnpm install` before running tests or build if not already done
 - Before writing or updating tests, review `.claude/skills/testing/SKILL.md`.
+- `.claude/settings.json` hooks: cloud sessions install dependencies on start, edited files are formatted with Biome (remaining lint errors are reported back), and the rules here marked as hook-enforced are blocked before they run.
 - For core bug-fix tasks, default to TDD when practical (red/green/refactor); AI prompt improvements should generally be backed by evals too, and TDD is often useful there as well.
 - When adding a new workspace package, add its `package.json` COPY line to `docker/Dockerfile.prod` and `docker/Dockerfile.local`.
 
@@ -76,6 +79,16 @@
 - For UI and interaction work, follow `.claude/skills/apple-design/SKILL.md` (Apple-style response, spatial consistency, reduced motion, typography and wayfinding; vendored from emilkowalski/skills under MIT). Apply it with the existing shadcn/Radix components rather than new animation libraries.
 - Before shipping a user-facing UI change, run a review pass with `.claude/skills/ux-review/SKILL.md` (10-expert UX panel; vendored from noodlemind under MIT) and fix what it finds.
 - Use `LoadingContent` component for async data: `<LoadingContent loading={isLoading} error={error}>{data && <YourComponent data={data} />}</LoadingContent>`
+
+## Feature Docs
+Read the matching guide before changing one of these features:
+- Inbox Cleaner: `.cursor/rules/features/cleaner.mdc`
+- Delayed actions: `.cursor/rules/features/delayed-actions.mdc`
+- Digest: `.cursor/rules/features/digest.mdc`
+- Knowledge base: `.cursor/rules/features/knowledge.mdc`
+- Reply memory: `.cursor/rules/features/reply-memory.mdc`
+- Schedule (recurring events): `.cursor/rules/features/schedule.mdc`
+- PostHog feature flags: `.cursor/rules/posthog-feature-flags.mdc`
 
 ## Fullstack Workflow
 See `.claude/skills/fullstack-workflow/SKILL.md` for full examples and templates.
