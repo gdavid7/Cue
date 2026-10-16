@@ -278,31 +278,6 @@ const nextConfig: NextConfig = {
         source: "/",
       },
       {
-        destination: "https://go.getinboxzero.com/feature-requests",
-        permanent: true,
-        source: "/feature-requests",
-      },
-      {
-        destination: "https://go.getinboxzero.com/feature-requests",
-        permanent: true,
-        source: "/roadmap",
-      },
-      {
-        destination: "https://go.getinboxzero.com/feedback",
-        permanent: true,
-        source: "/feedback",
-      },
-      {
-        destination: "https://go.getinboxzero.com/changelog",
-        permanent: true,
-        source: "/changelog",
-      },
-      {
-        destination: "https://go.getinboxzero.com/x",
-        permanent: true,
-        source: "/twitter",
-      },
-      {
         destination: "https://go.getinboxzero.com/github",
         permanent: true,
         source: "/github",
@@ -318,16 +293,6 @@ const nextConfig: NextConfig = {
           "https://play.google.com/store/apps/details?id=com.getinboxzero.app",
         permanent: false,
         source: "/android",
-      },
-      {
-        destination: "https://go.getinboxzero.com/discord",
-        permanent: true,
-        source: "/discord",
-      },
-      {
-        destination: "https://go.getinboxzero.com/linkedin",
-        permanent: true,
-        source: "/linkedin",
       },
       {
         destination: "/support",
@@ -346,29 +311,9 @@ const nextConfig: NextConfig = {
         source: "/waitlist-other",
       },
       {
-        destination: "https://go.getinboxzero.com/affiliate",
-        permanent: true,
-        source: "/affiliates",
-      },
-      {
         destination: "/bulk-unsubscribe",
         permanent: false,
         source: "/newsletters",
-      },
-      {
-        destination: "https://docs.getinboxzero.com",
-        permanent: true,
-        source: "/docs",
-      },
-      {
-        destination: "https://docs.getinboxzero.com/:path*",
-        permanent: true,
-        source: "/docs/:path*",
-      },
-      {
-        destination: "https://docs.getinboxzero.com",
-        permanent: true,
-        source: "/api-reference/cli",
       },
       {
         destination: "/login",
@@ -394,16 +339,6 @@ const nextConfig: NextConfig = {
         destination: "/",
         permanent: true,
         source: "/new-senders",
-      },
-      {
-        destination: "https://go.getinboxzero.com/game",
-        permanent: false,
-        source: "/game",
-      },
-      {
-        destination: "https://go.getinboxzero.com/soc2",
-        permanent: true,
-        source: "/soc2",
       },
     ];
   },

@@ -86,7 +86,7 @@ export function getModel(
     : selectDeploymentModelByType(modelType);
   const { primaryModel, fallbackModels } = selectedModel;
 
-  logger.info("Using model", {
+  logger.trace("Using model", {
     modelType,
     provider: primaryModel.provider,
     model: primaryModel.modelName,

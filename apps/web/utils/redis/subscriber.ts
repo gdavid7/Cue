@@ -12,7 +12,7 @@ class RedisSubscriber {
       throw new Error("REDIS_URL is not set");
     }
 
-    logger.info("Initializing Redis subscriber connection");
+    logger.trace("Initializing Redis subscriber connection");
     const redisSubscriber = new Redis(env.REDIS_URL);
 
     // ioredis reports every failed reconnect attempt; an outage would log
@@ -22,7 +22,7 @@ class RedisSubscriber {
     });
 
     redisSubscriber.on("connect", () => {
-      logger.info("Redis connected successfully");
+      logger.trace("Redis connected successfully");
     });
 
     return redisSubscriber;

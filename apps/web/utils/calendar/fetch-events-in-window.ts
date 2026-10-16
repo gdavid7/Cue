@@ -34,9 +34,9 @@ export async function fetchCalendarEventsInWindow({
   maxResultsPerProvider: number;
   logger: Logger;
 }): Promise<CalendarEventsInWindow> {
-  logger.info("Starting calendar event window fetch");
+  logger.trace("Starting calendar event window fetch");
   const providers = await createCalendarEventProviders(emailAccountId, logger);
-  logger.info("Created calendar event providers", {
+  logger.trace("Created calendar event providers", {
     providerCount: providers.length,
   });
   // Zero providers never proves an empty calendar: connections are silently
@@ -63,14 +63,14 @@ export async function fetchCalendarEventsInWindow({
   const connectedCalendars = await prisma.calendarConnection.count({
     where: { emailAccountId, isConnected: true },
   });
-  logger.info("Counted connected calendars", { connectedCalendars });
+  logger.trace("Counted connected calendars", { connectedCalendars });
 
   const results = await Promise.allSettled(
     providers.map(async (provider, providerIndex) => {
       const providerLogger = logger.with({
         calendarProviderIndex: providerIndex,
       });
-      providerLogger.info("Starting calendar provider event fetch");
+      providerLogger.trace("Starting calendar provider event fetch");
 
       try {
         const events = await provider.fetchEvents({
@@ -79,7 +79,7 @@ export async function fetchCalendarEventsInWindow({
           maxResults: maxResultsPerProvider,
         });
 
-        providerLogger.info("Completed calendar provider event fetch", {
+        providerLogger.trace("Completed calendar provider event fetch", {
           eventCount: events.length,
         });
         return events;

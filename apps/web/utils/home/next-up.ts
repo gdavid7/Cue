@@ -14,8 +14,11 @@ import {
 import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";
 import {
+  isAppServerError,
   parseToolResult,
   searchCanvas,
+  TimeoutError,
+  withTimeout,
 } from "@/utils/thread-context/connector-context";
 
 const EVENTS_SHOWN = 2;
@@ -240,6 +243,9 @@ async function getDeadlines({
       const cached = await redis.get<NextUpItem[]>(key).catch(() => null);
       if (Array.isArray(cached)) return inWindow(cached);
 
+      const skipForAWhile = () =>
+        redis.set(key, [], { ex: DEADLINE_CACHE_SECONDS }).catch(() => null);
+
       const fetching = source
         .fetch(execute, {
           accountId,
@@ -248,16 +254,33 @@ async function getDeadlines({
           windowEnd,
           timeZone,
         })
-        .then(async (items) => {
-          await redis
-            .set(key, items, { ex: DEADLINE_CACHE_SECONDS })
-            .catch(() => null);
-          return items;
-        });
+        .then(
+          async (items) => {
+            await redis
+              .set(key, items, { ex: DEADLINE_CACHE_SECONDS })
+              .catch(() => null);
+            return items;
+          },
+          async (error) => {
+            // An app that's down stays down for a while: asking on every
+            // visit only waits on the same failure.
+            if (isAppServerError(error)) await skipForAWhile();
+            throw error;
+          },
+        );
       try {
         return inWindow(await withTimeout(fetching, SOURCE_TIMEOUT_MS));
       } catch (error) {
-        logger.warn("Connected app deadlines failed", { app, error });
+        if (error instanceof TimeoutError) {
+          logger.warn("Connected app timed out", { app });
+          // A slow app is as slow on the next visit. The fetch still running
+          // fills the cache with what it finds if it finishes.
+          await skipForAWhile();
+        } else if (isAppServerError(error)) {
+          logger.trace("Connected app down for deadlines", { app });
+        } else {
+          logger.warn("Connected app deadlines failed", { app, error });
+        }
         return [];
       }
     }),
@@ -536,19 +559,6 @@ function safeUrl(value: string) {
   } catch {
     return null;
   }
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`Timed out after ${ms}ms`)),
-        ms,
-      );
-    }),
-  ]).finally(() => clearTimeout(timer));
 }
 
 // Apps return their own API's JSON; only the fields used here are checked.

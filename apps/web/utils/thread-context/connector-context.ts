@@ -171,7 +171,13 @@ export async function fetchConnectorCandidates({
           if (failures) await redis.del(failuresKey).catch(() => null);
           return found;
         } catch (error) {
-          logger.warn("Connected app search failed", { app: name, error });
+          if (error instanceof TimeoutError) {
+            logger.warn("Connected app timed out", { app: name });
+          } else if (isAppServerError(error)) {
+            logger.trace("Connected app down for search", { app: name });
+          } else {
+            logger.warn("Connected app search failed", { app: name, error });
+          }
           complete = false;
           // Marked for reconnecting, so it isn't asked again anyway
           if (error instanceof ConnectionExpiredError) return [];
@@ -984,7 +990,19 @@ function addDays(date: Date, days: number) {
   return new Date(date.getTime() + days * 86_400_000);
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+/**
+ * The app answered with its own server failure (Canvas's
+ * `internal_server_error`): nothing on this side can fix it, so the source is
+ * left out without a warning.
+ */
+export function isAppServerError(error: unknown) {
+  return (
+    error instanceof AppToolError &&
+    error.message.includes("internal_server_error")
+  );
+}
+
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
     promise,
@@ -997,7 +1015,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   ]).finally(() => clearTimeout(timer));
 }
 
-class TimeoutError extends Error {}
+export class TimeoutError extends Error {}
 
 function uniqueBy<T>(items: T[], key: (item: T) => string): T[] {
   const seen = new Set<string>();
