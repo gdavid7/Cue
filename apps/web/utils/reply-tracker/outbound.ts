@@ -21,6 +21,8 @@ import {
   excludeAssistantMessages,
 } from "@/utils/reply-tracker/thread-status-context";
 import { isFilebotConversationMessage } from "@/utils/filebot/is-filebot-email";
+import { splitRecipientList } from "@/utils/email";
+import { getUserOwnAddresses, isOwnAddress } from "@/utils/user/own-addresses";
 
 export async function handleOutboundReply({
   emailAccount,
@@ -51,6 +53,11 @@ export async function handleOutboundReply({
   });
   if (!enabledStatuses.length) {
     logger.info("Outbound reply tracking disabled, skipping.");
+    return;
+  }
+
+  if (await isSentOnlyToOwnAddresses({ emailAccount, message })) {
+    logger.info("Skipping. Sent only to the user's own addresses.");
     return;
   }
 
@@ -188,6 +195,23 @@ async function getEnabledStatuses({
   return enabledRules
     .map((r) => r.systemType)
     .filter((s): s is ConversationStatus => s != null);
+}
+
+// Writing to your own other mailbox isn't waiting on anyone.
+async function isSentOnlyToOwnAddresses({
+  emailAccount,
+  message,
+}: {
+  emailAccount: EmailAccountWithAI;
+  message: ParsedMessage;
+}) {
+  const { to, cc, bcc } = message.headers;
+  const recipients = splitRecipientList(
+    [to, cc, bcc].filter(Boolean).join(","),
+  );
+  if (!recipients.length) return false;
+  const ownAddresses = await getUserOwnAddresses(emailAccount.userId);
+  return recipients.every((recipient) => isOwnAddress(recipient, ownAddresses));
 }
 
 function isMessageLatestInThread(

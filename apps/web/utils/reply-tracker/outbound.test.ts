@@ -15,6 +15,7 @@ import {
   clearOutboundThreadStatusLock,
   markOutboundThreadStatusProcessed,
 } from "@/utils/redis/outbound-thread-status";
+import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/ai/reply/determine-thread-status");
@@ -24,6 +25,11 @@ vi.mock("@/utils/redis/outbound-thread-status", () => ({
   acquireOutboundThreadStatusLock: vi.fn(),
   clearOutboundThreadStatusLock: vi.fn(),
   markOutboundThreadStatusProcessed: vi.fn(),
+}));
+
+vi.mock("@/utils/user/own-addresses", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/user/own-addresses")>()),
+  getUserOwnAddresses: vi.fn(),
 }));
 
 describe("handleOutboundReply", () => {
@@ -40,6 +46,62 @@ describe("handleOutboundReply", () => {
     );
     vi.mocked(markOutboundThreadStatusProcessed).mockResolvedValue(true);
     vi.mocked(clearOutboundThreadStatusLock).mockResolvedValue(true);
+    vi.mocked(getUserOwnAddresses).mockResolvedValue([emailAccount.email]);
+  });
+
+  // D4: writing to your own other mailbox isn't waiting on anyone.
+  it("does not track a message sent only to the user's own addresses", async () => {
+    vi.mocked(getUserOwnAddresses).mockResolvedValue([
+      emailAccount.email,
+      "me.elsewhere@gmail.com",
+    ]);
+    prisma.rule.findMany.mockResolvedValue([
+      { systemType: SystemType.AWAITING_REPLY },
+    ] as any);
+    const message = getMockMessage({
+      from: emailAccount.email,
+      to: "Me <Me.Elsewhere@gmail.com>",
+    });
+
+    await handleOutboundReply({
+      emailAccount,
+      message: message as any,
+      provider: provider as any,
+      logger,
+    });
+
+    expect(getUserOwnAddresses).toHaveBeenCalledWith(emailAccount.userId);
+    expect(aiDetermineThreadStatus).not.toHaveBeenCalled();
+    expect(applyThreadStatusLabel).not.toHaveBeenCalled();
+    expect(updateThreadTrackers).not.toHaveBeenCalled();
+  });
+
+  it("tracks a message to the user's other address that also copies someone else", async () => {
+    vi.mocked(getUserOwnAddresses).mockResolvedValue([
+      emailAccount.email,
+      "me.elsewhere@gmail.com",
+    ]);
+    prisma.rule.findMany.mockResolvedValue([
+      { systemType: SystemType.AWAITING_REPLY },
+    ] as any);
+    const message = {
+      ...getMockMessage({ to: "me.elsewhere@gmail.com" }),
+    };
+    message.headers = { ...message.headers, cc: "alex@example.com" } as any;
+    provider.getThreadMessages.mockResolvedValue([message]);
+    vi.mocked(aiDetermineThreadStatus).mockResolvedValue({
+      status: SystemType.AWAITING_REPLY,
+      rationale: "Waiting for Alex",
+    });
+
+    await handleOutboundReply({
+      emailAccount,
+      message: message as any,
+      provider: provider as any,
+      logger,
+    });
+
+    expect(aiDetermineThreadStatus).toHaveBeenCalled();
   });
 
   it("should proceed with processing even if the message is not the latest in the thread", async () => {
