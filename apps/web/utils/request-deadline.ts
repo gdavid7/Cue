@@ -1,10 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { setRequestDeadlineReader } from "@/utils/request-deadline-reader";
 
 // Leaves room to send the answer, and for a provider call already in flight
 // when the deadline passes, before the platform kills the function.
 const MAX_DURATION_MARGIN_MS = 10_000;
 
 const deadlineContext = new AsyncLocalStorage<{ deadlineAt?: number }>();
+
+setRequestDeadlineReader(() => deadlineContext.getStore()?.deadlineAt);
 
 /**
  * Runs a request someone is waiting on with a deadline derived from its
@@ -28,9 +31,4 @@ export async function runWithRequestDeadline<T>(
   } finally {
     store.deadlineAt = undefined;
   }
-}
-
-/** Epoch ms by which the current request must answer, if it has a deadline. */
-export function getRequestDeadline(): number | undefined {
-  return deadlineContext.getStore()?.deadlineAt;
 }

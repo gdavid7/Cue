@@ -5,7 +5,7 @@ import { gmailQuotaStore } from "@/utils/gmail/quota-store";
 import { extractErrorInfo, isRetryableError } from "@/utils/gmail/retry";
 import { createScopedLogger } from "@/utils/logger";
 import { isEmailProviderRateLimitRedisConfigured } from "@/utils/redis/email-provider-rate-limit";
-import { getRequestDeadline } from "@/utils/request-deadline";
+import { getRequestDeadline } from "@/utils/request-deadline-reader";
 import { sleep } from "@/utils/sleep";
 
 // The per-user Gmail limit for this Google Cloud project, shared by every

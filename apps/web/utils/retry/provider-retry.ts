@@ -1,6 +1,6 @@
 import pRetry, { type RetryContext } from "p-retry";
 import type { Logger } from "@/utils/logger";
-import { getRequestDeadline } from "@/utils/request-deadline";
+import { getRequestDeadline } from "@/utils/request-deadline-reader";
 import { sleep } from "@/utils/sleep";
 
 // "rate-limit-only" is for non-idempotent writes: network, server, and conflict

@@ -22,7 +22,7 @@ import { createEmailProvider } from "@/utils/email/provider";
 import { isProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
 import { recordRateLimitFromApiError } from "@/utils/email/rate-limit";
 import { getAuditContext } from "@/utils/audit/context";
-import { getRequestDeadline } from "@/utils/request-deadline";
+import { getRequestDeadline } from "@/utils/request-deadline-reader";
 
 vi.mock("better-auth", () => {
   const mockAuthFn = vi.fn();
