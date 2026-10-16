@@ -9,6 +9,8 @@ import {
   SafeError,
 } from "@/utils/error";
 import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
+import { extractErrorInfo as extractGmailErrorInfo } from "@/utils/gmail/retry";
+import { extractErrorInfo as extractOutlookErrorInfo } from "@/utils/outlook/retry";
 import {
   isPublicApiPath,
   publicApiErrorFromUnknown,
@@ -871,12 +873,22 @@ function logSlowMiddlewareTotal({
 }
 
 // A rate limit the provider's known error shapes don't name, such as a
-// bare 429 inside a batch failure, is still a rate limit.
+// bare 429 inside a batch failure, is still a rate limit. Only an error
+// carrying the provider's HTTP response counts: an AI provider's "Rate limit
+// exceeded" on the same request is not the mailbox's.
 function providerRateLimitApiError(error: unknown, req: NextRequest) {
   const provider = toRateLimitProvider(
     (req as Partial<RequestWithEmailProvider>).emailProvider?.name,
   );
-  if (!provider || !isEmailProviderRateLimitError({ error, provider }))
+  if (!provider) return null;
+  const status =
+    provider === "google"
+      ? extractGmailErrorInfo(error).status
+      : extractOutlookErrorInfo(error).status;
+  if (
+    (status !== 403 && status !== 429) ||
+    !isEmailProviderRateLimitError({ error, provider })
+  )
     return null;
   return {
     type: getProviderRateLimitApiErrorType(provider),

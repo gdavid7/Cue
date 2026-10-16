@@ -680,6 +680,43 @@ describe("Middleware", () => {
       mockAuth.mockResolvedValue({ user: { id: mockUserId } } as any);
     });
 
+    it("answers a Gmail response's bare 429 as a Gmail rate limit, but not an AI provider's", async () => {
+      mockReq = createMockRequest("GET", "http://localhost/api/assistant", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+      mockGetEmailAccount.mockResolvedValue(mockEmail);
+      mockPrismaEmailAccountFindUnique.mockResolvedValue({
+        id: mockAccountId,
+        account: { provider: "google" },
+      } as any);
+      mockCreateEmailProvider.mockResolvedValue({ name: "google" } as any);
+      mockCheckCommonErrors.mockReturnValue(null);
+      const respond = (error: unknown) =>
+        withEmailProvider("assistant", vi.fn().mockRejectedValue(error))(
+          mockReq,
+          mockContext,
+        );
+
+      // The AI SDK gives up with this after its own retries.
+      const aiRateLimit = Object.assign(new Error("Rate limit exceeded"), {
+        name: "AI_RetryError",
+        reason: "maxRetriesExceeded",
+        lastError: { statusCode: 429, message: "Rate limit exceeded" },
+      });
+      expect((await respond(aiRateLimit)).status).toBe(500);
+      expect(mockRecordRateLimitFromApiError).not.toHaveBeenCalled();
+
+      // Gaxios puts the HTTP response on the error, or on its cause.
+      const gmailThrottle = new Error("Batch request failed", {
+        cause: Object.assign(new Error("Too many requests"), {
+          response: { status: 429 },
+        }),
+      });
+      const gmail = await respond(gmailThrottle);
+      expect(gmail.status).toBe(429);
+      expect(gmail.headers.get("Retry-After")).not.toBeNull();
+    });
+
     it("preserves NextRequest APIs when adding an email provider", async () => {
       mockReq = createMockRequest(
         "GET",
