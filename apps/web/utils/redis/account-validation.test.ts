@@ -94,6 +94,20 @@ describe("createOwnedAccountMemo", () => {
     expect(load).toHaveBeenCalledTimes(4);
   });
 
+  it("forgets everything again on a second dropped connection", async () => {
+    const bus = fakeBus();
+    const memo = createOwnedAccountMemo(bus);
+    const load = vi.fn(async () => "me@example.com");
+
+    await memo.get("account:u1:a1", load);
+    bus.drop();
+    await memo.get("account:u1:a1", load);
+    bus.drop();
+    await memo.get("account:u1:a1", load);
+
+    expect(load).toHaveBeenCalledTimes(3);
+  });
+
   it("forgets everything when invalidations may have been missed", async () => {
     const bus = fakeBus();
     const memo = createOwnedAccountMemo(bus);
@@ -107,24 +121,31 @@ describe("createOwnedAccountMemo", () => {
   });
 });
 
+// Like the shared subscriber: a dropped connection tells only listeners that
+// were live, and a listener is live again only once it subscribes again.
 function fakeBus() {
-  const listeners = new Set<{
-    onMessage: (message: string) => void;
-    onLost: () => void;
-  }>();
+  type Listener = { onMessage: (message: string) => void; onLost: () => void };
+  const listeners = new Set<Listener>();
+  const live = new Set<Listener>();
   return {
-    listen(
-      _channel: string,
-      listener: { onMessage: (message: string) => void; onLost: () => void },
-    ) {
+    listen(_channel: string, listener: Listener) {
       listeners.add(listener);
-      return { ready: Promise.resolve() };
+      live.add(listener);
+      return {
+        ready: Promise.resolve(),
+        close: () => {
+          listeners.delete(listener);
+          live.delete(listener);
+        },
+      };
     },
     async publish(_channel: string, message: string) {
       for (const listener of listeners) listener.onMessage(message);
     },
     drop() {
-      for (const listener of listeners) listener.onLost();
+      const lost = [...live];
+      live.clear();
+      for (const listener of lost) listener.onLost();
     },
   };
 }

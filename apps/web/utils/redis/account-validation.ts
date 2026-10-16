@@ -11,7 +11,7 @@ const INVALIDATION_CHANNEL = "account-validation:invalidate";
 type Listen = (
   channel: string,
   listener: { onMessage: (message: string) => void; onLost: () => void },
-) => { ready: Promise<unknown> };
+) => { ready: Promise<unknown>; close?: () => void };
 
 /**
  * Most authenticated requests check the account, so each instance trusts an
@@ -37,10 +37,19 @@ export function createOwnedAccountMemo({
     if (listening) return;
     listening = true;
     try {
-      listen(INVALIDATION_CHANNEL, {
+      const subscription = listen(INVALIDATION_CHANNEL, {
         onMessage: (key) => memo.delete(key),
-        onLost: () => memo.clear(),
-      }).ready.catch(() => {
+        // A dropped connection only reports to a subscription once, so this
+        // one is closed and the next check subscribes afresh, to hear about
+        // the next drop too.
+        onLost: () => {
+          memo.clear();
+          subscription.close?.();
+          listening = false;
+        },
+      });
+      subscription.ready.catch(() => {
+        subscription.close?.();
         listening = false;
       });
     } catch {
