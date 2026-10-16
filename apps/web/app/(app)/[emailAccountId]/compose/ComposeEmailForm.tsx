@@ -225,6 +225,8 @@ type ComposeEmailFormProps = {
 
 type ComposeFormValues = Omit<SendEmailBody, "attachments" | "messageHtml">;
 
+type MoveToFinish = { from: MovedFromDraft; filesMoved: boolean };
+
 /** What a new message keeps when its From account changes mid-draft. */
 type MovedComposeDraft = {
   values: ComposeFormValues;
@@ -747,8 +749,31 @@ function ComposeEmailFormContent({
     return draftId;
   };
 
+  // A moved draft whose old copy couldn't go yet, because the new mailbox
+  // hadn't saved it. The next save that lands finishes it, once.
+  const unfinishedMove = useRef<MoveToFinish | undefined>(undefined);
+  const completeMove = async (move: MoveToFinish) => {
+    const result = await finishComposeDraftMove({
+      from: move.from,
+      newMailboxDraftId: providerDraftId.current,
+      filesMoved: move.filesMoved,
+    });
+    if (result !== "moved") return false;
+    toastSuccess({ description: `Draft moved to ${sendingAddress}` });
+    await client?.requestSync([move.from.emailAccountId]);
+    return true;
+  };
+
   // Replies and forwards sync their text even before any files are attached.
   const providerAutosave = useProviderDraftAutosave({
+    onSaved: () => {
+      const move = unfinishedMove.current;
+      if (!move) return;
+      unfinishedMove.current = undefined;
+      completeMove(move).catch((error: unknown) => {
+        toastError({ description: getMoveErrorMessage(error) });
+      });
+    },
     enabled: Boolean(providerDraftMessageId) || Boolean(localDraftIdentity),
     sessionKey: providerDraftMessageId ? undefined : draftQueueKey,
     minIntervalMs:
@@ -1050,18 +1075,18 @@ function ComposeEmailFormContent({
             (item) => item.id === attachment.id && item.status === "uploaded",
           ),
       );
-      const filesMoved = filesLeftBehind.length === 0;
-      const result = await finishComposeDraftMove({
+      const move = {
         from: moved.from,
-        newMailboxDraftId: savedToMailbox ? providerDraftId.current : undefined,
-        filesMoved,
-      });
-      if (result !== "moved") return;
-      toastSuccess({ description: `Draft moved to ${sendingAddress}` });
+        filesMoved: filesLeftBehind.length === 0,
+      };
+      if (!savedToMailbox) {
+        unfinishedMove.current = move;
+        return;
+      }
+      if (!(await completeMove(move))) return;
       // The move isn't the whole story when files stayed on the old draft.
       for (const { attachment } of filesLeftBehind)
         toastError({ description: `Could not attach ${attachment.filename}.` });
-      await client?.requestSync([moved.from.emailAccountId]);
     };
     finishMove().catch((error: unknown) => {
       toastError({ description: getMoveErrorMessage(error) });

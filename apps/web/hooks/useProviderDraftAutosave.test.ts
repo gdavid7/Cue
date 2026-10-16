@@ -61,6 +61,35 @@ it("counts a save now as landed when typing continued during it", async () => {
   unmount();
 });
 
+it("tells the caller after each save that landed, not after a failed one", async () => {
+  const onSaved = vi.fn();
+  const save = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("Gmail is unavailable."))
+    .mockResolvedValue(undefined);
+  let content = "first";
+  const { result, unmount } = renderHook(() =>
+    useProviderDraftAutosave({
+      enabled: true,
+      getContent: () => content,
+      save,
+      onSaved,
+    }),
+  );
+
+  await act(async () => {
+    await result.current.saveNow();
+  });
+  expect(onSaved).not.toHaveBeenCalled();
+
+  content = "second";
+  await act(async () => {
+    await result.current.saveNow();
+  });
+  expect(onSaved).toHaveBeenCalledOnce();
+  unmount();
+});
+
 it("reports a failed save now", async () => {
   const save = vi.fn().mockRejectedValue(new Error("Gmail is unavailable."));
   const { result, unmount } = renderHook(() =>

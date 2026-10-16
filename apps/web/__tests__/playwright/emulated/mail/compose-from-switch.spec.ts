@@ -232,7 +232,16 @@ test("keeps the old mailbox draft while the new mailbox can't save it", async ({
 
     await expect(page.getByText(/^Draft moved to /)).toHaveCount(0);
     expect(await readDraftFiles(page, subject)).toEqual([[]]);
+
+    // Once the new mailbox saves it, the move finishes on its own: the old
+    // draft goes and only the new account's remains.
     await page.unroute("**/*");
+    await expect(
+      page.getByText(`Draft moved to ${secondAccount.email}`, { exact: true }),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect
+      .poll(() => readDraftFiles(page, subject), { timeout: 60_000 })
+      .toEqual([[]]);
   } finally {
     await deleteSecondEmailAccount(secondAccount.accountId);
   }

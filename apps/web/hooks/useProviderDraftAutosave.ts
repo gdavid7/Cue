@@ -34,6 +34,7 @@ export function useProviderDraftAutosave<T>({
   getContent,
   save,
   minIntervalMs = 0,
+  onSaved,
 }: {
   enabled: boolean;
   sessionKey?: string;
@@ -41,10 +42,12 @@ export function useProviderDraftAutosave<T>({
   save: (content: T) => Promise<void>;
   /** Spaces out timed saves; closing, hiding, or going online still save. */
   minIntervalMs?: number;
+  /** Runs after each save the mailbox accepted. */
+  onSaved?: () => void;
 }) {
   const [error, setError] = useState("");
-  const latest = useRef({ enabled, getContent, save, minIntervalMs });
-  latest.current = { enabled, getContent, save, minIntervalMs };
+  const latest = useRef({ enabled, getContent, save, minIntervalMs, onSaved });
+  latest.current = { enabled, getContent, save, minIntervalMs, onSaved };
   const lastSaveStartedAt = useRef(0);
   const dirty = useRef(false);
   const pendingContent = useRef<T | undefined>(undefined);
@@ -95,6 +98,7 @@ export function useProviderDraftAutosave<T>({
         closedSaveFailures.current = 0;
         consecutiveFailures.current = 0;
         if (mounted.current) setError("");
+        latest.current.onSaved?.();
       })
       .catch((error: unknown) => {
         if (error instanceof DraftAutosaveHaltedError) {
