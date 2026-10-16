@@ -198,6 +198,18 @@ export async function processHistoryForUser(
         },
       },
       async () => {
+        const catchUpToken = await getGmailHistoryCatchUp(
+          validatedEmailAccount.id,
+          logger,
+        );
+
+        if (
+          !validatedEmailAccount.lastSyncedHistoryId &&
+          !options.startHistoryId
+        ) {
+          return await startWithoutCursor(catchUpToken);
+        }
+
         const gmail = await getGmailClientWithRefresh({
           accessToken: accountAccessToken,
           refreshToken: accountRefreshToken,
@@ -206,11 +218,6 @@ export async function processHistoryForUser(
           emailAccountId: validatedEmailAccount.id,
           logger,
         });
-
-        const catchUpToken = await getGmailHistoryCatchUp(
-          validatedEmailAccount.id,
-          logger,
-        );
 
         const historyResult = await fetchGmailHistoryResilient({
           gmail,
@@ -342,6 +349,42 @@ export async function processHistoryForUser(
         return NextResponse.json({ ok: true });
       },
     );
+  }
+
+  // A mailbox's cursor starts at the history id its watch began at. Without
+  // one, history from 0 is always expired and jumping to this push would
+  // skip the mail that sent it, so a catch-up runs once the watch's history
+  // id is saved. A catch-up that still finds none, or no catch-up at all,
+  // starts from this push so later mail is processed.
+  async function startWithoutCursor(catchUpToken: string | null) {
+    if (!catchUpToken) {
+      await markGmailHistoryCatchUp(validatedEmailAccount.id, logger);
+      const willCatchUp = await scheduleGmailHistoryCatchUp({
+        emailAccountId: validatedEmailAccount.id,
+        historyId,
+        logger,
+      });
+      if (willCatchUp) {
+        logger.info("No Gmail history cursor yet; catching up shortly");
+        return NextResponse.json({ ok: true });
+      }
+    }
+
+    logger.warn(
+      "No Gmail history cursor; starting from this push, earlier mail is not processed by automation",
+    );
+    await updateLastSyncedHistoryId({
+      emailAccountId: validatedEmailAccount.id,
+      lastSyncedHistoryId: historyId,
+    });
+    if (catchUpToken) {
+      await clearGmailHistoryCatchUp({
+        emailAccountId: validatedEmailAccount.id,
+        token: catchUpToken,
+        logger,
+      });
+    }
+    return NextResponse.json({ ok: true });
   }
 
   // The catch-up skips history the cursor already covers, so it asks for

@@ -18,6 +18,10 @@ import {
 import { logErrorWithDedupe } from "@/utils/log-error-with-dedupe";
 import { clearWatchLapsedErrorIfResolved } from "@/utils/error-messages";
 import { syncGoogleEmailFromProfile } from "@/utils/auth/rename-email";
+import { resumeAfterGmailDeferral } from "@/utils/gmail/deferred-resume";
+import { isGmailCallDeferredError } from "@/utils/gmail/quota";
+
+export const WATCH_RESUME_PATH = "/api/watch/resume";
 
 export type WatchEmailAccountResult =
   | {
@@ -34,19 +38,29 @@ export type WatchEmailAccountResult =
 
 export async function ensureEmailAccountsWatched({
   userIds,
+  emailAccountId,
+  deferrals = 0,
   logger,
 }: {
   userIds: string[] | null;
+  /** Watches only this mailbox, as when resuming its deferred watch. */
+  emailAccountId?: string;
+  /** How many times the Gmail quota gate has deferred this watch. */
+  deferrals?: number;
   logger: Logger;
 }): Promise<WatchEmailAccountResult[]> {
-  const emailAccounts = await getEmailAccountsToWatch(userIds);
-  return await watchEmailAccounts(emailAccounts, logger);
+  const emailAccounts = await getEmailAccountsToWatch(userIds, emailAccountId);
+  return await watchEmailAccounts(emailAccounts, deferrals, logger);
 }
 
-async function getEmailAccountsToWatch(userIds: string[] | null) {
+async function getEmailAccountsToWatch(
+  userIds: string[] | null,
+  emailAccountId: string | undefined,
+) {
   return prisma.emailAccount.findMany({
     where: {
       ...(userIds ? { userId: { in: userIds } } : {}),
+      ...(emailAccountId ? { id: emailAccountId } : {}),
       ...getPremiumUserFilter(),
       account: { disconnectedAt: null },
     },
@@ -86,6 +100,7 @@ async function getEmailAccountsToWatch(userIds: string[] | null) {
 
 async function watchEmailAccounts(
   emailAccounts: Awaited<ReturnType<typeof getEmailAccountsToWatch>>,
+  deferrals: number,
   logger: Logger,
 ): Promise<WatchEmailAccountResult[]> {
   if (!emailAccounts.length) return [];
@@ -101,7 +116,7 @@ async function watchEmailAccounts(
         email: emailAccount.email,
         provider: emailAccount.account.provider,
       });
-      const result = await watchEmailAccount(emailAccount, log);
+      const result = await watchEmailAccount(emailAccount, deferrals, log);
       if (result) results.push(result);
     } catch (error) {
       if (error instanceof Error) {
@@ -139,6 +154,7 @@ async function watchEmailAccounts(
 
 async function watchEmailAccount(
   emailAccount: Awaited<ReturnType<typeof getEmailAccountsToWatch>>[number],
+  deferrals: number,
   logger: Logger,
 ): Promise<WatchEmailAccountResult | null> {
   const { account, user, watchEmailsExpirationDate } = emailAccount;
@@ -192,18 +208,30 @@ async function watchEmailAccount(
   });
 
   if (!result.success) {
-    await logErrorWithDedupe({
-      logger,
-      message: "Failed to watch emails for account",
+    // Without push the mailbox gets no new mail until the next renewal, so a
+    // watch the quota gate put off is tried again as soon as it allows.
+    const resumed = await resumeAfterGmailDeferral({
       error: result.error,
-      dedupeKeyParts: {
-        scope: "watch/all",
-        emailAccountId: emailAccount.id,
-        operation: "watch-email-account",
-      },
-      ttlSeconds: 15 * 60,
-      summaryIntervalSeconds: 5 * 60,
+      path: WATCH_RESUME_PATH,
+      body: { emailAccountId: emailAccount.id },
+      deferrals,
+      jobKey: `gmail-watch-${emailAccount.id}-${Math.floor(Date.now() / 60_000)}`,
+      job: "Gmail watch setup",
+      logger,
     });
+    if (!resumed)
+      await logErrorWithDedupe({
+        logger,
+        message: "Failed to watch emails for account",
+        error: result.error,
+        dedupeKeyParts: {
+          scope: "watch/all",
+          emailAccountId: emailAccount.id,
+          operation: "watch-email-account",
+        },
+        ttlSeconds: 15 * 60,
+        summaryIntervalSeconds: 5 * 60,
+      });
 
     return {
       emailAccountId: emailAccount.id,
@@ -295,6 +323,16 @@ async function watchEmails({
           where: { id: emailAccountId },
           data: { watchEmailsExpirationDate: result.expirationDate },
         });
+        // A mailbox's first push reads history from its cursor; without one
+        // it would read from 0, which Gmail reports as expired, and the mail
+        // that sent the push would be skipped. An existing cursor is left
+        // alone so a renewal never moves past unprocessed history.
+        if (result.historyId) {
+          await prisma.emailAccount.updateMany({
+            where: { id: emailAccountId, lastSyncedHistoryId: null },
+            data: { lastSyncedHistoryId: result.historyId },
+          });
+        }
         return { success: true, expirationDate: result.expirationDate };
       }
     }
@@ -323,7 +361,7 @@ async function watchEmails({
           cleanupError,
         }),
       );
-    } else {
+    } else if (!isGmailCallDeferredError(error)) {
       captureException(error, { emailAccountId });
     }
 

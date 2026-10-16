@@ -1410,6 +1410,70 @@ describe("processHistoryForUser - backlogs", () => {
   });
 });
 
+describe("processHistoryForUser - mailbox without a history cursor", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getEmailProviderRateLimitState).mockResolvedValue(null);
+    vi.mocked(getGmailHistoryCatchUp).mockResolvedValue(null);
+    vi.mocked(publishToQstashAt).mockResolvedValue(true);
+    givenAccountWithoutCursor();
+  });
+
+  it("waits for a catch-up instead of reading from the start and skipping the first mail", async () => {
+    const result = await processHistoryForUser(
+      { emailAddress: "user@test.com", historyId: 2000 },
+      {},
+      logger,
+    );
+
+    expect(await (result as any).json()).toEqual({ ok: true });
+    // History from "0" is always expired, which used to jump the cursor
+    // past the push and drop the mail that sent it.
+    expect(getHistory).not.toHaveBeenCalled();
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+    expect(markGmailHistoryCatchUp).toHaveBeenCalledWith(
+      "account-123",
+      expect.anything(),
+    );
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/google/webhook/catch-up",
+        body: { emailAccountId: "account-123", historyId: "2000" },
+      }),
+    );
+  });
+
+  it("starts from the push when a catch-up still finds no cursor, so later mail is processed", async () => {
+    vi.mocked(getGmailHistoryCatchUp).mockResolvedValue("catch-up-token");
+
+    await processHistoryForUser(
+      { emailAddress: "user@test.com", historyId: 2000 },
+      {},
+      logger,
+    );
+
+    expect(getHistory).not.toHaveBeenCalled();
+    expect(lastCursorUpdate()).toBe("2000");
+    expect(publishToQstashAt).not.toHaveBeenCalled();
+    expect(clearGmailHistoryCatchUp).toHaveBeenCalledWith(
+      expect.objectContaining({ token: "catch-up-token" }),
+    );
+  });
+
+  it("starts from the push when no catch-up can be scheduled", async () => {
+    vi.mocked(publishToQstashAt).mockResolvedValue(false);
+
+    await processHistoryForUser(
+      { emailAddress: "user@test.com", historyId: 2000 },
+      {},
+      logger,
+    );
+
+    expect(getHistory).not.toHaveBeenCalled();
+    expect(lastCursorUpdate()).toBe("2000");
+  });
+});
+
 const backlogAccount = {
   id: "account-123",
   email: "user@test.com",
@@ -1457,4 +1521,29 @@ function cursorUpdates() {
 
 function lastCursorUpdate() {
   return cursorUpdates().at(-1);
+}
+
+function givenAccountWithoutCursor() {
+  const emailAccount = {
+    id: "account-123",
+    email: "user@test.com",
+    lastSyncedHistoryId: null,
+  };
+  vi.mocked(getWebhookEmailAccount).mockResolvedValue(emailAccount as any);
+  vi.mocked(validateWebhookAccount).mockResolvedValue({
+    success: true,
+    data: {
+      emailAccount: {
+        ...emailAccount,
+        account: {
+          access_token: "token",
+          refresh_token: "refresh",
+          expires_at: new Date(Date.now() + 3_600_000),
+        },
+        rules: [],
+      },
+      hasAutomationRules: true,
+      hasAiAccess: true,
+    },
+  } as any);
 }
