@@ -276,9 +276,9 @@ apps/web/
 └── components/ExampleForm.tsx              # Form component
 ```
 
-## Related Rules
-- [GET API Route Guidelines](mdc:.cursor/rules/get-api-route.mdc)
-- [Data Fetching with SWR](mdc:.cursor/rules/data-fetching.mdc)
-- [Form Handling](mdc:.cursor/rules/form-handling.mdc)
-- [Server Actions](mdc:.cursor/rules/server-actions.mdc)
+## Related Skills
+- [Prisma](../prisma/SKILL.md) for the queries behind routes and actions
+- [UI components](../ui-components/SKILL.md) for forms and loading states
+- [Project structure](../project-structure/SKILL.md) for where files go
+- [Testing](../testing/SKILL.md) for covering routes and actions
 

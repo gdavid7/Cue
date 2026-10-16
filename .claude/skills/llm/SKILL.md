@@ -139,4 +139,4 @@ ${emailAccount.about ? `<user_info>${emailAccount.about}</user_info>` : ""}`;
 
 ## Testing
 
-See [llm-test.mdc](mdc:.cursor/rules/llm-test.mdc)
+See the [llm-test skill](../llm-test/SKILL.md).
