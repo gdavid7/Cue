@@ -27,6 +27,7 @@ import { normalizeLabelName } from "@/utils/label/normalize-label-name";
 import { resolveLabelNameAndId } from "@/utils/label/resolve-label";
 import {
   buildMicrosoftSearchErrorResult,
+  getOutlookFieldScopeCandidate,
   getOutlookLocalSearch,
   normalizeOutlookSearchInput,
   runOutlookSearch,
@@ -1907,7 +1908,13 @@ function startOtherAccountSearch({
       skipped: "Later pages search only this chat's account.",
     });
   }
-  if (input.folderName || input.categoryName) {
+  if (
+    input.folderName ||
+    input.categoryName ||
+    // An Outlook query can name its folder or category itself.
+    (isMicrosoftProvider(provider) &&
+      getOutlookFieldScopeCandidate(input.query))
+  ) {
     return Promise.resolve({
       results: [],
       notSearchedCount: 0,

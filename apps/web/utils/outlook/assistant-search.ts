@@ -306,7 +306,7 @@ function inferOutlookReadStateFromQuery(
   return state === "read" || state === "unread" ? state : null;
 }
 
-function getOutlookFieldScopeCandidate(query: string) {
+export function getOutlookFieldScopeCandidate(query: string) {
   const normalizedQuery = query.trim();
   const colonIndex = normalizedQuery.indexOf(":");
   if (colonIndex === -1) return null;

@@ -218,6 +218,32 @@ describe("searchInbox across the user's accounts", () => {
     expect(query).toContain("renewal");
   });
 
+  it.each([
+    "folder:Legal",
+    'category:"Clients"',
+  ])("keeps an Outlook search scoped in its query (%s) in the chat's account", async (query) => {
+    prisma.emailAccount.findMany.mockResolvedValue([
+      accounts.outlook,
+      accounts.gmail,
+    ] as never);
+    providers["account-3"].getFolders = vi
+      .fn()
+      .mockResolvedValue([
+        { id: "folder-legal", displayName: "Legal", childFolders: [] },
+      ]);
+
+    const result = await searchInboxTool({
+      email: "three@example.com",
+      emailAccountId: "account-3",
+      userId: USER_ID,
+      provider: "microsoft",
+      logger,
+    }).execute?.({ query, limit: 20, allAccounts: true }, toolCallOptions);
+
+    expect(providers["account-2"].searchMessages).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ otherAccountsSkipped: expect.any(String) });
+  });
+
   it("keeps an Outlook folder search in the chat's account", async () => {
     prisma.emailAccount.findMany.mockResolvedValue([
       accounts.outlook,
