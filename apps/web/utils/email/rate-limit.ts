@@ -25,6 +25,7 @@ import {
   isRetryableError as isOutlookRetryableError,
 } from "@/utils/outlook/retry";
 import { getRetryAfterHeaderFromError } from "@/utils/retry/get-retry-after-header";
+import { logRedisFailureOnce } from "@/utils/redis/unavailable-log";
 import {
   currentGmailQuotaContext,
   getGmailCallDeferredError,
@@ -55,10 +56,17 @@ export async function getEmailProviderRateLimitState({
       emailAccountId,
     });
   } catch (error) {
-    customLogger?.warn("Failed to read provider rate-limit state", {
-      emailAccountId,
-      error: error instanceof Error ? error.message : error,
-    });
+    // Read on most requests, so a refusing Redis is logged once in a while
+    // rather than on each of them.
+    if (customLogger)
+      logRedisFailureOnce(
+        customLogger,
+        "Failed to read provider rate-limit state",
+        {
+          emailAccountId,
+          error: error instanceof Error ? error.message : error,
+        },
+      );
     return null;
   }
 }

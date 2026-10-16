@@ -4,9 +4,19 @@ import {
   type EmailProviderRateLimitProvider,
   toRateLimitProvider,
 } from "@/utils/email/rate-limit-mode-error";
+import { createMemoCache } from "@/utils/memo-cache";
 import { redis } from "@/utils/redis";
 
 const RATE_LIMIT_KEY_PREFIX = "email-provider-rate-limit";
+
+// Read for every provider a request creates. An instance rereads an account
+// at most every few seconds and sees its own writes at once; another
+// instance's new state reaches it within that window, while the quota gate
+// keeps pacing the calls in between.
+const recentStates = createMemoCache<RedisEmailProviderRateLimitState | null>({
+  ttlMs: 5000,
+  maxEntries: 5000,
+});
 
 type StoredEmailProviderRateLimitState = {
   provider: EmailProviderRateLimitProvider;
@@ -32,6 +42,16 @@ export async function getEmailProviderRateLimitStateFromRedis({
 }) {
   if (!isEmailProviderRateLimitRedisConfigured()) return null;
 
+  const state = await recentStates.get(emailAccountId, () =>
+    readRateLimitState(emailAccountId),
+  );
+  if (state && state.retryAt.getTime() <= Date.now()) return null;
+  return state;
+}
+
+async function readRateLimitState(
+  emailAccountId: string,
+): Promise<RedisEmailProviderRateLimitState | null> {
   const key = getRateLimitKey(emailAccountId);
   const value = await redis.get<StoredEmailProviderRateLimitState | string>(
     key,
@@ -80,6 +100,7 @@ export async function setEmailProviderRateLimitStateInRedis({
   await redis.set(getRateLimitKey(emailAccountId), JSON.stringify(value), {
     ex: ttlSeconds,
   });
+  recentStates.set(emailAccountId, { provider, retryAt, source });
 }
 
 export async function deleteEmailProviderRateLimitStateFromRedis({
@@ -89,6 +110,7 @@ export async function deleteEmailProviderRateLimitStateFromRedis({
 }) {
   if (!isEmailProviderRateLimitRedisConfigured()) return;
   await redis.del(getRateLimitKey(emailAccountId));
+  recentStates.delete(emailAccountId);
 }
 
 export function isEmailProviderRateLimitRedisConfigured() {

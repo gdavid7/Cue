@@ -1,8 +1,18 @@
 import "server-only";
 import { redis } from "@/utils/redis";
 import prisma from "@/utils/prisma";
+import { createMemoCache } from "@/utils/memo-cache";
 
 const EXPIRATION = 60 * 60; // 1 hour
+
+// Most authenticated requests check the account. Ownership rarely changes,
+// so each instance trusts an owned account for a minute; invalidation clears
+// this instance at once and the others within the minute.
+const ownedAccounts = createMemoCache<string | null>({
+  ttlMs: 60_000,
+  maxEntries: 5000,
+  keep: (email) => email !== null,
+});
 
 /**
  * Get the Redis key for account validation
@@ -33,7 +43,16 @@ export async function getEmailAccount({
   if (!userId || !emailAccountId) return null;
 
   const key = getValidationKey({ userId, emailAccountId });
+  return ownedAccounts.get(key, () =>
+    lookUpEmailAccount(key, emailAccountId, userId),
+  );
+}
 
+async function lookUpEmailAccount(
+  key: string,
+  emailAccountId: string,
+  userId: string,
+): Promise<string | null> {
   // Check Redis cache first
   try {
     const cachedResult = await redis.get<string>(key);
@@ -72,6 +91,7 @@ export async function invalidateAccountValidation({
   emailAccountId: string;
 }): Promise<void> {
   const key = getValidationKey({ userId, emailAccountId });
+  ownedAccounts.delete(key);
   try {
     await redis.del(key);
   } catch {

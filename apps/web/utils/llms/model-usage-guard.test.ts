@@ -26,6 +26,15 @@ vi.mock("@/utils/redis", () => ({
 
 vi.mock("@/utils/prisma");
 
+// These cases are about the limits, not the per-instance memo of spend.
+vi.mock("@/utils/memo-cache", () => ({
+  createMemoCache: () => ({
+    get: (_key: string, load: () => Promise<unknown>) => load(),
+    set: () => {},
+    delete: () => {},
+  }),
+}));
+
 vi.mock("@inboxzero/transactional-email", () => ({
   sendActionRequiredEmail: vi.fn(),
 }));
