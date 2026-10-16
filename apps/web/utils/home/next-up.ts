@@ -14,9 +14,10 @@ import {
 import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";
 import {
-  isAppUnavailable,
+  isAppServerError,
   parseToolResult,
   searchCanvas,
+  TimeoutError,
   withTimeout,
 } from "@/utils/thread-context/connector-context";
 
@@ -242,6 +243,9 @@ async function getDeadlines({
       const cached = await redis.get<NextUpItem[]>(key).catch(() => null);
       if (Array.isArray(cached)) return inWindow(cached);
 
+      const skipForAWhile = () =>
+        redis.set(key, [], { ex: DEADLINE_CACHE_SECONDS }).catch(() => null);
+
       const fetching = source
         .fetch(execute, {
           accountId,
@@ -260,22 +264,20 @@ async function getDeadlines({
           async (error) => {
             // An app that's down stays down for a while: asking on every
             // visit only waits on the same failure.
-            if (isAppUnavailable(error)) {
-              await redis
-                .set(key, [], { ex: DEADLINE_CACHE_SECONDS })
-                .catch(() => null);
-            }
+            if (isAppServerError(error)) await skipForAWhile();
             throw error;
           },
         );
       try {
         return inWindow(await withTimeout(fetching, SOURCE_TIMEOUT_MS));
       } catch (error) {
-        if (isAppUnavailable(error)) {
-          logger.trace("Connected app unavailable for deadlines", {
-            app,
-            error: error instanceof Error ? error.message : String(error),
-          });
+        if (error instanceof TimeoutError) {
+          logger.warn("Connected app timed out", { app });
+          // A slow app is as slow on the next visit. The fetch still running
+          // fills the cache with what it finds if it finishes.
+          await skipForAWhile();
+        } else if (isAppServerError(error)) {
+          logger.trace("Connected app down for deadlines", { app });
         } else {
           logger.warn("Connected app deadlines failed", { app, error });
         }

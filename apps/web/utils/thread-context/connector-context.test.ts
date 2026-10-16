@@ -1159,6 +1159,30 @@ describe("fetchConnectorCandidates with a connection the app turned away", () =>
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("warns once, without details, when an app is too slow to answer", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(logger, "warn");
+    mockExecuteTool.mockImplementation(() => new Promise(() => {}));
+
+    try {
+      const pending = fetchConnectorCandidates({
+        emailAccountId: "school",
+        keywords: ["milestone"],
+        logger,
+        now: NOW,
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      const result = await pending;
+
+      expect(result).toEqual({ candidates: [], complete: false });
+      expect(warn.mock.calls).toEqual([
+        ["Connected app timed out", { app: "canvas" }],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("leaves the connection alone when Canvas fails with its own error", async () => {
     mockExecuteTool.mockRejectedValue(
       new AppToolError(

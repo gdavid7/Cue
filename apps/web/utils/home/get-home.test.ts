@@ -570,7 +570,7 @@ describe("getHomeData: what's next", () => {
     }
   });
 
-  it("skips an app that is down or slow without a warning, but warns about one it can't read", async () => {
+  it("skips an app that is down without a warning, and warns once, without details, about one that is slow", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -592,15 +592,53 @@ describe("getHomeData: what's next", () => {
       const home = await pending;
 
       expect(home.nextUp).toEqual([]);
-      const warned = warn.mock.calls
-        .map((args) => args.join(" "))
-        .filter((line) => line.includes("Connected app deadlines failed"));
-      expect(warned).toHaveLength(1);
-      expect(warned[0]).toContain("jira");
+      const lines = warn.mock.calls.map((args) => args.join(" "));
+      expect(
+        lines.filter((line) => line.includes("Connected app timed out")),
+      ).toEqual([
+        `[test]: Connected app timed out ${JSON.stringify({ app: "asana" }, null, 2)}`,
+      ]);
+      const failed = lines.filter((line) =>
+        line.includes("Connected app deadlines failed"),
+      );
+      expect(failed).toHaveLength(1);
+      expect(failed[0]).toContain("jira");
     } finally {
       warn.mockRestore();
       vi.useRealTimers();
     }
+  });
+
+  it("doesn't ask an app that was too slow again on the next visit", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const store = new Map<string, unknown>();
+    vi.mocked(redis.get).mockImplementation(
+      async (key: string) => (store.get(key) ?? null) as never,
+    );
+    vi.mocked(redis.set).mockImplementation(async (key, value) => {
+      store.set(key as string, value);
+      return "OK";
+    });
+    prisma.mcpConnection.findMany.mockResolvedValue([
+      connection("asana"),
+    ] as never);
+    mocks.executeTool.mockImplementation(() => new Promise(() => {}));
+
+    try {
+      for (const _visit of [1, 2]) {
+        const pending = run(mockProvider({}));
+        await vi.advanceTimersByTimeAsync(10_000);
+        await pending;
+      }
+    } finally {
+      vi.mocked(redis.get).mockImplementation(async () => null);
+      vi.mocked(redis.set).mockImplementation(async () => "OK");
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+
+    expect(mocks.executeTool).toHaveBeenCalledTimes(1);
   });
 
   it("doesn't ask an app that just failed with its own error again on the next visit", async () => {

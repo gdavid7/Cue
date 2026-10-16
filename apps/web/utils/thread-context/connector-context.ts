@@ -171,11 +171,10 @@ export async function fetchConnectorCandidates({
           if (failures) await redis.del(failuresKey).catch(() => null);
           return found;
         } catch (error) {
-          if (isAppUnavailable(error)) {
-            logger.trace("Connected app unavailable for search", {
-              app: name,
-              reason: failureReason(error),
-            });
+          if (error instanceof TimeoutError) {
+            logger.warn("Connected app timed out", { app: name });
+          } else if (isAppServerError(error)) {
+            logger.trace("Connected app down for search", { app: name });
           } else {
             logger.warn("Connected app search failed", { app: name, error });
           }
@@ -992,14 +991,14 @@ function addDays(date: Date, days: number) {
 }
 
 /**
- * The app is down (Canvas answers `internal_server_error`) or too slow to
- * wait for. Nothing here can fix either, so the source is just left out.
+ * The app answered with its own server failure (Canvas's
+ * `internal_server_error`): nothing on this side can fix it, so the source is
+ * left out without a warning.
  */
-export function isAppUnavailable(error: unknown) {
+export function isAppServerError(error: unknown) {
   return (
-    error instanceof TimeoutError ||
-    (error instanceof AppToolError &&
-      error.message.includes("internal_server_error"))
+    error instanceof AppToolError &&
+    error.message.includes("internal_server_error")
   );
 }
 
@@ -1016,7 +1015,7 @@ export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   ]).finally(() => clearTimeout(timer));
 }
 
-class TimeoutError extends Error {}
+export class TimeoutError extends Error {}
 
 function uniqueBy<T>(items: T[], key: (item: T) => string): T[] {
   const seen = new Set<string>();
