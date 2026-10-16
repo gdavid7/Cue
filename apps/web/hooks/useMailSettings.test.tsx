@@ -18,6 +18,7 @@ const settings: MailSettingsResponse = {
       filters: [{ kind: "UNREAD", value: null }],
     },
   ],
+  replyTracking: true,
 };
 
 afterEach(cleanup);

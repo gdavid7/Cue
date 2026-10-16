@@ -18,6 +18,7 @@ import {
 import prisma from "@/utils/__mocks__/prisma";
 import { ACCOUNT_LINKING } from "@/utils/auth/account-linking";
 import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
+import { expectReplyTrackingOn } from "@/__tests__/helpers";
 
 const { mockAfter, mockAssertSignUpAllowed } = vi.hoisted(() => ({
   mockAfter: vi.fn(),
@@ -645,6 +646,8 @@ describe("handleLinkAccount", () => {
       ],
     });
     expect(upsert?.update).not.toHaveProperty("mailSplits");
+    expectReplyTrackingOn(upsert?.create.rules);
+    expect(upsert?.update).not.toHaveProperty("rules");
     expect(mockAfter).toHaveBeenCalledOnce();
     expect(ensureEmailAccountsWatched).not.toHaveBeenCalled();
 

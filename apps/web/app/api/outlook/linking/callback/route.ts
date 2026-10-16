@@ -50,6 +50,7 @@ import {
 import type { Logger } from "@/utils/logger";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 import { scheduleWatchAfterLinking } from "@/utils/email/watch-after-linking";
+import { INITIAL_REPLY_TRACKING_RULES } from "@/utils/reply-tracker/initial-rules";
 
 export const GET = withError("outlook/linking/callback", async (request) => {
   const actorSession = await auth(request.headers);
@@ -356,6 +357,7 @@ export const GET = withError("outlook/linking/callback", async (request) => {
                   profile.surname ||
                   null,
                 image: profileImage,
+                rules: { create: INITIAL_REPLY_TRACKING_RULES },
               },
             },
           },

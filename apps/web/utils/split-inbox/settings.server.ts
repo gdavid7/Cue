@@ -1,3 +1,4 @@
+import { SystemType } from "@/generated/prisma/enums";
 import { ensureAllMailSplit } from "@/utils/split-inbox/initial-splits";
 import prisma from "@/utils/prisma";
 
@@ -25,6 +26,10 @@ export async function getMailSettings({
           },
         },
       },
+      rules: {
+        where: { systemType: SystemType.TO_REPLY },
+        select: { enabled: true },
+      },
     },
   });
 
@@ -32,5 +37,6 @@ export async function getMailSettings({
     layout: emailAccount?.mailLayout ?? null,
     expandedPreview: emailAccount?.mailExpandedPreview ?? false,
     splits: ensureAllMailSplit(emailAccount?.mailSplits ?? []),
+    replyTracking: emailAccount?.rules.some((rule) => rule.enabled) ?? false,
   };
 }

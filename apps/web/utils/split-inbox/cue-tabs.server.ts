@@ -10,7 +10,10 @@ import { ONBOARDING_PROCESS_EMAILS_COUNT } from "@/utils/config";
 import { SafeError } from "@/utils/error";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
-import { CONVERSATION_STATUS_TYPES } from "@/utils/reply-tracker/conversation-status-config";
+import {
+  CONVERSATION_STATUS_TYPES,
+  isConversationStatusType,
+} from "@/utils/reply-tracker/conversation-status-config";
 import { getRuleConfig } from "@/utils/rule/consts";
 import { upsertSystemRule } from "@/utils/rule/rule";
 import { MAX_MAIL_SPLITS } from "@/utils/split-inbox/split-constants";
@@ -20,16 +23,7 @@ import {
 } from "@/utils/split-inbox/splits.server";
 import { getEmailAccountForRuleExecution } from "@/utils/user/get";
 
-/**
- * "Needs reply" reads reply tracking, which takes every conversation status
- * rule: once the person replies, the status the AI picks only resolves the
- * conversation when that status's rule is on.
- */
-const CUE_TAB_SYSTEM_TYPES = [
-  ...CONVERSATION_STATUS_TYPES,
-  SystemType.NEWSLETTER,
-  SystemType.MARKETING,
-];
+const READING_SYSTEM_TYPES = [SystemType.NEWSLETTER, SystemType.MARKETING];
 
 const CUE_TABS = [
   {
@@ -40,29 +34,43 @@ const CUE_TABS = [
   {
     name: "Reading",
     matchAll: false,
-    values: [SystemType.NEWSLETTER, SystemType.MARKETING],
+    values: READING_SYSTEM_TYPES,
   },
 ];
 
 /**
- * The opt-in "Needs reply" and "Reading" tabs. They read what Cue's rules
- * decided from Cue's own database, so the rules they need are added with no
- * actions: nothing is labelled, archived, moved or drafted in the mailbox.
- * Rules the account already has are kept, minus the label action Cue added.
+ * Sets up Cue's own sorting when the person picks an inbox style. Reply
+ * tracking is always turned on, whatever the style: "Needs reply" takes every
+ * conversation status rule, since once the person replies the status the AI
+ * picks only resolves the conversation when that status's rule is on. The
+ * opt-in "Needs reply" and "Reading" tabs, and the reading rules behind them,
+ * only come with `addTabs`.
+ *
+ * Both read what Cue's rules decided from Cue's own database, so the rules are
+ * added with no actions: nothing is labelled, archived, moved or drafted in the
+ * mailbox. Rules the account already has are kept, minus the label action Cue
+ * added.
  */
-export async function addCueTabs({
+export async function setUpCueSorting({
   emailAccountId,
   provider,
+  addTabs,
   logger,
 }: {
   emailAccountId: string;
   provider: string;
+  addTabs: boolean;
   logger: Logger;
 }) {
+  const systemTypes = addTabs
+    ? [...CONVERSATION_STATUS_TYPES, ...READING_SYSTEM_TYPES]
+    : CONVERSATION_STATUS_TYPES;
   const existingRules = await prisma.rule.findMany({
-    where: { emailAccountId, systemType: { in: CUE_TAB_SYSTEM_TYPES } },
+    where: { emailAccountId, systemType: { in: systemTypes } },
     select: {
+      id: true,
       systemType: true,
+      enabled: true,
       actions: { select: { id: true, type: true, label: true } },
     },
   });
@@ -86,7 +94,20 @@ export async function addCueTabs({
       where: { id: { in: legacyLabelActionIds } },
     });
   }
-  const missing = CUE_TAB_SYSTEM_TYPES.filter(
+
+  const disabledReplyTrackingIds = existingRules
+    .filter(
+      (rule) => isConversationStatusType(rule.systemType) && !rule.enabled,
+    )
+    .map((rule) => rule.id);
+  if (disabledReplyTrackingIds.length) {
+    await prisma.rule.updateMany({
+      where: { id: { in: disabledReplyTrackingIds } },
+      data: { enabled: true },
+    });
+  }
+
+  const missing = systemTypes.filter(
     (systemType) =>
       !existingRules.some((rule) => rule.systemType === systemType),
   );
@@ -104,30 +125,32 @@ export async function addCueTabs({
     });
   }
 
-  for (const tab of CUE_TABS) {
-    const split = {
-      emailAccountId,
-      name: tab.name,
-      matchAll: tab.matchAll,
-      filters: tab.values.map((value) => ({
-        kind: MailSplitFilterKind.CUE,
-        value,
-      })),
-    };
-    const result = await createMailSplit(split);
-    if (result?.status === "limit") {
-      throw new SafeError(
-        `You can only have ${MAX_MAIL_SPLITS} splits. Turn one off and try again.`,
-      );
-    }
-    if (result?.status === "duplicate") {
-      await repointLabelTab(split);
+  if (addTabs) {
+    for (const tab of CUE_TABS) {
+      const split = {
+        emailAccountId,
+        name: tab.name,
+        matchAll: tab.matchAll,
+        filters: tab.values.map((value) => ({
+          kind: MailSplitFilterKind.CUE,
+          value,
+        })),
+      };
+      const result = await createMailSplit(split);
+      if (result?.status === "limit") {
+        throw new SafeError(
+          `You can only have ${MAX_MAIL_SPLITS} splits. Turn one off and try again.`,
+        );
+      }
+      if (result?.status === "duplicate") {
+        await repointLabelTab(split);
+      }
     }
   }
 
-  // New rules only sort mail as it arrives, so the tabs would sit empty until
-  // then. Sorting the latest inbox mail fills them now.
-  if (missing.length) {
+  // Rules only sort mail as it arrives, so Needs reply would sit empty until
+  // then. Sorting the latest inbox mail fills it now.
+  if (missing.length || disabledReplyTrackingIds.length) {
     after(async () => {
       const emailAccount = await getEmailAccountForRuleExecution({
         emailAccountId,

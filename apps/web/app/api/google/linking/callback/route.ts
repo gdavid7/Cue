@@ -34,6 +34,7 @@ import { isDuplicateError } from "@/utils/prisma-helpers";
 import { SafeError } from "@/utils/error";
 import { scheduleWatchAfterLinking } from "@/utils/email/watch-after-linking";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
+import { INITIAL_REPLY_TRACKING_RULES } from "@/utils/reply-tracker/initial-rules";
 
 export const GET = withError("google/linking/callback", async (request) => {
   const actorSession = await auth(request.headers);
@@ -280,6 +281,7 @@ export const GET = withError("google/linking/callback", async (request) => {
                 userId: targetUserId,
                 name: payload.name || null,
                 image: payload.picture,
+                rules: { create: INITIAL_REPLY_TRACKING_RULES },
               },
             },
           },

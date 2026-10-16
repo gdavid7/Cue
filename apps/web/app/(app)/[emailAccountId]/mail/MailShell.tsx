@@ -46,6 +46,7 @@ import { LabelPickerDialog } from "@/app/(app)/[emailAccountId]/mail/LabelPicker
 import { ThreadList } from "@/app/(app)/[emailAccountId]/mail/ThreadList";
 import { InboxStyleCard } from "@/app/(app)/[emailAccountId]/mail/InboxStylePicker";
 import { CueLabelsCard } from "@/components/CueLabelsCleanup";
+import { ReplyTrackingNotice } from "@/app/(app)/[emailAccountId]/mail/ReplyTrackingNotice";
 import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
 import { TodayIntroLine } from "@/app/(app)/[emailAccountId]/mail/TodayIntroLine";
 import { MailLoadingNote } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
@@ -1951,6 +1952,7 @@ export function MailShell() {
                 />
               )}
               {showSplitTabs && !isAllAccounts && <CueLabelsCard />}
+              {!isAllAccounts && <ReplyTrackingNotice />}
               {isTourOpen && (
                 <WhatsNewTour onClose={() => setIsTourOpen(false)} />
               )}

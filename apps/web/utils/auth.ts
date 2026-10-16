@@ -1,5 +1,6 @@
 import { mcpOAuthPlugins } from "@/utils/mcp/oauth-provider";
 import { INITIAL_MAIL_SPLITS } from "@/utils/split-inbox/initial-splits";
+import { INITIAL_REPLY_TRACKING_RULES } from "@/utils/reply-tracker/initial-rules";
 import { adminSso } from "@/utils/auth/sso";
 import { scim } from "@better-auth/scim";
 import { genericOAuth } from "better-auth/plugins/generic-oauth";
@@ -842,6 +843,7 @@ export async function handleLinkAccount(
                       order,
                     })),
                   },
+                  rules: { create: INITIAL_REPLY_TRACKING_RULES },
                 },
                 select: { id: true },
               }),

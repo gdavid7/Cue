@@ -78,6 +78,7 @@ describe("swr-persistence", () => {
         },
         { id: "split-2", name: "Inbox", order: 1, matchAll: true, filters: [] },
       ],
+      replyTracking: true,
     };
     persistSwrEntries(ACCOUNT_A, cacheWith({ "/api/mail/settings": settings }));
     expect(

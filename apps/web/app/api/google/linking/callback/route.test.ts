@@ -4,6 +4,7 @@ import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages"
 import prisma from "@/utils/__mocks__/prisma";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 import { env } from "@/env";
+import { expectReplyTrackingOn } from "@/__tests__/helpers";
 
 const {
   mockValidateOAuthCallback,
@@ -312,6 +313,9 @@ describe("google linking callback route", () => {
     const redirectLocation = response.headers.get("location");
     expect(redirectLocation).toContain("success=account_created_and_linked");
     expect(prisma.account.create).toHaveBeenCalled();
+    expectReplyTrackingOn(
+      prisma.account.create.mock.calls[0]?.[0].data.emailAccount?.create?.rules,
+    );
     expect(prisma.account.update).not.toHaveBeenCalled();
     expect(connectCalendarAtSignIn).toHaveBeenCalledWith({
       accountId: "account-123",

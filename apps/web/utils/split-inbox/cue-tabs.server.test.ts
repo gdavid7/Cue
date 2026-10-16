@@ -9,7 +9,7 @@ import prisma from "@/utils/__mocks__/prisma";
 import { createEmailProvider } from "@/utils/email/provider";
 import { createScopedLogger } from "@/utils/logger";
 import { upsertSystemRule } from "@/utils/rule/rule";
-import { addCueTabs } from "@/utils/split-inbox/cue-tabs.server";
+import { setUpCueSorting } from "@/utils/split-inbox/cue-tabs.server";
 import {
   createMailSplit,
   updateMailSplit,
@@ -37,6 +37,18 @@ vi.mock("@/utils/user/get", () => ({
 }));
 
 const logger = createScopedLogger("cue-tabs-test");
+const WITH_TABS = {
+  emailAccountId: "account",
+  provider: "google",
+  addTabs: true,
+  logger,
+};
+const REPLY_TRACKING_RULES = [
+  SystemType.TO_REPLY,
+  SystemType.AWAITING_REPLY,
+  SystemType.FYI,
+  SystemType.ACTIONED,
+];
 const NEEDED_RULES = [
   SystemType.TO_REPLY,
   SystemType.AWAITING_REPLY,
@@ -46,7 +58,7 @@ const NEEDED_RULES = [
   SystemType.MARKETING,
 ];
 
-describe("addCueTabs", () => {
+describe("setUpCueSorting", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     afterCallbacks.length = 0;
@@ -54,7 +66,7 @@ describe("addCueTabs", () => {
   });
 
   it("sorts mail inside Cue without touching the mailbox", async () => {
-    await addCueTabs({ emailAccountId: "account", provider: "google", logger });
+    await setUpCueSorting(WITH_TABS);
 
     const upserts = vi
       .mocked(upsertSystemRule)
@@ -97,11 +109,12 @@ describe("addCueTabs", () => {
       NEEDED_RULES.map((systemType) => ({
         id: `rule-${systemType}`,
         systemType,
+        enabled: true,
         actions: [],
       })) as never,
     );
 
-    await addCueTabs({ emailAccountId: "account", provider: "google", logger });
+    await setUpCueSorting(WITH_TABS);
 
     expect(upsertSystemRule).not.toHaveBeenCalled();
     expect(
@@ -115,6 +128,7 @@ describe("addCueTabs", () => {
       NEEDED_RULES.map((systemType) => ({
         id: `rule-${systemType}`,
         systemType,
+        enabled: true,
         actions:
           systemType === SystemType.FYI
             ? [
@@ -134,7 +148,7 @@ describe("addCueTabs", () => {
       })) as never,
     );
 
-    await addCueTabs({ emailAccountId: "account", provider: "google", logger });
+    await setUpCueSorting(WITH_TABS);
 
     expect(prisma.action.deleteMany).toHaveBeenCalledWith({
       where: {
@@ -150,6 +164,7 @@ describe("addCueTabs", () => {
     });
     expect(upsertSystemRule).not.toHaveBeenCalled();
     expect(prisma.rule.update).not.toHaveBeenCalled();
+    expect(prisma.rule.updateMany).not.toHaveBeenCalled();
   });
 
   it("points an earlier label-backed tab of the same name at Cue's sorting", async () => {
@@ -166,7 +181,7 @@ describe("addCueTabs", () => {
         filters: [{ kind: MailSplitFilterKind.FROM }],
       } as never);
 
-    await addCueTabs({ emailAccountId: "account", provider: "google", logger });
+    await setUpCueSorting(WITH_TABS);
 
     expect(vi.mocked(updateMailSplit).mock.calls).toEqual([
       [
@@ -183,13 +198,51 @@ describe("addCueTabs", () => {
     ]);
   });
 
+  it("turns reply tracking on without adding tabs when the person skips them", async () => {
+    await setUpCueSorting({ ...WITH_TABS, addTabs: false });
+
+    const upserts = vi
+      .mocked(upsertSystemRule)
+      .mock.calls.map(([rule]) => rule);
+    expect(upserts.map((rule) => rule.systemType).sort()).toEqual(
+      [...REPLY_TRACKING_RULES].sort(),
+    );
+    for (const rule of upserts) {
+      expect(rule.enabled).toBe(true);
+      expect(rule.actions).toEqual([]);
+    }
+    expect(createMailSplit).not.toHaveBeenCalled();
+    expect(afterCallbacks).toHaveLength(1);
+  });
+
+  it("turns reply tracking rules back on when the account has them off", async () => {
+    prisma.rule.findMany.mockResolvedValue(
+      REPLY_TRACKING_RULES.map((systemType) => ({
+        id: `rule-${systemType}`,
+        systemType,
+        enabled: systemType !== SystemType.TO_REPLY,
+        actions: [],
+      })) as never,
+    );
+    prisma.rule.updateMany.mockResolvedValue({ count: 1 });
+
+    await setUpCueSorting({ ...WITH_TABS, addTabs: false });
+
+    expect(upsertSystemRule).not.toHaveBeenCalled();
+    expect(prisma.rule.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: [`rule-${SystemType.TO_REPLY}`] } },
+      data: { enabled: true },
+    });
+    expect(afterCallbacks).toHaveLength(1);
+  });
+
   it("explains the split limit instead of failing silently", async () => {
     vi.mocked(createMailSplit).mockResolvedValueOnce({
       status: "limit",
     } as never);
 
-    await expect(
-      addCueTabs({ emailAccountId: "account", provider: "google", logger }),
-    ).rejects.toThrow("You can only have");
+    await expect(setUpCueSorting(WITH_TABS)).rejects.toThrow(
+      "You can only have",
+    );
   });
 });

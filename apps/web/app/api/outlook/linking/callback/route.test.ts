@@ -4,6 +4,7 @@ import prisma from "@/utils/__mocks__/prisma";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
 import { env } from "@/env";
+import { expectReplyTrackingOn } from "@/__tests__/helpers";
 
 const {
   mockValidateOAuthCallback,
@@ -313,6 +314,9 @@ describe("outlook linking callback route", () => {
           providerAccountId: "entra-object-id",
         }),
       }),
+    );
+    expectReplyTrackingOn(
+      prisma.account.create.mock.calls[0]?.[0].data.emailAccount?.create?.rules,
     );
     expect(mockSetOAuthCodeResult).toHaveBeenCalledWith("valid-auth-code", {
       success: "account_created_and_linked",
