@@ -89,6 +89,25 @@ describe("aiGenerateMeetingBriefing without search tools", () => {
       "List only the requested external guests in guests.",
     );
   });
+
+  it("asks for the briefing itself rather than a tool call it cannot make", async () => {
+    const generateObject = vi.fn(async () => ({
+      object: { priorities: [], guests: [] },
+    }));
+    vi.mocked(createGenerateObject).mockReturnValue(generateObject as never);
+
+    await aiGenerateMeetingBriefing({
+      briefingData: BRIEFING_DATA,
+      emailAccount: getEmailAccount(),
+      logger: createTestLogger(),
+    });
+
+    const [options] = generateObject.mock.calls[0] as unknown as [
+      { prompt: string },
+    ];
+    expect(options.prompt.trimEnd()).toMatch(/Return the complete briefing\.$/);
+    expect(options.prompt).not.toContain("finalizeBriefing");
+  });
 });
 
 const BRIEFING_DATA: MeetingBriefingData = {

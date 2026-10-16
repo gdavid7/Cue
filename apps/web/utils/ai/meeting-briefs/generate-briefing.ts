@@ -96,7 +96,9 @@ export async function aiGenerateMeetingBriefing({
   const availableSearchTools = ["perplexitySearch", "webSearch"].filter(
     (toolName) => toolName in searchTools,
   );
-  const prompt = buildPrompt(briefingData, emailAccount, availableSearchTools);
+  const prompt = buildPrompt(briefingData, emailAccount, availableSearchTools, {
+    returnsBriefingDirectly: Object.keys(searchTools).length === 0,
+  });
   const modelOptions = getModelForUseCase(
     emailAccount.user,
     LlmUseCase.MeetingBriefing,
@@ -405,6 +407,11 @@ export function buildPrompt(
   briefingData: MeetingBriefingData,
   emailAccount: EmailAccountWithAI,
   availableSearchTools: string[],
+  // Without tools the briefing comes back as structured output, not through
+  // the finalizeBriefing tool.
+  {
+    returnsBriefingDirectly = false,
+  }: { returnsBriefingDirectly?: boolean } = {},
 ): string {
   const {
     event,
@@ -464,7 +471,7 @@ ${guestContexts.map((guest) => formatGuestContext(guest)).join("\n")}
 </guest_context>
 ${toolsNote}
 
-Call finalizeBriefing with the complete briefing.`;
+${returnsBriefingDirectly ? "Return the complete briefing." : "Call finalizeBriefing with the complete briefing."}`;
 
   return prompt;
 }
