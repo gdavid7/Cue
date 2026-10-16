@@ -64,6 +64,31 @@ describe("aiGenerateMeetingBriefing without search tools", () => {
     );
     expect(createGenerateText).not.toHaveBeenCalled();
   });
+
+  it("gives the structured path the briefing writing rules the finalize tool carried", async () => {
+    const generateObject = vi.fn(async () => ({
+      object: { priorities: [], guests: [] },
+    }));
+    vi.mocked(createGenerateObject).mockReturnValue(generateObject as never);
+
+    await aiGenerateMeetingBriefing({
+      briefingData: BRIEFING_DATA,
+      emailAccount: getEmailAccount(),
+      logger: createTestLogger(),
+    });
+
+    // Anthropic's native structured output ignores a schema description, so
+    // the rules travel in the instructions.
+    const [options] = generateObject.mock.calls[0] as unknown as [
+      { instructions: string },
+    ];
+    expect(options.instructions).toContain(
+      "Submit the completed meeting briefing after reviewing the supplied email threads and past meetings.",
+    );
+    expect(options.instructions).toContain(
+      "List only the requested external guests in guests.",
+    );
+  });
 });
 
 const BRIEFING_DATA: MeetingBriefingData = {

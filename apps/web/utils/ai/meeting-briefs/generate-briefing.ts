@@ -116,7 +116,10 @@ export async function aiGenerateMeetingBriefing({
       });
       const { object } = await generateObject({
         ...modelOptions,
-        instructions: AGENTIC_SYSTEM_PROMPT,
+        // The finalize tool's description holds the briefing's writing rules.
+        // Anthropic's native structured output ignores a schema description,
+        // so they go in the instructions.
+        instructions: `${AGENTIC_SYSTEM_PROMPT}\n\n${FINALIZE_BRIEFING_DESCRIPTION}`,
         prompt,
         schema: briefingSchema,
       });
