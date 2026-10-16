@@ -51,6 +51,11 @@ vi.mock("@/utils/prisma", () => ({
     executedRule: {
       findMany: (...args: unknown[]) => mockExecutedRuleFindMany(...args),
     },
+    emailAccount: {
+      findMany: vi
+        .fn()
+        .mockResolvedValue([{ email: "learned-exclusions@example.com" }]),
+    },
   },
 }));
 
