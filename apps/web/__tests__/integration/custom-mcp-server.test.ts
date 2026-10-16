@@ -301,12 +301,19 @@ function createMcpPrismaStore(store: {
   let nextId = 0;
   const id = (prefix: string) => `${prefix}-${++nextId}`;
 
+  // Queries filter by account directly or with ownedBySameUser(); this test
+  // has one account per user, so both name the same account.
+  const ownedBy = (row: Record<string, any>, where: any) => {
+    const accountId =
+      where.emailAccountId ?? where.emailAccount?.user?.emailAccounts?.some?.id;
+    return accountId === undefined || row.emailAccountId === accountId;
+  };
+
   const integrationById = (integrationId: string) =>
     store.integrations.find((row) => row.id === integrationId);
 
   const connectionMatches = (row: Record<string, any>, where: any) =>
-    (where.emailAccountId === undefined ||
-      row.emailAccountId === where.emailAccountId) &&
+    ownedBy(row, where) &&
     (where.isActive === undefined || row.isActive === where.isActive) &&
     (where.integration?.name === undefined ||
       integrationById(row.integrationId)?.name === where.integration.name) &&
@@ -361,9 +368,7 @@ function createMcpPrismaStore(store: {
     mcpIntegration: {
       count: vi.fn(
         async ({ where }: any) =>
-          store.integrations.filter(
-            (row) => row.emailAccountId === where.emailAccountId,
-          ).length,
+          store.integrations.filter((row) => ownedBy(row, where)).length,
       ),
       create: vi.fn(async ({ data }: any) => {
         const row = { id: id("integration"), ...data };
@@ -373,9 +378,7 @@ function createMcpPrismaStore(store: {
       findFirst: vi.fn(
         async ({ where }: any) =>
           store.integrations.find(
-            (row) =>
-              row.name === where.name &&
-              row.emailAccountId === where.emailAccountId,
+            (row) => row.name === where.name && ownedBy(row, where),
           ) ?? null,
       ),
       delete: vi.fn(async ({ where }: any) => {
@@ -383,9 +386,7 @@ function createMcpPrismaStore(store: {
       }),
       deleteMany: vi.fn(async ({ where }: any) => ({
         count: deleteIntegrations(
-          (row) =>
-            row.name === where.name &&
-            row.emailAccountId === where.emailAccountId,
+          (row) => row.name === where.name && ownedBy(row, where),
         ),
       })),
     },
