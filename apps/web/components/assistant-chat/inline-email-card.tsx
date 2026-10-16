@@ -36,6 +36,7 @@ import {
   markReadThreadAction,
 } from "@/utils/actions/mail";
 import { normalizeInlineEmailThreadIds } from "@/utils/ai/assistant/inline-email-actions";
+import { parseOtherAccountEmailId } from "@/utils/ai/assistant/other-account-email-id";
 import { getEmailUrlForMessage } from "@/utils/url";
 import { formatShortDate } from "@/utils/date";
 import { extractEmailAddress, extractNameFromEmail } from "@/utils/email";
@@ -326,6 +327,10 @@ export function InlineEmailCard({
   const [expanded, setExpanded] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const threadId = resolveInlineEmailThreadId({ id, threadid });
+  // Another account's email can't be opened or changed through the chat's
+  // account, so its card only links out to it.
+  const actionableThreadId =
+    threadId && !parseOtherAccountEmailId(threadId) ? threadId : undefined;
 
   const meta = threadId ? emailLookup.get(threadId) : undefined;
   const isArchived = !!threadId && !!listState?.archivedThreadIds.has(threadId);
@@ -386,18 +391,21 @@ export function InlineEmailCard({
 
   const isDone = actionState === "done" || isArchived;
   const markReadComplete = isMarkedRead || markReadState === "done";
-  const showArchive = Boolean(threadId);
   const hasSummary = !!children;
+  const otherAccount =
+    threadId && !actionableThreadId
+      ? (meta?.account ?? "another account")
+      : null;
 
   return (
     <div>
       <div
-        role={threadId ? "button" : undefined}
-        tabIndex={threadId ? 0 : undefined}
-        className={`group flex items-center gap-2 border-b border-border/40 pl-2 pr-3 text-sm last:border-b-0 ${hasSummary ? "py-3" : "py-1.5"} ${threadId ? "cursor-pointer" : ""} ${isDone ? "bg-muted/30 line-through opacity-50" : "hover:bg-muted/50"}`}
-        onClick={() => threadId && setExpanded(!expanded)}
+        role={actionableThreadId ? "button" : undefined}
+        tabIndex={actionableThreadId ? 0 : undefined}
+        className={`group flex items-center gap-2 border-b border-border/40 pl-2 pr-3 text-sm last:border-b-0 ${hasSummary ? "py-3" : "py-1.5"} ${actionableThreadId ? "cursor-pointer" : ""} ${isDone ? "bg-muted/30 line-through opacity-50" : "hover:bg-muted/50"}`}
+        onClick={() => actionableThreadId && setExpanded(!expanded)}
         onKeyDown={(e) => {
-          if (threadId && (e.key === "Enter" || e.key === " ")) {
+          if (actionableThreadId && (e.key === "Enter" || e.key === " ")) {
             e.preventDefault();
             setExpanded(!expanded);
           }
@@ -426,6 +434,7 @@ export function InlineEmailCard({
                 <span className="tabular-nums">
                   {formatShortDate(new Date(meta.date), { lowercase: true })}
                 </span>
+                {otherAccount ? ` · in ${otherAccount}` : null}
               </div>
             </div>
           ) : (
@@ -441,6 +450,11 @@ export function InlineEmailCard({
               <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
                 {meta.subject}
               </span>
+              {otherAccount ? (
+                <span className="max-w-40 shrink-0 truncate text-xs text-muted-foreground">
+                  in {otherAccount}
+                </span>
+              ) : null}
               <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                 {formatShortDate(new Date(meta.date), { lowercase: true })}
               </span>
@@ -468,39 +482,41 @@ export function InlineEmailCard({
                 </DropdownMenuTrigger>
               </Tooltip>
               <DropdownMenuContent align="end" className="w-48">
-                {showArchive ? (
-                  <DropdownMenuItem
-                    disabled={isDone || actionState === "loading"}
-                    onClick={handleArchive}
-                  >
-                    {isDone ? (
-                      <CheckIcon className="mr-2 size-4" />
-                    ) : (
-                      <ArchiveIcon className="mr-2 size-4" />
-                    )}
-                    {isDone ? "Archived" : "Archive"}
-                  </DropdownMenuItem>
+                {actionableThreadId ? (
+                  <>
+                    <DropdownMenuItem
+                      disabled={isDone || actionState === "loading"}
+                      onClick={handleArchive}
+                    >
+                      {isDone ? (
+                        <CheckIcon className="mr-2 size-4" />
+                      ) : (
+                        <ArchiveIcon className="mr-2 size-4" />
+                      )}
+                      {isDone ? "Archived" : "Archive"}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={markReadComplete || markReadState === "loading"}
+                      onClick={handleMarkRead}
+                    >
+                      {markReadComplete ? (
+                        <CheckIcon className="mr-2 size-4" />
+                      ) : (
+                        <MailOpenIcon className="mr-2 size-4" />
+                      )}
+                      {markReadComplete ? "Marked read" : "Mark as read"}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setShowDetails((v) => !v);
+                        if (!expanded) setExpanded(true);
+                      }}
+                    >
+                      <InfoIcon className="mr-2 size-4" />
+                      {showDetails ? "Hide details" : "Show details"}
+                    </DropdownMenuItem>
+                  </>
                 ) : null}
-                <DropdownMenuItem
-                  disabled={markReadComplete || markReadState === "loading"}
-                  onClick={handleMarkRead}
-                >
-                  {markReadComplete ? (
-                    <CheckIcon className="mr-2 size-4" />
-                  ) : (
-                    <MailOpenIcon className="mr-2 size-4" />
-                  )}
-                  {markReadComplete ? "Marked read" : "Mark as read"}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => {
-                    setShowDetails((v) => !v);
-                    if (!expanded) setExpanded(true);
-                  }}
-                >
-                  <InfoIcon className="mr-2 size-4" />
-                  {showDetails ? "Hide details" : "Show details"}
-                </DropdownMenuItem>
                 {externalUrl ? (
                   <DropdownMenuItem asChild>
                     <a
@@ -517,7 +533,7 @@ export function InlineEmailCard({
             </DropdownMenu>
           ) : null}
 
-          {threadId ? (
+          {actionableThreadId ? (
             <span className={iconIndicatorClass} aria-hidden="true">
               {expanded ? (
                 <ChevronDownIcon className="size-3.5" />
@@ -529,8 +545,8 @@ export function InlineEmailCard({
         </div>
       </div>
 
-      {expanded && threadId && (
-        <EmailPreview threadId={threadId} showDetails={showDetails} />
+      {expanded && actionableThreadId && (
+        <EmailPreview threadId={actionableThreadId} showDetails={showDetails} />
       )}
     </div>
   );
@@ -588,7 +604,11 @@ export function InlineEmailDetail({
           </Tooltip>
         ) : null}
       </div>
-      {threadId ? (
+      {threadId && parseOtherAccountEmailId(threadId) ? (
+        <div className="px-3 py-2 text-xs text-muted-foreground">
+          In {meta?.account ?? "another account"}
+        </div>
+      ) : threadId ? (
         <EmailPreview threadId={threadId} compact />
       ) : (
         <div className="px-3 py-2 text-xs text-muted-foreground">
@@ -599,13 +619,14 @@ export function InlineEmailDetail({
   );
 }
 
+// The threads "Archive all" and "Mark all read" act on, in the chat's account.
 function collectThreadIds(children: ReactNode): string[] {
   const ids: string[] = [];
   Children.forEach(children, (child) => {
     if (!isValidElement<{ id?: string; threadid?: string }>(child)) return;
 
     const threadId = resolveInlineEmailThreadId(child.props);
-    if (threadId) {
+    if (threadId && !parseOtherAccountEmailId(threadId)) {
       ids.push(threadId);
     }
   });
@@ -726,6 +747,8 @@ function getInlineEmailExternalUrl({
   if (externalUrl) return externalUrl;
   if (!threadId) return null;
   if (provider === "microsoft") return null;
+  // The chat account's address would open the wrong mailbox.
+  if (parseOtherAccountEmailId(threadId)) return null;
 
   return getEmailUrlForMessage(
     messageId ?? threadId,

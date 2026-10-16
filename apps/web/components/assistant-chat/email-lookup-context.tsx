@@ -10,6 +10,8 @@ export type EmailMeta = {
   date: string;
   isUnread: boolean;
   externalUrl?: string;
+  /** The account a search across accounts found it in. */
+  account?: string;
 };
 
 export type EmailLookup = Map<string, EmailMeta>;

@@ -211,6 +211,7 @@ export function SearchInboxResult({ output }: { output: unknown }) {
       date: string;
       isUnread: boolean;
       externalUrl?: string;
+      account?: string;
     }>
   >(output, "messages");
 
@@ -435,6 +436,7 @@ export function ReadEmailResult({ output }: { output: unknown }) {
   const messageId = getOutputField<string>(output, "messageId");
   const threadId = getOutputField<string>(output, "threadId");
   const outputExternalUrl = getOutputField<string>(output, "externalUrl");
+  const account = getOutputField<string>(output, "account");
   const externalUrl = getExternalMessageUrl({
     messageId,
     threadId,
@@ -461,6 +463,9 @@ export function ReadEmailResult({ output }: { output: unknown }) {
               {to && <InlineMetadataItem label="To" value={to} />}
               {formattedDate && (
                 <InlineMetadataItem label="Date" value={formattedDate} />
+              )}
+              {account && (
+                <InlineMetadataItem label="Account" value={account} />
               )}
             </div>
           </div>
@@ -2530,6 +2535,7 @@ type ToolEmailRow = {
   date: string;
   isUnread: boolean;
   externalUrl?: string;
+  account?: string;
 };
 
 function ToolEmailRows({ emails }: { emails: ToolEmailRow[] }) {
@@ -2551,6 +2557,7 @@ function ToolEmailRows({ emails }: { emails: ToolEmailRow[] }) {
         date: email.date,
         isUnread: email.isUnread,
         externalUrl: email.externalUrl,
+        account: email.account,
       },
     ]),
   );
