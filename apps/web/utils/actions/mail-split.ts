@@ -32,7 +32,8 @@ export const applyInboxStyleAction = actionClient
       parsedInput: { style, addCueTabs },
     }) => {
       await applyInboxStyle({ emailAccountId, provider, style });
-      // The style only picks tabs; reply tracking is on whichever is chosen.
+      // The style only picks tabs; missing reply tracking rules are added
+      // whichever is chosen, and rules the person turned off stay off.
       await setUpCueSorting({
         emailAccountId,
         provider,

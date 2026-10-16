@@ -10,12 +10,8 @@ import { ONBOARDING_PROCESS_EMAILS_COUNT } from "@/utils/config";
 import { SafeError } from "@/utils/error";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
-import {
-  CONVERSATION_STATUS_TYPES,
-  isConversationStatusType,
-} from "@/utils/reply-tracker/conversation-status-config";
+import { CONVERSATION_STATUS_TYPES } from "@/utils/reply-tracker/conversation-status-config";
 import { getRuleConfig } from "@/utils/rule/consts";
-import { upsertSystemRule } from "@/utils/rule/rule";
 import { MAX_MAIL_SPLITS } from "@/utils/split-inbox/split-constants";
 import {
   createMailSplit,
@@ -40,16 +36,16 @@ const CUE_TABS = [
 
 /**
  * Sets up Cue's own sorting when the person picks an inbox style. Reply
- * tracking is always turned on, whatever the style: "Needs reply" takes every
- * conversation status rule, since once the person replies the status the AI
- * picks only resolves the conversation when that status's rule is on. The
- * opt-in "Needs reply" and "Reading" tabs, and the reading rules behind them,
- * only come with `addTabs`.
+ * tracking rules that are missing are added, whatever the style: "Needs reply"
+ * takes every conversation status rule, since once the person replies the
+ * status the AI picks only resolves the conversation when that status's rule
+ * is on. The opt-in "Needs reply" and "Reading" tabs, and the reading rules
+ * behind them, only come with `addTabs`.
  *
- * Both read what Cue's rules decided from Cue's own database, so the rules are
- * added with no actions: nothing is labelled, archived, moved or drafted in the
- * mailbox. Rules the account already has are kept, minus the label action Cue
- * added.
+ * Only missing rules are created, with no actions: nothing is labelled,
+ * archived, moved or drafted in the mailbox. Rules the account already has are
+ * never changed, so one the person turned off stays off, and a rule of their
+ * own that already uses a system rule's name is left alone.
  */
 export async function setUpCueSorting({
   emailAccountId,
@@ -65,65 +61,54 @@ export async function setUpCueSorting({
   const systemTypes = addTabs
     ? [...CONVERSATION_STATUS_TYPES, ...READING_SYSTEM_TYPES]
     : CONVERSATION_STATUS_TYPES;
+  const configs = systemTypes.map((systemType) => ({
+    systemType,
+    ...getRuleConfig(systemType),
+  }));
   const existingRules = await prisma.rule.findMany({
-    where: { emailAccountId, systemType: { in: systemTypes } },
+    where: {
+      emailAccountId,
+      OR: [
+        { systemType: { in: systemTypes } },
+        { name: { in: configs.map((config) => config.name) } },
+      ],
+    },
     select: {
-      id: true,
+      name: true,
       systemType: true,
-      enabled: true,
       actions: { select: { id: true, type: true, label: true } },
     },
   });
 
   // Earlier versions created these rules with one label action each. Dropping
   // that action stops them labelling the mailbox; anything the person set up
-  // themselves (other actions, a renamed label) is left as it is.
-  const legacyLabelActionIds = existingRules.flatMap((rule) => {
-    const [action, ...rest] = rule.actions;
-    const isLegacyLabel =
-      rule.systemType &&
-      action &&
-      !rest.length &&
-      action.type === ActionType.LABEL &&
-      normalizeLabelName(action.label ?? "") ===
-        normalizeLabelName(getRuleConfig(rule.systemType).label);
-    return isLegacyLabel ? [action.id] : [];
-  });
-  if (legacyLabelActionIds.length) {
-    await prisma.action.deleteMany({
-      where: { id: { in: legacyLabelActionIds } },
-    });
-  }
+  // themselves (other actions, a renamed label) is left as it is. Only the
+  // tabs need it, so picking a style alone never touches the mailbox's labels.
+  if (addTabs) await removeLegacyLabelActions(existingRules);
 
-  const disabledReplyTrackingIds = existingRules
-    .filter(
-      (rule) => isConversationStatusType(rule.systemType) && !rule.enabled,
-    )
-    .map((rule) => rule.id);
-  if (disabledReplyTrackingIds.length) {
-    await prisma.rule.updateMany({
-      where: { id: { in: disabledReplyTrackingIds } },
-      data: { enabled: true },
-    });
-  }
-
-  const missing = systemTypes.filter(
-    (systemType) =>
-      !existingRules.some((rule) => rule.systemType === systemType),
+  const missing = configs.filter(
+    (config) =>
+      !existingRules.some(
+        (rule) =>
+          rule.systemType === config.systemType || rule.name === config.name,
+      ),
   );
-  for (const systemType of missing) {
-    const config = getRuleConfig(systemType);
-    await upsertSystemRule({
-      name: config.name,
-      instructions: config.instructions,
-      actions: [],
-      emailAccountId,
-      systemType,
-      runOnThreads: config.runOnThreads,
-      enabled: true,
-      logger,
-    });
-  }
+  // skipDuplicates covers a rule added since the read: it is skipped, not
+  // replaced.
+  const created = missing.length
+    ? await prisma.rule.createManyAndReturn({
+        data: missing.map((config) => ({
+          emailAccountId,
+          name: config.name,
+          instructions: config.instructions,
+          systemType: config.systemType,
+          runOnThreads: config.runOnThreads,
+          enabled: true,
+        })),
+        skipDuplicates: true,
+        select: { id: true },
+      })
+    : [];
 
   if (addTabs) {
     for (const tab of CUE_TABS) {
@@ -148,9 +133,11 @@ export async function setUpCueSorting({
     }
   }
 
-  // Rules only sort mail as it arrives, so Needs reply would sit empty until
-  // then. Sorting the latest inbox mail fills it now.
-  if (missing.length || disabledReplyTrackingIds.length) {
+  // New rules only sort mail as it arrives, so their tabs would sit empty
+  // until then. Sorting the latest inbox mail with just those rules fills them
+  // now, without re-running the person's other rules on old mail.
+  if (created.length) {
+    const ruleIds = created.map((rule) => rule.id);
     after(async () => {
       const emailAccount = await getEmailAccountForRuleExecution({
         emailAccountId,
@@ -161,10 +148,34 @@ export async function setUpCueSorting({
         provider,
         maxEmails: ONBOARDING_PROCESS_EMAILS_COUNT,
         skipArchive: true,
+        ruleIds,
         logger,
       });
     });
   }
+}
+
+async function removeLegacyLabelActions(
+  rules: {
+    systemType: SystemType | null;
+    actions: { id: string; type: ActionType; label: string | null }[];
+  }[],
+) {
+  const legacyLabelActionIds = rules.flatMap((rule) => {
+    const [action, ...rest] = rule.actions;
+    const isLegacyLabel =
+      rule.systemType &&
+      action &&
+      !rest.length &&
+      action.type === ActionType.LABEL &&
+      normalizeLabelName(action.label ?? "") ===
+        normalizeLabelName(getRuleConfig(rule.systemType).label);
+    return isLegacyLabel ? [action.id] : [];
+  });
+  if (!legacyLabelActionIds.length) return;
+  await prisma.action.deleteMany({
+    where: { id: { in: legacyLabelActionIds } },
+  });
 }
 
 /**

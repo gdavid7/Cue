@@ -10,12 +10,15 @@ export async function bulkProcessInboxEmails({
   provider,
   maxEmails,
   skipArchive,
+  ruleIds,
   logger: log,
 }: {
   emailAccount: EmailAccountForDrafting;
   provider: string;
   maxEmails: number;
   skipArchive: boolean;
+  /** Sort with only these rules, such as ones just added. Defaults to every enabled rule. */
+  ruleIds?: string[];
   logger: Logger;
 }) {
   const logger = log.with({ module: "bulk-process-emails" });
@@ -35,6 +38,7 @@ export async function bulkProcessInboxEmails({
         where: {
           emailAccountId: emailAccount.id,
           enabled: true,
+          ...(ruleIds ? { id: { in: ruleIds } } : {}),
         },
         include: {
           actions: true,
