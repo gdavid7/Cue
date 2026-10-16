@@ -806,10 +806,17 @@ test.describe("Cue writing partner", () => {
 
     await page.keyboard.press("s");
     const suggestion = page.getByRole("group", { name: "Suggested text" });
-    await expect(suggestion).toContainText(
-      "Could you send me the doc, please?",
-    );
-    await expect(suggestion.locator("del")).toContainText("can u");
+    // The preview is a word diff: the suggestion reads without its deletions.
+    await expect
+      .poll(() =>
+        suggestion.evaluate((group) => {
+          const copy = group.cloneNode(true) as HTMLElement;
+          for (const removed of copy.querySelectorAll("del")) removed.remove();
+          return copy.textContent;
+        }),
+      )
+      .toBe("Could you send me the doc, please?");
+    await expect(suggestion.locator("del").first()).toHaveText("can u");
     // Nothing reaches the draft until it is accepted.
     await expect(editor).toContainText("can u send the doc pls");
     await capturePlaywrightCheckpoint(page, testInfo, "cue-rewrite-preview");
@@ -817,7 +824,7 @@ test.describe("Cue writing partner", () => {
     await page.keyboard.press("Enter");
     await expect(page.getByRole("dialog", { name: "Cue" })).toBeHidden();
     await expect(editor).toContainText("Could you send me the doc, please?");
-    await expect(editor.locator("strong")).toHaveText("doc");
+    await expect(editor.locator("b, strong")).toHaveText("doc");
     await expect(editor).not.toContainText("can u");
 
     await page.keyboard.press("ControlOrMeta+z");
