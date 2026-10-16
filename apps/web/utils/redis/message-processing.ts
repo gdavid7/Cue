@@ -58,15 +58,35 @@ export async function acquireMessageProcessing(key: {
   | { status: "held" }
   | { status: "processed" }
 > {
-  const lockToken = await acquireOwnedLock({
-    key: getProcessingKey(key),
-    processingTtlSeconds: MESSAGE_PROCESSING_TTL_SECONDS,
-  });
-  if (lockToken) return { status: "acquired", lockToken };
-  const stored = await redis.get<string>(getProcessingKey(key));
-  return stored === MESSAGE_PROCESSED_STATUS
-    ? { status: "processed" }
-    : { status: "held" };
+  try {
+    const lockToken = await acquireOwnedLock({
+      key: getProcessingKey(key),
+      processingTtlSeconds: MESSAGE_PROCESSING_TTL_SECONDS,
+    });
+    if (lockToken) return { status: "acquired", lockToken };
+    const stored = await redis.get<string>(getProcessingKey(key));
+    return stored === MESSAGE_PROCESSED_STATUS
+      ? { status: "processed" }
+      : { status: "held" };
+  } catch (error) {
+    throw new MessageLockUnavailableError(error);
+  }
+}
+
+/**
+ * Redis could not say whether another run has the message, so it is neither
+ * processed (it might be twice) nor skipped (it might be lost): the run stops
+ * before it and a catch-up comes back for it.
+ */
+export class MessageLockUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super("Could not claim the message for processing", { cause });
+    this.name = "MessageLockUnavailableError";
+  }
+}
+
+export function isMessageLockUnavailableError(error: unknown) {
+  return error instanceof MessageLockUnavailableError;
 }
 
 export async function markMessageProcessed({

@@ -11,6 +11,7 @@ import { getEmailProviderRateLimitState } from "@/utils/email/rate-limit";
 import { createTestLogger } from "@/__tests__/helpers";
 import { captureException } from "@/utils/error";
 import { GmailCallDeferredError } from "@/utils/gmail/quota";
+import { MessageLockUnavailableError } from "@/utils/redis/message-processing";
 import { processHistoryItem } from "@/utils/webhook/google/process-history-item";
 import { publishToQstashAt } from "@/utils/upstash";
 import {
@@ -1162,6 +1163,30 @@ describe("processHistoryForUser - backlogs", () => {
     expect(publishToQstashAt).toHaveBeenCalledWith(
       expect.objectContaining({ path: "/api/google/webhook/catch-up" }),
     );
+  });
+
+  // Without Redis a message can't be claimed, so it can't be processed
+  // safely; moving the cursor past it would drop it for good.
+  it("keeps the cursor before a message it couldn't claim because Redis failed", async () => {
+    vi.mocked(getHistory).mockResolvedValue({
+      history: inboxHistory(["1100", "m1"], ["1200", "m2"], ["1300", "m3"]),
+    } as any);
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      if (event.item.message?.id === "m2")
+        throw new MessageLockUnavailableError(new Error("limit exceeded"));
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1300 },
+      {},
+      logger,
+    );
+
+    expect(cursorUpdates()).toEqual(["1100"]);
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/api/google/webhook/catch-up" }),
+    );
+    expect(captureException).not.toHaveBeenCalled();
   });
 
   it("continues a backlog in a scheduled catch-up once the run's time budget is spent", async () => {
