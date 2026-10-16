@@ -1442,6 +1442,12 @@ function ComposeEmailFormContent({
           );
           if (!result?.data)
             throw new Error(getActionErrorMessage(result ?? {}));
+          // The local draft hid its mailbox copy; once it is cleared, that
+          // copy would open again as a draft until sync drops it.
+          hideSendingDraftMessages(
+            selectedEmailAccountId,
+            local?.content?.providerDraftMessageIds ?? [],
+          );
           await client?.requestSync([selectedEmailAccountId]);
         }
         if (
