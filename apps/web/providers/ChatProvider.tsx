@@ -22,6 +22,7 @@ import type { ChatMessage } from "@/components/assistant-chat/types";
 import { chatMessagesKey, useChatMessages } from "@/hooks/useChatMessages";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useAccount } from "@/providers/EmailAccountProvider";
+import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import type { MessageContext } from "@/utils/ai/assistant/chat-context-validation";
 import { InlineEmailActionProvider } from "@/components/assistant-chat/inline-email-action-context";
@@ -61,7 +62,7 @@ type PendingChatRequest = {
   textLength: number;
 };
 
-type ChatAccount = { id: string; email: string; disconnected: boolean };
+type ChatAccount = GetEmailAccountsResponse["emailAccounts"][number];
 
 type ChatContextType = {
   chat: Chat;
@@ -100,26 +101,24 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const { data: accountsData } = useAccounts();
   const { mutate } = useSWRConfig();
   // Chats are stored per account. In All inboxes the chat can work in another
-  // account than the page's, until the page's account changes.
-  const [chatScope, setChatScope] = useState<{
-    routeAccountId: string;
-    accountId: string;
-  } | null>(null);
+  // account than the page's; the address names it, so a reload or a shared
+  // `?chatId=` link reopens the chat where it lives. An id that is not one of
+  // the user's accounts (or no longer is) falls back to the page's account.
+  const [chatAccountIdParam, setChatAccountIdParam] = useQueryState(
+    "chatAccountId",
+    parseAsString,
+  );
   const emailAccountId =
-    chatScope?.routeAccountId === routeAccountId
-      ? chatScope.accountId
+    chatAccountIdParam && accountIds.includes(chatAccountIdParam)
+      ? chatAccountIdParam
       : routeAccountId;
-  const chatAccount = useMemo<ChatAccount | null>(() => {
-    const account = accountsData?.emailAccounts.find(
-      (candidate) => candidate.id === emailAccountId,
-    );
-    if (!account) return null;
-    return {
-      id: account.id,
-      email: account.email,
-      disconnected: Boolean(account.account.disconnectedAt),
-    };
-  }, [accountsData, emailAccountId]);
+  const chatAccount = useMemo<ChatAccount | null>(
+    () =>
+      accountsData?.emailAccounts.find(
+        (candidate) => candidate.id === emailAccountId,
+      ) ?? null,
+    [accountsData, emailAccountId],
+  );
 
   const [input, setInput] = useState<string>("");
   const [chatId, setChatId] = useQueryState("chatId", parseAsString);
@@ -367,9 +366,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   // old one, so it is replaced by the chat to open, or a new one.
   const moveChatToAccount = useCallback(
     (accountId: string, nextChatId: string | null) => {
-      setChatScope(
-        accountId === routeAccountId ? null : { routeAccountId, accountId },
-      );
+      setChatAccountIdParam(accountId === routeAccountId ? null : accountId);
       pendingInlineActionsRef.current = null;
       pendingRequestRef.current = null;
       pendingRequestContextRef.current = null;
@@ -378,13 +375,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setContext(null);
       setInlineActions([]);
     },
-    [chat.setMessages, routeAccountId, setChatId],
+    [chat.setMessages, routeAccountId, setChatAccountIdParam, setChatId],
   );
 
+  // The new conversation gets its id at once, so a question sent right after
+  // the switch (e.g. "Continue in chat") has a chat to go to.
   const switchChatAccount = useCallback(
     (accountId: string) => {
       if (accountId === emailAccountId) return;
-      moveChatToAccount(accountId, null);
+      moveChatToAccount(accountId, generateUUID());
     },
     [emailAccountId, moveChatToAccount],
   );
@@ -405,11 +404,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   // the chat offers the switch instead.
   const hasConversation =
     chat.messages.length > 0 || Boolean(data?.messages.length);
+  // A saved chat whose messages haven't loaded may still hold a conversation.
+  const conversationUnknown = Boolean(chatId) && data === undefined;
   useEffect(() => {
     const threadKey = openThread
       ? `${openThread.emailAccountId}:${openThread.threadId}`
       : null;
     if (followedThreadRef.current === threadKey) return;
+    if (conversationUnknown) return;
     followedThreadRef.current = threadKey;
     if (!openThread || openThread.emailAccountId === emailAccountId) return;
     if (!accountIds.includes(openThread.emailAccountId)) return;
@@ -417,6 +419,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     moveChatToAccount(openThread.emailAccountId, null);
   }, [
     accountIds,
+    conversationUnknown,
     emailAccountId,
     hasConversation,
     isRunActive,
@@ -438,13 +441,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     pendingInlineActionsRef.current = null;
     pendingRequestRef.current = null;
     pendingRequestContextRef.current = null;
+    setChatAccountIdParam(null);
     setChatId(null);
     chat.setMessages([]);
     setInput("");
     setContext(null);
     setAttachments([]);
     setInlineActions([]);
-  }, [chat.setMessages, routeAccountId, setChatId]);
+  }, [chat.setMessages, routeAccountId, setChatAccountIdParam, setChatId]);
 
   // Fix context comes from the page's account (its rules and mail).
   const setContextForPage = useCallback(
@@ -463,11 +467,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         (part) => part.type === "file",
       ).length;
 
-      if (chatAccount?.disconnected) {
-        toastError({
-          description: `Reconnect ${chatAccount.email} to continue`,
-        });
-        throw new ChatInputValidationError();
+      if (chatAccount?.account.disconnectedAt) {
+        const message = `Reconnect ${chatAccount.email} to continue`;
+        toastError({ description: message });
+        throw new ChatInputValidationError(message);
       }
 
       if (textLength > ASSISTANT_CHAT_MAX_TEXT_LENGTH) {
@@ -482,7 +485,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         });
         logger.flush().catch(() => undefined);
         toastError({ description: ASSISTANT_CHAT_MAX_TEXT_LENGTH_MESSAGE });
-        throw new ChatInputValidationError();
+        throw new ChatInputValidationError(
+          ASSISTANT_CHAT_MAX_TEXT_LENGTH_MESSAGE,
+        );
       }
 
       if (!chatId) setChatId(chat.id);
@@ -699,8 +704,8 @@ function mergeAttachments(
 }
 
 class ChatInputValidationError extends Error {
-  constructor() {
-    super(ASSISTANT_CHAT_MAX_TEXT_LENGTH_MESSAGE);
+  constructor(message: string) {
+    super(message);
     this.name = "ChatInputValidationError";
   }
 }

@@ -86,11 +86,7 @@ export function Chat({
   } = useChat();
   const { messages, status, regenerate, setMessages } = chat;
   // Tools would run on the dead account's tokens, so the chat is read-only.
-  const readOnly = Boolean(chatAccount?.disconnected);
-  const { data: accountsData } = useAccounts();
-  const scopedAccount = accountsData?.emailAccounts.find(
-    (account) => account.id === chatAccount?.id,
-  );
+  const readOnly = Boolean(chatAccount?.account.disconnectedAt);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadQueue, setUploadQueue] = useState<string[]>([]);
 
@@ -348,7 +344,7 @@ export function Chat({
       {hasMessages ? (
         // Cards and actions in the conversation act in the chat's account,
         // which in All inboxes may not be the page's.
-        <EmailAccountScopeProvider emailAccount={scopedAccount}>
+        <EmailAccountScopeProvider emailAccount={chatAccount ?? undefined}>
           <ChatMessagesView
             status={status}
             messages={messages}
@@ -698,7 +694,7 @@ function ChatAccountNotice() {
   if (!chatAccount) return null;
 
   let notice: React.ReactNode = null;
-  if (chatAccount.disconnected) {
+  if (chatAccount.account.disconnectedAt) {
     notice = (
       <>
         <span>Reconnect {chatAccount.email} to continue</span>

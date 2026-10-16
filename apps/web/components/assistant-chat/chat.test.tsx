@@ -63,8 +63,14 @@ const accountChat = vi.hoisted(() => ({
   chatAccount: {
     id: "email-account-1",
     email: "a@example.com",
-    disconnected: false,
-  } as { id: string; email: string; disconnected: boolean } | null,
+    account: { disconnectedAt: null, provider: "google" },
+    providerRateLimit: null,
+  } as {
+    id: string;
+    email: string;
+    account: { disconnectedAt: string | null; provider: string };
+    providerRateLimit: null;
+  } | null,
   switchedAccount: false,
   openThreadAccountId: null as string | null,
   openChat: vi.fn(),
@@ -260,7 +266,8 @@ beforeEach(() => {
   accountChat.chatAccount = {
     id: "email-account-1",
     email: "a@example.com",
-    disconnected: false,
+    account: { disconnectedAt: null, provider: "google" },
+    providerRateLimit: null,
   };
   accountChat.switchedAccount = false;
   accountChat.openThreadAccountId = null;
@@ -344,7 +351,8 @@ describe("Chat account", () => {
     accountChat.chatAccount = {
       id: "email-account-2",
       email: "b@example.com",
-      disconnected: false,
+      account: { disconnectedAt: null, provider: "google" },
+      providerRateLimit: null,
     };
     accountChat.switchedAccount = true;
     render(<Chat open />);
@@ -370,7 +378,8 @@ describe("Chat account", () => {
     accountChat.chatAccount = {
       id: "email-account-2",
       email: "b@example.com",
-      disconnected: false,
+      account: { disconnectedAt: null, provider: "google" },
+      providerRateLimit: null,
     };
     chatState.messages = [
       { id: "m1", role: "user", parts: [{ type: "text", text: "Hi" }] },
@@ -390,7 +399,11 @@ describe("Chat account", () => {
     accountChat.chatAccount = {
       id: "email-account-2",
       email: "b@example.com",
-      disconnected: true,
+      account: {
+        disconnectedAt: "2026-09-01T00:00:00.000Z",
+        provider: "google",
+      },
+      providerRateLimit: null,
     };
     render(<Chat open />);
 
