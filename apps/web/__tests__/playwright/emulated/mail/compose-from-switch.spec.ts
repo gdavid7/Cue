@@ -101,6 +101,72 @@ test("keeps a new message's text, recipients and files when From changes", async
   }
 });
 
+// The old account's drafts are the only copy until the new account holds the
+// message, so an account that can't load hands the message back intact.
+test("returns the message to its account when the new From can't load", async ({
+  page,
+}) => {
+  test.skip(
+    isMicrosoftPlaywright(),
+    "Reads the mailbox drafts back from the Gmail emulator.",
+  );
+  test.setTimeout(240_000);
+  const { emailAccountId } = await openMail(page);
+  const secondAccount = await createSecondEmailAccount(emailAccountId);
+  const subject = `From switch failure ${Date.now()}`;
+  const body = "Text that must survive a failed switch.";
+
+  try {
+    await page.route("**/api/user/email-account", async (route) => {
+      const accountId = await route.request().headerValue("x-email-account-id");
+      if (accountId !== secondAccount.id) return route.fallback();
+      await route.fulfill({
+        status: 500,
+        json: { error: "Playwright: this account is unavailable." },
+      });
+    });
+    await page.goto(`/${emailAccountId}/mail?accountScope=all`);
+    await page.getByRole("button", { name: /^Compose/ }).click();
+    const dialog = page.getByRole("dialog", { name: "New Message" });
+    const from = dialog.getByRole("combobox", { name: "From" });
+    await dialog
+      .getByRole("combobox", { name: "To", exact: true })
+      .fill("recipient@example.com");
+    await page.keyboard.press("Enter");
+    await dialog.getByPlaceholder("Subject").fill(subject);
+    const editor = dialog.getByRole("textbox", { name: "Email message" });
+    await editor.fill(body);
+    await expect
+      .poll(() => readDraftFiles(page, subject), { timeout: 60_000 })
+      .toEqual([[]]);
+
+    await from.click();
+    await page
+      .getByRole("option", {
+        name: `${secondAccount.name} (${secondAccount.email})`,
+        exact: true,
+      })
+      .click();
+
+    await expect(
+      page.getByText("Playwright: this account is unavailable."),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(from).not.toContainText(secondAccount.email, {
+      timeout: 30_000,
+    });
+    await expect(dialog.getByPlaceholder("Subject")).toHaveValue(subject);
+    await expect(dialog).toContainText("recipient@example.com");
+    await expect(editor).toContainText(body);
+    // The old account's mailbox draft was never removed.
+    expect(await readDraftFiles(page, subject)).toEqual([[]]);
+
+    await dialog.getByRole("button", { name: "Discard draft" }).click();
+    await expect(dialog).toBeHidden();
+  } finally {
+    await deleteSecondEmailAccount(secondAccount.accountId);
+  }
+});
+
 async function setSignature(emailAccountId: string, signature: string | null) {
   return withClient(async (client) => {
     const previous = await client.query<{ signature: string | null }>(
