@@ -57,8 +57,8 @@ export function useHiddenDraftMessageIds(emailAccountId: string) {
 
 /**
  * Hides a draft from this tab while its send is held for undo or queued on the
- * device, before the server knows about it. Returns a function that shows it
- * again.
+ * device, before the server knows about it, or once it is discarded and until
+ * sync drops it. Returns a function that shows it again.
  */
 export function hideSendingDraftMessages(
   emailAccountId: string,

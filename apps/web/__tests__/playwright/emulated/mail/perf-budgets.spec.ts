@@ -287,8 +287,20 @@ test("Today, Rules, Settings and chat are ready quickly", async ({
       );
 
       if (viaLink) {
+        // Settings was a full page load. A click before React hydrates the
+        // link is a plain document navigation, which resets the timer.
+        const chatLink = page.getByRole("link", { name: "Chat", exact: true });
+        await expect
+          .poll(() =>
+            chatLink.evaluate((element) =>
+              Object.keys(element).some((key) =>
+                key.startsWith("__reactProps$"),
+              ),
+            ),
+          )
+          .toBe(true);
         await armInteraction(page);
-        await page.getByRole("link", { name: "Chat", exact: true }).click();
+        await chatLink.click();
         recorder.add(
           "chat-ready",
           await timeSinceInput(page, chatInputReady, undefined),

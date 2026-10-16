@@ -266,14 +266,14 @@ test("keeps integration actions accessible on phones", async ({
   });
   await markAutomationOnboardingViewed(page);
   await page.goto(`/${emailAccountId}/integrations`);
-  const showMore = page.getByRole("button", { name: /^Show \d+ more apps$/ });
-  await expect(showMore).toBeVisible();
-  await capturePlaywrightCheckpoint(page, testInfo, "mobile-integrations");
-  await expectInViewport(showMore);
+  // Composio's apps are listed only with a Composio key, which emulated runs
+  // don't have, so the custom server action is what every run shows.
   const addServer = page.getByRole("button", {
     name: "Add custom server",
     exact: true,
   });
+  await expect(addServer).toBeVisible();
+  await capturePlaywrightCheckpoint(page, testInfo, "mobile-integrations");
   await addServer.scrollIntoViewIfNeeded();
   await expectInViewport(addServer);
   await addServer.click();

@@ -71,7 +71,7 @@ test("enables the notetaker and persists meeting choices, notes, and settings", 
   await expect(meetingDialog).toContainText("Follow-up draft is ready");
   await meetingDialog.getByRole("button", { name: "Close" }).click();
 
-  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   const settingsDialog = page.getByRole("dialog", {
     name: "Notetaker settings",
   });
@@ -93,7 +93,7 @@ test("enables the notetaker and persists meeting choices, notes, and settings", 
     }),
   ).toBeChecked({ timeout: 60_000 });
 
-  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   const persistedSettingsDialog = page.getByRole("dialog", {
     name: "Notetaker settings",
   });

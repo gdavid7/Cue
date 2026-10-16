@@ -644,6 +644,8 @@ function EarlierMessagesRow({
   let label =
     count === undefined ? "Show earlier messages" : `${count} earlier messages`;
   if (loading) label = "Loading earlier messages…";
+  // As tall as a collapsed message row, so the messages below stay put when
+  // the earlier ones load into its place.
   return (
     <li className="flex items-center gap-3 px-2 py-1.5 sm:px-5">
       <span aria-hidden className="h-px flex-1 bg-border" />
@@ -655,7 +657,7 @@ function EarlierMessagesRow({
             ? undefined
             : `Show ${count} earlier messages`
         }
-        className="shrink-0 rounded-md px-2 py-1 font-medium text-muted-foreground text-xs outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-disabled:pointer-events-none"
+        className="inline-flex h-7 shrink-0 items-center rounded-md px-2 font-medium text-muted-foreground text-xs outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-disabled:pointer-events-none"
         onClick={loading ? undefined : onShow}
         type="button"
       >

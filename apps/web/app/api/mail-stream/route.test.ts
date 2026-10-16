@@ -4,6 +4,11 @@ import { getEmailAccount } from "@/utils/redis/account-validation";
 import { getSharedSubscriber } from "@/utils/redis/shared-subscriber";
 import { GET } from "./route";
 
+const mockEnv = vi.hoisted(() => ({
+  REDIS_URL: "redis://localhost:6379" as string | undefined,
+}));
+
+vi.mock("@/env", () => ({ env: mockEnv }));
 vi.mock("@/utils/middleware", async () => {
   const { createWithAuthTestMiddleware } = await import("@/__tests__/helpers");
   return createWithAuthTestMiddleware();
@@ -26,6 +31,7 @@ describe("Mail realtime stream", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.resetAllMocks();
+    mockEnv.REDIS_URL = "redis://localhost:6379";
     listen = makeListen();
     vi.mocked(getSharedSubscriber).mockReturnValue({ listen } as never);
     vi.mocked(getEmailAccount).mockResolvedValue("user@example.com");
@@ -40,6 +46,15 @@ describe("Mail realtime stream", () => {
     ).toBe(400);
     vi.mocked(getEmailAccount).mockResolvedValue(null);
     expect((await GET(request())).status).toBe(403);
+    expect(listen).not.toHaveBeenCalled();
+  });
+
+  // Without Redis there are no hints to relay. Clients poll while the stream
+  // is down, so an empty answer keeps them working without a server error.
+  it("answers with no stream when Redis is not configured", async () => {
+    mockEnv.REDIS_URL = undefined;
+    const response = await GET(request());
+    expect(response.status).toBe(204);
     expect(listen).not.toHaveBeenCalled();
   });
 
