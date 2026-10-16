@@ -611,6 +611,58 @@ describe("createEmailProviderOperationExecutor", () => {
     expect(input.remindAt).toBeNull();
   });
 
+  // A handover can come after its undo window ended. A reminder due by then
+  // would fire at once on a reply nobody has had time to answer.
+  it("drops a reminder already due when the send is handed over late", async () => {
+    vi.mocked(findScheduledEmail).mockResolvedValue(null);
+    vi.mocked(holdEmailForUndo).mockImplementation(async ({ input, sendAt }) =>
+      heldRow({ payload: input, sendAt }),
+    );
+    const executor = createEmailProviderOperationExecutor({
+      accountId: "acc-1",
+      provider: { name: "google" } as unknown as EmailProvider,
+    });
+    const operation = heldSendOperation(Date.now() - 10 * 60_000);
+    if (operation.intent.kind !== "send") throw new Error("expected send");
+    operation.intent.remindAtMs = Date.now() - 60_000;
+
+    await executor.execute({
+      operation,
+      attemptId: "a-late-handover",
+      signal: new AbortController().signal,
+    });
+
+    const { input } = vi.mocked(holdEmailForUndo).mock.calls[0][0];
+    expect(input.remindAt).toBeNull();
+  });
+
+  it("holds an offline send for when it was queued, the same on every attempt", async () => {
+    vi.mocked(findScheduledEmail).mockResolvedValue(null);
+    vi.mocked(holdEmailForUndo).mockImplementation(async ({ input, sendAt }) =>
+      heldRow({ payload: input, sendAt }),
+    );
+    const executor = createEmailProviderOperationExecutor({
+      accountId: "acc-1",
+      provider: { name: "google" } as unknown as EmailProvider,
+    });
+    const operation = sendOperation();
+    if (operation.intent.kind !== "send") throw new Error("expected send");
+    operation.intent.queuedAtMs = Date.now() - 60 * 60_000;
+    operation.intent.remindAtMs = Date.now() + 86_400_000;
+
+    await executor.execute({
+      operation,
+      attemptId: "a-offline-1",
+      signal: new AbortController().signal,
+    });
+
+    expect(holdEmailForUndo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sendAt: new Date(operation.intent.queuedAtMs),
+      }),
+    );
+  });
+
   it("holds a send with files by its mailbox draft, never their bytes", async () => {
     vi.mocked(findScheduledEmail).mockResolvedValue(null);
     vi.mocked(holdEmailForUndo).mockImplementation(async ({ input, sendAt }) =>

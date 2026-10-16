@@ -618,8 +618,9 @@ async function driveHeldSend(
   if (!row) {
     const held = await holdEngineSend(accountId, mutationId, {
       ...intent,
-      // A send queued offline has no undo window left; it goes now.
-      sendAtMs: intent.sendAtMs ?? Date.now(),
+      // A send queued offline has no undo window; it is due from when it
+      // was queued, which every attempt agrees on.
+      sendAtMs: intent.sendAtMs ?? intent.queuedAtMs,
     });
     if (held.status === "rejected") return held;
     row = held.row;
@@ -652,9 +653,13 @@ async function holdEngineSend(
     clientMutationId: mutationId,
     ...sendRequest(intent),
     sendAt: null,
-    // A reminder whose time passed while the send waited has nothing to do.
+    // A reminder already due when the send reaches the server would fire on
+    // a reply nobody has had time to answer, so it is dropped. Attempts that
+    // straddle that moment can disagree; only one can create the hold, and a
+    // racing one fails this attempt and finds the hold on the next.
     remindAt:
-      intent.remindAtMs !== undefined && intent.remindAtMs > intent.sendAtMs
+      intent.remindAtMs !== undefined &&
+      intent.remindAtMs > Math.max(intent.sendAtMs, Date.now())
         ? new Date(intent.remindAtMs).toISOString()
         : null,
   });
