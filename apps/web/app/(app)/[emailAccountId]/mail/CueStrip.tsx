@@ -151,7 +151,8 @@ export function CueStrip({
       }),
     });
   }
-  const actions = chosen?.messageId === messageId ? chosen.actions : [];
+  const actions =
+    chosen && chosen.messageId === messageId ? chosen.actions : [];
 
   if (!show) return null;
 
