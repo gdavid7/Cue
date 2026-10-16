@@ -544,33 +544,41 @@ export async function noteGmailQuotaRefusal(
   // nor holds a person's reads, and its retry time is not waited out here.
   const volume = isVolumeRefusal(error);
   const retryAfterMs = volume ? (retryAfterFromMessage(error) ?? 0) : 0;
-  try {
-    await withinStoreTimeout(
+  const writes: Promise<unknown>[] = [
+    gmailQuotaStore.block({
+      key: keys.backgroundPause,
+      ms: Math.max(BACKGROUND_PAUSE_MIN_MS, retryAfterMs),
+    }),
+    gmailQuotaStore.note({
+      usageKey: keys.usage(minuteOf(Date.now())),
+      field: `refused:${ticket.caller}`,
+      amount: 1,
+    }),
+  ];
+  if (ticket.priority !== "background")
+    writes.push(
       gmailQuotaStore.block({
-        key: keys.backgroundPause,
-        ms: Math.max(BACKGROUND_PAUSE_MIN_MS, retryAfterMs),
+        key: keys.syncPause,
+        ms: Math.max(SYNC_PAUSE_MIN_MS, retryAfterMs),
       }),
     );
-    if (volume) {
-      await withinStoreTimeout(
-        gmailQuotaStore.block({
-          key: keys.backgroundSlow,
-          ms: BACKGROUND_SLOW_MS,
-        }),
-      );
-      await withinStoreTimeout(
-        gmailQuotaStore.cutBudget({
-          key: keys.budget,
-          trailingKey: keys.trailing,
-          trailingWindowMs: TRAILING_WINDOW_MS,
-          start: BUDGET.start,
-          fraction: BUDGET.cutFraction,
-          floor: BUDGET.floor,
-        }),
-      );
-    }
-    if (volume && ticket.priority === "interactive")
-      await withinStoreTimeout(
+  if (volume) {
+    writes.push(
+      gmailQuotaStore.block({
+        key: keys.backgroundSlow,
+        ms: BACKGROUND_SLOW_MS,
+      }),
+      gmailQuotaStore.cutBudget({
+        key: keys.budget,
+        trailingKey: keys.trailing,
+        trailingWindowMs: TRAILING_WINDOW_MS,
+        start: BUDGET.start,
+        fraction: BUDGET.cutFraction,
+        floor: BUDGET.floor,
+      }),
+    );
+    if (ticket.priority === "interactive")
+      writes.push(
         gmailQuotaStore.block({
           key: keys.interactivePause,
           ms: Math.min(
@@ -579,23 +587,13 @@ export async function noteGmailQuotaRefusal(
           ),
         }),
       );
-    if (ticket.priority !== "background")
-      await withinStoreTimeout(
-        gmailQuotaStore.block({
-          key: keys.syncPause,
-          ms: Math.max(SYNC_PAUSE_MIN_MS, retryAfterMs),
-        }),
-      );
-    await withinStoreTimeout(
-      gmailQuotaStore.note({
-        usageKey: keys.usage(minuteOf(Date.now())),
-        field: `refused:${ticket.caller}`,
-        amount: 1,
-      }),
-    );
-  } catch (storeError) {
-    logger.warn("Failed to record Gmail quota refusal", { error: storeError });
   }
+  const results = await Promise.allSettled(writes.map(withinStoreTimeout));
+  for (const result of results)
+    if (result.status === "rejected")
+      logger.warn("Failed to record Gmail quota refusal", {
+        error: result.reason,
+      });
 }
 
 export function isGmailQuotaRefusal(error: unknown) {

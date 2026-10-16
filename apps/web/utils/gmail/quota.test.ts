@@ -53,6 +53,7 @@ const PAGE_ACCOUNT = "account-page";
 const SUSTAINED_ACCOUNT = "account-sustained";
 const AIMD_ACCOUNT = "account-aimd";
 const SENDING_ACCOUNT = "account-sending";
+const HUNG_ACCOUNT = "account-hung";
 const HOLD_ACCOUNT = "account-hold";
 const CONCURRENCY_ACCOUNT = "account-concurrency";
 // Google enforced about a third of the published minute; the gate starts
@@ -342,6 +343,32 @@ describe("Gmail quota gate", () => {
 
     await vi.advanceTimersByTimeAsync(300);
     expect(settled).toBe(true);
+  });
+
+  it("still records the rest of a refusal when one store write hangs", async () => {
+    // The first write, the background pause, never answers.
+    vi.spyOn(gmailQuotaStore, "block").mockReturnValueOnce(
+      new Promise(() => undefined),
+    );
+    runWithGmailQuota({ caller: "mail/v1/enumeration", priority: "sync" }, () =>
+      meterGmailCall({ emailAccountId: HUNG_ACCOUNT, cost: 40 }, async () => {
+        throw quotaRefusal;
+      }),
+    ).catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(300);
+
+    // Sync still stands back after the refusal.
+    let page = false;
+    runWithGmailQuota({ caller: "mail/v1/enumeration", priority: "sync" }, () =>
+      meterGmailCall(
+        { emailAccountId: HUNG_ACCOUNT, cost: 40 },
+        async () => "page",
+      ),
+    ).then(() => {
+      page = true;
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(page).toBe(false);
   });
 
   it("writes the first-sync marker once while a scan pages through, and clears it at the end", async () => {
