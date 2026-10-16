@@ -65,6 +65,22 @@ export function useInboxInsights(
   );
 }
 
+/**
+ * The open thread's insight, as the reader's features ask for it. They share
+ * this shape so they share one request: a different key would ask again.
+ */
+export function threadInsightItem({
+  emailAccountId,
+  threadId,
+  messageId,
+}: {
+  emailAccountId: string;
+  threadId: string;
+  messageId: string;
+}): InboxInsightItem {
+  return { key: threadId, emailAccountId, threadId, messageId };
+}
+
 /** One request per account and page of rows, ordered so the cache key is stable. */
 export function getInboxInsightRequests(items: InboxInsightItem[]) {
   const byAccount = groupBy(items, (item) => item.emailAccountId);

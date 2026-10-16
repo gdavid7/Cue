@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { format } from "date-fns";
 import { CalendarPlusIcon } from "lucide-react";
 import { useAction } from "next-safe-action/hooks";
@@ -12,7 +12,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { useInboxInsights } from "@/hooks/useInboxInsights";
+import { threadInsightItem, useInboxInsights } from "@/hooks/useInboxInsights";
 import { useSaveDestinations } from "@/hooks/useSaveDestinations";
 import { addToCalendarAction } from "@/utils/actions/calendar";
 import {
@@ -26,61 +26,48 @@ import { getActionErrorMessage } from "@/utils/error";
  * calendar is connected: puts it on the user's own calendar after they check
  * the title and time.
  */
-export function AddToCalendarButton(props: CalendarDraftSource) {
-  const draft = useCalendarDraft(props);
-  if (!draft) return null;
-
-  return (
-    <AddToCalendarPopover
-      key={`${props.messageId}:${draft.start}`}
-      draft={draft}
-      emailAccountId={props.emailAccountId}
-    />
-  );
-}
-
-type CalendarDraftSource = {
-  emailAccountId: string;
-  threadId: string;
-  messageId: string;
-  subject: string;
-};
-
-/**
- * The event Cue found in the latest email, once a calendar is connected to put
- * it on; null otherwise.
- */
-export function useCalendarDraft({
+export function AddToCalendarButton({
   emailAccountId,
   threadId,
   messageId,
   subject,
-}: CalendarDraftSource) {
+}: {
+  emailAccountId: string;
+  threadId: string;
+  messageId: string;
+  subject: string;
+}) {
   const { data: destinations } = useSaveDestinations(emailAccountId);
   const insightItems = useMemo(
     () =>
       destinations?.calendar
-        ? [{ key: threadId, emailAccountId, threadId, messageId }]
+        ? [threadInsightItem({ emailAccountId, threadId, messageId })]
         : [],
     [destinations?.calendar, emailAccountId, threadId, messageId],
   );
   const { data: insights } = useInboxInsights(insightItems);
-  if (!destinations?.calendar) return null;
-  return getCalendarDraftFromInsight({
+  const draft = getCalendarDraftFromInsight({
     insight: insights?.[threadId]?.insight,
     subject,
   });
+
+  if (!destinations?.calendar || !draft) return null;
+
+  return (
+    <AddToCalendarPopover
+      key={`${messageId}:${draft.start}`}
+      draft={draft}
+      emailAccountId={emailAccountId}
+    />
+  );
 }
 
-export function AddToCalendarPopover({
+function AddToCalendarPopover({
   draft,
   emailAccountId,
-  trigger,
 }: {
   draft: CalendarDraft;
   emailAccountId: string;
-  /** Replaces the toolbar icon button; must be a single focusable element. */
-  trigger?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState(draft.title);
@@ -111,21 +98,13 @@ export function AddToCalendarPopover({
 
   return (
     <Popover onOpenChange={setOpen} open={open}>
-      {trigger ? (
-        <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      ) : (
-        <Tooltip content="Add to calendar">
-          <PopoverTrigger asChild>
-            <Button
-              aria-label="Add to calendar"
-              size="iconXs"
-              variant="outline"
-            >
-              <CalendarPlusIcon className="size-3.5" />
-            </Button>
-          </PopoverTrigger>
-        </Tooltip>
-      )}
+      <Tooltip content="Add to calendar">
+        <PopoverTrigger asChild>
+          <Button aria-label="Add to calendar" size="iconXs" variant="outline">
+            <CalendarPlusIcon className="size-3.5" />
+          </Button>
+        </PopoverTrigger>
+      </Tooltip>
       <PopoverContent
         align="end"
         aria-label="Add to calendar"

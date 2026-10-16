@@ -15,6 +15,11 @@ const PERSON_SUBJECT = "Graduation date check-in";
 const PERSON_BODY =
   "Hi! Before we finalize your offer, is your graduation date still June 2027, or are you planning to go to grad school instead? Thanks, Maya";
 const NEWSLETTER_SUBJECT = "Field Notes Issue 43";
+// No label: only Cue's note on it, which arrives after the thread opens, says
+// it needs a reply, so the strip settles late.
+const UNSORTED_SUBJECT = "Coffee next week?";
+const UNSORTED_SUMMARY =
+  "Priya wants to know if you're free for coffee on Tuesday.";
 const SUMMARY =
   "Maya asks whether your graduation date is still June 2027 or you're going to grad school.";
 const REPLY =
@@ -37,7 +42,7 @@ const EMPTY_INSIGHT = {
 test.describe.configure({ mode: "serial" });
 
 // The emulator lives for the whole spec, while each test starts a new device.
-const threads = { person: "", newsletter: "" };
+const threads = { person: "", newsletter: "", unsorted: "" };
 
 test.beforeEach(async ({ page }) => {
   test.skip(
@@ -73,6 +78,14 @@ test.beforeEach(async ({ page }) => {
       ],
     },
   });
+  await registerLlmReply({
+    match: `<email>\nSubject: ${UNSORTED_SUBJECT}\n`,
+    object: { ...EMPTY_INSIGHT, action: "reply", task: "Say if Tuesday works" },
+  });
+  await registerLlmReply({
+    match: `<subject>${UNSORTED_SUBJECT}</subject>`,
+    object: { summary: UNSORTED_SUMMARY, keyPoints: [] },
+  });
   // FYI, not To Reply: Draft reply works for any email from a person, and
   // nothing drafts on its own before the user asks.
   const [fyi, newsletter] = await Promise.all([
@@ -90,6 +103,12 @@ test.beforeEach(async ({ page }) => {
     subject: NEWSLETTER_SUBJECT,
     body: "This week: three essays on slow travel. Read online or unsubscribe.",
     labelIds: ["INBOX", "UNREAD", newsletter],
+  });
+  threads.unsorted = await ensureMessage(page, {
+    from: "Priya Shah <priya@studio.example>",
+    subject: UNSORTED_SUBJECT,
+    body: "Are you free for coffee on Tuesday afternoon? Priya",
+    labelIds: ["INBOX", "UNREAD"],
   });
 });
 
@@ -157,6 +176,44 @@ test("sums up a conversation with a person, not a newsletter, and drafts the rep
   await strip.getByRole("button", { name: "Draft reply" }).click();
   await expect(editor).toContainText(REPLY, { timeout: 60_000 });
   await capturePlaywrightCheckpoint(page, testInfo, "cue-strip-draft-reply");
+});
+
+// The strip's space is held from the first frame whenever it could show, so a
+// summary that lands late never pushes the conversation down.
+test("the conversation doesn't move when the strip settles", async ({
+  page,
+}, testInfo) => {
+  const emailAccountId = await getEmailAccountId(page);
+  await page.addInitScript(() => {
+    const tops: number[] = [];
+    (window as unknown as { __messageTops: number[] }).__messageTops = tops;
+    const sample = () => {
+      const message = document.querySelector("[data-thread-message-id]");
+      if (message) tops.push(Math.round(message.getBoundingClientRect().top));
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+
+  await openThread(page, emailAccountId, threads.unsorted, UNSORTED_SUBJECT);
+  const strip = page.getByRole("region", { name: "Cue summary" });
+  await expect(strip.getByText(UNSORTED_SUMMARY)).toBeVisible({
+    timeout: 60_000,
+  });
+  await expect(strip).toHaveAttribute("aria-busy", "false");
+
+  const tops = await page.evaluate(
+    () => (window as unknown as { __messageTops: number[] }).__messageTops,
+  );
+  expect(tops.length).toBeGreaterThan(0);
+  expect(new Set(tops)).toEqual(new Set([tops[0]]));
+  await capturePlaywrightCheckpoint(page, testInfo, "cue-strip-settled-late");
+
+  // Ask Cue opens the assistant on this email with the cursor in it.
+  await strip.getByRole("button", { name: "Ask Cue about this email" }).click();
+  await expect(
+    page.getByRole("textbox", { name: "Message Cue" }),
+  ).toBeFocused();
 });
 
 test("the strip reads well in light and dark, on desktop and phones", async ({

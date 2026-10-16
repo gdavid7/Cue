@@ -290,20 +290,15 @@ export function ThreadReader({
       />
       {emailAccountId && threadId && lastReceived ? (
         <CueStrip
-          // Its chosen actions and loaded answers belong to one thread.
+          // What it held space for and loaded belongs to one thread.
           key={`${emailAccountId}:${threadId}`}
           emailAccountId={emailAccountId}
           enabled={canAssist}
           messages={receivedMessages}
-          // Mail already out of the inbox has nothing to archive.
-          onArchive={
-            onMoveToInbox || onRestore || onNotSpam ? undefined : onArchive
-          }
           onAskCue={onAskCue}
           onDraftReply={requestDraftReply}
-          onSnooze={onSnooze}
           reply={reply}
-          subject={headerMessage?.headers.subject ?? ""}
+          newestIsIncoming={newestIsIncoming}
           threadId={threadId}
           userLabels={userLabels}
         />

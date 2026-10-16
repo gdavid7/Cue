@@ -1,31 +1,22 @@
 "use client";
 
-import { type ReactNode, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  ArchiveIcon,
-  CalendarPlusIcon,
-  Clock3Icon,
   Loader2Icon,
   MailMinusIcon,
   PenLineIcon,
   SparklesIcon,
 } from "lucide-react";
 import {
-  AddToCalendarPopover,
-  useCalendarDraft,
-} from "@/app/(app)/[emailAccountId]/mail/AddToCalendarButton";
-import {
-  type CueStripAction,
-  getCueStripActions,
   getCueStripVisibility,
   getThreadCategories,
+  isFromPerson,
 } from "@/app/(app)/[emailAccountId]/mail/cue-strip";
-import { SnoozeButton } from "@/app/(app)/[emailAccountId]/mail/SnoozeButton";
 import { useUnsubscribeSender } from "@/app/(app)/[emailAccountId]/mail/use-unsubscribe-sender";
 import type { ThreadMessage } from "@/components/email-list/types";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useInboxInsights } from "@/hooks/useInboxInsights";
+import { threadInsightItem, useInboxInsights } from "@/hooks/useInboxInsights";
 import { useThreadBrief } from "@/hooks/useThreadBrief";
 import { useThreadPlans } from "@/hooks/useThreadPlans";
 import type { EmailLabels } from "@/providers/email-label-types";
@@ -35,23 +26,22 @@ const NO_PLANS: never[] = [];
 
 /**
  * Cue's read of the open conversation, above the messages: what the sender
- * wants in one line, up to three actions that fit, and a way to ask Cue
- * about it. Only for conversations with people (see `getCueStripVisibility`).
+ * wants in one line, the actions the reader doesn't already show, and a way
+ * to ask Cue about it. Only for conversations with people (see
+ * `getCueStripVisibility`).
  *
- * The messages never wait for it. Once Cue knows the strip belongs, its
- * space is held at full height while the summary loads behind a skeleton.
+ * The messages never wait for it, and never move for it: its space is held
+ * from the first render whenever it could show, and folds away if it doesn't.
  */
 export function CueStrip({
   emailAccountId,
   threadId,
   messages,
   userLabels,
-  subject,
+  newestIsIncoming,
   enabled,
   reply,
   onDraftReply,
-  onArchive,
-  onSnooze,
   onAskCue,
 }: {
   /** The account that owns the thread, not the one the screen started on. */
@@ -60,21 +50,22 @@ export function CueStrip({
   /** The thread's messages without drafts, oldest first. */
   messages: ThreadMessage[];
   userLabels: EmailLabels;
-  subject: string;
+  /** Whether someone else wrote the newest message, not the user. */
+  newestIsIncoming: boolean;
   /**
    * False until the conversation is actually open, so moving through the list
-   * with the keyboard never asks for a summary.
+   * with the keyboard never asks for anything.
    */
   enabled: boolean;
   reply: { canRequest: boolean; drafts: boolean; pending: boolean };
   onDraftReply: () => void;
-  onArchive?: () => void;
-  onSnooze?: (until: Date) => void;
   /** Unset when the assistant can't see this thread, e.g. another account's. */
   onAskCue?: () => void;
 }) {
   const latest = messages.at(-1);
   const messageId = latest?.id;
+  const fromPerson =
+    newestIsIncoming && latest ? isFromPerson(latest.headers) : false;
 
   const { data: planData, error: plansError } = useThreadPlans({
     threadId: enabled ? threadId : null,
@@ -90,6 +81,7 @@ export function CueStrip({
     getCueStripVisibility({
       categories,
       categoriesLoaded,
+      fromPerson,
       insight: undefined,
     }) === "pending";
 
@@ -98,7 +90,7 @@ export function CueStrip({
   const insightItems = useMemo(
     () =>
       enabled && messageId && needsInsight
-        ? [{ key: threadId, emailAccountId, threadId, messageId }]
+        ? [threadInsightItem({ emailAccountId, threadId, messageId })]
         : [],
     [enabled, messageId, needsInsight, threadId, emailAccountId],
   );
@@ -112,152 +104,103 @@ export function CueStrip({
   const visibility = getCueStripVisibility({
     categories,
     categoriesLoaded,
+    fromPerson,
     insight,
   });
-  const show = enabled && visibility === "show";
 
   const { data: briefData, error: briefError } = useThreadBrief({
     emailAccountId,
     threadId,
     messageId,
-    enabled: show,
+    enabled: enabled && visibility === "show",
   });
   const briefSettled = Boolean(briefData || briefError);
-  const calendarDraft = useCalendarDraft({
-    emailAccountId,
-    threadId,
-    messageId: messageId ?? "",
-    subject,
-  });
-  const unsubscribeMessage = latest?.headers["list-unsubscribe"]
-    ? latest
-    : null;
 
-  // Chosen once per message, when the summary lands: buttons that reshuffled
-  // as slower answers arrived would move under the user's pointer.
-  const [chosen, setChosen] = useState<{
-    messageId: string;
-    actions: CueStripAction[];
-  }>();
-  if (show && briefSettled && messageId && chosen?.messageId !== messageId) {
-    setChosen({
-      messageId,
-      actions: getCueStripActions({
-        canDraftReply: reply.canRequest,
-        canAddToCalendar: Boolean(calendarDraft),
-        canUnsubscribe: Boolean(unsubscribeMessage),
-        canSnooze: Boolean(onSnooze),
-        canArchive: Boolean(onArchive),
-      }),
-    });
-  }
-  const actions =
-    chosen && chosen.messageId === messageId ? chosen.actions : [];
-
-  if (!show) return null;
+  // Held from the first render that could show it, so a strip that lands late
+  // never pushes the messages down; one that won't show folds away instead.
+  const [heldFor, setHeldFor] = useState<string>();
+  if (messageId && visibility !== "hide" && heldFor !== messageId)
+    setHeldFor(messageId);
+  if (!messageId || heldFor !== messageId) return null;
+  const open = visibility !== "hide";
 
   const brief = briefData?.brief;
-
-  const renderAction = (action: CueStripAction): ReactNode => {
-    switch (action) {
-      case "draft-reply":
-        return reply.canRequest || reply.pending ? (
-          <StripButton
-            busy={reply.pending}
-            icon={reply.pending ? SpinnerIcon : PenLineIcon}
-            key={action}
-            onClick={onDraftReply}
-          >
-            {reply.pending
-              ? "Drafting…"
-              : reply.drafts
-                ? "Draft reply"
-                : "Reply"}
-          </StripButton>
-        ) : null;
-      case "add-to-calendar":
-        return calendarDraft ? (
-          <AddToCalendarPopover
-            draft={calendarDraft}
-            emailAccountId={emailAccountId}
-            key={action}
-            trigger={
-              <StripButton icon={CalendarPlusIcon}>Add to calendar</StripButton>
-            }
-          />
-        ) : null;
-      case "unsubscribe":
-        return unsubscribeMessage ? (
-          <StripUnsubscribeButton key={action} message={unsubscribeMessage} />
-        ) : null;
-      case "snooze":
-        return onSnooze ? (
-          <SnoozeButton
-            key={action}
-            onSnooze={onSnooze}
-            trigger={
-              // Below lg the bottom bar already has Snooze and Archive.
-              <StripButton className="max-lg:hidden" icon={Clock3Icon}>
-                Snooze
-              </StripButton>
-            }
-          />
-        ) : null;
-      case "archive":
-        return onArchive ? (
-          <StripButton
-            className="max-lg:hidden"
-            icon={ArchiveIcon}
-            key={action}
-            onClick={onArchive}
-          >
-            Archive
-          </StripButton>
-        ) : null;
-    }
-  };
+  const unsubscribeMessage =
+    latest?.headers["list-unsubscribe"] && visibility === "show"
+      ? latest
+      : null;
 
   return (
-    <section
-      aria-busy={!briefSettled}
-      aria-label="Cue summary"
-      className="fade-in mb-3 flex animate-in flex-col gap-1 rounded-lg border border-border/70 bg-muted/40 px-3 pt-2 pb-1.5 duration-200 motion-reduce:animate-none"
-      data-cue-strip
+    <div
+      aria-hidden={open ? undefined : true}
+      className={cn(
+        "grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none",
+        open ? "grid-rows-[1fr]" : "grid-rows-[0fr] opacity-0",
+      )}
+      data-cue-strip-state={open ? visibility : "hidden"}
+      inert={!open}
     >
-      <div className="flex min-h-5 min-w-0 items-center gap-2 max-sm:min-h-10 max-sm:items-start">
-        <SparklesIcon
-          aria-hidden
-          className="size-3.5 shrink-0 text-muted-foreground max-sm:mt-[3px]"
-        />
-        {briefSettled ? (
-          <StripSummary
-            key={messageId}
-            quoted={brief?.source === "extract"}
-            summary={brief?.summary}
-          />
-        ) : (
-          <>
-            <Skeleton className="h-3 w-full max-w-sm motion-reduce:animate-none" />
-            <span className="sr-only" role="status">
-              Summarizing this conversation
-            </span>
-          </>
-        )}
+      <div className="min-h-0 overflow-hidden">
+        <section
+          aria-busy={!briefSettled}
+          aria-label="Cue summary"
+          className="mb-3 flex flex-col gap-1 rounded-lg border border-border/70 bg-muted/40 px-3 pt-2 pb-1.5"
+          data-cue-strip
+        >
+          <div className="flex min-h-5 min-w-0 items-center gap-2 max-sm:min-h-10 max-sm:items-start">
+            <SparklesIcon
+              aria-hidden
+              className="size-3.5 shrink-0 text-muted-foreground max-sm:mt-[3px]"
+            />
+            {briefSettled ? (
+              <StripSummary
+                key={messageId}
+                quoted={brief?.source === "extract"}
+                summary={brief?.summary}
+              />
+            ) : (
+              <>
+                <Skeleton className="h-3 w-full max-w-sm motion-reduce:animate-none" />
+                {visibility === "show" && enabled ? (
+                  <span className="sr-only" role="status">
+                    Summarizing this conversation
+                  </span>
+                ) : null}
+              </>
+            )}
+          </div>
+          {/* Under the summary, so the line gets the strip's full width. Only
+              what the toolbar and the phone's bottom bar don't already show. */}
+          <div className="ml-4 flex min-h-6 flex-wrap items-center gap-1 pointer-coarse:min-h-9">
+            {visibility === "show" && (reply.canRequest || reply.pending) ? (
+              <StripButton
+                busy={reply.pending}
+                icon={reply.pending ? SpinnerIcon : PenLineIcon}
+                onClick={onDraftReply}
+              >
+                {reply.pending
+                  ? "Drafting…"
+                  : reply.drafts
+                    ? "Draft reply"
+                    : "Reply"}
+              </StripButton>
+            ) : null}
+            {unsubscribeMessage ? (
+              <StripUnsubscribeButton message={unsubscribeMessage} />
+            ) : null}
+            {onAskCue ? (
+              <StripButton
+                aria-label="Ask Cue about this email"
+                icon={SparklesIcon}
+                onClick={onAskCue}
+              >
+                Ask Cue
+              </StripButton>
+            ) : null}
+          </div>
+        </section>
       </div>
-      {/* Under the summary, so the line gets the strip's full width. */}
-      <div className="ml-4 flex min-h-6 flex-wrap items-center gap-1 pointer-coarse:min-h-9">
-        {actions.map(renderAction)}
-        {onAskCue ? (
-          <StripButton
-            aria-label="Ask Cue about this email"
-            icon={SparklesIcon}
-            onClick={onAskCue}
-          >
-            Ask Cue
-          </StripButton>
-        ) : null}
-      </div>
-    </section>
+    </div>
   );
 }
 

@@ -1,5 +1,7 @@
+import { isAutomatedAddress } from "@cue/context";
 import { SystemType } from "@/generated/prisma/enums";
 import type { EmailLabels } from "@/providers/email-label-types";
+import { extractEmailAddress } from "@/utils/email";
 import type { EmailInsight } from "@/utils/inbox-insights/extract-insight";
 import { getRuleLabel } from "@/utils/rule/consts";
 
@@ -67,67 +69,45 @@ export function getThreadCategories({
  * one: a summary of a newsletter or receipt costs a model call and is the
  * likeliest to be wrong. A conversation category wins over a bulk one, since
  * a mailing someone answered has become a conversation. Without a category,
- * Cue's note on the newest message decides: it shows when the email asks the
- * user to reply or act.
+ * it needs a newest message from a person, and then Cue's note on it decides:
+ * it shows when the email asks the user to reply or act.
  *
- * "pending" means it can't tell yet, and the reader keeps the space free
- * rather than reserving it for something that may never come.
+ * "pending" means it could still show, so the reader holds its space: the
+ * messages below never move down when it lands, and fold up if it doesn't.
  */
 export function getCueStripVisibility({
   categories,
   categoriesLoaded,
+  fromPerson,
   insight,
 }: {
   categories: Set<string>;
   /** False while the thread's rule runs are still loading. */
   categoriesLoaded: boolean;
+  /** Whether someone else wrote the newest message, as a person (`isFromPerson`). */
+  fromPerson: boolean;
   /** Undefined while loading; null when Cue has no note for the email. */
   insight: Pick<EmailInsight, "action"> | null | undefined;
 }): CueStripVisibility {
   if (CONVERSATION_TYPES.some((type) => categories.has(type))) return "show";
   if (AUTOMATED_TYPES.some((type) => categories.has(type))) return "hide";
+  if (!fromPerson) return "hide";
   if (!categoriesLoaded || insight === undefined) return "pending";
   return insight?.action === "reply" || insight?.action === "do"
     ? "show"
     : "hide";
 }
 
-export type CueStripAction =
-  | "draft-reply"
-  | "add-to-calendar"
-  | "unsubscribe"
-  | "snooze"
-  | "archive";
-
-const MAX_ACTIONS = 3;
-
 /**
- * At most three, most specific first: answering, then what the email itself
- * offers, then the triage that fits any conversation.
+ * A person's own address, not a no-reply or notification sender, and not mail
+ * sent to a list. Decided from the message alone, so the reader knows at once.
  */
-export function getCueStripActions({
-  canDraftReply,
-  canAddToCalendar,
-  canUnsubscribe,
-  canSnooze,
-  canArchive,
-}: Record<
-  | "canDraftReply"
-  | "canAddToCalendar"
-  | "canUnsubscribe"
-  | "canSnooze"
-  | "canArchive",
-  boolean
->): CueStripAction[] {
-  const actions: [CueStripAction, boolean][] = [
-    ["draft-reply", canDraftReply],
-    ["add-to-calendar", canAddToCalendar],
-    ["unsubscribe", canUnsubscribe],
-    ["snooze", canSnooze],
-    ["archive", canArchive],
-  ];
-  return actions
-    .filter(([, available]) => available)
-    .map(([action]) => action)
-    .slice(0, MAX_ACTIONS);
+export function isFromPerson(headers: {
+  from: string;
+  "list-unsubscribe"?: string;
+}) {
+  return (
+    !headers["list-unsubscribe"] &&
+    !isAutomatedAddress(extractEmailAddress(headers.from))
+  );
 }

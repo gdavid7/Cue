@@ -17,6 +17,7 @@ import type { EmailLabels } from "@/providers/email-label-types";
 const mocks = vi.hoisted(() => ({
   requests: [] as { url: string; emailAccountId: string | undefined }[],
   plans: [] as { status: string; rule: { systemType: string } }[],
+  insight: null as { action: "reply" | "do" | "none" } | null,
 }));
 
 vi.mock("@/env", () => ({ env: {} }));
@@ -41,6 +42,7 @@ describe("CueStrip", () => {
   beforeEach(() => {
     mocks.requests = [];
     mocks.plans = [];
+    mocks.insight = null;
   });
   afterEach(cleanup);
 
@@ -59,13 +61,47 @@ describe("CueStrip", () => {
     expect(requested("/api/user/thread-brief")).toBe(false);
   });
 
-  it("asks for nothing until the conversation is actually open", async () => {
+  // Keyboard movement through the list: the space is held, nothing is asked.
+  it("holds its space but asks for nothing until the conversation is actually open", async () => {
     renderStrip({ labels: ["Label_reply"], enabled: false });
 
     await flush();
-    expect(screen.queryByRole("region", { name: "Cue summary" })).toBeNull();
+    expect(
+      screen
+        .getByRole("region", { name: "Cue summary" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    expect(mocks.requests).toEqual([]);
+  });
+
+  // The space is there before Cue knows, so the messages never move down;
+  // mail that turns out to ask nothing folds it away.
+  it("holds the space while Cue decides, then folds it away for mail that asks nothing", async () => {
+    mocks.insight = { action: "none" };
+    renderStrip({ labels: [] });
+
+    expect(screen.getByRole("region", { name: "Cue summary" })).toBeTruthy();
+    await waitForRequest("/api/user/inbox-insights");
+    await vi.waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Cue summary" })).toBeNull(),
+    );
     expect(requested("/api/user/thread-brief")).toBe(false);
-    expect(requested("/api/user/thread-plans")).toBe(false);
+  });
+
+  it("shows for uncategorised mail when Cue's note says it needs the user", async () => {
+    mocks.insight = { action: "reply" };
+    renderStrip({ labels: [] });
+
+    expect(await screen.findByText(SUMMARY)).toBeTruthy();
+  });
+
+  it("holds no space for machine mail and asks nothing about it", async () => {
+    renderStrip({ labels: [], from: "Acme <no-reply@acme.example>" });
+
+    expect(screen.queryByRole("region", { name: "Cue summary" })).toBeNull();
+    await flush();
+    expect(requested("/api/user/inbox-insights")).toBe(false);
+    expect(requested("/api/user/thread-brief")).toBe(false);
   });
 
   // In All inboxes the screen's account may not own the open thread.
@@ -90,7 +126,7 @@ describe("CueStrip", () => {
     expect(await screen.findByText(SUMMARY)).toBeTruthy();
   });
 
-  it("drafts a reply, snoozes and archives with the reader's own actions", async () => {
+  it("drafts a reply through the reader", async () => {
     const props = renderStrip({ labels: ["Label_reply"] });
     const strip = await screen.findByRole("region", { name: "Cue summary" });
 
@@ -98,14 +134,17 @@ describe("CueStrip", () => {
       await within(strip).findByRole("button", { name: "Draft reply" }),
     );
     expect(props.onDraftReply).toHaveBeenCalledTimes(1);
+  });
 
-    fireEvent.click(within(strip).getByRole("button", { name: "Archive" }));
-    expect(props.onArchive).toHaveBeenCalledTimes(1);
+  // The toolbar (or the phone's bottom bar) already has these on screen.
+  it("never repeats the reader's own Archive, Snooze or Add to calendar", async () => {
+    renderStrip({ labels: ["Label_reply"] });
+    const strip = await screen.findByRole("region", { name: "Cue summary" });
+    await within(strip).findByText(SUMMARY);
 
-    fireEvent.click(within(strip).getByRole("button", { name: "Snooze" }));
-    const snooze = await screen.findByRole("dialog", { name: "Snooze until" });
-    fireEvent.click(within(snooze).getAllByRole("button")[0]);
-    expect(props.onSnooze).toHaveBeenCalledWith(expect.any(Date));
+    for (const name of [/archive/i, /snooze/i, /calendar/i]) {
+      expect(within(strip).queryByRole("button", { name })).toBeNull();
+    }
   });
 
   it("opens the assistant on this email", async () => {
@@ -155,32 +194,34 @@ describe("CueStrip", () => {
     await screen.findByText(SUMMARY);
 
     expect(screen.queryByRole("button", { name: "Draft reply" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Archive" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Ask Cue about this email" }),
+    ).toBeTruthy();
   });
 });
 
 function renderStrip({
   labels,
   enabled = true,
+  from = "Maya Patel <maya@example.com>",
   reply = { canRequest: true, drafts: true, pending: false },
   ...overrides
 }: {
   labels: string[];
   enabled?: boolean;
+  from?: string;
   reply?: { canRequest: boolean; drafts: boolean; pending: boolean };
   onAskCue?: (() => void) | undefined;
 }) {
   const props: ComponentProps<typeof CueStrip> = {
     emailAccountId: THREAD_ACCOUNT,
     threadId: "t1",
-    messages: [message("m1", ["INBOX", ...labels])],
+    messages: [message("m1", ["INBOX", ...labels], from)],
     userLabels: LABELS,
-    subject: "Your start date",
+    newestIsIncoming: true,
     enabled,
     reply,
     onDraftReply: vi.fn(),
-    onArchive: vi.fn(),
-    onSnooze: vi.fn(),
     onAskCue: vi.fn(),
     ...overrides,
   };
@@ -205,7 +246,12 @@ async function fetcher(key: string | [string, string]) {
   if (url.startsWith("/api/user/thread-plans")) return { plans: mocks.plans };
   if (url.startsWith("/api/user/thread-brief"))
     return { brief: { summary: SUMMARY, keyPoints: [], source: "ai" } };
-  if (url.startsWith("/api/user/inbox-insights")) return { insights: {} };
+  if (url.startsWith("/api/user/inbox-insights"))
+    return {
+      insights: mocks.insight
+        ? { t1: { insight: mocks.insight, meeting: null, reply: null } }
+        : {},
+    };
   if (url.startsWith("/api/user/save-destinations")) return { calendar: false };
   throw new Error(`Unexpected request ${url}`);
 }
@@ -223,13 +269,13 @@ function flush() {
   return new Promise((resolve) => setTimeout(resolve, 20));
 }
 
-function message(id: string, labelIds: string[]) {
+function message(id: string, labelIds: string[], from: string) {
   return {
     id,
     threadId: "t1",
     labelIds,
     headers: {
-      from: "Maya Patel <maya@example.com>",
+      from,
       to: "user@example.com",
       subject: "Your start date",
       date: new Date(0).toISOString(),

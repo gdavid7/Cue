@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  getCueStripActions,
   getCueStripVisibility,
   getThreadCategories,
+  isFromPerson,
 } from "@/app/(app)/[emailAccountId]/mail/cue-strip";
 import type { EmailLabels } from "@/providers/email-label-types";
 
@@ -89,6 +89,27 @@ describe("when the Cue strip shows", () => {
     expect(visibilityFor({ insight: undefined })).toBe("pending");
   });
 
+  // Bulk and machine mail is decided at once, so the reader never holds space
+  // for a strip that won't come.
+  it("hides for uncategorised mail that isn't from a person, without waiting", () => {
+    expect(
+      visibilityFor({
+        fromPerson: false,
+        categoriesLoaded: false,
+        insight: undefined,
+      }),
+    ).toBe("hide");
+    expect(
+      visibilityFor({ fromPerson: false, insight: { action: "do" } }),
+    ).toBe("hide");
+  });
+
+  it("still shows for a conversation whose newest message is the user's own", () => {
+    expect(
+      visibilityFor({ labels: ["Label_awaiting"], fromPerson: false }),
+    ).toBe("show");
+  });
+
   it("doesn't wait for anything once a label settles it", () => {
     expect(
       visibilityFor({
@@ -100,42 +121,25 @@ describe("when the Cue strip shows", () => {
   });
 });
 
-describe("getCueStripActions", () => {
-  const none = {
-    canDraftReply: false,
-    canAddToCalendar: false,
-    canUnsubscribe: false,
-    canSnooze: false,
-    canArchive: false,
-  };
-
-  it("offers at most three, answering first", () => {
-    expect(
-      getCueStripActions({
-        canDraftReply: true,
-        canAddToCalendar: true,
-        canUnsubscribe: true,
-        canSnooze: true,
-        canArchive: true,
-      }),
-    ).toEqual(["draft-reply", "add-to-calendar", "unsubscribe"]);
+describe("isFromPerson", () => {
+  it("counts a person writing from their own address", () => {
+    expect(isFromPerson({ from: "Maya Chen <maya@talent.example>" })).toBe(
+      true,
+    );
   });
 
-  it("falls back to triage when the email offers nothing of its own", () => {
-    expect(
-      getCueStripActions({
-        ...none,
-        canDraftReply: true,
-        canSnooze: true,
-        canArchive: true,
-      }),
-    ).toEqual(["draft-reply", "snooze", "archive"]);
+  it("doesn't count no-reply and other machine addresses", () => {
+    expect(isFromPerson({ from: "Acme <no-reply@acme.example>" })).toBe(false);
+    expect(isFromPerson({ from: "notifications@github.com" })).toBe(false);
   });
 
-  it("leaves out what can't be done here, like snoozing mail in the trash", () => {
-    expect(getCueStripActions({ ...none, canArchive: true })).toEqual([
-      "archive",
-    ]);
+  it("doesn't count mail sent to a list, which offers an unsubscribe", () => {
+    expect(
+      isFromPerson({
+        from: "Field Notes <hello@fieldnotes.example>",
+        "list-unsubscribe": "<https://fieldnotes.example/u>",
+      }),
+    ).toBe(false);
   });
 });
 
@@ -145,8 +149,14 @@ function visibilityFor(options: {
   categoriesLoaded?: boolean;
   /** Left out: Cue has no note. Passed as undefined: the note is loading. */
   insight?: { action: "reply" | "do" | "none" } | null;
+  fromPerson?: boolean;
 }) {
-  const { labels = [], planTypes = [], categoriesLoaded = true } = options;
+  const {
+    labels = [],
+    planTypes = [],
+    categoriesLoaded = true,
+    fromPerson = true,
+  } = options;
   const insight = "insight" in options ? options.insight : null;
   return getCueStripVisibility({
     categories: getThreadCategories({
@@ -158,6 +168,7 @@ function visibilityFor(options: {
       })),
     }),
     categoriesLoaded,
+    fromPerson,
     insight,
   });
 }

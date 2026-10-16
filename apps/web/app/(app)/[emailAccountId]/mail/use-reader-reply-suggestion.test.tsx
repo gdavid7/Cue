@@ -29,7 +29,8 @@ vi.mock("@/hooks/useSuggestedReply", () => ({
 vi.mock("@/app/(app)/[emailAccountId]/assistant/settings/DraftReplies", () => ({
   useDraftReplies: () => mocks.draftReplies,
 }));
-vi.mock("@/hooks/useInboxInsights", () => ({
+vi.mock("@/hooks/useInboxInsights", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useInboxInsights")>()),
   useInboxInsights: () => ({ data: mocks.insights }),
 }));
 vi.mock("@/providers/EmailAccountProvider", () => ({

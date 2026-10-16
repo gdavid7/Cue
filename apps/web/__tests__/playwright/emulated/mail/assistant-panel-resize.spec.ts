@@ -68,7 +68,7 @@ test("keeps the assistant full screen on phones, with no resize handle", async (
   await page.setViewportSize({ width: 390, height: 844 });
   await openMail(page);
 
-  await page.getByRole("button", { name: "Ask Cue" }).click();
+  await page.getByRole("button", { name: "Ask Cue", exact: true }).click();
   await expect(
     page.getByRole("textbox", { name: "Message Cue" }),
   ).toBeVisible();
@@ -79,7 +79,7 @@ test("keeps the assistant full screen on phones, with no resize handle", async (
 });
 
 async function openAssistantPanel(page: Page) {
-  await page.getByRole("button", { name: "Ask Cue" }).click();
+  await page.getByRole("button", { name: "Ask Cue", exact: true }).click();
   const handle = page.getByRole("separator", {
     name: "Resize assistant panel",
   });

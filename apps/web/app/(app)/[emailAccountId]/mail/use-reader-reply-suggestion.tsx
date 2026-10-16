@@ -10,7 +10,7 @@ import {
   suggestionPhaseLabel,
 } from "@/components/thread-context/SuggestedReply";
 import { SystemType } from "@/generated/prisma/enums";
-import { useInboxInsights } from "@/hooks/useInboxInsights";
+import { threadInsightItem, useInboxInsights } from "@/hooks/useInboxInsights";
 import { useReplySuggestion } from "@/hooks/useReplySuggestion";
 import { useSuggestedReply } from "@/hooks/useSuggestedReply";
 import { useAccount } from "@/providers/EmailAccountProvider";
@@ -87,7 +87,7 @@ export function useReaderReplySuggestion({
   const insightItems = useMemo(
     () =>
       current?.eligible && !hasToReplyLabel && threadId && latestId
-        ? [{ key: threadId, emailAccountId, threadId, messageId: latestId }]
+        ? [threadInsightItem({ emailAccountId, threadId, messageId: latestId })]
         : [],
     [current?.eligible, hasToReplyLabel, threadId, latestId, emailAccountId],
   );
