@@ -49,16 +49,28 @@ describe("useHome", () => {
     await act(() => vi.advanceTimersByTimeAsync(100));
     expect(fetcher).toHaveBeenCalledTimes(1);
 
-    // A backlog sorts several messages in a row; Today loads once for them.
+    // The first change shows at once.
     await act(async () => {
       announceTodayChanged();
-      announceTodayChanged();
-      await vi.advanceTimersByTimeAsync(1000);
-      announceTodayChanged();
-      await vi.advanceTimersByTimeAsync(5000);
+      await vi.advanceTimersByTimeAsync(100);
     });
-
     expect(fetcher).toHaveBeenCalledTimes(2);
+
+    // A backlog sorts a message every second or so; Today loads at most once
+    // per ten seconds for them, and once more for the last.
+    await act(async () => {
+      for (let second = 0; second < 5; second++) {
+        announceTodayChanged();
+        await vi.advanceTimersByTimeAsync(1000);
+      }
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(fetcher).toHaveBeenCalledTimes(3);
+
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
   it("reloads when the user comes back to the tab", async () => {
