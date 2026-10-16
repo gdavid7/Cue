@@ -44,6 +44,28 @@ describe("shouldRunEvalTests", () => {
     ).toBe(false);
   });
 
+  it("exposes direct Anthropic Claude 5.5 presets that only run when asked for", () => {
+    process.env.EVAL_MODELS =
+      "claude-sonnet-5.5-anthropic,claude-haiku-5.5-anthropic";
+
+    expect(getEvalModels()).toEqual([
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-sonnet-5-5",
+      }),
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-haiku-5-5",
+      }),
+    ]);
+
+    process.env.EVAL_MODELS = "all";
+
+    expect(
+      getEvalModels().some((model) => model.provider === "anthropic"),
+    ).toBe(false);
+  });
+
   it("exposes Azure DeepSeek presets without including them in all-model runs", () => {
     process.env.EVAL_MODELS = "deepseek-v4-pro-azure";
 

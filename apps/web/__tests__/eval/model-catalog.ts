@@ -70,6 +70,19 @@ export const EVAL_MODEL_CATALOG: Record<string, EvalModel> = {
     model: "anthropic/claude-haiku-4.5",
     label: "Claude Haiku 4.5",
   },
+  // Direct Anthropic API, so runs use the same provider options as production.
+  "claude-sonnet-5.5-anthropic": {
+    provider: "anthropic",
+    model: "claude-sonnet-5-5",
+    label: "Claude Sonnet 5.5",
+    includeInAll: false,
+  },
+  "claude-haiku-5.5-anthropic": {
+    provider: "anthropic",
+    model: "claude-haiku-5-5",
+    label: "Claude Haiku 5.5",
+    includeInAll: false,
+  },
   "gpt-5.6-luna-azure": {
     provider: "azure-foundry",
     model: "gpt-5.6-luna",
