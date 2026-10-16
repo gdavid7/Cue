@@ -6,6 +6,7 @@ import {
   GRAPH_UPLOAD_CHUNK_BYTES,
 } from "@/utils/email/draft-attachment-upload";
 import {
+  readDraftAttachmentFiles,
   removeDraftAttachment,
   uploadDraftAttachment,
 } from "./upload-draft-attachment";
@@ -213,6 +214,102 @@ describe("removeDraftAttachment", () => {
         attachmentId: "att-1",
       }),
     ).rejects.toThrow("Draft not found.");
+  });
+});
+
+// Switching From mid-draft re-attaches the old account's files in the new one.
+describe("readDraftAttachmentFiles", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reuses a file this tab attached without downloading it", async () => {
+    const file = new Blob(["notes"]);
+    fetchMock.mockResolvedValue(
+      Response.json({
+        attachmentId: "draft-att-1",
+        messageId: "message-2",
+        attachments: [],
+      }),
+    );
+    await uploadDraftAttachment({
+      emailAccountId: "account-a",
+      draftId: "draft-1",
+      file,
+      attachment: { ...metadata(5), id: "local-1" },
+    });
+    fetchMock.mockReset();
+
+    const files = await readDraftAttachmentFiles({
+      emailAccountId: "account-a",
+      draftId: "draft-1",
+      attachments: [
+        {
+          ...metadata(5),
+          id: "local-1",
+          draftAttachmentId: "draft-att-1",
+        },
+      ],
+    });
+
+    expect(files).toEqual([file]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("downloads a file attached before this tab from the old account's draft", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        Response.json({
+          messageId: "draft-message-1",
+          attachments: [{ ...listedAttachment("draft-att-2"), size: 7 }],
+        }),
+      )
+      .mockResolvedValueOnce(new Response(new Blob(["earlier"])));
+
+    const [file] = await readDraftAttachmentFiles({
+      emailAccountId: "account-a",
+      draftId: "draft-1",
+      attachments: [
+        {
+          ...metadata(7),
+          id: "local-2",
+          draftAttachmentId: "draft-att-2",
+        },
+      ],
+    });
+
+    expect(await file?.text()).toBe("earlier");
+    const [listUrl, listInit] = fetchMock.mock.calls[0]!;
+    expect(listUrl).toBe("/api/user/drafts/draft-1/attachments");
+    expect(new Headers(listInit.headers).get(EMAIL_ACCOUNT_HEADER)).toBe(
+      "account-a",
+    );
+    expect(fetchMock.mock.calls[1]![0]).toContain("attachmentId=draft-att-2");
+  });
+
+  it("fails when the old draft no longer has the file", async () => {
+    fetchMock.mockResolvedValueOnce(
+      Response.json({ messageId: "draft-message-1", attachments: [] }),
+    );
+
+    await expect(
+      readDraftAttachmentFiles({
+        emailAccountId: "account-a",
+        draftId: "draft-1",
+        attachments: [
+          {
+            ...metadata(7),
+            id: "local-3",
+            draftAttachmentId: "gone",
+          },
+        ],
+      }),
+    ).rejects.toThrow("Could not attach notes.txt.");
   });
 });
 

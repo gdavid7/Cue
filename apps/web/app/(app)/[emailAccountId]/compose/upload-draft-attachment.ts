@@ -190,6 +190,46 @@ export async function readDraftAttachmentBytes({
   });
 }
 
+/**
+ * The bytes of files on a mailbox draft, so they can go on a draft in another
+ * account. Files this tab attached are read from memory.
+ */
+export async function readDraftAttachmentFiles({
+  emailAccountId,
+  draftId,
+  attachments,
+}: {
+  emailAccountId: string;
+  draftId: string;
+  attachments: (DraftAttachmentMetadata & { draftAttachmentId: string })[];
+}): Promise<Blob[]> {
+  const isInMemory = (attachment: DraftAttachmentMetadata) =>
+    attachedFiles.get(fileKey(emailAccountId, attachment.id))?.size ===
+    attachment.size;
+  const listed = attachments.every(isInMemory)
+    ? null
+    : await fetchDraftAttachments({ emailAccountId, draftId });
+  return Promise.all(
+    attachments.map((attachment) => {
+      const cached = attachedFiles.get(fileKey(emailAccountId, attachment.id));
+      if (cached?.size === attachment.size) return cached;
+      const item = listed?.attachments.find(
+        (candidate) => candidate.id === attachment.draftAttachmentId,
+      );
+      if (!item) throw new Error(`Could not attach ${attachment.filename}.`);
+      return readDraftAttachmentBytes({
+        emailAccountId,
+        attachmentId: attachment.id,
+        source: {
+          messageId: item.messageId,
+          providerAttachmentId: item.providerAttachmentId,
+        },
+        size: attachment.size,
+      });
+    }),
+  );
+}
+
 async function uploadInOneRequest({
   emailAccountId,
   draftId,

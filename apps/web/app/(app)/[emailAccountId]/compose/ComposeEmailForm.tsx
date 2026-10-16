@@ -145,6 +145,7 @@ import {
 } from "./draft-operation-queue";
 import {
   forgetAttachedFiles,
+  readDraftAttachmentFiles,
   removeDraftAttachment,
   resolveDraftId,
   uploadDraftAttachment,
@@ -219,6 +220,14 @@ type ComposeEmailFormProps = {
 
 type ComposeFormValues = Omit<SendEmailBody, "attachments" | "messageHtml">;
 
+/** What a new message keeps when its From account changes mid-draft. */
+type MovedComposeDraft = {
+  values: ComposeFormValues;
+  editableHtml: string;
+  mode: ReplyDraftContent["draft"]["mode"];
+  files: { attachment: ComposeAttachment; file: Blob }[];
+};
+
 export function ComposeEmailForm(props: ComposeEmailFormProps) {
   useMailEngineDemand();
   return (
@@ -232,6 +241,7 @@ function ComposeEmailFormWithEngine(props: ComposeEmailFormProps) {
   const { emailAccountId, provider } = useAccount();
   const [selectedEmailAccountId, setSelectedEmailAccountId] =
     useState(emailAccountId);
+  const [movedDraft, setMovedDraft] = useState<MovedComposeDraft>();
   const selectedAccountOverride =
     selectedEmailAccountId === emailAccountId
       ? undefined
@@ -308,7 +318,12 @@ function ComposeEmailFormWithEngine(props: ComposeEmailFormProps) {
             sendingAddress={emailAccount.email}
             sentWithFooterHtml={composeSignature?.footerHtml ?? ""}
             key={composeSessionKey}
-            onSelectEmailAccount={setSelectedEmailAccountId}
+            movedDraft={movedDraft}
+            onMovedDraftApplied={() => setMovedDraft(undefined)}
+            onSelectEmailAccount={(nextEmailAccountId, moved) => {
+              setMovedDraft(moved);
+              setSelectedEmailAccountId(nextEmailAccountId);
+            }}
             selectedEmailAccountId={selectedEmailAccountId}
           />
         </ShortcutsProvider>
@@ -322,7 +337,9 @@ function ComposeEmailFormContent({
   draftKeyMessageId,
   providerDraftMessageId,
   draftMode,
-  storedDraft,
+  storedDraft: savedDraft,
+  movedDraft,
+  onMovedDraftApplied,
   draftLoadError,
   replyingToEmail,
   fromAccounts,
@@ -349,6 +366,8 @@ function ComposeEmailFormContent({
 }: ComposeEmailFormProps & {
   localDraftIdentity?: ReplyDraftIdentity;
   storedDraft?: StoredReplyDraft;
+  movedDraft?: MovedComposeDraft;
+  onMovedDraftApplied: () => void;
   initialAttachments: ComposeAttachment[];
   initialProviderDraftId?: string;
   initialDraftMissing: boolean;
@@ -358,8 +377,14 @@ function ComposeEmailFormContent({
   sendingAddress: string;
   sentWithFooterHtml: string;
   selectedEmailAccountId: string;
-  onSelectEmailAccount: (emailAccountId: string) => void;
+  onSelectEmailAccount: (
+    emailAccountId: string,
+    movedDraft: MovedComposeDraft,
+  ) => void;
 }) {
+  // A draft moved here from another account starts from what it carried.
+  const [isMovedDraft] = useState(Boolean(movedDraft));
+  const storedDraft = isMovedDraft ? undefined : savedDraft;
   const ownEmails = useOwnEmailAddresses();
   const isComposeWindow = layout === "window";
   const isInlineReply = Boolean(draftKeyMessageId && replyingToEmail?.threadId);
@@ -381,7 +406,7 @@ function ComposeEmailFormContent({
   });
   const editorInitialized = useRef(false);
   const providerDraftId = useRef(
-    initialDraftMissing
+    initialDraftMissing || isMovedDraft
       ? undefined
       : (storedDraft?.content?.providerDraftId ?? initialProviderDraftId),
   );
@@ -389,9 +414,11 @@ function ComposeEmailFormContent({
 
   const [initialComposer] = useState(() => {
     // Copied because restoring marks the inline images the editor shows.
-    const restoredAttachments = initialAttachments.map((attachment) => ({
-      ...attachment,
-    }));
+    const restoredAttachments = movedDraft
+      ? movedDraft.files.map(({ attachment }) => attachment)
+      : initialAttachments.map((attachment) => ({
+          ...attachment,
+        }));
     if (storedDraft?.content) {
       const { draft, preservedBlocks } = storedDraft.content;
       const parsedDraft = new DOMParser().parseFromString(
@@ -435,12 +462,22 @@ function ComposeEmailFormContent({
       };
     }
 
-    const preparedDraft = prepareEmailDraft({
-      html: initialBodyHtml ?? replyingToEmail?.draftHtml ?? "",
+    const prepared = prepareEmailDraft({
+      html: movedDraft
+        ? ""
+        : (initialBodyHtml ?? replyingToEmail?.draftHtml ?? ""),
       quotedHtml: replyingToEmail?.quotedContentHtml,
       signatureHtml:
         replyingToEmail?.signatureHtml ?? accountSignatureHtml ?? undefined,
     });
+    // The text moves as written; only the signature is the new account's.
+    const preparedDraft = movedDraft
+      ? {
+          ...prepared,
+          editableHtml: movedDraft.editableHtml,
+          mode: movedDraft.mode,
+        }
+      : prepared;
     // The footer travels with the signature so it lands right after it and is
     // removed with it, without introducing another block in the composer. A
     // reopened draft's signature may already carry a footer; it is replaced.
@@ -505,13 +542,14 @@ function ComposeEmailFormContent({
     watch,
     setValue,
   } = useForm<ComposeFormValues>({
-    defaultValues: storedDraft?.content?.values ?? {
-      replyToEmail: getReplyToEmailPayload(replyingToEmail),
-      subject: replyingToEmail?.subject,
-      to: replyingToEmail?.to,
-      cc: replyingToEmail?.cc,
-      bcc: replyingToEmail?.bcc,
-    },
+    defaultValues: movedDraft?.values ??
+      storedDraft?.content?.values ?? {
+        replyToEmail: getReplyToEmailPayload(replyingToEmail),
+        subject: replyingToEmail?.subject,
+        to: replyingToEmail?.to,
+        cc: replyingToEmail?.cc,
+        bcc: replyingToEmail?.bcc,
+      },
   });
   // Cc and Bcc rows stay out of the way until asked for or already filled.
   const [shownRecipientRows, setShownRecipientRows] = useState({
@@ -580,7 +618,7 @@ function ComposeEmailFormContent({
     saveError: draftSaveError,
   } = useReplyDraftPersistence({
     identity: localDraftIdentity,
-    initialRevision: storedDraft?.revision,
+    initialRevision: savedDraft?.revision,
     loadError: draftLoadError,
     getContent: getDraftContent,
   });
@@ -751,6 +789,8 @@ function ComposeEmailFormContent({
     startedFromBody.current = false;
     captureDraft();
   }, [captureDraft]);
+  // A moved draft is saved to its new account, files included, right away.
+  const movedFiles = useRef(movedDraft?.files);
   useEffect(() => {
     const subscription = watch(() => captureDraft());
     return () => subscription.unsubscribe();
@@ -773,7 +813,7 @@ function ComposeEmailFormContent({
     current = attachmentsRef.current,
   ) => updateAttachments(mergeDraftAttachments(current, listed));
 
-  const uploadComposeAttachment = (file: File, attachment: ComposeAttachment) =>
+  const uploadComposeAttachment = (file: Blob, attachment: ComposeAttachment) =>
     enqueueDraftOperation(draftQueueKey, async () => {
       const isAttached = () =>
         attachmentsRef.current.some((item) => item.id === attachment.id);
@@ -973,6 +1013,16 @@ function ComposeEmailFormContent({
       }, 0);
     };
   }, []);
+
+  useEffect(() => {
+    const files = movedFiles.current;
+    if (!files) return;
+    movedFiles.current = undefined;
+    onMovedDraftApplied();
+    captureDraft();
+    for (const { file, attachment } of files)
+      uploadComposeAttachment(file, attachment);
+  });
 
   const forgetAttachedComposeFiles = useCallback(
     () =>
@@ -1474,6 +1524,73 @@ function ComposeEmailFormContent({
     resumeProviderAutosave,
   ]);
 
+  // Changing From moves the draft: its text, recipients and files go to the
+  // new account, and the old account's draft is removed.
+  const [isMovingDraft, setIsMovingDraft] = useState(false);
+  const moveDraftToAccount = async (nextEmailAccountId: string) => {
+    if (nextEmailAccountId === selectedEmailAccountId || isMovingDraft) return;
+    setIsMovingDraft(true);
+    try {
+      await stopProviderAutosave();
+      await waitForDraftOperations(draftQueueKey);
+      const content = getDraftContent();
+      const local = localDraftIdentity
+        ? await getReplyDraft(localDraftIdentity)
+        : undefined;
+      const draftId =
+        local?.content?.providerDraftId ?? providerDraftId.current;
+      const uploaded = attachmentsRef.current.flatMap((attachment) =>
+        attachment.status === "uploaded" && attachment.draftAttachmentId
+          ? [{ ...attachment, draftAttachmentId: attachment.draftAttachmentId }]
+          : [],
+      );
+      const files =
+        draftId && uploaded.length
+          ? await readDraftAttachmentFiles({
+              emailAccountId: selectedEmailAccountId,
+              draftId,
+              attachments: uploaded.map((attachment) => ({
+                ...toAttachmentMetadata(attachment),
+                draftAttachmentId: attachment.draftAttachmentId,
+              })),
+            })
+          : [];
+      if (draftId) {
+        const result = await discardComposeDraftAction(selectedEmailAccountId, {
+          draftId,
+        });
+        if (!result?.data) throw new Error(getActionErrorMessage(result ?? {}));
+        await client?.requestSync([selectedEmailAccountId]);
+      }
+      forgetAttachedComposeFiles();
+      await clearLocalDraft();
+      // The previews travel with the draft, so this composer must not revoke them.
+      attachmentsRef.current = [];
+      onSelectEmailAccount(nextEmailAccountId, {
+        values: content?.values ?? getValues(),
+        editableHtml: content?.draft.editableHtml ?? initialDraft.editableHtml,
+        mode: content?.draft.mode ?? initialDraft.mode,
+        files: uploaded.flatMap(
+          ({ draftAttachmentId: _draftAttachmentId, ...attachment }, index) => {
+            const file = files[index];
+            return file
+              ? [{ attachment: { ...attachment, status: "uploading" }, file }]
+              : [];
+          },
+        ),
+      });
+    } catch (error) {
+      resumeProviderAutosave();
+      setIsMovingDraft(false);
+      toastError({
+        description:
+          error instanceof Error
+            ? error.message
+            : "Could not discard this draft.",
+      });
+    }
+  };
+
   // The popped-out composer reopens from the local draft, so keep writing
   // here if the latest edits could not be saved.
   const handlePopOut = async () => {
@@ -1587,8 +1704,9 @@ function ComposeEmailFormContent({
           <div className="flex min-h-7 items-center gap-2">
             <ComposeFieldLabel htmlFor="from-account" label="From" />
             <Select
+              disabled={isMovingDraft}
               value={selectedEmailAccountId}
-              onValueChange={onSelectEmailAccount}
+              onValueChange={moveDraftToAccount}
             >
               <SelectTrigger
                 aria-label="From"
