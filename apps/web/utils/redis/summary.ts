@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { redis } from "@/utils/redis";
 
-const SUMMARY_TTL_SECONDS = 7 * 24 * 60 * 60;
+const SUMMARY_TTL_SECONDS = 24 * 60 * 60;
 
 export async function getSummary(text: string): Promise<string | null> {
   return redis.get(summaryKey(text));

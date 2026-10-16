@@ -9,7 +9,3 @@ export const redis = getRedisUsageMeter().wrap(
     token: env.REDIS_HTTP_TOKEN,
   }),
 );
-
-export async function expire(key: string, seconds: number) {
-  return redis.expire(key, seconds);
-}
