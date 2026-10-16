@@ -1138,6 +1138,27 @@ describe("fetchConnectorCandidates with a connection the app turned away", () =>
     );
   });
 
+  it("skips Canvas quietly when it answers with its own server error", async () => {
+    const warn = vi.spyOn(logger, "warn");
+    mockExecuteTool.mockRejectedValue(
+      new AppToolError(
+        "canvas",
+        "CANVAS_LIST_CALENDAR_EVENTS_FOR_USER",
+        'CANVAS_LIST_CALENDAR_EVENTS_FOR_USER failed: {"errors":[{"message":"An error occurred.","error_code":"internal_server_error"}],"error_report_id":2756288220}',
+      ),
+    );
+
+    const result = await fetchConnectorCandidates({
+      emailAccountId: "school",
+      keywords: ["milestone"],
+      logger,
+      now: NOW,
+    });
+
+    expect(result).toEqual({ candidates: [], complete: false });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("leaves the connection alone when Canvas fails with its own error", async () => {
     mockExecuteTool.mockRejectedValue(
       new AppToolError(

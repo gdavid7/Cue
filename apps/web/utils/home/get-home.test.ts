@@ -3,7 +3,11 @@ import { createTestLogger, getMockMessage } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
 import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import { GmailCallDeferredError } from "@/utils/gmail/quota";
-import { ConnectionExpiredError } from "@/utils/mcp/providers/types";
+import {
+  AppToolError,
+  ConnectionExpiredError,
+} from "@/utils/mcp/providers/types";
+import { redis } from "@/utils/redis";
 import { getHomeData, priorityOf } from "./get-home";
 
 vi.mock("server-only", () => ({}));
@@ -566,6 +570,71 @@ describe("getHomeData: what's next", () => {
     }
   });
 
+  it("skips an app that is down or slow without a warning, but warns about one it can't read", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      prisma.mcpConnection.findMany.mockResolvedValue([
+        connection("canvas"),
+        connection("asana"),
+        connection("jira"),
+      ] as never);
+      mocks.executeTool.mockImplementation(({ tool }: { tool: string }) => {
+        if (tool === "CANVAS_LIST_CALENDAR_EVENTS_FOR_USER")
+          return Promise.reject(new AppToolError("canvas", tool, CANVAS_500));
+        if (tool.startsWith("ASANA_")) return new Promise(() => {});
+        if (tool === "JIRA_SEARCH_ISSUES") return Promise.resolve({});
+        return Promise.resolve(TOOL_RESULTS[tool]);
+      });
+
+      const pending = run(mockProvider({}));
+      await vi.advanceTimersByTimeAsync(10_000);
+      const home = await pending;
+
+      expect(home.nextUp).toEqual([]);
+      const warned = warn.mock.calls
+        .map((args) => args.join(" "))
+        .filter((line) => line.includes("Connected app deadlines failed"));
+      expect(warned).toHaveLength(1);
+      expect(warned[0]).toContain("jira");
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("doesn't ask an app that just failed with its own error again on the next visit", async () => {
+    const store = new Map<string, unknown>();
+    vi.mocked(redis.get).mockImplementation(
+      async (key: string) => (store.get(key) ?? null) as never,
+    );
+    vi.mocked(redis.set).mockImplementation(async (key, value) => {
+      store.set(key as string, value);
+      return "OK";
+    });
+    prisma.mcpConnection.findMany.mockResolvedValue([
+      connection("canvas"),
+    ] as never);
+    mocks.executeTool.mockImplementation(({ tool }: { tool: string }) =>
+      tool === "CANVAS_LIST_CALENDAR_EVENTS_FOR_USER"
+        ? Promise.reject(new AppToolError("canvas", tool, CANVAS_500))
+        : Promise.resolve(TOOL_RESULTS[tool]),
+    );
+
+    try {
+      await run(mockProvider({}));
+      await run(mockProvider({}));
+    } finally {
+      vi.mocked(redis.get).mockImplementation(async () => null);
+      vi.mocked(redis.set).mockImplementation(async () => "OK");
+    }
+
+    const eventCalls = mocks.executeTool.mock.calls.filter(
+      ([{ tool }]) => tool === "CANVAS_LIST_CALENDAR_EVENTS_FOR_USER",
+    );
+    expect(eventCalls).toHaveLength(1);
+  });
+
   it("doesn't ask an app whose connection needs reconnecting, nor suggest connecting it", async () => {
     prisma.mcpConnection.findMany.mockResolvedValue([
       { ...connection("canvas"), needsReconnectAt: new Date(0) },
@@ -622,6 +691,10 @@ describe("getHomeData: what's next", () => {
     expect(home.nextUp).toEqual([]);
   });
 });
+
+// As production logged it.
+const CANVAS_500 =
+  'CANVAS_LIST_CALENDAR_EVENTS_FOR_USER failed: {"errors":[{"message":"An error occurred.","error_code":"internal_server_error"}],"error_report_id":2756288220}';
 
 const TOOL_RESULTS: Record<string, unknown> = {
   CANVAS_GET_CURRENT_USER: { response_data: { id: 7 } },

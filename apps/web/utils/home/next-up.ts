@@ -14,8 +14,10 @@ import {
 import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";
 import {
+  isAppUnavailable,
   parseToolResult,
   searchCanvas,
+  withTimeout,
 } from "@/utils/thread-context/connector-context";
 
 const EVENTS_SHOWN = 2;
@@ -248,16 +250,35 @@ async function getDeadlines({
           windowEnd,
           timeZone,
         })
-        .then(async (items) => {
-          await redis
-            .set(key, items, { ex: DEADLINE_CACHE_SECONDS })
-            .catch(() => null);
-          return items;
-        });
+        .then(
+          async (items) => {
+            await redis
+              .set(key, items, { ex: DEADLINE_CACHE_SECONDS })
+              .catch(() => null);
+            return items;
+          },
+          async (error) => {
+            // An app that's down stays down for a while: asking on every
+            // visit only waits on the same failure.
+            if (isAppUnavailable(error)) {
+              await redis
+                .set(key, [], { ex: DEADLINE_CACHE_SECONDS })
+                .catch(() => null);
+            }
+            throw error;
+          },
+        );
       try {
         return inWindow(await withTimeout(fetching, SOURCE_TIMEOUT_MS));
       } catch (error) {
-        logger.warn("Connected app deadlines failed", { app, error });
+        if (isAppUnavailable(error)) {
+          logger.trace("Connected app unavailable for deadlines", {
+            app,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        } else {
+          logger.warn("Connected app deadlines failed", { app, error });
+        }
         return [];
       }
     }),
@@ -536,19 +557,6 @@ function safeUrl(value: string) {
   } catch {
     return null;
   }
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`Timed out after ${ms}ms`)),
-        ms,
-      );
-    }),
-  ]).finally(() => clearTimeout(timer));
 }
 
 // Apps return their own API's JSON; only the fields used here are checked.

@@ -171,7 +171,14 @@ export async function fetchConnectorCandidates({
           if (failures) await redis.del(failuresKey).catch(() => null);
           return found;
         } catch (error) {
-          logger.warn("Connected app search failed", { app: name, error });
+          if (isAppUnavailable(error)) {
+            logger.trace("Connected app unavailable for search", {
+              app: name,
+              reason: failureReason(error),
+            });
+          } else {
+            logger.warn("Connected app search failed", { app: name, error });
+          }
           complete = false;
           // Marked for reconnecting, so it isn't asked again anyway
           if (error instanceof ConnectionExpiredError) return [];
@@ -984,7 +991,19 @@ function addDays(date: Date, days: number) {
   return new Date(date.getTime() + days * 86_400_000);
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+/**
+ * The app is down (Canvas answers `internal_server_error`) or too slow to
+ * wait for. Nothing here can fix either, so the source is just left out.
+ */
+export function isAppUnavailable(error: unknown) {
+  return (
+    error instanceof TimeoutError ||
+    (error instanceof AppToolError &&
+      error.message.includes("internal_server_error"))
+  );
+}
+
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
     promise,
