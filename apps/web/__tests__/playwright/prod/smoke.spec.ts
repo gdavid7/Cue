@@ -6,7 +6,7 @@ import {
   pruneReplyProbes,
   QA_PROBE_SUBJECT_PREFIX,
   readQaMailboxCredentials,
-  readQaOutlookEmail,
+  readQaOutlookMailbox,
   sendOutlookProbe,
   sendSelfMessage,
   waitForMessageFrom,
@@ -32,7 +32,9 @@ import { RobotRun } from "./robot-run";
 // report turns the results into one machine-readable summary.
 
 const credentials = readQaMailboxCredentials();
-const outlookEmail = credentials ? readQaOutlookEmail(credentials.email) : null;
+const outlookMailbox = credentials
+  ? readQaOutlookMailbox(credentials.email)
+  : null;
 const baseUrl = process.env.CUE_QA_BASE_URL || "https://cue-inbox.vercel.app";
 const run = new RobotRun(
   baseUrl,
@@ -51,7 +53,7 @@ if (!credentials) {
   );
 }
 test.skip(!credentials, "QA account secrets are not configured");
-if (credentials && !outlookEmail) {
+if (outlookMailbox?.status === "not_configured") {
   console.log(
     "NOT CONFIGURED: CUE_QA_OUTLOOK_EMAIL is not set; skipping the Outlook steps.",
   );
@@ -264,7 +266,18 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
     "gmail",
   );
 
-  if (outlookEmail) {
+  if (outlookMailbox?.status === "misconfigured") {
+    await run.step(
+      `${OUTLOOK_STEP_PREFIX}configuration`,
+      { page, testInfo },
+      async () => {
+        throw new Error(`Outlook misconfigured: ${outlookMailbox.reason}`);
+      },
+    );
+  }
+
+  if (outlookMailbox?.status === "configured") {
+    const outlookEmail = outlookMailbox.email;
     let outlook: { id: string; index: number } | null = null;
     const outlookAccount = () => {
       if (!outlook) throw new Error("No Outlook QA mailbox; see its step");
@@ -337,25 +350,34 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
         metrics.inboundSyncMs = Date.now() - sentAt;
 
         await probe.click();
-        const clickedAt = new Date();
-        await replyToGmailQa(page, {
-          gmail: credentials.email,
-          outlook: outlookEmail,
-          token,
-        });
-        const received = await waitForMessageFrom(credentials, {
-          from: outlookEmail,
-          subject,
-          token,
-          since: clickedAt,
-          timeoutMs: SENT_TIMEOUT_MS,
-        });
-        expect(received, "the reply reaches the Gmail QA inbox").not.toBeNull();
-        metrics.replyDeliveredMs = Math.max(
-          0,
-          (received?.getTime() ?? 0) - clickedAt.getTime(),
-        );
-        await trashOpenThread(page, outlookAccount().id).catch(() => undefined);
+        try {
+          const clickedAt = new Date();
+          await replyToGmailQa(page, {
+            gmail: credentials.email,
+            outlook: outlookEmail,
+            token,
+          });
+          const received = await waitForMessageFrom(credentials, {
+            from: outlookEmail,
+            subject,
+            token,
+            since: clickedAt,
+            timeoutMs: SENT_TIMEOUT_MS,
+          });
+          expect(
+            received,
+            "the reply reaches the Gmail QA inbox",
+          ).not.toBeNull();
+          metrics.replyDeliveredMs = Math.max(
+            0,
+            (received?.getTime() ?? 0) - clickedAt.getTime(),
+          );
+        } finally {
+          // Even after a failed reply, so probes do not pile up in Outlook.
+          await trashOpenThread(page, outlookAccount().id).catch(
+            () => undefined,
+          );
+        }
       },
     );
 

@@ -13,7 +13,7 @@ import {
 import {
   type QaMailboxCredentials,
   readQaMailboxCredentials,
-  readQaOutlookEmail,
+  readQaOutlookMailbox,
   sendOutlookProbe,
   waitForMessageFrom,
 } from "@/scripts/qa/qa-mailbox";
@@ -80,11 +80,15 @@ const ESTIMATE_MS = {
 } as const;
 
 const qaCredentials = readQaMailboxCredentials();
-const outlookEmail = qaCredentials
-  ? readQaOutlookEmail(qaCredentials.email)
+const outlookMailbox = qaCredentials
+  ? readQaOutlookMailbox(qaCredentials.email)
   : null;
+// A misconfigured Outlook mailbox still runs its journey, which fails saying
+// why; the other journeys run as usual.
 const selected = parseJourneySelection(process.env.CUE_JOURNEYS, {
-  outlookConfigured: Boolean(outlookEmail),
+  outlookConfigured: Boolean(
+    outlookMailbox && outlookMailbox.status !== "not_configured",
+  ),
 });
 const budgets = resolveBudgets(process.env.CUE_JOURNEY_BUDGETS);
 
@@ -113,7 +117,7 @@ test("Cue journeys", async ({ page }, testInfo) => {
     test.skip(true, "QA account secrets are not configured");
     return;
   }
-  if (credentials && !outlookEmail) {
+  if (credentials && outlookMailbox?.status === "not_configured") {
     console.log(
       "NOT CONFIGURED: CUE_QA_OUTLOOK_EMAIL is not set; skipping the Outlook journey.",
     );
@@ -197,10 +201,16 @@ test("Cue journeys", async ({ page }, testInfo) => {
     await run.run("compose-send", options("compose-send"), (attempt) =>
       composeSend(page, { inboxPath, mailbox, runTag, attempt }),
     );
-    if (credentials && outlookEmail) {
+    if (credentials && outlookMailbox?.status === "configured") {
+      const outlookEmail = outlookMailbox.email;
       await run.run("outlook", options("outlook"), (attempt) =>
         outlookJourney(page, { credentials, outlookEmail, runTag, attempt }),
       );
+    } else if (credentials && outlookMailbox?.status === "misconfigured") {
+      const { reason } = outlookMailbox;
+      await run.run("outlook", options("outlook"), async () => {
+        throw new Error(`Outlook misconfigured: ${reason}`);
+      });
     }
   } finally {
     try {

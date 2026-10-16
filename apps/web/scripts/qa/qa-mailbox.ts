@@ -13,23 +13,34 @@ export const QA_PROBE_SUBJECT_PREFIX = "Cue QA reply probe";
 
 export type QaMailboxCredentials = { email: string; appPassword: string };
 
+export type QaOutlookMailbox =
+  | { status: "not_configured" }
+  | { status: "misconfigured"; reason: string }
+  | { status: "configured"; email: string };
+
 /**
- * The Outlook QA mailbox linked to the QA user in Cue, or null when the robots
- * have no Outlook steps. Probes go only from the Gmail QA account to this
- * address and back, so anything but one address of its own is refused.
+ * The Outlook QA mailbox linked to the QA user in Cue. Probes go only from
+ * the Gmail QA account to this address and back, so anything but one address
+ * of its own is misconfigured; the robots report that on their Outlook steps
+ * and keep running the Gmail ones.
  */
-export function readQaOutlookEmail(gmailEmail: string): string | null {
+export function readQaOutlookMailbox(gmailEmail: string): QaOutlookMailbox {
   const email = process.env.CUE_QA_OUTLOOK_EMAIL?.trim().toLowerCase();
-  if (!email) return null;
+  if (!email) return { status: "not_configured" };
   if (!/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(email)) {
-    throw new Error("CUE_QA_OUTLOOK_EMAIL must be one email address");
+    return {
+      status: "misconfigured",
+      reason: "CUE_QA_OUTLOOK_EMAIL must be one email address",
+    };
   }
   if (email === gmailEmail.trim().toLowerCase()) {
-    throw new Error(
-      "CUE_QA_OUTLOOK_EMAIL must be the Outlook QA mailbox, not the Gmail one",
-    );
+    return {
+      status: "misconfigured",
+      reason:
+        "CUE_QA_OUTLOOK_EMAIL must be the Outlook QA mailbox, not the Gmail one",
+    };
   }
-  return email;
+  return { status: "configured", email };
 }
 
 export function readQaMailboxCredentials(): QaMailboxCredentials | null {
@@ -111,7 +122,8 @@ export async function sendOutlookProbe(
   message: { subject: string; text: string; messageId?: string },
 ) {
   // Re-read rather than trusted, so only the configured address is reachable.
-  if (readQaOutlookEmail(credentials.email) !== outlookEmail) {
+  const configured = readQaOutlookMailbox(credentials.email);
+  if (configured.status !== "configured" || configured.email !== outlookEmail) {
     throw new Error("Refusing to send a probe to an unconfigured address");
   }
   await sendQaMail(credentials, outlookEmail, message);
