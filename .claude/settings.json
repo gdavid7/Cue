@@ -34,8 +34,10 @@
       "Bash(pnpm exec vitest run:*)",
       "Bash(pnpm exec biome:*)",
       "Bash(pnpm -F inbox-zero-ai exec prisma generate:*)",
-      "Bash(node --test:*)",
-      "Bash(scripts/agent-run.sh:*)",
+      "Bash(node --test .claude/hooks/:*)",
+      "Bash(scripts/agent-run.sh pnpm test:*)",
+      "Bash(scripts/agent-run.sh pnpm exec vitest run:*)",
+      "Bash(scripts/agent-run.sh pnpm typecheck:web)",
       "Bash(scripts/dispatch-browser-qa.sh:*)",
       "Bash(scripts/check-skill-links.mjs:*)"
     ]
