@@ -23,6 +23,12 @@ export type GmailQuotaStore = {
    * `deferMs` is lifted explicitly, usually long before it expires, so a
    * caller it holds is told to come back in `deferMs` (`defer`) rather than
    * wait it out. While `pace.slowKey` exists the pace cap is halved.
+   *
+   * The bucket refills at the per-minute budget kept in `budget.key`:
+   * `budget.start` until one is set, raised by `budget.raiseFactor` for each
+   * `budget.raiseEveryMs` since it last changed, up to `budget.max`. Each
+   * admission is also counted in `budget.trailingKey` for `cutBudget`, and
+   * the budget it ran at is kept in the usage hash's `budget:perMinute`.
    */
   take(input: {
     bucketKey: string;
@@ -31,7 +37,15 @@ export type GmailQuotaStore = {
     blockers: { key: string; deferMs?: number }[];
     cost: number;
     capacity: number;
-    perMinute: number;
+    budget: {
+      key: string;
+      trailingKey: string;
+      trailingWindowMs: number;
+      start: number;
+      max: number;
+      raiseFactor: number;
+      raiseEveryMs: number;
+    };
     floor: number;
     /**
      * How long the caller will still wait. A wait past it on anything but
@@ -51,6 +65,19 @@ export type GmailQuotaStore = {
       };
     };
   }): Promise<{ waitMs: number; defer: boolean }>;
+  /**
+   * Lowers the budget in `key` to `fraction` of the units admitted within
+   * `trailingWindowMs` (counted in `trailingKey`), never below `floor`, and
+   * restarts its quiet period. Returns the budget.
+   */
+  cutBudget(input: {
+    key: string;
+    trailingKey: string;
+    trailingWindowMs: number;
+    start: number;
+    fraction: number;
+    floor: number;
+  }): Promise<number>;
   /** Sets `key` for `ms` unless it is already set for longer. */
   block(input: { key: string; ms: number }): Promise<void>;
   /**
@@ -93,7 +120,6 @@ local time = redis.call('TIME')
 local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
 local cost = tonumber(ARGV[1])
 local capacity = tonumber(ARGV[2])
-local rate = tonumber(ARGV[3]) / 60000
 local floor = tonumber(ARGV[4])
 local paceCap = tonumber(ARGV[6])
 local paceWindow = tonumber(ARGV[7])
@@ -104,11 +130,31 @@ local waitBudget = tonumber(ARGV[11])
 if ARGV[12] == '1' and redis.call('EXISTS', KEYS[6]) == 1 then
   paceCap = math.floor(paceCap / 2)
 end
+local trailingWindow = tonumber(ARGV[3])
+local budgetStart = tonumber(ARGV[13])
+local budgetMax = tonumber(ARGV[14])
+local raiseFactor = tonumber(ARGV[15])
+local raiseEvery = tonumber(ARGV[16])
+local budget = redis.call('HMGET', KEYS[7], 'perMinute', 'at')
+local perMinute = tonumber(budget[1])
+local budgetAt = tonumber(budget[2]) or now
+if not perMinute then
+  perMinute = budgetStart
+  budgetAt = now
+  redis.call('HSET', KEYS[7], 'perMinute', tostring(perMinute), 'at', tostring(now))
+elseif now - budgetAt >= raiseEvery then
+  local steps = math.floor((now - budgetAt) / raiseEvery)
+  perMinute = math.min(budgetMax, math.floor(perMinute * raiseFactor ^ steps))
+  budgetAt = budgetAt + steps * raiseEvery
+  redis.call('HSET', KEYS[7], 'perMinute', tostring(perMinute), 'at', tostring(budgetAt))
+end
+redis.call('PEXPIRE', KEYS[7], 86400000)
+local rate = perMinute / 60000
 local wait = 0
 local defer = 0
-for i = 7, #KEYS do
+for i = 9, #KEYS do
   local ttl = redis.call('PTTL', KEYS[i])
-  local deferMs = tonumber(ARGV[i + 6])
+  local deferMs = tonumber(ARGV[i + 8])
   if ttl > 0 and deferMs and deferMs > 0 then
     ttl = deferMs
     defer = 1
@@ -170,13 +216,34 @@ local seq = redis.call('INCR', KEYS[4])
 redis.call('PEXPIRE', KEYS[4], 300000)
 redis.call('ZADD', KEYS[3], now, seq .. ':' .. cost)
 redis.call('PEXPIRE', KEYS[3], paceWindow * 2)
+redis.call('ZADD', KEYS[8], now, seq .. ':' .. cost)
+redis.call('ZREMRANGEBYSCORE', KEYS[8], '-inf', now - trailingWindow)
+redis.call('PEXPIRE', KEYS[8], trailingWindow * 2)
 redis.call('HINCRBY', KEYS[2], ARGV[5], cost)
+redis.call('HSET', KEYS[2], 'budget:perMinute', math.floor(perMinute))
 local peak = tonumber(redis.call('HGET', KEYS[2], 'peak:second')) or 0
 if inWindow + cost > peak then
   redis.call('HSET', KEYS[2], 'peak:second', inWindow + cost)
 end
 redis.call('PEXPIRE', KEYS[2], 300000)
 return {0, 0}
+`;
+
+const cutBudgetScript = `
+local time = redis.call('TIME')
+local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
+redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now - tonumber(ARGV[1]))
+local recent = redis.call('ZRANGE', KEYS[2], 0, -1)
+local units = 0
+for j = 1, #recent do
+  units = units + tonumber(string.match(recent[j], ':(%d+)$'))
+end
+local current = tonumber(redis.call('HGET', KEYS[1], 'perMinute')) or tonumber(ARGV[2])
+local cut = math.max(tonumber(ARGV[4]), math.floor(units * tonumber(ARGV[3])))
+local budget = math.min(current, cut)
+redis.call('HSET', KEYS[1], 'perMinute', tostring(budget), 'at', tostring(now))
+redis.call('PEXPIRE', KEYS[1], 86400000)
+return budget
 `;
 
 const blockScript = `
@@ -238,12 +305,14 @@ export const gmailQuotaStore: GmailQuotaStore = {
         `${input.pace.key}:seq`,
         input.pace.demand.key,
         input.pace.slowKey ?? input.pace.key,
+        input.budget.key,
+        input.budget.trailingKey,
         ...input.blockers.map((blocker) => blocker.key),
       ],
       [
         String(input.cost),
         String(input.capacity),
-        String(input.perMinute),
+        String(input.budget.trailingWindowMs),
         String(input.floor),
         input.usageField,
         String(input.pace.cap),
@@ -253,6 +322,10 @@ export const gmailQuotaStore: GmailQuotaStore = {
         String(input.pace.demand.everyMs ?? input.pace.demand.markMs ?? 0),
         String(input.waitBudgetMs ?? -1),
         input.pace.slowKey ? "1" : "0",
+        String(input.budget.start),
+        String(input.budget.max),
+        String(input.budget.raiseFactor),
+        String(input.budget.raiseEveryMs),
         ...input.blockers.map((blocker) => String(blocker.deferMs ?? 0)),
       ],
     );
@@ -260,6 +333,19 @@ export const gmailQuotaStore: GmailQuotaStore = {
     if (!Number.isFinite(waitMs) || waitMs <= 0)
       return { waitMs: 0, defer: false };
     return { waitMs, defer: Number(result?.[1]) === 1 };
+  },
+  async cutBudget(input) {
+    const budget = await redis.eval<string[], number>(
+      cutBudgetScript,
+      [input.key, input.trailingKey],
+      [
+        String(input.trailingWindowMs),
+        String(input.start),
+        String(input.fraction),
+        String(input.floor),
+      ],
+    );
+    return Number(budget);
   },
   async block({ key, ms }) {
     await redis.eval(blockScript, [key], [String(Math.max(1, Math.ceil(ms)))]);

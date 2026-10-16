@@ -372,20 +372,18 @@ describe("getMessagesBatch", () => {
       }));
     });
 
-    // A chat search: 60 units, three messages at a time, leaving the second
-    // room for a thread read.
+    // A chat search: 100 units, five messages at a time.
     const result = await runWithGmailQuota({ priority: "interactive" }, () =>
       getMessagesBatch({ messageIds, accessToken, logger }),
     );
 
     expect(result).toHaveLength(100);
-    expect(vi.mocked(getBatch).mock.calls.map(([ids]) => ids.length)).toEqual([
-      ...new Array(33).fill(3),
-      1,
-    ]);
+    expect(vi.mocked(getBatch).mock.calls.map(([ids]) => ids.length)).toEqual(
+      new Array(20).fill(5),
+    );
     expect(maxActiveBatchRequests).toBe(1);
 
-    // A sync scan: one message at a time.
+    // A sync scan: 80 units, four at a time.
     vi.mocked(getBatch).mockClear();
     await runWithGmailQuota({ priority: "sync" }, () =>
       getMessagesBatch({
@@ -394,9 +392,9 @@ describe("getMessagesBatch", () => {
         logger,
       }),
     );
-    expect(vi.mocked(getBatch).mock.calls.map(([ids]) => ids.length)).toEqual(
-      new Array(9).fill(1),
-    );
+    expect(vi.mocked(getBatch).mock.calls.map(([ids]) => ids.length)).toEqual([
+      4, 4, 1,
+    ]);
   });
 
   it("retries only rate-limited items in smaller sequential batches", async () => {
