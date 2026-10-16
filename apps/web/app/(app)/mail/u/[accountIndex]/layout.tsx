@@ -19,6 +19,9 @@ import { buildLoginRedirectUrl } from "@/utils/redirect";
 import { findLandingSplit } from "@/utils/split-inbox/inbox-styles";
 import { getMailSettings } from "@/utils/split-inbox/settings.server";
 import { loadInboxPreview } from "@/utils/threads/inbox-preview.server";
+import { createScopedLogger } from "@/utils/logger";
+
+const logger = createScopedLogger("mail/route-layout");
 
 // The mail screen lives in the layout, not the page: a layout persists while
 // the view below it (`inbox`, `sent`, a thread) changes, so switching views
@@ -78,14 +81,29 @@ async function startInboxPreview(account: { id: string; provider: string }) {
     return { preview: null };
   if (hasLocalMailbox(cookieStore.get(LOCAL_MAILBOX_COOKIE)?.value, account.id))
     return { preview: null };
-  // An inbox that opens on a tab, such as Gmail's Primary, would show its
-  // other tabs' mail and then swap to the tab.
-  const { splits } = await getMailSettings({ emailAccountId: account.id });
-  if (findLandingSplit(splits)?.filters.length) return { preview: null };
-  return {
-    preview: loadInboxPreview({
-      emailAccountId: account.id,
-      provider: account.provider,
-    }),
-  };
+  return { preview: loadLandingInboxPreview(account) };
+}
+
+// An inbox that opens on a tab, such as Gmail's Primary, would show its other
+// tabs' mail and then swap to the tab. Checked with the rows, not before the
+// page is sent, so the page never waits on it.
+async function loadLandingInboxPreview(account: {
+  id: string;
+  provider: string;
+}) {
+  const settings = await getMailSettings({ emailAccountId: account.id }).catch(
+    (error: unknown) => {
+      logger.warn("Could not read the inbox's tabs for its preview", {
+        emailAccountId: account.id,
+        error,
+      });
+      return null;
+    },
+  );
+  if (!settings || findLandingSplit(settings.splits)?.filters.length)
+    return null;
+  return loadInboxPreview({
+    emailAccountId: account.id,
+    provider: account.provider,
+  });
 }

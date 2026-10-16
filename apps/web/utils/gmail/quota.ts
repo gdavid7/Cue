@@ -37,16 +37,19 @@ const PACE_CAP: Record<GmailQuotaPriority, number> = {
   sync: 160,
   background: 80,
 };
-// For two seconds after a person's large request, such as a first inbox page
-// or an assistant search, sync drops to 40 units a second and background
-// waits, so a first page of 25 messages (about 505 units) takes the two and a
-// half seconds the cap allows. Opening a thread is a few small reads and
-// starts no episode: the sync that fills that thread's older messages keeps
-// its share. A new episode starts at most every three seconds, so someone
+// For two seconds from when a person's large request arrives, such as a first
+// inbox page or an assistant search, sync drops to 40 units a second and
+// background waits, so a first page of 25 messages (about 505 units) takes the
+// two and a half seconds the cap allows. It starts on arrival, not admission:
+// otherwise sync refills each second before a waiting batch fits. Opening a
+// thread is a few small reads and starts no episode: the sync that fills that
+// thread's older messages keeps its share. A new episode starts at most every three seconds, so someone
 // working all the time still leaves sync and background one second in three.
 const INTERACTIVE_DEMAND_MIN_UNITS = 100;
 const INTERACTIVE_DEMAND_MS = 2000;
 const INTERACTIVE_DEMAND_EVERY_MS = 3000;
+// What sync and background get between two episodes.
+const DEMAND_GAP_MS = INTERACTIVE_DEMAND_EVERY_MS - INTERACTIVE_DEMAND_MS;
 const PACE_YIELD_CAP = { sync: 40, background: 0 };
 const MAX_WAIT_MS: Record<GmailQuotaPriority, number> = {
   interactive: 10_000,
@@ -107,7 +110,9 @@ type GmailQuotaContext = {
 // they clicked or a question they asked the assistant, or it blocks first
 // paint of a page the person opened. Background: it only
 // enriches or analyzes mail the user already has. Any other route, the sync
-// engine's scans, Today and webhooks among them, is sync.
+// engine's scans and webhooks among them, is sync. A route a person is
+// waiting on that also fans out raises its own reads to interactive, with a
+// wait budget, through runWithGmailQuota.
 const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
   ...withPriority("interactive", [
     "labels",
@@ -423,6 +428,9 @@ export async function admitGmailCall({
           capacity: BUCKET.capacity,
           perMinute: BUCKET.perMinute,
           floor: FLOOR[priority],
+          waitBudgetMs: Number.isFinite(deadline)
+            ? Math.max(0, deadline - Date.now())
+            : undefined,
           pace: {
             key: keys.pace,
             cap: PACE_CAP[priority],
@@ -542,12 +550,12 @@ export async function holdGmailInteractiveDemand(
   const key = accountKeys(emailAccountId).interactiveDemand;
   try {
     const endsAt = await withinStoreTimeout(
-      gmailQuotaStore.holdDemand({ key, ms: maxMs }),
+      gmailQuotaStore.holdDemand({ key, ms: maxMs, gapMs: DEMAND_GAP_MS }),
     );
     if (!endsAt) return done;
     return async () => {
       await withinStoreTimeout(
-        gmailQuotaStore.releaseDemand({ key, endsAt }),
+        gmailQuotaStore.releaseDemand({ key, endsAt, gapMs: DEMAND_GAP_MS }),
       ).catch((error) => {
         logger.warn("Failed to release Gmail interactive demand", { error });
       });

@@ -351,6 +351,13 @@ export interface EmailProvider {
     inboxOnly?: boolean;
     unreadOnly?: boolean;
     includeDrafts?: boolean;
+    /** Headers only, where the provider can leave bodies out. */
+    format?: "metadata";
+    /**
+     * Return the messages that loaded when the provider keeps refusing the
+     * rest, instead of failing.
+     */
+    allowPartial?: boolean;
   }): Promise<{
     messages: ParsedMessage[];
     nextPageToken?: string;
@@ -464,6 +471,11 @@ export interface EmailProvider {
     labelIds?: string[];
     /** Gmail omits spam and trash unless this is set. Outlook uses `folder` instead. */
     includeSpamTrash?: boolean;
+    /**
+     * Outlook only: leave out Junk Email and Deleted Items, as Gmail's search
+     * does by default. Gmail already does, so it ignores this.
+     */
+    excludeSpamTrash?: boolean;
     folder?: "spam" | "trash";
     mailboxSearch?: ProviderMailboxSearch;
     /**

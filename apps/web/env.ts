@@ -483,7 +483,7 @@ const parsedEnv = createEnv({
     NEXT_PUBLIC_SUPPORT_EMAIL: z
       .string()
       .optional()
-      .default("support@getinboxzero.com"),
+      .default("cue.qa.test@gmail.com"),
     NEXT_PUBLIC_GTM_ID: z.string().optional(),
     NEXT_PUBLIC_CONVERSION_ANALYTICS_SCRIPT_URL: z.string().optional(),
     NEXT_PUBLIC_CRISP_WEBSITE_ID: z.string().optional(),

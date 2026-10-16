@@ -347,6 +347,16 @@ export function sanitizeOutlookSearchQuery(query: string): {
   };
 }
 
+/**
+ * The $search text Graph receives for a chat search query. Read state is
+ * applied as a filter, so its terms are not searched for.
+ */
+export function outlookSearchKql(query: string): string {
+  return sanitizeOutlookSearchQuery(
+    stripStandaloneOutlookStateTerms(query.trim()).trim(),
+  ).sanitized;
+}
+
 function collapseOutlookSearchQueryToText(query: string): string {
   return stripStandaloneOutlookStateTerms(query)
     .replace(
@@ -538,6 +548,11 @@ export async function queryBatchMessages(
     categoryNames?: string[];
     includeDrafts?: boolean;
     mailboxSearch?: ProviderMailboxSearch;
+    /**
+     * Leave out Junk Email and Deleted Items, as Gmail's search leaves out
+     * spam and trash, unless `folderId` points at one of them.
+     */
+    excludeSpamTrash?: boolean;
   },
   logger: Logger,
 ) {
@@ -569,6 +584,15 @@ export async function queryBatchMessages(
     convertMessages(messages, folderIds, categoryMap, options.includeDrafts);
   // Messages carry the folder's opaque id, so a well-known name like "inbox" must be resolved before comparing.
   const expectedParentFolderId = resolveFolderId(folderId, folderIds);
+  // /me/messages spans every folder, and Graph rejects a parentFolderId
+  // filter next to $search, so these are dropped after each page arrives.
+  const excludedFolderIds = new Set(
+    options.excludeSpamTrash && !folderId
+      ? [folderIds.junkemail, folderIds.deleteditems].filter(Boolean)
+      : [],
+  );
+  const inSearchedFolders = (message: Message) =>
+    !message.parentFolderId || !excludedFolderIds.has(message.parentFolderId);
 
   let readState = options.readState;
   if (options.mailboxSearch?.read !== undefined) {
@@ -598,6 +622,7 @@ export async function queryBatchMessages(
         message.parentFolderId !== expectedParentFolderId
       )
         return false;
+      if (!inSearchedFolders(message)) return false;
       if (
         normalizedFromEmail &&
         !matchesOutlookSender(message, normalizedFromEmail)
@@ -622,9 +647,10 @@ export async function queryBatchMessages(
   const rawSearchQuery = options.mailboxSearch
     ? outlookMailboxText(options.mailboxSearch)
     : stripStandaloneOutlookStateTerms(searchQuery?.trim() || "").trim();
-  const { sanitized: cleanedSearchQuery, wasSanitized } = options.mailboxSearch
-    ? { sanitized: rawSearchQuery, wasSanitized: false }
-    : sanitizeOutlookSearchQuery(rawSearchQuery);
+  const cleanedSearchQuery = options.mailboxSearch
+    ? rawSearchQuery
+    : outlookSearchKql(searchQuery ?? "");
+  const wasSanitized = !options.mailboxSearch && Boolean(cleanedSearchQuery);
   const effectiveSearchQuery = cleanedSearchQuery || undefined;
 
   logger.info("Building Outlook request", {
@@ -646,8 +672,9 @@ export async function queryBatchMessages(
   const hasSearchQuery = !!effectiveSearchQuery;
   const hasDateFilters = !!(dateFilters && dateFilters.length > 0);
 
-  // Only apply folder filtering if a specific folderId is requested
-  // API already excludes Junk/Deleted by default, and drafts are filtered in convertMessages
+  // Only apply folder filtering if a specific folderId is requested.
+  // /me/messages includes Junk Email and Deleted Items; `excludeSpamTrash`
+  // drops them. Drafts are filtered in convertMessages.
   const folderFilter = folderId
     ? `parentFolderId eq '${escapeODataString(folderId)}'`
     : undefined;
@@ -677,6 +704,7 @@ export async function queryBatchMessages(
         message.parentFolderId !== expectedParentFolderId
       )
         return false;
+      if (!inSearchedFolders(message)) return false;
       if (
         normalizedFromEmail &&
         !matchesOutlookSender(message, normalizedFromEmail)
@@ -741,7 +769,9 @@ export async function queryBatchMessages(
 
     const response: { value: Message[]; "@odata.nextLink"?: string } =
       await withMicrosoftGraphRetry(() => request.get(), logger);
-    const messages = await parseMessages(response.value);
+    const messages = await parseMessages(
+      response.value.filter(inSearchedFolders),
+    );
 
     nextPageToken = response["@odata.nextLink"];
 

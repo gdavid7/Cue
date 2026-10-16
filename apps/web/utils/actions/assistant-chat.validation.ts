@@ -316,7 +316,20 @@ export const assistantInputSchema = z.object({
   // The browser holds this account's mail locally and can answer the
   // assistant's inbox searches from it.
   localMailSearch: z.boolean().optional().default(false),
+  // The query syntaxes its local search reads. Tabs from before Outlook
+  // support send only `localMailSearch` and read Gmail's syntax alone.
+  // Syntaxes this server does not know are dropped rather than refused.
+  localMailSearchSyntaxes: z
+    .array(z.string().max(32))
+    .max(8)
+    .optional()
+    .default([])
+    .transform((syntaxes) =>
+      LOCAL_MAIL_SEARCH_SYNTAXES.filter((syntax) => syntaxes.includes(syntax)),
+    ),
 });
+
+export const LOCAL_MAIL_SEARCH_SYNTAXES = ["gmail", "outlook"] as const;
 
 export type AssistantInput = z.infer<typeof assistantInputSchema>;
 

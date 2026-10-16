@@ -136,10 +136,7 @@ const PROVIDER_CONFIG: Record<string, ProviderUrlConfig> = {
       field: SearchField,
       address: string,
       emailAddress?: string | null,
-    ) => {
-      const query = encodeURIComponent(`${field}:${address}`);
-      return `${getOutlookBaseUrl(isPersonalMicrosoftEmail(emailAddress))}/search/q/${query}`;
-    },
+    ) => getOutlookSearchUrl(`${field}:${address}`, emailAddress),
   },
   google: GOOGLE_CONFIG,
   default: {
@@ -269,6 +266,21 @@ export function getGmailBasicSearchUrl(emailAddress: string, query: string) {
     `search/${encodeURIComponent(query)}`,
     emailAddress,
   );
+}
+
+/** Searches the mailbox in its provider's web app, or null if it has none. */
+export function getMailboxSearchUrl(
+  emailAddress: string,
+  query: string,
+  provider?: string | null,
+) {
+  if (provider === "google") return getGmailBasicSearchUrl(emailAddress, query);
+  if (provider === "microsoft") return getOutlookSearchUrl(query, emailAddress);
+  return null;
+}
+
+function getOutlookSearchUrl(query: string, emailAddress?: string | null) {
+  return `${getOutlookBaseUrl(isPersonalMicrosoftEmail(emailAddress))}/search/q/${encodeURIComponent(query)}`;
 }
 
 export function getGmailFilterSettingsUrl(emailAddress?: string | null) {

@@ -1,10 +1,16 @@
 import { expect } from "@playwright/test";
+import { isMicrosoftPlaywright } from "../mail-provider";
 import { test } from "../playwright-test";
 import {
   openAttachments,
   resetAttachmentTestState,
   setupAttachmentTestState,
 } from "./attachment-test-helpers";
+
+test.skip(
+  isMicrosoftPlaywright(),
+  "The Drive folders come from the Google emulator, which Microsoft runs don't start.",
+);
 
 test.beforeEach(async () => {
   await setupAttachmentTestState();

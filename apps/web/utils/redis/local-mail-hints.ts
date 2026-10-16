@@ -18,9 +18,28 @@ export async function publishLocalMailHint(
   emailAccountId: string,
   logger: Logger,
 ) {
+  await publishHint(emailAccountId, "{}", logger);
+}
+
+export const TRACKER_HINT_MESSAGE = '{"kind":"trackers"}';
+
+// Cue changed what needs a reply or who the user is waiting on, so an open
+// Today reloads its lanes. The mailbox itself did not change.
+export async function publishTrackerHint(
+  emailAccountId: string,
+  logger: Logger,
+) {
+  await publishHint(emailAccountId, TRACKER_HINT_MESSAGE, logger);
+}
+
+async function publishHint(
+  emailAccountId: string,
+  message: string,
+  logger: Logger,
+) {
   try {
     if (!(await redis.exists(`local-mail-interest:${emailAccountId}`))) return;
-    await redis.publish(localMailHintChannel(emailAccountId), "{}");
+    await redis.publish(localMailHintChannel(emailAccountId), message);
   } catch (error) {
     logger.warn("Failed to publish local mail hint", { error });
   }

@@ -15,6 +15,7 @@ import {
   conversationWithSubject,
   openMail,
   readLatestMailMutation,
+  waitForMetadataCoverage,
 } from "./mail-test-helpers";
 
 import {
@@ -107,6 +108,9 @@ test("Command K acts on highlighted and selected conversations", async ({
   await page.goto(`/${emailAccountId}/mail`);
   const conversations = page.getByRole("listbox", { name: "Conversations" });
   const options = conversations.getByRole("option");
+  // The list grows while the first sync catches up older mail, so count once
+  // the whole mailbox is listed.
+  await waitForMetadataCoverage(page);
   let initialConversationCount = 0;
   await expect
     .poll(

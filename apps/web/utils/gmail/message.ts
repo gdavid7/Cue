@@ -177,16 +177,33 @@ export async function getMessageByRfc822Id(
   return getMessage(message.id, gmail);
 }
 
+// The headers a mail list or thread row reads, for `format=metadata`.
+export const GMAIL_METADATA_HEADERS = [
+  "From",
+  "To",
+  "Cc",
+  "Bcc",
+  "Subject",
+  "Date",
+  "Message-ID",
+  "In-Reply-To",
+  "References",
+  "Reply-To",
+];
+
 export async function getMessagesBatch({
   messageIds,
   accessToken,
   retryCount = 0,
   logger,
+  format,
 }: {
   messageIds: string[];
   accessToken: string;
   retryCount?: number;
   logger: Logger;
+  /** Headers only, for a list that shows no bodies. */
+  format?: "metadata";
 }): Promise<ParsedMessage[]> {
   if (messageIds.length > 100) throw new Error("Too many messages. Max 100");
 
@@ -198,6 +215,7 @@ export async function getMessagesBatch({
       parse: (message) => parseMessage(message),
       retryCount,
       logger,
+      queryString: messageFormatQueryString(format),
     }),
   );
 }
@@ -211,10 +229,13 @@ export async function getMessagesBatchPartial({
   messageIds,
   accessToken,
   logger,
+  format,
 }: {
   messageIds: string[];
   accessToken: string;
   logger: Logger;
+  /** Headers only, for a list that shows no bodies. */
+  format?: "metadata";
 }) {
   if (messageIds.length > 100) throw new Error("Too many messages. Max 100");
 
@@ -224,6 +245,7 @@ export async function getMessagesBatchPartial({
     accessToken,
     parse: (message) => parseMessage(message),
     logger,
+    queryString: messageFormatQueryString(format),
   });
   return {
     messages: result.items,
@@ -455,4 +477,13 @@ function gmailAuthenticationResults(
     nearest === firstByGmail &&
     /\bby mx\.google\.com with E?SMTPS?\b/i.test(headers[nearest]?.value ?? "");
   return delivered ? (headers[results]?.value ?? undefined) : undefined;
+}
+
+function messageFormatQueryString(format: "metadata" | undefined) {
+  if (format !== "metadata") return;
+  const params = new URLSearchParams({ format });
+  for (const header of GMAIL_METADATA_HEADERS) {
+    params.append("metadataHeaders", header);
+  }
+  return params.toString();
 }

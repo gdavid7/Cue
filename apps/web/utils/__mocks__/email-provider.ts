@@ -36,6 +36,7 @@ export const createMockEmailProvider = (
   overrides?: Partial<EmailProvider>,
 ): EmailProvider => ({
   name: "google",
+  localMailSyncStrategy: "account-history",
   toJSON: () => ({ name: "google", type: "MockEmailProvider" }),
   getThreads: vi.fn().mockResolvedValue([]),
   getThread: vi.fn().mockResolvedValue({
@@ -102,6 +103,8 @@ export const createMockEmailProvider = (
   sendEmail: vi.fn().mockResolvedValue({ messageId: "sent-msg1" }),
   forwardEmail: vi.fn().mockResolvedValue({ messageId: "sent-msg1" }),
   markSpam: vi.fn().mockResolvedValue(undefined),
+  markNotSpam: vi.fn().mockResolvedValue(undefined),
+  markMessagesStarredState: vi.fn().mockResolvedValue(undefined),
   starMessage: vi.fn().mockResolvedValue(undefined),
   blockUnsubscribedEmail: vi.fn().mockResolvedValue(undefined),
   markRead: vi.fn().mockResolvedValue(undefined),
@@ -109,6 +112,10 @@ export const createMockEmailProvider = (
   markMessagesReadState: vi.fn().mockResolvedValue(undefined),
   getDraft: vi.fn().mockResolvedValue(null),
   getDraftReferenceForMessage: vi.fn().mockResolvedValue(null),
+  getDraftAttachments: vi.fn().mockResolvedValue(null),
+  addDraftAttachment: vi.fn(),
+  removeDraftAttachment: vi.fn(),
+  startDraftAttachmentUpload: vi.fn(),
   deleteDraft: vi.fn().mockResolvedValue(true),
   sendDraft: vi
     .fn()
@@ -163,7 +170,11 @@ export const createMockEmailProvider = (
   getAccessToken: vi.fn().mockReturnValue("mock-token"),
   checkIfReplySent: vi.fn().mockResolvedValue(false),
   countReceivedMessages: vi.fn().mockResolvedValue(0),
+  countMessages: vi.fn().mockResolvedValue(0),
   getAttachment: vi.fn().mockResolvedValue({ data: "", size: 0 }),
+  getAttachmentStream: vi.fn(),
+  getContactPhotos: vi.fn().mockResolvedValue({}),
+  syncLocalMail: vi.fn(),
   getThreadsWithQuery: vi
     .fn()
     .mockResolvedValue({ threads: [], nextPageToken: undefined }),
@@ -175,7 +186,6 @@ export const createMockEmailProvider = (
   isReplyInThread: vi.fn().mockReturnValue(false),
   isSentMessage: vi.fn().mockReturnValue(false),
   getThreadsFromSenderWithSubject: vi.fn().mockResolvedValue([]),
-  processHistory: vi.fn().mockResolvedValue(undefined),
   moveThreadToFolder: vi.fn().mockResolvedValue(undefined),
   getOrCreateFolderIdByName: vi.fn().mockResolvedValue("folder1"),
   renameFolder: vi.fn().mockResolvedValue(undefined),
@@ -188,4 +198,5 @@ export const createMockEmailProvider = (
 export const mockGmailProvider = createMockEmailProvider({ name: "google" });
 export const mockOutlookProvider = createMockEmailProvider({
   name: "microsoft",
+  localMailSyncStrategy: "folder-delta",
 });

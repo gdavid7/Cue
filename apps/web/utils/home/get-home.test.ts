@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { createTestLogger, getMockMessage } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
 import type { EmailProvider, EmailThread } from "@/utils/email/types";
+import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import { getHomeData, priorityOf } from "./get-home";
 
 vi.mock("server-only", () => ({}));
@@ -202,21 +203,98 @@ describe("getHomeData", () => {
     });
   });
 
-  it("counts filed mail once even when it has several handled labels", async () => {
-    const receipt = thread("venmo", {
-      from: "Venmo <venmo@venmo.com>",
-      subject: "You paid",
-      labels: ["Label_Receipt", "Label_Newsletter"],
-    });
+  it("answers within its budget with the lanes that loaded, marking a slow one pending", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const provider = mockProvider({
+        NEEDS_REPLY: [
+          thread("sarah", {
+            from: "Sarah <s@acme.com>",
+            subject: "Renewal",
+            labels: ["INBOX"],
+          }),
+        ],
+      });
+      provider.getThreadsWithQuery.mockReturnValue(new Promise(() => {}));
+
+      let settled = false;
+      const pending = run(provider).finally(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(9000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1000);
+      const home = await pending;
+
+      expect(home.needsYou.map((t) => t.threadId)).toEqual(["sarah"]);
+      expect(home.alsoInInbox).toEqual([]);
+      expect(home.pending).toEqual(["alsoInInbox"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks a lane the Gmail quota gate deferred pending instead of failing the page", async () => {
     const provider = mockProvider({
-      Newsletter: [receipt],
-      Receipt: [receipt],
+      NEEDS_REPLY: [
+        thread("sarah", {
+          from: "Sarah <s@acme.com>",
+          subject: "Renewal",
+          labels: ["INBOX"],
+        }),
+      ],
+      AWAITING: [
+        thread("alex", {
+          from: `David <${USER}>`,
+          to: "Alex <a@ctc.com>",
+          subject: "Superday",
+          labels: [],
+        }),
+      ],
+    });
+    const getThread = vi.mocked(provider.getThread).getMockImplementation()!;
+    vi.mocked(provider.getThread).mockImplementation(async (threadId) => {
+      if (threadId === "alex")
+        throw new GmailCallDeferredError(5000, "interactive");
+      return getThread(threadId);
     });
 
     const home = await run(provider);
 
-    expect(home.handled.map((t) => t.threadId)).toEqual(["venmo"]);
-    expect(home.stats).toMatchObject({ handled: 1 });
+    expect(home.needsYou.map((t) => t.threadId)).toEqual(["sarah"]);
+    expect(home.waiting).toEqual([]);
+    expect(home.pending).toEqual(["waiting"]);
+  });
+
+  it("marks a lane Gmail failed for another reason failed, so empty isn't read as nothing there", async () => {
+    const provider = mockProvider({});
+    provider.getThreadsWithQuery.mockRejectedValue(new Error("Bad request"));
+
+    const home = await run(provider);
+
+    expect(home.alsoInInbox).toEqual([]);
+    expect(home.pending).toEqual([]);
+    expect(home.failed).toEqual(["alsoInInbox"]);
+  });
+
+  it("holds back the rest of the inbox until the labels load, so filed mail isn't shown there", async () => {
+    for (const failure of [
+      new GmailCallDeferredError(5000, "interactive"),
+      new Error("Bad request"),
+    ]) {
+      const newsletter = thread("weekly", {
+        from: "News <n@x.com>",
+        subject: "Weekly",
+        labels: ["INBOX", "Label_Newsletter"],
+      });
+      const provider = mockProvider({ INBOX: [newsletter] });
+      provider.getLabels.mockRejectedValue(failure);
+
+      const home = await run(provider);
+
+      expect(home.alsoInInbox).toEqual([]);
+      expect(home.pending).toEqual(["alsoInInbox"]);
+    }
   });
 
   it("lists pending AI drafts as work in progress", async () => {
@@ -293,14 +371,12 @@ describe("getHomeData", () => {
       subject: "Weekly",
       labels: ["INBOX", "Label_Newsletter"],
     });
-    const provider = mockProvider({
-      Newsletter: [newsletter],
-      INBOX: [newsletter],
-    });
+    const provider = mockProvider({ INBOX: [newsletter] });
 
     const home = await run(provider);
 
-    expect(home.handled.map((t) => t.threadId)).toEqual(["weekly"]);
+    // Read from the inbox listing's own labels: no list per filing label.
+    expect(provider.getThreadsWithQuery).toHaveBeenCalledTimes(1);
     expect(home.alsoInInbox).toEqual([]);
   });
 
@@ -344,7 +420,7 @@ describe("getHomeData", () => {
       }),
     );
     // Counted from Cue's records: no extra mailbox reads.
-    expect(provider.getThreadsWithQuery).toHaveBeenCalledTimes(3);
+    expect(provider.getThreadsWithQuery).toHaveBeenCalledTimes(1);
   });
 });
 

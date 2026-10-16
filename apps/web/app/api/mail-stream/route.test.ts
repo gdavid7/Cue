@@ -14,6 +14,7 @@ vi.mock("@/utils/redis/account-validation", () => ({
   getEmailAccount: vi.fn(),
 }));
 vi.mock("@/utils/redis/local-mail-hints", () => ({
+  TRACKER_HINT_MESSAGE: "tracker-hint",
   localMailHintChannel: (id: string) => `local-mail:${id}`,
   refreshLocalMailInterest: vi.fn(),
 }));
@@ -65,6 +66,9 @@ describe("Mail realtime stream", () => {
     subscriber.emit("message", "local-mail:other-account", "secret");
     subscriber.emit("message", "local-mail:account-a", "secret");
     expect(await read(reader)).toBe("event: mailbox-change\ndata: {}\n\n");
+    // Today reloads on tracker changes without the mailbox syncing again.
+    subscriber.emit("message", "local-mail:account-a", "tracker-hint");
+    expect(await read(reader)).toBe("event: trackers-change\ndata: {}\n\n");
     await reader.cancel();
     expect(subscriber.disconnect).toHaveBeenCalledOnce();
     expect(subscriber.listenerCount("message")).toBe(0);

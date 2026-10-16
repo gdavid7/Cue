@@ -55,6 +55,28 @@ describe("followMailboxChanges", () => {
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
+  it("tells Today about tracker changes without syncing the mailbox", () => {
+    const onTrackersChange = vi.fn();
+    const onChange = vi.fn();
+    stops.push(
+      followMailboxChanges({
+        accountId: "acc/1",
+        onChange,
+        onTrackersChange,
+        createEventSource: (url) => {
+          const source = new FakeEventSource(url);
+          sources.push(source);
+          return source as unknown as EventSource;
+        },
+      }),
+    );
+
+    sources[0].emit("trackers-change");
+
+    expect(onTrackersChange).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("catches up each time the stream (re)connects", () => {
     const { onChange } = follow();
 

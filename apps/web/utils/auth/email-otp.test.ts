@@ -44,8 +44,45 @@ describe("email code authentication", () => {
     prisma.user.findUnique.mockResolvedValue({
       emailOtpEnabled: true,
       emailOtpVersion: 0,
+      emailVerified: true,
     } as never);
     prisma.session.findFirst.mockResolvedValue({ id: "active" } as never);
+  });
+
+  // better-auth deletes every sign-in link of an unverified account when an
+  // email code signs into it. Microsoft never verifies an address, so a code
+  // would delete the Outlook link and, with it, the mailbox.
+  it("refuses codes for an account no sign-in has verified, keeping its links", async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      emailOtpEnabled: true,
+      emailOtpVersion: 0,
+      emailVerified: false,
+    } as never);
+    const { database, request } = setup(undefined, { emailVerified: false });
+    database.account.push({
+      id: "microsoft-account",
+      userId: "owner",
+      providerId: "microsoft",
+      accountId: "microsoft-subject",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    await request("/email-otp/send-verification-otp", {
+      email,
+      type: "sign-in",
+    });
+    await flushEmails();
+    const delivered = vi.mocked(deliverTransactionalEmail).mock.calls.length;
+    const response = await request("/sign-in/email-otp", {
+      email,
+      otp: delivered ? sentCode() : "123456",
+    });
+
+    expect(response.status).toBe(400);
+    expect(database.account).toHaveLength(1);
+    expect(database.session).toHaveLength(0);
+    expect(deliverTransactionalEmail).not.toHaveBeenCalled();
   });
 
   it("signs into the existing account with a single-use encrypted code", async () => {
@@ -314,14 +351,17 @@ describe("email code authentication", () => {
   });
 });
 
-function setup(onSessionCreated?: () => void) {
+function setup(
+  onSessionCreated?: () => void,
+  { emailVerified = true }: { emailVerified?: boolean } = {},
+) {
   const database: Record<string, Record<string, unknown>[]> = {
     user: [
       {
         id: "owner",
         email,
         name: "Owner",
-        emailVerified: true,
+        emailVerified,
         createdAt: new Date(),
         updatedAt: new Date(),
       },

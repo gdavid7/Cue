@@ -33,6 +33,9 @@ async function main() {
   const resultsPath = process.argv[2];
   const report = buildHealthReport({
     robot: await readRobot(resultsPath),
+    outlook: process.env.CUE_QA_OUTLOOK_EMAIL
+      ? { status: "configured" }
+      : { status: "not_configured", missing: ["CUE_QA_OUTLOOK_EMAIL"] },
     axiom: await queryAxiom(),
     sentry: await querySentry(),
   });

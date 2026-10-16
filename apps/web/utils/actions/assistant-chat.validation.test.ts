@@ -24,6 +24,30 @@ describe("assistantInputSchema", () => {
     );
   });
 
+  it("reads the search syntaxes a browser can answer locally, none for older tabs", () => {
+    const parse = (body: Record<string, unknown>) =>
+      assistantInputSchema.parse({ ...createInput("hi"), ...body })
+        .localMailSearchSyntaxes;
+
+    expect(parse({ localMailSearch: true })).toEqual([]);
+    expect(
+      parse({
+        localMailSearch: true,
+        localMailSearchSyntaxes: ["gmail", "outlook"],
+      }),
+    ).toEqual(["gmail", "outlook"]);
+    // A newer tab may know syntaxes this server does not; they are ignored.
+    expect(
+      parse({ localMailSearchSyntaxes: ["outlook", "imap-search"] }),
+    ).toEqual(["outlook"]);
+    expect(
+      assistantInputSchema.safeParse({
+        ...createInput("hi"),
+        localMailSearchSyntaxes: Array.from({ length: 20 }, () => "gmail"),
+      }).success,
+    ).toBe(false);
+  });
+
   // The id goes into the model's context, so it can only look like an id.
   it("accepts Gmail and Outlook thread ids as the open thread, and nothing else", () => {
     const withOpen = (openThreadId: string) =>

@@ -21,7 +21,11 @@ import type {
 } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
-import { isGmailCallDeferredError } from "@/utils/gmail/quota";
+import {
+  holdGmailInteractiveDemand,
+  isGmailCallDeferredError,
+  runWithGmailQuota,
+} from "@/utils/gmail/quota";
 import { getTrackedThreads } from "@/utils/reply-tracker/tracked-threads";
 import { getNextUp } from "@/utils/home/next-up";
 import { getRuleLabel } from "@/utils/rule/consts";
@@ -33,6 +37,9 @@ import {
 } from "@/utils/premium";
 
 const LIST_LIMIT = 10;
+// Well inside the route's 30 seconds, and about as long as a person watches a
+// loading page before giving up on it.
+const HOME_BUDGET_MS = 10_000;
 const HANDLED_WINDOW_DAYS = 7;
 // Older pending drafts were most likely deleted in the mail app, and a rule
 // still "applying" after this long has crashed; neither is work in progress.
@@ -107,71 +114,71 @@ export async function getHomeData({
   timeZone?: string;
   now?: Date;
 }) {
-  const labels = await emailProvider.getLabels();
-  const labelId = (name: string) => findLabel(labels, name)?.id;
-  const labelNames = new Map(labels.map((l) => [l.id, l.name]));
-
-  const toReplyId = labelId(getRuleLabel(SystemType.TO_REPLY));
-  const awaitingId = labelId(getRuleLabel(SystemType.AWAITING_REPLY));
-  const handledIds = HANDLED_LABELS.map(labelId).filter(isString);
-  const since = new Date(now.getTime() - HANDLED_WINDOW_DAYS * 86_400_000);
-
-  const list = (
-    query: Parameters<EmailProvider["getThreadsWithQuery"]>[0]["query"],
-    label: string,
-  ) =>
-    emailProvider
-      .getThreadsWithQuery({
-        query,
-        maxResults: LIST_LIMIT,
-        messageFormat: "metadata",
-      })
-      .then((r) => r.threads)
-      .catch((error) => {
-        // An empty lane would read as "nothing here"; the client retries.
-        if (isGmailCallDeferredError(error)) throw error;
-        logger.warn("Failed to list home threads", { label, error });
-        return [] as EmailThread[];
-      });
-
-  // Reply tracking lives in Cue's database, so these lanes don't depend on Cue
-  // labelling anything in the mailbox.
-  const tracked = (
-    type: ThreadTrackerType,
-    label: string,
-    inboxOnly: boolean,
-  ) =>
-    getTrackedThreads({
-      emailAccountId,
-      emailProvider,
-      type,
-      limit: LIST_LIMIT,
-      inboxOnly,
-    }).catch((error) => {
-      if (isGmailCallDeferredError(error)) throw error;
-      logger.warn("Failed to list tracked home threads", { label, error });
-      return [] as EmailThread[];
+  // Today waits on Gmail for the rows it shows, behind whatever else the
+  // account is doing. A lane that can't be served in time comes back pending,
+  // for the client to fetch again, rather than holding up or failing the rest.
+  const deadline = Date.now() + HOME_BUDGET_MS;
+  // Someone is looking at the page: its reads go ahead of sync and background
+  // work, which also hold back while it loads, as they do for an assistant
+  // turn. Its many small reads would otherwise get only what sync leaves.
+  const releaseDemand = holdGmailInteractiveDemand(
+    emailAccountId,
+    HOME_BUDGET_MS,
+  );
+  const gmail = <T>(lane: HomeLane | "labels", work: () => Promise<T>) =>
+    withinBudget(
+      runWithGmailQuota(
+        { priority: "interactive", maxTotalWaitMs: HOME_BUDGET_MS },
+        work,
+      ),
+      deadline,
+    ).catch((error): Pending => {
+      if (isGmailCallDeferredError(error)) return PENDING;
+      logger.warn("Failed to load home lane", { lane, error });
+      return FAILED;
     });
 
   const [
-    needsYou,
-    waiting,
-    handledByLabel,
-    inbox,
+    labelsResult,
+    needsYouResult,
+    waitingResult,
+    inboxResult,
     agentTasks,
     cue,
     today,
     nextUp,
   ] = await Promise.all([
-    // An archived conversation is off the user's plate even before they reply.
-    tracked(ThreadTrackerType.NEEDS_REPLY, "needs-you", true),
-    tracked(ThreadTrackerType.AWAITING, "waiting", false),
-    // One query per label: the EmailProvider interface has no "any of these labels".
-    Promise.all(
-      handledIds.map((id) => list({ labelIds: [id], after: since }, "handled")),
+    gmail("labels", () => emailProvider.getLabels()),
+    // Reply tracking lives in Cue's database, so these lanes don't depend
+    // on Cue labelling anything in the mailbox. An archived conversation is
+    // off the user's plate even before they reply.
+    gmail("needsYou", () =>
+      getTrackedThreads({
+        emailAccountId,
+        emailProvider,
+        type: ThreadTrackerType.NEEDS_REPLY,
+        limit: LIST_LIMIT,
+        inboxOnly: true,
+      }),
+    ),
+    gmail("waiting", () =>
+      getTrackedThreads({
+        emailAccountId,
+        emailProvider,
+        type: ThreadTrackerType.AWAITING,
+        limit: LIST_LIMIT,
+      }),
     ),
     // Everything still in the inbox, so nothing is only reachable through AI triage.
-    list({ labelIds: ["INBOX"] }, "inbox"),
+    gmail("alsoInInbox", () =>
+      emailProvider
+        .getThreadsWithQuery({
+          query: { labelIds: ["INBOX"] },
+          maxResults: LIST_LIMIT,
+          messageFormat: "metadata",
+        })
+        .then((r) => r.threads),
+    ),
     getAgentTasks({ emailAccountId, now }),
     getCueStatus(emailAccountId),
     getTodayActivity({
@@ -179,10 +186,44 @@ export async function getHomeData({
       since: startOfDay(new TZDate(now, timeZone)),
     }),
     getNextUp({ emailAccountId, userEmail, timeZone, logger, now }),
-  ]);
-  const handled = uniqueByThreadId(handledByLabel.flat());
-  // Each thread shows once on Today: sorted mail has its own section.
-  const shownIds = new Set([...needsYou, ...handled].map((t) => t.id));
+  ]).finally(() => releaseDemand.then((release) => release()));
+
+  const labels = labelsResult.ok ? labelsResult.value : [];
+  const lane = (result: LaneResult<EmailThread[]>) =>
+    result.ok ? result.value : [];
+  const needsYou = lane(needsYouResult);
+  const waiting = lane(waitingResult);
+  // Without the labels, filed mail can't be told apart from the rest of the
+  // inbox, so that lane waits for a load that has them.
+  const inbox = labelsResult.ok ? inboxResult : PENDING;
+  const laneResults = [
+    ["needsYou", needsYouResult],
+    ["waiting", waitingResult],
+    ["alsoInInbox", inbox],
+  ] as const;
+  const pending = laneResults
+    .filter(([, result]) => !result.ok && result.pending)
+    .map(([name]) => name);
+  const failed = laneResults
+    .filter(([, result]) => !result.ok && !result.pending)
+    .map(([name]) => name);
+  if (pending.length) logger.info("Home lanes pending", { pending });
+
+  const labelId = (name: string) => findLabel(labels, name)?.id;
+  const labelNames = new Map(labels.map((l) => [l.id, l.name]));
+  const toReplyId = labelId(getRuleLabel(SystemType.TO_REPLY));
+  const awaitingId = labelId(getRuleLabel(SystemType.AWAITING_REPLY));
+  const handledIds = new Set(HANDLED_LABELS.map(labelId).filter(isString));
+  const since = now.getTime() - HANDLED_WINDOW_DAYS * 86_400_000;
+  // Each thread shows once on Today. Recently filed mail is Cue's to handle,
+  // so it isn't repeated under the rest of the inbox either.
+  const shownIds = new Set(needsYou.map((t) => t.id));
+  const isRecentlyFiled = (thread: EmailThread) =>
+    thread.messages.some(
+      (m) =>
+        getMessageTimestamp(m) >= since &&
+        m.labelIds?.some((id) => handledIds.has(id)),
+    );
 
   const toRow = (thread: EmailThread) =>
     toHomeThread(thread, {
@@ -203,11 +244,14 @@ export async function getHomeData({
   return {
     needsYou: needsYouRows,
     waiting: waiting.map(toRow).filter(isDefined),
-    handled: handled.map(toRow).filter(isDefined),
-    alsoInInbox: inbox
-      .filter((t) => !shownIds.has(t.id))
+    alsoInInbox: lane(inbox)
+      .filter((t) => !shownIds.has(t.id) && !isRecentlyFiled(t))
       .map(toRow)
       .filter(isDefined),
+    /** Lanes Gmail couldn't serve in time; empty here means "not loaded yet". */
+    pending,
+    /** Lanes that failed to load; empty here means "unknown", not "nothing". */
+    failed,
     agentTasks,
     // Whether an empty lane means "nothing there" or "nobody has looked".
     cue,
@@ -218,12 +262,9 @@ export async function getHomeData({
       estimatedMinutes: needsYouRows.length * MINUTES_PER_REPLY,
       agentWorking: agentTasks.length,
       waiting: waiting.length,
-      handled: handled.length,
-      handledWindowDays: HANDLED_WINDOW_DAYS,
       // Lists are capped, so a full one means "at least this many".
       needsYouCapped: needsYou.length >= LIST_LIMIT,
       waitingCapped: waiting.length >= LIST_LIMIT,
-      handledCapped: handled.length >= LIST_LIMIT,
     },
   };
 }
@@ -534,8 +575,33 @@ function humanize(value: string) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-function uniqueByThreadId(threads: EmailThread[]) {
-  return [...new Map(threads.map((t) => [t.id, t])).values()];
+export type HomeLane = "needsYou" | "waiting" | "alsoInInbox";
+type Pending = { ok: false; pending: boolean };
+type LaneResult<T> = { ok: true; value: T } | Pending;
+const PENDING: Pending = { ok: false, pending: true };
+// A lane Gmail failed for another reason isn't asked for again on its own,
+// since that wouldn't change the answer; the page says it didn't load.
+const FAILED: Pending = { ok: false, pending: false };
+
+async function withinBudget<T>(
+  work: Promise<T>,
+  deadline: number,
+): Promise<LaneResult<T>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<Pending>((resolve) => {
+    timer = setTimeout(
+      () => resolve(PENDING),
+      Math.max(0, deadline - Date.now()),
+    );
+  });
+  try {
+    return await Promise.race([
+      work.then((value) => ({ ok: true as const, value })),
+      late,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function isString(x: string | undefined): x is string {

@@ -511,6 +511,90 @@ describe("buildHealthReport", () => {
       problems: [],
     });
   });
+
+  it("says the Outlook steps are NOT CONFIGURED without their secret", () => {
+    const report = buildHealthReport({
+      robot: { status: "ok", results: robotResults },
+      outlook: { status: "not_configured", missing: ["CUE_QA_OUTLOOK_EMAIL"] },
+      axiom: { status: "not_configured", missing: [] },
+      sentry: { status: "not_configured", missing: [] },
+      now: NOW,
+    });
+
+    expect(report.outlook).toEqual({
+      status: "not_configured",
+      missing: ["CUE_QA_OUTLOOK_EMAIL"],
+    });
+    const summary = formatHumanSummary(report);
+    expect(summary).toContain(
+      "Robot: FAILED (1/2 steps passed, first inbox row 3900 ms)",
+    );
+    expect(summary).toContain(
+      "Outlook: NOT CONFIGURED (missing CUE_QA_OUTLOOK_EMAIL)",
+    );
+  });
+
+  it("summarizes the Outlook steps and reports their failures", () => {
+    const outlookStep = {
+      consoleErrors: [],
+      failedRequests: [],
+    };
+    const report = buildHealthReport({
+      robot: {
+        status: "ok",
+        results: {
+          ...robotResults,
+          steps: [
+            ...robotResults.steps,
+            {
+              ...outlookStep,
+              name: "Outlook: probe arrives and the reply reaches Gmail",
+              status: "passed",
+              durationMs: 52_000,
+              metrics: { inboundSyncMs: 8000.4, replyDeliveredMs: 41_000 },
+            },
+            {
+              ...outlookStep,
+              name: "Outlook: Today shows its sections",
+              status: "failed",
+              durationMs: 60_000,
+              error: "Today did not load",
+            },
+          ],
+        },
+      },
+      outlook: { status: "configured" },
+      axiom: { status: "not_configured", missing: [] },
+      sentry: { status: "not_configured", missing: [] },
+      now: NOW,
+    });
+
+    expect(report.outlook).toEqual({
+      status: "ok",
+      passed: 1,
+      total: 2,
+      inboundSyncMs: 8000,
+      replyDeliveredMs: 41_000,
+    });
+    expect(report.problems).toContain(
+      'Robot step "Outlook: Today shows its sections" failed: Today did not load',
+    );
+    expect(formatHumanSummary(report)).toContain(
+      "Outlook: 1/2 steps passed (probe arrived in 8000 ms, reply reached Gmail in 41000 ms)",
+    );
+  });
+
+  it("leaves the report as it was when the caller says nothing about Outlook", () => {
+    const report = buildHealthReport({
+      robot: { status: "ok", results: robotResults },
+      axiom: { status: "not_configured", missing: [] },
+      sentry: { status: "not_configured", missing: [] },
+      now: NOW,
+    });
+
+    expect(report).not.toHaveProperty("outlook");
+    expect(formatHumanSummary(report)).not.toContain("Outlook");
+  });
 });
 
 describe("redact", () => {

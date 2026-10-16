@@ -55,6 +55,7 @@ const take = (input: {
   blockers?: { key: string; deferMs?: number }[];
   usageField?: string;
   paceCap?: number;
+  waitBudgetMs?: number;
   demand?: {
     key: string;
     yieldCap?: number;
@@ -68,6 +69,7 @@ const admit = (input: {
   blockers?: { key: string; deferMs?: number }[];
   usageField?: string;
   paceCap?: number;
+  waitBudgetMs?: number;
   demand?: {
     key: string;
     yieldCap?: number;
@@ -84,6 +86,7 @@ const admit = (input: {
     capacity: 1000,
     perMinute: 3600,
     floor: input.floor,
+    waitBudgetMs: input.waitBudgetMs,
     // Out of the way unless a case is about the per-second pace.
     pace: {
       key: keys.pace,
@@ -253,11 +256,39 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       ).toBe(0);
     });
 
+    it("starts a person's demand while their request still waits for room", async () => {
+      const person = { key: keys.demand, markMs: 2000, everyMs: 3000 };
+      expect(await take({ cost: 160, floor: 200, paceCap: 160 })).toBe(0);
+      // The second is too full for the person's batch, so it waits...
+      expect(
+        await take({ cost: 100, floor: -200, paceCap: 200, demand: person }),
+      ).toBeGreaterThan(0);
+      // ...but sync already gives way while it does.
+      expect(await redis!.pttl(keys.demand)).toBeGreaterThan(2900);
+    });
+
+    it("starts no yield for a request that will give up before it is admitted", async () => {
+      const person = { key: keys.demand, markMs: 2000, everyMs: 3000 };
+      await gmailQuotaStore.block({ key: keys.pause, ms: 5000 });
+      expect(
+        await take({
+          cost: 100,
+          floor: -200,
+          paceCap: 200,
+          blockers: [{ key: keys.pause }],
+          demand: person,
+          waitBudgetMs: 1000,
+        }),
+      ).toBeGreaterThan(1000);
+      expect(await redis!.exists(keys.demand)).toBe(0);
+    });
+
     it("holds a person's demand for a whole turn and releases only its own hold", async () => {
       const background = { key: keys.demand, yieldCap: 0 };
       const endsAt = await gmailQuotaStore.holdDemand({
         key: keys.demand,
         ms: 45_000,
+        gapMs: 1000,
       });
       expect(endsAt).toBeGreaterThan(0);
       expect(
@@ -265,19 +296,34 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       ).toBeGreaterThan(40_000);
       // A shorter hold doesn't cut the longer one short.
       expect(
-        await gmailQuotaStore.holdDemand({ key: keys.demand, ms: 1000 }),
+        await gmailQuotaStore.holdDemand({
+          key: keys.demand,
+          ms: 1000,
+          gapMs: 1000,
+        }),
       ).toBe(0);
       await gmailQuotaStore.releaseDemand({
         key: keys.demand,
         endsAt: endsAt - 1,
+        gapMs: 1000,
       });
       expect(await redis!.exists(keys.demand)).toBe(1);
 
-      await gmailQuotaStore.releaseDemand({ key: keys.demand, endsAt });
+      await gmailQuotaStore.releaseDemand({
+        key: keys.demand,
+        endsAt,
+        gapMs: 1000,
+      });
 
       expect(
         await take({ cost: 20, floor: 500, paceCap: 80, demand: background }),
       ).toBe(0);
+      // The next large request starts no episode until the gap has passed.
+      const person = { key: keys.demand, markMs: 2000, everyMs: 3000 };
+      expect(
+        await take({ cost: 100, floor: -200, paceCap: 200, demand: person }),
+      ).toBe(0);
+      expect(await redis!.pttl(keys.demand)).toBeLessThanOrEqual(1000);
     });
 
     it("hands a minute's usage to exactly one caller", async () => {

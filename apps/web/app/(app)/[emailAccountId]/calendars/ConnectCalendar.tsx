@@ -12,6 +12,7 @@ import { CALENDAR_ONBOARDING_RETURN_COOKIE } from "@/utils/calendar/constants";
 import { useProductAnalytics } from "@/hooks/useProductAnalytics";
 import type { AppPage } from "@/utils/analytics/product";
 import { redirectToSafeUrl } from "@/utils/redirect";
+import { useEnabledMailboxProviders } from "@/providers/MailboxProvidersProvider";
 
 export function ConnectCalendar({
   analyticsPage,
@@ -21,6 +22,7 @@ export function ConnectCalendar({
   onboardingReturnPath?: string;
 }) {
   const { emailAccountId } = useAccount();
+  const enabledProviders = useEnabledMailboxProviders();
   const analytics = useProductAnalytics(analyticsPage);
   const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
   const [isConnectingMicrosoft, setIsConnectingMicrosoft] = useState(false);
@@ -119,21 +121,23 @@ export function ConnectCalendar({
         {isConnectingGoogle ? "Connecting..." : "Add Google Calendar"}
       </Button>
 
-      <Button
-        onClick={handleConnectMicrosoft}
-        disabled={isConnectingGoogle || isConnectingMicrosoft}
-        variant="outline"
-        className="flex items-center gap-2 w-full md:w-auto"
-      >
-        <Image
-          src="/images/microsoft.svg"
-          alt="Microsoft"
-          width={16}
-          height={16}
-          unoptimized
-        />
-        {isConnectingMicrosoft ? "Connecting..." : "Add Outlook Calendar"}
-      </Button>
+      {enabledProviders.includes("microsoft") ? (
+        <Button
+          onClick={handleConnectMicrosoft}
+          disabled={isConnectingGoogle || isConnectingMicrosoft}
+          variant="outline"
+          className="flex items-center gap-2 w-full md:w-auto"
+        >
+          <Image
+            src="/images/microsoft.svg"
+            alt="Microsoft"
+            width={16}
+            height={16}
+            unoptimized
+          />
+          {isConnectingMicrosoft ? "Connecting..." : "Add Outlook Calendar"}
+        </Button>
+      ) : null}
     </div>
   );
 }

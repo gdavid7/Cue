@@ -31,6 +31,13 @@ const microsoftClientSecret =
   process.env.MICROSOFT_CLIENT_SECRET ?? "emulate-microsoft-secret";
 const microsoftWebhookClientState =
   process.env.MICROSOFT_WEBHOOK_CLIENT_STATE ?? "playwright-microsoft-webhook";
+// Google runs also start a Microsoft emulator holding a separate Outlook
+// mailbox, so a spec can link Outlook to a Google user as production allows.
+const linkedMicrosoftBaseUrl =
+  mailProvider === "google"
+    ? (process.env.MICROSOFT_BASE_URL ??
+      `http://localhost:${await getAvailablePort()}`)
+    : undefined;
 const emailBaseUrl =
   process.env.PLAYWRIGHT_EMAIL_BASE_URL ??
   `http://127.0.0.1:${await getAvailablePort()}`;
@@ -88,6 +95,11 @@ const emulateSeedPath = writeEmulateSeed({
   playwrightTestEmail,
   runId,
 });
+const linkedOutlookEmail =
+  `playwright-outlook+${runId}@outlook.com`.toLowerCase();
+const linkedMicrosoftSeedPath = linkedMicrosoftBaseUrl
+  ? writeLinkedMicrosoftSeed({ baseURL, linkedOutlookEmail, runId })
+  : undefined;
 const emulateCommand =
   process.env.EMULATE_COMMAND ??
   `npx emulate start --service ${mailProvider} --port ${emulatePort} --seed ${emulateSeedPath}`;
@@ -101,6 +113,7 @@ if (mailProvider === "microsoft") {
   process.env.MICROSOFT_WEBHOOK_CLIENT_STATE = microsoftWebhookClientState;
 } else {
   process.env.GOOGLE_BASE_URL = emulateBaseUrl;
+  process.env.PLAYWRIGHT_LINKED_OUTLOOK_EMAIL = linkedOutlookEmail;
 }
 process.env.INTERNAL_API_KEY = internalApiKey;
 process.env.NEXT_PUBLIC_BASE_URL = baseURL;
@@ -185,6 +198,19 @@ export default defineConfig({
       timeout: 240_000,
       reuseExistingServer: !process.env.CI,
     },
+    ...(linkedMicrosoftBaseUrl && linkedMicrosoftSeedPath
+      ? [
+          {
+            name: "Linked Microsoft emulator",
+            stdout: "pipe",
+            command: `npx emulate start --service microsoft --port ${getUrlPort(linkedMicrosoftBaseUrl)} --seed ${linkedMicrosoftSeedPath}`,
+            cwd: process.cwd(),
+            url: `${linkedMicrosoftBaseUrl}/.well-known/openid-configuration`,
+            timeout: 240_000,
+            reuseExistingServer: !process.env.CI,
+          },
+        ]
+      : []),
     ...(todoistBaseUrl && todoistPort
       ? [
           {
@@ -264,7 +290,13 @@ export default defineConfig({
               MICROSOFT_CLIENT_SECRET: microsoftClientSecret,
               MICROSOFT_WEBHOOK_CLIENT_STATE: microsoftWebhookClientState,
             }
-          : { GOOGLE_BASE_URL: emulateBaseUrl }),
+          : {
+              GOOGLE_BASE_URL: emulateBaseUrl,
+              MICROSOFT_BASE_URL: linkedMicrosoftBaseUrl,
+              MICROSOFT_CLIENT_ID: microsoftClientId,
+              MICROSOFT_CLIENT_SECRET: microsoftClientSecret,
+              MICROSOFT_WEBHOOK_CLIENT_STATE: microsoftWebhookClientState,
+            }),
         GOOGLE_PUBSUB_TOPIC_NAME:
           process.env.GOOGLE_PUBSUB_TOPIC_NAME ?? "topic",
         GOOGLE_PUBSUB_VERIFICATION_TOKEN:
@@ -418,6 +450,47 @@ function writeEmulateSeed({
 
   fs.writeFileSync(outputPath, seed);
 
+  return outputPath;
+}
+
+function writeLinkedMicrosoftSeed({ baseURL, linkedOutlookEmail, runId }) {
+  const outputDir = path.join(process.cwd(), ".tmp", "playwright", runId);
+  const outputPath = path.join(
+    outputDir,
+    "emulate.playwright.linked-microsoft.generated.yaml",
+  );
+  const receivedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  fs.mkdirSync(outputDir, { recursive: true });
+  fs.writeFileSync(
+    outputPath,
+    `microsoft:
+  users:
+    - email: ${linkedOutlookEmail}
+      name: Playwright Outlook
+  oauth_clients:
+    - client_id: emulate-microsoft-client-id
+      client_secret: emulate-microsoft-secret
+      name: Inbox Zero Smoke
+      redirect_uris:
+        - ${new URL("/api/auth/callback/microsoft", baseURL).href}
+        - ${new URL("/api/outlook/linking/callback", baseURL).href}
+  messages:
+    - id: msg_playwright_linked_outlook
+      conversation_id: thr_playwright_linked_outlook
+      user_email: ${linkedOutlookEmail}
+      from:
+        address: alice@example.com
+        name: Alice Example
+      to_recipients:
+        - address: ${linkedOutlookEmail}
+      subject: Linked Outlook Message
+      body_content: This conversation lives in the linked Outlook mailbox.
+      body_content_type: text
+      parent_folder_id: inbox
+      is_read: false
+      received_date_time: "${receivedAt}"
+`,
+  );
   return outputPath;
 }
 

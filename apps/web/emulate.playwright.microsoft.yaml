@@ -577,3 +577,23 @@ microsoft:
       parent_folder_id: inbox
       is_read: true
       received_date_time: "2026-01-02T07:00:00.000Z"
+    # --- Workstream C (AI features, Today, calendar): an Outlook meeting
+    # request. Graph types it "#microsoft.graph.eventMessageRequest", which is
+    # how Cue tells an Outlook invite from plain mail
+    # (utils/outlook/message.ts); odata_type comes from the emulator patch in
+    # patches/@inbox-zero__emulate@0.13.0.patch. Same ids as the Gmail seed's
+    # MIME invite, so mail/calendar-invitation.spec.ts runs unchanged.
+    - id: msg_playwright_calendar
+      conversation_id: thr_playwright_calendar
+      user_email: __PLAYWRIGHT_TEST_EMAIL__
+      odata_type: "#microsoft.graph.eventMessageRequest"
+      from:
+        address: organizer@example.com
+        name: Organizer Example
+      to_recipients:
+        - address: __PLAYWRIGHT_TEST_EMAIL__
+      subject: "Invitation: Project planning"
+      body_content: "<p>You have been invited to Project planning.</p>"
+      parent_folder_id: inbox
+      is_read: false
+      received_date_time: "2024-12-22T20:40:00.000Z"

@@ -37,6 +37,7 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
         input.floor + Math.min(input.cost, input.capacity - input.floor);
       if (tokens < need)
         wait = Math.max(wait, Math.ceil((need - tokens) / rate));
+      const unpacedWait = wait;
 
       const { pace } = input;
       const recent = (windows.get(pace.key) ?? []).filter(
@@ -64,16 +65,22 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
           yieldWait < 0 || yieldWait > afterDemand ? afterDemand : yieldWait;
       }
       wait = Math.max(wait, paceWait);
-      if (wait > 0) return { waitMs: wait, defer };
-
-      buckets.set(input.bucketKey, { tokens: tokens - input.cost, at: now });
-      recent.push({ at: now, cost: input.cost });
       const episode = demands.get(pace.demand.key);
-      if (pace.demand.markMs && (!episode || episode.renewsAt <= now))
+      const willWait =
+        input.waitBudgetMs === undefined || unpacedWait <= input.waitBudgetMs;
+      if (
+        pace.demand.markMs &&
+        willWait &&
+        (!episode || episode.renewsAt <= now)
+      )
         demands.set(pace.demand.key, {
           endsAt: now + pace.demand.markMs,
           renewsAt: now + (pace.demand.everyMs ?? pace.demand.markMs),
         });
+      if (wait > 0) return { waitMs: wait, defer };
+
+      buckets.set(input.bucketKey, { tokens: tokens - input.cost, at: now });
+      recent.push({ at: now, cost: input.cost });
       const fields = usage.get(input.usageKey) ?? {};
       fields[input.usageField] = (fields[input.usageField] ?? 0) + input.cost;
       fields["peak:second"] = Math.max(
@@ -89,14 +96,16 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
     async clear(key) {
       blocks.delete(key);
     },
-    async holdDemand({ key, ms }) {
+    async holdDemand({ key, ms, gapMs }) {
       const endsAt = Date.now() + ms;
       if ((demands.get(key)?.endsAt ?? 0) >= endsAt) return 0;
-      demands.set(key, { endsAt, renewsAt: endsAt });
+      demands.set(key, { endsAt, renewsAt: endsAt + gapMs });
       return endsAt;
     },
-    async releaseDemand({ key, endsAt }) {
-      if (demands.get(key)?.endsAt === endsAt) demands.delete(key);
+    async releaseDemand({ key, endsAt, gapMs }) {
+      if (demands.get(key)?.endsAt !== endsAt) return;
+      const now = Date.now();
+      demands.set(key, { endsAt: now, renewsAt: now + gapMs });
     },
     async note({ usageKey, field, amount }) {
       const fields = usage.get(usageKey) ?? {};

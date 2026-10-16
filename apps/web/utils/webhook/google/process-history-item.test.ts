@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { processHistoryItem } from "./process-history-item";
+import {
+  MESSAGE_HELD_ELSEWHERE,
+  processHistoryItem,
+} from "./process-history-item";
 import { HistoryEventType } from "./types";
 import {
   DraftReplyConfidence,
@@ -7,8 +10,9 @@ import {
 } from "@/generated/prisma/enums";
 import type { gmail_v1 } from "@googleapis/gmail";
 import {
-  clearMessageProcessing,
-  markMessageAsProcessing,
+  acquireMessageProcessing,
+  markMessageProcessed,
+  releaseMessageProcessing,
 } from "@/utils/redis/message-processing";
 import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import { GmailLabel } from "@/utils/gmail/label";
@@ -23,8 +27,11 @@ vi.mock("@/utils/prisma");
 vi.mock("@/utils/redis/message-processing", () => ({
   acquireOutboundMessageLock: vi.fn().mockResolvedValue("lock-token-1"),
   clearOutboundMessageLock: vi.fn().mockResolvedValue(true),
-  clearMessageProcessing: vi.fn().mockResolvedValue(undefined),
-  markMessageAsProcessing: vi.fn().mockResolvedValue(true),
+  acquireMessageProcessing: vi
+    .fn()
+    .mockResolvedValue({ status: "acquired", lockToken: "message-lock" }),
+  markMessageProcessed: vi.fn().mockResolvedValue(true),
+  releaseMessageProcessing: vi.fn().mockResolvedValue(true),
   markOutboundMessageProcessed: vi.fn().mockResolvedValue(true),
 }));
 
@@ -169,14 +176,19 @@ describe("processHistoryItem", () => {
   }
 
   it("should skip if message is already being processed", async () => {
-    vi.mocked(markMessageAsProcessing).mockResolvedValueOnce(false);
+    vi.mocked(acquireMessageProcessing).mockResolvedValueOnce({
+      status: "held",
+    });
 
     const options = {
       ...defaultOptions,
       emailAccount: getDefaultEmailAccount(),
     };
 
-    await processHistoryItem(createHistoryItem(), options, logger);
+    // Not handled here, so the history cursor must not count it done.
+    await expect(
+      processHistoryItem(createHistoryItem(), options, logger),
+    ).resolves.toBe(MESSAGE_HELD_ELSEWHERE);
   });
 
   it("releases a message the Gmail quota gate deferred so the catch-up can process it", async () => {
@@ -194,9 +206,48 @@ describe("processHistoryItem", () => {
         logger,
       ),
     ).rejects.toBe(deferred);
-    expect(clearMessageProcessing).toHaveBeenCalledWith({
+    expect(releaseMessageProcessing).toHaveBeenCalledWith({
       userEmail: emailAccount.email,
       messageId: "123",
+      lockToken: "message-lock",
+    });
+    expect(markMessageProcessed).not.toHaveBeenCalled();
+  });
+
+  it("skips a message already processed without reading it from Gmail again", async () => {
+    vi.mocked(acquireMessageProcessing).mockResolvedValueOnce({
+      status: "processed",
+    });
+    const getMessage = vi.fn();
+    vi.mocked(createEmailProvider).mockResolvedValueOnce({
+      getMessage,
+      isSentMessage: vi.fn().mockReturnValue(false),
+    } as any);
+
+    // Handled before, so the cursor may move past it.
+    await expect(
+      processHistoryItem(
+        createHistoryItem(),
+        { ...defaultOptions, emailAccount: getDefaultEmailAccount() },
+        logger,
+      ),
+    ).resolves.toBeUndefined();
+    expect(getMessage).not.toHaveBeenCalled();
+  });
+
+  it("remembers a handled message, so a catch-up skips it cheaply", async () => {
+    const emailAccount = getDefaultEmailAccount();
+
+    await processHistoryItem(
+      createHistoryItem(),
+      { ...defaultOptions, emailAccount },
+      logger,
+    );
+
+    expect(markMessageProcessed).toHaveBeenCalledWith({
+      userEmail: emailAccount.email,
+      messageId: "123",
+      lockToken: "message-lock",
     });
   });
 
@@ -281,7 +332,7 @@ describe("processHistoryItem", () => {
       logger,
     );
 
-    expect(markMessageAsProcessing).toHaveBeenCalledWith({
+    expect(acquireMessageProcessing).toHaveBeenCalledWith({
       userEmail: options.emailAccount.email,
       messageId: "sent-123",
     });

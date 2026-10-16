@@ -36,6 +36,7 @@ import {
 import { createClientLogger } from "@/utils/logger-client";
 import { getActiveMailClient } from "@/utils/mail-engine/active-client";
 import { answerAssistantSearch } from "@/utils/mail-engine/assistant-search";
+import { LOCAL_MAIL_SEARCH_SYNTAXES } from "@/utils/actions/assistant-chat.validation";
 import { submitLocalMailSearchResult } from "@/utils/actions/assistant-chat";
 
 const logger = createClientLogger("assistant-chat");
@@ -139,6 +140,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             openThreadId: openThreadRef.current?.threadId,
             openMessageId: openThreadRef.current?.messageId,
             localMailSearch: Boolean(getActiveMailClient()),
+            localMailSearchSyntaxes: LOCAL_MAIL_SEARCH_SYNTAXES,
             ...body,
           },
         };

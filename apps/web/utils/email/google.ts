@@ -1441,6 +1441,8 @@ export class GmailProvider implements EmailProvider {
     inboxOnly?: boolean;
     unreadOnly?: boolean;
     includeDrafts?: boolean;
+    format?: "metadata";
+    allowPartial?: boolean;
   }): Promise<{
     messages: ParsedMessage[];
     nextPageToken?: string;
@@ -1475,7 +1477,14 @@ export class GmailProvider implements EmailProvider {
     });
 
     return {
-      messages: await this.getListedMessages(response.messages),
+      messages: options.allowPartial
+        ? (
+            await this.getListedMessagesPartial(
+              response.messages,
+              options.format,
+            )
+          ).messages
+        : await this.getListedMessages(response.messages, options.format),
       nextPageToken: response.nextPageToken || undefined,
     };
   }
@@ -1543,6 +1552,7 @@ export class GmailProvider implements EmailProvider {
   // unloaded too: it would meet the same limit.
   private async getListedMessagesPartial(
     listed: gmail_v1.Schema$Message[] | undefined,
+    format?: "metadata",
   ) {
     const ids = (listed ?? []).flatMap((message) =>
       message.id ? [message.id] : [],
@@ -1553,6 +1563,7 @@ export class GmailProvider implements EmailProvider {
         messageIds: idsChunk,
         accessToken: getAccessTokenFromClient(this.client),
         logger: this.logger,
+        format,
       });
       messages.push(...result.messages);
       if (!result.unloadedCount) continue;
@@ -1573,13 +1584,21 @@ export class GmailProvider implements EmailProvider {
   // calls that trip Gmail's per-user concurrency and quota limits.
   private async getListedMessages(
     listed: gmail_v1.Schema$Message[] | undefined,
+    format?: "metadata",
   ): Promise<ParsedMessage[]> {
     const ids = (listed ?? []).flatMap((message) =>
       message.id ? [message.id] : [],
     );
     const messages: ParsedMessage[] = [];
     for (const idsChunk of chunk(ids, 100)) {
-      messages.push(...(await this.getMessagesBatch(idsChunk)));
+      messages.push(
+        ...(await getMessagesBatch({
+          messageIds: idsChunk,
+          accessToken: getAccessTokenFromClient(this.client),
+          logger: this.logger,
+          format,
+        })),
+      );
     }
     return messages;
   }

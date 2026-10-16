@@ -27,6 +27,19 @@ production with an email code it reads from the QA inbox over IMAP.
 | old mail URL redirects | `/{accountId}/mail` ends on `/mail/u/{n}/inbox` | |
 | sign out in one click | Settings' Sign out ends the session | `signOutMs` |
 
+With `CUE_QA_OUTLOOK_EMAIL` set (see "Outlook QA mailbox" below), the robot
+also runs these steps on the Outlook mailbox, named `Outlook: …` in the
+report. Without it they are left out and the report says
+`Outlook: NOT CONFIGURED`.
+
+| Step | Passes when | Metrics |
+| --- | --- | --- |
+| Outlook: mailbox is connected | the Outlook QA mailbox is linked to the QA user and not disconnected; otherwise the other Outlook steps skip | |
+| Outlook: inbox shows mail | a row appears and nothing asks to reconnect | `timeToFirstRowMs` |
+| Outlook: probe arrives and the reply reaches Gmail | a probe sent over SMTP from the Gmail QA account shows in the Outlook inbox; a reply sent from Cue reaches the Gmail QA inbox (checked over IMAP) | `inboundSyncMs`, `replyDeliveredMs` |
+| Outlook: Today shows its sections | as for Gmail | `todayLoadMs` |
+| Outlook: chat answers | a question on the Outlook account gets a non-error answer | `chatAnswerMs` |
+
 Each step records its duration, console errors and HTTP responses ≥ 400
 (paths only, no query strings). Logs and the report never contain subjects,
 bodies or addresses.
@@ -36,6 +49,12 @@ over SMTP from the QA account to itself, the reply is checked to have no other
 recipient before Send, and while it is in flight any app write naming another
 address is blocked. Seeded mail rewrites every other address to the reserved
 `example.com` domain. Probes older than three days are moved to Trash.
+
+The Outlook steps only ever mail between the two QA addresses: the probe goes
+from the Gmail QA account to the configured Outlook address only, the reply
+is checked to be addressed to the Gmail QA account alone, and the recipient
+guard allows just those two. The Outlook thread is moved to Deleted Items once
+checked; Gmail's copies are pruned with the other reply probes.
 
 A lapsed Gmail connection (see the weekly note below) shows as a
 `needs_reconnect` outcome and a "Cue QA test account needs reconnecting"
@@ -90,6 +109,23 @@ failure fails the job.
 10. **Axiom:** in Axiom, Settings → API tokens → New token, with query access
     to the production dataset. A personal token also needs an org ID header,
     so use an API token.
+
+### Outlook QA mailbox (optional)
+
+1. **Create a free Outlook.com account** just for this, for example
+   `cue.qa.outlook@outlook.com`. No app password or IMAP is needed: the robot
+   reaches it only through Cue.
+2. **Link it to the QA user:** sign in to Cue as the QA account, open
+   Accounts → **Add Microsoft**, and connect the Outlook account. Gmail stays
+   the first mailbox.
+3. **Add the GitHub secret** `CUE_QA_OUTLOOK_EMAIL` with its address. Both
+   robots pick it up on their next run; remove it to turn the Outlook steps
+   off again.
+
+Microsoft refresh tokens slide for 90 days while used, so the robots keep the
+link alive without a weekly reconnect. If Cue marks it disconnected, the
+`Outlook: mailbox is connected` step fails and says so; reconnect it from
+Accounts.
 
 ## Weekly: reconnect the test account
 
@@ -156,6 +192,7 @@ for certain, and judges each journey **PASS**, **SLOW** (over its target) or
 | `triage` | opens planted mail, archives it and undoes the archive | `openEmailMs` 1500/10000, `archiveMs` 1000/5000, `undoMs` 1500/8000 |
 | `search` | searches for a word only the planted invoice has | `searchMs` 3000/15000 |
 | `compose-send` | composes a message to itself and follows it back into the Inbox | `composeOpenMs` 1000/5000, `sendToInboxMs` 45000/120000 (includes the 30 s undo window) |
+| `outlook` | only with `CUE_QA_OUTLOOK_EMAIL`: opens the Outlook QA mailbox, sends it a probe from the Gmail QA account over SMTP and times its row, then replies from Cue and times the reply into the Gmail QA inbox (IMAP) | `firstRowMs:outlook`, `newMailWhileOpenMs:outlook`, `replyDeliveredMs` 60000/180000 |
 
 Every journey also fails on an uncaught page error, a hydration error or a 5xx
 from Cue, and reports other console errors and 4xx responses as warnings. A

@@ -323,6 +323,26 @@ describe("getMessagesBatch", () => {
     expect(getBatch).toHaveBeenCalledTimes(2);
   });
 
+  it("asks Gmail for headers only when the caller needs no bodies", async () => {
+    vi.mocked(getBatch).mockImplementation(async (ids) =>
+      ids.map((id) => ({ id, threadId: `${id}-thread`, payload: {} })),
+    );
+
+    await getMessagesBatchPartial({
+      messageIds: ["m1"],
+      accessToken: "token",
+      logger,
+      format: "metadata",
+    });
+
+    const queryString = vi.mocked(getBatch).mock.calls[0]?.[3];
+    const params = new URLSearchParams(queryString);
+    expect(params.get("format")).toBe("metadata");
+    expect(params.getAll("metadataHeaders")).toEqual(
+      expect.arrayContaining(["From", "To", "Subject", "Date"]),
+    );
+  });
+
   it("sizes sequential batches to the gate's per-second pace for the caller", async () => {
     const { gmailRequestUnitsFor } = await vi.importActual<
       typeof import("@/utils/gmail/quota")

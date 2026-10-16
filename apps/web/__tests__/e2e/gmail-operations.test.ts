@@ -37,6 +37,11 @@ vi.mock("@/utils/redis/message-processing", () => ({
   clearOutboundMessageLock: vi.fn().mockResolvedValue(true),
   markMessageAsProcessing: vi.fn().mockResolvedValue(true),
   markOutboundMessageProcessed: vi.fn().mockResolvedValue(true),
+  acquireMessageProcessing: vi
+    .fn()
+    .mockResolvedValue({ status: "acquired", lockToken: "message-lock" }),
+  markMessageProcessed: vi.fn().mockResolvedValue(true),
+  releaseMessageProcessing: vi.fn().mockResolvedValue(true),
 }));
 
 // Keep this e2e mock non-blocking to match the existing webhook test behavior.

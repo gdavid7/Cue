@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("better-auth", () => ({
   betterAuth: vi.fn((options: unknown) => ({
@@ -26,8 +26,15 @@ vi.mock("@/utils/calendar/connect-sign-in-calendar", () => ({
   connectCalendarAtSignIn: vi.fn(),
 }));
 
-// Each test re-imports the whole sign-in module, which takes several seconds cold.
 describe("betterAuthConfig login providers", { timeout: 30_000 }, () => {
+  // The first import transforms the whole sign-in module graph, which takes
+  // well over 10 seconds on a busy host. Paying it once here leaves each test
+  // a re-evaluation of already transformed modules.
+  beforeAll(async () => {
+    await loadBetterAuthConfig([]);
+    vi.doUnmock("@/utils/oauth/login-providers");
+  }, 180_000);
+
   afterEach(() => {
     vi.resetModules();
     vi.doUnmock("@/utils/oauth/login-providers");

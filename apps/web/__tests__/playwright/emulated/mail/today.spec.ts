@@ -1,5 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 import { getEmailAccountId } from "../account-test-helpers";
+import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
 import { readLatestMailMutation, withClient } from "./mail-test-helpers";
@@ -9,6 +10,7 @@ const ARCHIVE_THREAD = "thr_playwright_archive";
 const REPLY_THREAD = "thr_playwright_1";
 const REPLY_SUBJECT = "Playwright Test Message";
 const TRACKER_PREFIX = "playwright-today-";
+const TODAY_SUBSCRIPTION_ID = "playwright-today-subscription";
 
 test.beforeEach(async ({ page }) => {
   const emailAccountId = await getEmailAccountId(page);
@@ -76,6 +78,82 @@ test("replies to a conversation from Today in the reader", async ({ page }) => {
   // Leaving the conversation goes back to Today.
   await page.getByRole("button", { name: "Back to inbox" }).click();
   await expect(page).toHaveURL(/\/home(\?|$)/);
+});
+
+test("a reply sent from Outlook clears the conversation from Needs reply", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !isMicrosoftPlaywright(),
+    "Proves Outlook's sent-mail webhook; Gmail's history path has its own coverage.",
+  );
+  const { emailAccountId, needsReply } = await openToday(page);
+  await expect(todayRow(page, REPLY_THREAD).getByRole("option")).toBeVisible();
+
+  const account = await readOutlookAccount(emailAccountId);
+  const cleanups: Array<() => Promise<unknown>> = [];
+  try {
+    cleanups.push(await enableReplyTracking(emailAccountId, account));
+    await registerLlmReply({
+      match: "determine the current status of this thread",
+      object: {
+        status: "AWAITING_REPLY",
+        rationale: "The user replied and is waiting for an answer.",
+      },
+    });
+
+    // Sent in Outlook itself, so only Graph's notification tells Cue.
+    const comment = `Replied in Outlook ${Date.now()}`;
+    const sentMessageId = await replyInOutlook(page, account.accessToken, {
+      messageId: "msg_playwright_1",
+      threadId: REPLY_THREAD,
+      comment,
+    });
+    cleanups.push(() =>
+      page.request.delete(
+        `${process.env.MICROSOFT_BASE_URL}/v1.0/me/messages/${sentMessageId}`,
+        { headers: { Authorization: `Bearer ${account.accessToken}` } },
+      ),
+    );
+    const webhook = await page.request.post("/api/outlook/webhook", {
+      data: {
+        value: [
+          {
+            subscriptionId: TODAY_SUBSCRIPTION_ID,
+            clientState:
+              process.env.MICROSOFT_WEBHOOK_CLIENT_STATE ??
+              "playwright-microsoft-webhook",
+            changeType: "created",
+            resourceData: { id: sentMessageId },
+          },
+        ],
+      },
+    });
+    expect(webhook.ok(), await webhook.text()).toBe(true);
+
+    await expect
+      .poll(() => openNeedsReplyTrackers(emailAccountId, REPLY_THREAD), {
+        timeout: 60_000,
+      })
+      .toBe(0);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(needsReply).toBeVisible({ timeout: 60_000 });
+    // The reply moved it on to waiting for the other side's answer.
+    await expect(
+      needsReply.locator(`[data-today-thread="${REPLY_THREAD}"]`),
+    ).toHaveCount(0);
+    await expect(
+      page
+        .getByRole("listbox", { name: "Waiting on" })
+        .locator(`[data-today-thread="${REPLY_THREAD}"]`),
+    ).toHaveCount(1);
+    await expect(
+      needsReply.locator(`[data-today-thread="${ARCHIVE_THREAD}"]`),
+    ).toHaveCount(1);
+    await capturePlaywrightCheckpoint(page, testInfo, "today-outlook-replied");
+  } finally {
+    for (const cleanup of cleanups.reverse()) await cleanup();
+  }
 });
 
 test("Today's rows match the inbox in both themes and on phones", async ({
@@ -283,4 +361,159 @@ async function expectEngineMutation(
       { timeout: 60_000 },
     )
     .toMatchObject({ status: "succeeded" });
+}
+
+type OutlookAccount = {
+  accessToken: string;
+  premiumId: string | null;
+  watchEmailsSubscriptionId: string | null;
+};
+
+async function readOutlookAccount(
+  emailAccountId: string,
+): Promise<OutlookAccount> {
+  return withClient(async (client) => {
+    const result = await client.query<OutlookAccount>(
+      `SELECT account.access_token AS "accessToken", app_user."premiumId",
+         email."watchEmailsSubscriptionId"
+       FROM "EmailAccount" email JOIN "Account" account ON account.id = email."accountId"
+       JOIN "User" app_user ON app_user.id = email."userId"
+       WHERE email.id = $1`,
+      [emailAccountId],
+    );
+    if (!result.rows[0]?.accessToken)
+      throw new Error("Missing emulator account");
+    return result.rows[0];
+  });
+}
+
+// Graph notifications are processed for premium accounts with a subscription
+// and outbound replies only when a conversation status rule is on. Returns
+// what puts the account back.
+async function enableReplyTracking(
+  emailAccountId: string,
+  account: OutlookAccount,
+) {
+  const premiumId = `${TODAY_SUBSCRIPTION_ID}-premium`;
+  const ruleId = `${TODAY_SUBSCRIPTION_ID}-awaiting`;
+  const existingRule = await withClient(async (client) => {
+    await client.query(
+      `INSERT INTO "Premium"
+         (id, "createdAt", "updatedAt", "pendingInvites", tier, "adminGrantTier", "adminGrantExpiresAt")
+       VALUES ($1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ARRAY[]::text[],
+         'PLUS_MONTHLY', 'PLUS_MONTHLY', CURRENT_TIMESTAMP + INTERVAL '1 day')`,
+      [premiumId],
+    );
+    await client.query(
+      `UPDATE "User" SET "premiumId" = $2
+       WHERE id = (SELECT "userId" FROM "EmailAccount" WHERE id = $1)`,
+      [emailAccountId, premiumId],
+    );
+    await client.query(
+      `UPDATE "EmailAccount" SET "watchEmailsSubscriptionId" = $2 WHERE id = $1`,
+      [emailAccountId, TODAY_SUBSCRIPTION_ID],
+    );
+    const existing = await client.query<{ id: string; enabled: boolean }>(
+      `SELECT id, enabled FROM "Rule"
+       WHERE "emailAccountId" = $1 AND "systemType" = 'AWAITING_REPLY'`,
+      [emailAccountId],
+    );
+    if (existing.rows[0]) {
+      await client.query(`UPDATE "Rule" SET enabled = true WHERE id = $1`, [
+        existing.rows[0].id,
+      ]);
+      return existing.rows[0];
+    }
+    await client.query(
+      `INSERT INTO "Rule" (id, name, enabled, "systemType", "emailAccountId", "createdAt", "updatedAt")
+       VALUES ($1, 'Playwright awaiting reply', true, 'AWAITING_REPLY', $2,
+         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [ruleId, emailAccountId],
+    );
+    return null;
+  });
+
+  return () =>
+    withClient(async (client) => {
+      await client.query(
+        `DELETE FROM "ThreadTracker" WHERE "emailAccountId" = $1 AND "threadId" = $2
+         AND "messageId" NOT LIKE $3`,
+        [emailAccountId, REPLY_THREAD, `${TRACKER_PREFIX}%`],
+      );
+      if (existingRule)
+        await client.query(`UPDATE "Rule" SET enabled = $2 WHERE id = $1`, [
+          existingRule.id,
+          existingRule.enabled,
+        ]);
+      else await client.query(`DELETE FROM "Rule" WHERE id = $1`, [ruleId]);
+      await client.query(
+        `UPDATE "EmailAccount" SET "watchEmailsSubscriptionId" = $2 WHERE id = $1`,
+        [emailAccountId, account.watchEmailsSubscriptionId],
+      );
+      await client.query(
+        `UPDATE "User" SET "premiumId" = $2
+         WHERE id = (SELECT "userId" FROM "EmailAccount" WHERE id = $1)`,
+        [emailAccountId, account.premiumId],
+      );
+      await client.query(`DELETE FROM "Premium" WHERE id = $1`, [premiumId]);
+    });
+}
+
+async function registerLlmReply(reply: { match: string; object: unknown }) {
+  const response = await fetch(
+    `${process.env.PLAYWRIGHT_LLM_BASE_URL}/__emulator/replies`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(reply),
+    },
+  );
+  expect(response.ok).toBe(true);
+}
+
+// Replies through Graph, as Outlook would, and returns the sent message's id.
+async function replyInOutlook(
+  page: Page,
+  accessToken: string,
+  {
+    messageId,
+    threadId,
+    comment,
+  }: { messageId: string; threadId: string; comment: string },
+) {
+  const base = `${process.env.MICROSOFT_BASE_URL}/v1.0/me`;
+  const headers = { Authorization: `Bearer ${accessToken}` };
+  const reply = await page.request.post(`${base}/messages/${messageId}/reply`, {
+    headers,
+    data: { comment },
+  });
+  expect(reply.ok(), await reply.text()).toBe(true);
+  const sent = await page.request.get(
+    `${base}/mailFolders/sentitems/messages?$top=50`,
+    { headers },
+  );
+  expect(sent.ok(), await sent.text()).toBe(true);
+  const { value } = (await sent.json()) as {
+    value: Array<{ id: string; conversationId: string; bodyPreview: string }>;
+  };
+  const message = value.find(
+    (item) =>
+      item.conversationId === threadId && item.bodyPreview.includes(comment),
+  );
+  if (!message) throw new Error("The Outlook reply is not in Sent Items");
+  return message.id;
+}
+
+async function openNeedsReplyTrackers(
+  emailAccountId: string,
+  threadId: string,
+) {
+  return withClient(async (client) => {
+    const result = await client.query(
+      `SELECT 1 FROM "ThreadTracker" WHERE "emailAccountId" = $1 AND "threadId" = $2
+       AND type = 'NEEDS_REPLY' AND resolved = false`,
+      [emailAccountId, threadId],
+    );
+    return result.rowCount ?? 0;
+  });
 }
