@@ -100,6 +100,7 @@ export default async function AppLayout({
       <div className="font-inter">
         <AppProviders
           accounts={accounts}
+          userId={session.user.id}
           enabledMailboxProviders={getEnabledMailboxProviders()}
         >
           <MailEngineRuntime>

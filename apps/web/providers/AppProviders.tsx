@@ -19,6 +19,7 @@ import { MailEngineRuntime } from "@/utils/mail-engine/MailEngineHost";
 export function AppProviders(props: {
   children: React.ReactNode;
   accounts: ServerEmailAccount[];
+  userId: string;
   enabledMailboxProviders: readonly MailboxProvider[];
 }) {
   return (
@@ -28,7 +29,7 @@ export function AppProviders(props: {
         <MailboxProvidersProvider
           enabledProviders={props.enabledMailboxProviders}
         >
-          <EmailAccountProvider accounts={props.accounts}>
+          <EmailAccountProvider accounts={props.accounts} userId={props.userId}>
             <SWRProvider>
               <StatLoaderProvider>
                 <ChatProvider>

@@ -33,6 +33,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeading } from "@/components/Typography";
 import { useIsLargeScreen } from "@/hooks/use-mobile";
 import { useHome } from "@/hooks/useHome";
+import { ALSO_IN_INBOX_LIMIT } from "@/utils/home/today-cache";
 import { useMailHref } from "@/hooks/useMailHref";
 import { useShortcuts } from "@/lib/shortcuts/useShortcuts";
 import { useAccount } from "@/providers/EmailAccountProvider";
@@ -54,7 +55,6 @@ import {
   TodayThreadRow,
 } from "./TodayThreadRow";
 
-const ALSO_IN_INBOX_LIMIT = 5;
 const NO_THREADS: ReadonlySet<string> = new Set();
 const NO_LANES: ReadonlySet<HomeLane> = new Set();
 const SKELETON_ROWS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2"];
@@ -67,9 +67,11 @@ const SKELETON_ROWS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2"];
  * shortcuts and undo, through the same mail engine commands.
  */
 export function HomeDashboard() {
-  const { emailAccountId, emailAccount } = useAccount();
-  const { data, isLoading, error, mutate, gaveUp, retry } =
-    useHome(emailAccountId);
+  const { emailAccountId, emailAccount, userId } = useAccount();
+  const { data, isLoading, error, mutate, gaveUp, retry } = useHome(
+    emailAccountId,
+    userId,
+  );
   const greetingText = useGreeting();
   const firstName = (emailAccount?.name || "").split(" ")[0];
   const mailHref = useMailHref();

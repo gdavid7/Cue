@@ -5,6 +5,11 @@ import type { ReactNode } from "react";
 import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { announceTodayChanged } from "@/utils/home/today-changes";
+import {
+  readCachedToday,
+  resetCachedTodayBlocksForTesting,
+  writeCachedToday,
+} from "@/utils/home/today-cache";
 import { useHome, useWarmHome } from "./useHome";
 
 vi.mock("@/utils/swr", () => ({
@@ -103,6 +108,69 @@ describe("useHome", () => {
   });
 });
 
+describe("useHome with a cached Today", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    window.localStorage.clear();
+    resetCachedTodayBlocksForTesting();
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("opens on what Today last showed, then replaces it with a fresh load", async () => {
+    writeCachedToday({
+      userId: "user",
+      emailAccountId: "account",
+      data: todayData("cached"),
+      now: Date.now(),
+    });
+    let resolve: (value: unknown) => void = () => {};
+    const fetcher = vi.fn(
+      () =>
+        new Promise((resolveLoad) => {
+          resolve = resolveLoad;
+        }),
+    );
+    const { result } = renderHook(() => useHome("account", "user"), {
+      wrapper: wrapper(fetcher),
+    });
+
+    expect(result.current.data).toEqual(todayData("cached"));
+    expect(result.current.isLoading).toBe(false);
+    await act(() => vi.advanceTimersByTimeAsync(10));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolve(todayData("fresh"));
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(result.current.data).toEqual(todayData("fresh"));
+    expect(
+      readCachedToday({
+        userId: "user",
+        emailAccountId: "account",
+        now: Date.now(),
+      }),
+    ).toEqual(todayData("fresh"));
+  });
+
+  it("shows another user's Today to nobody", () => {
+    writeCachedToday({
+      userId: "someone-else",
+      emailAccountId: "account",
+      data: todayData("theirs"),
+      now: Date.now(),
+    });
+    const { result } = renderHook(() => useHome("account", "user"), {
+      wrapper: wrapper(() => new Promise(() => {})),
+    });
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.isLoading).toBe(true);
+  });
+});
+
 describe("useWarmHome", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -147,6 +215,30 @@ describe("useWarmHome", () => {
     expect(result.current.data).toEqual({ pending: [] });
   });
 });
+
+function todayData(subject: string) {
+  return {
+    needsYou: [
+      {
+        threadId: "thread",
+        fromName: "Alice",
+        fromEmail: "alice@example.com",
+        subject,
+        preview: "Hello",
+        at: "2026-10-16T10:00:00Z",
+        priority: "medium",
+        unread: true,
+        messageId: "message",
+        starred: false,
+        inInbox: true,
+      },
+    ],
+    waiting: [],
+    alsoInInbox: [],
+    pending: [],
+    failed: [],
+  };
+}
 
 function wrapper(fetcher: () => Promise<unknown>, dedupingInterval = 0) {
   return ({ children }: { children: ReactNode }) => (

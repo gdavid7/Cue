@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
+import { useHydrated } from "@/hooks/useHydrated";
+import { readCachedToday, writeCachedToday } from "@/utils/home/today-cache";
 import { onTodayChanged } from "@/utils/home/today-changes";
 import { getAccountScopedKey } from "@/utils/swr";
 
@@ -13,10 +15,11 @@ const FOCUS_REFRESH_MIN_MS = 30_000;
 const CHANGE_REFRESH_MIN_MS = 10_000;
 
 /**
- * Today's data. `gaveUp` is set once a lane has stayed pending through every
+ * Today's data. It opens on what Today last showed in this browser, then
+ * refreshes. `gaveUp` is set once a lane has stayed pending through every
  * refresh; `retry` asks again from the start.
  */
-export function useHome(emailAccountId?: string | null) {
+export function useHome(emailAccountId?: string | null, userId?: string) {
   // Loads in a row that came back with a lane still pending. SWR may call
   // refreshInterval from an earlier render, so it reads the ref.
   const pendingLoadsRef = useRef(0);
@@ -25,7 +28,18 @@ export function useHome(emailAccountId?: string | null) {
     pendingLoadsRef.current = loads;
     setPendingLoads(loads);
   };
+  // Read once hydrated: the server has no storage, and a page that rendered
+  // differently there would not hydrate.
+  const hydrated = useHydrated();
+  const cached = useMemo(
+    () =>
+      hydrated && emailAccountId && userId
+        ? readCachedToday({ userId, emailAccountId })
+        : undefined,
+    [hydrated, emailAccountId, userId],
+  );
   const home = useSWR<GetHomeResponse>(homeKey(emailAccountId), {
+    fallbackData: cached,
     // Each load spends Gmail quota, so tab switches share one.
     focusThrottleInterval: FOCUS_REFRESH_MIN_MS,
     onSuccess: (data) =>
@@ -36,6 +50,12 @@ export function useHome(emailAccountId?: string | null) {
         : 0,
   });
   const { mutate } = home;
+
+  useEffect(() => {
+    if (!home.data || home.data === cached || !emailAccountId || !userId)
+      return;
+    writeCachedToday({ userId, emailAccountId, data: home.data });
+  }, [home.data, cached, emailAccountId, userId]);
 
   // Cue sorted new mail or the user's reply changed a lane: show it now
   // rather than on the next reload. A backlog sorts a message every second
@@ -65,7 +85,8 @@ export function useHome(emailAccountId?: string | null) {
   return {
     data: home.data,
     error: home.error,
-    isLoading: home.isLoading,
+    // A cached Today shows while the fresh one loads.
+    isLoading: home.isLoading && !home.data,
     mutate,
     gaveUp: Boolean(
       home.data?.pending.length && pendingLoads >= PENDING_LOAD_LIMIT,
