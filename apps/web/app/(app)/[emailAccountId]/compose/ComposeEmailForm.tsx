@@ -89,6 +89,7 @@ import {
   discardComposeDraftAction,
 } from "@/utils/actions/mail";
 import { scheduleEmailAction } from "@/utils/actions/scheduled-email";
+import { readBackSentReply } from "@/app/(app)/[emailAccountId]/compose/read-back-sent-reply";
 import { formatRecipientNames, splitRecipientList } from "@/utils/email";
 import type { StoredReplyDraft } from "@/utils/mail-engine/reply-drafts";
 import {
@@ -1133,6 +1134,14 @@ function ComposeEmailFormContent({
           );
           if (!scheduledThreadId) {
             toastSuccess({ description: "Email scheduled." });
+          }
+          if (scheduledThreadId && client) {
+            readBackSentReply({
+              client,
+              accountId: selectedEmailAccountId,
+              threadId: scheduledThreadId,
+              sendAt: deliveryTimes.sendAt,
+            });
           }
           onClose?.();
           refetch?.();
