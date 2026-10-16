@@ -694,6 +694,12 @@ describe("aiProcessAssistantChat turn limits", () => {
       expect(toolBreakpoints + breakpoints.length).toBeLessThanOrEqual(4);
       expect(breakpoints).toContain(stepPrompt.length - 1);
       expect(breakpoints).toContain(0);
+      // The end of the earlier turns' history.
+      expect(breakpoints).toContain(2);
+      expect(stepPrompt[2]).toMatchObject({
+        role: "assistant",
+        content: "Two newsletters.",
+      });
     }
   });
 
