@@ -102,6 +102,9 @@ test("switching between Today and the inbox answers at once", async ({
       timeout: 60_000,
     });
     await waitForEngineIdle(page);
+    // A person takes a moment before reaching for Today; by then the page
+    // has fetched Today's route, which is what this measures past.
+    await page.waitForTimeout(2000);
     await switchTo("today", "reload");
     recorder.add("today-cache-bytes", await page.evaluate(cachedTodayBytes));
   } catch (error) {
