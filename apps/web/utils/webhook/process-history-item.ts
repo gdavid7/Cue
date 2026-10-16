@@ -26,8 +26,6 @@ import { logErrorWithDedupe } from "@/utils/log-error-with-dedupe";
 import { sendToReplyPushNotification } from "@/utils/to-reply-push";
 import { sendOtpPushNotification } from "@/utils/otp-push";
 import { internalDateToDate } from "@/utils/date";
-import { isConversationStatusType } from "@/utils/reply-tracker/conversation-status-config";
-import { getUserOwnAddresses, isOwnAddress } from "@/utils/user/own-addresses";
 
 export type SharedProcessHistoryOptions = {
   provider: EmailProvider;
@@ -225,27 +223,20 @@ export async function processHistoryItem(
     if (!hasExistingRule && hasAutomationRules && hasAiAccess) {
       logger.info("Running rules...");
 
-      // Mail from another of the user's mailboxes still runs their rules, but
-      // isn't someone waiting on a reply: no reply tracking, draft or alert.
-      const fromSelf = isOwnAddress(parsedMessage.headers.from, [
-        canonicalizeEmailAddress(userEmail),
-        ...(await getUserOwnAddresses(emailAccount.userId)),
-      ]);
-
       const results = await runRules({
         provider,
         message: parsedMessage,
-        rules: fromSelf
-          ? rules.filter((rule) => !isConversationStatusType(rule.systemType))
-          : rules,
+        rules,
         emailAccount,
         isTest: false,
         modelType: "default",
         logger,
-        skipDraftReplies: fromSelf,
       });
 
-      if (options.isNewMessage && !fromSelf) {
+      if (
+        options.isNewMessage &&
+        email !== canonicalizeEmailAddress(userEmail)
+      ) {
         await sendToReplyPushNotification({
           emailAccountId,
           userId: emailAccount.userId,

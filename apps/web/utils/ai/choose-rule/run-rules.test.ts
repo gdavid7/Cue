@@ -33,6 +33,7 @@ import { getActionItemsWithAiArgs } from "@/utils/ai/choose-rule/choose-args";
 import { executeAct } from "@/utils/ai/choose-rule/execute";
 import { determineConversationStatus } from "@/utils/reply-tracker/handle-conversation-status";
 import { isDraftReplyActionType } from "@/utils/actions/draft-reply";
+import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 
 const logger = createTestLogger();
 
@@ -60,6 +61,10 @@ vi.mock("@/utils/rule/learned-patterns", () => ({
 }));
 vi.mock("@/utils/rule/ai-sender-pattern-learning", () => ({
   shouldLearnAiSenderPatterns: vi.fn(() => true),
+}));
+vi.mock("@/utils/user/own-addresses", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/user/own-addresses")>()),
+  getUserOwnAddresses: vi.fn().mockResolvedValue([]),
 }));
 vi.mock("@/utils/scheduled-actions/scheduler", () => ({
   scheduleDelayedActions: vi.fn(),
@@ -403,6 +408,71 @@ describe("ensureConversationRuleForAiCalendarMatch", () => {
     });
 
     expect(result).toEqual(matches);
+  });
+});
+
+// D4: mail from another of the user's connected mailboxes is the user. Their
+// rules still run, but nothing treats it as someone waiting on a reply.
+describe("runRules for mail from the user's other mailbox", () => {
+  const ownOther = "me.elsewhere@gmail.com";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getUserOwnAddresses).mockResolvedValue([
+      "user@test.com",
+      ownOther,
+    ]);
+    prisma.executedRule.findFirst.mockResolvedValue(null);
+    prisma.executedRule.findMany.mockResolvedValue([]);
+    prisma.executedRule.create.mockResolvedValue({} as any);
+  });
+
+  function messageFrom(from: string) {
+    return getRunRulesMessage({ headers: { from } });
+  }
+
+  it("runs the user's rules without reply tracking", async () => {
+    mockMatchingRules([]);
+
+    await runRulesWithDefaults({
+      message: messageFrom(`Me <${ownOther.toUpperCase()}>`),
+      rules: [regularRule, toReplyRule],
+    });
+
+    expect(getUserOwnAddresses).toHaveBeenCalledWith(getEmailAccount().userId);
+    const { rules } = vi.mocked(findMatchingRules).mock.calls[0]![0];
+    expect(rules.map((rule) => rule.id)).toEqual([regularRule.id]);
+  });
+
+  it("drops AI drafts from the user's matching rules", async () => {
+    const draftRule = createRule("draft-rule", null, [
+      getAction({ id: "draft-action", type: ActionType.DRAFT_EMAIL }),
+    ]);
+    mockMatchingRules([{ rule: draftRule, matchReasons: [] }]);
+
+    const result = await runRulesWithDefaults({
+      message: messageFrom(ownOther),
+      rules: [draftRule],
+    });
+
+    expect(getActionItemsWithAiArgs).not.toHaveBeenCalled();
+    expect(result).toEqual([
+      expect.objectContaining({ status: ExecutedRuleStatus.SKIPPED }),
+    ]);
+  });
+
+  it("keeps reply tracking for other senders", async () => {
+    mockMatchingRules([]);
+
+    await runRulesWithDefaults({
+      message: messageFrom("Alex <alex@example.com>"),
+      rules: [regularRule, toReplyRule],
+    });
+
+    const { rules } = vi.mocked(findMatchingRules).mock.calls[0]![0];
+    expect(rules.map((rule) => rule.id)).toContain(
+      CONVERSATION_TRACKING_META_RULE_ID,
+    );
   });
 });
 

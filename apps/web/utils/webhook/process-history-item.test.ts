@@ -24,7 +24,6 @@ import { sendOtpPushNotification } from "@/utils/otp-push";
 import { runRules } from "@/utils/ai/choose-rule/run-rules";
 import { sendMobilePushNotification } from "@/utils/mobile-push";
 import { SafeError } from "@/utils/error";
-import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 
 vi.mock("@/utils/prisma", () => ({
   default: {
@@ -60,11 +59,6 @@ vi.mock("@/utils/drive/process-filing-attachments", () => ({
 }));
 vi.mock("@/utils/otp-push", () => ({
   sendOtpPushNotification: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock("@/utils/user/own-addresses", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/utils/user/own-addresses")>()),
-  getUserOwnAddresses: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("@/utils/mobile-push", () => ({
@@ -232,86 +226,6 @@ describe("Provider Edge Cases", () => {
         new Error("Push unavailable"),
       );
       await expect(processArrival()).resolves.toBeUndefined();
-      expect(sendMobilePushNotification).toHaveBeenCalledOnce();
-    });
-  });
-
-  // D4: mail from the user's other connected mailbox is the user writing to
-  // themselves. Their rules still run, but nothing treats it as someone
-  // waiting on a reply.
-  describe("Mail from the user's other connected address", () => {
-    const ownOther = "me.elsewhere@gmail.com";
-    const userRule = getRule("Label receipts");
-    const toReplyRule = {
-      ...getRule("To Reply"),
-      systemType: SystemType.TO_REPLY,
-    };
-
-    beforeEach(() => {
-      vi.mocked(prisma.executedRule.findFirst).mockResolvedValue(null);
-      vi.mocked(getUserOwnAddresses).mockResolvedValue([
-        baseOptions.emailAccount.email,
-        ownOther,
-      ]);
-      vi.mocked(runRules).mockResolvedValue([
-        {
-          rule: toReplyRule,
-          status: ExecutedRuleStatus.APPLIED,
-          createdAt: new Date(),
-        },
-      ]);
-    });
-
-    async function processFrom(from: string) {
-      const message = getMockParsedMessage({
-        id: "own-message",
-        internalDate: String(Date.now() - 60_000),
-        headers: {
-          from,
-          to: baseOptions.emailAccount.email,
-          subject: "Notes",
-          date: new Date().toISOString(),
-        },
-      });
-      await processHistoryItem(
-        { messageId: message.id, message },
-        {
-          ...baseOptions,
-          provider: createMockEmailProvider({
-            isSentMessage: vi.fn().mockReturnValue(false),
-          }),
-          rules: [userRule, toReplyRule],
-          hasAutomationRules: true,
-          hasAiAccess: true,
-          isNewMessage: true,
-        },
-      );
-    }
-
-    it("runs the user's rules without reply tracking, drafts or alerts", async () => {
-      await processFrom(`Me <${ownOther.toUpperCase()}>`);
-
-      expect(getUserOwnAddresses).toHaveBeenCalledWith(
-        baseOptions.emailAccount.userId,
-      );
-      expect(runRules).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          rules: [userRule],
-          skipDraftReplies: true,
-        }),
-      );
-      expect(sendMobilePushNotification).not.toHaveBeenCalled();
-    });
-
-    it("keeps reply tracking, drafts and alerts for other senders", async () => {
-      await processFrom("Alex <alex@example.com>");
-
-      expect(runRules).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          rules: [userRule, toReplyRule],
-          skipDraftReplies: false,
-        }),
-      );
       expect(sendMobilePushNotification).toHaveBeenCalledOnce();
     });
   });

@@ -22,7 +22,8 @@ import type {
 } from "@/utils/ai/choose-rule/types";
 import { serializeMatchReasons } from "@/utils/ai/choose-rule/types";
 import { sanitizeActionFields } from "@/utils/action-item";
-import { extractEmailAddress } from "@/utils/email";
+import { canonicalizeEmailAddress, extractEmailAddress } from "@/utils/email";
+import { getUserOwnAddresses, isOwnAddress } from "@/utils/user/own-addresses";
 import { filterNullProperties } from "@/utils";
 import { analyzeSenderPattern } from "@/utils/ai/choose-rule/analyze-sender-pattern";
 import { FIRST_TIME_EVENTS, trackFirstTimeEvent } from "@/utils/posthog";
@@ -109,7 +110,18 @@ export async function runRules({
   skipDraftReplies?: boolean;
 }): Promise<RunRulesResult[]> {
   const batchTimestamp = new Date(); // Single timestamp for this batch execution
-  const { regularRules, conversationRules } = prepareRulesWithMetaRule(rules);
+  // Mail from another of the user's mailboxes still runs their rules, but
+  // isn't someone waiting on a reply: no reply tracking and no reply draft.
+  const fromSelf = isOwnAddress(message.headers.from, [
+    canonicalizeEmailAddress(emailAccount.email),
+    ...(await getUserOwnAddresses(emailAccount.userId)),
+  ]);
+  const { regularRules, conversationRules } = prepareRulesWithMetaRule(
+    fromSelf
+      ? rules.filter((rule) => !isConversationStatusType(rule.systemType))
+      : rules,
+  );
+  skipDraftReplies ||= fromSelf;
 
   const results = await findMatchingRules({
     rules: regularRules,
