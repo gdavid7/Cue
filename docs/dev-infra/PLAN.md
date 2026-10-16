@@ -89,10 +89,9 @@ recommendation.
   - Skips cleanly when the secret is absent, so forks stay green.
   - Never runs on `pull_request` from forks (secrets are not passed there
     anyway).
-- **Decision:** set an `OPENROUTER_API_KEY` repository secret and a monthly
-  budget? **Recommend yes, with a spend cap on the OpenRouter key** (for
-  example $50/month) and the subset limited to the default model. Full
-  cross-model runs stay manual.
+- **Decision (2026-10-16):** OpenRouter declined. Built with direct Anthropic
+  and Google keys instead; see "Eval subset" below. Full cross-model runs
+  stay manual (`ai-evals.yml`).
 
 ### 2. `e2e-flows.yml` and the production robots
 
@@ -250,13 +249,50 @@ Decided 2026-10-16.
 | # | Decision | Status |
 |---|---|---|
 | A | Run unit tests, lint and build check in CI | **Done.** `test.yml` and `build-check.yml` run on pushes and pull requests to the integration branch, `production` and `claude/**`, and on dispatch |
-| 1 | `OPENROUTER_API_KEY` and a budget for eval subsets | **Open** |
+| 1 | Eval subset on prompt, tool or eval changes | **Built, waiting on keys.** OpenRouter declined; Claude under test with `ANTHROPIC_API_KEY`, Gemini as judge with `GOOGLE_API_KEY`. See "Eval subset" below |
 | 2 | Delete upstream-only workflows | **Done.** Removed `e2e-flows`, `api-release`, `cli-release`, `desktop-release`, `mail-packages-release`, `deploy-image-proxy`, `build_and_publish_docker`, `publish-playwright-report` (and its script). `build-changelog` stays: it validates, it doesn't publish |
 | 3 | `@claude` pushing fixes (key and write permissions) | **Deferred.** Only the trigger restriction is done: every `claude.yml` trigger requires an OWNER, MEMBER or COLLABORATOR author |
 | 5 | GitHub issues for product work only | **Yes**, conventions below |
 | 6 | CODEOWNERS; auto-merge outside founder-owned paths | **CODEOWNERS added** (`.github/CODEOWNERS`). Auto-merge is **not enabled**; steps below |
 | 7 | Production errors stay in Sentry | **Yes**, conventions below |
 | 8 | Small PRs into the integration branch | **Yes**, conventions below |
+
+## Eval subset (decision 1)
+
+`.github/workflows/eval-subset.yml` runs a small AI eval subset with one model.
+
+**When it runs:**
+- On pushes and pull requests that touch `apps/web/utils/ai/**`,
+  `apps/web/utils/llms/**` (non-test files) or `apps/web/__tests__/eval/**`.
+- Only for this repository's collaborators. A push needs write access; a pull
+  request must come from a branch in this repository (never a fork) by an
+  OWNER, MEMBER or COLLABORATOR. It never uses `pull_request_target`.
+- Also by dispatch, with an optional list of extra eval files.
+
+**What it runs:**
+- Three default evals: `choose-rule`, `prompt-security-core-paths` and
+  `assistant-chat-core-tools`, 62 cases in all.
+- Plus any eval file the change adds or edits, capped at 6 files per run.
+- The model under test is `anthropic:claude-sonnet-5-5`; the judge is Gemini
+  (`gemini-3-flash`). The report is uploaded as an artifact.
+
+**Cost:** an estimate of **about $2 to $6 per run**, from the repository's
+pricing table (Sonnet 5.5 at $2 / $10 per million input / output tokens,
+Gemini 3 Flash judge at $0.50 / $3). Multi-turn assistant cases cost the
+most. Measure it on the first run.
+
+**Without keys** the first step fails with the names of the missing secrets
+and nothing else. This matters because the evals skip silently, and read as
+green, when no key is set.
+
+**For the founder:**
+1. Add two repository secrets under **Settings → Secrets and variables →
+   Actions → New repository secret**: `ANTHROPIC_API_KEY` and
+   `GOOGLE_API_KEY`.
+2. Set a monthly spend limit for that key's workspace in the Anthropic
+   console, and a budget alert for the Google key in Google Cloud.
+3. Dispatch "Eval Subset" once on the integration branch to measure the cost
+   and pass rate before relying on it.
 
 ## Conventions (also in AGENTS.md)
 
