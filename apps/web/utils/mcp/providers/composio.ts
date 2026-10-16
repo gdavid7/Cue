@@ -179,7 +179,9 @@ export const composioProvider: IntegrationProvider = {
     );
     if (!account) {
       await rememberStatus(app, emailAccountId, "needs_reconnect");
-      throw new ConnectionExpiredError(app, `No active ${app} connection`);
+      throw new ConnectionExpiredError(app, `No active ${app} connection`, {
+        confirmed: true,
+      });
     }
 
     const result = executeResultSchema.parse(

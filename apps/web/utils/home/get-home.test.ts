@@ -592,7 +592,11 @@ describe("getHomeData: what's next", () => {
     await run(mockProvider({}));
 
     expect(prisma.mcpConnection.updateMany).toHaveBeenCalledWith({
-      where: { id: "connection-canvas", needsReconnectAt: null },
+      where: {
+        id: "connection-canvas",
+        needsReconnectAt: null,
+        updatedAt: { lt: expect.any(Date) },
+      },
       data: { needsReconnectAt: expect.any(Date) },
     });
   });

@@ -75,12 +75,21 @@ export class AppToolError extends Error {
 }
 
 // The app's authorization expired or was revoked; only reconnecting fixes it.
+// `confirmed` when the provider itself holds no working authorization; an
+// app's auth-looking error alone can also mean one resource is off limits
+// (Canvas answers both with a 401), so it needs re-checking.
 export class ConnectionExpiredError extends Error {
   readonly app: string;
+  readonly confirmed: boolean;
 
-  constructor(app: string, message: string) {
+  constructor(
+    app: string,
+    message: string,
+    { confirmed = false }: { confirmed?: boolean } = {},
+  ) {
     super(message);
     this.name = "ConnectionExpiredError";
     this.app = app;
+    this.confirmed = confirmed;
   }
 }

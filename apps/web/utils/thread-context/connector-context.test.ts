@@ -1114,7 +1114,11 @@ describe("fetchConnectorCandidates with a connection the app turned away", () =>
     });
 
     expect(prisma.mcpConnection.updateMany).toHaveBeenCalledWith({
-      where: { id: "connection-canvas", needsReconnectAt: null },
+      where: {
+        id: "connection-canvas",
+        needsReconnectAt: null,
+        updatedAt: { lt: expect.any(Date) },
+      },
       data: { needsReconnectAt: expect.any(Date) },
     });
   });

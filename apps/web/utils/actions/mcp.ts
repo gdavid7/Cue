@@ -160,6 +160,7 @@ export const testMcpConnectionAction = actionClient
         throw new SafeError("This connection can't be tested");
       }
 
+      const startedAt = new Date();
       let data: unknown;
       try {
         data = await getIntegrationProvider(config.provider.id).checkConnection(
@@ -175,7 +176,7 @@ export const testMcpConnectionAction = actionClient
           logger.warn("Stored credentials rejected", {
             integration: config.name,
           });
-          await markConnectionNeedsReconnect(connection.id);
+          await markConnectionNeedsReconnect(connection.id, startedAt);
           throw new SafeError(
             `${config.displayName} rejected this token. Check it or create a new one.`,
           );
