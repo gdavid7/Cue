@@ -4,6 +4,7 @@ import {
   ensureConversationRuleContinuity,
   ensureConversationRuleForAiCalendarMatch,
   limitDraftEmailActions,
+  OWN_ADDRESS_DRAFT_SKIP_REASON,
   runRules,
 } from "./run-rules";
 import {
@@ -459,6 +460,24 @@ describe("runRules for mail from the user's other mailbox", () => {
     expect(result).toEqual([
       expect.objectContaining({ status: ExecutedRuleStatus.SKIPPED }),
     ]);
+    // The history says why: the sender, not a bulk run.
+    const { reason } = prisma.executedRule.create.mock.calls.at(-1)![0].data;
+    expect(reason).toContain(OWN_ADDRESS_DRAFT_SKIP_REASON);
+    expect(reason).not.toContain("bulk run");
+  });
+
+  // Mail to yourself from this same mailbox, without a Sent label.
+  it("treats the account's own address as the user too", async () => {
+    vi.mocked(getUserOwnAddresses).mockResolvedValue([]);
+    mockMatchingRules([]);
+
+    await runRulesWithDefaults({
+      message: messageFrom(getEmailAccount().email),
+      rules: [regularRule, toReplyRule],
+    });
+
+    const { rules } = vi.mocked(findMatchingRules).mock.calls[0]![0];
+    expect(rules.map((rule) => rule.id)).toEqual([regularRule.id]);
   });
 
   it("keeps reply tracking for other senders", async () => {

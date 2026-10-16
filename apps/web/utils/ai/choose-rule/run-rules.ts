@@ -88,6 +88,9 @@ export type RunRulesResult = {
   createdAt: Date;
 };
 
+export const OWN_ADDRESS_DRAFT_SKIP_REASON =
+  "Sent from one of your own addresses, so no reply was drafted";
+
 export async function runRules({
   provider,
   message,
@@ -121,7 +124,11 @@ export async function runRules({
       ? rules.filter((rule) => !isConversationStatusType(rule.systemType))
       : rules,
   );
-  skipDraftReplies ||= fromSelf;
+  const draftSkipReason = fromSelf
+    ? OWN_ADDRESS_DRAFT_SKIP_REASON
+    : skipDraftReplies
+      ? "Draft replies were disabled for this bulk run"
+      : undefined;
 
   const results = await findMatchingRules({
     rules: regularRules,
@@ -192,7 +199,7 @@ export async function runRules({
     }
   }
 
-  const executableMatches = skipDraftReplies
+  const executableMatches = draftSkipReason
     ? removeDraftReplyActionsFromMatches(matchesWithFlags)
     : matchesWithFlags;
   const finalMatches = limitDraftEmailActions(executableMatches, logger);
@@ -265,7 +272,7 @@ export async function runRules({
       batchTimestamp,
       logger,
       skipArchive,
-      skipDraftReplies,
+      draftSkipReason,
     );
 
     executedRules.push({
@@ -380,7 +387,8 @@ async function executeMatchedRule(
   batchTimestamp: Date,
   logger: Logger,
   skipArchive?: boolean,
-  skipDraftReplies?: boolean,
+  /** Set when reply drafts were left out, saying why. */
+  draftSkipReason?: string,
 ) {
   const blockedActionTypes = getBlockedLowTrustStaticFromActionTypes(
     rule.from,
@@ -417,14 +425,16 @@ async function executeMatchedRule(
     logger,
   });
 
-  const skippedDraftOnlyRule = skipDraftReplies && rule.actions.length === 0;
+  const skippedDraftOnlyRule =
+    Boolean(draftSkipReason) && rule.actions.length === 0;
   if (
     actionItems.length === 0 &&
     (blockedActionTypes.length || skippedDraftOnlyRule)
   ) {
-    const skipReason = skippedDraftOnlyRule
-      ? "Draft replies were disabled for this bulk run"
-      : LOW_TRUST_STATIC_FROM_OUTBOUND_MESSAGE;
+    const skipReason =
+      skippedDraftOnlyRule && draftSkipReason
+        ? draftSkipReason
+        : LOW_TRUST_STATIC_FROM_OUTBOUND_MESSAGE;
     const reasonToUse = reason ? `${reason}. ${skipReason}` : skipReason;
     let executedRule = null;
 
