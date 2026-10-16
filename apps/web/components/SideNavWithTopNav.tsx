@@ -8,7 +8,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { SideNav } from "@/components/SideNav";
-import { SidebarRight } from "@/components/SidebarRight";
+import { BehindSidebarRight, SidebarRight } from "@/components/SidebarRight";
 import { bindChatPanelWidth } from "@/hooks/useChatPanelWidth";
 import { cn } from "@/utils";
 import { isMailShellPath } from "@/utils/path";
@@ -103,13 +103,15 @@ export function SideNavWithTopNav({
           the global navigation and its mobile header would be duplicates.
           The chat page puts the trigger in its own top bar, where a layout
           banner above it can't end up underneath a fixed one. */}
-      {!isMailRoute && (
-        <>
-          {!isChatPagePath(pathname) && <MobileHeader />}
-          <SideNav name="left-sidebar" feedbackEnabled={feedbackEnabled} />
-        </>
-      )}
-      <ContentWrapper>{children}</ContentWrapper>
+      <BehindSidebarRight name="chat-sidebar" disabled={isAssistantRoute}>
+        {!isMailRoute && (
+          <>
+            {!isChatPagePath(pathname) && <MobileHeader />}
+            <SideNav name="left-sidebar" feedbackEnabled={feedbackEnabled} />
+          </>
+        )}
+        <ContentWrapper>{children}</ContentWrapper>
+      </BehindSidebarRight>
       {!isAssistantRoute ? <SidebarRight name="chat-sidebar" /> : null}
     </SidebarProvider>
   );

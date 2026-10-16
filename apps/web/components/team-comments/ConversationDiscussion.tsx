@@ -281,7 +281,7 @@ export function ConversationDiscussionView({
                           size="icon2xs"
                           variant="ghost"
                           aria-label="Delete comment"
-                          className="ml-auto text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
+                          className="ml-auto text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
                           onClick={() =>
                             runAndRefresh(
                               deleteComment({
