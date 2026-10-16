@@ -244,6 +244,40 @@ describe("useThreadActions", () => {
     expect(secondCommandId).not.toBe(firstCommandId);
   });
 
+  it("keeps a newer archive as the one to undo when an older undo fails", async () => {
+    const threads = [
+      createThread(["INBOX"], "one"),
+      createThread(["INBOX"], "two"),
+    ];
+    const { result } = renderActions({ threads });
+    await act(() => result.current.archive(["one"]));
+
+    let answerCancel: (value: { status: "too_late" }) => void = () => {};
+    mail.client.cancelOperation.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answerCancel = resolve;
+      }),
+    );
+    mail.client.submitConversations
+      .mockResolvedValueOnce({ status: "queued" })
+      .mockResolvedValueOnce({ status: "rejected", code: "queue_full" });
+    await act(async () => {
+      const undoingFirst = result.current.undo();
+      await result.current.archive(["two"]);
+      answerCancel({ status: "too_late" });
+      await undoingFirst;
+    });
+    const secondCommandId =
+      mail.client.submitConversations.mock.calls[1][0].commandId;
+
+    mail.client.cancelOperation.mockClear();
+    await act(() => result.current.undo());
+    expect(mail.client.cancelOperation).toHaveBeenCalledWith({
+      accountId: "account",
+      operationId: secondCommandId,
+    });
+  });
+
   // Today lists conversations from the server, not the engine's views, so it
   // needs to hear which rows an undo brought back.
   it("acts on a conversation listed outside the mailbox and reports what undo restored", async () => {

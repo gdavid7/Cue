@@ -200,7 +200,8 @@ export function useThreadActions({
       }
       if (!restoredKeys.length) {
         batch.undone = false;
-        lastAction.current = batch;
+        // An action taken while this undo ran is now the one to undo.
+        if (lastAction.current === null) lastAction.current = batch;
       }
       return restoredKeys;
     },
