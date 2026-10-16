@@ -352,10 +352,29 @@ async function processHistory(
     done.add(event);
   };
 
-  // Newest first, so a backlog surfaces the mail the user is waiting on first.
-  // Per-message locks keep concurrent runs from processing a message twice.
-  const newMessages = entries.flatMap((entry) => entry.newMessages).reverse();
-  await mapWithConcurrency(newMessages, NEW_MESSAGE_CONCURRENCY, run);
+  // Threads with the newest mail first, so a backlog surfaces the mail the
+  // user is waiting on first. Within a thread, oldest first and one at a
+  // time: an older sent reply handled after a newer inbound one would resolve
+  // that one's Needs reply.
+  const threads = new Map<string, HistoryEvent[]>();
+  for (const event of entries.flatMap((entry) => entry.newMessages)) {
+    const threadId = event.item.message?.threadId ?? "";
+    // Re-inserting moves the thread to the end, so the map ends up ordered by
+    // each thread's newest message.
+    const thread = threads.get(threadId) ?? [];
+    threads.delete(threadId);
+    threads.set(threadId, [...thread, event]);
+  }
+  await mapWithConcurrency(
+    [...threads.values()].reverse(),
+    NEW_MESSAGE_CONCURRENCY,
+    async (thread) => {
+      for (const event of thread) {
+        await run(event);
+        if (!done.has(event)) return;
+      }
+    },
+  );
 
   // Label changes keep their order, and only follow fully processed history,
   // so a catch-up never replays one.

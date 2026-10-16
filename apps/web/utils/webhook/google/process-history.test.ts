@@ -825,6 +825,46 @@ describe("processHistoryForUser - backlogs", () => {
     expect(publishToQstashAt).not.toHaveBeenCalled();
   });
 
+  it("keeps a thread's messages in order, so a newer inbound reply isn't resolved by an older sent one", async () => {
+    // A (inbound), R (the user's reply), B (their answer) in one thread, plus
+    // newer mail in another thread. Run out of order, R's outbound handling
+    // would resolve B's Needs reply.
+    vi.mocked(getHistory).mockResolvedValue({
+      history: [
+        historyMessage("1100", "a", "shared", ["INBOX"]),
+        historyMessage("1200", "r", "shared", ["SENT"]),
+        historyMessage("1300", "b", "shared", ["INBOX"]),
+        historyMessage("1400", "other", "other-thread", ["INBOX"]),
+      ],
+    } as any);
+    const timeline: string[] = [];
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      const id = event.item.message?.id;
+      timeline.push(`start ${id}`);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      timeline.push(`end ${id}`);
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1400 },
+      {},
+      logger,
+    );
+
+    const thread = timeline.filter((step) => !step.endsWith("other"));
+    expect(thread).toEqual([
+      "start a",
+      "end a",
+      "start r",
+      "end r",
+      "start b",
+      "end b",
+    ]);
+    // The thread with the newest mail starts first.
+    expect(timeline[0]).toBe("start other");
+    expect(lastCursorUpdate()).toBe("1400");
+  });
+
   it("processes new inbox mail newest first, a few messages at a time", async () => {
     vi.mocked(getHistory).mockResolvedValue({
       history: inboxHistory(
@@ -958,6 +998,18 @@ function inboxHistory(...entries: [historyId: string, messageId: string][]) {
       },
     ],
   }));
+}
+
+function historyMessage(
+  id: string,
+  messageId: string,
+  threadId: string,
+  labelIds: string[],
+) {
+  return {
+    id,
+    messagesAdded: [{ message: { id: messageId, threadId, labelIds } }],
+  };
 }
 
 function processedMessageIds() {
