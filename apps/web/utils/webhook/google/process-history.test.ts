@@ -1083,6 +1083,26 @@ describe("processHistoryForUser - backlogs", () => {
     );
   });
 
+  it("moves past pages with no history records instead of catching up on them forever", async () => {
+    vi.mocked(getHistory).mockImplementation(
+      async () =>
+        ({
+          history: [],
+          nextPageToken: "more",
+          historyId: "9000",
+        }) as any,
+    );
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1500 },
+      {},
+      logger,
+    );
+
+    expect(cursorUpdates()).toEqual(["9000"]);
+    expect(publishToQstashAt).not.toHaveBeenCalled();
+  });
+
   it("asks the catch-up for history past what it read, so it doesn't look caught up", async () => {
     // The push is older than the history read since; the cursor passes it.
     let page = 0;

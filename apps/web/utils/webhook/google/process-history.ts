@@ -270,6 +270,20 @@ export async function processHistoryForUser(
             emailAccountId: validatedEmailAccount.id,
             lastSyncedHistoryId: historyId,
           });
+        } else if (historyResult.lastPageHistoryId) {
+          // Every page read had no records of the kinds asked for. Moving to
+          // the mailbox history Gmail reported keeps catch-ups from reading
+          // the same empty pages again and again.
+          logger.warn("Gmail history pages held no records; moving past them", {
+            startHistoryId: historyResult.startHistoryId,
+            pageCount: historyResult.pageCount,
+            lastPageHistoryId: historyResult.lastPageHistoryId,
+          });
+          await updateLastSyncedHistoryId({
+            emailAccountId: validatedEmailAccount.id,
+            lastSyncedHistoryId: historyResult.lastPageHistoryId,
+          });
+          complete = true;
         }
 
         if (!complete) {
@@ -579,6 +593,8 @@ async function fetchGmailHistoryResilient({
       pageCount: number;
       historyItemCount: number;
       hasMore: boolean;
+      /** The mailbox's history id as of the last page read. */
+      lastPageHistoryId: string | null;
     }
   | { status: "expired" }
 > {
@@ -603,6 +619,7 @@ async function fetchGmailHistoryResilient({
     const historyEntries: gmail_v1.Schema$History[] = [];
     let pageToken: string | undefined;
     let pageCount = 0;
+    let lastPageHistoryId: string | null = null;
 
     do {
       const data = await getHistory(
@@ -620,6 +637,8 @@ async function fetchGmailHistoryResilient({
       historyEntries.push(...pageHistory);
       pageCount += 1;
       pageToken = data.nextPageToken || undefined;
+      if (data.historyId && /^\d+$/.test(data.historyId))
+        lastPageHistoryId = data.historyId;
 
       logger.info("Fetched Gmail history page", {
         startHistoryId,
@@ -638,6 +657,7 @@ async function fetchGmailHistoryResilient({
       pageCount,
       historyItemCount: historyEntries.length,
       hasMore: !!pageToken,
+      lastPageHistoryId,
     };
   } catch (error) {
     // Gmail history IDs are typically valid for ~1 week. If older, Gmail returns a 404.
