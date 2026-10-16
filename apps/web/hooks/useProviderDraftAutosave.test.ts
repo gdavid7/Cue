@@ -11,6 +11,48 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// A draft moving to another account is removed from the old one only once
+// the new mailbox holds it, so the caller needs to know the save landed.
+it("saves the latest content now and says whether the mailbox has it", async () => {
+  const save = vi.fn().mockResolvedValue(undefined);
+  const { result, unmount } = renderHook(() =>
+    useProviderDraftAutosave({
+      enabled: true,
+      getContent: () => "moved",
+      save,
+    }),
+  );
+
+  let saved: boolean | undefined;
+  await act(async () => {
+    saved = await result.current.saveNow();
+  });
+
+  expect(save).toHaveBeenCalledWith("moved");
+  expect(saved).toBe(true);
+  unmount();
+});
+
+it("reports a failed save now", async () => {
+  const save = vi.fn().mockRejectedValue(new Error("Gmail is unavailable."));
+  const { result, unmount } = renderHook(() =>
+    useProviderDraftAutosave({
+      enabled: true,
+      getContent: () => "moved",
+      save,
+    }),
+  );
+
+  let saved: boolean | undefined;
+  await act(async () => {
+    saved = await result.current.saveNow();
+  });
+
+  expect(save).toHaveBeenCalledOnce();
+  expect(saved).toBe(false);
+  unmount();
+});
+
 it("saves during continuous editing and skips unchanged drafts", async () => {
   vi.useFakeTimers();
   const save = vi.fn().mockResolvedValue(undefined);

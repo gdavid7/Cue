@@ -192,5 +192,13 @@ export function useProviderDraftAutosave<T>({
     };
   }, [flush, isPendingContentSaved, sessionKey]);
 
-  return { capture, stop, resume, error };
+  /** Saves the latest content now; resolves whether the mailbox holds it. */
+  const saveNow = useCallback(async () => {
+    await activeSave.current;
+    capture();
+    await flush();
+    return savedSnapshot.current !== undefined && isPendingContentSaved();
+  }, [capture, flush, isPendingContentSaved]);
+
+  return { capture, stop, resume, saveNow, error };
 }

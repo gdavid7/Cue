@@ -172,6 +172,69 @@ test("returns the message to its account when the new From can't load", async ({
   }
 });
 
+// A copy on this device can be lost with the tab, so the old mailbox draft
+// stays until the new account's mailbox has the message.
+test("keeps the old mailbox draft while the new mailbox can't save it", async ({
+  page,
+}) => {
+  test.skip(
+    isMicrosoftPlaywright(),
+    "Reads the mailbox drafts back from the Gmail emulator.",
+  );
+  test.setTimeout(240_000);
+  const { emailAccountId } = await openMail(page);
+  const secondAccount = await createSecondEmailAccount(emailAccountId);
+  const subject = `From switch unsaved ${Date.now()}`;
+
+  try {
+    await page.goto(`/${emailAccountId}/mail?accountScope=all`);
+    await page.getByRole("button", { name: /^Compose/ }).click();
+    const dialog = page.getByRole("dialog", { name: "New Message" });
+    const from = dialog.getByRole("combobox", { name: "From" });
+    await dialog
+      .getByRole("combobox", { name: "To", exact: true })
+      .fill("recipient@example.com");
+    await page.keyboard.press("Enter");
+    await dialog.getByPlaceholder("Subject").fill(subject);
+    await dialog
+      .getByRole("textbox", { name: "Email message" })
+      .fill("Only the old mailbox has this.");
+    await expect
+      .poll(() => readDraftFiles(page, subject), { timeout: 60_000 })
+      .toEqual([[]]);
+
+    // Every mailbox save from here on fails.
+    let refusedSaves = 0;
+    await page.route("**/*", async (route) => {
+      const request = route.request();
+      if (
+        request.method() !== "POST" ||
+        !(await request.headerValue("next-action"))
+      )
+        return route.fallback();
+      refusedSaves += 1;
+      await route.fulfill({ status: 500, body: "" });
+    });
+    await from.click();
+    await page
+      .getByRole("option", {
+        name: `${secondAccount.name} (${secondAccount.email})`,
+        exact: true,
+      })
+      .click();
+    await expect(from).toContainText(secondAccount.email, { timeout: 60_000 });
+    await expect
+      .poll(() => refusedSaves, { timeout: 30_000 })
+      .toBeGreaterThan(0);
+
+    await expect(page.getByText(/^Draft moved to /)).toHaveCount(0);
+    expect(await readDraftFiles(page, subject)).toEqual([[]]);
+    await page.unroute("**/*");
+  } finally {
+    await deleteSecondEmailAccount(secondAccount.accountId);
+  }
+});
+
 test("keeps text typed while the message moves to another From", async ({
   page,
 }) => {

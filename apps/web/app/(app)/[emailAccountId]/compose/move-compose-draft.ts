@@ -17,20 +17,20 @@ export type MovedFromDraft = {
 
 /**
  * Removes the old account's copy of a message moved to another account, but
- * only once the new account holds it: until then the old drafts are all
- * there is. A file that didn't reach the new draft keeps the old mailbox
- * draft, which still has it.
+ * only once the new account's mailbox holds it. A copy on this device can be
+ * lost with the tab or a private window, so it doesn't count. A file that
+ * didn't reach the new draft keeps the old mailbox draft, which still has it.
  */
 export async function finishComposeDraftMove({
   from,
-  savedOnNewAccount,
+  newMailboxDraftId,
   filesMoved,
 }: {
   from: MovedFromDraft;
-  savedOnNewAccount: boolean;
+  newMailboxDraftId: string | undefined;
   filesMoved: boolean;
 }): Promise<"moved" | "kept"> {
-  if (!savedOnNewAccount) return "kept";
+  if (!newMailboxDraftId) return "kept";
   if (from.draftId && filesMoved) {
     const result = await discardComposeDraftAction(from.emailAccountId, {
       draftId: from.draftId,

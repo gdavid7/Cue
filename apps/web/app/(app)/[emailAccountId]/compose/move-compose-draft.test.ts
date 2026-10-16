@@ -50,10 +50,10 @@ describe("finishComposeDraftMove", () => {
     } as never);
   });
 
-  it("removes the old account's drafts once the new account saved the message", async () => {
+  it("removes the old account's drafts once the new mailbox holds the message", async () => {
     const result = await finishComposeDraftMove({
       from,
-      savedOnNewAccount: true,
+      newMailboxDraftId: "draft-b",
       filesMoved: true,
     });
 
@@ -66,12 +66,12 @@ describe("finishComposeDraftMove", () => {
     expect(forgetAttachedFiles).toHaveBeenCalledWith("account-a", ["file-1"]);
   });
 
-  // H1: until the new account holds the message, the old drafts are all
-  // there is, so nothing of them is removed.
-  it("keeps every old draft when the new account could not save the message", async () => {
+  // The new account's device copy can vanish with the tab or a private
+  // window, so only its mailbox draft makes the old drafts safe to remove.
+  it("keeps every old draft until the new mailbox holds the message", async () => {
     const result = await finishComposeDraftMove({
       from,
-      savedOnNewAccount: false,
+      newMailboxDraftId: undefined,
       filesMoved: true,
     });
 
@@ -84,7 +84,7 @@ describe("finishComposeDraftMove", () => {
   it("keeps the old mailbox draft, which still has the files, when a file did not move", async () => {
     const result = await finishComposeDraftMove({
       from,
-      savedOnNewAccount: true,
+      newMailboxDraftId: "draft-b",
       filesMoved: false,
     });
 
@@ -101,7 +101,7 @@ describe("finishComposeDraftMove", () => {
     await expect(
       finishComposeDraftMove({
         from,
-        savedOnNewAccount: true,
+        newMailboxDraftId: "draft-b",
         filesMoved: true,
       }),
     ).rejects.toThrow("Gmail is unavailable.");

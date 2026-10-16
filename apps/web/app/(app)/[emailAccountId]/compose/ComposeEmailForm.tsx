@@ -1040,10 +1040,9 @@ function ComposeEmailFormContent({
       uploadComposeAttachment(file, attachment),
     );
     const finishMove = async () => {
-      // Saved here first, so removing the old account's copy loses nothing.
-      const savedOnNewAccount =
-        Boolean(getDraftContent()) && (await flushDraft());
       await Promise.all(uploads);
+      // The old account's copy goes only once the new mailbox holds this one.
+      const savedToMailbox = await providerAutosave.saveNow();
       const filesMoved = moved.files.every(({ attachment }) =>
         attachmentsRef.current.some(
           (item) => item.id === attachment.id && item.status === "uploaded",
@@ -1051,7 +1050,7 @@ function ComposeEmailFormContent({
       );
       const result = await finishComposeDraftMove({
         from: moved.from,
-        savedOnNewAccount,
+        newMailboxDraftId: savedToMailbox ? providerDraftId.current : undefined,
         filesMoved,
       });
       if (result !== "moved") return;
