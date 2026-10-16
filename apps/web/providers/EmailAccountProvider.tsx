@@ -162,7 +162,10 @@ export function EmailAccountProvider({
       pinnedIndex >= 0 ? pinnedIndex : accountIds.indexOf(emailAccount.id);
     if (String(accountIndex) === activePin.accountIndex) return;
     if (pinnedIndex < 0)
-      toastInfo({ description: "That account is no longer connected" });
+      toastInfo({
+        title: "That account is no longer connected",
+        description: `Now showing ${emailAccount.email}`,
+      });
     const next = reindexMailPath({
       pathname: window.location.pathname,
       search: window.location.search,
