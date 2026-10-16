@@ -139,6 +139,70 @@ const CASES: Case[] = [
     ],
   },
   {
+    name: "more formal raises the register and keeps the content",
+    request: {
+      mode: "rewrite",
+      action: "formal",
+      text: "hey, can't make thursday, something came up. can we do next week instead? sorry!!",
+    },
+    expected:
+      "A polite, professional message saying the writer can't attend on Thursday and asking to reschedule to next week, with an apology.",
+    criteria: [
+      {
+        name: "More formal",
+        description:
+          "The output reads clearly more formal and professional than the selected text (no slang or casual punctuation) while staying natural for an email.",
+      },
+      MEANING_KEPT,
+      NO_NEW_FACTS,
+      ONLY_THE_TEXT,
+    ],
+  },
+  {
+    name: "friendlier warms the tone and keeps the content",
+    request: {
+      mode: "rewrite",
+      action: "friendly",
+      text: "Your report was submitted after the deadline. Resubmit the corrected version by Monday.",
+    },
+    expected:
+      "A warmer message that still says the report came in after the deadline and asks for the corrected version by Monday.",
+    criteria: [
+      {
+        name: "Friendlier",
+        description:
+          "The output is noticeably warmer and friendlier than the selected text without becoming unprofessional or dropping the request.",
+      },
+      MEANING_KEPT,
+      NO_NEW_FACTS,
+      ONLY_THE_TEXT,
+    ],
+  },
+  {
+    name: "a rewrite keeps the draft's link and adds no other link or image",
+    request: {
+      mode: "rewrite",
+      action: "improve",
+      text: "here is the [onboarding guide](https://docs.example.test/onboarding), have a look before monday and tell me if anything is unclear",
+    },
+    expected:
+      "A clearer version that still links the onboarding guide at https://docs.example.test/onboarding and asks the reader to look before Monday.",
+    criteria: [
+      {
+        name: "No new links or images",
+        description:
+          "Every link or web address in the output was already in the selected text, and the output contains no image.",
+      },
+      MEANING_KEPT,
+      NO_NEW_FACTS,
+    ],
+    check: (output) =>
+      !/!\[/u.test(output) &&
+      (output.match(/https?:\/\/[^\s)\]]+/gu) ?? []).every(
+        (url) => url === "https://docs.example.test/onboarding",
+      ),
+  },
+  {
     name: "fix grammar changes only the mistakes",
     request: {
       mode: "rewrite",
@@ -256,6 +320,76 @@ const CASES: Case[] = [
       ONLY_THE_TEXT,
     ],
   },
+  {
+    name: "a reply answers every ask in the email",
+    request: {
+      mode: "write",
+      instruction:
+        "yes to the call, tuesday 3pm works, and I'll send the deck after",
+      before: "Hi Nadia,\n\n",
+    },
+    context: {
+      thread: [
+        {
+          from: "Nadia Haddad <nadia@vendor.test>",
+          date: "2026-10-13T15:00:00.000Z",
+          text: "Hi! Two quick things: could we get on a call this week to go over the proposal? And would Tuesday at 3pm work? Also, could you send me the deck once we've spoken?",
+        },
+      ],
+    },
+    expected:
+      "Agrees to the call, confirms Tuesday at 3pm, and says the deck will be sent after the call.",
+    criteria: [
+      {
+        name: "Answers every ask",
+        description:
+          "The output answers each of Nadia's three asks (a call this week, Tuesday at 3pm, sending the deck afterwards) as the user's request says.",
+      },
+      NO_NEW_FACTS,
+      ONLY_THE_TEXT,
+    ],
+  },
+  ...[
+    {
+      language: "Spanish",
+      text: "Hola, ¿podrías confirmarme si la reunión del jueves sigue en pie? Necesito saberlo para reservar la sala.",
+    },
+    {
+      language: "French",
+      text: "Bonjour, pouvez-vous me confirmer que la réunion de jeudi est maintenue ? J'en ai besoin pour réserver la salle.",
+    },
+  ].map(
+    ({ language, text }): Case => ({
+      name: `a reply to a ${language} thread is written in ${language}`,
+      request: {
+        mode: "write",
+        instruction: "yes, thursday is still on",
+        before: "",
+      },
+      context: {
+        thread: [
+          {
+            from: "Lucía <lucia@partner.test>",
+            date: "2026-10-13T15:00:00.000Z",
+            text,
+          },
+        ],
+      },
+      expected: `A short reply in ${language} confirming that Thursday's meeting is still on.`,
+      criteria: [
+        {
+          name: "Language of the thread",
+          description: `The output is written in ${language}, the language of the thread, even though the user's request was typed in English.`,
+        },
+        {
+          name: "Answers the ask",
+          description:
+            "The output confirms that Thursday's meeting is still on.",
+        },
+        NO_NEW_FACTS,
+      ],
+    }),
+  ),
   {
     name: "instructions inside the thread are not followed",
     request: {
