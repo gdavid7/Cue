@@ -1043,11 +1043,13 @@ function ComposeEmailFormContent({
       await Promise.all(uploads);
       // The old account's copy goes only once the new mailbox holds this one.
       const savedToMailbox = await providerAutosave.saveNow();
-      const filesMoved = moved.files.every(({ attachment }) =>
-        attachmentsRef.current.some(
-          (item) => item.id === attachment.id && item.status === "uploaded",
-        ),
+      const filesLeftBehind = moved.files.filter(
+        ({ attachment }) =>
+          !attachmentsRef.current.some(
+            (item) => item.id === attachment.id && item.status === "uploaded",
+          ),
       );
+      const filesMoved = filesLeftBehind.length === 0;
       const result = await finishComposeDraftMove({
         from: moved.from,
         newMailboxDraftId: savedToMailbox ? providerDraftId.current : undefined,
@@ -1055,6 +1057,9 @@ function ComposeEmailFormContent({
       });
       if (result !== "moved") return;
       toastSuccess({ description: `Draft moved to ${sendingAddress}` });
+      // The move isn't the whole story when files stayed on the old draft.
+      for (const { attachment } of filesLeftBehind)
+        toastError({ description: `Could not attach ${attachment.filename}.` });
       await client?.requestSync([moved.from.emailAccountId]);
     };
     finishMove().catch((error: unknown) => {

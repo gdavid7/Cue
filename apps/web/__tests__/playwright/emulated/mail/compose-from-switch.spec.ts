@@ -311,6 +311,68 @@ test("keeps text typed while the message moves to another From", async ({
   }
 });
 
+test("says which files the new account couldn't attach after a move", async ({
+  page,
+}) => {
+  test.skip(
+    isMicrosoftPlaywright(),
+    "Reads the mailbox drafts back from the Gmail emulator.",
+  );
+  test.setTimeout(240_000);
+  const { emailAccountId } = await openMail(page);
+  const secondAccount = await createSecondEmailAccount(emailAccountId);
+  const subject = `From switch reattach ${Date.now()}`;
+
+  try {
+    await page.goto(`/${emailAccountId}/mail?accountScope=all`);
+    await page.getByRole("button", { name: /^Compose/ }).click();
+    const dialog = page.getByRole("dialog", { name: "New Message" });
+    await dialog
+      .getByRole("combobox", { name: "To", exact: true })
+      .fill("recipient@example.com");
+    await page.keyboard.press("Enter");
+    await dialog.getByPlaceholder("Subject").fill(subject);
+    await dialog
+      .getByRole("textbox", { name: "Email message" })
+      .fill("The file stays on the old draft.");
+    await dialog.getByTestId("compose-attachments-input").setInputFiles({
+      name: "stays.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("kept on the old draft"),
+    });
+    const attachments = dialog.getByRole("list", { name: "Attachments" });
+    await expect(attachments.locator("li[aria-busy]")).toHaveCount(0, {
+      timeout: UPLOAD_TIMEOUT_MS,
+    });
+
+    // The new account's mailbox refuses the file.
+    await page.route("**/api/user/drafts/*/attachments?*", (route) =>
+      route.request().method() === "POST"
+        ? route.fulfill({
+            status: 500,
+            json: { error: "Playwright: upload refused." },
+          })
+        : route.fallback(),
+    );
+    await dialog.getByRole("combobox", { name: "From" }).click();
+    await page
+      .getByRole("option", {
+        name: `${secondAccount.name} (${secondAccount.email})`,
+        exact: true,
+      })
+      .click();
+
+    await expect(
+      page.getByText(`Draft moved to ${secondAccount.email}`, { exact: true }),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(
+      page.getByText("Could not attach stays.txt.", { exact: true }),
+    ).toBeVisible();
+  } finally {
+    await deleteSecondEmailAccount(secondAccount.accountId);
+  }
+});
+
 test("says which files stay behind when the message moves", async ({
   page,
 }) => {
