@@ -28,6 +28,8 @@ vi.mock("next/navigation", () => ({
     accountIndex: navigation.accountIndex,
   }),
   useRouter: () => ({ replace: navigation.replace }),
+  usePathname: () => window.location.pathname,
+  useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
 vi.mock("@/utils/actions/email-account-cookie", () => ({
@@ -695,6 +697,48 @@ describe("EmailAccountProvider", () => {
     expect(cookie.setLastAccount).not.toHaveBeenCalledWith({
       emailAccountId: "account-3",
     });
+  });
+
+  it("forgets the pinned account's old position once the user navigates", async () => {
+    navigation.accountIndex = "1";
+    window.history.replaceState(null, "", "/mail/u/1/inbox");
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          listResponse(["account-1", "account-2", "account-3"]),
+        )
+        .mockResolvedValueOnce(listResponse(["account-2", "account-3"])),
+    );
+    const tree = () => (
+      <EmailAccountProvider>
+        <AccountState />
+      </EmailAccountProvider>
+    );
+    const { rerender } = render(tree());
+    await waitFor(() =>
+      expect(screen.getByTestId("account-id").textContent).toBe("account-2"),
+    );
+
+    await fetchEmailAccounts();
+    await waitFor(() =>
+      expect(navigation.replace).toHaveBeenCalledWith("/mail/u/0/inbox"),
+    );
+    // Before the rewrite lands, the user opens Sent for the same account.
+    navigation.accountIndex = "0";
+    window.history.replaceState(null, "", "/mail/u/0/sent");
+    rerender(tree());
+    expect(screen.getByTestId("account-id").textContent).toBe("account-2");
+
+    // Then switches to account 3, which is now at position 1.
+    navigation.accountIndex = "1";
+    window.history.replaceState(null, "", "/mail/u/1/inbox");
+    rerender(tree());
+
+    await waitFor(() =>
+      expect(screen.getByTestId("account-id").textContent).toBe("account-3"),
+    );
   });
 
   it("does not replace a global route when remaining accounts exist", async () => {

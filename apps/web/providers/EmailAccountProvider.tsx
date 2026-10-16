@@ -2,13 +2,20 @@
 
 import {
   createContext,
+  Suspense,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import { useParams, useRouter } from "next/navigation";
+import {
+  useParams,
+  usePathname,
+  useRouter,
+  useSearchParams,
+} from "next/navigation";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
 import { setLastEmailAccountAction } from "@/utils/actions/email-account-cookie";
 import { unownedAccountRedirectUrl } from "@/utils/account-switch-url";
@@ -167,22 +174,32 @@ export function EmailAccountProvider({
     if (next) router.replace(next);
   }, [data, emailAccount?.id, emailAccountId, ownedRouteId, router]);
 
-  useEffect(() => {
-    if (params.accountIndex === undefined) return;
+  // Once the router lands anywhere, by a rewrite or by the user navigating,
+  // only the latest rewrite and the address now showing can still be in
+  // flight or current; older positions no longer name the pinned account.
+  const seenUrlRef = useRef<string | null>(null);
+  const forgetLandedAddresses = useCallback(() => {
     const current = currentUrl();
-    if (activePin) {
-      // The router has landed on the latest rewrite: the address agrees, and
-      // older positions no longer name this account.
-      const latest = activePin.addresses.at(-1);
-      if (
-        latest &&
-        activePin.addresses.length > 1 &&
-        latest.url === current &&
-        latest.accountIndex === params.accountIndex
-      )
-        setPin({ accountId: activePin.accountId, addresses: [latest] });
-      return;
-    }
+    if (seenUrlRef.current === current) return;
+    seenUrlRef.current = current;
+    setPin((previous) => {
+      if (!previous || previous.addresses.length < 2) return previous;
+      const latest = previous.addresses.at(-1);
+      const kept =
+        latest?.url === current
+          ? [latest]
+          : previous.addresses.filter(
+              (address) => address === latest || address.url === current,
+            );
+      return kept.length === previous.addresses.length
+        ? previous
+        : { ...previous, addresses: kept };
+    });
+  }, []);
+
+  useEffect(() => {
+    if (params.accountIndex === undefined || activePin) return;
+    const current = currentUrl();
     const accountId = accountIds[Number(params.accountIndex)];
     if (accountId)
       setPin({
@@ -269,6 +286,10 @@ export function EmailAccountProvider({
         providerRateLimit: emailAccount?.providerRateLimit ?? null,
       }}
     >
+      {/* Search params suspend while a page renders statically. */}
+      <Suspense fallback={null}>
+        <AddressWatcher onNavigate={forgetLandedAddresses} />
+      </Suspense>
       {children}
     </EmailAccountContext.Provider>
   );
@@ -337,6 +358,20 @@ type AddressPin = {
     accountIds: readonly string[];
   }[];
 };
+
+/**
+ * Reports each change of the page's address. Kept apart so the app-wide
+ * provider does not re-render on every navigation.
+ */
+function AddressWatcher({ onNavigate }: { onNavigate: () => void }) {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on each address change
+  useEffect(() => {
+    onNavigate();
+  }, [onNavigate, pathname, searchParams]);
+  return null;
+}
 
 function currentUrl() {
   return `${window.location.pathname}${window.location.search}`;
