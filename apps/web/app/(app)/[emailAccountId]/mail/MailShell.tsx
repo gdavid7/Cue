@@ -1930,6 +1930,13 @@ export function MailShell() {
                 isStarredSelected={allStarred}
                 onStarSelected={starTargets}
                 onLabelSelected={canLabel ? openLabelPicker : undefined}
+                labelUnavailableReason={
+                  currentLabelTargets.some(
+                    (target) => target.emailAccountId !== labelAccountId,
+                  )
+                    ? "Labels belong to one account"
+                    : undefined
+                }
                 onClearSelection={selection.clear}
               />
               {showSplitTabs && (
