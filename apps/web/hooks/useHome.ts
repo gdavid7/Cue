@@ -31,13 +31,15 @@ export function useHome(emailAccountId?: string | null, userId?: string) {
     setPendingLoads(loads);
   };
   const key = homeKey(emailAccountId);
-  const { mutate: mutateKey } = useSWRConfig();
+  const { cache, mutate: mutateKey } = useSWRConfig();
   useSavedHomeSeed(emailAccountId, userId);
   const home = useSWR<GetHomeResponse>(key, {
     // A row action while a load is on its way makes SWR drop that load's
-    // answer; ask again so the fresh lanes still arrive.
-    onDiscarded: () => {
-      if (key) mutateKey(key);
+    // answer; ask again so the fresh lanes still arrive. A newer load still
+    // running will answer instead: asking again then would replace it, and
+    // that one would be dropped in turn, without end.
+    onDiscarded: (discarded) => {
+      if (key && !cache.get(discarded)?.isValidating) mutateKey(key);
     },
     // Each load spends Gmail quota, so tab switches share one.
     focusThrottleInterval: FOCUS_REFRESH_MIN_MS,
@@ -108,7 +110,7 @@ export function useWarmHome(
   userId?: string,
 ) {
   const key = enabled ? homeKey(emailAccountId) : null;
-  const { mutate } = useSWRConfig();
+  const { cache, mutate } = useSWRConfig();
   // With a saved copy, the hover puts it in place instead of loading: a
   // load on its way when Today opened would be dropped as overtaken by the
   // copy, and Today loads once itself.
@@ -118,8 +120,9 @@ export function useWarmHome(
     revalidateOnFocus: false,
     revalidateOnReconnect: false,
     // Today, opened meanwhile, may change a row before this load answers.
-    onDiscarded: () => {
-      if (key) mutate(key);
+    // As in useHome, only when no newer load is running.
+    onDiscarded: (discarded) => {
+      if (key && !cache.get(discarded)?.isValidating) mutate(key);
     },
   });
 }

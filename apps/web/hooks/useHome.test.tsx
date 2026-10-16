@@ -190,6 +190,26 @@ describe("useHome with a cached Today", () => {
     expect(result.current.data).toEqual(todayData("fresher"));
   });
 
+  it("settles on the newest load when a change arrives while one is on its way", async () => {
+    const loads = pendingLoads();
+    const { result } = renderHook(() => useHome("account", "user"), {
+      wrapper: wrapper(loads.fetcher),
+    });
+    await act(() => vi.advanceTimersByTimeAsync(20));
+    await act(async () => {
+      announceTodayChanged();
+      await vi.advanceTimersByTimeAsync(20);
+    });
+    for (let load = 0; load < 10; load++) {
+      await act(async () => {
+        loads.resolve(todayData(`load ${load}`));
+        await vi.advanceTimersByTimeAsync(20);
+      });
+    }
+    expect(loads.fetcher.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(result.current.data).toEqual(todayData("load 1"));
+  });
+
   it("shows another user's Today to nobody", () => {
     writeCachedToday({
       userId: "someone-else",
