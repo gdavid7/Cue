@@ -77,8 +77,9 @@ test.describe("on a phone", () => {
     await seedChat(emailAccountId);
     const askCue = page.getByRole("button", { name: "Ask Cue" });
 
-    await askCue.focus();
-    await page.keyboard.press("Enter");
+    // Clicking focuses the button, which is where focus should come back to.
+    // (Enter on it would also be mail's "open" shortcut.)
+    await askCue.click();
     const panel = page.getByRole("dialog", { name: "Chat" });
     await expect(panel).toBeFocused();
     await expect(
@@ -209,6 +210,12 @@ async function openAssistantPanel(page: Page) {
     name: "Resize assistant panel",
   });
   await expect(handle).toBeVisible();
+  // The panel slides in; measuring the handle mid-slide puts the drag inside
+  // the panel instead of on its edge.
+  await expect(handle.locator("..")).toHaveCSS(
+    "transform",
+    "matrix(1, 0, 0, 1, 0, 0)",
+  );
   return handle;
 }
 
