@@ -32,6 +32,7 @@ import {
 import { isDuplicateError, isNotFoundError } from "@/utils/prisma-helpers";
 import { type Logger, toLogJson } from "@/utils/logger";
 import { invalidateAccountValidation } from "@/utils/redis/account-validation";
+import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
 import { prepareMemberRemovalNotifications } from "@/utils/team-comments/member-removal";
 import {
   DELETE_ACCOUNT_REQUIRES_OWNER_TRANSFER_ERROR,
@@ -353,10 +354,13 @@ async function runDeleteEmailAccountTransaction(
     );
   }
 
-  await invalidateAccountValidation({
-    userId,
-    emailAccountId: context.emailAccountId,
-  });
+  await Promise.all([
+    invalidateAccountValidation({
+      userId,
+      emailAccountId: context.emailAccountId,
+    }),
+    invalidateUserOwnAddresses(userId),
+  ]);
 }
 
 function getPrismaErrorCode(error: unknown) {

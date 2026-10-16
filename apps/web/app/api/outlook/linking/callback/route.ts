@@ -50,6 +50,7 @@ import {
 import type { Logger } from "@/utils/logger";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 import { scheduleWatchAfterLinking } from "@/utils/email/watch-after-linking";
+import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
 
 export const GET = withError("outlook/linking/callback", async (request) => {
   const actorSession = await auth(request.headers);
@@ -575,6 +576,7 @@ async function completeMicrosoftAccountLinking({
   targetUserId: string;
 }) {
   await connectCalendarAtSignIn({ accountId, logger });
+  await invalidateUserOwnAddresses(targetUserId);
   await setOAuthCodeResult(code, { success });
 
   scheduleWatchAfterLinking({ targetUserId, logger });

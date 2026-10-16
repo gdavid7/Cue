@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
 import prisma from "@/utils/__mocks__/prisma";
+import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 import { env } from "@/env";
 
@@ -75,6 +76,10 @@ vi.mock("@/utils/oauth/account-linking", async (importActual) => {
     handleAccountLinking: mockHandleAccountLinking,
   };
 });
+
+vi.mock("@/utils/user/own-addresses", () => ({
+  invalidateUserOwnAddresses: vi.fn(),
+}));
 
 vi.mock("@/utils/user/merge-account", () => ({
   mergeAccount: vi.fn(),
@@ -317,6 +322,7 @@ describe("google linking callback route", () => {
       accountId: "account-123",
       logger: expect.anything(),
     });
+    expect(invalidateUserOwnAddresses).toHaveBeenCalledWith("user-123");
   });
 
   it("rejects the callback when the actor differs from the target user", async () => {

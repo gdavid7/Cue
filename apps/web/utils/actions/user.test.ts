@@ -12,6 +12,7 @@ import { LAST_EMAIL_ACCOUNT_COOKIE } from "@/utils/cookies";
 import { publishConversationChange } from "@/utils/team-comments/events";
 import { deleteTinybirdEmailData } from "@inboxzero/tinybird";
 import { invalidateAccountValidation } from "@/utils/redis/account-validation";
+import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
 import { deleteAccountAction, deleteEmailAccountAction } from "./user";
 
 vi.mock("@/utils/prisma");
@@ -60,6 +61,9 @@ vi.mock("@/utils/premium/seats", () => ({
 }));
 vi.mock("@/utils/redis/account-validation", () => ({
   invalidateAccountValidation: vi.fn(() => Promise.resolve()),
+}));
+vi.mock("@/utils/user/own-addresses", () => ({
+  invalidateUserOwnAddresses: vi.fn(() => Promise.resolve()),
 }));
 vi.mock("@/utils/ai/draft-cleanup", () => ({
   cleanupAIDraftsForAccount: vi.fn(),
@@ -300,6 +304,22 @@ describe("deleteEmailAccountAction", () => {
       userId: "user-1",
       emailAccountId: "secondary-account",
     });
+  });
+
+  it("forgets the user's own addresses after deleting an account", async () => {
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      email: "secondary@example.com",
+      accountId: "account-2",
+      account: { provider: "google" },
+      user: { email: "primary@example.com" },
+    } as Awaited<ReturnType<typeof prisma.emailAccount.findUnique>>);
+
+    const result = await deleteEmailAccountAction({
+      emailAccountId: "secondary-account",
+    });
+
+    expect(result?.serverError).toBeUndefined();
+    expect(invalidateUserOwnAddresses).toHaveBeenCalledWith("user-1");
   });
 
   it("clears the last-account cookie after deleting the account it names", async () => {

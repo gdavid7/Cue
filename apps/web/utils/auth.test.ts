@@ -16,6 +16,7 @@ import {
   handleReferralOnSignUp,
 } from "@/utils/auth";
 import prisma from "@/utils/__mocks__/prisma";
+import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
 import { ACCOUNT_LINKING } from "@/utils/auth/account-linking";
 import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
 
@@ -57,6 +58,9 @@ vi.mock("@/utils/prisma");
 vi.mock("better-auth/cookies", async (importActual) => ({
   ...(await importActual<typeof import("better-auth/cookies")>()),
   setSessionCookie: vi.fn(),
+}));
+vi.mock("@/utils/user/own-addresses", () => ({
+  invalidateUserOwnAddresses: vi.fn(),
 }));
 vi.mock("@/utils/redis/account-validation", () => ({
   invalidateAccountValidation: vi.fn(),
@@ -477,6 +481,7 @@ describe("handleLinkAccount", () => {
       { path: "/get-access-token", context: {} },
     );
     expect(prisma.user.update).not.toHaveBeenCalled();
+    expect(invalidateUserOwnAddresses).not.toHaveBeenCalled();
     expect(prisma.emailAccount.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { name: "Test User", image: null } }),
     );
@@ -645,6 +650,7 @@ describe("handleLinkAccount", () => {
       ],
     });
     expect(upsert?.update).not.toHaveProperty("mailSplits");
+    expect(invalidateUserOwnAddresses).toHaveBeenCalledWith("user_1");
     expect(mockAfter).toHaveBeenCalledOnce();
     expect(ensureEmailAccountsWatched).not.toHaveBeenCalled();
 
