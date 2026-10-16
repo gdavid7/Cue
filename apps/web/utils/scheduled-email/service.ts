@@ -187,7 +187,12 @@ export async function cancelHeldEmail(
       heldForUndo: true,
       status: { in: ["PENDING", "BLOCKED_AUTH"] },
     },
-    data: { status: "CANCELLED", error: null, payload: {} },
+    data: {
+      status: "CANCELLED",
+      reminderStatus: "CANCELLED",
+      error: null,
+      payload: {},
+    },
   });
   if (cancelled.count) return "cancelled";
   const existing = await findScheduledEmail(emailAccountId, clientMutationId);
@@ -393,9 +398,17 @@ export async function processScheduledEmail(
         },
       });
     } else {
+      // A held send isn't retried once it fails or turns uncertain, so its
+      // reminder has nothing to follow up. A scheduled send keeps its
+      // reminder for a retry, and a reconnect resumes a blocked hold.
+      const reminderEnds =
+        row.heldForUndo &&
+        row.reminderStatus === "PENDING" &&
+        outcome.status !== "blocked_auth";
       await prisma.scheduledEmail.updateMany({
         where: claimedWhere,
         data: {
+          ...(reminderEnds ? { reminderStatus: "CANCELLED" as const } : {}),
           status:
             outcome.status === "blocked_auth"
               ? "BLOCKED_AUTH"

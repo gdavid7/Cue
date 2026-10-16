@@ -7,12 +7,15 @@ export async function deleteExpiredEmailSendOperations(
 ): Promise<number> {
   const expiredWhere = expiredSendOperationWhere(now);
   // An undo hold only matters while its send can still be retried, or while
-  // the reminder it carries is still to run.
+  // a sent one has a reminder still to run.
   await prisma.scheduledEmail.deleteMany({
     where: {
       heldForUndo: true,
       status: { in: ["SENT", "CANCELLED", "FAILED", "UNCERTAIN"] },
-      reminderStatus: { notIn: ["PENDING", "PROCESSING"] },
+      NOT: {
+        status: "SENT",
+        reminderStatus: { in: ["PENDING", "PROCESSING"] },
+      },
       updatedAt: expiredWhere.updatedAt,
     },
   });

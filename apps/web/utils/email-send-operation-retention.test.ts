@@ -18,7 +18,10 @@ describe("deleteExpiredEmailSendOperations", () => {
     expect(prisma.scheduledEmail.deleteMany).toHaveBeenCalledWith({
       where: expect.objectContaining({
         heldForUndo: true,
-        reminderStatus: { notIn: ["PENDING", "PROCESSING"] },
+        NOT: {
+          status: "SENT",
+          reminderStatus: { in: ["PENDING", "PROCESSING"] },
+        },
       }),
     });
   });
