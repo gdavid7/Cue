@@ -1,6 +1,7 @@
-import type {
-  LanguageModelV4,
-  SharedV4ProviderOptions,
+import {
+  APICallError,
+  type LanguageModelV4,
+  type SharedV4ProviderOptions,
 } from "@ai-sdk/provider";
 import type { GoogleLanguageModelOptions } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
@@ -19,7 +20,7 @@ import { env } from "@/env";
 import { Provider } from "@/utils/llms/config";
 import type { UserAIFields } from "@/utils/llms/types";
 import { createScopedLogger, toLogJson } from "@/utils/logger";
-import { SafeError } from "../error";
+import { isAnthropicBillingLimitError, SafeError } from "../error";
 import { assertCliLlmEnabled, createCliLanguageModel } from "./cli-provider";
 
 const DEFAULT_GOOGLE_THINKING_BUDGET = 128;
@@ -372,9 +373,11 @@ function selectModel(
       return {
         provider: Provider.ANTHROPIC,
         modelName,
-        model: createAnthropic({
-          apiKey: resolveApiKey(aiApiKey, env.ANTHROPIC_API_KEY),
-        })(modelName),
+        model: withBillingLimitsNotRetried(
+          createAnthropic({
+            apiKey: resolveApiKey(aiApiKey, env.ANTHROPIC_API_KEY),
+          })(modelName),
+        ),
         providerOptions: getAnthropicProviderOptions(modelName, modelType),
       };
     }
@@ -780,6 +783,48 @@ function getAnthropicProviderOptions(modelName: string, modelType: ModelType) {
         ? { fallbacks: "default" as const }
         : {}),
     },
+  };
+}
+
+// Anthropic reports its monthly spend cap as a retryable 429, so the AI SDK
+// would retry it with backoff although the cap lasts until the month ends.
+// Marking billing limits non-retryable sends the call to the next model at
+// once.
+function withBillingLimitsNotRetried(model: LanguageModelV4): LanguageModelV4 {
+  const rethrow = (error: unknown): never => {
+    if (
+      APICallError.isInstance(error) &&
+      error.isRetryable &&
+      isAnthropicBillingLimitError(error)
+    ) {
+      throw new APICallError({
+        message: error.message,
+        url: error.url,
+        requestBodyValues: error.requestBodyValues,
+        statusCode: error.statusCode,
+        responseHeaders: error.responseHeaders,
+        responseBody: error.responseBody,
+        cause: error.cause,
+        data: error.data,
+        isRetryable: false,
+      });
+    }
+    throw error;
+  };
+
+  return {
+    specificationVersion: model.specificationVersion,
+    get provider() {
+      return model.provider;
+    },
+    get modelId() {
+      return model.modelId;
+    },
+    get supportedUrls() {
+      return model.supportedUrls;
+    },
+    doGenerate: (options) => model.doGenerate(options).catch(rethrow),
+    doStream: (options) => model.doStream(options).catch(rethrow),
   };
 }
 

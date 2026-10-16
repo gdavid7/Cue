@@ -687,12 +687,20 @@ function isNoObjectGeneratedError(
   return AiSdkErrorMarker.matches(error, "AI_NoObjectGeneratedError");
 }
 
+// Providers' error schemas can drop `details`, so fall back to the raw body.
 function getProviderErrorCode(error: APICallError): string | undefined {
-  const data = error.data as
-    | { error?: { details?: { error_code?: unknown } } }
-    | undefined;
-  const errorCode = data?.error?.details?.error_code;
-  return typeof errorCode === "string" ? errorCode : undefined;
+  type ErrorBody = { error?: { details?: { error_code?: unknown } } };
+  const fromData = (error.data as ErrorBody | undefined)?.error?.details
+    ?.error_code;
+  if (typeof fromData === "string") return fromData;
+  if (!error.responseBody) return;
+  try {
+    const body = JSON.parse(error.responseBody) as ErrorBody;
+    const fromBody = body?.error?.details?.error_code;
+    return typeof fromBody === "string" ? fromBody : undefined;
+  } catch {
+    return;
+  }
 }
 
 function getProviderErrorType(error: APICallError): string | undefined {
