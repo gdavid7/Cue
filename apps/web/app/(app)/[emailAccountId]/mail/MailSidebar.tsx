@@ -1027,13 +1027,15 @@ function NavRow({
   collapsed?: boolean;
 }) {
   const pendingNavigation = useContext(PendingNavigationContext);
+  // aria-current stays with the open page; only the highlight runs ahead.
+  const highlighted = isSidebarRowActive({
+    active,
+    href,
+    pending: pendingNavigation.pending,
+    pathname: pendingNavigation.pathname,
+  });
   const presentation = getMailSidebarRowPresentation({
-    active: isSidebarRowActive({
-      active,
-      href,
-      pending: pendingNavigation.pending,
-      pathname: pendingNavigation.pathname,
-    }),
+    active: highlighted,
     icon,
     name,
     count,
@@ -1057,6 +1059,7 @@ function NavRow({
       <Link
         href={href}
         aria-current={active ? "page" : undefined}
+        data-highlighted={highlighted || undefined}
         className={className}
         // Views of the open mail screen change on the client, so fetching
         // them from the server ahead of time would be wasted.
