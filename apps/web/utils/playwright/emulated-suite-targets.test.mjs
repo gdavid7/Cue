@@ -291,3 +291,30 @@ test("every spec in the repo that falls into a provider-choosing group is listed
   );
   expect(() => batchPlaywrightTargets(targets)).not.toThrow();
 });
+
+test("the batch runner accepts feature group names alongside areas and specs", () => {
+  const webRoot = path.resolve(import.meta.dirname, "../..");
+  const runner = path.join(
+    webRoot,
+    "__tests__/playwright/run-emulated-suite.mjs",
+  );
+  const result = spawnSync(
+    process.execPath,
+    [runner, "mail-triage", "settings/sign-out.spec.ts", "--list-batches"],
+    {
+      cwd: webRoot,
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_STEP_SUMMARY: "" },
+    },
+  );
+
+  expect(result.status, result.stderr).toBe(0);
+  const batches = JSON.parse(result.stdout);
+  expect(batches.map(({ name }) => name)).toEqual(["mail-triage", "settings"]);
+  expect(batches[0].paths).toContain(
+    "__tests__/playwright/emulated/mail/triage-actions.spec.ts",
+  );
+  expect(batches[1].paths).toEqual([
+    "__tests__/playwright/emulated/settings/sign-out.spec.ts",
+  ]);
+});

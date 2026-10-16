@@ -153,6 +153,13 @@ const featureGroups = [
   },
 ];
 
+/** A feature group's specs as emulated target paths, or undefined for an unknown name. */
+export function getFeatureGroupTargetPaths(name) {
+  return featureGroups
+    .find((group) => group.name === name)
+    ?.specs.map((spec) => `__tests__/playwright/emulated/${spec}`);
+}
+
 export function expandPlaywrightTargets(paths, appRoot) {
   const files = new Set();
   for (const targetPath of paths) {

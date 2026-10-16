@@ -3,6 +3,8 @@ export function expandPlaywrightTargets(
   appRoot: string,
 ): Array<{ name: string; path: string }>;
 
+export function getFeatureGroupTargetPaths(name: string): string[] | undefined;
+
 export function getPlaywrightTargetName(specPath: string): string;
 
 export function getPlaywrightSpecPathFromTargetName(targetName: string): string;
