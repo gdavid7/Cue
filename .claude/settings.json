@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git fetch:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git grep:*)",
+      "Bash(git blame:*)",
+      "Bash(git worktree list:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(jq:*)",
+      "Bash(pwd)",
+      "Bash(which:*)",
+      "Bash(pnpm install --frozen-lockfile:*)",
+      "Bash(pnpm test:*)",
+      "Bash(pnpm check:*)",
+      "Bash(pnpm fix:*)",
+      "Bash(pnpm typecheck:*)",
+      "Bash(pnpm test-integration:*)",
+      "Bash(pnpm --filter inbox-zero-ai test:*)",
+      "Bash(pnpm -F inbox-zero-ai test:*)",
+      "Bash(pnpm exec vitest run:*)",
+      "Bash(pnpm exec biome:*)",
+      "Bash(pnpm -F inbox-zero-ai exec prisma generate:*)",
+      "Bash(node --test:*)",
+      "Bash(scripts/agent-run.sh:*)",
+      "Bash(scripts/dispatch-browser-qa.sh:*)",
+      "Bash(scripts/check-skill-links.mjs:*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-start.sh",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-bash.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/biome-edited-file.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
