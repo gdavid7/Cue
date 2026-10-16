@@ -5,17 +5,18 @@ permissions:
 
 on:
   push:
-    branches: [main]
+    branches: [claude/upbeat-sagan-6c5ed8, production, "claude/**"]
     paths-ignore:
       - "docs/**"
       - "**/*.md"
       - "**/*.mdx"
   pull_request:
-    branches: [main]
+    branches: [claude/upbeat-sagan-6c5ed8, production, "claude/**"]
     paths-ignore:
       - "docs/**"
       - "**/*.md"
       - "**/*.mdx"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
