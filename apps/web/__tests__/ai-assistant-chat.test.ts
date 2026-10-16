@@ -902,7 +902,9 @@ describe("aiProcessAssistantChat", () => {
       content: "assistant response",
     });
     expect(args.messages[3].role).toBe("user");
-    expect(args.messages[3].content).toContain(
+    expect(args.messages[3].content).toContain("Current timestamp:");
+    expect(args.messages[4].role).toBe("user");
+    expect(args.messages[4].content).toContain(
       "Memories from previous conversations:",
     );
     expect(args.messages.at(-1)).toEqual({

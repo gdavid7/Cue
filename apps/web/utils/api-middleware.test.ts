@@ -25,7 +25,10 @@ vi.mock("@/utils/email/provider", () => ({
 vi.mock("@/utils/email/rate-limit", () => ({
   recordRateLimitFromApiError: vi.fn(),
 }));
-vi.mock("@/utils/email/rate-limit-mode-error", () => ({
+vi.mock("@/utils/email/rate-limit-mode-error", async (importActual) => ({
+  ...(await importActual<
+    typeof import("@/utils/email/rate-limit-mode-error")
+  >()),
   isProviderRateLimitModeError: vi.fn(),
 }));
 vi.mock("@/utils/error", async (importActual) => {
