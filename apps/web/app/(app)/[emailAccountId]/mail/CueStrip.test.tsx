@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   plans: [] as { status: string; rule: { systemType: string } }[],
   insight: null as { action: "reply" | "do" | "none" } | null,
   insightFailures: 0,
+  insightByMessage: {} as Record<string, "reply" | "do" | "none">,
+  insightGate: null as Promise<void> | null,
   aiAccess: true,
 }));
 
@@ -50,6 +52,8 @@ describe("CueStrip", () => {
     mocks.plans = [];
     mocks.insight = null;
     mocks.insightFailures = 0;
+    mocks.insightByMessage = {};
+    mocks.insightGate = null;
     mocks.aiAccess = true;
   });
   afterEach(cleanup);
@@ -160,13 +164,56 @@ describe("CueStrip", () => {
     expect(container.querySelector('[aria-busy="true"]')).toBeNull();
   });
 
-  it("holds no space for machine mail and asks nothing about it", async () => {
+  // The sender's address only guesses whether to hold space; Cue decides.
+  it("shows for a person writing from an address like hello@ when Cue says it needs a reply", async () => {
+    mocks.insight = { action: "reply" };
+    renderStrip({ labels: [], from: "Priya Shah <hello@studio.example>" });
+
+    expect(await screen.findByText(SUMMARY)).toBeTruthy();
+  });
+
+  it("holds no space up front for a no-reply sender", () => {
     renderStrip({ labels: [], from: "Acme <no-reply@acme.example>" });
 
     expect(screen.queryByRole("region", { name: "Cue summary" })).toBeNull();
-    await flush();
-    expect(requested("/api/user/inbox-insights")).toBe(false);
+  });
+
+  it("keeps a no-reply newsletter hidden and asks for no summary", async () => {
+    renderStrip({
+      labels: ["Label_news"],
+      from: "Field Notes <no-reply@fieldnotes.example>",
+    });
+
+    await waitForRequest("/api/user/thread-plans");
+    expect(screen.queryByRole("region", { name: "Cue summary" })).toBeNull();
     expect(requested("/api/user/thread-brief")).toBe(false);
+  });
+
+  // A new message in the open thread is decided by its own note, not by the
+  // note on the message before it, which SWR keeps showing while it loads.
+  it("decides a newly arrived message by its own note", async () => {
+    let release = () => {};
+    mocks.insightByMessage = { m1: "none", m2: "reply" };
+    const view = renderStrip({ labels: [] });
+    await waitForRequest("/api/user/inbox-insights");
+    await vi.waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Cue summary" })).toBeNull(),
+    );
+
+    mocks.insightGate = new Promise((resolve) => {
+      release = resolve;
+    });
+    view.rerender({
+      messages: [
+        message("m1", ["INBOX"], "Maya Patel <maya@example.com>"),
+        message("m2", ["INBOX"], "Maya Patel <maya@example.com>"),
+      ],
+    });
+
+    // Held while m2's note loads, rather than hidden on m1's.
+    expect(screen.getByRole("region", { name: "Cue summary" })).toBeTruthy();
+    release();
+    expect(await screen.findByText(SUMMARY)).toBeTruthy();
   });
 
   // In All inboxes the screen's account may not own the open thread.
@@ -298,20 +345,25 @@ function renderStrip(
     onAskCue: vi.fn(),
     ...overrides,
   };
-  render(
+  const cache = new Map();
+  const tree = (current: ComponentProps<typeof CueStrip>) => (
     <SWRConfig
       value={{
-        provider: () => new Map(),
+        provider: () => cache,
         shouldRetryOnError: swr.errorRetryInterval !== undefined,
         errorRetryInterval: swr.errorRetryInterval,
         dedupingInterval: 0,
         fetcher,
       }}
     >
-      <CueStrip {...props} />
-    </SWRConfig>,
+      <CueStrip {...current} />
+    </SWRConfig>
   );
-  return props;
+  const view = render(tree(props));
+  return Object.assign(props, {
+    rerender: (changes: Partial<ComponentProps<typeof CueStrip>>) =>
+      view.rerender(tree({ ...props, ...changes })),
+  });
 }
 
 async function fetcher(key: string | [string, string]) {
@@ -324,12 +376,15 @@ async function fetcher(key: string | [string, string]) {
     mocks.insightFailures -= 1;
     throw new Error("Gmail is busy for this account");
   }
-  if (url.startsWith("/api/user/inbox-insights"))
+  if (url.startsWith("/api/user/inbox-insights")) {
+    const asked = decodeURIComponent(url.split(":").at(-1) ?? "");
+    const byMessage = mocks.insightByMessage[asked];
+    if (byMessage && mocks.insightGate) await mocks.insightGate;
+    const insight = byMessage ? { action: byMessage } : mocks.insight;
     return {
-      insights: mocks.insight
-        ? { t1: { insight: mocks.insight, meeting: null, reply: null } }
-        : {},
+      insights: insight ? { t1: { insight, meeting: null, reply: null } } : {},
     };
+  }
   if (url.startsWith("/api/user/save-destinations")) return { calendar: false };
   throw new Error(`Unexpected request ${url}`);
 }

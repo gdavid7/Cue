@@ -89,7 +89,6 @@ export function CueStrip({
     getCueStripVisibility({
       categories,
       categoriesLoaded,
-      fromPerson,
       insight: undefined,
     }) === "pending";
 
@@ -103,14 +102,19 @@ export function CueStrip({
     [enabled, messageId, needsInsight, threadId, emailAccountId],
   );
   // A failed lookup isn't an answer; SWR retries it, and the space stays held.
-  const { data: insights } = useInboxInsights(insightItems);
-  let insight = insights ? (insights[threadId]?.insight ?? null) : undefined;
+  // While the current message's note loads, SWR keeps showing the previous
+  // message's: that one doesn't count.
+  const { data: insights, isLoading: insightLoading } =
+    useInboxInsights(insightItems);
+  let insight =
+    insights && !insightLoading
+      ? (insights[threadId]?.insight ?? null)
+      : undefined;
   if (!notesPossible) insight = null;
 
   const visibility = getCueStripVisibility({
     categories,
     categoriesLoaded,
-    fromPerson,
     insight,
   });
 
@@ -118,8 +122,11 @@ export function CueStrip({
   // never pushes the messages down; one that won't show folds away instead.
   // Without AI only a category can show it, so nothing is held on a guess.
   const [heldFor, setHeldFor] = useState<string>();
+  // A sender that doesn't look like a person holds nothing up front; if Cue
+  // still decides it needs the user, the strip appears late.
   const couldShow =
-    visibility === "show" || (visibility === "pending" && notesPossible);
+    visibility === "show" ||
+    (visibility === "pending" && notesPossible && fromPerson);
   if (messageId && couldShow && heldFor !== messageId) setHeldFor(messageId);
   // Once folded it stays folded for this message: opening again when a slow
   // answer lands would move the messages a second time.

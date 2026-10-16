@@ -69,8 +69,8 @@ export function getThreadCategories({
  * one: a summary of a newsletter or receipt costs a model call and is the
  * likeliest to be wrong. A conversation category wins over a bulk one, since
  * a mailing someone answered has become a conversation. Without a category,
- * it needs a newest message from a person, and then Cue's note on it decides:
- * it shows when the email asks the user to reply or act.
+ * Cue's note on the newest message decides: it shows when the email asks the
+ * user to reply or act.
  *
  * "pending" means it could still show, so the reader holds its space: the
  * messages below never move down when it lands, and fold up if it doesn't.
@@ -78,20 +78,16 @@ export function getThreadCategories({
 export function getCueStripVisibility({
   categories,
   categoriesLoaded,
-  fromPerson,
   insight,
 }: {
   categories: Set<string>;
   /** False while the thread's rule runs are still loading. */
   categoriesLoaded: boolean;
-  /** Whether someone else wrote the newest message, as a person (`isFromPerson`). */
-  fromPerson: boolean;
   /** Undefined while loading; null when Cue has no note for the email. */
   insight: Pick<EmailInsight, "action"> | null | undefined;
 }): CueStripVisibility {
   if (CONVERSATION_TYPES.some((type) => categories.has(type))) return "show";
   if (AUTOMATED_TYPES.some((type) => categories.has(type))) return "hide";
-  if (!fromPerson) return "hide";
   if (!categoriesLoaded || insight === undefined) return "pending";
   return insight?.action === "reply" || insight?.action === "do"
     ? "show"
@@ -99,8 +95,10 @@ export function getCueStripVisibility({
 }
 
 /**
- * A person's own address, not a no-reply or notification sender, and not mail
- * sent to a list. Decided from the message alone, so the reader knows at once.
+ * Whether the newest message looks like a person's: not a no-reply or
+ * notification address, and not mail sent to a list. Only a guess, from the
+ * message alone, at whether to hold the strip's space before Cue decides; it
+ * never hides the strip. Cue's category and note decide that.
  */
 export function isFromPerson(headers: {
   from: string;

@@ -89,27 +89,6 @@ describe("when the Cue strip shows", () => {
     expect(visibilityFor({ insight: undefined })).toBe("pending");
   });
 
-  // Bulk and machine mail is decided at once, so the reader never holds space
-  // for a strip that won't come.
-  it("hides for uncategorised mail that isn't from a person, without waiting", () => {
-    expect(
-      visibilityFor({
-        fromPerson: false,
-        categoriesLoaded: false,
-        insight: undefined,
-      }),
-    ).toBe("hide");
-    expect(
-      visibilityFor({ fromPerson: false, insight: { action: "do" } }),
-    ).toBe("hide");
-  });
-
-  it("still shows for a conversation whose newest message is the user's own", () => {
-    expect(
-      visibilityFor({ labels: ["Label_awaiting"], fromPerson: false }),
-    ).toBe("show");
-  });
-
   it("doesn't wait for anything once a label settles it", () => {
     expect(
       visibilityFor({
@@ -121,6 +100,8 @@ describe("when the Cue strip shows", () => {
   });
 });
 
+// Only a guess at whether to hold the strip's space before Cue decides; it
+// never hides the strip on its own.
 describe("isFromPerson", () => {
   it("counts a person writing from their own address", () => {
     expect(isFromPerson({ from: "Maya Chen <maya@talent.example>" })).toBe(
@@ -149,14 +130,8 @@ function visibilityFor(options: {
   categoriesLoaded?: boolean;
   /** Left out: Cue has no note. Passed as undefined: the note is loading. */
   insight?: { action: "reply" | "do" | "none" } | null;
-  fromPerson?: boolean;
 }) {
-  const {
-    labels = [],
-    planTypes = [],
-    categoriesLoaded = true,
-    fromPerson = true,
-  } = options;
+  const { labels = [], planTypes = [], categoriesLoaded = true } = options;
   const insight = "insight" in options ? options.insight : null;
   return getCueStripVisibility({
     categories: getThreadCategories({
@@ -168,7 +143,6 @@ function visibilityFor(options: {
       })),
     }),
     categoriesLoaded,
-    fromPerson,
     insight,
   });
 }
