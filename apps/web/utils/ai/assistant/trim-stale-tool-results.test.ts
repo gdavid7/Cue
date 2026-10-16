@@ -1,6 +1,7 @@
 import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
 import {
+  projectEarlierTurnToolResults,
   RECENT_TOOL_RESULTS_TO_KEEP,
   trimStaleToolResults,
 } from "@/utils/ai/assistant/trim-stale-tool-results";
@@ -123,6 +124,35 @@ describe("trimStaleToolResults", () => {
       success: true,
       movedCount: 1,
     });
+  });
+});
+
+describe("projectEarlierTurnToolResults", () => {
+  it("replays earlier turns' searches in the model's view and leaves the latest turn alone", () => {
+    const messages = [
+      userMessage("What's new?"),
+      ...searchRound(0, { snippetLength: 20 }),
+      userMessage("And from Acme?"),
+      ...searchRound(1, { snippetLength: 20 }),
+    ];
+
+    const projected = projectEarlierTurnToolResults(messages);
+
+    const [earlier] = (
+      getToolOutputValue(projected, "call-0") as {
+        messages: Array<Record<string, unknown>>;
+      }
+    ).messages;
+    expect(earlier).toMatchObject({
+      messageId: "message-0",
+      threadId: "thread-0",
+      subject: "Subject 0",
+    });
+    expect(earlier).not.toHaveProperty("externalUrl");
+    expect(earlier).not.toHaveProperty("hasAttachments");
+    expect(getToolOutputValue(projected, "call-1")).toEqual(
+      getToolOutputValue(messages, "call-1"),
+    );
   });
 });
 

@@ -70,6 +70,7 @@ import {
   runOnOtherAccounts,
 } from "@/utils/ai/assistant/chat-other-accounts";
 import { toOtherAccountEmailId } from "@/utils/ai/assistant/other-account-email-id";
+import { toSearchInboxModelValue } from "@/utils/ai/assistant/search-inbox-model-output";
 import {
   type AccountSearch,
   translateAccountSearch,
@@ -614,6 +615,7 @@ const gmailSearchInboxTool = (options: InboxToolOptions) =>
         otherAccounts,
       });
     },
+    toModelOutput: searchInboxModelOutput,
   });
 
 const outlookSearchInboxTool = (options: InboxToolOptions) =>
@@ -636,6 +638,7 @@ const outlookSearchInboxTool = (options: InboxToolOptions) =>
         otherAccounts,
       });
     },
+    toModelOutput: searchInboxModelOutput,
   });
 
 const searchInboxTools = {
@@ -2526,4 +2529,11 @@ async function extractAttachmentText(
   }
 
   return { text: "", truncated: false };
+}
+
+function searchInboxModelOutput({ output }: { output: unknown }) {
+  return {
+    type: "json" as const,
+    value: toSearchInboxModelValue(JSON.parse(JSON.stringify(output))),
+  };
 }
