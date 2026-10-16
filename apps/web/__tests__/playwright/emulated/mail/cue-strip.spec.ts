@@ -42,7 +42,12 @@ const EMPTY_INSIGHT = {
 test.describe.configure({ mode: "serial" });
 
 // The emulator lives for the whole spec, while each test starts a new device.
-const threads = { person: "", newsletter: "", unsorted: "" };
+const threads = {
+  person: "",
+  newsletter: "",
+  unsorted: "",
+  unsortedMessage: "",
+};
 
 test.beforeEach(async ({ page }) => {
   test.skip(
@@ -92,24 +97,25 @@ test.beforeEach(async ({ page }) => {
     ensureLabel(page, "FYI"),
     ensureLabel(page, "Newsletter"),
   ]);
-  threads.person = await ensureMessage(page, {
+  ({ threadId: threads.person } = await ensureMessage(page, {
     from: "Maya Chen <maya@talent.example>",
     subject: PERSON_SUBJECT,
     body: PERSON_BODY,
     labelIds: ["INBOX", "UNREAD", fyi],
-  });
-  threads.newsletter = await ensureMessage(page, {
+  }));
+  ({ threadId: threads.newsletter } = await ensureMessage(page, {
     from: "Field Notes <hello@fieldnotes.example>",
     subject: NEWSLETTER_SUBJECT,
     body: "This week: three essays on slow travel. Read online or unsubscribe.",
     labelIds: ["INBOX", "UNREAD", newsletter],
-  });
-  threads.unsorted = await ensureMessage(page, {
-    from: "Priya Shah <priya@studio.example>",
-    subject: UNSORTED_SUBJECT,
-    body: "Are you free for coffee on Tuesday afternoon? Priya",
-    labelIds: ["INBOX", "UNREAD"],
-  });
+  }));
+  ({ threadId: threads.unsorted, messageId: threads.unsortedMessage } =
+    await ensureMessage(page, {
+      from: "Priya Shah <priya@studio.example>",
+      subject: UNSORTED_SUBJECT,
+      body: "Are you free for coffee on Tuesday afternoon? Priya",
+      labelIds: ["INBOX", "UNREAD"],
+    }));
 });
 
 test.afterEach(async ({ page }) => {
@@ -184,22 +190,43 @@ test("the conversation doesn't move when the strip settles", async ({
   page,
 }, testInfo) => {
   const emailAccountId = await getEmailAccountId(page);
+  // Cue's note on the email is what decides the strip here. It's worked out
+  // on the server ahead of time, as the inbox would have, so this checks the
+  // reader, not how fast the emulated provider answers under load.
+  await expect
+    .poll(
+      async () => {
+        const response = await page.request.get(
+          `/api/user/inbox-insights?items=${threads.unsorted}:${threads.unsortedMessage}`,
+          { headers: { "X-Email-Account-ID": emailAccountId } },
+        );
+        if (!response.ok()) return null;
+        const { insights } = await response.json();
+        return insights[threads.unsorted]?.insight?.action ?? null;
+      },
+      { timeout: 60_000 },
+    )
+    .toBe("reply");
+
   await page.addInitScript(() => {
-    const tops: number[] = [];
-    (window as unknown as { __messageTops: number[] }).__messageTops = tops;
+    const tops: string[] = [];
+    (window as unknown as { __messageTops: string[] }).__messageTops = tops;
     // Measured from the subject above it, so the page settling around the
     // reader (banners, the list loading) doesn't count; only what sits
     // between the subject and the first message, which is the strip.
     const sample = () => {
       const subject = document.querySelector("[data-mail-reader-subject]");
       const message = document.querySelector("[data-thread-message-id]");
-      if (subject && message)
-        tops.push(
-          Math.round(
-            message.getBoundingClientRect().top -
-              subject.getBoundingClientRect().top,
-          ),
+      const strip = document.querySelector("[data-cue-strip-state]");
+      if (subject && message) {
+        const offset = Math.round(
+          message.getBoundingClientRect().top -
+            subject.getBoundingClientRect().top,
         );
+        // The strip's state and height ride along, to explain any change.
+        const entry = `${offset}:${strip?.getAttribute("data-cue-strip-state") ?? "none"}:${Math.round(strip?.getBoundingClientRect().height ?? 0)}`;
+        if (tops.at(-1) !== entry) tops.push(entry);
+      }
       requestAnimationFrame(sample);
     };
     requestAnimationFrame(sample);
@@ -212,11 +239,12 @@ test("the conversation doesn't move when the strip settles", async ({
   });
   await expect(strip).toHaveAttribute("aria-busy", "false");
 
-  const tops = await page.evaluate(
-    () => (window as unknown as { __messageTops: number[] }).__messageTops,
+  const samples = await page.evaluate(
+    () => (window as unknown as { __messageTops: string[] }).__messageTops,
   );
-  expect(tops.length).toBeGreaterThan(0);
-  expect(new Set(tops)).toEqual(new Set([tops[0]]));
+  const offsets = samples.map((sample) => sample.split(":")[0]);
+  expect(offsets.length).toBeGreaterThan(0);
+  expect(new Set(offsets), samples.join(" → ")).toEqual(new Set([offsets[0]]));
   await capturePlaywrightCheckpoint(page, testInfo, "cue-strip-settled-late");
 
   // Ask Cue opens the assistant on this email with the cursor in it.
@@ -413,7 +441,8 @@ async function ensureMessage(
     const subject = payload?.headers?.find(
       (header) => header.name.toLowerCase() === "subject",
     )?.value;
-    if (subject === input.subject) return candidate.threadId;
+    if (subject === input.subject)
+      return { threadId: candidate.threadId, messageId: candidate.id };
   }
 
   const email = process.env.PLAYWRIGHT_TEST_EMAIL;
@@ -433,7 +462,8 @@ async function ensureMessage(
     },
   );
   expect(inserted.ok(), await inserted.text()).toBe(true);
-  return ((await inserted.json()) as { threadId: string }).threadId;
+  const message = (await inserted.json()) as { id: string; threadId: string };
+  return { threadId: message.threadId, messageId: message.id };
 }
 
 async function gmailHeaders() {
