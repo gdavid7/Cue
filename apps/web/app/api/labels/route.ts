@@ -39,5 +39,5 @@ export const GET = withEmailProvider(
     }));
     return NextResponse.json({ labels: unifiedLabels });
   },
-  { requestTiming: {} },
+  { requestTiming: {}, maxDuration },
 );

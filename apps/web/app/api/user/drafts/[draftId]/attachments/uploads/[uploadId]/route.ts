@@ -57,6 +57,7 @@ export const PUT = withEmailProvider(
       throw new SafeError("Upload chunk does not match its range.");
 
     const result = await uploadGmailDraftChunk({
+      emailAccountId,
       accessToken: request.emailProvider.getAccessToken(),
       sessionUri: upload.sessionUri,
       start: range.start,

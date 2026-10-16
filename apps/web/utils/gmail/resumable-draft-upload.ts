@@ -1,10 +1,6 @@
 import { SafeError } from "@/utils/error";
 import { getGoogleGmailApiRootUrl } from "@/utils/gmail/oauth";
-import {
-  gmailAccountForAccessToken,
-  gmailRequestCost,
-  meterGmailCall,
-} from "@/utils/gmail/quota";
+import { gmailRequestCost, meterGmailCall } from "@/utils/gmail/quota";
 
 /**
  * Opens a Gmail resumable upload that replaces the whole draft message.
@@ -13,11 +9,13 @@ import {
  * would let a caller aim our token anywhere.
  */
 export async function startGmailDraftUploadSession({
+  emailAccountId,
   accessToken,
   draftId,
   threadId,
   totalBytes,
 }: {
+  emailAccountId: string | undefined;
   accessToken: string;
   draftId: string;
   threadId?: string | null;
@@ -30,7 +28,7 @@ export async function startGmailDraftUploadSession({
   url.searchParams.set("uploadType", "resumable");
   const response = await meterGmailCall(
     {
-      emailAccountId: gmailAccountForAccessToken(accessToken),
+      emailAccountId,
       cost: gmailRequestCost("PUT", url),
       priority: "interactive",
     },
@@ -63,12 +61,14 @@ export async function startGmailDraftUploadSession({
 }
 
 export async function uploadGmailDraftChunk({
+  emailAccountId,
   accessToken,
   sessionUri,
   start,
   bytes,
   totalBytes,
 }: {
+  emailAccountId: string;
   accessToken: string;
   sessionUri: string;
   start: number;
@@ -77,15 +77,23 @@ export async function uploadGmailDraftChunk({
 }): Promise<
   { status: "incomplete"; nextOffset: number } | { status: "complete" }
 > {
-  const response = await fetch(sessionUri, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Range": `bytes ${start}-${start + bytes.byteLength - 1}/${totalBytes}`,
+  const response = await meterGmailCall(
+    {
+      emailAccountId,
+      cost: gmailRequestCost("PUT", sessionUri),
+      priority: "interactive",
     },
-    body: bytes,
-    signal: AbortSignal.timeout(60_000),
-  });
+    () =>
+      fetch(sessionUri, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Range": `bytes ${start}-${start + bytes.byteLength - 1}/${totalBytes}`,
+        },
+        body: bytes,
+        signal: AbortSignal.timeout(60_000),
+      }),
+  );
   if (response.status === 308) {
     const range = response.headers.get("range")?.match(/^bytes=0-(\d+)$/u);
     return {

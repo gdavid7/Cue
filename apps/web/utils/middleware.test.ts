@@ -22,6 +22,7 @@ import { createEmailProvider } from "@/utils/email/provider";
 import { isProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
 import { recordRateLimitFromApiError } from "@/utils/email/rate-limit";
 import { getAuditContext } from "@/utils/audit/context";
+import { getRequestDeadline } from "@/utils/request-deadline";
 
 vi.mock("better-auth", () => {
   const mockAuthFn = vi.fn();
@@ -46,10 +47,19 @@ vi.mock("@/utils/admin", () => ({
 vi.mock("@/utils/email/provider", () => ({
   createEmailProvider: vi.fn(),
 }));
-vi.mock("@/utils/email/rate-limit", () => ({
-  recordRateLimitFromApiError: vi.fn(),
-}));
-vi.mock("@/utils/email/rate-limit-mode-error", () => ({
+vi.mock("@/utils/email/rate-limit", async (importActual) => {
+  const actual =
+    await importActual<typeof import("@/utils/email/rate-limit")>();
+  return {
+    recordRateLimitFromApiError: vi.fn(),
+    getProviderRateLimitRetryAfterSeconds:
+      actual.getProviderRateLimitRetryAfterSeconds,
+  };
+});
+vi.mock("@/utils/email/rate-limit-mode-error", async (importActual) => ({
+  ...(await importActual<
+    typeof import("@/utils/email/rate-limit-mode-error")
+  >()),
   isProviderRateLimitModeError: vi.fn(),
 }));
 
@@ -316,6 +326,70 @@ describe("Middleware", () => {
         error: commonError.message,
         isKnownError: true,
       });
+    });
+
+    it("tells the client when to retry a Gmail per-minute quota refusal", async () => {
+      const refusal = {
+        status: 403,
+        errors: [{ reason: "rateLimitExceeded" }],
+        message:
+          "Quota exceeded for quota metric 'Queries' and limit 'Units per minute per user'",
+      };
+      mockCheckCommonErrors.mockReturnValue({
+        message: "Gmail error: retry later",
+        code: 429,
+        type: "Gmail Rate Limit Exceeded",
+      });
+      mockRecordRateLimitFromApiError.mockResolvedValueOnce("google");
+
+      const response = await withError(
+        "labels",
+        vi.fn().mockRejectedValue(refusal),
+      )(mockReq, mockContext);
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get("Retry-After")).toBe("30");
+    });
+
+    it("tells the client when to retry a rate limit on a route with no email account", async () => {
+      mockCheckCommonErrors.mockReturnValue({
+        message: "Gmail error: retry later",
+        code: 429,
+        type: "Gmail Rate Limit Exceeded",
+      });
+      // Nothing to record without an account.
+      mockRecordRateLimitFromApiError.mockResolvedValueOnce(null);
+
+      const response = await withError(
+        "threads/all",
+        vi.fn().mockRejectedValue({
+          status: 403,
+          errors: [{ reason: "rateLimitExceeded" }],
+          message:
+            "Quota exceeded for quota metric 'Queries' and limit 'Units per minute per user'",
+        }),
+      )(mockReq, mockContext);
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get("Retry-After")).toBe("30");
+    });
+
+    it("gives a route's work a deadline under its maxDuration, and none without one", async () => {
+      const handler = vi.fn(async () =>
+        NextResponse.json({ deadlineAt: getRequestDeadline() ?? null }),
+      );
+
+      const startedAt = Date.now();
+      const bounded = await withError("test", handler, { maxDuration: 30 })(
+        mockReq,
+        mockContext,
+      );
+      const unbounded = await withError("test", handler)(mockReq, mockContext);
+
+      const { deadlineAt } = await bounded.json();
+      expect(deadlineAt - startedAt).toBeGreaterThanOrEqual(15_000);
+      expect(deadlineAt - startedAt).toBeLessThanOrEqual(21_000);
+      await expect(unbounded.json()).resolves.toEqual({ deadlineAt: null });
     });
 
     it("should return 500 and capture unhandled errors", async () => {
@@ -604,6 +678,43 @@ describe("Middleware", () => {
 
     beforeEach(() => {
       mockAuth.mockResolvedValue({ user: { id: mockUserId } } as any);
+    });
+
+    it("answers a Gmail response's bare 429 as a Gmail rate limit, but not an AI provider's", async () => {
+      mockReq = createMockRequest("GET", "http://localhost/api/assistant", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+      mockGetEmailAccount.mockResolvedValue(mockEmail);
+      mockPrismaEmailAccountFindUnique.mockResolvedValue({
+        id: mockAccountId,
+        account: { provider: "google" },
+      } as any);
+      mockCreateEmailProvider.mockResolvedValue({ name: "google" } as any);
+      mockCheckCommonErrors.mockReturnValue(null);
+      const respond = (error: unknown) =>
+        withEmailProvider("assistant", vi.fn().mockRejectedValue(error))(
+          mockReq,
+          mockContext,
+        );
+
+      // The AI SDK gives up with this after its own retries.
+      const aiRateLimit = Object.assign(new Error("Rate limit exceeded"), {
+        name: "AI_RetryError",
+        reason: "maxRetriesExceeded",
+        lastError: { statusCode: 429, message: "Rate limit exceeded" },
+      });
+      expect((await respond(aiRateLimit)).status).toBe(500);
+      expect(mockRecordRateLimitFromApiError).not.toHaveBeenCalled();
+
+      // Gaxios puts the HTTP response on the error, or on its cause.
+      const gmailThrottle = new Error("Batch request failed", {
+        cause: Object.assign(new Error("Too many requests"), {
+          response: { status: 429 },
+        }),
+      });
+      const gmail = await respond(gmailThrottle);
+      expect(gmail.status).toBe(429);
+      expect(gmail.headers.get("Retry-After")).not.toBeNull();
     });
 
     it("preserves NextRequest APIs when adding an email provider", async () => {
