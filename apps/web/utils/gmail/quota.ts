@@ -239,6 +239,7 @@ const summaryCheckedMinute = new Map<string, number>();
 const storeUnavailableLoggedMinute = new Map<string, number>();
 const initialSyncMarkedAt = new Map<string, number>();
 let gateOffReported = false;
+const unattributedCallers = new Set<string>();
 
 export class GmailCallDeferredError extends Error {
   readonly code = "GMAIL_CALL_DEFERRED";
@@ -419,7 +420,10 @@ export async function admitGmailCall({
     reportGateOff();
     return admitted();
   }
-  if (!emailAccountId) return admitted();
+  if (!emailAccountId) {
+    reportUnattributed(context.caller);
+    return admitted();
+  }
 
   rememberUnsummarizedAccount(emailAccountId);
   const keys = accountKeys(emailAccountId);
@@ -853,6 +857,14 @@ function reportGateOff() {
   logger.error(
     "Gmail quota gate is off: real Google is configured but Redis is not, so Gmail calls are not paced",
   );
+}
+
+// A call that names no account draws on no account's budget, so Gmail can
+// refuse that account for traffic the gate never saw.
+function reportUnattributed(caller: string) {
+  if (unattributedCallers.has(caller)) return;
+  unattributedCallers.add(caller);
+  logger.warn("Gmail call admitted without an account", { caller });
 }
 
 function noteStoreUnavailable(

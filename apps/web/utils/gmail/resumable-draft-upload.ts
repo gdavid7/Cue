@@ -77,15 +77,23 @@ export async function uploadGmailDraftChunk({
 }): Promise<
   { status: "incomplete"; nextOffset: number } | { status: "complete" }
 > {
-  const response = await fetch(sessionUri, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Range": `bytes ${start}-${start + bytes.byteLength - 1}/${totalBytes}`,
+  const response = await meterGmailCall(
+    {
+      emailAccountId: gmailAccountForAccessToken(accessToken),
+      cost: gmailRequestCost("PUT", sessionUri),
+      priority: "interactive",
     },
-    body: bytes,
-    signal: AbortSignal.timeout(60_000),
-  });
+    () =>
+      fetch(sessionUri, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Range": `bytes ${start}-${start + bytes.byteLength - 1}/${totalBytes}`,
+        },
+        body: bytes,
+        signal: AbortSignal.timeout(60_000),
+      }),
+  );
   if (response.status === 308) {
     const range = response.headers.get("range")?.match(/^bytes=0-(\d+)$/u);
     return {
