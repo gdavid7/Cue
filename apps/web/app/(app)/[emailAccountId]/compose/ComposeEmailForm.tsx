@@ -1054,8 +1054,9 @@ function ComposeEmailFormContent({
         savedOnNewAccount,
         filesMoved,
       });
-      if (result === "moved")
-        await client?.requestSync([moved.from.emailAccountId]);
+      if (result !== "moved") return;
+      toastSuccess({ description: `Draft moved to ${sendingAddress}` });
+      await client?.requestSync([moved.from.emailAccountId]);
     };
     finishMove().catch((error: unknown) => {
       toastError({

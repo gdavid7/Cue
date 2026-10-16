@@ -75,6 +75,10 @@ test("keeps a new message's text, recipients and files when From changes", async
       .click();
 
     await expect(from).toContainText(secondAccount.email);
+    // Said only once the new account holds the whole message.
+    await expect(
+      page.getByText(`Draft moved to ${secondAccount.email}`, { exact: true }),
+    ).toBeVisible({ timeout: 60_000 });
     await expect(dialog.getByPlaceholder("Subject")).toHaveValue(subject);
     await expect(dialog).toContainText("recipient@example.com");
     await expect(editor).toContainText(body);
@@ -157,6 +161,7 @@ test("returns the message to its account when the new From can't load", async ({
     await expect(dialog.getByPlaceholder("Subject")).toHaveValue(subject);
     await expect(dialog).toContainText("recipient@example.com");
     await expect(editor).toContainText(body);
+    await expect(page.getByText(/^Draft moved to /)).toHaveCount(0);
     // The old account's mailbox draft was never removed.
     expect(await readDraftFiles(page, subject)).toEqual([[]]);
 
