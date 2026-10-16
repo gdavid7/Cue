@@ -158,6 +158,8 @@ export function MailMobileNav({
           isInbox ? "text-foreground" : "text-muted-foreground",
         )}
         href={mailHref()}
+        // From Today the inbox is a route away; fetched ahead, it opens at once.
+        prefetch={isToday ? true : undefined}
       >
         <InboxIcon className="size-5" />
         Inbox
@@ -177,6 +179,7 @@ export function MailMobileNav({
           isToday ? "text-foreground" : "text-muted-foreground",
         )}
         href={prefixPath(emailAccountId, "/home")}
+        prefetch
       >
         <SunIcon className="size-5" />
         Today

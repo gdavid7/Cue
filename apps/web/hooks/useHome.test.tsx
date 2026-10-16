@@ -2,10 +2,16 @@
 
 import { act, cleanup, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
+import type { GetHomeResponse } from "@/app/api/user/home/route";
 import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { announceTodayChanged } from "@/utils/home/today-changes";
-import { useHome } from "./useHome";
+import {
+  readCachedToday,
+  resetCachedTodayBlocksForTesting,
+  writeCachedToday,
+} from "@/utils/home/today-cache";
+import { useHome, useWarmHome } from "./useHome";
 
 vi.mock("@/utils/swr", () => ({
   getAccountScopedKey: (path: string, emailAccountId: string) => [
@@ -103,11 +109,263 @@ describe("useHome", () => {
   });
 });
 
-function wrapper(fetcher: () => Promise<unknown>) {
+describe("useHome with a cached Today", () => {
+  beforeEach(() => {
+    // SWR refreshes data it already shows on the next animation frame.
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "Date", "requestAnimationFrame"],
+    });
+    window.localStorage.clear();
+    resetCachedTodayBlocksForTesting();
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("opens on what Today last showed, then replaces it with one fresh load", async () => {
+    writeCachedToday({
+      userId: "user",
+      emailAccountId: "account",
+      data: todayData("cached"),
+      now: Date.now(),
+    });
+    const loads = pendingLoads();
+    const { result } = renderHook(() => useHome("account", "user"), {
+      wrapper: wrapper(loads.fetcher),
+    });
+
+    expect(result.current.data).toEqual(todayData("cached"));
+    expect(result.current.isLoading).toBe(false);
+    await act(() => vi.advanceTimersByTimeAsync(20));
+    expect(loads.fetcher).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      loads.resolve(todayData("fresh"));
+      await vi.advanceTimersByTimeAsync(20);
+    });
+    expect(result.current.data).toEqual(todayData("fresh"));
+    expect(loads.fetcher).toHaveBeenCalledTimes(1);
+    expect(
+      readCachedToday({
+        userId: "user",
+        emailAccountId: "account",
+        now: Date.now(),
+      }),
+    ).toEqual(todayData("fresh"));
+  });
+
+  it("shows an action on a cached row, and the fresh load still lands", async () => {
+    writeCachedToday({
+      userId: "user",
+      emailAccountId: "account",
+      data: todayData("cached"),
+      now: Date.now(),
+    });
+    const loads = pendingLoads();
+    const { result } = renderHook(() => useHome("account", "user"), {
+      wrapper: wrapper(loads.fetcher),
+    });
+    await act(() => vi.advanceTimersByTimeAsync(20));
+
+    // Starring a row while the first load is on its way, as the rows do.
+    await act(async () => {
+      await result.current.mutate(
+        (current) => current && starFirstRow(current),
+        { revalidate: false },
+      );
+    });
+    expect(result.current.data?.needsYou[0].starred).toBe(true);
+
+    // SWR drops a load that a change overtook; another one replaces it.
+    await act(async () => {
+      loads.resolve(todayData("fresh"));
+      await vi.advanceTimersByTimeAsync(20);
+    });
+    expect(loads.fetcher).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      loads.resolve(todayData("fresher"));
+      await vi.advanceTimersByTimeAsync(20);
+    });
+    expect(result.current.data).toEqual(todayData("fresher"));
+  });
+
+  it("settles on the newest load when a change arrives while one is on its way", async () => {
+    const loads = pendingLoads();
+    const { result } = renderHook(() => useHome("account", "user"), {
+      wrapper: wrapper(loads.fetcher),
+    });
+    await act(() => vi.advanceTimersByTimeAsync(20));
+    await act(async () => {
+      announceTodayChanged();
+      await vi.advanceTimersByTimeAsync(20);
+    });
+    for (let load = 0; load < 10; load++) {
+      await act(async () => {
+        loads.resolve(todayData(`load ${load}`));
+        await vi.advanceTimersByTimeAsync(20);
+      });
+    }
+    expect(loads.fetcher.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(result.current.data).toEqual(todayData("load 1"));
+  });
+
+  it("shows another user's Today to nobody", () => {
+    writeCachedToday({
+      userId: "someone-else",
+      emailAccountId: "account",
+      data: todayData("theirs"),
+      now: Date.now(),
+    });
+    const { result } = renderHook(() => useHome("account", "user"), {
+      wrapper: wrapper(() => new Promise(() => {})),
+    });
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.isLoading).toBe(true);
+  });
+});
+
+describe("useWarmHome", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "Date", "requestAnimationFrame"],
+    });
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("loads nothing until Today is wanted, then opens Today on that one load", async () => {
+    const loads = pendingLoads();
+    const { result, rerender } = renderHook(
+      ({ wanted, open }: { wanted: boolean; open: boolean }) => {
+        useWarmHome("account", wanted);
+        return useHome(open ? "account" : null);
+      },
+      {
+        initialProps: { wanted: false, open: false },
+        wrapper: wrapper(loads.fetcher, 2000),
+      },
+    );
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    expect(loads.fetcher).not.toHaveBeenCalled();
+
+    rerender({ wanted: true, open: false });
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    expect(loads.fetcher).toHaveBeenCalledTimes(1);
+
+    // Today opens while the load is still on its way, and shares it.
+    rerender({ wanted: true, open: true });
+    await act(async () => {
+      loads.resolve({ pending: [] });
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(loads.fetcher).toHaveBeenCalledTimes(1);
+    expect(result.current.data).toEqual({ pending: [] });
+  });
+
+  it("opens on the saved copy after a hover, with one load", async () => {
+    window.localStorage.clear();
+    writeCachedToday({
+      userId: "user",
+      emailAccountId: "account",
+      data: todayData("cached"),
+      now: Date.now(),
+    });
+    const loads = pendingLoads();
+    const { result, rerender } = renderHook(
+      ({ open }: { open: boolean }) => {
+        useWarmHome("account", true, "user");
+        return useHome(open ? "account" : null, "user");
+      },
+      { initialProps: { open: false }, wrapper: wrapper(loads.fetcher, 2000) },
+    );
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+
+    rerender({ open: true });
+    expect(result.current.data).toEqual(todayData("cached"));
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    await act(async () => {
+      loads.resolve(todayData("fresh"));
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(loads.fetcher).toHaveBeenCalledTimes(1);
+    expect(result.current.data).toEqual(todayData("fresh"));
+  });
+
+  it("refreshes a hover's load that something changed before Today opened", async () => {
+    const fetcher = vi.fn(async () => ({ pending: [] }));
+    const { result, rerender } = renderHook(
+      ({ open }: { open: boolean }) => {
+        useWarmHome("account", true);
+        return useHome(open ? "account" : null);
+      },
+      { initialProps: { open: false }, wrapper: wrapper(fetcher, 2000) },
+    );
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    // Such as the user's reply, before anything on screen listens for it.
+    announceTodayChanged();
+    rerender({ open: true });
+    expect(result.current.data).toEqual({ pending: [] });
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Only the lanes; the rest of Today's answer plays no part here.
+function todayData(subject: string) {
+  return {
+    needsYou: [
+      {
+        threadId: "thread",
+        fromName: "Alice",
+        fromEmail: "alice@example.com",
+        subject,
+        preview: "Hello",
+        at: "2026-10-16T10:00:00Z",
+        priority: "medium",
+        unread: true,
+        messageId: "message",
+        starred: false,
+        inInbox: true,
+      },
+    ],
+    waiting: [],
+    alsoInInbox: [],
+    pending: [],
+    failed: [],
+  } as unknown as GetHomeResponse;
+}
+
+function starFirstRow(data: GetHomeResponse): GetHomeResponse {
+  return {
+    ...data,
+    needsYou: data.needsYou.map((row, index) =>
+      index === 0 ? { ...row, starred: true } : row,
+    ),
+  };
+}
+
+/** A fetcher whose loads each wait for the next `resolve`. */
+function pendingLoads() {
+  const waiting: ((value: unknown) => void)[] = [];
+  return {
+    fetcher: vi.fn(
+      () =>
+        new Promise((resolveLoad) => {
+          waiting.push(resolveLoad);
+        }),
+    ),
+    resolve: (value: unknown) => waiting.shift()?.(value),
+  };
+}
+
+function wrapper(fetcher: () => Promise<unknown>, dedupingInterval = 0) {
   return ({ children }: { children: ReactNode }) => (
-    <SWRConfig
-      value={{ fetcher, provider: () => new Map(), dedupingInterval: 0 }}
-    >
+    <SWRConfig value={{ fetcher, provider: () => new Map(), dedupingInterval }}>
       {children}
     </SWRConfig>
   );

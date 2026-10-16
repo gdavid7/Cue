@@ -36,6 +36,8 @@ type Context = {
   accountIds: readonly string[];
   emailAccount: GetEmailAccountsResponse["emailAccounts"][number] | undefined;
   emailAccountId: string;
+  /** The signed-in user, from the server; empty outside the app. */
+  userId: string;
   userEmail: string;
   isLoading: boolean;
   provider: string;
@@ -61,6 +63,7 @@ const previewContextValue: Context = {
   accountIds: [],
   emailAccount: undefined,
   emailAccountId: "",
+  userId: "",
   userEmail: "",
   isLoading: false,
   provider: "",
@@ -70,6 +73,7 @@ const previewContextValue: Context = {
 export function EmailAccountProvider({
   children,
   accounts: serverAccounts = NO_ACCOUNTS,
+  userId = "",
 }: {
   children: React.ReactNode;
   /**
@@ -77,6 +81,7 @@ export function EmailAccountProvider({
    * can start before the full account list loads.
    */
   accounts?: ServerEmailAccount[];
+  userId?: string;
 }) {
   const params = useParams<{
     emailAccountId: string | undefined;
@@ -283,6 +288,7 @@ export function EmailAccountProvider({
         emailAccount,
         isLoading,
         emailAccountId: resolvedEmailAccountId,
+        userId,
         userEmail: emailAccount?.email ?? serverAccount?.email ?? "",
         provider:
           emailAccount?.account?.provider ?? serverAccount?.provider ?? "",
@@ -331,6 +337,7 @@ export function EmailAccountScopeProvider({
             accountIds: parent.accountIds,
             emailAccount,
             emailAccountId: emailAccount.id,
+            userId: parent.userId,
             userEmail: emailAccount.email,
             isLoading: false,
             provider: emailAccount.account.provider,

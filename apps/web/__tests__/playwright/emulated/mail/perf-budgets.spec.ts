@@ -21,6 +21,7 @@ import {
   rowWithSubjectMatches,
   timeSinceInput,
   timeSinceNavigation,
+  waitForEngineIdle,
 } from "./perf-test-helpers";
 
 // Gmail-level speed is a product requirement, so the flows people repeat all
@@ -457,27 +458,4 @@ async function rowHasText(page: Page, subject: string, text: string) {
     },
     { subject, text },
   );
-}
-
-/**
- * Lets the first sync settle so later timings measure the UI rather than the
- * backfill. A mailbox still syncing after the wait is measured as it is.
- */
-async function waitForEngineIdle(page: Page) {
-  const deadline = Date.now() + Number(process.env.PERF_SYNC_WAIT_MS ?? 10_000);
-  while (Date.now() < deadline) {
-    const idle = await page.evaluate(async () => {
-      const diagnostics = (await window.__inboxZeroMailInspect
-        ?.read()
-        .catch(() => null)) as {
-        coverage?: { lastCompletedSyncAtMs?: number | null }[];
-      } | null;
-      return Boolean(
-        diagnostics?.coverage?.some((c) => c.lastCompletedSyncAtMs),
-      );
-    });
-    if (idle) break;
-    await page.waitForTimeout(500);
-  }
-  if (perfProfile === "phone") await page.waitForTimeout(500);
 }

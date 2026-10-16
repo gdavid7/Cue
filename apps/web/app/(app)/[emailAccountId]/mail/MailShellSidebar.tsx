@@ -35,6 +35,8 @@ import {
   useMailSlugs,
 } from "@/app/(app)/[emailAccountId]/mail/use-mail-route";
 import { useMailHref } from "@/hooks/useMailHref";
+import { useWarmHome } from "@/hooks/useHome";
+import { useIntent } from "@/hooks/useIntent";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Sidebar, useSidebar } from "@/components/ui/sidebar";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
@@ -104,7 +106,11 @@ export const MailShellSidebar = memo(function MailShellSidebar({
   mobileOpen?: boolean;
   onMobileOpenChange?: (open: boolean) => void;
 }) {
-  const { emailAccountId, provider } = useAccount();
+  const { emailAccountId, provider, userId } = useAccount();
+  // Reaching for Today starts its load, so it opens on data already coming.
+  // A pointer that only passes over Today on its way elsewhere loads nothing.
+  const todayIntent = useIntent();
+  useWarmHome(emailAccountId, todayIntent.intended, userId);
   const isGoogle = isGoogleProvider(provider);
   const isOutlook = isMicrosoftProvider(provider);
   const terminology = getEmailTerminology(provider);
@@ -274,6 +280,8 @@ export const MailShellSidebar = memo(function MailShellSidebar({
         ) : undefined
       }
       todayHref={prefixPath(emailAccountId, "/home")}
+      onTodayIntent={todayIntent.begin}
+      onTodayIntentEnd={todayIntent.end}
       appLinks={appLinks}
       toolLinks={toolLinks}
       allInboxesHref={

@@ -8,6 +8,7 @@ import { redirectToSafeUrl } from "@/utils/redirect";
 import { wipeLocalMailbox } from "@/utils/mail-engine/wipe-local-mailbox";
 import { clearLocalReplyDrafts } from "@/utils/mail-engine/reply-drafts";
 import { clearPersistedSwrCache } from "@/utils/swr-persistence";
+import { clearCachedToday } from "@/utils/home/today-cache";
 
 // Enough for a normal wipe to finish before leaving. A slower one stays marked
 // and the next mail engine finishes it before opening.
@@ -25,6 +26,7 @@ async function signOutAndLeave(callbackUrl: string) {
   toastLoading("Signing out…");
   stopEmailAccountsFetches();
   clearPersistedSwrCache();
+  clearCachedToday();
   clearLocalReplyDrafts();
   const localWipe = wipeLocalMailbox();
   clearLastEmailAccountAction();
