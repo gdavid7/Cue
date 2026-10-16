@@ -7,6 +7,7 @@ import { env } from "@/env";
 import prisma from "@/utils/__mocks__/prisma";
 import { extractEmailAddress } from "@/utils/email";
 import { createGenerateObject } from "@/utils/llms";
+import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 
 const logger = createTestLogger();
 
@@ -32,6 +33,11 @@ vi.mock("@/utils/email", async () => {
   };
 });
 
+vi.mock("@/utils/user/own-addresses", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/user/own-addresses")>()),
+  getUserOwnAddresses: vi.fn(),
+}));
+
 vi.mock("@/utils/llms", () => ({
   createGenerateObject: vi.fn(() => vi.fn()),
 }));
@@ -48,6 +54,7 @@ describe("isColdEmail", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     env.WHITELIST_FROM = "welcome@service.example OR service.example";
+    vi.mocked(getUserOwnAddresses).mockResolvedValue([]);
   });
 
   it("should recognize a known cold email sender even when from field format differs", async () => {
@@ -187,6 +194,43 @@ describe("isColdEmail", () => {
     expect(
       mockProvider.hasPreviousCommunicationsWithSenderOrDomain,
     ).not.toHaveBeenCalled();
+  });
+
+  it("never classifies the user's own other address on a consumer domain as cold", async () => {
+    vi.mocked(getUserOwnAddresses).mockResolvedValue([
+      "user@gmail.com",
+      "user.other@gmail.com",
+    ]);
+    vi.mocked(prisma.groupItem.findFirst).mockResolvedValue({
+      id: "group-item-id",
+      type: GroupItemType.FROM,
+      value: "user.other@gmail.com",
+      exclude: false,
+      group: { id: "group-id", name: "Cold Email" },
+    } as any);
+    const emailAccount = getEmailAccount({
+      id: "test-account-id",
+      email: "user@gmail.com",
+    });
+
+    const result = await isColdEmail({
+      logger,
+      email: {
+        id: "msg-own",
+        from: "Me <User.Other@gmail.com>",
+        to: "user@gmail.com",
+        subject: "Notes",
+        content: "Sending this to my other inbox.",
+        date: new Date(),
+      },
+      emailAccount,
+      provider: mockProvider as never,
+      coldEmailRule: { instructions: "test instructions", groupId: "group-id" },
+    });
+
+    expect(result.isColdEmail).toBe(false);
+    expect(getUserOwnAddresses).toHaveBeenCalledWith(emailAccount.userId);
+    expect(createGenerateObject).not.toHaveBeenCalled();
   });
 
   it("should not classify a colleague as cold when a learned pattern exists", async () => {

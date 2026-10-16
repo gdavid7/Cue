@@ -16,6 +16,7 @@ import { isWhitelistedSender } from "@/utils/email/whitelist";
 import { hasPriorContactOrAssumeYes } from "@/utils/cold-email/has-prior-contact";
 import { decideColdEmail } from "@/utils/decision-model/cold-email";
 import { runDecisionModelOrFallback } from "@/utils/decision-model/decision-model";
+import { getUserOwnAddresses, isOwnAddress } from "@/utils/user/own-addresses";
 
 export const COLD_EMAIL_FOLDER_NAME = "Cold Emails";
 
@@ -72,6 +73,15 @@ export async function checkColdEmailGuards({
   // actions, so a colleague is never labelled or archived either.
   if (isSameOrganization(email.from, emailAccount.email)) {
     logger.info("Sender is internal");
+    return { isColdEmail: false, reason: "hasPreviousEmail" };
+  }
+
+  // Mail from another of the user's connected mailboxes is the user, even
+  // when an earlier mistake learned the address as a cold sender.
+  if (
+    isOwnAddress(email.from, await getUserOwnAddresses(emailAccount.userId))
+  ) {
+    logger.info("Sender is one of the user's own addresses");
     return { isColdEmail: false, reason: "hasPreviousEmail" };
   }
 
