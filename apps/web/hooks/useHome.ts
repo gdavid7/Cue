@@ -14,6 +14,10 @@ const PENDING_LOAD_LIMIT = 12;
 const FOCUS_REFRESH_MIN_MS = 30_000;
 const CHANGE_REFRESH_MIN_MS = 10_000;
 
+// When a hover last started loading each account's Today. Today opening
+// soon after shares that load instead of spending Gmail quota on another.
+const warmedAt = new Map<string, number>();
+
 /**
  * Today's data. It opens on what Today last showed in this browser, then
  * refreshes. `gaveUp` is set once a lane has stayed pending through every
@@ -38,8 +42,16 @@ export function useHome(emailAccountId?: string | null, userId?: string) {
         : undefined,
     [hydrated, emailAccountId, userId],
   );
+  const warmedRecently = useMemo(() => {
+    const startedAt = emailAccountId ? warmedAt.get(emailAccountId) : undefined;
+    return (
+      startedAt !== undefined && Date.now() - startedAt < FOCUS_REFRESH_MIN_MS
+    );
+  }, [emailAccountId]);
   const home = useSWR<GetHomeResponse>(homeKey(emailAccountId), {
     fallbackData: cached,
+    // The hover's load, on its way or just in, is this open's load.
+    revalidateOnMount: warmedRecently ? false : undefined,
     // Each load spends Gmail quota, so tab switches share one.
     focusThrottleInterval: FOCUS_REFRESH_MIN_MS,
     onSuccess: (data) =>
@@ -107,11 +119,23 @@ export function useWarmHome(
   emailAccountId: string | null | undefined,
   enabled: boolean,
 ) {
-  useSWR<GetHomeResponse>(enabled ? homeKey(emailAccountId) : null, {
-    revalidateIfStale: false,
-    revalidateOnFocus: false,
-    revalidateOnReconnect: false,
-  });
+  const { data } = useSWR<GetHomeResponse>(
+    enabled ? homeKey(emailAccountId) : null,
+    {
+      revalidateIfStale: false,
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+    },
+  );
+  // With nothing loaded yet, enabling it just started a load.
+  const loading = enabled && Boolean(emailAccountId) && data === undefined;
+  useEffect(() => {
+    if (loading && emailAccountId) warmedAt.set(emailAccountId, Date.now());
+  }, [loading, emailAccountId]);
+}
+
+export function resetWarmedHomesForTesting() {
+  warmedAt.clear();
 }
 
 function homeKey(emailAccountId: string | null | undefined) {

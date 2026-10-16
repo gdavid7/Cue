@@ -123,6 +123,8 @@ export type MailSidebarProps = {
   todayHref?: string;
   /** The pointer or focus reached the Today row, so it may well open next. */
   onTodayIntent?: () => void;
+  /** The pointer or focus left the Today row. */
+  onTodayIntentEnd?: () => void;
   /** The app's other places, such as Chat and Rules, above the footer. */
   appLinks?: { name: string; href: string; icon: ReactNode }[];
   /** The app's rarer tools, such as Unsubscribe, behind a Tools toggle. */
@@ -267,6 +269,7 @@ function MailSidebarContent({
   allInboxesHref,
   todayHref,
   onTodayIntent,
+  onTodayIntentEnd,
   appLinks,
   toolLinks,
   showSidebarToggle = true,
@@ -395,6 +398,7 @@ function MailSidebarContent({
               collapsed={collapsed}
               prefetch
               onIntent={onTodayIntent}
+              onIntentEnd={onTodayIntentEnd}
             />
           ) : null}
           {unified
@@ -1013,12 +1017,14 @@ function NavRow({
   reloadDocument,
   prefetch,
   onIntent,
+  onIntentEnd,
 }: {
   href?: string;
   reloadDocument?: boolean;
   /** Overrides the default: mail views of the open mail screen skip it. */
   prefetch?: boolean;
   onIntent?: () => void;
+  onIntentEnd?: () => void;
   active: boolean;
   icon: ReactNode;
   name: string;
@@ -1069,6 +1075,8 @@ function NavRow({
         }
         onPointerEnter={onIntent}
         onFocus={onIntent}
+        onPointerLeave={onIntentEnd}
+        onBlur={onIntentEnd}
         onClick={(event: MouseEvent<HTMLAnchorElement>) => {
           if (
             event.button !== 0 ||

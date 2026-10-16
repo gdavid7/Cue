@@ -10,7 +10,7 @@ import {
   resetCachedTodayBlocksForTesting,
   writeCachedToday,
 } from "@/utils/home/today-cache";
-import { useHome, useWarmHome } from "./useHome";
+import { resetWarmedHomesForTesting, useHome, useWarmHome } from "./useHome";
 
 vi.mock("@/utils/swr", () => ({
   getAccountScopedKey: (path: string, emailAccountId: string) => [
@@ -110,9 +110,13 @@ describe("useHome", () => {
 
 describe("useHome with a cached Today", () => {
   beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    // SWR refreshes data it already shows on the next animation frame.
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "Date", "requestAnimationFrame"],
+    });
     window.localStorage.clear();
     resetCachedTodayBlocksForTesting();
+    resetWarmedHomesForTesting();
   });
   afterEach(() => {
     cleanup();
@@ -139,7 +143,7 @@ describe("useHome with a cached Today", () => {
 
     expect(result.current.data).toEqual(todayData("cached"));
     expect(result.current.isLoading).toBe(false);
-    await act(() => vi.advanceTimersByTimeAsync(10));
+    await act(() => vi.advanceTimersByTimeAsync(20));
     expect(fetcher).toHaveBeenCalledTimes(1);
 
     await act(async () => {
@@ -173,7 +177,10 @@ describe("useHome with a cached Today", () => {
 
 describe("useWarmHome", () => {
   beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "Date", "requestAnimationFrame"],
+    });
+    resetWarmedHomesForTesting();
   });
   afterEach(() => {
     cleanup();
@@ -213,6 +220,63 @@ describe("useWarmHome", () => {
     });
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(result.current.data).toEqual({ pending: [] });
+  });
+
+  it("opens Today on the hover's load seconds later, without loading again", async () => {
+    const fetcher = vi.fn(async () => ({ pending: [] }));
+    const { result, rerender } = renderHook(
+      ({ wanted, open }: { wanted: boolean; open: boolean }) => {
+        useWarmHome("account", wanted);
+        return useHome(open ? "account" : null);
+      },
+      {
+        initialProps: { wanted: true, open: false },
+        wrapper: wrapper(fetcher, 2000),
+      },
+    );
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    rerender({ wanted: true, open: true });
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(result.current.data).toEqual({ pending: [] });
+  });
+
+  it("still asks again for a lane the hover's load found pending", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce({ pending: ["waiting"] })
+      .mockResolvedValue({ pending: [] });
+    const { rerender } = renderHook(
+      ({ open }: { open: boolean }) => {
+        useWarmHome("account", true);
+        return useHome(open ? "account" : null);
+      },
+      { initialProps: { open: false }, wrapper: wrapper(fetcher, 2000) },
+    );
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    rerender({ open: true });
+    await act(() => vi.advanceTimersByTimeAsync(5500));
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("still reloads when Cue changes a lane after the hover's load", async () => {
+    const fetcher = vi.fn(async () => ({ pending: [] }));
+    const { rerender } = renderHook(
+      ({ open }: { open: boolean }) => {
+        useWarmHome("account", true);
+        return useHome(open ? "account" : null);
+      },
+      { initialProps: { open: false }, wrapper: wrapper(fetcher, 2000) },
+    );
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    rerender({ open: true });
+    await act(async () => {
+      announceTodayChanged();
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 });
 
