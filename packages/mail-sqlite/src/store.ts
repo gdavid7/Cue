@@ -1203,16 +1203,11 @@ export async function createSqliteMailStore(
         const nowMs = Date.now();
         // Undo windows are held by the server so they outlast this device;
         // connectivity holds stay here until the device is back online.
-        let sendAtMs =
+        const sendAtMs =
           input.notBeforeMs !== undefined &&
           input.notBeforeMs - nowMs < DEFERRED_DISPATCH_MIN_HOLD_MS
             ? input.notBeforeMs
             : undefined;
-        // The server keeps a send's reminder on its hold, so a send with one
-        // and no wait of its own is handed over to send now.
-        if (input.remindAtMs !== undefined && input.notBeforeMs === undefined) {
-          sendAtMs = nowMs;
-        }
         const payload = {
           kind: "send" as const,
           frozenDraftId: input.draft.draftId,

@@ -69,7 +69,8 @@ export const preparedOperationSchema = z.object({
       sendAtMs: z.number().int().nonnegative().optional(),
       /**
        * A reminder the server records with the send and runs once it is
-       * sent. A send with one is always handed over with a `sendAtMs`.
+       * sent. The server holds any send that carries one, so the reminder
+       * outlives the client, whether or not the send has a `sendAtMs`.
        */
       remindAtMs: z.number().int().nonnegative().optional(),
     }),
