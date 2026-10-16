@@ -17,6 +17,7 @@ const MAX_MESSAGES = 6;
 const MAX_MESSAGE_LENGTH = 1500;
 const MAX_KEY_POINTS = 4;
 const CACHE_TTL_SECONDS = 24 * 60 * 60;
+const EXTRACT_CACHE_TTL_SECONDS = 60 * 60;
 // The fallback quotes sentences that ask for something or set a date. English
 // only: it's a stand-in for when no model is available, not the main path.
 const ASK =
@@ -92,9 +93,17 @@ export async function getThreadBrief({
     return ai;
   }
   const extract = extractBrief(messages);
-  return extract && ai?.aiUnavailable
-    ? { ...extract, aiUnavailable: true }
-    : extract;
+  if (extract && ai?.aiUnavailable) {
+    const unavailable = { ...extract, aiUnavailable: true };
+    // Without AI access every open would read the thread again for the same
+    // words. Kept briefly, so an upgrade soon gets a written brief. A model
+    // failure isn't kept at all: the next open tries again.
+    await redis
+      .set(cacheKey, unavailable, { ex: EXTRACT_CACHE_TTL_SECONDS })
+      .catch(() => null);
+    return unavailable;
+  }
+  return extract;
 }
 
 /**

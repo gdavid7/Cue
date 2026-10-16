@@ -194,8 +194,18 @@ export function MailShell() {
     error: settingsError,
     mutate: mutateSettings,
   } = useMailSettings();
-  const { toggleSidebar, setOpen: setSidebarOpen } = useSidebar();
-  const { submitTextMessage, chatId, setNewChat } = useChat();
+  const {
+    toggleSidebar,
+    setOpen: setSidebarOpen,
+    setOpenMobile: setOpenMobileSidebar,
+    isMobile: isMobileSidebar,
+  } = useSidebar();
+  const {
+    submitTextMessage,
+    chatId,
+    setNewChat,
+    requestInputFocus: requestChatInputFocus,
+  } = useChat();
   // A question waits for a conversation to exist; sent before one, it's dropped.
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   useEffect(() => {
@@ -1728,16 +1738,12 @@ export function MailShell() {
   // The chat already reads the open thread, so asking about this email is
   // opening it with the cursor in place.
   const onAskCueAboutThread = useStableCallback(() => {
-    setSidebarOpen((open) =>
-      open.includes("chat-sidebar") ? open : [...open, "chat-sidebar"],
-    );
-    requestAnimationFrame(() =>
-      document
-        .querySelector<HTMLTextAreaElement>(
-          'textarea[aria-label="Message Cue"]',
-        )
-        ?.focus(),
-    );
+    const withChat = (open: string[]) =>
+      open.includes("chat-sidebar") ? open : [...open, "chat-sidebar"];
+    // Phones keep their own list of open panels.
+    if (isMobileSidebar) setOpenMobileSidebar(withChat);
+    else setSidebarOpen(withChat);
+    requestChatInputFocus();
   });
   const onContinueInChat = useStableCallback((question: string) => {
     setSidebarOpen((open) =>

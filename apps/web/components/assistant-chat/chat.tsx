@@ -77,7 +77,15 @@ export function Chat({
     setAttachments,
     submitTextMessage,
     stop,
+    inputFocusRequested,
+    clearInputFocusRequest,
   } = useChat();
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (!inputFocusRequested || !inputRef.current) return;
+    inputRef.current.focus();
+    clearInputFocusRequest();
+  }, [inputFocusRequested, clearInputFocusRequest]);
   const { messages, status, regenerate, setMessages } = chat;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadQueue, setUploadQueue] = useState<string[]>([]);
@@ -225,6 +233,7 @@ export function Chat({
         // The placeholder disappears once the user types.
         aria-label="Message Cue"
         data-testid="chat-input"
+        ref={inputRef}
         value={input}
         placeholder="Ask Cue about your mail, or tell it what to do"
         onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>

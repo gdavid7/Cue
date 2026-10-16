@@ -10,6 +10,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   store: new Map<string, unknown>(),
+  ttls: new Map<string, number>(),
   generateObject: vi.fn(),
   assertHasAiAccess: vi.fn(),
 }));
@@ -19,9 +20,12 @@ vi.mock("@/utils/user/get", () => ({ getEmailAccountWithAi: vi.fn() }));
 vi.mock("@/utils/redis", () => ({
   redis: {
     get: vi.fn(async (key: string) => mocks.store.get(key) ?? null),
-    set: vi.fn(async (key: string, value: unknown) => {
-      mocks.store.set(key, value);
-    }),
+    set: vi.fn(
+      async (key: string, value: unknown, options?: { ex?: number }) => {
+        mocks.store.set(key, value);
+        if (options?.ex) mocks.ttls.set(key, options.ex);
+      },
+    ),
   },
 }));
 vi.mock("@/utils/llms", () => ({
@@ -49,6 +53,7 @@ const message = (
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.store.clear();
+  mocks.ttls.clear();
 });
 
 describe("extractBrief", () => {
@@ -180,6 +185,23 @@ describe("thread brief caching", () => {
         messageId: "msg1",
       }),
     ).resolves.toBeNull();
+  });
+
+  it("keeps the email's own words for an hour when there's no AI access", async () => {
+    mocks.assertHasAiAccess.mockRejectedValue(new Error("upgrade"));
+    await brief(providerWith([message("Can you send the pricing?")]));
+
+    await expect(
+      getCachedThreadBrief({
+        emailAccountId: "a1",
+        threadId: "t1",
+        messageId: "msg1",
+      }),
+    ).resolves.toMatchObject({
+      summary: "Can you send the pricing?",
+      source: "extract",
+    });
+    expect(mocks.ttls.get("thread-brief:a1:t1:msg1")).toBe(60 * 60);
   });
 
   it("doesn't cache a failed model call, so the next open tries again", async () => {
