@@ -248,7 +248,7 @@ Decided 2026-10-16.
 
 | # | Decision | Status |
 |---|---|---|
-| A | Run unit tests, lint and build check in CI | **Done; first runs red on existing failures** (below). `test.yml` and `build-check.yml` run on pushes and pull requests to the integration branch, `production` and `claude/**`, and on dispatch |
+| A | Run unit tests, lint and build check in CI | **Done and green** (existing failures fixed, below). `test.yml` and `build-check.yml` run on pushes and pull requests to the integration branch, `production` and `claude/**`, and on dispatch |
 | 1 | Eval subset on prompt, tool or eval changes | **Built, waiting on keys.** OpenRouter declined; Claude under test with `ANTHROPIC_API_KEY`, Gemini as judge with `GOOGLE_API_KEY`. See "Eval subset" below |
 | 2 | Delete upstream-only workflows | **Done.** Removed `e2e-flows`, `api-release`, `cli-release`, `desktop-release`, `mail-packages-release`, `deploy-image-proxy`, `build_and_publish_docker`, `publish-playwright-report` (and its script). `build-changelog` stays: it validates, it doesn't publish |
 | 3 | `@claude` pushing fixes (key and write permissions) | **Deferred.** Only the trigger restriction is done: every `claude.yml` trigger requires an OWNER, MEMBER or COLLABORATOR author |
@@ -259,24 +259,36 @@ Decided 2026-10-16.
 
 ## First CI results (2026-10-16)
 
-The first runs on this fork pass lint, package type checks, conventions, the
-first unit-test shard, package, database and Electron tests, and the
-production `next build` with type checking (2 min). They are red on three
-failures that already exist on the integration branch; this branch changes
-none of the files involved:
+The first runs on this fork were red on failures that already existed on the
+integration branch. All are fixed on this branch; Run Tests and Build Check
+are green on `2917795a`:
+[Run Tests](https://github.com/gdavid7/Cue/actions/runs/38923831576),
+[Build Check](https://github.com/gdavid7/Cue/actions/runs/38923830642).
 
-- **Integration tests:** `__tests__/integration/mail-engine/http-archive.test.ts:132`
-  and `search-body.test.ts:127` sync no Gmail messages from the emulator
-  (`beforeInbox` 0, expected 2). Reproduces locally.
-- **Unit shard 2:** all 5,265 tests pass, but `use-combined-mail-threads.test.tsx`
-  leaves a React render running after its test environment is torn down
-  (`window is not defined`), which Vitest counts as an error. It only shows
-  up when the file runs in the full shard.
-- **Bundle budget:** `/login` first-load JS is 607 KB gzip against a 585 KB
-  budget (`scripts/check-bundle-budgets.ts`).
-
-Runs: [Run Tests](https://github.com/gdavid7/Cue/actions/runs/38915629805),
-[Build Check](https://github.com/gdavid7/Cue/actions/runs/38915297278).
+- **Integration tests (16 failing in 6 files): test setup, no product bug.**
+  - Mail-engine slices: the Gmail harness pointed only the client at the
+    emulator, so batch reads (`GOOGLE_BASE_URL`, fixed at import) hit real
+    Gmail with the emulator token (401). The sync budget also fails closed
+    without Redis, which these tests don't run. The harness now redirects
+    batch fetches to its emulator; the slices run the budget as a
+    pass-through.
+  - Todoist: the Prisma mock lacked `mcpConnection.findMany`, now used by
+    `findConnectionAccountId`.
+  - Stats: pagination now hydrates a page in one batch request; the test
+    expected none and now expects exactly that one.
+  - Slack: assertions hardcoded "Inbox Zero"; they use `BRAND_NAME` (Cue).
+  - Custom MCP: the test's fake Prisma didn't understand the
+    `ownedBySameUser` filter the queries moved to.
+- **Unit shard 2:** `use-combined-mail-threads.test.tsx` never unmounted its
+  hooks (Vitest globals are off, so Testing Library's auto-cleanup never
+  registers), and a render ran after teardown. It now cleans up and asserts
+  no subscription outlives a test.
+- **Bundle budget:** `/login` first-load JS had grown from 554 KB gzip (when
+  the budget was set) to 607 KB, against 585. Turbopack's bundle analysis
+  put 45.6 KB of that in `tldts` (the public suffix list), pulled in by
+  `ConnectorLogo`'s favicon fallback on the new landing sections. Connector
+  domains no longer go through the apex lookup: `/login` is 562 KB, and
+  mail, Today and Settings dropped about 45 KB each.
 
 ## Eval subset (decision 1)
 
