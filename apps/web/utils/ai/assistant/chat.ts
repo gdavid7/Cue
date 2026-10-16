@@ -613,9 +613,9 @@ function addAnthropicCacheControl(
   });
 }
 
-// The system prompt carries the current time, so it changes every turn. A
-// breakpoint on the last tool keeps the large, stable tool definitions cached
-// across turns, since Anthropic renders tools ahead of the system prompt.
+// Anthropic renders tools ahead of the system prompt, so a breakpoint on the
+// last tool keeps the large tool definitions cached on their own whenever the
+// system prompt changes, such as after a calendar or send setting changes.
 function addAnthropicToolCacheControl<T extends Record<string, Tool>>(
   tools: T,
 ): T {

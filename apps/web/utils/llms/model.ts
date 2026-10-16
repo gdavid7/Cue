@@ -770,9 +770,10 @@ function getAnthropicProviderOptions(modelName: string, modelType: ModelType) {
     anthropic: {
       effort: REASONING_EFFORT_BY_MODEL_TYPE[modelType],
       // A thinking block is only valid in the exact conversation that produced
-      // it. Chat rebuilds the system prompt each turn and trims old tool
-      // results, which accounts created since 2026-08-31 reject with a 400
-      // unless the stale blocks are dropped.
+      // it. Chat's per-turn context messages are gone from the next turn's
+      // history, and long runs trim old tool results, so earlier blocks no
+      // longer match; accounts created since 2026-08-31 reject that with a
+      // 400 unless the stale blocks are dropped.
       thinking: {
         type: "adaptive" as const,
         blockBinding: { prefixMismatchBehavior: "drop_block" as const },
