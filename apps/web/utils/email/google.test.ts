@@ -1032,6 +1032,7 @@ describe("GmailProvider.createDraft", () => {
     expect(mime).toContain("Cc: copied@example.com");
     expect(mime).toContain("Bcc: hidden@example.com");
     expect(mime).toContain("In-Reply-To: <parent@example.com>");
+    expect(mime).toMatch(/^X-Mailer: Cue\r$/m);
   });
 
   it("writes a reply draft from the send-as alias the parent was sent to", async () => {

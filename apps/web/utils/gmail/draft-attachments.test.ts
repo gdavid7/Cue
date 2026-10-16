@@ -75,6 +75,7 @@ describe("buildGmailDraftUploadTemplate", () => {
     expect(photo?.disposition).toBe("inline");
     expect(raw).toMatch(/X-Attachment-Id: existing-1/i);
     expect(raw).toMatch(/X-Attachment-Id: new-image/i);
+    expect(raw).toMatch(/^X-Mailer: Cue\r$/m);
   });
 });
 

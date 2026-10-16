@@ -6,7 +6,6 @@ import {
   CircleHelpIcon,
   ChevronsUpDownIcon,
   KeyboardIcon,
-  LightbulbIcon,
   MessageCircleIcon,
   ShieldCheckIcon,
   LogOutIcon,
@@ -205,15 +204,13 @@ export function NavUser() {
               </DropdownMenuItem>
             )}
             <DropdownMenuItem asChild>
-              <Link
-                href="https://docs.getinboxzero.com"
-                target="_blank"
-                rel="noopener noreferrer"
+              <a
+                href={`mailto:${env.NEXT_PUBLIC_SUPPORT_EMAIL}`}
                 onClick={() => closeMobileSidebar("left-sidebar")}
               >
                 <CircleHelpIcon className="mr-2 size-4" />
-                Help Center
-              </Link>
+                Contact support
+              </a>
             </DropdownMenuItem>
             {isSupportChatAvailable && (
               <DropdownMenuItem
@@ -233,17 +230,6 @@ export function NavUser() {
                 <Kbd className="ml-auto">{getShortcutHint("help")}</Kbd>
               </DropdownMenuItem>
             )}
-            <DropdownMenuItem asChild>
-              <Link
-                href="/feature-requests"
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={() => closeMobileSidebar("left-sidebar")}
-              >
-                <LightbulbIcon className="mr-2 size-4" />
-                Feature Requests
-              </Link>
-            </DropdownMenuItem>
             {!env.NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS && (
               <DropdownMenuItem
                 onSelect={() => {
