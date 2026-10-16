@@ -278,11 +278,6 @@ const nextConfig: NextConfig = {
         source: "/",
       },
       {
-        destination: "https://go.getinboxzero.com/feature-requests",
-        permanent: true,
-        source: "/feature-requests",
-      },
-      {
         destination: "https://go.getinboxzero.com/github",
         permanent: true,
         source: "/github",
