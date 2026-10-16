@@ -14,13 +14,7 @@ import {
 } from "react";
 import { useSetAtom } from "jotai";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
-import {
-  CheckIcon,
-  FlagIcon,
-  type LucideIcon,
-  MailSearchIcon,
-  PauseIcon,
-} from "lucide-react";
+import { CheckIcon, FlagIcon, MailSearchIcon, PauseIcon } from "lucide-react";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
 import type { ActionableThread } from "@/app/(app)/[emailAccountId]/mail/types";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
@@ -42,12 +36,15 @@ import { markNeedsReplyAction } from "@/utils/actions/thread-assist";
 import { formatShortDate } from "@/utils/date";
 import { getActionErrorMessage } from "@/utils/error";
 import type { AgentTask, HomeLane, HomeThread } from "@/utils/home/get-home";
-import { prefixPath } from "@/utils/path";
 import { AllClear, CueChecked } from "./AllClear";
+import {
+  type CueNotice,
+  CueNoticeStatus,
+  replyTrackingOffNotice,
+} from "./CueNotice";
 import { BeforeYourMeeting } from "./BeforeYourMeeting";
 import { ConnectLine, NextUpList } from "./NextUp";
 import { formatTime } from "./today-format";
-import { TodayStatus } from "./TodayStatus";
 import {
   type TodayRowCorrection,
   type TodayRowHandlers,
@@ -487,19 +484,7 @@ function HomeLanes({
 
   return (
     <>
-      {notice ? (
-        <TodayStatus icon={notice.icon} title={notice.title} tone={notice.tone}>
-          {notice.detail}
-          {notice.link ? (
-            <Link
-              className="font-medium text-blue-600 underline-offset-2 hover:underline dark:text-blue-400"
-              href={notice.link.href}
-            >
-              {notice.link.label}
-            </Link>
-          ) : null}
-        </TodayStatus>
-      ) : null}
+      {notice ? <CueNoticeStatus notice={notice} /> : null}
 
       {allClear ? (
         <AllClear
@@ -644,14 +629,7 @@ function cueNotice(
   cue: GetHomeResponse["cue"],
   emailAccountId: string,
   { hasTrackedThreads }: { hasTrackedThreads: boolean },
-): {
-  icon: LucideIcon;
-  /** Settings that are off are nags, quieter than what Cue is doing. */
-  tone: "info" | "quiet";
-  title: string;
-  detail?: string;
-  link?: { label: string; href: string };
-} | null {
+): CueNotice | null {
   if (!cue.aiAccess) {
     // Conversations tracked while the assistant was on still show, so only
     // say they would appear when there are none.
@@ -664,17 +642,7 @@ function cueNotice(
       link: { label: "See plans", href: "/premium" },
     };
   }
-  if (!cue.replyTracking) {
-    return {
-      icon: PauseIcon,
-      tone: "quiet",
-      title: "Reply tracking is off, so Cue isn't checking what needs a reply.",
-      link: {
-        label: "Turn it on in Rules",
-        href: prefixPath(emailAccountId, "/automation"),
-      },
-    };
-  }
+  if (!cue.replyTracking) return replyTrackingOffNotice(emailAccountId);
   if (!cue.hasReadMail) {
     return {
       icon: MailSearchIcon,

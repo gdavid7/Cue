@@ -34,6 +34,8 @@ import { isDuplicateError } from "@/utils/prisma-helpers";
 import { SafeError } from "@/utils/error";
 import { scheduleWatchAfterLinking } from "@/utils/email/watch-after-linking";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
+import { INITIAL_REPLY_TRACKING_RULES } from "@/utils/reply-tracker/initial-rules";
+import { recordFirstSignIn } from "@/utils/analytics/activation";
 
 export const GET = withError("google/linking/callback", async (request) => {
   const actorSession = await auth(request.headers);
@@ -280,12 +282,16 @@ export const GET = withError("google/linking/callback", async (request) => {
                 userId: targetUserId,
                 name: payload.name || null,
                 image: payload.picture,
+                rules: { create: INITIAL_REPLY_TRACKING_RULES },
               },
             },
           },
+          include: { emailAccount: { select: { id: true } } },
         });
 
         linkedAccountId = newAccount.id;
+        if (newAccount.emailAccount)
+          await recordFirstSignIn(newAccount.emailAccount.id);
         logger.info("Successfully created and linked new Google account", {
           email: providerEmail,
           targetUserId,

@@ -18,6 +18,8 @@ import {
 import prisma from "@/utils/__mocks__/prisma";
 import { ACCOUNT_LINKING } from "@/utils/auth/account-linking";
 import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
+import { expectReplyTrackingOn } from "@/__tests__/helpers";
+import { recordFirstSignIn } from "@/utils/analytics/activation";
 
 const { mockAfter, mockAssertSignUpAllowed } = vi.hoisted(() => ({
   mockAfter: vi.fn(),
@@ -54,6 +56,9 @@ vi.mock("better-auth", () => {
   };
 });
 vi.mock("@/utils/prisma");
+vi.mock("@/utils/analytics/activation", () => ({
+  recordFirstSignIn: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("better-auth/cookies", async (importActual) => ({
   ...(await importActual<typeof import("better-auth/cookies")>()),
   setSessionCookie: vi.fn(),
@@ -582,6 +587,7 @@ describe("handleLinkAccount", () => {
     expect(update?.data).not.toHaveProperty("userId");
     expect(update?.data).not.toHaveProperty("mailSplits");
     expect(clearAccountDisconnectedErrorIfResolved).toHaveBeenCalled();
+    expect(recordFirstSignIn).not.toHaveBeenCalled();
     expect(mockAfter).toHaveBeenCalledOnce();
   });
 
@@ -645,6 +651,9 @@ describe("handleLinkAccount", () => {
       ],
     });
     expect(upsert?.update).not.toHaveProperty("mailSplits");
+    expectReplyTrackingOn(upsert?.create.rules);
+    expect(upsert?.update).not.toHaveProperty("rules");
+    expect(recordFirstSignIn).toHaveBeenCalledWith("email_account_1");
     expect(mockAfter).toHaveBeenCalledOnce();
     expect(ensureEmailAccountsWatched).not.toHaveBeenCalled();
 

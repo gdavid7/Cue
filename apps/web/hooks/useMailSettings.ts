@@ -21,6 +21,9 @@ const mailSettingsSchema = z.object({
       ),
     }),
   ),
+  // Responses cached before this field existed still render; reading it as
+  // on keeps the "Reply tracking is off" notice from flashing on them.
+  replyTracking: z.boolean().default(true),
 }) satisfies z.ZodType<MailSettingsResponse>;
 
 export function useMailSettings() {

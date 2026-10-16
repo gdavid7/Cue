@@ -12,6 +12,7 @@ const bodySchema = z.object({
   provider: z.string().min(1),
   maxEmails: z.number().int().positive(),
   skipArchive: z.boolean(),
+  ruleIds: z.array(z.string().min(1)).optional(),
   startedAt: z.number().int().positive(),
   processedTotal: z.number().int().nonnegative(),
   deferrals: z.number().int().nonnegative(),

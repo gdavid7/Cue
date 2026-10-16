@@ -12,7 +12,7 @@ import {
   updateMailSplitAction,
 } from "@/utils/actions/mail-split";
 import { aiPromptToSplitFilters } from "@/utils/ai/split/prompt-to-split";
-import { addCueTabs } from "@/utils/split-inbox/cue-tabs.server";
+import { setUpCueSorting } from "@/utils/split-inbox/cue-tabs.server";
 import { applyInboxStyle } from "@/utils/split-inbox/inbox-styles.server";
 
 vi.mock("@/utils/prisma");
@@ -28,7 +28,7 @@ vi.mock("@/utils/split-inbox/inbox-styles.server", () => ({
   applyInboxStyle: vi.fn(),
 }));
 vi.mock("@/utils/split-inbox/cue-tabs.server", () => ({
-  addCueTabs: vi.fn(),
+  setUpCueSorting: vi.fn(),
 }));
 
 const EMAIL_ACCOUNT_ID = "email-account-1";
@@ -53,7 +53,7 @@ describe("mail split actions", () => {
     } as never);
   });
 
-  it("adds the Needs reply and Reading tabs only when the person opts in", async () => {
+  it("turns reply tracking on for every style and adds Cue's tabs only on opt-in", async () => {
     await applyInboxStyleAction(EMAIL_ACCOUNT_ID, {
       style: "one-inbox",
       addCueTabs: false,
@@ -63,16 +63,23 @@ describe("mail split actions", () => {
       provider: "google",
       style: "one-inbox",
     });
-    expect(addCueTabs).not.toHaveBeenCalled();
+    expect(setUpCueSorting).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        emailAccountId: EMAIL_ACCOUNT_ID,
+        provider: "google",
+        addTabs: false,
+      }),
+    );
 
     await applyInboxStyleAction(EMAIL_ACCOUNT_ID, {
       style: "tabs",
       addCueTabs: true,
     });
-    expect(addCueTabs).toHaveBeenCalledWith(
+    expect(setUpCueSorting).toHaveBeenLastCalledWith(
       expect.objectContaining({
         emailAccountId: EMAIL_ACCOUNT_ID,
         provider: "google",
+        addTabs: true,
       }),
     );
   });

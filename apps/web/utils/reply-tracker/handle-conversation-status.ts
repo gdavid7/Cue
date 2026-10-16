@@ -9,6 +9,7 @@ import prisma from "@/utils/prisma";
 import { sortByInternalDate } from "@/utils/date";
 import { withPrismaRetry } from "@/utils/prisma-retry";
 import { publishTrackerHint } from "@/utils/redis/local-mail-hints";
+import { recordNeedsReplyFirstItem } from "@/utils/analytics/activation";
 import {
   buildThreadStatusMessagesForLLM,
   excludeAssistantMessages,
@@ -184,6 +185,9 @@ export async function updateThreadTrackers({
         ? Date.now() - sentAt.getTime()
         : null,
     });
+    if (trackerType === ThreadTrackerType.NEEDS_REPLY) {
+      await recordNeedsReplyFirstItem(emailAccountId);
+    }
   }
 
   await publishTrackerHint(emailAccountId, logger);

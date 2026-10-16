@@ -8,11 +8,15 @@ import { getEmailAccount, getMockMessage } from "@/__tests__/helpers";
 import { SystemType, ThreadTrackerType } from "@/generated/prisma/enums";
 import prisma from "@/utils/__mocks__/prisma";
 import { publishTrackerHint } from "@/utils/redis/local-mail-hints";
+import { recordNeedsReplyFirstItem } from "@/utils/analytics/activation";
 
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/ai/reply/determine-thread-status");
 vi.mock("@/utils/redis/local-mail-hints", () => ({
   publishTrackerHint: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@/utils/analytics/activation", () => ({
+  recordNeedsReplyFirstItem: vi.fn().mockResolvedValue(undefined),
 }));
 
 describe("determineConversationStatus", () => {
@@ -121,6 +125,31 @@ describe("updateThreadTrackers", () => {
         update: { resolved: false, type: ThreadTrackerType.NEEDS_REPLY },
       }),
     );
+  });
+
+  it.each([
+    { status: SystemType.TO_REPLY, counted: true },
+    { status: SystemType.AWAITING_REPLY, counted: false },
+    { status: SystemType.FYI, counted: false },
+  ])("counts Needs reply items toward activation only for $status", async ({
+    status,
+    counted,
+  }) => {
+    vi.mocked(recordNeedsReplyFirstItem).mockClear();
+
+    await updateThreadTrackers({
+      emailAccountId: "account",
+      threadId: "thread",
+      messageId: "message",
+      sentAt: new Date("2026-10-14T12:00:00Z"),
+      status,
+    });
+
+    if (counted) {
+      expect(recordNeedsReplyFirstItem).toHaveBeenCalledWith("account");
+    } else {
+      expect(recordNeedsReplyFirstItem).not.toHaveBeenCalled();
+    }
   });
 
   it.each([

@@ -211,6 +211,30 @@ describe("bulkProcessInboxEmails", () => {
     expect(ranOn().filter((id) => id === "m1")).toHaveLength(1);
   });
 
+  it("sorts with only the rules it is given", async () => {
+    await bulkProcessInboxEmails({ ...job, ruleIds: ["rule-1"] });
+
+    expect(prisma.rule.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          enabled: true,
+          id: { in: ["rule-1"] },
+        }),
+      }),
+    );
+    expect(ranOn()).toEqual(["m1", "m2", "m3", "m4"]);
+  });
+
+  it("resumes a deferred sort with only the rules it was given", async () => {
+    getInboxMessages.mockRejectedValue(
+      new GmailCallDeferredError(10_000, "background"),
+    );
+
+    await bulkProcessInboxEmails({ ...job, ruleIds: ["rule-1"] });
+
+    expect(lastResumeBody()).toMatchObject({ ruleIds: ["rule-1"] });
+  });
+
   it("does not reschedule a failure that is not a deferral", async () => {
     getInboxMessages.mockRejectedValue(new Error("boom"));
 

@@ -1,5 +1,9 @@
 import { ensureAllMailSplit } from "@/utils/split-inbox/initial-splits";
 import prisma from "@/utils/prisma";
+import {
+  isReplyTrackingOn,
+  REPLY_TRACKING_RULES,
+} from "@/utils/reply-tracker/reply-tracking-status";
 
 export async function getMailSettings({
   emailAccountId,
@@ -25,6 +29,7 @@ export async function getMailSettings({
           },
         },
       },
+      rules: REPLY_TRACKING_RULES,
     },
   });
 
@@ -32,5 +37,6 @@ export async function getMailSettings({
     layout: emailAccount?.mailLayout ?? null,
     expandedPreview: emailAccount?.mailExpandedPreview ?? false,
     splits: ensureAllMailSplit(emailAccount?.mailSplits ?? []),
+    replyTracking: isReplyTrackingOn(emailAccount?.rules),
   };
 }

@@ -30,7 +30,7 @@ describe("bulk inbox processing resume", () => {
     vi.clearAllMocks();
   });
 
-  it("resumes the deferred sort with its start time and deferral count", async () => {
+  it("resumes the deferred sort with its rules, start time and deferral count", async () => {
     vi.mocked(getEmailAccountForRuleExecution).mockResolvedValue({
       id: "account-1",
     } as never);
@@ -44,6 +44,7 @@ describe("bulk inbox processing resume", () => {
         provider: "google",
         maxEmails: 20,
         skipArchive: true,
+        ruleIds: ["rule-1"],
         startedAt: 1_700_000_000_000,
         processedTotal: 3,
         deferrals: 2,
@@ -77,6 +78,7 @@ function resume({ verified = true } = {}) {
       provider: "google",
       maxEmails: 20,
       skipArchive: true,
+      ruleIds: ["rule-1"],
       startedAt: 1_700_000_000_000,
       processedTotal: 3,
       deferrals: 2,

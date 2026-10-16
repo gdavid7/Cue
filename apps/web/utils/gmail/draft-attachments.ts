@@ -241,7 +241,7 @@ function draftMailOptions(
     attachments,
     inReplyTo: current.headers?.["in-reply-to"],
     references: current.headers?.references,
-    headers: { "X-Mailer": "Inbox Zero Web" },
+    headers: { "X-Mailer": "Cue" },
   };
 }
 

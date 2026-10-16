@@ -3,18 +3,25 @@ import { Client } from "pg";
 import { test } from "../playwright-test";
 import { getEmailAccountId } from "../account-test-helpers";
 
-test("opens chat directly without rules or an onboarding cookie", async ({
+test("opens chat directly on a new mailbox without an onboarding cookie", async ({
   page,
 }) => {
   const emailAccountId = await getEmailAccountId(page);
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
   try {
-    const rules = await client.query(
-      'SELECT id FROM "Rule" WHERE "emailAccountId" = $1',
+    // A new mailbox has only the reply tracking rules it starts with, none of
+    // the person's own.
+    const rules = await client.query<{ systemType: string | null }>(
+      'SELECT "systemType" FROM "Rule" WHERE "emailAccountId" = $1',
       [emailAccountId],
     );
-    expect(rules.rows).toHaveLength(0);
+    expect(rules.rows.map((rule) => rule.systemType).sort()).toEqual([
+      "ACTIONED",
+      "AWAITING_REPLY",
+      "FYI",
+      "TO_REPLY",
+    ]);
   } finally {
     await client.end();
   }

@@ -23,6 +23,9 @@ vi.mock("@/utils/ai/reply/reply-memory", () => ({
   saveDraftSendLogReplyMemory: vi.fn().mockResolvedValue(undefined),
   syncReplyMemoriesFromDraftSendLogs: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("@/utils/analytics/activation", () => ({
+  recordFirstSuggestedReplySent: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("@/utils/messaging/rule-notifications", () => ({
   replaceMessagingDraftNotificationsWithDraftSentState: vi
     .fn()
@@ -37,6 +40,7 @@ import {
   calculateSimilarityDetails,
 } from "@/utils/similarity-score";
 import { isDraftUnmodified } from "@/utils/ai/choose-rule/draft-management";
+import { recordFirstSuggestedReplySent } from "@/utils/analytics/activation";
 import {
   isMeaningfulDraftEdit,
   saveDraftSendLogReplyMemory,
@@ -262,6 +266,7 @@ describe("trackSentDraftStatus", () => {
       executedRuleId: "executed-rule-1",
       logger,
     });
+    expect(recordFirstSuggestedReplySent).toHaveBeenCalledWith("account-1");
   });
 
   it("treats sent messages to someone else as ignored drafts and skips learning", async () => {
@@ -306,6 +311,7 @@ describe("trackSentDraftStatus", () => {
     expect(isMeaningfulDraftEdit).not.toHaveBeenCalled();
     expect(saveDraftSendLogReplyMemory).not.toHaveBeenCalled();
     expect(syncReplyMemoriesFromDraftSendLogs).not.toHaveBeenCalled();
+    expect(recordFirstSuggestedReplySent).not.toHaveBeenCalled();
   });
 
   it("keeps learning from replies with forwarded blocks when sent to the source sender", async () => {
@@ -611,6 +617,27 @@ describe("trackSentDraftStatus for saved suggested replies", () => {
     expect(
       replaceMessagingDraftNotificationsWithDraftSentState,
     ).not.toHaveBeenCalled();
+    expect(recordFirstSuggestedReplySent).toHaveBeenCalledWith("account-1");
+  });
+
+  it("does not count a suggestion as sent while its draft is still there", async () => {
+    vi.mocked(prisma.suggestedReplyDraft.findFirst).mockResolvedValue(
+      createSuggestedReplyDraft(),
+    );
+    vi.mocked(calculateSimilarity).mockReturnValue(0.2);
+
+    await trackSentDraftStatus({
+      emailAccountId: "account-1",
+      message: createSentMessage(),
+      provider: {
+        getDraft: vi.fn().mockResolvedValue({ id: "suggested-draft-1" }),
+        getMessage: vi.fn().mockResolvedValue(createSourceMessage()),
+      } as any,
+      logger,
+    });
+
+    expect(prisma.draftSendLog.create).toHaveBeenCalled();
+    expect(recordFirstSuggestedReplySent).not.toHaveBeenCalled();
   });
 
   it("logs an unchanged send without learning from it", async () => {
@@ -659,6 +686,7 @@ describe("trackSentDraftStatus for saved suggested replies", () => {
 
     expect(prisma.draftSendLog.create).toHaveBeenCalled();
     expect(saveDraftSendLogReplyMemory).not.toHaveBeenCalled();
+    expect(recordFirstSuggestedReplySent).not.toHaveBeenCalled();
   });
 
   it("compares against the suggestion when it was saved over a rule draft", async () => {

@@ -14,6 +14,7 @@ export async function bulkProcessInboxEmails({
   provider,
   maxEmails,
   skipArchive,
+  ruleIds,
   logger: log,
   startedAt: resumedStartedAt,
   processedTotal = 0,
@@ -23,6 +24,8 @@ export async function bulkProcessInboxEmails({
   provider: string;
   maxEmails: number;
   skipArchive: boolean;
+  /** Sort with only these rules, such as ones just added. Defaults to every enabled rule. */
+  ruleIds?: string[];
   logger: Logger;
   /** When the first run of this job started; set on resumes. */
   startedAt?: number;
@@ -52,6 +55,7 @@ export async function bulkProcessInboxEmails({
         where: {
           emailAccountId: emailAccount.id,
           enabled: true,
+          ...(ruleIds ? { id: { in: ruleIds } } : {}),
         },
         include: {
           actions: true,
@@ -151,6 +155,7 @@ export async function bulkProcessInboxEmails({
         provider,
         maxEmails,
         skipArchive,
+        ruleIds,
         startedAt,
         processedTotal: nextProcessedTotal,
       },

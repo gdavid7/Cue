@@ -35,6 +35,10 @@ import {
   isPremiumRecord,
   premiumEntitlementSelect,
 } from "@/utils/premium";
+import {
+  isReplyTrackingOn,
+  REPLY_TRACKING_RULES,
+} from "@/utils/reply-tracker/reply-tracking-status";
 
 const LIST_LIMIT = 10;
 // Well inside the route's 30 seconds, and about as long as a person watches a
@@ -351,10 +355,7 @@ async function getCueStatus(emailAccountId: string) {
             premium: { select: premiumEntitlementSelect },
           },
         },
-        rules: {
-          where: { systemType: SystemType.TO_REPLY },
-          select: { enabled: true },
-        },
+        rules: REPLY_TRACKING_RULES,
       },
     }),
     prisma.executedRule.findFirst({
@@ -372,7 +373,7 @@ async function getCueStatus(emailAccountId: string) {
     aiAccess:
       isPremiumRecord(premium) &&
       hasAiAccess(getUserTier(premium), !!account?.user.aiApiKey),
-    replyTracking: account?.rules.some((rule) => rule.enabled) ?? false,
+    replyTracking: isReplyTrackingOn(account?.rules),
     hasReadMail: Boolean(firstRun || firstTracker),
   };
 }

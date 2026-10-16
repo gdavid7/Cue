@@ -332,6 +332,18 @@ describe("sending a Gmail draft from the reader", () => {
     expect(messages.get).not.toHaveBeenCalled();
     expect(drafts.list).not.toHaveBeenCalled();
   });
+
+  it("names Cue as the mailer on sent mail", async () => {
+    const { gmail, messages } = createGmail();
+
+    await sendEmailWithHtml(gmail, { ...email, replyToEmail: undefined });
+
+    const mime = Buffer.from(
+      messages.send.mock.calls[0][0].requestBody.raw,
+      "base64url",
+    ).toString();
+    expect(mime).toMatch(/^X-Mailer: Cue\r$/m);
+  });
 });
 
 function createGmail() {

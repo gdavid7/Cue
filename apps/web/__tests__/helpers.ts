@@ -1,7 +1,12 @@
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import type { EmailForLLM } from "@/utils/types";
 import type { EmailProvider } from "@/utils/email/types";
-import { ActionType, LogicalOperator } from "@/generated/prisma/enums";
+import { expect } from "vitest";
+import {
+  ActionType,
+  LogicalOperator,
+  SystemType,
+} from "@/generated/prisma/enums";
 import type { Action, Prisma } from "@/generated/prisma/client";
 import { isGoogleProvider } from "@/utils/email/provider-types";
 import { createScopedLogger } from "@/utils/logger";
@@ -543,4 +548,31 @@ export function getMockOrganizationMembership({
       ],
     },
   };
+}
+
+/**
+ * Asserts a nested Prisma `rules` create turns reply tracking on: every
+ * conversation status rule, enabled, with no mailbox actions.
+ */
+export function expectReplyTrackingOn(rules: unknown) {
+  const created = (rules as { create?: unknown[] } | undefined)?.create ?? [];
+  expect(
+    created
+      .map((rule) => {
+        const { systemType, enabled, actions } = rule as {
+          systemType?: string;
+          enabled?: boolean;
+          actions?: unknown;
+        };
+        return { systemType, enabled, actions };
+      })
+      .sort((a, b) => String(a.systemType).localeCompare(String(b.systemType))),
+  ).toEqual(
+    [
+      SystemType.ACTIONED,
+      SystemType.AWAITING_REPLY,
+      SystemType.FYI,
+      SystemType.TO_REPLY,
+    ].map((systemType) => ({ systemType, enabled: true, actions: undefined })),
+  );
 }
