@@ -1568,7 +1568,9 @@ function ComposeEmailFormContent({
       attachmentsRef.current = [];
       onSelectEmailAccount(nextEmailAccountId, {
         values: content?.values ?? getValues(),
-        editableHtml: content?.draft.editableHtml ?? initialDraft.editableHtml,
+        editableHtml: removeComposerSignature(
+          content?.draft.editableHtml ?? initialDraft.editableHtml,
+        ),
         mode: content?.draft.mode ?? initialDraft.mode,
         files: uploaded.flatMap(
           ({ draftAttachmentId: _draftAttachmentId, ...attachment }, index) => {
@@ -2240,6 +2242,17 @@ function stripBrandingOutsideSignature(body: HTMLElement) {
   const html = stripBrandingSignatures(body.innerHTML);
   // A function replacer keeps "$" sequences in the signature literal.
   return html.replace("<!--signature-->", () => signature.outerHTML);
+}
+
+// Once edited, a draft holds its signature inline; a moved draft takes the
+// new account's signature instead.
+function removeComposerSignature(html: string) {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  // Only a top-level container is the composer's own signature.
+  for (const element of [...template.content.children])
+    if (element.hasAttribute("data-smartmail")) element.remove();
+  return template.innerHTML;
 }
 
 function ReplyStatus({
