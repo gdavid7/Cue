@@ -15,8 +15,7 @@ test("drags the assistant panel wider, keeps the width after reload, and resets 
   const handle = await openAssistantPanel(page);
   await expect(handle).toHaveAttribute("aria-valuenow", String(DEFAULT_WIDTH));
 
-  const box = await handle.boundingBox();
-  if (!box) throw new Error("Resize handle has no box");
+  const box = await settledBox(handle);
   const grabX = box.x + box.width / 2;
   const grabY = box.y + box.height / 2;
   await page.mouse.move(grabX, grabY);
@@ -109,6 +108,27 @@ async function expectMailReflowed(
     })
     .toBeLessThanOrEqual(viewportWidth - panelWidth);
   expect(await hasHorizontalOverflow(page)).toBe(false);
+}
+
+// The panel slides in, so a box read mid-animation puts the grab point beside
+// the handle. Two equal reads a frame or more apart mean it has landed.
+async function settledBox(locator: Locator) {
+  let box = await locator.boundingBox();
+  let previous = "";
+  await expect
+    .poll(
+      async () => {
+        box = await locator.boundingBox();
+        const current = JSON.stringify(box);
+        const settled = box !== null && current === previous;
+        previous = current;
+        return settled;
+      },
+      { intervals: [100] },
+    )
+    .toBe(true);
+  if (!box) throw new Error("Resize handle has no box");
+  return box;
 }
 
 function hasHorizontalOverflow(page: Page) {
