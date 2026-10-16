@@ -911,7 +911,7 @@ export class OutlookProvider implements EmailProvider {
       bcc?: string;
       attachments?: MailAttachment[];
     },
-    userEmail: string,
+    userEmails: string | string[],
     executedRule?: { id: string; threadId: string; emailAccountId: string },
   ): Promise<{ draftId: string }> {
     if (shouldSkipAutoDraft({ logger: this.logger, source: "microsoft" })) {
@@ -926,7 +926,7 @@ export class OutlookProvider implements EmailProvider {
     if (executedRule) {
       // Run draft creation and previous draft deletion in parallel
       const [result] = await Promise.all([
-        draftEmail(this.client, email, args, userEmail, this.logger),
+        draftEmail(this.client, email, args, userEmails, this.logger),
         handlePreviousDraftDeletion({
           client: this,
           executedRule,
@@ -943,7 +943,7 @@ export class OutlookProvider implements EmailProvider {
         this.client,
         email,
         args,
-        userEmail,
+        userEmails,
         this.logger,
       );
 

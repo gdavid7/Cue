@@ -261,7 +261,8 @@ export interface EmailProvider {
       bcc?: string;
       attachments?: MailAttachment[];
     },
-    userEmail: string,
+    /** The user's own addresses, never copied on the reply. */
+    userEmails: string | string[],
     executedRule?: { id: string; threadId: string; emailAccountId: string },
   ): Promise<{ draftId: string }>;
   forwardEmail(

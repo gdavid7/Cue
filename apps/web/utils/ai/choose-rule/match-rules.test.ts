@@ -2065,6 +2065,7 @@ describe("findMatchingRules - Integration Tests", () => {
       modelType: "default",
       coldEmailRule,
       logger: expect.any(Object),
+      senderAuthenticated: false,
     });
 
     expect(result.matches[0]?.rule.id).toBe("cold-email-rule");
@@ -2072,6 +2073,38 @@ describe("findMatchingRules - Integration Tests", () => {
       { type: ConditionType.AI },
     ]);
     expect(result.reasoning).toBe("");
+  });
+
+  it("tells the cold email check when Gmail authenticated the sender", async () => {
+    const coldEmailRule = getRule({
+      id: "cold-email-rule",
+      systemType: SystemType.COLD_EMAIL,
+    });
+    vi.mocked(getColdEmailRule).mockResolvedValue(coldEmailRule);
+    vi.mocked(isColdEmailRuleEnabled).mockReturnValue(true);
+    vi.mocked(isColdEmail).mockResolvedValue({
+      isColdEmail: false,
+      reason: "hasPreviousEmail",
+    });
+
+    await findMatchingRules({
+      rules: [coldEmailRule],
+      message: getMessage({
+        headers: {
+          ...getHeaders({ from: "me.elsewhere@gmail.com" }),
+          "authentication-results":
+            "mx.google.com; dkim=pass header.i=@gmail.com; dmarc=pass header.from=gmail.com",
+        },
+      }),
+      emailAccount: getEmailAccount(),
+      provider,
+      modelType: "default",
+      logger,
+    });
+
+    expect(isColdEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ senderAuthenticated: true }),
+    );
   });
 
   it("returns learned pattern match reasons for cold email pattern hits", async () => {

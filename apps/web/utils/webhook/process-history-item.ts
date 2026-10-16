@@ -233,10 +233,8 @@ export async function processHistoryItem(
         logger,
       });
 
-      if (
-        options.isNewMessage &&
-        email !== canonicalizeEmailAddress(userEmail)
-      ) {
+      // runRules never applies To Reply to mail from the user's own addresses.
+      if (options.isNewMessage) {
         await sendToReplyPushNotification({
           emailAccountId,
           userId: emailAccount.userId,

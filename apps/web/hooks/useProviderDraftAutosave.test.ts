@@ -11,6 +11,105 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// A draft moving to another account is removed from the old one only once
+// the new mailbox holds it, so the caller needs to know the save landed.
+it("saves the latest content now and says whether the mailbox has it", async () => {
+  const save = vi.fn().mockResolvedValue(undefined);
+  const { result, unmount } = renderHook(() =>
+    useProviderDraftAutosave({
+      enabled: true,
+      getContent: () => "moved",
+      save,
+    }),
+  );
+
+  let saved: boolean | undefined;
+  await act(async () => {
+    saved = await result.current.saveNow();
+  });
+
+  expect(save).toHaveBeenCalledWith("moved");
+  expect(saved).toBe(true);
+  unmount();
+});
+
+// Every save made by this composer already holds the moved message, so
+// typing while it runs doesn't make the mailbox copy any less complete.
+it("counts a save now as landed when typing continued during it", async () => {
+  let content = "moved";
+  let typeMore = () => {};
+  const save = vi.fn().mockImplementation(async () => {
+    content = "moved and more";
+    typeMore();
+  });
+  const { result, unmount } = renderHook(() =>
+    useProviderDraftAutosave({
+      enabled: true,
+      getContent: () => content,
+      save,
+    }),
+  );
+  typeMore = () => result.current.capture();
+
+  let saved: boolean | undefined;
+  await act(async () => {
+    saved = await result.current.saveNow();
+  });
+
+  expect(save).toHaveBeenCalledWith("moved");
+  expect(saved).toBe(true);
+  unmount();
+});
+
+it("tells the caller after each save that landed, not after a failed one", async () => {
+  const onSaved = vi.fn();
+  const save = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("Gmail is unavailable."))
+    .mockResolvedValue(undefined);
+  let content = "first";
+  const { result, unmount } = renderHook(() =>
+    useProviderDraftAutosave({
+      enabled: true,
+      getContent: () => content,
+      save,
+      onSaved,
+    }),
+  );
+
+  await act(async () => {
+    await result.current.saveNow();
+  });
+  expect(onSaved).not.toHaveBeenCalled();
+
+  content = "second";
+  await act(async () => {
+    await result.current.saveNow();
+  });
+  expect(onSaved).toHaveBeenCalledOnce();
+  unmount();
+});
+
+it("reports a failed save now", async () => {
+  const save = vi.fn().mockRejectedValue(new Error("Gmail is unavailable."));
+  const { result, unmount } = renderHook(() =>
+    useProviderDraftAutosave({
+      enabled: true,
+      getContent: () => "moved",
+      save,
+    }),
+  );
+
+  let saved: boolean | undefined;
+  await act(async () => {
+    saved = await result.current.saveNow();
+  });
+
+  expect(save).toHaveBeenCalledOnce();
+  expect(saved).toBe(false);
+  unmount();
+});
+
 it("saves during continuous editing and skips unchanged drafts", async () => {
   vi.useFakeTimers();
   const save = vi.fn().mockResolvedValue(undefined);

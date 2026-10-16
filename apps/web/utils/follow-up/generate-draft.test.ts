@@ -20,6 +20,10 @@ vi.mock("@/utils/user/get", () => ({
   getWritingStyle: vi.fn().mockResolvedValue(null),
 }));
 
+vi.mock("@/utils/user/own-addresses", () => ({
+  getUserOwnAddresses: vi.fn(async () => ["me@gmail.com"]),
+}));
+
 vi.mock("@/utils/prisma", () => ({
   default: {
     emailAccount: {
@@ -165,7 +169,7 @@ describe("generateFollowUpDraft", () => {
         to: "bob@external.com",
         content: expect.any(String),
       }),
-      "user@example.com",
+      ["user@example.com", "me@gmail.com"],
       undefined,
     );
   });
@@ -207,7 +211,7 @@ describe("generateFollowUpDraft", () => {
         to: "bob@external.com", // Override to send to original recipient
         content: expect.any(String),
       }),
-      "user@example.com",
+      ["user@example.com", "me@gmail.com"],
       undefined,
     );
   });
@@ -258,7 +262,7 @@ describe("generateFollowUpDraft", () => {
       expect.objectContaining({
         to: "bob@external.com",
       }),
-      "user@example.com",
+      ["user@example.com", "me@gmail.com"],
       undefined,
     );
   });
@@ -303,7 +307,7 @@ describe("generateFollowUpDraft", () => {
       expect.objectContaining({
         content: "What do you think about it?\n\nCheers!<br>Barbara",
       }),
-      "user@example.com",
+      ["user@example.com", "me@gmail.com"],
       undefined,
     );
   });

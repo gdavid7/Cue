@@ -1145,7 +1145,7 @@ export class GmailProvider implements EmailProvider {
       bcc?: string;
       attachments?: MailAttachment[];
     },
-    userEmail: string,
+    userEmails: string | string[],
     executedRule?: { id: string; threadId: string; emailAccountId: string },
   ): Promise<{ draftId: string }> {
     if (shouldSkipAutoDraft({ logger: this.logger, source: "google" })) {
@@ -1157,13 +1157,13 @@ export class GmailProvider implements EmailProvider {
       contentLength: args.content?.length,
     });
 
-    const userEmails = await this.getSelfEmailAddresses(userEmail);
+    const selfEmails = await this.getSelfEmailAddresses([userEmails].flat());
     const from = await this.getReplyFrom(email.headers);
     const draftPromise = draftEmail(
       this.client,
       email,
       { ...args, from },
-      userEmails,
+      selfEmails,
     );
     let result: Awaited<typeof draftPromise>;
 
@@ -2342,13 +2342,16 @@ export class GmailProvider implements EmailProvider {
     );
   }
 
-  private async getSelfEmailAddresses(userEmail: string): Promise<string[]> {
+  private async getSelfEmailAddresses(userEmails: string[]): Promise<string[]> {
     try {
       const sendAsEmailAddresses = await this.getSendAsEmailAddresses();
-      return extractUniqueEmailAddresses([userEmail, ...sendAsEmailAddresses]);
+      return extractUniqueEmailAddresses([
+        ...userEmails,
+        ...sendAsEmailAddresses,
+      ]);
     } catch (error) {
       this.logger.warn("Failed to fetch Gmail send-as addresses", { error });
-      return extractUniqueEmailAddresses([userEmail]);
+      return extractUniqueEmailAddresses(userEmails);
     }
   }
 

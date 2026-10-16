@@ -16,6 +16,7 @@ import { isWhitelistedSender } from "@/utils/email/whitelist";
 import { hasPriorContactOrAssumeYes } from "@/utils/cold-email/has-prior-contact";
 import { decideColdEmail } from "@/utils/decision-model/cold-email";
 import { runDecisionModelOrFallback } from "@/utils/decision-model/decision-model";
+import { getUserOwnAddresses, isOwnAddress } from "@/utils/user/own-addresses";
 
 export const COLD_EMAIL_FOLDER_NAME = "Cold Emails";
 
@@ -44,6 +45,8 @@ type ColdEmailGuardsInput = {
   provider: EmailProvider;
   coldEmailRule: Pick<Rule, "instructions" | "groupId"> | null;
   logger: Logger;
+  /** Whether the From domain authenticated on arrival (DMARC or aligned DKIM). */
+  senderAuthenticated?: boolean;
 };
 
 /**
@@ -57,6 +60,7 @@ export async function checkColdEmailGuards({
   provider,
   coldEmailRule,
   logger,
+  senderAuthenticated = false,
 }: ColdEmailGuardsInput): Promise<ColdEmailResult | null> {
   logger.info("Checking is cold email");
 
@@ -118,6 +122,16 @@ export async function checkColdEmailGuards({
     return { isColdEmail: false, reason: "excluded" };
   }
 
+  // Mail from another of the user's connected mailboxes is the user. From is
+  // easy to forge, so this only holds when the sender's domain authenticated.
+  if (
+    senderAuthenticated &&
+    isOwnAddress(email.from, await getUserOwnAddresses(emailAccount.userId))
+  ) {
+    logger.info("Sender is one of the user's own addresses");
+    return { isColdEmail: false, reason: "hasPreviousEmail" };
+  }
+
   const hasPreviousEmail = await hasPriorContactOrAssumeYes({
     provider,
     from: extractEmailAddress(email.from) || email.from,
@@ -141,6 +155,7 @@ export async function isColdEmail({
   modelType,
   coldEmailRule,
   logger,
+  senderAuthenticated,
 }: ColdEmailGuardsInput & {
   modelType?: ModelType;
 }): Promise<ColdEmailResult> {
@@ -150,6 +165,7 @@ export async function isColdEmail({
     provider,
     coldEmailRule,
     logger,
+    senderAuthenticated,
   });
 
   if (guardResult) return guardResult;

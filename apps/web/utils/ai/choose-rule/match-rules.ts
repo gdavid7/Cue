@@ -48,6 +48,7 @@ import {
 import { decisionModelChooseRule } from "@/utils/decision-model/choose-rule";
 import { getDecisionModelConfig } from "@/utils/decision-model/decision-model";
 import { isConversationStatusType } from "@/utils/reply-tracker/conversation-status-config";
+import { isAuthenticatedSender } from "@/utils/email/sender-authentication";
 import { getClassificationFeedback } from "@/utils/rule/classification-feedback";
 import {
   getSelectionMetadataTraceDetails,
@@ -111,6 +112,7 @@ export async function findMatchingRules({
       provider,
       coldEmailRule,
       logger,
+      senderAuthenticated: isAuthenticatedSender(message),
     };
     const coldEmailResult = decisionModel
       ? await checkColdEmailGuards(coldEmailInput)

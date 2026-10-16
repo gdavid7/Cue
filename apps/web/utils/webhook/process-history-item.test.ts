@@ -108,7 +108,6 @@ describe("Provider Edge Cases", () => {
       isNewMessage = true,
       old = false,
       outbound = false,
-      self = false,
     } = {}) {
       const message = getMockParsedMessage({
         id: "arrival-message",
@@ -116,9 +115,7 @@ describe("Provider Edge Cases", () => {
         internalDate: String(Date.now() - (old ? 16 * 60_000 : 60_000)),
         subject: "Can you review this?",
         headers: {
-          from: self
-            ? baseOptions.emailAccount.email
-            : "Alex Example <alex@example.com>",
+          from: "Alex Example <alex@example.com>",
           to: baseOptions.emailAccount.email,
           subject: "Can you review this?",
           date: new Date().toISOString(),
@@ -205,11 +202,6 @@ describe("Provider Edge Cases", () => {
       await processArrival({ outbound: true });
       expect(sendMobilePushNotification).not.toHaveBeenCalled();
       expect(runRules).not.toHaveBeenCalled();
-    });
-
-    it("does not alert for self-sent mail even without a SENT label", async () => {
-      await processArrival({ self: true });
-      expect(sendMobilePushNotification).not.toHaveBeenCalled();
     });
 
     it("does not alert when the message already has an executed rule", async () => {

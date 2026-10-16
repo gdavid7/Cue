@@ -5,6 +5,7 @@ import { getMockUserSelect, createTestLogger } from "@/__tests__/helpers";
 import { getEmailAccount } from "@/utils/redis/account-validation";
 import { redis } from "@/utils/redis";
 import { getPremiumTransferOperations } from "@/utils/user/merge-premium";
+import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/user/merge-premium");
@@ -189,6 +190,52 @@ describe("mergeAccount", () => {
       await expect(
         getEmailAccount({ userId: sourceUserId, emailAccountId }),
       ).resolves.toBeNull();
+    });
+
+    it("forgets both users' own addresses after moving a mailbox", async () => {
+      const sourceUserId = "source-user-id";
+      const targetUserId = "target-user-id";
+      const accountId = "account-id";
+
+      prisma.emailAccount.findMany
+        .mockResolvedValueOnce([{ email: "primary@test.com" }] as any)
+        .mockResolvedValueOnce([{ email: "target@test.com" }] as any);
+      await getUserOwnAddresses(sourceUserId);
+      await getUserOwnAddresses(targetUserId);
+
+      prisma.emailAccount.findMany.mockResolvedValueOnce([
+        { id: "email-1", email: "primary@test.com", accountId: "other" },
+        { id: "email-2", email: "secondary@test.com", accountId },
+      ] as any);
+      prisma.user.findUnique.mockResolvedValue(
+        getMockUserSelect({ email: "primary@test.com" }) as any,
+      );
+      prisma.account.update.mockResolvedValue({} as any);
+      prisma.emailAccount.update.mockResolvedValue({} as any);
+      prisma.$transaction.mockImplementation((ops) => Promise.resolve(ops));
+
+      await mergeAccount({
+        sourceAccountId: accountId,
+        sourceUserId,
+        targetUserId,
+        email: "secondary@test.com",
+        name: "Test User",
+        logger,
+      });
+
+      prisma.emailAccount.findMany
+        .mockResolvedValueOnce([{ email: "primary@test.com" }] as any)
+        .mockResolvedValueOnce([
+          { email: "target@test.com" },
+          { email: "secondary@test.com" },
+        ] as any);
+      expect(await getUserOwnAddresses(sourceUserId)).toEqual([
+        "primary@test.com",
+      ]);
+      expect(await getUserOwnAddresses(targetUserId)).toEqual([
+        "target@test.com",
+        "secondary@test.com",
+      ]);
     });
   });
 

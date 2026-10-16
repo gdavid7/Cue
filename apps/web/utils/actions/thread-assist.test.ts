@@ -22,6 +22,9 @@ vi.mock("@/utils/thread-context/suggest-reply", () => ({
   getCachedSuggestedReply: mocks.getCachedSuggestedReply,
   getSuggestedReplySettings: async () => SUGGESTION_SETTINGS,
 }));
+vi.mock("@/utils/user/own-addresses", () => ({
+  getUserOwnAddresses: async () => ["user@example.com", "me@gmail.com"],
+}));
 vi.mock("@/utils/email/reply-body", () => ({
   buildDraftReplyBody: async ({ text }: { text: string }) => text,
 }));
@@ -46,6 +49,18 @@ describe("saveSuggestedReplyAction", () => {
       reply: "Wednesday works.",
       citations: [],
     });
+  });
+
+  // D5: the user's other connected mailbox is never copied on the reply.
+  it("tells the mailbox every connected address of the user", async () => {
+    await saveSuggestedReplyAction(EMAIL_ACCOUNT_ID, {
+      threadId: "thread-1",
+      content: "Wednesday works.",
+    });
+
+    expect(mailbox.ownEmailsSeen).toEqual([
+      ["user@example.com", "user@example.com", "me@gmail.com"],
+    ]);
   });
 
   it("leaves one reply draft in the conversation when saved twice", async () => {
@@ -125,6 +140,7 @@ function createMailbox() {
     textPlain: "Meet Wednesday?",
   } as unknown as ParsedMessage;
   const drafts: { id: string; messageId: string; html: string }[] = [];
+  const ownEmailsSeen: (string | string[])[] = [];
   const draftMessage = (draft: (typeof drafts)[number]) =>
     ({
       ...received,
@@ -149,7 +165,12 @@ function createMailbox() {
       const draft = drafts.find((d) => d.messageId === messageId);
       return draft ? { id: draft.id } : null;
     },
-    draftEmail: async (_email: ParsedMessage, args: { content: string }) => {
+    draftEmail: async (
+      _email: ParsedMessage,
+      args: { content: string },
+      userEmails: string | string[],
+    ) => {
+      ownEmailsSeen.push(userEmails);
       const draft = {
         id: `draft-${drafts.length + 1}`,
         messageId: `draft-message-${drafts.length + 1}`,
@@ -164,7 +185,7 @@ function createMailbox() {
       draft.html = params.messageHtml ?? draft.html;
     },
   };
-  return { provider, drafts };
+  return { provider, drafts, ownEmailsSeen };
 }
 
 const SUGGESTION_SETTINGS = {

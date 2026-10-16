@@ -22,7 +22,8 @@ import type {
 } from "@/utils/ai/choose-rule/types";
 import { serializeMatchReasons } from "@/utils/ai/choose-rule/types";
 import { sanitizeActionFields } from "@/utils/action-item";
-import { extractEmailAddress } from "@/utils/email";
+import { canonicalizeEmailAddress, extractEmailAddress } from "@/utils/email";
+import { getUserOwnAddresses, isOwnAddress } from "@/utils/user/own-addresses";
 import { filterNullProperties } from "@/utils";
 import { analyzeSenderPattern } from "@/utils/ai/choose-rule/analyze-sender-pattern";
 import { FIRST_TIME_EVENTS, trackFirstTimeEvent } from "@/utils/posthog";
@@ -87,6 +88,9 @@ export type RunRulesResult = {
   createdAt: Date;
 };
 
+export const OWN_ADDRESS_DRAFT_SKIP_REASON =
+  "Sent from one of your own addresses, so no reply was drafted";
+
 export async function runRules({
   provider,
   message,
@@ -109,7 +113,22 @@ export async function runRules({
   skipDraftReplies?: boolean;
 }): Promise<RunRulesResult[]> {
   const batchTimestamp = new Date(); // Single timestamp for this batch execution
-  const { regularRules, conversationRules } = prepareRulesWithMetaRule(rules);
+  // Mail from another of the user's mailboxes still runs their rules, but
+  // isn't someone waiting on a reply: no reply tracking and no reply draft.
+  const fromSelf = isOwnAddress(message.headers.from, [
+    canonicalizeEmailAddress(emailAccount.email),
+    ...(await getUserOwnAddresses(emailAccount.userId)),
+  ]);
+  const { regularRules, conversationRules } = prepareRulesWithMetaRule(
+    fromSelf
+      ? rules.filter((rule) => !isConversationStatusType(rule.systemType))
+      : rules,
+  );
+  const draftSkipReason = fromSelf
+    ? OWN_ADDRESS_DRAFT_SKIP_REASON
+    : skipDraftReplies
+      ? "Draft replies were disabled for this bulk run"
+      : undefined;
 
   const results = await findMatchingRules({
     rules: regularRules,
@@ -180,7 +199,7 @@ export async function runRules({
     }
   }
 
-  const executableMatches = skipDraftReplies
+  const executableMatches = draftSkipReason
     ? removeDraftReplyActionsFromMatches(matchesWithFlags)
     : matchesWithFlags;
   const finalMatches = limitDraftEmailActions(executableMatches, logger);
@@ -253,7 +272,7 @@ export async function runRules({
       batchTimestamp,
       logger,
       skipArchive,
-      skipDraftReplies,
+      draftSkipReason,
     );
 
     executedRules.push({
@@ -368,7 +387,8 @@ async function executeMatchedRule(
   batchTimestamp: Date,
   logger: Logger,
   skipArchive?: boolean,
-  skipDraftReplies?: boolean,
+  /** Set when reply drafts were left out, saying why. */
+  draftSkipReason?: string,
 ) {
   const blockedActionTypes = getBlockedLowTrustStaticFromActionTypes(
     rule.from,
@@ -405,14 +425,16 @@ async function executeMatchedRule(
     logger,
   });
 
-  const skippedDraftOnlyRule = skipDraftReplies && rule.actions.length === 0;
+  const skippedDraftOnlyRule =
+    Boolean(draftSkipReason) && rule.actions.length === 0;
   if (
     actionItems.length === 0 &&
     (blockedActionTypes.length || skippedDraftOnlyRule)
   ) {
-    const skipReason = skippedDraftOnlyRule
-      ? "Draft replies were disabled for this bulk run"
-      : LOW_TRUST_STATIC_FROM_OUTBOUND_MESSAGE;
+    const skipReason =
+      skippedDraftOnlyRule && draftSkipReason
+        ? draftSkipReason
+        : LOW_TRUST_STATIC_FROM_OUTBOUND_MESSAGE;
     const reasonToUse = reason ? `${reason}. ${skipReason}` : skipReason;
     let executedRule = null;
 
