@@ -20,7 +20,7 @@ vi.mock("@/utils/middleware", async () => {
   return createWithErrorTestMiddleware();
 });
 vi.mock("@/utils/redis", () => ({
-  redis: { exists: vi.fn(), set: vi.fn(), publish: vi.fn() },
+  redis: { set: vi.fn(), publish: vi.fn() },
 }));
 vi.mock("@/utils/webhook/outlook/process-history", () => ({
   processHistoryForUser: vi.fn(),
@@ -55,7 +55,7 @@ describe("Outlook realtime webhook hints", () => {
     vi.mocked(getWebhookEmailAccount).mockResolvedValue({
       id: "account-a",
     } as never);
-    vi.mocked(redis.exists).mockResolvedValue(1);
+    vi.mocked(redis.publish).mockResolvedValue(1);
     vi.mocked(redis.set).mockResolvedValue("OK");
     vi.mocked(processHistoryForUser).mockResolvedValue(undefined);
   });
@@ -84,31 +84,24 @@ describe("Outlook realtime webhook hints", () => {
       }),
     );
   });
-  it.each([
-    "no-interest",
-    "redis-failure",
-  ])("preserves automation for %s", async (scenario) => {
-    if (scenario === "no-interest")
-      vi.mocked(redis.exists).mockResolvedValue(0);
-    else vi.mocked(redis.exists).mockRejectedValue(new Error("Unavailable"));
+  it("preserves automation when Redis fails", async () => {
+    vi.mocked(redis.publish).mockRejectedValue(new Error("Unavailable"));
     expect((await POST(request())).status).toBe(200);
     await vi.waitFor(() =>
       expect(processHistoryForUser).toHaveBeenCalledOnce(),
     );
-    expect(redis.publish).not.toHaveBeenCalled();
   });
   it("does not delay later automation notifications while Redis is stalled", async () => {
     let release!: (value: number) => void;
     const blockedRedis = new Promise<number>((resolve) => {
       release = resolve;
     });
-    vi.mocked(redis.exists).mockReturnValue(blockedRedis);
+    vi.mocked(redis.publish).mockReturnValue(blockedRedis);
     try {
       expect((await POST(request("valid-state", 2))).status).toBe(200);
       await vi.waitFor(() =>
         expect(processHistoryForUser).toHaveBeenCalledTimes(2),
       );
-      expect(redis.publish).not.toHaveBeenCalled();
     } finally {
       release(0);
       await blockedRedis;

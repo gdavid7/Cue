@@ -6,9 +6,19 @@ import { SafeError } from "@/utils/error";
 import { redis } from "@/utils/redis";
 import { sendActionRequiredEmail } from "@inboxzero/transactional-email";
 import { createUnsubscribeToken } from "@/utils/unsubscribe";
+import { createMemoCache } from "@/utils/memo-cache";
+import { logRedisFailureOnce } from "@/utils/redis/unavailable-log";
 
 const logger = createScopedLogger("llms/model-usage-guard");
 const TRIAL_AI_LIMIT_NOTIFICATION_TTL_SECONDS = 60 * 24 * 60 * 60;
+
+// Both guards run before every AI call, and a chat turn or a processed email
+// makes several in a row. The limits are weekly budgets, so each instance
+// rereads a user's spend at most once a minute.
+const weeklySpend = createMemoCache<number>({
+  ttlMs: 60_000,
+  maxEntries: 5000,
+});
 
 export const TRIAL_AI_LIMIT_REACHED_MESSAGE =
   "Your trial has reached the AI usage limit. Start your paid plan now to continue using AI automation.";
@@ -49,12 +59,12 @@ export async function getUserTrialAiUsageLimitStatus(options: {
 
   let weeklySpendUsd = 0;
   try {
-    weeklySpendUsd = await getWeeklyUsageCost({
-      userId: options.userId,
-      legacyEmails: getLegacyUsageEmails(user),
-    });
+    weeklySpendUsd = await getWeeklySpend(
+      options.userId,
+      getLegacyUsageEmails(user),
+    );
   } catch (error) {
-    logger.error("Failed to evaluate trial AI spend status", {
+    logRedisFailureOnce(logger, "Failed to evaluate trial AI spend status", {
       userId: options.userId,
       error,
     });
@@ -188,17 +198,16 @@ export async function shouldForceNanoModel(options: {
   }
 
   try {
-    const weeklySpendUsd = await getWeeklyUsageCost({
-      userId: options.userId,
-      legacyEmails: [options.userEmail],
-    });
+    const weeklySpendUsd = await getWeeklySpend(options.userId, [
+      options.userEmail,
+    ]);
     return {
       shouldForce: weeklySpendUsd >= weeklyLimitUsd,
       weeklySpendUsd,
       weeklyLimitUsd,
     };
   } catch (error) {
-    logger.error("Failed to evaluate nano model guard", {
+    logRedisFailureOnce(logger, "Failed to evaluate nano model guard", {
       label: options.label,
       userId: options.userId,
       emailAccountId: options.emailAccountId,
@@ -251,4 +260,11 @@ function getTrialAiUsageLimitStatus({
 
 function getTrialAiLimitNotificationKey(userId: string) {
   return `trial-ai-limit-notification:${userId}`;
+}
+
+function getWeeklySpend(userId: string, legacyEmails: string[]) {
+  const key = `${userId}:${[...new Set(legacyEmails)].sort().join(",")}`;
+  return weeklySpend.get(key, () =>
+    getWeeklyUsageCost({ userId, legacyEmails }),
+  );
 }

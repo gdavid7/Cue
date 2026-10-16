@@ -128,12 +128,16 @@ const ACCOUNT = "account-1";
 const logger = createScopedLogger("first-load-quota-test");
 const END_MS = 240_000;
 const STEADY_MS = 180_000;
-// The gate refills 3,600 units a minute; a thread open costs 40 units, so one
-// every 0.7 s spends 95% of that.
-const BUCKET_UNITS_PER_SECOND = 60;
+// The gate refills at the account's budget, 4,000 units a minute to start;
+// a thread open costs 40 units, so one every 0.7 s spends 86% of that.
+const BUCKET_UNITS_PER_SECOND =
+  Math.round((GMAIL_USER_UNITS_PER_MINUTE * 0.8) / 3) / 60;
 const OPEN_EVERY_MS = 700;
-// Gmail's per-user limit for short bursts, a moving average over a second.
-const GMAIL_UNITS_PER_SECOND = 250;
+// Gmail refuses short bursts well under its minute's limit, so the fake
+// refuses any second past the minute spread evenly, and the gate keeps a
+// fifth under that.
+const GMAIL_UNITS_PER_SECOND = GMAIL_USER_UNITS_PER_MINUTE / 60;
+const GATE_UNITS_PER_SECOND = GMAIL_UNITS_PER_SECOND * 0.8;
 const HOME_BUDGET_MS = 10_000;
 
 // Replays what opening Cue fires at Gmail: two tabs each scanning the recent
@@ -375,7 +379,7 @@ describe("Gmail quota on a first load", () => {
 
     expect(gmail.limitedCalls()).toEqual([]);
     expect(rateLimitModes).toEqual([]);
-    expect(gmail.peakSecondUnits()).toBeLessThanOrEqual(GMAIL_UNITS_PER_SECOND);
+    expect(gmail.peakSecondUnits()).toBeLessThanOrEqual(GATE_UNITS_PER_SECOND);
     // The search waits at most a moment behind the sync, never the turn.
     expect(search).toMatchObject({ ok: true });
     expect(search?.ms).toBeLessThan(3000);
@@ -418,7 +422,7 @@ describe("Gmail quota on a first load", () => {
 
     expect(gmail.limitedCalls()).toEqual([]);
     expect(rateLimitModes).toEqual([]);
-    expect(gmail.peakSecondUnits()).toBeLessThanOrEqual(GMAIL_UNITS_PER_SECOND);
+    expect(gmail.peakSecondUnits()).toBeLessThanOrEqual(GATE_UNITS_PER_SECOND);
     expect(firstPage).toMatchObject({ ok: true, count: 25 });
     expect(firstPage?.ms).toBeLessThanOrEqual(2600);
   }, 60_000);
@@ -479,13 +483,16 @@ describe("Gmail quota on a first load", () => {
     // Before the fix: deferred after 15.7 s, failing the whole page.
     expect(home).toMatchObject({ ok: true });
     expect(home!.ms).toBeLessThanOrEqual(HOME_BUDGET_MS);
-    // Today's reads go ahead of the sync, so every lane lands in one request.
+    // Today's reads go ahead of the sync. Its thirty thread reads (about
+    // 1,200 units) are more than the half bucket sync leaves plus ten
+    // seconds of a 4,000-unit budget, so the first lanes land and the rest
+    // come back pending, never empty.
     expect(home!.value).toMatchObject({
       needsYou: expect.arrayContaining([expect.anything()]),
-      waiting: expect.arrayContaining([expect.anything()]),
-      alsoInInbox: expect.arrayContaining([expect.anything()]),
-      pending: [],
     });
+    expectServedOrPending(
+      home!.value as Parameters<typeof expectServedOrPending>[0],
+    );
   }, 60_000);
 
   // A person opens threads while the first sync fills the inbox and inbox
@@ -540,12 +547,12 @@ describe("Gmail quota on a first load", () => {
     await advanceUntilSettled(actors, STEADY_MS + 60_000);
 
     expect(gmail.limitedCalls()).toEqual([]);
-    expect(gmail.peakSecondUnits()).toBeLessThanOrEqual(GMAIL_UNITS_PER_SECOND);
+    expect(gmail.peakSecondUnits()).toBeLessThanOrEqual(GATE_UNITS_PER_SECOND);
     expect(opens).toHaveLength(3);
-    // About 810 units at sync's 160 a second, around the thread's reads and
-    // the insights (9.6 s when those reads cut sync to 40 a second).
+    // About 810 units: the half bucket sync may spend, then the rest at a
+    // 4,000-unit budget's refill, around the thread's reads and the insights.
     expect(recentWindowMs).not.toBeNull();
-    expect(recentWindowMs).toBeLessThanOrEqual(8000);
+    expect(recentWindowMs).toBeLessThanOrEqual(10_000);
   }, 60_000);
 
   it("keeps the backfill moving while someone opens threads at nearly the bucket's refill rate", async () => {
@@ -806,4 +813,18 @@ async function advanceUntilSettled(
     await vi.advanceTimersByTimeAsync(100);
   }
   await done;
+}
+
+function expectServedOrPending(home: {
+  needsYou: unknown[];
+  waiting: unknown[];
+  alsoInInbox: unknown[];
+  pending: string[];
+}) {
+  for (const lane of ["needsYou", "waiting", "alsoInInbox"] as const) {
+    if (!home.pending.includes(lane))
+      expect(home[lane], lane).toEqual(
+        expect.arrayContaining([expect.anything()]),
+      );
+  }
 }

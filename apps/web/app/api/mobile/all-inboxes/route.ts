@@ -16,25 +16,29 @@ export type GetAllInboxesResponse = Awaited<
   ReturnType<typeof loadAllInboxesSummary>
 >;
 
-export const GET = withAuth("mobile/all-inboxes", async (request) => {
-  const { accountId, after } = querySchema.parse(
-    Object.fromEntries(new URL(request.url).searchParams),
-  );
-  const accounts = await getConnectedEmailAccounts({
-    userId: request.auth.userId,
-    accountId,
-  });
-  const result = await loadAllInboxesSummary({
-    accounts,
-    after,
-    logger: request.logger,
-    createProvider: (account) =>
-      createEmailProvider({
-        emailAccountId: account.id,
-        provider: account.provider,
-        logger: request.logger.with({ emailAccountId: account.id }),
-      }),
-  });
+export const GET = withAuth(
+  "mobile/all-inboxes",
+  async (request) => {
+    const { accountId, after } = querySchema.parse(
+      Object.fromEntries(new URL(request.url).searchParams),
+    );
+    const accounts = await getConnectedEmailAccounts({
+      userId: request.auth.userId,
+      accountId,
+    });
+    const result = await loadAllInboxesSummary({
+      accounts,
+      after,
+      logger: request.logger,
+      createProvider: (account) =>
+        createEmailProvider({
+          emailAccountId: account.id,
+          provider: account.provider,
+          logger: request.logger.with({ emailAccountId: account.id }),
+        }),
+    });
 
-  return NextResponse.json(result);
-});
+    return NextResponse.json(result);
+  },
+  { maxDuration },
+);

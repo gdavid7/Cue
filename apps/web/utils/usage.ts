@@ -58,6 +58,7 @@ export async function saveAiUsage({
   provider,
   model,
   usage,
+  stepUsages,
   label,
   hasUserApiKey,
   providerReportedCost,
@@ -75,6 +76,8 @@ export async function saveAiUsage({
   provider: string;
   model: string;
   usage: LanguageModelUsage;
+  // Per-request usage of a multi-step run, for prompt-size-dependent rates.
+  stepUsages?: LanguageModelUsage[];
   label: string;
   hasUserApiKey?: boolean;
   providerReportedCost?: number;
@@ -90,7 +93,12 @@ export async function saveAiUsage({
   // undercount it.
   usageIncomplete?: boolean;
 }) {
-  const estimatedCost = calculateUsageCost({ provider, model, usage });
+  const estimatedCost = calculateUsageCost({
+    provider,
+    model,
+    usage,
+    stepUsages,
+  });
   const isUserApiKey = !!hasUserApiKey;
   const platformCost = isUserApiKey
     ? 0
@@ -195,11 +203,28 @@ export function calculateUsageCost(options: {
   provider: string;
   model: string;
   usage: LanguageModelUsage;
+  // Per-request usage of a multi-step run. Needed for models whose rate
+  // depends on each request's prompt size; `usage` is the run's sum.
+  stepUsages?: LanguageModelUsage[];
 }): number {
-  const { provider, model, usage } = options;
+  const { provider, model, usage, stepUsages } = options;
   const pricing = getModelPricing({ provider, model });
   if (!pricing) return 0;
 
+  if (pricing.longPrompt && stepUsages?.length) {
+    return stepUsages.reduce(
+      (total, stepUsage) => total + calculateRequestCost(pricing, stepUsage),
+      0,
+    );
+  }
+
+  return calculateRequestCost(pricing, usage);
+}
+
+function calculateRequestCost(
+  pricing: ModelPricing,
+  usage: LanguageModelUsage,
+): number {
   const normalizedCachedInputTokens = Math.max(
     0,
     usage.inputTokenDetails?.cacheReadTokens ?? 0,
@@ -223,14 +248,18 @@ export function calculateUsageCost(options: {
     inputTokens - cachedInputTokens - cacheWriteTokens,
   );
   const outputTokens = Math.max(0, usage.outputTokens ?? 0);
-  const cachedInputTokenPrice = pricing.cachedInput ?? pricing.input;
-  const cacheWriteTokenPrice = pricing.cacheWrite ?? pricing.input;
+  const rates =
+    pricing.longPrompt && inputTokens > pricing.longPrompt.thresholdTokens
+      ? pricing.longPrompt
+      : pricing;
+  const cachedInputTokenPrice = rates.cachedInput ?? rates.input;
+  const cacheWriteTokenPrice = rates.cacheWrite ?? rates.input;
 
   return (
-    uncachedInputTokens * pricing.input +
+    uncachedInputTokens * rates.input +
     cachedInputTokens * cachedInputTokenPrice +
     cacheWriteTokens * cacheWriteTokenPrice +
-    outputTokens * pricing.output
+    outputTokens * rates.output
   );
 }
 

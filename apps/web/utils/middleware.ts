@@ -2,7 +2,15 @@ import { ZodError } from "zod";
 import { type NextRequest, NextResponse, after } from "next/server";
 import { randomUUID } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
-import { captureException, checkCommonErrors, SafeError } from "@/utils/error";
+import {
+  captureException,
+  checkCommonErrors,
+  getEmailProviderRateLimitMessage,
+  SafeError,
+} from "@/utils/error";
+import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
+import { extractErrorInfo as extractGmailErrorInfo } from "@/utils/gmail/retry";
+import { extractErrorInfo as extractOutlookErrorInfo } from "@/utils/outlook/retry";
 import {
   isPublicApiPath,
   publicApiErrorFromUnknown,
@@ -15,8 +23,15 @@ import { flushLoggerSafely } from "@/utils/logger-flush";
 import { auth } from "@/utils/auth";
 import { getEmailAccount } from "@/utils/redis/account-validation";
 import { getCallerEmailAccount } from "@/utils/organizations/access";
-import { recordRateLimitFromApiError } from "@/utils/email/rate-limit";
-import { isProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
+import {
+  getProviderRateLimitRetryAfterSeconds,
+  recordRateLimitFromApiError,
+} from "@/utils/email/rate-limit";
+import {
+  getProviderRateLimitApiErrorType,
+  isProviderRateLimitModeError,
+  toRateLimitProvider,
+} from "@/utils/email/rate-limit-mode-error";
 import { getGmailCallDeferredError } from "@/utils/gmail/quota";
 import {
   EMAIL_ACCOUNT_HEADER,
@@ -28,6 +43,7 @@ import { isAdmin } from "@/utils/admin";
 import prisma from "@/utils/prisma";
 import { createEmailProvider } from "@/utils/email/provider";
 import type { EmailProvider } from "@/utils/email/types";
+import { runWithRequestDeadline } from "@/utils/request-deadline";
 import { startRequestTimer } from "@/utils/request-timing";
 import {
   type AuditActorType,
@@ -68,6 +84,11 @@ export interface RequestWithEmailProvider extends RequestWithEmailAccount {
 
 export interface MiddlewareOptions {
   allowOrgAdmins?: boolean;
+  /**
+   * The route's `maxDuration` in seconds. Its provider retries and Gmail
+   * quota waits then give up in time to answer before the platform kills it.
+   */
+  maxDuration?: number;
   requestTiming?: {
     runningWarnAfterMs?: number;
     slowWarnAfterMs?: number;
@@ -112,28 +133,36 @@ function withMiddleware<T extends NextRequest>(
       },
       async () => {
         try {
-          // Apply middleware if provided
-          let enhancedReq = reqWithLogger;
-          if (middleware) {
-            const middlewareResult = await middleware(reqWithLogger, options);
+          return await runWithRequestDeadline(
+            options?.maxDuration,
+            async () => {
+              // Apply middleware if provided
+              let enhancedReq = reqWithLogger;
+              if (middleware) {
+                const middlewareResult = await middleware(
+                  reqWithLogger,
+                  options,
+                );
 
-            // If middleware returned a Response, return it directly
-            if (middlewareResult instanceof Response) {
-              flushLogger(reqWithLogger);
-              return middlewareResult;
-            }
+                // If middleware returned a Response, return it directly
+                if (middlewareResult instanceof Response) {
+                  flushLogger(reqWithLogger);
+                  return middlewareResult;
+                }
 
-            // Otherwise, continue with the enhanced request
-            enhancedReq = middlewareResult;
-          }
-          requestForError = enhancedReq;
+                // Otherwise, continue with the enhanced request
+                enhancedReq = middlewareResult;
+              }
+              requestForError = enhancedReq;
 
-          // Execute the handler with the (potentially) enhanced request
-          const response = await handler(enhancedReq as T, context);
+              // Execute the handler with the (potentially) enhanced request
+              const response = await handler(enhancedReq as T, context);
 
-          flushLogger(enhancedReq);
+              flushLogger(enhancedReq);
 
-          return response;
+              return response;
+            },
+          );
         } catch (error) {
           flushLogger(requestForError);
 
@@ -229,7 +258,9 @@ function withMiddleware<T extends NextRequest>(
             );
           }
 
-          const apiError = checkCommonErrors(error, requestPath, reqLogger);
+          const apiError =
+            checkCommonErrors(error, requestPath, reqLogger) ??
+            providerRateLimitApiError(error, requestForError);
           if (apiError) {
             await recordRateLimitFromApiError({
               apiErrorType: apiError.type,
@@ -238,6 +269,10 @@ function withMiddleware<T extends NextRequest>(
               logger: reqLogger,
               source: scope || new URL(requestForError.url).pathname,
             });
+            const retryAfterSeconds = getProviderRateLimitRetryAfterSeconds(
+              error,
+              apiError.type,
+            );
 
             await logErrorToPosthog(
               "api",
@@ -256,7 +291,12 @@ function withMiddleware<T extends NextRequest>(
 
             return NextResponse.json(
               { error: apiError.message, isKnownError: true },
-              { status: apiError.code },
+              {
+                status: apiError.code,
+                headers: retryAfterSeconds
+                  ? { "Retry-After": String(retryAfterSeconds) }
+                  : undefined,
+              },
             );
           }
 
@@ -658,14 +698,16 @@ export function withError(
 export function withAuth(
   scope: string,
   handler: NextHandler<RequestWithAuth>,
+  options?: Pick<MiddlewareOptions, "maxDuration">,
 ): NextHandler;
 export function withAuth(handler: NextHandler<RequestWithAuth>): NextHandler;
 export function withAuth(
   scopeOrHandler: string | NextHandler<RequestWithAuth>,
   handler?: NextHandler<RequestWithAuth>,
+  options?: Pick<MiddlewareOptions, "maxDuration">,
 ): NextHandler {
   if (typeof scopeOrHandler === "string") {
-    return withMiddleware(handler!, authMiddleware, undefined, scopeOrHandler);
+    return withMiddleware(handler!, authMiddleware, options, scopeOrHandler);
   }
   return withMiddleware(scopeOrHandler, authMiddleware);
 }
@@ -828,6 +870,31 @@ function logSlowMiddlewareTotal({
       durationMs,
     });
   }
+}
+
+// A rate limit the provider's known error shapes don't name, such as a
+// bare 429 inside a batch failure, is still a rate limit. Only an error
+// carrying the provider's HTTP response counts: an AI provider's "Rate limit
+// exceeded" on the same request is not the mailbox's.
+function providerRateLimitApiError(error: unknown, req: NextRequest) {
+  const provider = toRateLimitProvider(
+    (req as Partial<RequestWithEmailProvider>).emailProvider?.name,
+  );
+  if (!provider) return null;
+  const status =
+    provider === "google"
+      ? extractGmailErrorInfo(error).status
+      : extractOutlookErrorInfo(error).status;
+  if (
+    (status !== 403 && status !== 429) ||
+    !isEmailProviderRateLimitError({ error, provider })
+  )
+    return null;
+  return {
+    type: getProviderRateLimitApiErrorType(provider),
+    message: getEmailProviderRateLimitMessage(provider),
+    code: 429,
+  };
 }
 
 function getSafeErrorStatusCode(statusCode?: number) {

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { RetryError } from "ai";
+import { APICallError } from "ai";
 import { extractLLMErrorInfo, withLLMRetry } from "./retry";
 
 vi.mock("@/utils/sleep", () => ({
@@ -131,6 +132,28 @@ describe("extractLLMErrorInfo", () => {
   });
 
   describe("non-retryable errors", () => {
+    it("does not retry an Anthropic account that reached its monthly spend cap", () => {
+      // The cap stays until the month ends, so the 429 has no retry-after.
+      const error = new APICallError({
+        message:
+          "You have reached your API usage limits: your organization has crossed its monthly API usage threshold.",
+        url: "https://api.anthropic.com/v1/messages",
+        requestBodyValues: {},
+        statusCode: 429,
+        responseHeaders: {},
+        data: {
+          type: "error",
+          error: {
+            type: "rate_limit_error",
+            details: { error_code: "enforced_spend_limit_reached" },
+          },
+        },
+        isRetryable: true,
+      });
+
+      expect(extractLLMErrorInfo(error).retryable).toBe(false);
+    });
+
     it("does not retry 400 bad request", () => {
       const error = { status: 400, message: "Invalid request" };
       const result = extractLLMErrorInfo(error);

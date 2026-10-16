@@ -18,6 +18,19 @@ describe("getEvalJudgeUserAi", () => {
     });
   });
 
+  it("judges with Claude Haiku 5.5 on the Anthropic API without an OpenRouter key", () => {
+    vi.stubEnv("EVAL_JUDGE_PROVIDER", "anthropic");
+    vi.stubEnv("EVAL_JUDGE_MODEL", "claude-haiku-5-5");
+    vi.stubEnv("ANTHROPIC_API_KEY", "test-anthropic-key");
+    vi.stubEnv("OPENROUTER_API_KEY", "");
+
+    expect(getEvalJudgeUserAi()).toEqual({
+      aiProvider: "anthropic",
+      aiModel: "claude-haiku-5-5",
+      aiApiKey: "test-anthropic-key",
+    });
+  });
+
   it("allows the judge provider and model to be overridden", () => {
     vi.stubEnv("EVAL_JUDGE_PROVIDER", "google");
     vi.stubEnv("EVAL_JUDGE_MODEL", "google/test-model");

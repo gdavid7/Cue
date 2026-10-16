@@ -2,7 +2,7 @@ import { tool, type ToolSet } from "ai";
 import { z } from "zod";
 import { createPerplexity } from "@ai-sdk/perplexity";
 import { env } from "@/env";
-import { createGenerateText } from "@/utils/llms";
+import { createGenerateObject, createGenerateText } from "@/utils/llms";
 import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import { getUserInfoPrompt } from "@/utils/ai/helpers";
@@ -96,11 +96,40 @@ export async function aiGenerateMeetingBriefing({
   const availableSearchTools = ["perplexitySearch", "webSearch"].filter(
     (toolName) => toolName in searchTools,
   );
-  const prompt = buildPrompt(briefingData, emailAccount, availableSearchTools);
+  const prompt = buildPrompt(briefingData, emailAccount, availableSearchTools, {
+    returnsBriefingDirectly: Object.keys(searchTools).length === 0,
+  });
   const modelOptions = getModelForUseCase(
     emailAccount.user,
     LlmUseCase.MeetingBriefing,
   );
+
+  // With nothing to research, the briefing is the only output. Structured
+  // output guarantees it, where a forced finalizeBriefing call does not:
+  // models that reject forced tool use (such as Claude Sonnet 5.5) may answer
+  // in text instead.
+  if (Object.keys(searchTools).length === 0) {
+    try {
+      const generateObject = createGenerateObject({
+        emailAccount,
+        label: "Meeting Briefing",
+        modelOptions,
+        promptHardening: { trust: "untrusted", level: "full" },
+      });
+      const { object } = await generateObject({
+        ...modelOptions,
+        // The finalize tool's description holds the briefing's writing rules.
+        // Anthropic's native structured output ignores a schema description,
+        // so they go in the instructions.
+        instructions: `${AGENTIC_SYSTEM_PROMPT}\n\n${FINALIZE_BRIEFING_DESCRIPTION}`,
+        prompt,
+        schema: briefingSchema,
+      });
+      return object;
+    } finally {
+      await cleanup();
+    }
+  }
 
   const generateText = createGenerateText({
     emailAccount,
@@ -127,10 +156,7 @@ export async function aiGenerateMeetingBriefing({
           });
         }
       },
-      toolChoice:
-        Object.keys(searchTools).length === 0
-          ? { type: "tool", toolName: "finalizeBriefing" }
-          : "auto",
+      toolChoice: "auto",
       tools: {
         ...searchTools,
         finalizeBriefing: tool({
@@ -381,6 +407,11 @@ export function buildPrompt(
   briefingData: MeetingBriefingData,
   emailAccount: EmailAccountWithAI,
   availableSearchTools: string[],
+  // Without tools the briefing comes back as structured output, not through
+  // the finalizeBriefing tool.
+  {
+    returnsBriefingDirectly = false,
+  }: { returnsBriefingDirectly?: boolean } = {},
 ): string {
   const {
     event,
@@ -440,7 +471,7 @@ ${guestContexts.map((guest) => formatGuestContext(guest)).join("\n")}
 </guest_context>
 ${toolsNote}
 
-Call finalizeBriefing with the complete briefing.`;
+${returnsBriefingDirectly ? "Return the complete briefing." : "Call finalizeBriefing with the complete briefing."}`;
 
   return prompt;
 }

@@ -2,6 +2,7 @@ import { captureException } from "@/utils/error";
 import { flushAuditEvents } from "@/utils/audit/delivery";
 import { getAuditContext, runWithAuditContext } from "@/utils/audit/context";
 import { logGmailQuotaUsage } from "@/utils/gmail/quota";
+import { getRedisUsageMeter } from "@/utils/redis/usage-meter";
 import type { Logger } from "@/utils/logger";
 
 type LoggerFlushExtra = Record<string, unknown>;
@@ -10,8 +11,9 @@ export async function flushLoggerSafely(
   logger: Logger,
   extra?: LoggerFlushExtra,
 ) {
-  // Logged before the flush so the summary ships with this request's logs.
+  // Logged before the flush so the summaries ship with this request's logs.
   await logGmailQuotaUsage();
+  getRedisUsageMeter().logSummary(logger);
   await Promise.all([
     logger.flush().catch((error) => {
       captureException(error, {

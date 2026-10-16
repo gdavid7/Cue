@@ -79,7 +79,9 @@ export async function saveReply({
       ...(attachments !== undefined ? { attachments } : {}),
     }),
     {
-      ex: ruleId ? 60 * 60 * 24 * 90 : 60 * 60 * 24,
+      // Reused when a rule runs on the same message again; after 14 days a
+      // rerun writes the draft afresh.
+      ex: ruleId ? 60 * 60 * 24 * 14 : 60 * 60 * 24,
     },
   );
 }

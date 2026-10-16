@@ -36,6 +36,7 @@ import type { Logger } from "@/utils/logger";
 import type { gmail_v1 } from "@googleapis/gmail";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import { scheduleGmailHistoryCatchUp } from "@/utils/webhook/google/history-catch-up";
+import { isMessageLockUnavailableError } from "@/utils/redis/message-processing";
 import { mapWithConcurrency } from "@/utils/async";
 import {
   acquireGmailHistoryLease,
@@ -367,6 +368,19 @@ export async function processHistoryForUser(
       return NextResponse.json({ ok: true });
     }
 
+    if (isMessageLockUnavailableError(error)) {
+      logger.warn("Webhook history deferred: message locks unavailable", {
+        error,
+      });
+      await markGmailHistoryCatchUp(validatedEmailAccount.id, logger);
+      await scheduleGmailHistoryCatchUp({
+        emailAccountId: validatedEmailAccount.id,
+        historyId: catchUpHistoryId(),
+        logger,
+      });
+      return NextResponse.json({ ok: true });
+    }
+
     if (
       isGmailCallDeferredError(error) ||
       isEmailProviderRateLimitError({ error, provider: "google" })
@@ -424,7 +438,8 @@ async function processHistory(
       // held back), so the catch-up picks it up again.
       if (
         isEmailProviderRateLimitError({ error, provider: "google" }) ||
-        isGmailCallDeferredError(error)
+        isGmailCallDeferredError(error) ||
+        isMessageLockUnavailableError(error)
       ) {
         stopError ??= error;
         return;

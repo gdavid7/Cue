@@ -6,10 +6,6 @@ export function localMailHintChannel(emailAccountId: string) {
   return `local-mail:${emailAccountId}`;
 }
 
-export async function refreshLocalMailInterest(emailAccountId: string) {
-  await redis.set(`local-mail-interest:${emailAccountId}`, "1", { ex: 75 });
-}
-
 // Not coalesced here: a dropped hint leaves a second email unseen until the
 // client's idle catch-up. Each provider push costs one publish, and the
 // client's engine folds hints that arrive during a sync into one more read, so
@@ -37,8 +33,9 @@ async function publishHint(
   message: string,
   logger: Logger,
 ) {
+  // One command whether or not a client listens: checking for listeners
+  // first would cost as much as publishing to none.
   try {
-    if (!(await redis.exists(`local-mail-interest:${emailAccountId}`))) return;
     await redis.publish(localMailHintChannel(emailAccountId), message);
   } catch (error) {
     logger.warn("Failed to publish local mail hint", { error });

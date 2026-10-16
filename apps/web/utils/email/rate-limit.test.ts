@@ -21,6 +21,15 @@ vi.mock("@/utils/redis", () => ({
   },
 }));
 
+// These cases are about the state, not the per-instance memo in front of it.
+vi.mock("@/utils/memo-cache", () => ({
+  createMemoCache: () => ({
+    get: (_key: string, load: () => Promise<unknown>) => load(),
+    set: () => {},
+    delete: () => {},
+  }),
+}));
+
 const logger = createTestLogger();
 
 describe("email provider rate-limit state", () => {
@@ -176,6 +185,57 @@ describe("email provider rate-limit state", () => {
     );
   });
 
+  it.each([
+    [
+      "a sending limit",
+      `User-rate limit exceeded.  Retry after ${new Date(Date.now() + 3 * 60 * 60_000).toISOString()} (Mail sending)`,
+    ],
+    [
+      "a retry time hours away",
+      `User-rate limit exceeded. Retry after ${new Date(Date.now() + 2 * 60 * 60_000).toISOString()}`,
+    ],
+    ["too many concurrent requests", "Too many concurrent requests for user"],
+  ])("never puts the account in rate-limit mode for %s", async (_, message) => {
+    const state = await recordProviderRateLimitFromError({
+      emailAccountId: "account-1",
+      provider: "google",
+      error: {
+        cause: {
+          status: 429,
+          message,
+          errors: [{ reason: "rateLimitExceeded" }],
+        },
+      },
+      source: "test",
+      logger,
+    });
+
+    expect(state).toBeNull();
+    expect(redis.set).not.toHaveBeenCalled();
+  });
+
+  it("holds rate-limit mode for at most two minutes", async () => {
+    vi.mocked(redis.get).mockResolvedValueOnce(null);
+    const retryAt = new Date(Date.now() + 4 * 60_000).toISOString();
+
+    const state = await recordProviderRateLimitFromError({
+      emailAccountId: "account-1",
+      provider: "google",
+      error: {
+        cause: {
+          status: 429,
+          message: `User-rate limit exceeded. Retry after ${retryAt}`,
+        },
+      },
+      source: "test",
+      logger,
+    });
+
+    expect(state!.retryAt.getTime() - Date.now()).toBeLessThanOrEqual(
+      2 * 60_000,
+    );
+  });
+
   it("records and rethrows from wrapped operations", async () => {
     const retryAt = new Date(Date.now() + 120_000).toISOString();
     const rateLimitError = {
@@ -286,6 +346,24 @@ describe("email provider rate-limit state", () => {
         ex: expect.any(Number),
       }),
     );
+  });
+
+  it("honours Microsoft Graph's full Retry-After", async () => {
+    vi.mocked(redis.get).mockResolvedValueOnce(null);
+
+    const state = await recordProviderRateLimitFromError({
+      emailAccountId: "account-1",
+      provider: "microsoft",
+      error: {
+        statusCode: 429,
+        code: "TooManyRequests",
+        response: { headers: { "retry-after": "600" } },
+      },
+      source: "test-outlook",
+      logger,
+    });
+
+    expect(state!.retryAt.getTime() - Date.now()).toBeGreaterThan(590_000);
   });
 
   it("records rate-limit state from mapped API error type", async () => {

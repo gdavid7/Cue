@@ -123,6 +123,28 @@ describe("createLocalMailSearch", () => {
     expect(Date.now() - startedAt).toBeLessThan(1000);
   });
 
+  // Redis refusing must cost the chat nothing but the local shortcut: the
+  // turn searches the provider at once instead of waiting out the timeout.
+  it("hands back to the provider at once when Redis fails", async () => {
+    const { redis } = await import("@/utils/redis");
+    const logger = createTestLogger();
+    const search = createLocalMailSearch({
+      emailAccountId: ACCOUNT,
+      logger,
+      pollIntervalMs: 5,
+      waitMs: 5000,
+    });
+    search.attach({ write: vi.fn() } as unknown as UIMessageStreamWriter);
+
+    vi.mocked(redis.set).mockRejectedValueOnce(new Error("limit exceeded"));
+    expect(await search.search({ query: "x", limit: 20 })).toBeNull();
+
+    vi.mocked(redis.eval).mockRejectedValueOnce(new Error("limit exceeded"));
+    const startedAt = Date.now();
+    expect(await search.search({ query: "x", limit: 20 })).toBeNull();
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+  });
+
   it("hands back to the provider when the browser doesn't answer in time", async () => {
     const search = createLocalMailSearch({
       emailAccountId: ACCOUNT,

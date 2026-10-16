@@ -14,6 +14,15 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
   const demands = new Map<string, { endsAt: number; renewsAt: number }>();
   const blocks = new Map<string, number>();
   const usage = new Map<string, Record<string, number>>();
+  const budgets = new Map<string, { perMinute: number; at: number }>();
+  const trailing = new Map<string, Array<{ at: number; cost: number }>>();
+  const trailingUnits = (key: string, windowMs: number) => {
+    const recent = (trailing.get(key) ?? []).filter(
+      (entry) => entry.at > Date.now() - windowMs,
+    );
+    trailing.set(key, recent);
+    return recent.reduce((sum, entry) => sum + entry.cost, 0);
+  };
   const claimed = new Set<string>();
   const ttl = (key: string) => Math.max(0, (blocks.get(key) ?? 0) - Date.now());
 
@@ -26,7 +35,23 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
         0,
         ...held.map(({ key, deferMs }) => deferMs || ttl(key)),
       );
-      const rate = input.perMinute / 60_000;
+      const { budget } = input;
+      let current = budgets.get(budget.key);
+      if (!current) {
+        current = { perMinute: budget.start, at: now };
+        budgets.set(budget.key, current);
+      } else if (now - current.at >= budget.raiseEveryMs) {
+        const steps = Math.floor((now - current.at) / budget.raiseEveryMs);
+        current = {
+          perMinute: Math.min(
+            budget.max,
+            Math.floor(current.perMinute * budget.raiseFactor ** steps),
+          ),
+          at: current.at + steps * budget.raiseEveryMs,
+        };
+        budgets.set(budget.key, current);
+      }
+      const rate = current.perMinute / 60_000;
       const stored = buckets.get(input.bucketKey);
       const tokens = Math.min(
         input.capacity,
@@ -56,7 +81,11 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
         }
         return pace.windowMs;
       };
-      let paceWait = windowWait(pace.cap);
+      const cap =
+        pace.slowKey && ttl(pace.slowKey) > 0
+          ? Math.floor(pace.cap / 2)
+          : pace.cap;
+      let paceWait = windowWait(cap);
       const demandTtl = (demands.get(pace.demand.key)?.endsAt ?? 0) - now;
       if (pace.demand.yieldCap !== undefined && demandTtl > 0) {
         const afterDemand = Math.max(demandTtl, paceWait);
@@ -81,14 +110,26 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
 
       buckets.set(input.bucketKey, { tokens: tokens - input.cost, at: now });
       recent.push({ at: now, cost: input.cost });
+      trailingUnits(budget.trailingKey, budget.trailingWindowMs);
+      trailing.get(budget.trailingKey)?.push({ at: now, cost: input.cost });
       const fields = usage.get(input.usageKey) ?? {};
       fields[input.usageField] = (fields[input.usageField] ?? 0) + input.cost;
+      fields["budget:perMinute"] = Math.floor(current.perMinute);
       fields["peak:second"] = Math.max(
         fields["peak:second"] ?? 0,
         inWindow + input.cost,
       );
       usage.set(input.usageKey, fields);
       return { waitMs: 0, defer: false };
+    },
+    async cutBudget(input) {
+      const units = trailingUnits(input.trailingKey, input.trailingWindowMs);
+      const perMinute = Math.min(
+        budgets.get(input.key)?.perMinute ?? input.start,
+        Math.max(input.floor, Math.floor(units * input.fraction)),
+      );
+      budgets.set(input.key, { perMinute, at: Date.now() });
+      return perMinute;
     },
     async block({ key, ms }) {
       if (ttl(key) < ms) blocks.set(key, Date.now() + ms);
@@ -126,6 +167,8 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
       demands.clear();
       blocks.clear();
       usage.clear();
+      budgets.clear();
+      trailing.clear();
       claimed.clear();
     },
   };

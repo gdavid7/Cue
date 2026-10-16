@@ -48,6 +48,9 @@ const keys = {
   pause: "gmail-quota:test:background-pause",
   pace: "gmail-quota:test:pace",
   demand: "gmail-quota:test:interactive-demand",
+  slow: "gmail-quota:test:background-slow",
+  budget: "gmail-quota:test:budget",
+  trailing: "gmail-quota:test:trailing",
 };
 const take = (input: {
   cost: number;
@@ -55,6 +58,7 @@ const take = (input: {
   blockers?: { key: string; deferMs?: number }[];
   usageField?: string;
   paceCap?: number;
+  slowKey?: string;
   waitBudgetMs?: number;
   demand?: {
     key: string;
@@ -69,6 +73,7 @@ const admit = (input: {
   blockers?: { key: string; deferMs?: number }[];
   usageField?: string;
   paceCap?: number;
+  slowKey?: string;
   waitBudgetMs?: number;
   demand?: {
     key: string;
@@ -84,7 +89,15 @@ const admit = (input: {
     blockers: input.blockers ?? [],
     cost: input.cost,
     capacity: 1000,
-    perMinute: 3600,
+    budget: {
+      key: keys.budget,
+      trailingKey: keys.trailing,
+      trailingWindowMs: 60_000,
+      start: 3600,
+      max: 12_000,
+      raiseFactor: 1.1,
+      raiseEveryMs: 600_000,
+    },
     floor: input.floor,
     waitBudgetMs: input.waitBudgetMs,
     // Out of the way unless a case is about the per-second pace.
@@ -92,6 +105,7 @@ const admit = (input: {
       key: keys.pace,
       cap: input.paceCap ?? 100_000,
       windowMs: 1000,
+      slowKey: input.slowKey,
       demand: input.demand ?? { key: keys.demand },
     },
   });
@@ -147,6 +161,7 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       expect(await redis!.hgetall(keys.usage)).toEqual({
         "sync:a": "600",
         "peak:second": "600",
+        "budget:perMinute": "3600",
       });
       expect(await redis!.pttl(keys.bucket)).toBeGreaterThan(0);
     });
@@ -161,6 +176,7 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       expect(await redis!.hgetall(keys.usage)).toEqual({
         "sync:test": "700",
         "peak:second": "700",
+        "budget:perMinute": "3600",
       });
     });
 
@@ -220,6 +236,59 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       // A higher cap still has room in the same second.
       expect(await take({ cost: 60, floor: -200, paceCap: 200 })).toBe(0);
       expect(Number(await redis!.hget(keys.usage, "peak:second"))).toBe(180);
+    });
+
+    it("refills at the account's budget, cut to what it let through and raised after quiet periods", async () => {
+      const cut = () =>
+        gmailQuotaStore.cutBudget({
+          key: keys.budget,
+          trailingKey: keys.trailing,
+          trailingWindowMs: 60_000,
+          start: 3600,
+          fraction: 0.85,
+          floor: 1200,
+        });
+      // Starts at its start, and records it with the minute's usage.
+      expect(await take({ cost: 1000, floor: -200 })).toBe(0);
+      expect(await redis!.hget(keys.budget, "perMinute")).toBe("3600");
+      expect(Number(await redis!.hget(keys.usage, "budget:perMinute"))).toBe(
+        3600,
+      );
+      for (let i = 0; i < 4; i++)
+        expect(await take({ cost: 500, floor: -100_000 })).toBe(0);
+      // 3,000 units in the trailing minute: 85% of them.
+      expect(await cut()).toBe(2550);
+      // The bucket, 2,000 units overdrawn, now refills at 2,550 a minute:
+      // 2,300 units take about 54 s.
+      const wait = await take({ cost: 300, floor: 0 });
+      expect(wait).toBeGreaterThan(53_500);
+      expect(wait).toBeLessThanOrEqual(54_200);
+      // A cut never raises the budget, and never goes below the floor.
+      await redis!.del(keys.trailing);
+      expect(await cut()).toBe(1200);
+      // Two quiet periods later it is up two tenths, compounded.
+      await redis!.hset(keys.budget, "at", String(Date.now() - 1_250_000));
+      await take({ cost: 1, floor: -100_000 });
+      expect(await redis!.hget(keys.budget, "perMinute")).toBe("1452");
+    });
+
+    it("halves the pace cap while the slow key is set, still honouring blockers", async () => {
+      const slowed = {
+        cost: 20,
+        floor: 500,
+        paceCap: 40,
+        slowKey: keys.slow,
+        blockers: [{ key: keys.pause }],
+      };
+      await gmailQuotaStore.block({ key: keys.slow, ms: 600_000 });
+      expect(await take(slowed)).toBe(0);
+      // Half of 40 a second: the next message waits for the second to pass.
+      expect(await take(slowed)).toBeGreaterThan(0);
+      await gmailQuotaStore.clear(keys.slow);
+      expect(await take(slowed)).toBe(0);
+      await gmailQuotaStore.block({ key: keys.pause, ms: 20_000 });
+      await redis!.del(keys.pace);
+      expect(await take(slowed)).toBeGreaterThan(19_000);
     });
 
     it("holds others to their yield cap while a person's demand lasts", async () => {
@@ -342,7 +411,12 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
           },
         ]);
       expect(await claim()).toEqual([
-        { "deferred:user/stats": 2, chat: 40, "peak:second": 40 },
+        {
+          "deferred:user/stats": 2,
+          chat: 40,
+          "peak:second": 40,
+          "budget:perMinute": 3600,
+        },
         null,
       ]);
       expect(await claim()).toEqual([null, null]);

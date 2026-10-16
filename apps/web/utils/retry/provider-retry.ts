@@ -1,5 +1,6 @@
 import pRetry, { type RetryContext } from "p-retry";
 import type { Logger } from "@/utils/logger";
+import { getRequestDeadline } from "@/utils/request-deadline-reader";
 import { sleep } from "@/utils/sleep";
 
 // "rate-limit-only" is for non-idempotent writes: network, server, and conflict
@@ -35,6 +36,9 @@ export async function withProviderRetry<T>(
 ): Promise<T> {
   return pRetry(operation, {
     retries: maxRetries,
+    // The callback below waits each provider's own backoff; p-retry's default
+    // backoff would double it.
+    minTimeout: 0,
     onFailedAttempt: async (attempt) => {
       const { retryable, isRateLimit, delayMs, logFields, expected } =
         classify(attempt);
@@ -60,6 +64,11 @@ export async function withProviderRetry<T>(
         retryPolicy,
       };
 
+      if (attempt.retriesLeft === 0) {
+        logger.warn(`${providerName} error. Out of retries`, retryLogFields);
+        throw attempt.error;
+      }
+
       logger.warn(`${providerName} error. Will retry`, retryLogFields);
 
       if (delayMs > maxBlockingDelayMs) {
@@ -67,6 +76,15 @@ export async function withProviderRetry<T>(
           "Aborting retry due to long backoff in serverless",
           retryLogFields,
         );
+        throw attempt.error;
+      }
+
+      const deadlineAt = getRequestDeadline();
+      if (deadlineAt !== undefined && Date.now() + delayMs > deadlineAt) {
+        logger.warn("Aborting retry that would pass the request deadline", {
+          ...retryLogFields,
+          remainingMs: Math.max(0, deadlineAt - Date.now()),
+        });
         throw attempt.error;
       }
 

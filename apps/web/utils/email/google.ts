@@ -1121,6 +1121,7 @@ export class GmailProvider implements EmailProvider {
       attachment,
     });
     const sessionUri = await startGmailDraftUploadSession({
+      emailAccountId: this.emailAccountId,
       accessToken: this.getAccessToken(),
       draftId,
       threadId: template.threadId,

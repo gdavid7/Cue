@@ -18,6 +18,7 @@ vi.mock("@/utils/redis", () => ({
     hincrby: vi.fn(),
     hincrbyfloat: vi.fn(),
     expire: vi.fn(),
+    eval: vi.fn(),
   },
 }));
 
@@ -33,6 +34,7 @@ describe("redis usage tracking", () => {
     vi.mocked(redis.hincrby).mockResolvedValue(1);
     vi.mocked(redis.hincrbyfloat).mockResolvedValue(1);
     vi.mocked(redis.expire).mockResolvedValue(1);
+    vi.mocked(redis.eval).mockImplementation(runUsageScript as never);
   });
 
   describe("saveUsage", () => {
@@ -54,6 +56,22 @@ describe("redis usage tracking", () => {
       });
 
       expect(redis.expire).not.toHaveBeenCalled();
+    });
+
+    // HINCRBY rejects a fraction, and inside the script that aborts the
+    // whole save, cost and weekly spend included.
+    it("sends whole token counts even when a provider reports fractions", async () => {
+      await saveUsage({
+        userId: "user-1",
+        emailAccountId: "acc-1",
+        usage: { inputTokens: 10.6, outputTokens: 4.2, totalTokens: 14.8 },
+        cost: 1,
+        now: NOW,
+      });
+
+      const args = vi.mocked(redis.eval).mock.calls[0]?.[2] as string[];
+      const increments = args.slice(3).filter((_, index) => index % 2 === 1);
+      expect(increments).toEqual(["1", "15", "4", "11"]);
     });
 
     it("does not throw when a usage write rejects", async () => {
@@ -185,6 +203,8 @@ describe("redis usage tracking", () => {
     const weeklyCost = await getWeeklyUsageCost({ userId: "user-1", now: NOW });
 
     expect(weeklyCost).toBeCloseTo(2.25);
+    // The week is one billed command, not one per day.
+    expect(redis.eval).toHaveBeenCalledTimes(1);
     expect(redis.hgetall).toHaveBeenCalledTimes(7);
     expect(redis.hgetall).not.toHaveBeenCalledWith(
       "usage-weekly-cost:user@example.com:2026-02-24",
@@ -702,6 +722,32 @@ describe("redis usage tracking", () => {
     expect(redis.expire).not.toHaveBeenCalled();
   });
 });
+
+// Plays the module's Lua through the mocked commands, so a test sees what the
+// script writes and reads; __tests__/redis/usage-store.test.ts runs the Lua.
+async function runUsageScript(script: string, keys: string[], args: string[]) {
+  if (script.includes("HGET")) {
+    return Promise.all(
+      keys.map(async (key) => {
+        const hash = (await redis.hgetall(key)) as RedisHash | null;
+        return hash?.cost ?? "";
+      }),
+    );
+  }
+  const [weekly, cost, ttl, ...fields] = args;
+  const hashes = weekly === "1" ? keys.slice(0, -1) : keys;
+  for (const key of hashes) {
+    for (let i = 0; i < fields.length; i += 2)
+      await redis.hincrby(key, fields[i], Number(fields[i + 1]));
+    if (Number(cost) > 0) await redis.hincrbyfloat(key, "cost", Number(cost));
+  }
+  if (weekly === "1") {
+    const weeklyKey = keys[keys.length - 1];
+    await redis.hincrbyfloat(weeklyKey, "cost", Number(cost));
+    await redis.expire(weeklyKey, Number(ttl));
+  }
+  return 1;
+}
 
 function mockRedisHashes(hashes: Record<string, RedisHash>) {
   vi.mocked(redis.hgetall).mockImplementation(

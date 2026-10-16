@@ -25,9 +25,11 @@ import {
   isRetryableError as isOutlookRetryableError,
 } from "@/utils/outlook/retry";
 import { getRetryAfterHeaderFromError } from "@/utils/retry/get-retry-after-header";
+import { logRedisFailureOnce } from "@/utils/redis/unavailable-log";
 import {
   currentGmailQuotaContext,
   getGmailCallDeferredError,
+  isGmailNonVolumeRefusal,
   noteRateLimitModeSkip,
 } from "@/utils/gmail/quota";
 
@@ -35,6 +37,10 @@ const DEFAULT_RATE_LIMIT_DELAY_MS = 30_000;
 // Gmail's weighted-units quota is a per-minute budget, so a retry within
 // seconds only spends units that are not back yet and extends the outage.
 const GMAIL_PER_MINUTE_QUOTA_MIN_DELAY_MS = 30_000;
+// Rate-limit mode skips every call for the account, reads included, so for
+// Gmail it never outlasts a couple of per-minute windows; the quota gate
+// paces the rest. Microsoft Graph's Retry-After is honoured as given.
+const MAX_GMAIL_RATE_LIMIT_MODE_MS = 2 * 60_000;
 const RETRY_AT_BUFFER_SECONDS = 5;
 
 export type EmailProviderRateLimitState = {
@@ -55,10 +61,17 @@ export async function getEmailProviderRateLimitState({
       emailAccountId,
     });
   } catch (error) {
-    customLogger?.warn("Failed to read provider rate-limit state", {
-      emailAccountId,
-      error: error instanceof Error ? error.message : error,
-    });
+    // Read on most requests, so a refusing Redis is logged once in a while
+    // rather than on each of them.
+    if (customLogger)
+      logRedisFailureOnce(
+        customLogger,
+        "Failed to read provider rate-limit state",
+        {
+          emailAccountId,
+          error: error instanceof Error ? error.message : error,
+        },
+      );
     return null;
   }
 }
@@ -241,6 +254,10 @@ export async function recordProviderRateLimitFromError({
     currentGmailQuotaContext().priority === "background"
   )
     return null;
+  // Account-wide mode blocks the user's reads too, so a refusal that says
+  // nothing about reading volume (a sending limit, too many requests at
+  // once, a retry time hours away) never starts it.
+  if (provider === "google" && isGmailNonVolumeRefusal(error)) return null;
 
   const delayMs = getProviderRateLimitDelayMs({
     error,
@@ -249,7 +266,12 @@ export async function recordProviderRateLimitFromError({
   });
   if (!delayMs) return null;
 
-  const retryAt = new Date(Date.now() + delayMs);
+  const retryAt = new Date(
+    Date.now() +
+      (provider === "google"
+        ? Math.min(delayMs, MAX_GMAIL_RATE_LIMIT_MODE_MS)
+        : delayMs),
+  );
   return setEmailProviderRateLimitState({
     emailAccountId,
     provider,
@@ -330,6 +352,20 @@ export function describeProviderRateLimitError(
   if (delayMs === null) return null;
   const seconds = Math.max(1, Math.ceil(delayMs / 1000));
   return `${getProviderRateLimitMessageLabel(rateLimitProvider)} is temporarily limiting requests; try again in about ${seconds} ${seconds === 1 ? "second" : "seconds"}.`;
+}
+
+/** How long a client should wait before retrying what a provider refused. */
+export function getProviderRateLimitRetryAfterSeconds(
+  error: unknown,
+  apiErrorType: string,
+): number | undefined {
+  const provider = getProviderFromRateLimitApiErrorType(apiErrorType);
+  if (!provider) return;
+  const delayMs = isProviderRateLimitModeError(error)
+    ? Date.parse(error.retryAt ?? "") - Date.now()
+    : getProviderRateLimitDelayMs({ error, provider, attemptNumber: 1 });
+  if (!delayMs || !(delayMs > 0)) return;
+  return Math.ceil(delayMs / 1000);
 }
 
 export function getProviderRateLimitDelayMs({

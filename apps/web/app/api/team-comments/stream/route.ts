@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { withAuth } from "@/utils/middleware";
-import { RedisSubscriber } from "@/utils/redis/subscriber";
+import { getSharedSubscriber } from "@/utils/redis/shared-subscriber";
 import { env } from "@/env";
 import { getAuthorizedConversation } from "@/utils/team-comments/access";
 import {
@@ -22,7 +22,6 @@ export const GET = withAuth("team-comments/stream", async (request) => {
   const actor = { userId: request.auth.userId, memberId };
   const initial = await getAuthorizedConversation(actor, conversationId);
   const generation = initial.conversation.generation;
-  const subscriber = env.REDIS_URL ? RedisSubscriber.createInstance() : null;
   const encoder = new TextEncoder();
   let cleanup = () => {};
   const stream = new ReadableStream<Uint8Array>({
@@ -30,17 +29,14 @@ export const GET = withAuth("team-comments/stream", async (request) => {
       let closed = false;
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       let lifetime: ReturnType<typeof setTimeout> | undefined;
-      let unsubscribeLocal = () => {};
+      let unsubscribe = () => {};
       const close = () => {
         if (closed) return;
         closed = true;
         clearInterval(heartbeat);
         clearTimeout(lifetime);
         request.signal.removeEventListener("abort", close);
-        unsubscribeLocal();
-        subscriber?.off("message", onMessage);
-        subscriber?.off("error", close);
-        subscriber?.disconnect();
+        unsubscribe();
         try {
           controller.close();
         } catch {
@@ -67,8 +63,7 @@ export const GET = withAuth("team-comments/stream", async (request) => {
           return false;
         }
       };
-      const onMessage = (channel: string) => {
-        if (channel !== conversationChangeChannel(conversationId)) return;
+      const onMessage = () => {
         validate().then((allowed) => {
           if (allowed) send("change");
         });
@@ -88,21 +83,22 @@ export const GET = withAuth("team-comments/stream", async (request) => {
         close();
         return;
       }
-      if (!subscriber) {
-        unsubscribeLocal = subscribeLocalConversationChange(
+      if (!env.REDIS_URL) {
+        unsubscribe = subscribeLocalConversationChange(
           conversationId,
-          () => onMessage(conversationChangeChannel(conversationId)),
+          onMessage,
         );
         start();
         return;
       }
-      subscriber.on("message", onMessage);
-      // Closing lets EventSource reconnect instead of silently missing changes.
-      subscriber.on("error", close);
-      subscriber
-        .subscribe(conversationChangeChannel(conversationId))
-        .then(start)
-        .catch(close);
+      // Closing when the connection drops lets EventSource reconnect instead
+      // of silently missing changes.
+      const listening = getSharedSubscriber().listen(
+        conversationChangeChannel(conversationId),
+        { onMessage, onLost: close },
+      );
+      unsubscribe = listening.close;
+      listening.ready.then(start).catch(close);
     },
     cancel() {
       cleanup();
