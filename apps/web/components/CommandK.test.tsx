@@ -15,6 +15,10 @@ import { useSnoozeDateParser } from "@/hooks/useSnoozeDateParser";
 const displayedEmail = vi.hoisted(() => ({
   showEmail: vi.fn(),
   threadId: "thread-1" as string | null,
+  accountId: "account-1" as string | null,
+}));
+const threadLookup = vi.hoisted(() => ({
+  calls: [] as Array<{ id: string | null; emailAccountId?: string }>,
 }));
 const thread = vi.hoisted(() => ({
   data: {
@@ -45,14 +49,15 @@ vi.mock("@/components/AccountCommandList", () => ({
 vi.mock("@/hooks/useDisplayedEmail", () => ({
   useDisplayedEmail: () => ({
     threadId: displayedEmail.threadId,
+    accountId: displayedEmail.accountId,
     showEmail: displayedEmail.showEmail,
   }),
 }));
 vi.mock("@/hooks/useThread", () => ({
-  useThread: () => ({ data: thread.data, isLoading: thread.isLoading }),
-}));
-vi.mock("@/providers/EmailAccountProvider", () => ({
-  useAccount: () => ({ emailAccountId: "account-1" }),
+  useThread: (args: { id: string | null; emailAccountId?: string }) => {
+    threadLookup.calls.push(args);
+    return { data: thread.data, isLoading: thread.isLoading };
+  },
 }));
 vi.mock("@/providers/ComposeModalProvider", () => ({
   useComposeModal: () => ({ onOpen: vi.fn() }),
@@ -101,6 +106,8 @@ describe("CommandK side-panel actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     displayedEmail.threadId = "thread-1";
+    displayedEmail.accountId = "account-1";
+    threadLookup.calls = [];
     thread.data = {
       thread: {
         id: "thread-1",
@@ -209,6 +216,35 @@ describe("CommandK side-panel actions", () => {
     });
   });
 
+  it("archives and stars the side-panel thread in the account it belongs to", async () => {
+    displayedEmail.accountId = "account-2";
+    render(<CommandK feedbackEnabled />);
+
+    await act(async () => shortcuts.handlers?.archive?.());
+    await act(async () => shortcuts.handlers?.star?.());
+
+    expect(threadLookup.calls.at(-1)).toEqual({
+      id: "thread-1",
+      emailAccountId: "account-2",
+    });
+    const submittedAccounts = mail.client.submitConversations.mock.calls.map(
+      ([command]) => ({
+        accountId: command.accountId,
+        conversations: command.conversations,
+      }),
+    );
+    expect(submittedAccounts).toEqual([
+      {
+        accountId: "account-2",
+        conversations: [{ accountId: "account-2", conversationId: "thread-1" }],
+      },
+      {
+        accountId: "account-2",
+        conversations: [{ accountId: "account-2", conversationId: "thread-1" }],
+      },
+    ]);
+  });
+
   it("opens a forward composer for the latest side-panel message", () => {
     render(<CommandK feedbackEnabled />);
 
@@ -216,6 +252,7 @@ describe("CommandK side-panel actions", () => {
 
     expect(displayedEmail.showEmail).toHaveBeenCalledWith({
       threadId: "thread-1",
+      accountId: "account-1",
       autoOpenForwardForMessageId: "message-2",
       showReplyButton: true,
     });

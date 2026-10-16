@@ -33,7 +33,6 @@ import type {
   SenderCommandContext,
 } from "@/store/command-palette";
 import { useDisplayedEmail } from "@/hooks/useDisplayedEmail";
-import { useAccount } from "@/providers/EmailAccountProvider";
 import { useCommandPaletteCommands } from "@/hooks/useCommandPaletteCommands";
 import { fuzzySearch } from "@/lib/commands/fuzzy-search";
 import type { Command, CommandSection } from "@/lib/commands/types";
@@ -140,11 +139,13 @@ function CommandPaletteContent({
   );
   const { setTheme } = useTheme();
 
-  const { emailAccountId } = useAccount();
   const client = useOptionalMailClient();
-  const { threadId, showEmail } = displayedEmail;
+  const { threadId, accountId: displayedAccountId, showEmail } = displayedEmail;
   const { data: displayedThread, isLoading: isDisplayedThreadLoading } =
-    useThread({ id: threadId });
+    useThread({
+      id: threadId,
+      emailAccountId: displayedAccountId ?? undefined,
+    });
   const { onOpen: onOpenComposeModal } = useComposeModal();
   const { commands, isLoading } = useCommandPaletteCommands({
     includeRules: !mailCommandContext,
@@ -160,7 +161,7 @@ function CommandPaletteContent({
     help: () => setShortcutsOpen(true),
     archive: threadId
       ? async () => {
-          if (displayedThread?.thread.id !== threadId) {
+          if (displayedThread?.thread.id !== threadId || !displayedAccountId) {
             toastError({
               description: isDisplayedThreadLoading
                 ? "Email is still loading"
@@ -174,7 +175,7 @@ function CommandPaletteContent({
               throw new Error("Mail engine is unavailable");
             }
             const { admission } = await submitConversationChange({
-              accountId: emailAccountId,
+              accountId: displayedAccountId,
               change,
               client,
               conversationId: threadId,
@@ -197,7 +198,7 @@ function CommandPaletteContent({
       : undefined,
     star: threadId
       ? async () => {
-          if (displayedThread?.thread.id !== threadId) {
+          if (displayedThread?.thread.id !== threadId || !displayedAccountId) {
             toastError({
               description: isDisplayedThreadLoading
                 ? "Email is still loading"
@@ -214,7 +215,7 @@ function CommandPaletteContent({
               throw new Error("Mail engine is unavailable");
             }
             const { admission } = await submitConversationChange({
-              accountId: emailAccountId,
+              accountId: displayedAccountId,
               change,
               client,
               conversationId: threadId,
@@ -240,6 +241,7 @@ function CommandPaletteContent({
             if (!messageId) return;
             showEmail({
               threadId,
+              accountId: displayedAccountId ?? undefined,
               autoOpenForwardForMessageId: messageId,
               showReplyButton: true,
             });
