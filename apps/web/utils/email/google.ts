@@ -2240,13 +2240,13 @@ export class GmailProvider implements EmailProvider {
 
   async watchEmails(): Promise<{
     expirationDate: Date;
-    subscriptionId?: string;
+    historyId?: string;
   } | null> {
     const res = await watchGmail(this.client, this.logger);
 
     if (res.expiration) {
       const expirationDate = new Date(+res.expiration);
-      return { expirationDate };
+      return { expirationDate, historyId: res.historyId ?? undefined };
     }
     return null;
   }

@@ -6,6 +6,9 @@ import { createEmailProvider } from "@/utils/email/provider";
 import { captureException } from "@/utils/error";
 import { clearWatchLapsedErrorIfResolved } from "@/utils/error-messages";
 import { fetchGoogleOpenIdProfile } from "@/utils/gmail/oauth";
+import { GmailCallDeferredError } from "@/utils/gmail/quota";
+import { logErrorWithDedupe } from "@/utils/log-error-with-dedupe";
+import { publishToQstashAt } from "@/utils/upstash";
 import {
   ensureEmailAccountsWatched,
   stopWatchingEmailAccount,
@@ -41,6 +44,10 @@ vi.mock("@/utils/redis/account-validation", () => ({
 
 vi.mock("@/utils/log-error-with-dedupe", () => ({
   logErrorWithDedupe: vi.fn(),
+}));
+
+vi.mock("@/utils/upstash", () => ({
+  publishToQstashAt: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("@/utils/premium", () => ({
@@ -206,6 +213,127 @@ describe("ensureEmailAccountsWatched", () => {
     );
   });
 
+  it("starts a mailbox without a history cursor from the history id its watch began at", async () => {
+    vi.mocked(prisma.emailAccount.findMany).mockResolvedValue([
+      getWatchedEmailAccount({ watchEmailsExpirationDate: null }),
+    ] as any);
+    vi.mocked(createEmailProvider).mockResolvedValue({
+      ...getGoogleProvider(),
+      watchEmails: vi.fn().mockResolvedValue({
+        expirationDate: new Date(Date.now() + 3_600_000),
+        historyId: "5000",
+      }),
+    });
+
+    await ensureEmailAccountsWatched({ userIds: ["user-id"], logger });
+
+    // Only a missing cursor: a renewal must not move a cursor past history
+    // that is still waiting to be processed.
+    expect(prisma.emailAccount.updateMany).toHaveBeenCalledWith({
+      where: { id: "email-account-id", lastSyncedHistoryId: null },
+      data: { lastSyncedHistoryId: "5000" },
+    });
+    // The expiry marks the watch healthy, so the next renewal would not
+    // retry a cursor that failed to save after it.
+    expect(
+      prisma.emailAccount.updateMany.mock.invocationCallOrder[0],
+    ).toBeLessThan(prisma.emailAccount.update.mock.invocationCallOrder[0]);
+  });
+
+  it("never widens a single-mailbox watch to every mailbox", async () => {
+    vi.mocked(prisma.emailAccount.findMany).mockResolvedValue([]);
+
+    await ensureEmailAccountsWatched({
+      userIds: null,
+      emailAccountId: "",
+      logger,
+    });
+
+    expect(prisma.emailAccount.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: "" }),
+      }),
+    );
+  });
+
+  it("logs a deferred watch as a failure when no resume can be scheduled", async () => {
+    vi.mocked(prisma.emailAccount.findMany).mockResolvedValue([
+      getWatchedEmailAccount({ watchEmailsExpirationDate: null }),
+    ] as any);
+    vi.mocked(createEmailProvider).mockResolvedValue({
+      ...getGoogleProvider(),
+      watchEmails: vi
+        .fn()
+        .mockRejectedValue(new GmailCallDeferredError(9500, "sync")),
+    });
+    vi.mocked(publishToQstashAt).mockResolvedValueOnce(false);
+
+    await ensureEmailAccountsWatched({ userIds: ["user-id"], logger });
+
+    expect(logErrorWithDedupe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Failed to watch emails for account",
+      }),
+    );
+  });
+
+  it("resumes a Gmail watch the quota gate deferred once the deferral passes", async () => {
+    vi.mocked(prisma.emailAccount.findMany).mockResolvedValue([
+      getWatchedEmailAccount({ watchEmailsExpirationDate: null }),
+    ] as any);
+    vi.mocked(createEmailProvider).mockResolvedValue({
+      ...getGoogleProvider(),
+      watchEmails: vi
+        .fn()
+        .mockRejectedValue(new GmailCallDeferredError(9500, "sync")),
+    });
+    const before = Date.now();
+
+    const results = await ensureEmailAccountsWatched({
+      userIds: ["user-id"],
+      logger,
+    });
+
+    expect(results).toEqual([
+      expect.objectContaining({
+        emailAccountId: "email-account-id",
+        status: "error",
+      }),
+    ]);
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/watch/resume",
+        body: { emailAccountId: "email-account-id", deferrals: 1 },
+      }),
+    );
+    const { notBefore } = vi.mocked(publishToQstashAt).mock.calls[0][0];
+    expect(notBefore.getTime()).toBeGreaterThanOrEqual(before + 9500);
+    expect(captureException).not.toHaveBeenCalled();
+    expect(logErrorWithDedupe).not.toHaveBeenCalled();
+  });
+
+  it("stops resuming a watch the quota gate keeps deferring", async () => {
+    vi.mocked(prisma.emailAccount.findMany).mockResolvedValue([
+      getWatchedEmailAccount({ watchEmailsExpirationDate: null }),
+    ] as any);
+    vi.mocked(createEmailProvider).mockResolvedValue({
+      ...getGoogleProvider(),
+      watchEmails: vi
+        .fn()
+        .mockRejectedValue(new GmailCallDeferredError(9500, "sync")),
+    });
+
+    await ensureEmailAccountsWatched({
+      userIds: null,
+      emailAccountId: "email-account-id",
+      deferrals: 5,
+      logger,
+    });
+
+    expect(publishToQstashAt).not.toHaveBeenCalled();
+    expect(logErrorWithDedupe).toHaveBeenCalled();
+  });
+
   it("still renews the watch when the mailbox address check fails", async () => {
     vi.mocked(prisma.emailAccount.findMany).mockResolvedValue([
       getWatchedEmailAccount({
@@ -244,7 +372,7 @@ function getGoogleProvider() {
 function getWatchedEmailAccount({
   watchEmailsExpirationDate,
 }: {
-  watchEmailsExpirationDate: Date;
+  watchEmailsExpirationDate: Date | null;
 }) {
   return {
     id: "email-account-id",

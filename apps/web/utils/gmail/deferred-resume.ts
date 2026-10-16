@@ -9,8 +9,9 @@ const MAX_GMAIL_DEFERRALS = 5;
 /**
  * A background job the Gmail quota gate deferred is delivered to `path` again
  * once the deferral's retry-after has passed, with `deferrals` counting how
- * many times it was put off. Returns false when `error` is not a deferral, so
- * the caller handles it as before.
+ * many times it was put off. Resolves `not-deferred` when `error` is not a
+ * deferral, so the caller handles it as before; `gave-up` and `unscheduled`
+ * mean the job will not run again on its own.
  */
 export async function resumeAfterGmailDeferral<
   T extends Record<string, unknown>,
@@ -32,9 +33,9 @@ export async function resumeAfterGmailDeferral<
   /** What the job does, for logs. */
   job: string;
   logger: Logger;
-}): Promise<boolean> {
+}): Promise<"not-deferred" | "scheduled" | "gave-up" | "unscheduled"> {
   const deferred = getGmailCallDeferredError(error);
-  if (!deferred) return false;
+  if (!deferred) return "not-deferred";
   const { retryAfterMs } = deferred;
 
   if (deferrals >= MAX_GMAIL_DEFERRALS) {
@@ -42,7 +43,7 @@ export async function resumeAfterGmailDeferral<
       deferrals,
       retryAfterMs,
     });
-    return true;
+    return "gave-up";
   }
 
   const nextDeferrals = deferrals + 1;
@@ -58,16 +59,16 @@ export async function resumeAfterGmailDeferral<
         deferrals: nextDeferrals,
         retryAfterMs,
       });
-    } else {
-      logger.warn(
-        `Deferred ${job} by Gmail quota and no scheduler is configured to resume it`,
-        { retryAfterMs },
-      );
+      return "scheduled";
     }
+    logger.warn(
+      `Deferred ${job} by Gmail quota and no scheduler is configured to resume it`,
+      { retryAfterMs },
+    );
   } catch (scheduleError) {
     logger.warn(`Failed to schedule resume of ${job}`, {
       error: scheduleError,
     });
   }
-  return true;
+  return "unscheduled";
 }

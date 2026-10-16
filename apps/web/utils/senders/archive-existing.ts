@@ -89,7 +89,7 @@ export async function runQueuedSenderArchive({
       emailAccountId,
     );
   } catch (error) {
-    const resumed = await resumeAfterGmailDeferral({
+    const resume = await resumeAfterGmailDeferral({
       error,
       path: ARCHIVE_EXISTING_RESUME_PATH,
       body: {
@@ -105,7 +105,7 @@ export async function runQueuedSenderArchive({
       job: "archiving existing sender mail",
       logger,
     });
-    if (!resumed) {
+    if (resume === "not-deferred") {
       logger.error("Failed to archive existing sender mail", { error });
     }
   }

@@ -4,6 +4,7 @@ import { redis } from "@/utils/redis";
 import {
   countEmptyGmailHistoryRun,
   getGmailHistoryCatchUpTarget,
+  markGmailHistoryCatchUp,
   raiseGmailHistoryCatchUpTarget,
 } from "./gmail-history-catch-up";
 
@@ -14,6 +15,7 @@ vi.mock("@/utils/redis", () => ({
     del: vi.fn(),
     eval: vi.fn(),
     get: vi.fn(),
+    set: vi.fn(),
   },
 }));
 
@@ -56,6 +58,28 @@ describe("Gmail history catch-up target", () => {
 });
 
 const logger = createTestLogger();
+
+describe("markGmailHistoryCatchUp", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("reports a stored mark, which the catch-up needs in order to run", async () => {
+    vi.mocked(redis.set).mockResolvedValue("OK");
+
+    await expect(markGmailHistoryCatchUp("account-1", logger)).resolves.toBe(
+      true,
+    );
+  });
+
+  it("reports a failed write, so the caller does not count on a catch-up", async () => {
+    vi.mocked(redis.set).mockRejectedValue(new Error("Redis unavailable"));
+
+    await expect(markGmailHistoryCatchUp("account-1", logger)).resolves.toBe(
+      false,
+    );
+  });
+});
 
 describe("countEmptyGmailHistoryRun", () => {
   beforeEach(() => {

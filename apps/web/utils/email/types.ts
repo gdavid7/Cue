@@ -561,5 +561,7 @@ export interface EmailProvider {
   watchEmails(): Promise<{
     expirationDate: Date;
     subscriptionId?: string;
+    /** Gmail: the mailbox's history id as the watch began. */
+    historyId?: string;
   } | null>;
 }

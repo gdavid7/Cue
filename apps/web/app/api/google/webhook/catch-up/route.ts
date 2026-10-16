@@ -67,7 +67,7 @@ export const POST = withError(
 
     await processHistoryForUser(
       { emailAddress: emailAccount.email, historyId: target },
-      {},
+      { fromCatchUp: true },
       logger,
     );
     return NextResponse.json({ ok: true });

@@ -2,8 +2,12 @@ import "server-only";
 import type { ThreadsListResponse } from "@/app/api/threads/route";
 import { createEmailProvider } from "@/utils/email/provider";
 import type { EmailThread } from "@/utils/email/types";
-import { runWithGmailQuota } from "@/utils/gmail/quota";
+import {
+  getGmailCallDeferredError,
+  runWithGmailQuota,
+} from "@/utils/gmail/quota";
 import { createScopedLogger } from "@/utils/logger";
+import { sleep } from "@/utils/sleep";
 import { attachThreadPlans, toListThreads } from "@/utils/threads/load";
 import type { ParsedMessage } from "@/utils/types";
 
@@ -18,7 +22,11 @@ const PREVIEW_MESSAGES = 10;
 // The page's shell is sent before this settles; only the stream stays open
 // for the rows. Past these, the list waits for the mail engine instead.
 const MAX_QUOTA_WAIT_MS = 4000;
-const PREVIEW_TIMEOUT_MS = 5000;
+// The gate defers a call that would wait past the budget above, often by
+// only a second. A deferral this short is waited out once, so a new user's
+// first rows don't fall back to the slower mail engine over it.
+const MAX_DEFERRAL_WAIT_MS = 2500;
+const PREVIEW_TIMEOUT_MS = 5000 + MAX_DEFERRAL_WAIT_MS;
 
 /**
  * The inbox's newest conversations, as the mail list shows them, for a
@@ -35,41 +43,58 @@ export async function loadInboxPreview({
 }): Promise<ThreadsListResponse | null> {
   const log = logger.with({ emailAccountId });
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
   const gaveUp = new Promise<null>((resolve) => {
     timeout = setTimeout(() => {
+      timedOut = true;
       log.warn("Gave up on the inbox preview");
       resolve(null);
     }, PREVIEW_TIMEOUT_MS);
   });
-  const loaded = runWithGmailQuota(
-    {
-      caller: "mail/inbox-preview",
-      priority: "interactive",
-      maxTotalWaitMs: MAX_QUOTA_WAIT_MS,
-    },
-    async () => {
-      const emailProvider = await createEmailProvider({
-        emailAccountId,
-        provider,
-        logger: log,
-      });
-      const { messages } = await emailProvider.getMessagesWithPagination({
-        inboxOnly: true,
-        maxResults: PREVIEW_MESSAGES,
-        format: "metadata",
-        allowPartial: true,
-      });
-      return toListThreads(
-        await attachThreadPlans({
+  const load = () =>
+    runWithGmailQuota(
+      {
+        caller: "mail/inbox-preview",
+        priority: "interactive",
+        maxTotalWaitMs: MAX_QUOTA_WAIT_MS,
+      },
+      async () => {
+        const emailProvider = await createEmailProvider({
           emailAccountId,
-          threads: groupByThread(messages),
-        }),
-      );
-    },
-  ).catch((error: unknown) => {
-    log.warn("Could not load the inbox preview", { error });
-    return null;
-  });
+          provider,
+          logger: log,
+        });
+        const { messages } = await emailProvider.getMessagesWithPagination({
+          inboxOnly: true,
+          maxResults: PREVIEW_MESSAGES,
+          format: "metadata",
+          allowPartial: true,
+        });
+        return toListThreads(
+          await attachThreadPlans({
+            emailAccountId,
+            threads: groupByThread(messages),
+          }),
+        );
+      },
+    );
+  const loaded = load()
+    .catch(async (error: unknown) => {
+      const deferred = getGmailCallDeferredError(error);
+      if (!deferred || deferred.retryAfterMs > MAX_DEFERRAL_WAIT_MS)
+        throw error;
+      log.info("Inbox preview deferred by Gmail quota; waiting it out", {
+        retryAfterMs: deferred.retryAfterMs,
+      });
+      await sleep(deferred.retryAfterMs);
+      // Nobody is waiting for rows any more; leave the quota to the engine.
+      if (timedOut) return null;
+      return load();
+    })
+    .catch((error: unknown) => {
+      log.warn("Could not load the inbox preview", { error });
+      return null;
+    });
   try {
     return await Promise.race([loaded, gaveUp]);
   } finally {

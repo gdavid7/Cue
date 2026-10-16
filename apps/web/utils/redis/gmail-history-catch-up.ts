@@ -18,19 +18,22 @@ const EMPTY_HISTORY_RUNS_TTL_SECONDS = 60 * 60;
  * Records that webhook history was left unprocessed because Gmail was rate
  * limiting the account. Each mark gets a new token so a catch-up run only
  * clears the mark it read, not one set by a webhook skipped during that run.
+ * Resolves whether the mark was stored; a catch-up only runs while it is.
  */
 export async function markGmailHistoryCatchUp(
   emailAccountId: string,
   logger: Logger,
-) {
-  if (!isEmailProviderRateLimitRedisConfigured()) return;
+): Promise<boolean> {
+  if (!isEmailProviderRateLimitRedisConfigured()) return false;
 
   try {
     await redis.set(getGmailHistoryCatchUpKey(emailAccountId), randomUUID(), {
       ex: GMAIL_HISTORY_CATCH_UP_TTL_SECONDS,
     });
+    return true;
   } catch (error) {
     logger.warn("Failed to mark Gmail history catch-up", { error });
+    return false;
   }
 }
 

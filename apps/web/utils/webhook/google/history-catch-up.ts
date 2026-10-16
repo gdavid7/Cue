@@ -78,6 +78,9 @@ export async function nudgeGmailHistoryCatchUp({
  * mailbox does not wait hours for its next push. Deferrals within one delay
  * window share a single delivery, and a delivery does nothing once a later
  * push has caught up.
+ *
+ * Resolves whether a delivery was scheduled. It only runs while the caller's
+ * catch-up mark is stored.
  */
 export async function scheduleGmailHistoryCatchUp({
   emailAccountId,
@@ -89,7 +92,7 @@ export async function scheduleGmailHistoryCatchUp({
   historyId: string;
   retryAt?: Date;
   logger: Logger;
-}) {
+}): Promise<boolean> {
   const notBefore = new Date(
     Math.max(Date.now() + CATCH_UP_DELAY_MS, retryAt?.getTime() ?? 0),
   );
@@ -106,7 +109,9 @@ export async function scheduleGmailHistoryCatchUp({
       logger.info(
         "No scheduler for the Gmail history catch-up; the next push catches up",
       );
+    return scheduled;
   } catch (error) {
     logger.warn("Failed to schedule Gmail history catch-up", { error });
+    return false;
   }
 }
