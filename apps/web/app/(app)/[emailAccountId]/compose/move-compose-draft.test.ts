@@ -4,7 +4,10 @@ import {
   createReplyDraftWriter,
   getReplyDraft,
 } from "@/utils/mail-engine/reply-drafts";
-import { finishComposeDraftMove } from "./move-compose-draft";
+import {
+  finishComposeDraftMove,
+  getMoveErrorMessage,
+} from "./move-compose-draft";
 import { forgetAttachedFiles } from "./upload-draft-attachment";
 
 vi.mock("@/utils/actions/mail", () => ({
@@ -106,5 +109,17 @@ describe("finishComposeDraftMove", () => {
       }),
     ).rejects.toThrow("Gmail is unavailable.");
     expect(clear).not.toHaveBeenCalled();
+  });
+});
+
+describe("getMoveErrorMessage", () => {
+  it("shows the failure's own message", () => {
+    expect(getMoveErrorMessage(new Error("Gmail is unavailable."))).toBe(
+      "Gmail is unavailable.",
+    );
+  });
+
+  it("falls back to saying the draft could not move", () => {
+    expect(getMoveErrorMessage("unknown")).toBe("Could not move this draft.");
   });
 });

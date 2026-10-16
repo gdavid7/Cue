@@ -160,6 +160,7 @@ import {
 } from "./compose-attachments";
 import {
   finishComposeDraftMove,
+  getMoveErrorMessage,
   type MovedFromDraft,
 } from "./move-compose-draft";
 
@@ -1063,12 +1064,7 @@ function ComposeEmailFormContent({
       await client?.requestSync([moved.from.emailAccountId]);
     };
     finishMove().catch((error: unknown) => {
-      toastError({
-        description:
-          error instanceof Error
-            ? error.message
-            : "Could not discard this draft.",
-      });
+      toastError({ description: getMoveErrorMessage(error) });
     });
   });
 
@@ -1637,12 +1633,7 @@ function ComposeEmailFormContent({
     } catch (error) {
       resumeProviderAutosave();
       setIsMovingDraft(false);
-      toastError({
-        description:
-          error instanceof Error
-            ? error.message
-            : "Could not discard this draft.",
-      });
+      toastError({ description: getMoveErrorMessage(error) });
     }
   };
 

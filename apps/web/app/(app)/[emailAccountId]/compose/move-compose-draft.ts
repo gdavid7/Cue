@@ -45,3 +45,7 @@ export async function finishComposeDraftMove({
   forgetAttachedFiles(from.emailAccountId, from.attachmentIds);
   return "moved";
 }
+
+export function getMoveErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Could not move this draft.";
+}
