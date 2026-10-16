@@ -63,6 +63,15 @@
     "components/email-list/ThreadDeliveryStatus.tsx",
     "components/ShortcutTooltipContent.tsx"
   ],
+  "compose-from-switch.spec.ts": [
+    "app/(app)/[emailAccountId]/compose/ComposeEmailForm.tsx",
+    "app/(app)/[emailAccountId]/compose/upload-draft-attachment.ts"
+  ],
+  "reply-from-owning-account.spec.ts": [
+    "components/email-list/EmailMessage.tsx",
+    "hooks/useOwnEmailAddresses.ts",
+    "utils/email/reply-all.ts"
+  ],
   "compose-attachment-send.spec.ts": [
     "app/(app)/[emailAccountId]/compose/ComposeEmailForm.tsx",
     "app/(app)/[emailAccountId]/compose/compose-attachments.ts",
