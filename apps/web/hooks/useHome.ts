@@ -10,6 +10,7 @@ import { getAccountScopedKey } from "@/utils/swr";
 const PENDING_REFRESH_MS = 5000;
 const PENDING_LOAD_LIMIT = 12;
 const FOCUS_REFRESH_MIN_MS = 30_000;
+const CHANGE_COALESCE_MS = 3000;
 
 /**
  * Today's data. `gaveUp` is set once a lane has stayed pending through every
@@ -47,8 +48,22 @@ export function useHome(emailAccountId?: string | null) {
   const { mutate } = home;
 
   // Cue sorted new mail or the user's reply changed a lane: show it now
-  // rather than on the next reload.
-  useEffect(() => onTodayChanged(() => mutate()), [mutate]);
+  // rather than on the next reload. A backlog sorts several messages a
+  // second, and each load spends Gmail quota, so a burst shares one load.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stop = onTodayChanged(() => {
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        mutate();
+      }, CHANGE_COALESCE_MS);
+    });
+    return () => {
+      stop();
+      clearTimeout(timer);
+    };
+  }, [mutate]);
 
   return {
     data: home.data,

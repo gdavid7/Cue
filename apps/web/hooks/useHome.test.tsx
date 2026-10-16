@@ -49,9 +49,13 @@ describe("useHome", () => {
     await act(() => vi.advanceTimersByTimeAsync(100));
     expect(fetcher).toHaveBeenCalledTimes(1);
 
+    // A backlog sorts several messages in a row; Today loads once for them.
     await act(async () => {
       announceTodayChanged();
-      await vi.advanceTimersByTimeAsync(100);
+      announceTodayChanged();
+      await vi.advanceTimersByTimeAsync(1000);
+      announceTodayChanged();
+      await vi.advanceTimersByTimeAsync(5000);
     });
 
     expect(fetcher).toHaveBeenCalledTimes(2);
