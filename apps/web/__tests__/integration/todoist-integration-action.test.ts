@@ -59,6 +59,19 @@ vi.mock("@/utils/prisma", () => ({
     },
     mcpConnection: {
       findFirst: (...args: unknown[]) => mockMcpConnectionFindFirst(...args),
+      // findConnectionAccountId lists the person's connections first; mirror
+      // findFirst so each test still sets a single connection state.
+      findMany: async (...args: unknown[]) => {
+        const connection = await mockMcpConnectionFindFirst(...args);
+        return connection
+          ? [
+              {
+                emailAccountId: TEST_ACCOUNT_ID,
+                integration: connection.integration,
+              },
+            ]
+          : [];
+      },
     },
     mcpTool: {
       deleteMany: (...args: unknown[]) => mockMcpToolDeleteMany(...args),
