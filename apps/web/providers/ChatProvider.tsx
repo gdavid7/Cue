@@ -20,6 +20,7 @@ import { toastError } from "@/components/Toast";
 import { convertToUIMessages } from "@/components/assistant-chat/helpers";
 import type { ChatMessage } from "@/components/assistant-chat/types";
 import { chatMessagesKey, useChatMessages } from "@/hooks/useChatMessages";
+import { CHAT_ACCOUNT_PARAM, CHAT_ID_PARAM } from "@/utils/chat-url";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
@@ -105,7 +106,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   // `?chatId=` link reopens the chat where it lives. An id that is not one of
   // the user's accounts (or no longer is) falls back to the page's account.
   const [chatAccountIdParam, setChatAccountIdParam] = useQueryState(
-    "chatAccountId",
+    CHAT_ACCOUNT_PARAM,
     parseAsString,
   );
   const emailAccountId =
@@ -121,7 +122,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   );
 
   const [input, setInput] = useState<string>("");
-  const [chatId, setChatId] = useQueryState("chatId", parseAsString);
+  const [chatId, setChatId] = useQueryState(CHAT_ID_PARAM, parseAsString);
   const [context, setContext] = useState<MessageContext | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [inlineActions, setInlineActions] = useState<InlineEmailAction[]>([]);

@@ -479,6 +479,42 @@ describe("EmailAccountProvider", () => {
     expect(screen.getByTestId("account-id").textContent).toBe("account-4");
   });
 
+  it("drops a removed account's chat from the address it rewrites", async () => {
+    navigation.accountIndex = "2";
+    window.history.replaceState(
+      null,
+      "",
+      "/mail/u/2/inbox?chatId=chat-b&chatAccountId=account-2",
+    );
+    const threeAccounts = ["account-1", "account-2", "account-3"];
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(listResponse(threeAccounts))
+        .mockResolvedValueOnce(
+          listResponse(threeAccounts.filter((id) => id !== "account-2")),
+        ),
+    );
+
+    render(
+      <EmailAccountProvider>
+        <AccountState />
+      </EmailAccountProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("account-ids").textContent).toBe(
+        threeAccounts.join(","),
+      ),
+    );
+
+    await fetchEmailAccounts();
+
+    await waitFor(() =>
+      expect(navigation.replace).toHaveBeenCalledWith("/mail/u/1/inbox"),
+    );
+  });
+
   it("does not replace a global route when remaining accounts exist", async () => {
     navigation.emailAccountId = "deleted-account";
     window.history.replaceState(null, "", "/accounts");

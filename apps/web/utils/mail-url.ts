@@ -120,12 +120,15 @@ export function reindexMailPath({
   accountIndex,
   previousAccountIds,
   accountIds,
+  dropParams = [],
 }: {
   pathname: string;
   search: string;
   accountIndex: number;
   previousAccountIds: readonly string[];
   accountIds: readonly string[];
+  /** Page parameters that no longer apply, left out of the new address. */
+  dropParams?: readonly string[];
 }) {
   const mail = parseMailPath(pathname, search);
   if (!mail || accountIndex < 0) return null;
@@ -147,6 +150,7 @@ export function reindexMailPath({
       threadAccountIndex: threadAccountIndex >= 0 ? threadAccountIndex : null,
     }),
     search,
+    dropParams,
   );
 }
 

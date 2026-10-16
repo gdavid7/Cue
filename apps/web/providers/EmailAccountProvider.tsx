@@ -7,6 +7,7 @@ import { setLastEmailAccountAction } from "@/utils/actions/email-account-cookie"
 import { unownedAccountRedirectUrl } from "@/utils/account-switch-url";
 import { ownedLastEmailAccountId } from "@/utils/cookies";
 import { reindexMailPath } from "@/utils/mail-url";
+import { staleChatParams } from "@/utils/chat-url";
 import { toastInfo } from "@/components/Toast";
 import {
   fetchEmailAccounts,
@@ -210,6 +211,8 @@ export function EmailAccountProvider({
       accountIndex,
       previousAccountIds: address.accountIds,
       accountIds,
+      // Otherwise the removed account's chat would come back with the page.
+      dropParams: staleChatParams(window.location.search, accountIds),
     });
     const rewrite = next && next !== current ? next : null;
     // Until the router moves, the address's position stays this account's,
