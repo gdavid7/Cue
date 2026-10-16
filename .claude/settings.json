@@ -64,6 +64,17 @@
         ]
       }
     ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/stop-related-tests.sh",
+            "timeout": 90
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|MultiEdit|Write",
