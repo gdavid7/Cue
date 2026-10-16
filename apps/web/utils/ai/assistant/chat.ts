@@ -348,9 +348,13 @@ export async function aiProcessAssistantChat({
       contextMessages,
     });
 
-  const messagesWithCacheControl = addAnthropicCacheControl(
+  const stableCacheBreakpointIndexes = getStableCacheBreakpointIndexes(
     cacheOptimizedMessages,
     stablePrefixEndIndex,
+  );
+  const messagesWithCacheControl = addAnthropicCacheControl(
+    cacheOptimizedMessages,
+    stableCacheBreakpointIndexes,
   );
 
   const runtimeTools = withChatToolRuntime({
@@ -488,8 +492,17 @@ export async function aiProcessAssistantChat({
     stopWhen: () => false,
     prepareStep: ({ messages: stepMessages, stepNumber, model }) => {
       const trimmedMessages = trimStaleToolResults(stepMessages);
+      const preparedMessages =
+        model &&
+        typeof model !== "string" &&
+        model.provider.startsWith("anthropic")
+          ? moveAnthropicTailCacheBreakpoint(
+              trimmedMessages,
+              stableCacheBreakpointIndexes,
+            )
+          : trimmedMessages;
       const messages =
-        trimmedMessages === stepMessages ? undefined : trimmedMessages;
+        preparedMessages === stepMessages ? undefined : preparedMessages;
 
       // Most steps only pick the next lookup, so they think briefly; the
       // answer forced below keeps the model's full thinking. A step can't
@@ -593,40 +606,65 @@ function buildCacheOptimizedMessages({
   };
 }
 
-function addAnthropicCacheControl(
+// The system prompt and the end of the earlier turns' history.
+function getStableCacheBreakpointIndexes(
   messages: ModelMessage[],
   stablePrefixEndIndex: number,
 ) {
-  const cacheControl: Record<string, JSONValue> = {
-    cacheControl: { type: "ephemeral" },
-  };
-
-  const cacheBreakpointIndexes = new Set([
+  return new Set([
     0,
     Math.max(0, Math.min(stablePrefixEndIndex, messages.length - 1)),
   ]);
+}
+
+function addAnthropicCacheControl(
+  messages: ModelMessage[],
+  cacheBreakpointIndexes: Set<number>,
+) {
+  return messages.map((message, index) =>
+    cacheBreakpointIndexes.has(index)
+      ? withAnthropicCacheControl(message)
+      : message,
+  );
+}
+
+// Anthropic allows four cache breakpoints. The last tool, the system prompt
+// and the end of the earlier turns' history hold three; the fourth follows the
+// end of each step's prompt, so the next step of the run reads this turn's
+// earlier tool results from the cache instead of paying for them again. The
+// AI SDK carries a step's messages forward, so the previous step's tail
+// breakpoint is removed.
+function moveAnthropicTailCacheBreakpoint(
+  messages: ModelMessage[],
+  stableBreakpointIndexes: Set<number>,
+) {
+  const lastIndex = messages.length - 1;
 
   return messages.map((message, index) => {
-    if (!cacheBreakpointIndexes.has(index)) return message;
+    if (stableBreakpointIndexes.has(index)) return message;
+    if (index === lastIndex) return withAnthropicCacheControl(message);
+    if (!message.providerOptions?.anthropic?.cacheControl) return message;
 
-    const messageWithOptions = message as ModelMessage & {
-      providerOptions?: Record<string, Record<string, JSONValue>>;
-    };
-
+    const { cacheControl: _cacheControl, ...anthropic } =
+      message.providerOptions.anthropic;
     return {
-      ...messageWithOptions,
-      providerOptions: {
-        ...messageWithOptions.providerOptions,
-        anthropic: {
-          ...(messageWithOptions.providerOptions?.anthropic as Record<
-            string,
-            JSONValue
-          >),
-          ...cacheControl,
-        },
-      },
+      ...message,
+      providerOptions: { ...message.providerOptions, anthropic },
     };
   });
+}
+
+function withAnthropicCacheControl(message: ModelMessage): ModelMessage {
+  return {
+    ...message,
+    providerOptions: {
+      ...message.providerOptions,
+      anthropic: {
+        ...message.providerOptions?.anthropic,
+        cacheControl: { type: "ephemeral" },
+      },
+    },
+  };
 }
 
 // Anthropic renders tools ahead of the system prompt, so a breakpoint on the
