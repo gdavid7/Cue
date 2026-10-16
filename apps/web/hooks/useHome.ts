@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import useSWR from "swr";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import useSWR, { unstable_serialize, useSWRConfig } from "swr";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
-import { useHydrated } from "@/hooks/useHydrated";
 import { readCachedToday, writeCachedToday } from "@/utils/home/today-cache";
 import { onTodayChanged } from "@/utils/home/today-changes";
 import { getAccountScopedKey } from "@/utils/swr";
@@ -13,10 +12,6 @@ const PENDING_REFRESH_MS = 5000;
 const PENDING_LOAD_LIMIT = 12;
 const FOCUS_REFRESH_MIN_MS = 30_000;
 const CHANGE_REFRESH_MIN_MS = 10_000;
-
-// When a hover last started loading each account's Today. Today opening
-// soon after shares that load instead of spending Gmail quota on another.
-const warmedAt = new Map<string, number>();
 
 /**
  * Today's data. It opens on what Today last showed in this browser, then
@@ -32,26 +27,29 @@ export function useHome(emailAccountId?: string | null, userId?: string) {
     pendingLoadsRef.current = loads;
     setPendingLoads(loads);
   };
-  // Read once hydrated: the server has no storage, and a page that rendered
-  // differently there would not hydrate.
-  const hydrated = useHydrated();
-  const cached = useMemo(
-    () =>
-      hydrated && emailAccountId && userId
-        ? readCachedToday({ userId, emailAccountId })
-        : undefined,
-    [hydrated, emailAccountId, userId],
-  );
-  const warmedRecently = useMemo(() => {
-    const startedAt = emailAccountId ? warmedAt.get(emailAccountId) : undefined;
-    return (
-      startedAt !== undefined && Date.now() - startedAt < FOCUS_REFRESH_MIN_MS
-    );
-  }, [emailAccountId]);
-  const home = useSWR<GetHomeResponse>(homeKey(emailAccountId), {
-    fallbackData: cached,
-    // The hover's load, on its way or just in, is this open's load.
-    revalidateOnMount: warmedRecently ? false : undefined,
+  const key = homeKey(emailAccountId);
+  const { cache, mutate: mutateKey } = useSWRConfig();
+  // The saved copy as it went into SWR's cache, so it isn't saved back.
+  const seeded = useRef<GetHomeResponse | undefined>(undefined);
+  // Seeds SWR's own cache, so row actions change what is on screen. It runs
+  // before SWR's first load starts in this same commit (effects run in
+  // order), so that load isn't taken as overtaken by it. Effects only run in
+  // the browser, after hydration, so the server's render still matches.
+  const serializedKey = key ? unstable_serialize(key) : null;
+  useLayoutEffect(() => {
+    if (!serializedKey || !emailAccountId || !userId) return;
+    if (cache.get(serializedKey)?.data !== undefined) return;
+    const cached = readCachedToday({ userId, emailAccountId });
+    if (!cached) return;
+    seeded.current = cached;
+    mutateKey(serializedKey, cached, { revalidate: false });
+  }, [serializedKey, emailAccountId, userId, cache, mutateKey]);
+  const home = useSWR<GetHomeResponse>(key, {
+    // A row action while a load is on its way makes SWR drop that load's
+    // answer; ask again so the fresh lanes still arrive.
+    onDiscarded: () => {
+      if (key) mutateKey(key);
+    },
     // Each load spends Gmail quota, so tab switches share one.
     focusThrottleInterval: FOCUS_REFRESH_MIN_MS,
     onSuccess: (data) =>
@@ -64,10 +62,15 @@ export function useHome(emailAccountId?: string | null, userId?: string) {
   const { mutate } = home;
 
   useEffect(() => {
-    if (!home.data || home.data === cached || !emailAccountId || !userId)
+    if (
+      !home.data ||
+      home.data === seeded.current ||
+      !emailAccountId ||
+      !userId
+    )
       return;
     writeCachedToday({ userId, emailAccountId, data: home.data });
-  }, [home.data, cached, emailAccountId, userId]);
+  }, [home.data, emailAccountId, userId]);
 
   // Cue sorted new mail or the user's reply changed a lane: show it now
   // rather than on the next reload. A backlog sorts a message every second
@@ -119,23 +122,17 @@ export function useWarmHome(
   emailAccountId: string | null | undefined,
   enabled: boolean,
 ) {
-  const { data } = useSWR<GetHomeResponse>(
-    enabled ? homeKey(emailAccountId) : null,
-    {
-      revalidateIfStale: false,
-      revalidateOnFocus: false,
-      revalidateOnReconnect: false,
+  const key = enabled ? homeKey(emailAccountId) : null;
+  const { mutate } = useSWRConfig();
+  useSWR<GetHomeResponse>(key, {
+    revalidateIfStale: false,
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+    // Today, opened meanwhile, may change a row before this load answers.
+    onDiscarded: () => {
+      if (key) mutate(key);
     },
-  );
-  // With nothing loaded yet, enabling it just started a load.
-  const loading = enabled && Boolean(emailAccountId) && data === undefined;
-  useEffect(() => {
-    if (loading && emailAccountId) warmedAt.set(emailAccountId, Date.now());
-  }, [loading, emailAccountId]);
-}
-
-export function resetWarmedHomesForTesting() {
-  warmedAt.clear();
+  });
 }
 
 function homeKey(emailAccountId: string | null | undefined) {

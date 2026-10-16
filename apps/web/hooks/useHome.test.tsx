@@ -11,7 +11,7 @@ import {
   resetCachedTodayBlocksForTesting,
   writeCachedToday,
 } from "@/utils/home/today-cache";
-import { resetWarmedHomesForTesting, useHome, useWarmHome } from "./useHome";
+import { useHome, useWarmHome } from "./useHome";
 
 vi.mock("@/utils/swr", () => ({
   getAccountScopedKey: (path: string, emailAccountId: string) => [
@@ -117,41 +117,35 @@ describe("useHome with a cached Today", () => {
     });
     window.localStorage.clear();
     resetCachedTodayBlocksForTesting();
-    resetWarmedHomesForTesting();
   });
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
   });
 
-  it("opens on what Today last showed, then replaces it with a fresh load", async () => {
+  it("opens on what Today last showed, then replaces it with one fresh load", async () => {
     writeCachedToday({
       userId: "user",
       emailAccountId: "account",
       data: todayData("cached"),
       now: Date.now(),
     });
-    let resolve: (value: unknown) => void = () => {};
-    const fetcher = vi.fn(
-      () =>
-        new Promise((resolveLoad) => {
-          resolve = resolveLoad;
-        }),
-    );
+    const loads = pendingLoads();
     const { result } = renderHook(() => useHome("account", "user"), {
-      wrapper: wrapper(fetcher),
+      wrapper: wrapper(loads.fetcher),
     });
 
     expect(result.current.data).toEqual(todayData("cached"));
     expect(result.current.isLoading).toBe(false);
     await act(() => vi.advanceTimersByTimeAsync(20));
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(loads.fetcher).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      resolve(todayData("fresh"));
-      await vi.advanceTimersByTimeAsync(10);
+      loads.resolve(todayData("fresh"));
+      await vi.advanceTimersByTimeAsync(20);
     });
     expect(result.current.data).toEqual(todayData("fresh"));
+    expect(loads.fetcher).toHaveBeenCalledTimes(1);
     expect(
       readCachedToday({
         userId: "user",
@@ -159,6 +153,41 @@ describe("useHome with a cached Today", () => {
         now: Date.now(),
       }),
     ).toEqual(todayData("fresh"));
+  });
+
+  it("shows an action on a cached row, and the fresh load still lands", async () => {
+    writeCachedToday({
+      userId: "user",
+      emailAccountId: "account",
+      data: todayData("cached"),
+      now: Date.now(),
+    });
+    const loads = pendingLoads();
+    const { result } = renderHook(() => useHome("account", "user"), {
+      wrapper: wrapper(loads.fetcher),
+    });
+    await act(() => vi.advanceTimersByTimeAsync(20));
+
+    // Starring a row while the first load is on its way, as the rows do.
+    await act(async () => {
+      await result.current.mutate(
+        (current) => current && starFirstRow(current),
+        { revalidate: false },
+      );
+    });
+    expect(result.current.data?.needsYou[0].starred).toBe(true);
+
+    // SWR drops a load that a change overtook; another one replaces it.
+    await act(async () => {
+      loads.resolve(todayData("fresh"));
+      await vi.advanceTimersByTimeAsync(20);
+    });
+    expect(loads.fetcher).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      loads.resolve(todayData("fresher"));
+      await vi.advanceTimersByTimeAsync(20);
+    });
+    expect(result.current.data).toEqual(todayData("fresher"));
   });
 
   it("shows another user's Today to nobody", () => {
@@ -181,7 +210,6 @@ describe("useWarmHome", () => {
     vi.useFakeTimers({
       toFake: ["setTimeout", "clearTimeout", "Date", "requestAnimationFrame"],
     });
-    resetWarmedHomesForTesting();
   });
   afterEach(() => {
     cleanup();
@@ -189,13 +217,7 @@ describe("useWarmHome", () => {
   });
 
   it("loads nothing until Today is wanted, then opens Today on that one load", async () => {
-    let resolve: (value: unknown) => void = () => {};
-    const fetcher = vi.fn(
-      () =>
-        new Promise((resolveLoad) => {
-          resolve = resolveLoad;
-        }),
-    );
+    const loads = pendingLoads();
     const { result, rerender } = renderHook(
       ({ wanted, open }: { wanted: boolean; open: boolean }) => {
         useWarmHome("account", wanted);
@@ -203,80 +225,43 @@ describe("useWarmHome", () => {
       },
       {
         initialProps: { wanted: false, open: false },
-        wrapper: wrapper(fetcher, 2000),
+        wrapper: wrapper(loads.fetcher, 2000),
       },
     );
     await act(() => vi.advanceTimersByTimeAsync(100));
-    expect(fetcher).not.toHaveBeenCalled();
+    expect(loads.fetcher).not.toHaveBeenCalled();
 
     rerender({ wanted: true, open: false });
     await act(() => vi.advanceTimersByTimeAsync(100));
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(loads.fetcher).toHaveBeenCalledTimes(1);
 
     // Today opens while the load is still on its way, and shares it.
     rerender({ wanted: true, open: true });
     await act(async () => {
-      resolve({ pending: [] });
+      loads.resolve({ pending: [] });
       await vi.advanceTimersByTimeAsync(100);
     });
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(loads.fetcher).toHaveBeenCalledTimes(1);
     expect(result.current.data).toEqual({ pending: [] });
   });
 
-  it("opens Today on the hover's load seconds later, without loading again", async () => {
+  it("refreshes a hover's load that something changed before Today opened", async () => {
     const fetcher = vi.fn(async () => ({ pending: [] }));
     const { result, rerender } = renderHook(
-      ({ wanted, open }: { wanted: boolean; open: boolean }) => {
-        useWarmHome("account", wanted);
+      ({ open }: { open: boolean }) => {
+        useWarmHome("account", true);
         return useHome(open ? "account" : null);
       },
-      {
-        initialProps: { wanted: true, open: false },
-        wrapper: wrapper(fetcher, 2000),
-      },
+      { initialProps: { open: false }, wrapper: wrapper(fetcher, 2000) },
     );
     await act(() => vi.advanceTimersByTimeAsync(3000));
     expect(fetcher).toHaveBeenCalledTimes(1);
 
-    rerender({ wanted: true, open: true });
-    await act(() => vi.advanceTimersByTimeAsync(1000));
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    // Such as the user's reply, before anything on screen listens for it.
+    announceTodayChanged();
+    rerender({ open: true });
     expect(result.current.data).toEqual({ pending: [] });
-  });
-
-  it("still asks again for a lane the hover's load found pending", async () => {
-    const fetcher = vi
-      .fn()
-      .mockResolvedValueOnce({ pending: ["waiting"] })
-      .mockResolvedValue({ pending: [] });
-    const { rerender } = renderHook(
-      ({ open }: { open: boolean }) => {
-        useWarmHome("account", true);
-        return useHome(open ? "account" : null);
-      },
-      { initialProps: { open: false }, wrapper: wrapper(fetcher, 2000) },
-    );
-    await act(() => vi.advanceTimersByTimeAsync(3000));
-    rerender({ open: true });
-    await act(() => vi.advanceTimersByTimeAsync(5500));
-    expect(fetcher).toHaveBeenCalledTimes(2);
-  });
-
-  it("still reloads when Cue changes a lane after the hover's load", async () => {
-    const fetcher = vi.fn(async () => ({ pending: [] }));
-    const { rerender } = renderHook(
-      ({ open }: { open: boolean }) => {
-        useWarmHome("account", true);
-        return useHome(open ? "account" : null);
-      },
-      { initialProps: { open: false }, wrapper: wrapper(fetcher, 2000) },
-    );
-    await act(() => vi.advanceTimersByTimeAsync(3000));
-    rerender({ open: true });
-    await act(async () => {
-      announceTodayChanged();
-      await vi.advanceTimersByTimeAsync(100);
-    });
+    await act(() => vi.advanceTimersByTimeAsync(100));
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 });
@@ -304,6 +289,29 @@ function todayData(subject: string) {
     pending: [],
     failed: [],
   } as unknown as GetHomeResponse;
+}
+
+function starFirstRow(data: GetHomeResponse): GetHomeResponse {
+  return {
+    ...data,
+    needsYou: data.needsYou.map((row, index) =>
+      index === 0 ? { ...row, starred: true } : row,
+    ),
+  };
+}
+
+/** A fetcher whose loads each wait for the next `resolve`. */
+function pendingLoads() {
+  const waiting: ((value: unknown) => void)[] = [];
+  return {
+    fetcher: vi.fn(
+      () =>
+        new Promise((resolveLoad) => {
+          waiting.push(resolveLoad);
+        }),
+    ),
+    resolve: (value: unknown) => waiting.shift()?.(value),
+  };
 }
 
 function wrapper(fetcher: () => Promise<unknown>, dedupingInterval = 0) {
