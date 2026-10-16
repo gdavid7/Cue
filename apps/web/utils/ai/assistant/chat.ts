@@ -466,6 +466,7 @@ export async function aiProcessAssistantChat({
         finishReason: step.finishReason,
         toolNames: step.toolCalls.map((call) => call.toolName),
         inputTokens: step.usage?.inputTokens,
+        cachedInputTokens: step.usage?.inputTokenDetails?.cacheReadTokens,
         outputTokens: step.usage?.outputTokens,
         reasoningTokens: step.usage?.outputTokenDetails?.reasoningTokens,
       });
