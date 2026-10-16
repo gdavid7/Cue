@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
 import { withAuth } from "@/utils/middleware";
 import { getEmailAccount } from "@/utils/redis/account-validation";
-import { RedisSubscriber } from "@/utils/redis/subscriber";
+import { getSharedSubscriber } from "@/utils/redis/shared-subscriber";
 import {
   TRACKER_HINT_MESSAGE,
   localMailHintChannel,
-  refreshLocalMailInterest,
 } from "@/utils/redis/local-mail-hints";
 
 export const maxDuration = 300;
@@ -25,8 +24,6 @@ export const GET = withAuth("mail-stream", async (request) => {
     return NextResponse.json({ error: "Invalid account ID" }, { status: 403 });
   }
 
-  const subscriber = RedisSubscriber.createInstance();
-  const channel = localMailHintChannel(emailAccountId);
   const encoder = new TextEncoder();
   let cleanup = () => {};
   const stream = new ReadableStream<Uint8Array>({
@@ -34,16 +31,14 @@ export const GET = withAuth("mail-stream", async (request) => {
       let closed = false;
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       let lifetime: ReturnType<typeof setTimeout> | undefined;
-      let refreshing = false;
+      let subscription: { close: () => void } | undefined;
       const close = () => {
         if (closed) return;
         closed = true;
         clearInterval(heartbeat);
         clearTimeout(lifetime);
         request.signal.removeEventListener("abort", close);
-        subscriber.off("message", onMessage);
-        subscriber.off("error", close);
-        subscriber.disconnect();
+        subscription?.close();
         try {
           controller.close();
         } catch {
@@ -59,44 +54,34 @@ export const GET = withAuth("mail-stream", async (request) => {
           close();
         }
       };
-      const onMessage = (receivedChannel: string, message: string) => {
-        if (receivedChannel !== channel) return;
-        send(
-          message === TRACKER_HINT_MESSAGE
-            ? "trackers-change"
-            : "mailbox-change",
-        );
-      };
-      const refresh = async () => {
-        if (closed || refreshing) return;
-        refreshing = true;
-        try {
-          await refreshLocalMailInterest(emailAccountId);
-          send("heartbeat");
-        } catch {
-          close();
-        } finally {
-          refreshing = false;
-        }
-      };
       request.signal.addEventListener("abort", close);
-      subscriber.on("message", onMessage);
-      subscriber.on("error", close);
       lifetime = setTimeout(close, 270_000);
       if (request.signal.aborted) {
         close();
         return;
       }
-      subscriber
-        .subscribe(channel)
-        .then(async () => {
-          if (closed) return;
-          await refresh();
+      // Hints come over the instance's shared connection. Until it is
+      // subscribed the tab polls; if the connection drops the stream ends,
+      // and the tab reconnects and catches up.
+      const listening = getSharedSubscriber().listen(
+        localMailHintChannel(emailAccountId),
+        {
+          onMessage: (message) =>
+            send(
+              message === TRACKER_HINT_MESSAGE
+                ? "trackers-change"
+                : "mailbox-change",
+            ),
+          onLost: close,
+        },
+      );
+      subscription = listening;
+      listening.ready
+        .then(() => {
           if (closed) return;
           send("ready");
-          heartbeat = setInterval(() => {
-            refresh();
-          }, 25_000);
+          // Keeps proxies from timing the idle stream out; costs no Redis.
+          heartbeat = setInterval(() => send("heartbeat"), 25_000);
         })
         .catch(close);
     },
