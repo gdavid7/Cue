@@ -1,4 +1,3 @@
-import { after } from "next/server";
 import { env } from "@/env";
 import { auth } from "@/utils/auth";
 import { hash } from "@/utils/hash";
@@ -50,8 +49,7 @@ import {
 } from "@/utils/outlook/scopes";
 import type { Logger } from "@/utils/logger";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
-import { ensureEmailAccountsWatched } from "@/utils/email/watch-manager";
-import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
+import { scheduleWatchAfterLinking } from "@/utils/email/watch-after-linking";
 
 export const GET = withError("outlook/linking/callback", async (request) => {
   const actorSession = await auth(request.headers);
@@ -579,20 +577,7 @@ async function completeMicrosoftAccountLinking({
   await connectCalendarAtSignIn({ accountId, logger });
   await setOAuthCodeResult(code, { success });
 
-  after(() =>
-    ensureEmailAccountsWatched({ userIds: [targetUserId], logger })
-      .finally(() =>
-        clearAccountDisconnectedErrorIfResolved({
-          userId: targetUserId,
-          logger,
-        }),
-      )
-      .catch((error) => {
-        logger.error("Failed to register email watches after account linking", {
-          error,
-        });
-      }),
-  );
+  scheduleWatchAfterLinking({ targetUserId, logger });
 
   return createAccountLinkingRedirect({
     query: { success },
