@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   getConfiguredRolePrimaryModelEntry,
+  getLowThinkingStepOptions,
   getModel,
   getResolvedDeploymentRolePrimaryModelEntry,
+  type ModelType,
 } from "./model";
 import { Provider } from "./config";
 import { env } from "@/env";
@@ -619,6 +621,58 @@ describe("Models", () => {
       expect(result.provider).toBe(Provider.ANTHROPIC);
       expect(result.modelName).toBe("claude-3-7-sonnet-20250219");
       expect(result.model).toBeDefined();
+    });
+
+    it("sets each role's effort for current Claude models instead of their high default", () => {
+      const userAi = defaultUserAi();
+      setDefaultLlms(Provider.ANTHROPIC, "claude-sonnet-5-5", [
+        "google:gemini-3.8-flash",
+      ]);
+      setChatLlms(Provider.ANTHROPIC, "claude-sonnet-5-5");
+      setDraftLlms(Provider.ANTHROPIC, "claude-sonnet-5-5");
+      setEconomyLlms(Provider.ANTHROPIC, "claude-haiku-5-5");
+      setNanoLlms(Provider.ANTHROPIC, "claude-haiku-5-5");
+
+      const effortFor = (modelType: ModelType) =>
+        getModel(userAi, modelType).providerOptions?.anthropic?.effort;
+
+      expect(effortFor("default")).toBe("low");
+      expect(effortFor("economy")).toBe("low");
+      expect(effortFor("nano")).toBe("low");
+      expect(effortFor("chat")).toBe("medium");
+      expect(effortFor("draft")).toBe("medium");
+    });
+
+    it("drops thinking blocks whose conversation changed instead of failing the request", () => {
+      setChatLlms(Provider.ANTHROPIC, "claude-sonnet-5-5");
+
+      expect(
+        getModel(defaultUserAi(), "chat").providerOptions?.anthropic?.thinking,
+      ).toEqual({
+        type: "adaptive",
+        blockBinding: { prefixMismatchBehavior: "drop_block" },
+      });
+    });
+
+    it("lets Anthropic re-run a refused Claude Sonnet 5.5 turn on its fallback model", () => {
+      setChatLlms(Provider.ANTHROPIC, "claude-sonnet-5-5");
+      setEconomyLlms(Provider.ANTHROPIC, "claude-haiku-5-5");
+
+      expect(
+        getModel(defaultUserAi(), "chat").providerOptions?.anthropic?.fallbacks,
+      ).toBe("default");
+      // Claude Haiku 5.5 has no server-side fallback and rejects the option.
+      expect(
+        getModel(defaultUserAi(), "economy").providerOptions?.anthropic,
+      ).not.toHaveProperty("fallbacks");
+    });
+
+    it("keeps older Claude models on their own thinking defaults", () => {
+      setChatLlms(Provider.ANTHROPIC, "claude-sonnet-4-6");
+
+      expect(
+        getModel(defaultUserAi(), "chat").providerOptions?.anthropic,
+      ).toBeUndefined();
     });
 
     it("should configure Bedrock model correctly via env vars", () => {
@@ -1546,3 +1600,38 @@ function restoreProcessEnv(values: {
     }
   }
 }
+
+describe("getLowThinkingStepOptions", () => {
+  it("lowers a Gemini 3 model's thinking level", () => {
+    expect(
+      getLowThinkingStepOptions({
+        provider: "google.generative-ai",
+        modelId: "gemini-3.8-flash",
+      }),
+    ).toEqual({ google: { thinkingConfig: { thinkingLevel: "low" } } });
+  });
+
+  it("lowers a current Claude model's effort", () => {
+    expect(
+      getLowThinkingStepOptions({
+        provider: "anthropic.messages",
+        modelId: "claude-sonnet-5-5",
+      }),
+    ).toEqual({ anthropic: { effort: "low" } });
+  });
+
+  it("leaves models without an effort setting alone", () => {
+    expect(
+      getLowThinkingStepOptions({
+        provider: "anthropic.messages",
+        modelId: "claude-haiku-4-5",
+      }),
+    ).toBeUndefined();
+    expect(
+      getLowThinkingStepOptions({
+        provider: "openai.responses",
+        modelId: "gpt-6-luna",
+      }),
+    ).toBeUndefined();
+  });
+});

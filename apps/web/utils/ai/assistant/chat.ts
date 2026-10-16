@@ -1,4 +1,4 @@
-import type { JSONValue, ModelMessage } from "ai";
+import type { JSONValue, ModelMessage, Tool } from "ai";
 import type { Logger } from "@/utils/logger";
 import type { MessageContext } from "@/utils/ai/assistant/chat-context-validation";
 import { stringifyEmail } from "@/utils/stringify-email";
@@ -344,7 +344,7 @@ export async function aiProcessAssistantChat({
     stablePrefixEndIndex,
   );
 
-  const allTools = withChatToolRuntime({
+  const runtimeTools = withChatToolRuntime({
     logger,
     onGmailCall: gmailDemand.take,
     tools: {
@@ -412,6 +412,8 @@ export async function aiProcessAssistantChat({
         : {}),
     },
   });
+
+  const allTools = addAnthropicToolCacheControl(runtimeTools);
 
   logger.trace("Resolved system prompt", {
     systemPromptLength: system.length,
@@ -489,9 +491,16 @@ export async function aiProcessAssistantChat({
       }
 
       gmailDemand.end();
+      // Anthropic rejects a request whose history holds tool calls but that
+      // defines no tools, and a changed tool list invalidates the run's
+      // cached prompt and thinking, so Claude keeps its tools switched off.
+      const keepsToolDefinitions =
+        !!model &&
+        typeof model !== "string" &&
+        model.provider.startsWith("anthropic");
       return {
         messages,
-        activeTools: [],
+        ...(keepsToolDefinitions ? {} : { activeTools: [] }),
         toolChoice: "none",
       };
     },
@@ -597,6 +606,31 @@ function addAnthropicCacheControl(
       },
     };
   });
+}
+
+// The system prompt carries the current time, so it changes every turn. A
+// breakpoint on the last tool keeps the large, stable tool definitions cached
+// across turns, since Anthropic renders tools ahead of the system prompt.
+function addAnthropicToolCacheControl<T extends Record<string, Tool>>(
+  tools: T,
+): T {
+  const lastToolName = Object.keys(tools).at(-1);
+  if (!lastToolName) return tools;
+
+  const lastTool = tools[lastToolName];
+  return {
+    ...tools,
+    [lastToolName]: {
+      ...lastTool,
+      providerOptions: {
+        ...lastTool.providerOptions,
+        anthropic: {
+          ...lastTool.providerOptions?.anthropic,
+          cacheControl: { type: "ephemeral" },
+        },
+      },
+    },
+  };
 }
 
 function formatFixRuleResultContext({

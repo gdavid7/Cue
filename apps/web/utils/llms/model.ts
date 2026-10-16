@@ -1,4 +1,7 @@
-import type { LanguageModelV4 } from "@ai-sdk/provider";
+import type {
+  LanguageModelV4,
+  SharedV4ProviderOptions,
+} from "@ai-sdk/provider";
 import type { GoogleLanguageModelOptions } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAzure } from "@ai-sdk/azure";
@@ -27,6 +30,14 @@ const REASONING_EFFORT_BY_MODEL_TYPE = {
   chat: "medium",
   draft: "medium",
 } as const satisfies Record<ModelType, "low" | "medium">;
+
+// Models that accept `fallbacks: "default"` on the Claude API.
+const SERVER_SIDE_FALLBACK_CLAUDE_MODELS = new Set([
+  "claude-fable-5-1",
+  "claude-opus-5-5",
+  "claude-opus-5",
+  "claude-sonnet-5-5",
+]);
 
 const logger = createScopedLogger("llms/model");
 
@@ -89,16 +100,20 @@ export function getModel(
 }
 
 /**
- * Per-step provider options that lower a Gemini 3 model's thinking to low, or
- * undefined for any other model, which keeps its configured reasoning.
+ * Per-step provider options that lower a Gemini 3 model's thinking or a
+ * current Claude model's effort to low, or undefined for any other model,
+ * which keeps its configured reasoning.
  */
 export function getLowThinkingStepOptions(model: {
   provider: string;
   modelId: string;
-}) {
-  if (!model.provider.startsWith("google") || !isGemini3Model(model.modelId))
-    return;
-  return { google: { thinkingConfig: { thinkingLevel: "low" as const } } };
+}): SharedV4ProviderOptions | undefined {
+  if (model.provider.startsWith("google") && isGemini3Model(model.modelId)) {
+    return { google: { thinkingConfig: { thinkingLevel: "low" } } };
+  }
+  if (model.provider.startsWith("anthropic") && isClaude5Model(model.modelId)) {
+    return { anthropic: { effort: "low" } };
+  }
 }
 
 function selectModel(
@@ -360,7 +375,7 @@ function selectModel(
         model: createAnthropic({
           apiKey: resolveApiKey(aiApiKey, env.ANTHROPIC_API_KEY),
         })(modelName),
-        // Note: Anthropic thinking is disabled by default (not including the config)
+        providerOptions: getAnthropicProviderOptions(modelName, modelType),
       };
     }
     default: {
@@ -740,6 +755,38 @@ function getGoogleThinkingBudget(modelType: ModelType): number | undefined {
   return REASONING_EFFORT_BY_MODEL_TYPE[modelType] === "medium"
     ? -1
     : DEFAULT_GOOGLE_THINKING_BUDGET;
+}
+
+// Claude 5-generation models always think adaptively; omitting the settings
+// runs them at a high default effort (medium on Opus 5.5 and Haiku 5.5).
+// Older Claude models keep thinking off by default.
+function getAnthropicProviderOptions(modelName: string, modelType: ModelType) {
+  if (!isClaude5Model(modelName)) return;
+
+  return {
+    anthropic: {
+      effort: REASONING_EFFORT_BY_MODEL_TYPE[modelType],
+      // A thinking block is only valid in the exact conversation that produced
+      // it. Chat rebuilds the system prompt each turn and trims old tool
+      // results, which accounts created since 2026-08-31 reject with a 400
+      // unless the stale blocks are dropped.
+      thinking: {
+        type: "adaptive" as const,
+        blockBinding: { prefixMismatchBehavior: "drop_block" as const },
+      },
+      // When a safety classifier declines a turn, Anthropic re-runs it on
+      // its recommended fallback model instead of returning a refusal.
+      ...(SERVER_SIDE_FALLBACK_CLAUDE_MODELS.has(modelName)
+        ? { fallbacks: "default" as const }
+        : {}),
+    },
+  };
+}
+
+function isClaude5Model(modelName: string): boolean {
+  return /(^|[/.])claude-(opus|sonnet|haiku|fable|mythos)-5/.test(
+    modelName.toLowerCase(),
+  );
 }
 
 function isGemini3Model(modelName: string): boolean {
