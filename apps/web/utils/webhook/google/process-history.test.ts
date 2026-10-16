@@ -87,6 +87,7 @@ vi.mock("@/utils/redis/gmail-history-lease", () => ({
 }));
 
 vi.mock("@/utils/webhook/google/process-history-item", () => ({
+  MESSAGE_HELD_ELSEWHERE: "held-elsewhere",
   processHistoryItem: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -880,6 +881,26 @@ describe("processHistoryForUser - backlogs", () => {
       "account-123",
       { acquired: true, token: "lease-token" },
       expect.anything(),
+    );
+  });
+
+  it("never moves the cursor past a message someone else is still processing", async () => {
+    vi.mocked(getHistory).mockResolvedValue({
+      history: inboxHistory(["1100", "m1"], ["1200", "m2"], ["1300", "m3"]),
+    } as any);
+    vi.mocked(processHistoryItem).mockImplementation(async (event) =>
+      event.item.message?.id === "m2" ? ("held-elsewhere" as never) : undefined,
+    );
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1300 },
+      {},
+      logger,
+    );
+
+    expect(cursorUpdates()).toEqual(["1100"]);
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/api/google/webhook/catch-up" }),
     );
   });
 

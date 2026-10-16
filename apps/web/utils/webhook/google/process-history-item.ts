@@ -14,6 +14,12 @@ import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
 import type { Logger } from "@/utils/logger";
 
+/**
+ * Another processor holds the message. It isn't handled yet, and that holder
+ * may still be deferred, so history must not be counted past it.
+ */
+export const MESSAGE_HELD_ELSEWHERE = "held-elsewhere";
+
 export async function processHistoryItem(
   historyItem: {
     type: HistoryEventType;
@@ -57,7 +63,7 @@ export async function processHistoryItem(
     });
     if (!isFree) {
       logger.info("Skipping. Message already being processed.");
-      return;
+      return MESSAGE_HELD_ELSEWHERE;
     }
 
     logger.info("Gmail lock acquired, calling shared processor");

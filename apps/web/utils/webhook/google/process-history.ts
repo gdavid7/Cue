@@ -10,7 +10,10 @@ import {
   HistoryEventType,
   type ProcessHistoryOptions,
 } from "@/utils/webhook/google/types";
-import { processHistoryItem } from "@/utils/webhook/google/process-history-item";
+import {
+  MESSAGE_HELD_ELSEWHERE,
+  processHistoryItem,
+} from "@/utils/webhook/google/process-history-item";
 import { getHistory } from "@/utils/gmail/history";
 import {
   validateWebhookAccount,
@@ -364,7 +367,8 @@ async function processHistory(
       threadId: event.item.message?.threadId,
     });
     try {
-      await processHistoryItem(event, options, log);
+      const outcome = await processHistoryItem(event, options, log);
+      if (outcome === MESSAGE_HELD_ELSEWHERE) return;
     } catch (error) {
       // Stop before the cursor passes mail Gmail refused (or the quota gate
       // held back), so the catch-up picks it up again.

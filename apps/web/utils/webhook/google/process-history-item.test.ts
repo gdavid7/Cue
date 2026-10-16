@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { processHistoryItem } from "./process-history-item";
+import {
+  MESSAGE_HELD_ELSEWHERE,
+  processHistoryItem,
+} from "./process-history-item";
 import { HistoryEventType } from "./types";
 import {
   DraftReplyConfidence,
@@ -176,7 +179,10 @@ describe("processHistoryItem", () => {
       emailAccount: getDefaultEmailAccount(),
     };
 
-    await processHistoryItem(createHistoryItem(), options, logger);
+    // Not handled here, so the history cursor must not count it done.
+    await expect(
+      processHistoryItem(createHistoryItem(), options, logger),
+    ).resolves.toBe(MESSAGE_HELD_ELSEWHERE);
   });
 
   it("releases a message the Gmail quota gate deferred so the catch-up can process it", async () => {
