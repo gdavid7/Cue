@@ -515,6 +515,188 @@ describe("EmailAccountProvider", () => {
     );
   });
 
+  it("reads a thread opened after a same-position rewrite against the list it was opened with", async () => {
+    navigation.accountIndex = "0";
+    window.history.replaceState(
+      null,
+      "",
+      "/mail/u/0/all-inboxes/inbox/thread-c?account=2",
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          listResponse(["account-1", "account-2", "account-3"]),
+        )
+        .mockResolvedValueOnce(listResponse(["account-1", "account-3"]))
+        .mockResolvedValueOnce(
+          listResponse(["account-1", "account-3", "account-4"]),
+        ),
+    );
+    const { rerender } = render(
+      <EmailAccountProvider>
+        <AccountState />
+      </EmailAccountProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("account-ids").textContent).toBe(
+        "account-1,account-2,account-3",
+      ),
+    );
+
+    await fetchEmailAccounts();
+    await waitFor(() =>
+      expect(navigation.replace).toHaveBeenCalledWith(
+        "/mail/u/0/all-inboxes/inbox/thread-c?account=1",
+      ),
+    );
+    // The router lands, then the user opens an account-3 thread.
+    window.history.replaceState(
+      null,
+      "",
+      "/mail/u/0/all-inboxes/inbox/thread-c?account=1",
+    );
+    rerender(
+      <EmailAccountProvider>
+        <AccountState />
+      </EmailAccountProvider>,
+    );
+    window.history.replaceState(
+      null,
+      "",
+      "/mail/u/0/all-inboxes/inbox/thread-d?account=1",
+    );
+    rerender(
+      <EmailAccountProvider>
+        <AccountState />
+      </EmailAccountProvider>,
+    );
+
+    await fetchEmailAccounts();
+    await waitFor(() =>
+      expect(screen.getByTestId("account-ids").textContent).toBe(
+        "account-1,account-3,account-4",
+      ),
+    );
+
+    // Adding an account moves nobody, so the open thread stays as it is.
+    expect(navigation.replace).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads an address the app canonicalised against the list it was written for", async () => {
+    navigation.accountIndex = "0";
+    window.history.replaceState(null, "", "/mail/u/0");
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          listResponse(["account-1", "account-2", "account-3", "account-4"]),
+        )
+        .mockResolvedValueOnce(
+          listResponse(["account-1", "account-3", "account-4"]),
+        )
+        .mockResolvedValueOnce(
+          listResponse(["account-1", "account-3", "account-4", "account-5"]),
+        ),
+    );
+    const { rerender } = render(
+      <EmailAccountProvider>
+        <AccountState />
+      </EmailAccountProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("account-ids").textContent).toBe(
+        "account-1,account-2,account-3,account-4",
+      ),
+    );
+
+    await fetchEmailAccounts();
+    await waitFor(() =>
+      expect(navigation.replace).toHaveBeenCalledWith("/mail/u/0/inbox"),
+    );
+    window.history.replaceState(null, "", "/mail/u/0/inbox");
+    rerender(
+      <EmailAccountProvider>
+        <AccountState />
+      </EmailAccountProvider>,
+    );
+    // An account-4 thread, at its position in the list without account 2.
+    window.history.replaceState(
+      null,
+      "",
+      "/mail/u/0/all-inboxes/inbox/thread-d?account=2",
+    );
+    rerender(
+      <EmailAccountProvider>
+        <AccountState />
+      </EmailAccountProvider>,
+    );
+
+    await fetchEmailAccounts();
+    await waitFor(() =>
+      expect(screen.getByTestId("account-ids").textContent).toBe(
+        "account-1,account-3,account-4,account-5",
+      ),
+    );
+
+    expect(navigation.replace).not.toHaveBeenCalledWith(
+      "/mail/u/0/all-inboxes/inbox/thread-d?account=1",
+    );
+    expect(navigation.replace).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the pinned account when the router lands on an intermediate rewrite", async () => {
+    navigation.accountIndex = "3";
+    window.history.replaceState(null, "", "/mail/u/3/inbox");
+    const fourAccounts = ["account-1", "account-2", "account-3", "account-4"];
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(listResponse(fourAccounts))
+        .mockResolvedValueOnce(listResponse(fourAccounts.slice(1)))
+        .mockResolvedValueOnce(listResponse(fourAccounts.slice(2))),
+    );
+    const shown: string[] = [];
+    function RecordAccount() {
+      shown.push(useAccount().emailAccountId);
+      return null;
+    }
+    const tree = () => (
+      <EmailAccountProvider>
+        <RecordAccount />
+        <AccountState />
+      </EmailAccountProvider>
+    );
+    const { rerender } = render(tree());
+    await waitFor(() =>
+      expect(screen.getByTestId("account-id").textContent).toBe("account-4"),
+    );
+
+    await fetchEmailAccounts();
+    await waitFor(() =>
+      expect(navigation.replace).toHaveBeenLastCalledWith("/mail/u/2/inbox"),
+    );
+    await fetchEmailAccounts();
+    await waitFor(() =>
+      expect(navigation.replace).toHaveBeenLastCalledWith("/mail/u/1/inbox"),
+    );
+    cookie.setLastAccount.mockClear();
+
+    // The first rewrite lands after the second was sent.
+    navigation.accountIndex = "2";
+    window.history.replaceState(null, "", "/mail/u/2/inbox");
+    rerender(tree());
+
+    expect(screen.getByTestId("account-id").textContent).toBe("account-4");
+    expect(shown.filter((id) => id && id !== "account-4")).toEqual([]);
+    expect(cookie.setLastAccount).not.toHaveBeenCalledWith({
+      emailAccountId: "account-3",
+    });
+  });
+
   it("does not replace a global route when remaining accounts exist", async () => {
     navigation.emailAccountId = "deleted-account";
     window.history.replaceState(null, "", "/accounts");
