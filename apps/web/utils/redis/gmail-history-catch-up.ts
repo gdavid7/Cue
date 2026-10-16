@@ -102,7 +102,11 @@ export async function raiseGmailHistoryCatchUpTarget(
     await redis.eval(
       RAISE_TARGET_SCRIPT,
       [getCatchUpTargetKey(emailAccountId)],
-      [historyId, String(GMAIL_HISTORY_CATCH_UP_TTL_SECONDS)],
+      [
+        // The script compares by length first, so no leading zeros.
+        BigInt(historyId).toString(),
+        String(GMAIL_HISTORY_CATCH_UP_TTL_SECONDS),
+      ],
     );
   } catch (error) {
     logger.warn("Failed to record Gmail history catch-up target", { error });

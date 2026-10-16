@@ -36,6 +36,16 @@ describe("Gmail history catch-up target", () => {
     );
   });
 
+  it("compares ids without leading zeros, so a padded id can't outrank a larger one", async () => {
+    await raiseGmailHistoryCatchUpTarget("account-1", "0001500", logger);
+
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.any(String),
+      ["gmail-history-catch-up-target:account-1"],
+      ["1500", "86400"],
+    );
+  });
+
   it("reads back the stored id exactly", async () => {
     vi.mocked(redis.get).mockResolvedValue("h90071992547409931234");
 
