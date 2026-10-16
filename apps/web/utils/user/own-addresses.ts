@@ -4,7 +4,7 @@ import { redis } from "@/utils/redis";
 import { canonicalizeEmailAddress } from "@/utils/email";
 
 // Linking and removal invalidate the key; the expiry only bounds a missed path.
-const EXPIRATION_SECONDS = 60 * 60;
+const EXPIRATION_SECONDS = 10 * 60;
 
 /**
  * Every address the user has connected, lowercased. Mail between them is the
