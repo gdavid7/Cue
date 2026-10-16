@@ -12,6 +12,7 @@ import { ChatPanelResizeHandle } from "./ChatPanelResizeHandle";
 import {
   CHAT_PANEL_DEFAULT_WIDTH,
   CHAT_PANEL_MIN_WIDTH,
+  bindChatPanelWidth,
   clampChatPanelWidth,
   resetChatPanelWidth,
   useChatPanelWidth,
@@ -141,6 +142,71 @@ describe("ChatPanelResizeHandle", () => {
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
 
+  it("points at the panel it resizes", () => {
+    renderHandle();
+
+    expect(separator().getAttribute("aria-controls")).toBe("chat-panel");
+  });
+
+  it("writes the live width and drag state onto the layout element", () => {
+    const { layout } = renderHandle();
+    const handle = separator();
+    expect(layout.style.getPropertyValue("--chat-panel-width")).toBe(
+      `${CHAT_PANEL_DEFAULT_WIDTH}px`,
+    );
+
+    fireEvent.pointerDown(handle, { clientX: 1150, pointerId: 1, button: 0 });
+    fireEvent.pointerMove(handle, { clientX: 1050, pointerId: 1 });
+
+    expect(layout.style.getPropertyValue("--chat-panel-width")).toBe(
+      `${CHAT_PANEL_DEFAULT_WIDTH + 100}px`,
+    );
+    expect(layout.hasAttribute("data-chat-panel-resizing")).toBe(true);
+
+    fireEvent.pointerUp(handle, { clientX: 1050, pointerId: 1 });
+
+    expect(layout.hasAttribute("data-chat-panel-resizing")).toBe(false);
+  });
+
+  it("ends the drag if the handle goes away mid-drag", () => {
+    const { layout, unmountHandle } = renderHandle();
+    const handle = separator();
+
+    fireEvent.pointerDown(handle, { clientX: 1150, pointerId: 1, button: 0 });
+    fireEvent.pointerMove(handle, { clientX: 1050, pointerId: 1 });
+    expect(layout.hasAttribute("data-chat-panel-resizing")).toBe(true);
+
+    unmountHandle();
+
+    expect(layout.hasAttribute("data-chat-panel-resizing")).toBe(false);
+    expect(screen.getByTestId("width").textContent).toBe(
+      String(CHAT_PANEL_DEFAULT_WIDTH),
+    );
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it("doesn't save a width for a click that didn't move", () => {
+    const { layout } = renderHandle();
+    const handle = separator();
+
+    fireEvent.pointerDown(handle, { clientX: 1150, pointerId: 1, button: 0 });
+    fireEvent.pointerUp(handle, { clientX: 1150, pointerId: 1 });
+
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
+    expect(layout.hasAttribute("data-chat-panel-resizing")).toBe(false);
+  });
+
+  it("follows a width saved in another tab", () => {
+    renderHandle();
+
+    act(() => {
+      window.localStorage.setItem(STORAGE_KEY, "700");
+      window.dispatchEvent(new StorageEvent("storage", { key: STORAGE_KEY }));
+    });
+
+    expect(separator().getAttribute("aria-valuenow")).toBe("700");
+  });
+
   it("keeps resizing for the session when storage is unavailable", () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("blocked");
@@ -160,11 +226,21 @@ describe("ChatPanelResizeHandle", () => {
 });
 
 function renderHandle() {
-  render(
-    <>
-      <ChatPanelResizeHandle />
+  const view = render(<Layout showHandle />);
+  return {
+    layout: screen.getByTestId("layout"),
+    unmountHandle: () => view.rerender(<Layout showHandle={false} />),
+  };
+}
+
+function Layout({ showHandle }: { showHandle: boolean }) {
+  return (
+    <div data-testid="layout" ref={bindChatPanelWidth}>
+      <div id="chat-panel">
+        {showHandle ? <ChatPanelResizeHandle panelId="chat-panel" /> : null}
+      </div>
       <Width />
-    </>,
+    </div>
   );
 }
 

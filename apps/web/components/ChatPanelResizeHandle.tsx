@@ -1,7 +1,8 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import {
+  cancelChatPanelDrag,
   getChatPanelWidth,
   getChatPanelWidthBounds,
   previewChatPanelWidth,
@@ -15,20 +16,41 @@ const KEYBOARD_STEP = 16;
 const KEYBOARD_LARGE_STEP = 64;
 
 /** Sits on the panel's left edge: dragging left widens the panel. */
-export function ChatPanelResizeHandle({ className }: { className?: string }) {
+export function ChatPanelResizeHandle({
+  panelId,
+  className,
+}: {
+  panelId: string;
+  className?: string;
+}) {
   const width = useChatPanelWidth();
   const drag = useRef<{ startX: number; startWidth: number } | null>(null);
   const { min, max } = getChatPanelWidthBounds();
 
+  // Closing the panel, crossing the breakpoint or navigating mid-drag would
+  // otherwise leave the whole layout in its dragging state.
+  useEffect(
+    () => () => {
+      if (!drag.current) return;
+      drag.current = null;
+      cancelChatPanelDrag();
+    },
+    [],
+  );
+
   const finishDrag = () => {
     if (!drag.current) return;
+    const { startWidth } = drag.current;
     drag.current = null;
-    saveChatPanelWidth(getChatPanelWidth());
+    const finalWidth = getChatPanelWidth();
+    if (finalWidth === startWidth) cancelChatPanelDrag();
+    else saveChatPanelWidth(finalWidth);
   };
 
   return (
     <div
       role="separator"
+      aria-controls={panelId}
       aria-label="Resize assistant panel"
       aria-orientation="vertical"
       aria-valuenow={width}

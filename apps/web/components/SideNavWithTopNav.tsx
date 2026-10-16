@@ -9,10 +9,7 @@ import {
 } from "@/components/ui/sidebar";
 import { SideNav } from "@/components/SideNav";
 import { SidebarRight } from "@/components/SidebarRight";
-import {
-  useChatPanelWidth,
-  useIsResizingChatPanel,
-} from "@/hooks/useChatPanelWidth";
+import { bindChatPanelWidth } from "@/hooks/useChatPanelWidth";
 import { cn } from "@/utils";
 import { isMailShellPath } from "@/utils/path";
 
@@ -34,7 +31,7 @@ function ContentWrapper({ children }: { children: React.ReactNode }) {
     <div
       className={cn(
         "min-w-0 flex-1 transition-all duration-200 ease-linear motion-reduce:transition-none",
-        isRightSidebarOpen && "lg:mr-[var(--chat-panel-width)]",
+        isRightSidebarOpen && "lg:mr-[var(--chat-panel-width,450px)]",
       )}
     >
       <SidebarInset
@@ -78,8 +75,6 @@ export function SideNavWithTopNav({
   feedbackEnabled: boolean;
 }) {
   const pathname = usePathname();
-  const chatPanelWidth = useChatPanelWidth();
-  const isResizingChatPanel = useIsResizingChatPanel();
 
   if (!pathname) return null;
 
@@ -97,12 +92,11 @@ export function SideNavWithTopNav({
       defaultOpen={defaultOpen ? ["left-sidebar"] : []}
       sidebarNames={["left-sidebar", "chat-sidebar"]}
       keyboardShortcutName="left-sidebar"
-      style={
-        { "--chat-panel-width": `${chatPanelWidth}px` } as React.CSSProperties
-      }
-      // While dragging, the panel and the content beside it track the pointer
-      // with no easing, and email iframes can't swallow the pointer.
-      data-chat-panel-resizing={isResizingChatPanel || undefined}
+      // Sets --chat-panel-width and, while dragging, data-chat-panel-resizing
+      // directly, so a drag doesn't re-render the layout. While dragging, the
+      // panel and the content beside it track the pointer with no easing,
+      // and email iframes can't swallow the pointer.
+      ref={bindChatPanelWidth}
       className="data-[chat-panel-resizing]:select-none data-[chat-panel-resizing]:[&_*]:!cursor-col-resize data-[chat-panel-resizing]:[&_*]:!transition-none data-[chat-panel-resizing]:[&_iframe]:pointer-events-none"
     >
       {/* Mail supplies its own sidebar and trigger for this shared state, so

@@ -41,12 +41,20 @@ export function useChatPanelWidth() {
   );
 }
 
-export function useIsResizingChatPanel() {
-  return useSyncExternalStore(
-    subscribe,
-    () => draggingWidth !== null,
-    () => false,
-  );
+/**
+ * A ref for the layout element: keeps `--chat-panel-width` and
+ * `data-chat-panel-resizing` on it in step with the store, so a drag restyles
+ * the layout every frame without re-rendering it. Before this runs, CSS falls
+ * back to the default width.
+ */
+export function bindChatPanelWidth(element: HTMLElement | null) {
+  if (!element) return;
+  const apply = () => {
+    element.style.setProperty("--chat-panel-width", `${getChatPanelWidth()}px`);
+    element.toggleAttribute("data-chat-panel-resizing", draggingWidth !== null);
+  };
+  apply();
+  return subscribe(apply);
 }
 
 export function getChatPanelWidth() {
@@ -61,6 +69,13 @@ export function getChatPanelWidth() {
 
 export function previewChatPanelWidth(width: number) {
   draggingWidth = clampChatPanelWidth(width, window.innerWidth);
+  notify();
+}
+
+/** Drops an unfinished drag and returns to the saved width. */
+export function cancelChatPanelDrag() {
+  if (draggingWidth === null) return;
+  draggingWidth = null;
   notify();
 }
 
@@ -95,9 +110,12 @@ function readStoredWidth() {
 function subscribe(onChange: () => void) {
   listeners.add(onChange);
   window.addEventListener("resize", onChange);
+  // Another tab saved or reset the width.
+  window.addEventListener("storage", onChange);
   return () => {
     listeners.delete(onChange);
     window.removeEventListener("resize", onChange);
+    window.removeEventListener("storage", onChange);
   };
 }
 
