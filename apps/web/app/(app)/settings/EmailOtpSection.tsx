@@ -5,6 +5,7 @@ import { useAction } from "next-safe-action/hooks";
 import type { EmailOtpSettingsResponse } from "@/app/api/user/email-otp/route";
 import { updateEmailOtpAction } from "@/utils/actions/email-otp";
 import { getActionErrorMessage } from "@/utils/error";
+import { UNVERIFIED_EMAIL_OTP_MESSAGE } from "@/utils/auth/email-otp-availability";
 import { toastError } from "@/components/Toast";
 import { LoadingContent } from "@/components/LoadingContent";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -43,12 +44,17 @@ export function EmailOtpSection({
         <Item size="sm">
           <ItemContent>
             <ItemTitle>Allow sign-in with a one-time email code</ItemTitle>
-            {data.emailOtpEnabled && hasMultipleAccounts && (
+            {data.emailOtpEnabled && data.canEnable && hasMultipleAccounts && (
               <ItemDescription className="line-clamp-none break-all">
                 Sign in with {data.email}.
               </ItemDescription>
             )}
-            {!data.emailDeliveryConfigured && (
+            {!data.canEnable && (
+              <ItemDescription className="line-clamp-none">
+                {UNVERIFIED_EMAIL_OTP_MESSAGE}
+              </ItemDescription>
+            )}
+            {data.canEnable && !data.emailDeliveryConfigured && (
               <ItemDescription className="line-clamp-none">
                 Email delivery unavailable.
               </ItemDescription>
@@ -57,10 +63,11 @@ export function EmailOtpSection({
           <ItemActions>
             <Switch
               aria-label="Allow sign-in with a one-time email code"
-              checked={data.emailOtpEnabled}
+              checked={data.emailOtpEnabled && data.canEnable}
               disabled={
                 isExecuting ||
                 !data.canManage ||
+                !data.canEnable ||
                 (!data.emailDeliveryConfigured && !data.emailOtpEnabled)
               }
               onCheckedChange={(enabled) => execute({ enabled })}

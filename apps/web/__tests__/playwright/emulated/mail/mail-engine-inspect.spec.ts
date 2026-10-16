@@ -1,5 +1,6 @@
 import { expect, type Route } from "@playwright/test";
 import { getEmailAccountId } from "../account-test-helpers";
+import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
 import {
@@ -11,6 +12,10 @@ import {
   requestMailSync,
   waitForMetadataCoverage,
 } from "./mail-test-helpers";
+
+const reconnectHeading = `Sign in again to reconnect ${
+  isMicrosoftPlaywright() ? "Outlook" : "Gmail"
+}`;
 
 test("exposes engine diagnostics after metadata coverage", async ({
   page,
@@ -54,9 +59,7 @@ test("exposes engine diagnostics after metadata coverage", async ({
   expect(inspect.connection).toBe("ready");
   expect(inspect.coverageComplete).toBe(true);
   await expect(
-    page.getByRole("heading", {
-      name: "Sign in again to reconnect Gmail",
-    }),
+    page.getByRole("heading", { name: reconnectHeading }),
   ).toHaveCount(0);
 });
 
@@ -158,9 +161,7 @@ test("opens account reconnect from blocked_auth catch-up", async ({
   // Without a mailbox push, the engine's next catch-up is a minute away.
   await requestMailSync(page);
   await expect(
-    page.getByRole("heading", {
-      name: "Sign in again to reconnect Gmail",
-    }),
+    page.getByRole("heading", { name: reconnectHeading }),
   ).toBeVisible({ timeout: 60_000 });
   expect(changeRequests).toBeGreaterThan(0);
   expect(enumerationRequests).toBe(0);

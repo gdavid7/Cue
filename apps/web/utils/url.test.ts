@@ -10,6 +10,7 @@ import {
   getGmailSearchUrl,
   getGmailBasicSearchUrl,
   getGmailFilterSettingsUrl,
+  getMailboxSearchUrl,
 } from "./url";
 
 describe("createSearchParams", () => {
@@ -532,6 +533,41 @@ describe("getGmailBasicSearchUrl", () => {
     },
   ])("builds search URL for $name", ({ query, expected }) => {
     expect(getGmailBasicSearchUrl("user@gmail.com", query)).toBe(expected);
+  });
+});
+
+describe("getMailboxSearchUrl", () => {
+  const query = 'subject:"Briefing for"';
+
+  it.each([
+    {
+      name: "Gmail",
+      emailAddress: "user@gmail.com",
+      provider: "google",
+      expected:
+        "https://mail.google.com/mail/u/?authuser=user%40gmail.com#search/subject%3A%22Briefing%20for%22",
+    },
+    {
+      name: "a personal Outlook mailbox",
+      emailAddress: "user@outlook.com",
+      provider: "microsoft",
+      expected:
+        "https://outlook.live.com/mail/0/search/q/subject%3A%22Briefing%20for%22",
+    },
+    {
+      name: "a work Outlook mailbox",
+      emailAddress: "user@company.com",
+      provider: "microsoft",
+      expected:
+        "https://outlook.office.com/mail/search/q/subject%3A%22Briefing%20for%22",
+    },
+  ])("searches $name", ({ emailAddress, provider, expected }) => {
+    expect(getMailboxSearchUrl(emailAddress, query, provider)).toBe(expected);
+  });
+
+  it("returns null for a provider without a web mailbox", () => {
+    expect(getMailboxSearchUrl("user@example.com", query, "imap")).toBeNull();
+    expect(getMailboxSearchUrl("user@example.com", query)).toBeNull();
   });
 });
 

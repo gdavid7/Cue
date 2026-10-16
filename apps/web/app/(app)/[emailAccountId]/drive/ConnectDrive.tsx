@@ -15,9 +15,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { redirectToSafeUrl } from "@/utils/redirect";
+import { useEnabledMailboxProviders } from "@/providers/MailboxProvidersProvider";
 
 export function ConnectDrive() {
   const { emailAccountId } = useAccount();
+  const enabledProviders = useEnabledMailboxProviders();
   const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
   const [isConnectingMicrosoft, setIsConnectingMicrosoft] = useState(false);
   const [googleDialogOpen, setGoogleDialogOpen] = useState(false);
@@ -103,22 +105,24 @@ export function ConnectDrive() {
           {isConnectingGoogle ? "Connecting..." : "Add Google Drive"}
         </Button>
 
-        <Button
-          onClick={handleConnectMicrosoft}
-          disabled={isConnectingGoogle || isConnectingMicrosoft}
-          loading={isConnectingMicrosoft}
-          variant="outline"
-          className="flex items-center gap-2 w-full md:w-auto"
-        >
-          <Image
-            src="/images/microsoft.svg"
-            alt="OneDrive"
-            width={16}
-            height={16}
-            unoptimized
-          />
-          {isConnectingMicrosoft ? "Connecting..." : "Add OneDrive"}
-        </Button>
+        {enabledProviders.includes("microsoft") ? (
+          <Button
+            onClick={handleConnectMicrosoft}
+            disabled={isConnectingGoogle || isConnectingMicrosoft}
+            loading={isConnectingMicrosoft}
+            variant="outline"
+            className="flex items-center gap-2 w-full md:w-auto"
+          >
+            <Image
+              src="/images/microsoft.svg"
+              alt="OneDrive"
+              width={16}
+              height={16}
+              unoptimized
+            />
+            {isConnectingMicrosoft ? "Connecting..." : "Add OneDrive"}
+          </Button>
+        ) : null}
       </div>
 
       <Dialog open={googleDialogOpen} onOpenChange={setGoogleDialogOpen}>

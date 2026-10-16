@@ -15,7 +15,30 @@ describe("email code access setting", () => {
     prisma.session.findFirst.mockResolvedValue({ emailOtp: false } as never);
     prisma.user.findUniqueOrThrow.mockResolvedValue({
       email: "owner@example.com",
+      emailVerified: true,
     } as never);
+  });
+
+  it("does not turn on codes for an account no sign-in has verified, but can turn them off", async () => {
+    prisma.user.findUniqueOrThrow.mockResolvedValue({
+      email: "owner@example.com",
+      emailVerified: false,
+    } as never);
+    await expect(
+      updateEmailOtpSetting({
+        userId: "owner",
+        sessionId: "session",
+        enabled: true,
+      }),
+    ).rejects.toThrow("verified");
+    expect(prisma.user.update).not.toHaveBeenCalled();
+    await expect(
+      updateEmailOtpSetting({
+        userId: "owner",
+        sessionId: "session",
+        enabled: false,
+      }),
+    ).resolves.toEqual({ enabled: false });
   });
 
   it.each([
@@ -78,6 +101,7 @@ describe("email code access setting", () => {
   it("normalizes the account email and pending-code identifier together", async () => {
     prisma.user.findUniqueOrThrow.mockResolvedValue({
       email: " Owner@Example.com ",
+      emailVerified: true,
     } as never);
     await updateEmailOtpSetting({
       userId: "owner",

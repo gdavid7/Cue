@@ -15,10 +15,13 @@ export const GET = withAuth("user/email-otp", async (request) =>
 async function getSettings(userId: string, emailOtpSession: boolean) {
   const user = await prisma.user.findUniqueOrThrow({
     where: { id: userId },
-    select: { email: true, emailOtpEnabled: true },
+    select: { email: true, emailOtpEnabled: true, emailVerified: true },
   });
   return {
-    ...user,
+    email: user.email,
+    emailOtpEnabled: user.emailOtpEnabled,
+    // Sign-in refuses codes for unverified addresses (utils/auth/email-otp.ts).
+    canEnable: user.emailVerified === true,
     canManage: !emailOtpSession,
     emailDeliveryConfigured: isTransactionalEmailConfigured(),
   };

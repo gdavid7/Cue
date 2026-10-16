@@ -212,6 +212,9 @@ const genericOauthConfig: GenericOAuthConfig[] = [
           scopes: [...OUTLOOK_SCOPES],
           pkce: true,
           prompt: "consent" as const,
+          // Like the real Microsoft provider, sign-out stays in Cue rather than
+          // following the emulator's end-session endpoint.
+          disableProviderLogout: true,
           ...(env.OAUTH_PROXY_URL && {
             redirectURI: `${env.OAUTH_PROXY_URL}/api/auth/callback/microsoft`,
           }),
