@@ -91,6 +91,7 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       while (start < message.length) {
         const end = Math.min(start + GMAIL_UPLOAD_CHUNK_BYTES, message.length);
         const result = await uploadGmailDraftChunk({
+          emailAccountId: "draft-attachments-account",
           accessToken: provider.getAccessToken(),
           sessionUri: upload.sessionUri,
           start,

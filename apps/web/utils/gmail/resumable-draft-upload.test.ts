@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createGmailQuotaStats,
   meterGmailCall,
-  rememberGmailAccessToken,
   runWithGmailQuota,
 } from "@/utils/gmail/quota";
+import { gmailQuotaStore } from "@/utils/gmail/quota-store";
 import { uploadGmailDraftChunk } from "@/utils/gmail/resumable-draft-upload";
 
 vi.mock("@/utils/gmail/quota-store", async () => {
@@ -27,7 +27,7 @@ describe("Gmail traffic the quota gate must see", () => {
   });
 
   it("charges each draft upload chunk to the account, as Gmail does", async () => {
-    rememberGmailAccessToken("upload-token", "account-upload");
+    const take = vi.spyOn(gmailQuotaStore, "take");
     vi.stubGlobal(
       "fetch",
       vi.fn(
@@ -41,6 +41,7 @@ describe("Gmail traffic the quota gate must see", () => {
       { caller: "draft-upload", priority: "interactive", stats },
       () =>
         uploadGmailDraftChunk({
+          emailAccountId: "account-upload",
           accessToken: "upload-token",
           sessionUri: SESSION_URI,
           start: 0,
@@ -51,6 +52,11 @@ describe("Gmail traffic the quota gate must see", () => {
 
     expect(result).toEqual({ status: "incomplete", nextOffset: 4 });
     expect(stats.admittedCost).toBeGreaterThan(0);
+    expect(take).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bucketKey: "gmail-quota:account-upload:bucket",
+      }),
+    );
   });
 
   it("reports a caller whose Gmail calls name no account, once", async () => {
