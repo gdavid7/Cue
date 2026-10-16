@@ -56,8 +56,8 @@ const SENDING_ACCOUNT = "account-sending";
 const HUNG_ACCOUNT = "account-hung";
 const HOLD_ACCOUNT = "account-hold";
 const CONCURRENCY_ACCOUNT = "account-concurrency";
-// Google enforced about a third of the published minute; the gate starts
-// each account at 80% of that.
+// Google may enforce well under the per-user limit, so the gate starts each
+// account at 80% of a third of it.
 const STARTING_BUDGET = Math.round((GMAIL_USER_UNITS_PER_MINUTE * 0.8) / 3);
 const NO_DEADLINE_ACCOUNT = "account-no-deadline";
 // Gmail refuses short bursts past this many units a second, per user.
@@ -758,7 +758,7 @@ describe("Gmail quota gate", () => {
     // Each ten minutes without a refusal raise it a tenth...
     await vi.advanceTimersByTimeAsync(9 * 60_000);
     expect(await budgetOfMinuteEnding()).toBe(1320);
-    // ...up to 80% of Gmail's published limit.
+    // ...up to 80% of Gmail's per-user limit.
     await vi.advanceTimersByTimeAsync(5 * 60 * 60_000);
     expect(await budgetOfMinuteEnding()).toBe(
       GMAIL_USER_UNITS_PER_MINUTE * 0.8,

@@ -8,20 +8,18 @@ import { isEmailProviderRateLimitRedisConfigured } from "@/utils/redis/email-pro
 import { getRequestDeadline } from "@/utils/request-deadline";
 import { sleep } from "@/utils/sleep";
 
-// Gmail allows 15,000 units per user per minute for each Google Cloud
-// project (raised from 6,000 at our request, October 2026), so every route,
-// tab, device and job of one account shares that minute.
+// The per-user Gmail limit for this Google Cloud project, shared by every
+// route, tab, device and job of one account.
 // https://developers.google.com/workspace/gmail/api/reference/quota
 export const GMAIL_USER_UNITS_PER_MINUTE = 15_000;
 
-// What Google enforces per account is not the published minute: across 334
-// account-minutes in production, refusals followed the account's own units
-// over the trailing minute or two (none under about 2,000 per two minutes,
-// most from 3,000), not its busiest second. So each account has its own
-// per-minute budget, which the bucket refills at. It starts at 80% of a
-// third of the published limit; a refusal cuts it to 85% of what the gate
-// let through in the minute before, never below `floor`; each ten minutes
-// without a refusal raise it a tenth, up to 80% of the published limit.
+// Google may enforce less than that in practice, and what it refuses follows
+// an account's own units over the last minute or two rather than its busiest
+// second. So each account has its own per-minute budget, which the bucket
+// refills at. It starts at 80% of a third of the limit; a refusal for volume
+// cuts it to 85% of what the gate let through in the minute before, never
+// below `floor`; each ten minutes without one raise it a tenth, up to 80% of
+// the limit.
 const BUDGET = {
   start: Math.round((GMAIL_USER_UNITS_PER_MINUTE * 0.8) / 3),
   max: GMAIL_USER_UNITS_PER_MINUTE * 0.8,
@@ -42,7 +40,7 @@ const FLOOR: Record<GmailQuotaPriority, number> = {
   background: 600,
 };
 // Any one second admits at most `PACE_CAP` units in all, 80% of the
-// published minute spread evenly. Each priority may fill the
+// limit's minute spread evenly. Each priority may fill the
 // second up to its own level: sync leaves interactive calls room, and
 // background only runs below sync's level, so it never slows the sync that
 // fills the inbox.
@@ -878,13 +876,6 @@ function trimOldest(map: Map<string, unknown>) {
   if (oldest) map.delete(oldest);
 }
 
-/**
- * A call the gate let through without its store. Warned once a minute per
- * account on each instance, and counted into the account's usage summary so a
- * store that keeps timing out shows up instead of silently switching the gate
- * off. The count usually still lands: a slow store finishes the write after
- * the gate stopped waiting.
- */
 // Without Redis nothing paces Gmail calls, which against real Google ends in
 // per-minute refusals for whole accounts. The emulator has no such limit.
 function reportGateOff() {
@@ -903,6 +894,13 @@ function reportUnattributed(caller: string) {
   logger.warn("Gmail call admitted without an account", { caller });
 }
 
+/**
+ * A call the gate let through without its store. Warned once a minute per
+ * account on each instance, and counted into the account's usage summary so a
+ * store that keeps timing out shows up instead of silently switching the gate
+ * off. The count usually still lands: a slow store finishes the write after
+ * the gate stopped waiting.
+ */
 function noteStoreUnavailable(
   emailAccountId: string,
   caller: string,
