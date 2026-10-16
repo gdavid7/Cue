@@ -21,6 +21,12 @@ import {
 import type { EmailProvider } from "@/utils/email/types";
 
 vi.mock("server-only", () => ({}));
+vi.mock("@/utils/email/local-mail-sync-budget", async (importActual) => {
+  const { passThroughLocalMailSyncBudget } = await vi.importActual<
+    typeof import("@/__tests__/integration/local-mail-sync-budget-mock")
+  >("@/__tests__/integration/local-mail-sync-budget-mock");
+  return passThroughLocalMailSyncBudget(importActual);
+});
 vi.mock("@inboxzero/tinybird", () => ({
   publishArchive: vi.fn().mockResolvedValue(undefined),
 }));
