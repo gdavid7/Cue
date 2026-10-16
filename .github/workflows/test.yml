@@ -4,8 +4,9 @@ permissions:
   contents: read
 
 on:
+  # Agent branches get CI from their pull request; pushing them too ran it twice.
   push:
-    branches: [claude/upbeat-sagan-6c5ed8, production, "claude/**"]
+    branches: [claude/upbeat-sagan-6c5ed8, production]
     paths-ignore:
       - "docs/**"
       - "**/*.md"

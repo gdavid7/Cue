@@ -10,8 +10,9 @@ name: Eval Subset
 # OWNER, MEMBER or COLLABORATOR. This workflow never uses pull_request_target.
 
 on:
+  # Agent branches get CI from their pull request; pushing them too ran it twice.
   push:
-    branches: [claude/upbeat-sagan-6c5ed8, production, "claude/**"]
+    branches: [claude/upbeat-sagan-6c5ed8, production]
     paths:
       - "apps/web/utils/ai/**"
       - "apps/web/utils/llms/**"

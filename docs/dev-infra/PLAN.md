@@ -248,7 +248,7 @@ Decided 2026-10-16.
 
 | # | Decision | Status |
 |---|---|---|
-| A | Run unit tests, lint and build check in CI | **Done and green** (existing failures fixed, below). `test.yml` and `build-check.yml` run on pushes and pull requests to the integration branch, `production` and `claude/**`, and on dispatch |
+| A | Run unit tests, lint and build check in CI | **Done and green** (existing failures fixed, below). `test.yml` and `build-check.yml` run on pull requests into the integration branch, `production` and `claude/**`, on pushes to the integration branch and `production`, and on dispatch |
 | 1 | Eval subset on prompt, tool or eval changes | **Built, waiting on keys.** OpenRouter declined; Claude under test with `ANTHROPIC_API_KEY`, Gemini as judge with `GOOGLE_API_KEY`. See "Eval subset" below |
 | 2 | Delete upstream-only workflows | **Done.** Removed `e2e-flows`, `api-release`, `cli-release`, `desktop-release`, `mail-packages-release`, `deploy-image-proxy`, `build_and_publish_docker`, `publish-playwright-report` (and its script). `build-changelog` stays: it validates, it doesn't publish |
 | 3 | `@claude` pushing fixes (key and write permissions) | **Deferred.** Only the trigger restriction is done: every `claude.yml` trigger requires an OWNER, MEMBER or COLLABORATOR author |
@@ -295,8 +295,9 @@ are green on `2917795a`:
 `.github/workflows/eval-subset.yml` runs a small AI eval subset with one model.
 
 **When it runs:**
-- On pushes and pull requests that touch `apps/web/utils/ai/**`,
-  `apps/web/utils/llms/**` (non-test files) or `apps/web/__tests__/eval/**`.
+- On pull requests (and pushes to the integration branch and `production`)
+  that touch `apps/web/utils/ai/**`, `apps/web/utils/llms/**` (non-test
+  files) or `apps/web/__tests__/eval/**`.
 - Only for this repository's collaborators. A push needs write access; a pull
   request must come from a branch in this repository (never a fork) by an
   OWNER, MEMBER or COLLABORATOR. It never uses `pull_request_target`.
