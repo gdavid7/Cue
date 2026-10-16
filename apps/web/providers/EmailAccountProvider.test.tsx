@@ -434,6 +434,51 @@ describe("EmailAccountProvider", () => {
     expect(shown).not.toContain("account-4");
   });
 
+  it("reindexes against the address's own list when a second removal lands before the router moves", async () => {
+    navigation.accountIndex = "3";
+    window.history.replaceState(
+      null,
+      "",
+      "/mail/u/3/all-inboxes/inbox/thread-c?account=2",
+    );
+    const fourAccounts = ["account-1", "account-2", "account-3", "account-4"];
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(listResponse(fourAccounts))
+        .mockResolvedValueOnce(listResponse(fourAccounts.slice(1)))
+        .mockResolvedValueOnce(listResponse(fourAccounts.slice(2))),
+    );
+
+    render(
+      <EmailAccountProvider>
+        <AccountState />
+      </EmailAccountProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("account-ids").textContent).toBe(
+        fourAccounts.join(","),
+      ),
+    );
+
+    await fetchEmailAccounts();
+    await waitFor(() =>
+      expect(navigation.replace).toHaveBeenLastCalledWith(
+        "/mail/u/2/all-inboxes/inbox/thread-c?account=1",
+      ),
+    );
+    // The router has not moved yet: the address still has u/3 and account=2.
+    await fetchEmailAccounts();
+
+    await waitFor(() =>
+      expect(navigation.replace).toHaveBeenLastCalledWith(
+        "/mail/u/1/all-inboxes/inbox/thread-c?account=0",
+      ),
+    );
+    expect(screen.getByTestId("account-id").textContent).toBe("account-4");
+  });
+
   it("does not replace a global route when remaining accounts exist", async () => {
     navigation.emailAccountId = "deleted-account";
     window.history.replaceState(null, "", "/accounts");

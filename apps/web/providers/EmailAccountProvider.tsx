@@ -83,9 +83,12 @@ export function EmailAccountProvider({
   // `/mail/u/{n}` is a position, and removing an earlier account (in another
   // tab or device) shifts the list. The page stays on the account it opened.
   const [pin, setPin] = useState<IndexPin | null>(null);
+  // The page's position as the address has it, or as a rewrite sent to the
+  // router has it before the router moves.
   const activePin =
     params.accountIndex !== undefined &&
-    pin?.accountIndexes.includes(params.accountIndex)
+    (pin?.address.accountIndex === params.accountIndex ||
+      pin?.pending?.accountIndex === params.accountIndex)
       ? pin
       : null;
   const indexedAccountId =
@@ -155,22 +158,44 @@ export function EmailAccountProvider({
   useEffect(() => {
     if (params.accountIndex === undefined) return;
     if (activePin) {
-      // The rewritten address has arrived; the old position no longer names
-      // this account.
-      if (activePin.accountIndexes.length > 1)
-        setPin({ ...activePin, accountIndexes: [params.accountIndex] });
+      // The router has moved to the rewritten position; the old one no
+      // longer names this account.
+      const { pending } = activePin;
+      if (
+        pending &&
+        params.accountIndex === pending.accountIndex &&
+        params.accountIndex !== activePin.address.accountIndex
+      )
+        setPin({
+          accountId: activePin.accountId,
+          address: {
+            accountIndex: pending.accountIndex,
+            accountIds: pending.accountIds,
+          },
+          pending: null,
+        });
       return;
     }
     const accountId = accountIds[Number(params.accountIndex)];
     if (accountId)
-      setPin({ accountIndexes: [params.accountIndex], accountId, accountIds });
+      setPin({
+        accountId,
+        address: { accountIndex: params.accountIndex, accountIds },
+        pending: null,
+      });
   }, [accountIds, activePin, params.accountIndex]);
 
   useEffect(() => {
     if (!data || !activePin || !emailAccount) return;
+    const current = `${window.location.pathname}${window.location.search}`;
     // Positions in the address, the page's and an open thread's, refer to
-    // the list the pin was made from.
-    if (activePin.accountIds.join() === accountIds.join()) return;
+    // the list it was written for: the rewrite's once the router has it.
+    const address =
+      activePin.pending && activePin.pending.url === current
+        ? activePin.pending
+        : activePin.address;
+    const latest = activePin.pending ?? activePin.address;
+    if (latest.accountIds.join() === accountIds.join()) return;
     const pinnedIndex = accountIds.indexOf(activePin.accountId);
     const accountId = pinnedIndex >= 0 ? activePin.accountId : emailAccount.id;
     const accountIndex = accountIds.indexOf(accountId);
@@ -179,22 +204,26 @@ export function EmailAccountProvider({
         title: "That account is no longer connected",
         description: `Now showing ${emailAccount.email}`,
       });
-    const current = `${window.location.pathname}${window.location.search}`;
     const next = reindexMailPath({
       pathname: window.location.pathname,
       search: window.location.search,
       accountIndex,
-      previousAccountIds: activePin.accountIds,
+      previousAccountIds: address.accountIds,
       accountIds,
     });
-    // Until the router updates the address, its old position stays this
-    // account's, so the page never shows whoever moved into it.
+    const rewrite = next && next !== current ? next : null;
+    // Until the router moves, the address's position stays this account's,
+    // so the page never shows whoever moved into it.
     setPin({
-      accountIndexes: [...activePin.accountIndexes, String(accountIndex)],
       accountId,
-      accountIds,
+      address: rewrite
+        ? { accountIndex: address.accountIndex, accountIds: address.accountIds }
+        : { accountIndex: String(accountIndex), accountIds },
+      pending: rewrite
+        ? { url: rewrite, accountIndex: String(accountIndex), accountIds }
+        : null,
     });
-    if (next && next !== current) router.replace(next);
+    if (rewrite) router.replace(rewrite);
   }, [accountIds, activePin, data, emailAccount, router]);
 
   const resolvedEmailAccountId =
@@ -271,11 +300,15 @@ export function EmailAccountScopeProvider({
 }
 
 type IndexPin = {
-  /** The address positions that name this account. */
-  accountIndexes: string[];
+  /** The address the page has, and the account list its positions refer to. */
+  address: { accountIndex: string; accountIds: readonly string[] };
+  /** A rewrite sent to the router, which may not have moved yet. */
+  pending: {
+    url: string;
+    accountIndex: string;
+    accountIds: readonly string[];
+  } | null;
   accountId: string;
-  /** The list the address's indexes referred to when the page opened it. */
-  accountIds: readonly string[];
 };
 
 export function useAccount() {
