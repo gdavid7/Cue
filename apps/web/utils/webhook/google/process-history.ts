@@ -445,8 +445,10 @@ async function processHistory(
     },
   );
 
-  // Label changes keep their order, and only follow fully processed history,
-  // so a catch-up never replays one.
+  // Label changes keep their order and only run for history whose new
+  // messages are all processed, so the cursor can move past them. They have
+  // no processed marker: a run cut off before saving its cursor leaves them
+  // to be applied again by the next run.
   for (const entry of entries) {
     if (!entry.newMessages.every((event) => done.has(event))) break;
     for (const event of entry.labelEvents) {
