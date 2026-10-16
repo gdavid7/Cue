@@ -1069,24 +1069,18 @@ function ComposeEmailFormContent({
       await Promise.all(uploads);
       // The old account's copy goes only once the new mailbox holds this one.
       const savedToMailbox = await providerAutosave.saveNow();
-      const filesLeftBehind = moved.files.filter(
-        ({ attachment }) =>
-          !attachmentsRef.current.some(
-            (item) => item.id === attachment.id && item.status === "uploaded",
-          ),
+      // A file that didn't attach here already said so when its upload failed.
+      const filesMoved = moved.files.every(({ attachment }) =>
+        attachmentsRef.current.some(
+          (item) => item.id === attachment.id && item.status === "uploaded",
+        ),
       );
-      const move = {
-        from: moved.from,
-        filesMoved: filesLeftBehind.length === 0,
-      };
+      const move = { from: moved.from, filesMoved };
       if (!savedToMailbox) {
         unfinishedMove.current = move;
         return;
       }
-      if (!(await completeMove(move))) return;
-      // The move isn't the whole story when files stayed on the old draft.
-      for (const { attachment } of filesLeftBehind)
-        toastError({ description: `Could not attach ${attachment.filename}.` });
+      await completeMove(move);
     };
     finishMove().catch((error: unknown) => {
       toastError({ description: getMoveErrorMessage(error) });

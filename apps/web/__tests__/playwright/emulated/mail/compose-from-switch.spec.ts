@@ -377,9 +377,13 @@ test("says which files the new account couldn't attach after a move", async ({
     await expect(
       page.getByText(`Draft moved to ${secondAccount.email}`, { exact: true }),
     ).toBeVisible({ timeout: 60_000 });
+    // The file's own upload error names it once; the move adds no second one.
+    await expect(
+      page.getByText("Playwright: upload refused.", { exact: true }),
+    ).toHaveCount(1);
     await expect(
       page.getByText("Could not attach stays.txt.", { exact: true }),
-    ).toBeVisible();
+    ).toHaveCount(0);
   } finally {
     await deleteSecondEmailAccount(secondAccount.accountId);
   }
