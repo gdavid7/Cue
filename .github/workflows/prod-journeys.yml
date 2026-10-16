@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       journeys:
-        description: 'Comma list of inbox-load, new-mail, triage, search, compose-send, chat; or "all"'
+        description: 'Comma list of inbox-load, new-mail, triage, search, compose-send, chat, outlook; or "all"'
         type: string
         default: all
       budgets:
@@ -47,6 +47,9 @@ jobs:
       CUE_QA_BASE_URL: https://cue-inbox.vercel.app
       CUE_QA_EMAIL: ${{ secrets.CUE_QA_EMAIL }}
       CUE_QA_IMAP_APP_PASSWORD: ${{ secrets.CUE_QA_IMAP_APP_PASSWORD }}
+      # Optional: the Outlook QA mailbox linked to the QA user; unset leaves
+      # the outlook journey out.
+      CUE_QA_OUTLOOK_EMAIL: ${{ secrets.CUE_QA_OUTLOOK_EMAIL }}
       CUE_JOURNEYS: ${{ inputs.journeys || 'all' }}
       CUE_JOURNEY_BUDGETS: ${{ inputs.budgets }}
       CUE_JOURNEYS_RESULTS_FILE: ${{ github.workspace }}/apps/web/.tmp/journeys/results.json
@@ -72,6 +75,11 @@ jobs:
           else
             echo "Robot: NOT CONFIGURED (missing CUE_QA_EMAIL or CUE_QA_IMAP_APP_PASSWORD); skipping"
             echo "robot=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$CUE_QA_OUTLOOK_EMAIL" ]; then
+            echo "Outlook journey: configured"
+          else
+            echo "Outlook journey: NOT CONFIGURED (missing CUE_QA_OUTLOOK_EMAIL); skipping"
           fi
           if [ -n "$AXIOM_QUERY_TOKEN" ] && [ -n "$AXIOM_DATASET" ]; then
             echo "Axiom: configured"

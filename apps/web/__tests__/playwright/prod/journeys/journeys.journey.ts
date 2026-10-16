@@ -1,5 +1,4 @@
 import { expect, type Page, test } from "@playwright/test";
-import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
 import {
   buildGroundTruth,
   type GroundTruth,
@@ -11,7 +10,13 @@ import {
   parseJourneySelection,
   resolveBudgets,
 } from "@/scripts/qa/journey-report";
-import { readQaMailboxCredentials } from "@/scripts/qa/qa-mailbox";
+import {
+  type QaMailboxCredentials,
+  readQaMailboxCredentials,
+  readQaOutlookMailbox,
+  sendOutlookProbe,
+  waitForMessageFrom,
+} from "@/scripts/qa/qa-mailbox";
 import { buildMailPath } from "@/utils/mail-url";
 import {
   armInteraction,
@@ -26,6 +31,11 @@ import {
   SignInRefusedError,
   signInWithEmailCode,
 } from "../qa-session";
+import {
+  findMailAccount,
+  replyToGmailQa,
+  trashOpenThread,
+} from "../outlook-probe";
 import { createEmulatorJourneyMailbox } from "./emulated-mailbox";
 import { type AttemptContext, JourneyRun } from "./journey-run";
 import {
@@ -66,9 +76,20 @@ const ESTIMATE_MS = {
   triage: 90_000,
   search: 45_000,
   "compose-send": SEND_TO_INBOX_WAIT_MS + 20_000,
+  outlook: NEW_MAIL_OPEN_WAIT_MS + SEND_TO_INBOX_WAIT_MS + 30_000,
 } as const;
 
-const selected = parseJourneySelection(process.env.CUE_JOURNEYS);
+const qaCredentials = readQaMailboxCredentials();
+const outlookMailbox = qaCredentials
+  ? readQaOutlookMailbox(qaCredentials.email)
+  : null;
+// A misconfigured Outlook mailbox still runs its journey, which fails saying
+// why; the other journeys run as usual.
+const selected = parseJourneySelection(process.env.CUE_JOURNEYS, {
+  outlookConfigured: Boolean(
+    outlookMailbox && outlookMailbox.status !== "not_configured",
+  ),
+});
 const budgets = resolveBudgets(process.env.CUE_JOURNEY_BUDGETS);
 
 test("Cue journeys", async ({ page }, testInfo) => {
@@ -86,7 +107,7 @@ test("Cue journeys", async ({ page }, testInfo) => {
     budgets,
     deadline: Date.now() + RUN_BUDGET_MS,
   });
-  const credentials = emulated ? null : readQaMailboxCredentials();
+  const credentials = emulated ? null : qaCredentials;
   if (!emulated && !credentials) {
     console.log(
       "NOT CONFIGURED: CUE_QA_EMAIL / CUE_QA_IMAP_APP_PASSWORD are not set; skipping the journeys robot.",
@@ -95,6 +116,11 @@ test("Cue journeys", async ({ page }, testInfo) => {
     await run.write();
     test.skip(true, "QA account secrets are not configured");
     return;
+  }
+  if (credentials && outlookMailbox?.status === "not_configured") {
+    console.log(
+      "NOT CONFIGURED: CUE_QA_OUTLOOK_EMAIL is not set; skipping the Outlook journey.",
+    );
   }
   const mailbox: JourneyMailbox = credentials
     ? createImapJourneyMailbox(credentials)
@@ -175,6 +201,17 @@ test("Cue journeys", async ({ page }, testInfo) => {
     await run.run("compose-send", options("compose-send"), (attempt) =>
       composeSend(page, { inboxPath, mailbox, runTag, attempt }),
     );
+    if (credentials && outlookMailbox?.status === "configured") {
+      const outlookEmail = outlookMailbox.email;
+      await run.run("outlook", options("outlook"), (attempt) =>
+        outlookJourney(page, { credentials, outlookEmail, runTag, attempt }),
+      );
+    } else if (credentials && outlookMailbox?.status === "misconfigured") {
+      const { reason } = outlookMailbox;
+      await run.run("outlook", options("outlook"), async () => {
+        throw new Error(`Outlook misconfigured: ${reason}`);
+      });
+    }
   } finally {
     try {
       run.cleanup.removed += await mailbox.removeJourneyMail(runTag);
@@ -674,6 +711,108 @@ async function composeSend(
   }
 }
 
+/**
+ * The Outlook QA mailbox, linked to the same QA user: its inbox loads, a
+ * probe from the Gmail QA account shows while it is open, and a reply sent
+ * from it reaches the Gmail QA inbox. Probes only go between the two QA
+ * addresses; the Gmail side is trashed with the run's mail, the Outlook
+ * thread right away.
+ */
+async function outlookJourney(
+  page: Page,
+  {
+    credentials,
+    outlookEmail,
+    runTag,
+    attempt: { attempt, metrics, check, remainingMs },
+  }: {
+    credentials: QaMailboxCredentials;
+    outlookEmail: string;
+    runTag: string;
+    attempt: AttemptContext;
+  },
+) {
+  const account = await findMailAccount(page, outlookEmail);
+  if (!account) throw new Error("The Outlook QA mailbox is not linked to Cue");
+  if (account.disconnected)
+    throw new Error("Cue marked the Outlook QA mailbox as disconnected");
+  const inboxPath = buildMailPath({ accountIndex: account.index });
+
+  await page.goto("about:blank");
+  await page.goto(inboxPath, { waitUntil: "commit" });
+  metrics["firstRowMs:outlook"] = await page
+    .waitForFunction(firstInboxRowVisible, undefined, {
+      polling: "raf",
+      timeout: 45_000,
+    })
+    .then((handle) => handle.jsonValue() as Promise<number>);
+  await openInbox(page, inboxPath);
+  // Let the mail stream connect, as it would for someone who just opened Cue.
+  await page.waitForTimeout(3000);
+
+  const subject = journeySubject(`Outlook check ${attempt}`, runTag);
+  await sendOutlookProbe(credentials, outlookEmail, {
+    subject,
+    text: "Automated Cue QA message to time Outlook mail. Safe to ignore.",
+    messageId: `<cue-qa-journey-${runTag}-outlook-${attempt}@cue-qa.invalid>`,
+  });
+  const sentAt = Date.now();
+  const shownAt = await page
+    .waitForFunction(
+      rowWithSubjectShown,
+      { subject, wallClock: true },
+      {
+        polling: 250,
+        timeout: Math.max(
+          10_000,
+          Math.min(NEW_MAIL_OPEN_WAIT_MS, remainingMs() - 120_000),
+        ),
+      },
+    )
+    .then((handle) => handle.jsonValue() as Promise<number>)
+    .catch(() => null);
+  metrics["newMailWhileOpenMs:outlook"] = shownAt
+    ? Math.max(0, shownAt - sentAt)
+    : Date.now() - sentAt;
+  check(
+    "Gmail to Outlook mail shows while the inbox is open",
+    shownAt !== null,
+  );
+  if (shownAt === null) return;
+
+  await page
+    .getByRole("listbox", { name: "Conversations" })
+    .getByRole("option")
+    .filter({ hasText: subject })
+    .first()
+    .click();
+  const token = `Cue QA Outlook reply ${runTag} ${attempt}`;
+  const clickedAt = new Date();
+  try {
+    await replyToGmailQa(page, {
+      gmail: credentials.email,
+      outlook: outlookEmail,
+      token,
+    });
+    const received = await waitForMessageFrom(credentials, {
+      from: outlookEmail,
+      subject,
+      token,
+      since: clickedAt,
+      timeoutMs: Math.max(
+        10_000,
+        Math.min(SEND_TO_INBOX_WAIT_MS, remainingMs() - 30_000),
+      ),
+    });
+    metrics.replyDeliveredMs = received
+      ? Math.max(0, received.getTime() - clickedAt.getTime())
+      : Date.now() - clickedAt.getTime();
+    check("the Outlook reply reaches the Gmail QA inbox", received !== null);
+  } finally {
+    await trashOpenThread(page, account.id).catch(() => undefined);
+  }
+}
+
 async function openInbox(page: Page, inboxPath: string) {
   const conversations = page.getByRole("listbox", { name: "Conversations" });
   if (!new URL(page.url(), "http://x").pathname.startsWith(inboxPath)) {
@@ -692,21 +831,9 @@ async function openInbox(page: Page, inboxPath: string) {
 }
 
 async function findAccount(page: Page, email: string) {
-  const response = await page.request.get("/api/user/email-accounts");
-  if (!response.ok()) {
-    throw new Error(`Email accounts failed to load (${response.status()})`);
-  }
-  const { emailAccounts }: GetEmailAccountsResponse = await response.json();
-  const index = emailAccounts.findIndex(
-    (account) => account.email.toLowerCase() === email.toLowerCase(),
-  );
-  const match = emailAccounts[index];
-  if (!match) throw new Error("The QA mailbox is not connected to Cue");
-  return {
-    id: match.id,
-    index,
-    disconnected: Boolean(match.account.disconnectedAt),
-  };
+  const account = await findMailAccount(page, email);
+  if (!account) throw new Error("The QA mailbox is not connected to Cue");
+  return account;
 }
 
 function describe(error: unknown) {

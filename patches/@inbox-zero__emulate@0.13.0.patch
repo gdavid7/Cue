@@ -37,3 +37,39 @@ index 0cf536b906f2aa9107e78b84112329f4684937bf..1a23c0f6ac1e8e33a7fc05d847325a16
  }
  function buildRawMessage(message) {
    const headers = [
+diff --git a/dist/dist-ZATTDANE.js b/dist/dist-ZATTDANE.js
+index fb4e1a679969c34f7a9636e37d47839b9f1e0898..f8433d0e5db28a89bfe16711725df80125e0b39f 100644
+--- a/dist/dist-ZATTDANE.js
++++ b/dist/dist-ZATTDANE.js
+@@ -265,7 +265,10 @@ function createMessageRecord(ms, input) {
+     parent_folder_id: input.parent_folder_id,
+     has_attachments: false,
+     web_link: buildMessageWebLink(input.web_link_base, messageId),
+-    in_reply_to_microsoft_id: input.in_reply_to_microsoft_id ?? null
++    in_reply_to_microsoft_id: input.in_reply_to_microsoft_id ?? null,
++    // Graph's derived message types, such as a meeting request's
++    // "#microsoft.graph.eventMessageRequest"; null is a plain message.
++    odata_type: input.odata_type ?? null
+   });
+   return message;
+ }
+@@ -449,7 +452,8 @@ function formatMessageResource(ms, message) {
+       content: message.body_content
+     },
+     attachments: attachments.map(formatAttachmentResource),
+-    webLink: message.web_link
++    webLink: message.web_link,
++    ...message.odata_type ? { "@odata.type": message.odata_type } : {}
+   };
+ }
+ function formatSender(name, address) {
+@@ -3335,7 +3339,8 @@ function seedFromConfig(store, baseUrl, config) {
+         importance: message.importance,
+         categories: message.categories,
+         parent_folder_id: message.parent_folder_id ?? (message.is_draft ? folders.drafts.microsoft_id : folders.inbox.microsoft_id),
+-        web_link_base: baseUrl
++        web_link_base: baseUrl,
++        odata_type: message.odata_type
+       });
+     }
+   }

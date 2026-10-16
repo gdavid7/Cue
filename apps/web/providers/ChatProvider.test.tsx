@@ -536,6 +536,7 @@ describe("ChatProvider", () => {
       message,
       supportsInlineEmailCards: true,
       localMailSearch: false,
+      localMailSearchSyntaxes: ["gmail", "outlook"],
       context: buildFixRuleContext("thread-1"),
     });
   });

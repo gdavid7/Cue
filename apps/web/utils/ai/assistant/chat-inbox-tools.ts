@@ -24,6 +24,7 @@ import { normalizeLabelName } from "@/utils/label/normalize-label-name";
 import { resolveLabelNameAndId } from "@/utils/label/resolve-label";
 import {
   buildMicrosoftSearchErrorResult,
+  getOutlookLocalSearch,
   normalizeOutlookSearchInput,
   runOutlookSearch,
 } from "@/utils/outlook/assistant-search";
@@ -603,16 +604,7 @@ const gmailSearchInboxTool = ({
                 pageToken: pageToken ?? undefined,
               })
             : null;
-        if (localPage && !local)
-          return {
-            queryUsed: query,
-            error:
-              "The next page of this search is no longer available; run the search again without pageToken.",
-            searchFeedback: {
-              message: "Local search page unavailable",
-              retryable: true,
-            },
-          };
+        if (localPage && !local) return localPageUnavailable(query);
 
         const emailProvider = await emailProviderPromise;
         const labelsPromise = getLabelsForSearchResults({
@@ -668,6 +660,7 @@ const outlookSearchInboxTool = ({
   emailAccountId,
   provider,
   logger,
+  localMailSearch,
 }: InboxToolOptions) =>
   tool({
     description:
@@ -687,15 +680,6 @@ const outlookSearchInboxTool = ({
       } = input;
 
       try {
-        const emailProvider = await createEmailProvider({
-          emailAccountId,
-          provider,
-          logger,
-        });
-        const labelsPromise = getLabelsForSearchResults({
-          emailProvider,
-          logger,
-        });
         const normalizedInput = normalizeOutlookSearchInput({
           query,
           fromEmail,
@@ -703,6 +687,46 @@ const outlookSearchInboxTool = ({
           categoryName,
           folderName,
         });
+        const emailProviderPromise = createEmailProvider({
+          emailAccountId,
+          provider,
+          logger,
+        });
+        // Awaited below; this only keeps a failure during the local search
+        // from counting as unhandled.
+        emailProviderPromise.catch(() => undefined);
+        // A Graph page walk stays on Graph; a local one stays local.
+        const localPage = isLocalPageToken(pageToken);
+        const localSearch =
+          localMailSearch && (!pageToken || localPage)
+            ? getOutlookLocalSearch(normalizedInput)
+            : null;
+        const local =
+          localMailSearch && localSearch
+            ? await localMailSearch.search({
+                ...localSearch.request,
+                limit,
+                pageToken: pageToken ?? undefined,
+              })
+            : null;
+        if (localPage && !local) return localPageUnavailable(query);
+
+        const emailProvider = await emailProviderPromise;
+        const labelsPromise = getLabelsForSearchResults({
+          emailProvider,
+          logger,
+        });
+        if (local && localSearch)
+          return formatSearchInboxResult({
+            searchResult: {
+              messages: local.messages,
+              nextPageToken: local.nextPageToken,
+            },
+            queryUsed: localSearch.queryUsed,
+            labels: await labelsPromise,
+            taxonomyNamesKey: "categoryNames",
+          });
+
         const searchResult = await runOutlookSearch({
           emailProvider,
           normalizedInput,
@@ -1604,6 +1628,18 @@ type SearchMessagesResult = {
   nextPageToken?: string;
   unloadedMessages?: number;
 };
+
+function localPageUnavailable(query: string) {
+  return {
+    queryUsed: query,
+    error:
+      "The next page of this search is no longer available; run the search again without pageToken.",
+    searchFeedback: {
+      message: "Local search page unavailable",
+      retryable: true,
+    },
+  };
+}
 
 function searchSourceFromMessage(message: ParsedMessage): SearchResultSource {
   return {

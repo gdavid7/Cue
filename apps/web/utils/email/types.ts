@@ -471,6 +471,11 @@ export interface EmailProvider {
     labelIds?: string[];
     /** Gmail omits spam and trash unless this is set. Outlook uses `folder` instead. */
     includeSpamTrash?: boolean;
+    /**
+     * Outlook only: leave out Junk Email and Deleted Items, as Gmail's search
+     * does by default. Gmail already does, so it ignores this.
+     */
+    excludeSpamTrash?: boolean;
     folder?: "spam" | "trash";
     mailboxSearch?: ProviderMailboxSearch;
     /**

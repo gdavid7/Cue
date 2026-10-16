@@ -266,6 +266,37 @@ describe("chat route rule freshness persistence", () => {
     );
   });
 
+  it("lets the browser answer an Outlook account's searches only when it reads Outlook syntax", async () => {
+    const account = getEmailAccount();
+    mockGetEmailAccountWithAi.mockResolvedValue({
+      ...account,
+      account: { ...account.account, provider: "microsoft" },
+    });
+
+    // A tab from before Outlook support would read the query as Gmail's.
+    await POST(createRequest("Any invoices?", { localMailSearch: true }), {
+      params: Promise.resolve({}),
+    });
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ localMailSearch: undefined }),
+    );
+
+    await POST(
+      createRequest("Any invoices?", {
+        localMailSearch: true,
+        localMailSearchSyntaxes: ["gmail", "outlook"],
+      }),
+      { params: Promise.resolve({}) },
+    );
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        localMailSearch: expect.objectContaining({
+          search: expect.any(Function),
+        }),
+      }),
+    );
+  });
+
   it("passes on the thread the user has open, when the client sends one", async () => {
     await POST(
       createRequest("What's this about?", {
