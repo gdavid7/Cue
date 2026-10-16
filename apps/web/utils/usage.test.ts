@@ -443,10 +443,13 @@ describe("saveAiUsage", () => {
       label: "Reply context collector",
     });
 
-    const [event] = vi.mocked(publishAiCall).mock.calls[0];
-    expect(event.estimatedCost).toBeCloseTo(
-      (120_000 * 0.1 + 1000 * 0.5) / 1_000_000,
-      10,
+    expect(publishAiCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        estimatedCost: expect.closeTo(
+          (120_000 * 0.1 + 1000 * 0.5) / 1_000_000,
+          10,
+        ),
+      }),
     );
   });
 
