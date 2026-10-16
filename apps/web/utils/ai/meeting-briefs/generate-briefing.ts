@@ -2,7 +2,7 @@ import { tool, type ToolSet } from "ai";
 import { z } from "zod";
 import { createPerplexity } from "@ai-sdk/perplexity";
 import { env } from "@/env";
-import { createGenerateText } from "@/utils/llms";
+import { createGenerateObject, createGenerateText } from "@/utils/llms";
 import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import { getUserInfoPrompt } from "@/utils/ai/helpers";
@@ -102,6 +102,30 @@ export async function aiGenerateMeetingBriefing({
     LlmUseCase.MeetingBriefing,
   );
 
+  // With nothing to research, the briefing is the only output. Structured
+  // output guarantees it, where a forced finalizeBriefing call does not:
+  // models that reject forced tool use (such as Claude Sonnet 5.5) may answer
+  // in text instead.
+  if (Object.keys(searchTools).length === 0) {
+    try {
+      const generateObject = createGenerateObject({
+        emailAccount,
+        label: "Meeting Briefing",
+        modelOptions,
+        promptHardening: { trust: "untrusted", level: "full" },
+      });
+      const { object } = await generateObject({
+        ...modelOptions,
+        instructions: AGENTIC_SYSTEM_PROMPT,
+        prompt,
+        schema: briefingSchema,
+      });
+      return object;
+    } finally {
+      await cleanup();
+    }
+  }
+
   const generateText = createGenerateText({
     emailAccount,
     label: "Meeting Briefing",
@@ -127,10 +151,7 @@ export async function aiGenerateMeetingBriefing({
           });
         }
       },
-      toolChoice:
-        Object.keys(searchTools).length === 0
-          ? { type: "tool", toolName: "finalizeBriefing" }
-          : "auto",
+      toolChoice: "auto",
       tools: {
         ...searchTools,
         finalizeBriefing: tool({
