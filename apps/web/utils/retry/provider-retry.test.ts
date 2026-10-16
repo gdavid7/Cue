@@ -45,10 +45,26 @@ describe("withProviderRetry under a request deadline", () => {
     await vi.runAllTimersAsync();
 
     expect(await outcome).toBe(refusal);
-    // A 30s route keeps 20s. p-retry adds its own 1s, 2s, 4s... on top of
-    // each delay, so 1+1, 2+2 and 4+4 fit and 8+8 would not.
-    expect(operation).toHaveBeenCalledTimes(4);
+    // A 30s route keeps 20s: waits of 1, 2, 4 and 8 seconds fit, and the
+    // next 10 would not.
+    expect(operation).toHaveBeenCalledTimes(5);
     expect(Date.now() - startedAt).toBeLessThanOrEqual(20_000);
+  });
+
+  it("waits only its own backoff between attempts, and none after the last", async () => {
+    vi.useFakeTimers();
+    const operation = vi.fn().mockRejectedValue(new Error("Rate limit"));
+    const startedAt = Date.now();
+
+    const outcome = withProviderRetry(operation, retryOptions()).catch(
+      (error: unknown) => error,
+    );
+    await vi.runAllTimersAsync();
+    await outcome;
+
+    expect(operation).toHaveBeenCalledTimes(6);
+    // 1 + 2 + 4 + 8 + 10 seconds between six attempts.
+    expect(Date.now() - startedAt).toBe(25_000);
   });
 
   it("keeps every retry for work with no deadline", async () => {

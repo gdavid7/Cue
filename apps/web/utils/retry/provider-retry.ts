@@ -36,6 +36,9 @@ export async function withProviderRetry<T>(
 ): Promise<T> {
   return pRetry(operation, {
     retries: maxRetries,
+    // The callback below waits each provider's own backoff; p-retry's default
+    // backoff would double it.
+    minTimeout: 0,
     onFailedAttempt: async (attempt) => {
       const { retryable, isRateLimit, delayMs, logFields, expected } =
         classify(attempt);
@@ -61,6 +64,11 @@ export async function withProviderRetry<T>(
         retryPolicy,
       };
 
+      if (attempt.retriesLeft === 0) {
+        logger.warn(`${providerName} error. Out of retries`, retryLogFields);
+        throw attempt.error;
+      }
+
       logger.warn(`${providerName} error. Will retry`, retryLogFields);
 
       if (delayMs > maxBlockingDelayMs) {
@@ -71,12 +79,8 @@ export async function withProviderRetry<T>(
         throw attempt.error;
       }
 
-      // p-retry waits its own backoff (`retryDelay`) after this callback.
       const deadlineAt = getRequestDeadline();
-      if (
-        deadlineAt !== undefined &&
-        Date.now() + delayMs + attempt.retryDelay > deadlineAt
-      ) {
+      if (deadlineAt !== undefined && Date.now() + delayMs > deadlineAt) {
         logger.warn("Aborting retry that would pass the request deadline", {
           ...retryLogFields,
           remainingMs: Math.max(0, deadlineAt - Date.now()),
