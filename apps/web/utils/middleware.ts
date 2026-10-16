@@ -248,16 +248,17 @@ function withMiddleware<T extends NextRequest>(
 
           const apiError = checkCommonErrors(error, requestPath, reqLogger);
           if (apiError) {
-            const rateLimitProvider = await recordRateLimitFromApiError({
+            await recordRateLimitFromApiError({
               apiErrorType: apiError.type,
               error,
               emailAccountId: getEmailAccountId(requestForError),
               logger: reqLogger,
               source: scope || new URL(requestForError.url).pathname,
             });
-            const retryAfterSeconds = rateLimitProvider
-              ? getProviderRateLimitRetryAfterSeconds(error, rateLimitProvider)
-              : undefined;
+            const retryAfterSeconds = getProviderRateLimitRetryAfterSeconds(
+              error,
+              apiError.type,
+            );
 
             await logErrorToPosthog(
               "api",

@@ -334,8 +334,10 @@ export function describeProviderRateLimitError(
 /** How long a client should wait before retrying what a provider refused. */
 export function getProviderRateLimitRetryAfterSeconds(
   error: unknown,
-  provider: EmailProviderRateLimitProvider,
+  apiErrorType: string,
 ): number | undefined {
+  const provider = getProviderFromRateLimitApiErrorType(apiErrorType);
+  if (!provider) return;
   const delayMs = isProviderRateLimitModeError(error)
     ? Date.parse(error.retryAt ?? "") - Date.now()
     : getProviderRateLimitDelayMs({ error, provider, attemptNumber: 1 });

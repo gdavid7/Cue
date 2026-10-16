@@ -56,7 +56,10 @@ vi.mock("@/utils/email/rate-limit", async (importActual) => {
       actual.getProviderRateLimitRetryAfterSeconds,
   };
 });
-vi.mock("@/utils/email/rate-limit-mode-error", () => ({
+vi.mock("@/utils/email/rate-limit-mode-error", async (importActual) => ({
+  ...(await importActual<
+    typeof import("@/utils/email/rate-limit-mode-error")
+  >()),
   isProviderRateLimitModeError: vi.fn(),
 }));
 
@@ -342,6 +345,29 @@ describe("Middleware", () => {
       const response = await withError(
         "labels",
         vi.fn().mockRejectedValue(refusal),
+      )(mockReq, mockContext);
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get("Retry-After")).toBe("30");
+    });
+
+    it("tells the client when to retry a rate limit on a route with no email account", async () => {
+      mockCheckCommonErrors.mockReturnValue({
+        message: "Gmail error: retry later",
+        code: 429,
+        type: "Gmail Rate Limit Exceeded",
+      });
+      // Nothing to record without an account.
+      mockRecordRateLimitFromApiError.mockResolvedValueOnce(null);
+
+      const response = await withError(
+        "threads/all",
+        vi.fn().mockRejectedValue({
+          status: 403,
+          errors: [{ reason: "rateLimitExceeded" }],
+          message:
+            "Quota exceeded for quota metric 'Queries' and limit 'Units per minute per user'",
+        }),
       )(mockReq, mockContext);
 
       expect(response.status).toBe(429);
