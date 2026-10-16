@@ -15,7 +15,10 @@ case "$file" in
   *) exit 0 ;;
 esac
 
+# An import or variable added a step before its first use is work in progress,
+# not dead code: never remove or report it mid-edit. `pnpm check` still does.
 output="$(cd "${CLAUDE_PROJECT_DIR:-.}" && "$biome" check --write --no-errors-on-unmatched \
+  --skip=correctness/noUnusedImports --skip=correctness/noUnusedVariables \
   --files-ignore-unknown=true --reporter=github --max-diagnostics=10 "$file" 2>&1)" && exit 0
 echo "Biome found issues in $file:" >&2
 echo "$output" | grep '^::' | head -10 >&2
