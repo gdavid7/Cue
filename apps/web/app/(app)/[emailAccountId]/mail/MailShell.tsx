@@ -195,7 +195,8 @@ export function MailShell() {
     mutate: mutateSettings,
   } = useMailSettings();
   const { toggleSidebar, setOpen: setSidebarOpen } = useSidebar();
-  const { submitTextMessage, chatId, setNewChat } = useChat();
+  const { submitTextMessage, chatId, setNewChat, switchChatAccount } =
+    useChat();
   // A question waits for a conversation to exist; sent before one, it's dropped.
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   useEffect(() => {
@@ -1275,14 +1276,15 @@ export function MailShell() {
       : accountsData?.emailAccounts.find(
           (account) => account.id === labelAccountId,
         );
+  const mixedLabelAccounts = currentLabelTargets.some(
+    (target) => target.emailAccountId !== labelAccountId,
+  );
   // Outlook categories use the same engine membership command as Gmail labels.
   const canLabel =
     currentLabelTargets.length > 0 &&
     (isGoogleProvider(labelAccount?.account.provider) ||
       isMicrosoftProvider(labelAccount?.account.provider)) &&
-    currentLabelTargets.every(
-      (target) => target.emailAccountId === labelAccountId,
-    );
+    !mixedLabelAccounts;
   const openLabelPicker = useStableCallback(() => {
     if (canLabel)
       setLabelPicker({ mode: "label", targets: currentLabelTargets });
@@ -1725,6 +1727,8 @@ export function MailShell() {
     setSidebarOpen((open) =>
       open.includes("chat-sidebar") ? open : [...open, "chat-sidebar"],
     );
+    // The answer came from this page's account, so the follow-up runs there.
+    switchChatAccount(emailAccountId);
     if (!chatId) setNewChat();
     setPendingQuestion(question);
   });
@@ -1927,6 +1931,11 @@ export function MailShell() {
                 isStarredSelected={allStarred}
                 onStarSelected={starTargets}
                 onLabelSelected={canLabel ? openLabelPicker : undefined}
+                labelUnavailableReason={
+                  mixedLabelAccounts
+                    ? "Labels belong to one account"
+                    : undefined
+                }
                 onClearSelection={selection.clear}
               />
               {showSplitTabs && (
@@ -1996,6 +2005,7 @@ export function MailShell() {
               ) : null}
               {searchParam && emailAccountId ? (
                 <SearchAnswerCard
+                  accountEmail={isAllAccounts ? userEmail : undefined}
                   emailAccountId={emailAccountId}
                   key={searchParam}
                   noResults={searchFoundNothing && isSearchCommitted}

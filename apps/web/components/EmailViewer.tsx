@@ -7,14 +7,20 @@ import { EmailThread } from "@/components/email-list/EmailThread";
 import { useThread } from "@/hooks/useThread";
 import { LoadingContent } from "@/components/LoadingContent";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { useAccount } from "@/providers/EmailAccountProvider";
+import {
+  EmailAccountScopeProvider,
+  useAccount,
+} from "@/providers/EmailAccountProvider";
+import { useAccounts } from "@/hooks/useAccounts";
 import { isGoogleProvider } from "@/utils/email/provider-types";
 
 export function EmailViewer() {
-  const { provider } = useAccount();
+  const { emailAccountId, provider: currentProvider } = useAccount();
+  const { data: accountsData } = useAccounts();
 
   const {
     threadId,
+    accountId,
     showEmail,
     showReplyButton,
     autoOpenForwardForMessageId,
@@ -22,6 +28,14 @@ export function EmailViewer() {
   } = useDisplayedEmail();
 
   const hideEmail = useCallback(() => showEmail(null), [showEmail]);
+  const panelAccount =
+    accountId && accountId !== emailAccountId
+      ? accountsData?.emailAccounts.find((account) => account.id === accountId)
+      : undefined;
+  // The thread is never shown or acted on through the page's account.
+  const panelAccountMissing =
+    Boolean(accountId) && accountId !== emailAccountId && !panelAccount;
+  const provider = panelAccount?.account.provider ?? currentProvider;
   const supportsViewerReplies = isGoogleProvider(provider);
 
   return (
@@ -32,21 +46,23 @@ export function EmailViewer() {
         className="overflow-y-auto bg-background p-6"
         overlay="transparent"
       >
-        {threadId && (
-          <ThreadContent
-            threadId={threadId}
-            showReplyButton={supportsViewerReplies && showReplyButton}
-            autoOpenReplyForMessageId={
-              supportsViewerReplies
-                ? (autoOpenReplyForMessageId ?? undefined)
-                : undefined
-            }
-            autoOpenForwardForMessageId={
-              supportsViewerReplies
-                ? (autoOpenForwardForMessageId ?? undefined)
-                : undefined
-            }
-          />
+        {threadId && !panelAccountMissing && (
+          <EmailAccountScopeProvider emailAccount={panelAccount}>
+            <ThreadContent
+              threadId={threadId}
+              showReplyButton={supportsViewerReplies && showReplyButton}
+              autoOpenReplyForMessageId={
+                supportsViewerReplies
+                  ? (autoOpenReplyForMessageId ?? undefined)
+                  : undefined
+              }
+              autoOpenForwardForMessageId={
+                supportsViewerReplies
+                  ? (autoOpenForwardForMessageId ?? undefined)
+                  : undefined
+              }
+            />
+          </EmailAccountScopeProvider>
         )}
       </SheetContent>
     </Sheet>

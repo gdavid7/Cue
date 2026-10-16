@@ -5,6 +5,10 @@ import { MailScreen } from "@/app/(app)/[emailAccountId]/mail/MailScreen";
 import { MailScreenLayout } from "@/app/(app)/[emailAccountId]/mail/MailScreenLayout";
 import { auth } from "@/utils/auth";
 import {
+  LAST_EMAIL_ACCOUNT_COOKIE,
+  parseLastEmailAccountCookieValue,
+} from "@/utils/cookies";
+import {
   hasLocalMailbox,
   LOCAL_MAILBOX_COOKIE,
 } from "@/utils/mail-engine/local-mailbox-cookie";
@@ -50,7 +54,16 @@ export default async function MailRouteLayout({
   // find no mail address to change.
   const index = parseAccountIndex(accountIndex);
   const account = index === null ? undefined : accounts[index];
-  if (!account) redirect(buildMailPath({ accountIndex: 0 }));
+  if (!account) {
+    // Removing an earlier account shifts later ones down, so a position past
+    // the end is most likely the account this browser was last in.
+    const lastAccountId = parseLastEmailAccountCookieValue({
+      userId: session.user.id,
+      cookieValue: (await cookies()).get(LAST_EMAIL_ACCOUNT_COOKIE)?.value,
+    });
+    const lastIndex = accounts.findIndex(({ id }) => id === lastAccountId);
+    redirect(buildMailPath({ accountIndex: Math.max(lastIndex, 0) }));
+  }
 
   const { preview } = await startInboxPreview(account);
   return (

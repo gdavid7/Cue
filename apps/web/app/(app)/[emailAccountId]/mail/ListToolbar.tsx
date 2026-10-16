@@ -102,6 +102,8 @@ export type ListToolbarProps = {
   onStarSelected: () => void;
   /** Omitted when the current view can't label (combined inboxes). */
   onLabelSelected?: () => void;
+  /** Shown on a disabled Label button when the selection can't be labelled. */
+  labelUnavailableReason?: string;
   onClearSelection: () => void;
 };
 
@@ -133,6 +135,7 @@ export const ListToolbar = memo(function ListToolbar({
   isStarredSelected,
   onStarSelected,
   onLabelSelected,
+  labelUnavailableReason,
   onClearSelection,
 }: ListToolbarProps) {
   const LayoutIcon = layout === "split" ? ColumnsIcon : RowsIcon;
@@ -236,6 +239,17 @@ export const ListToolbar = memo(function ListToolbar({
                 onClick={onLabelSelected}
                 aria-label="Label"
                 className={selectionButton}
+              >
+                <TagIcon className="size-3.5" />
+              </button>
+            </Tooltip>
+          ) : labelUnavailableReason ? (
+            <Tooltip content={labelUnavailableReason}>
+              <button
+                type="button"
+                aria-disabled="true"
+                aria-label="Label"
+                className={cn(selectionButton, "cursor-default opacity-40")}
               >
                 <TagIcon className="size-3.5" />
               </button>

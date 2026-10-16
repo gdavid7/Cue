@@ -179,7 +179,12 @@ export function RuleForm({
     replace,
   } = useFieldArray({ control, name: "actions" });
 
-  const { userLabels, isLoading, mutate: mutateLabels } = useLabels();
+  // Keyed by the account in scope, which in a chat may not be the page's.
+  const {
+    userLabels,
+    isLoading,
+    mutate: mutateLabels,
+  } = useLabels(emailAccountId);
   const { data: messagingChannelsData } = useMessagingChannels(emailAccountId);
   const { folders, isLoading: foldersLoading } = useFolders(provider);
   const router = useRouter();

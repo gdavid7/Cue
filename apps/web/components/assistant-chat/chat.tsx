@@ -2,7 +2,9 @@
 
 import type { ChangeEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import {
+  ChevronDownIcon,
   HistoryIcon,
   Loader2,
   PaperclipIcon,
@@ -43,6 +45,11 @@ import { randomUuid } from "@/utils/uuid";
 import { VoiceInput } from "@/components/voice/VoiceInput";
 import { liveHistoryFromUiMessages } from "@/utils/voice/live-history";
 import { PageHeading } from "@/components/Typography";
+import { Loading } from "@/components/Loading";
+import { ErrorDisplay } from "@/components/ErrorDisplay";
+import { useAccounts } from "@/hooks/useAccounts";
+import { EmailAccountScopeProvider } from "@/providers/EmailAccountProvider";
+import { getPermissionsConsentPath } from "@/utils/permissions-consent";
 
 const MAX_FILE_SIZE = 4 * 1024 * 1024; // 4MB
 const MAX_FILES = 5;
@@ -77,8 +84,16 @@ export function Chat({
     setAttachments,
     submitTextMessage,
     stop,
+    chatAccount,
+    switchedAccount,
+    chatAccountError,
   } = useChat();
   const { messages, status, regenerate, setMessages } = chat;
+  // Tools would run on the dead account's tokens, so the chat is read-only.
+  const readOnly = Boolean(chatAccount?.account.disconnectedAt);
+  // Until another account's row loads, the conversation would render in the
+  // page's account, so its cards could act there.
+  const chatAccountLoading = switchedAccount && !chatAccount;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadQueue, setUploadQueue] = useState<string[]>([]);
 
@@ -189,7 +204,11 @@ export function Chat({
     <PromptInput
       onSubmit={(e) => {
         e.preventDefault();
-        if (hasContent && (status === "ready" || status === "error")) {
+        if (
+          !readOnly &&
+          hasContent &&
+          (status === "ready" || status === "error")
+        ) {
           analytics.captureAction("chat_message_submitted", {
             has_text: input.trim().length > 0,
             attachment_count: attachments.length,
@@ -226,6 +245,7 @@ export function Chat({
         aria-label="Message Cue"
         data-testid="chat-input"
         value={input}
+        disabled={readOnly}
         placeholder="Ask Cue about your mail, or tell it what to do"
         onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
           setInput(e.currentTarget.value)
@@ -293,7 +313,9 @@ export function Chat({
                 : "ready"
           }
           disabled={
-            status === "ready" || status === "error" ? !hasContent : false
+            status === "ready" || status === "error"
+              ? readOnly || !hasContent
+              : false
           }
           onClick={(e) => {
             if (status === "streaming" || status === "submitted") {
@@ -325,20 +347,34 @@ export function Chat({
         onClose={onClose}
         start={topBarStart}
       />
-      {hasMessages ? (
-        <ChatMessagesView
-          status={status}
-          messages={messages}
-          persistedMessageIds={persistedMessageIds}
-          setMessages={setMessages}
-          regenerate={regenerate}
-          context={context}
-          setContext={setContext}
-          inputArea={inputArea}
-        />
+      <ChatAccountNotice />
+      {chatAccountLoading ? (
+        chatAccountError ? (
+          <ErrorDisplay error={{ error: chatAccountError.message }} />
+        ) : (
+          <div role="status" aria-label="Loading chat" className="flex-1">
+            <Loading />
+          </div>
+        )
+      ) : hasMessages ? (
+        // Cards and actions in the conversation act in the chat's account,
+        // which in All inboxes may not be the page's.
+        <EmailAccountScopeProvider emailAccount={chatAccount ?? undefined}>
+          <ChatMessagesView
+            status={status}
+            messages={messages}
+            persistedMessageIds={persistedMessageIds}
+            setMessages={setMessages}
+            regenerate={regenerate}
+            context={context}
+            setContext={setContext}
+            inputArea={inputArea}
+          />
+        </EmailAccountScopeProvider>
       ) : (
         <NewChatView
           inputArea={inputArea}
+          readOnly={readOnly}
           onSuggestionClick={(text) => {
             analytics.captureAction("chat_suggestion_clicked", {
               suggestion_index: CHAT_EXAMPLES.indexOf(text),
@@ -420,9 +456,11 @@ const CHAT_EXAMPLES = [
 
 function NewChatView({
   inputArea,
+  readOnly,
   onSuggestionClick,
 }: {
   inputArea: React.ReactNode;
+  readOnly: boolean;
   onSuggestionClick: (text: string) => void;
 }) {
   return (
@@ -437,6 +475,7 @@ function NewChatView({
               variant="outline"
               size="sm"
               className="rounded-full"
+              disabled={readOnly}
               onClick={() => onSuggestionClick(example)}
             >
               {example}
@@ -459,9 +498,10 @@ function ChatTopBar({
 }) {
   return (
     <div className="relative mx-auto w-full max-w-[calc(var(--chat-max-w)+var(--chat-px)*2)] px-[var(--chat-px)] pt-2">
-      <div className="flex items-center gap-1">
+      <div className="flex min-w-0 items-center gap-1">
         {start}
-        <div className="ml-auto flex items-center gap-1">
+        <ChatAccountLabel />
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           {hasMessages ? <NewChatButton /> : null}
           <ChatHistoryDropdown />
           {onClose ? <CloseChatButton onClose={onClose} /> : null}
@@ -509,7 +549,7 @@ function ChatHistoryDropdown() {
   const [deleteTarget, setDeleteTarget] = useState<ChatHistoryEntry | null>(
     null,
   );
-  const { chatId, setChatId } = useChat();
+  const { chatId, setChatId, openChat } = useChat();
   const { data, error, isLoading, mutate } = useChats(shouldLoadChats);
 
   return (
@@ -561,7 +601,10 @@ function ChatHistoryDropdown() {
                   chat={chatItem}
                   onSelect={() => {
                     setOpen(false);
-                    setChatId(chatItem.id);
+                    openChat({
+                      id: chatItem.id,
+                      emailAccountId: chatItem.emailAccountId,
+                    });
                   }}
                   onRename={() => {
                     setOpen(false);
@@ -588,6 +631,7 @@ function ChatHistoryDropdown() {
           if (!value) setRenameTarget(null);
         }}
         chatId={renameTarget?.id ?? ""}
+        emailAccountId={renameTarget?.emailAccountId ?? ""}
         currentName={renameTarget?.name ?? ""}
         defaultLabel={renameTarget ? getChatHistoryLabel(renameTarget) : ""}
         onRenamed={mutate}
@@ -598,6 +642,7 @@ function ChatHistoryDropdown() {
           if (!value) setDeleteTarget(null);
         }}
         chatId={deleteTarget?.id ?? ""}
+        emailAccountId={deleteTarget?.emailAccountId ?? ""}
         label={deleteTarget ? getChatHistoryLabel(deleteTarget) : ""}
         onDeleted={() => {
           if (deleteTarget && chatId === deleteTarget.id) setChatId(null);
@@ -605,6 +650,109 @@ function ChatHistoryDropdown() {
         }}
       />
     </>
+  );
+}
+
+/** Which account the chat reads and acts in, and a way to change it. */
+function ChatAccountLabel() {
+  const { chatAccount, switchChatAccount } = useChat();
+  const { data } = useAccounts();
+  if (!chatAccount) return null;
+
+  const label = `Chat for ${chatAccount.email}`;
+  const otherAccounts =
+    data?.emailAccounts.filter((account) => account.id !== chatAccount.id) ??
+    [];
+  if (!otherAccounts.length) {
+    return (
+      <span className="min-w-0 truncate px-2 text-muted-foreground text-xs">
+        {label}
+      </span>
+    );
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 min-w-0 gap-1 px-2 font-normal text-muted-foreground text-xs"
+        >
+          <span className="truncate">{label}</span>
+          <ChevronDownIcon className="size-3 shrink-0" aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-64">
+        {otherAccounts.map((account) => (
+          <DropdownMenuItem
+            key={account.id}
+            disabled={Boolean(account.account.disconnectedAt)}
+            onSelect={() => switchChatAccount(account.id)}
+          >
+            <span className="truncate">{account.email}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function ChatAccountNotice() {
+  const {
+    chatAccount,
+    openThreadAccountId,
+    switchChatAccount,
+    switchedAccount,
+  } = useChat();
+  const { data } = useAccounts();
+  if (!chatAccount) return null;
+
+  let notice: React.ReactNode = null;
+  if (chatAccount.account.disconnectedAt) {
+    notice = (
+      <>
+        <span>Reconnect {chatAccount.email} to continue</span>
+        <Button asChild size="xs-2" variant="outline">
+          <Link
+            href={getPermissionsConsentPath(chatAccount.id, { expired: true })}
+          >
+            Reconnect
+          </Link>
+        </Button>
+      </>
+    );
+  } else if (openThreadAccountId) {
+    const threadEmail = data?.emailAccounts.find(
+      (account) => account.id === openThreadAccountId,
+    )?.email;
+    if (!threadEmail) return null;
+    notice = (
+      <>
+        <span>The open email is in {threadEmail}</span>
+        <Button
+          size="xs-2"
+          variant="outline"
+          onClick={() => switchChatAccount(openThreadAccountId)}
+        >
+          Switch
+        </Button>
+      </>
+    );
+  } else if (switchedAccount) {
+    notice = <span>Switched to {chatAccount.email} for this conversation</span>;
+  }
+  if (!notice) return null;
+
+  return (
+    <div className="mx-auto w-full max-w-[calc(var(--chat-max-w)+var(--chat-px)*2)] px-[var(--chat-px)]">
+      <div
+        role="status"
+        className="flex min-w-0 flex-wrap items-center gap-2 rounded-md bg-muted px-3 py-1.5 text-muted-foreground text-xs"
+      >
+        {notice}
+      </div>
+    </div>
   );
 }
 

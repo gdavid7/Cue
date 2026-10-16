@@ -16,11 +16,17 @@ export const SEARCH_ANSWERS = true;
  * leave just the results, or, when there are none, a way to ask in chat.
  */
 export function SearchAnswerCard({
+  accountEmail,
   emailAccountId,
   query,
   noResults,
   onContinueInChat,
 }: {
+  /**
+   * Set above mail from several accounts: the answer reads one account's
+   * mail, so it says which.
+   */
+  accountEmail?: string;
   emailAccountId: string;
   /** The search as committed with Enter, never the text being typed. */
   query: string;
@@ -66,6 +72,11 @@ export function SearchAnswerCard({
       aria-label="Answer from your mail"
       className="fade-in animate-in border-border border-b px-4 py-3 duration-150"
     >
+      {accountEmail ? (
+        <p className="mb-0.5 text-muted-foreground text-xs">
+          From {accountEmail}
+        </p>
+      ) : null}
       <p className="text-foreground text-sm leading-6">{data.answer}</p>
       <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
         {data.sources.map((source) => {

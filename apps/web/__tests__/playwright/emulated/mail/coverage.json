@@ -15,6 +15,15 @@
     "components/theme-provider.tsx",
     "app/(landing)/login/LoginForm.tsx"
   ],
+  "all-inboxes-context.spec.ts": [
+    "providers/ChatProvider.tsx",
+    "components/assistant-chat/chat.tsx",
+    "components/assistant-chat/ChatHistoryItem.tsx",
+    "components/CommandK.tsx",
+    "components/EmailViewer.tsx",
+    "hooks/useDisplayedEmail.ts"
+  ],
+  "account-removal-routing.spec.ts": ["providers/EmailAccountProvider.tsx"],
   "account-selection.spec.ts": [
     "app/(app)/[emailAccountId]/mail/MailSidebar.tsx",
     "app/(app)/[emailAccountId]/mail/use-combined-mail-threads.ts"

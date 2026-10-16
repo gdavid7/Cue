@@ -9,6 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EmailAccountPreviewProvider } from "@/providers/EmailAccountProvider";
 import { Chat } from "@/components/assistant-chat/chat";
 import type { ChatHistoryEntry } from "@/components/assistant-chat/chat-history-types";
 import type { Chat as ChatHelpers } from "@/providers/ChatProvider";
@@ -53,14 +54,66 @@ const {
   mockSetNewChat: vi.fn(),
   mockStop: vi.fn(),
   mockUseChats: vi.fn(),
-  chatState: { status: "ready" as ChatHelpers["status"] },
+  chatState: {
+    status: "ready" as ChatHelpers["status"],
+    messages: [] as ChatHelpers["messages"],
+  },
+}));
+const accountChat = vi.hoisted(() => ({
+  chatAccount: {
+    id: "email-account-1",
+    email: "a@example.com",
+    account: { disconnectedAt: null, provider: "google" },
+    providerRateLimit: null,
+  } as {
+    id: string;
+    email: string;
+    account: { disconnectedAt: string | null; provider: string };
+    providerRateLimit: null;
+  } | null,
+  switchedAccount: false,
+  chatAccountError: undefined as Error | undefined,
+  openThreadAccountId: null as string | null,
+  openChat: vi.fn(),
+  switchChatAccount: vi.fn(),
 }));
 
-vi.mock("@/components/assistant-chat/messages", () => ({
-  Messages: ({ footer }: { footer?: React.ReactNode }) => (
-    <div data-testid="messages">{footer}</div>
-  ),
+vi.mock("@/hooks/useAccounts", () => ({
+  useAccounts: () => ({
+    data: {
+      emailAccounts: [
+        {
+          id: "email-account-1",
+          email: "a@example.com",
+          account: { disconnectedAt: null },
+        },
+        {
+          id: "email-account-2",
+          email: "b@example.com",
+          account: { disconnectedAt: null, provider: "google" },
+          providerRateLimit: null,
+        },
+      ],
+    },
+  }),
 }));
+
+vi.mock("@/components/assistant-chat/messages", async () => {
+  const { useAccount } = await vi.importActual<
+    typeof import("@/providers/EmailAccountProvider")
+  >("@/providers/EmailAccountProvider");
+  return {
+    // Names the account the messages' cards and actions would act in.
+    Messages: ({ footer }: { footer?: React.ReactNode }) => (
+      <div data-testid="messages">
+        <span data-testid="messages-account">
+          {useAccount().emailAccountId}
+        </span>
+        {footer}
+      </div>
+    ),
+  };
+});
 
 vi.mock("@/components/assistant-chat/preview-attachment", () => ({
   PreviewAttachment: () => <div data-testid="preview-attachment" />,
@@ -175,7 +228,7 @@ vi.mock("@/hooks/useProductAnalytics", () => ({
 vi.mock("@/providers/ChatProvider", () => ({
   useChat: () => ({
     chat: {
-      messages: [],
+      messages: chatState.messages,
       status: chatState.status,
       stop: vi.fn(),
       regenerate: mockRegenerate,
@@ -194,6 +247,7 @@ vi.mock("@/providers/ChatProvider", () => ({
     setChatId: mockSetChatId,
     submitTextMessage: vi.fn(),
     stop: mockStop,
+    ...accountChat,
   }),
 }));
 
@@ -209,6 +263,16 @@ afterEach(() => {
 
 beforeEach(() => {
   chatState.status = "ready";
+  chatState.messages = [];
+  accountChat.chatAccount = {
+    id: "email-account-1",
+    email: "a@example.com",
+    account: { disconnectedAt: null, provider: "google" },
+    providerRateLimit: null,
+  };
+  accountChat.switchedAccount = false;
+  accountChat.chatAccountError = undefined;
+  accountChat.openThreadAccountId = null;
   window.localStorage.clear();
   mockUseChatInput.mockReturnValue({ input: "", setInput: mockSetInput });
 });
@@ -217,7 +281,9 @@ describe("Chat history", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseChats.mockImplementation((shouldFetch: boolean) => ({
-      data: shouldFetch ? { chats: [chatHistoryEntry] } : undefined,
+      data: shouldFetch
+        ? { chats: [chatHistoryEntry, otherAccountChat] }
+        : undefined,
       error: undefined,
       isLoading: false,
       mutate: mockMutate,
@@ -236,8 +302,156 @@ describe("Chat history", () => {
     fireEvent.click(screen.getByText("Project update"));
 
     await waitFor(() => {
-      expect(mockSetChatId).toHaveBeenCalledWith("chat-1");
+      expect(accountChat.openChat).toHaveBeenCalledWith({
+        id: "chat-1",
+        emailAccountId: "email-account-1",
+      });
     });
+  });
+
+  it("lists every account's chats with the account each works in, and resumes one in its account", async () => {
+    render(<Chat open />);
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: /chat history/i }),
+    );
+
+    const otherRow = (await screen.findByText("Travel plans")).closest(
+      "[role=menuitem]",
+    );
+    expect(otherRow?.textContent).toContain("b@example.com");
+
+    fireEvent.click(screen.getByText("Travel plans"));
+
+    await waitFor(() =>
+      expect(accountChat.openChat).toHaveBeenCalledWith({
+        id: "chat-2",
+        emailAccountId: "email-account-2",
+      }),
+    );
+  });
+});
+
+describe("Chat account", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseChats.mockReturnValue({
+      data: undefined,
+      error: undefined,
+      isLoading: false,
+      mutate: mockMutate,
+    });
+  });
+
+  it("names the account the chat works in", () => {
+    render(<Chat open />);
+
+    expect(screen.getByText("Chat for a@example.com")).toBeTruthy();
+    expect(screen.queryByText(/Switched to/)).toBeNull();
+  });
+
+  it("says when it switched to another account for this conversation", () => {
+    accountChat.chatAccount = {
+      id: "email-account-2",
+      email: "b@example.com",
+      account: { disconnectedAt: null, provider: "google" },
+      providerRateLimit: null,
+    };
+    accountChat.switchedAccount = true;
+    render(<Chat open />);
+
+    expect(
+      screen.getByText("Switched to b@example.com for this conversation"),
+    ).toBeTruthy();
+  });
+
+  it("offers to move to the open email's account when a conversation is under way", () => {
+    accountChat.openThreadAccountId = "email-account-2";
+    render(<Chat open />);
+
+    expect(screen.getByText("The open email is in b@example.com")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+
+    expect(accountChat.switchChatAccount).toHaveBeenCalledWith(
+      "email-account-2",
+    );
+  });
+
+  it("runs the conversation's cards and actions in the chat's account", () => {
+    accountChat.chatAccount = {
+      id: "email-account-2",
+      email: "b@example.com",
+      account: { disconnectedAt: null, provider: "google" },
+      providerRateLimit: null,
+    };
+    chatState.messages = [
+      { id: "m1", role: "user", parts: [{ type: "text", text: "Hi" }] },
+    ];
+    render(
+      <EmailAccountPreviewProvider>
+        <Chat open />
+      </EmailAccountPreviewProvider>,
+    );
+
+    expect(screen.getByTestId("messages-account").textContent).toBe(
+      "email-account-2",
+    );
+  });
+
+  it("waits for another account's details before showing its conversation", () => {
+    // A reload of ?chatAccountId=B: the accounts list is still loading.
+    accountChat.chatAccount = null;
+    accountChat.switchedAccount = true;
+    chatState.messages = [
+      { id: "m1", role: "user", parts: [{ type: "text", text: "Hi" }] },
+    ];
+    render(
+      <EmailAccountPreviewProvider>
+        <Chat open />
+      </EmailAccountPreviewProvider>,
+    );
+
+    // The page's account must never stand in for the chat's.
+    expect(screen.queryByTestId("messages")).toBeNull();
+    expect(screen.getByRole("status", { name: "Loading chat" })).toBeTruthy();
+  });
+
+  it("says the chat's account couldn't load instead of waiting for it", () => {
+    accountChat.chatAccount = null;
+    accountChat.switchedAccount = true;
+    accountChat.chatAccountError = new Error("Failed to fetch");
+    chatState.messages = [
+      { id: "m1", role: "user", parts: [{ type: "text", text: "Hi" }] },
+    ];
+    render(
+      <EmailAccountPreviewProvider>
+        <Chat open />
+      </EmailAccountPreviewProvider>,
+    );
+
+    expect(screen.queryByTestId("messages")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Couldn't load this",
+    );
+  });
+
+  it("keeps a disconnected account's chat read-only with a way to reconnect", () => {
+    accountChat.chatAccount = {
+      id: "email-account-2",
+      email: "b@example.com",
+      account: {
+        disconnectedAt: "2026-09-01T00:00:00.000Z",
+        provider: "google",
+      },
+      providerRateLimit: null,
+    };
+    render(<Chat open />);
+
+    expect(
+      screen.getByText("Reconnect b@example.com to continue"),
+    ).toBeTruthy();
+    expect(
+      (screen.getByTestId("chat-input") as HTMLTextAreaElement).disabled,
+    ).toBe(true);
   });
 });
 
@@ -322,10 +536,15 @@ const chatHistoryEntry = {
   name: "Project update",
   createdAt: new Date("2026-05-23T00:00:00.000Z"),
   updatedAt: new Date("2026-05-23T00:00:00.000Z"),
-  deletedAt: null,
-  compactionCount: 0,
-  lastSeenRulesRevision: null,
-  activeStreamId: null,
-  activeStreamStartedAt: null,
   emailAccountId: "email-account-1",
+  email: "a@example.com",
+  disconnected: false,
+} satisfies ChatHistoryEntry;
+
+const otherAccountChat = {
+  ...chatHistoryEntry,
+  id: "chat-2",
+  name: "Travel plans",
+  emailAccountId: "email-account-2",
+  email: "b@example.com",
 } satisfies ChatHistoryEntry;

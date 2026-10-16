@@ -149,6 +149,10 @@ function AccountHeader({
   );
 }
 
+// Chats and memories are stored per account and cascade with it.
+const CHATS_DELETED_WARNING =
+  "Its chats and assistant memories will be deleted.";
+
 function AccountOptionsDropdown({
   emailAccount,
   onAccountDeleted,
@@ -231,8 +235,8 @@ function AccountOptionsDropdown({
           title="Delete Account"
           description={
             emailAccount.isPrimary
-              ? `Are you sure you want to delete "${emailAccount.email}"? This is your primary account. You will be logged out and need to log in again. Your oldest remaining account will become your new primary account. All data for "${emailAccount.email}" will be permanently deleted from ${BRAND_NAME}.`
-              : `Are you sure you want to delete "${emailAccount.email}"? This will delete all data for it on ${BRAND_NAME}.`
+              ? `Are you sure you want to delete "${emailAccount.email}"? This is your primary account. You will be logged out and need to log in again. Your oldest remaining account will become your new primary account. All data for "${emailAccount.email}" will be permanently deleted from ${BRAND_NAME}. ${CHATS_DELETED_WARNING}`
+              : `Are you sure you want to delete "${emailAccount.email}"? This will delete all data for it on ${BRAND_NAME}. ${CHATS_DELETED_WARNING}`
           }
           confirmText="Delete"
           onConfirm={() => {
