@@ -46,6 +46,7 @@ const STUCK_TURN_ACCOUNT = "account-stuck-turn";
 const TURN_GAP_ACCOUNT = "account-turn-gap";
 const GIVE_UP_ACCOUNT = "account-give-up";
 const DEADLINE_ACCOUNT = "account-deadline";
+const BACKOFF_ACCOUNT = "account-backoff";
 const NO_DEADLINE_ACCOUNT = "account-no-deadline";
 // Gmail refuses short bursts well under its minute's limit; its minute spread
 // evenly is the most any second can safely carry.
@@ -458,7 +459,7 @@ describe("Gmail quota gate", () => {
     expect(page).toBe(false);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(page).toBe(true);
-    // Background work stays out until its longer pause ends.
+    // Background comes back soon after, at a slower pace.
     let insight = false;
     runWithGmailQuota(
       { caller: "user/inbox-insights", priority: "background" },
@@ -467,10 +468,60 @@ describe("Gmail quota gate", () => {
           insight = true;
         }),
     );
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(insight).toBe(false);
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(5000);
     expect(insight).toBe(true);
+  });
+
+  it("halves background's pace for ten minutes after a refusal rather than pausing it and resuming at full pace", async () => {
+    const admissions: number[] = [];
+    const backfill = () =>
+      runWithGmailQuota(
+        { caller: "mail/v1/enumeration", priority: "background" },
+        () =>
+          meterGmailCall(
+            { emailAccountId: BACKOFF_ACCOUNT, cost: 20 },
+            async () => {
+              admissions.push(Date.now());
+            },
+          ),
+      );
+    const unitsOverTenSeconds = async () => {
+      const from = Date.now();
+      let stop = false;
+      const loop = (async () => {
+        while (!stop) await backfill().catch(() => sleep(1000));
+      })();
+      await vi.advanceTimersByTimeAsync(10_000);
+      stop = true;
+      await vi.advanceTimersByTimeAsync(2000);
+      await loop;
+      return (
+        admissions.filter((at) => at >= from && at < from + 10_000).length * 20
+      );
+    };
+    // Its full pace is 40 units a second.
+    expect(await unitsOverTenSeconds()).toBeGreaterThan(300);
+
+    await expect(
+      runWithGmailQuota(
+        { caller: "mail/v1/enumeration", priority: "background" },
+        () =>
+          meterGmailCall(
+            { emailAccountId: BACKOFF_ACCOUNT, cost: 20 },
+            async () => {
+              throw quotaRefusal;
+            },
+          ),
+      ),
+    ).rejects.toBe(quotaRefusal);
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    // Gmail refused at that pace, so it comes back at half of it...
+    expect(await unitsOverTenSeconds()).toBeGreaterThan(0);
+    expect(await unitsOverTenSeconds()).toBeLessThanOrEqual(200);
+    // ...and gets its full pace back once ten quiet minutes have passed.
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(await unitsOverTenSeconds()).toBeGreaterThan(300);
   });
 
   it("never admits more in any second than Gmail allows, leaving room for interactive calls", async () => {

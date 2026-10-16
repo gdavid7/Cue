@@ -56,7 +56,11 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
         }
         return pace.windowMs;
       };
-      let paceWait = windowWait(pace.cap);
+      const cap =
+        pace.slowKey && ttl(pace.slowKey) > 0
+          ? Math.floor(pace.cap / 2)
+          : pace.cap;
+      let paceWait = windowWait(cap);
       const demandTtl = (demands.get(pace.demand.key)?.endsAt ?? 0) - now;
       if (pace.demand.yieldCap !== undefined && demandTtl > 0) {
         const afterDemand = Math.max(demandTtl, paceWait);

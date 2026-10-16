@@ -48,6 +48,7 @@ const keys = {
   pause: "gmail-quota:test:background-pause",
   pace: "gmail-quota:test:pace",
   demand: "gmail-quota:test:interactive-demand",
+  slow: "gmail-quota:test:background-slow",
 };
 const take = (input: {
   cost: number;
@@ -55,6 +56,7 @@ const take = (input: {
   blockers?: { key: string; deferMs?: number }[];
   usageField?: string;
   paceCap?: number;
+  slowKey?: string;
   waitBudgetMs?: number;
   demand?: {
     key: string;
@@ -69,6 +71,7 @@ const admit = (input: {
   blockers?: { key: string; deferMs?: number }[];
   usageField?: string;
   paceCap?: number;
+  slowKey?: string;
   waitBudgetMs?: number;
   demand?: {
     key: string;
@@ -92,6 +95,7 @@ const admit = (input: {
       key: keys.pace,
       cap: input.paceCap ?? 100_000,
       windowMs: 1000,
+      slowKey: input.slowKey,
       demand: input.demand ?? { key: keys.demand },
     },
   });
@@ -220,6 +224,25 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       // A higher cap still has room in the same second.
       expect(await take({ cost: 60, floor: -200, paceCap: 200 })).toBe(0);
       expect(Number(await redis!.hget(keys.usage, "peak:second"))).toBe(180);
+    });
+
+    it("halves the pace cap while the slow key is set, still honouring blockers", async () => {
+      const slowed = {
+        cost: 20,
+        floor: 500,
+        paceCap: 40,
+        slowKey: keys.slow,
+        blockers: [{ key: keys.pause }],
+      };
+      await gmailQuotaStore.block({ key: keys.slow, ms: 600_000 });
+      expect(await take(slowed)).toBe(0);
+      // Half of 40 a second: the next message waits for the second to pass.
+      expect(await take(slowed)).toBeGreaterThan(0);
+      await gmailQuotaStore.clear(keys.slow);
+      expect(await take(slowed)).toBe(0);
+      await gmailQuotaStore.block({ key: keys.pause, ms: 20_000 });
+      await redis!.del(keys.pace);
+      expect(await take(slowed)).toBeGreaterThan(19_000);
     });
 
     it("holds others to their yield cap while a person's demand lasts", async () => {

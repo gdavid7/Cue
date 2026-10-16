@@ -22,7 +22,7 @@ export type GmailQuotaStore = {
    * otherwise the milliseconds to wait before asking again. A blocker with
    * `deferMs` is lifted explicitly, usually long before it expires, so a
    * caller it holds is told to come back in `deferMs` (`defer`) rather than
-   * wait it out.
+   * wait it out. While `pace.slowKey` exists the pace cap is halved.
    */
   take(input: {
     bucketKey: string;
@@ -42,6 +42,7 @@ export type GmailQuotaStore = {
       key: string;
       cap: number;
       windowMs: number;
+      slowKey?: string;
       demand: {
         key: string;
         yieldCap?: number;
@@ -100,9 +101,12 @@ local yieldCap = tonumber(ARGV[8])
 local demandMs = tonumber(ARGV[9])
 local demandEvery = tonumber(ARGV[10])
 local waitBudget = tonumber(ARGV[11])
+if ARGV[12] == '1' and redis.call('EXISTS', KEYS[6]) == 1 then
+  paceCap = math.floor(paceCap / 2)
+end
 local wait = 0
 local defer = 0
-for i = 6, #KEYS do
+for i = 7, #KEYS do
   local ttl = redis.call('PTTL', KEYS[i])
   local deferMs = tonumber(ARGV[i + 6])
   if ttl > 0 and deferMs and deferMs > 0 then
@@ -233,6 +237,7 @@ export const gmailQuotaStore: GmailQuotaStore = {
         input.pace.key,
         `${input.pace.key}:seq`,
         input.pace.demand.key,
+        input.pace.slowKey ?? input.pace.key,
         ...input.blockers.map((blocker) => blocker.key),
       ],
       [
@@ -247,6 +252,7 @@ export const gmailQuotaStore: GmailQuotaStore = {
         String(input.pace.demand.markMs ?? 0),
         String(input.pace.demand.everyMs ?? input.pace.demand.markMs ?? 0),
         String(input.waitBudgetMs ?? -1),
+        input.pace.slowKey ? "1" : "0",
         ...input.blockers.map((blocker) => String(blocker.deferMs ?? 0)),
       ],
     );

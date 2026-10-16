@@ -85,9 +85,13 @@ const ENGINE_SCAN_CALLER = "mail/v1/enumeration";
 // this long lets the call through rather than stall every Gmail call.
 const STORE_TIMEOUT_MS = 300;
 // After Gmail refuses a call, sync and background stand back while
-// interactive calls continue under Gmail's own retry.
+// interactive calls continue under Gmail's own retry. Background then comes
+// back at half its pace for ten minutes: at full pace it was refused again
+// about once a minute, each time after a pause. Its pause outlasts its
+// longest wait, so jobs come back later rather than hold a function open.
 const SYNC_PAUSE_MIN_MS = 10_000;
-const BACKGROUND_PAUSE_MIN_MS = 30_000;
+const BACKGROUND_PAUSE_MIN_MS = 20_000;
+const BACKGROUND_SLOW_MS = 10 * 60_000;
 // Usage hashes expire five minutes after their last write, so a summary can
 // still claim the four minutes before the current one.
 const SUMMARY_LOOKBACK_MINUTES = 4;
@@ -452,6 +456,8 @@ export async function admitGmailCall({
             key: keys.pace,
             cap: PACE_CAP[priority],
             windowMs: PACE_WINDOW_MS,
+            slowKey:
+              priority === "background" ? keys.backgroundSlow : undefined,
             demand:
               priority !== "interactive"
                 ? {
@@ -494,9 +500,10 @@ export async function admitGmailCall({
 }
 
 /**
- * Gmail refused a call for quota. Background work pauses; a refusal of
- * anything else also pauses sync. Interactive calls keep going, with Gmail's
- * own retry, since someone is waiting on them and they are few.
+ * Gmail refused a call for quota. Background work pauses, then runs at half
+ * its pace for a while; a refusal of anything else also pauses sync.
+ * Interactive calls keep going, with Gmail's own retry, since someone is
+ * waiting on them and they are few.
  */
 export async function noteGmailQuotaRefusal(
   ticket: GmailQuotaTicket,
@@ -513,6 +520,12 @@ export async function noteGmailQuotaRefusal(
       gmailQuotaStore.block({
         key: keys.backgroundPause,
         ms: Math.max(BACKGROUND_PAUSE_MIN_MS, retryAfterMs),
+      }),
+    );
+    await withinStoreTimeout(
+      gmailQuotaStore.block({
+        key: keys.backgroundSlow,
+        ms: BACKGROUND_SLOW_MS,
       }),
     );
     if (ticket.priority !== "background")
@@ -888,6 +901,7 @@ function accountKeys(emailAccountId: string) {
     syncPause: `${prefix}:sync-pause`,
     initialSync: `${prefix}:initial-sync`,
     backgroundPause: `${prefix}:background-pause`,
+    backgroundSlow: `${prefix}:background-slow`,
     usage: (minute: number) => `${prefix}:usage:${minute}`,
   };
 }
