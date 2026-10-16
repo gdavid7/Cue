@@ -19,6 +19,7 @@ import {
 } from "@/utils/messaging/rule-notifications";
 import { emailToContentForAI } from "@/utils/ai/content-sanitizer";
 import { FIRST_TIME_EVENTS, trackFirstTimeEvent } from "@/utils/posthog";
+import { recordFirstSuggestedReplySent } from "@/utils/analytics/activation";
 import { messageRepliesToSourceSender } from "@/utils/email";
 import { getDraftSendLogSimilarityFields } from "./draft-similarity";
 import { logReplyTrackerError } from "./error-logging";
@@ -243,6 +244,7 @@ export async function trackSentDraftStatus({
         event: FIRST_TIME_EVENTS.FIRST_DRAFT_SENT,
       }),
     );
+    await recordFirstSuggestedReplySent(emailAccountId);
   }
 
   const replaceMessagingDraftNotifications = wasLikelyDraftSent
@@ -589,6 +591,16 @@ async function trackSentSuggestedReplyDraft({
     draftExists,
     sentMessageRepliesToSource,
   });
+
+  // A draft still in the mailbox means this send was some other message.
+  if (
+    !draftExists &&
+    isDraftSentStatus(
+      getSentDraftStatus({ similarityScore, sentMessageRepliesToSource }),
+    )
+  ) {
+    await recordFirstSuggestedReplySent(emailAccountId);
+  }
 
   if (sentMessageRepliesToSource === false) return;
 

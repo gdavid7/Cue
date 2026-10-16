@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
+import { recordActiveDay } from "@/utils/analytics/activation";
 import { withEmailProvider } from "@/utils/middleware";
 import { getHomeData } from "@/utils/home/get-home";
 
@@ -8,17 +9,19 @@ export const maxDuration = 30;
 
 export const GET = withEmailProvider(
   "user/home",
-  async (request) =>
-    NextResponse.json(
-      await getHomeData({
-        emailAccountId: request.auth.emailAccountId,
-        userEmail: request.auth.email,
-        emailProvider: request.emailProvider,
-        logger: request.logger,
-        // "Today" and "after 5 pm" are the browser's, which the server can't see.
-        timeZone: validTimeZone(request.nextUrl.searchParams.get("tz")),
-      }),
-    ),
+  async (request) => {
+    const { emailAccountId } = request.auth;
+    const home = await getHomeData({
+      emailAccountId,
+      userEmail: request.auth.email,
+      emailProvider: request.emailProvider,
+      logger: request.logger,
+      // "Today" and "after 5 pm" are the browser's, which the server can't see.
+      timeZone: validTimeZone(request.nextUrl.searchParams.get("tz")),
+    });
+    after(() => recordActiveDay(emailAccountId));
+    return NextResponse.json(home);
+  },
   { maxDuration },
 );
 
