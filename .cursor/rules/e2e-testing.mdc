@@ -1,9 +1,14 @@
 ---
 description: E2E Flow Tests setup and debugging guide
-globs: ["**/__tests__/e2e/**", ".github/workflows/e2e-flows.yml"]
+globs: ["**/__tests__/e2e/**"]
 ---
 
 # E2E Flow Tests
+
+> **This fork:** the `e2e-flows.yml` workflow was removed. It ran the upstream
+> project's image from the upstream E2E repository, which this fork can't use.
+> Run flow tests locally, use CI browser QA (`docs/dev-infra/ci-browser-qa.md`)
+> for emulated coverage, and the production robots for the live deployment.
 
 ## Overview
 

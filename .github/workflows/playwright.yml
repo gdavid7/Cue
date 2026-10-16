@@ -31,9 +31,7 @@ on:
       - "apps/web/package.json"
       - "pnpm-lock.yaml"
       - "scripts/pnpm-install-without-desktop.sh"
-      - "scripts/publish-playwright-report.sh"
       - ".github/workflows/playwright.yml"
-      - ".github/workflows/publish-playwright-report.yml"
   pull_request:
     branches: [main]
     paths:
@@ -61,9 +59,7 @@ on:
       - "apps/web/package.json"
       - "pnpm-lock.yaml"
       - "scripts/pnpm-install-without-desktop.sh"
-      - "scripts/publish-playwright-report.sh"
       - ".github/workflows/playwright.yml"
-      - ".github/workflows/publish-playwright-report.yml"
   schedule:
     - cron: "0 6 * * *"
   # Browser QA on demand for any branch, with no repository secrets:

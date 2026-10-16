@@ -15,6 +15,11 @@ Actions:
 - `sync` - Sync workflow files from main repo
 - `local` - Instructions for local setup
 
+> **This fork:** the `e2e-flows.yml` workflow was removed. It ran the upstream
+> project's image from the upstream E2E repository, which this fork can't use.
+> Run flow tests locally, use CI browser QA (`docs/dev-infra/ci-browser-qa.md`)
+> for emulated coverage, and the production robots for the live deployment.
+
 ## Quick Reference
 
 ### Trigger Tests

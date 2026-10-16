@@ -44,7 +44,7 @@ Configure these secrets in your repository:
 - `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_WEBHOOK_CLIENT_STATE`
 - `LLM_API_KEY`
 
-Also set the repository variable `E2E_FLOWS_ENABLED=true` to enable the workflow.
+These secrets apply to the upstream E2E repository; this fork has no `e2e-flows.yml` workflow, so run flows locally (below).
 
 ### 3. Local Development
 
