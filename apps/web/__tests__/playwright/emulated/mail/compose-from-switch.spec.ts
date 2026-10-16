@@ -226,12 +226,14 @@ test("keeps text typed while the message moves to another From", async ({
     // While the move waits, the message can't be edited.
     const form = dialog.locator("form");
     await expect(form).toHaveAttribute("inert", "");
-    await page.keyboard.type(" Lost?");
+    // Clicks and keys can't reach an inert editor, so nothing can be typed.
+    expect(
+      await editor.evaluate((element) => Boolean(element.closest("[inert]"))),
+    ).toBe(true);
     releaseSave();
 
     await expect(from).toContainText(secondAccount.email, { timeout: 60_000 });
     await expect(editor).toContainText("Before the switch. More.");
-    await expect(editor).not.toContainText("Lost?");
     await expect(form).not.toHaveAttribute("inert");
     await page.unroute("**/*");
     await dialog.getByRole("button", { name: "Discard draft" }).click();

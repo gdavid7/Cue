@@ -23,6 +23,9 @@ export function useLocalReplyDraft(
   }>();
   useEffect(() => {
     if (!key) return;
+    // Another identity's result is stale once this one loads: coming back to
+    // it must read what was saved meanwhile.
+    setLoaded((current) => (current?.key === key ? current : undefined));
     let cancelled = false;
     const identities = JSON.parse(key) as {
       identity: ReplyDraftIdentity;
