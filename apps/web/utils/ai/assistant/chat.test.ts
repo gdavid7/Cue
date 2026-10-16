@@ -752,6 +752,42 @@ describe("aiProcessAssistantChat turn limits", () => {
   });
 });
 
+describe("aiProcessAssistantChat step log", () => {
+  it("logs each step's cached input tokens next to its input tokens", async () => {
+    vi.clearAllMocks();
+    vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
+    const logger = createTestLogger();
+    const info = vi.spyOn(logger, "info");
+    await aiProcessAssistantChat({
+      messages: [{ role: "user", content: "what's new?" }],
+      emailAccountId: "email-account-id",
+      user: getEmailAccount(),
+      logger,
+    });
+    const [options] = vi.mocked(toolCallAgentStream).mock.calls[0];
+
+    await options.onStepEnd?.({
+      stepNumber: 1,
+      model: { provider: "google.generative-ai", modelId: "gemini-3.8-flash" },
+      finishReason: "tool-calls",
+      toolCalls: [],
+      usage: {
+        inputTokens: 22_600,
+        inputTokenDetails: { cacheReadTokens: 21_000 },
+        outputTokens: 40,
+      },
+    } as never);
+
+    expect(info).toHaveBeenCalledWith(
+      "Assistant chat step finished",
+      expect.objectContaining({
+        inputTokens: 22_600,
+        cachedInputTokens: 21_000,
+      }),
+    );
+  });
+});
+
 describe("aiProcessAssistantChat Gmail demand", () => {
   async function run() {
     vi.clearAllMocks();
