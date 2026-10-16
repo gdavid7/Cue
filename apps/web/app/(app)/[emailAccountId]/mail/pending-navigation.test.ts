@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { isSidebarRowActive } from "./pending-navigation";
+// @vitest-environment jsdom
+
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isSidebarRowActive, usePendingNavigation } from "./pending-navigation";
 
 const pending = { href: "/account-1/home", from: "/mail/u/0/inbox" };
 
@@ -44,5 +47,36 @@ describe("isSidebarRowActive", () => {
         pathname: "/mail/u/0/sent",
       }),
     ).toBe(true);
+  });
+});
+
+describe("usePendingNavigation", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("lets go of a navigation that never leaves, such as one sent back", () => {
+    const { result } = renderHook(() =>
+      usePendingNavigation("/mail/u/0/inbox"),
+    );
+    act(() => result.current.start("/account-1/home"));
+    expect(result.current.pending?.href).toBe("/account-1/home");
+
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(result.current.pending).toBeNull();
+  });
+
+  it("lets go once the address changes", () => {
+    const { result, rerender } = renderHook(
+      ({ pathname }) => usePendingNavigation(pathname),
+      { initialProps: { pathname: "/mail/u/0/inbox" } },
+    );
+    act(() => result.current.start("/account-1/home"));
+    rerender({ pathname: "/account-1/home" });
+    expect(result.current.pending).toBeNull();
   });
 });

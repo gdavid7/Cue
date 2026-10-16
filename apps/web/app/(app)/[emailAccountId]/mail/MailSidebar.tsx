@@ -65,6 +65,7 @@ import { showMailView } from "./show-mail-view";
 import {
   isSidebarRowActive,
   type PendingNavigation,
+  usePendingNavigation,
 } from "./pending-navigation";
 import { splitLabelsByListVisibility } from "./label-visibility";
 import { getMailSidebarFolders } from "./outlook-folder-list";
@@ -1108,14 +1109,10 @@ const PendingNavigationContext = createContext<{
 /** Lets a row show as current as soon as it's clicked; see `isSidebarRowActive`. */
 function PendingNavigationProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "";
-  const [pending, setPending] = useState<PendingNavigation | null>(null);
+  const { pending, start } = usePendingNavigation(pathname);
   const value = useMemo(
-    () => ({
-      pending,
-      pathname,
-      start: (href: string) => setPending({ href, from: pathname }),
-    }),
-    [pending, pathname],
+    () => ({ pending, pathname, start }),
+    [pending, pathname, start],
   );
   return (
     <PendingNavigationContext.Provider value={value}>
