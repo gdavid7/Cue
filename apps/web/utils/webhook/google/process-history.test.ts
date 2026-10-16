@@ -1225,6 +1225,32 @@ describe("processHistoryForUser - backlogs", () => {
     );
   });
 
+  it("stops reading history pages once the run's time budget is spent", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.mocked(getHistory).mockImplementation(async () => {
+      vi.setSystemTime(Date.now() + 10 * 60_000);
+      return { history: [], nextPageToken: "more" } as any;
+    });
+
+    try {
+      await processHistoryForUser(
+        { emailAddress: backlogAccount.email, historyId: 1500 },
+        {},
+        logger,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(getHistory).toHaveBeenCalledTimes(1);
+    expect(cursorUpdates()).toEqual([]);
+    // Cut short by time, not a run of empty pages.
+    expect(countEmptyGmailHistoryRun).not.toHaveBeenCalled();
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/api/google/webhook/catch-up" }),
+    );
+  });
+
   it("keeps reading past empty pages to the records after them", async () => {
     let page = 0;
     vi.mocked(getHistory).mockImplementation(async () => {

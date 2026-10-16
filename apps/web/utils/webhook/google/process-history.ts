@@ -216,6 +216,7 @@ export async function processHistoryForUser(
           emailAccount: validatedEmailAccount,
           webhookHistoryId: historyId,
           options,
+          deadline,
           logger,
         });
 
@@ -284,11 +285,12 @@ export async function processHistoryForUser(
             emailAccountId: validatedEmailAccount.id,
             lastSyncedHistoryId: historyId,
           });
-        } else {
+        } else if (!historyResult.outOfTime) {
           // Every page this run could read held no records, and Gmail offers
           // more. The cursor stays: Gmail's current history id could skip
           // records on pages not read yet, so a catch-up reads on. Only after
-          // several such runs in a row does it move past them.
+          // several such runs in a row does it move past them. A run that ran
+          // out of time before its page limit doesn't count.
           const emptyRuns = await countEmptyGmailHistoryRun(
             validatedEmailAccount.id,
             logger,
@@ -637,12 +639,14 @@ async function fetchGmailHistoryResilient({
   emailAccount,
   webhookHistoryId,
   options,
+  deadline,
   logger,
 }: {
   gmail: gmail_v1.Gmail;
   emailAccount: ValidatedWebhookAccountData;
   webhookHistoryId: string;
   options: { startHistoryId?: string };
+  deadline: number;
   logger: Logger;
 }): Promise<
   | {
@@ -655,6 +659,8 @@ async function fetchGmailHistoryResilient({
       hasMore: boolean;
       /** The mailbox's history id as of the last page read. */
       lastPageHistoryId: string | null;
+      /** Reading stopped at the run's deadline rather than a page limit. */
+      outOfTime: boolean;
     }
   | { status: "expired" }
 > {
@@ -680,6 +686,7 @@ async function fetchGmailHistoryResilient({
     let pageToken: string | undefined;
     let pageCount = 0;
     let lastPageHistoryId: string | null = null;
+    let outOfTime = false;
 
     do {
       const data = await getHistory(
@@ -707,8 +714,11 @@ async function fetchGmailHistoryResilient({
         accumulatedHistoryItemCount: historyEntries.length,
         hasNextPage: !!pageToken,
       });
+      // Reading leaves the rest of the run's time to processing and saving.
+      outOfTime = Date.now() >= deadline;
     } while (
       pageToken &&
+      !outOfTime &&
       pageCount <
         (historyEntries.length
           ? MAX_GMAIL_HISTORY_PAGES_PER_RUN
@@ -724,6 +734,7 @@ async function fetchGmailHistoryResilient({
       historyItemCount: historyEntries.length,
       hasMore: !!pageToken,
       lastPageHistoryId,
+      outOfTime,
     };
   } catch (error) {
     // Gmail history IDs are typically valid for ~1 week. If older, Gmail returns a 404.
