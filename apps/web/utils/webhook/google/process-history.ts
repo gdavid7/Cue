@@ -242,6 +242,8 @@ export async function processHistoryForUser(
             BigInt(lastReadId) + BigInt(historyResult.hasMore ? 1 : 0);
 
         if (historyEntries.length > 0) {
+          // Empty runs only count in a row.
+          await clearEmptyGmailHistoryRuns(validatedEmailAccount.id, logger);
           logger.info("Processing history", {
             startHistoryId: historyResult.startHistoryId,
             historyIdGap: historyResult.historyIdGap,

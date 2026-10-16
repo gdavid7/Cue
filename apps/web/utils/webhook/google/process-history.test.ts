@@ -15,6 +15,7 @@ import { processHistoryItem } from "@/utils/webhook/google/process-history-item"
 import { publishToQstashAt } from "@/utils/upstash";
 import {
   clearGmailHistoryCatchUp,
+  clearEmptyGmailHistoryRuns,
   countEmptyGmailHistoryRun,
   getGmailHistoryCatchUp,
   markGmailHistoryCatchUp,
@@ -1159,6 +1160,23 @@ describe("processHistoryForUser - backlogs", () => {
       expect.objectContaining({
         body: { emailAccountId: "account-123", historyId: "1300" },
       }),
+    );
+  });
+
+  it("forgets earlier empty runs once a run reads records", async () => {
+    vi.mocked(getHistory).mockResolvedValue({
+      history: inboxHistory(["1100", "m1"]),
+    } as any);
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1100 },
+      {},
+      logger,
+    );
+
+    expect(clearEmptyGmailHistoryRuns).toHaveBeenCalledWith(
+      "account-123",
+      expect.anything(),
     );
   });
 
