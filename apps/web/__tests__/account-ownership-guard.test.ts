@@ -144,6 +144,9 @@ const ACCOUNT_PATH_SEGMENT = /\[\w*[aA]ccountId\]/;
 const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 // Imports whose names are never schemas that could hold an account id.
 const NON_SCHEMA_MODULES = /^(?:zod|zod\/.*|@\/generated\/prisma.*)$/;
+const SCHEMA_NAME = /(?:Schema|Input|Body|Query|Params)$/;
+const SCHEMA_METHOD_CALL =
+  /^\s*\.\s*(?:optional|nullish|nullable|array|omit|pick|extend|merge|partial|required|refine|superRefine|transform|or|and|default|parse|safeParse)\(/;
 const WEB_ROOT = path.resolve(import.meta.dirname, "..");
 
 describe("user-level handlers that take an account id", () => {
@@ -219,6 +222,16 @@ describe("schema reading", () => {
     ).toBe(true);
   });
 
+  it("counts a route that parses its query with a schema holding an account id", () => {
+    expect(
+      routeTakesAccountId(
+        "const query = sourceSchema.parse(Object.fromEntries(url.searchParams));",
+        schemas,
+        new Set(["sourceSchema"]),
+      ),
+    ).toBe(true);
+  });
+
   it("counts a route that reads its body without a schema it can read", () => {
     expect(
       routeTakesAccountId(
@@ -263,9 +276,12 @@ function findUserLevelHandlers() {
   const actionFiles = listFiles(path.join(WEB_ROOT, "utils/actions")).filter(
     (file) => file.endsWith(".ts") && !file.endsWith(".test.ts"),
   );
+  // Schemas live with the actions and in modules across utils.
+  const utilFiles = listFiles(path.join(WEB_ROOT, "utils")).filter(
+    (file) => file.endsWith(".ts") && !/\.test\.ts$|\.d\.ts$/.test(file),
+  );
   const schemas: Schemas = new Map();
-  for (const file of actionFiles)
-    addSchemas(schemas, readFileSync(file, "utf8"));
+  for (const file of utilFiles) addSchemas(schemas, readFileSync(file, "utf8"));
 
   for (const file of actionFiles) {
     const source = readFileSync(file, "utf8");
@@ -318,20 +334,21 @@ function routeTakesAccountId(
   imports: Set<string>,
 ) {
   if (ROUTE_ACCOUNT_INPUT.test(handler)) return true;
-  if (!ROUTE_READS_BODY.test(handler)) return false;
   const parseCalls = [...handler.matchAll(SCHEMA_PARSE_CALL)].filter(
     (match) => match[1] !== "JSON",
   );
-  // A body read without a schema may hold anything.
-  if (!parseCalls.length) return true;
+  // Any named schema the handler parses with, whatever it parses: body,
+  // query or path. Schemas written inline are in the handler, read above.
   const parsedWith = parseCalls.flatMap((match) =>
     match[1] ? [match[1]] : [],
   );
-  // Schemas written inline are in the handler itself, read above.
-  return parsedWith.some((name) => {
+  const parsesAccountId = parsedWith.some((name) => {
     const text = expandSchema(name, schemas, imports);
     return text === null || SCHEMA_ACCOUNT_KEY.test(text);
   });
+  if (parsesAccountId) return true;
+  // A body read without a schema may hold anything.
+  return ROUTE_READS_BODY.test(handler) && !parseCalls.length;
 }
 
 /** The schema an action validates, with the named schemas it is built from. */
@@ -366,7 +383,7 @@ function expandText(
 ): string | null {
   let unreadable = false;
   const code = text.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
-  const expanded = code.replace(/\b\w+\b/g, (word) => {
+  const expanded = code.replace(/\b\w+\b/g, (word, offset: number) => {
     const schema = schemas.get(word);
     if (schema) {
       if (seen.has(word)) return word;
@@ -375,7 +392,14 @@ function expandText(
       if (inner === null) unreadable = true;
       return inner ?? word;
     }
-    if (imports.has(word)) unreadable = true;
+    // An imported part of a schema is named as one or used as one; imported
+    // functions, enums and limits in refinements are not schemas.
+    if (
+      imports.has(word) &&
+      (SCHEMA_NAME.test(word) ||
+        SCHEMA_METHOD_CALL.test(code.slice(offset + word.length)))
+    )
+      unreadable = true;
     return word;
   });
   return unreadable ? null : expanded;
