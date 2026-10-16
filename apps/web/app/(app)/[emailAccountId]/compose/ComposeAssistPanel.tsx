@@ -113,7 +113,10 @@ export function ComposeAssistPanel({
       style={{
         left: position?.left ?? 0,
         top: position?.top ?? 0,
-        visibility: position ? undefined : "hidden",
+        // Transparent rather than hidden until placed: a hidden element can't
+        // take focus, and the menu and prompt focus themselves as they mount.
+        opacity: position ? undefined : 0,
+        pointerEvents: position ? undefined : "none",
       }}
     >
       {state.status === "menu" ? (
