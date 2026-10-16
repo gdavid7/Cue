@@ -84,12 +84,14 @@ function projectEarlierTurnResult(part: ToolResultPart): ToolResultPart {
 }
 
 function shortenEarlierTurnResult(part: ToolResultPart): ToolResultPart {
-  if (WRITE_SOURCE_TOOLS.has(part.toolName) || !isTrimmable(part)) return part;
+  if (!isTrimmable(part)) return part;
 
   return { ...part, output: trimOutput(part.toolName, part.output) };
 }
 
 function isTrimmable(part: ToolResultPart) {
+  if (WRITE_SOURCE_TOOLS.has(part.toolName)) return false;
+
   const { output } = part;
   const canShorten =
     output.type === "text" ||
