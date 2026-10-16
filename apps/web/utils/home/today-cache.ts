@@ -4,15 +4,15 @@ import type { GetHomeResponse } from "@/app/api/user/home/route";
  * Today's last answer, kept in this browser so Today opens on it at once
  * while a fresh one loads from Gmail, which can take seconds. It holds what
  * Today shows: senders, subjects and short previews, like the local mail
- * store already does on this device. It is kept per user and account, for a
- * day, and is cleared on sign-out and when the account is removed.
+ * store already does on this device. It is kept per user and account until
+ * the browser's day ends, and is cleared on sign-out and when the account is
+ * removed.
  */
 
 /** "Also in your inbox" shows this many rows. */
 export const ALSO_IN_INBOX_LIMIT = 5;
 
 const PREFIX = "cue:today:v1:";
-const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 // A row shows one line of preview; the rest would only take up storage.
 const PREVIEW_LENGTH = 140;
 
@@ -30,32 +30,33 @@ type Owner = { userId: string; emailAccountId: string };
 let blocked = false;
 const blockedAccountIds = new Set<string>();
 
+/**
+ * Today's saved copy for this user and account, if it was saved today. Every
+ * other user's copy and every out-of-date one is forgotten on the way.
+ */
 export function readCachedToday({
   userId,
   emailAccountId,
   now = Date.now(),
 }: Owner & { now?: number }): GetHomeResponse | undefined {
   if (!userId || !emailAccountId) return;
-  const key = storageKey({ userId, emailAccountId });
+  const wanted = storageKey({ userId, emailAccountId });
+  let found: GetHomeResponse | undefined;
   try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return;
-    const entry = JSON.parse(raw) as Partial<Entry>;
-    if (
-      entry.userId !== userId ||
-      entry.emailAccountId !== emailAccountId ||
-      typeof entry.savedAt !== "number" ||
-      !entry.data
-    )
-      return;
-    if (now - entry.savedAt > MAX_AGE_MS) {
-      window.localStorage.removeItem(key);
-      return;
+    for (const key of todayKeys()) {
+      const entry = key.startsWith(`${PREFIX}${userId}:`)
+        ? parseEntry(window.localStorage.getItem(key))
+        : undefined;
+      if (!entry || !sameDay(entry.savedAt, now) || key !== storageKey(entry)) {
+        window.localStorage.removeItem(key);
+        continue;
+      }
+      if (key === wanted) found = entry.data;
     }
-    return entry.data;
   } catch {
     return;
   }
+  return found;
 }
 
 /** Saves Today when every lane loaded: a pending lane would read as empty. */
@@ -126,6 +127,28 @@ function toStored(data: GetHomeResponse): GetHomeResponse {
     waiting: shorten(data.waiting),
     alsoInInbox: shorten(data.alsoInInbox.slice(0, ALSO_IN_INBOX_LIMIT)),
   };
+}
+
+function parseEntry(raw: string | null): Entry | undefined {
+  if (!raw) return;
+  try {
+    const entry = JSON.parse(raw) as Partial<Entry>;
+    if (
+      typeof entry.userId !== "string" ||
+      typeof entry.emailAccountId !== "string" ||
+      typeof entry.savedAt !== "number" ||
+      !entry.data
+    )
+      return;
+    return entry as Entry;
+  } catch {
+    return;
+  }
+}
+
+// "Today" counts and "Next up" belong to the day they were loaded.
+function sameDay(a: number, b: number) {
+  return new Date(a).toDateString() === new Date(b).toDateString();
 }
 
 function storageKey({ userId, emailAccountId }: Owner) {

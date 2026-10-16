@@ -10,7 +10,8 @@ import {
   writeCachedToday,
 } from "./today-cache";
 
-const NOW = new Date("2026-10-16T12:00:00Z").getTime();
+// Local times: what counts as "today" is the browser's own day.
+const NOW = new Date(2026, 9, 16, 12, 0).getTime();
 const HOUR = 60 * 60 * 1000;
 const owner = { userId: "user-1", emailAccountId: "account-1" };
 
@@ -50,10 +51,47 @@ describe("Today's cache", () => {
     expect(readCachedToday({ ...owner, now: NOW })).toBeUndefined();
   });
 
-  it("drops a Today older than a day", () => {
-    writeCachedToday({ ...owner, data: home(), now: NOW });
-    expect(readCachedToday({ ...owner, now: NOW + 25 * HOUR })).toBeUndefined();
+  it("drops a Today saved on an earlier day, however recently", () => {
+    // Its counts and "Next up" were yesterday's.
+    const lateEvening = new Date(2026, 9, 16, 23, 30).getTime();
+    const afterMidnight = new Date(2026, 9, 17, 0, 30).getTime();
+    writeCachedToday({ ...owner, data: home(), now: lateEvening });
+    expect(readCachedToday({ ...owner, now: afterMidnight })).toBeUndefined();
     expect(window.localStorage.length).toBe(0);
+  });
+
+  it("forgets other users' and out-of-date entries when it reads", () => {
+    writeCachedToday({
+      userId: "user-2",
+      emailAccountId: "account-9",
+      data: home(),
+      now: NOW - HOUR,
+    });
+    window.localStorage.setItem(
+      "cue:today:v1:user-1:account-2",
+      JSON.stringify({
+        userId: "user-1",
+        emailAccountId: "account-2",
+        savedAt: NOW - 30 * HOUR,
+        data: home(),
+      }),
+    );
+    writeCachedToday({ ...owner, data: home(), now: NOW - HOUR });
+    // Saving user-1's Today already forgot user-2's; put one back.
+    window.localStorage.setItem(
+      "cue:today:v1:user-2:account-9",
+      JSON.stringify({
+        userId: "user-2",
+        emailAccountId: "account-9",
+        savedAt: NOW - HOUR,
+        data: home(),
+      }),
+    );
+
+    expect(readCachedToday({ ...owner, now: NOW })).toEqual(home());
+    expect(Object.keys(window.localStorage)).toEqual([
+      "cue:today:v1:user-1:account-1",
+    ]);
   });
 
   it("keeps only a Today whose lanes all loaded", () => {
