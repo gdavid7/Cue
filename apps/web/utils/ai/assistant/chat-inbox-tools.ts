@@ -1875,6 +1875,7 @@ type OtherAccountSearch = Promise<
  */
 function startOtherAccountSearch({
   options: { userId, emailAccountId, logger },
+  abortSignal,
   input,
 }: {
   options: InboxToolOptions;
@@ -1904,10 +1905,12 @@ function startOtherAccountSearch({
     userId,
     emailAccountId,
     logger,
-    run: (account) =>
+    abortSignal,
+    run: (account, signal) =>
       searchOtherAccount({
         account,
         search,
+        signal,
         logger: logger.with({ otherEmailAccountId: account.id }),
       }),
   }).catch((error) => {
@@ -1919,10 +1922,12 @@ function startOtherAccountSearch({
 async function searchOtherAccount({
   account,
   search,
+  signal,
   logger,
 }: {
   account: OtherAccount;
   search: AccountSearch;
+  signal: AbortSignal;
   logger: Logger;
 }): Promise<OtherAccountSearchResult> {
   const emailProvider = await createEmailProvider({
@@ -1930,14 +1935,16 @@ async function searchOtherAccount({
     provider: account.provider,
     logger,
   });
+  signal.throwIfAborted();
   const labelsPromise = getLabelsForSearchResults({ emailProvider, logger });
   const isOutlook = isMicrosoftProvider(account.provider);
   const result = isOutlook
-    ? await searchOtherOutlookAccount({ emailProvider, search, logger })
+    ? await searchOtherOutlookAccount({ emailProvider, search, signal, logger })
     : await emailProvider.searchMessages({
         query: toGmailQuery(search),
         maxResults: OTHER_ACCOUNT_MAX_RESULTS,
         allowPartial: true,
+        signal,
       });
   const labelsById = createLabelLookupMap(await labelsPromise);
 
@@ -1957,10 +1964,12 @@ async function searchOtherAccount({
 async function searchOtherOutlookAccount({
   emailProvider,
   search,
+  signal,
   logger,
 }: {
   emailProvider: EmailProvider;
   search: AccountSearch;
+  signal: AbortSignal;
   logger: Logger;
 }) {
   const { result, lastError } = await runOutlookSearch({
@@ -1972,6 +1981,7 @@ async function searchOtherOutlookAccount({
     }),
     limit: OTHER_ACCOUNT_MAX_RESULTS,
     logger,
+    signal,
   });
   if (!result) throw lastError ?? new Error("Outlook search failed");
   return result;

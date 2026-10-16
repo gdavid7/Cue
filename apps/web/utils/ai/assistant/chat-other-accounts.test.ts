@@ -271,4 +271,73 @@ describe("runOnOtherAccounts", () => {
       vi.useRealTimers();
     }
   });
+
+  it("answers within one deadline for all accounts, however many there are", async () => {
+    vi.useFakeTimers();
+    try {
+      prisma.emailAccount.findMany.mockResolvedValue(
+        Array.from({ length: 10 }, (_, index) =>
+          connectedAccount(`account-${index + 2}`, `a${index}@example.com`),
+        ) as never,
+      );
+      const signals: AbortSignal[] = [];
+      let settled = false;
+
+      const pending = runOnOtherAccounts({
+        userId: USER_ID,
+        emailAccountId: CHAT_ACCOUNT,
+        logger,
+        run: (_account, signal) => {
+          signals.push(signal);
+          return new Promise(() => undefined);
+        },
+      }).then((results) => {
+        settled = true;
+        return results;
+      });
+
+      await vi.advanceTimersByTimeAsync(14_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(settled).toBe(true);
+
+      const results = await pending;
+      expect(results).toHaveLength(10);
+      for (const result of results) {
+        expect(result).toEqual({
+          account: expect.any(Object),
+          error: "This account did not answer in time.",
+        });
+      }
+      // Accounts still queued at the deadline are never started.
+      expect(signals).toHaveLength(3);
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops the accounts' searches when the chat turn is stopped", async () => {
+    prisma.emailAccount.findMany.mockResolvedValue([
+      connectedAccount(OTHER_ACCOUNT, "other@example.com"),
+    ] as never);
+    const turn = new AbortController();
+    let accountSignal: AbortSignal | undefined;
+
+    const pending = runOnOtherAccounts({
+      userId: USER_ID,
+      emailAccountId: CHAT_ACCOUNT,
+      logger,
+      abortSignal: turn.signal,
+      run: (_account, signal) => {
+        accountSignal = signal;
+        return new Promise(() => undefined);
+      },
+    });
+    await vi.waitFor(() => expect(accountSignal).toBeDefined());
+    turn.abort();
+
+    await expect(pending).resolves.toHaveLength(1);
+    expect(accountSignal?.aborted).toBe(true);
+  });
 });

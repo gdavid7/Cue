@@ -7,10 +7,11 @@ import { parseOtherAccountEmailId } from "@/utils/ai/assistant/other-account-ema
 
 // Each other account is searched on a person's behalf while they wait, and
 // draws on its own Gmail or Graph budget, so a few run at once and a slow one
-// is reported rather than holding up the reply.
+// is reported rather than holding up the reply: all of them answer by one
+// deadline, however many there are.
 const OTHER_ACCOUNTS_CONCURRENCY = 3;
 const MAX_OTHER_ACCOUNTS = 10;
-const OTHER_ACCOUNT_TIMEOUT_MS = 15_000;
+const OTHER_ACCOUNTS_DEADLINE_MS = 15_000;
 
 type ConnectedEmailAccount = Awaited<
   ReturnType<typeof getConnectedEmailAccounts>
@@ -74,42 +75,81 @@ export async function resolveEmailAccountForId({
   };
 }
 
+/**
+ * Runs `run` for each of the user's other accounts, a few at once, and
+ * answers by one deadline for all of them. At the deadline, or when the chat
+ * turn stops, every unfinished search is aborted through the signal it was
+ * given, queued accounts are never started, and each is reported as not
+ * answering in time.
+ */
 export async function runOnOtherAccounts<T>({
   userId,
   emailAccountId,
   logger,
+  abortSignal,
   run,
 }: {
   userId: string;
   /** The chat's own account, which the caller searches itself. */
   emailAccountId: string;
   logger: Logger;
-  run: (account: ConnectedEmailAccount) => Promise<T>;
+  abortSignal?: AbortSignal;
+  run: (account: ConnectedEmailAccount, signal: AbortSignal) => Promise<T>;
 }): Promise<OtherAccountResult<T>[]> {
   const accounts = (await getConnectedEmailAccounts({ userId }))
     .filter((account) => account.id !== emailAccountId)
     .slice(0, MAX_OTHER_ACCOUNTS);
 
-  return mapWithConcurrency(
-    accounts,
-    OTHER_ACCOUNTS_CONCURRENCY,
-    async (account): Promise<OtherAccountResult<T>> => {
-      try {
-        return { account, result: await withTimeout(run(account)) };
-      } catch (error) {
-        logger.warn("Search in another account failed", {
-          otherEmailAccountId: account.id,
-          error,
-        });
-        return {
-          account,
-          error:
-            error instanceof OtherAccountTimeoutError
-              ? "This account did not answer in time."
-              : "Could not search this account.",
-        };
-      }
-    },
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  if (abortSignal?.aborted) stop();
+  abortSignal?.addEventListener("abort", stop, { once: true });
+  const deadline = setTimeout(stop, OTHER_ACCOUNTS_DEADLINE_MS);
+  const stopped = new Promise<void>((resolve) => {
+    if (controller.signal.aborted) resolve();
+    controller.signal.addEventListener("abort", () => resolve(), {
+      once: true,
+    });
+  });
+
+  const finished: Array<OtherAccountResult<T> | undefined> = [];
+  try {
+    await Promise.race([
+      mapWithConcurrency(
+        accounts,
+        OTHER_ACCOUNTS_CONCURRENCY,
+        async (account, index) => {
+          if (controller.signal.aborted) return;
+          try {
+            const result = await run(account, controller.signal);
+            if (!controller.signal.aborted)
+              finished[index] = { account, result };
+          } catch (error) {
+            if (controller.signal.aborted) return;
+            logger.warn("Search in another account failed", {
+              otherEmailAccountId: account.id,
+              error,
+            });
+            finished[index] = {
+              account,
+              error: "Could not search this account.",
+            };
+          }
+        },
+      ),
+      stopped,
+    ]);
+  } finally {
+    clearTimeout(deadline);
+    abortSignal?.removeEventListener("abort", stop);
+  }
+
+  return accounts.map(
+    (account, index) =>
+      finished[index] ?? {
+        account,
+        error: "This account did not answer in time.",
+      },
   );
 }
 
@@ -219,23 +259,4 @@ async function refuseOtherAccountEmail({
     error: `This email is in the user's other account ${account.email}. This chat works in its own account${chatAccount} and can only act on that account's email, so nothing was done. Tell the user which account the email is in and that they can switch the chat to ${account.email} to act on it.`,
     emailAccount: account.email,
   });
-}
-
-class OtherAccountTimeoutError extends Error {}
-
-async function withTimeout<T>(promise: Promise<T>) {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new OtherAccountTimeoutError()),
-          OTHER_ACCOUNT_TIMEOUT_MS,
-        );
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
 }

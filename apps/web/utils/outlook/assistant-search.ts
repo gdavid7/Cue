@@ -26,12 +26,15 @@ export async function runOutlookSearch({
   limit,
   pageToken,
   logger,
+  signal,
 }: {
   emailProvider: EmailProvider;
   normalizedInput: NormalizedOutlookSearchInput;
   limit: number;
   pageToken?: string | null;
   logger: Logger;
+  /** Stops the search's Graph requests. */
+  signal?: AbortSignal;
 }): Promise<{
   result?: SearchMessagesResult;
   queryUsed: string;
@@ -82,6 +85,7 @@ export async function runOutlookSearch({
         // Matches Gmail, and the browser's local search, which never holds
         // Junk or Deleted Items.
         excludeSpamTrash: true,
+        signal,
       });
       executedQuery = candidateQuery;
       break;
@@ -129,6 +133,7 @@ export async function runOutlookSearch({
     readState: normalizedInput.readState,
     categoryName: normalizedInput.categoryName,
     fromEmail: normalizedInput.fromEmail,
+    signal,
     folderId,
   });
 
@@ -165,6 +170,7 @@ async function skipEmptyOutlookSearchPages({
   categoryName,
   fromEmail,
   folderId,
+  signal,
 }: {
   emailProvider: EmailProvider;
   searchResult: SearchMessagesResult;
@@ -174,6 +180,7 @@ async function skipEmptyOutlookSearchPages({
   categoryName?: string | null;
   fromEmail?: string | null;
   folderId?: string;
+  signal?: AbortSignal;
 }) {
   let result = searchResult;
   let emptyPageSkips = 0;
@@ -193,6 +200,7 @@ async function skipEmptyOutlookSearchPages({
       labelName: categoryName ?? undefined,
       ...(folderId && { folderId }),
       excludeSpamTrash: true,
+      signal,
     });
   }
 

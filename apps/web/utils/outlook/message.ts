@@ -3,7 +3,10 @@ import { CALENDAR_INVITATION_LIMITS } from "@/utils/calendar/invitations/constan
 import { isSameCalendarInvitation } from "@/utils/calendar/invitations/content";
 import { escapeSearchValue } from "@/utils/outlook/search-escape";
 import PostalMime from "postal-mime";
-import { ResponseType } from "@microsoft/microsoft-graph-client";
+import {
+  type GraphRequest,
+  ResponseType,
+} from "@microsoft/microsoft-graph-client";
 import type {
   Message,
   Attachment as GraphAttachment,
@@ -553,10 +556,18 @@ export async function queryBatchMessages(
      * spam and trash, unless `folderId` points at one of them.
      */
     excludeSpamTrash?: boolean;
+    /** Stops the Graph requests a stopped search would still make. */
+    signal?: AbortSignal;
   },
   logger: Logger,
 ) {
-  const { searchQuery, dateFilters, pageToken, folderId } = options;
+  const { searchQuery, dateFilters, pageToken, folderId, signal } = options;
+  signal?.throwIfAborted();
+  const send = (request: GraphRequest) =>
+    withMicrosoftGraphRetry(() => {
+      signal?.throwIfAborted();
+      return (signal ? request.options({ signal }) : request).get();
+    }, logger);
   const normalizedFromEmail = options.fromEmail?.trim().toLowerCase();
 
   const MAX_RESULTS = 20;
@@ -611,10 +622,7 @@ export async function queryBatchMessages(
   const nextLink = resolveMicrosoftGraphNextLink(pageToken);
   if (nextLink) {
     const response: { value: Message[]; "@odata.nextLink"?: string } =
-      await withMicrosoftGraphRetry(
-        () => client.getClient().api(nextLink).get(),
-        logger,
-      );
+      await send(client.getClient().api(nextLink));
 
     const filteredMessages = response.value.filter((message) => {
       if (
@@ -696,7 +704,7 @@ export async function queryBatchMessages(
     );
 
     const response: { value: Message[]; "@odata.nextLink"?: string } =
-      await withMicrosoftGraphRetry(() => request.get(), logger);
+      await send(request);
 
     const filteredMessages = response.value.filter((message) => {
       if (
@@ -768,7 +776,7 @@ export async function queryBatchMessages(
     }
 
     const response: { value: Message[]; "@odata.nextLink"?: string } =
-      await withMicrosoftGraphRetry(() => request.get(), logger);
+      await send(request);
     const messages = await parseMessages(
       response.value.filter(inSearchedFolders),
     );

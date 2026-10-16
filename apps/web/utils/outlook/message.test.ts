@@ -330,6 +330,44 @@ describe("convertMessage", () => {
   });
 });
 
+describe("queryBatchMessages with an abort signal", () => {
+  it("hands the signal to the Graph search request", async () => {
+    const request = {
+      ...createMockMessagesRequest(),
+      options: vi.fn().mockReturnThis(),
+    };
+    const api = vi.fn(() => request);
+    const controller = new AbortController();
+
+    await queryBatchMessages(
+      createCachedOutlookClient(api),
+      { searchQuery: "Documents", signal: controller.signal },
+      createTestLogger(),
+    );
+
+    expect(request.options).toHaveBeenCalledWith({ signal: controller.signal });
+  });
+
+  it("asks Graph nothing once the search is stopped", async () => {
+    const request = {
+      ...createMockMessagesRequest(),
+      options: vi.fn().mockReturnThis(),
+    };
+    const api = vi.fn(() => request);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      queryBatchMessages(
+        createCachedOutlookClient(api),
+        { searchQuery: "Documents", signal: controller.signal },
+        createTestLogger(),
+      ),
+    ).rejects.toThrow();
+    expect(request.get).not.toHaveBeenCalled();
+  });
+});
+
 describe("queryBatchMessages", () => {
   it("returns immutable search IDs so execution history remains addressable after moves", async () => {
     const request = createMockMessagesRequest();

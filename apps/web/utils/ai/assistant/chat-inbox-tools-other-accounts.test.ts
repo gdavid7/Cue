@@ -101,6 +101,33 @@ describe("searchInbox across the user's accounts", () => {
     });
   });
 
+  it("gives other accounts' searches a signal that can stop them", async () => {
+    await search("google", { query: "contract renewal", allAccounts: true });
+
+    const [{ signal }] = providers["account-2"].searchMessages.mock.calls[0];
+    expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("does not search other accounts once the chat turn is stopped", async () => {
+    const turn = new AbortController();
+    turn.abort();
+
+    await searchInboxTool({
+      email: CHAT_EMAIL,
+      emailAccountId: "account-1",
+      userId: USER_ID,
+      provider: "google",
+      logger,
+    }).execute?.({ query: "contract renewal", limit: 20, allAccounts: true }, {
+      toolCallId: "call-1",
+      messages: [],
+      abortSignal: turn.signal,
+    } as never);
+
+    expect(providers["account-2"].searchMessages).not.toHaveBeenCalled();
+    expect(providers["account-3"].searchMessages).not.toHaveBeenCalled();
+  });
+
   it("caps each other account's results below a full page", async () => {
     await search("google", {
       query: "contract renewal",

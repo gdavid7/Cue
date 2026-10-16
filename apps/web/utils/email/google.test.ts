@@ -233,6 +233,45 @@ describe("GmailProvider.searchMessages with partial results allowed", () => {
   });
 });
 
+describe("GmailProvider.searchMessages with an abort signal", () => {
+  it("hands the signal to Gmail's list call", async () => {
+    const list = vi.fn().mockResolvedValue({ data: { messages: [] } });
+    const provider = new GmailProvider(createGmailClient({ list }));
+    const controller = new AbortController();
+
+    await provider.searchMessages({
+      query: "invoice",
+      signal: controller.signal,
+    });
+
+    expect(list.mock.calls[0]?.[1]).toEqual({ signal: controller.signal });
+  });
+
+  it("fetches no messages once the search is stopped", async () => {
+    gmailMessageBatchMock.getMessagesBatchPartial.mockClear();
+    const controller = new AbortController();
+    const list = vi.fn(async () => {
+      controller.abort();
+      return { data: { messages: [{ id: "m1", threadId: "t1" }] } };
+    });
+    const provider = new GmailProvider({
+      ...createGmailClient({ list } as never),
+      context: { _options: { auth: { credentials: { access_token: "t" } } } },
+    } as unknown as gmail_v1.Gmail);
+
+    await expect(
+      provider.searchMessages({
+        query: "invoice",
+        allowPartial: true,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow();
+    expect(
+      gmailMessageBatchMock.getMessagesBatchPartial,
+    ).not.toHaveBeenCalled();
+  });
+});
+
 describe("GmailProvider.searchMessages structured search", () => {
   it.each([
     "term",
