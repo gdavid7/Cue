@@ -82,10 +82,10 @@ test("persists pause state and disconnects the integration", async ({
   ).toBeVisible({ timeout: 120_000 });
 
   await openIntegrations(page);
-  // Apps Composio doesn't host are listed only while connected.
-  await page.getByRole("button", { name: /^Show \d+ more apps$/ }).click();
+  // Apps Composio doesn't host are listed only while connected, and emulated
+  // runs have no Composio key, so disconnecting Notion leaves nothing listed.
   await expect(
-    page.getByRole("button", { name: "Show fewer apps" }),
-  ).toBeVisible();
+    page.getByText("No integrations found", { exact: true }),
+  ).toBeVisible({ timeout: 60_000 });
   await expect(notionRow).toHaveCount(0);
 });
