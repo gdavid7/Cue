@@ -197,9 +197,10 @@ export const composioProvider: IntegrationProvider = {
     if (!result.successful) {
       const message = `${tool} failed: ${result.error ?? "unknown error"}`;
       // Composio can keep an account ACTIVE after the app revoked its token;
-      // the app's auth error is the only sign.
+      // the app's auth error is the only sign. It can also mean one resource
+      // is off limits to a working token, so it isn't remembered here: the
+      // caller confirms it with the app's check tool and records the lapse.
       if (result.error && AUTH_FAILURE.test(result.error)) {
-        await rememberStatus(app, emailAccountId, "needs_reconnect");
         throw new ConnectionExpiredError(app, message);
       }
       throw new AppToolError(app, tool, message);
