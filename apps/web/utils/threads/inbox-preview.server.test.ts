@@ -150,6 +150,29 @@ describe("loadInboxPreview", () => {
     expect(mocks.getMessagesWithPagination).toHaveBeenCalledTimes(2);
   });
 
+  it("does not load again once the preview has given up", async () => {
+    vi.useFakeTimers();
+    mocks.getMessagesWithPagination.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new GmailCallDeferredError(2000, "interactive")),
+            6000,
+          ),
+        ),
+    );
+
+    const preview = loadInboxPreview({
+      emailAccountId: "acc-1",
+      provider: "google",
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(preview).resolves.toBeNull();
+    // Nobody is waiting for these rows, so the quota is left to the engine.
+    expect(mocks.getMessagesWithPagination).toHaveBeenCalledTimes(1);
+  });
+
   it("does not wait out a long Gmail quota deferral", async () => {
     vi.useFakeTimers();
     mocks.getMessagesWithPagination.mockRejectedValue(
