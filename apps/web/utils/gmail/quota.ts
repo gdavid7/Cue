@@ -89,9 +89,13 @@ const STORE_TIMEOUT_MS = 300;
 // for ten minutes: at full pace it was refused again about once a minute,
 // each time after a pause. Its pause outlasts its longest wait, so jobs come
 // back later rather than hold a function open. After Gmail refuses a
-// person's call, their calls (the refused one's retry among them) also wait
-// a few seconds at the gate rather than resend into the same refusal.
+// person's call for volume, their calls (the refused one's retry among them)
+// also wait five to ten seconds at the gate rather than resend into the same
+// refusal.
 const INTERACTIVE_PAUSE_MIN_MS = 5000;
+const INTERACTIVE_PAUSE_MAX_MS = 10_000;
+// A volume refusal names a retry time within a few minutes, if any.
+const VOLUME_RETRY_MAX_MS = 5 * 60_000;
 const SYNC_PAUSE_MIN_MS = 10_000;
 const BACKGROUND_PAUSE_MIN_MS = 20_000;
 const BACKGROUND_SLOW_MS = 10 * 60_000;
@@ -519,11 +523,11 @@ export async function admitGmailCall({
 }
 
 /**
- * Gmail refused a call for quota. The account's budget drops to what Gmail
- * just accepted. Background work pauses, then runs at half its pace for a
- * while; a refusal of anything else also pauses sync. A
- * refused interactive call holds interactive calls for a few seconds, since
- * someone is waiting on them; otherwise they keep going.
+ * Gmail refused a call for quota. Background work pauses, and a refusal of
+ * anything else also pauses sync. When the refusal is for the minute's
+ * volume, the account's budget also drops to what Gmail just accepted,
+ * background runs at half its pace for a while, and a refused interactive
+ * call holds interactive calls for a few seconds; otherwise they keep going.
  */
 export async function noteGmailQuotaRefusal(
   ticket: GmailQuotaTicket,
@@ -534,7 +538,12 @@ export async function noteGmailQuotaRefusal(
   if (!ticket.emailAccountId || !isEmailProviderRateLimitRedisConfigured())
     return;
   const keys = accountKeys(ticket.emailAccountId);
-  const retryAfterMs = retryAfterFromMessage(error) ?? 0;
+  // A volume refusal says the account sent too much this minute; anything
+  // else (too many requests at once, a daily sending limit, a retry time
+  // far off) says nothing about the minute, so it neither cuts the budget
+  // nor holds a person's reads, and its retry time is not waited out here.
+  const volume = isVolumeRefusal(error);
+  const retryAfterMs = volume ? (retryAfterFromMessage(error) ?? 0) : 0;
   try {
     await withinStoreTimeout(
       gmailQuotaStore.block({
@@ -542,27 +551,32 @@ export async function noteGmailQuotaRefusal(
         ms: Math.max(BACKGROUND_PAUSE_MIN_MS, retryAfterMs),
       }),
     );
-    await withinStoreTimeout(
-      gmailQuotaStore.block({
-        key: keys.backgroundSlow,
-        ms: BACKGROUND_SLOW_MS,
-      }),
-    );
-    await withinStoreTimeout(
-      gmailQuotaStore.cutBudget({
-        key: keys.budget,
-        trailingKey: keys.trailing,
-        trailingWindowMs: TRAILING_WINDOW_MS,
-        start: BUDGET.start,
-        fraction: BUDGET.cutFraction,
-        floor: BUDGET.floor,
-      }),
-    );
-    if (ticket.priority === "interactive")
+    if (volume) {
+      await withinStoreTimeout(
+        gmailQuotaStore.block({
+          key: keys.backgroundSlow,
+          ms: BACKGROUND_SLOW_MS,
+        }),
+      );
+      await withinStoreTimeout(
+        gmailQuotaStore.cutBudget({
+          key: keys.budget,
+          trailingKey: keys.trailing,
+          trailingWindowMs: TRAILING_WINDOW_MS,
+          start: BUDGET.start,
+          fraction: BUDGET.cutFraction,
+          floor: BUDGET.floor,
+        }),
+      );
+    }
+    if (volume && ticket.priority === "interactive")
       await withinStoreTimeout(
         gmailQuotaStore.block({
           key: keys.interactivePause,
-          ms: Math.max(INTERACTIVE_PAUSE_MIN_MS, retryAfterMs),
+          ms: Math.min(
+            INTERACTIVE_PAUSE_MAX_MS,
+            Math.max(INTERACTIVE_PAUSE_MIN_MS, retryAfterMs),
+          ),
         }),
       );
     if (ticket.priority !== "background")
@@ -939,6 +953,18 @@ async function withinStoreTimeout<T>(operation: Promise<T>): Promise<T> {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function isVolumeRefusal(error: unknown) {
+  const info = extractErrorInfo(error);
+  if (
+    info.reason !== "rateLimitExceeded" &&
+    info.reason !== "userRateLimitExceeded"
+  )
+    return false;
+  if (/too many concurrent requests/i.test(info.errorMessage)) return false;
+  if (/mail sending/i.test(info.errorMessage)) return false;
+  return (retryAfterFromMessage(error) ?? 0) <= VOLUME_RETRY_MAX_MS;
 }
 
 function retryAfterFromMessage(error: unknown) {

@@ -52,6 +52,9 @@ const RETRY_ACCOUNT = "account-retry";
 const PAGE_ACCOUNT = "account-page";
 const SUSTAINED_ACCOUNT = "account-sustained";
 const AIMD_ACCOUNT = "account-aimd";
+const SENDING_ACCOUNT = "account-sending";
+const HOLD_ACCOUNT = "account-hold";
+const CONCURRENCY_ACCOUNT = "account-concurrency";
 // Google enforced about a third of the published minute; the gate starts
 // each account at 80% of that.
 const STARTING_BUDGET = Math.round((GMAIL_USER_UNITS_PER_MINUTE * 0.8) / 3);
@@ -608,6 +611,80 @@ describe("Gmail quota gate", () => {
     }
   });
 
+  it("never holds a person's reads for a sending limit that lifts in hours", async () => {
+    const sendingLimit = refusal(
+      429,
+      `User-rate limit exceeded.  Retry after ${new Date(Date.now() + 3 * 60 * 60_000).toISOString()} (Mail sending)`,
+    );
+    await expect(
+      interactive(SENDING_ACCOUNT, async () => {
+        throw sendingLimit;
+      }),
+    ).rejects.toBe(sendingLimit);
+
+    // A read right away, and another an hour later, go straight through.
+    const read = vi.fn(async () => "thread");
+    await expect(interactive(SENDING_ACCOUNT, read)).resolves.toBe("thread");
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await expect(interactive(SENDING_ACCOUNT, read)).resolves.toBe("thread");
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("holds a person's reads for at most ten seconds after a volume refusal", async () => {
+    const volume = refusal(
+      403,
+      `Quota exceeded for quota metric 'Queries' and limit 'Units per minute per user'. Retry after ${new Date(Date.now() + 2 * 60_000).toISOString()}`,
+    );
+    await expect(
+      interactive(HOLD_ACCOUNT, async () => {
+        throw volume;
+      }),
+    ).rejects.toBe(volume);
+
+    let readAt: number | null = null;
+    const startedAt = Date.now();
+    interactive(HOLD_ACCOUNT, async () => {
+      readAt = Date.now();
+    });
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(readAt).toBeNull();
+    await vi.advanceTimersByTimeAsync(7000);
+    expect(readAt).not.toBeNull();
+    expect(readAt! - startedAt).toBeLessThanOrEqual(10_000);
+  });
+
+  it("keeps the budget through a refusal for concurrency rather than volume", async () => {
+    vi.setSystemTime(new Date("2026-10-14T16:00:00Z"));
+    const info = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const concurrency = refusal(429, "Too many concurrent requests for user");
+    for (let i = 0; i < 20; i++) {
+      const sent = interactive(CONCURRENCY_ACCOUNT, async () => "ok", 100);
+      await vi.advanceTimersByTimeAsync(2000);
+      await sent;
+    }
+    await expect(
+      interactive(CONCURRENCY_ACCOUNT, async () => {
+        throw concurrency;
+      }),
+    ).rejects.toBe(concurrency);
+
+    const stamp = interactive(CONCURRENCY_ACCOUNT, async () => "ok");
+    await vi.advanceTimersByTimeAsync(60_000);
+    await stamp;
+    await logGmailQuotaUsage();
+    const line = info.mock.calls
+      .map(([entry]) => String(entry))
+      .filter(
+        (entry) =>
+          entry.includes("Gmail quota usage") &&
+          entry.includes(CONCURRENCY_ACCOUNT),
+      )
+      .at(-1)!;
+    expect(JSON.parse(line.slice(line.indexOf("{"))).budgetUnits).toBe(
+      STARTING_BUDGET,
+    );
+  });
+
   it("tunes each account's budget to what Gmail accepts: cut on a refusal, raised after quiet periods", async () => {
     vi.setSystemTime(new Date("2026-10-14T15:00:00Z"));
     const info = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -1100,3 +1177,18 @@ describe("Gmail quota gate", () => {
     ).toBeNull();
   });
 });
+
+function interactive<T>(
+  emailAccountId: string,
+  operation: () => Promise<T>,
+  cost = 20,
+) {
+  return runWithGmailQuota(
+    { caller: "test/interactive", priority: "interactive" },
+    () => meterGmailCall({ emailAccountId, cost }, operation),
+  );
+}
+
+function refusal(status: number, message: string) {
+  return { status, errors: [{ reason: "rateLimitExceeded" }], message };
+}
