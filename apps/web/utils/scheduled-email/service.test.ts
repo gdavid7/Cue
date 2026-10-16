@@ -667,6 +667,37 @@ describe("releaseHeldEmail", () => {
 
 describe("holdEmailForUndo", () => {
   beforeEach(() => vi.resetAllMocks());
+  // A reply sent now with a reminder goes through the mail engine; its hold
+  // carries the reminder, which runs only once the hold has sent.
+  it("records a held send's reminder on the hold itself", async () => {
+    prisma.scheduledEmail.findUnique.mockResolvedValue(null);
+    prisma.scheduledEmail.create.mockResolvedValue(row({ heldForUndo: true }));
+    await holdEmailForUndo({
+      emailAccountId: "account",
+      input: { ...input, sendAt: null },
+      sendAt: now,
+      logger,
+    });
+    expect(prisma.scheduledEmail.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        heldForUndo: true,
+        remindAt: new Date(input.remindAt),
+        reminderStatus: "PENDING",
+      }),
+    });
+  });
+  it("rejects a held send whose reminder is not after it", async () => {
+    prisma.scheduledEmail.findUnique.mockResolvedValue(null);
+    await expect(
+      holdEmailForUndo({
+        emailAccountId: "account",
+        input: { ...input, sendAt: null, remindAt: now.toISOString() },
+        sendAt: now,
+        logger,
+      }),
+    ).rejects.toThrow("The reminder must be after the send time.");
+    expect(prisma.scheduledEmail.create).not.toHaveBeenCalled();
+  });
   it.each([
     false,
     true,

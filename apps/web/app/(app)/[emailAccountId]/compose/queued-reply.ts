@@ -41,6 +41,8 @@ type QueueReaderEmailOptions = {
   onQueued?: () => Promise<void>;
   mutationId?: string;
   holdForUndo?: boolean;
+  /** When the server brings the conversation back if nobody has replied. */
+  remindAtMs?: number;
   /** The mailbox draft's saved copies, which the queued send replaces. */
   providerDraftMessageIds?: string[];
   /** The files on the mailbox draft, kept so an undone send lists them. */
@@ -85,6 +87,7 @@ async function queueReaderEmailOnce(
     online,
     onQueued,
     holdForUndo,
+    remindAtMs,
     providerDraftMessageIds,
     attachments,
     settlementTimeoutMs = READER_EMAIL_SETTLEMENT_TIMEOUT_MS,
@@ -114,6 +117,7 @@ async function queueReaderEmailOnce(
     draft: { accountId: emailAccountId, draftId },
     draftRevision,
     notBeforeMs: !online ? nowMs + OFFLINE_DISPATCH_HOLD_MS : undoHoldUntil,
+    ...(remindAtMs === undefined ? {} : { remindAtMs }),
     replyTo: messageIds[0]
       ? { accountId: emailAccountId, messageId: messageIds[0] }
       : null,

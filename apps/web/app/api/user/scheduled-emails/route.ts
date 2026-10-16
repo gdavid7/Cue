@@ -64,12 +64,22 @@ async function getThreadData(emailAccountId: string, threadId: string) {
     where: {
       emailAccountId,
       threadId,
-      heldForUndo: false,
       status: { not: "CANCELLED" },
-      OR: [
-        { status: { not: "SENT" } },
-        { reminderStatus: { in: ["PENDING", "PROCESSING"] } },
-        { sentAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+      AND: [
+        // An undo hold shows once it has sent, for the reminder it carries.
+        {
+          OR: [
+            { heldForUndo: false },
+            { status: "SENT", remindAt: { not: null } },
+          ],
+        },
+        {
+          OR: [
+            { status: { not: "SENT" } },
+            { reminderStatus: { in: ["PENDING", "PROCESSING"] } },
+            { sentAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+          ],
+        },
       ],
     },
     select: {

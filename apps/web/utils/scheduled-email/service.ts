@@ -95,6 +95,11 @@ export async function holdEmailForUndo({
       assertReusableRequest(existing, hashPayload(input));
     return existing;
   }
+  // A reply sent now with a reminder keeps it on the hold, where it runs once
+  // the hold has sent, the same as a scheduled send's.
+  const remindAt = input.remindAt ? new Date(input.remindAt) : null;
+  if (remindAt && remindAt <= sendAt)
+    throw new SafeError("The reminder must be after the send time.");
   let row: ScheduledEmail;
   try {
     row = await prisma.scheduledEmail.create({
@@ -106,6 +111,7 @@ export async function holdEmailForUndo({
         threadId: input.threadId,
         sendAt,
         heldForUndo: true,
+        ...(remindAt ? { remindAt, reminderStatus: "PENDING" as const } : {}),
       },
     });
   } catch (error) {

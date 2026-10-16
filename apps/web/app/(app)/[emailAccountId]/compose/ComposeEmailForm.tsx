@@ -1067,14 +1067,17 @@ function ComposeEmailFormContent({
           });
           return;
         }
+        // Only a send time takes the scheduled path. A reminder alone goes
+        // with the send through the outbox, so the reply shows in its
+        // conversation at once and the server keeps the reminder on it.
         if (isInlineReply) {
-          if (deliveryPath.current === "outbox" && (sendAt || remindAt)) {
+          if (deliveryPath.current === "outbox" && sendAt) {
             setSubmissionError(
               "This reply was already submitted to the outbox. Check its delivery status before scheduling a new reply.",
             );
             return;
           }
-          deliveryPath.current ??= sendAt || remindAt ? "scheduled" : "outbox";
+          deliveryPath.current ??= sendAt ? "scheduled" : "outbox";
         }
         captureDraft();
         await flushDraft();
@@ -1089,7 +1092,7 @@ function ComposeEmailFormContent({
             : [];
         const isScheduled = isInlineReply
           ? deliveryPath.current === "scheduled"
-          : canScheduleDelivery && Boolean(sendAt || remindAt);
+          : canScheduleDelivery && Boolean(sendAt);
         if (isScheduled) {
           const scheduledThreadId = replyingToEmail?.threadId ?? null;
           const result = await scheduleEmailAction(selectedEmailAccountId, {
@@ -1147,6 +1150,10 @@ function ComposeEmailFormContent({
           localDraftIdentity?.messageId ??
           requestId;
         const online = navigator.onLine;
+        const remindAtMs =
+          canScheduleDelivery && deliveryTimes.remindAt
+            ? Date.parse(deliveryTimes.remindAt)
+            : undefined;
         if (!client) {
           setSubmissionError(
             "Mail is still starting. Try sending again in a moment.",
@@ -1166,6 +1173,7 @@ function ComposeEmailFormContent({
             mutationId: requestId,
             emailAccountId: selectedEmailAccountId,
             holdForUndo: online,
+            remindAtMs,
             messageIds: isNewCompose ? [] : [readerMessageId],
             providerDraftMessageIds: draftMessageIds,
             attachments: attachmentsRef.current.flatMap(toAttachmentReference),
@@ -1237,6 +1245,13 @@ function ComposeEmailFormContent({
                 if (markDoneAfterSend) onMarkDone?.();
                 onSuccess?.(settled.messageId, settled.threadId);
                 refetch?.();
+                // The reminder rides on the send's hold, listed once sent.
+                if (remindAtMs !== undefined)
+                  await refreshScheduledEmails(
+                    mutate,
+                    selectedEmailAccountId,
+                    settled.threadId,
+                  );
                 return;
               }
               if (settled.status === "failed" && settled.ownsNotification) {
@@ -1267,6 +1282,12 @@ function ComposeEmailFormContent({
           if (markDoneAfterSend) onMarkDone?.();
           onSuccess?.(outcome.messageId, outcome.threadId);
           refetch?.();
+          if (remindAtMs !== undefined)
+            await refreshScheduledEmails(
+              mutate,
+              selectedEmailAccountId,
+              outcome.threadId,
+            );
         } else if (outcome.status === "queued") {
           // A queued reply's delivery status in the thread already says so.
           if (!isInlineReply)

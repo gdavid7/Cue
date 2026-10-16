@@ -39,6 +39,24 @@ describe("queueReaderEmail", () => {
     expect(client.observeOperation).not.toHaveBeenCalled();
   });
 
+  it("queues a reminder with the send for the server to hold", async () => {
+    const client = createClient();
+    const remindAtMs = Date.now() + 86_400_000;
+    await queueReaderEmail({
+      client,
+      email: createEmail(),
+      emailAccountId: "account-two",
+      messageIds: ["message"],
+      online: true,
+      holdForUndo: true,
+      remindAtMs,
+      threadId: "thread",
+    });
+    expect(client.submitSend).toHaveBeenCalledWith(
+      expect.objectContaining({ remindAtMs }),
+    );
+  });
+
   it("admits a new message without a reply target", async () => {
     const client = createClient();
     await queueReaderEmail({

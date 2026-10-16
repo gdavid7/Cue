@@ -538,6 +538,79 @@ describe("createEmailProviderOperationExecutor", () => {
     );
   });
 
+  it("holds a send's reminder with it on the server", async () => {
+    const sendAtMs = Date.now() + 30_000;
+    const remindAtMs = sendAtMs + 86_400_000;
+    vi.mocked(findScheduledEmail).mockResolvedValue(null);
+    vi.mocked(holdEmailForUndo).mockImplementation(async ({ input, sendAt }) =>
+      heldRow({ payload: input, sendAt }),
+    );
+    const executor = createEmailProviderOperationExecutor({
+      accountId: "acc-1",
+      provider: { name: "google" } as unknown as EmailProvider,
+    });
+    const operation = heldSendOperation(sendAtMs);
+    if (operation.intent.kind !== "send") throw new Error("expected send");
+    operation.intent.remindAtMs = remindAtMs;
+
+    await executor.execute({
+      operation,
+      attemptId: "a-held-reminder",
+      signal: new AbortController().signal,
+    });
+
+    const { input } = vi.mocked(holdEmailForUndo).mock.calls[0][0];
+    expect(input.remindAt).toBe(new Date(remindAtMs).toISOString());
+  });
+
+  // A send queued offline reaches the server without an undo window; its
+  // reminder still has to be held with it, or it would be lost.
+  it("holds a send that carries a reminder even without an undo window", async () => {
+    vi.mocked(findScheduledEmail).mockResolvedValue(null);
+    vi.mocked(holdEmailForUndo).mockImplementation(async ({ input, sendAt }) =>
+      heldRow({ payload: input, sendAt }),
+    );
+    const executor = createEmailProviderOperationExecutor({
+      accountId: "acc-1",
+      provider: { name: "google" } as unknown as EmailProvider,
+    });
+    const operation = sendOperation();
+    if (operation.intent.kind !== "send") throw new Error("expected send");
+    operation.intent.remindAtMs = Date.now() + 86_400_000;
+
+    await executor.execute({
+      operation,
+      attemptId: "a-offline-reminder",
+      signal: new AbortController().signal,
+    });
+
+    expect(executeDurableEmailSend).not.toHaveBeenCalled();
+    expect(holdEmailForUndo).toHaveBeenCalledOnce();
+  });
+
+  it("sends without the reminder once its time has passed", async () => {
+    vi.mocked(findScheduledEmail).mockResolvedValue(null);
+    vi.mocked(holdEmailForUndo).mockImplementation(async ({ input, sendAt }) =>
+      heldRow({ payload: input, sendAt }),
+    );
+    const executor = createEmailProviderOperationExecutor({
+      accountId: "acc-1",
+      provider: { name: "google" } as unknown as EmailProvider,
+    });
+    const operation = sendOperation();
+    if (operation.intent.kind !== "send") throw new Error("expected send");
+    operation.intent.remindAtMs = Date.now() - 1000;
+
+    await executor.execute({
+      operation,
+      attemptId: "a-late-reminder",
+      signal: new AbortController().signal,
+    });
+
+    const { input } = vi.mocked(holdEmailForUndo).mock.calls[0][0];
+    expect(input.remindAt).toBeNull();
+  });
+
   it("holds a send with files by its mailbox draft, never their bytes", async () => {
     vi.mocked(findScheduledEmail).mockResolvedValue(null);
     vi.mocked(holdEmailForUndo).mockImplementation(async ({ input, sendAt }) =>

@@ -50,6 +50,29 @@ describe("engine undo-window sends", () => {
     await engine.close();
   });
 
+  // The server records the reminder on the hold and runs it once sent, so a
+  // send with a reminder is always handed over, with or without an undo window.
+  it.each([
+    ["an undo window", Date.now() + 30_000],
+    ["no undo window", null],
+  ])("hands a send with a reminder to the server with %s", async (_label, notBeforeMs) => {
+    const remindAtMs = Date.now() + 86_400_000;
+    const { engine, executor } = await sendHarness({
+      cancel: { status: "cancelled" },
+      notBeforeMs,
+      remindAtMs,
+    });
+
+    await engine.runUntil(Date.now() + 200);
+
+    const intent = executor.execute.mock.calls[0]?.[0].operation.intent;
+    expect(intent).toMatchObject({ kind: "send", remindAtMs });
+    expect(intent?.kind === "send" && intent.sendAtMs).toEqual(
+      expect.any(Number),
+    );
+    await engine.close();
+  });
+
   it("reports too late when the server has already started sending", async () => {
     const { engine } = await sendHarness({ cancel: { status: "too_late" } });
     await engine.runUntil(Date.now() + 200);
@@ -87,7 +110,15 @@ describe("engine undo-window sends", () => {
   });
 });
 
-async function sendHarness({ cancel }: { cancel: CancelResult }) {
+async function sendHarness({
+  cancel,
+  notBeforeMs = Date.now() + 30_000,
+  remindAtMs,
+}: {
+  cancel: CancelResult;
+  notBeforeMs?: number | null;
+  remindAtMs?: number;
+}) {
   const store = await createSqliteMailStore(createNodeSqliteDriver());
   await store.ensureAccount({
     accountId: "acc-1",
@@ -123,7 +154,8 @@ async function sendHarness({ cancel }: { cancel: CancelResult }) {
     conversationId: "thread-1",
     draft: { accountId: "acc-1", draftId: "d1" },
     draftRevision: saved.draftRevision,
-    notBeforeMs: Date.now() + 30_000,
+    ...(notBeforeMs === null ? {} : { notBeforeMs }),
+    ...(remindAtMs === undefined ? {} : { remindAtMs }),
     replyTo: null,
   });
   expect(admission.status).toBe("queued");
