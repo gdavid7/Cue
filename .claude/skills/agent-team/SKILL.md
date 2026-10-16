@@ -23,6 +23,8 @@ incidents; keep the guardrails even when they feel slow.
 | Reviewer | A fresh `reviewer` agent per diff | Independent GO/NO-GO with verified findings (file:line, concrete scenario, fix); runs the type check | Edits code |
 | QA | One long-lived agent | Browser specs on a **production build** of the integration branch, screenshots, root causes (product vs test) | Edits product code |
 | Auditor | Read-only agent, rotating area | Security, accessibility, mobile, performance, reliability, AI quality, code health; verified findings only | Edits code |
+| Product R&D | Read-only agent, every few hours | Finds product gaps and improvement ideas with evidence (robot reports, usage and latency data, UX audits, code, competitors); ranks proposals with expected impact and cost | Edits code; ships anything without triage |
+| GTM strategist | Read-only agent, paired with Product R&D | Reviews proposals for user value, positioning and acquisition fit; adds go-to-market-driven ideas | Edits code; changes public copy without the founder |
 
 Agents cannot spawn agents here, so an "EM managing a team" means: the EM writes
 the plan and briefs, the coordinator launches the engineers from those briefs,
@@ -70,6 +72,12 @@ Every engineer prompt includes:
    read its report.
 7. If a release candidate fails QA because of one branch, revert that merge on
    the integration branch, ship the rest, and later revert the revert after fixes.
+
+## Product R&D loop
+
+- Product R&D drafts ranked proposals; the GTM strategist reviews them and adds its own. Output goes to one proposals file per cycle.
+- The coordinator triages each proposal. Bugs, performance and quality work inside the current product scope go straight to engineers. New features, product behaviour, copy, pricing and prompts go to the founder with a recommendation.
+- Record every decision, so later cycles don't re-propose rejected ideas.
 
 ## Production feedback loop
 
