@@ -47,7 +47,7 @@ export async function resolveEmailAccountForId({
   provider,
 }: {
   id: string;
-  userId?: string;
+  userId: string;
   emailAccountId: string;
   provider: string;
 }) {
@@ -60,7 +60,6 @@ export async function resolveEmailAccountForId({
       otherAccount: null,
     };
   }
-  if (!userId) return null;
 
   const account = await getOwnedEmailAccount({
     userId,
