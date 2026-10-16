@@ -17,6 +17,7 @@ built from evidence rather than memory.
 1. **Production.** List recent production deployments and their commits:
    - `vercel ls --prod` for the deployments, and `vercel inspect <url>` for
      status and alias.
+   - Check each deployment's source and commit (Vercel API `meta.githubCommitSha`, or the deployment's git source). The production branch is `production`, so what's live is that branch's head unless a CLI redeploy happened since.
    - Map each deployed commit to what it contained with `git log` on the
      integration branch.
    - Note anything deployed without code changes, such as a redeploy for an

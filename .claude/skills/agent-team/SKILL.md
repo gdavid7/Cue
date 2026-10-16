@@ -66,7 +66,8 @@ Every engineer prompt includes:
 5. QA: a production build of the integration branch, all affected specs plus a
    standing regression set; rerun failures alone once; classify flake vs real;
    inspect screenshots for UI changes.
-6. Deploy from a separate detached deploy worktree at the exact tested sha, with the
+6. Deploy only through the `production` branch. Vercel's Production Branch Tracking points at `production`. Pushes to working branches make preview deployments, never production. After QA passes, push the exact tested sha to `production` (`git push origin <sha>:production`). Never push untested code there. A CLI `vercel deploy --prod` bypasses this, so use it only for an emergency redeploy of the sha already on `production`.
+   Previously: deploy from a separate detached deploy worktree at the exact tested sha, with the
    Axiom variables unset in the shell. Verify the build status (not just exit 0),
    smoke `/login` and `/api/health`, then trigger the production health robot and
    read its report.
