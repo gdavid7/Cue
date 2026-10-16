@@ -1499,6 +1499,7 @@ export class GmailProvider implements EmailProvider {
     includeSpamTrash?: boolean;
     folder?: "spam" | "trash";
     allowPartial?: boolean;
+    signal?: AbortSignal;
   }): Promise<{
     messages: ParsedMessage[];
     nextPageToken?: string;
@@ -1531,7 +1532,10 @@ export class GmailProvider implements EmailProvider {
           (labelId) =>
             labelId === GmailLabel.SPAM || labelId === GmailLabel.TRASH,
         ),
+      signal: options.signal,
     });
+    // Reading the listed messages is most of a search's quota.
+    options.signal?.throwIfAborted();
 
     if (options.allowPartial) {
       const { messages, unloadedMessages } =

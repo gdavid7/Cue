@@ -26,12 +26,15 @@ export async function runOutlookSearch({
   limit,
   pageToken,
   logger,
+  signal,
 }: {
   emailProvider: EmailProvider;
   normalizedInput: NormalizedOutlookSearchInput;
   limit: number;
   pageToken?: string | null;
   logger: Logger;
+  /** Stops the search's Graph requests. */
+  signal?: AbortSignal;
 }): Promise<{
   result?: SearchMessagesResult;
   queryUsed: string;
@@ -82,10 +85,13 @@ export async function runOutlookSearch({
         // Matches Gmail, and the browser's local search, which never holds
         // Junk or Deleted Items.
         excludeSpamTrash: true,
+        signal,
       });
       executedQuery = candidateQuery;
       break;
     } catch (error) {
+      // A stopped search has nobody waiting on a fallback.
+      if (signal?.aborted) throw error;
       lastError = error;
       failures.push({ query: candidateQuery, error });
 
@@ -105,9 +111,11 @@ export async function runOutlookSearch({
       if (i === searchQueries.length - 1) break;
 
       logger.warn("Search query failed; retrying with Outlook fallback", {
+        error,
+      });
+      logger.trace("Outlook search fallback queries", {
         query: candidateQuery,
         fallbackQuery: searchQueries[i + 1],
-        error,
       });
     }
   }
@@ -129,6 +137,7 @@ export async function runOutlookSearch({
     readState: normalizedInput.readState,
     categoryName: normalizedInput.categoryName,
     fromEmail: normalizedInput.fromEmail,
+    signal,
     folderId,
   });
 
@@ -165,6 +174,7 @@ async function skipEmptyOutlookSearchPages({
   categoryName,
   fromEmail,
   folderId,
+  signal,
 }: {
   emailProvider: EmailProvider;
   searchResult: SearchMessagesResult;
@@ -174,6 +184,7 @@ async function skipEmptyOutlookSearchPages({
   categoryName?: string | null;
   fromEmail?: string | null;
   folderId?: string;
+  signal?: AbortSignal;
 }) {
   let result = searchResult;
   let emptyPageSkips = 0;
@@ -193,6 +204,7 @@ async function skipEmptyOutlookSearchPages({
       labelName: categoryName ?? undefined,
       ...(folderId && { folderId }),
       excludeSpamTrash: true,
+      signal,
     });
   }
 
@@ -298,7 +310,7 @@ function inferOutlookReadStateFromQuery(
   return state === "read" || state === "unread" ? state : null;
 }
 
-function getOutlookFieldScopeCandidate(query: string) {
+export function getOutlookFieldScopeCandidate(query: string) {
   const normalizedQuery = query.trim();
   const colonIndex = normalizedQuery.indexOf(":");
   if (colonIndex === -1) return null;

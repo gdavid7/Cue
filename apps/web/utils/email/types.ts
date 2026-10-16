@@ -483,6 +483,8 @@ export interface EmailProvider {
      * rest, with their count in `unloadedMessages`, instead of failing.
      */
     allowPartial?: boolean;
+    /** Stops the search's provider calls, and with them its quota use. */
+    signal?: AbortSignal;
   }): Promise<{
     messages: ParsedMessage[];
     nextPageToken?: string;

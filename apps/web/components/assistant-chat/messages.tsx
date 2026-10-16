@@ -134,6 +134,7 @@ function buildEmailLookup(messages: Array<ChatMessage>): EmailLookup {
               date: string;
               isUnread: boolean;
               externalUrl?: string;
+              account?: string;
             }>
           | undefined;
         if (!items) continue;
@@ -147,6 +148,7 @@ function buildEmailLookup(messages: Array<ChatMessage>): EmailLookup {
               date: item.date,
               isUnread: item.isUnread,
               externalUrl: item.externalUrl,
+              account: item.account,
             });
           }
         }

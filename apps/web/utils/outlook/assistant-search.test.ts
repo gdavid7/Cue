@@ -78,3 +78,50 @@ describe("normalizeOutlookSearchInput folder scope", () => {
     }
   });
 });
+
+describe("runOutlookSearch once stopped", () => {
+  it("stops without trying a fallback query or warning", async () => {
+    const controller = new AbortController();
+    const searchMessages = vi
+      .fn<EmailProvider["searchMessages"]>()
+      .mockImplementation(async () => {
+        controller.abort();
+        throw new Error("The operation was aborted");
+      });
+    const logger = createTestLogger();
+    const warn = vi.spyOn(logger, "warn");
+
+    await expect(
+      runOutlookSearch({
+        emailProvider: createMockEmailProvider({ searchMessages }),
+        normalizedInput: { query: 'subject:"Weekly digest" invoice' },
+        limit: 20,
+        logger,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow();
+    expect(searchMessages).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed query's text out of the warning", async () => {
+    const searchMessages = vi
+      .fn<EmailProvider["searchMessages"]>()
+      .mockRejectedValueOnce(new Error("Mock query failure"))
+      .mockResolvedValueOnce({ messages: [] });
+    const logger = createTestLogger();
+    const warn = vi.spyOn(logger, "warn");
+    const trace = vi.spyOn(logger, "trace");
+
+    await runOutlookSearch({
+      emailProvider: createMockEmailProvider({ searchMessages }),
+      normalizedInput: { query: 'subject:"Private matter" invoice' },
+      limit: 20,
+      logger,
+    });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(warn.mock.calls[0])).not.toContain("Private matter");
+    expect(JSON.stringify(trace.mock.calls)).toContain("Private matter");
+  });
+});

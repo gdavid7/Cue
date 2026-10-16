@@ -312,6 +312,7 @@ export async function getMessages(
     pageToken?: string;
     labelIds?: string[];
     includeSpamTrash?: boolean;
+    signal?: AbortSignal;
   },
 ): Promise<{
   messages: {
@@ -320,16 +321,19 @@ export async function getMessages(
   }[];
   nextPageToken?: string;
 }> {
-  const messages = await withGmailRetry(() =>
-    gmail.users.messages.list({
+  const messages = await withGmailRetry(() => {
+    const params = {
       userId: "me",
       maxResults: options.maxResults,
       q: options.query,
       pageToken: options.pageToken,
       labelIds: options.labelIds,
       includeSpamTrash: options.includeSpamTrash,
-    }),
-  );
+    };
+    if (!options.signal) return gmail.users.messages.list(params);
+    options.signal.throwIfAborted();
+    return gmail.users.messages.list(params, { signal: options.signal });
+  });
 
   return {
     messages: messages.data.messages?.filter(isMessage) || [],

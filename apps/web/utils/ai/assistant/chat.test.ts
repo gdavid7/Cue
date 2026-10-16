@@ -1,7 +1,12 @@
 import { asSchema, type ModelMessage, type Tool } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestLogger, getEmailAccount } from "@/__tests__/helpers";
+import {
+  createTestLogger,
+  getEmailAccount,
+  getMockMessage,
+} from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
+import { toOtherAccountEmailId } from "@/utils/ai/assistant/other-account-email-id";
 import {
   aiProcessAssistantChat,
   buildInboxSnapshotMessage,
@@ -349,6 +354,79 @@ describe("aiProcessAssistantChat tool definitions", () => {
         name,
       ).toBeUndefined();
     }
+  });
+});
+
+describe("aiProcessAssistantChat across accounts", () => {
+  async function chatTools() {
+    let tools: Record<string, Tool> = {};
+    vi.mocked(toolCallAgentStream).mockImplementation(async (options) => {
+      tools = options.tools as Record<string, Tool>;
+      return {} as never;
+    });
+    await aiProcessAssistantChat({
+      messages: [{ role: "user", content: "archive the Acme email" }],
+      emailAccountId: "email-account-id",
+      user: getEmailAccount(),
+      logger: createTestLogger(),
+    });
+    return tools;
+  }
+
+  it("refuses to change another account's email from this chat", async () => {
+    const { createEmailProvider } = await import("@/utils/email/provider");
+    vi.mocked(createEmailProvider).mockClear();
+    prisma.emailAccount.findMany.mockResolvedValue([
+      {
+        id: "other-account",
+        email: "other@example.com",
+        name: null,
+        image: null,
+        account: { provider: "google" },
+      },
+    ] as never);
+    const tools = await chatTools();
+
+    const result = await tools.manageInbox.execute?.(
+      {
+        action: "archive_threads",
+        threadIds: [toOtherAccountEmailId("other-account", "thread-1")],
+      },
+      { toolCallId: "call-1", messages: [] } as never,
+    );
+
+    expect(result).toMatchObject({
+      error: expect.stringContaining("other@example.com"),
+    });
+    expect(createEmailProvider).not.toHaveBeenCalled();
+  });
+
+  it("reads another account's email in that account", async () => {
+    const { createEmailProvider } = await import("@/utils/email/provider");
+    vi.mocked(createEmailProvider).mockReset();
+    vi.mocked(createEmailProvider).mockResolvedValue({
+      getMessage: vi.fn(async () => getMockMessage({ id: "message-1" })),
+    } as never);
+    prisma.emailAccount.findMany.mockResolvedValue([
+      {
+        id: "other-account",
+        email: "other@example.com",
+        name: null,
+        image: null,
+        account: { provider: "google" },
+      },
+    ] as never);
+    const tools = await chatTools();
+
+    const result = await tools.readEmail.execute?.(
+      { messageId: toOtherAccountEmailId("other-account", "message-1") },
+      { toolCallId: "call-1", messages: [] } as never,
+    );
+
+    expect(createEmailProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ emailAccountId: "other-account" }),
+    );
+    expect(result).toMatchObject({ account: "other@example.com" });
   });
 });
 

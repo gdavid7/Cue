@@ -295,6 +295,7 @@ describe("chat inbox tools", () => {
     const toolInstance = manageInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });
@@ -332,6 +333,7 @@ describe("chat inbox tools", () => {
     const schema = manageInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     }).inputSchema as any;
@@ -413,6 +415,7 @@ describe("chat inbox tools", () => {
     const schema = manageInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     }).inputSchema as any;
@@ -490,6 +493,7 @@ describe("chat inbox tools", () => {
     const toolInstance = manageInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });
@@ -584,6 +588,7 @@ describe("chat inbox tools", () => {
     const toolInstance = manageInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });
@@ -621,6 +626,7 @@ describe("chat inbox tools", () => {
     const toolInstance = manageInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });
@@ -664,6 +670,7 @@ describe("chat inbox tools", () => {
     const toolInstance = manageInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });
@@ -707,6 +714,7 @@ describe("chat inbox tools", () => {
     const toolInstance = manageInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });
@@ -742,6 +750,7 @@ describe("chat inbox tools", () => {
     const toolInstance = manageInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });
@@ -789,6 +798,7 @@ describe("chat inbox tools", () => {
     const toolInstance = manageInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });
@@ -824,6 +834,7 @@ describe("chat inbox tools", () => {
     const toolInstance = manageInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -868,6 +879,7 @@ describe("chat inbox tools", () => {
     const toolInstance = manageInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });
@@ -983,6 +995,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -1020,6 +1033,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -1043,6 +1057,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -1075,6 +1090,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -1115,6 +1131,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });
@@ -1141,6 +1158,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });
@@ -1183,6 +1201,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
       const toolInstance = searchInboxTool({
         email: TEST_EMAIL,
         emailAccountId: "email-account-1",
+        userId: "user-1",
         provider: "google",
         logger,
         localMailSearch,
@@ -1300,6 +1319,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
       const toolInstance = searchInboxTool({
         email: TEST_EMAIL,
         emailAccountId: "email-account-1",
+        userId: "user-1",
         provider: "microsoft",
         logger,
         localMailSearch,
@@ -1404,6 +1424,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });
@@ -1449,6 +1470,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });
@@ -1469,6 +1491,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });
@@ -1492,6 +1515,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });
@@ -1523,6 +1547,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });
@@ -1568,6 +1593,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -1623,6 +1649,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -1655,6 +1682,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -1685,6 +1713,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -1747,6 +1776,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -1829,6 +1859,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const options = {
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     };
@@ -1896,6 +1927,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -1921,6 +1953,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolOptions = {
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     };
@@ -1941,6 +1974,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -1961,6 +1995,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolOptions = {
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       logger,
     };
     const gmailTool = searchInboxTool({
@@ -2004,6 +2039,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -2037,6 +2073,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -2076,6 +2113,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -2133,6 +2171,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -2189,6 +2228,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -2240,6 +2280,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -2285,6 +2326,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });
@@ -2321,6 +2363,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -2360,6 +2403,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -2400,6 +2444,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "microsoft",
       logger,
     });
@@ -2430,6 +2475,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     const toolInstance = searchInboxTool({
       email: TEST_EMAIL,
       emailAccountId: "email-account-1",
+      userId: "user-1",
       provider: "google",
       logger,
     });

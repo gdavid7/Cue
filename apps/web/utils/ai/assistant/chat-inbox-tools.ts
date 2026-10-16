@@ -5,7 +5,10 @@ import prisma from "@/utils/prisma";
 import { posthogCaptureEvent } from "@/utils/posthog";
 import { createEmailProvider } from "@/utils/email/provider";
 import { describeProviderRateLimitError } from "@/utils/email/rate-limit";
-import { isGoogleProvider } from "@/utils/email/provider-types";
+import {
+  isGoogleProvider,
+  isMicrosoftProvider,
+} from "@/utils/email/provider-types";
 import {
   extractEmailAddress,
   extractUniqueEmailAddresses,
@@ -24,6 +27,7 @@ import { normalizeLabelName } from "@/utils/label/normalize-label-name";
 import { resolveLabelNameAndId } from "@/utils/label/resolve-label";
 import {
   buildMicrosoftSearchErrorResult,
+  getOutlookFieldScopeCandidate,
   getOutlookLocalSearch,
   normalizeOutlookSearchInput,
   runOutlookSearch,
@@ -59,6 +63,17 @@ import {
 import { microsoftGraphPageTokenSchema } from "@/utils/outlook/page-token";
 import { validateUserAndAiAccess } from "@/utils/user/validate";
 import { SafeError } from "@/utils/error";
+import { getEmailUrlForMessage } from "@/utils/url";
+import {
+  type OtherAccountResult,
+  resolveEmailAccountForId,
+  runOnOtherAccounts,
+} from "@/utils/ai/assistant/chat-other-accounts";
+import { toOtherAccountEmailId } from "@/utils/ai/assistant/other-account-email-id";
+import {
+  type AccountSearch,
+  translateAccountSearch,
+} from "@/utils/ai/assistant/cross-provider-search";
 
 const MAX_SENDER_CATEGORIZATION_WAIT_MS = 1500;
 const recipientListSchema = z
@@ -139,6 +154,8 @@ type InboxToolOptions = {
   emailAccountId: string;
   provider: string;
   logger: Logger;
+  /** The signed-in user, whose other accounts searchInbox may also search. */
+  userId: string;
   /** The chat's browser, when it can answer searches from its local mail. */
   localMailSearch?: LocalMailSearch;
 };
@@ -497,6 +514,12 @@ const searchInboxBaseFields = {
   pageToken: microsoftGraphPageTokenSchema.describe(
     "Use the page token returned from a prior search to paginate.",
   ),
+  allAccounts: z
+    .boolean()
+    .nullish()
+    .describe(
+      "Optional. Set to true to also search the user's other connected email accounts, such as when the user asks about all their accounts or the email may be in another one. Every message then names its account. Other accounts return only their first few matches, and their emails can be read but not acted on from this chat.",
+    ),
 };
 
 const gmailSearchInboxInputSchema = z.object({
@@ -568,207 +591,50 @@ const outlookSearchInboxInputSchema = z
     },
   );
 
-const gmailSearchInboxTool = ({
-  email,
-  emailAccountId,
-  provider,
-  logger,
-  localMailSearch,
-}: InboxToolOptions) =>
+type GmailSearchInboxInput = z.infer<typeof gmailSearchInboxInputSchema>;
+type OutlookSearchInboxInput = z.infer<typeof outlookSearchInboxInputSchema>;
+
+const gmailSearchInboxTool = (options: InboxToolOptions) =>
   tool({
     description:
       "Search inbox messages and return concise message metadata. Returns at most 20 messages per call. If hasMore=true, more matches remain; for bulk or all-matching requests, keep calling searchInbox with nextPageToken until hasMore=false before reporting completion. totalReturned is only the number of messages returned by this call, so do not present it or a single search page as an exact mailbox, folder, or label count. If the tool returns an error or provider search feedback instead of messages, treat the lookup as inconclusive rather than evidence that the email is absent.",
     inputSchema: gmailSearchInboxInputSchema,
-    execute: async (input) => {
+    execute: async (input, callOptions) => {
+      const { email, logger } = options;
       trackToolCall({ tool: "search_inbox", email, logger });
 
-      const { query, limit, pageToken } = input;
-      const maxResults = limit ?? SEARCH_INBOX_MAX_RESULTS;
-      const localPage = isLocalPageToken(pageToken);
-
-      try {
-        const emailProviderPromise = createEmailProvider({
-          emailAccountId,
-          provider,
-          logger,
-        });
-        // Awaited below; this only keeps a failure during the local search
-        // from counting as unhandled.
-        emailProviderPromise.catch(() => undefined);
-        // A Gmail page walk stays on Gmail; a local one stays local.
-        const local =
-          localMailSearch && (!pageToken || localPage)
-            ? await localMailSearch.search({
-                query,
-                limit: maxResults,
-                pageToken: pageToken ?? undefined,
-              })
-            : null;
-        if (localPage && !local) return localPageUnavailable(query);
-
-        const emailProvider = await emailProviderPromise;
-        const labelsPromise = getLabelsForSearchResults({
-          emailProvider,
-          logger,
-        });
-        const searchResult = local
-          ? {
-              messages: local.messages,
-              nextPageToken: local.nextPageToken,
-            }
-          : await emailProvider
-              .searchMessages({
-                query,
-                maxResults,
-                pageToken: pageToken ?? undefined,
-                allowPartial: true,
-              })
-              .then((result) => ({
-                ...result,
-                messages: result.messages.map(searchSourceFromMessage),
-              }));
-
-        return formatSearchInboxResult({
-          searchResult,
-          queryUsed: query,
-          labels: await labelsPromise,
-          taxonomyNamesKey: "labelNames",
-        });
-      } catch (error) {
-        // Provider failures are logged and flushed at the provider boundary.
-        const errorInfo = extractGmailErrorInfo(error);
-        const { retryable } = isGmailRetryableError(errorInfo);
-        return {
-          queryUsed: query,
-          error:
-            describeProviderRateLimitError(error, provider) ??
-            "Failed to search inbox",
-          searchFeedback: {
-            status: errorInfo.status,
-            message: (
-              errorInfo.errorMessage || "Gmail search request failed"
-            ).slice(0, 300),
-            retryable,
-          },
-        };
-      }
+      const otherAccounts = startOtherAccountSearch({
+        options,
+        input,
+        abortSignal: callOptions?.abortSignal,
+      });
+      return withOtherAccountResults({
+        result: await searchGmailChatAccount({ options, input }),
+        chatEmail: email,
+        otherAccounts,
+      });
     },
   });
 
-const outlookSearchInboxTool = ({
-  email,
-  emailAccountId,
-  provider,
-  logger,
-  localMailSearch,
-}: InboxToolOptions) =>
+const outlookSearchInboxTool = (options: InboxToolOptions) =>
   tool({
     description:
       "Search inbox messages and return concise message metadata. Returns at most 20 messages per call. If hasMore=true, more matches remain; for bulk or all-matching requests, keep calling searchInbox with nextPageToken until hasMore=false and collect all matching threadIds before writing in batches, even when the current page has zero messages. Report the summed successCount from action results, and disclose any failures or remaining pages. Outlook filtered searches can return an empty page before later matching pages. For folder/category count questions, use only folderName/categoryName with no query or other filters and report exactCount, the full-scope message count including drafts. If countError is returned, the exact total is unavailable. totalReturned is only this page size and is never an exact mailbox, folder, or category total. If the tool returns an error or provider search feedback instead of messages, treat the lookup as inconclusive rather than evidence that the email is absent.",
     inputSchema: outlookSearchInboxInputSchema,
-    execute: async (input) => {
+    execute: async (input, callOptions) => {
+      const { email, logger } = options;
       trackToolCall({ tool: "search_inbox", email, logger });
 
-      const {
-        query = "",
-        fromEmail,
-        limit,
-        pageToken,
-        readState,
-        categoryName,
-        folderName,
-      } = input;
-
-      try {
-        const normalizedInput = normalizeOutlookSearchInput({
-          query,
-          fromEmail,
-          readState,
-          categoryName,
-          folderName,
-        });
-        const emailProviderPromise = createEmailProvider({
-          emailAccountId,
-          provider,
-          logger,
-        });
-        // Awaited below; this only keeps a failure during the local search
-        // from counting as unhandled.
-        emailProviderPromise.catch(() => undefined);
-        // A Graph page walk stays on Graph; a local one stays local.
-        const localPage = isLocalPageToken(pageToken);
-        const localSearch =
-          localMailSearch && (!pageToken || localPage)
-            ? getOutlookLocalSearch(normalizedInput)
-            : null;
-        const local =
-          localMailSearch && localSearch
-            ? await localMailSearch.search({
-                ...localSearch.request,
-                limit,
-                pageToken: pageToken ?? undefined,
-              })
-            : null;
-        if (localPage && !local) return localPageUnavailable(query);
-
-        const emailProvider = await emailProviderPromise;
-        const labelsPromise = getLabelsForSearchResults({
-          emailProvider,
-          logger,
-        });
-        if (local && localSearch)
-          return formatSearchInboxResult({
-            searchResult: {
-              messages: local.messages,
-              nextPageToken: local.nextPageToken,
-            },
-            queryUsed: localSearch.queryUsed,
-            labels: await labelsPromise,
-            taxonomyNamesKey: "categoryNames",
-          });
-
-        const searchResult = await runOutlookSearch({
-          emailProvider,
-          normalizedInput,
-          limit,
-          pageToken,
-          logger,
-        });
-
-        if (!searchResult.result) {
-          return buildMicrosoftSearchErrorResult({
-            query,
-            failures: searchResult.failures,
-          });
-        }
-
-        const labels = await labelsPromise;
-
-        return {
-          ...formatSearchInboxResult({
-            searchResult: {
-              ...searchResult.result,
-              messages: searchResult.result.messages.map(
-                searchSourceFromMessage,
-              ),
-            },
-            queryUsed: searchResult.queryUsed,
-            labels,
-            taxonomyNamesKey: "categoryNames",
-          }),
-          ...(searchResult.exactCount !== undefined && {
-            exactCount: searchResult.exactCount,
-          }),
-          ...(searchResult.countError && {
-            countError: searchResult.countError,
-          }),
-        };
-      } catch (error) {
-        return buildMicrosoftSearchErrorResult({
-          query,
-          failures: [{ query, error }],
-        });
-      }
+      const otherAccounts = startOtherAccountSearch({
+        options,
+        input,
+        abortSignal: callOptions?.abortSignal,
+      });
+      return withOtherAccountResults({
+        result: await searchOutlookChatAccount({ options, input }),
+        chatEmail: email,
+        otherAccounts,
+      });
     },
   });
 
@@ -795,11 +661,14 @@ const readEmailInputSchema = z.object({
 export const readEmailTool = ({
   email,
   emailAccountId,
+  userId,
   provider,
   logger,
 }: {
   email: string;
   emailAccountId: string;
+  /** The signed-in user, whose other accounts' emails it may also read. */
+  userId: string;
   provider: string;
   logger: Logger;
 }) =>
@@ -810,20 +679,37 @@ export const readEmailTool = ({
     execute: async ({ messageId }) => {
       trackToolCall({ tool: "read_email", email, logger });
 
+      let target: Awaited<ReturnType<typeof resolveEmailAccountForId>> = null;
       try {
-        const emailProvider = await createEmailProvider({
+        target = await resolveEmailAccountForId({
+          id: messageId,
+          userId,
           emailAccountId,
           provider,
+        });
+        if (!target) return { error: OTHER_ACCOUNT_EMAIL_NOT_FOUND };
+
+        const emailProvider = await createEmailProvider({
+          emailAccountId: target.emailAccountId,
+          provider: target.provider,
           logger,
         });
 
-        const message = await emailProvider.getMessage(messageId);
+        const message = await emailProvider.getMessage(target.id);
         const emailForLLM = getEmailForLLM(message, { maxLength: 4000 });
 
         return {
-          messageId: message.id,
-          threadId: message.threadId,
-          externalUrl: message.externalUrl,
+          ...(target.otherAccount
+            ? {
+                ...otherAccountEmailFields(target.otherAccount, message),
+                // Its link opens in this provider, not the chat's.
+                provider: target.provider,
+              }
+            : {
+                messageId: message.id,
+                threadId: message.threadId,
+                externalUrl: message.externalUrl,
+              }),
           from: emailForLLM.from,
           to: emailForLLM.to,
           cc: emailForLLM.cc,
@@ -837,8 +723,10 @@ export const readEmailTool = ({
         logger.error("Failed to read email", { error });
         return {
           error:
-            describeProviderRateLimitError(error, provider) ??
-            "Failed to read email",
+            describeProviderRateLimitError(
+              error,
+              target?.provider ?? provider,
+            ) ?? "Failed to read email",
         };
       }
     },
@@ -868,11 +756,14 @@ const readAttachmentInputSchema = z.object({
 export const readAttachmentTool = ({
   email,
   emailAccountId,
+  userId,
   provider,
   logger,
 }: {
   email: string;
   emailAccountId: string;
+  /** The signed-in user, whose other accounts' attachments it may also read. */
+  userId: string;
   provider: string;
   logger: Logger;
 }) =>
@@ -888,10 +779,19 @@ export const readAttachmentTool = ({
     }) => {
       trackToolCall({ tool: "read_attachment", email, logger });
 
+      let target: Awaited<ReturnType<typeof resolveEmailAccountForId>> = null;
       try {
-        const emailProvider = await createEmailProvider({
+        target = await resolveEmailAccountForId({
+          id: messageId,
+          userId,
           emailAccountId,
           provider,
+        });
+        if (!target) return { error: OTHER_ACCOUNT_EMAIL_NOT_FOUND };
+
+        const emailProvider = await createEmailProvider({
+          emailAccountId: target.emailAccountId,
+          provider: target.provider,
           logger,
         });
 
@@ -900,7 +800,7 @@ export const readAttachmentTool = ({
 
         if (!resolvedMimeType || !resolvedFilename) {
           try {
-            const message = await emailProvider.getMessage(messageId);
+            const message = await emailProvider.getMessage(target.id);
             const matchedAttachment = message.attachments?.find(
               (attachment) => attachment.attachmentId === attachmentId,
             );
@@ -928,7 +828,7 @@ export const readAttachmentTool = ({
         }
 
         const attachment = await emailProvider.getAttachment(
-          messageId,
+          target.id,
           attachmentId,
         );
 
@@ -962,8 +862,10 @@ export const readAttachmentTool = ({
         logger.error("Failed to read attachment", { error });
         return {
           error:
-            describeProviderRateLimitError(error, provider) ??
-            "Failed to read attachment",
+            describeProviderRateLimitError(
+              error,
+              target?.provider ?? provider,
+            ) ?? "Failed to read attachment",
         };
       }
     },
@@ -1762,6 +1664,466 @@ function summarizeSearchResults(
       },
     },
   );
+}
+
+async function searchGmailChatAccount({
+  options: { emailAccountId, provider, logger, localMailSearch },
+  input,
+}: {
+  options: InboxToolOptions;
+  input: GmailSearchInboxInput;
+}) {
+  const { query, limit, pageToken } = input;
+  const maxResults = limit ?? SEARCH_INBOX_MAX_RESULTS;
+  const localPage = isLocalPageToken(pageToken);
+
+  try {
+    const emailProviderPromise = createEmailProvider({
+      emailAccountId,
+      provider,
+      logger,
+    });
+    // Awaited below; this only keeps a failure during the local search
+    // from counting as unhandled.
+    emailProviderPromise.catch(() => undefined);
+    // A Gmail page walk stays on Gmail; a local one stays local.
+    const local =
+      localMailSearch && (!pageToken || localPage)
+        ? await localMailSearch.search({
+            query,
+            limit: maxResults,
+            pageToken: pageToken ?? undefined,
+          })
+        : null;
+    if (localPage && !local) return localPageUnavailable(query);
+
+    const emailProvider = await emailProviderPromise;
+    const labelsPromise = getLabelsForSearchResults({
+      emailProvider,
+      logger,
+    });
+    const searchResult = local
+      ? {
+          messages: local.messages,
+          nextPageToken: local.nextPageToken,
+        }
+      : await emailProvider
+          .searchMessages({
+            query,
+            maxResults,
+            pageToken: pageToken ?? undefined,
+            allowPartial: true,
+          })
+          .then((result) => ({
+            ...result,
+            messages: result.messages.map(searchSourceFromMessage),
+          }));
+
+    return formatSearchInboxResult({
+      searchResult,
+      queryUsed: query,
+      labels: await labelsPromise,
+      taxonomyNamesKey: "labelNames",
+    });
+  } catch (error) {
+    // Provider failures are logged and flushed at the provider boundary.
+    const errorInfo = extractGmailErrorInfo(error);
+    const { retryable } = isGmailRetryableError(errorInfo);
+    return {
+      queryUsed: query,
+      error:
+        describeProviderRateLimitError(error, provider) ??
+        "Failed to search inbox",
+      searchFeedback: {
+        status: errorInfo.status,
+        message: (
+          errorInfo.errorMessage || "Gmail search request failed"
+        ).slice(0, 300),
+        retryable,
+      },
+    };
+  }
+}
+
+async function searchOutlookChatAccount({
+  options: { emailAccountId, provider, logger, localMailSearch },
+  input,
+}: {
+  options: InboxToolOptions;
+  input: OutlookSearchInboxInput;
+}) {
+  const {
+    query = "",
+    fromEmail,
+    limit,
+    pageToken,
+    readState,
+    categoryName,
+    folderName,
+  } = input;
+
+  try {
+    const normalizedInput = normalizeOutlookSearchInput({
+      query,
+      fromEmail,
+      readState,
+      categoryName,
+      folderName,
+    });
+    const emailProviderPromise = createEmailProvider({
+      emailAccountId,
+      provider,
+      logger,
+    });
+    // Awaited below; this only keeps a failure during the local search
+    // from counting as unhandled.
+    emailProviderPromise.catch(() => undefined);
+    // A Graph page walk stays on Graph; a local one stays local.
+    const localPage = isLocalPageToken(pageToken);
+    const localSearch =
+      localMailSearch && (!pageToken || localPage)
+        ? getOutlookLocalSearch(normalizedInput)
+        : null;
+    const local =
+      localMailSearch && localSearch
+        ? await localMailSearch.search({
+            ...localSearch.request,
+            limit,
+            pageToken: pageToken ?? undefined,
+          })
+        : null;
+    if (localPage && !local) return localPageUnavailable(query);
+
+    const emailProvider = await emailProviderPromise;
+    const labelsPromise = getLabelsForSearchResults({
+      emailProvider,
+      logger,
+    });
+    if (local && localSearch)
+      return formatSearchInboxResult({
+        searchResult: {
+          messages: local.messages,
+          nextPageToken: local.nextPageToken,
+        },
+        queryUsed: localSearch.queryUsed,
+        labels: await labelsPromise,
+        taxonomyNamesKey: "categoryNames",
+      });
+
+    const searchResult = await runOutlookSearch({
+      emailProvider,
+      normalizedInput,
+      limit,
+      pageToken,
+      logger,
+    });
+
+    if (!searchResult.result) {
+      return buildMicrosoftSearchErrorResult({
+        query,
+        failures: searchResult.failures,
+      });
+    }
+
+    const labels = await labelsPromise;
+
+    return {
+      ...formatSearchInboxResult({
+        searchResult: {
+          ...searchResult.result,
+          messages: searchResult.result.messages.map(searchSourceFromMessage),
+        },
+        queryUsed: searchResult.queryUsed,
+        labels,
+        taxonomyNamesKey: "categoryNames",
+      }),
+      ...(searchResult.exactCount !== undefined && {
+        exactCount: searchResult.exactCount,
+      }),
+      ...(searchResult.countError && {
+        countError: searchResult.countError,
+      }),
+    };
+  } catch (error) {
+    return buildMicrosoftSearchErrorResult({
+      query,
+      failures: [{ query, error }],
+    });
+  }
+}
+
+// Other accounts answer with a first look, not a page walk: enough to find
+// the email, at a few Gmail or Graph calls per account.
+const OTHER_ACCOUNT_MAX_RESULTS = 10;
+const OTHER_ACCOUNT_EMAIL_NOT_FOUND =
+  "That email is not in any of the user's connected accounts.";
+
+type SearchResultItem = ReturnType<typeof mapMessageForSearchResult>;
+
+type OtherAccountSearchResult =
+  | {
+      messages: Array<SearchResultItem & { account: string }>;
+      hasMore: boolean;
+      /** The other provider could only search the chat's search's keywords. */
+      keywordsOnly: boolean;
+    }
+  | { nothingToSearch: true };
+
+type OtherAccount = { id: string; email: string; provider: string };
+
+type OtherAccountSearch = Promise<{
+  results: OtherAccountResult<OtherAccountSearchResult>[];
+  notSearchedCount: number;
+  /** Why the other accounts were not searched at all. */
+  skipped?: string;
+} | null> | null;
+
+/**
+ * Starts the search in the user's other accounts, alongside the chat
+ * account's own, when the model asked for all accounts.
+ */
+function startOtherAccountSearch({
+  options: { userId, emailAccountId, provider, logger },
+  abortSignal,
+  input,
+}: {
+  options: InboxToolOptions;
+  // Either provider's input: a Gmail search has no Outlook-only fields.
+  input: GmailSearchInboxInput &
+    Partial<
+      Pick<
+        OutlookSearchInboxInput,
+        "fromEmail" | "readState" | "folderName" | "categoryName"
+      >
+    >;
+  abortSignal?: AbortSignal;
+}): OtherAccountSearch {
+  if (!input.allAccounts) return null;
+  // A page walk continues the chat account's search, and folders and
+  // categories are the chat account's own, so those stay in it.
+  if (input.pageToken) {
+    return Promise.resolve({
+      results: [],
+      notSearchedCount: 0,
+      skipped: "Later pages search only this chat's account.",
+    });
+  }
+  if (
+    input.folderName ||
+    input.categoryName ||
+    // An Outlook query can name its folder or category itself.
+    (isMicrosoftProvider(provider) &&
+      getOutlookFieldScopeCandidate(input.query))
+  ) {
+    return Promise.resolve({
+      results: [],
+      notSearchedCount: 0,
+      skipped: "Folder and category filters apply only to this chat's account.",
+    });
+  }
+
+  const search: AccountSearch = {
+    query: input.query,
+    fromEmail: input.fromEmail,
+    readState: input.readState,
+  };
+  return runOnOtherAccounts({
+    userId,
+    emailAccountId,
+    logger,
+    abortSignal,
+    run: (account, signal) =>
+      searchOtherAccount({
+        account,
+        chatProvider: provider,
+        search,
+        signal,
+        logger: logger.with({ otherEmailAccountId: account.id }),
+      }),
+  }).catch((error) => {
+    logger.warn("Search across other accounts failed", { error });
+    return null;
+  });
+}
+
+async function searchOtherAccount({
+  account,
+  chatProvider,
+  search: chatSearch,
+  signal,
+  logger,
+}: {
+  account: OtherAccount;
+  chatProvider: string;
+  search: AccountSearch;
+  signal: AbortSignal;
+  logger: Logger;
+}): Promise<OtherAccountSearchResult> {
+  const translated = translateAccountSearch({
+    search: chatSearch,
+    from: chatProvider,
+    to: account.provider,
+  });
+  if (!translated) return { nothingToSearch: true };
+  const { search, keywordsOnly } = translated;
+
+  const emailProvider = await createEmailProvider({
+    emailAccountId: account.id,
+    provider: account.provider,
+    logger,
+  });
+  signal.throwIfAborted();
+  const labelsPromise = getLabelsForSearchResults({ emailProvider, logger });
+  const isOutlook = isMicrosoftProvider(account.provider);
+  const result = isOutlook
+    ? await searchOtherOutlookAccount({ emailProvider, search, signal, logger })
+    : await emailProvider.searchMessages({
+        query: search.query,
+        maxResults: OTHER_ACCOUNT_MAX_RESULTS,
+        allowPartial: true,
+        signal,
+      });
+  const labelsById = createLabelLookupMap(await labelsPromise);
+
+  return {
+    keywordsOnly,
+    hasMore: Boolean(result.nextPageToken),
+    messages: result.messages.map((message) => ({
+      ...mapMessageForSearchResult(
+        searchSourceFromMessage(message),
+        labelsById,
+        isOutlook ? "categoryNames" : "labelNames",
+      ),
+      ...otherAccountEmailFields(account, message),
+    })),
+  };
+}
+
+async function searchOtherOutlookAccount({
+  emailProvider,
+  search,
+  signal,
+  logger,
+}: {
+  emailProvider: EmailProvider;
+  search: AccountSearch;
+  signal: AbortSignal;
+  logger: Logger;
+}) {
+  const { result, lastError } = await runOutlookSearch({
+    emailProvider,
+    normalizedInput: normalizeOutlookSearchInput({
+      query: search.query,
+      fromEmail: search.fromEmail,
+      readState: search.readState,
+    }),
+    limit: OTHER_ACCOUNT_MAX_RESULTS,
+    logger,
+    signal,
+  });
+  if (!result) throw lastError ?? new Error("Outlook search failed");
+  return result;
+}
+
+function otherAccountEmailFields(
+  account: OtherAccount,
+  message: { id: string; threadId: string; externalUrl?: string },
+) {
+  return {
+    messageId: toOtherAccountEmailId(account.id, message.id),
+    threadId: toOtherAccountEmailId(account.id, message.threadId),
+    externalUrl:
+      message.externalUrl ??
+      getEmailUrlForMessage(
+        message.id,
+        message.threadId,
+        account.email,
+        account.provider,
+      ),
+    account: account.email,
+  };
+}
+
+/** The chat account's result, with the other accounts' merged in. */
+async function withOtherAccountResults<
+  T extends {
+    messages?: SearchResultItem[];
+    error?: unknown;
+    hasMore?: unknown;
+  },
+>({
+  result,
+  chatEmail,
+  otherAccounts: otherAccountSearch,
+}: {
+  result: T;
+  chatEmail: string;
+  otherAccounts: OtherAccountSearch;
+}) {
+  if (!otherAccountSearch) return result;
+  const otherSearch = await otherAccountSearch;
+  const otherAccounts = otherSearch?.results;
+
+  const chatMessages = (result.messages ?? []).map((message) => ({
+    ...message,
+    account: chatEmail,
+  }));
+  const otherMessages = (otherAccounts ?? []).flatMap((entry) =>
+    "result" in entry && "messages" in entry.result
+      ? entry.result.messages
+      : [],
+  );
+  const messages = [...chatMessages, ...otherMessages];
+  // With mail found elsewhere, the chat account's failure is that account's
+  // alone, not the result's.
+  const { error: _chatAccountError, ...resultWithoutError } = result;
+  const merged = otherMessages.length > 0 ? resultWithoutError : result;
+
+  return {
+    ...merged,
+    totalReturned: messages.length,
+    summary: summarizeSearchResults(messages),
+    messages,
+    accounts: [
+      typeof result.error === "string"
+        ? { account: chatEmail, error: result.error }
+        : {
+            account: chatEmail,
+            returned: chatMessages.length,
+            hasMore: Boolean(result.hasMore),
+          },
+      ...(otherAccounts ?? []).map(describeOtherAccount),
+    ],
+    ...(otherSearch?.notSearchedCount && {
+      accountsNotSearched: otherSearch.notSearchedCount,
+    }),
+    ...(otherSearch?.skipped && { otherAccountsSkipped: otherSearch.skipped }),
+    ...(otherSearch
+      ? {}
+      : {
+          otherAccountsError:
+            "The user's other accounts could not be searched.",
+        }),
+  };
+}
+
+function describeOtherAccount(
+  entry: OtherAccountResult<OtherAccountSearchResult>,
+) {
+  const account = entry.account.email;
+  if ("error" in entry) return { account, error: entry.error };
+  if ("nothingToSearch" in entry.result) {
+    return {
+      account,
+      error: "Nothing in this search applies to this account.",
+    };
+  }
+  return {
+    account,
+    returned: entry.result.messages.length,
+    hasMore: entry.result.hasMore,
+    ...(entry.result.keywordsOnly && { keywordsOnly: true }),
+  };
 }
 
 function createLabelLookupMap(labels: Array<{ id: string; name: string }>) {

@@ -21,6 +21,7 @@ export async function getConnectedEmailAccounts({
       email: true,
       name: true,
       image: true,
+      includeInAllAccounts: true,
       account: {
         select: { provider: true },
       },
@@ -33,6 +34,7 @@ export async function getConnectedEmailAccounts({
     email: account.email,
     name: account.name,
     image: account.image,
+    includeInAllAccounts: account.includeInAllAccounts,
     provider: account.account.provider,
   }));
 }

@@ -15,6 +15,7 @@ import {
   InlineEmailList,
 } from "@/components/assistant-chat/inline-email-card";
 import { getEmailUrlForMessage } from "@/utils/url";
+import { toOtherAccountEmailId } from "@/utils/ai/assistant/other-account-email-id";
 
 (globalThis as { React?: typeof React }).React = React;
 
@@ -508,6 +509,86 @@ describe("InlineEmailList", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("leaves another account's email out of archive all", async () => {
+    const otherThreadId = toOtherAccountEmailId("account-2", "thread-9");
+    render(
+      createElement(
+        InlineEmailList,
+        null,
+        createElement(InlineEmailCard, { threadid: "thread-1" }, "Mine"),
+        createElement(InlineEmailCard, { threadid: otherThreadId }, "Theirs"),
+      ),
+    );
+
+    fireEvent.click(screen.getAllByRole("button")[0]);
+
+    await waitFor(() => {
+      expect(mockArchiveThreadAction).toHaveBeenCalledTimes(1);
+    });
+    expect(mockArchiveThreadAction).toHaveBeenCalledWith("account-1", {
+      threadId: "thread-1",
+    });
+  });
+});
+
+describe("InlineEmailCard for another account's email", () => {
+  const otherThreadId = toOtherAccountEmailId("account-2", "thread-9");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseAccount.mockReturnValue({
+      emailAccountId: "account-1",
+      provider: "google",
+      userEmail: "user@example.com",
+    });
+    mockUseEmailLookup.mockReturnValue(
+      new Map([
+        [
+          otherThreadId,
+          {
+            messageId: toOtherAccountEmailId("account-2", "msg-9"),
+            from: "Legal <legal@acme.example>",
+            subject: "Contract renewal",
+            snippet: "Renewal terms attached",
+            date: "2026-03-11T10:00:00.000Z",
+            isUnread: false,
+            externalUrl: "https://mail.example/other-account/thread-9",
+            account: "other@example.com",
+          },
+        ],
+      ]),
+    );
+    mockUseThread.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+    });
+  });
+
+  it("says which account it is in and offers no actions in the chat's account", () => {
+    render(<InlineEmailCard threadid={otherThreadId}>Renewal</InlineEmailCard>);
+
+    expect(screen.getByText(/other@example\.com/)).toBeTruthy();
+
+    openMoreActions();
+
+    expect(screen.queryByRole("menuitem", { name: "Archive" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Mark as read" })).toBeNull();
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Open in email" })
+        .getAttribute("href"),
+    ).toBe("https://mail.example/other-account/thread-9");
+  });
+
+  it("does not load it through the chat's account", () => {
+    render(<InlineEmailCard threadid={otherThreadId}>Renewal</InlineEmailCard>);
+
+    fireEvent.click(screen.getByText("Renewal"));
+
+    expect(mockUseThread).not.toHaveBeenCalled();
   });
 });
 
