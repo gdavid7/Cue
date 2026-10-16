@@ -2,7 +2,13 @@ import { ZodError } from "zod";
 import { type NextRequest, NextResponse, after } from "next/server";
 import { randomUUID } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
-import { captureException, checkCommonErrors, SafeError } from "@/utils/error";
+import {
+  captureException,
+  checkCommonErrors,
+  getEmailProviderRateLimitMessage,
+  SafeError,
+} from "@/utils/error";
+import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
 import {
   isPublicApiPath,
   publicApiErrorFromUnknown,
@@ -19,7 +25,11 @@ import {
   getProviderRateLimitRetryAfterSeconds,
   recordRateLimitFromApiError,
 } from "@/utils/email/rate-limit";
-import { isProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
+import {
+  getProviderRateLimitApiErrorType,
+  isProviderRateLimitModeError,
+  toRateLimitProvider,
+} from "@/utils/email/rate-limit-mode-error";
 import { getGmailCallDeferredError } from "@/utils/gmail/quota";
 import {
   EMAIL_ACCOUNT_HEADER,
@@ -246,7 +256,9 @@ function withMiddleware<T extends NextRequest>(
             );
           }
 
-          const apiError = checkCommonErrors(error, requestPath, reqLogger);
+          const apiError =
+            checkCommonErrors(error, requestPath, reqLogger) ??
+            providerRateLimitApiError(error, requestForError);
           if (apiError) {
             await recordRateLimitFromApiError({
               apiErrorType: apiError.type,
@@ -856,6 +868,21 @@ function logSlowMiddlewareTotal({
       durationMs,
     });
   }
+}
+
+// A rate limit the provider's known error shapes don't name, such as a
+// bare 429 inside a batch failure, is still a rate limit.
+function providerRateLimitApiError(error: unknown, req: NextRequest) {
+  const provider = toRateLimitProvider(
+    (req as Partial<RequestWithEmailProvider>).emailProvider?.name,
+  );
+  if (!provider || !isEmailProviderRateLimitError({ error, provider }))
+    return null;
+  return {
+    type: getProviderRateLimitApiErrorType(provider),
+    message: getEmailProviderRateLimitMessage(provider),
+    code: 429,
+  };
 }
 
 function getSafeErrorStatusCode(statusCode?: number) {

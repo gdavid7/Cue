@@ -43,23 +43,21 @@ describe("GET /api/threads/basic", () => {
     vi.clearAllMocks();
   });
 
-  it("preserves provider rate limits as a known 429 response", async () => {
-    mockGetThreadsWithQuery.mockRejectedValue(
-      new Error("Batch request failed", {
-        cause: Object.assign(new Error("Provider request was throttled"), {
-          response: { status: 429 },
-        }),
+  it("lets provider rate limits reach the middleware, which answers 429 with Retry-After", async () => {
+    const throttled = new Error("Batch request failed", {
+      cause: Object.assign(new Error("Provider request was throttled"), {
+        response: { status: 429 },
       }),
-    );
+    });
+    mockGetThreadsWithQuery.mockRejectedValue(throttled);
 
-    const response = await GET(
-      new NextRequest(
-        "http://localhost:3000/api/threads/basic?fromEmail=sender%40example.com",
+    await expect(
+      GET(
+        new NextRequest(
+          "http://localhost:3000/api/threads/basic?fromEmail=sender%40example.com",
+        ),
       ),
-    );
-
-    expect(response.status).toBe(429);
-    expect(await response.json()).toMatchObject({ isKnownError: true });
+    ).rejects.toBe(throttled);
   });
 
   it("keeps unrelated provider failures as generic server errors", async () => {

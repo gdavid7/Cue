@@ -3,6 +3,8 @@ import { resolveNativeThreadsQuery } from "@/utils/split-inbox/native-categories
 import { withEmailProvider } from "@/utils/middleware";
 import { threadsQuery, threadsView } from "@/utils/threads/validation";
 import { loadThreads, toListThreads } from "@/utils/threads/load";
+import { getGmailCallDeferredError } from "@/utils/gmail/quota";
+import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
 
 export const maxDuration = 30;
 
@@ -80,6 +82,12 @@ export const GET = withEmailProvider(
         view === "list" ? toListThreads(threads) : threads,
       );
     } catch (error) {
+      // The middleware answers these with 503 or 429 and Retry-After.
+      if (
+        getGmailCallDeferredError(error) ||
+        isEmailProviderRateLimitError({ error, provider: emailProvider.name })
+      )
+        throw error;
       request.logger.error("Error fetching threads", {
         error,
         emailAccountId,

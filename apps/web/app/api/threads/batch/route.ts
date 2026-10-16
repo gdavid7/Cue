@@ -3,6 +3,8 @@ import { withEmailProvider } from "@/utils/middleware";
 import type { ThreadsResponse } from "@/app/api/threads/route";
 import { runWithBoundedConcurrency } from "@/utils/async";
 import { isIgnoredSender } from "@/utils/filter-ignored-senders";
+import { getGmailCallDeferredError } from "@/utils/gmail/quota";
+import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
 
 export type ThreadsBatchResponse = {
   threads: ThreadsResponse["threads"];
@@ -42,6 +44,16 @@ export const GET = withEmailProvider(
         concurrency: THREAD_FETCH_CONCURRENCY,
         run: (threadId) => emailProvider.getThread(threadId),
       });
+
+      // A thread Gmail held back would otherwise vanish from a 200; the
+      // middleware answers with 503 or 429 and Retry-After instead.
+      const throttled = results.find(
+        ({ result }) =>
+          result.status === "rejected" &&
+          isQuotaError(result.reason, emailProvider.name),
+      );
+      if (throttled?.result.status === "rejected")
+        throw throttled.result.reason;
 
       for (const { item: threadId, result } of results) {
         if (result.status === "rejected") {
@@ -85,6 +97,7 @@ export const GET = withEmailProvider(
 
       return NextResponse.json({ threads: validThreads });
     } catch (error) {
+      if (isQuotaError(error, emailProvider.name)) throw error;
       request.logger.error("Error fetching batch threads", {
         error,
         emailAccountId,
@@ -97,3 +110,10 @@ export const GET = withEmailProvider(
   },
   { maxDuration },
 );
+
+function isQuotaError(error: unknown, provider: string) {
+  return (
+    !!getGmailCallDeferredError(error) ||
+    isEmailProviderRateLimitError({ error, provider })
+  );
+}

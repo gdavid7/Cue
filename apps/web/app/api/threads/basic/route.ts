@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { withEmailProvider } from "@/utils/middleware";
 import type { EmailProvider } from "@/utils/email/types";
 import { threadsQuery } from "@/utils/threads/validation";
-import { EMAIL_PROVIDER_RATE_LIMIT_MESSAGE, SafeError } from "@/utils/error";
+import { getGmailCallDeferredError } from "@/utils/gmail/quota";
 import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
 
 // Straight from the provider — this route does no ExecutedRule join, so it
@@ -48,18 +48,16 @@ export const GET = withEmailProvider(
         nextPageToken,
       });
     } catch (error) {
+      // The middleware answers these with 503 or 429 and Retry-After.
+      if (
+        getGmailCallDeferredError(error) ||
+        isEmailProviderRateLimitError({ error, provider: emailProvider.name })
+      )
+        throw error;
       request.logger.error("Error fetching basic threads", {
         error,
         emailAccountId,
       });
-      if (
-        isEmailProviderRateLimitError({
-          error,
-          provider: emailProvider.name,
-        })
-      ) {
-        throw new SafeError(EMAIL_PROVIDER_RATE_LIMIT_MESSAGE, 429);
-      }
 
       return NextResponse.json(
         { error: "Failed to fetch threads" },
