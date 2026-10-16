@@ -288,7 +288,7 @@ export function ThreadReader({
           translatedSubject ?? headerMessage?.headers.subject ?? "Conversation"
         }
       />
-      {STUB_CUE_STRIP && emailAccountId && threadId && lastReceived ? (
+      {emailAccountId && threadId && lastReceived ? (
         <CueStrip
           // Its chosen actions and loaded answers belong to one thread.
           key={`${emailAccountId}:${threadId}`}
@@ -471,6 +471,3 @@ function latestShownMessage<T extends { id: string }>(
     (message) => !hiddenDraftMessageIds.includes(message.id),
   );
 }
-
-// Temporary: CI experiment for hosted-electron-archive:494, reverted next.
-const STUB_CUE_STRIP = false as boolean;
