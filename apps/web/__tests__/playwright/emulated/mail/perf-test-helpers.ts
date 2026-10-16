@@ -199,6 +199,29 @@ export async function timeSinceNavigation<A>(
   return (await handle.jsonValue()) as number;
 }
 
+/**
+ * Lets the first sync settle so later timings measure the UI rather than the
+ * backfill. A mailbox still syncing after the wait is measured as it is.
+ */
+export async function waitForEngineIdle(page: Page) {
+  const deadline = Date.now() + Number(process.env.PERF_SYNC_WAIT_MS ?? 10_000);
+  while (Date.now() < deadline) {
+    const idle = await page.evaluate(async () => {
+      const diagnostics = (await window.__inboxZeroMailInspect
+        ?.read()
+        .catch(() => null)) as {
+        coverage?: { lastCompletedSyncAtMs?: number | null }[];
+      } | null;
+      return Boolean(
+        diagnostics?.coverage?.some((c) => c.lastCompletedSyncAtMs),
+      );
+    });
+    if (idle) break;
+    await page.waitForTimeout(500);
+  }
+  if (perfProfile === "phone") await page.waitForTimeout(500);
+}
+
 export function firstInboxRowVisible() {
   const row = document.querySelector(
     '[role="listbox"][aria-label="Conversations"] [data-mail-thread-row]',
