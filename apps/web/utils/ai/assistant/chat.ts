@@ -58,6 +58,7 @@ import { LlmUseCase } from "@/utils/llms/use-cases";
 import { isIntegrationActionEnabledForUserId } from "@/utils/integration-action.server";
 import { trimStaleToolResults } from "@/utils/ai/assistant/trim-stale-tool-results";
 import { withChatToolRuntime } from "@/utils/ai/assistant/chat-tool-runtime";
+import { withChatAccountScope } from "@/utils/ai/assistant/chat-other-accounts";
 import { getLowThinkingStepOptions } from "@/utils/llms/model";
 import { holdGmailInteractiveDemand } from "@/utils/gmail/quota";
 import type { LocalMailSearch } from "@/utils/ai/assistant/local-mail-search";
@@ -347,70 +348,78 @@ export async function aiProcessAssistantChat({
   const allTools = withChatToolRuntime({
     logger,
     onGmailCall: gmailDemand.take,
-    tools: {
-      getAssistantCapabilities: getAssistantCapabilitiesTool(toolOptions),
-      getAccountOverview: getAccountOverviewTool(toolOptions),
-      getSenderCategoryOverview: getSenderCategoryOverviewTool(toolOptions),
-      startSenderCategorization: startSenderCategorizationTool(toolOptions),
-      getSenderCategorizationStatus:
-        getSenderCategorizationStatusTool(toolOptions),
-      manageSenderCategory: manageSenderCategoryTool(toolOptions),
-      searchInbox: searchInboxTool(toolOptions),
-      searchContext: searchContextTool(toolOptions),
-      ...(isExaSearchEnabled()
-        ? { searchWeb: searchWebTool(toolOptions) }
-        : {}),
-      readEmail: readEmailTool(toolOptions),
-      manageInbox: manageInboxTool(toolOptions),
-      getUserRulesAndSettings: getUserRulesAndSettingsTool(toolOptions),
-      getRuleExecutionForMessage: getRuleExecutionForMessageTool(toolOptions),
-      getLearnedPatterns: getLearnedPatternsTool(toolOptions),
-      createRule: createRuleTool(toolOptions),
-      updateRule: updateRuleTool(toolOptions),
-      deleteRule: deleteRuleTool(toolOptions),
-      updateLearnedPatterns: updateLearnedPatternsTool(toolOptions),
-      updatePersonalInstructions: updatePersonalInstructionsTool(toolOptions),
+    // searchInbox may list other accounts' emails; only these read tools
+    // follow them there, and every other tool stays in the chat's account.
+    tools: withChatAccountScope({
+      userId: user.userId,
+      emailAccountId,
+      email: user.email,
+      crossAccountTools: ["readEmail", "readAttachment"],
+      tools: {
+        getAssistantCapabilities: getAssistantCapabilitiesTool(toolOptions),
+        getAccountOverview: getAccountOverviewTool(toolOptions),
+        getSenderCategoryOverview: getSenderCategoryOverviewTool(toolOptions),
+        startSenderCategorization: startSenderCategorizationTool(toolOptions),
+        getSenderCategorizationStatus:
+          getSenderCategorizationStatusTool(toolOptions),
+        manageSenderCategory: manageSenderCategoryTool(toolOptions),
+        searchInbox: searchInboxTool(toolOptions),
+        searchContext: searchContextTool(toolOptions),
+        ...(isExaSearchEnabled()
+          ? { searchWeb: searchWebTool(toolOptions) }
+          : {}),
+        readEmail: readEmailTool(toolOptions),
+        manageInbox: manageInboxTool(toolOptions),
+        getUserRulesAndSettings: getUserRulesAndSettingsTool(toolOptions),
+        getRuleExecutionForMessage: getRuleExecutionForMessageTool(toolOptions),
+        getLearnedPatterns: getLearnedPatternsTool(toolOptions),
+        createRule: createRuleTool(toolOptions),
+        updateRule: updateRuleTool(toolOptions),
+        deleteRule: deleteRuleTool(toolOptions),
+        updateLearnedPatterns: updateLearnedPatternsTool(toolOptions),
+        updatePersonalInstructions: updatePersonalInstructionsTool(toolOptions),
 
-      // Email send tools (gated by env)
-      ...(emailSendToolsEnabled
-        ? {
-            sendEmail: sendEmailTool(toolOptions),
-            replyEmail: replyEmailTool(toolOptions),
-          }
-        : {}),
+        // Email send tools (gated by env)
+        ...(emailSendToolsEnabled
+          ? {
+              sendEmail: sendEmailTool(toolOptions),
+              replyEmail: replyEmailTool(toolOptions),
+            }
+          : {}),
 
-      // Progressive disclosure groups (registered but not active by default)
-      ...(calendarConnection.state === "connected"
-        ? {
-            getCalendarEvents: getCalendarEventsTool(toolOptions),
-            addToCalendar: addToCalendarTool({
-              ...toolOptions,
-              timezone: userTimezone,
-            }),
-          }
-        : {}),
-      // Attachments
-      readAttachment: readAttachmentTool(toolOptions),
-      ...(hasConnectedDrive
-        ? { saveToDrive: saveToDriveTool(toolOptions) }
-        : {}),
-      ...providerPolicy.getTaxonomyTools(toolOptions),
-      // Settings
-      updateAssistantSettings: updateAssistantSettingsTool(toolOptions),
-      // Memory
-      searchMemories: searchMemoriesTool(toolOptions),
-      saveMemory: saveMemoryTool({
-        ...toolOptions,
-        chatId,
-        conversationMessages: memoryConversationMessages,
-      }),
-      // Knowledge
-      addToKnowledgeBase: addToKnowledgeBaseTool(toolOptions),
-      // Forward
-      ...(emailSendToolsEnabled
-        ? { forwardEmail: forwardEmailTool(toolOptions) }
-        : {}),
-    },
+        // Progressive disclosure groups (registered but not active by default)
+        ...(calendarConnection.state === "connected"
+          ? {
+              getCalendarEvents: getCalendarEventsTool(toolOptions),
+              addToCalendar: addToCalendarTool({
+                ...toolOptions,
+                timezone: userTimezone,
+              }),
+            }
+          : {}),
+        // Attachments
+        readAttachment: readAttachmentTool(toolOptions),
+        ...(hasConnectedDrive
+          ? { saveToDrive: saveToDriveTool(toolOptions) }
+          : {}),
+        ...providerPolicy.getTaxonomyTools(toolOptions),
+        // Settings
+        updateAssistantSettings: updateAssistantSettingsTool(toolOptions),
+        // Memory
+        searchMemories: searchMemoriesTool(toolOptions),
+        saveMemory: saveMemoryTool({
+          ...toolOptions,
+          chatId,
+          conversationMessages: memoryConversationMessages,
+        }),
+        // Knowledge
+        addToKnowledgeBase: addToKnowledgeBaseTool(toolOptions),
+        // Forward
+        ...(emailSendToolsEnabled
+          ? { forwardEmail: forwardEmailTool(toolOptions) }
+          : {}),
+      },
+    }),
   });
 
   logger.trace("Resolved system prompt", {
