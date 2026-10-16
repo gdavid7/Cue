@@ -350,7 +350,7 @@ export function Chat({
       <ChatAccountNotice />
       {chatAccountLoading ? (
         chatAccountError ? (
-          <ErrorDisplay error={chatAccountError} />
+          <ErrorDisplay error={{ error: chatAccountError.message }} />
         ) : (
           <div role="status" aria-label="Loading chat" className="flex-1">
             <Loading />
