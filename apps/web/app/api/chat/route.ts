@@ -348,13 +348,14 @@ export const POST = withEmailAccount("chat", async (request) => {
       toolCallCount: 0,
       visibleTextProduced: false,
     };
-    // Searches are answered locally only by a browser that says it can,
-    // and only for Gmail and Outlook, whose search syntax the local search
-    // reads.
+    // Searches are answered locally only by a browser that says it can, and
+    // for Outlook only by one that reads Outlook's syntax: older tabs read
+    // every query as Gmail's.
     const localMailSearch =
       data.localMailSearch &&
       (isGoogleProvider(user.account.provider) ||
-        isMicrosoftProvider(user.account.provider))
+        (isMicrosoftProvider(user.account.provider) &&
+          data.localMailSearchSyntaxes.includes("outlook")))
         ? createLocalMailSearch({
             emailAccountId,
             logger: runLogger,
