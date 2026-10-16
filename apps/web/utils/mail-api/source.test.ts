@@ -827,6 +827,24 @@ describe("createEmailProviderMailboxSource", () => {
     ).toEqual(folders.map((folder) => `${folder}-next`));
   });
 
+  // Opening a conversation fills it from membership. A draft-only one used
+  // to resolve to no messages, so the reader stayed blank until a full sync
+  // happened to bring the draft.
+  it("lists the drafts of a conversation that has nothing else", async () => {
+    const source = membershipSource([{ id: "draft", labelIds: ["DRAFT"] }]);
+    expect(await readMembershipKeys(source)).toEqual(["draft"]);
+  });
+
+  // Triage commands act on membership, so drafts beside other messages stay
+  // out of it: archiving a conversation must not move its unsent reply.
+  it("leaves drafts out of a conversation that has other messages", async () => {
+    const source = membershipSource([
+      { id: "received", labelIds: ["INBOX"] },
+      { id: "draft", labelIds: ["DRAFT"] },
+    ]);
+    expect(await readMembershipKeys(source)).toEqual(["received"]);
+  });
+
   it("pages conversation membership instead of truncating the thread", async () => {
     const messages = Array.from({ length: 3 }, (_, index) => ({
       id: `m${index + 1}`,
@@ -2550,4 +2568,50 @@ function gmailMessage(
     textPlain: id,
     inline: [],
   } as unknown as ParsedMessage;
+}
+
+// Answers as the providers do: drafts only when asked for them.
+function membershipSource(messages: { id: string; labelIds: string[] }[]) {
+  const thread = messages.map((message) => ({
+    ...message,
+    threadId: "c1",
+    headers: { from: "me@example.com" },
+    snippet: message.id,
+  }));
+  const withoutDrafts = () =>
+    thread.filter((message) => !message.labelIds.includes("DRAFT"));
+  return createEmailProviderMailboxSource({
+    logger,
+    accountId: "acc-1",
+    provider: {
+      name: "google",
+      async getThread(_id: string, options?: { includeDrafts?: boolean }) {
+        return {
+          messages: options?.includeDrafts ? thread : withoutDrafts(),
+          historyId: "h1",
+        };
+      },
+      async getThreadMessages() {
+        return withoutDrafts();
+      },
+    } as unknown as EmailProvider,
+  });
+}
+
+async function readMembershipKeys(
+  source: ReturnType<typeof createEmailProviderMailboxSource>,
+) {
+  const result = await source.readConversationMembership({
+    session: { accountId: "acc-1", generation: "g1" },
+    requestId: "r1",
+    signal: new AbortController().signal,
+    conversation: { accountId: "acc-1", conversationId: "c1" },
+    resolutionId: "res",
+    page: null,
+    pageSize: 20,
+  });
+  if (result.status !== "ok" || result.value.status !== "page") {
+    throw new Error(`Unexpected membership result: ${result.status}`);
+  }
+  return result.value.page.keys.map((key) => key.messageId);
 }

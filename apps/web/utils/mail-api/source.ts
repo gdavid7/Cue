@@ -19,6 +19,7 @@ import {
   parsedMessagePatch,
 } from "@/utils/mail-api/observations";
 import { isProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
+import { GmailLabel } from "@/utils/gmail/label";
 import {
   getProviderRateLimitDelayMs,
   recordProviderRateLimitFromError,
@@ -432,11 +433,20 @@ export function createEmailProviderMailboxSource(input: {
       try {
         const thread = await provider.getThread(conversation.conversationId, {
           complete: true,
+          includeDrafts: true,
         });
-        const messages =
-          thread.messages.length > 0
-            ? thread.messages
-            : await provider.getThreadMessages(conversation.conversationId);
+        // Triage commands act on these messages, so a conversation's drafts
+        // stay out unless they are all it has: then they are what opening it
+        // must show.
+        let messages = thread.messages.filter(
+          (message) => !message.labelIds?.includes(GmailLabel.DRAFT),
+        );
+        if (!messages.length) messages = thread.messages;
+        if (!messages.length) {
+          messages = await provider.getThreadMessages(
+            conversation.conversationId,
+          );
+        }
         const start = page ? Number(page) || 0 : 0;
         const slice = messages.slice(start, start + pageSize);
         return {
