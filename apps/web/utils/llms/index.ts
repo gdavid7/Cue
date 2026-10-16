@@ -5,6 +5,7 @@ import {
   type ToolSet,
   ToolLoopAgent,
   type JSONValue,
+  type LanguageModelUsage,
   type FlexibleSchema,
   type InferSchema,
   type GenerateObjectResult,
@@ -212,6 +213,7 @@ type UsageMetadata = {
   providerRequestIds?: string[];
   stepCount?: number;
   toolCallCount?: number;
+  stepUsages?: LanguageModelUsage[];
 };
 type LlmEmailAccount = {
   sensitiveDataPolicy?: EmailAccountWithAI["sensitiveDataPolicy"];
@@ -1926,6 +1928,7 @@ function getUsageMetadata(result: unknown): UsageMetadata {
   return {
     stepCount,
     toolCallCount,
+    stepUsages: getStepUsages(result),
     providerRequestIds: getProviderRequestIds(result),
     providerReportedCost: providerCost.providerReportedCost,
     providerUpstreamInferenceCost: providerCost.providerUpstreamInferenceCost,
@@ -1965,6 +1968,7 @@ async function saveUsageWithMetadata({
     email,
     emailAccountId,
     usage,
+    stepUsages: usageMetadata.stepUsages,
     provider,
     model,
     label,
@@ -2003,6 +2007,13 @@ function getStepCount(result: unknown) {
   if (!steps) return;
 
   return steps.length;
+}
+
+function getStepUsages(result: unknown) {
+  const usages = getObjectArrayProperty(result, "steps")
+    ?.map((step) => getObjectProperty(step, "usage"))
+    .filter((usage) => usage !== undefined);
+  return usages?.length ? (usages as LanguageModelUsage[]) : undefined;
 }
 
 function getToolCallCount(result: unknown) {

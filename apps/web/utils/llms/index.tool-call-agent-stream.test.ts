@@ -82,6 +82,28 @@ describe("toolCallAgentStream abort", () => {
   });
 });
 
+describe("toolCallAgentStream usage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("records each step's usage so per-request pricing tiers apply", async () => {
+    const primary = createScriptedModel("primary", [
+      [STREAM_START, toolCall("call-1", "archive"), finish("tool-calls")],
+      [STREAM_START, ...textParts("Done"), finish("stop")],
+    ]);
+
+    await runAgent({
+      primary,
+      tools: { archive: async () => "archived" },
+    });
+
+    const [usageEvent] = vi.mocked(saveAiUsage).mock.calls[0];
+    expect(usageEvent.stepUsages).toHaveLength(2);
+    expect(usageEvent.stepUsages?.[0]).toMatchObject({ inputTokens: 1 });
+  });
+});
+
 describe("toolCallAgentStream model fallback", () => {
   beforeEach(() => {
     vi.clearAllMocks();
