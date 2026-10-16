@@ -1,11 +1,49 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestLogger } from "@/__tests__/helpers";
 import { redis } from "@/utils/redis";
-import { countEmptyGmailHistoryRun } from "./gmail-history-catch-up";
+import {
+  countEmptyGmailHistoryRun,
+  getGmailHistoryCatchUpTarget,
+  raiseGmailHistoryCatchUpTarget,
+} from "./gmail-history-catch-up";
 
 vi.mock("@/utils/redis", () => ({
-  redis: { incr: vi.fn(), expire: vi.fn(), del: vi.fn() },
+  redis: {
+    incr: vi.fn(),
+    expire: vi.fn(),
+    del: vi.fn(),
+    eval: vi.fn(),
+    get: vi.fn(),
+  },
 }));
+
+describe("Gmail history catch-up target", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("only ever raises the target, comparing ids too large for numbers as strings", async () => {
+    await raiseGmailHistoryCatchUpTarget(
+      "account-1",
+      "90071992547409931234",
+      logger,
+    );
+
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.stringContaining("#current > #requested"),
+      ["gmail-history-catch-up-target:account-1"],
+      ["90071992547409931234", "86400"],
+    );
+  });
+
+  it("reads back the stored id exactly", async () => {
+    vi.mocked(redis.get).mockResolvedValue("h90071992547409931234");
+
+    expect(await getGmailHistoryCatchUpTarget("account-1", logger)).toBe(
+      "90071992547409931234",
+    );
+  });
+});
 
 const logger = createTestLogger();
 

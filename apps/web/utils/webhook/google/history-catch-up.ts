@@ -2,7 +2,10 @@ import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";
 import { isEmailProviderRateLimitRedisConfigured } from "@/utils/redis/email-provider-rate-limit";
-import { markGmailHistoryCatchUp } from "@/utils/redis/gmail-history-catch-up";
+import {
+  markGmailHistoryCatchUp,
+  raiseGmailHistoryCatchUpTarget,
+} from "@/utils/redis/gmail-history-catch-up";
 import { publishToQstashAt } from "@/utils/upstash";
 
 export const GMAIL_HISTORY_CATCH_UP_PATH = "/api/google/webhook/catch-up";
@@ -91,6 +94,7 @@ export async function scheduleGmailHistoryCatchUp({
     Math.max(Date.now() + CATCH_UP_DELAY_MS, retryAt?.getTime() ?? 0),
   );
   const window = Math.floor(notBefore.getTime() / CATCH_UP_DELAY_MS);
+  await raiseGmailHistoryCatchUpTarget(emailAccountId, historyId, logger);
   try {
     const scheduled = await publishToQstashAt({
       path: GMAIL_HISTORY_CATCH_UP_PATH,

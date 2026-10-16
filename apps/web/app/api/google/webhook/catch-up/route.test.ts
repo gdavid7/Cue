@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
-import { getGmailHistoryCatchUp } from "@/utils/redis/gmail-history-catch-up";
+import {
+  getGmailHistoryCatchUp,
+  getGmailHistoryCatchUpTarget,
+} from "@/utils/redis/gmail-history-catch-up";
 import { processHistoryForUser } from "@/utils/webhook/google/process-history";
 import { POST } from "./route";
 
@@ -16,6 +19,7 @@ vi.mock("@/utils/qstash", () => ({
 }));
 vi.mock("@/utils/redis/gmail-history-catch-up", () => ({
   getGmailHistoryCatchUp: vi.fn(),
+  getGmailHistoryCatchUpTarget: vi.fn().mockResolvedValue(null),
 }));
 vi.mock("@/utils/webhook/google/process-history", () => ({
   processHistoryForUser: vi.fn(),
@@ -65,6 +69,25 @@ describe("Gmail history catch-up", () => {
 
     expect(response.status).toBe(200);
     expect(processHistoryForUser).not.toHaveBeenCalled();
+  });
+
+  it("keeps catching up while history past this delivery was asked for", async () => {
+    // A lower delivery won the scheduling window over a higher request, or
+    // the cursor passed the history this delivery names mid-backlog.
+    vi.mocked(getGmailHistoryCatchUp).mockResolvedValue("token-1");
+    vi.mocked(getGmailHistoryCatchUpTarget).mockResolvedValueOnce("1500");
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      email: "user@example.com",
+      lastSyncedHistoryId: "1300",
+    } as never);
+
+    await POST(catchUp(), {} as never);
+
+    expect(processHistoryForUser).toHaveBeenCalledWith(
+      { emailAddress: "user@example.com", historyId: "1500" },
+      {},
+      expect.anything(),
+    );
   });
 
   it("rejects a malformed delivery", async () => {

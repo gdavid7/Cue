@@ -69,6 +69,8 @@ export async function processHistoryForUser(
   logger: Logger,
 ) {
   const deadline = Date.now() + HISTORY_RUN_BUDGET_MS;
+  // How far this run read Gmail history, for a catch-up to aim past.
+  let readThrough = BigInt(0);
   const { emailAddress } = decodedData;
   const historyId = normalizeHistoryId(decodedData.historyId);
   // All emails in the database are stored in lowercase
@@ -234,6 +236,10 @@ export async function processHistoryForUser(
 
         const historyEntries = historyResult.history;
         let complete = !historyResult.hasMore;
+        const lastReadId = historyEntries.at(-1)?.id;
+        if (lastReadId)
+          readThrough =
+            BigInt(lastReadId) + BigInt(historyResult.hasMore ? 1 : 0);
 
         if (historyEntries.length > 0) {
           logger.info("Processing history", {
@@ -315,16 +321,9 @@ export async function processHistoryForUser(
             hasMoreHistory: historyResult.hasMore,
           });
           await markGmailHistoryCatchUp(validatedEmailAccount.id, logger);
-          // The catch-up skips history the cursor already covers, so it asks
-          // for everything read (and past it, when pages are left), which can
-          // be newer than this push.
-          const lastReadId = historyEntries.at(-1)?.id;
-          const leftThrough = lastReadId
-            ? BigInt(lastReadId) + BigInt(historyResult.hasMore ? 1 : 0)
-            : BigInt(0);
           await scheduleGmailHistoryCatchUp({
             emailAccountId: validatedEmailAccount.id,
-            historyId: maxBigInt(BigInt(historyId), leftThrough).toString(),
+            historyId: catchUpHistoryId(),
             logger,
           });
         } else if (catchUpToken) {
@@ -338,6 +337,13 @@ export async function processHistoryForUser(
         return NextResponse.json({ ok: true });
       },
     );
+  }
+
+  // The catch-up skips history the cursor already covers, so it asks for
+  // everything this run read (and past it, when pages were left), which can
+  // be newer than this push.
+  function catchUpHistoryId() {
+    return maxBigInt(BigInt(historyId), readThrough).toString();
   }
 
   async function handleHistoryError(error: unknown) {
@@ -364,7 +370,7 @@ export async function processHistoryForUser(
       logger.info("Webhook history deferred by Gmail rate limiting");
       await scheduleGmailHistoryCatchUp({
         emailAccountId: validatedEmailAccount.id,
-        historyId,
+        historyId: catchUpHistoryId(),
         logger,
       });
       return NextResponse.json({ ok: true });

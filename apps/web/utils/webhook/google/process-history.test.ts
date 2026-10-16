@@ -82,6 +82,7 @@ vi.mock("@/utils/redis/gmail-history-catch-up", () => ({
   getGmailHistoryCatchUp: vi.fn().mockResolvedValue(null),
   clearGmailHistoryCatchUp: vi.fn().mockResolvedValue(undefined),
   countEmptyGmailHistoryRun: vi.fn().mockResolvedValue(1),
+  raiseGmailHistoryCatchUpTarget: vi.fn().mockResolvedValue(undefined),
   clearEmptyGmailHistoryRuns: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -1127,6 +1128,37 @@ describe("processHistoryForUser - backlogs", () => {
     expect(lastCursorUpdate()).toBe(String(1000 + page));
     expect(publishToQstashAt).toHaveBeenCalledWith(
       expect.objectContaining({ path: "/api/google/webhook/catch-up" }),
+    );
+  });
+
+  it("after a deferral, asks the catch-up for the history it read, past the push", async () => {
+    // The push named 1100; the run read through 1300 and saved through 1200
+    // before Gmail deferred the newest message.
+    vi.mocked(getHistory).mockResolvedValue({
+      history: [
+        historyMessage("1100", "a", "shared", ["INBOX"]),
+        historyMessage("1200", "b", "shared", ["INBOX"]),
+        historyMessage("1300", "c", "shared", ["INBOX"]),
+      ],
+    } as any);
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      if (event.item.message?.id === "c")
+        throw new Error(
+          "User-rate limit exceeded.  Retry after 2026-01-01T00:00:00Z",
+        );
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1100 },
+      {},
+      logger,
+    );
+
+    expect(lastCursorUpdate()).toBe("1200");
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: { emailAccountId: "account-123", historyId: "1300" },
+      }),
     );
   });
 

@@ -69,6 +69,66 @@ export async function clearGmailHistoryCatchUp({
   }
 }
 
+// History ids can pass 2^53, beyond Lua's and JSON's numbers, so they are
+// compared as digit strings and stored with a prefix that keeps the Redis
+// client from parsing them as numbers.
+const TARGET_PREFIX = "h";
+const RAISE_TARGET_SCRIPT = `
+local stored = redis.call("GET", KEYS[1])
+local requested = ARGV[1]
+if stored then
+  local current = string.sub(stored, 2)
+  if #current > #requested or (#current == #requested and current >= requested) then
+    return 0
+  end
+end
+redis.call("SET", KEYS[1], "${TARGET_PREFIX}" .. requested, "EX", tonumber(ARGV[2]))
+return 1
+`;
+
+/**
+ * Raises the history id catch-ups must reach to at least `historyId`.
+ * Deliveries in one scheduling window share one body, and a run's cursor can
+ * pass the id a delivery names, so the catch-up compares against this.
+ */
+export async function raiseGmailHistoryCatchUpTarget(
+  emailAccountId: string,
+  historyId: string,
+  logger: Logger,
+) {
+  if (!isEmailProviderRateLimitRedisConfigured()) return;
+
+  try {
+    await redis.eval(
+      RAISE_TARGET_SCRIPT,
+      [getCatchUpTargetKey(emailAccountId)],
+      [historyId, String(GMAIL_HISTORY_CATCH_UP_TTL_SECONDS)],
+    );
+  } catch (error) {
+    logger.warn("Failed to record Gmail history catch-up target", { error });
+  }
+}
+
+export async function getGmailHistoryCatchUpTarget(
+  emailAccountId: string,
+  logger: Logger,
+): Promise<string | null> {
+  if (!isEmailProviderRateLimitRedisConfigured()) return null;
+
+  try {
+    const stored = await redis.get<string>(getCatchUpTargetKey(emailAccountId));
+    const target = stored?.slice(TARGET_PREFIX.length);
+    return target && /^\d+$/.test(target) ? target : null;
+  } catch (error) {
+    logger.warn("Failed to read Gmail history catch-up target", { error });
+    return null;
+  }
+}
+
+function getCatchUpTargetKey(emailAccountId: string) {
+  return `gmail-history-catch-up-target:${emailAccountId}`;
+}
+
 /**
  * Counts runs in a row that read their page limit of Gmail history without
  * finding a record, so they can stop retrying the same empty pages. Without
