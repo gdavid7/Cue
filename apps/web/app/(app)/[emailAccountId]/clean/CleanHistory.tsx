@@ -15,7 +15,7 @@ export function CleanHistory() {
     useSWR<CleanHistoryResponse>("/api/clean/history");
 
   return (
-    <LoadingContent loading={isLoading} error={error}>
+    <LoadingContent hasData={Boolean(data)} loading={isLoading} error={error}>
       {data?.result.length ? (
         <div className="space-y-2">
           {data.result.map((job) => (

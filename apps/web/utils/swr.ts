@@ -65,6 +65,12 @@ export function getDevSWRErrorRetryMs(
 // five seconds, so each rate-limited request would retry into the same window,
 // spending quota the provider has not restored and keeping the account limited.
 const RATE_LIMITED_RETRY_MS = 60_000;
+// A deferred read (503) says how long the account's budget needs. Waiting it
+// out asks once instead of several times inside the window. The bounds keep a
+// bad header from either hammering the server or parking the screen, and the
+// jitter keeps tabs deferred together from all asking at the same moment.
+const MIN_RETRY_AFTER_MS = 1000;
+const MAX_RETRY_AFTER_MS = 90_000;
 
 export const onSWRErrorRetry: NonNullable<SWRConfiguration["onErrorRetry"]> = (
   error,
@@ -73,17 +79,51 @@ export const onSWRErrorRetry: NonNullable<SWRConfiguration["onErrorRetry"]> = (
   revalidate,
   opts,
 ) => {
-  // Retrying cannot restore a signed-out session; the fetcher already asked
-  // the user to sign in.
-  if (isSessionExpiredErrorBody(error?.info)) return;
-  if (error?.status === 429) {
-    if (opts.retryCount <= 1) {
-      setTimeout(() => revalidate(opts), RATE_LIMITED_RETRY_MS);
-    }
+  const hint = getRetryHint(error, opts.retryCount);
+  if (hint.kind === "backoff") {
+    SWRConfig.defaultValue.onErrorRetry(error, key, config, revalidate, opts);
     return;
   }
-  SWRConfig.defaultValue.onErrorRetry(error, key, config, revalidate, opts);
+  if (hint.kind === "stop") return;
+  if (
+    config.errorRetryCount !== undefined &&
+    opts.retryCount > config.errorRetryCount
+  )
+    return;
+  setTimeout(() => whenVisible(() => revalidate(opts)), hint.ms);
 };
+
+type RetryHint =
+  | { kind: "wait"; ms: number }
+  | { kind: "stop" }
+  /** The server gave no hint: use the usual backoff. */
+  | { kind: "backoff" };
+
+/**
+ * What the server's answer says about the next try. `retryCount` is 1 for the
+ * first retry; `jitter` (0.75–1.25) spreads the wait for a Retry-After hint.
+ */
+export function getRetryHint(
+  error: { status?: number; retryAfterMs?: number; info?: unknown } | undefined,
+  retryCount: number,
+  jitter = 0.75 + Math.random() / 2,
+): RetryHint {
+  // Retrying cannot restore a signed-out session; the fetcher already asked
+  // the user to sign in.
+  if (isSessionExpiredErrorBody(error?.info)) return { kind: "stop" };
+  if (error?.status === 429)
+    return retryCount <= 1
+      ? { kind: "wait", ms: RATE_LIMITED_RETRY_MS }
+      : { kind: "stop" };
+  if (error?.status === 503 && typeof error.retryAfterMs === "number") {
+    const bounded = Math.min(
+      Math.max(error.retryAfterMs, MIN_RETRY_AFTER_MS),
+      MAX_RETRY_AFTER_MS,
+    );
+    return { kind: "wait", ms: Math.round(bounded * jitter) };
+  }
+  return { kind: "backoff" };
+}
 
 type NormalizedError = { error: string };
 
@@ -142,4 +182,16 @@ export function processSWRResponse<
     data: data as TData | null, // SWR handles undefined during load
     error: undefined,
   } as SWRResponse<TData | null, NormalizedError>;
+}
+
+// As SWR's own retries: a hidden tab doesn't ask, it asks once it is back.
+function whenVisible(run: () => void) {
+  if (typeof document === "undefined" || document.visibilityState !== "hidden")
+    return run();
+  const onChange = () => {
+    if (document.visibilityState === "hidden") return;
+    document.removeEventListener("visibilitychange", onChange);
+    run();
+  };
+  document.addEventListener("visibilitychange", onChange);
 }

@@ -105,6 +105,7 @@ export function OrgStats({ organizationId }: { organizationId: string }) {
 
       <div className="space-y-6">
         <LoadingContent
+          hasData={Boolean(totalsData)}
           loading={totalsLoading}
           error={totalsError}
           loadingComponent={
@@ -138,6 +139,7 @@ export function OrgStats({ organizationId }: { organizationId: string }) {
 
         <div className="grid gap-4 md:grid-cols-2">
           <LoadingContent
+            hasData={Boolean(emailBucketsData)}
             loading={emailBucketsLoading}
             error={emailBucketsError}
             loadingComponent={<Skeleton className="h-64" />}
@@ -154,6 +156,7 @@ export function OrgStats({ organizationId }: { organizationId: string }) {
           </LoadingContent>
 
           <LoadingContent
+            hasData={Boolean(rulesBucketsData)}
             loading={rulesBucketsLoading}
             error={rulesBucketsError}
             loadingComponent={<Skeleton className="h-64" />}

@@ -29,6 +29,7 @@ export function MeetingsList({
       <TypographyH3>Recorded</TypographyH3>
 
       <LoadingContent
+        hasData={Boolean(data)}
         loading={isLoading}
         error={error}
         loadingComponent={<Skeleton className="mt-4 h-24 w-full" />}

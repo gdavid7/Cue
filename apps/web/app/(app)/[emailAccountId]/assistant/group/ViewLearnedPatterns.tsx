@@ -99,6 +99,7 @@ function ViewGroupInner({ groupId }: { groupId: string }) {
       </div>
       <div className="mt-2">
         <LoadingContent
+          hasData={Boolean(data)}
           loading={!data && isLoading}
           error={error}
           loadingComponent={<Skeleton className="m-4 h-24 rounded" />}

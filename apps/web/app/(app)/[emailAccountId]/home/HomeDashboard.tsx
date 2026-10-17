@@ -384,6 +384,7 @@ export function HomeDashboard() {
       </header>
 
       <LoadingContent
+        hasData={Boolean(data)}
         error={error}
         loading={isLoading}
         loadingComponent={

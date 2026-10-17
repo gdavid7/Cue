@@ -3,6 +3,7 @@ import { EMAIL_ACCOUNT_ID_REQUIRED_ERROR } from "@/utils/config";
 import {
   getAccountScopedKey,
   getDevSWRErrorRetryMs,
+  getRetryHint,
   onSWRErrorRetry,
   shouldRevalidateAllLiveSwrKeysForAccountId,
   shouldResetSwrCacheForAccountId,
@@ -131,6 +132,41 @@ describe("onSWRErrorRetry", () => {
     }
   });
 
+  it("waits out a deferral's Retry-After, give or take a quarter, before asking again", () => {
+    vi.useFakeTimers();
+    try {
+      const revalidate = vi.fn();
+      retryDeferral(27_000, revalidate);
+      vi.advanceTimersByTime(20_000);
+      expect(revalidate).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(14_000);
+      expect(revalidate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds a deferral's retry until a hidden tab is back", () => {
+    vi.useFakeTimers();
+    const page = Object.assign(new EventTarget(), {
+      visibilityState: "hidden",
+    });
+    vi.stubGlobal("document", page);
+    try {
+      const revalidate = vi.fn();
+      retryDeferral(1000, revalidate);
+      vi.advanceTimersByTime(10 * 60_000);
+      expect(revalidate).not.toHaveBeenCalled();
+
+      page.visibilityState = "visible";
+      page.dispatchEvent(new Event("visibilitychange"));
+      expect(revalidate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps SWR's backoff for other errors", () => {
     vi.useFakeTimers();
     try {
@@ -149,3 +185,40 @@ describe("onSWRErrorRetry", () => {
     }
   });
 });
+
+describe("getRetryHint", () => {
+  it("waits a deferral's Retry-After, kept between a second and 90 seconds", () => {
+    const deferred = (retryAfterMs: number, jitter: number) =>
+      getRetryHint({ status: 503, retryAfterMs }, 1, jitter);
+
+    expect(deferred(27_000, 1)).toEqual({ kind: "wait", ms: 27_000 });
+    expect(deferred(0, 1)).toEqual({ kind: "wait", ms: 1000 });
+    expect(deferred(60 * 60_000, 1)).toEqual({ kind: "wait", ms: 90_000 });
+    expect(deferred(60 * 60_000, 1.25)).toEqual({ kind: "wait", ms: 112_500 });
+    expect(deferred(20_000, 0.75)).toEqual({ kind: "wait", ms: 15_000 });
+  });
+
+  it("retries a rate limit once, then stops", () => {
+    expect(getRetryHint({ status: 429 }, 1)).toEqual({
+      kind: "wait",
+      ms: 60_000,
+    });
+    expect(getRetryHint({ status: 429 }, 2)).toEqual({ kind: "stop" });
+  });
+
+  it("leaves errors without a hint to the usual backoff", () => {
+    expect(getRetryHint({ status: 503 }, 1)).toEqual({ kind: "backoff" });
+    expect(getRetryHint({ status: 500 }, 1)).toEqual({ kind: "backoff" });
+    expect(getRetryHint(undefined, 1)).toEqual({ kind: "backoff" });
+  });
+});
+
+function retryDeferral(retryAfterMs: number, revalidate: () => void) {
+  onSWRErrorRetry(
+    { status: 503, retryAfterMs },
+    "key",
+    { errorRetryInterval: 5000 } as never,
+    revalidate,
+    { retryCount: 1 } as never,
+  );
+}

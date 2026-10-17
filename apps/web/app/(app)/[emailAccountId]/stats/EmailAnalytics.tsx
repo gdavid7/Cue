@@ -57,6 +57,7 @@ export function EmailAnalytics(props: {
   return (
     <div className="grid gap-2 sm:gap-4 sm:grid-cols-2">
       <LoadingContent
+        hasData={Boolean(data)}
         loading={isLoading}
         error={error}
         loadingComponent={<Skeleton className="h-[377px] rounded" />}
@@ -83,6 +84,7 @@ export function EmailAnalytics(props: {
         )}
       </LoadingContent>
       <LoadingContent
+        hasData={Boolean(dataRecipients)}
         loading={isLoadingRecipients}
         error={errorRecipients}
         loadingComponent={<Skeleton className="h-[377px] w-full rounded" />}

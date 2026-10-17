@@ -36,6 +36,7 @@ export function EmailOtpSection({
 
   return (
     <LoadingContent
+      hasData={Boolean(data)}
       loading={isLoading}
       error={error}
       loadingComponent={<Skeleton className="mx-4 my-3 h-6" />}

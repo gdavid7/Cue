@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => ({
   undoLatestToast: vi.fn(),
   home: {
     data: undefined as GetHomeResponse | undefined,
-    error: undefined as { error: string } | undefined,
+    error: undefined as { error: string; status?: number } | undefined,
     gaveUp: false,
     retry: vi.fn(),
   },
@@ -499,6 +499,19 @@ describe("HomeDashboard states", () => {
     expect(screen.getByText("Couldn't load this")).toBeTruthy();
     expect(screen.queryAllByRole("status")).toEqual([]);
     expect(lanes()).toEqual([]);
+  });
+
+  it("refresh deferred: keeps the lanes on screen instead of the error", () => {
+    mocks.home.data = homeData([thread("a", "Quarterly numbers")]);
+    mocks.home.error = {
+      error: "Gmail is busy for this account. Try again shortly.",
+      status: 503,
+    };
+
+    renderToday();
+
+    expect(lanes()).toEqual(["Needs reply"]);
+    expect(screen.queryByText("Couldn't load this")).toBeNull();
   });
 });
 

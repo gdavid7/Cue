@@ -588,6 +588,7 @@ function ChatHistoryDropdown() {
         </Tooltip>
         <DropdownMenuContent align="end" className="w-72">
           <LoadingContent
+            hasData={Boolean(data)}
             loading={isLoading}
             error={error}
             loadingComponent={

@@ -51,6 +51,7 @@ export function SentMessageOpenTrackingSetting({
 
   return (
     <LoadingContent
+      hasData={Boolean(data)}
       loading={isLoading}
       error={error}
       loadingComponent={

@@ -96,7 +96,7 @@ export function ThreadContent({
 
   return (
     <ErrorBoundary extra={{ component: "ThreadContent", threadId }}>
-      <LoadingContent loading={isLoading} error={error}>
+      <LoadingContent hasData={Boolean(data)} loading={isLoading} error={error}>
         {data && (
           <Suspense fallback={<Loading />}>
             <EmailThreadLazy

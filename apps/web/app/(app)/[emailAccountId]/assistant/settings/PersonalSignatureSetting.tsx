@@ -42,6 +42,7 @@ export function PersonalSignatureSetting() {
       description="Set your email signature to include in drafted messages."
       right={
         <LoadingContent
+          hasData={Boolean(data)}
           loading={isLoading}
           error={error}
           loadingComponent={<Skeleton className="h-8 w-32" />}

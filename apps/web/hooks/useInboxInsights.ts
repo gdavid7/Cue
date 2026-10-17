@@ -1,10 +1,15 @@
 import groupBy from "lodash/groupBy";
-import { useMemo } from "react";
-import useSWR, { useSWRConfig } from "swr";
+import { useCallback, useMemo } from "react";
+import useSWR, { unstable_serialize, useSWRConfig } from "swr";
 import type { GetInboxInsightsResponse } from "@/app/api/user/inbox-insights/route";
 import type { ThreadInsightData } from "@/utils/inbox-insights/get-inbox-insights";
+import { getRetryHint } from "@/utils/swr";
 
 const CHUNK_SIZE = 50;
+// A page where only some accounts answered asks the rest again this many
+// times; an account that keeps failing then waits for the next change.
+const PARTIAL_RETRY_LIMIT = 5;
+const PARTIAL_RETRY_BASE_MS = 5000;
 
 type InboxInsightItem = {
   /** Where the caller looks the insight up; unique across accounts. */
@@ -25,7 +30,7 @@ export function useInboxInsights(
   items: InboxInsightItem[],
   { enabled = true }: { enabled?: boolean } = {},
 ) {
-  const { fetcher } = useSWRConfig();
+  const { fetcher, cache } = useSWRConfig();
   const requests = useMemo(() => getInboxInsightRequests(items), [items]);
   const key =
     enabled && requests.length
@@ -40,14 +45,32 @@ export function useInboxInsights(
         ] as const)
       : null;
 
-  return useSWR<Record<string, ThreadInsightData>>(
+  // SWR retries only a fetch that throws, so accounts that failed beside ones
+  // that answered are asked again by polling, as the server's hint allows.
+  // SWR reads the interval when polling starts and after each poll, so the
+  // function changes only when a failure appears or clears, which starts or
+  // stops polling without resetting a wait on every render.
+  const serializedKey = unstable_serialize(key);
+  const hasFailure = Boolean(
+    (cache.get(serializedKey)?.data as InboxInsightsResult | undefined)
+      ?.failure,
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: see above
+  const refreshInterval = useCallback(
+    (latest?: InboxInsightsResult) => getPartialRetryMs(latest),
+    [hasFailure],
+  );
+
+  const result = useSWR<InboxInsightsResult>(
     key,
     async () => {
       if (!fetcher) throw new Error("SWR fetcher is not configured");
       const accountFetcher = fetcher as (
         key: [string, string],
       ) => Promise<GetInboxInsightsResponse>;
-      const responses = await Promise.all(
+      // Each account answers on its own budget: one that is busy must not
+      // take the other accounts' rows down with it.
+      const settled = await Promise.allSettled(
         requests.map(async (request) => {
           const { insights } = await accountFetcher([
             `/api/user/inbox-insights?items=${request.items.map((item) => item.pair).join(",")}`,
@@ -59,10 +82,65 @@ export function useInboxInsights(
           });
         }),
       );
-      return Object.fromEntries(responses.flat());
+      const failures = settled.flatMap((outcome) =>
+        outcome.status === "rejected" ? [outcome.reason] : [],
+      );
+      // Nothing to show: SWR keeps the previous rows and retries as usual.
+      if (failures.length === settled.length) throw failures[0];
+      const insights = Object.fromEntries(
+        settled.flatMap((outcome) =>
+          outcome.status === "fulfilled" ? outcome.value : [],
+        ),
+      );
+      if (!failures.length) return { insights };
+      const previous = cache.get(serializedKey)?.data as
+        | InboxInsightsResult
+        | undefined;
+      const { status, retryAfterMs } = failures[0] as {
+        status?: number;
+        retryAfterMs?: number;
+      };
+      return {
+        insights,
+        failure: {
+          status,
+          retryAfterMs,
+          attempt: (previous?.failure?.attempt ?? 0) + 1,
+          // In the cache, so every reader of these rows waits the same and
+          // their polls share one request.
+          jitter: 0.75 + Math.random() / 2,
+        },
+      };
     },
-    { revalidateOnFocus: false, keepPreviousData: true },
+    { revalidateOnFocus: false, keepPreviousData: true, refreshInterval },
   );
+
+  return {
+    data: result.data?.insights,
+    error: result.error,
+    isLoading: result.isLoading,
+  };
+}
+
+type InboxInsightsResult = {
+  insights: Record<string, ThreadInsightData>;
+  /** Set when only some of the accounts answered. */
+  failure?: {
+    status?: number;
+    retryAfterMs?: number;
+    /** How many fetches in a row came back with an account missing. */
+    attempt: number;
+    jitter: number;
+  };
+};
+
+function getPartialRetryMs(latest: InboxInsightsResult | undefined) {
+  const failure = latest?.failure;
+  if (!failure || failure.attempt > PARTIAL_RETRY_LIMIT) return 0;
+  const hint = getRetryHint(failure, failure.attempt, failure.jitter);
+  if (hint.kind === "stop") return 0;
+  if (hint.kind === "wait") return hint.ms;
+  return PARTIAL_RETRY_BASE_MS * 2 ** (failure.attempt - 1);
 }
 
 /**
