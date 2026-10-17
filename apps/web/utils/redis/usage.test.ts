@@ -5,6 +5,7 @@ import {
   getUsage,
   getWeeklyUsageCostWindow,
   getWeeklyUsageCost,
+  getWeeklyUsageCostByBucket,
   saveUsage,
 } from "@/utils/redis/usage";
 
@@ -209,6 +210,41 @@ describe("redis usage tracking", () => {
     expect(redis.hgetall).not.toHaveBeenCalledWith(
       "usage-weekly-cost:user@example.com:2026-02-24",
     );
+  });
+
+  it("meters triage spend in its own bucket of the user's weekly spend", async () => {
+    const hashes: Record<string, RedisHash> = {};
+    vi.mocked(redis.hincrbyfloat).mockImplementation(
+      async (key: string, field: string, increment: number) => {
+        hashes[key] ??= {};
+        hashes[key][field] = Number(hashes[key][field] ?? 0) + increment;
+        return 1;
+      },
+    );
+    mockRedisHashes(hashes);
+
+    await saveUsage({
+      userId: "user-1",
+      emailAccountId: "acc-1",
+      usage: { totalTokens: 10 } as never,
+      cost: 2,
+      now: NOW,
+    });
+    await saveUsage({
+      userId: "user-1",
+      emailAccountId: "acc-1",
+      usage: { totalTokens: 10 } as never,
+      cost: 0.5,
+      spendBucket: "triage",
+      now: NOW,
+    });
+
+    const spend = await getWeeklyUsageCostByBucket({
+      userId: "user-1",
+      now: NOW,
+    });
+
+    expect(spend).toEqual({ total: 2.5, interactive: 2, triage: 0.5 });
   });
 
   it("migrates legacy weekly email spend into user weekly spend", async () => {
@@ -726,24 +762,27 @@ describe("redis usage tracking", () => {
 // Plays the module's Lua through the mocked commands, so a test sees what the
 // script writes and reads; __tests__/redis/usage-store.test.ts runs the Lua.
 async function runUsageScript(script: string, keys: string[], args: string[]) {
-  if (script.includes("HGET")) {
-    return Promise.all(
+  if (script.includes("HMGET")) {
+    const costs = await Promise.all(
       keys.map(async (key) => {
         const hash = (await redis.hgetall(key)) as RedisHash | null;
-        return hash?.cost ?? "";
+        return [hash?.cost ?? "", hash?.triageCost ?? ""];
       }),
     );
+    return costs.flat();
   }
   const [weekly, cost, ttl, ...fields] = args;
-  const hashes = weekly === "1" ? keys.slice(0, -1) : keys;
+  const hashes = weekly === "0" ? keys : keys.slice(0, -1);
   for (const key of hashes) {
     for (let i = 0; i < fields.length; i += 2)
       await redis.hincrby(key, fields[i], Number(fields[i + 1]));
     if (Number(cost) > 0) await redis.hincrbyfloat(key, "cost", Number(cost));
   }
-  if (weekly === "1") {
+  if (weekly !== "0") {
     const weeklyKey = keys[keys.length - 1];
     await redis.hincrbyfloat(weeklyKey, "cost", Number(cost));
+    if (weekly === "2")
+      await redis.hincrbyfloat(weeklyKey, "triageCost", Number(cost));
     await redis.expire(weeklyKey, Number(ttl));
   }
   return 1;

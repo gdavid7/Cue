@@ -12,6 +12,7 @@ import { getUserInfoPrompt, getUserRulesPrompt } from "@/utils/ai/helpers";
 import { sortRulesByCanonicalOrder } from "@/utils/rule/sort";
 import type { Logger } from "@/utils/logger";
 import type { ClassificationFeedbackItem } from "@/utils/rule/classification-feedback";
+import { TRIAGE_AI_LABELS } from "@/utils/llms/spend-bucket";
 
 type GetAiResponseOptions = {
   email: EmailForLLM;
@@ -103,7 +104,7 @@ async function getAiResponse(options: GetAiResponseOptions): Promise<{
 
   const generateObject = createGenerateObject({
     emailAccount,
-    label: "Choose rule",
+    label: TRIAGE_AI_LABELS.chooseRule,
     modelOptions,
     promptHardening: { trust: "untrusted", level: "full" },
     cacheSystemPrompt: true,

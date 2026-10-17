@@ -4,6 +4,7 @@ import type { Logger } from "@/utils/logger";
 import type { EmailForLLM } from "@/utils/types";
 import { getDecisionEmailState } from "./email-state";
 import { type DecisionModelConfig, runDecisionModel } from "./decision-model";
+import { TRIAGE_AI_LABELS } from "@/utils/llms/spend-bucket";
 
 const STATUS_QUESTION_KEY = "thread_status";
 const MAX_MESSAGE_CONTENT_LENGTH = 4000;
@@ -59,7 +60,7 @@ export async function decideThreadStatus({
         ),
       },
     },
-    label: "Determine thread status",
+    label: TRIAGE_AI_LABELS.threadStatus,
     logger,
   });
 

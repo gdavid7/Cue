@@ -1,11 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertTrialAiUsageAllowed,
   getUserTrialAiUsageLimitStatus,
   shouldForceNanoModel,
   TRIAL_AI_LIMIT_REACHED_MESSAGE,
 } from "@/utils/llms/model-usage-guard";
-import { getWeeklyUsageCost } from "@/utils/redis/usage";
+import {
+  getWeeklyUsageCost,
+  getWeeklyUsageCostByBucket,
+} from "@/utils/redis/usage";
 import { env } from "@/env";
 import prisma from "@/utils/__mocks__/prisma";
 import { SafeError } from "@/utils/error";
@@ -15,6 +18,7 @@ import { createUnsubscribeToken } from "@/utils/unsubscribe";
 
 vi.mock("@/utils/redis/usage", () => ({
   getWeeklyUsageCost: vi.fn(),
+  getWeeklyUsageCostByBucket: vi.fn(),
 }));
 
 vi.mock("@/utils/redis", () => ({
@@ -70,7 +74,7 @@ describe("shouldForceNanoModel", () => {
     });
 
     expect(result.shouldForce).toBe(false);
-    expect(getWeeklyUsageCost).not.toHaveBeenCalled();
+    expect(getWeeklyUsageCostByBucket).not.toHaveBeenCalled();
   });
 
   it("does not force nano for users with their own API key", async () => {
@@ -84,7 +88,7 @@ describe("shouldForceNanoModel", () => {
     });
 
     expect(result.shouldForce).toBe(false);
-    expect(getWeeklyUsageCost).not.toHaveBeenCalled();
+    expect(getWeeklyUsageCostByBucket).not.toHaveBeenCalled();
   });
 
   it("does not force nano when nano model is not configured", async () => {
@@ -98,13 +102,13 @@ describe("shouldForceNanoModel", () => {
     });
 
     expect(result.shouldForce).toBe(false);
-    expect(getWeeklyUsageCost).not.toHaveBeenCalled();
+    expect(getWeeklyUsageCostByBucket).not.toHaveBeenCalled();
   });
 
   it("forces nano when weekly spend meets the configured limit", async () => {
     vi.mocked(env).AI_NANO_WEEKLY_SPEND_LIMIT_USD = 3;
     vi.mocked(env).NANO_LLMS = "openai:gpt-5.4-nano";
-    vi.mocked(getWeeklyUsageCost).mockResolvedValue(3.25);
+    mockWeeklySpend({ interactive: 3.25, triage: 0 });
 
     const result = await shouldForceNanoModel({
       userEmail: "user@example.com",
@@ -121,7 +125,7 @@ describe("shouldForceNanoModel", () => {
   it("does not force nano when weekly spend is below the limit", async () => {
     vi.mocked(env).AI_NANO_WEEKLY_SPEND_LIMIT_USD = 3;
     vi.mocked(env).NANO_LLMS = "openai:gpt-5.4-nano";
-    vi.mocked(getWeeklyUsageCost).mockResolvedValue(2.99);
+    mockWeeklySpend({ interactive: 2.99, triage: 0 });
 
     const result = await shouldForceNanoModel({
       userEmail: "user@example.com",
@@ -134,7 +138,123 @@ describe("shouldForceNanoModel", () => {
     expect(result.weeklySpendUsd).toBe(2.99);
     expect(result.weeklyLimitUsd).toBe(3);
   });
+
+  describe("spend buckets", () => {
+    const claimedKeys = new Set<string>();
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-14T12:00:00.000Z"));
+      vi.mocked(env).AI_NANO_WEEKLY_SPEND_LIMIT_USD = 3;
+      vi.mocked(env).NANO_LLMS = "openai:gpt-5.4-nano";
+      claimedKeys.clear();
+      vi.mocked(redis.set).mockImplementation((async (key: string) => {
+        if (claimedKeys.has(key)) return null;
+        claimedKeys.add(key);
+        return "OK";
+      }) as never);
+      warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      warnSpy.mockRestore();
+    });
+
+    it("keeps triage on its model when chat spend is over the limit", async () => {
+      mockWeeklySpend({ interactive: 12, triage: 1 });
+
+      const triage = await shouldForceNanoModel(guardOptions("Choose rule"));
+      const interactive = await shouldForceNanoModel(
+        guardOptions("Summarize email"),
+      );
+
+      expect(triage).toMatchObject({
+        shouldForce: false,
+        spendBucket: "triage",
+      });
+      expect(interactive).toMatchObject({
+        shouldForce: true,
+        spendBucket: "interactive",
+        weeklySpendUsd: 12,
+        weeklyLimitUsd: 3,
+      });
+    });
+
+    it("downgrades only triage once triage spend passes its own cap", async () => {
+      mockWeeklySpend({ interactive: 1, triage: 9.5 });
+
+      for (const label of [
+        "Choose rule",
+        "Determine thread status",
+        "Cold email check",
+      ]) {
+        expect(await shouldForceNanoModel(guardOptions(label))).toMatchObject({
+          shouldForce: true,
+          spendBucket: "triage",
+          weeklySpendUsd: 9.5,
+          weeklyLimitUsd: 9,
+        });
+      }
+      expect(
+        await shouldForceNanoModel(guardOptions("Summarize email")),
+      ).toMatchObject({ shouldForce: false, spendBucket: "interactive" });
+    });
+
+    it("warns once per user per week for each bucket over its limit", async () => {
+      mockWeeklySpend({ interactive: 4, triage: 10 });
+
+      for (let i = 0; i < 3; i++) {
+        await shouldForceNanoModel(guardOptions("Choose rule"));
+        await shouldForceNanoModel(guardOptions("Summarize email"));
+      }
+
+      expect(getBucketWarnings()).toEqual(["triage", "interactive"]);
+
+      vi.setSystemTime(new Date("2026-10-21T12:00:00.000Z"));
+      await shouldForceNanoModel(guardOptions("Choose rule"));
+      await shouldForceNanoModel(guardOptions("Choose rule"));
+
+      expect(getBucketWarnings()).toEqual(["triage", "interactive", "triage"]);
+    });
+
+    function getBucketWarnings() {
+      return warnSpy.mock.calls
+        .map(([message]) => String(message))
+        .filter((message) => message.includes("spend bucket over limit"))
+        .map((message) =>
+          message.includes('"spendBucket": "triage"')
+            ? "triage"
+            : "interactive",
+        );
+    }
+  });
 });
+
+function guardOptions(label: string) {
+  return {
+    userEmail: "user@example.com",
+    hasUserApiKey: false,
+    label,
+    userId: "user-1",
+    emailAccountId: "account-1",
+  };
+}
+
+function mockWeeklySpend({
+  interactive,
+  triage,
+}: {
+  interactive: number;
+  triage: number;
+}) {
+  vi.mocked(getWeeklyUsageCostByBucket).mockResolvedValue({
+    total: interactive + triage,
+    interactive,
+    triage,
+  });
+}
 
 describe("assertTrialAiUsageAllowed", () => {
   beforeEach(() => {
