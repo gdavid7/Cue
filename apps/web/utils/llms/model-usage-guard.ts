@@ -1,8 +1,5 @@
 import { env } from "@/env";
-import {
-  getWeeklyUsageCost,
-  getWeeklyUsageCostByBucket,
-} from "@/utils/redis/usage";
+import { getWeeklyUsageCostByBucket } from "@/utils/redis/usage";
 import { createScopedLogger, type Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { SafeError } from "@/utils/error";
@@ -24,10 +21,6 @@ const SPEND_BUCKET_WARNING_TTL_SECONDS = 8 * 24 * 60 * 60;
 // Both guards run before every AI call, and a chat turn or a processed email
 // makes several in a row. The limits are weekly budgets, so each instance
 // rereads a user's spend at most once a minute.
-const weeklySpend = createMemoCache<number>({
-  ttlMs: 60_000,
-  maxEntries: 5000,
-});
 const weeklySpendByBucket = createMemoCache<
   Awaited<ReturnType<typeof getWeeklyUsageCostByBucket>>
 >({
@@ -243,11 +236,7 @@ export async function shouldForceNanoModel(options: {
 
   let weeklySpendUsd: number;
   try {
-    const legacyEmails = [options.userEmail];
-    const spend = await weeklySpendByBucket.get(
-      getWeeklySpendMemoKey(userId, legacyEmails),
-      () => getWeeklyUsageCostByBucket({ userId, legacyEmails }),
-    );
+    const spend = await getWeeklySpendByBucket(userId, [options.userEmail]);
     weeklySpendUsd = spend[spendBucket];
   } catch (error) {
     logRedisFailureOnce(logger, "Failed to evaluate nano model guard", {
@@ -266,7 +255,7 @@ export async function shouldForceNanoModel(options: {
 
   const shouldForce = weeklySpendUsd >= weeklyLimitUsd;
   if (shouldForce) {
-    await warnSpendBucketOverLimitOnce({
+    warnSpendBucketOverLimitOnce({
       userId,
       spendBucket,
       weeklySpendUsd,
@@ -277,7 +266,8 @@ export async function shouldForceNanoModel(options: {
   return { shouldForce, spendBucket, weeklySpendUsd, weeklyLimitUsd };
 }
 
-async function warnSpendBucketOverLimitOnce({
+// Fire-and-forget: the warning must never delay or fail the AI call.
+function warnSpendBucketOverLimitOnce({
   userId,
   spendBucket,
   weeklySpendUsd,
@@ -289,8 +279,8 @@ async function warnSpendBucketOverLimitOnce({
   weeklyLimitUsd: number;
 }) {
   const key = `ai-spend-bucket-over-limit:${spendBucket}:${userId}:${getUtcWeekStart(new Date())}`;
-  try {
-    await spendBucketWarnings.get(key, async () => {
+  spendBucketWarnings
+    .get(key, async () => {
       const claimed = await redis.set(key, new Date().toISOString(), {
         ex: SPEND_BUCKET_WARNING_TTL_SECONDS,
         nx: true,
@@ -304,14 +294,14 @@ async function warnSpendBucketOverLimitOnce({
         });
       }
       return true;
+    })
+    .catch((error) => {
+      logRedisFailureOnce(logger, "Failed to record AI spend bucket warning", {
+        userId,
+        spendBucket,
+        error,
+      });
     });
-  } catch (error) {
-    logRedisFailureOnce(logger, "Failed to record AI spend bucket warning", {
-      userId,
-      spendBucket,
-      error,
-    });
-  }
 }
 
 function isTrialPremium(
@@ -359,14 +349,16 @@ function getTrialAiLimitNotificationKey(userId: string) {
   return `trial-ai-limit-notification:${userId}`;
 }
 
-function getWeeklySpend(userId: string, legacyEmails: string[]) {
-  return weeklySpend.get(getWeeklySpendMemoKey(userId, legacyEmails), () =>
-    getWeeklyUsageCost({ userId, legacyEmails }),
-  );
+async function getWeeklySpend(userId: string, legacyEmails: string[]) {
+  const { total } = await getWeeklySpendByBucket(userId, legacyEmails);
+  return total;
 }
 
-function getWeeklySpendMemoKey(userId: string, legacyEmails: string[]) {
-  return `${userId}:${[...new Set(legacyEmails)].sort().join(",")}`;
+function getWeeklySpendByBucket(userId: string, legacyEmails: string[]) {
+  const key = `${userId}:${[...new Set(legacyEmails)].sort().join(",")}`;
+  return weeklySpendByBucket.get(key, () =>
+    getWeeklyUsageCostByBucket({ userId, legacyEmails }),
+  );
 }
 
 // Monday of the current UTC week.

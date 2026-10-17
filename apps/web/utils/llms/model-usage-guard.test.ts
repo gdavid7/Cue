@@ -5,10 +5,7 @@ import {
   shouldForceNanoModel,
   TRIAL_AI_LIMIT_REACHED_MESSAGE,
 } from "@/utils/llms/model-usage-guard";
-import {
-  getWeeklyUsageCost,
-  getWeeklyUsageCostByBucket,
-} from "@/utils/redis/usage";
+import { getWeeklyUsageCostByBucket } from "@/utils/redis/usage";
 import { env } from "@/env";
 import prisma from "@/utils/__mocks__/prisma";
 import { SafeError } from "@/utils/error";
@@ -17,7 +14,6 @@ import { sendActionRequiredEmail } from "@inboxzero/transactional-email";
 import { createUnsubscribeToken } from "@/utils/unsubscribe";
 
 vi.mock("@/utils/redis/usage", () => ({
-  getWeeklyUsageCost: vi.fn(),
   getWeeklyUsageCostByBucket: vi.fn(),
 }));
 
@@ -167,7 +163,7 @@ describe("shouldForceNanoModel", () => {
 
       const triage = await shouldForceNanoModel(guardOptions("Choose rule"));
       const interactive = await shouldForceNanoModel(
-        guardOptions("Summarize email"),
+        guardOptions("chat-compaction"),
       );
 
       expect(triage).toMatchObject({
@@ -189,6 +185,8 @@ describe("shouldForceNanoModel", () => {
         "Choose rule",
         "Determine thread status",
         "Cold email check",
+        "Draft reply",
+        "Summarize email",
       ]) {
         expect(await shouldForceNanoModel(guardOptions(label))).toMatchObject({
           shouldForce: true,
@@ -198,7 +196,7 @@ describe("shouldForceNanoModel", () => {
         });
       }
       expect(
-        await shouldForceNanoModel(guardOptions("Summarize email")),
+        await shouldForceNanoModel(guardOptions("chat-compaction")),
       ).toMatchObject({ shouldForce: false, spendBucket: "interactive" });
     });
 
@@ -207,23 +205,32 @@ describe("shouldForceNanoModel", () => {
 
       for (let i = 0; i < 3; i++) {
         await shouldForceNanoModel(guardOptions("Choose rule"));
-        await shouldForceNanoModel(guardOptions("Summarize email"));
+        await shouldForceNanoModel(guardOptions("chat-compaction"));
       }
 
+      await flushWarnings();
       expect(getBucketWarnings()).toEqual(["triage", "interactive"]);
 
       vi.setSystemTime(new Date("2026-10-21T12:00:00.000Z"));
       await shouldForceNanoModel(guardOptions("Choose rule"));
       await shouldForceNanoModel(guardOptions("Choose rule"));
 
+      await flushWarnings();
       expect(getBucketWarnings()).toEqual(["triage", "interactive", "triage"]);
     });
 
+    // The warning is fire-and-forget, so let its Redis claim settle.
+    function flushWarnings() {
+      return new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
     function getBucketWarnings() {
       return warnSpy.mock.calls
-        .map(([message]) => String(message))
-        .filter((message) => message.includes("spend bucket over limit"))
-        .map((message) =>
+        .map(([message]: unknown[]) => String(message))
+        .filter((message: string) =>
+          message.includes("spend bucket over limit"),
+        )
+        .map((message: string) =>
           message.includes('"spendBucket": "triage"')
             ? "triage"
             : "interactive",
@@ -271,7 +278,7 @@ describe("assertTrialAiUsageAllowed", () => {
       emailAccountId: "account-1",
     });
 
-    expect(getWeeklyUsageCost).not.toHaveBeenCalled();
+    expect(getWeeklyUsageCostByBucket).not.toHaveBeenCalled();
     expect(prisma.user.findUnique).not.toHaveBeenCalled();
   });
 
@@ -286,13 +293,13 @@ describe("assertTrialAiUsageAllowed", () => {
       emailAccountId: "account-1",
     });
 
-    expect(getWeeklyUsageCost).not.toHaveBeenCalled();
+    expect(getWeeklyUsageCostByBucket).not.toHaveBeenCalled();
     expect(prisma.user.findUnique).not.toHaveBeenCalled();
   });
 
   it("does not block paid subscriptions over the trial limit", async () => {
     vi.mocked(env).AI_TRIAL_WEEKLY_SPEND_LIMIT_USD = 2;
-    vi.mocked(getWeeklyUsageCost).mockResolvedValue(3);
+    mockWeeklySpend({ interactive: 3, triage: 0 });
     prisma.user.findUnique.mockResolvedValue({
       email: "user@example.com",
       emailAccounts: [{ email: "account@example.com" }],
@@ -310,14 +317,14 @@ describe("assertTrialAiUsageAllowed", () => {
       emailAccountId: "account-1",
     });
 
-    expect(getWeeklyUsageCost).not.toHaveBeenCalled();
+    expect(getWeeklyUsageCostByBucket).not.toHaveBeenCalled();
     expect(redis.set).not.toHaveBeenCalled();
     expect(sendActionRequiredEmail).not.toHaveBeenCalled();
   });
 
   it("blocks trial users over the spend limit and sends an upgrade email once", async () => {
     vi.mocked(env).AI_TRIAL_WEEKLY_SPEND_LIMIT_USD = 2;
-    vi.mocked(getWeeklyUsageCost).mockResolvedValue(3);
+    mockWeeklySpend({ interactive: 3, triage: 0 });
     vi.mocked(redis.set).mockResolvedValue("OK");
     vi.mocked(createUnsubscribeToken).mockResolvedValue("unsubscribe-token");
     prisma.user.findUnique.mockResolvedValue({
@@ -339,7 +346,7 @@ describe("assertTrialAiUsageAllowed", () => {
       }),
     ).rejects.toThrow(SafeError);
 
-    expect(getWeeklyUsageCost).toHaveBeenCalledWith({
+    expect(getWeeklyUsageCostByBucket).toHaveBeenCalledWith({
       userId: "user-1",
       legacyEmails: ["user@example.com", "account@example.com"],
     });
@@ -366,7 +373,7 @@ describe("assertTrialAiUsageAllowed", () => {
 
   it("does not resend a trial limit email when the notification marker exists", async () => {
     vi.mocked(env).AI_TRIAL_WEEKLY_SPEND_LIMIT_USD = 2;
-    vi.mocked(getWeeklyUsageCost).mockResolvedValue(3);
+    mockWeeklySpend({ interactive: 3, triage: 0 });
     vi.mocked(redis.set).mockResolvedValue(null);
     prisma.user.findUnique.mockResolvedValue({
       email: "user@example.com",
@@ -424,12 +431,12 @@ describe("getUserTrialAiUsageLimitStatus", () => {
     });
 
     expect(status).toEqual({ status: "allowed" });
-    expect(getWeeklyUsageCost).not.toHaveBeenCalled();
+    expect(getWeeklyUsageCostByBucket).not.toHaveBeenCalled();
   });
 
   it("returns a dynamic trial limit status for trial users over the limit", async () => {
     vi.mocked(env).AI_TRIAL_WEEKLY_SPEND_LIMIT_USD = 2;
-    vi.mocked(getWeeklyUsageCost).mockResolvedValue(3);
+    mockWeeklySpend({ interactive: 3, triage: 0 });
     prisma.user.findUnique.mockResolvedValue({
       email: "user@example.com",
       aiApiKey: null,
@@ -444,7 +451,7 @@ describe("getUserTrialAiUsageLimitStatus", () => {
       userId: "user-1",
     });
 
-    expect(getWeeklyUsageCost).toHaveBeenCalledWith({
+    expect(getWeeklyUsageCostByBucket).toHaveBeenCalledWith({
       userId: "user-1",
       legacyEmails: ["user@example.com", "account@example.com"],
     });

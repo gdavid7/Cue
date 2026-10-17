@@ -12,7 +12,11 @@ import {
   vi,
 } from "vitest";
 import { createRedisHttpServer } from "@/scripts/local-dev/redis-http";
-import { getUsage, getWeeklyUsageCost, saveUsage } from "@/utils/redis/usage";
+import {
+  getUsage,
+  getWeeklyUsageCostByBucket,
+  saveUsage,
+} from "@/utils/redis/usage";
 
 // AI usage is written and read on every model call, so its Lua runs here
 // unchanged against a private redis-server, through the Upstash REST client
@@ -87,6 +91,7 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
 
     it("saves a call's usage to the account, the user and the week in one command", async () => {
       await saveUsage({
+        spendBucket: "interactive",
         userId: "user-1",
         emailAccountId: "account-1",
         usage,
@@ -94,6 +99,7 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
         now: NOW,
       });
       await saveUsage({
+        spendBucket: "interactive",
         userId: "user-1",
         emailAccountId: "account-1",
         usage,
@@ -120,11 +126,42 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       expect(await redis!.ttl(weekly)).toBeGreaterThan(7 * 24 * 60 * 60);
     });
 
+    it("splits a user's weekly spend into interactive and triage buckets", async () => {
+      await saveUsage({
+        userId: "user-1",
+        emailAccountId: "account-1",
+        usage,
+        cost: 0.75,
+        spendBucket: "interactive",
+        now: NOW,
+      });
+      await saveUsage({
+        userId: "user-1",
+        emailAccountId: "account-1",
+        usage,
+        cost: 0.25,
+        spendBucket: "triage",
+        now: NOW,
+      });
+
+      const spend = await getWeeklyUsageCostByBucket({
+        userId: "user-1",
+        now: NOW,
+      });
+
+      expect(spend.total).toBeCloseTo(1);
+      expect(spend.interactive).toBeCloseTo(0.75);
+      expect(spend.triage).toBeCloseTo(0.25);
+      const weekly = "usage-weekly-cost:user:user-1:2026-02-24";
+      expect(await redis!.ttl(weekly)).toBeGreaterThan(7 * 24 * 60 * 60);
+    });
+
     it("counts a free call without touching the weekly spend", async () => {
       await saveUsage({
         emailAccountId: "account-1",
         usage: { totalTokens: 10 } as never,
         cost: 0,
+        spendBucket: "interactive",
         now: NOW,
       });
 
@@ -157,7 +194,7 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
         JSON.stringify({ weeklyCosts: {} }),
       );
 
-      const weeklyCost = await getWeeklyUsageCost({
+      const { total: weeklyCost } = await getWeeklyUsageCostByBucket({
         userId: "user-1",
         legacyEmails: ["a@example.com", "b@example.com"],
         now: NOW,

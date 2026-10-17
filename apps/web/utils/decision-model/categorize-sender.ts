@@ -6,6 +6,7 @@ import {
   type DecisionQuestion,
   runDecisionModel,
 } from "./decision-model";
+import { TRIAGE_AI_LABELS } from "@/utils/llms/spend-bucket";
 
 const CATEGORY_KEY_PREFIX = "category_";
 const SENDER_KEY_PREFIX = "sender_";
@@ -39,7 +40,7 @@ export async function decideSenderCategory({
     senders: [{ emailAddress: sender, emails: previousEmails.slice(0, 3) }],
     categories,
     logger,
-    label: "Categorize sender",
+    label: TRIAGE_AI_LABELS.categorizeSender,
   });
   const category = result[0]?.category;
   return category

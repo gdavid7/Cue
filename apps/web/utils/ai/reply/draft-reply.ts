@@ -21,6 +21,7 @@ import {
   createDraftAttributionTracker,
   type DraftAttribution,
 } from "@/utils/ai/reply/draft-attribution";
+import { TRIAGE_AI_LABELS } from "@/utils/llms/spend-bucket";
 
 const logger = createScopedLogger("DraftReply");
 const DRAFT_OUTPUT_INSTRUCTION =
@@ -385,7 +386,7 @@ export async function aiDraftReplyWithConfidence(
 
   const generateObject = createGenerateObject({
     emailAccount,
-    label: "Draft reply",
+    label: TRIAGE_AI_LABELS.draftReply,
     modelOptions,
     promptHardening: { trust: "untrusted", level: "full" },
     onModelUsed: attributionTracker.onModelUsed,

@@ -241,7 +241,7 @@ export async function saveUsage(options: {
   emailAccountId: string;
   usage: LanguageModelUsage;
   cost: number;
-  spendBucket?: AiSpendBucket;
+  spendBucket: AiSpendBucket;
   now?: Date;
 }) {
   const {
@@ -249,7 +249,7 @@ export async function saveUsage(options: {
     emailAccountId,
     usage,
     cost,
-    spendBucket = "interactive",
+    spendBucket,
     now = new Date(),
   } = options;
 
@@ -283,15 +283,6 @@ export async function saveUsage(options: {
       usage: loggedUsage,
     });
   }
-}
-
-export async function getWeeklyUsageCost(options: {
-  userId: string;
-  legacyEmails?: string[];
-  now?: Date;
-}) {
-  const { total } = await getWeeklyUsageCostByBucket(options);
-  return total;
 }
 
 // Spend recorded before triage had its own bucket, and legacy per-email

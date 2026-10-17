@@ -8,6 +8,7 @@ import { strictOptional } from "@/utils/llms/strict-optional";
 import { createScopedLogger } from "@/utils/logger";
 import { decideSenderCategory } from "@/utils/decision-model/categorize-sender";
 import { runDecisionModelOrFallback } from "@/utils/decision-model/decision-model";
+import { TRIAGE_AI_LABELS } from "@/utils/llms/spend-bucket";
 
 const logger = createScopedLogger("categorize-sender");
 
@@ -98,7 +99,7 @@ ${formatCategoriesForPrompt(categories)}
 
   const generateObject = createGenerateObject({
     emailAccount,
-    label: "Categorize sender",
+    label: TRIAGE_AI_LABELS.categorizeSender,
     modelOptions,
     promptHardening: { trust: "untrusted", level: "compact" },
   });

@@ -9,6 +9,7 @@ import { truncate } from "@/utils/string";
 import { formatReplyMemoryPromptLine } from "./extract-reply-memories";
 import { decideRelevantReplyMemories } from "@/utils/decision-model/reply-memory-selection";
 import { runDecisionModelOrFallback } from "@/utils/decision-model/decision-model";
+import { TRIAGE_AI_LABELS } from "@/utils/llms/spend-bucket";
 
 const MAX_SELECTED_REPLY_MEMORIES = 6;
 const MAX_EMAIL_CONTENT_LENGTH = 4000;
@@ -163,7 +164,7 @@ Select the ids of the memories relevant to drafting a reply to this email.`;
 
   const generateObject = createGenerateObject({
     emailAccount,
-    label: "Reply memory selection",
+    label: TRIAGE_AI_LABELS.replyMemorySelection,
     modelOptions,
     promptHardening: { trust: "untrusted", level: "compact" },
   });

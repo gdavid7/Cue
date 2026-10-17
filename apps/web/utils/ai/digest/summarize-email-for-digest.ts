@@ -6,6 +6,7 @@ import { stringifyEmailSimple } from "@/utils/stringify-email";
 import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
 import { createGenerateObject } from "@/utils/llms";
 import { getUserInfoPrompt } from "@/utils/ai/helpers";
+import { TRIAGE_AI_LABELS } from "@/utils/llms/spend-bucket";
 
 const logger = createScopedLogger("summarize-digest-email");
 
@@ -85,7 +86,7 @@ ${getUserInfoPrompt({ emailAccount })}`;
 
     const generateObject = createGenerateObject({
       emailAccount,
-      label: "Summarize email",
+      label: TRIAGE_AI_LABELS.digestSummary,
       modelOptions,
       promptHardening: { trust: "untrusted", level: "compact" },
     });
