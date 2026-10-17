@@ -18,7 +18,7 @@ describe("robots route", () => {
     vi.resetModules();
   });
 
-  it("returns the existing production rules", async () => {
+  it("returns the production rules with only our own sitemap", async () => {
     const robots = await loadRobots(
       "https://www.getinboxzero.com",
       "production",
@@ -30,10 +30,7 @@ describe("robots route", () => {
         allow: "/",
         disallow: "/components",
       },
-      sitemap: [
-        "https://www.getinboxzero.com/sitemap.xml",
-        "https://docs.getinboxzero.com/sitemap.xml",
-      ],
+      sitemap: "https://www.getinboxzero.com/sitemap.xml",
     });
   });
 
