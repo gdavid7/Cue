@@ -168,9 +168,6 @@ test("requires client consent, enforces read-only access, and disconnects existi
   await expect(
     connectDialog.getByText("ChatGPT, Claude, or Cursor"),
   ).toBeVisible();
-  await expect(
-    connectDialog.getByRole("link", { name: "Full setup guide" }),
-  ).toHaveAttribute("href", "https://docs.getinboxzero.com/essentials/mcp");
   await capturePlaywrightCheckpoint(connectDialog, testInfo, "mcp-connect-url");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: /^MCP apps/ }).click();

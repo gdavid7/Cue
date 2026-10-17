@@ -1,5 +1,5 @@
 // Product-facing name of the bot that appears in the participant list.
-export const MEETING_BOT_DISPLAY_NAME = "Inbox Zero Notetaker";
+export const MEETING_BOT_DISPLAY_NAME = "Cue Notetaker";
 const MAX_MEETING_BOT_DISPLAY_NAME_LENGTH = 100;
 
 interface TranscriptUtterance {

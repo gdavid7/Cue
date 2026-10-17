@@ -31,7 +31,6 @@ import {
   updateMcpServerAccessAction,
 } from "@/utils/actions/api-key";
 import { getActionErrorMessage } from "@/utils/error";
-import { MCP_GUIDE_URL } from "@/utils/mcp/config";
 
 export function McpSection() {
   const { data, isLoading, error, mutate } = useApiKeys();
@@ -162,14 +161,6 @@ function McpAccessItem({
             </DialogDescription>
           </DialogHeader>
           <CopyInput value={mcpUrl} />
-          <a
-            href={MCP_GUIDE_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-sm text-muted-foreground underline underline-offset-4"
-          >
-            Full setup guide
-          </a>
         </DialogContent>
       </Dialog>
     </Item>

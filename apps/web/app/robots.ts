@@ -18,9 +18,6 @@ export default function robots(): MetadataRoute.Robots {
       allow: "/",
       disallow: "/components",
     },
-    sitemap: [
-      `${env.NEXT_PUBLIC_BASE_URL}/sitemap.xml`,
-      "https://docs.getinboxzero.com/sitemap.xml",
-    ],
+    sitemap: `${env.NEXT_PUBLIC_BASE_URL}/sitemap.xml`,
   };
 }

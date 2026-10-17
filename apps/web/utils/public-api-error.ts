@@ -3,8 +3,6 @@ import { ZodError } from "zod";
 import { env } from "@/env";
 import { SafeError } from "@/utils/error";
 
-export const PUBLIC_API_DOCS_URL =
-  "https://docs.getinboxzero.com/api-reference/introduction";
 export const PUBLIC_API_OPENAPI_PATH = "/openapi.json";
 
 export type PublicApiErrorCode =
@@ -25,14 +23,14 @@ export type PublicApiErrorBody = {
 };
 
 const DEFAULT_HINTS: Record<PublicApiErrorCode, string> = {
-  BAD_REQUEST: `Check the request against ${PUBLIC_API_OPENAPI_PATH} or ${PUBLIC_API_DOCS_URL}.`,
-  UNAUTHORIZED: `Include a valid API-Key header. See ${PUBLIC_API_DOCS_URL}.`,
-  FORBIDDEN: `Use an account-scoped API key with the required scopes. See ${PUBLIC_API_DOCS_URL}.`,
-  NOT_FOUND: `Confirm the path and resource id against ${PUBLIC_API_OPENAPI_PATH} or ${PUBLIC_API_DOCS_URL}.`,
+  BAD_REQUEST: `Check the request against ${PUBLIC_API_OPENAPI_PATH}.`,
+  UNAUTHORIZED: `Include a valid API-Key header. See ${PUBLIC_API_OPENAPI_PATH}.`,
+  FORBIDDEN: `Use an account-scoped API key with the required scopes. See ${PUBLIC_API_OPENAPI_PATH}.`,
+  NOT_FOUND: `Confirm the path and resource id against ${PUBLIC_API_OPENAPI_PATH}.`,
   METHOD_NOT_ALLOWED: `Use a method declared for this path in ${PUBLIC_API_OPENAPI_PATH}.`,
   RATE_LIMITED:
     "Wait and retry with backoff. Reduce request rate if the limit persists.",
-  INTERNAL_ERROR: `Retry the request. If it keeps failing, see ${PUBLIC_API_DOCS_URL}.`,
+  INTERNAL_ERROR: "Retry the request. If it keeps failing, contact support.",
 };
 
 export function isPublicApiPath(pathname: string): boolean {

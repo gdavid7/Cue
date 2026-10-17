@@ -122,8 +122,8 @@ describe.skipIf(!RUN_DB_TESTS)(
 
       expect(fakeProvider.scheduled).toHaveLength(2);
       expect(fakeProvider.scheduled.map(({ botName }) => botName)).toEqual([
-        "Alice's Inbox Zero Notetaker",
-        "Bob's Inbox Zero Notetaker",
+        "Alice's Cue Notetaker",
+        "Bob's Cue Notetaker",
       ]);
 
       const recordings = await prisma.meetingRecording.findMany();
@@ -194,7 +194,7 @@ describe.skipIf(!RUN_DB_TESTS)(
       const emailAccount = account(accountAId, ACCOUNT_A);
       await reconcile.reconcileSingleEvent({ emailAccount, event, logger });
       expect((await prisma.meetingRecording.findFirstOrThrow()).botName).toBe(
-        "Alice's Inbox Zero Notetaker",
+        "Alice's Cue Notetaker",
       );
 
       await reconcile.reconcileSingleEvent({
@@ -205,11 +205,11 @@ describe.skipIf(!RUN_DB_TESTS)(
 
       expect(fakeProvider.updated).toContainEqual({
         botId: fakeProvider.scheduled[0]?.botId,
-        botName: "Alicia's Inbox Zero Notetaker",
+        botName: "Alicia's Cue Notetaker",
       });
       expect(fakeProvider.scheduled).toHaveLength(1);
       expect((await prisma.meetingRecording.findFirstOrThrow()).botName).toBe(
-        "Alicia's Inbox Zero Notetaker",
+        "Alicia's Cue Notetaker",
       );
 
       await reconcile.reconcileSingleEvent({
@@ -934,7 +934,7 @@ describe.skipIf(!RUN_DB_TESTS)(
 
       expect(fakeProvider.updated).toContainEqual({
         botId: fakeProvider.scheduled[0]?.botId,
-        botName: "Alice's Inbox Zero Notetaker",
+        botName: "Alice's Cue Notetaker",
         meetingUrl: "https://acme.zoom.us/j/8123456789?pwd=new",
       });
       expect(fakeProvider.scheduled).toHaveLength(1);
@@ -975,7 +975,7 @@ describe.skipIf(!RUN_DB_TESTS)(
 
       expect(fakeProvider.updated).toContainEqual({
         botId: fakeProvider.scheduled[1]?.botId,
-        botName: "Bob's Inbox Zero Notetaker",
+        botName: "Bob's Cue Notetaker",
       });
       expect(fakeProvider.cancelled).toHaveLength(0);
       expect(fakeProvider.scheduled).toHaveLength(2);

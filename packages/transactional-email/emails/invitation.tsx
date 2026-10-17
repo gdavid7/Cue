@@ -44,18 +44,16 @@ const InvitationEmail: InvitationEmailComponent = ({
             <Section className="p-4 text-center">
               <Link href={baseUrl} className="text-[15px]">
                 <Img
-                  src={"https://www.getinboxzero.com/icon.png"}
+                  src={`${baseUrl}/icon.png`}
                   width="40"
                   height="40"
-                  alt="Inbox Zero"
+                  alt="Cue"
                   className="mx-auto my-0"
                 />
               </Link>
 
               <Text className="mx-0 mb-8 mt-4 p-0 text-center text-2xl font-normal">
-                <span className="font-semibold tracking-tighter">
-                  Inbox Zero
-                </span>
+                <span className="font-semibold tracking-tighter">Cue</span>
               </Text>
 
               <Text className="mx-0 mb-8 mt-0 p-0 text-center text-2xl font-normal">
@@ -107,7 +105,7 @@ function Footer({
     <Section className="mt-8 text-center text-sm text-gray-500">
       <Text className="m-0">
         You're receiving this email because you were invited to join an
-        organization on Inbox Zero.
+        organization on Cue.
       </Text>
       <div className="mt-2">
         <Link

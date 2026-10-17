@@ -38,8 +38,6 @@ import {
   type Slot,
 } from "./booking-helpers";
 
-const BRAND_HOMEPAGE_URL = "https://www.getinboxzero.com";
-
 type BookingLink = Omit<GetPublicBookingLinkResponse, "locationValue"> & {
   locationValue: string | null;
 };
@@ -104,7 +102,7 @@ export function BookingSidebar({
         </p>
       ) : null}
       <a
-        href={BRAND_HOMEPAGE_URL}
+        href="/"
         target="_blank"
         rel="noopener noreferrer"
         className="mt-auto flex items-center gap-1.5 border-t pt-4 text-xs text-muted-foreground transition-colors hover:text-foreground"
