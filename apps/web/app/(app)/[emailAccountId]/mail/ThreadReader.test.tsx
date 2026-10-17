@@ -1,8 +1,14 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
-import type { ReactNode } from "react";
+import { type ReactNode, useLayoutEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThreadReader } from "@/app/(app)/[emailAccountId]/mail/ThreadReader";
 import type { ThreadMessage } from "@/components/email-list/types";
@@ -19,35 +25,69 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
   }),
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/ReaderToolbar", () => ({
-  ReaderToolbar: ({ subject }: { subject: string }) => <h1>{subject}</h1>,
+  ReaderToolbar: ({
+    subject,
+    messageExpansion,
+  }: {
+    subject: string;
+    messageExpansion?: { canExpand: boolean };
+  }) => (
+    <header>
+      <h1>{subject}</h1>
+      <button type="button">More actions</button>
+      {messageExpansion?.canExpand ? (
+        <button type="button">Expand all messages</button>
+      ) : null}
+    </header>
+  ),
 }));
-const threadView = vi.hoisted(() => ({ loading: false }));
+const threadView = vi.hoisted(() => {
+  let open = () => {};
+  return {
+    mode: "ready" as "ready" | "pending" | "gated",
+    gate: new Promise<void>((resolve) => {
+      open = resolve;
+    }),
+    open: () => open(),
+  };
+});
 // Rendered directly, so assertions don't depend on which test first awaited
-// the lazy chunk; `threadView.loading` holds it in its loading state.
+// the lazy chunk. "pending" never loads; "gated" loads on `threadView.open()`.
 vi.mock("@/components/email-list/EmailThreadLazy", async () => {
   const { lazy } = await import("react");
   const { EmailThread } = await import("@/components/email-list/EmailThread");
   const PendingThreadView = lazy(() => new Promise<never>(() => {}));
+  const GatedThreadView = lazy(() =>
+    threadView.gate.then(() => ({ default: EmailThread })),
+  );
   return {
-    EmailThreadLazy: (props: Parameters<typeof EmailThread>[0]) =>
-      threadView.loading ? <PendingThreadView /> : <EmailThread {...props} />,
+    EmailThreadLazy: (props: Parameters<typeof EmailThread>[0]) => {
+      if (threadView.mode === "pending") return <PendingThreadView />;
+      if (threadView.mode === "gated") return <GatedThreadView {...props} />;
+      return <EmailThread {...props} />;
+    },
     preloadEmailThread: () => {},
   };
 });
 vi.mock("@/components/email-list/EmailThread", () => ({
   EmailThread: ({
-    renderToolbar,
+    onMessageExpansionChange,
     afterLatestMessage,
     autoOpenReplyForMessageId,
     focusAutoOpenedReply,
   }: {
-    renderToolbar: () => ReactNode;
+    onMessageExpansionChange?: (controls: {
+      allExpanded: boolean;
+      canExpand: boolean;
+      onToggleAll: () => void;
+    }) => void;
     afterLatestMessage?: ReactNode;
     autoOpenReplyForMessageId?: string;
     focusAutoOpenedReply?: boolean;
   }) => (
     <>
-      {renderToolbar()}
+      <ReportsExpansion onChange={onMessageExpansionChange} />
+      <div data-testid="thread-view" />
       {afterLatestMessage}
       {autoOpenReplyForMessageId ? (
         <div
@@ -116,11 +156,37 @@ class MockResizeObserver {
 describe("ThreadReader", () => {
   afterEach(() => {
     cleanup();
-    threadView.loading = false;
+    threadView.mode = "ready";
+  });
+
+  it("keeps the toolbar in place while the thread view's code loads", async () => {
+    threadView.mode = "gated";
+    renderReader({
+      refetch: vi.fn(),
+      messages: [createMessage("message-1", "Office hours", ["INBOX"])],
+    });
+    const moreActions = screen.getByRole("button", { name: "More actions" });
+    moreActions.focus();
+    expect(screen.getByLabelText("Loading email")).toBeTruthy();
+    // Expanding needs the thread view, so it waits for it.
+    expect(
+      screen.queryByRole("button", { name: "Expand all messages" }),
+    ).toBeNull();
+
+    await act(async () => threadView.open());
+
+    expect(await screen.findByTestId("thread-view")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "More actions" })).toBe(
+      moreActions,
+    );
+    expect(document.activeElement).toBe(moreActions);
+    expect(
+      screen.getByRole("button", { name: "Expand all messages" }),
+    ).toBeTruthy();
   });
 
   it("shows a loading indicator while the thread view's code loads", () => {
-    threadView.loading = true;
+    threadView.mode = "pending";
 
     renderReader({
       refetch: vi.fn(),
@@ -286,4 +352,19 @@ function createMessage(id: string, subject: string, labelIds: string[]) {
     labelIds,
     headers: { subject, from: "sender@example.com", date: "" },
   } as unknown as ThreadMessage;
+}
+
+function ReportsExpansion({
+  onChange,
+}: {
+  onChange?: (controls: {
+    allExpanded: boolean;
+    canExpand: boolean;
+    onToggleAll: () => void;
+  }) => void;
+}) {
+  useLayoutEffect(() => {
+    onChange?.({ allExpanded: false, canExpand: true, onToggleAll: () => {} });
+  }, [onChange]);
+  return null;
 }

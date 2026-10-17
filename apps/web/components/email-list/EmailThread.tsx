@@ -2,6 +2,7 @@ import { OpenedConversationAttachments } from "./OpenedConversationAttachments";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useState,
   useRef,
@@ -54,7 +55,7 @@ export function EmailThread({
   onOpenSenderContext,
   onThreadDiscarded,
   withHeader,
-  renderToolbar,
+  onMessageExpansionChange,
   renderMessageMenu,
   enableMessageNavigation = false,
   afterLatestMessage,
@@ -94,11 +95,14 @@ export function EmailThread({
   /** Set while older messages exist that haven't been loaded yet. */
   earlierMessages?: { loading: boolean; onLoad: () => unknown };
   renderMessageMenu?: (message: ThreadMessage) => ReactNode;
-  renderToolbar?: (controls: {
-    allExpanded: boolean;
-    canExpand: boolean;
-    onToggleAll: () => void;
-  }) => ReactNode;
+  /**
+   * Hands the expand/collapse-all controls to a toolbar drawn outside the
+   * thread, which then replaces the thread's own button. Called with undefined
+   * when the thread unmounts.
+   */
+  onMessageExpansionChange?: (
+    controls: MessageExpansionControls | undefined,
+  ) => void;
 }) {
   const { emailAccountId, userEmail } = useAccount();
   const threadId = messages[0]?.threadId ?? "";
@@ -351,6 +355,23 @@ export function EmailThread({
       ),
     );
   };
+  const canExpand = organizedMessages.length > 1;
+  const toggleAllRef = useRef(toggleAll);
+  useLayoutEffect(() => {
+    toggleAllRef.current = toggleAll;
+  });
+  // Before paint, so the toolbar's controls appear with the messages.
+  useLayoutEffect(() => {
+    onMessageExpansionChange?.({
+      allExpanded,
+      canExpand,
+      onToggleAll: () => toggleAllRef.current(),
+    });
+  }, [allExpanded, canExpand, onMessageExpansionChange]);
+  useLayoutEffect(
+    () => () => onMessageExpansionChange?.(undefined),
+    [onMessageExpansionChange],
+  );
   const [selectedMessageId, setSelectedMessageId] = useState<string>();
   const selectedId = organizedMessages.some(
     ({ message }) => message.id === selectedMessageId,
@@ -412,11 +433,6 @@ export function EmailThread({
       threadId={threadId}
     >
       <div className="min-w-0 bg-card" ref={threadRef}>
-        {renderToolbar?.({
-          allExpanded,
-          canExpand: organizedMessages.length > 1,
-          onToggleAll: toggleAll,
-        })}
         {withHeader && (
           <div className="flex items-center justify-between">
             <div className="font-semibold text-2xl text-foreground">
@@ -428,7 +444,7 @@ export function EmailThread({
           </div>
         )}
 
-        {!renderToolbar && organizedMessages.length > 1 && (
+        {!onMessageExpansionChange && canExpand && (
           <div className="flex justify-end pt-2">
             <Tooltip
               content={
@@ -806,3 +822,9 @@ function draftRecency(draft: ThreadMessage) {
   const time = internalDateToDate(value, { fallbackToNow: false }).getTime();
   return Number.isNaN(time) ? 0 : time;
 }
+
+export type MessageExpansionControls = {
+  allExpanded: boolean;
+  canExpand: boolean;
+  onToggleAll: () => void;
+};

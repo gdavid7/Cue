@@ -22,6 +22,7 @@ import type {
   MailLayoutMode,
 } from "@/app/(app)/[emailAccountId]/mail/types";
 import { EmailThreadLazy } from "@/components/email-list/EmailThreadLazy";
+import type { MessageExpansionControls } from "@/components/email-list/EmailThread";
 import { ReplyAssistContext } from "@/components/email-list/reply-assist";
 import { ThreadContextList } from "@/components/thread-context/ThreadContextList";
 import type { ThreadMessage } from "@/components/email-list/types";
@@ -156,6 +157,10 @@ export function ThreadReader({
     senderEmail: string;
     senderName: string;
   } | null>(null);
+  // Reported by the thread view once it has mounted; until then the toolbar
+  // has no expand/collapse-all control.
+  const [messageExpansion, setMessageExpansion] =
+    useState<MessageExpansionControls>();
   const [readerRef, readerWidth] = useElementWidth();
   const isNarrow = readerWidth < INLINE_SIDE_PANEL_MIN_WIDTH;
   const { emailAccountId, userEmail, accountIds } = useAccount();
@@ -253,16 +258,17 @@ export function ThreadReader({
       userLabels,
     }) ?? [];
 
-  const renderToolbar = (
-    messageExpansion?: ComponentProps<typeof ReaderToolbar>["messageExpansion"],
-  ) => (
+  // Drawn outside the lazily loaded thread view, in the same place with or
+  // without messages, so it never remounts: an open menu stays open and a
+  // click is never lost while the thread view's code arrives.
+  const toolbar = (
     <>
       <ReaderToolbar
         isStarred={isThreadStarred(
           thread?.messages.length ? thread.messages : messages,
         )}
         isUnread={isUnread}
-        messageExpansion={messageExpansion}
+        messageExpansion={messages.length > 0 ? messageExpansion : undefined}
         labelHref={labelHref}
         labels={labels}
         menu={menu}
@@ -336,12 +342,12 @@ export function ThreadReader({
         ) : null
       }
     >
+      {toolbar}
       {messages.length > 0 ? (
         <ReplyAssistContext.Provider value={assist}>
-          {/* MailShell preloads the thread view, so this rarely shows. A
-              spinner rather than a second toolbar, which would remount its
-              strip; the marker keeps BufferedThreadReader on the previous
-              thread. */}
+          {/* MailShell preloads the thread view, so this rarely shows. Only
+              the messages wait for it; the marker keeps BufferedThreadReader
+              on the previous thread. */}
           <Suspense
             fallback={
               <div
@@ -356,7 +362,7 @@ export function ThreadReader({
             }
           >
             <EmailThreadLazy
-              renderToolbar={renderToolbar}
+              onMessageExpansionChange={setMessageExpansion}
               renderMessageMenu={renderMessageMenu}
               enableMessageNavigation={enableMessageNavigation}
               autoOpenReplyForMessageId={
@@ -415,9 +421,7 @@ export function ThreadReader({
             />
           </Suspense>
         </ReplyAssistContext.Provider>
-      ) : (
-        renderToolbar()
-      )}
+      ) : null}
       {emailAccountId && threadId && messages.length > 0 && (
         <PublisherDiscussion
           key={`${emailAccountId}:${threadId}`}
