@@ -1,5 +1,4 @@
 import type { PostHog } from "posthog-js";
-import { useSyncExternalStore } from "react";
 import { env } from "@/env";
 import { loadChunk } from "@/utils/load-chunk";
 
@@ -104,20 +103,12 @@ export function whenReady(timeoutMs: number): Promise<void> {
   });
 }
 
-export function useFeatureFlagEnabled(flag: string) {
-  return useSyncExternalStore(
-    subscribeToFlags,
-    () => client?.isFeatureEnabled(flag),
-    () => undefined,
-  );
+export function isFeatureFlagEnabled(flag: string) {
+  return client?.isFeatureEnabled(flag);
 }
 
-export function useActiveFeatureFlags() {
-  return useSyncExternalStore(
-    subscribeToFlags,
-    () => activeFlags,
-    () => activeFlags,
-  );
+export function getActiveFeatureFlags() {
+  return activeFlags;
 }
 
 function whenLoaded(call: (client: PostHog) => void) {
@@ -135,7 +126,7 @@ function whenLoaded(call: (client: PostHog) => void) {
   }
 }
 
-function subscribeToFlags(listener: () => void) {
+export function subscribeToFlags(listener: () => void) {
   flagListeners.add(listener);
   return () => {
     flagListeners.delete(listener);

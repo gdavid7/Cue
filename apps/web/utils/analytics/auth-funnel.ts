@@ -2,26 +2,13 @@ import {
   type PostHogClient,
   whenReady,
 } from "@/utils/analytics/posthog-client";
-import type { LoginProvider } from "@/utils/oauth/login-providers";
-
-export type AuthFunnelProvider = LoginProvider | "unknown";
+import type { AuthFunnelProvider } from "@/utils/analytics/auth-funnel-provider";
+import { normalizeAuthProvider } from "@/utils/analytics/auth-funnel-provider";
 
 type AuthFailureStage = "start" | "callback";
 
 const AUTH_PROVIDER_ATTEMPT_KEY = "auth_provider_attempt";
 const AUTH_PROVIDER_ATTEMPT_MAX_AGE_MS = 15 * 60 * 1000;
-
-export function normalizeAuthProvider(value: unknown): AuthFunnelProvider {
-  switch (value) {
-    case "google":
-    case "microsoft":
-    case "apple":
-    case "sso":
-      return value;
-    default:
-      return "unknown";
-  }
-}
 
 export function getAuthErrorCategory(errorCode?: string | null) {
   switch (errorCode?.toLowerCase()) {

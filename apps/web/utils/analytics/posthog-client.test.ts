@@ -159,8 +159,12 @@ describe("posthog client", () => {
   });
 });
 
-function importClient() {
-  return import("@/utils/analytics/posthog-client");
+async function importClient() {
+  const [client, flags] = await Promise.all([
+    import("@/utils/analytics/posthog-client"),
+    import("@/utils/analytics/posthog-flags"),
+  ]);
+  return { ...client, ...flags };
 }
 
 async function flushLoad() {

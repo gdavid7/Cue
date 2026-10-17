@@ -1,11 +1,11 @@
 /** @vitest-environment jsdom */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeAuthProvider } from "@/utils/analytics/auth-funnel-provider";
 import {
   clearPendingAuthProvider,
   getAuthErrorCategory,
   getPendingAuthProvider,
-  normalizeAuthProvider,
   rememberAuthProvider,
   trackAuthFailure,
   trackAuthStarted,
