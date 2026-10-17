@@ -17,6 +17,7 @@ import {
 import type { ClassificationFeedbackItem } from "@/utils/rule/classification-feedback";
 import { isDefaultRuleInstructions } from "@/utils/rule/consts";
 import type { ParsedMessage } from "@/utils/types";
+import { TRIAGE_AI_LABELS } from "@/utils/llms/spend-bucket";
 
 const MODULE = "decision-model-choose-rule";
 
@@ -112,7 +113,7 @@ export async function decisionModelChooseRule<T extends RuleCandidate>({
         : null,
     }),
     questions,
-    label: "Choose rule",
+    label: TRIAGE_AI_LABELS.chooseRule,
     logger,
   });
 

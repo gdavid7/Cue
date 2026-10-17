@@ -13,6 +13,7 @@ import type { EmailProvider } from "@/utils/email/types";
 import { getEmailForLLM } from "@/utils/get-email-from-message";
 import { captureException } from "@/utils/error";
 import { getEmailListPrompt, getUserInfoPrompt } from "@/utils/ai/helpers";
+import { TRIAGE_AI_LABELS } from "@/utils/llms/spend-bucket";
 
 type ReplyContextThreadEmail = EmailForLLM & {
   threadId?: string | null;
@@ -109,7 +110,7 @@ ${getTodayForLLM()}`;
 
     const generateText = createGenerateText({
       emailAccount,
-      label: "Reply context collector",
+      label: TRIAGE_AI_LABELS.replyContextCollector,
       modelOptions,
       promptHardening: { trust: "untrusted", level: "full" },
     });

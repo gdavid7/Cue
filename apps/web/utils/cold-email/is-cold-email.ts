@@ -17,6 +17,7 @@ import { hasPriorContactOrAssumeYes } from "@/utils/cold-email/has-prior-contact
 import { decideColdEmail } from "@/utils/decision-model/cold-email";
 import { runDecisionModelOrFallback } from "@/utils/decision-model/decision-model";
 import { getUserOwnAddresses, isOwnAddress } from "@/utils/user/own-addresses";
+import { TRIAGE_AI_LABELS } from "@/utils/llms/spend-bucket";
 
 export const COLD_EMAIL_FOLDER_NAME = "Cold Emails";
 
@@ -268,7 +269,7 @@ ${stringifyEmail(email, 500)}
 
   const generateObject = createGenerateObject({
     emailAccount,
-    label: "Cold email check",
+    label: TRIAGE_AI_LABELS.coldEmail,
     modelOptions,
     promptHardening: { trust: "untrusted", level: "compact" },
   });

@@ -1,6 +1,7 @@
 /** biome-ignore-all lint/style/noMagicNumbers: we're defining constants */
 import type { LanguageModelUsage } from "ai";
 import { saveUsage } from "@/utils/redis/usage";
+import { getAiSpendBucket } from "@/utils/llms/spend-bucket";
 import { OPENROUTER_MODEL_PRICING } from "@/utils/llms/pricing.generated";
 import {
   STATIC_MODEL_PRICING,
@@ -183,7 +184,13 @@ export async function saveAiUsage({
       }),
     ),
     invokeUsageSink(() =>
-      saveUsage({ userId, emailAccountId, cost: platformCost, usage }),
+      saveUsage({
+        userId,
+        emailAccountId,
+        cost: platformCost,
+        usage,
+        spendBucket: getAiSpendBucket(label),
+      }),
     ),
   ]);
 

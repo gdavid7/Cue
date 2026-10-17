@@ -3,6 +3,7 @@ import type { LanguageModelUsage } from "ai";
 import { redis } from "@/utils/redis";
 import { createScopedLogger } from "@/utils/logger";
 import { logRedisFailureOnce } from "@/utils/redis/unavailable-log";
+import type { AiSpendBucket } from "@/utils/llms/spend-bucket";
 
 const logger = createScopedLogger("redis/usage");
 const WEEKLY_USAGE_COST_DAYS = 7;
@@ -10,10 +11,11 @@ const WEEKLY_USAGE_COST_TTL_SECONDS = 8 * 24 * 60 * 60;
 const WEEKLY_USAGE_COST_KEY_PREFIX = "usage-weekly-cost";
 const USAGE_MIGRATION_LOCK_TTL_SECONDS = 5 * 60;
 
-// KEYS: the usage hashes, then the weekly cost hash when ARGV[1] is '1'.
-// ARGV: that flag, the cost, the weekly TTL, then field/increment pairs.
+// KEYS: the usage hashes, then the weekly cost hash when ARGV[1] isn't '0'.
+// ARGV: that flag ('2' also adds the cost to the weekly triage cost), the
+// cost, the weekly TTL, then field/increment pairs.
 const saveUsageScript = `
-local weekly = ARGV[1] == '1'
+local weekly = ARGV[1] ~= '0'
 local cost = tonumber(ARGV[2])
 local hashes = #KEYS
 if weekly then hashes = hashes - 1 end
@@ -25,15 +27,21 @@ for i = 1, hashes do
 end
 if weekly then
   redis.call('HINCRBYFLOAT', KEYS[#KEYS], 'cost', ARGV[2])
+  if ARGV[1] == '2' then
+    redis.call('HINCRBYFLOAT', KEYS[#KEYS], 'triageCost', ARGV[2])
+  end
   redis.call('EXPIRE', KEYS[#KEYS], tonumber(ARGV[3]))
 end
 return 1
 `;
 
+// Returns each key's cost then its triage cost, flattened.
 const readCostsScript = `
 local costs = {}
 for i = 1, #KEYS do
-  costs[i] = redis.call('HGET', KEYS[i], 'cost') or ''
+  local values = redis.call('HMGET', KEYS[i], 'cost', 'triageCost')
+  costs[2 * i - 1] = values[1] or ''
+  costs[2 * i] = values[2] or ''
 end
 return costs
 `;
@@ -233,9 +241,17 @@ export async function saveUsage(options: {
   emailAccountId: string;
   usage: LanguageModelUsage;
   cost: number;
+  spendBucket: AiSpendBucket;
   now?: Date;
 }) {
-  const { userId, emailAccountId, usage, cost, now = new Date() } = options;
+  const {
+    userId,
+    emailAccountId,
+    usage,
+    cost,
+    spendBucket,
+    now = new Date(),
+  } = options;
 
   const usageKeys = [
     getUsageKey({ type: "email-account", id: emailAccountId }),
@@ -252,7 +268,7 @@ export async function saveUsage(options: {
       saveUsageScript,
       weeklyCostKey ? [...usageKeys, weeklyCostKey] : usageKeys,
       [
-        weeklyCostKey ? "1" : "0",
+        getWeeklyCostFlag(weeklyCostKey, spendBucket),
         String(cost || 0),
         String(WEEKLY_USAGE_COST_TTL_SECONDS),
         ...fields.flatMap(([field, value]) => [field, String(value)]),
@@ -269,7 +285,9 @@ export async function saveUsage(options: {
   }
 }
 
-export async function getWeeklyUsageCost({
+// Spend recorded before triage had its own bucket, and legacy per-email
+// spend, counts as interactive.
+export async function getWeeklyUsageCostByBucket({
   userId,
   legacyEmails = [],
   now = new Date(),
@@ -277,15 +295,41 @@ export async function getWeeklyUsageCost({
   userId: string;
   legacyEmails?: string[];
   now?: Date;
-}) {
+}): Promise<{ total: number } & Record<AiSpendBucket, number>> {
   const usageKeys = getWeeklyUsageCostKeys(userId, now);
-  const uniqueLegacyEmails = Array.from(new Set(legacyEmails));
-  const legacyCostsByKey = uniqueLegacyEmails.length
-    ? await getLegacyWeeklyUsageCostsByKey({ emails: uniqueLegacyEmails, now })
-    : new Map<string, number>();
+  const current = await readWeeklyCostTotals(usageKeys);
+  const total = await addLegacyWeeklyUsageCost({
+    userId,
+    legacyEmails,
+    now,
+    usageKeys,
+    migratedCost: current.cost,
+  });
+  const triage = Math.min(current.triageCost, total);
 
-  const migratedCost = await getWeeklyUsageCostTotal(usageKeys);
+  return { total, triage, interactive: total - triage };
+}
+
+async function addLegacyWeeklyUsageCost({
+  userId,
+  legacyEmails,
+  now,
+  usageKeys,
+  migratedCost,
+}: {
+  userId: string;
+  legacyEmails: string[];
+  now: Date;
+  usageKeys: string[];
+  migratedCost: number;
+}) {
+  const uniqueLegacyEmails = Array.from(new Set(legacyEmails));
   if (!uniqueLegacyEmails.length) return migratedCost;
+
+  const legacyCostsByKey = await getLegacyWeeklyUsageCostsByKey({
+    emails: uniqueLegacyEmails,
+    now,
+  });
 
   const migrationName = `weekly-usage-cost-user:${userId}`;
   const doneKey = getUsageMigrationDoneKey(migrationName);
@@ -537,21 +581,36 @@ function hasUsageData(usage: RedisUsage | null | undefined) {
 }
 
 async function getWeeklyUsageCostTotal(keys: string[]) {
+  const { cost } = await readWeeklyCostTotals(keys);
+  return cost;
+}
+
+async function readWeeklyCostTotals(keys: string[]) {
   const weeklyCosts = await readWeeklyCosts(keys);
-  return weeklyCosts.reduce((sum, value) => sum + value, 0);
+  return weeklyCosts.reduce(
+    (totals, { cost, triageCost }) => ({
+      cost: totals.cost + cost,
+      triageCost: totals.triageCost + triageCost,
+    }),
+    { cost: 0, triageCost: 0 },
+  );
 }
 
 // Any number of daily hashes in one command.
-async function readWeeklyCosts(keys: string[]): Promise<number[]> {
+async function readWeeklyCosts(
+  keys: string[],
+): Promise<Array<{ cost: number; triageCost: number }>> {
   if (!keys.length) return [];
   const costs = await redis.eval<string[], unknown[]>(
     readCostsScript,
     keys,
     [],
   );
-  return keys.map((_, index) =>
-    parseRedisNumber(Array.isArray(costs) ? costs[index] : null),
-  );
+  const values = Array.isArray(costs) ? costs : [];
+  return keys.map((_, index) => ({
+    cost: parseRedisNumber(values[2 * index]),
+    triageCost: parseRedisNumber(values[2 * index + 1]),
+  }));
 }
 
 function getWeeklyUsageCostKeys(userId: string, now: Date) {
@@ -565,6 +624,14 @@ function getWeeklyUsageCostDays(now: Date) {
     date.setUTCDate(now.getUTCDate() - offsetDays);
     return getUtcDay(date);
   });
+}
+
+function getWeeklyCostFlag(
+  weeklyCostKey: string | null,
+  spendBucket: AiSpendBucket,
+) {
+  if (!weeklyCostKey) return "0";
+  return spendBucket === "triage" ? "2" : "1";
 }
 
 function getWeeklyUsageCostKey(userId: string, date: Date | string) {
@@ -598,7 +665,8 @@ async function getLegacyWeeklyUsageCostsByKey({
   );
   const costs = await readWeeklyCosts(keys);
   keys.forEach((key, index) => {
-    if (costs[index] > 0) costsByKey.set(key, costs[index]);
+    const cost = costs[index]?.cost ?? 0;
+    if (cost > 0) costsByKey.set(key, cost);
   });
 
   return costsByKey;

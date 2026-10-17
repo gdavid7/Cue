@@ -5,6 +5,7 @@ import type { EmailForLLM } from "@/utils/types";
 import { DEFAULT_COLD_EMAIL_PROMPT } from "@/utils/cold-email/prompt";
 import { type DecisionModelConfig, runDecisionModel } from "./decision-model";
 import { getDecisionEmailState } from "./email-state";
+import { TRIAGE_AI_LABELS } from "@/utils/llms/spend-bucket";
 
 const COLD_EMAIL_KEY = "cold_email";
 const MIN_COLD_EMAIL_PROBABILITY = 0.75;
@@ -46,7 +47,7 @@ export async function decideColdEmail({
         },
       },
     },
-    label: "Cold email check",
+    label: TRIAGE_AI_LABELS.coldEmail,
     logger,
   });
   const answer = response.answers[COLD_EMAIL_KEY];

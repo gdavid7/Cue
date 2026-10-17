@@ -4,7 +4,7 @@ import {
   getTopWeeklyUsageCosts,
   getUsage,
   getWeeklyUsageCostWindow,
-  getWeeklyUsageCost,
+  getWeeklyUsageCostByBucket,
   saveUsage,
 } from "@/utils/redis/usage";
 
@@ -48,6 +48,7 @@ describe("redis usage tracking", () => {
       vi.mocked(redis.hincrbyfloat).mockRejectedValue(new Error("redis down"));
 
       await saveUsage({
+        spendBucket: "interactive",
         userId: "user-1",
         emailAccountId: "acc-1",
         usage,
@@ -62,6 +63,7 @@ describe("redis usage tracking", () => {
     // whole save, cost and weekly spend included.
     it("sends whole token counts even when a provider reports fractions", async () => {
       await saveUsage({
+        spendBucket: "interactive",
         userId: "user-1",
         emailAccountId: "acc-1",
         usage: { inputTokens: 10.6, outputTokens: 4.2, totalTokens: 14.8 },
@@ -79,6 +81,7 @@ describe("redis usage tracking", () => {
 
       await expect(
         saveUsage({
+          spendBucket: "interactive",
           userId: "user-1",
           emailAccountId: "acc-1",
           usage,
@@ -129,6 +132,7 @@ describe("redis usage tracking", () => {
     vi.mocked(redis.hgetall).mockImplementation(async () => hash);
 
     await saveUsage({
+      spendBucket: "interactive",
       emailAccountId: "email-account-1",
       usage: { totalTokens: 10, inputTokens: 10 },
       cost: 0,
@@ -200,7 +204,10 @@ describe("redis usage tracking", () => {
       "usage-weekly-cost:user:user-1:2026-02-22": { cost: "0.25" },
     });
 
-    const weeklyCost = await getWeeklyUsageCost({ userId: "user-1", now: NOW });
+    const { total: weeklyCost } = await getWeeklyUsageCostByBucket({
+      userId: "user-1",
+      now: NOW,
+    });
 
     expect(weeklyCost).toBeCloseTo(2.25);
     // The week is one billed command, not one per day.
@@ -211,6 +218,42 @@ describe("redis usage tracking", () => {
     );
   });
 
+  it("meters triage spend in its own bucket of the user's weekly spend", async () => {
+    const hashes: Record<string, RedisHash> = {};
+    vi.mocked(redis.hincrbyfloat).mockImplementation(
+      async (key: string, field: string, increment: number) => {
+        hashes[key] ??= {};
+        hashes[key][field] = Number(hashes[key][field] ?? 0) + increment;
+        return 1;
+      },
+    );
+    mockRedisHashes(hashes);
+
+    await saveUsage({
+      spendBucket: "interactive",
+      userId: "user-1",
+      emailAccountId: "acc-1",
+      usage: { totalTokens: 10 } as never,
+      cost: 2,
+      now: NOW,
+    });
+    await saveUsage({
+      userId: "user-1",
+      emailAccountId: "acc-1",
+      usage: { totalTokens: 10 } as never,
+      cost: 0.5,
+      spendBucket: "triage",
+      now: NOW,
+    });
+
+    const spend = await getWeeklyUsageCostByBucket({
+      userId: "user-1",
+      now: NOW,
+    });
+
+    expect(spend).toEqual({ total: 2.5, interactive: 2, triage: 0.5 });
+  });
+
   it("migrates legacy weekly email spend into user weekly spend", async () => {
     mockRedisHashes({
       "usage-weekly-cost:user@example.com:2026-02-24": { cost: "1.5" },
@@ -219,7 +262,7 @@ describe("redis usage tracking", () => {
       "usage-weekly-cost:user:user-1:2026-02-23": { cost: "0.5" },
     });
 
-    const weeklyCost = await getWeeklyUsageCost({
+    const { total: weeklyCost } = await getWeeklyUsageCostByBucket({
       userId: "user-1",
       legacyEmails: ["user@example.com"],
       now: NOW,
@@ -249,7 +292,7 @@ describe("redis usage tracking", () => {
       "usage-weekly-cost:user@example.com:2026-02-24": { cost: "1.5" },
     });
 
-    const weeklyCost = await getWeeklyUsageCost({
+    const { total: weeklyCost } = await getWeeklyUsageCostByBucket({
       userId: "user-1",
       legacyEmails: ["user@example.com"],
       now: NOW,
@@ -279,13 +322,13 @@ describe("redis usage tracking", () => {
       "usage-weekly-cost:user:user-1:2026-02-24": { cost: "1.0" },
     });
 
-    await getWeeklyUsageCost({
+    await getWeeklyUsageCostByBucket({
       userId: "user-1",
       legacyEmails: ["primary@example.com"],
       now: NOW,
     });
 
-    const weeklyCost = await getWeeklyUsageCost({
+    const { total: weeklyCost } = await getWeeklyUsageCostByBucket({
       userId: "user-1",
       legacyEmails: ["primary@example.com", "secondary@example.com"],
       now: NOW,
@@ -311,7 +354,7 @@ describe("redis usage tracking", () => {
       "usage-weekly-cost:user@example.com:2026-02-24": { cost: "1.5" },
     });
 
-    const weeklyCost = await getWeeklyUsageCost({
+    const { total: weeklyCost } = await getWeeklyUsageCostByBucket({
       userId: "user-1",
       legacyEmails: ["user@example.com"],
       now: NOW,
@@ -345,7 +388,7 @@ describe("redis usage tracking", () => {
       [legacyWeeklyCostKey]: { cost: "1.5" },
     });
 
-    const weeklyCost = await getWeeklyUsageCost({
+    const { total: weeklyCost } = await getWeeklyUsageCostByBucket({
       userId: "user-1",
       legacyEmails: ["user@example.com"],
       now: NOW,
@@ -386,7 +429,7 @@ describe("redis usage tracking", () => {
       [legacyWeeklyCostKey]: { cost: "1.5" },
     });
 
-    const weeklyCost = await getWeeklyUsageCost({
+    const { total: weeklyCost } = await getWeeklyUsageCostByBucket({
       userId: "user-1",
       legacyEmails: ["user@example.com"],
       now: NOW,
@@ -475,6 +518,7 @@ describe("redis usage tracking", () => {
 
   it("stores usage under both email account and user keys", async () => {
     await saveUsage({
+      spendBucket: "interactive",
       userId: "user-1",
       emailAccountId: "email-account-1",
       usage: {
@@ -684,6 +728,7 @@ describe("redis usage tracking", () => {
 
   it("stores account usage without weekly spend when user ID is missing", async () => {
     await saveUsage({
+      spendBucket: "interactive",
       emailAccountId: "email-account-1",
       usage: {
         totalTokens: 300,
@@ -709,6 +754,7 @@ describe("redis usage tracking", () => {
 
   it("skips cost updates when platform cost is zero", async () => {
     await saveUsage({
+      spendBucket: "interactive",
       userId: "user-1",
       emailAccountId: "email-account-1",
       usage: {
@@ -726,24 +772,27 @@ describe("redis usage tracking", () => {
 // Plays the module's Lua through the mocked commands, so a test sees what the
 // script writes and reads; __tests__/redis/usage-store.test.ts runs the Lua.
 async function runUsageScript(script: string, keys: string[], args: string[]) {
-  if (script.includes("HGET")) {
-    return Promise.all(
+  if (script.includes("HMGET")) {
+    const costs = await Promise.all(
       keys.map(async (key) => {
         const hash = (await redis.hgetall(key)) as RedisHash | null;
-        return hash?.cost ?? "";
+        return [hash?.cost ?? "", hash?.triageCost ?? ""];
       }),
     );
+    return costs.flat();
   }
   const [weekly, cost, ttl, ...fields] = args;
-  const hashes = weekly === "1" ? keys.slice(0, -1) : keys;
+  const hashes = weekly === "0" ? keys : keys.slice(0, -1);
   for (const key of hashes) {
     for (let i = 0; i < fields.length; i += 2)
       await redis.hincrby(key, fields[i], Number(fields[i + 1]));
     if (Number(cost) > 0) await redis.hincrbyfloat(key, "cost", Number(cost));
   }
-  if (weekly === "1") {
+  if (weekly !== "0") {
     const weeklyKey = keys[keys.length - 1];
     await redis.hincrbyfloat(weeklyKey, "cost", Number(cost));
+    if (weekly === "2")
+      await redis.hincrbyfloat(weeklyKey, "triageCost", Number(cost));
     await redis.expire(weeklyKey, Number(ttl));
   }
   return 1;

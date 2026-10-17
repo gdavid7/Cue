@@ -11,6 +11,7 @@ import { getRuleConfig, isDefaultRuleInstructions } from "@/utils/rule/consts";
 import { createScopedLogger } from "@/utils/logger";
 import { decideThreadStatus } from "@/utils/decision-model/thread-status";
 import { runDecisionModelOrFallback } from "@/utils/decision-model/decision-model";
+import { TRIAGE_AI_LABELS } from "@/utils/llms/spend-bucket";
 
 const logger = createScopedLogger("determine-thread-status");
 
@@ -174,7 +175,7 @@ Based on the full thread context above, determine the current status of this thr
 
   const generateObject = createGenerateObject({
     emailAccount,
-    label: "Determine thread status",
+    label: TRIAGE_AI_LABELS.threadStatus,
     modelOptions,
     promptHardening: { trust: "untrusted", level: "compact" },
   });

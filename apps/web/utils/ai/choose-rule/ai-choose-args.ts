@@ -14,6 +14,7 @@ import {
   createDraftAttributionTracker,
   type DraftAttribution,
 } from "@/utils/ai/reply/draft-attribution";
+import { TRIAGE_AI_LABELS } from "@/utils/llms/spend-bucket";
 
 // Bump this when template-based draft generation changes in a way that would
 // affect attribution comparisons for rule-generated draft content.
@@ -98,7 +99,7 @@ export async function aiGenerateArgs({
   );
 
   const generateObject = createGenerateObject({
-    label: "Args for rule",
+    label: TRIAGE_AI_LABELS.ruleArgs,
     emailAccount,
     modelOptions,
     promptHardening: {

@@ -6,6 +6,7 @@ import {
   type DecisionQuestion,
   runDecisionModel,
 } from "./decision-model";
+import { TRIAGE_AI_LABELS } from "@/utils/llms/spend-bucket";
 
 const MEMORY_KEY_PREFIX = "memory_";
 const MIN_RELEVANCE_PROBABILITY = 0.5;
@@ -62,7 +63,7 @@ export async function decideRelevantReplyMemories({
       })),
     },
     questions,
-    label: "Reply memory selection",
+    label: TRIAGE_AI_LABELS.replyMemorySelection,
     logger,
   });
 
