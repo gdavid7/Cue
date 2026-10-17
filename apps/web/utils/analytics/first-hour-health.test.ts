@@ -18,7 +18,9 @@ import { createScopedLogger } from "@/utils/logger";
 import { redis } from "@/utils/redis";
 
 vi.mock("@/utils/prisma");
-vi.mock("@/utils/redis", () => ({ redis: { set: vi.fn(), del: vi.fn() } }));
+vi.mock("@/utils/redis", () => ({
+  redis: { set: vi.fn(), del: vi.fn(), mget: vi.fn() },
+}));
 vi.mock("@inboxzero/transactional-email", () => ({}));
 
 const NOW = new Date("2026-10-17T12:00:00.000Z");
@@ -39,6 +41,8 @@ describe("recordFirstHourHealthForNewMailboxes", () => {
       claimedKeys.add(key);
       return "OK";
     }) as never);
+    vi.mocked(redis.mget).mockImplementation((async (...keys: string[]) =>
+      keys.map((key) => (claimedKeys.has(key) ? "1" : null))) as never);
     vi.mocked(redis.del).mockImplementation((async (key: string) => {
       claimedKeys.delete(key);
       return 1;
@@ -54,7 +58,7 @@ describe("recordFirstHourHealthForNewMailboxes", () => {
     logSpy.mockRestore();
   });
 
-  it("selects mailboxes whose first sign-in was 60 to 120 minutes ago", async () => {
+  it("selects mailboxes whose first sign-in was 60 minutes to 26 hours ago", async () => {
     prisma.emailAccount.findMany.mockResolvedValue([]);
 
     await recordFirstHourHealthForNewMailboxes(logger);
@@ -62,8 +66,53 @@ describe("recordFirstHourHealthForNewMailboxes", () => {
     const { where } = prisma.emailAccount.findMany.mock.calls[0][0] as {
       where: { createdAt: { gt: Date; lte: Date } };
     };
-    expect(where.createdAt.gt).toEqual(new Date("2026-10-17T10:00:00.000Z"));
+    expect(where.createdAt.gt).toEqual(new Date("2026-10-16T10:00:00.000Z"));
     expect(where.createdAt.lte).toEqual(new Date("2026-10-17T11:00:00.000Z"));
+  });
+
+  it("covers every mailbox exactly once with a jittered daily tick", async () => {
+    const signUps = Array.from({ length: 4 * 24 * 4 }, (_, i) =>
+      mailbox(`account-${i}`, {
+        createdAt: new Date(
+          Date.parse("2026-10-14T00:00:00.000Z") + i * 15 * 60_000,
+        ),
+      }),
+    );
+    prisma.emailAccount.findMany.mockImplementation((async (args: {
+      where: { createdAt: { gt: Date; lte: Date } };
+    }) =>
+      signUps.filter(
+        (m) =>
+          m.createdAt > args.where.createdAt.gt &&
+          m.createdAt <= args.where.createdAt.lte,
+      )) as never);
+
+    // Vercel runs a daily cron anywhere in its hour, so gaps run 23h to 25h.
+    const ticks = [
+      "2026-10-15T00:00:00.000Z",
+      "2026-10-16T00:59:00.000Z",
+      "2026-10-17T00:00:00.000Z",
+      "2026-10-18T00:59:00.000Z",
+      "2026-10-19T00:30:00.000Z",
+    ];
+    for (const tick of ticks) {
+      vi.setSystemTime(new Date(tick));
+      await recordFirstHourHealthForNewMailboxes(logger);
+    }
+
+    const coveredFrom = Date.parse(ticks[0]) - 26 * 60 * 60_000;
+    const coveredUntil = Date.parse(ticks[ticks.length - 1]) - 60 * 60_000;
+    const expected = signUps
+      .filter(
+        (m) =>
+          m.createdAt.getTime() > coveredFrom &&
+          m.createdAt.getTime() <= coveredUntil,
+      )
+      .map((m) => m.id);
+    const logged = loggedEvents().map((event) => event.emailAccountId);
+    expect(logged).toHaveLength(new Set(logged).size);
+    expect([...logged].sort()).toEqual([...expected].sort());
+    expect(logged.length).toBeGreaterThan(300);
   });
 
   it("logs aggregate counts and states only, with no addresses or content", async () => {
@@ -183,7 +232,7 @@ describe("recordFirstHourHealthForNewMailboxes", () => {
       "account-1",
       "account-2",
     ]);
-    expect(second).toEqual({ candidates: 2, sent: 0, failed: 0 });
+    expect(second).toEqual({ candidates: 2, unsent: 0, sent: 0, failed: 0 });
     // Already-sent mailboxes cost no health queries.
     expect(prisma.rule.findMany).toHaveBeenCalledTimes(2);
   });
@@ -214,7 +263,7 @@ describe("recordFirstHourHealthForNewMailboxes", () => {
     );
 
     const first = await recordFirstHourHealthForNewMailboxes(logger);
-    expect(first).toEqual({ candidates: 1, sent: 0, failed: 1 });
+    expect(first).toEqual({ candidates: 1, unsent: 1, sent: 0, failed: 1 });
     expect(loggedEvents()).toEqual([]);
 
     await recordFirstHourHealthForNewMailboxes(logger);
@@ -233,6 +282,7 @@ describe("recordFirstHourHealthForNewMailboxes", () => {
 function mailbox(
   id: string,
   overrides: Partial<{
+    createdAt: Date;
     watchEmailsExpirationDate: Date | null;
     lastSyncedHistoryId: string | null;
     account: { provider: string; disconnectedAt: Date | null };

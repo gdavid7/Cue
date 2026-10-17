@@ -16,7 +16,7 @@ only: no addresses, subjects or content.
 | `activation.needs_reply_first_item` | The first time Needs reply has an item for the mailbox | `emailAccountId`, `at`, `firstSignInAt`, `msSinceFirstSignIn` |
 | `activation.first_suggested_reply_sent` | The first sent reply that started from a reply Cue wrote: a saved suggested reply or an AI draft, sent rather than discarded | `emailAccountId`, `at` |
 | `activation.active_day` | The mailbox opens Mail or Today, at most once per UTC day | `emailAccountId`, `at`, `day` (`YYYY-MM-DD`) |
-| `activation.first_hour_health` | Once per mailbox, 60 to 120 minutes after first sign-in, from the `/api/cron/scheduled-actions` tick (at most 25 per tick). It needs that tick at least hourly, e.g. the external pinger; with only the daily Vercel cron most mailboxes are missed | `emailAccountId`, `at`, `firstSignInAt`, `minutesSinceFirstSignIn`, `provider`, enabled rule counts and `replyTrackingEnabled`, ExecutedRule counts by status (`rulesApplied`, `rulesApplying`, `rulesSkipped`, `rulesSkippedNoMatch`, `rulesErrored`), `minutesSinceLastRuleRun`, `needsReplyCount`, `awaitingReplyCount`, `accountDisconnected`, `watchStatus` (`active`/`expired`/`missing`), `hasSyncCursor`, `errorTypes` (stored error type names) |
+| `activation.first_hour_health` | Once per mailbox, from the daily `/api/cron/scheduled-actions` tick, for mailboxes between 60 minutes and 26 hours past first sign-in. The window outlives the longest gap between daily ticks, so every mailbox is covered once. Use `minutesSinceFirstSignIn` to tell an early snapshot from a late one. At most 200 per tick, oldest first | `emailAccountId`, `at`, `firstSignInAt`, `minutesSinceFirstSignIn`, `provider`, enabled rule counts and `replyTrackingEnabled`, ExecutedRule counts by status (`rulesApplied`, `rulesApplying`, `rulesSkipped`, `rulesSkippedNoMatch`, `rulesErrored`), `minutesSinceLastRuleRun`, `needsReplyCount`, `awaitingReplyCount`, `accountDisconnected`, `watchStatus` (`active`/`expired`/`missing`), `hasSyncCursor`, `errorTypes` (stored error type names) |
 
 The unit is the mailbox, because `emailAccountId` is the only id the events
 carry. A person with two mailboxes counts as two.
@@ -30,7 +30,7 @@ How each event fires only once:
   `activation:needs-reply-first-item:<id>` and
   `activation:first-suggested-reply-sent:<id>`.
 - `first_hour_health` claims `activation:first-hour-health:<id>`, which
-  expires after a day, and releases it if the snapshot fails so a later tick
+  expires after three days, and releases it if the snapshot fails so a later tick
   retries.
 - `active_day` claims `activation:active-day:<id>:<day>`, which expires after
   two days.

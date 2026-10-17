@@ -9,15 +9,18 @@ import { createScopedLogger, type Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";
 
-// Mailboxes whose first sign-in (EmailAccount.createdAt) falls in this age
-// window get the event. It needs a tick at least every hour to cover everyone.
+// Mailboxes at least an hour past first sign-in (EmailAccount.createdAt) that
+// have not had the event get it. The tick runs once a day with up to an hour
+// of jitter, so the window spans more than the longest gap between ticks.
 const MIN_AGE_MS = 60 * 60 * 1000;
-const MAX_AGE_MS = 120 * 60 * 1000;
-export const FIRST_HOUR_HEALTH_MAX_PER_RUN = 25;
-// Bounds the Redis claims per run when many in the window were already sent.
-const MAX_CANDIDATES = 200;
+const MAX_AGE_MS = 26 * 60 * 60 * 1000;
+// Above a day's sign-ups, so a daily tick never leaves one behind. Oldest go
+// first, as they leave the window soonest.
+export const FIRST_HOUR_HEALTH_MAX_PER_RUN = 200;
+// Bounds the rows read when a more frequent tick already sent most of them.
+const MAX_CANDIDATES = 2000;
 // Outlives the age window, so a mailbox is never sent twice, then expires.
-const SENT_KEY_TTL_SECONDS = 24 * 60 * 60;
+const SENT_KEY_TTL_SECONDS = 3 * 24 * 60 * 60;
 
 const productLogger = createScopedLogger("product");
 
@@ -47,12 +50,20 @@ export async function recordFirstHourHealthForNewMailboxes(logger: Logger) {
     },
   });
 
+  // One read skips the already-sent, so they never use up the cap.
+  const sentFlags = candidates.length
+    ? await redis.mget<(string | null)[]>(
+        ...candidates.map((mailbox) => sentKeyFor(mailbox.id)),
+      )
+    : [];
+  const unsent = candidates.filter((_, i) => !sentFlags[i]);
+
   let sent = 0;
   let failed = 0;
-  for (const mailbox of candidates) {
+  for (const mailbox of unsent) {
     if (sent + failed >= FIRST_HOUR_HEALTH_MAX_PER_RUN) break;
 
-    const sentKey = `activation:first-hour-health:${mailbox.id}`;
+    const sentKey = sentKeyFor(mailbox.id);
     let claimed = false;
     try {
       claimed =
@@ -60,6 +71,7 @@ export async function recordFirstHourHealthForNewMailboxes(logger: Logger) {
           nx: true,
           ex: SENT_KEY_TTL_SECONDS,
         })) === "OK";
+      // Another tick claimed it since the read.
       if (!claimed) continue;
 
       productLogger.info(
@@ -79,7 +91,12 @@ export async function recordFirstHourHealthForNewMailboxes(logger: Logger) {
     }
   }
 
-  return { candidates: candidates.length, sent, failed };
+  return {
+    candidates: candidates.length,
+    unsent: unsent.length,
+    sent,
+    failed,
+  };
 }
 
 type Mailbox = {
@@ -176,6 +193,10 @@ function getErrorTypes(errorMessages: unknown, emailAccountId: string) {
       return [ErrorType.EMAIL_WATCH_LAPSED];
     return knownTypes.has(key) ? [key] : [];
   });
+}
+
+function sentKeyFor(emailAccountId: string) {
+  return `activation:first-hour-health:${emailAccountId}`;
 }
 
 function minutesBetween(from: Date, to: Date) {
