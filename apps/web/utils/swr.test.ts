@@ -136,10 +136,10 @@ describe("onSWRErrorRetry", () => {
     vi.useFakeTimers();
     try {
       const revalidate = vi.fn();
-      retryDeferral(27_000, revalidate);
-      vi.advanceTimersByTime(20_000);
+      retryDeferral(8000, revalidate);
+      vi.advanceTimersByTime(5900);
       expect(revalidate).not.toHaveBeenCalled();
-      vi.advanceTimersByTime(14_000);
+      vi.advanceTimersByTime(4100);
       expect(revalidate).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
@@ -188,14 +188,32 @@ describe("onSWRErrorRetry", () => {
 
 describe("getRetryHint", () => {
   it("waits a deferral's Retry-After, kept between a second and 90 seconds", () => {
-    const deferred = (retryAfterMs: number, jitter: number) =>
-      getRetryHint({ status: 503, retryAfterMs }, 1, jitter);
+    const deferred = (retryAfterMs: number, retryCount: number, jitter = 1) =>
+      getRetryHint({ status: 503, retryAfterMs }, retryCount, jitter);
 
-    expect(deferred(27_000, 1)).toEqual({ kind: "wait", ms: 27_000 });
+    expect(deferred(27_000, 3)).toEqual({ kind: "wait", ms: 27_000 });
     expect(deferred(0, 1)).toEqual({ kind: "wait", ms: 1000 });
-    expect(deferred(60 * 60_000, 1)).toEqual({ kind: "wait", ms: 90_000 });
-    expect(deferred(60 * 60_000, 1.25)).toEqual({ kind: "wait", ms: 112_500 });
-    expect(deferred(20_000, 0.75)).toEqual({ kind: "wait", ms: 15_000 });
+    expect(deferred(60 * 60_000, 5)).toEqual({ kind: "wait", ms: 90_000 });
+    expect(deferred(60 * 60_000, 5, 1.25)).toEqual({
+      kind: "wait",
+      ms: 112_500,
+    });
+    expect(deferred(20_000, 3, 0.75)).toEqual({ kind: "wait", ms: 15_000 });
+  });
+
+  // A new account's first-sync gate reports its ~90 s expiry but lifts within
+  // seconds; a summary on screen must not wait the whole of it.
+  it("asks again sooner than a long Retry-After at first, then backs off toward it", () => {
+    const deferred = (retryCount: number) =>
+      getRetryHint({ status: 503, retryAfterMs: 85_000 }, retryCount, 1);
+
+    expect([1, 2, 3, 4, 5].map(deferred)).toEqual([
+      { kind: "wait", ms: 10_000 },
+      { kind: "wait", ms: 20_000 },
+      { kind: "wait", ms: 40_000 },
+      { kind: "wait", ms: 80_000 },
+      { kind: "wait", ms: 85_000 },
+    ]);
   });
 
   it("retries a rate limit once, then stops", () => {

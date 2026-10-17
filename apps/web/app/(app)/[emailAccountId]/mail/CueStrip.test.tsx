@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   insight: null as { action: "reply" | "do" | "none" } | null,
   insightFailures: 0,
   briefDeferrals: 0,
+  briefRetryAfterMs: 50,
   insightByMessage: {} as Record<string, "reply" | "do" | "none">,
   insightGate: null as Promise<void> | null,
   aiAccess: true,
@@ -56,6 +57,7 @@ describe("CueStrip", () => {
     mocks.insight = null;
     mocks.insightFailures = 0;
     mocks.briefDeferrals = 0;
+    mocks.briefRetryAfterMs = 50;
     mocks.insightByMessage = {};
     mocks.insightGate = null;
     mocks.aiAccess = true;
@@ -108,6 +110,27 @@ describe("CueStrip", () => {
           r.url.startsWith("/api/user/thread-brief"),
         ),
       ).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A new account's first-sync gate answers with its whole ~90 s expiry, but
+  // it lifts within seconds: the summary must not wait all of it.
+  it("asks again within seconds when the deferral's hint is the first-sync gate's expiry", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mocks.briefDeferrals = 1;
+      mocks.briefRetryAfterMs = 85_000;
+      renderStrip(
+        { labels: ["Label_reply"] },
+        { onErrorRetry: onSWRErrorRetry },
+      );
+      const strip = screen.getByRole("region", { name: "Cue summary" });
+      await waitForRequest("/api/user/thread-brief");
+
+      await act(() => vi.advanceTimersByTimeAsync(13_000));
+      expect(within(strip).getByText(SUMMARY)).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }
@@ -447,7 +470,7 @@ async function fetcher(key: string | [string, string]) {
     mocks.briefDeferrals -= 1;
     throw Object.assign(new Error("Gmail is busy for this account"), {
       status: 503,
-      retryAfterMs: 50,
+      retryAfterMs: mocks.briefRetryAfterMs,
     });
   }
   if (url.startsWith("/api/user/thread-brief"))
