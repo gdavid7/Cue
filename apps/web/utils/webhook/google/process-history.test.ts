@@ -1446,37 +1446,23 @@ describe("processHistoryForUser - backlogs", () => {
 });
 
 describe("processHistoryForUser - expired Gmail history", () => {
-  const lastTriagedAt = new Date("2026-10-01T12:00:00Z");
+  const HOUR = 60 * 60 * 1000;
+  const DAY = 24 * HOUR;
+  let lastTriagedAt: Date;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    lastTriagedAt = new Date(Date.now() - 3 * DAY);
     vi.mocked(getEmailProviderRateLimitState).mockResolvedValue(null);
     vi.mocked(processHistoryItem).mockReset().mockResolvedValue(undefined);
     vi.mocked(publishToQstashAt).mockResolvedValue(true);
-    vi.mocked(getWebhookEmailAccount).mockResolvedValue(backlogAccount as any);
-    vi.mocked(validateWebhookAccount).mockResolvedValue({
-      success: true,
-      data: {
-        emailAccount: {
-          ...backlogAccount,
-          account: {
-            access_token: "token",
-            refresh_token: "refresh",
-            expires_at: new Date(Date.now() + 3_600_000),
-          },
-          rules: [],
-        },
-        hasAutomationRules: true,
-        hasAiAccess: true,
-      },
-    } as any);
+    vi.mocked(markGmailHistoryCatchUp).mockResolvedValue(true);
+    givenExpiredAccount({ hasAutomationRules: true, hasAiAccess: true });
     const expired = Object.assign(new Error("Requested entity was not found"), {
       status: 404,
     });
     vi.mocked(getHistory).mockRejectedValue(expired);
-    vi.mocked(prisma.executedRule.findFirst).mockResolvedValue({
-      createdAt: lastTriagedAt,
-    } as any);
+    givenExecutedRules([lastTriagedAt]);
     // Gmail lists newest first.
     vi.mocked(getMessages).mockResolvedValue({
       messages: [
@@ -1487,7 +1473,7 @@ describe("processHistoryForUser - expired Gmail history", () => {
     });
   });
 
-  it("triages the inbox mail that arrived while history was expired, then starts from the push", async () => {
+  it("triages the mail that arrived while history was expired, then starts from the push", async () => {
     const result = await processHistoryForUser(
       { emailAddress: backlogAccount.email, historyId: 5000 },
       {},
@@ -1495,13 +1481,6 @@ describe("processHistoryForUser - expired Gmail history", () => {
     );
 
     expect(await (result as any).json()).toEqual({ ok: true });
-    expect(getMessages).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        labelIds: ["INBOX"],
-        query: `after:${lastTriagedAt.getTime() / 1000}`,
-      }),
-    );
     expect(processedMessageIds()).toEqual(
       expect.arrayContaining(["m1", "m2", "m3"]),
     );
@@ -1510,6 +1489,56 @@ describe("processHistoryForUser - expired Gmail history", () => {
       processedMessageIds().indexOf("m3"),
     );
     expect(cursorUpdates()).toEqual(["5000"]);
+  });
+
+  it("searches inbox and sent mail, so a reply sent during the gap is handled with its thread", async () => {
+    vi.mocked(getMessages).mockResolvedValue({
+      messages: [
+        { id: "sent-reply", threadId: "t1" },
+        { id: "inbound", threadId: "t1" },
+      ],
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 5000 },
+      {},
+      logger,
+    );
+
+    const [, options] = vi.mocked(getMessages).mock.calls[0];
+    expect(options.query).toContain("{in:inbox in:sent}");
+    expect(options.labelIds).toBeUndefined();
+    expect(processedMessageIds()).toEqual(["inbound", "sent-reply"]);
+  });
+
+  it("starts the gap an hour before the last triage that came before this recovery", async () => {
+    // Triage from an earlier, cut-short run of this recovery is ignored.
+    givenExecutedRules([new Date(Date.now() - HOUR), lastTriagedAt]);
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 5000 },
+      {},
+      logger,
+    );
+
+    expect(searchedAfterSeconds()).toBe(
+      Math.floor((lastTriagedAt.getTime() - HOUR) / 1000),
+    );
+  });
+
+  it("searches no further back than messages keep their processed marker", async () => {
+    givenExecutedRules([new Date(Date.now() - 30 * DAY)]);
+    const before = Date.now();
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 5000 },
+      {},
+      logger,
+    );
+
+    const after = searchedAfterSeconds() * 1000;
+    expect(after).toBeGreaterThanOrEqual(before - 8 * DAY - 1000);
+    expect(after).toBeLessThanOrEqual(Date.now() - 8 * DAY);
   });
 
   it("keeps the expired cursor until the gap is triaged, so the next run searches it again", async () => {
@@ -1536,23 +1565,121 @@ describe("processHistoryForUser - expired Gmail history", () => {
     );
   });
 
-  it("measures the gap from triage before this recovery began, so its own triage doesn't hide the rest", async () => {
+  it.each([
+    ["the Gmail quota gate defers", new GmailCallDeferredError(15_000, "sync")],
+    [
+      "Gmail rate limits",
+      Object.assign(new Error("Rate Limit Exceeded"), {
+        status: 429,
+        errors: [{ reason: "rateLimitExceeded" }],
+      }),
+    ],
+  ])("keeps the expired cursor and catches up when %s a message in the gap", async (_, error) => {
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      if (event.item.message?.id === "m2") throw error;
+    });
+
     await processHistoryForUser(
       { emailAddress: backlogAccount.email, historyId: 5000 },
       {},
       logger,
     );
 
-    const { where } = vi.mocked(prisma.executedRule.findFirst).mock
-      .calls[0][0] as any;
-    expect(where.emailAccountId).toBe("account-123");
-    expect(where.createdAt.lt.getTime()).toBeLessThanOrEqual(
-      Date.now() - 12 * 60 * 60 * 1000,
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/google/webhook/catch-up",
+        body: { emailAccountId: "account-123", historyId: "5000" },
+      }),
+    );
+  });
+
+  it("finishes the gap on the next run, after the messages the first one processed", async () => {
+    const handled = new Set<string>();
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      const id = event.item.message?.id ?? "";
+      if (id === "m1" && !handled.has("first-run-done"))
+        return "held-elsewhere" as never;
+      handled.add(id);
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 5000 },
+      {},
+      logger,
+    );
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+
+    handled.add("first-run-done");
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 5100 },
+      {},
+      logger,
+    );
+
+    // The second run searches the same gap again; a message processed by the
+    // first is skipped there by its processed marker (process-history-item).
+    expect(getMessages).toHaveBeenCalledTimes(2);
+    expect(searchedAfterSeconds(1)).toBe(searchedAfterSeconds(0));
+    expect(cursorUpdates()).toEqual(["5100"]);
+  });
+
+  it("starts from the push, with an error, when the gap holds more mail than one search page", async () => {
+    vi.mocked(getMessages).mockResolvedValue({
+      messages: [{ id: "m1", threadId: "t1" }],
+      nextPageToken: "more",
+    });
+    const spyLogger = createTestLogger();
+    vi.spyOn(spyLogger, "with").mockReturnValue(spyLogger);
+    const errorLog = vi.spyOn(spyLogger, "error");
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 5000 },
+      {},
+      spyLogger,
+    );
+
+    expect(processedMessageIds()).toEqual(["m1"]);
+    expect(cursorUpdates()).toEqual(["5000"]);
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.stringContaining("more mail than is triaged"),
+      expect.objectContaining({ messageCount: 1 }),
+    );
+  });
+
+  it("starts from the push when the gap search fails, so the cursor is never stuck", async () => {
+    vi.mocked(getMessages).mockRejectedValue(new Error("Backend Error"));
+
+    const result = await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 5000 },
+      {},
+      logger,
+    );
+
+    expect(await (result as any).json()).toEqual({ ok: true });
+    expect(processHistoryItem).not.toHaveBeenCalled();
+    expect(cursorUpdates()).toEqual(["5000"]);
+  });
+
+  it("keeps the expired cursor and catches up when the gap search is deferred", async () => {
+    vi.mocked(getMessages).mockRejectedValue(
+      new GmailCallDeferredError(15_000, "sync"),
+    );
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 5000 },
+      {},
+      logger,
+    );
+
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/api/google/webhook/catch-up" }),
     );
   });
 
   it("starts from the push when nothing was ever triaged to measure the gap from", async () => {
-    vi.mocked(prisma.executedRule.findFirst).mockResolvedValue(null);
+    givenExecutedRules([]);
 
     await processHistoryForUser(
       { emailAddress: backlogAccount.email, historyId: 5000 },
@@ -1564,6 +1691,60 @@ describe("processHistoryForUser - expired Gmail history", () => {
     expect(processHistoryItem).not.toHaveBeenCalled();
     expect(cursorUpdates()).toEqual(["5000"]);
   });
+
+  it("doesn't search the gap for an account with no automation rules and no AI access", async () => {
+    givenExpiredAccount({ hasAutomationRules: false, hasAiAccess: false });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 5000 },
+      {},
+      logger,
+    );
+
+    expect(prisma.executedRule.findFirst).not.toHaveBeenCalled();
+    expect(getMessages).not.toHaveBeenCalled();
+    expect(cursorUpdates()).toEqual(["5000"]);
+  });
+
+  function givenExpiredAccount(access: {
+    hasAutomationRules: boolean;
+    hasAiAccess: boolean;
+  }) {
+    vi.mocked(getWebhookEmailAccount).mockResolvedValue(backlogAccount as any);
+    vi.mocked(validateWebhookAccount).mockResolvedValue({
+      success: true,
+      data: {
+        emailAccount: {
+          ...backlogAccount,
+          account: {
+            access_token: "token",
+            refresh_token: "refresh",
+            expires_at: new Date(Date.now() + 3_600_000),
+          },
+          rules: [],
+        },
+        ...access,
+      },
+    } as any);
+  }
+
+  // Answers the lookup like the database would, from these rows.
+  function givenExecutedRules(createdAts: Date[]) {
+    vi.mocked(prisma.executedRule.findFirst).mockImplementation((async ({
+      where,
+    }: any) => {
+      const before: Date = where.createdAt.lt;
+      const latest = createdAts
+        .filter((createdAt) => createdAt < before)
+        .sort((a, b) => b.getTime() - a.getTime())[0];
+      return latest ? { createdAt: latest } : null;
+    }) as any);
+  }
+
+  function searchedAfterSeconds(call = 0) {
+    const query = vi.mocked(getMessages).mock.calls[call][1].query ?? "";
+    return Number(/after:(\d+)/.exec(query)?.[1]);
+  }
 });
 
 describe("processHistoryForUser - mailbox without a history cursor", () => {

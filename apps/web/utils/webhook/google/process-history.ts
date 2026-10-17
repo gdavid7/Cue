@@ -58,11 +58,18 @@ const HISTORY_RUN_BUDGET_MS = 180_000;
 // several times faster while the account's Gmail quota gate paces the calls.
 const NEW_MESSAGE_CONCURRENCY = 3;
 const PROGRESS_SAVE_INTERVAL_MS = 10_000;
-// One search page of the newest inbox mail from an expired history gap.
+// One search page of the newest inbox and sent mail from an expired history
+// gap.
 const MAX_EXPIRED_GAP_MESSAGES = 50;
 // A recovery cut short resumes on the next push or catch-up, well within a
 // day; the triage it already did must not count as the gap's start then.
 const EXPIRED_GAP_TRIAGE_SETTLE_MS = 24 * 60 * 60 * 1000;
+// Mail delivered shortly before its triage was recorded still falls in the
+// gap's search.
+const EXPIRED_GAP_START_MARGIN_MS = 60 * 60 * 1000;
+// As far back as messages keep their processed marker, so older mail that was
+// triaged before is never handled twice.
+const MAX_EXPIRED_GAP_AGE_MS = 8 * 24 * 60 * 60 * 1000;
 
 export async function processHistoryForUser(
   decodedData: {
@@ -238,9 +245,12 @@ export async function processHistoryForUser(
 
         if (historyResult.status === "expired") {
           // Mail that arrived while the cursor was too old for Gmail's history
-          // is found by search instead. The cursor stays expired until all of
-          // it is triaged, so the next run searches again and skips what this
-          // one processed.
+          // is found by search instead: the newest 50 messages of the gap, and
+          // an error is logged when there are more, which are not triaged.
+          // The cursor stays expired until those are triaged, so the next run
+          // searches again and skips what this one processed. A search that
+          // fails for any other reason than rate limiting or a revoked grant
+          // moves the cursor to the push, so it is never stuck.
           const gapHistory = await listExpiredGapMail(gmail);
           if (gapHistory.length > 0) {
             const processed = await processEntries(gapHistory, gmail);
@@ -384,41 +394,70 @@ export async function processHistoryForUser(
   }
 
   // The gap starts no later than the account's last triage. Without one there
-  // is nothing to measure from, and older inbox mail is left alone.
+  // is nothing to measure from, and older mail is left alone.
   async function listExpiredGapMail(
     gmail: gmail_v1.Gmail,
   ): Promise<gmail_v1.Schema$History[]> {
+    if (!hasAutomationRules && !userHasAiAccess) return [];
+
+    try {
+      return await searchExpiredGapMail(gmail);
+    } catch (error) {
+      if (
+        isEmailProviderRateLimitError({ error, provider: "google" }) ||
+        isGmailCallDeferredError(error) ||
+        isInvalidGrantError(error)
+      )
+        throw error;
+      logger.error(
+        "Failed to search an expired Gmail history gap; mail in it is not triaged",
+        { error },
+      );
+      return [];
+    }
+  }
+
+  async function searchExpiredGapMail(
+    gmail: gmail_v1.Gmail,
+  ): Promise<gmail_v1.Schema$History[]> {
+    const now = Date.now();
     const lastTriaged = await prisma.executedRule.findFirst({
       where: {
         emailAccountId: validatedEmailAccount.id,
-        createdAt: { lt: new Date(Date.now() - EXPIRED_GAP_TRIAGE_SETTLE_MS) },
+        createdAt: { lt: new Date(now - EXPIRED_GAP_TRIAGE_SETTLE_MS) },
       },
       orderBy: { createdAt: "desc" },
       select: { createdAt: true },
     });
     if (!lastTriaged) return [];
 
+    const gapStart = new Date(
+      Math.max(
+        lastTriaged.createdAt.getTime() - EXPIRED_GAP_START_MARGIN_MS,
+        now - MAX_EXPIRED_GAP_AGE_MS,
+      ),
+    );
     const { messages, nextPageToken } = await getMessages(gmail, {
-      query: `after:${Math.floor(lastTriaged.createdAt.getTime() / 1000)}`,
-      labelIds: [GmailLabel.INBOX],
+      query: `after:${Math.floor(gapStart.getTime() / 1000)} {in:inbox in:sent}`,
       maxResults: MAX_EXPIRED_GAP_MESSAGES,
     });
     const gap = {
-      gapStart: lastTriaged.createdAt.toISOString(),
+      gapStart: gapStart.toISOString(),
       messageCount: messages.length,
     };
     if (nextPageToken) {
       logger.error(
-        "Expired Gmail history gap holds more inbox mail than is triaged",
+        "Expired Gmail history gap holds more mail than is triaged",
         gap,
       );
     } else {
-      logger.info("Triaging inbox mail from an expired Gmail history gap", gap);
+      logger.info("Triaging mail from an expired Gmail history gap", gap);
     }
 
     // Gmail lists newest first; history runs oldest first, which keeps each
     // thread in order. These have no history id, so the cursor never moves to
-    // one.
+    // one. The label only admits them as history; whether a message is
+    // outbound is decided from the message itself when it is processed.
     return messages.reverse().map((message) => ({
       messagesAdded: [
         { message: { ...message, labelIds: [GmailLabel.INBOX] } },
