@@ -9,12 +9,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
+import { loadChunk } from "@/utils/load-chunk";
 
 // Every app page mounts this dialog, but its content is only needed once
 // settings are opened.
 const SettingsContent = dynamic(
   () =>
-    import("@/app/(app)/settings/SettingsContent").then(
+    loadChunk(() => import("@/app/(app)/settings/SettingsContent")).then(
       (mod) => mod.SettingsContent,
     ),
   { loading: () => <Loading /> },
