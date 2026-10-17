@@ -78,10 +78,12 @@ function runElectron(binary, script, extraEnv) {
     child.stderr.on("data", (chunk) => {
       stderr += String(chunk);
     });
+    // Under the spec's 240s test timeout, which would otherwise end the test
+    // first and discard Electron's output along with the reason it hung.
     const timer = setTimeout(() => {
       child.kill();
       reject(new Error(`electron hosted mail timed out\n${stdout}\n${stderr}`));
-    }, 240_000);
+    }, 180_000);
     child.on("error", (error) => {
       clearTimeout(timer);
       reject(error);
