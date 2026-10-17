@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
 import { LAST_EMAIL_ACCOUNT_COOKIE } from "@/utils/cookies";
-import { setLastEmailAccountAction } from "./email-account-cookie";
+import { auth } from "@/utils/auth";
+import {
+  clearLastEmailAccountAction,
+  setLastEmailAccountAction,
+} from "./email-account-cookie";
 
-const { cookiesSet } = vi.hoisted(() => ({
+const { cookiesSet, cookiesDelete } = vi.hoisted(() => ({
   cookiesSet: vi.fn(),
+  cookiesDelete: vi.fn(),
 }));
 
 vi.mock("@/utils/prisma");
@@ -14,7 +19,7 @@ vi.mock("@/utils/auth", () => ({
   })),
 }));
 vi.mock("next/headers", () => ({
-  cookies: vi.fn(async () => ({ set: cookiesSet })),
+  cookies: vi.fn(async () => ({ set: cookiesSet, delete: cookiesDelete })),
 }));
 vi.mock("@sentry/nextjs", () => import("@/__tests__/mocks/sentry-nextjs.mock"));
 
@@ -55,6 +60,32 @@ describe("setLastEmailAccountAction", () => {
     });
 
     expect(result?.serverError).toBeUndefined();
+    expect(cookiesSet).not.toHaveBeenCalled();
+  });
+});
+
+describe("clearLastEmailAccountAction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("clears the cookie after sign-out has already ended the session", async () => {
+    vi.mocked(auth).mockResolvedValueOnce(null as never);
+
+    const result = await clearLastEmailAccountAction();
+
+    expect(result?.serverError).toBeUndefined();
+    expect(cookiesDelete).toHaveBeenCalledWith(LAST_EMAIL_ACCOUNT_COOKIE);
+  });
+
+  it("still requires a session to set the cookie", async () => {
+    vi.mocked(auth).mockResolvedValueOnce(null as never);
+
+    const result = await setLastEmailAccountAction({
+      emailAccountId: "account-1",
+    });
+
+    expect(result?.serverError).toBeDefined();
     expect(cookiesSet).not.toHaveBeenCalled();
   });
 });
