@@ -32,6 +32,8 @@ import { MailShellSidebar } from "@/app/(app)/[emailAccountId]/mail/MailShellSid
 import { MailSplitTabs } from "@/app/(app)/[emailAccountId]/mail/MailSplitTabs";
 import { SelectAllCheckbox } from "@/app/(app)/[emailAccountId]/mail/SelectAllCheckbox";
 import { MailReaderPane } from "@/app/(app)/[emailAccountId]/mail/MailReaderPane";
+import { preloadEmailThread } from "@/components/email-list/EmailThreadLazy";
+import { scheduleAfterPageLoad } from "@/utils/schedule-after-page-load";
 import { MailTitlebarNav } from "@/app/(app)/[emailAccountId]/mail/MailTitlebarNav";
 import {
   SearchAnswerCard,
@@ -742,6 +744,20 @@ export function MailShell() {
       threadId: openThreadId,
     };
   }, [emailAccountId, isAllAccounts, openThreadAccountId, openThreadId]);
+  // An open thread, as from a link, needs the thread view now. Otherwise it
+  // loads once the page is idle, in every layout, so the first thread opened
+  // doesn't wait on it.
+  const hasOpenThread = Boolean(openThreadId);
+  useEffect(() => {
+    if (hasOpenThread) {
+      preloadEmailThread();
+      return;
+    }
+    return scheduleAfterPageLoad(preloadEmailThread, {
+      fallbackDelay: 2000,
+      idleTimeout: 3000,
+    });
+  }, [hasOpenThread]);
   const openThreadKey = isAllAccounts
     ? getThreadSelectionKey(openThreadSelection)
     : openThreadId;

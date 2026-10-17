@@ -21,6 +21,12 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
 vi.mock("@/app/(app)/[emailAccountId]/mail/ReaderToolbar", () => ({
   ReaderToolbar: ({ subject }: { subject: string }) => <h1>{subject}</h1>,
 }));
+// Rendered directly, so assertions don't depend on which test first awaited
+// the lazy chunk.
+vi.mock("@/components/email-list/EmailThreadLazy", async () => {
+  const { EmailThread } = await import("@/components/email-list/EmailThread");
+  return { EmailThreadLazy: EmailThread, preloadEmailThread: () => {} };
+});
 vi.mock("@/components/email-list/EmailThread", () => ({
   EmailThread: ({
     renderToolbar,

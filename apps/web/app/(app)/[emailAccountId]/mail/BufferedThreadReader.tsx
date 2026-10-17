@@ -58,15 +58,18 @@ export function BufferedThreadReader({
     const timeout = setTimeout(commit, Math.max(0, remaining));
     if (!dataReady) return () => clearTimeout(timeout);
     const reveal = () => {
-      const iframes = pendingRef.current?.querySelectorAll("iframe");
-      // React committing the message does not mean its srcDoc has been parsed
-      // and measured. Keep the complete previous reader until both are ready.
+      const pending = pendingRef.current;
+      const iframes = pending?.querySelectorAll("iframe");
+      // React committing the message does not mean the thread view's code has
+      // loaded, or that its srcDoc has been parsed and measured. Keep the
+      // complete previous reader until all are ready.
       if (
         performance.now() < expiresAt &&
-        iframes &&
-        Array.from(iframes).some(
-          (iframe) => iframe.dataset.emailReady !== "true",
-        )
+        (pending?.querySelector("[data-thread-view-loading]") ||
+          (iframes &&
+            Array.from(iframes).some(
+              (iframe) => iframe.dataset.emailReady !== "true",
+            )))
       ) {
         frame = requestAnimationFrame(reveal);
         return;

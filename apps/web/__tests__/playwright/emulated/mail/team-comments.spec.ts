@@ -109,6 +109,7 @@ test("publisher shares with a teammate who never received the mail and both see 
       name: "Reply",
       exact: true,
     });
+    await expect(receivedMail).toBeVisible();
     if (!(await replyButton.isVisible())) await receivedMail.click();
     await replyButton.click();
     await receivedMail

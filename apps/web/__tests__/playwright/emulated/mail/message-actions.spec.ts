@@ -24,6 +24,11 @@ test("shows matched reasons only for the selected message", async ({
     await expect(
       page.getByRole("heading", { name: "Matched Reason Message" }),
     ).toBeVisible({ timeout: 60_000 });
+    // The heading can show before the thread's messages, and the check below
+    // doesn't wait.
+    await expect(
+      page.locator("[data-thread-message-id]").first(),
+    ).toBeVisible();
     const expand = page.getByRole("button", {
       name: "Expand all messages",
       exact: true,

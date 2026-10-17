@@ -32,6 +32,11 @@ test("captures queued reply and reconnect", async ({ page }, testInfo) => {
     .filter((message) => message.labelIds?.includes("SENT"))
     .map((message) => message.id);
   const replyBody = `Confirmed, see you Thursday. This reply is sent only inside the local emulator. Attempt ${testInfo.retry}.`;
+  // The heading can show before the thread's messages, and the check below
+  // doesn't wait.
+  await expect(
+    page.locator('[data-thread-message-id="msg_playwright_reply"]'),
+  ).toBeVisible();
   const editor = page.locator("[contenteditable='true']");
   if (!(await editor.count())) await replyToSeededWorkflowMessage(page).click();
   await expect(editor).toBeVisible();
@@ -331,6 +336,7 @@ async function openSeededWorkflowReplyEditor(page: Page) {
   const collapsed = message.locator(
     '[data-message-toggle][aria-expanded="false"]',
   );
+  await expect(message).toBeVisible();
   if (await collapsed.count()) await collapsed.click();
   const editor = page.getByRole("textbox", { name: "Email message" });
   if (!(await editor.count()) || !(await editor.first().isVisible())) {

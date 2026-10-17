@@ -1,9 +1,12 @@
 "use client";
 
-import { Suspense, useCallback } from "react";
+import { Suspense, useCallback, useEffect } from "react";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { useDisplayedEmail } from "@/hooks/useDisplayedEmail";
-import { EmailThreadLazy } from "@/components/email-list/EmailThreadLazy";
+import {
+  EmailThreadLazy,
+  preloadEmailThread,
+} from "@/components/email-list/EmailThreadLazy";
 import { useThread } from "@/hooks/useThread";
 import { Loading } from "@/components/Loading";
 import { LoadingContent } from "@/components/LoadingContent";
@@ -86,6 +89,10 @@ export function ThreadContent({
   onSendSuccess?: (messageId: string, threadId: string) => void;
 }) {
   const { data, isLoading, error, mutate } = useThread({ id: threadId });
+  // Loads the thread view alongside the thread rather than after it.
+  useEffect(() => {
+    preloadEmailThread();
+  }, []);
 
   return (
     <ErrorBoundary extra={{ component: "ThreadContent", threadId }}>
