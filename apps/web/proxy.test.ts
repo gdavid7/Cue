@@ -92,6 +92,60 @@ describe("proxy mail links", () => {
   });
 });
 
+describe("proxy root", () => {
+  it("sends a signed-out visitor to log in without reaching the page", () => {
+    const response = proxy(
+      new NextRequest("https://www.getinboxzero.com/?utm_source=x", {
+        headers: { Accept: "text/html,application/xhtml+xml" },
+      }),
+    );
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe(
+      "https://www.getinboxzero.com/login",
+    );
+    expect(response.headers.get("vary")).toBe("Accept");
+  });
+
+  it.each([
+    ["a session", "better-auth.session_token=abc.def"],
+    ["a secure session", "__Secure-better-auth.session_token=abc.def"],
+  ])("leaves a visitor with %s to the page, which verifies it", (_, cookie) => {
+    const response = proxy(
+      new NextRequest("https://www.getinboxzero.com/", {
+        headers: { cookie },
+      }),
+    );
+
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("x-middleware-next")).toBe("1");
+  });
+
+  it("still serves markdown to agents asking for it", () => {
+    const response = proxy(
+      new NextRequest("https://www.getinboxzero.com/", {
+        headers: { Accept: "text/markdown" },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+  });
+
+  it("leaves other methods and other pages alone", () => {
+    expect(
+      proxy(
+        new NextRequest("https://www.getinboxzero.com/", { method: "POST" }),
+      ).headers.get("location"),
+    ).toBeNull();
+    expect(
+      proxy(
+        new NextRequest("https://www.getinboxzero.com/pricing"),
+      ).headers.get("location"),
+    ).toBeNull();
+  });
+});
+
 describe("proxy content negotiation", () => {
   it("returns markdown when explicitly preferred", async () => {
     const response = proxy(

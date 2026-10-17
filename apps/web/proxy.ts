@@ -50,17 +50,23 @@ export function proxy(request: NextRequest) {
     return withVaryAccept(NextResponse.next({ request: { headers } }));
   }
 
-  if (!prefersMarkdown(request.headers.get("accept"))) {
-    return withVaryAccept(next());
-  }
-
-  const pageMarkdown = getMarkdownForPath(
-    request.nextUrl.pathname,
-    request.nextUrl.origin,
-    { brandName: BRAND_NAME, supportEmail: SUPPORT_EMAIL },
-  );
+  const pageMarkdown = prefersMarkdown(request.headers.get("accept"))
+    ? getMarkdownForPath(pathname, request.nextUrl.origin, {
+        brandName: BRAND_NAME,
+        supportEmail: SUPPORT_EMAIL,
+      })
+    : null;
   if (pageMarkdown) {
     return markdownResponse(pageMarkdown);
+  }
+
+  // The root page only sends a signed-out visitor to log in, so answering
+  // here spares them a cold start of the page and its auth stack. Requests
+  // with a session cookie still reach the page, which verifies it.
+  if (pathname === "/" && !getSessionCookie(request)) {
+    return withVaryAccept(
+      NextResponse.redirect(new URL("/login", request.url)),
+    );
   }
 
   return withVaryAccept(next());

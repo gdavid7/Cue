@@ -170,33 +170,16 @@ describe("redirectToEmailAccountPath", () => {
   });
 
   it("falls back to the first remaining account when the last-account cookie is stale", async () => {
-    mocks.cookies.mockResolvedValue({
-      get: () => ({
-        value: JSON.stringify({
-          userId: "user_123",
-          emailAccountId: "deleted_account",
-        }),
-      }),
-    });
-    mocks.findFirst
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ id: "account_remaining" });
-
-    mocks.findMany.mockResolvedValue([accountRow("account_remaining")]);
+    mockLastEmailAccountCookie("deleted_account");
+    mocks.findMany.mockResolvedValue([
+      accountRow("account_remaining"),
+      accountRow("account_other"),
+    ]);
 
     await expect(redirectToEmailAccountPath("/mail")).rejects.toThrow(
       "redirect:/mail/u/0/inbox",
     );
 
-    expect(mocks.findFirst).toHaveBeenNthCalledWith(1, {
-      where: { id: "deleted_account", userId: "user_123" },
-      select: { id: true },
-    });
-    expect(mocks.findFirst).toHaveBeenNthCalledWith(2, {
-      where: { userId: "user_123" },
-      select: { id: true },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    });
     expect(getAccountRedirectLog(consoleLogSpy)).toEqual(
       expect.objectContaining({
         path: "/mail",
@@ -208,8 +191,8 @@ describe("redirectToEmailAccountPath", () => {
     );
   });
 
-  it("addresses mail by the account's position among the user's accounts", async () => {
-    mocks.findFirst.mockResolvedValue({ id: "account_second" });
+  it("finds the last-used mailbox from the account list alone", async () => {
+    mockLastEmailAccountCookie("account_second");
     mocks.findMany.mockResolvedValue([
       accountRow("account_first"),
       accountRow("account_second"),
@@ -218,6 +201,7 @@ describe("redirectToEmailAccountPath", () => {
     await expect(redirectToEmailAccountPath("/mail")).rejects.toThrow(
       "redirect:/mail/u/1/inbox",
     );
+    expect(mocks.findFirst).not.toHaveBeenCalled();
     expect(mocks.findMany).toHaveBeenCalledWith({
       where: { userId: "user_123" },
       select: {
@@ -227,10 +211,65 @@ describe("redirectToEmailAccountPath", () => {
       },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
+    expect(getAccountRedirectLog(consoleLogSpy)).toEqual(
+      expect.objectContaining({
+        usedLastEmailAccountCookie: true,
+        usedFallbackAccountLookup: false,
+        stepDurationsMs: {
+          auth: expect.any(Number),
+          "email-accounts": expect.any(Number),
+        },
+      }),
+    );
+  });
+
+  it("ignores a last-account cookie written for another user", async () => {
+    mocks.cookies.mockResolvedValue({
+      get: () => ({
+        value: JSON.stringify({
+          userId: "someone_else",
+          emailAccountId: "account_second",
+        }),
+      }),
+    });
+    mocks.findMany.mockResolvedValue([
+      accountRow("account_first"),
+      accountRow("account_second"),
+    ]);
+
+    await expect(redirectToEmailAccountPath("/mail")).rejects.toThrow(
+      "redirect:/mail/u/0/inbox",
+    );
+  });
+
+  it("keeps a thread link on the first account when the cookie is stale", async () => {
+    mockLastEmailAccountCookie("deleted_account");
+    mocks.findMany.mockResolvedValue([accountRow("account_first")]);
+
+    await expect(
+      redirectToEmailAccountPath("/mail", { "thread-id": "t1" }),
+    ).rejects.toThrow("redirect:/mail/u/0/inbox/t1");
+  });
+
+  it("sends a user with no accounts from mail to mailbox connection", async () => {
+    mocks.findMany.mockResolvedValue([]);
+
+    await expect(
+      redirectToEmailAccountPath("/mail", { type: "sent" }),
+    ).rejects.toThrow("redirect:/connect-mailbox?next=%2Fmail%3Ftype%3Dsent");
+    expect(mocks.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("sends a signed-out user to log in and back to the same mail", async () => {
+    mocks.auth.mockResolvedValue(null);
+
+    await expect(
+      redirectToEmailAccountPath("/mail", { type: "sent" }),
+    ).rejects.toThrow("redirect:/login?next=%2Fmail%3Ftype%3Dsent");
+    expect(mocks.findMany).not.toHaveBeenCalled();
   });
 
   it("keeps a mail view and unrelated params when redirecting to mail", async () => {
-    mocks.findFirst.mockResolvedValue({ id: "account_123" });
     mocks.findMany.mockResolvedValue([accountRow("account_123")]);
 
     await expect(
@@ -257,6 +296,14 @@ function getAccountRedirectLog(consoleLogSpy: ReturnType<typeof vi.spyOn>) {
   expect(jsonStart).toBeGreaterThanOrEqual(0);
 
   return JSON.parse((message as string).slice(jsonStart));
+}
+
+function mockLastEmailAccountCookie(emailAccountId: string) {
+  mocks.cookies.mockResolvedValue({
+    get: () => ({
+      value: JSON.stringify({ userId: "user_123", emailAccountId }),
+    }),
+  });
 }
 
 function accountRow(id: string) {

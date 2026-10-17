@@ -10,7 +10,10 @@ import {
 import { buildLoginRedirectUrl, buildRedirectUrl } from "@/utils/redirect";
 import { createScopedLogger } from "@/utils/logger";
 import { flushLoggerSafely } from "@/utils/logger-flush";
-import { getMailRedirectPath } from "@/utils/mail-url.server";
+import {
+  getMailRedirectPath,
+  getOrderedEmailAccountIds,
+} from "@/utils/mail-url.server";
 
 const logger = createScopedLogger("account-redirect");
 
@@ -34,34 +37,18 @@ export async function redirectToEmailAccountPath(
     redirect(buildLoginRedirectUrl(buildRedirectUrl(path, searchParams)));
   }
 
-  const lastEmailAccountId = await measureRedirectStep(
-    timing,
-    "last-email-account-cookie",
-    () => getLastEmailAccountFromCookie(userId),
-  );
-
-  let emailAccountId = lastEmailAccountId;
-
-  // If no last account is available, fall back to the first account.
-  if (!emailAccountId) {
-    const emailAccount = await measureRedirectStep(
-      timing,
-      "fallback-email-account-lookup",
-      () =>
-        prisma.emailAccount.findFirst({
-          where: { userId },
-          select: { id: true },
-          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-        }),
-    );
-    emailAccountId = emailAccount?.id ?? null;
-  }
+  const { emailAccountId, usedLastEmailAccountCookie } =
+    path === "/mail"
+      ? await measureRedirectStep(timing, "email-accounts", () =>
+          resolveMailAccount(userId),
+        )
+      : await resolveAccount(timing, userId);
 
   if (!emailAccountId) {
     logRedirectTiming(timing, {
       outcome: "connect-mailbox",
-      usedLastEmailAccountCookie: !!lastEmailAccountId,
-      usedFallbackAccountLookup: !lastEmailAccountId,
+      usedLastEmailAccountCookie,
+      usedFallbackAccountLookup: !usedLastEmailAccountCookie,
       foundEmailAccount: false,
     });
     redirect(
@@ -81,23 +68,64 @@ export async function redirectToEmailAccountPath(
 
   logRedirectTiming(timing, {
     outcome: "account-path",
-    usedLastEmailAccountCookie: !!lastEmailAccountId,
-    usedFallbackAccountLookup: !lastEmailAccountId,
+    usedLastEmailAccountCookie,
+    usedFallbackAccountLookup: !usedLastEmailAccountCookie,
     foundEmailAccount: true,
   });
   redirect(redirectUrl);
 }
 
-async function getLastEmailAccountFromCookie(
+// Mail is addressed by account position, so the ordered account list it needs
+// anyway also confirms the last-used account, in one lookup.
+async function resolveMailAccount(userId: string) {
+  const [accountIds, lastEmailAccountId] = await Promise.all([
+    getOrderedEmailAccountIds(userId),
+    getLastEmailAccountIdFromCookie(userId),
+  ]);
+  const usedLastEmailAccountCookie =
+    !!lastEmailAccountId && accountIds.includes(lastEmailAccountId);
+  return {
+    emailAccountId: usedLastEmailAccountCookie
+      ? lastEmailAccountId
+      : (accountIds[0] ?? null),
+    usedLastEmailAccountCookie,
+  };
+}
+
+async function resolveAccount(timing: RedirectTiming, userId: string) {
+  const lastEmailAccountId = await measureRedirectStep(
+    timing,
+    "last-email-account-cookie",
+    () => getConfirmedLastEmailAccountId(userId),
+  );
+  if (lastEmailAccountId) {
+    return {
+      emailAccountId: lastEmailAccountId,
+      usedLastEmailAccountCookie: true,
+    };
+  }
+
+  const emailAccount = await measureRedirectStep(
+    timing,
+    "fallback-email-account-lookup",
+    () =>
+      prisma.emailAccount.findFirst({
+        where: { userId },
+        select: { id: true },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      }),
+  );
+  return {
+    emailAccountId: emailAccount?.id ?? null,
+    usedLastEmailAccountCookie: false,
+  };
+}
+
+async function getConfirmedLastEmailAccountId(
   userId: string,
 ): Promise<string | null> {
   try {
-    const cookieStore = await cookies();
-    const cookieValue = cookieStore.get(LAST_EMAIL_ACCOUNT_COOKIE)?.value;
-    const lastEmailAccountId = parseLastEmailAccountCookieValue({
-      userId,
-      cookieValue,
-    });
+    const lastEmailAccountId = await getLastEmailAccountIdFromCookie(userId);
     if (!lastEmailAccountId) return null;
 
     const emailAccount = await prisma.emailAccount.findFirst({
@@ -105,6 +133,20 @@ async function getLastEmailAccountFromCookie(
       select: { id: true },
     });
     return emailAccount?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function getLastEmailAccountIdFromCookie(
+  userId: string,
+): Promise<string | null> {
+  try {
+    const cookieStore = await cookies();
+    return parseLastEmailAccountCookieValue({
+      userId,
+      cookieValue: cookieStore.get(LAST_EMAIL_ACCOUNT_COOKIE)?.value,
+    });
   } catch {
     return null;
   }
