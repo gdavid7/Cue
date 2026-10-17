@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { processHistoryForUser } from "./process-history";
 import { cleanupInvalidTokens } from "@/utils/auth/cleanup-invalid-tokens";
 import { getHistory } from "@/utils/gmail/history";
+import { getMessages } from "@/utils/gmail/message";
 import {
   getWebhookEmailAccount,
   validateWebhookAccount,
@@ -44,6 +45,10 @@ vi.mock("@/utils/gmail/history", () => ({
   getHistory: vi.fn(),
 }));
 
+vi.mock("@/utils/gmail/message", () => ({
+  getMessages: vi.fn().mockResolvedValue({ messages: [] }),
+}));
+
 vi.mock("@/utils/webhook/validate-webhook-account", () => ({
   getWebhookEmailAccount: vi.fn(),
   validateWebhookAccount: vi.fn(),
@@ -53,6 +58,9 @@ vi.mock("@/utils/prisma", () => ({
   default: {
     emailAccount: {
       update: vi.fn().mockResolvedValue({}),
+    },
+    executedRule: {
+      findFirst: vi.fn().mockResolvedValue(null),
     },
     $executeRaw: vi.fn().mockResolvedValue(1),
   },
@@ -773,6 +781,33 @@ describe("processHistoryForUser - authentication failures", () => {
     expect(prisma.$executeRaw).not.toHaveBeenCalled();
   });
 
+  it("stops before mail it could not process once the grant is revoked, and disconnects the account", async () => {
+    vi.mocked(getHistory).mockResolvedValueOnce({
+      history: inboxHistory(["1100", "m1"], ["1200", "m2"]),
+    } as any);
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      if (event.item.message?.id === "m1")
+        throw new Error("Token refresh failed: invalid_grant");
+    });
+
+    const response = await processHistoryForUser(
+      { emailAddress: "user@example.com", historyId: 1200 },
+      {},
+      logger,
+    );
+
+    expect(await response.json()).toEqual({ ok: true });
+    expect(cleanupInvalidTokens).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        emailAccountId: "account-123",
+        reason: "invalid_grant",
+        failedRefreshToken: "failed-refresh-token",
+      }),
+    );
+    // m1 was never triaged, so after a reconnect the history resumes there.
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
   it("acknowledges invalid grants even if cleanup fails", async () => {
     vi.mocked(getHistory).mockRejectedValueOnce(new Error("invalid_grant"));
     vi.mocked(cleanupInvalidTokens).mockRejectedValueOnce(
@@ -1407,6 +1442,127 @@ describe("processHistoryForUser - backlogs", () => {
         },
       }),
     );
+  });
+});
+
+describe("processHistoryForUser - expired Gmail history", () => {
+  const lastTriagedAt = new Date("2026-10-01T12:00:00Z");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getEmailProviderRateLimitState).mockResolvedValue(null);
+    vi.mocked(processHistoryItem).mockReset().mockResolvedValue(undefined);
+    vi.mocked(publishToQstashAt).mockResolvedValue(true);
+    vi.mocked(getWebhookEmailAccount).mockResolvedValue(backlogAccount as any);
+    vi.mocked(validateWebhookAccount).mockResolvedValue({
+      success: true,
+      data: {
+        emailAccount: {
+          ...backlogAccount,
+          account: {
+            access_token: "token",
+            refresh_token: "refresh",
+            expires_at: new Date(Date.now() + 3_600_000),
+          },
+          rules: [],
+        },
+        hasAutomationRules: true,
+        hasAiAccess: true,
+      },
+    } as any);
+    const expired = Object.assign(new Error("Requested entity was not found"), {
+      status: 404,
+    });
+    vi.mocked(getHistory).mockRejectedValue(expired);
+    vi.mocked(prisma.executedRule.findFirst).mockResolvedValue({
+      createdAt: lastTriagedAt,
+    } as any);
+    // Gmail lists newest first.
+    vi.mocked(getMessages).mockResolvedValue({
+      messages: [
+        { id: "m3", threadId: "t1" },
+        { id: "m2", threadId: "t2" },
+        { id: "m1", threadId: "t1" },
+      ],
+    });
+  });
+
+  it("triages the inbox mail that arrived while history was expired, then starts from the push", async () => {
+    const result = await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 5000 },
+      {},
+      logger,
+    );
+
+    expect(await (result as any).json()).toEqual({ ok: true });
+    expect(getMessages).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        labelIds: ["INBOX"],
+        query: `after:${lastTriagedAt.getTime() / 1000}`,
+      }),
+    );
+    expect(processedMessageIds()).toEqual(
+      expect.arrayContaining(["m1", "m2", "m3"]),
+    );
+    // Within a thread, oldest first.
+    expect(processedMessageIds().indexOf("m1")).toBeLessThan(
+      processedMessageIds().indexOf("m3"),
+    );
+    expect(cursorUpdates()).toEqual(["5000"]);
+  });
+
+  it("keeps the expired cursor until the gap is triaged, so the next run searches it again", async () => {
+    vi.mocked(processHistoryItem).mockImplementation(async (event) =>
+      event.item.message?.id === "m1" ? ("held-elsewhere" as never) : undefined,
+    );
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 5000 },
+      {},
+      logger,
+    );
+
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+    expect(markGmailHistoryCatchUp).toHaveBeenCalledWith(
+      "account-123",
+      expect.anything(),
+    );
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/google/webhook/catch-up",
+        body: { emailAccountId: "account-123", historyId: "5000" },
+      }),
+    );
+  });
+
+  it("measures the gap from triage before this recovery began, so its own triage doesn't hide the rest", async () => {
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 5000 },
+      {},
+      logger,
+    );
+
+    const { where } = vi.mocked(prisma.executedRule.findFirst).mock
+      .calls[0][0] as any;
+    expect(where.emailAccountId).toBe("account-123");
+    expect(where.createdAt.lt.getTime()).toBeLessThanOrEqual(
+      Date.now() - 12 * 60 * 60 * 1000,
+    );
+  });
+
+  it("starts from the push when nothing was ever triaged to measure the gap from", async () => {
+    vi.mocked(prisma.executedRule.findFirst).mockResolvedValue(null);
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 5000 },
+      {},
+      logger,
+    );
+
+    expect(getMessages).not.toHaveBeenCalled();
+    expect(processHistoryItem).not.toHaveBeenCalled();
+    expect(cursorUpdates()).toEqual(["5000"]);
   });
 });
 

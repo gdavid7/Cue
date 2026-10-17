@@ -15,6 +15,7 @@ import {
   processHistoryItem,
 } from "@/utils/webhook/google/process-history-item";
 import { getHistory } from "@/utils/gmail/history";
+import { getMessages } from "@/utils/gmail/message";
 import {
   validateWebhookAccount,
   getWebhookEmailAccount,
@@ -57,6 +58,11 @@ const HISTORY_RUN_BUDGET_MS = 180_000;
 // several times faster while the account's Gmail quota gate paces the calls.
 const NEW_MESSAGE_CONCURRENCY = 3;
 const PROGRESS_SAVE_INTERVAL_MS = 10_000;
+// One search page of the newest inbox mail from an expired history gap.
+const MAX_EXPIRED_GAP_MESSAGES = 50;
+// A recovery cut short resumes on the next push or catch-up, well within a
+// day; the triage it already did must not count as the gap's start then.
+const EXPIRED_GAP_TRIAGE_SETTLE_MS = 24 * 60 * 60 * 1000;
 
 export async function processHistoryForUser(
   decodedData: {
@@ -231,6 +237,23 @@ export async function processHistoryForUser(
         });
 
         if (historyResult.status === "expired") {
+          // Mail that arrived while the cursor was too old for Gmail's history
+          // is found by search instead. The cursor stays expired until all of
+          // it is triaged, so the next run searches again and skips what this
+          // one processed.
+          const gapHistory = await listExpiredGapMail(gmail);
+          if (gapHistory.length > 0) {
+            const processed = await processEntries(gapHistory, gmail);
+            if (!processed.complete) {
+              await markGmailHistoryCatchUp(validatedEmailAccount.id, logger);
+              await scheduleGmailHistoryCatchUp({
+                emailAccountId: validatedEmailAccount.id,
+                historyId,
+                logger,
+              });
+              return NextResponse.json({ ok: true });
+            }
+          }
           await updateLastSyncedHistoryId({
             emailAccountId: validatedEmailAccount.id,
             lastSyncedHistoryId: historyId,
@@ -263,25 +286,7 @@ export async function processHistoryForUser(
             hasMoreHistory: historyResult.hasMore,
           });
 
-          const processed = await processHistory(
-            {
-              deadline,
-              history: historyEntries,
-              spamLearnedThreadIds: new Set<string>(),
-              gmail,
-              accessToken: accountAccessToken,
-              hasAutomationRules,
-              hasAiAccess: userHasAiAccess,
-              rules: validatedEmailAccount.rules,
-              emailAccount: {
-                ...validatedEmailAccount,
-                account: {
-                  provider: accountProvider,
-                },
-              },
-            },
-            logger,
-          );
+          const processed = await processEntries(historyEntries, gmail);
           complete &&= processed.complete;
         } else if (complete) {
           logger.info("No history", {
@@ -351,6 +356,74 @@ export async function processHistoryForUser(
         return NextResponse.json({ ok: true });
       },
     );
+  }
+
+  function processEntries(
+    history: gmail_v1.Schema$History[],
+    gmail: gmail_v1.Gmail,
+  ) {
+    return processHistory(
+      {
+        deadline,
+        history,
+        spamLearnedThreadIds: new Set<string>(),
+        gmail,
+        accessToken: accountAccessToken,
+        hasAutomationRules,
+        hasAiAccess: userHasAiAccess,
+        rules: validatedEmailAccount.rules,
+        emailAccount: {
+          ...validatedEmailAccount,
+          account: {
+            provider: accountProvider,
+          },
+        },
+      },
+      logger,
+    );
+  }
+
+  // The gap starts no later than the account's last triage. Without one there
+  // is nothing to measure from, and older inbox mail is left alone.
+  async function listExpiredGapMail(
+    gmail: gmail_v1.Gmail,
+  ): Promise<gmail_v1.Schema$History[]> {
+    const lastTriaged = await prisma.executedRule.findFirst({
+      where: {
+        emailAccountId: validatedEmailAccount.id,
+        createdAt: { lt: new Date(Date.now() - EXPIRED_GAP_TRIAGE_SETTLE_MS) },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    });
+    if (!lastTriaged) return [];
+
+    const { messages, nextPageToken } = await getMessages(gmail, {
+      query: `after:${Math.floor(lastTriaged.createdAt.getTime() / 1000)}`,
+      labelIds: [GmailLabel.INBOX],
+      maxResults: MAX_EXPIRED_GAP_MESSAGES,
+    });
+    const gap = {
+      gapStart: lastTriaged.createdAt.toISOString(),
+      messageCount: messages.length,
+    };
+    if (nextPageToken) {
+      logger.error(
+        "Expired Gmail history gap holds more inbox mail than is triaged",
+        gap,
+      );
+    } else {
+      logger.info("Triaging inbox mail from an expired Gmail history gap", gap);
+    }
+
+    // Gmail lists newest first; history runs oldest first, which keeps each
+    // thread in order. These have no history id, so the cursor never moves to
+    // one.
+    return messages.reverse().map((message) => ({
+      messagesAdded: [
+        { message: { ...message, labelIds: [GmailLabel.INBOX] } },
+      ],
+    }));
   }
 
   // A mailbox's cursor starts at the history id its watch began at. Without
@@ -487,10 +560,13 @@ async function processHistory(
     } catch (error) {
       // Stop before the cursor passes mail Gmail refused (or the quota gate
       // held back), so the catch-up picks it up again.
+      // A revoked grant fails every message after it too, and the run's
+      // error handling disconnects the account.
       if (
         isEmailProviderRateLimitError({ error, provider: "google" }) ||
         isGmailCallDeferredError(error) ||
-        isMessageLockUnavailableError(error)
+        isMessageLockUnavailableError(error) ||
+        isInvalidGrantError(error)
       ) {
         stopError ??= error;
         return;
@@ -705,7 +781,7 @@ function isHistoryIdExpiredError(error: unknown): boolean {
 /**
  * Reads Gmail history from the account's cursor, never skipping any, up to a
  * bounded number of pages per run; `hasMore` says a catch-up must continue.
- * Handles expired history IDs (404s) by resetting the sync point.
+ * Reports an expired history id (a 404) as `expired`.
  */
 async function fetchGmailHistoryResilient({
   gmail,
@@ -811,10 +887,9 @@ async function fetchGmailHistoryResilient({
     };
   } catch (error) {
     // Gmail history IDs are typically valid for ~1 week. If older, Gmail returns a 404.
-    // In this case, we reset the sync point to the current history ID.
     if (isHistoryIdExpiredError(error)) {
-      logger.error(
-        "Gmail history expired; mail in the gap is not processed by automation",
+      logger.warn(
+        "Gmail history expired; triaging the gap's inbox mail by search",
         {
           expiredHistoryId: startHistoryId,
           newHistoryId: webhookHistoryId,
