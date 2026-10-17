@@ -3,6 +3,7 @@ import prisma from "@/utils/prisma";
 import { withError } from "@/utils/middleware";
 import { SafeError } from "@/utils/error";
 import { auth } from "@/utils/auth";
+import { SESSION_EXPIRED_ERROR_CODE } from "@/utils/config";
 import {
   isDecisionModelAvailable,
   isDecisionModelEnabledForUser,
@@ -125,13 +126,19 @@ async function getUser({
 }
 
 // Not using withAuth — unauthenticated requests return 401 with isKnownError
-// so the client can distinguish "not logged in" from real errors without Sentry noise
+// so the client can distinguish "not logged in" from real errors without Sentry noise.
+// Public pages read this too; the session-expired code only redirects pages
+// that armed it for a signed-in user.
 export const GET = withError("user/me", async (request) => {
   const session = await auth(request.headers);
   const userId = session?.user.id;
   if (!userId)
     return NextResponse.json(
-      { error: "Not authenticated", isKnownError: true },
+      {
+        error: "Not authenticated",
+        errorCode: SESSION_EXPIRED_ERROR_CODE,
+        isKnownError: true,
+      },
       { status: 401 },
     );
 
