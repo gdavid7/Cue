@@ -22,6 +22,8 @@ export type ProcessHistoryOptions = {
   rules: RuleWithActions[];
   hasAutomationRules: boolean;
   hasAiAccess: boolean;
+  /** When the run's AI calls must have ended, before its function is killed. */
+  aiDeadlineAt?: number;
   emailAccount: Pick<
     EmailAccount,
     | "autoCategorizeSenders"

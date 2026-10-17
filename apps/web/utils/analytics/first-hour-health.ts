@@ -150,9 +150,12 @@ async function getFirstHourHealth(mailbox: Mailbox, now: Date) {
     executedByStatus.find((row) => row.status === status)?._count._all ?? 0;
   const trackerCount = (type: ThreadTrackerType) =>
     trackersByType.find((row) => row.type === type)?._count._all ?? 0;
+  // A failure to process mail isn't a rule run.
   const lastRuleRunAt = executedByStatus.reduce<Date | null>(
     (latest, row) =>
-      row._max.createdAt && (!latest || row._max.createdAt > latest)
+      row.status !== ExecutedRuleStatus.ERROR &&
+      row._max.createdAt &&
+      (!latest || row._max.createdAt > latest)
         ? row._max.createdAt
         : latest,
     null,

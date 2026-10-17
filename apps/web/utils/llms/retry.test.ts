@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { RetryError } from "ai";
 import { APICallError } from "ai";
 import { extractLLMErrorInfo, withLLMRetry } from "./retry";
+import { sleep } from "@/utils/sleep";
 
 vi.mock("@/utils/sleep", () => ({
   sleep: vi.fn().mockResolvedValue(undefined),
@@ -235,6 +236,23 @@ describe("withLLMRetry", () => {
     const result = await withLLMRetry(fn, { label: "test" });
 
     expect(result).toBe("success");
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops waiting for the next attempt once its signal aborts, with the provider's error", async () => {
+    vi.mocked(sleep).mockReturnValueOnce(new Promise(() => {}));
+    const rateLimited = createError("Rate limited", { status: 429 });
+    const fn = vi.fn().mockRejectedValue(rateLimited);
+    const controller = new AbortController();
+
+    const outcome = withLLMRetry(fn, {
+      label: "test",
+      signal: controller.signal,
+    }).catch((error) => error);
+    await vi.waitFor(() => expect(sleep).toHaveBeenCalled());
+    controller.abort();
+
+    expect(await outcome).toBe(rateLimited);
     expect(fn).toHaveBeenCalledTimes(1);
   });
 

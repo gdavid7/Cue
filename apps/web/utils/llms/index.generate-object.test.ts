@@ -1,9 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  AutomatedAiCallTimeoutError,
+  runWithAutomatedAiCallBound,
+} from "@/utils/llms/automated-call-bound";
+import {
+  getAIApiCallError,
+  isAnthropicInsufficientBalanceError,
+} from "@/utils/error";
+import { addUserErrorMessageWithNotification } from "@/utils/error-messages";
+import { sleep } from "@/utils/sleep";
 
 const {
   mockAssertTrialAiUsageAllowed,
   mockAttachLlmRepairMetadata,
   mockGenerateObject,
+  mockGenerateText,
   mockIsContentFilterRefusal,
   mockNoObjectGeneratedErrorIsInstance,
   mockSaveAiUsage,
@@ -12,6 +23,7 @@ const {
   mockAssertTrialAiUsageAllowed: vi.fn(),
   mockAttachLlmRepairMetadata: vi.fn(),
   mockGenerateObject: vi.fn(),
+  mockGenerateText: vi.fn(),
   mockIsContentFilterRefusal: vi.fn(() => false),
   mockNoObjectGeneratedErrorIsInstance: vi.fn(() => false),
   mockSaveAiUsage: vi.fn(),
@@ -25,7 +37,7 @@ vi.mock("ai", () => ({
   TypeValidationError: { isInstance: () => false },
   ToolLoopAgent: class {},
   generateObject: mockGenerateObject,
-  generateText: vi.fn(),
+  generateText: mockGenerateText,
   streamText: vi.fn(),
   smoothStream: vi.fn(),
   stepCountIs: vi.fn(),
@@ -63,6 +75,7 @@ vi.mock("@/utils/error", () => ({
   captureException: vi.fn(),
   getAIApiCallError: vi.fn(() => null),
   isAnthropicInsufficientBalanceError: vi.fn(() => false),
+  isAnthropicBillingLimitError: vi.fn(() => false),
   isContentFilterRefusal: mockIsContentFilterRefusal,
   isIncorrectAPIKeyError: vi.fn(() => false),
   isInsufficientCreditsError: vi.fn(() => false),
@@ -653,6 +666,179 @@ describe("createGenerateObject repairText", () => {
     expect(mockGenerateObject).toHaveBeenCalledTimes(1);
   });
 
+  it("gives up on an automated call that runs past its time bound, without trying the fallback model", async () => {
+    vi.useFakeTimers();
+    try {
+      mockGenerateObject.mockImplementation(
+        ({ abortSignal }: { abortSignal?: AbortSignal }) =>
+          new Promise((_, reject) => {
+            abortSignal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      );
+      const generateObject = await createGenerateObjectWithFallback();
+
+      const outcome = inAutomatedWork(() =>
+        generateObject({
+          instructions: "Return JSON.",
+          prompt: "Return JSON.",
+          schema: {} as any,
+        } as any),
+      ).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(45_000);
+
+      expect(await outcome).toBeInstanceOf(AutomatedAiCallTimeoutError);
+      expect(mockGenerateObject).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves calls outside automated work without a time bound", async () => {
+    const generateObject = await createTestGenerateObject();
+
+    await generateObject({
+      instructions: "Return JSON.",
+      prompt: "Return JSON.",
+      schema: {} as any,
+    } as any);
+
+    expect(mockGenerateObject.mock.calls[0][0].abortSignal).toBeUndefined();
+  });
+
+  it("still tells the user their own key is out of credits when the call runs out of time", async () => {
+    vi.useFakeTimers();
+    try {
+      const outOfCredits = Object.assign(new Error("Insufficient credits"), {
+        statusCode: 429,
+      });
+      vi.mocked(getAIApiCallError).mockReturnValue(outOfCredits as any);
+      vi.mocked(isAnthropicInsufficientBalanceError).mockReturnValue(true);
+      vi.mocked(sleep).mockReturnValueOnce(new Promise(() => {}));
+      mockGenerateObject.mockRejectedValue(outOfCredits);
+      const generateObject = await createTestGenerateObject();
+
+      const outcome = inAutomatedWork(() =>
+        generateObject({
+          instructions: "Return JSON.",
+          prompt: "Return JSON.",
+          schema: {} as any,
+        } as any),
+      ).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(45_000);
+
+      const error = await outcome;
+      expect(error).toBeInstanceOf(AutomatedAiCallTimeoutError);
+      expect(error.cause).toBe(outOfCredits);
+      expect(addUserErrorMessageWithNotification).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.mocked(getAIApiCallError).mockReturnValue(null);
+      vi.mocked(isAnthropicInsufficientBalanceError).mockReturnValue(false);
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears an automated call's timer once it settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const generateObject = await createTestGenerateObject();
+
+      await inAutomatedWork(() =>
+        generateObject({
+          instructions: "Return JSON.",
+          prompt: "Return JSON.",
+          schema: {} as any,
+        } as any),
+      );
+
+      expect(mockGenerateObject.mock.calls[0][0].abortSignal).toBeDefined();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives a local model's automated call until the run's deadline, not the call budget", async () => {
+    vi.useFakeTimers();
+    try {
+      mockGenerateObject.mockImplementation(hangUntilAborted);
+      const generateObject = await createTestGenerateObject({
+        provider: "ollama",
+        modelName: "llama-test",
+      });
+
+      let settled = false;
+      const outcome = inAutomatedWork(() =>
+        generateObject({
+          instructions: "Return JSON.",
+          prompt: "Return JSON.",
+          schema: {} as any,
+        } as any),
+      )
+        .catch((error) => error)
+        .finally(() => {
+          settled = true;
+        });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(RUN_DEADLINE_MS);
+
+      expect(await outcome).toBeInstanceOf(AutomatedAiCallTimeoutError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds an automated text call the same way", async () => {
+    vi.useFakeTimers();
+    try {
+      mockGenerateText.mockImplementation(
+        ({ abortSignal }: { abortSignal?: AbortSignal }) =>
+          new Promise((_, reject) => {
+            abortSignal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      );
+      const generateText = await createTestGenerateText();
+
+      const outcome = inAutomatedWork(() =>
+        generateText({ prompt: "Hi" } as any),
+      ).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(45_000);
+
+      expect(await outcome).toBeInstanceOf(AutomatedAiCallTimeoutError);
+      expect(mockGenerateText).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives an automated tool loop until the run's deadline, not the call budget", async () => {
+    vi.useFakeTimers();
+    try {
+      mockGenerateText.mockImplementation(hangUntilAborted);
+      const generateText = await createTestGenerateText();
+
+      let settled = false;
+      const outcome = inAutomatedWork(() =>
+        generateText({ prompt: "Hi", tools: { lookup: {} } } as any),
+      )
+        .catch((error) => error)
+        .finally(() => {
+          settled = true;
+        });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(RUN_DEADLINE_MS);
+
+      expect(await outcome).toBeInstanceOf(AutomatedAiCallTimeoutError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("clears stale repair metadata before trying a fallback model", async () => {
     mockGenerateObject
       .mockImplementationOnce(async (options) => {
@@ -729,6 +915,41 @@ async function createTestGenerateObject({
     promptHardening: { trust: "untrusted", level: "full" },
     onModelUsed,
     cacheSystemPrompt,
+  });
+}
+
+const RUN_DEADLINE_MS = 270_000;
+
+function inAutomatedWork<T>(operation: () => Promise<T>) {
+  return runWithAutomatedAiCallBound(operation, {
+    runDeadlineAt: Date.now() + RUN_DEADLINE_MS,
+  });
+}
+
+function hangUntilAborted({ abortSignal }: { abortSignal?: AbortSignal }) {
+  return new Promise((_, reject) => {
+    abortSignal?.addEventListener("abort", () =>
+      reject(new DOMException("aborted", "AbortError")),
+    );
+  });
+}
+
+async function createTestGenerateText() {
+  const { createGenerateText } = await import("./index");
+
+  return createGenerateText({
+    emailAccount: {
+      id: "account-1",
+      email: "user@example.com",
+      userId: "user-1",
+    },
+    label: "test",
+    modelOptions: {
+      ...createResolvedModel({ provider: "openai", modelName: "gpt-test" }),
+      hasUserApiKey: false,
+      fallbackModels: [],
+    } as any,
+    promptHardening: { trust: "untrusted", level: "full" },
   });
 }
 

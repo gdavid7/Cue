@@ -51,6 +51,34 @@ describe("bulk processing", () => {
     }
   });
 
+  it("processes mail Cue failed to process, but not mail it already sorted", async () => {
+    const failed = {
+      id: "failed",
+      messages: [{ id: "m1" }],
+      plan: { status: "ERROR", rule: null },
+    };
+    const sorted = {
+      id: "sorted",
+      messages: [{ id: "m2" }],
+      plan: { status: "APPLIED", rule: { id: "rule" } },
+    };
+    const unsorted = { id: "unsorted", messages: [{ id: "m3" }] };
+    vi.mocked(fetchWithAccount).mockResolvedValueOnce(
+      Response.json({ threads: [failed, sorted, unsorted] }),
+    );
+    const complete = vi.fn();
+
+    await onRun(
+      "account-id",
+      { startDate: new Date(2025, 3, 1) },
+      vi.fn(),
+      complete,
+    );
+
+    await vi.waitFor(() => expect(complete).toHaveBeenCalledWith("success", 2));
+    expect(vi.mocked(runAiRules).mock.calls[0][1]).toEqual([failed, unsorted]);
+  });
+
   it("includes the entire selected end date, including a same-day range", async () => {
     const date = new Date(2025, 3, 10);
     const complete = vi.fn();

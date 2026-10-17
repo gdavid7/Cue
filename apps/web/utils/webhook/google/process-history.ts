@@ -37,7 +37,18 @@ import type { Logger } from "@/utils/logger";
 import type { gmail_v1 } from "@googleapis/gmail";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import { scheduleGmailHistoryCatchUp } from "@/utils/webhook/google/history-catch-up";
-import { isMessageLockUnavailableError } from "@/utils/redis/message-processing";
+import {
+  countMessageProcessingFailure,
+  deferMessageProcessing,
+  isMessageLockUnavailableError,
+} from "@/utils/redis/message-processing";
+import { recordMessageProcessingFailure } from "@/utils/webhook/message-processing-failure";
+import {
+  isGmailRunStopError,
+  isMessageRetryPending,
+  isRetryableGmailMessageFailure,
+} from "@/utils/webhook/google/message-failure";
+import { AUTOMATED_RUN_AI_DEADLINE_MS } from "@/utils/llms/automated-call-bound";
 import { mapWithConcurrency } from "@/utils/async";
 import {
   acquireGmailHistoryLease,
@@ -70,6 +81,21 @@ const EXPIRED_GAP_START_MARGIN_MS = 60 * 60 * 1000;
 // As far back as messages keep their processed marker, so older mail that was
 // triaged before is never handled twice.
 const MAX_EXPIRED_GAP_AGE_MS = 8 * 24 * 60 * 60 * 1000;
+// A message that keeps failing for reasons that should pass, such as an AI
+// outage, is retried for at least this long and this many runs, then given up
+// on, so it can't hold the account's history back for good.
+const MIN_MESSAGE_RETRY_MS = 6 * 60 * 60 * 1000;
+const MIN_MESSAGE_FAILURES = 3;
+// Each further failure waits longer for its catch-up, up to the last delay.
+const MESSAGE_RETRY_DELAYS_MS = [90_000, 5 * 60_000, 15 * 60_000, 30 * 60_000];
+// When Redis can't count a message's failures, this many in a row on one
+// instance give up on it rather than defer it forever.
+const MAX_UNCOUNTED_MESSAGE_FAILURES = 3;
+const MAX_TRACKED_UNCOUNTED_MESSAGES = 1000;
+// During an outage every message fails, so a run gives up after a few rather
+// than spend AI calls on each.
+const MAX_RETRYABLE_FAILURES_PER_RUN = 3;
+const uncountedMessageFailures = new Map<string, number>();
 
 export async function processHistoryForUser(
   decodedData: {
@@ -84,7 +110,8 @@ export async function processHistoryForUser(
   },
   logger: Logger,
 ) {
-  const deadline = Date.now() + HISTORY_RUN_BUDGET_MS;
+  const startedAt = Date.now();
+  const deadline = startedAt + HISTORY_RUN_BUDGET_MS;
   // How far this run read Gmail history, for a catch-up to aim past.
   let readThrough = BigInt(0);
   const { emailAddress } = decodedData;
@@ -259,6 +286,7 @@ export async function processHistoryForUser(
               await scheduleGmailHistoryCatchUp({
                 emailAccountId: validatedEmailAccount.id,
                 historyId,
+                retryAt: toDate(processed.retryAt),
                 logger,
               });
               return NextResponse.json({ ok: true });
@@ -280,6 +308,8 @@ export async function processHistoryForUser(
 
         const historyEntries = historyResult.history;
         let complete = !historyResult.hasMore;
+        // Only mail waiting on its retry is left, so nothing is due before it.
+        let retryAt: number | undefined;
         const lastReadId = historyEntries.at(-1)?.id;
         if (lastReadId)
           readThrough =
@@ -297,6 +327,7 @@ export async function processHistoryForUser(
           });
 
           const processed = await processEntries(historyEntries, gmail);
+          if (complete) retryAt = processed.retryAt;
           complete &&= processed.complete;
         } else if (complete) {
           logger.info("No history", {
@@ -353,6 +384,7 @@ export async function processHistoryForUser(
           await scheduleGmailHistoryCatchUp({
             emailAccountId: validatedEmailAccount.id,
             historyId: catchUpHistoryId(),
+            retryAt: toDate(retryAt),
             logger,
           });
         } else if (catchUpToken) {
@@ -375,6 +407,7 @@ export async function processHistoryForUser(
     return processHistory(
       {
         deadline,
+        aiDeadlineAt: startedAt + AUTOMATED_RUN_AI_DEADLINE_MS,
         history,
         spamLearnedThreadIds: new Set<string>(),
         gmail,
@@ -535,13 +568,15 @@ export async function processHistoryForUser(
       logger.warn("Webhook history deferred: message locks unavailable", {
         error,
       });
-      await markGmailHistoryCatchUp(validatedEmailAccount.id, logger);
-      await scheduleGmailHistoryCatchUp({
-        emailAccountId: validatedEmailAccount.id,
-        historyId: catchUpHistoryId(),
-        logger,
+      return await deferToCatchUp();
+    }
+
+    // Logged with its cause where the message failed.
+    if (error instanceof MessageRetryDeferredError) {
+      logger.info("Webhook history deferred to retry failed messages", {
+        retryInSeconds: Math.round((error.retryAt - Date.now()) / 1000),
       });
-      return NextResponse.json({ ok: true });
+      return await deferToCatchUp(new Date(error.retryAt));
     }
 
     if (
@@ -571,12 +606,23 @@ export async function processHistoryForUser(
     // returning 200 here, as otherwise PubSub will call the webhook over and over
     return NextResponse.json({ error: true });
   }
+
+  async function deferToCatchUp(retryAt?: Date) {
+    await markGmailHistoryCatchUp(validatedEmailAccount.id, logger);
+    await scheduleGmailHistoryCatchUp({
+      emailAccountId: validatedEmailAccount.id,
+      historyId: catchUpHistoryId(),
+      retryAt,
+      logger,
+    });
+    return NextResponse.json({ ok: true });
+  }
 }
 
 async function processHistory(
   options: ProcessHistoryOptions & { deadline: number },
   logger: Logger,
-): Promise<{ complete: boolean }> {
+): Promise<{ complete: boolean; retryAt?: number }> {
   const { history, emailAccount, deadline } = options;
   const { email: userEmail, id: emailAccountId } = emailAccount;
 
@@ -584,41 +630,142 @@ async function processHistory(
     id: h.id,
     ...getHistoryEvents(h, logger),
   }));
+  const threadEvents = new Set(entries.flatMap((entry) => entry.threadEvents));
   const done = new Set<HistoryEvent>();
   let stopError: unknown;
+  // The earliest a message that failed is due to be retried, and whether the
+  // run left anything else that is due sooner.
+  let retryAt: number | undefined;
+  let leftOtherWork = false;
+  let retryableFailures = 0;
+  const waitForRetry = (at: number) => {
+    retryAt = Math.min(retryAt ?? at, at);
+  };
 
+  // A message that fails, or waits on its retry, holds only its own thread
+  // back: other threads go on, and the cursor stays before it.
   const run = async (event: HistoryEvent) => {
-    if (stopError !== undefined || Date.now() >= deadline) return;
+    if (stopError !== undefined) return;
+    if (Date.now() >= deadline) {
+      leftOtherWork = true;
+      return;
+    }
     const log = logger.with({
       messageId: event.item.message?.id,
       threadId: event.item.message?.threadId,
     });
     try {
       const outcome = await processHistoryItem(event, options, log);
-      if (outcome === MESSAGE_HELD_ELSEWHERE) return;
+      if (outcome === MESSAGE_HELD_ELSEWHERE) {
+        leftOtherWork = true;
+        return;
+      }
+      if (isMessageRetryPending(outcome)) {
+        waitForRetry(outcome.retryPendingUntil);
+        return;
+      }
     } catch (error) {
       // Stop before the cursor passes mail Gmail refused (or the quota gate
       // held back), so the catch-up picks it up again.
       // A revoked grant fails every message after it too, and the run's
       // error handling disconnects the account.
-      if (
-        isEmailProviderRateLimitError({ error, provider: "google" }) ||
-        isGmailCallDeferredError(error) ||
-        isMessageLockUnavailableError(error) ||
-        isInvalidGrantError(error)
-      ) {
+      if (isGmailRunStopError(error)) {
         stopError ??= error;
+        return;
+      }
+      // A failure that should pass, such as an AI outage, is retried later,
+      // until the message has been retried long enough.
+      const retryable = isRetryableGmailMessageFailure(error);
+      const retry = retryable ? await planRetry(event, log) : undefined;
+      if (retry) {
+        log.warn("Message failed; retrying it later", {
+          error,
+          failures: retry.failures,
+          retryInSeconds: Math.round((retry.retryAt - Date.now()) / 1000),
+        });
+        waitForRetry(retry.retryAt);
+        retryableFailures += 1;
+        if (retryableFailures >= MAX_RETRYABLE_FAILURES_PER_RUN)
+          stopError ??= new MessageRetryDeferredError(
+            error,
+            retryAt ?? retry.retryAt,
+          );
         return;
       }
       captureException(error, {
         userEmail,
         extra: { messageId: event.item.message?.id },
       });
-      log.error("Error processing history item", { error });
+      log.error("Error processing history item", { error, retryable });
+      await recordFailure(event, log);
     }
     done.add(event);
     await saveProgress();
   };
+
+  // Undefined once the message has been retried long enough. Otherwise the
+  // message waits for its retry, which every run before then sees from its
+  // claim alone, without processing it, and a catch-up is due for.
+  async function planRetry(
+    event: HistoryEvent,
+    log: Logger,
+  ): Promise<{ failures?: number; retryAt: number } | undefined> {
+    const messageId = event.item.message?.id;
+    if (!messageId) return;
+    const key = `${userEmail}:${messageId}`;
+    let counted: Awaited<ReturnType<typeof countMessageProcessingFailure>>;
+    try {
+      counted = await countMessageProcessingFailure({ userEmail, messageId });
+    } catch (error) {
+      log.warn("Failed to count message failure", { error });
+      const uncounted = (uncountedMessageFailures.get(key) ?? 0) + 1;
+      if (uncountedMessageFailures.size >= MAX_TRACKED_UNCOUNTED_MESSAGES)
+        uncountedMessageFailures.clear();
+      if (uncounted >= MAX_UNCOUNTED_MESSAGE_FAILURES) {
+        uncountedMessageFailures.delete(key);
+        return;
+      }
+      uncountedMessageFailures.set(key, uncounted);
+      return { retryAt: Date.now() + MESSAGE_RETRY_DELAYS_MS[0] };
+    }
+    uncountedMessageFailures.delete(key);
+
+    const { failures, firstFailedAt } = counted;
+    if (
+      failures >= MIN_MESSAGE_FAILURES &&
+      Date.now() - firstFailedAt >= MIN_MESSAGE_RETRY_MS
+    )
+      return;
+    const delayIndex = Math.min(failures, MESSAGE_RETRY_DELAYS_MS.length) - 1;
+    const retryAt = Date.now() + MESSAGE_RETRY_DELAYS_MS[delayIndex];
+    // Label changes aren't claimed; they wait for the next run instead.
+    if (threadEvents.has(event)) {
+      await deferMessageProcessing({ userEmail, messageId, retryAt }).catch(
+        (error) => log.warn("Failed to defer message retry", { error }),
+      );
+    }
+    return { failures, retryAt };
+  }
+
+  // Only incoming mail would have had rules run on it.
+  async function recordFailure(event: HistoryEvent, log: Logger) {
+    const { id: messageId, threadId, labelIds } = event.item.message ?? {};
+    if (
+      event.type !== HistoryEventType.MESSAGE_ADDED ||
+      !labelIds?.includes(GmailLabel.INBOX) ||
+      !options.hasAutomationRules ||
+      !options.hasAiAccess ||
+      !messageId ||
+      !threadId
+    )
+      return;
+    await recordMessageProcessingFailure({
+      emailAccountId,
+      messageId,
+      threadId,
+      logger: log,
+    });
+  }
 
   // A run can be cut off by the function timeout, so the cursor follows the
   // processed history as it goes, not only at the end.
@@ -714,10 +861,28 @@ async function processHistory(
   await saveProgress({ final: true });
 
   if (stopError !== undefined) throw stopError;
-  return { complete: processedCount() === entries.length };
+  return {
+    complete: processedCount() === entries.length,
+    retryAt: leftOtherWork ? undefined : retryAt,
+  };
 }
 
 type HistoryEvent = Parameters<typeof processHistoryItem>[0];
+
+/** A message failed for a reason that should pass; a catch-up retries it. */
+class MessageRetryDeferredError extends Error {
+  readonly retryAt: number;
+
+  constructor(cause: unknown, retryAt: number) {
+    super("Messages failed and are retried in a catch-up", { cause });
+    this.name = "MessageRetryDeferredError";
+    this.retryAt = retryAt;
+  }
+}
+
+function toDate(epochMs: number | undefined) {
+  return epochMs === undefined ? undefined : new Date(epochMs);
+}
 
 function getHistoryEvents(h: gmail_v1.Schema$History, logger: Logger) {
   const newMessages: HistoryEvent[] = uniqBy(

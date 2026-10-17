@@ -1,6 +1,7 @@
 import { after } from "next/server";
 import {
   ActionType,
+  ExecutedRuleStatus,
   MailSplitFilterKind,
   SystemType,
 } from "@/generated/prisma/enums";
@@ -145,7 +146,7 @@ export async function setUpCueSorting({
   // created with, as long as they are on and have no actions, so the sort
   // changes nothing in the mailbox.
   const neverSorted = !(await prisma.executedRule.findFirst({
-    where: { emailAccountId },
+    where: { emailAccountId, status: { not: ExecutedRuleStatus.ERROR } },
     select: { id: true },
   }));
   const ruleIds = [

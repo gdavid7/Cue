@@ -91,6 +91,10 @@ import {
   withLLMRetry,
 } from "./retry";
 import { createStreamFallbackModel } from "./stream-fallback-model";
+import {
+  AutomatedAiCallTimeoutError,
+  startAutomatedAiCallBound,
+} from "@/utils/llms/automated-call-bound";
 
 const logger = createScopedLogger("llms");
 
@@ -305,6 +309,16 @@ export function createGenerateText({
         emailAccountId: emailAccount.id,
         label,
       });
+    const isToolLoop = Boolean(options.tools);
+    // A tool loop takes several model turns, and a local model's speed is the
+    // operator's to judge, so those keep only the request deadline.
+    const timeBound = startAutomatedAiCallBound({
+      budgeted: !isToolLoop && !modelCandidates.some(isLocalModel),
+    });
+    const abortSignal = combineAbortSignals(
+      options.abortSignal,
+      timeBound?.signal,
+    );
 
     const generate = async (candidate: ResolvedModel) => {
       const systemText = applyPromptHardeningToSystem({
@@ -375,6 +389,7 @@ export function createGenerateText({
           ...protectedRequestOptions,
           ...(bridged.tools ? { tools: bridged.tools } : {}),
           ...commonOptions,
+          ...(abortSignal ? { abortSignal } : {}),
           telemetry: buildLlmTelemetry({
             userEmail: emailAccount.email,
             userId: emailAccount.userId,
@@ -421,40 +436,63 @@ export function createGenerateText({
       return result;
     };
 
-    for (let index = 0; index < modelCandidates.length; index++) {
-      const candidate = modelCandidates[index];
-      const nextCandidate = modelCandidates[index + 1];
+    try {
+      for (let index = 0; index < modelCandidates.length; index++) {
+        const candidate = modelCandidates[index];
+        const nextCandidate = modelCandidates[index + 1];
 
-      try {
-        return await withLLMRetry(
-          () => withNetworkRetry(() => generate(candidate), { label }),
-          { label },
-        );
-      } catch (error) {
-        if (error instanceof SafeError) throw error;
+        try {
+          return await withLLMRetry(
+            () =>
+              withNetworkRetry(() => generate(candidate), {
+                label,
+                signal: timeBound?.signal,
+              }),
+            { label, signal: timeBound?.signal },
+          );
+        } catch (error) {
+          if (error instanceof SafeError) throw error;
+          if (timeBound?.signal.aborted) {
+            // A user's own key that is out of credits or invalid still
+            // notifies them, though the call ran out of time.
+            await handleError(
+              error,
+              emailAccount.userId,
+              emailAccount.email,
+              emailAccount.id,
+              label,
+              candidate.modelName,
+              effectiveModelOptions.hasUserApiKey,
+              { timedOut: true },
+            );
+            throw timedOut(error, { label, candidate, isToolLoop });
+          }
 
-        if (nextCandidate && shouldFallbackToNextModel(error)) {
-          logModelFallback("LLM call failed, trying fallback model", error, {
+          if (nextCandidate && shouldFallbackToNextModel(error)) {
+            logModelFallback("LLM call failed, trying fallback model", error, {
+              label,
+              provider: candidate.provider,
+              model: candidate.modelName,
+              fallbackProvider: nextCandidate.provider,
+              fallbackModel: nextCandidate.modelName,
+            });
+            continue;
+          }
+
+          await handleError(
+            error,
+            emailAccount.userId,
+            emailAccount.email,
+            emailAccount.id,
             label,
-            provider: candidate.provider,
-            model: candidate.modelName,
-            fallbackProvider: nextCandidate.provider,
-            fallbackModel: nextCandidate.modelName,
-          });
-          continue;
+            candidate.modelName,
+            effectiveModelOptions.hasUserApiKey,
+          );
+          throw error;
         }
-
-        await handleError(
-          error,
-          emailAccount.userId,
-          emailAccount.email,
-          emailAccount.id,
-          label,
-          candidate.modelName,
-          effectiveModelOptions.hasUserApiKey,
-        );
-        throw error;
       }
+    } finally {
+      timeBound?.clear();
     }
 
     throw new Error("No models available for generation");
@@ -503,6 +541,13 @@ export function createGenerateObject({
       });
     let latestRepairAttempt: RepairAttemptState | undefined;
     const fallbackFailures: LlmFallbackFailure[] = [];
+    const timeBound = startAutomatedAiCallBound({
+      budgeted: !modelCandidates.some(isLocalModel),
+    });
+    const abortSignal = combineAbortSignals(
+      options.abortSignal,
+      timeBound?.signal,
+    );
 
     const generate = async (candidate: ResolvedModel) => {
       const systemText = applyPromptHardeningToSystem({
@@ -589,6 +634,7 @@ export function createGenerateObject({
         },
         ...protectedOptions,
         ...commonOptions,
+        abortSignal,
         telemetry: buildLlmTelemetry({
           userEmail: emailAccount.email,
           userId: emailAccount.userId,
@@ -678,87 +724,107 @@ export function createGenerateObject({
     };
 
     const generationStartedAt = Date.now();
-    for (let index = 0; index < modelCandidates.length; index++) {
-      const candidate = modelCandidates[index];
-      const nextCandidate = modelCandidates[index + 1];
-      latestRepairAttempt = undefined;
+    try {
+      for (let index = 0; index < modelCandidates.length; index++) {
+        const candidate = modelCandidates[index];
+        const nextCandidate = modelCandidates[index + 1];
+        latestRepairAttempt = undefined;
 
-      try {
-        const result = await withLLMRetry(
-          () =>
-            withNetworkRetry(() => generate(candidate), {
-              label,
-              shouldRetry: (error) =>
-                (NoObjectGeneratedError.isInstance(error) &&
-                  !isContentFilterRefusal(error)) ||
-                TypeValidationError.isInstance(error),
-            }),
-          { label },
-        );
+        try {
+          const result = await withLLMRetry(
+            () =>
+              withNetworkRetry(() => generate(candidate), {
+                label,
+                shouldRetry: (error) =>
+                  (NoObjectGeneratedError.isInstance(error) &&
+                    !isContentFilterRefusal(error)) ||
+                  TypeValidationError.isInstance(error),
+                signal: timeBound?.signal,
+              }),
+            { label, signal: timeBound?.signal },
+          );
 
-        logger.info("LLM object generation completed", {
-          label,
-          // Across retries and fallbacks, from the first attempt.
-          durationMs: Date.now() - generationStartedAt,
-          candidateCount: modelCandidates.length,
-          fallbackUsed: index > 0,
-          fallbackDepth: index,
-          selectedProvider: candidate.provider,
-          selectedModel: candidate.modelName,
-          attemptedModels: modelCandidates
-            .slice(0, index + 1)
-            .map(getResolvedModelKey),
-          failedModels: fallbackFailures.map(
-            ({ provider, model }) => `${provider}:${model}`,
-          ),
-          failureCategories: fallbackFailures.map(({ category }) => category),
-        });
-
-        return result;
-      } catch (error) {
-        if (error instanceof SafeError) throw error;
-
-        attachLlmRepairMetadata(
-          error,
-          buildRepairMetadata({
-            attempt: latestRepairAttempt,
+          logger.info("LLM object generation completed", {
             label,
-            provider: candidate.provider,
-            model: candidate.modelName,
-          }),
-        );
-
-        if (nextCandidate && shouldFallbackToNextModel(error)) {
-          fallbackFailures.push({
-            provider: candidate.provider,
-            model: candidate.modelName,
-            category: getLlmFallbackFailureCategory(error),
+            // Across retries and fallbacks, from the first attempt.
+            durationMs: Date.now() - generationStartedAt,
+            candidateCount: modelCandidates.length,
+            fallbackUsed: index > 0,
+            fallbackDepth: index,
+            selectedProvider: candidate.provider,
+            selectedModel: candidate.modelName,
+            attemptedModels: modelCandidates
+              .slice(0, index + 1)
+              .map(getResolvedModelKey),
+            failedModels: fallbackFailures.map(
+              ({ provider, model }) => `${provider}:${model}`,
+            ),
+            failureCategories: fallbackFailures.map(({ category }) => category),
           });
-          logModelFallback(
-            "LLM object generation failed, trying fallback model",
+
+          return result;
+        } catch (error) {
+          if (error instanceof SafeError) throw error;
+          if (timeBound?.signal.aborted) {
+            // A user's own key that is out of credits or invalid still
+            // notifies them, though the call ran out of time.
+            await handleError(
+              error,
+              emailAccount.userId,
+              emailAccount.email,
+              emailAccount.id,
+              label,
+              candidate.modelName,
+              effectiveModelOptions.hasUserApiKey,
+              { timedOut: true },
+            );
+            throw timedOut(error, { label, candidate, isToolLoop: false });
+          }
+
+          attachLlmRepairMetadata(
             error,
-            {
+            buildRepairMetadata({
+              attempt: latestRepairAttempt,
               label,
               provider: candidate.provider,
               model: candidate.modelName,
-              fallbackProvider: nextCandidate.provider,
-              fallbackModel: nextCandidate.modelName,
-            },
+            }),
           );
-          continue;
-        }
 
-        await handleError(
-          error,
-          emailAccount.userId,
-          emailAccount.email,
-          emailAccount.id,
-          label,
-          candidate.modelName,
-          effectiveModelOptions.hasUserApiKey,
-        );
-        throw error;
+          if (nextCandidate && shouldFallbackToNextModel(error)) {
+            fallbackFailures.push({
+              provider: candidate.provider,
+              model: candidate.modelName,
+              category: getLlmFallbackFailureCategory(error),
+            });
+            logModelFallback(
+              "LLM object generation failed, trying fallback model",
+              error,
+              {
+                label,
+                provider: candidate.provider,
+                model: candidate.modelName,
+                fallbackProvider: nextCandidate.provider,
+                fallbackModel: nextCandidate.modelName,
+              },
+            );
+            continue;
+          }
+
+          await handleError(
+            error,
+            emailAccount.userId,
+            emailAccount.email,
+            emailAccount.id,
+            label,
+            candidate.modelName,
+            effectiveModelOptions.hasUserApiKey,
+          );
+          throw error;
+        }
       }
+    } finally {
+      timeBound?.clear();
     }
 
     throw new Error("No models available for generation");
@@ -1307,6 +1373,8 @@ async function handleError(
   label: string,
   modelName: string,
   hasUserApiKey: boolean,
+  // A call that ran out of time is retried with its message, so isn't an error yet.
+  { timedOut = false }: { timedOut?: boolean } = {},
 ) {
   const apiError = getAIApiCallError(error);
   const isUserKeyInsufficientCredits =
@@ -1320,14 +1388,16 @@ async function handleError(
       modelName,
     });
   } else {
-    logger.error("Error in LLM call", {
+    const fields = {
       error,
       userId,
       userEmail,
       emailAccountId,
       label,
       modelName,
-    });
+    };
+    if (timedOut) logger.warn("Error in LLM call", fields);
+    else logger.error("Error in LLM call", fields);
   }
 
   const notifyUser = async (
@@ -2316,4 +2386,49 @@ function toPosthogTokenUsage(event: unknown) {
       ),
     ),
   };
+}
+
+function combineAbortSignals(
+  ...signals: Array<AbortSignal | undefined>
+): AbortSignal | undefined {
+  const present = signals.filter((signal) => signal !== undefined);
+  if (present.length <= 1) return present[0];
+  return AbortSignal.any(present);
+}
+
+function timedOut(
+  error: unknown,
+  {
+    label,
+    candidate,
+    isToolLoop,
+  }: {
+    label: string;
+    candidate: { provider: string; modelName: string };
+    isToolLoop: boolean;
+  },
+) {
+  logger.warn(
+    isToolLoop
+      ? "Automated AI tool loop ran out of time"
+      : "Automated AI call ran out of time",
+    {
+      label,
+      provider: candidate.provider,
+      model: candidate.modelName,
+      error,
+    },
+  );
+  return new AutomatedAiCallTimeoutError(label, error);
+}
+
+const LOCAL_MODEL_PROVIDERS = new Set<string>([
+  Provider.OLLAMA,
+  Provider.OPENAI_COMPATIBLE,
+  Provider.CODEX_CLI,
+  Provider.CLAUDE_CODE,
+]);
+
+function isLocalModel({ provider }: { provider: string }) {
+  return LOCAL_MODEL_PROVIDERS.has(provider);
 }

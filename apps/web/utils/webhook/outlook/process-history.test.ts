@@ -44,6 +44,7 @@ vi.mock("@/utils/prisma", () => ({
   default: {
     executedRule: {
       findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({}),
     },
   },
 }));
@@ -432,6 +433,58 @@ describe("Outlook processHistoryForUser - Folder Filtering", () => {
       const jsonResponse = await result.json();
       expect(jsonResponse).toEqual({ ok: true });
       expect(captureException).not.toHaveBeenCalled();
+    });
+
+    it("leaves incoming mail that failed visibly failed, since nothing retries it", async () => {
+      const message = getMockParsedMessage({ labelIds: ["INBOX"] });
+      vi.mocked(createEmailProvider).mockResolvedValue({
+        getMessage: vi.fn().mockResolvedValue(message),
+      } as any);
+      vi.mocked(processHistoryItem).mockRejectedValue(
+        Object.assign(new Error("Overloaded"), { statusCode: 529 }),
+      );
+
+      await processHistoryForUser({
+        subscriptionId: "sub-123",
+        resourceData: mockResourceData as any,
+        logger,
+      });
+
+      expect(prisma.executedRule.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          messageId: message.id,
+          status: "ERROR",
+        }),
+      });
+    });
+
+    it.each([
+      {
+        failure: "Microsoft throttling",
+        error: Object.assign(new Error("Throttled"), {
+          code: "ApplicationThrottled",
+          statusCode: 429,
+        }),
+      },
+      {
+        failure: "a revoked grant",
+        error: new Error("Token refresh failed: invalid_grant"),
+      },
+    ])("doesn't record mail as failed on $failure", async ({ error }) => {
+      vi.mocked(createEmailProvider).mockResolvedValue({
+        getMessage: vi
+          .fn()
+          .mockResolvedValue(getMockParsedMessage({ labelIds: ["INBOX"] })),
+      } as any);
+      vi.mocked(processHistoryItem).mockRejectedValue(error);
+
+      await processHistoryForUser({
+        subscriptionId: "sub-123",
+        resourceData: mockResourceData as any,
+        logger,
+      });
+
+      expect(prisma.executedRule.create).not.toHaveBeenCalled();
     });
 
     it("captures unknown errors in Sentry", async () => {

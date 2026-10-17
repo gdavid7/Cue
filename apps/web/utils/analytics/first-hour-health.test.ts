@@ -199,6 +199,28 @@ describe("recordFirstHourHealthForNewMailboxes", () => {
     expect(JSON.stringify(logSpy.mock.calls)).not.toContain("@example.com");
   });
 
+  it("doesn't count mail Cue failed to process as a rule run", async () => {
+    prisma.emailAccount.findMany.mockResolvedValue([
+      mailbox("account-1"),
+    ] as never);
+    vi.mocked(prisma.executedRule.groupBy).mockResolvedValue([
+      {
+        status: "ERROR",
+        _count: { _all: 2 },
+        _max: { createdAt: new Date("2026-10-17T11:55:00.000Z") },
+      },
+    ] as never);
+
+    await recordFirstHourHealthForNewMailboxes(logger);
+
+    expect(loggedEvents()).toEqual([
+      expect.objectContaining({
+        rulesErrored: 2,
+        minutesSinceLastRuleRun: null,
+      }),
+    ]);
+  });
+
   it("reports a missing watch and no rule runs for a mailbox that never set up", async () => {
     prisma.emailAccount.findMany.mockResolvedValue([
       mailbox("account-1"),

@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { redis } from "@/utils/redis";
 import {
+  countMessageProcessingFailure,
+  deferMessageProcessing,
   acquireMessageProcessing,
   markMessageProcessed,
   acquireOutboundMessageLock,
@@ -18,8 +20,79 @@ vi.mock("@/utils/redis", () => ({
     set: vi.fn(),
     get: vi.fn(),
     eval: vi.fn(),
+    del: vi.fn(),
+    multi: vi.fn(),
   },
 }));
+
+describe("countMessageProcessingFailure", () => {
+  it("counts a failure and keeps when the message first failed, expiring both together", async () => {
+    const commands: string[] = [];
+    const transaction: Record<string, unknown> = {};
+    for (const command of ["hincrby", "hsetnx", "expire", "hget"]) {
+      transaction[command] = vi.fn((...args: unknown[]) => {
+        commands.push(`${command} ${args.join(" ")}`);
+        return transaction;
+      });
+    }
+    transaction.exec = vi.fn().mockResolvedValue([2, 0, 1, 1_700_000_000_000]);
+    vi.mocked(redis.multi).mockReturnValue(transaction as any);
+
+    const result = await countMessageProcessingFailure({
+      userEmail: "user@example.com",
+      messageId: "message-1",
+    });
+
+    expect(result).toEqual({ failures: 2, firstFailedAt: 1_700_000_000_000 });
+    expect(commands).toContainEqual(
+      `expire processing-message-failures:user@example.com:message-1 ${8 * 24 * 60 * 60}`,
+    );
+  });
+});
+
+describe("message retries", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const key = { userEmail: "user@example.com", messageId: "message-1" };
+
+  async function deferAndReadBack(retryAt: number) {
+    await deferMessageProcessing({ ...key, retryAt });
+    const [processingKey, value, options] = vi.mocked(redis.set).mock
+      .calls[0] as [string, string, object];
+    vi.mocked(redis.get).mockResolvedValue(value);
+    return { processingKey, options };
+  }
+
+  it("keeps a failed message from being claimed until its retry is due", async () => {
+    const retryAt = Date.now() + 5 * 60_000;
+    const { processingKey, options } = await deferAndReadBack(retryAt);
+    vi.mocked(redis.set).mockResolvedValue(null);
+
+    expect(processingKey).toBe("processing-message:user@example.com:message-1");
+    expect(options).toEqual(expect.objectContaining({ nx: true }));
+    expect(await acquireMessageProcessing(key)).toEqual({
+      status: "retry-pending",
+      retryAt,
+    });
+  });
+
+  it("claims a message whose retry is due within moments, for a run arriving a little early", async () => {
+    await deferAndReadBack(Date.now() + 2000);
+    vi.mocked(redis.set)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce("OK");
+
+    expect(await acquireMessageProcessing(key)).toEqual({
+      status: "acquired",
+      lockToken: "lock-uuid",
+    });
+    expect(redis.del).toHaveBeenCalledWith(
+      "processing-message:user@example.com:message-1",
+    );
+  });
+});
 
 describe("message-processing redis locks", () => {
   beforeEach(() => {

@@ -33,6 +33,7 @@ vi.mock("@/utils/redis/message-processing", () => ({
   markMessageProcessed: vi.fn().mockResolvedValue(true),
   releaseMessageProcessing: vi.fn().mockResolvedValue(true),
   markOutboundMessageProcessed: vi.fn().mockResolvedValue(true),
+  isMessageLockUnavailableError: vi.fn(() => false),
 }));
 
 vi.mock("@/utils/gmail/thread", () => ({
@@ -235,6 +236,53 @@ describe("processHistoryItem", () => {
       lockToken: "message-lock",
     });
     expect(markMessageProcessed).not.toHaveBeenCalled();
+  });
+
+  it("releases a message that failed during an outage, so the catch-up can retry it", async () => {
+    const outage = Object.assign(new Error("Service Unavailable"), {
+      statusCode: 503,
+    });
+    vi.mocked(createEmailProvider).mockResolvedValueOnce({
+      getMessage: vi.fn().mockRejectedValue(outage),
+      isSentMessage: vi.fn().mockReturnValue(false),
+    } as any);
+    const emailAccount = getDefaultEmailAccount();
+
+    await expect(
+      processHistoryItem(
+        createHistoryItem(),
+        { ...defaultOptions, emailAccount },
+        logger,
+      ),
+    ).rejects.toBe(outage);
+    expect(releaseMessageProcessing).toHaveBeenCalledWith({
+      userEmail: emailAccount.email,
+      messageId: "123",
+      lockToken: "message-lock",
+    });
+    expect(markMessageProcessed).not.toHaveBeenCalled();
+  });
+
+  it("leaves a message that failed alone until its retry is due, without reading it or calling AI", async () => {
+    const retryAt = Date.now() + 5 * 60_000;
+    vi.mocked(acquireMessageProcessing).mockResolvedValueOnce({
+      status: "retry-pending",
+      retryAt,
+    });
+    const getMessage = vi.fn();
+    vi.mocked(createEmailProvider).mockResolvedValueOnce({
+      getMessage,
+      isSentMessage: vi.fn().mockReturnValue(false),
+    } as any);
+
+    const outcome = await processHistoryItem(
+      createHistoryItem(),
+      { ...defaultOptions, emailAccount: getDefaultEmailAccount() },
+      logger,
+    );
+
+    expect(outcome).toEqual({ retryPendingUntil: retryAt });
+    expect(getMessage).not.toHaveBeenCalled();
   });
 
   it("skips a message already processed without reading it from Gmail again", async () => {

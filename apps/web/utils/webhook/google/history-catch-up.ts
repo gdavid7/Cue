@@ -14,6 +14,7 @@ export const GMAIL_HISTORY_CATCH_UP_PATH = "/api/google/webhook/catch-up";
 // history back, short enough that the mail is not noticeably late.
 const CATCH_UP_DELAY_MS = 90_000;
 const NUDGE_DEBOUNCE_SECONDS = 60;
+const RETRY_WINDOW_MARGIN_MS = 5000;
 
 /**
  * Server-side automation only runs on a Gmail push, and pushes can arrive
@@ -93,10 +94,19 @@ export async function scheduleGmailHistoryCatchUp({
   retryAt?: Date;
   logger: Logger;
 }): Promise<boolean> {
+  const now = Date.now();
   const notBefore = new Date(
-    Math.max(Date.now() + CATCH_UP_DELAY_MS, retryAt?.getTime() ?? 0),
+    Math.max(now + CATCH_UP_DELAY_MS, retryAt?.getTime() ?? 0),
   );
-  const window = Math.floor(notBefore.getTime() / CATCH_UP_DELAY_MS);
+  // Runs deferred to the same future time, such as a failed message's retry,
+  // share one delivery however many pushes defer to it. A delivery that
+  // arrives a little early isn't deferred into its own window, where it would
+  // be dropped as a duplicate.
+  const windowStart =
+    retryAt && retryAt.getTime() > now + RETRY_WINDOW_MARGIN_MS
+      ? retryAt
+      : notBefore;
+  const window = Math.floor(windowStart.getTime() / CATCH_UP_DELAY_MS);
   await raiseGmailHistoryCatchUpTarget(emailAccountId, historyId, logger);
   try {
     const scheduled = await publishToQstashAt({

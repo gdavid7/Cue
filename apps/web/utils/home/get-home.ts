@@ -290,7 +290,12 @@ async function getTodayActivity({
   const [checked, actions] = await Promise.all([
     prisma.executedRule.groupBy({
       by: ["messageId"],
-      where: { emailAccountId, createdAt: { gte: since } },
+      // A message Cue failed to process wasn't checked.
+      where: {
+        emailAccountId,
+        createdAt: { gte: since },
+        status: { not: ExecutedRuleStatus.ERROR },
+      },
     }),
     prisma.executedAction.findMany({
       where: {

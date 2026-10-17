@@ -11,10 +11,15 @@ import {
   releaseMessageProcessing,
 } from "@/utils/redis/message-processing";
 import { GmailLabel } from "@/utils/gmail/label";
-import { isGmailCallDeferredError } from "@/utils/gmail/quota";
-import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
 import type { Logger } from "@/utils/logger";
-import { isInvalidGrantError } from "@/utils/error";
+import {
+  isRetryableGmailMessageFailure,
+  type MessageRetryPending,
+} from "@/utils/webhook/google/message-failure";
+import {
+  AUTOMATED_RUN_AI_DEADLINE_MS,
+  runWithAutomatedAiCallBound,
+} from "@/utils/llms/automated-call-bound";
 
 /**
  * Another processor holds the message. It isn't handled yet, and that holder
@@ -69,21 +74,33 @@ export async function processHistoryItem(
       logger.info("Skipping. Message already being processed.");
       return MESSAGE_HELD_ELSEWHERE;
     }
+    if (claim.status === "retry-pending") {
+      logger.info("Skipping. Message failed and waits to be retried.");
+      const pending: MessageRetryPending = { retryPendingUntil: claim.retryAt };
+      return pending;
+    }
     const lock = { ...lockKey, lockToken: claim.lockToken };
 
     logger.info("Gmail lock acquired, calling shared processor");
 
     try {
-      const result = await processHistoryItemShared(
-        { messageId, threadId },
+      const result = await runWithAutomatedAiCallBound(
+        () =>
+          processHistoryItemShared(
+            { messageId, threadId },
+            {
+              provider,
+              isNewMessage: type === HistoryEventType.MESSAGE_ADDED,
+              emailAccount,
+              hasAutomationRules,
+              hasAiAccess,
+              rules,
+              logger,
+            },
+          ),
         {
-          provider,
-          isNewMessage: type === HistoryEventType.MESSAGE_ADDED,
-          emailAccount,
-          hasAutomationRules,
-          hasAiAccess,
-          rules,
-          logger,
+          runDeadlineAt:
+            options.aiDeadlineAt ?? Date.now() + AUTOMATED_RUN_AI_DEADLINE_MS,
         },
       );
       await markMessageProcessed(lock).catch((error) =>
@@ -94,11 +111,7 @@ export async function processHistoryItem(
       // The history cursor stays before this message so a catch-up (or the
       // first run after a reconnect) retries it; the lock would make that run
       // skip it.
-      if (
-        isGmailCallDeferredError(error) ||
-        isEmailProviderRateLimitError({ error, provider: "google" }) ||
-        isInvalidGrantError(error)
-      ) {
+      if (isRetryableGmailMessageFailure(error)) {
         await releaseMessageProcessing(lock).catch((clearError) =>
           logger.warn("Failed to release message processing lock", {
             error: clearError,

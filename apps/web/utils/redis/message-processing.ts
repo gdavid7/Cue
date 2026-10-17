@@ -45,10 +45,16 @@ const MESSAGE_PROCESSING_TTL_SECONDS = 60 * 5;
 const MESSAGE_PROCESSED_TTL_SECONDS = 60 * 60 * 24 * 8;
 const MESSAGE_PROCESSED_STATUS = "processed";
 
+const MESSAGE_RETRY_STATUS_PREFIX = "retry:";
+// A run arriving a little early, such as its catch-up delivered on a clock
+// slightly ahead, still retries the message rather than wait on it again.
+const MESSAGE_RETRY_DUE_MARGIN_MS = 5000;
+
 /**
  * Claims a message for a Gmail history run. A message another run holds is
  * `held`; one handled before is `processed`, so a catch-up skips it with one
- * read instead of handling it again.
+ * read instead of handling it again. One that failed is `retry-pending` until
+ * its retry is due, so runs before then skip it just as cheaply.
  */
 export async function acquireMessageProcessing(key: {
   userEmail: string;
@@ -57,20 +63,61 @@ export async function acquireMessageProcessing(key: {
   | { status: "acquired"; lockToken: string }
   | { status: "held" }
   | { status: "processed" }
+  | { status: "retry-pending"; retryAt: number }
 > {
   try {
-    const lockToken = await acquireOwnedLock({
-      key: getProcessingKey(key),
-      processingTtlSeconds: MESSAGE_PROCESSING_TTL_SECONDS,
-    });
+    const claim = () =>
+      acquireOwnedLock({
+        key: getProcessingKey(key),
+        processingTtlSeconds: MESSAGE_PROCESSING_TTL_SECONDS,
+      });
+    const lockToken = await claim();
     if (lockToken) return { status: "acquired", lockToken };
     const stored = await redis.get<string>(getProcessingKey(key));
-    return stored === MESSAGE_PROCESSED_STATUS
-      ? { status: "processed" }
+    if (stored === MESSAGE_PROCESSED_STATUS) return { status: "processed" };
+    const retryAt = getRetryAt(stored);
+    if (retryAt === undefined) return { status: "held" };
+    if (retryAt > Date.now() + MESSAGE_RETRY_DUE_MARGIN_MS)
+      return { status: "retry-pending", retryAt };
+
+    await redis.del(getProcessingKey(key));
+    const dueLockToken = await claim();
+    return dueLockToken
+      ? { status: "acquired", lockToken: dueLockToken }
       : { status: "held" };
   } catch (error) {
     throw new MessageLockUnavailableError(error);
   }
+}
+
+/**
+ * Leaves a message that failed unclaimed until `retryAt`, when a run may try
+ * it again. Only for a message whose claim was released, never one marked
+ * processed.
+ */
+export async function deferMessageProcessing({
+  retryAt,
+  ...key
+}: {
+  userEmail: string;
+  messageId: string;
+  retryAt: number;
+}) {
+  await redis.set(
+    getProcessingKey(key),
+    `${MESSAGE_RETRY_STATUS_PREFIX}${retryAt}`,
+    { px: Math.max(1, retryAt - Date.now()), nx: true },
+  );
+}
+
+function getRetryAt(stored: string | null) {
+  if (
+    typeof stored !== "string" ||
+    !stored.startsWith(MESSAGE_RETRY_STATUS_PREFIX)
+  )
+    return;
+  const retryAt = Number(stored.slice(MESSAGE_RETRY_STATUS_PREFIX.length));
+  return Number.isFinite(retryAt) ? retryAt : undefined;
 }
 
 /**
@@ -114,6 +161,41 @@ export async function releaseMessageProcessing({
   lockToken: string;
 }) {
   return clearOwnedLock({ key: getProcessingKey(key), lockToken });
+}
+
+// As long as the processed marker, so a message is never retried afresh while
+// a run could still reach it.
+const MESSAGE_FAILURES_TTL_SECONDS = MESSAGE_PROCESSED_TTL_SECONDS;
+
+/**
+ * Counts one more run that failed to process a message for a reason that may
+ * pass, and when it first failed, so a message that keeps failing is given up
+ * on instead of holding the account's history back.
+ */
+export async function countMessageProcessingFailure(key: {
+  userEmail: string;
+  messageId: string;
+}): Promise<{ failures: number; firstFailedAt: number }> {
+  const failuresKey = getFailuresKey(key);
+  // One transaction, so the count never outlives its expiry.
+  const [failures, , , firstFailedAt] = await redis
+    .multi()
+    .hincrby(failuresKey, "failures", 1)
+    .hsetnx(failuresKey, "firstFailedAt", Date.now())
+    .expire(failuresKey, MESSAGE_FAILURES_TTL_SECONDS)
+    .hget<number>(failuresKey, "firstFailedAt")
+    .exec<[number, number, number, number | null]>();
+  return { failures, firstFailedAt: Number(firstFailedAt ?? Date.now()) };
+}
+
+function getFailuresKey({
+  userEmail,
+  messageId,
+}: {
+  userEmail: string;
+  messageId: string;
+}) {
+  return `processing-message-failures:${userEmail}:${messageId}`;
 }
 
 type OutboundMessageKey = {

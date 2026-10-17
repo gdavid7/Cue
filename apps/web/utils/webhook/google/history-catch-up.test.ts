@@ -96,4 +96,33 @@ describe("scheduleGmailHistoryCatchUp", () => {
     );
     expect(publishToQstashAt).toHaveBeenCalled();
   });
+
+  it("doesn't defer a catch-up that arrived a little early into its own delivery", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const retryAt = new Date(Date.now() + 10 * 60_000);
+      await scheduleGmailHistoryCatchUp({
+        emailAccountId: "account-1",
+        historyId: "1500",
+        retryAt,
+        logger,
+      });
+      // That catch-up arrives 2s before its retry is due, and the message
+      // fails again.
+      vi.setSystemTime(retryAt.getTime() - 2000);
+      await scheduleGmailHistoryCatchUp({
+        emailAccountId: "account-1",
+        historyId: "1500",
+        retryAt,
+        logger,
+      });
+
+      const [first, second] = vi
+        .mocked(publishToQstashAt)
+        .mock.calls.map(([delivery]) => delivery.deduplicationId);
+      expect(second).not.toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

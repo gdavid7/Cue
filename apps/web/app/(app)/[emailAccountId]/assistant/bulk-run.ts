@@ -8,6 +8,7 @@ import { toastError } from "@/components/Toast";
 import { captureException } from "@/utils/error";
 import { fetchWithAccount } from "@/utils/fetch";
 import { createSearchParams } from "@/utils/url";
+import { ExecutedRuleStatus } from "@/generated/prisma/enums";
 
 const BATCH_SIZE = 25;
 
@@ -100,9 +101,15 @@ export async function onRun(
 
       nextPageToken = data.nextPageToken || "";
 
+      // Mail Cue failed to process has no plan yet.
       const eligibleThreads = rerun
         ? data.threads
-        : data.threads.filter((thread) => !thread.plan);
+        : data.threads.filter(
+            (thread) =>
+              !thread.plan ||
+              (thread.plan.status === ExecutedRuleStatus.ERROR &&
+                !thread.plan.rule),
+          );
       const remainingEmails =
         maxEmails === undefined ? undefined : maxEmails - totalProcessed;
       if (remainingEmails !== undefined && remainingEmails <= 0) break;

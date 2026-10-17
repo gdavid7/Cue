@@ -487,10 +487,12 @@ describe("getHomeData", () => {
     // Midnight in Los Angeles, not UTC.
     expect(checkedMessages).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: {
+        where: expect.objectContaining({
           emailAccountId: "account-1",
           createdAt: { gte: new Date("2026-10-13T07:00:00Z") },
-        },
+          // Mail Cue failed to process wasn't checked.
+          status: { not: "ERROR" },
+        }),
       }),
     );
     // Counted from Cue's records: no extra mailbox reads.
