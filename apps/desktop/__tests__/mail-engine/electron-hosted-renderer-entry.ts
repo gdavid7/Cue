@@ -1447,6 +1447,7 @@ async function waitForHeading(window: BrowserWindow, name: string) {
 }
 
 async function clickMoreActionsItem(window: BrowserWindow, label: string) {
+  await waitForThreadView(window);
   const moreRect = await waitForElementRect(
     window,
     'button[aria-label="More actions"]',
@@ -1962,7 +1963,30 @@ async function waitForThreadReader(window: BrowserWindow) {
   throw new Error("thread reader never opened");
 }
 
+/**
+ * The reader shows its toolbar while the thread's messages and the lazily
+ * loaded thread view are still on their way, then swaps in the thread view's
+ * own toolbar. A menu opened on the first one closes with it, so the "More
+ * actions" menu is only used once the thread view has rendered its messages.
+ */
+async function waitForThreadView(window: BrowserWindow) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const ready = (await window.webContents.executeJavaScript(`
+      !document.querySelector("[data-thread-view-loading]") &&
+        [...document.querySelectorAll("[data-thread-message-id]")].some(
+          (message) => !message.closest("[inert], [aria-hidden='true']"),
+        )
+    `)) as boolean;
+    if (ready) return;
+    await delay(250);
+  }
+  await captureWindow(window, process.env.ELECTRON_SCREENSHOT_PATH);
+  const body = await readBodyText(window);
+  throw new Error(`thread view never rendered: ${body.slice(0, 2000)}`);
+}
+
 async function clickMoreActionsStar(window: BrowserWindow) {
+  await waitForThreadView(window);
   const moreRect = await waitForElementRect(
     window,
     'button[aria-label="More actions"]',
