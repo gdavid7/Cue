@@ -1,5 +1,5 @@
 import { SESSION_EXPIRED_ERROR_CODE } from "@/utils/config";
-import { buildLoginRedirectUrl } from "@/utils/redirect";
+import { buildLoginRedirectUrl, redirectToSafeUrl } from "@/utils/redirect";
 
 // Server actions answer a missing session with this text, which is how the
 // client tells it apart from other action errors. The client also shows it
@@ -87,7 +87,7 @@ function redirectToLogin() {
     // Without storage the loop guard is off; redirecting is still right.
   }
   const { pathname, search, hash } = window.location;
-  window.location.assign(buildLoginRedirectUrl(`${pathname}${search}${hash}`));
+  redirectToSafeUrl(buildLoginRedirectUrl(`${pathname}${search}${hash}`));
 }
 
 function redirectedRecently() {
