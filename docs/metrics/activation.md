@@ -1,14 +1,14 @@
 # Activation metrics
 
-Cue records four activation events as structured server logs that ship to
+Cue records five activation events as structured server logs that ship to
 Axiom. There is no separate analytics vendor. The definitions live in
 `apps/web/utils/analytics/activation.ts`.
 
 ## Events
 
 Each event is an info log in the `product` scope. Its `message` is the event
-name. Its fields are the mailbox id and timestamps only: no addresses, subjects
-or content.
+name. Its fields are the mailbox id, timestamps and aggregate counts or states
+only: no addresses, subjects or content.
 
 | Event (`message`) | When | Fields |
 | --- | --- | --- |
@@ -16,6 +16,7 @@ or content.
 | `activation.needs_reply_first_item` | The first time Needs reply has an item for the mailbox | `emailAccountId`, `at`, `firstSignInAt`, `msSinceFirstSignIn` |
 | `activation.first_suggested_reply_sent` | The first sent reply that started from a reply Cue wrote: a saved suggested reply or an AI draft, sent rather than discarded | `emailAccountId`, `at` |
 | `activation.active_day` | The mailbox opens Mail or Today, at most once per UTC day | `emailAccountId`, `at`, `day` (`YYYY-MM-DD`) |
+| `activation.first_hour_health` | Once per mailbox, 60 to 120 minutes after first sign-in, from the `/api/cron/scheduled-actions` tick (at most 25 per tick). It needs that tick at least hourly, e.g. the external pinger; with only the daily Vercel cron most mailboxes are missed | `emailAccountId`, `at`, `firstSignInAt`, `minutesSinceFirstSignIn`, `provider`, enabled rule counts and `replyTrackingEnabled`, ExecutedRule counts by status (`rulesApplied`, `rulesApplying`, `rulesSkipped`, `rulesSkippedNoMatch`, `rulesErrored`), `minutesSinceLastRuleRun`, `needsReplyCount`, `awaitingReplyCount`, `accountDisconnected`, `watchStatus` (`active`/`expired`/`missing`), `hasSyncCursor`, `errorTypes` (stored error type names) |
 
 The unit is the mailbox, because `emailAccountId` is the only id the events
 carry. A person with two mailboxes counts as two.
@@ -28,6 +29,9 @@ How each event fires only once:
   long past every metric window: `activation:first-sign-in:<id>`,
   `activation:needs-reply-first-item:<id>` and
   `activation:first-suggested-reply-sent:<id>`.
+- `first_hour_health` claims `activation:first-hour-health:<id>`, which
+  expires after a day, and releases it if the snapshot fails so a later tick
+  retries.
 - `active_day` claims `activation:active-day:<id>:<day>`, which expires after
   two days.
 

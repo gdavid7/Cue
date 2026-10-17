@@ -14,6 +14,7 @@ import { markQStashActionAsExecuting } from "@/utils/scheduled-actions/scheduler
 import { env } from "@/env";
 import type { Logger } from "@/utils/logger";
 import { processDueSnoozedThreads } from "@/utils/snooze/process-due";
+import { recordFirstHourHealthForNewMailboxes } from "@/utils/analytics/first-hour-health";
 
 export const maxDuration = 300;
 
@@ -27,7 +28,7 @@ export const GET = withError("cron/scheduled-actions", async (request) => {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  const result = await processScheduledMail(request.logger);
+  const result = await runScheduledWork(request.logger);
 
   return NextResponse.json(result);
 });
@@ -40,7 +41,7 @@ export const POST = withError("cron/scheduled-actions", async (request) => {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  const result = await processScheduledMail(request.logger);
+  const result = await runScheduledWork(request.logger);
 
   return NextResponse.json(result);
 });
@@ -141,6 +142,18 @@ async function processScheduledActions(logger: Logger) {
     skipped,
     total: scheduledActions.length,
   };
+}
+
+// The most frequent tick in the app, so new-mailbox health piggybacks on it.
+async function runScheduledWork(logger: Logger) {
+  const [mail, firstHourHealth] = await Promise.all([
+    processScheduledMail(logger),
+    recordFirstHourHealthForNewMailboxes(logger).catch((error) => {
+      logger.error("First-hour health check failed", { error });
+      return { error: true };
+    }),
+  ]);
+  return { ...mail, firstHourHealth };
 }
 
 async function processScheduledMail(logger: Logger) {
