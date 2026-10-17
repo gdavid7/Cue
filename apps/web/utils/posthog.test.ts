@@ -364,6 +364,35 @@ describe("posthogCaptureEvent", () => {
 
     expect(catchSpy).toHaveBeenCalledOnce();
   });
+
+  it("skips capture and reports a missing key once, not as a warning", async () => {
+    const key = mockEnv.NEXT_PUBLIC_POSTHOG_KEY;
+    mockEnv.NEXT_PUBLIC_POSTHOG_KEY = "";
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await expect(
+        posthogCaptureEvent("user@example.com", "Test event"),
+      ).resolves.toBe(false);
+      await expect(
+        posthogCaptureEvent("user@example.com", "Test event"),
+      ).resolves.toBe(false);
+
+      expect(captureMock).not.toHaveBeenCalled();
+      const missingKeyLogs = [...logSpy.mock.calls, ...warnSpy.mock.calls]
+        .map(([message]) => String(message))
+        .filter((message) => message.includes("NEXT_PUBLIC_POSTHOG_KEY"));
+      expect(missingKeyLogs).toHaveLength(1);
+      expect(String(logSpy.mock.calls[0]?.[0])).toContain(
+        "NEXT_PUBLIC_POSTHOG_KEY not set",
+      );
+    } finally {
+      mockEnv.NEXT_PUBLIC_POSTHOG_KEY = key;
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
 });
 
 describe("Stripe billing outcome events", () => {

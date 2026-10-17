@@ -9,6 +9,8 @@ import { redis } from "@/utils/redis";
 
 const logger = createScopedLogger("posthog");
 let posthogLlmClient: PostHog | undefined;
+// PostHog is deliberately unconfigured in some deployments, so say so once rather than per event.
+let reportedMissingKey = false;
 
 export function getPosthogLlmClient() {
   if (!env.NEXT_PUBLIC_POSTHOG_KEY) return;
@@ -148,7 +150,7 @@ export async function aliasPosthogUser({
   newEmail: string;
 }) {
   if (!env.NEXT_PUBLIC_POSTHOG_KEY) {
-    logger.warn("NEXT_PUBLIC_POSTHOG_KEY not set");
+    reportMissingPosthogKey();
     return;
   }
 
@@ -178,7 +180,7 @@ export async function posthogCaptureEvent(
 ) {
   try {
     if (!env.NEXT_PUBLIC_POSTHOG_KEY) {
-      logger.warn("NEXT_PUBLIC_POSTHOG_KEY not set");
+      reportMissingPosthogKey();
       return false;
     }
 
@@ -607,4 +609,10 @@ function addFirstTimeEventCacheKey(key: string) {
 
   const oldestKey = firedFirstTimeEvents.keys().next().value;
   if (oldestKey) firedFirstTimeEvents.delete(oldestKey);
+}
+
+function reportMissingPosthogKey() {
+  if (reportedMissingKey) return;
+  reportedMissingKey = true;
+  logger.info("NEXT_PUBLIC_POSTHOG_KEY not set");
 }

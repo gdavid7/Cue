@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Logger } from "@/utils/logger";
+import { createScopedLogger } from "@/utils/logger";
 
 vi.mock("@/utils/fb", () => ({
   sendCompleteRegistrationEvent: vi.fn(),
@@ -34,10 +34,9 @@ import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";
 
 describe("server conversion tracking", () => {
-  const logger = {
-    error: vi.fn(),
-    warn: vi.fn(),
-  } as unknown as Logger;
+  const logger = createScopedLogger("server-conversions-test");
+  vi.spyOn(logger, "error");
+  vi.spyOn(logger, "warn");
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -139,5 +138,16 @@ describe("server conversion tracking", () => {
     await expect(
       getRegistrationCompletedConversionEligibility("user-id", logger),
     ).resolves.toEqual({ eligible: true, createdAt });
+  });
+
+  it("treats users created over an hour ago as ineligible without warning", async () => {
+    const createdAt = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({ createdAt } as never);
+
+    await expect(
+      getRegistrationCompletedConversionEligibility("user-id", logger),
+    ).resolves.toEqual({ eligible: false });
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
   });
 });

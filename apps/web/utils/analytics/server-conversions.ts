@@ -113,7 +113,7 @@ export async function getRegistrationCompletedConversionEligibility(
   const ONE_HOUR_AGO = new Date(Date.now() - ONE_HOUR_MS);
 
   if (userCreatedAt.createdAt < ONE_HOUR_AGO) {
-    logger.warn(
+    logger.trace(
       "getRegistrationCompletedConversionEligibility: User created more than an hour ago",
       { userId },
     );
