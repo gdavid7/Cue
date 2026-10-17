@@ -213,6 +213,9 @@ test("advances the split reader after archiving an open conversation", async ({
     page.getByRole("heading", { name: "Second Unread Command Message" }),
   ).toBeVisible();
   await expect(conversation).toHaveCount(0);
+  // The heading can show before the thread's messages, and the frame check
+  // below doesn't wait.
+  await expect(page.locator("[data-thread-message-id]").first()).toBeVisible();
 
   let archived = false;
   let restoreSucceeded: boolean | undefined;
