@@ -65,10 +65,15 @@ export function getDevSWRErrorRetryMs(
 // spending quota the provider has not restored and keeping the account limited.
 const RATE_LIMITED_RETRY_MS = 60_000;
 // A deferred read (503) says how long the account's budget needs. Waiting it
-// out asks once instead of several times inside the window. The bounds keep a
-// bad header from either hammering the server or parking the screen, and the
-// jitter keeps tabs deferred together from all asking at the same moment.
+// out asks once instead of several times inside the window. Its Retry-After
+// is a ceiling, not a promise: a gate that is lifted explicitly, like the
+// one held while a new account's first sync runs, reports its full expiry
+// (about 90 s) though it usually lifts within seconds. So the wait is held
+// to 10 s on the first retry and doubles from there. The bounds also keep a
+// bad header from hammering the server or parking the screen, and the jitter
+// keeps tabs deferred together from all asking at the same moment.
 const MIN_RETRY_AFTER_MS = 1000;
+const FIRST_RETRY_AFTER_CAP_MS = 10_000;
 const MAX_RETRY_AFTER_MS = 90_000;
 
 export const onSWRErrorRetry: NonNullable<SWRConfiguration["onErrorRetry"]> = (
@@ -112,9 +117,13 @@ export function getRetryHint(
       ? { kind: "wait", ms: RATE_LIMITED_RETRY_MS }
       : { kind: "stop" };
   if (error?.status === 503 && typeof error.retryAfterMs === "number") {
+    const cap = Math.min(
+      FIRST_RETRY_AFTER_CAP_MS * 2 ** Math.max(0, retryCount - 1),
+      MAX_RETRY_AFTER_MS,
+    );
     const bounded = Math.min(
       Math.max(error.retryAfterMs, MIN_RETRY_AFTER_MS),
-      MAX_RETRY_AFTER_MS,
+      cap,
     );
     return { kind: "wait", ms: Math.round(bounded * jitter) };
   }
