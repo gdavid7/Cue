@@ -113,8 +113,25 @@ function PersistedSwrCache() {
       return;
     }
     const isAccountSwitch = hydratedForRef.current !== null;
+    // Empty → id is a first account, not a switch: the effect below
+    // revalidates that.
+    const previousAccountId = hydratedForRef.current;
     hydratedForRef.current = emailAccountId;
     const persisted = readPersistedSwrEntries(emailAccountId);
+    if (previousAccountId) {
+      // Keys without the account in them (/api/user/group, the chat list…)
+      // still hold the previous account's data, and a failed refresh leaves
+      // data on screen. Hooks still mounted ask again for this account; a
+      // clear without revalidating would also drop the fetch they already
+      // started, leaving them loading. Persisted keys are re-seeded below.
+      scopedMutate(
+        (key) =>
+          !(PERSISTED_SWR_KEYS as readonly unknown[]).includes(key) &&
+          !(Array.isArray(key) && key.includes(emailAccountId)),
+        undefined,
+        { revalidate: true },
+      );
+    }
     for (const key of PERSISTED_SWR_KEYS) {
       const data = persisted.get(key)?.data;
       if (isAccountSwitch) {

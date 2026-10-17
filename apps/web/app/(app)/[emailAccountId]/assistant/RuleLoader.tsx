@@ -22,7 +22,7 @@ export function RuleLoader({
   if (isMissingRule) return <RuleNotFoundState />;
 
   return (
-    <LoadingContent loading={isLoading} error={error}>
+    <LoadingContent hasData={Boolean(data)} loading={isLoading} error={error}>
       {data ? children({ rule: data.rule, mutate }) : null}
     </LoadingContent>
   );

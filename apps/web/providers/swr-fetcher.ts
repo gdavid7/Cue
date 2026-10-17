@@ -74,12 +74,16 @@ export const swrFetcher = async (
     }
 
     const errorMessage = getSWRFetchErrorMessage(errorData);
-    const error: Error & { info?: Record<string, unknown>; status?: number } =
-      new Error(errorMessage);
+    const error: Error & {
+      info?: Record<string, unknown>;
+      status?: number;
+      retryAfterMs?: number;
+    } = new Error(errorMessage);
 
     // Attach extra info to the error object.
     error.info = errorData;
     error.status = res.status;
+    error.retryAfterMs = parseRetryAfterMs(res.headers.get("Retry-After"));
 
     const isKnownError = errorData.isKnownError;
 
@@ -100,3 +104,15 @@ export const swrFetcher = async (
 
   return res.json();
 };
+
+// Retry-After is either whole seconds or an HTTP date; anything else (a
+// negative number, garbage) is no hint at all. The retry bounds the result.
+function parseRetryAfterMs(value: string | null): number | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return;
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000;
+  if (/^[+-]?[\d.]+$/.test(trimmed)) return;
+  const date = Date.parse(trimmed);
+  if (Number.isNaN(date)) return;
+  return Math.max(0, date - Date.now());
+}

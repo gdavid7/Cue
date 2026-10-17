@@ -185,6 +185,55 @@ describe("SWRProvider persisted cache", () => {
     });
   });
 
+  it("never shows the previous account's data when the new account's load fails", async () => {
+    let account = "account-a";
+    const fetcher = vi.fn(async () => {
+      if (account === "account-b") {
+        throw Object.assign(new Error("Server error"), { status: 500 });
+      }
+      return { owner: account };
+    });
+
+    function GroupProbe() {
+      const { data, error } = useSWR<{ owner: string }>(
+        "/api/user/group",
+        fetcher,
+        {
+          shouldRetryOnError: false,
+          revalidateOnFocus: false,
+          dedupingInterval: 0,
+        },
+      );
+      // As LoadingContent with hasData: data stays on screen through an error.
+      return (
+        <div data-testid="group">
+          {data ? data.owner : error ? "error" : "loading"}
+        </div>
+      );
+    }
+
+    const view = render(
+      <SWRProvider>
+        <GroupProbe />
+      </SWRProvider>,
+    );
+    await waitFor(() => {
+      expect(view.getByTestId("group").textContent).toBe("account-a");
+    });
+
+    account = "account-b";
+    accountState.emailAccountId = "account-b";
+    view.rerender(
+      <SWRProvider>
+        <GroupProbe />
+      </SWRProvider>,
+    );
+
+    await waitFor(() => {
+      expect(view.getByTestId("group").textContent).toBe("error");
+    });
+  });
+
   it("persists the active account's whitelisted entries on pagehide", async () => {
     window.localStorage.setItem(
       snapshotKey("account-a"),

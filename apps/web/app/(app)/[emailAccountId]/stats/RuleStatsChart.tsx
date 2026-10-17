@@ -113,6 +113,7 @@ export function RuleStatsChart({ dateRange, title }: RuleStatsChartProps) {
 
   return (
     <LoadingContent
+      hasData={Boolean(data)}
       loading={isLoading}
       error={error}
       loadingComponent={<Skeleton className="h-64 w-full rounded" />}

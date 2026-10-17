@@ -148,7 +148,24 @@ export function CueStrip({
     messageId,
     enabled: enabled && visibility === "show" && !folded,
   });
-  const briefSettled = Boolean(briefData || briefError);
+  // A deferred read is asked again once the account's Gmail budget allows,
+  // so its summary is still on the way rather than missing; past the same
+  // limit Cue has to decide, the strip stops waiting for it.
+  const briefDeferred =
+    briefError?.status === 503 && typeof briefError.retryAfterMs === "number";
+  const [briefGaveUpFor, setBriefGaveUpFor] = useState<string>();
+  useEffect(() => {
+    if (!briefDeferred || !messageId) return;
+    const timer = setTimeout(
+      () => setBriefGaveUpFor(messageId),
+      DECIDE_LIMIT_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [briefDeferred, messageId]);
+  const briefSettled = Boolean(
+    briefData ||
+      (briefError && (!briefDeferred || briefGaveUpFor === messageId)),
+  );
 
   if (!messageId || !held) return null;
   const open = visibility !== "hide" && !folded;

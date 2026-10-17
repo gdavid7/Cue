@@ -32,6 +32,7 @@ export function AvailabilitySection() {
         </div>
 
         <LoadingContent
+          hasData={Boolean(data)}
           loading={isLoading}
           error={error}
           loadingComponent={

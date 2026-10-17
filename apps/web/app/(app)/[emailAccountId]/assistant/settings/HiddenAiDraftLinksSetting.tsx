@@ -53,6 +53,7 @@ export function HiddenAiDraftLinksSetting() {
       description="Let AI-generated drafts use custom anchor text like 'click here'. This is more convenient, but it hides the full destination and any data in the link."
       right={
         <LoadingContent
+          hasData={Boolean(data)}
           loading={isLoading}
           error={error}
           loadingComponent={<Skeleton className="h-8 w-32" />}

@@ -41,6 +41,7 @@ export function VacationResponderSetting({
     <>
       <ItemSeparator />
       <LoadingContent
+        hasData={Boolean(data)}
         loading={isLoading}
         error={error}
         // A provider that can't be read shouldn't take over the settings page.

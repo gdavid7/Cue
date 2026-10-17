@@ -30,7 +30,7 @@ export function ColdEmailRejected() {
   const { userEmail } = useAccount();
 
   return (
-    <LoadingContent loading={isLoading} error={error}>
+    <LoadingContent hasData={Boolean(data)} loading={isLoading} error={error}>
       {data?.coldEmails.length ? (
         <div>
           <Table>

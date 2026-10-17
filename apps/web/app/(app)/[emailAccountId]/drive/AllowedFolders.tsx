@@ -70,7 +70,7 @@ export function AllowedFolders({ emailAccountId }: { emailAccountId: string }) {
   const driveConnectionId = connectionsData?.connections[0]?.id;
 
   return (
-    <LoadingContent loading={isLoading} error={error}>
+    <LoadingContent hasData={Boolean(data)} loading={isLoading} error={error}>
       {data && (
         <AllowedFoldersContent
           emailAccountId={emailAccountId}

@@ -45,6 +45,7 @@ export function WebLookupSetting() {
       description="When your mail and calendar can't back a reply, Cue searches public web pages for what's missing. Only a short query of public names and topics is sent, not your email."
       right={
         <LoadingContent
+          hasData={Boolean(data)}
           loading={isLoading}
           error={error}
           loadingComponent={<Skeleton className="h-8 w-32" />}

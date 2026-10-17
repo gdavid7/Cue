@@ -29,7 +29,7 @@ export function FilingRulesForm({
   const { data, isLoading, error, mutate } = useEmailAccountFull();
 
   return (
-    <LoadingContent loading={isLoading} error={error}>
+    <LoadingContent hasData={Boolean(data)} loading={isLoading} error={error}>
       {data && (
         <FilingRulesFormContent
           emailAccountId={emailAccountId}

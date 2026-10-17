@@ -66,7 +66,7 @@ export function ColdEmailList() {
   }, [selected, data?.coldEmails, mutate, markNotColdEmail]);
 
   return (
-    <LoadingContent loading={isLoading} error={error}>
+    <LoadingContent hasData={Boolean(data)} loading={isLoading} error={error}>
       {data?.coldEmails.length ? (
         <div>
           {Array.from(selected.values()).filter(Boolean).length > 0 && (

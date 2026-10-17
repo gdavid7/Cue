@@ -247,7 +247,7 @@ function EmailsChart({
   });
 
   return (
-    <LoadingContent loading={isLoading} error={error}>
+    <LoadingContent hasData={Boolean(data)} loading={isLoading} error={error}>
       {data && (
         <BarChart
           data={data.result}
