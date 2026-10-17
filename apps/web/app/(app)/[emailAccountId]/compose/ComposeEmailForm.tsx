@@ -82,7 +82,10 @@ import {
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import { getActiveMailClient } from "@/utils/mail-engine/active-client";
 import { useReplyDraftPersistence } from "@/hooks/useReplyDraftPersistence";
-import { MAIL_SHORTCUT_SCOPES } from "@/lib/shortcuts/registry";
+import {
+  MAIL_SHORTCUT_SCOPES,
+  TYPING_SURFACE_ATTRIBUTE,
+} from "@/lib/shortcuts/registry";
 import { ShortcutsProvider } from "@/lib/shortcuts/ShortcutsProvider";
 import { useShortcuts } from "@/lib/shortcuts/useShortcuts";
 import { useAccount } from "@/providers/EmailAccountProvider";
@@ -1662,6 +1665,17 @@ function ComposeEmailFormContent({
   // Changing From moves the draft: its text, recipients and files go to the
   // new account. The old account's drafts stay until the new one holds it.
   const [isMovingDraft, setIsMovingDraft] = useState(false);
+  // While the draft moves, From is inert and then replaced along with this
+  // composer, so focus can't return to it and would drop to the page, where
+  // keys still being typed reach mailbox shortcuts. Compose itself holds focus
+  // until the moved draft's composer takes it. This runs once the From menu
+  // has closed and stopped holding focus itself.
+  useEffect(() => {
+    if (!isMovingDraft) return;
+    formRef.current
+      ?.closest<HTMLElement>(`[${TYPING_SURFACE_ATTRIBUTE}]`)
+      ?.focus();
+  }, [isMovingDraft]);
   const moveDraftToAccount = async (nextEmailAccountId: string) => {
     if (nextEmailAccountId === selectedEmailAccountId || isMovingDraft) return;
     setIsMovingDraft(true);

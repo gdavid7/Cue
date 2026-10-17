@@ -14,6 +14,7 @@ import {
   SEQUENCE_TIMEOUT_MS,
   type ShortcutEntry,
   SHORTCUTS,
+  TYPING_SURFACE_ATTRIBUTE,
 } from "./registry";
 
 describe("shortcut registry", () => {
@@ -179,6 +180,16 @@ describe("isTypingTarget", () => {
     element.setAttribute("role", "textbox");
 
     expect(isTypingTarget(element)).toBe(true);
+  });
+
+  it("guards a typing surface while it holds focus itself, not its controls", () => {
+    const surface = document.createElement("div");
+    surface.setAttribute(TYPING_SURFACE_ATTRIBUTE, "");
+    const button = document.createElement("button");
+    surface.append(button);
+
+    expect(isTypingTarget(surface)).toBe(true);
+    expect(isTypingTarget(button)).toBe(false);
   });
 
   it("lets shortcuts through for everything else", () => {

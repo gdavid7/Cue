@@ -313,9 +313,19 @@ test("keeps text typed while the message moves to another From", async ({
     expect(
       await editor.evaluate((element) => Boolean(element.closest("[inert]"))),
     ).toBe(true);
+    // Compose keeps focus meanwhile, so keys typed on can't triage the
+    // mailbox behind it.
+    await expect(dialog).toBeFocused();
+    const mailUrl = page.url();
+    await page.keyboard.type("typed while the draft moves");
     releaseSave();
 
     await expect(from).toContainText(secondAccount.email, { timeout: 60_000 });
+    await expect(
+      dialog.getByRole("combobox", { name: "To", exact: true }),
+    ).toBeFocused();
+    expect(page.url()).toBe(mailUrl);
+    await expect(page.getByText("Archived", { exact: true })).toHaveCount(0);
     await expect(editor).toContainText("Before the switch. More.");
     await expect(form).not.toHaveAttribute("inert");
     await page.unroute("**/*");

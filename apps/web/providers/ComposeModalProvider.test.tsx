@@ -12,6 +12,9 @@ import type { ComponentProps } from "react";
 import { SWRConfig } from "swr";
 import { Tooltip } from "@/components/Tooltip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAIL_SHORTCUT_SCOPES } from "@/lib/shortcuts/registry";
+import { ShortcutsProvider } from "@/lib/shortcuts/ShortcutsProvider";
+import { useShortcuts } from "@/lib/shortcuts/useShortcuts";
 import { ComposeModalProvider, useComposeModal } from "./ComposeModalProvider";
 import { EmailAccountProvider, useAccount } from "./EmailAccountProvider";
 
@@ -218,6 +221,24 @@ describe("ComposeModalProvider focus", () => {
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
+  // Moving a draft to another account makes the form inert and parks focus
+  // on compose itself; what the user keeps typing must not triage mail.
+  it("keeps keys typed while compose itself holds focus away from mail shortcuts", async () => {
+    const archive = vi.fn();
+    renderProvider({ archive });
+    fireEvent.click(await screen.findByRole("button", { name: "Compose" }));
+    await screen.findByTestId("composer");
+    const dialog = screen.getByRole("dialog");
+    dialog.focus();
+    expect(document.activeElement).toBe(dialog);
+
+    fireEvent.keyDown(dialog, { key: "e", code: "KeyE" });
+    expect(archive).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(document.body, { key: "e", code: "KeyE" });
+    expect(archive).toHaveBeenCalledOnce();
+  });
+
   it("still shows the Compose tooltip when Tab lands on it", async () => {
     renderProvider({ withTooltip: true });
     const opener = await screen.findByRole("button", { name: "Compose" });
@@ -231,11 +252,22 @@ describe("ComposeModalProvider focus", () => {
   });
 });
 
-function renderProvider({ withTooltip = false } = {}) {
+function renderProvider({
+  withTooltip = false,
+  archive,
+}: {
+  withTooltip?: boolean;
+  archive?: () => void;
+} = {}) {
   render(
     <SWRConfig value={{ provider: () => new Map() }}>
       <EmailAccountProvider>
         <ComposeModalProvider>
+          {archive && (
+            <ShortcutsProvider scopes={MAIL_SHORTCUT_SCOPES}>
+              <ArchiveShortcut archive={archive} />
+            </ShortcutsProvider>
+          )}
           {withTooltip ? (
             <Tooltip content="Write a new email">
               <ComposeButton />
@@ -248,6 +280,11 @@ function renderProvider({ withTooltip = false } = {}) {
       </EmailAccountProvider>
     </SWRConfig>,
   );
+}
+
+function ArchiveShortcut({ archive }: { archive: () => void }) {
+  useShortcuts({ archive });
+  return null;
 }
 
 function ComposeButton(props: ComponentProps<"button">) {

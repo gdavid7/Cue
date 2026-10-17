@@ -647,10 +647,17 @@ export function assertNoShortcutConflicts(
   throw new Error(`Conflicting shortcuts: ${describeConflicts(conflicts)}`);
 }
 
+/**
+ * Marks a container whose keys belong to what is being written there, even
+ * while focus rests on the container itself rather than a field inside it.
+ */
+export const TYPING_SURFACE_ATTRIBUTE = "data-typing-surface";
+
 /** Bindings stay inert while the user is typing, unless they're a ⌘ combo. */
 export function isTypingTarget(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null;
   if (!element?.tagName) return false;
+  if (element.hasAttribute?.(TYPING_SURFACE_ATTRIBUTE)) return true;
 
   const tagName = element.tagName.toUpperCase();
   if (tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT") {
