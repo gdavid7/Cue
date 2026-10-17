@@ -49,6 +49,8 @@ const HOSTED_IDLE_PROOF_TIMEOUT_MS = 90_000;
 const HOSTED_PROOF_POLL_MS = 500;
 // Idle catch-up proofs would otherwise wait out the 60s production interval.
 const HOSTED_IDLE_CATCH_UP_INTERVAL_MS = 1000;
+// A hosted mail page loads in a few seconds.
+const PAGE_LOAD_TIMEOUT_MS = 60_000;
 // While a fresh mailbox first syncs, the inbox shows the server's rows as a
 // placeholder: the same "Conversations" listbox, but nothing there selects or
 // triages. Only the mail engine's own list is ready for a proof to act on.
@@ -114,7 +116,7 @@ async function runHostedMail() {
   });
   const mailUrl = new URL(`/${accountId}/mail`, appOrigin).toString();
   try {
-    await window.loadURL(mailUrl);
+    await loadPage(window, mailUrl);
     const transport = await waitForTransport(window, "desktop-ipc");
     if (!owner) throw new Error("desktop mail owner is missing");
     const payload = await runProof({
@@ -337,11 +339,11 @@ async function proveSend(
   // not stop it. Leaving also keeps the idle page off the emulator's quota.
   await waitForNativeSendStatus(owner, accountId, ["verifying", "succeeded"]);
   const mailUrl = window.webContents.getURL();
-  await window.loadURL("about:blank");
+  await loadPage(window, "about:blank");
   const sendSucceeded = Boolean(
     await waitForNativeSendStatus(owner, accountId, ["succeeded"]),
   );
-  await window.loadURL(mailUrl);
+  await loadPage(window, mailUrl);
   await waitForConversations(window);
   await openDraftsMailbox(window);
   await waitForSubjectGone(window, SEND_SUBJECT);
@@ -622,7 +624,8 @@ async function proveBulk(
     DELETE_SUBJECT,
     false,
   );
-  await window.loadURL(
+  await loadPage(
+    window,
     new URL(
       `/${accountId}/mail`,
       getDesktopAppOrigin(requiredEnv("ELECTRON_APP_URL")),
@@ -682,7 +685,7 @@ async function proveQueuedRestart(
   });
   await waitForHeldOperations(gate);
   const mailUrl = window.webContents.getURL();
-  await window.loadURL(mailUrl);
+  await loadPage(window, mailUrl);
   await waitForTransport(window, "desktop-ipc");
   await waitForMissingSubject(window, ARCHIVE_SUBJECT, SEARCH_HIDDEN_SUBJECT);
   const queuedAfterReload = await waitForInspectStatus(window, {
@@ -821,7 +824,7 @@ async function proveSignOut(window: BrowserWindow, sqlitePath: string) {
   await waitForConversations(window);
   const sqliteExistsBefore = existsSync(sqlitePath);
   const origin = new URL(window.webContents.getURL()).origin;
-  await window.loadURL(`${origin}/settings`);
+  await loadPage(window, `${origin}/settings`);
   await waitForHeading(window, "Settings");
   await clickNavUser(window);
   const signOutRect = await waitForMenuItemRect(window, "Sign out");
@@ -1444,6 +1447,7 @@ async function waitForHeading(window: BrowserWindow, name: string) {
 }
 
 async function clickMoreActionsItem(window: BrowserWindow, label: string) {
+  await waitForThreadView(window);
   const moreRect = await waitForElementRect(
     window,
     'button[aria-label="More actions"]',
@@ -1959,7 +1963,30 @@ async function waitForThreadReader(window: BrowserWindow) {
   throw new Error("thread reader never opened");
 }
 
+/**
+ * The reader shows its toolbar while the thread's messages and the lazily
+ * loaded thread view are still on their way, then swaps in the thread view's
+ * own toolbar. A menu opened on the first one closes with it, so the "More
+ * actions" menu is only used once the thread view has rendered its messages.
+ */
+async function waitForThreadView(window: BrowserWindow) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const ready = (await window.webContents.executeJavaScript(`
+      !document.querySelector("[data-thread-view-loading]") &&
+        [...document.querySelectorAll("[data-thread-message-id]")].some(
+          (message) => !message.closest("[inert], [aria-hidden='true']"),
+        )
+    `)) as boolean;
+    if (ready) return;
+    await delay(250);
+  }
+  await captureWindow(window, process.env.ELECTRON_SCREENSHOT_PATH);
+  const body = await readBodyText(window);
+  throw new Error(`thread view never rendered: ${body.slice(0, 2000)}`);
+}
+
 async function clickMoreActionsStar(window: BrowserWindow) {
+  await waitForThreadView(window);
   const moreRect = await waitForElementRect(
     window,
     'button[aria-label="More actions"]',
@@ -2303,6 +2330,65 @@ async function readNativeStarredSubjects(
       ?.map((conversation) => conversation.subject)
       .filter((subject): subject is string => Boolean(subject)) ?? []
   );
+}
+
+/**
+ * `loadURL` settles only when the page finishes or fails to load, so a stalled
+ * navigation would otherwise hang the proof until the spec times out and its
+ * output is lost. This fails it with what the window was doing instead.
+ */
+async function loadPage(window: BrowserWindow, url: string) {
+  const contents = window.webContents;
+  const startedAt = Date.now();
+  const events: string[] = [];
+  const note = (text: string) =>
+    events.push(`${Date.now() - startedAt}ms ${text}`);
+  const listeners = {
+    "did-start-navigation": (details: { url: string }) =>
+      note(`start ${details.url}`),
+    "did-redirect-navigation": (details: { url: string }) =>
+      note(`redirect ${details.url}`),
+    "did-fail-load": (_event: unknown, code: number, description: string) =>
+      note(`fail ${code} ${description}`),
+    "dom-ready": () => note("dom-ready"),
+    "did-finish-load": () => note("finish"),
+    "render-process-gone": (_event: unknown, details: { reason: string }) =>
+      note(`renderer gone ${details.reason}`),
+    unresponsive: () => note("unresponsive"),
+  };
+  for (const [name, listener] of Object.entries(listeners)) {
+    contents.on(name as "dom-ready", listener as () => void);
+  }
+  const load = window.loadURL(url);
+  // A rejection after the deadline has nobody left to hear it.
+  load.catch(() => {});
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<"stalled">((resolve) => {
+    timer = setTimeout(() => resolve("stalled"), PAGE_LOAD_TIMEOUT_MS);
+  });
+  try {
+    if ((await Promise.race([load, deadline])) !== "stalled") return;
+    await captureWindow(window, process.env.ELECTRON_SCREENSHOT_PATH).catch(
+      () => {},
+    );
+    const workers = contents.session.serviceWorkers.getAllRunning();
+    throw new Error(
+      `page load of ${url} stalled: ${JSON.stringify({
+        currentUrl: contents.getURL(),
+        isLoading: contents.isLoading(),
+        isWaitingForResponse: contents.isWaitingForResponse(),
+        runningServiceWorkers: Object.values(workers).map(
+          (worker) => worker.scope,
+        ),
+        events,
+      })}`,
+    );
+  } finally {
+    clearTimeout(timer);
+    for (const [name, listener] of Object.entries(listeners)) {
+      contents.off(name as "dom-ready", listener as () => void);
+    }
+  }
 }
 
 async function captureWindow(window: BrowserWindow, screenshotPath?: string) {
