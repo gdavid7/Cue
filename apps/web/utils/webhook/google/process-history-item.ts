@@ -14,6 +14,7 @@ import { GmailLabel } from "@/utils/gmail/label";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
 import type { Logger } from "@/utils/logger";
+import { isInvalidGrantError } from "@/utils/error";
 
 /**
  * Another processor holds the message. It isn't handled yet, and that holder
@@ -90,11 +91,13 @@ export async function processHistoryItem(
       );
       return result;
     } catch (error) {
-      // The history cursor stays before this message so a catch-up retries
-      // it; the lock would make that catch-up skip it.
+      // The history cursor stays before this message so a catch-up (or the
+      // first run after a reconnect) retries it; the lock would make that run
+      // skip it.
       if (
         isGmailCallDeferredError(error) ||
-        isEmailProviderRateLimitError({ error, provider: "google" })
+        isEmailProviderRateLimitError({ error, provider: "google" }) ||
+        isInvalidGrantError(error)
       ) {
         await releaseMessageProcessing(lock).catch((clearError) =>
           logger.warn("Failed to release message processing lock", {

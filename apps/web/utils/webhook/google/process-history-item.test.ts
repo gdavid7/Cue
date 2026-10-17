@@ -214,6 +214,29 @@ describe("processHistoryItem", () => {
     expect(markMessageProcessed).not.toHaveBeenCalled();
   });
 
+  it("releases a message it could not process because the grant was revoked, so it is processed after a reconnect", async () => {
+    const revoked = new Error("Token refresh failed: invalid_grant");
+    vi.mocked(createEmailProvider).mockResolvedValueOnce({
+      getMessage: vi.fn().mockRejectedValue(revoked),
+      isSentMessage: vi.fn().mockReturnValue(false),
+    } as any);
+    const emailAccount = getDefaultEmailAccount();
+
+    await expect(
+      processHistoryItem(
+        createHistoryItem(),
+        { ...defaultOptions, emailAccount },
+        logger,
+      ),
+    ).rejects.toBe(revoked);
+    expect(releaseMessageProcessing).toHaveBeenCalledWith({
+      userEmail: emailAccount.email,
+      messageId: "123",
+      lockToken: "message-lock",
+    });
+    expect(markMessageProcessed).not.toHaveBeenCalled();
+  });
+
   it("skips a message already processed without reading it from Gmail again", async () => {
     vi.mocked(acquireMessageProcessing).mockResolvedValueOnce({
       status: "processed",
