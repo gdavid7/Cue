@@ -830,6 +830,37 @@ describe("EmailThread reading a conversation", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 
+  // Heading navigation steps from message to message, collapsed or not.
+  it("heads each message with its sender and date at the level asked for", () => {
+    const messages = [
+      createReaderMessage("first", "1000"),
+      createReaderMessage("latest", "2000"),
+    ];
+    const { rerender } = render(
+      <EmailThread messages={messages} refetch={vi.fn()} showReplyButton />,
+    );
+
+    const headings = screen.getAllByRole("heading", { level: 2 });
+    expect(headings).toHaveLength(2);
+    for (const heading of headings) {
+      expect(heading.textContent).toMatch(
+        /^Message from sender@example\.com, /,
+      );
+      expect(heading.className).toBe("sr-only");
+    }
+
+    rerender(
+      <EmailThread
+        messageHeadingLevel={3}
+        messages={messages}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+    expect(screen.queryAllByRole("heading", { level: 2 })).toEqual([]);
+    expect(screen.getAllByRole("heading", { level: 3 })).toHaveLength(2);
+  });
+
   it("hands expand-all to an outside toolbar, and takes it back on unmount", () => {
     const onMessageExpansionChange = vi.fn();
     const { unmount } = render(

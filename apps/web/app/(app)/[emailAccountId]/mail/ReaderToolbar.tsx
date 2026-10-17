@@ -49,6 +49,8 @@ type ReaderToolbarProps = {
   menu?: ReactNode;
   /** Shown beside snooze, e.g. `AddToCalendarButton`. */
   extraAction?: ReactNode;
+  /** 2 beside the mail list, whose view name is the page's h1. */
+  subjectHeadingLevel?: 1 | 2;
   messageExpansion?: {
     allExpanded: boolean;
     canExpand: boolean;
@@ -77,6 +79,7 @@ export function ReaderToolbar({
   onMarkUnread,
   menu,
   extraAction,
+  subjectHeadingLevel,
   messageExpansion,
 }: ReaderToolbarProps) {
   return (
@@ -130,6 +133,7 @@ export function ReaderToolbar({
       renderActionTooltip={renderActionTooltip}
       renderButton={renderButton}
       subject={subject}
+      subjectHeadingLevel={subjectHeadingLevel}
     />
   );
 }

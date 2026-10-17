@@ -41,6 +41,7 @@ export function ThreadContextList({
   onOpenThread,
   limit,
   heading,
+  headingLevel = 3,
 }: {
   threadId: string;
   emailAccountId: string;
@@ -48,6 +49,8 @@ export function ThreadContextList({
   /** Rows shown before "Show more". All of them when unset. */
   limit?: number;
   heading?: string;
+  /** One below the heading the list sits under, so no level is skipped. */
+  headingLevel?: 3 | 4;
 }) {
   const { data } = useThreadContext({ threadId, emailAccountId });
   const [expanded, setExpanded] = useState(false);
@@ -56,13 +59,14 @@ export function ThreadContextList({
 
   const shown = expanded || !limit ? items : items.slice(0, limit);
   const hidden = items.length - shown.length;
+  const Heading = headingLevel === 4 ? "h4" : "h3";
 
   return (
     <section aria-label={heading ?? "Related"}>
       {heading ? (
-        <h3 className="mb-1 px-2 font-medium text-muted-foreground text-xs">
+        <Heading className="mb-1 px-2 font-medium text-muted-foreground text-xs">
           {heading}
-        </h3>
+        </Heading>
       ) : null}
       <ul>
         {shown.map((item, index) => (

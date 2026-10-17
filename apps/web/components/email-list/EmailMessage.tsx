@@ -121,6 +121,7 @@ export function EmailMessage({
   composerSessionMessageId,
   onReplySent,
   focusComposer = false,
+  headingLevel = 2,
 }: {
   message: ThreadMessage;
   bodyAvailable?: boolean;
@@ -189,6 +190,8 @@ export function EmailMessage({
    * One that opens on its own, such as a saved draft, leaves focus alone.
    */
   focusComposer?: boolean;
+  /** One below the subject's heading, so heading navigation steps through messages. */
+  headingLevel?: 2 | 3;
 }) {
   const { emailAccountId, userEmail } = useAccount();
   const ownEmails = useOwnEmailAddresses();
@@ -393,6 +396,9 @@ export function EmailMessage({
     Boolean(senderAddress);
   const replyBarShown =
     showReplyBar && showReplyButton && expanded && !hasOpenComposer;
+  // The sender and date the header already shows, as one name.
+  const messageLabel = `Message from ${senderNameOf(message)}, ${formatShortDate(new Date(message.headers.date))}`;
+  const MessageHeading = headingLevel === 3 ? "h3" : "h2";
 
   // A conversation that is only drafts shows each one as a draft row.
   const collapsedDraftOnlyRow = visibleDrafts.find(
@@ -447,6 +453,7 @@ export function EmailMessage({
           : "px-2 py-1.5 hover:bg-muted/50 sm:px-5",
       )}
     >
+      <MessageHeading className="sr-only">{messageLabel}</MessageHeading>
       <MessageHeader
         darkEmailToggle={
           showDarkEmailToggle && (
@@ -530,7 +537,7 @@ export function EmailMessage({
                 onFocusMessage={onSelect}
                 emailAccountId={emailAccountId}
                 sender={senderAddress}
-                label={`Message from ${senderNameOf(message)}, ${formatShortDate(new Date(message.headers.date))}`}
+                label={messageLabel}
                 html={message.textHtml}
                 inlineAttachments={message.inline}
                 messageId={message.id}

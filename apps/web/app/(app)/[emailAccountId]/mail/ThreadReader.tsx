@@ -251,6 +251,10 @@ export function ThreadReader({
     );
   }
 
+  // Beside the list, the list's view name is the page's h1, so the subject is
+  // an h2; its messages, and what sits inside them, follow one level down.
+  const subjectHeadingLevel = layout === "split" ? 2 : 1;
+
   const labels =
     getEmailMessageCellLabels({
       labelIds: headerMessage?.labelIds,
@@ -293,6 +297,7 @@ export function ThreadReader({
         subject={
           translatedSubject ?? headerMessage?.headers.subject ?? "Conversation"
         }
+        subjectHeadingLevel={subjectHeadingLevel}
       />
       {emailAccountId && threadId && lastReceived ? (
         <CueStrip
@@ -359,6 +364,7 @@ export function ThreadReader({
             }
           >
             <EmailThreadLazy
+              messageHeadingLevel={subjectHeadingLevel === 2 ? 3 : 2}
               onMessageExpansionChange={setMessageExpansion}
               renderMessageMenu={renderMessageMenu}
               enableMessageNavigation={enableMessageNavigation}
@@ -374,6 +380,8 @@ export function ThreadReader({
                     <ThreadContextList
                       emailAccountId={emailAccountId}
                       heading="Related"
+                      // Inside the newest message, under its heading.
+                      headingLevel={subjectHeadingLevel === 2 ? 4 : 3}
                       limit={2}
                       onOpenThread={openThread}
                       threadId={threadId}

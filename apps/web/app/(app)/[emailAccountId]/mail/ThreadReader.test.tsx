@@ -27,13 +27,17 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
 vi.mock("@/app/(app)/[emailAccountId]/mail/ReaderToolbar", () => ({
   ReaderToolbar: ({
     subject,
+    subjectHeadingLevel = 1,
     messageExpansion,
   }: {
     subject: string;
+    subjectHeadingLevel?: number;
     messageExpansion?: { canExpand: boolean };
   }) => (
     <header>
-      <h1>{subject}</h1>
+      <div aria-level={subjectHeadingLevel} role="heading">
+        {subject}
+      </div>
       <button type="button">More actions</button>
       {messageExpansion?.canExpand ? (
         <button type="button">Expand all messages</button>
@@ -75,7 +79,9 @@ vi.mock("@/components/email-list/EmailThread", () => ({
     afterLatestMessage,
     autoOpenReplyForMessageId,
     focusAutoOpenedReply,
+    messageHeadingLevel = 2,
   }: {
+    messageHeadingLevel?: number;
     onMessageExpansionChange?: (controls: {
       allExpanded: boolean;
       canExpand: boolean;
@@ -87,7 +93,11 @@ vi.mock("@/components/email-list/EmailThread", () => ({
   }) => (
     <>
       <ReportsExpansion onChange={onMessageExpansionChange} />
-      <div data-testid="thread-view" />
+      <div data-testid="thread-view">
+        <div aria-level={messageHeadingLevel} role="heading">
+          Message from sender
+        </div>
+      </div>
       {afterLatestMessage}
       {autoOpenReplyForMessageId ? (
         <div
@@ -126,7 +136,13 @@ vi.mock(
   }),
 );
 vi.mock("@/components/thread-context/ThreadContextList", () => ({
-  ThreadContextList: () => <section aria-label="Related" />,
+  ThreadContextList: ({ headingLevel = 3 }: { headingLevel?: number }) => (
+    <section aria-label="Related">
+      <div aria-level={headingLevel} role="heading">
+        Related
+      </div>
+    </section>
+  ),
 }));
 vi.mock("@/components/team-comments/PublisherDiscussion", () => ({
   PublisherDiscussion: () => null,
@@ -246,6 +262,31 @@ describe("ThreadReader", () => {
     }
   });
 
+  // Heading navigation goes subject, then each message, then what's inside
+  // one, with no level skipped. Beside the list, whose view name is the
+  // page's h1, everything sits one level lower.
+  it.each([
+    { layout: "list" as const, levels: [1, 2, 3] },
+    { layout: "split" as const, levels: [2, 3, 4] },
+  ])("nests its headings without a gap in the $layout layout", ({
+    layout,
+    levels,
+  }) => {
+    renderReader({
+      layout,
+      refetch: vi.fn(),
+      messages: [createMessage("message-1", "Office hours", ["INBOX"])],
+    });
+
+    const level = (name: string) =>
+      Number(screen.getByRole("heading", { name }).getAttribute("aria-level"));
+    expect([
+      level("Office hours"),
+      level("Message from sender"),
+      level("Related"),
+    ]).toEqual(levels);
+  });
+
   it("shows related items under a message the user received", () => {
     renderReader({
       refetch: vi.fn(),
@@ -323,11 +364,13 @@ describe("ThreadReader", () => {
 function renderReader({
   error,
   loading = false,
+  layout = "split",
   refetch,
   messages = [],
 }: {
   error?: Parameters<typeof ThreadReader>[0]["error"];
   loading?: boolean;
+  layout?: "list" | "split";
   refetch: () => void;
   messages?: ThreadMessage[];
 }) {
@@ -338,7 +381,7 @@ function renderReader({
         enableMessageNavigation={false}
         error={error}
         labelHref={() => "/labels"}
-        layout="split"
+        layout={layout}
         loading={loading}
         messages={messages}
         onArchive={vi.fn()}

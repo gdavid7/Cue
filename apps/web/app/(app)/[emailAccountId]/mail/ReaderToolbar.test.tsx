@@ -79,6 +79,24 @@ describe("ReaderToolbar", () => {
     );
   });
 
+  // Beside the mail list, whose view name is the page's h1.
+  it("titles the conversation one level down without changing how it looks", () => {
+    const { rerender } = render(<Toolbar />);
+    const pageTitleStyle = screen.getByRole("heading", {
+      level: 1,
+      name: "Office hours",
+    }).className;
+
+    rerender(<Toolbar subjectHeadingLevel={2} />);
+
+    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+    const subject = screen.getByRole("heading", {
+      level: 2,
+      name: "Office hours",
+    });
+    expect(subject.className).toBe(pageTitleStyle);
+  });
+
   it("renames expand-all to collapse-all in place, keeping focus on it", () => {
     render(<Toolbar />);
     const toggle = screen.getByRole("button", { name: "Expand all messages" });
@@ -111,7 +129,7 @@ describe("ReaderToolbar", () => {
   });
 });
 
-function Toolbar() {
+function Toolbar({ subjectHeadingLevel }: { subjectHeadingLevel?: 1 | 2 }) {
   const [allExpanded, setAllExpanded] = useState(false);
   return (
     <ReaderToolbar
@@ -139,6 +157,7 @@ function Toolbar() {
       onMarkUnread={vi.fn()}
       onSnooze={vi.fn()}
       subject="Office hours"
+      subjectHeadingLevel={subjectHeadingLevel}
     />
   );
 }
