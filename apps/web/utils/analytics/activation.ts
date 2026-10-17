@@ -6,7 +6,8 @@ import { redis } from "@/utils/redis";
  * Activation events behind the beta's success metrics (aha, activated,
  * retained), queried in Axiom: see docs/metrics/activation.md. They are info
  * logs in the "product" scope whose message is the event name. Fields are the
- * mailbox id and timestamps only, never addresses, subjects or content.
+ * mailbox id, timestamps and aggregate counts only, never addresses, subjects
+ * or content.
  *
  * The unit is the mailbox (emailAccountId), the only id the events carry, so
  * every metric joins on it. A mailbox's first sign-in is its
@@ -17,6 +18,7 @@ export const ACTIVATION_EVENTS = {
   needsReplyFirstItem: "activation.needs_reply_first_item",
   firstSuggestedReplySent: "activation.first_suggested_reply_sent",
   activeDay: "activation.active_day",
+  firstHourHealth: "activation.first_hour_health",
 } as const;
 
 const logger = createScopedLogger("product");
