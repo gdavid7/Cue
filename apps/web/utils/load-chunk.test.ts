@@ -72,6 +72,26 @@ describe("loadChunk", () => {
     await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
   });
 
+  it("does not claim a new version when the device is offline", async () => {
+    const error = new Error("ChunkLoadError");
+    const onLine = vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    const storage = createStorage();
+    storage.setItem("stale-deployment-reloaded-at", String(Date.now()));
+
+    try {
+      await expect(
+        loadChunk(() => Promise.reject(error), {
+          delaysMs: [],
+          reload: vi.fn(),
+          storage,
+        }),
+      ).rejects.toBe(error);
+      expect(mockToastInfo).not.toHaveBeenCalled();
+    } finally {
+      onLine.mockRestore();
+    }
+  });
+
   it("never reloads for a background preload", async () => {
     const error = new Error("ChunkLoadError");
     const reload = vi.fn();

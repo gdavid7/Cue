@@ -39,7 +39,7 @@ export async function loadChunk<T>(
         await new Promise((resolve) => setTimeout(resolve, delay));
         continue;
       }
-      if (!reloadOnFailure) throw error;
+      if (!reloadOnFailure || typeof window === "undefined") throw error;
       // A reload mid-keystroke could drop the last few characters of a draft.
       if (
         !isEditingText() &&
@@ -50,7 +50,8 @@ export async function loadChunk<T>(
         // The page is going away; settling would only flash an error first.
         return new Promise<never>(() => {});
       }
-      showStaleDeploymentToast();
+      // Offline, the failure says nothing about a new version.
+      if (navigator.onLine !== false) showStaleDeploymentToast();
       throw error;
     }
   }
