@@ -53,6 +53,7 @@ vi.mock("@/components/Toast", () => ({
 }));
 
 vi.mock("@/utils/analytics/posthog-client", () => ({
+  whenReady: () => Promise.resolve(),
   posthog: {
     capture: (...args: unknown[]) => mockPosthogCapture(...args),
   },

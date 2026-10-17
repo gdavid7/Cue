@@ -1,4 +1,7 @@
-import type { PostHogClient } from "@/utils/analytics/posthog-client";
+import {
+  type PostHogClient,
+  whenReady,
+} from "@/utils/analytics/posthog-client";
 import type { LoginProvider } from "@/utils/oauth/login-providers";
 
 export type AuthFunnelProvider = LoginProvider | "unknown";
@@ -92,12 +95,18 @@ export function clearPendingAuthProvider() {
   );
 }
 
+// The sign-in redirect follows at once, and an event still waiting for PostHog
+// to load would be lost with the page.
+const AUTH_STARTED_MAX_WAIT_MS = 300;
+
+/** Resolves when it is safe to leave the page, at most a moment later. */
 export function trackAuthStarted(
   posthog: PostHogClient,
   provider: AuthFunnelProvider,
-) {
+): Promise<void> {
   rememberAuthProvider(provider);
   capture(posthog, "Authentication Started", { provider });
+  return whenReady(AUTH_STARTED_MAX_WAIT_MS);
 }
 
 export function trackAuthFailure(

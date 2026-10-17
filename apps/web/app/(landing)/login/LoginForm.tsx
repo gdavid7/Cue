@@ -67,7 +67,7 @@ export function LoginForm({
 
   const handleGoogleSignIn = async () => {
     setLoadingGoogle(true);
-    trackAuthStarted(posthog, "google");
+    await trackAuthStarted(posthog, "google");
     try {
       if (await startDesktopAuthIfAvailable("google", callbackURL)) {
         return;
@@ -247,7 +247,7 @@ async function handleSocialSignIn({
   posthog: PostHogClient;
 }) {
   setLoading(true);
-  trackAuthStarted(posthog, provider);
+  await trackAuthStarted(posthog, provider);
   try {
     if (await startDesktopAuthIfAvailable(provider, callbackURL)) {
       return;

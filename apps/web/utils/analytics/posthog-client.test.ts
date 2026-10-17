@@ -16,6 +16,7 @@ const library = vi.hoisted(() => ({
     register: vi.fn(),
     isFeatureEnabled: vi.fn(),
     onFeatureFlags: vi.fn(),
+    featureFlags: { getFlags: vi.fn((): string[] => []) },
   },
 }));
 
@@ -31,6 +32,7 @@ describe("posthog client", () => {
     vi.clearAllMocks();
     library.downloads = 0;
     library.flagsListener = undefined;
+    library.instance.featureFlags.getFlags.mockReturnValue([]);
     library.instance.onFeatureFlags.mockImplementation((listener) => {
       library.flagsListener = listener;
     });
@@ -68,10 +70,9 @@ describe("posthog client", () => {
     const [captureOrder] = library.instance.capture.mock.invocationCallOrder;
     expect(initOrder).toBeLessThan(identifyOrder);
     expect(identifyOrder).toBeLessThan(captureOrder);
-    expect(library.instance.identify).toHaveBeenCalledWith(
-      "user@example.com",
-      { email: "user@example.com" },
-    );
+    expect(library.instance.identify).toHaveBeenCalledWith("user@example.com", {
+      email: "user@example.com",
+    });
     // Queued events keep the time they happened.
     expect(library.instance.capture).toHaveBeenCalledWith(
       "$pageview",
@@ -99,6 +100,62 @@ describe("posthog client", () => {
     act(() => library.flagsListener?.(["booking-links"]));
 
     expect(result.current).toBe(true);
+  });
+
+  it("shows flags saved from an earlier visit as soon as PostHog loads", async () => {
+    const { loadPostHog, useActiveFeatureFlags, useFeatureFlagEnabled } =
+      await importClient();
+    const { result } = renderHook(() => ({
+      enabled: useFeatureFlagEnabled("booking-links"),
+      active: useActiveFeatureFlags(),
+    }));
+    library.instance.isFeatureEnabled.mockReturnValue(true);
+    library.instance.featureFlags.getFlags.mockReturnValue(["booking-links"]);
+
+    loadPostHog(vi.fn());
+
+    // No /flags response has arrived; the listener is never called.
+    await vi.waitFor(() => expect(result.current.enabled).toBe(true));
+    expect(result.current.active).toEqual(["booking-links"]);
+    expect(library.flagsListener).toBeDefined();
+  });
+
+  it("lets a sign-in redirect wait briefly for PostHog, never for long", async () => {
+    const { posthog, loadPostHog, whenReady } = await importClient();
+    const startedAt = Date.now();
+
+    // Still loading: gives up after the timeout.
+    await whenReady(20);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(15);
+
+    posthog.capture("Authentication Started");
+    loadPostHog(vi.fn());
+    await whenReady(5000);
+
+    expect(library.instance.capture).toHaveBeenCalledWith(
+      "Authentication Started",
+      undefined,
+      { timestamp: expect.any(Date) },
+    );
+  });
+
+  it("stops queueing once PostHog has failed to load", async () => {
+    const { posthog, loadPostHog, whenReady } = await importClient();
+    const init = vi.fn(() => {
+      throw new Error("PostHog failed to start");
+    });
+    posthog.capture("before failure");
+
+    loadPostHog(init);
+    await whenReady(5000);
+    posthog.capture("after failure");
+
+    // Settles at once now, rather than waiting out the timeout.
+    const startedAt = Date.now();
+    await whenReady(1000);
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(init).toHaveBeenCalledTimes(1);
+    expect(library.instance.capture).not.toHaveBeenCalled();
   });
 });
 

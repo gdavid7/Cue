@@ -60,7 +60,7 @@ function SSOLoginForm() {
   const onSubmit: SubmitHandler<SsoLoginBody> = useCallback(
     async (data) => {
       setIsSubmitting(true);
-      trackAuthStarted(posthog, "sso");
+      await trackAuthStarted(posthog, "sso");
       try {
         const params: GetSsoSignInParams = {
           email: data.email,

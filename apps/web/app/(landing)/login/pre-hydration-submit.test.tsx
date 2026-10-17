@@ -13,6 +13,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 vi.mock("@/utils/analytics/posthog-client", () => ({
+  whenReady: () => Promise.resolve(),
   posthog: { capture: vi.fn() },
 }));
 

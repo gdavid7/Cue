@@ -9,9 +9,11 @@ const MAX_PENDING_CALLS = 500;
 
 let client: PostHog | undefined;
 let loadStarted = false;
+let loadFailed = false;
 let pending: ((client: PostHog) => void)[] = [];
 let activeFlags: string[] = [];
 const flagListeners = new Set<() => void>();
+const settledListeners = new Set<() => void>();
 
 /**
  * The PostHog calls the app makes, usable before the library has loaded:
@@ -24,7 +26,6 @@ export const posthog: Pick<
   | "identify"
   | "register"
   | "setPersonProperties"
-  | "set_config"
   | "getEarlyAccessFeatures"
   | "updateEarlyAccessFeatureEnrollment"
 > = {
@@ -43,7 +44,6 @@ export const posthog: Pick<
   register: (...args) => whenLoaded((loaded) => loaded.register(...args)),
   setPersonProperties: (...args) =>
     whenLoaded((loaded) => loaded.setPersonProperties(...args)),
-  set_config: (...args) => whenLoaded((loaded) => loaded.set_config(...args)),
   getEarlyAccessFeatures: (...args) =>
     whenLoaded((loaded) => loaded.getEarlyAccessFeatures(...args)),
   updateEarlyAccessFeatureEnrollment: (...args) =>
@@ -65,17 +65,43 @@ export function loadPostHog(init: (instance: PostHog, key: string) => void) {
     .then(({ default: instance }) => {
       init(instance, key);
       client = instance;
+      // Flags persisted from an earlier visit are usable before /flags answers.
+      activeFlags = instance.featureFlags?.getFlags() ?? [];
+      notify(flagListeners);
       const calls = pending;
       pending = [];
       for (const call of calls) call(instance);
       instance.onFeatureFlags((flags) => {
         activeFlags = flags;
-        for (const listener of flagListeners) listener();
+        notify(flagListeners);
       });
+      notify(settledListeners);
     })
     .catch(() => {
+      loadFailed = true;
       pending = [];
+      notify(settledListeners);
     });
+}
+
+/**
+ * Resolves once queued calls have reached PostHog, or after `timeoutMs` if it
+ * is still loading, so a navigation away (such as a sign-in redirect) can give
+ * an event a moment to leave without ever being held up for long.
+ */
+export function whenReady(timeoutMs: number): Promise<void> {
+  if (client || loadFailed || !env.NEXT_PUBLIC_POSTHOG_KEY) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timeout);
+      settledListeners.delete(done);
+      resolve();
+    };
+    const timeout = setTimeout(done, timeoutMs);
+    settledListeners.add(done);
+  });
 }
 
 export function useFeatureFlagEnabled(flag: string) {
@@ -100,6 +126,7 @@ function whenLoaded(call: (client: PostHog) => void) {
     return;
   }
   if (
+    !loadFailed &&
     env.NEXT_PUBLIC_POSTHOG_KEY &&
     typeof window !== "undefined" &&
     pending.length < MAX_PENDING_CALLS
@@ -113,4 +140,8 @@ function subscribeToFlags(listener: () => void) {
   return () => {
     flagListeners.delete(listener);
   };
+}
+
+function notify(listeners: Set<() => void>) {
+  for (const listener of [...listeners]) listener();
 }

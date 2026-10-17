@@ -107,15 +107,34 @@ export function PostHogProvider({ children }: { children: React.ReactNode }) {
 
 // PostHog is a large library and nothing on screen needs it, so it downloads
 // once the page has loaded. Calls made before then are queued and replayed.
+// A first click or key press may lead straight to a navigation away (sign-in
+// redirects in particular), so it starts the download early, as does the
+// login page itself.
 function DeferredPostHog() {
+  const pathname = usePathname();
+  const onLoginPage = isLoginPath(pathname);
+
   useEffect(() => {
     if (!env.NEXT_PUBLIC_POSTHOG_KEY) return;
 
-    return scheduleAfterPageLoad(() => loadPostHog(initPostHog), {
+    const load = () => loadPostHog(initPostHog);
+    if (onLoginPage) {
+      load();
+      return;
+    }
+    const options = { capture: true, once: true, passive: true };
+    window.addEventListener("pointerdown", load, options);
+    window.addEventListener("keydown", load, options);
+    const cancelScheduledLoad = scheduleAfterPageLoad(load, {
       fallbackDelay: 2000,
       idleTimeout: 5000,
     });
-  }, []);
+    return () => {
+      window.removeEventListener("pointerdown", load, options);
+      window.removeEventListener("keydown", load, options);
+      cancelScheduledLoad();
+    };
+  }, [onLoginPage]);
 
   return null;
 }
@@ -146,4 +165,8 @@ function initPostHog(instance: PostHog, key: string) {
       disable_session_recording: false,
     });
   });
+}
+
+function isLoginPath(pathname: string | null) {
+  return pathname === "/login" || Boolean(pathname?.startsWith("/login/"));
 }
