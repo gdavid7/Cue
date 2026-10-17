@@ -49,6 +49,10 @@ const HOSTED_IDLE_PROOF_TIMEOUT_MS = 90_000;
 const HOSTED_PROOF_POLL_MS = 500;
 // Idle catch-up proofs would otherwise wait out the 60s production interval.
 const HOSTED_IDLE_CATCH_UP_INTERVAL_MS = 1000;
+// While a fresh mailbox first syncs, the inbox shows the server's rows as a
+// placeholder: the same "Conversations" listbox, but nothing there selects or
+// triages. Only the mail engine's own list is ready for a proof to act on.
+const LIVE_CONVERSATIONS_JS = `[...document.querySelectorAll('[role="listbox"][aria-label="Conversations"]')].find((list) => !list.closest("[data-mail-inbox-preview]"))`;
 
 if (process.env.ELECTRON_USER_DATA) {
   app.setPath("userData", process.env.ELECTRON_USER_DATA);
@@ -1066,7 +1070,7 @@ async function waitForResetRebuild(gate: BlockedAuthGate) {
 async function waitForConversations(window: BrowserWindow) {
   for (let attempt = 0; attempt < 120; attempt += 1) {
     const count = (await window.webContents.executeJavaScript(`
-      document.querySelector('[role="listbox"][aria-label="Conversations"]')
+      (${LIVE_CONVERSATIONS_JS})
         ?.querySelectorAll('[role="option"]').length ?? 0
     `)) as number;
     if (count > 0) return;
@@ -1191,7 +1195,7 @@ async function clickArchive(window: BrowserWindow, subject: string) {
     if (attempt > 0) await delay(250);
     selection = (await window.webContents.executeJavaScript(`
       (() => {
-        const list = document.querySelector('[role="listbox"][aria-label="Conversations"]');
+        const list = ${LIVE_CONVERSATIONS_JS};
         const option = [...(list?.querySelectorAll('[role="option"]') ?? [])]
           .find((item) => (item.textContent ?? "").includes(${JSON.stringify(subject)}));
         const checkbox = option?.querySelector('[role="checkbox"]');
@@ -1239,7 +1243,7 @@ async function selectConversation(window: BrowserWindow, subject: string) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const selection = (await window.webContents.executeJavaScript(`
       (() => {
-        const list = document.querySelector('[role="listbox"][aria-label="Conversations"]');
+        const list = ${LIVE_CONVERSATIONS_JS};
         const option = [...(list?.querySelectorAll('[role="option"]') ?? [])]
           .find((item) => (item.textContent ?? "").includes(${JSON.stringify(subject)}));
         const checkbox = option?.querySelector('[role="checkbox"]');
@@ -1677,7 +1681,7 @@ async function waitForInspectStatus(
 
 async function readSubjects(window: BrowserWindow) {
   return (await window.webContents.executeJavaScript(`
-    [...(document.querySelector('[role="listbox"][aria-label="Conversations"]')
+    [...((${LIVE_CONVERSATIONS_JS})
       ?.querySelectorAll('[role="option"]') ?? [])]
       .map((option) => option.textContent ?? "")
   `)) as string[];
@@ -1920,7 +1924,7 @@ async function clickConversation(window: BrowserWindow, subject: string) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const clicked = (await window.webContents.executeJavaScript(`
       (() => {
-        const list = document.querySelector('[role="listbox"][aria-label="Conversations"]');
+        const list = ${LIVE_CONVERSATIONS_JS};
         const option = [...(list?.querySelectorAll('[role="option"]') ?? [])]
           .find((item) => (item.textContent ?? "").includes(${JSON.stringify(subject)}));
         if (!(option instanceof HTMLElement)) {
