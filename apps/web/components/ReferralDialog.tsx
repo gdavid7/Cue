@@ -34,7 +34,7 @@ export function ReferralDialog() {
           <span className="font-semibold">Refer friend</span>
         </SidebarMenuButton>
       </DialogTrigger>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-4xl max-h-[90dvh] overflow-y-auto">
         <Referrals source="sidebar" />
       </DialogContent>
     </Dialog>

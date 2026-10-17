@@ -348,7 +348,7 @@ export function NewSplitDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={cn(
-          "top-[9vh] flex max-h-[80vh] w-[620px] max-w-[94vw] translate-y-0 flex-col gap-0 overflow-hidden p-0",
+          "top-[9dvh] flex max-h-[80dvh] w-[620px] max-w-[94vw] translate-y-0 flex-col gap-0 overflow-hidden p-0",
           // The dialog primitive sets `md:w-full` and `sm:rounded-lg`; those
           // responsive variants outrank an unprefixed override in tailwind-merge.
           "rounded-2xl sm:rounded-2xl md:w-[620px]",

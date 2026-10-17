@@ -56,6 +56,8 @@ import { DarkEmailToggle } from "@/components/email-list/DarkEmailToggle";
 import { EmailAttachments } from "@/components/email-list/EmailAttachments";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useOwnEmailAddresses } from "@/hooks/useOwnEmailAddresses";
+import { useIsCoarsePointer } from "@/hooks/use-mobile";
+import { useVisualViewportBox } from "@/hooks/useVisualViewportBox";
 import { useComposeModal } from "@/providers/ComposeModalProvider";
 import { formatReplySubject } from "@/utils/email/subject";
 import {
@@ -1018,7 +1020,15 @@ function ReplyPanel({
     composeMode,
   );
 
-  const replyRef = useRef<HTMLDivElement>(null);
+  const replyRef = useRef<HTMLDivElement | null>(null);
+  const visualViewportBoxRef = useVisualViewportBox(useIsCoarsePointer());
+  const setReplyRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      replyRef.current = element;
+      return visualViewportBoxRef(element);
+    },
+    [visualViewportBoxRef],
+  );
   // A forward owns its original source once composing starts. A later cache
   // fallback must not replace that source or discard the unsent editor state.
   const [forwardSource, setForwardSource] = useState<ParsedMessage>();
@@ -1151,10 +1161,14 @@ function ReplyPanel({
     <div
       className={cn(
         "mt-5",
+        // An on-screen keyboard covers the bottom of the layout viewport
+        // without shrinking the thread's scroller, so Send could never scroll
+        // above it. Room for the covered part lets it.
+        "pb-[max(0px,calc(100dvh-var(--visual-viewport-height,100dvh)-var(--visual-viewport-top,0px)))]",
         // Suggested text crossfades in rather than appearing all at once.
         suggestedBodyHtml && "fade-in animate-in duration-150",
       )}
-      ref={replyRef}
+      ref={setReplyRef}
     >
       <ComposeEmailFormLazy
         autoFocus={autoFocus}

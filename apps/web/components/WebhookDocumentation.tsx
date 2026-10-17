@@ -20,7 +20,7 @@ export function WebhookDocumentationDialog({
   return (
     <Dialog>
       <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+      <DialogContent className="max-w-2xl max-h-[80dvh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Webhook Payload</DialogTitle>
         </DialogHeader>

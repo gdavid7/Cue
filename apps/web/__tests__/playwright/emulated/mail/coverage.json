@@ -187,6 +187,13 @@
     "hooks/useProviderDraftAutosave.ts",
     "utils/scheduled-email/service.ts"
   ],
+  "phone-flows.spec.ts": [
+    "components/email-list/EmailMessage.tsx",
+    "hooks/useVisualViewportBox.ts",
+    "providers/ComposeModalProvider.tsx",
+    "app/(app)/[emailAccountId]/mail/ListToolbar.tsx",
+    "app/(app)/settings/SettingsDialog.tsx"
+  ],
   "search.spec.ts": [
     "app/(app)/[emailAccountId]/mail/ListToolbar.tsx",
     "app/(app)/[emailAccountId]/mail/MailSearchSuggestions.tsx",

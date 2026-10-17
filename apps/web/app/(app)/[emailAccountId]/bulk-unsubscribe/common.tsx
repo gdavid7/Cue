@@ -564,11 +564,11 @@ export function MoreDropdown<T extends Row>({
       </DropdownMenu>
 
       <Sheet open={labelSheetOpen} onOpenChange={setLabelSheetOpen}>
-        <SheetContent side="bottom" className="max-h-[80vh]">
+        <SheetContent side="bottom" className="max-h-[80dvh]">
           <SheetHeader>
             <SheetTitle>{labelMenuLabel}</SheetTitle>
           </SheetHeader>
-          <div className="mt-4 max-h-[60vh] space-y-1 overflow-y-auto">
+          <div className="mt-4 max-h-[60dvh] space-y-1 overflow-y-auto">
             {labels.length ? (
               labels.map((label) => {
                 const active = Boolean(getActiveLabelFilter(item, label));

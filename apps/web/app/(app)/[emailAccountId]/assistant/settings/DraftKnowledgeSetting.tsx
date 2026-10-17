@@ -46,7 +46,7 @@ function KnowledgeDialog({ enabled }: { enabled: boolean }) {
           Manage
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-h-[80vh] max-w-4xl overflow-y-auto">
+      <DialogContent className="max-h-[80dvh] max-w-4xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Draft knowledge base</DialogTitle>
           <DialogDescription>
