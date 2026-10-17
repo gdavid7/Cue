@@ -6,7 +6,6 @@ import { formatDateForLLM, formatRelativeTimeForLLM } from "@/utils/date";
 import { preprocessBooleanLike } from "@/utils/zod";
 import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
 import { createGenerateObject } from "@/utils/llms";
-// import { Braintrust } from "@/utils/braintrust";
 
 // TODO: allow specific labels
 // Pass in prompt labels
@@ -15,8 +14,6 @@ const schema = z.object({
   // label: z.string().optional(),
   // reasoning: z.string(),
 });
-
-// const braintrust = new Braintrust("cleaner-1");
 
 export async function aiClean({
   emailAccount,
@@ -108,12 +105,6 @@ The current date is ${currentDate}.
     prompt,
     schema,
   });
-
-  // braintrust.insertToDataset({
-  //   id: messageId,
-  //   input: { message, currentDate },
-  //   expected: aiResponse.object,
-  // });
 
   return aiResponse.object as { archive: boolean };
 }

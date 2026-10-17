@@ -61,7 +61,7 @@ allowBuilds:
   "@google/genai": true
   "@prisma/engines": true
   "@sentry/cli": true
-  braintrust: true
+  braintrust: set this to true or false
   core-js: true
   # Local/desktop only. Docker, Vercel, and CI skip @inboxzero/desktop.
   electron: true
