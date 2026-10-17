@@ -830,6 +830,35 @@ describe("EmailThread reading a conversation", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("hands expand-all to an outside toolbar, and takes it back on unmount", () => {
+    const onMessageExpansionChange = vi.fn();
+    const { unmount } = render(
+      <EmailThread
+        messages={[
+          createReaderMessage("first", "1000"),
+          createReaderMessage("latest", "2000"),
+        ]}
+        onMessageExpansionChange={onMessageExpansionChange}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+    // The outside toolbar draws the control, so the thread doesn't.
+    expect(
+      screen.queryByRole("button", { name: "Expand all messages" }),
+    ).toBeNull();
+    const controls = onMessageExpansionChange.mock.lastCall?.[0];
+    expect(controls).toMatchObject({ allExpanded: false, canExpand: true });
+
+    act(() => controls.onToggleAll());
+
+    expect(onMessageExpansionChange.mock.lastCall?.[0]).toMatchObject({
+      allExpanded: true,
+    });
+    unmount();
+    expect(onMessageExpansionChange).toHaveBeenLastCalledWith(undefined);
+  });
+
   it("folds a long run of read messages into one row that reveals them", () => {
     render(
       <EmailThread

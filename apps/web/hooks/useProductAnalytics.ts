@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { usePathname } from "next/navigation";
-import { usePostHog } from "posthog-js/react";
+import { posthog } from "@/utils/analytics/posthog-client";
 import {
   getAppPageFromPathname,
   getAppPageProperties,
@@ -14,7 +14,6 @@ import {
 type AppPageActionProperties = Record<string, unknown>;
 
 export function useProductAnalytics(page?: AppPage) {
-  const posthog = usePostHog();
   const pathname = usePathname();
   const inferredPage = page ?? getAppPageFromPathname(pathname);
 
@@ -33,6 +32,6 @@ export function useProductAnalytics(page?: AppPage) {
         });
       },
     }),
-    [inferredPage, posthog],
+    [inferredPage],
   );
 }

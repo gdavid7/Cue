@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Suspense, useCallback, useState } from "react";
-import { usePostHog } from "posthog-js/react";
+import { posthog } from "@/utils/analytics/posthog-client";
 import { type SubmitHandler, useForm } from "react-hook-form";
 import { z } from "zod";
 import { Button } from "@/components/Button";
@@ -42,7 +42,6 @@ export default function SSOLoginPage() {
 }
 
 function SSOLoginForm() {
-  const posthog = usePostHog();
   const router = useRouter();
   const searchParams = useSearchParams();
   const nextPath =
@@ -61,7 +60,7 @@ function SSOLoginForm() {
   const onSubmit: SubmitHandler<SsoLoginBody> = useCallback(
     async (data) => {
       setIsSubmitting(true);
-      trackAuthStarted(posthog, "sso");
+      await trackAuthStarted(posthog, "sso");
       try {
         const params: GetSsoSignInParams = {
           email: data.email,
@@ -113,7 +112,7 @@ function SSOLoginForm() {
         setIsSubmitting(false);
       }
     },
-    [posthog, router, nextPath],
+    [router, nextPath],
   );
 
   return (

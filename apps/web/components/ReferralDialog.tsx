@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import useSWR from "swr";
-import { usePostHog } from "posthog-js/react";
+import { posthog } from "@/utils/analytics/posthog-client";
 import {
   Card,
   CardContent,
@@ -42,7 +42,6 @@ export function ReferralDialog() {
 }
 
 export function Referrals({ source }: { source: ReferralSurface }) {
-  const posthog = usePostHog();
   const {
     data: codeData,
     isLoading: loadingCode,
@@ -59,7 +58,7 @@ export function Referrals({ source }: { source: ReferralSurface }) {
 
   useEffect(() => {
     posthog?.capture("Referral Surface Shown", { source });
-  }, [posthog, source]);
+  }, [source]);
 
   const link = generateReferralLink(codeData?.code || "");
 

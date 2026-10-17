@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import posthog from "posthog-js";
-import { PostHogProvider as PHProvider } from "posthog-js/react";
+import type { PostHog } from "posthog-js";
 import { useSession } from "@/utils/auth-client";
 import { usePathname, useSearchParams } from "next/navigation";
 import { env } from "@/env";
@@ -15,6 +14,7 @@ import {
   PRODUCT_ANALYTICS_EVENTS,
 } from "@/utils/analytics/product";
 import { getClientAnalyticsProperties } from "@/utils/analytics/client";
+import { loadPostHog, posthog } from "@/utils/analytics/posthog-client";
 import { clearPendingAuthProvider } from "@/utils/analytics/auth-funnel";
 import { startDesktopHealthReporting } from "@/utils/analytics/desktop-health";
 import { ONE_DAY_MS } from "@/utils/date";
@@ -96,66 +96,77 @@ export function PostHogIdentify() {
   return null;
 }
 
-if (typeof window !== "undefined" && env.NEXT_PUBLIC_POSTHOG_KEY) {
-  posthog.init(env.NEXT_PUBLIC_POSTHOG_KEY, {
+export function PostHogProvider({ children }: { children: React.ReactNode }) {
+  return (
+    <>
+      {children}
+      <DeferredPostHog />
+    </>
+  );
+}
+
+// PostHog is a large library and nothing on screen needs it, so it downloads
+// once the page has loaded. Calls made before then are queued and replayed.
+// A first click or key press may lead straight to a navigation away (sign-in
+// redirects in particular), so it starts the download early, as does the
+// login page itself.
+function DeferredPostHog() {
+  const pathname = usePathname();
+  const onLoginPage = isLoginPath(pathname);
+
+  useEffect(() => {
+    if (!env.NEXT_PUBLIC_POSTHOG_KEY) return;
+
+    const load = () => loadPostHog(initPostHog);
+    if (onLoginPage) {
+      load();
+      return;
+    }
+    const options = { capture: true, once: true, passive: true };
+    window.addEventListener("pointerdown", load, options);
+    window.addEventListener("keydown", load, options);
+    const cancelScheduledLoad = scheduleAfterPageLoad(load, {
+      fallbackDelay: 2000,
+      idleTimeout: 5000,
+    });
+    return () => {
+      window.removeEventListener("pointerdown", load, options);
+      window.removeEventListener("keydown", load, options);
+      cancelScheduledLoad();
+    };
+  }, [onLoginPage]);
+
+  return null;
+}
+
+function initPostHog(instance: PostHog, key: string) {
+  instance.init(key, {
     api_host: env.NEXT_PUBLIC_POSTHOG_API_HOST, // https://posthog.com/docs/advanced/proxy/nextjs
     capture_pageview: false, // Disable automatic pageview capture, as we capture manually
-    disable_session_recording: true,
-    disable_surveys: true,
+    disable_session_recording: !canUseTrackingCookies(),
     // Without consent, nothing is written to cookies or storage, so an
     // anonymous visitor is only recognized within the current page session.
     persistence: canUseTrackingCookies() ? "localStorage+cookie" : "memory",
     before_send: stripUntrackedUrlParams,
   });
-  posthog.register(getClientAnalyticsProperties());
+  instance.register(getClientAnalyticsProperties());
   startDesktopHealthReporting();
   subscribeToCookieConsent(() => {
     if (!canUseTrackingCookies()) {
-      posthog.set_config({
+      instance.set_config({
         persistence: "memory",
         disable_session_recording: true,
       });
       return;
     }
 
-    posthog.set_config({ persistence: "localStorage+cookie" });
-    if (deferredFeaturesEnabled) {
-      posthog.set_config({ disable_session_recording: false });
-    }
+    instance.set_config({
+      persistence: "localStorage+cookie",
+      disable_session_recording: false,
+    });
   });
 }
 
-export function PostHogProvider({ children }: { children: React.ReactNode }) {
-  return (
-    <PHProvider client={posthog}>
-      {children}
-      <DeferredPostHogFeatures />
-    </PHProvider>
-  );
-}
-
-let deferredFeaturesEnabled = false;
-
-function DeferredPostHogFeatures() {
-  useEffect(() => {
-    if (!env.NEXT_PUBLIC_POSTHOG_KEY || deferredFeaturesEnabled) return;
-
-    const enableDeferredFeatures = () => {
-      if (deferredFeaturesEnabled) return;
-
-      deferredFeaturesEnabled = true;
-      posthog.set_config({
-        disable_session_recording: !canUseTrackingCookies(),
-        disable_surveys: false,
-      });
-      posthog.reloadFeatureFlags();
-    };
-
-    return scheduleAfterPageLoad(enableDeferredFeatures, {
-      fallbackDelay: 2000,
-      idleTimeout: 5000,
-    });
-  }, []);
-
-  return null;
+function isLoginPath(pathname: string | null) {
+  return pathname === "/login" || Boolean(pathname?.startsWith("/login/"));
 }

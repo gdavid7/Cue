@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { usePostHog } from "posthog-js/react";
+import { posthog } from "@/utils/analytics/posthog-client";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -122,7 +122,6 @@ export function getTourStepView({
 }
 
 export function WhatsNewTour({ onClose: closeTour }: { onClose: () => void }) {
-  const posthog = usePostHog();
   const [stepIndex, setStepIndex] = useState(0);
   const [view, setView] = useState<TourStepView>("wait");
   // Skipped steps leave the count, so a lone step reads "1 of 1".

@@ -1,4 +1,4 @@
-import posthog from "posthog-js";
+import { posthog } from "@/utils/analytics/posthog-client";
 import { MAIL_ANALYTICS_EVENTS } from "@/utils/analytics/product";
 import {
   runWhenIdle,

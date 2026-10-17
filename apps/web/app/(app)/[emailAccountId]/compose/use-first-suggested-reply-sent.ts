@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
-import { usePostHog } from "posthog-js/react";
+import { posthog } from "@/utils/analytics/posthog-client";
 import { toastSuccess } from "@/components/Toast";
 import { useUser } from "@/hooks/useUser";
 import { dismissHintAction } from "@/utils/actions/hints";
@@ -18,7 +18,6 @@ export function getFirstReplySentHintId(emailAccountId: string) {
  */
 export function useFirstSuggestedReplySent(emailAccountId: string) {
   const { data: user, mutate } = useUser();
-  const posthog = usePostHog();
 
   return useCallback(
     ({ edited }: { edited: boolean }) => {
@@ -33,6 +32,6 @@ export function useFirstSuggestedReplySent(emailAccountId: string) {
       dismissHintAction({ hintId }).then(() => mutate());
       return true;
     },
-    [emailAccountId, mutate, posthog, user],
+    [emailAccountId, mutate, user],
   );
 }

@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { CheckIcon, SparklesIcon } from "lucide-react";
 import Link from "next/link";
-import { usePostHog } from "posthog-js/react";
+import { posthog } from "@/utils/analytics/posthog-client";
 import { env } from "@/env";
 import { LoadingContent } from "@/components/LoadingContent";
 import { usePremium } from "@/hooks/usePremium";
@@ -47,7 +47,6 @@ export type PricingProps = {
 };
 
 export default function Pricing(props: PricingProps) {
-  const posthog = usePostHog();
   const { premium, isPremium, isLoading, error, data, canManageBilling } =
     usePremium();
   const hasTrackedPricingView = useRef(false);
@@ -117,7 +116,6 @@ export default function Pricing(props: PricingProps) {
     hasExistingSubscription,
     isLoading,
     isLoggedIn,
-    posthog,
     pricingSource,
     props.showSkipUpgrade,
   ]);
@@ -260,7 +258,6 @@ function PriceTier({
   pricingSource: "welcome_upgrade" | "app_premium";
   checkoutReturnTo?: CheckoutReturnTo;
 }) {
-  const posthog = usePostHog();
   const [loading, setLoading] = useState(false);
 
   const isCurrentPlan = tier.tiers[frequency.value] === userPremiumTier;

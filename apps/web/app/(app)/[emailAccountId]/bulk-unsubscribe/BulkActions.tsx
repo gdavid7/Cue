@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { usePostHog } from "posthog-js/react";
+import { posthog } from "@/utils/analytics/posthog-client";
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
@@ -121,7 +121,6 @@ export function BulkActions({
     null,
   );
 
-  const posthog = usePostHog();
   const { hasUnsubscribeAccess, mutate: refetchPremium } = usePremium();
   const { PremiumModal, openModal } = usePremiumModal();
   const { emailAccountId } = useAccount();

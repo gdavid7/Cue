@@ -1,7 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+/** @vitest-environment jsdom */
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadChunk } from "./load-chunk";
 
+const mockToastInfo = vi.hoisted(() => vi.fn());
+vi.mock("sonner", () => ({ toast: { info: mockToastInfo } }));
+
 describe("loadChunk", () => {
+  afterEach(() => {
+    mockToastInfo.mockClear();
+    document.body.innerHTML = "";
+  });
+
   it("recovers when a retry succeeds", async () => {
     const load = vi
       .fn()
@@ -26,10 +36,60 @@ describe("loadChunk", () => {
     loadChunk(load, { delaysMs: [0], reload, storage });
     await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
 
+    expect(mockToastInfo).not.toHaveBeenCalled();
+
     await expect(
       loadChunk(load, { delaysMs: [0], reload, storage }),
     ).rejects.toBe(error);
     expect(reload).toHaveBeenCalledTimes(1);
+    // The guard rules out a second reload, so the user still gets a way out.
+    expect(mockToastInfo).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        action: expect.objectContaining({ label: "Reload" }),
+      }),
+    );
+  });
+
+  it("offers a reload instead of reloading while the user is typing", async () => {
+    const error = new Error("ChunkLoadError");
+    const load = vi.fn().mockRejectedValue(error);
+    const reload = vi.fn();
+    const storage = createStorage();
+    const draft = document.createElement("textarea");
+    document.body.append(draft);
+    draft.focus();
+
+    await expect(
+      loadChunk(load, { delaysMs: [], reload, storage }),
+    ).rejects.toBe(error);
+    expect(reload).not.toHaveBeenCalled();
+    expect(mockToastInfo).toHaveBeenCalledTimes(1);
+
+    // Typing did not use up the one automatic reload.
+    draft.blur();
+    loadChunk(load, { delaysMs: [], reload, storage });
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not claim a new version when the device is offline", async () => {
+    const error = new Error("ChunkLoadError");
+    const onLine = vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    const storage = createStorage();
+    storage.setItem("stale-deployment-reloaded-at", String(Date.now()));
+
+    try {
+      await expect(
+        loadChunk(() => Promise.reject(error), {
+          delaysMs: [],
+          reload: vi.fn(),
+          storage,
+        }),
+      ).rejects.toBe(error);
+      expect(mockToastInfo).not.toHaveBeenCalled();
+    } finally {
+      onLine.mockRestore();
+    }
   });
 
   it("never reloads for a background preload", async () => {
@@ -45,6 +105,7 @@ describe("loadChunk", () => {
       }),
     ).rejects.toBe(error);
     expect(reload).not.toHaveBeenCalled();
+    expect(mockToastInfo).not.toHaveBeenCalled();
   });
 });
 

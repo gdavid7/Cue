@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import useSWR from "swr";
-import { usePostHog } from "posthog-js/react";
+import { posthog } from "@/utils/analytics/posthog-client";
 import { CopyIcon } from "lucide-react";
 import { LinkedinIcon, TwitterIcon } from "@/components/BrandIcons";
 import { Confetti } from "@/components/Confetti";
@@ -40,7 +40,6 @@ export function UnsubscribeCelebrationDialog({
   dateRange?: DateRange;
   onClose: () => void;
 }) {
-  const posthog = usePostHog();
   const [confettiActive, setConfettiActive] = useState(false);
 
   const { data: codeData } = useSWR<GetReferralCodeResponse>(
@@ -58,7 +57,7 @@ export function UnsubscribeCelebrationDialog({
       senderCount: celebration.senderCount,
       emailCount: celebration.emailCount,
     });
-  }, [celebration, posthog]);
+  }, [celebration]);
 
   if (!celebration) return null;
 

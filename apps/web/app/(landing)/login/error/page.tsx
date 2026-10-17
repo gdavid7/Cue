@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Suspense, useEffect, useRef } from "react";
-import { usePostHog } from "posthog-js/react";
+import { posthog } from "@/utils/analytics/posthog-client";
 import {
   getEmailAlreadyLinkedDescription,
   getRequiresReconsentDescription,
@@ -60,7 +60,6 @@ const errorMessages: Record<string, { title: string; description: string }> = {
 };
 
 function LoginErrorContent() {
-  const posthog = usePostHog();
   const hasTrackedAuthFailure = useRef(false);
   const { data, isLoading, error } = useUser();
   const router = useRouter();
@@ -78,7 +77,7 @@ function LoginErrorContent() {
       stage: "callback",
       errorCode: resolvedErrorCode,
     });
-  }, [data?.id, isLoading, posthog, resolvedErrorCode]);
+  }, [data?.id, isLoading, resolvedErrorCode]);
 
   // For some reason users are being sent to this page when logged in
   // This will redirect them out of this page to the app

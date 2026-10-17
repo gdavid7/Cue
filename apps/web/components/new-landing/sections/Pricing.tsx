@@ -2,8 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { usePostHog } from "posthog-js/react";
-import type { PostHog } from "posthog-js";
+import { type PostHogClient, posthog } from "@/utils/analytics/posthog-client";
 import { Label, Radio, RadioGroup } from "@headlessui/react";
 import { Sparkle } from "@/components/new-landing/icons/Sparkle";
 import { Zap } from "@/components/new-landing/icons/Zap";
@@ -93,7 +92,6 @@ export function Pricing() {
     null,
   );
   const frequency = chosenFrequency ?? defaultFrequency;
-  const posthog = usePostHog();
 
   return (
     <Section id="pricing">
@@ -192,7 +190,7 @@ interface PricingCardProps {
   defaultFrequency: PricingFrequency;
   frequency: PricingFrequency;
   frequencySource: "default" | "user_selected";
-  posthog: PostHog;
+  posthog: PostHogClient;
   tier: PricingTier;
   tierIndex: number;
 }
