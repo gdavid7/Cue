@@ -21,11 +21,18 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
 vi.mock("@/app/(app)/[emailAccountId]/mail/ReaderToolbar", () => ({
   ReaderToolbar: ({ subject }: { subject: string }) => <h1>{subject}</h1>,
 }));
+const threadView = vi.hoisted(() => ({ loading: false }));
 // Rendered directly, so assertions don't depend on which test first awaited
-// the lazy chunk.
+// the lazy chunk; `threadView.loading` holds it in its loading state.
 vi.mock("@/components/email-list/EmailThreadLazy", async () => {
+  const { lazy } = await import("react");
   const { EmailThread } = await import("@/components/email-list/EmailThread");
-  return { EmailThreadLazy: EmailThread, preloadEmailThread: () => {} };
+  const PendingThreadView = lazy(() => new Promise<never>(() => {}));
+  return {
+    EmailThreadLazy: (props: Parameters<typeof EmailThread>[0]) =>
+      threadView.loading ? <PendingThreadView /> : <EmailThread {...props} />,
+    preloadEmailThread: () => {},
+  };
 });
 vi.mock("@/components/email-list/EmailThread", () => ({
   EmailThread: ({
@@ -107,7 +114,25 @@ class MockResizeObserver {
   MockResizeObserver;
 
 describe("ThreadReader", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    threadView.loading = false;
+  });
+
+  it("shows a loading indicator while the thread view's code loads", () => {
+    threadView.loading = true;
+
+    renderReader({
+      refetch: vi.fn(),
+      messages: [createMessage("message-1", "Office hours", ["INBOX"])],
+    });
+
+    const indicator = screen.getByLabelText("Loading email");
+    // BufferedThreadReader keeps the previous thread up while this marker shows.
+    const marker = indicator.closest("[data-thread-view-loading]");
+    expect(marker).toBeTruthy();
+    expect(marker?.hasAttribute("hidden")).toBe(false);
+  });
 
   it("explains a thread that failed to load and offers a retry", () => {
     const refetch = vi.fn();

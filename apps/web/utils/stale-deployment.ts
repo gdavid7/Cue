@@ -41,6 +41,11 @@ function handleStaleDeployment() {
     window.location.reload();
     return;
   }
+  showStaleDeploymentToast();
+}
+
+/** Lets the user reload onto the current build when it suits them. */
+export function showStaleDeploymentToast() {
   toast.info(`${BRAND_NAME} was updated`, {
     id: TOAST_ID,
     description: "Reload to keep using the latest version.",
@@ -60,7 +65,7 @@ function claimAutomaticReload() {
   }
 }
 
-function isEditingText() {
+export function isEditingText() {
   const element = document.activeElement;
   if (!(element instanceof HTMLElement)) return false;
   return (

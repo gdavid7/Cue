@@ -338,10 +338,23 @@ export function ThreadReader({
     >
       {messages.length > 0 ? (
         <ReplyAssistContext.Provider value={assist}>
-          {/* MailShell preloads the thread view, so this rarely shows. Empty
-              rather than a second toolbar, which would remount its strip; the
-              marker keeps BufferedThreadReader on the previous thread. */}
-          <Suspense fallback={<div data-thread-view-loading hidden />}>
+          {/* MailShell preloads the thread view, so this rarely shows. A
+              spinner rather than a second toolbar, which would remount its
+              strip; the marker keeps BufferedThreadReader on the previous
+              thread. */}
+          <Suspense
+            fallback={
+              <div
+                className="flex flex-1 items-center justify-center py-16"
+                data-thread-view-loading
+              >
+                <Loader2Icon
+                  aria-label="Loading email"
+                  className="size-6 animate-spin text-muted-foreground"
+                />
+              </div>
+            }
+          >
             <EmailThreadLazy
               renderToolbar={renderToolbar}
               renderMessageMenu={renderMessageMenu}
