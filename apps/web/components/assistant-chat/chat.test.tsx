@@ -164,6 +164,7 @@ vi.mock("@/utils/actions/safe-action", () => {
     actionClient: createActionClientMock(),
     actionClientUser: createActionClientMock(),
     adminActionClient: createActionClientMock(),
+    publicActionClient: createActionClientMock(),
   };
 });
 
