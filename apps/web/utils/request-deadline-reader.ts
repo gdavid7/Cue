@@ -11,3 +11,13 @@ export function setRequestDeadlineReader(reader: () => number | undefined) {
 export function getRequestDeadline(): number | undefined {
   return readRequestDeadline();
 }
+
+/**
+ * Whether at least `reserveMs` remains before the current request's deadline,
+ * so a loop can stop cleanly instead of being killed mid-item. Always true for
+ * a request without a deadline.
+ */
+export function hasTimeBeforeRequestDeadline(reserveMs: number): boolean {
+  const deadline = readRequestDeadline();
+  return deadline === undefined || Date.now() + reserveMs < deadline;
+}

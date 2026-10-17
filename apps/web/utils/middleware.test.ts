@@ -174,6 +174,86 @@ describe("Middleware", () => {
       }
     });
 
+    describe("request completion line", () => {
+      function completionLines(spy: ReturnType<typeof vi.spyOn>) {
+        return spy.mock.calls
+          .map((args) => String(args[0]))
+          .filter((line) => line.includes("Request completed"));
+      }
+
+      it("logs a slow request at info with its route template, status and duration", async () => {
+        vi.useFakeTimers();
+        const consoleLogSpy = vi
+          .spyOn(console, "log")
+          .mockImplementation(() => {});
+        try {
+          mockReq = createMockRequest(
+            "GET",
+            "http://localhost/api/threads/thread-123?email=someone%40example.com",
+          );
+          const wrappedHandler = withError("threads/detail", async () => {
+            vi.advanceTimersByTime(1500);
+            return NextResponse.json({ ok: true });
+          });
+
+          await wrappedHandler(mockReq, mockContext);
+
+          const lines = completionLines(consoleLogSpy);
+          expect(lines).toHaveLength(1);
+          expect(lines[0]).toContain('"route": "threads/detail"');
+          expect(lines[0]).toContain('"method": "GET"');
+          expect(lines[0]).toContain('"status": 200');
+          expect(lines[0]).toContain('"durationMs": 1500');
+          expect(lines[0]).not.toContain("someone");
+        } finally {
+          consoleLogSpy.mockRestore();
+          vi.useRealTimers();
+        }
+      });
+
+      it("logs a request that ends in a 500 at info however fast it was", async () => {
+        const consoleLogSpy = vi
+          .spyOn(console, "log")
+          .mockImplementation(() => {});
+        const consoleErrorSpy = vi
+          .spyOn(console, "error")
+          .mockImplementation(() => {});
+        try {
+          const wrappedHandler = withError("user/home", async () => {
+            throw new Error("boom");
+          });
+
+          const response = await wrappedHandler(mockReq, mockContext);
+
+          expect(response.status).toBe(500);
+          const lines = completionLines(consoleLogSpy);
+          expect(lines).toHaveLength(1);
+          expect(lines[0]).toContain('"route": "user/home"');
+          expect(lines[0]).toContain('"status": 500');
+        } finally {
+          consoleLogSpy.mockRestore();
+          consoleErrorSpy.mockRestore();
+        }
+      });
+
+      it("keeps a fast successful request out of the shipped logs", async () => {
+        const consoleLogSpy = vi
+          .spyOn(console, "log")
+          .mockImplementation(() => {});
+        try {
+          const wrappedHandler = withError("user/home", async () =>
+            NextResponse.json({ ok: true }),
+          );
+
+          await wrappedHandler(mockReq, mockContext);
+
+          expect(completionLines(consoleLogSpy)).toEqual([]);
+        } finally {
+          consoleLogSpy.mockRestore();
+        }
+      });
+    });
+
     it("should return 400 for ZodError", async () => {
       const zodError = new ZodError([
         { path: ["field"], message: "Required" },

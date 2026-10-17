@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { hasCronSecret, hasPostCronSecret } from "@/utils/cron";
+import { hasCronSecret, hasPostCronSecret, runCronJob } from "@/utils/cron";
 import { deleteExpiredEmailSendOperations } from "@/utils/email-send-operation-retention";
 import { captureException } from "@/utils/error";
 import { type RequestWithLogger, withError } from "@/utils/middleware";
@@ -39,9 +39,10 @@ export const POST = withError(
 );
 
 async function runRetention(request: RequestWithLogger) {
-  const deleted = await deleteExpiredEmailSendOperations();
-  request.logger.info("Deleted expired email send operations", {
-    count: deleted,
+  const result = await runCronJob({
+    cron: "cron/email-send-operation-retention",
+    logger: request.logger,
+    run: async () => ({ deleted: await deleteExpiredEmailSendOperations() }),
   });
-  return NextResponse.json({ deleted });
+  return NextResponse.json(result);
 }

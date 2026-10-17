@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { env } from "@/env";
-import { hasCronSecret, hasPostCronSecret } from "@/utils/cron";
+import { hasCronSecret, hasPostCronSecret, runCronJob } from "@/utils/cron";
 import { captureException } from "@/utils/error";
 import { type RequestWithLogger, withError } from "@/utils/middleware";
 import {
@@ -33,16 +33,23 @@ export const POST = withError("cron/reasoning-retention", async (request) => {
 });
 
 async function runReasoningRetention(request: RequestWithLogger) {
-  const [reasoning, draftSentText] = await Promise.all([
-    enforceConfiguredReasoningRetention({
-      days: env.REASONING_RETENTION_DAYS,
-      logger: request.logger,
-    }),
-    enforceDraftSentTextRetention({
-      days: env.DRAFT_SENT_TEXT_RETENTION_DAYS,
-      logger: request.logger,
-    }),
-  ]);
+  const result = await runCronJob({
+    cron: "cron/reasoning-retention",
+    logger: request.logger,
+    run: async () => {
+      const [reasoning, draftSentText] = await Promise.all([
+        enforceConfiguredReasoningRetention({
+          days: env.REASONING_RETENTION_DAYS,
+          logger: request.logger,
+        }),
+        enforceDraftSentTextRetention({
+          days: env.DRAFT_SENT_TEXT_RETENTION_DAYS,
+          logger: request.logger,
+        }),
+      ]);
+      return { reasoning, draftSentText };
+    },
+  });
 
-  return NextResponse.json({ reasoning, draftSentText });
+  return NextResponse.json(result);
 }

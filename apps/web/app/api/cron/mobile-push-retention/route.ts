@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { hasCronSecret, hasPostCronSecret } from "@/utils/cron";
+import { hasCronSecret, hasPostCronSecret, runCronJob } from "@/utils/cron";
 import { captureException } from "@/utils/error";
 import { type RequestWithLogger, withError } from "@/utils/middleware";
 import { deleteExpiredMobilePushDeliveries } from "@/utils/mobile-push-retention";
@@ -29,9 +29,10 @@ export const POST = withError("cron/mobile-push-retention", async (request) => {
 });
 
 async function runRetention(request: RequestWithLogger) {
-  const deleted = await deleteExpiredMobilePushDeliveries();
-  request.logger.info("Deleted expired mobile push delivery claims", {
-    count: deleted,
+  const result = await runCronJob({
+    cron: "cron/mobile-push-retention",
+    logger: request.logger,
+    run: async () => ({ deleted: await deleteExpiredMobilePushDeliveries() }),
   });
-  return NextResponse.json({ deleted });
+  return NextResponse.json(result);
 }

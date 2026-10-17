@@ -35,6 +35,7 @@ describe("logOut", () => {
     vi.useFakeTimers();
     mocks.signOut.mockResolvedValue({ data: { success: true } });
     mocks.wipeLocalMailbox.mockResolvedValue(undefined);
+    mocks.clearLastEmailAccount.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -73,6 +74,32 @@ describe("logOut", () => {
 
   it("leaves without waiting for a local wipe that never finishes", async () => {
     mocks.wipeLocalMailbox.mockReturnValue(new Promise(() => {}));
+    const logOut = await loadLogOut();
+
+    const done = logOut();
+    await vi.advanceTimersByTimeAsync(1500);
+    await done;
+
+    expect(mocks.redirect).toHaveBeenCalledWith("/login");
+  });
+
+  it("waits for the last-account cookie to clear before leaving, even after the session has ended", async () => {
+    const cleared = deferred<undefined>();
+    mocks.clearLastEmailAccount.mockReturnValue(cleared.promise);
+    const logOut = await loadLogOut();
+
+    const done = logOut();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.signOut).toHaveBeenCalledTimes(1);
+    expect(mocks.redirect).not.toHaveBeenCalled();
+
+    cleared.resolve(undefined);
+    await done;
+    expect(mocks.redirect).toHaveBeenCalledWith("/login");
+  });
+
+  it("leaves without waiting for a cookie clear that never answers", async () => {
+    mocks.clearLastEmailAccount.mockReturnValue(new Promise(() => {}));
     const logOut = await loadLogOut();
 
     const done = logOut();

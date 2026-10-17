@@ -60,6 +60,7 @@ const CONCURRENCY_ACCOUNT = "account-concurrency";
 // account at 80% of a third of it.
 const STARTING_BUDGET = Math.round((GMAIL_USER_UNITS_PER_MINUTE * 0.8) / 3);
 const NO_DEADLINE_ACCOUNT = "account-no-deadline";
+const STORE_WARN_ACCOUNT = "account-store-warn";
 // Gmail refuses short bursts past this many units a second, per user.
 const GMAIL_UNITS_PER_SECOND = 250;
 const logger = createScopedLogger("gmail-quota-test");
@@ -229,6 +230,42 @@ describe("Gmail quota gate", () => {
         { caller: "mail/v1/conversation-membership", calls: 2 },
       ],
     });
+  });
+
+  it("warns once when one slow store fails both a call's admission and the usage summary", async () => {
+    vi.setSystemTime(new Date("2026-10-14T14:00:10Z"));
+    const info = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(gmailQuotaStore, "take").mockReturnValueOnce(
+      new Promise(() => undefined),
+    );
+    vi.spyOn(gmailQuotaStore, "claimUsages").mockReturnValueOnce(
+      new Promise(() => undefined),
+    );
+
+    const call = runWithGmailQuota(
+      { caller: "mail/v1/conversation-membership", priority: "interactive" },
+      () =>
+        meterGmailCall(
+          { emailAccountId: STORE_WARN_ACCOUNT, cost: 40 },
+          async () => "thread",
+        ),
+    );
+    await vi.advanceTimersByTimeAsync(300);
+    await call;
+    const summary = logGmailQuotaUsage();
+    await vi.advanceTimersByTimeAsync(300);
+    await summary;
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain(
+      "Gmail quota store unavailable",
+    );
+    expect(
+      info.mock.calls.some(([line]) =>
+        String(line).includes("Failed to summarize Gmail quota usage"),
+      ),
+    ).toBe(true);
   });
 
   it("logs a burst's usage once its minute ends, at a request end with no further Gmail calls", async () => {

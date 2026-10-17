@@ -2,7 +2,7 @@ import { after, NextResponse } from "next/server";
 import { send } from "@vercel/queue";
 import { env } from "@/env";
 import { withError } from "@/utils/middleware";
-import { hasCronSecret, hasPostCronSecret } from "@/utils/cron";
+import { hasCronSecret, hasPostCronSecret, runCronJob } from "@/utils/cron";
 import { captureException } from "@/utils/error";
 import { getInternalApiUrl } from "@/utils/internal-api";
 import { runWithBackgroundLoggerFlush } from "@/utils/logger-flush";
@@ -17,7 +17,9 @@ const FOLLOW_UP_REMINDER_ACCOUNT_TOPIC = "follow-up-reminders-account";
 const INTERNAL_DISPATCH_CONCURRENCY = 10;
 const QUEUE_ENQUEUE_CONCURRENCY = 10;
 
-export const GET = withError("follow-up-reminders", async (request) => {
+const CRON_NAME = "follow-up-reminders";
+
+export const GET = withError(CRON_NAME, async (request) => {
   if (!hasCronSecret(request)) {
     captureException(
       new Error("Unauthorized request: api/follow-up-reminders"),
@@ -25,15 +27,10 @@ export const GET = withError("follow-up-reminders", async (request) => {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  if (!env.NEXT_PUBLIC_FOLLOW_UP_REMINDERS_ENABLED) {
-    request.logger.warn("Follow-up reminders feature is disabled");
-    return NextResponse.json({ message: "Follow-up reminders disabled" });
-  }
-
-  return triggerFollowUpReminderFanOut(request.logger);
+  return runFollowUpReminders(request.logger);
 });
 
-export const POST = withError("follow-up-reminders", async (request) => {
+export const POST = withError(CRON_NAME, async (request) => {
   if (!(await hasPostCronSecret(request))) {
     captureException(
       new Error("Unauthorized cron request: api/follow-up-reminders"),
@@ -41,13 +38,31 @@ export const POST = withError("follow-up-reminders", async (request) => {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  if (!env.NEXT_PUBLIC_FOLLOW_UP_REMINDERS_ENABLED) {
-    request.logger.warn("Follow-up reminders feature is disabled");
+  return runFollowUpReminders(request.logger);
+});
+
+async function runFollowUpReminders(logger: Logger) {
+  const { enabled, eligibleAccounts } = await runCronJob({
+    cron: CRON_NAME,
+    logger,
+    run: async () => {
+      if (!env.NEXT_PUBLIC_FOLLOW_UP_REMINDERS_ENABLED) {
+        // Expected while the feature is off.
+        logger.info("Follow-up reminders feature is disabled");
+        return { enabled: false, eligibleAccounts: 0 };
+      }
+      return {
+        enabled: true,
+        eligibleAccounts: await triggerFollowUpReminderFanOut(logger),
+      };
+    },
+  });
+
+  if (!enabled) {
     return NextResponse.json({ message: "Follow-up reminders disabled" });
   }
-
-  return triggerFollowUpReminderFanOut(request.logger);
-});
+  return NextResponse.json({ processing: true, eligibleAccounts });
+}
 
 async function triggerFollowUpReminderFanOut(logger: Logger) {
   const emailAccountIds = await getEligibleFollowUpReminderEmailAccountIds();
@@ -63,10 +78,7 @@ async function triggerFollowUpReminderFanOut(logger: Logger) {
     }),
   );
 
-  return NextResponse.json({
-    processing: true,
-    eligibleAccounts,
-  });
+  return eligibleAccounts;
 }
 
 async function dispatchFollowUpReminderAccounts(

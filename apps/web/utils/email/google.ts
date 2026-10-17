@@ -1344,11 +1344,14 @@ export class GmailProvider implements EmailProvider {
 
   async deleteLabel(labelId: string): Promise<void> {
     try {
-      await withGmailRetry(() =>
-        this.client.users.labels.delete({
-          userId: "me",
-          id: labelId,
-        }),
+      await withGmailRetry(
+        () =>
+          this.client.users.labels.delete({
+            userId: "me",
+            id: labelId,
+          }),
+        5,
+        { logger: this.logger, notFoundIsExpected: true },
       );
     } catch (error) {
       if (extractErrorInfo(error).status !== 404) throw error;

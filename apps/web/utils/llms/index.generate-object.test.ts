@@ -627,6 +627,7 @@ describe("createGenerateObject repairText", () => {
         );
 
       expect(outcomeLog).toContain('"fallbackDepth": 1');
+      expect(outcomeLog).toMatch(/"durationMs": \d+/);
       expect(outcomeLog).toContain('"selectedProvider": "anthropic"');
       expect(outcomeLog).toContain('"selectedModel": "claude-test"');
       expect(outcomeLog).toContain('"openai:gpt-test"');

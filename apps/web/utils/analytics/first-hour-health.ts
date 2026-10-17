@@ -8,6 +8,7 @@ import { ErrorType, watchLapsedErrorKey } from "@/utils/error-messages";
 import { createScopedLogger, type Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";
+import { hasTimeBeforeRequestDeadline } from "@/utils/request-deadline-reader";
 
 // Mailboxes at least an hour past first sign-in (EmailAccount.createdAt) that
 // have not had the event get it. The tick runs once a day with up to an hour
@@ -21,6 +22,8 @@ export const FIRST_HOUR_HEALTH_MAX_PER_RUN = 200;
 const MAX_CANDIDATES = 2000;
 // Outlives the age window, so a mailbox is never sent twice, then expires.
 const SENT_KEY_TTL_SECONDS = 3 * 24 * 60 * 60;
+// Room for the mailbox in progress to finish before the cron is killed.
+const MAILBOX_RESERVE_MS = 30_000;
 
 const productLogger = createScopedLogger("product");
 
@@ -60,8 +63,15 @@ export async function recordFirstHourHealthForNewMailboxes(logger: Logger) {
 
   let sent = 0;
   let failed = 0;
-  for (const mailbox of unsent) {
+  for (const [index, mailbox] of unsent.entries()) {
     if (sent + failed >= FIRST_HOUR_HEALTH_MAX_PER_RUN) break;
+    // Unclaimed mailboxes get the event from a later tick inside the window.
+    if (!hasTimeBeforeRequestDeadline(MAILBOX_RESERVE_MS)) {
+      logger.warn("Stopping first-hour health before the deadline", {
+        mailboxesLeft: unsent.length - index,
+      });
+      break;
+    }
 
     const sentKey = sentKeyFor(mailbox.id);
     let claimed = false;

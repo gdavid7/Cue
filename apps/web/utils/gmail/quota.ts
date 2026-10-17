@@ -237,7 +237,9 @@ const accountsByToken = new Map<string, string>();
 // until that minute has ended and been summarized.
 const unsummarizedAccounts = new Map<string, number>();
 const summaryCheckedMinute = new Map<string, number>();
-const storeUnavailableLoggedMinute = new Map<string, number>();
+// When this instance last warned about each account's store, in epoch ms.
+const storeWarnedAt = new Map<string, number>();
+const STORE_WARNING_INTERVAL_MS = 60_000;
 const initialSyncMarkedAt = new Map<string, number>();
 let gateOffReported = false;
 const unattributedCallers = new Set<string>();
@@ -708,10 +710,13 @@ export async function logGmailQuotaUsage() {
       try {
         await summarizeEndedMinutes(emailAccountId, minute);
       } catch (error) {
-        logger.warn("Failed to summarize Gmail quota usage", {
-          emailAccountId,
-          error,
-        });
+        // A store that already warned for this account within the minute
+        // (as when the same slow reply failed an admission) is not warned
+        // about again.
+        const log = claimStoreWarning(emailAccountId)
+          ? logger.warn
+          : logger.info;
+        log("Failed to summarize Gmail quota usage", { emailAccountId, error });
       }
     }),
   );
@@ -907,11 +912,11 @@ function reportUnattributed(caller: string) {
 }
 
 /**
- * A call the gate let through without its store. Warned once a minute per
- * account on each instance, and counted into the account's usage summary so a
- * store that keeps timing out shows up instead of silently switching the gate
- * off. The count usually still lands: a slow store finishes the write after
- * the gate stopped waiting.
+ * A call the gate let through without its store. Warned at most once a minute
+ * per account on each instance, and counted into the account's usage summary
+ * so a store that keeps timing out shows up instead of silently switching the
+ * gate off. The count usually still lands: a slow store finishes the write
+ * after the gate stopped waiting.
  */
 function noteStoreUnavailable(
   emailAccountId: string,
@@ -919,13 +924,7 @@ function noteStoreUnavailable(
   error: unknown,
 ) {
   const minute = minuteOf(Date.now());
-  if (storeUnavailableLoggedMinute.get(emailAccountId) !== minute) {
-    storeUnavailableLoggedMinute.delete(emailAccountId);
-    storeUnavailableLoggedMinute.set(emailAccountId, minute);
-    if (storeUnavailableLoggedMinute.size > 1000) {
-      const oldest = storeUnavailableLoggedMinute.keys().next().value;
-      if (oldest) storeUnavailableLoggedMinute.delete(oldest);
-    }
+  if (claimStoreWarning(emailAccountId)) {
     logger.warn("Gmail quota store unavailable", { emailAccountId, error });
   }
   gmailQuotaStore
@@ -935,6 +934,23 @@ function noteStoreUnavailable(
       amount: 1,
     })
     .catch(() => undefined);
+}
+
+// One slow store reply can fail both a call's admission and the request's
+// usage summary; a store warning per account per minute says it once.
+function claimStoreWarning(emailAccountId: string) {
+  const now = Date.now();
+  const last = storeWarnedAt.get(emailAccountId);
+  if (last !== undefined && now - last < STORE_WARNING_INTERVAL_MS) {
+    return false;
+  }
+  storeWarnedAt.delete(emailAccountId);
+  storeWarnedAt.set(emailAccountId, now);
+  if (storeWarnedAt.size > 1000) {
+    const oldest = storeWarnedAt.keys().next().value;
+    if (oldest) storeWarnedAt.delete(oldest);
+  }
+  return true;
 }
 
 function rememberInitialSyncMark(emailAccountId: string) {

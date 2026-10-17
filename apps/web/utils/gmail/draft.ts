@@ -15,12 +15,16 @@ const MAX_DRAFT_LOOKUP_PAGES = 10;
 export async function getDraft(draftId: string, gmail: gmail_v1.Gmail) {
   try {
     logger.info("Fetching draft", { draftId });
-    const response = await withGmailRetry(() =>
-      gmail.users.drafts.get({
-        userId: "me",
-        id: draftId,
-        format: "full",
-      }),
+    const response = await withGmailRetry(
+      () =>
+        gmail.users.drafts.get({
+          userId: "me",
+          id: draftId,
+          format: "full",
+        }),
+      5,
+      // A draft the user sent or deleted is routine; handled below.
+      { notFoundIsExpected: true },
     );
 
     logger.info("Draft API response received", {
@@ -178,17 +182,22 @@ export async function deleteDraft(
     // Defensive check: only delete if this is still a real draft.
     const existingDraft = await getDraft(draftId, gmail);
     if (!existingDraft) {
-      logger.warn("Draft not found or no longer a draft, skipping deletion.", {
+      // The user sent or deleted it: routine, nothing to clean up.
+      logger.info("Draft not found or no longer a draft, skipping deletion.", {
         draftId,
       });
       return false;
     }
 
-    const response = await withGmailRetry(() =>
-      gmail.users.drafts.delete({
-        userId: "me",
-        id: draftId,
-      }),
+    const response = await withGmailRetry(
+      () =>
+        gmail.users.drafts.delete({
+          userId: "me",
+          id: draftId,
+        }),
+      5,
+      // Deleted in between; handled below.
+      { notFoundIsExpected: true },
     );
     if (response.status !== 200 && response.status !== 204) {
       throw new Error(`Unexpected draft deletion status: ${response.status}`);
@@ -197,7 +206,7 @@ export async function deleteDraft(
     return true;
   } catch (error) {
     if (isNotFoundError(error)) {
-      logger.warn("Draft not found or already deleted, skipping deletion.", {
+      logger.info("Draft not found or already deleted, skipping deletion.", {
         draftId,
       });
       return false;
