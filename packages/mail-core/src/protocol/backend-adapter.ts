@@ -43,6 +43,11 @@ export type MailHttpRequestFn = (input: {
   json: unknown;
   bytes?: AsyncIterable<Uint8Array>;
   sizeBytes?: number | null;
+  /**
+   * The host app's own sign-in lapsed. The mailbox grant may be fine, so the
+   * account must not be treated as needing to reconnect.
+   */
+  sessionExpired?: boolean;
 }>;
 
 export type BackendMailboxSource = MailboxSource &
@@ -512,8 +517,18 @@ function parseError(response: { status: number; json: unknown }) {
 function readError(response: {
   status: number;
   json: unknown;
+  sessionExpired?: boolean;
 }): Pick<MailHttpError, "error"> | null {
   if (response.status < 400) return null;
+  if (response.sessionExpired) {
+    return {
+      error: {
+        code: "unauthorized",
+        retryable: true,
+        retryAfterMs: UNSTRUCTURED_ERROR_RETRY_MS,
+      },
+    };
+  }
   const structured = parseError(response);
   if (structured) return structured;
   if (response.status === 401) {
@@ -579,7 +594,11 @@ function mapExecutionError(error: Pick<MailHttpError, "error">) {
       retryAfterMs: error.error.retryAfterMs ?? 1000,
     };
   }
-  if (error.error.code === "unavailable") {
+  // A signed-out caller is turned away before anything reaches the provider.
+  if (
+    error.error.code === "unavailable" ||
+    error.error.code === "unauthorized"
+  ) {
     return {
       status: "not_dispatched" as const,
       reason: "unavailable" as const,

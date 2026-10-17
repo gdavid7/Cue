@@ -89,7 +89,9 @@ export type WorkerResponse =
   /** The mailbox was corrupt and is being rebuilt while the engine starts. */
   | { type: "rebuilding" }
   /** Carried work a rebuild could not restore; counts only, no content. */
-  | { type: "dropped"; drop: DroppedMailWork };
+  | { type: "dropped"; drop: DroppedMailWork }
+  /** A request found the app session signed out; only the page can act. */
+  | { type: "session_expired" };
 
 export function browserMailEngineCapabilities() {
   return {

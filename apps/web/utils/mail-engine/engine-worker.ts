@@ -64,7 +64,10 @@ async function createWorkerEngine(
   };
   await ensureAccount(input);
   const ports = createRoutedBackendAdapter({
-    requestFor: createMailHttpRequest,
+    requestFor: (accountId) =>
+      createMailHttpRequest(accountId, () => {
+        self.postMessage({ type: "session_expired" } satisfies WorkerResponse);
+      }),
   });
   const created = createMailEngine({
     store,

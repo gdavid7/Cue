@@ -12,6 +12,7 @@ import { startEngineLoop } from "@/utils/mail-engine/engine-loop";
 import { createMailHttpRequest } from "@/utils/mail-engine/http";
 import { browserStoragePressure } from "@/utils/mail-engine/storage-pressure";
 import { createWasmMailStore } from "@/utils/mail-engine/wasm-sqlite";
+import { notifySessionExpired } from "@/utils/session-expired";
 import {
   pageConnectivityOnline,
   requestSyncUnlessOffline,
@@ -43,7 +44,8 @@ export async function createInTabEngine(
   };
   await ensureAccount(input);
   const ports = createRoutedBackendAdapter({
-    requestFor: createMailHttpRequest,
+    requestFor: (accountId) =>
+      createMailHttpRequest(accountId, notifySessionExpired),
   });
   const engine = createMailEngine({
     store,

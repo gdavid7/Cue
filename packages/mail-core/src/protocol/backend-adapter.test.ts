@@ -33,10 +33,21 @@ describe("backend mailbox source", () => {
 
   it.each([
     {
-      name: "a session or provider auth failure",
+      name: "a provider grant failure",
       status: 401,
       json: { error: "Authorization required. Please grant permissions." },
       expected: { status: "blocked_auth" },
+    },
+    {
+      name: "a signed-out app session, which says nothing about the grant",
+      status: 401,
+      json: { error: "Unauthorized" },
+      sessionExpired: true,
+      expected: {
+        status: "paused",
+        reason: "unavailable",
+        retryAfterMs: 30_000,
+      },
     },
     {
       name: "a platform rate limit",
@@ -59,11 +70,17 @@ describe("backend mailbox source", () => {
   ])("classifies $name instead of parsing it as a result", async ({
     status,
     json,
+    sessionExpired,
     expected,
+  }: {
+    status: number;
+    json: unknown;
+    sessionExpired?: boolean;
+    expected: object;
   }) => {
     const source = createBackendMailboxSource({
       accountId: "acc-1",
-      request: async () => ({ status, json }),
+      request: async () => ({ status, json, sessionExpired }),
     });
     const session = { accountId: "acc-1", generation: "g1" };
     const signal = new AbortController().signal;
@@ -377,10 +394,17 @@ describe("backend operation executor", () => {
 
   it.each([
     {
-      name: "a revoked session or provider grant",
+      name: "a revoked provider grant",
       status: 401,
       json: { error: "Authorization required. Please grant permissions." },
       expected: { status: "not_dispatched", reason: "blocked_auth" },
+    },
+    {
+      name: "a signed-out app session",
+      status: 401,
+      json: { error: "Unauthorized" },
+      sessionExpired: true,
+      expected: { status: "not_dispatched", reason: "unavailable" },
     },
     {
       name: "a platform rate limit",
@@ -397,11 +421,17 @@ describe("backend operation executor", () => {
   ])("settles a command answered by $name instead of throwing", async ({
     status,
     json,
+    sessionExpired,
     expected,
+  }: {
+    status: number;
+    json: unknown;
+    sessionExpired?: boolean;
+    expected: object;
   }) => {
     const executor = createBackendOperationExecutor({
       accountId: "acc-1",
-      request: async () => ({ status, json }),
+      request: async () => ({ status, json, sessionExpired }),
     });
     const operation = {
       key: { accountId: "acc-1", operationId: "op-1" },

@@ -13,6 +13,10 @@ import {
 } from "@/utils/email/rate-limit-mode-error";
 import { extractErrorInfo } from "@/utils/gmail/retry";
 import { createScopedLogger, type Logger } from "@/utils/logger";
+import {
+  notifySessionExpired,
+  SESSION_EXPIRED_MESSAGE,
+} from "@/utils/session-expired";
 
 // biome-ignore lint/suspicious/noExplicitAny: existing loose external shape
 export type ErrorMessage = { error: string; data?: any };
@@ -626,6 +630,9 @@ export function assertActionSucceeded(
 
 function extractActionErrorMessage(error: SafeActionError): string | null {
   if (error.serverError) {
+    // Action call sites read their errors through here, so this is the one
+    // client-side place that sees an action rejected for a signed-out session.
+    if (error.serverError === SESSION_EXPIRED_MESSAGE) notifySessionExpired();
     return error.serverError;
   }
 

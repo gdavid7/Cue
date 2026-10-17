@@ -457,7 +457,7 @@ describe("Middleware", () => {
       });
     });
 
-    it("should return 401 if session does not exist", async () => {
+    it("answers a missing session with the session-expired 401, not a grant failure", async () => {
       mockAuth.mockResolvedValue(null as any);
       const handler: NextHandler<RequestWithAuth> = vi.fn();
       const wrappedHandler = withAuth(handler);
@@ -470,6 +470,7 @@ describe("Middleware", () => {
       expect(response.status).toBe(401);
       expect(responseBody).toEqual({
         error: "Unauthorized",
+        errorCode: "SESSION_EXPIRED",
         isKnownError: true,
       });
     });
@@ -562,6 +563,7 @@ describe("Middleware", () => {
       expect(response.status).toBe(401);
       expect(responseBody).toEqual({
         error: "Unauthorized",
+        errorCode: "SESSION_EXPIRED",
         isKnownError: true,
       });
     });

@@ -38,6 +38,7 @@ import {
   EMAIL_ACCOUNT_ID_REQUIRED_ERROR,
   MICROSOFT_AUTH_EXPIRED_ERROR_CODE,
   NO_REFRESH_TOKEN_ERROR_CODE,
+  SESSION_EXPIRED_ERROR_CODE,
 } from "@/utils/config";
 import { isAdmin } from "@/utils/admin";
 import prisma from "@/utils/prisma";
@@ -394,7 +395,11 @@ async function authMiddleware(
     });
 
     return NextResponse.json(
-      { error: "Unauthorized", isKnownError: true },
+      {
+        error: "Unauthorized",
+        errorCode: SESSION_EXPIRED_ERROR_CODE,
+        isKnownError: true,
+      },
       { status: 401 },
     );
   }

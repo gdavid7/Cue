@@ -16,6 +16,7 @@ import {
   UNEXPECTED_ACTION_ERROR_MESSAGE,
 } from "@/utils/error";
 import { env } from "@/env";
+import { SESSION_EXPIRED_MESSAGE } from "@/utils/session-expired";
 import { runWithAuditContext, setAuditContext } from "@/utils/audit/context";
 import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
 import {
@@ -159,7 +160,7 @@ export const actionClient = baseClient
   .use(async ({ next, metadata, bindArgsClientInputs, ctx }) => {
     const session = await auth();
 
-    if (!session?.user) throw new SafeError("Unauthorized");
+    if (!session?.user) throw new SafeError(SESSION_EXPIRED_MESSAGE);
     const userEmail = session.user.email;
     if (!userEmail) throw new SafeError("Unauthorized");
 
@@ -228,7 +229,7 @@ export const actionClientUser = baseClient.use(
     if (!session?.user) {
       // expected when the session has expired or the user logged out
       ctx.logger.warn("Unauthorized", metadata);
-      throw new SafeError("Unauthorized");
+      throw new SafeError(SESSION_EXPIRED_MESSAGE);
     }
 
     const userId = session.user.id;
@@ -251,7 +252,7 @@ export const actionClientUser = baseClient.use(
 export const adminActionClient = baseClient.use(
   async ({ next, metadata, ctx }) => {
     const session = await auth();
-    if (!session?.user) throw new SafeError("Unauthorized");
+    if (!session?.user) throw new SafeError(SESSION_EXPIRED_MESSAGE);
     if (!isAdmin({ email: session.user.email }))
       throw new SafeError("Unauthorized");
     setAuditContext({ actorType: "admin", userId: session.user.id });

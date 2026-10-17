@@ -1,7 +1,15 @@
 import type { MailHttpRequestFn } from "@inboxzero/mail-core/protocol/backend-adapter";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
+import { isSessionExpiredErrorBody } from "@/utils/session-expired";
 
-export function createMailHttpRequest(accountId: string): MailHttpRequestFn {
+/**
+ * onSessionExpired runs where the request ran, which may be a worker with no
+ * page to redirect, so the engine's host decides how to reach the page.
+ */
+export function createMailHttpRequest(
+  accountId: string,
+  onSessionExpired: () => void,
+): MailHttpRequestFn {
   return async ({ method, path, body, signal, accept }) => {
     const encoded = encodeRequestBody(body);
     const response = await fetch(path, {
@@ -27,6 +35,10 @@ export function createMailHttpRequest(accountId: string): MailHttpRequestFn {
       };
     }
     const json = await response.json().catch(() => null);
+    if (response.status === 401 && isSessionExpiredErrorBody(json)) {
+      onSessionExpired();
+      return { status: response.status, json, sessionExpired: true };
+    }
     return { status: response.status, json };
   };
 }

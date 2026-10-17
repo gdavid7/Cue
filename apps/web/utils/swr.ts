@@ -5,6 +5,7 @@ import useSWR, {
 } from "swr";
 import { EMAIL_ACCOUNT_ID_REQUIRED_ERROR } from "@/utils/config";
 import { useAccount } from "@/providers/EmailAccountProvider";
+import { isSessionExpiredErrorBody } from "@/utils/session-expired";
 
 // Makes sure that we have an email account id before fetching
 // Otherwise the backend will return an error
@@ -72,6 +73,9 @@ export const onSWRErrorRetry: NonNullable<SWRConfiguration["onErrorRetry"]> = (
   revalidate,
   opts,
 ) => {
+  // Retrying cannot restore a signed-out session; the fetcher already asked
+  // the user to sign in.
+  if (isSessionExpiredErrorBody(error?.info)) return;
   if (error?.status === 429) {
     if (opts.retryCount <= 1) {
       setTimeout(() => revalidate(opts), RATE_LIMITED_RETRY_MS);

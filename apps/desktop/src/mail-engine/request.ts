@@ -1,6 +1,9 @@
 import type { MailHttpRequestFn } from "@inboxzero/mail-core/protocol/backend-adapter";
 
 export const EMAIL_ACCOUNT_HEADER = "X-Email-Account-ID";
+// The web app's code for a signed-out app session, as opposed to a revoked
+// mailbox grant.
+const SESSION_EXPIRED_ERROR_CODE = "SESSION_EXPIRED";
 
 export function emailAccountIdFromMailApiPath(path: string): string | null {
   const pathname = pathnameOf(path);
@@ -59,8 +62,20 @@ export function createOriginMailRequest(input: {
       };
     }
     const json = await response.json().catch(() => null);
+    if (response.status === 401 && isSessionExpiredBody(json)) {
+      return { status: response.status, json, sessionExpired: true };
+    }
     return { status: response.status, json };
   };
+}
+
+function isSessionExpiredBody(json: unknown) {
+  return (
+    !!json &&
+    typeof json === "object" &&
+    "errorCode" in json &&
+    json.errorCode === SESSION_EXPIRED_ERROR_CODE
+  );
 }
 
 function pathnameOf(path: string) {
