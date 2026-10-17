@@ -185,6 +185,39 @@ describe("SidebarRight beside the page", () => {
     expect(opener.closest("[inert]")).toBeNull();
     expect(document.activeElement).toBe(opener);
   });
+
+  // The chat unmounts on close, so focus inside it would fall to the page.
+  it("gives focus back to the opener when it closes with focus inside", async () => {
+    screenSize.isLarge = true;
+    renderPanel();
+    const opener = screen.getByRole("button", { name: "Ask Cue" });
+    opener.focus();
+    fireEvent.click(opener);
+    const input = await screen.findByRole("textbox", { name: "Message Cue" });
+    input.focus();
+
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(screen.queryByRole("textbox", { name: "Message Cue" })).toBeNull();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("leaves focus on the page when it closes from there", async () => {
+    screenSize.isLarge = true;
+    renderPanel();
+    const opener = screen.getByRole("button", { name: "Ask Cue" });
+    fireEvent.click(opener);
+    await screen.findByRole("textbox", { name: "Message Cue" });
+    const elsewhere = screen.getByRole("button", {
+      name: "Ask Cue about this email",
+    });
+    elsewhere.focus();
+
+    fireEvent.keyDown(elsewhere, { key: "Escape" });
+
+    expect(screen.queryByRole("textbox", { name: "Message Cue" })).toBeNull();
+    expect(document.activeElement).toBe(elsewhere);
+  });
 });
 
 function renderPanel() {

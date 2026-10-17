@@ -33,22 +33,26 @@ export function SidebarRight({
     [visualViewportBoxRef],
   );
 
-  // Covering the page, the panel behaves as a dialog: what opened it is left
-  // behind an inert page, so focus has to be carried in and brought back.
-  // The opener is read before any effect inside the panel can move focus,
-  // such as the chat taking it for "Ask Cue about this email".
+  // The chat unmounts on close, so focus inside it would fall to the page:
+  // it goes back to what opened the panel instead. The opener is read before
+  // any effect inside the panel can move focus, such as the chat taking it
+  // for "Ask Cue about this email".
   const openerRef = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
-    if (!coversPage) return;
+    if (!isOpen) return;
     const active = document.activeElement;
     openerRef.current = active instanceof HTMLElement ? active : null;
-  }, [coversPage]);
+  }, [isOpen]);
+  // Covering the page, the panel behaves as a dialog: what opened it is left
+  // behind an inert page, so focus has to be carried in.
   useEffect(() => {
     if (!coversPage) return;
     const panel = panelRef.current;
     // Child effects run first, so focus already placed inside stays there.
     if (panel && !panel.contains(document.activeElement)) panel.focus();
-
+  }, [coversPage]);
+  useEffect(() => {
+    if (!isOpen) return;
     return () => {
       const opener = openerRef.current;
       openerRef.current = null;
@@ -59,7 +63,7 @@ export function SidebarRight({
         panelRef.current?.contains(focused);
       if (focusLeftWithPanel && opener?.isConnected) opener.focus();
     };
-  }, [coversPage]);
+  }, [isOpen]);
 
   return (
     <div
