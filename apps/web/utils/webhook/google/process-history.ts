@@ -37,7 +37,14 @@ import type { Logger } from "@/utils/logger";
 import type { gmail_v1 } from "@googleapis/gmail";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import { scheduleGmailHistoryCatchUp } from "@/utils/webhook/google/history-catch-up";
-import { isMessageLockUnavailableError } from "@/utils/redis/message-processing";
+import {
+  countMessageProcessingFailure,
+  isMessageLockUnavailableError,
+} from "@/utils/redis/message-processing";
+import {
+  isTransientMessageProcessingError,
+  recordMessageProcessingFailure,
+} from "@/utils/webhook/message-processing-failure";
 import { mapWithConcurrency } from "@/utils/async";
 import {
   acquireGmailHistoryLease,
@@ -70,6 +77,9 @@ const EXPIRED_GAP_START_MARGIN_MS = 60 * 60 * 1000;
 // As far back as messages keep their processed marker, so older mail that was
 // triaged before is never handled twice.
 const MAX_EXPIRED_GAP_AGE_MS = 8 * 24 * 60 * 60 * 1000;
+// A message that fails this many runs for reasons that should pass, such as
+// an AI outage, is given up on, so it can't hold the account's history back.
+const MAX_TRANSIENT_MESSAGE_FAILURES = 3;
 
 export async function processHistoryForUser(
   decodedData: {
@@ -535,13 +545,13 @@ export async function processHistoryForUser(
       logger.warn("Webhook history deferred: message locks unavailable", {
         error,
       });
-      await markGmailHistoryCatchUp(validatedEmailAccount.id, logger);
-      await scheduleGmailHistoryCatchUp({
-        emailAccountId: validatedEmailAccount.id,
-        historyId: catchUpHistoryId(),
-        logger,
-      });
-      return NextResponse.json({ ok: true });
+      return await deferToCatchUp();
+    }
+
+    // Logged with its cause where the message failed.
+    if (error instanceof MessageRetryDeferredError) {
+      logger.info("Webhook history deferred to retry a failed message");
+      return await deferToCatchUp();
     }
 
     if (
@@ -570,6 +580,16 @@ export async function processHistoryForUser(
     });
     // returning 200 here, as otherwise PubSub will call the webhook over and over
     return NextResponse.json({ error: true });
+  }
+
+  async function deferToCatchUp() {
+    await markGmailHistoryCatchUp(validatedEmailAccount.id, logger);
+    await scheduleGmailHistoryCatchUp({
+      emailAccountId: validatedEmailAccount.id,
+      historyId: catchUpHistoryId(),
+      logger,
+    });
+    return NextResponse.json({ ok: true });
   }
 }
 
@@ -610,15 +630,65 @@ async function processHistory(
         stopError ??= error;
         return;
       }
+      // A failure that should pass, such as an AI outage, stops the run before
+      // the message too, until the message has failed too many runs.
+      const transient = isTransientMessageProcessingError(error);
+      const failures = transient ? await countFailure(event, log) : undefined;
+      if (failures !== undefined && failures < MAX_TRANSIENT_MESSAGE_FAILURES) {
+        log.warn("Message failed; retrying it in a catch-up", {
+          error,
+          failures,
+        });
+        stopError ??= new MessageRetryDeferredError(error);
+        return;
+      }
       captureException(error, {
         userEmail,
         extra: { messageId: event.item.message?.id },
       });
-      log.error("Error processing history item", { error });
+      log.error("Error processing history item", {
+        error,
+        transient,
+        failures,
+      });
+      await recordFailure(event, log);
     }
     done.add(event);
     await saveProgress();
   };
+
+  // Without a count, the message can't be given up on safely, so it stays
+  // before the cursor as after its first failure.
+  async function countFailure(event: HistoryEvent, log: Logger) {
+    const messageId = event.item.message?.id;
+    if (!messageId) return;
+    try {
+      return await countMessageProcessingFailure({ userEmail, messageId });
+    } catch (error) {
+      log.warn("Failed to count message failure", { error });
+      return 0;
+    }
+  }
+
+  // Only incoming mail would have had rules run on it.
+  async function recordFailure(event: HistoryEvent, log: Logger) {
+    const { id: messageId, threadId, labelIds } = event.item.message ?? {};
+    if (
+      event.type !== HistoryEventType.MESSAGE_ADDED ||
+      !labelIds?.includes(GmailLabel.INBOX) ||
+      !options.hasAutomationRules ||
+      !options.hasAiAccess ||
+      !messageId ||
+      !threadId
+    )
+      return;
+    await recordMessageProcessingFailure({
+      emailAccountId,
+      messageId,
+      threadId,
+      logger: log,
+    });
+  }
 
   // A run can be cut off by the function timeout, so the cursor follows the
   // processed history as it goes, not only at the end.
@@ -718,6 +788,14 @@ async function processHistory(
 }
 
 type HistoryEvent = Parameters<typeof processHistoryItem>[0];
+
+/** A message failed for a reason that should pass; a catch-up retries it. */
+class MessageRetryDeferredError extends Error {
+  constructor(cause: unknown) {
+    super("A message failed and is retried in a catch-up", { cause });
+    this.name = "MessageRetryDeferredError";
+  }
+}
 
 function getHistoryEvents(h: gmail_v1.Schema$History, logger: Logger) {
   const newMessages: HistoryEvent[] = uniqBy(

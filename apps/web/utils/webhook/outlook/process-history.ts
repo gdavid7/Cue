@@ -21,6 +21,8 @@ import { runWithBackgroundLoggerFlush } from "@/utils/logger-flush";
 import { withRateLimitRecording } from "@/utils/email/rate-limit";
 import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
 import { markOutlookRateLimitCatchUp } from "@/utils/redis/outlook-rate-limit-catch-up";
+import { runWithAutomatedAiCallBound } from "@/utils/llms/automated-call-bound";
+import { recordMessageProcessingFailure } from "@/utils/webhook/message-processing-failure";
 export async function processHistoryForUser({
   preloadedEmailAccount,
   subscriptionId,
@@ -184,22 +186,45 @@ export async function processHistoryForUser({
           logger.info("Skipping rules. Rule already exists.");
         }
 
-        // Pass pre-fetched message to avoid refetching
-        await processHistoryItem(
-          { messageId: resourceData.id, message },
-          {
-            provider,
-            isNewMessage,
-            emailAccount: {
-              ...validatedEmailAccount,
-              account: { provider: accountProvider },
-            },
-            hasAutomationRules,
-            hasAiAccess: userHasAiAccess,
-            rules: validatedEmailAccount.rules,
-            logger,
-          },
-        );
+        try {
+          // Pass pre-fetched message to avoid refetching
+          await runWithAutomatedAiCallBound(() =>
+            processHistoryItem(
+              { messageId: resourceData.id, message },
+              {
+                provider,
+                isNewMessage,
+                emailAccount: {
+                  ...validatedEmailAccount,
+                  account: { provider: accountProvider },
+                },
+                hasAutomationRules,
+                hasAiAccess: userHasAiAccess,
+                rules: validatedEmailAccount.rules,
+                logger,
+              },
+            ),
+          );
+        } catch (error) {
+          // Notifications are acknowledged before processing and nothing
+          // retries a message, so incoming mail that failed is left visibly
+          // failed rather than silently unsorted.
+          if (
+            isInInbox &&
+            hasAutomationRules &&
+            userHasAiAccess &&
+            !isEmailProviderRateLimitError({ error, provider: "microsoft" }) &&
+            !isInvalidGrantError(error)
+          ) {
+            await recordMessageProcessingFailure({
+              emailAccountId: validatedEmailAccount.id,
+              messageId: message.id,
+              threadId: message.threadId,
+              logger,
+            });
+          }
+          throw error;
+        }
 
         return NextResponse.json({ ok: true });
       },

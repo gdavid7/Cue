@@ -116,6 +116,36 @@ export async function releaseMessageProcessing({
   return clearOwnedLock({ key: getProcessingKey(key), lockToken });
 }
 
+// Spans the catch-ups that retry a message, and is gone long before its
+// processed marker.
+const MESSAGE_FAILURES_TTL_SECONDS = 60 * 60 * 24;
+
+/**
+ * Counts one more run that failed to process a message for a reason that may
+ * pass, so a message that keeps failing is given up on instead of holding the
+ * account's history back.
+ */
+export async function countMessageProcessingFailure(key: {
+  userEmail: string;
+  messageId: string;
+}): Promise<number> {
+  const failuresKey = getFailuresKey(key);
+  const count = await redis.incr(failuresKey);
+  if (count === 1)
+    await redis.expire(failuresKey, MESSAGE_FAILURES_TTL_SECONDS);
+  return count;
+}
+
+function getFailuresKey({
+  userEmail,
+  messageId,
+}: {
+  userEmail: string;
+  messageId: string;
+}) {
+  return `processing-message-failures:${userEmail}:${messageId}`;
+}
+
 type OutboundMessageKey = {
   emailAccountId: string;
   messageId: string;

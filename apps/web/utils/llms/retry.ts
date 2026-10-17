@@ -109,9 +109,11 @@ export async function withNetworkRetry<T>(
   options: {
     label: string;
     shouldRetry?: (error: unknown) => boolean;
+    /** Gives up instead of waiting for another attempt once aborted. */
+    signal?: AbortSignal;
   },
 ): Promise<T> {
-  const { label, shouldRetry } = options;
+  const { label, shouldRetry, signal } = options;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
@@ -133,7 +135,7 @@ export async function withNetworkRetry<T>(
 
         // Exponential backoff: 1s, 2s, 4s
         const delayMs = 1000 * 2 ** attempt;
-        await sleep(delayMs);
+        await sleepUnlessAborted(delayMs, signal);
         continue;
       }
 
@@ -241,9 +243,11 @@ export async function withLLMRetry<T>(
   options: {
     label: string;
     maxRetries?: number;
+    /** Gives up instead of waiting for another attempt once aborted. */
+    signal?: AbortSignal;
   },
 ): Promise<T> {
-  const { label, maxRetries = 3 } = options;
+  const { label, maxRetries = 3, signal } = options;
 
   return pRetry(operation, {
     retries: maxRetries,
@@ -269,7 +273,25 @@ export async function withLLMRetry<T>(
         retryAfterMs: errorInfo.retryAfterMs,
       });
 
-      await sleep(totalDelayMs);
+      await sleepUnlessAborted(totalDelayMs, signal);
     },
   });
+}
+
+async function sleepUnlessAborted(ms: number, signal: AbortSignal | undefined) {
+  if (!signal) return sleep(ms);
+
+  signal.throwIfAborted();
+  let onAbort: (() => void) | undefined;
+  try {
+    await Promise.race([
+      sleep(ms),
+      new Promise<never>((_, reject) => {
+        onAbort = () => reject(signal.reason);
+        signal.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
 }

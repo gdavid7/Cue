@@ -12,7 +12,11 @@ import { getEmailProviderRateLimitState } from "@/utils/email/rate-limit";
 import { createTestLogger } from "@/__tests__/helpers";
 import { captureException } from "@/utils/error";
 import { GmailCallDeferredError } from "@/utils/gmail/quota";
-import { MessageLockUnavailableError } from "@/utils/redis/message-processing";
+import {
+  countMessageProcessingFailure,
+  MessageLockUnavailableError,
+} from "@/utils/redis/message-processing";
+import { AutomatedAiCallTimeoutError } from "@/utils/llms/automated-call-bound";
 import { processHistoryItem } from "@/utils/webhook/google/process-history-item";
 import { publishToQstashAt } from "@/utils/upstash";
 import {
@@ -61,6 +65,7 @@ vi.mock("@/utils/prisma", () => ({
     },
     executedRule: {
       findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({}),
     },
     $executeRaw: vi.fn().mockResolvedValue(1),
   },
@@ -104,6 +109,13 @@ vi.mock("@/utils/redis/gmail-history-lease", () => ({
 vi.mock("@/utils/webhook/google/process-history-item", () => ({
   MESSAGE_HELD_ELSEWHERE: "held-elsewhere",
   processHistoryItem: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("@/utils/redis/message-processing", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/utils/redis/message-processing")
+  >()),
+  countMessageProcessingFailure: vi.fn().mockResolvedValue(1),
 }));
 
 vi.mock("@/utils/upstash", () => ({
@@ -842,6 +854,7 @@ describe("processHistoryForUser - authentication failures", () => {
 describe("processHistoryForUser - backlogs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(countMessageProcessingFailure).mockResolvedValue(1);
     vi.mocked(getEmailProviderRateLimitState).mockResolvedValue(null);
     vi.mocked(processHistoryItem).mockReset().mockResolvedValue(undefined);
     vi.mocked(getWebhookEmailAccount).mockResolvedValue(backlogAccount as any);
@@ -1222,6 +1235,114 @@ describe("processHistoryForUser - backlogs", () => {
       expect.objectContaining({ path: "/api/google/webhook/catch-up" }),
     );
     expect(captureException).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      failure: "the AI provider is down",
+      error: Object.assign(new Error("Service Unavailable"), {
+        statusCode: 503,
+      }),
+    },
+    {
+      failure: "its AI call ran out of time",
+      error: new AutomatedAiCallTimeoutError("Choose rule", undefined),
+    },
+  ])("keeps the cursor before a message that failed because $failure, and retries it in a catch-up", async ({
+    error,
+  }) => {
+    vi.mocked(getHistory).mockResolvedValue({
+      history: inboxHistory(["1100", "m1"], ["1200", "m2"], ["1300", "m3"]),
+    } as any);
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      if (event.item.message?.id === "m2") throw error;
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1300 },
+      {},
+      logger,
+    );
+
+    expect(cursorUpdates()).toEqual(["1100"]);
+    expect(markGmailHistoryCatchUp).toHaveBeenCalled();
+    expect(publishToQstashAt).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/api/google/webhook/catch-up" }),
+    );
+    expect(prisma.executedRule.create).not.toHaveBeenCalled();
+  });
+
+  it("gives up on a message that keeps failing, records it as failed and moves on", async () => {
+    vi.mocked(countMessageProcessingFailure).mockResolvedValue(3);
+    vi.mocked(getHistory).mockResolvedValue({
+      history: inboxHistory(["1100", "m1"], ["1200", "m2"], ["1300", "m3"]),
+    } as any);
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      if (event.item.message?.id === "m2")
+        throw Object.assign(new Error("Overloaded"), { statusCode: 529 });
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1300 },
+      {},
+      logger,
+    );
+
+    expect(lastCursorUpdate()).toBe("1300");
+    expect(prisma.executedRule.create).toHaveBeenCalledTimes(1);
+    expect(prisma.executedRule.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        messageId: "m2",
+        threadId: "t-m2",
+        status: "ERROR",
+        automated: true,
+      }),
+    });
+    expect(captureException).toHaveBeenCalled();
+  });
+
+  it("records a message that would fail the same way again and moves on without retrying it", async () => {
+    vi.mocked(getHistory).mockResolvedValue({
+      history: inboxHistory(["1100", "m1"], ["1200", "m2"], ["1300", "m3"]),
+    } as any);
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      if (event.item.message?.id === "m2")
+        throw Object.assign(new Error("Invalid request"), { statusCode: 400 });
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1300 },
+      {},
+      logger,
+    );
+
+    expect(lastCursorUpdate()).toBe("1300");
+    expect(countMessageProcessingFailure).not.toHaveBeenCalled();
+    expect(publishToQstashAt).not.toHaveBeenCalled();
+    expect(prisma.executedRule.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ messageId: "m2", status: "ERROR" }),
+    });
+  });
+
+  it("keeps the cursor before a failed message when its failures can't be counted", async () => {
+    vi.mocked(countMessageProcessingFailure).mockRejectedValue(
+      new Error("fetch failed"),
+    );
+    vi.mocked(getHistory).mockResolvedValue({
+      history: inboxHistory(["1100", "m1"], ["1200", "m2"]),
+    } as any);
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      if (event.item.message?.id === "m2") throw new Error("fetch failed");
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1200 },
+      {},
+      logger,
+    );
+
+    expect(cursorUpdates()).toEqual(["1100"]);
+    expect(prisma.executedRule.create).not.toHaveBeenCalled();
   });
 
   it("continues a backlog in a scheduled catch-up once the run's time budget is spent", async () => {

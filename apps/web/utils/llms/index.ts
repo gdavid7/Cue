@@ -91,6 +91,10 @@ import {
   withLLMRetry,
 } from "./retry";
 import { createStreamFallbackModel } from "./stream-fallback-model";
+import {
+  AutomatedAiCallTimeoutError,
+  startAutomatedAiCallBound,
+} from "@/utils/llms/automated-call-bound";
 
 const logger = createScopedLogger("llms");
 
@@ -305,6 +309,11 @@ export function createGenerateText({
         emailAccountId: emailAccount.id,
         label,
       });
+    const timeBound = startAutomatedAiCallBound();
+    const abortSignal = combineAbortSignals(
+      options.abortSignal,
+      timeBound?.signal,
+    );
 
     const generate = async (candidate: ResolvedModel) => {
       const systemText = applyPromptHardeningToSystem({
@@ -374,6 +383,7 @@ export function createGenerateText({
           ...protectedRequestOptions,
           ...(bridged.tools ? { tools: bridged.tools } : {}),
           ...commonOptions,
+          ...(abortSignal ? { abortSignal } : {}),
           telemetry: buildLlmTelemetry({
             userEmail: emailAccount.email,
             userId: emailAccount.userId,
@@ -419,40 +429,50 @@ export function createGenerateText({
       return result;
     };
 
-    for (let index = 0; index < modelCandidates.length; index++) {
-      const candidate = modelCandidates[index];
-      const nextCandidate = modelCandidates[index + 1];
+    try {
+      for (let index = 0; index < modelCandidates.length; index++) {
+        const candidate = modelCandidates[index];
+        const nextCandidate = modelCandidates[index + 1];
 
-      try {
-        return await withLLMRetry(
-          () => withNetworkRetry(() => generate(candidate), { label }),
-          { label },
-        );
-      } catch (error) {
-        if (error instanceof SafeError) throw error;
+        try {
+          return await withLLMRetry(
+            () =>
+              withNetworkRetry(() => generate(candidate), {
+                label,
+                signal: timeBound?.signal,
+              }),
+            { label, signal: timeBound?.signal },
+          );
+        } catch (error) {
+          if (error instanceof SafeError) throw error;
+          if (timeBound?.signal.aborted)
+            throw timedOut(error, { label, candidate });
 
-        if (nextCandidate && shouldFallbackToNextModel(error)) {
-          logModelFallback("LLM call failed, trying fallback model", error, {
+          if (nextCandidate && shouldFallbackToNextModel(error)) {
+            logModelFallback("LLM call failed, trying fallback model", error, {
+              label,
+              provider: candidate.provider,
+              model: candidate.modelName,
+              fallbackProvider: nextCandidate.provider,
+              fallbackModel: nextCandidate.modelName,
+            });
+            continue;
+          }
+
+          await handleError(
+            error,
+            emailAccount.userId,
+            emailAccount.email,
+            emailAccount.id,
             label,
-            provider: candidate.provider,
-            model: candidate.modelName,
-            fallbackProvider: nextCandidate.provider,
-            fallbackModel: nextCandidate.modelName,
-          });
-          continue;
+            candidate.modelName,
+            effectiveModelOptions.hasUserApiKey,
+          );
+          throw error;
         }
-
-        await handleError(
-          error,
-          emailAccount.userId,
-          emailAccount.email,
-          emailAccount.id,
-          label,
-          candidate.modelName,
-          effectiveModelOptions.hasUserApiKey,
-        );
-        throw error;
       }
+    } finally {
+      timeBound?.clear();
     }
 
     throw new Error("No models available for generation");
@@ -501,6 +521,11 @@ export function createGenerateObject({
       });
     let latestRepairAttempt: RepairAttemptState | undefined;
     const fallbackFailures: LlmFallbackFailure[] = [];
+    const timeBound = startAutomatedAiCallBound();
+    const abortSignal = combineAbortSignals(
+      options.abortSignal,
+      timeBound?.signal,
+    );
 
     const generate = async (candidate: ResolvedModel) => {
       const systemText = applyPromptHardeningToSystem({
@@ -587,6 +612,7 @@ export function createGenerateObject({
         },
         ...protectedOptions,
         ...commonOptions,
+        abortSignal,
         telemetry: buildLlmTelemetry({
           userEmail: emailAccount.email,
           userId: emailAccount.userId,
@@ -672,85 +698,92 @@ export function createGenerateObject({
       return result;
     };
 
-    for (let index = 0; index < modelCandidates.length; index++) {
-      const candidate = modelCandidates[index];
-      const nextCandidate = modelCandidates[index + 1];
-      latestRepairAttempt = undefined;
+    try {
+      for (let index = 0; index < modelCandidates.length; index++) {
+        const candidate = modelCandidates[index];
+        const nextCandidate = modelCandidates[index + 1];
+        latestRepairAttempt = undefined;
 
-      try {
-        const result = await withLLMRetry(
-          () =>
-            withNetworkRetry(() => generate(candidate), {
-              label,
-              shouldRetry: (error) =>
-                (NoObjectGeneratedError.isInstance(error) &&
-                  !isContentFilterRefusal(error)) ||
-                TypeValidationError.isInstance(error),
-            }),
-          { label },
-        );
+        try {
+          const result = await withLLMRetry(
+            () =>
+              withNetworkRetry(() => generate(candidate), {
+                label,
+                shouldRetry: (error) =>
+                  (NoObjectGeneratedError.isInstance(error) &&
+                    !isContentFilterRefusal(error)) ||
+                  TypeValidationError.isInstance(error),
+                signal: timeBound?.signal,
+              }),
+            { label, signal: timeBound?.signal },
+          );
 
-        logger.info("LLM object generation completed", {
-          label,
-          candidateCount: modelCandidates.length,
-          fallbackUsed: index > 0,
-          fallbackDepth: index,
-          selectedProvider: candidate.provider,
-          selectedModel: candidate.modelName,
-          attemptedModels: modelCandidates
-            .slice(0, index + 1)
-            .map(getResolvedModelKey),
-          failedModels: fallbackFailures.map(
-            ({ provider, model }) => `${provider}:${model}`,
-          ),
-          failureCategories: fallbackFailures.map(({ category }) => category),
-        });
-
-        return result;
-      } catch (error) {
-        if (error instanceof SafeError) throw error;
-
-        attachLlmRepairMetadata(
-          error,
-          buildRepairMetadata({
-            attempt: latestRepairAttempt,
+          logger.info("LLM object generation completed", {
             label,
-            provider: candidate.provider,
-            model: candidate.modelName,
-          }),
-        );
-
-        if (nextCandidate && shouldFallbackToNextModel(error)) {
-          fallbackFailures.push({
-            provider: candidate.provider,
-            model: candidate.modelName,
-            category: getLlmFallbackFailureCategory(error),
+            candidateCount: modelCandidates.length,
+            fallbackUsed: index > 0,
+            fallbackDepth: index,
+            selectedProvider: candidate.provider,
+            selectedModel: candidate.modelName,
+            attemptedModels: modelCandidates
+              .slice(0, index + 1)
+              .map(getResolvedModelKey),
+            failedModels: fallbackFailures.map(
+              ({ provider, model }) => `${provider}:${model}`,
+            ),
+            failureCategories: fallbackFailures.map(({ category }) => category),
           });
-          logModelFallback(
-            "LLM object generation failed, trying fallback model",
+
+          return result;
+        } catch (error) {
+          if (error instanceof SafeError) throw error;
+          if (timeBound?.signal.aborted)
+            throw timedOut(error, { label, candidate });
+
+          attachLlmRepairMetadata(
             error,
-            {
+            buildRepairMetadata({
+              attempt: latestRepairAttempt,
               label,
               provider: candidate.provider,
               model: candidate.modelName,
-              fallbackProvider: nextCandidate.provider,
-              fallbackModel: nextCandidate.modelName,
-            },
+            }),
           );
-          continue;
-        }
 
-        await handleError(
-          error,
-          emailAccount.userId,
-          emailAccount.email,
-          emailAccount.id,
-          label,
-          candidate.modelName,
-          effectiveModelOptions.hasUserApiKey,
-        );
-        throw error;
+          if (nextCandidate && shouldFallbackToNextModel(error)) {
+            fallbackFailures.push({
+              provider: candidate.provider,
+              model: candidate.modelName,
+              category: getLlmFallbackFailureCategory(error),
+            });
+            logModelFallback(
+              "LLM object generation failed, trying fallback model",
+              error,
+              {
+                label,
+                provider: candidate.provider,
+                model: candidate.modelName,
+                fallbackProvider: nextCandidate.provider,
+                fallbackModel: nextCandidate.modelName,
+              },
+            );
+            continue;
+          }
+
+          await handleError(
+            error,
+            emailAccount.userId,
+            emailAccount.email,
+            emailAccount.id,
+            label,
+            candidate.modelName,
+            effectiveModelOptions.hasUserApiKey,
+          );
+          throw error;
+        }
       }
+    } finally {
+      timeBound?.clear();
     }
 
     throw new Error("No models available for generation");
@@ -2301,4 +2334,28 @@ function toPosthogTokenUsage(event: unknown) {
       ),
     ),
   };
+}
+
+function combineAbortSignals(
+  ...signals: Array<AbortSignal | undefined>
+): AbortSignal | undefined {
+  const present = signals.filter((signal) => signal !== undefined);
+  if (present.length <= 1) return present[0];
+  return AbortSignal.any(present);
+}
+
+function timedOut(
+  error: unknown,
+  {
+    label,
+    candidate,
+  }: { label: string; candidate: { provider: string; modelName: string } },
+) {
+  logger.warn("Automated AI call ran out of time", {
+    label,
+    provider: candidate.provider,
+    model: candidate.modelName,
+    error,
+  });
+  return new AutomatedAiCallTimeoutError(label, error);
 }

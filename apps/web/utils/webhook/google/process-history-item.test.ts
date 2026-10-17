@@ -237,6 +237,31 @@ describe("processHistoryItem", () => {
     expect(markMessageProcessed).not.toHaveBeenCalled();
   });
 
+  it("releases a message that failed during an outage, so the catch-up can retry it", async () => {
+    const outage = Object.assign(new Error("Service Unavailable"), {
+      statusCode: 503,
+    });
+    vi.mocked(createEmailProvider).mockResolvedValueOnce({
+      getMessage: vi.fn().mockRejectedValue(outage),
+      isSentMessage: vi.fn().mockReturnValue(false),
+    } as any);
+    const emailAccount = getDefaultEmailAccount();
+
+    await expect(
+      processHistoryItem(
+        createHistoryItem(),
+        { ...defaultOptions, emailAccount },
+        logger,
+      ),
+    ).rejects.toBe(outage);
+    expect(releaseMessageProcessing).toHaveBeenCalledWith({
+      userEmail: emailAccount.email,
+      messageId: "123",
+      lockToken: "message-lock",
+    });
+    expect(markMessageProcessed).not.toHaveBeenCalled();
+  });
+
   it("skips a message already processed without reading it from Gmail again", async () => {
     vi.mocked(acquireMessageProcessing).mockResolvedValueOnce({
       status: "processed",

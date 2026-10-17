@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  AutomatedAiCallTimeoutError,
+  runWithAutomatedAiCallBound,
+} from "@/utils/llms/automated-call-bound";
 
 const {
   mockAssertTrialAiUsageAllowed,
@@ -650,6 +654,47 @@ describe("createGenerateObject repairText", () => {
 
     // No retries on the same model — refusal will not succeed on retry.
     expect(mockGenerateObject).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up on an automated call that runs past its time bound, without trying the fallback model", async () => {
+    vi.useFakeTimers();
+    try {
+      mockGenerateObject.mockImplementation(
+        ({ abortSignal }: { abortSignal?: AbortSignal }) =>
+          new Promise((_, reject) => {
+            abortSignal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      );
+      const generateObject = await createGenerateObjectWithFallback();
+
+      const outcome = runWithAutomatedAiCallBound(() =>
+        generateObject({
+          instructions: "Return JSON.",
+          prompt: "Return JSON.",
+          schema: {} as any,
+        } as any),
+      ).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(45_000);
+
+      expect(await outcome).toBeInstanceOf(AutomatedAiCallTimeoutError);
+      expect(mockGenerateObject).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves calls outside automated work without a time bound", async () => {
+    const generateObject = await createTestGenerateObject();
+
+    await generateObject({
+      instructions: "Return JSON.",
+      prompt: "Return JSON.",
+      schema: {} as any,
+    } as any);
+
+    expect(mockGenerateObject.mock.calls[0][0].abortSignal).toBeUndefined();
   });
 
   it("clears stale repair metadata before trying a fallback model", async () => {

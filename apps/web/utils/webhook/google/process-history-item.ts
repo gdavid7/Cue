@@ -15,6 +15,8 @@ import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
 import type { Logger } from "@/utils/logger";
 import { isInvalidGrantError } from "@/utils/error";
+import { isTransientMessageProcessingError } from "@/utils/webhook/message-processing-failure";
+import { runWithAutomatedAiCallBound } from "@/utils/llms/automated-call-bound";
 
 /**
  * Another processor holds the message. It isn't handled yet, and that holder
@@ -74,17 +76,19 @@ export async function processHistoryItem(
     logger.info("Gmail lock acquired, calling shared processor");
 
     try {
-      const result = await processHistoryItemShared(
-        { messageId, threadId },
-        {
-          provider,
-          isNewMessage: type === HistoryEventType.MESSAGE_ADDED,
-          emailAccount,
-          hasAutomationRules,
-          hasAiAccess,
-          rules,
-          logger,
-        },
+      const result = await runWithAutomatedAiCallBound(() =>
+        processHistoryItemShared(
+          { messageId, threadId },
+          {
+            provider,
+            isNewMessage: type === HistoryEventType.MESSAGE_ADDED,
+            emailAccount,
+            hasAutomationRules,
+            hasAiAccess,
+            rules,
+            logger,
+          },
+        ),
       );
       await markMessageProcessed(lock).catch((error) =>
         logger.warn("Failed to mark message processed", { error }),
@@ -93,11 +97,12 @@ export async function processHistoryItem(
     } catch (error) {
       // The history cursor stays before this message so a catch-up (or the
       // first run after a reconnect) retries it; the lock would make that run
-      // skip it.
+      // skip it. So does a failure that should pass, such as an AI outage.
       if (
         isGmailCallDeferredError(error) ||
         isEmailProviderRateLimitError({ error, provider: "google" }) ||
-        isInvalidGrantError(error)
+        isInvalidGrantError(error) ||
+        isTransientMessageProcessingError(error)
       ) {
         await releaseMessageProcessing(lock).catch((clearError) =>
           logger.warn("Failed to release message processing lock", {
