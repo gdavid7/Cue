@@ -4,7 +4,7 @@ import { useCallback, useState, useEffect } from "react";
 import { toast } from "sonner";
 import { useLocalStorage } from "usehooks-ts";
 import { useAction } from "next-safe-action/hooks";
-import type { PostHog } from "posthog-js/react";
+import type { PostHogClient } from "@/utils/analytics/posthog-client";
 import { toastSuccess } from "@/components/Toast";
 import {
   setSenderStatusAction,
@@ -300,7 +300,7 @@ export function useUnsubscribe<T extends Row>({
   emailAccountId: string;
   hasUnsubscribeAccess: boolean;
   mutate: () => Promise<void>;
-  posthog: PostHog;
+  posthog: PostHogClient;
   refetchPremium: () => Promise<UserResponse | null | undefined>;
 }) {
   const analytics = useProductAnalytics("bulk_unsubscribe");
@@ -447,7 +447,7 @@ export function useBulkUnsubscribe<T extends Row>({
 }: {
   hasUnsubscribeAccess: boolean;
   mutate: MutateFn;
-  posthog: PostHog;
+  posthog: PostHogClient;
   refetchPremium: () => Promise<UserResponse | null | undefined>;
   emailAccountId: string;
   onDeselectItem?: (id: string) => void;
@@ -586,7 +586,7 @@ export function useAutoArchive<T extends Row>({
   item: T;
   hasUnsubscribeAccess: boolean;
   mutate: () => Promise<void>;
-  posthog: PostHog;
+  posthog: PostHogClient;
   refetchPremium: () => Promise<UserResponse | null | undefined>;
   emailAccountId: string;
 }) {
@@ -758,7 +758,7 @@ export function useApproveButton<T extends Row>({
       rollbackOnError?: boolean;
     },
   ) => Promise<void>;
-  posthog: PostHog;
+  posthog: PostHogClient;
   emailAccountId: string;
   filter: NewsletterFilterType;
 }) {
@@ -850,7 +850,7 @@ export function useBulkApprove<T extends Row>({
   filter,
 }: {
   mutate: MutateFn;
-  posthog: PostHog;
+  posthog: PostHogClient;
   emailAccountId: string;
   onDeselectItem?: (id: string) => void;
   filter: NewsletterFilterType;
@@ -890,7 +890,7 @@ export function useBulkArchive<T extends Row>({
   emailAccountId,
   mutate,
 }: {
-  posthog: PostHog;
+  posthog: PostHogClient;
   emailAccountId: string;
   mutate?: MutateFn;
 }) {
@@ -973,7 +973,7 @@ export function useDeleteAllFromSender<T extends Row>({
   emailAccountId,
 }: {
   item: T;
-  posthog: PostHog;
+  posthog: PostHogClient;
   emailAccountId: string;
 }) {
   const [deleteAllLoading, setDeleteAllLoading] = useState(false);
@@ -1006,7 +1006,7 @@ export function useBulkDelete<T extends Row>({
   emailAccountId,
 }: {
   mutate: () => Promise<unknown>;
-  posthog: PostHog;
+  posthog: PostHogClient;
   emailAccountId: string;
 }) {
   const { executeAsync: executeBulkTrash, isExecuting } = useAction(

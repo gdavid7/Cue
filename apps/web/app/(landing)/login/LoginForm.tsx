@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { usePostHog } from "posthog-js/react";
+import { type PostHogClient, posthog } from "@/utils/analytics/posthog-client";
 import { useEffect, useState } from "react";
 import { Button as UIButton } from "@/components/ui/button";
 import { signIn, signInWithSocialRedirect } from "@/utils/auth-client";
@@ -39,7 +39,6 @@ export function LoginForm({
   emphasis?: "primary" | "secondary";
 }) {
   const providerButtonVariant = emphasis === "primary" ? "default" : "outline";
-  const posthog = usePostHog();
   const searchParams = useSearchParams();
   const next = searchParams?.get("next");
   const { callbackURL, errorCallbackURL } = getAuthCallbackUrls(next);
@@ -245,7 +244,7 @@ async function handleSocialSignIn({
   callbackURL: string;
   errorCallbackURL: string;
   setLoading: (loading: boolean) => void;
-  posthog: ReturnType<typeof usePostHog>;
+  posthog: PostHogClient;
 }) {
   setLoading(true);
   trackAuthStarted(posthog, provider);

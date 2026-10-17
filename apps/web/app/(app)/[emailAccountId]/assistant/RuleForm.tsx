@@ -12,7 +12,7 @@ import { useRouter } from "next/navigation";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { type SubmitHandler, useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { usePostHog } from "posthog-js/react";
+import { posthog } from "@/utils/analytics/posthog-client";
 import { env } from "@/env";
 import { isDeleteEmailActionEnabled } from "@/utils/delete-email-action";
 import { PencilIcon, TrashIcon, InboxIcon, ZapIcon } from "lucide-react";
@@ -189,7 +189,6 @@ export function RuleForm({
   const { folders, isLoading: foldersLoading } = useFolders(provider);
   const router = useRouter();
 
-  const posthog = usePostHog();
   const [attachmentSources, setAttachmentSources] = useState<
     AttachmentSourceInput[]
   >(
@@ -319,7 +318,6 @@ export function RuleForm({
     [
       attachmentSources,
       router,
-      posthog,
       emailAccountId,
       isDialog,
       onSuccess,

@@ -4,7 +4,7 @@ import Link from "next/link";
 import type { ComponentProps } from "react";
 import type { LucideIcon } from "lucide-react";
 import { usePathname } from "next/navigation";
-import { usePostHog } from "posthog-js/react";
+import { posthog } from "@/utils/analytics/posthog-client";
 import {
   SidebarMenu,
   SidebarMenuButton,
@@ -41,7 +41,6 @@ export function SideNavMenu({
 }) {
   const { closeMobileSidebar } = useSidebar();
   const pathname = usePathname();
-  const posthog = usePostHog();
   const currentAppPage = getAppPageFromPathname(pathname);
 
   return (

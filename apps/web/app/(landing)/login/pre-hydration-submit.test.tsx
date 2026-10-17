@@ -12,7 +12,9 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
   useSearchParams: () => new URLSearchParams(),
 }));
-vi.mock("posthog-js/react", () => ({ usePostHog: () => undefined }));
+vi.mock("@/utils/analytics/posthog-client", () => ({
+  posthog: { capture: vi.fn() },
+}));
 
 // Until React hydrates a server-rendered form, a click on its submit button
 // submits it natively: a GET that puts the typed email (or password) in the

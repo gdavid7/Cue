@@ -1,4 +1,4 @@
-import posthog from "posthog-js";
+import { posthog } from "@/utils/analytics/posthog-client";
 
 const SUMMARY_FLUSH_INTERVAL_MS = 5 * 60 * 1000;
 

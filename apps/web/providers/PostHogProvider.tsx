@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import posthog from "posthog-js";
-import { PostHogProvider as PHProvider } from "posthog-js/react";
+import type { PostHog } from "posthog-js";
 import { useSession } from "@/utils/auth-client";
 import { usePathname, useSearchParams } from "next/navigation";
 import { env } from "@/env";
@@ -15,6 +14,7 @@ import {
   PRODUCT_ANALYTICS_EVENTS,
 } from "@/utils/analytics/product";
 import { getClientAnalyticsProperties } from "@/utils/analytics/client";
+import { loadPostHog, posthog } from "@/utils/analytics/posthog-client";
 import { clearPendingAuthProvider } from "@/utils/analytics/auth-funnel";
 import { startDesktopHealthReporting } from "@/utils/analytics/desktop-health";
 import { ONE_DAY_MS } from "@/utils/date";
@@ -96,66 +96,54 @@ export function PostHogIdentify() {
   return null;
 }
 
-if (typeof window !== "undefined" && env.NEXT_PUBLIC_POSTHOG_KEY) {
-  posthog.init(env.NEXT_PUBLIC_POSTHOG_KEY, {
-    api_host: env.NEXT_PUBLIC_POSTHOG_API_HOST, // https://posthog.com/docs/advanced/proxy/nextjs
-    capture_pageview: false, // Disable automatic pageview capture, as we capture manually
-    disable_session_recording: true,
-    disable_surveys: true,
-    // Without consent, nothing is written to cookies or storage, so an
-    // anonymous visitor is only recognized within the current page session.
-    persistence: canUseTrackingCookies() ? "localStorage+cookie" : "memory",
-    before_send: stripUntrackedUrlParams,
-  });
-  posthog.register(getClientAnalyticsProperties());
-  startDesktopHealthReporting();
-  subscribeToCookieConsent(() => {
-    if (!canUseTrackingCookies()) {
-      posthog.set_config({
-        persistence: "memory",
-        disable_session_recording: true,
-      });
-      return;
-    }
-
-    posthog.set_config({ persistence: "localStorage+cookie" });
-    if (deferredFeaturesEnabled) {
-      posthog.set_config({ disable_session_recording: false });
-    }
-  });
-}
-
 export function PostHogProvider({ children }: { children: React.ReactNode }) {
   return (
-    <PHProvider client={posthog}>
+    <>
       {children}
-      <DeferredPostHogFeatures />
-    </PHProvider>
+      <DeferredPostHog />
+    </>
   );
 }
 
-let deferredFeaturesEnabled = false;
-
-function DeferredPostHogFeatures() {
+// PostHog is a large library and nothing on screen needs it, so it downloads
+// once the page has loaded. Calls made before then are queued and replayed.
+function DeferredPostHog() {
   useEffect(() => {
-    if (!env.NEXT_PUBLIC_POSTHOG_KEY || deferredFeaturesEnabled) return;
+    if (!env.NEXT_PUBLIC_POSTHOG_KEY) return;
 
-    const enableDeferredFeatures = () => {
-      if (deferredFeaturesEnabled) return;
-
-      deferredFeaturesEnabled = true;
-      posthog.set_config({
-        disable_session_recording: !canUseTrackingCookies(),
-        disable_surveys: false,
-      });
-      posthog.reloadFeatureFlags();
-    };
-
-    return scheduleAfterPageLoad(enableDeferredFeatures, {
+    return scheduleAfterPageLoad(() => loadPostHog(initPostHog), {
       fallbackDelay: 2000,
       idleTimeout: 5000,
     });
   }, []);
 
   return null;
+}
+
+function initPostHog(instance: PostHog, key: string) {
+  instance.init(key, {
+    api_host: env.NEXT_PUBLIC_POSTHOG_API_HOST, // https://posthog.com/docs/advanced/proxy/nextjs
+    capture_pageview: false, // Disable automatic pageview capture, as we capture manually
+    disable_session_recording: !canUseTrackingCookies(),
+    // Without consent, nothing is written to cookies or storage, so an
+    // anonymous visitor is only recognized within the current page session.
+    persistence: canUseTrackingCookies() ? "localStorage+cookie" : "memory",
+    before_send: stripUntrackedUrlParams,
+  });
+  instance.register(getClientAnalyticsProperties());
+  startDesktopHealthReporting();
+  subscribeToCookieConsent(() => {
+    if (!canUseTrackingCookies()) {
+      instance.set_config({
+        persistence: "memory",
+        disable_session_recording: true,
+      });
+      return;
+    }
+
+    instance.set_config({
+      persistence: "localStorage+cookie",
+      disable_session_recording: false,
+    });
+  });
 }

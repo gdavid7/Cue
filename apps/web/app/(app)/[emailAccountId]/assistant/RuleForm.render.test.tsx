@@ -18,7 +18,6 @@ const mockUseLabels = vi.fn();
 const mockUseMessagingChannels = vi.fn();
 const mockUseFolders = vi.fn();
 const mockUseRouter = vi.fn();
-const mockUsePostHog = vi.fn();
 const { mockEnv, mockUpdateRuleAction } = vi.hoisted(() => ({
   mockEnv: {
     webhookActionsEnabled: true,
@@ -41,9 +40,9 @@ vi.mock("next/navigation", () => ({
   useRouter: () => mockUseRouter(),
 }));
 
-vi.mock("posthog-js/react", () => ({
+vi.mock("@/utils/analytics/posthog-client", () => ({
   useFeatureFlagEnabled: () => false,
-  usePostHog: () => mockUsePostHog(),
+  posthog: { capture: vi.fn() },
 }));
 
 vi.mock("@/providers/EmailAccountProvider", () => ({
@@ -130,9 +129,6 @@ describe("RuleForm", () => {
     mockUseRouter.mockReturnValue({
       push: vi.fn(),
       replace: vi.fn(),
-    });
-    mockUsePostHog.mockReturnValue({
-      capture: vi.fn(),
     });
     mockUpdateRuleAction.mockResolvedValue({
       data: {

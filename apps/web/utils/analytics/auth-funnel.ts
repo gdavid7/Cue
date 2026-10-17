@@ -1,4 +1,4 @@
-import type { PostHog } from "posthog-js";
+import type { PostHogClient } from "@/utils/analytics/posthog-client";
 import type { LoginProvider } from "@/utils/oauth/login-providers";
 
 export type AuthFunnelProvider = LoginProvider | "unknown";
@@ -93,7 +93,7 @@ export function clearPendingAuthProvider() {
 }
 
 export function trackAuthStarted(
-  posthog: PostHog,
+  posthog: PostHogClient,
   provider: AuthFunnelProvider,
 ) {
   rememberAuthProvider(provider);
@@ -101,7 +101,7 @@ export function trackAuthStarted(
 }
 
 export function trackAuthFailure(
-  posthog: PostHog,
+  posthog: PostHogClient,
   options: {
     provider: AuthFunnelProvider;
     stage: AuthFailureStage;
@@ -165,7 +165,7 @@ function withSessionStorage<T>(run: (storage: Storage) => T): T | null {
 }
 
 function capture(
-  posthog: PostHog,
+  posthog: PostHogClient,
   event: string,
   properties: Record<string, unknown>,
 ) {

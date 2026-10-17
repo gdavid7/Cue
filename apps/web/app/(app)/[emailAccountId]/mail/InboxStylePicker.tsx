@@ -2,7 +2,7 @@
 
 import { type KeyboardEvent, type ReactNode, useState } from "react";
 import { toast } from "sonner";
-import { usePostHog } from "posthog-js/react";
+import { posthog } from "@/utils/analytics/posthog-client";
 import { toastSuccess } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -75,7 +75,6 @@ export function InboxStyleCard({
 }) {
   const { emailAccountId, provider } = useAccount();
   const { data: user, mutate: mutateUser } = useUser();
-  const posthog = usePostHog();
   const [chosen, setChosen] = useState<InboxStyle | null>(null);
   const [addCueTabs, setAddCueTabs] = useState(true);
   const [isClosed, setIsClosed] = useState(false);

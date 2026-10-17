@@ -1,6 +1,6 @@
 "use client";
 
-import { usePostHog } from "posthog-js/react";
+import { posthog } from "@/utils/analytics/posthog-client";
 import { LazyMuxVideo } from "@/components/LazyMuxVideo";
 import { LiquidGlassButton } from "@/components/new-landing/LiquidGlassButton";
 import { Play } from "@/components/new-landing/icons/Play";
@@ -25,8 +25,6 @@ export function HeroVideoDialog({
   thumbnailTime?: number;
   title?: string;
 }) {
-  const posthog = usePostHog();
-
   return (
     <Dialog
       onOpenChange={(open) => {

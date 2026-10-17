@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { subDays } from "date-fns/subDays";
 import { ChevronDown } from "lucide-react";
-import { usePostHog } from "posthog-js/react";
+import { posthog } from "@/utils/analytics/posthog-client";
 import {
   ArchiveIcon,
   CheckIcon,
@@ -179,7 +179,6 @@ export function BulkUnsubscribe() {
 
   const { typesArray } = useEmailsToIncludeFilter();
   const { filtersArray, filter, setFilter } = useNewsletterFilter();
-  const posthog = usePostHog();
 
   const [search, setSearch] = useState("");
 
@@ -317,7 +316,7 @@ export function BulkUnsubscribe() {
     posthog?.capture("Clicked Select Suggested Unsubscribes", {
       count: suggestedRows.length,
     });
-  }, [isSuggestedMode, selectItems, suggestedRows, posthog]);
+  }, [isSuggestedMode, selectItems, suggestedRows]);
 
   const onToggleVisibleRow = useCallback(
     (id: string, shiftKey = false) =>

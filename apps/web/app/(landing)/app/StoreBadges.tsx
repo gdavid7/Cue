@@ -1,14 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { usePostHog } from "posthog-js/react";
+import { posthog } from "@/utils/analytics/posthog-client";
 import { Apple } from "@/components/new-landing/icons/Apple";
 import { landingPageAnalytics } from "@/hooks/useAnalytics";
 import { cn } from "@/utils";
 
 export function StoreBadges({ className }: { className?: string }) {
-  const posthog = usePostHog();
-
   return (
     <div
       className={cn(

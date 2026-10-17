@@ -1,4 +1,4 @@
-import { useFeatureFlagEnabled } from "posthog-js/react";
+import { useFeatureFlagEnabled } from "@/utils/analytics/posthog-client";
 import { env } from "@/env";
 import {
   INTEGRATION_ACTION_FEATURE_FLAG,

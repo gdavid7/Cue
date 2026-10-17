@@ -4,7 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { trackMailAction } from "@/utils/analytics/mail-usage";
 
 const capture = vi.hoisted(() => vi.fn());
-vi.mock("posthog-js", () => ({ default: { capture } }));
+vi.mock("@/utils/analytics/posthog-client", () => ({
+  posthog: { capture },
+}));
 
 describe("trackMailAction", () => {
   beforeEach(() => {

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePostHog } from "posthog-js/react";
+import { posthog } from "@/utils/analytics/posthog-client";
 import { Button } from "@/components/new-landing/common/Button";
 import { Chat } from "@/components/new-landing/icons/Chat";
 import { landingPageAnalytics } from "@/hooks/useAnalytics";
@@ -20,8 +20,6 @@ export function CallToAction({
   className,
   showSalesButton = true,
 }: CallToActionProps) {
-  const posthog = usePostHog();
-
   return (
     <div className={cn("flex justify-center items-center gap-4", className)}>
       <Button size={buttonSize} asChild>

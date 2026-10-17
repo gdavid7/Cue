@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePostHog } from "posthog-js/react";
+import { posthog } from "@/utils/analytics/posthog-client";
 import { cn } from "@/utils";
 import { Logo } from "@/components/new-landing/common/Logo";
 import { Button } from "@/components/new-landing/common/Button";
@@ -13,8 +13,6 @@ interface HeaderProps {
 }
 
 export function Header({ className }: HeaderProps) {
-  const posthog = usePostHog();
-
   return (
     <header
       className={cn(

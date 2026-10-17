@@ -1,14 +1,14 @@
-import type { PostHog } from "posthog-js";
+import type { PostHogClient } from "@/utils/analytics/posthog-client";
 
 export const landingPageAnalytics = {
-  videoClicked: (posthog: PostHog, videoId: string) => {
+  videoClicked: (posthog: PostHogClient, videoId: string) => {
     posthog?.capture?.("Landing Page Video Clicked", { video_id: videoId });
   },
-  videoStarted: (posthog: PostHog, videoId: string) => {
+  videoStarted: (posthog: PostHogClient, videoId: string) => {
     posthog?.capture?.("Landing Page Video Started", { video_id: videoId });
   },
   videoProgress: (
-    posthog: PostHog,
+    posthog: PostHogClient,
     videoId: string,
     progressPercent: number,
   ) => {
@@ -17,26 +17,26 @@ export const landingPageAnalytics = {
       progress_percent: progressPercent,
     });
   },
-  videoCompleted: (posthog: PostHog, videoId: string) => {
+  videoCompleted: (posthog: PostHogClient, videoId: string) => {
     posthog?.capture?.("Landing Page Video Completed", { video_id: videoId });
   },
-  videoClosed: (posthog: PostHog, videoId: string) => {
+  videoClosed: (posthog: PostHogClient, videoId: string) => {
     posthog?.capture?.("Landing Page Video Closed", { video_id: videoId });
   },
-  getStartedClicked: (posthog: PostHog) => {
+  getStartedClicked: (posthog: PostHogClient) => {
     posthog?.capture?.("Clicked Get Started");
   },
-  talkToSalesClicked: (posthog: PostHog) => {
+  talkToSalesClicked: (posthog: PostHogClient) => {
     posthog?.capture?.("Clicked talk to sales");
   },
-  logInClicked: (posthog: PostHog, position?: string) => {
+  logInClicked: (posthog: PostHogClient, position?: string) => {
     posthog?.capture?.("Clicked Log In", position ? { position } : undefined);
   },
-  signUpClicked: (posthog: PostHog, position?: string) => {
+  signUpClicked: (posthog: PostHogClient, position?: string) => {
     posthog?.capture?.("Clicked Sign Up", position ? { position } : undefined);
   },
   pricingCtaClicked: (
-    posthog: PostHog,
+    posthog: PostHogClient,
     properties: {
       tier: string;
       cta: string;
@@ -47,7 +47,7 @@ export const landingPageAnalytics = {
   ) => {
     posthog?.capture?.("Clicked Pricing CTA", properties);
   },
-  appDownloadClicked: (posthog: PostHog, platform: "ios" | "android") => {
+  appDownloadClicked: (posthog: PostHogClient, platform: "ios" | "android") => {
     posthog?.capture?.("Clicked App Download", { platform });
   },
 };

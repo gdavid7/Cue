@@ -1,4 +1,4 @@
-import posthog from "posthog-js";
+import { env } from "@/env";
 import { MAIL_ANALYTICS_EVENTS } from "@/utils/analytics/product";
 import { scheduleSummaryFlush } from "@/utils/analytics/summary-flush";
 
@@ -25,8 +25,7 @@ let sampled: boolean | undefined;
 export function isMailPerformanceSampled(): boolean {
   if (sampled === undefined) {
     sampled =
-      posthog.__loaded &&
-      !posthog.has_opted_out_capturing() &&
+      Boolean(env.NEXT_PUBLIC_POSTHOG_KEY) &&
       shouldSampleSession(Math.random());
     if (sampled) startCollecting();
   }

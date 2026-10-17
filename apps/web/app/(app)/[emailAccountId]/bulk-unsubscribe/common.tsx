@@ -17,7 +17,7 @@ import {
   ThumbsUpIcon,
   TrashIcon,
 } from "lucide-react";
-import { type PostHog, usePostHog } from "posthog-js/react";
+import { type PostHogClient, posthog } from "@/utils/analytics/posthog-client";
 import type { UserResponse } from "@/app/api/user/me/route";
 import { Button } from "@/components/ui/button";
 import { ButtonLoader } from "@/components/Loading";
@@ -90,8 +90,6 @@ export function ActionCell<T extends Row>({
   emailAccountId: string;
   filter: NewsletterFilterType;
 }) {
-  const posthog = usePostHog();
-
   const status = item.status ? senderStatusBadges[item.status] : undefined;
 
   return (
@@ -172,7 +170,7 @@ function UnsubscribeButton<T extends Row>({
   hasUnsubscribeAccess: boolean;
   mutate: () => Promise<void>;
   refetchPremium: () => Promise<UserResponse | null | undefined>;
-  posthog: PostHog;
+  posthog: PostHogClient;
   emailAccountId: string;
 }) {
   const [resubscribeDialogOpen, setResubscribeDialogOpen] = useState(false);
@@ -288,7 +286,7 @@ function ApproveButton<T extends Row>({
   item: T;
   hasUnsubscribeAccess: boolean;
   mutate: () => Promise<void>;
-  posthog: PostHog;
+  posthog: PostHogClient;
   emailAccountId: string;
   filter: NewsletterFilterType;
 }) {
@@ -377,7 +375,7 @@ export function MoreDropdown<T extends Row>({
   userEmail: string;
   emailAccountId: string;
   labels: EmailLabel[];
-  posthog: PostHog;
+  posthog: PostHogClient;
   mutate: () => Promise<unknown>;
   hasUnsubscribeAccess?: boolean;
   refetchPremium?: () => Promise<UserResponse | null | undefined>;

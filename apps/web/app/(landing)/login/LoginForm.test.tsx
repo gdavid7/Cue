@@ -52,8 +52,10 @@ vi.mock("@/components/Toast", () => ({
     mockToastError(...args),
 }));
 
-vi.mock("posthog-js/react", () => ({
-  usePostHog: () => ({ capture: mockPosthogCapture }),
+vi.mock("@/utils/analytics/posthog-client", () => ({
+  posthog: {
+    capture: (...args: unknown[]) => mockPosthogCapture(...args),
+  },
 }));
 
 vi.mock("@/utils/redirect", async (importOriginal) => {
