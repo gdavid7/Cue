@@ -1,6 +1,7 @@
 "use client";
 
 import type React from "react";
+import { useEffect } from "react";
 import { Provider } from "jotai";
 import { MotionConfig } from "motion/react";
 import { ComposeModalProvider } from "@/providers/ComposeModalProvider";
@@ -15,6 +16,7 @@ import { SWRProvider } from "@/providers/SWRProvider";
 import { MailboxProvidersProvider } from "@/providers/MailboxProvidersProvider";
 import type { MailboxProvider } from "@/utils/oauth/provider-config";
 import { MailEngineRuntime } from "@/utils/mail-engine/MailEngineHost";
+import { armSessionExpiredRedirect } from "@/utils/session-expired";
 
 export function AppProviders(props: {
   children: React.ReactNode;
@@ -22,6 +24,10 @@ export function AppProviders(props: {
   userId: string;
   enabledMailboxProviders: readonly MailboxProvider[];
 }) {
+  // The app layout only renders for a signed-in user, so a 401 from here on
+  // means that session ended.
+  useEffect(() => armSessionExpiredRedirect(), []);
+
   return (
     // JS-driven animations follow the OS "reduce motion" setting, as CSS does.
     <MotionConfig reducedMotion="user">

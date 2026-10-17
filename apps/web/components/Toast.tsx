@@ -42,11 +42,14 @@ export function toastError(options: {
   title?: string;
   description: string;
   id?: string | number;
+  duration?: number;
+  action?: { label: string; onClick: () => void };
 }) {
   return toast.error(options.title || options.description, {
     description: options.title ? options.description : undefined,
-    duration: 10_000,
+    duration: options.duration ?? 10_000,
     id: options.id,
+    action: options.action,
   });
 }
 

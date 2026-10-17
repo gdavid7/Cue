@@ -43,12 +43,13 @@ describe("admin access actions", () => {
   });
 
   it.each([
-    ["signed out", null],
+    ["signed out", null, "Session expired. Please sign in again."],
     [
       "a signed-in non-admin",
       { user: { id: "u2", email: "friend@example.com" } },
+      "Unauthorized",
     ],
-  ])("are refused for %s and change nothing", async (_label, session) => {
+  ])("are refused for %s and change nothing", async (_label, session, refusal) => {
     mockAuth.mockResolvedValue(session);
 
     const results = await Promise.all([
@@ -59,8 +60,7 @@ describe("admin access actions", () => {
       importAllowlistAction(),
     ]);
 
-    for (const result of results)
-      expect(result?.serverError).toBe("Unauthorized");
+    for (const result of results) expect(result?.serverError).toBe(refusal);
     expect(prisma.accessRequest.updateMany).not.toHaveBeenCalled();
     expect(prisma.accessRequest.upsert).not.toHaveBeenCalled();
     expect(prisma.accessRequest.findMany).not.toHaveBeenCalled();

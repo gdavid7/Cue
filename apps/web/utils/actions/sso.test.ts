@@ -69,12 +69,18 @@ describe("registerSSOProviderAction", () => {
   });
 
   it.each([
-    null,
-    { user: { id: "basic-user", email: "basic@example.com" } },
-  ])("rejects callers without application admin access: %s", async (session) => {
+    { session: null, refusal: "Session expired. Please sign in again." },
+    {
+      session: { user: { id: "basic-user", email: "basic@example.com" } },
+      refusal: "Unauthorized",
+    },
+  ])("rejects callers without application admin access: %o", async ({
+    session,
+    refusal,
+  }) => {
     mockAuth.mockResolvedValue(session);
     const result = await registerSSOProviderAction(input);
-    expect(result?.serverError).toBe("Unauthorized");
+    expect(result?.serverError).toBe(refusal);
     expect(prisma.organization.create).not.toHaveBeenCalled();
     expect(prisma.ssoProvider.create).not.toHaveBeenCalled();
   });

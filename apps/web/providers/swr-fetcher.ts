@@ -10,6 +10,11 @@ import {
   normalizeSWRFetchErrorData,
 } from "./swr-error";
 import { redirectToSafeUrl } from "@/utils/redirect";
+import {
+  isSessionExpiredErrorBody,
+  notifySessionExpired,
+  SESSION_EXPIRED_MESSAGE,
+} from "@/utils/session-expired";
 
 // https://swr.vercel.app/docs/error-handling#status-code-and-error-object
 export const swrFetcher = async (
@@ -73,7 +78,12 @@ export const swrFetcher = async (
       }
     }
 
-    const errorMessage = getSWRFetchErrorMessage(errorData);
+    const sessionExpired = isSessionExpiredErrorBody(errorData);
+    if (sessionExpired) notifySessionExpired();
+
+    const errorMessage = sessionExpired
+      ? SESSION_EXPIRED_MESSAGE
+      : getSWRFetchErrorMessage(errorData);
     const error: Error & {
       info?: Record<string, unknown>;
       status?: number;

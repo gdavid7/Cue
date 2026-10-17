@@ -55,6 +55,10 @@ import {
 } from "@/hooks/useHiddenDraftMessageIds";
 import { VoiceInput } from "@/components/voice/VoiceInput";
 import { toastError, toastSuccess } from "@/components/Toast";
+import {
+  holdSessionExpiredRedirect,
+  SESSION_EXPIRED_MESSAGE,
+} from "@/utils/session-expired";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -652,6 +656,23 @@ function ComposeEmailFormContent({
     loadError: draftLoadError,
     getContent: getDraftContent,
   });
+  // Signing out mid-sentence would take the composer away, so an expired
+  // session waits for the user. The draft is already kept on this device.
+  useEffect(
+    () =>
+      holdSessionExpiredRedirect({
+        beforeRedirect: flushDraft,
+        prompt: (signIn) => {
+          toastError({
+            id: SESSION_EXPIRED_TOAST_ID,
+            description: SESSION_EXPIRED_MESSAGE,
+            duration: Number.POSITIVE_INFINITY,
+            action: { label: "Sign in again", onClick: signIn },
+          });
+        },
+      }),
+    [flushDraft],
+  );
   const getProviderDraftContent = () => {
     const content = getDraftContent();
     if (!content) return;
@@ -2312,6 +2333,8 @@ function formatFileSize(size: number) {
   if (size < 1024 * 1024) return `${Math.ceil(size / 1024)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+const SESSION_EXPIRED_TOAST_ID = "session-expired";
 
 const SEND_UNCONFIRMED_MESSAGE =
   "We couldn't confirm this was sent. Check Sent before trying again.";

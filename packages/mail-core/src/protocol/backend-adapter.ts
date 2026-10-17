@@ -43,6 +43,11 @@ export type MailHttpRequestFn = (input: {
   json: unknown;
   bytes?: AsyncIterable<Uint8Array>;
   sizeBytes?: number | null;
+  /**
+   * The host app's own sign-in lapsed. The mailbox grant may be fine, so the
+   * account must not be treated as needing to reconnect.
+   */
+  sessionExpired?: boolean;
 }>;
 
 export type BackendMailboxSource = MailboxSource &
@@ -512,8 +517,20 @@ function parseError(response: { status: number; json: unknown }) {
 function readError(response: {
   status: number;
   json: unknown;
+  sessionExpired?: boolean;
 }): Pick<MailHttpError, "error"> | null {
   if (response.status < 400) return null;
+  // The host's sign-in was refused before the request reached the mail API:
+  // nothing ran, and the mailbox grant is not in question.
+  if (response.sessionExpired) {
+    return {
+      error: {
+        code: "unavailable",
+        retryable: true,
+        retryAfterMs: UNSTRUCTURED_ERROR_RETRY_MS,
+      },
+    };
+  }
   const structured = parseError(response);
   if (structured) return structured;
   if (response.status === 401) {

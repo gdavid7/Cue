@@ -127,4 +127,29 @@ describe("createOriginMailRequest", () => {
       [EMAIL_ACCOUNT_HEADER]: "acc-1",
     });
   });
+
+  it.each([
+    { errorCode: "SESSION_EXPIRED", sessionExpired: true },
+    { errorCode: "NO_REFRESH_TOKEN", sessionExpired: false },
+  ])("marks a 401 with $errorCode as a signed-out app session: $sessionExpired", async ({
+    errorCode,
+    sessionExpired,
+  }) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        Response.json({ error: "Unauthorized", errorCode }, { status: 401 }),
+      ),
+    );
+    const request = createOriginMailRequest({
+      origin: "http://localhost:3000",
+    });
+    const result = await request({
+      method: "POST",
+      path: "/api/mail/v1/accounts/acc-1/changes",
+      body: {},
+      signal: new AbortController().signal,
+    });
+    expect(Boolean(result.sessionExpired)).toBe(sessionExpired);
+  });
 });

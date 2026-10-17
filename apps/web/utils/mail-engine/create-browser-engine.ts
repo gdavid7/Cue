@@ -21,6 +21,7 @@ import {
   isLocalMailboxWipePending,
 } from "@/utils/mail-engine/wipe-local-mailbox";
 import { createClientLogger } from "@/utils/logger-client";
+import { notifySessionExpired } from "@/utils/session-expired";
 
 export { browserMailEngineCapabilities };
 
@@ -154,6 +155,10 @@ async function createWorkerOwnedEngine(
     }
     if (message.type === "dropped") {
       logDroppedWork(message.drop);
+      return;
+    }
+    if (message.type === "session_expired") {
+      notifySessionExpired();
       return;
     }
     if (message.type === "snapshots") {

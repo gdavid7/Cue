@@ -5,6 +5,7 @@ import useSWR, {
 } from "swr";
 import { EMAIL_ACCOUNT_ID_REQUIRED_ERROR } from "@/utils/config";
 import { useAccount } from "@/providers/EmailAccountProvider";
+import { isSessionExpiredErrorBody } from "@/utils/session-expired";
 
 // Makes sure that we have an email account id before fetching
 // Otherwise the backend will return an error
@@ -103,10 +104,13 @@ type RetryHint =
  * first retry; `jitter` (0.75–1.25) spreads the wait for a Retry-After hint.
  */
 export function getRetryHint(
-  error: { status?: number; retryAfterMs?: number } | undefined,
+  error: { status?: number; retryAfterMs?: number; info?: unknown } | undefined,
   retryCount: number,
   jitter = 0.75 + Math.random() / 2,
 ): RetryHint {
+  // Retrying cannot restore a signed-out session; the fetcher already asked
+  // the user to sign in.
+  if (isSessionExpiredErrorBody(error?.info)) return { kind: "stop" };
   if (error?.status === 429)
     return retryCount <= 1
       ? { kind: "wait", ms: RATE_LIMITED_RETRY_MS }
