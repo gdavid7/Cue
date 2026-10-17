@@ -39,6 +39,7 @@ describe("POST /api/user/scheduled-emails", () => {
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({
       error: "Unauthorized",
+      errorCode: "SESSION_EXPIRED",
       isKnownError: true,
     });
     expect(prisma.scheduledEmail.create).not.toHaveBeenCalled();
