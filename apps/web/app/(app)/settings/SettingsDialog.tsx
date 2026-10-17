@@ -1,6 +1,7 @@
 "use client";
 
-import { SettingsContent } from "@/app/(app)/settings/SettingsContent";
+import dynamic from "next/dynamic";
+import { Loading } from "@/components/Loading";
 import {
   Dialog,
   DialogContent,
@@ -8,6 +9,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
+
+// Every app page mounts this dialog, but its content is only needed once
+// settings are opened.
+const SettingsContent = dynamic(
+  () =>
+    import("@/app/(app)/settings/SettingsContent").then(
+      (mod) => mod.SettingsContent,
+    ),
+  { loading: () => <Loading /> },
+);
 
 export function SettingsDialog() {
   const { isSettingsOpen, closeSettings } = useSettingsDialog();

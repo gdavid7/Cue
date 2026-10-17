@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  Suspense,
   useCallback,
+  useEffect,
   useState,
   type ComponentProps,
   type ReactNode,
@@ -20,7 +22,10 @@ import type {
   ListThread,
   MailLayoutMode,
 } from "@/app/(app)/[emailAccountId]/mail/types";
-import { EmailThread } from "@/components/email-list/EmailThread";
+import {
+  EmailThreadLazy,
+  preloadEmailThread,
+} from "@/components/email-list/EmailThreadLazy";
 import { ReplyAssistContext } from "@/components/email-list/reply-assist";
 import { ThreadContextList } from "@/components/thread-context/ThreadContextList";
 import type { ThreadMessage } from "@/components/email-list/types";
@@ -39,6 +44,7 @@ import {
 import { GmailLabel } from "@/utils/gmail/label";
 import { PublisherDiscussion } from "@/components/team-comments/PublisherDiscussion";
 import type { OutgoingThreadMessage } from "@/utils/mail-engine/conversation-thread";
+import { scheduleAfterPageLoad } from "@/utils/schedule-after-page-load";
 
 const SenderContextPanel = dynamic(
   () =>
@@ -156,6 +162,18 @@ export function ThreadReader({
     senderName: string;
   } | null>(null);
   const [readerRef, readerWidth] = useElementWidth();
+  // An open thread needs the thread view now; otherwise it loads once the
+  // page is idle, so the first thread opened doesn't wait on it.
+  useEffect(() => {
+    if (threadId) {
+      preloadEmailThread().catch(() => undefined);
+      return;
+    }
+    return scheduleAfterPageLoad(
+      () => preloadEmailThread().catch(() => undefined),
+      { fallbackDelay: 2000, idleTimeout: 3000 },
+    );
+  }, [threadId]);
   const isNarrow = readerWidth < INLINE_SIDE_PANEL_MIN_WIDTH;
   const { emailAccountId, userEmail, accountIds } = useAccount();
   // Related items help answer the newest message, so they show only while
@@ -337,64 +355,66 @@ export function ThreadReader({
     >
       {messages.length > 0 ? (
         <ReplyAssistContext.Provider value={assist}>
-          <EmailThread
-            renderToolbar={renderToolbar}
-            renderMessageMenu={renderMessageMenu}
-            enableMessageNavigation={enableMessageNavigation}
-            autoOpenReplyForMessageId={
-              autoOpenReplyForMessageId ?? stripReplyFor ?? assist?.messageId
-            }
-            focusAutoOpenedReply={Boolean(
-              autoOpenReplyForMessageId ?? stripReplyFor,
-            )}
-            afterLatestMessage={
-              canAssist && newestIsIncoming && emailAccountId && threadId ? (
-                <div className="mt-4 -mx-2">
-                  <ThreadContextList
-                    emailAccountId={emailAccountId}
-                    heading="Related"
-                    limit={2}
-                    onOpenThread={openThread}
-                    threadId={threadId}
-                  />
-                </div>
-              ) : null
-            }
-            replyStatus={replyStatus}
-            earlierMessages={
-              localAvailability?.hasMore
-                ? {
-                    loading: localAvailability.loadingMore,
-                    onLoad: localAvailability.loadMore,
-                  }
-                : undefined
-            }
-            autoOpenReplyAll={autoOpenReplyAll}
-            autoOpenForwardForMessageId={autoOpenForwardForMessageId}
-            key={threadId}
-            messages={messages}
-            missingBodyIds={localAvailability?.missingBodyIds}
-            outgoing={localAvailability?.outgoing}
-            sendOperationIds={localAvailability?.sendOperationIds}
-            onMarkDone={onArchive}
-            onOpenSenderContext={(message) => {
-              const senderEmail = extractEmailAddress(message.headers.from);
-              setSenderContext({
-                messageId: message.id,
-                senderEmail,
-                senderName:
-                  extractNameFromEmail(message.headers.from) || senderEmail,
-              });
-            }}
-            refetch={refetch}
-            onSendSuccess={onSendSuccess}
-            onThreadDiscarded={
-              // A partially loaded conversation can look draft-only, so only
-              // leave once every message is here to say it is.
-              localAvailability?.hasMore ? undefined : onBackToInbox
-            }
-            showReplyButton
-          />
+          <Suspense fallback={renderToolbar()}>
+            <EmailThreadLazy
+              renderToolbar={renderToolbar}
+              renderMessageMenu={renderMessageMenu}
+              enableMessageNavigation={enableMessageNavigation}
+              autoOpenReplyForMessageId={
+                autoOpenReplyForMessageId ?? stripReplyFor ?? assist?.messageId
+              }
+              focusAutoOpenedReply={Boolean(
+                autoOpenReplyForMessageId ?? stripReplyFor,
+              )}
+              afterLatestMessage={
+                canAssist && newestIsIncoming && emailAccountId && threadId ? (
+                  <div className="mt-4 -mx-2">
+                    <ThreadContextList
+                      emailAccountId={emailAccountId}
+                      heading="Related"
+                      limit={2}
+                      onOpenThread={openThread}
+                      threadId={threadId}
+                    />
+                  </div>
+                ) : null
+              }
+              replyStatus={replyStatus}
+              earlierMessages={
+                localAvailability?.hasMore
+                  ? {
+                      loading: localAvailability.loadingMore,
+                      onLoad: localAvailability.loadMore,
+                    }
+                  : undefined
+              }
+              autoOpenReplyAll={autoOpenReplyAll}
+              autoOpenForwardForMessageId={autoOpenForwardForMessageId}
+              key={threadId}
+              messages={messages}
+              missingBodyIds={localAvailability?.missingBodyIds}
+              outgoing={localAvailability?.outgoing}
+              sendOperationIds={localAvailability?.sendOperationIds}
+              onMarkDone={onArchive}
+              onOpenSenderContext={(message) => {
+                const senderEmail = extractEmailAddress(message.headers.from);
+                setSenderContext({
+                  messageId: message.id,
+                  senderEmail,
+                  senderName:
+                    extractNameFromEmail(message.headers.from) || senderEmail,
+                });
+              }}
+              refetch={refetch}
+              onSendSuccess={onSendSuccess}
+              onThreadDiscarded={
+                // A partially loaded conversation can look draft-only, so only
+                // leave once every message is here to say it is.
+                localAvailability?.hasMore ? undefined : onBackToInbox
+              }
+              showReplyButton
+            />
+          </Suspense>
         </ReplyAssistContext.Provider>
       ) : (
         renderToolbar()

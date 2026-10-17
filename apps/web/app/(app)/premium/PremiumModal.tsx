@@ -1,9 +1,16 @@
 import { useCallback, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import Pricing from "@/app/(app)/premium/Pricing";
+import { Loading } from "@/components/Loading";
 import { tiers } from "@/app/(app)/premium/config";
+
+// Pricing pulls in Headless UI and its virtualizer. Pages such as mail mount
+// this hook on load but rarely open the modal, so it loads on first open.
+const Pricing = dynamic(() => import("@/app/(app)/premium/Pricing"), {
+  loading: () => <Loading />,
+});
 
 const modalTiers = tiers.filter((tier) => tier.name !== "Enterprise");
 

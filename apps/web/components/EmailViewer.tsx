@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback } from "react";
+import { Suspense, useCallback } from "react";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { useDisplayedEmail } from "@/hooks/useDisplayedEmail";
-import { EmailThread } from "@/components/email-list/EmailThread";
+import { EmailThreadLazy } from "@/components/email-list/EmailThreadLazy";
 import { useThread } from "@/hooks/useThread";
+import { Loading } from "@/components/Loading";
 import { LoadingContent } from "@/components/LoadingContent";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
@@ -90,17 +91,19 @@ export function ThreadContent({
     <ErrorBoundary extra={{ component: "ThreadContent", threadId }}>
       <LoadingContent loading={isLoading} error={error}>
         {data && (
-          <EmailThread
-            key={data.thread.id}
-            messages={data.thread.messages}
-            refetch={mutate}
-            showReplyButton={showReplyButton}
-            autoOpenReplyForMessageId={autoOpenReplyForMessageId}
-            autoOpenForwardForMessageId={autoOpenForwardForMessageId}
-            topRightComponent={topRightComponent}
-            onSendSuccess={onSendSuccess}
-            withHeader
-          />
+          <Suspense fallback={<Loading />}>
+            <EmailThreadLazy
+              key={data.thread.id}
+              messages={data.thread.messages}
+              refetch={mutate}
+              showReplyButton={showReplyButton}
+              autoOpenReplyForMessageId={autoOpenReplyForMessageId}
+              autoOpenForwardForMessageId={autoOpenForwardForMessageId}
+              topRightComponent={topRightComponent}
+              onSendSuccess={onSendSuccess}
+              withHeader
+            />
+          </Suspense>
         )}
       </LoadingContent>
     </ErrorBoundary>
