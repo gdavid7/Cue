@@ -69,7 +69,8 @@ describe("scheduled actions cron route", () => {
     const response = await GET(
       new Request("http://localhost:3000/api/cron/scheduled-actions", {
         headers: { authorization: "Bearer cron-secret" },
-      }),
+      }) as never,
+      { params: Promise.resolve({}) },
     );
 
     expect(response.status).toBe(200);
