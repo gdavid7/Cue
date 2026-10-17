@@ -74,12 +74,16 @@ export const swrFetcher = async (
     }
 
     const errorMessage = getSWRFetchErrorMessage(errorData);
-    const error: Error & { info?: Record<string, unknown>; status?: number } =
-      new Error(errorMessage);
+    const error: Error & {
+      info?: Record<string, unknown>;
+      status?: number;
+      retryAfterMs?: number;
+    } = new Error(errorMessage);
 
     // Attach extra info to the error object.
     error.info = errorData;
     error.status = res.status;
+    error.retryAfterMs = parseRetryAfterMs(res.headers.get("Retry-After"));
 
     const isKnownError = errorData.isKnownError;
 
@@ -100,3 +104,12 @@ export const swrFetcher = async (
 
   return res.json();
 };
+
+function parseRetryAfterMs(value: string | null): number | undefined {
+  if (!value) return;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const date = Date.parse(value);
+  if (Number.isNaN(date)) return;
+  return Math.max(0, date - Date.now());
+}

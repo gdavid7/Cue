@@ -70,6 +70,7 @@ export function ResponseTimeAnalytics({
 
   return (
     <LoadingContent
+      hasData={Boolean(data)}
       loading={isLoading}
       error={error}
       loadingComponent={<Skeleton className="h-[400px] rounded" />}

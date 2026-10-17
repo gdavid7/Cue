@@ -148,7 +148,11 @@ export function CueStrip({
     messageId,
     enabled: enabled && visibility === "show" && !folded,
   });
-  const briefSettled = Boolean(briefData || briefError);
+  // A deferred read is asked again once the account's Gmail budget allows,
+  // so its summary is still on the way rather than missing.
+  const briefDeferred =
+    briefError?.status === 503 && typeof briefError.retryAfterMs === "number";
+  const briefSettled = Boolean(briefData || (briefError && !briefDeferred));
 
   if (!messageId || !held) return null;
   const open = visibility !== "hide" && !folded;

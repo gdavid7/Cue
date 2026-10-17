@@ -48,3 +48,37 @@ describe("LoadingContent in development", () => {
     expect(screen.getByText("Could not load")).toBeTruthy();
   });
 });
+
+describe("LoadingContent with data on screen", () => {
+  afterEach(cleanup);
+
+  it("keeps showing the data when a refresh fails", () => {
+    render(
+      <LoadingContent
+        error={{ error: "Gmail is busy", status: 503 }}
+        hasData
+        loading={false}
+      >
+        <div>Content</div>
+      </LoadingContent>,
+    );
+
+    expect(screen.getByText("Content")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows the error when there is nothing to keep", () => {
+    render(
+      <LoadingContent
+        error={{ error: "Gmail is busy", status: 503 }}
+        hasData={false}
+        loading={false}
+      >
+        <div>Content</div>
+      </LoadingContent>,
+    );
+
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(screen.queryByText("Content")).toBeNull();
+  });
+});

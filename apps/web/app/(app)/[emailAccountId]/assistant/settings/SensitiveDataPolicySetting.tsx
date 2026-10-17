@@ -88,6 +88,7 @@ export function SensitiveDataPolicySetting() {
       description="Prevent credentials and card numbers from being sent to AI."
       right={
         <LoadingContent
+          hasData={Boolean(data)}
           loading={isLoading}
           error={error}
           loadingComponent={<Skeleton className="h-10 w-56" />}

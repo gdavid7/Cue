@@ -10,6 +10,11 @@ interface LoadingContentProps {
     status?: number;
   };
   errorComponent?: React.ReactNode;
+  /**
+   * Data from an earlier load is on screen. A failed refresh then keeps it
+   * rather than swapping it for the error; SWR retries in the background.
+   */
+  hasData?: boolean;
   loading: boolean;
   loadingComponent?: React.ReactNode;
   /** Defaults to revalidating the data on screen. */
@@ -18,6 +23,8 @@ interface LoadingContentProps {
 
 export function LoadingContent(props: LoadingContentProps) {
   const ignoreError = shouldIgnoreError(props.error);
+
+  if (props.error && props.hasData) return <>{props.children}</>;
 
   if (props.error && !ignoreError) {
     return props.errorComponent ? (

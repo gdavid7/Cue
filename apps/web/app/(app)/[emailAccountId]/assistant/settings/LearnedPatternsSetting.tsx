@@ -56,7 +56,7 @@ function Content() {
   const { data, isLoading, error } = useSWR<GroupsResponse>("/api/user/group");
 
   return (
-    <LoadingContent loading={isLoading} error={error}>
+    <LoadingContent hasData={Boolean(data)} loading={isLoading} error={error}>
       {data?.groups.length === 0 ? (
         <Card>
           <CardContent className="flex items-center justify-center p-6">

@@ -14,12 +14,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CueStrip } from "@/app/(app)/[emailAccountId]/mail/CueStrip";
 import type { ThreadMessage } from "@/components/email-list/types";
 import type { EmailLabels } from "@/providers/email-label-types";
+import { onSWRErrorRetry } from "@/utils/swr";
 
 const mocks = vi.hoisted(() => ({
   requests: [] as { url: string; emailAccountId: string | undefined }[],
   plans: [] as { status: string; rule: { systemType: string } }[],
   insight: null as { action: "reply" | "do" | "none" } | null,
   insightFailures: 0,
+  briefDeferrals: 0,
   insightByMessage: {} as Record<string, "reply" | "do" | "none">,
   insightGate: null as Promise<void> | null,
   aiAccess: true,
@@ -53,6 +55,7 @@ describe("CueStrip", () => {
     mocks.plans = [];
     mocks.insight = null;
     mocks.insightFailures = 0;
+    mocks.briefDeferrals = 0;
     mocks.insightByMessage = {};
     mocks.insightGate = null;
     mocks.aiAccess = true;
@@ -80,6 +83,23 @@ describe("CueStrip", () => {
 
     await within(strip).findByText(SUMMARY);
     expect(strip.querySelector(LIVE_REGION)).toBeNull();
+  });
+
+  // A deferral means the summary is on its way, not that there is none.
+  it("keeps loading while its summary's read is deferred, then shows it", async () => {
+    mocks.briefDeferrals = 1;
+    renderStrip({ labels: ["Label_reply"] }, { onErrorRetry: onSWRErrorRetry });
+
+    const strip = screen.getByRole("region", { name: "Cue summary" });
+    await waitForRequest("/api/user/thread-brief");
+    await flush();
+    expect(strip.getAttribute("aria-busy")).toBe("true");
+    expect(within(strip).queryByText(/No summary/)).toBeNull();
+
+    expect(await within(strip).findByText(SUMMARY)).toBeTruthy();
+    expect(
+      mocks.requests.filter((r) => r.url.startsWith("/api/user/thread-brief")),
+    ).toHaveLength(2);
   });
 
   it("stays hidden for a newsletter and never asks for a summary", async () => {
@@ -348,7 +368,10 @@ function renderStrip(
     reply?: { canRequest: boolean; drafts: boolean; pending: boolean };
     onAskCue?: (() => void) | undefined;
   },
-  swr: { errorRetryInterval?: number } = {},
+  swr: {
+    errorRetryInterval?: number;
+    onErrorRetry?: typeof onSWRErrorRetry;
+  } = {},
 ) {
   const props: ComponentProps<typeof CueStrip> = {
     emailAccountId: THREAD_ACCOUNT,
@@ -367,8 +390,11 @@ function renderStrip(
     <SWRConfig
       value={{
         provider: () => cache,
-        shouldRetryOnError: swr.errorRetryInterval !== undefined,
+        shouldRetryOnError:
+          swr.errorRetryInterval !== undefined ||
+          swr.onErrorRetry !== undefined,
         errorRetryInterval: swr.errorRetryInterval,
+        ...(swr.onErrorRetry ? { onErrorRetry: swr.onErrorRetry } : {}),
         dedupingInterval: 0,
         fetcher,
       }}
@@ -387,6 +413,13 @@ async function fetcher(key: string | [string, string]) {
   const [url, emailAccountId] = Array.isArray(key) ? key : [key, undefined];
   mocks.requests.push({ url, emailAccountId });
   if (url.startsWith("/api/user/thread-plans")) return { plans: mocks.plans };
+  if (url.startsWith("/api/user/thread-brief") && mocks.briefDeferrals > 0) {
+    mocks.briefDeferrals -= 1;
+    throw Object.assign(new Error("Gmail is busy for this account"), {
+      status: 503,
+      retryAfterMs: 50,
+    });
+  }
   if (url.startsWith("/api/user/thread-brief"))
     return { brief: { summary: SUMMARY, keyPoints: [], source: "ai" } };
   if (url.startsWith("/api/user/inbox-insights") && mocks.insightFailures > 0) {

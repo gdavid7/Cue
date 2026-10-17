@@ -135,7 +135,11 @@ export function OrgRules({ organizationId }: { organizationId: string }) {
       </div>
 
       <Card>
-        <LoadingContent loading={isLoading} error={error}>
+        <LoadingContent
+          hasData={Boolean(data)}
+          loading={isLoading}
+          error={error}
+        >
           {data?.rules.length ? (
             <Table>
               <TableHeader>

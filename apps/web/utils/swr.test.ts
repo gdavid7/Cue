@@ -131,6 +131,44 @@ describe("onSWRErrorRetry", () => {
     }
   });
 
+  it("waits out a deferral's Retry-After before asking again", () => {
+    vi.useFakeTimers();
+    try {
+      const revalidate = vi.fn();
+      onSWRErrorRetry(
+        { status: 503, retryAfterMs: 27_000 },
+        "key",
+        { errorRetryInterval: 5000 } as never,
+        revalidate,
+        { retryCount: 1 },
+      );
+      vi.advanceTimersByTime(26_000);
+      expect(revalidate).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1000);
+      expect(revalidate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps a deferral's wait so a long Retry-After can't park the screen", () => {
+    vi.useFakeTimers();
+    try {
+      const revalidate = vi.fn();
+      onSWRErrorRetry(
+        { status: 503, retryAfterMs: 60 * 60_000 },
+        "key",
+        { errorRetryInterval: 5000 } as never,
+        revalidate,
+        { retryCount: 1 },
+      );
+      vi.advanceTimersByTime(90_000);
+      expect(revalidate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps SWR's backoff for other errors", () => {
     vi.useFakeTimers();
     try {

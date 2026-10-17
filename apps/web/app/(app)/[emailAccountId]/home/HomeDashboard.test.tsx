@@ -500,6 +500,16 @@ describe("HomeDashboard states", () => {
     expect(screen.queryAllByRole("status")).toEqual([]);
     expect(lanes()).toEqual([]);
   });
+
+  it("refresh deferred: keeps the lanes on screen instead of the error", () => {
+    mocks.home.data = homeData([thread("a", "Quarterly numbers")]);
+    mocks.home.error = { error: "Gmail is busy for this account." };
+
+    renderToday();
+
+    expect(lanes()).toEqual(["Needs reply"]);
+    expect(screen.queryByText("Couldn't load this")).toBeNull();
+  });
 });
 
 function onlyStatus() {

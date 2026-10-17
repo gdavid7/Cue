@@ -83,7 +83,7 @@ export function UpcomingMeetings({
     <>
       <TypographyH3>Upcoming Meetings</TypographyH3>
 
-      <LoadingContent loading={isLoading} error={error}>
+      <LoadingContent hasData={Boolean(data)} loading={isLoading} error={error}>
         {!data?.events.length ? (
           <Empty className="mt-4 border">
             <EmptyHeader>
@@ -154,6 +154,7 @@ function SendHistoryLink() {
         </DialogHeader>
 
         <LoadingContent
+          hasData={Boolean(data)}
           loading={isLoading}
           error={error}
           loadingComponent={<Skeleton className="h-10 w-full" />}

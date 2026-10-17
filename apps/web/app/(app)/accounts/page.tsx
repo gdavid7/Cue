@@ -58,7 +58,7 @@ export default function AccountsPage() {
         />
       ) : null}
 
-      <LoadingContent loading={isLoading} error={error}>
+      <LoadingContent hasData={Boolean(data)} loading={isLoading} error={error}>
         <div className="grid grid-cols-1 gap-4 py-6 lg:grid-cols-2 xl:grid-cols-3">
           {data?.emailAccounts.map((emailAccount) => (
             <AccountItem

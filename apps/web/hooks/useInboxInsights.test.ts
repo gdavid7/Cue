@@ -6,6 +6,8 @@ import { SWRConfig } from "swr";
 import { describe, expect, it, vi } from "vitest";
 import { getInboxInsightRequests, useInboxInsights } from "./useInboxInsights";
 
+vi.mock("@/providers/EmailAccountProvider", () => ({ useAccount: vi.fn() }));
+
 describe("getInboxInsightRequests", () => {
   it("asks each account about its own rows, even when thread ids collide", () => {
     const requests = getInboxInsightRequests([
@@ -108,6 +110,54 @@ describe("useInboxInsights", () => {
 
     expect(result.current.error).toMatchObject({ status: 429 });
     expect(result.current.data).toEqual(shown);
+  });
+
+  it("keeps the other accounts' insights when one account is busy, then fills it in", async () => {
+    let personalBusy = true;
+    const fetcher = vi.fn(async ([, emailAccountId]: [string, string]) => {
+      if (emailAccountId === "personal" && personalBusy) {
+        personalBusy = false;
+        throw Object.assign(new Error("Gmail is busy"), {
+          status: 503,
+          retryAfterMs: 300,
+        });
+      }
+      return {
+        insights: { t1: { insight: null, meeting: null, reply: "ready" } },
+      };
+    });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(
+        SWRConfig,
+        {
+          value: {
+            fetcher,
+            provider: () => new Map(),
+            shouldRetryOnError: false,
+          },
+        },
+        children,
+      );
+    const items = [
+      item({ emailAccountId: "work", threadId: "t1" }),
+      item({ emailAccountId: "personal", threadId: "t1" }),
+    ];
+
+    const { result } = renderHook(() => useInboxInsights(items), { wrapper });
+
+    await waitFor(() =>
+      expect(result.current.data).toEqual({
+        "work:t1": { insight: null, meeting: null, reply: "ready" },
+      }),
+    );
+    expect(result.current.error).toBeUndefined();
+
+    await waitFor(() =>
+      expect(result.current.data).toEqual({
+        "work:t1": { insight: null, meeting: null, reply: "ready" },
+        "personal:t1": { insight: null, meeting: null, reply: "ready" },
+      }),
+    );
   });
 });
 

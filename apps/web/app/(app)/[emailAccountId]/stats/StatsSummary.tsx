@@ -31,6 +31,7 @@ export function StatsSummary(props: {
 
   return (
     <LoadingContent
+      hasData={Boolean(data)}
       loading={isLoading}
       error={error}
       loadingComponent={<Skeleton className="h-[405px] rounded" />}

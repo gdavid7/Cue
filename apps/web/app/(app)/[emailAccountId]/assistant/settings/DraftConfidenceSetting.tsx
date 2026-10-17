@@ -104,6 +104,7 @@ export function DraftConfidenceSetting() {
       description="How sure should Cue be before drafting a reply?"
       right={
         <LoadingContent
+          hasData={Boolean(data)}
           loading={isLoading}
           error={error}
           loadingComponent={<Skeleton className="h-10 w-44" />}

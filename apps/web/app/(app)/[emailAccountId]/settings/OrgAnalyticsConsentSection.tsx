@@ -64,7 +64,7 @@ export function OrgAnalyticsConsentSection({
   }
 
   return (
-    <LoadingContent loading={isLoading} error={error}>
+    <LoadingContent hasData={Boolean(data)} loading={isLoading} error={error}>
       {data?.organizationId && (
         <>
           <ItemSeparator />

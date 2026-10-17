@@ -51,6 +51,7 @@ export function SentWithSignatureSetting() {
       description={`Add 'Sent with ${BRAND_NAME}' with your referral link after your signature on emails you send from the mail client. Earn a month of credit for each person who signs up with your link.`}
       right={
         <LoadingContent
+          hasData={Boolean(data)}
           loading={isLoading}
           error={error}
           loadingComponent={<Skeleton className="h-8 w-32" />}

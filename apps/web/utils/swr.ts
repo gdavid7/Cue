@@ -64,6 +64,10 @@ export function getDevSWRErrorRetryMs(
 // five seconds, so each rate-limited request would retry into the same window,
 // spending quota the provider has not restored and keeping the account limited.
 const RATE_LIMITED_RETRY_MS = 60_000;
+// A deferred read (503) says how long the account's budget needs. Waiting it
+// out asks once instead of several times inside the window; the cap keeps a
+// bad header from parking the screen.
+const MAX_RETRY_AFTER_MS = 90_000;
 
 export const onSWRErrorRetry: NonNullable<SWRConfiguration["onErrorRetry"]> = (
   error,
@@ -72,14 +76,35 @@ export const onSWRErrorRetry: NonNullable<SWRConfiguration["onErrorRetry"]> = (
   revalidate,
   opts,
 ) => {
-  if (error?.status === 429) {
-    if (opts.retryCount <= 1) {
-      setTimeout(() => revalidate(opts), RATE_LIMITED_RETRY_MS);
-    }
+  const hintedMs = getHintedRetryMs(error, opts.retryCount);
+  if (hintedMs === undefined) {
+    SWRConfig.defaultValue.onErrorRetry(error, key, config, revalidate, opts);
     return;
   }
-  SWRConfig.defaultValue.onErrorRetry(error, key, config, revalidate, opts);
+  if (hintedMs === null) return;
+  if (
+    config.errorRetryCount !== undefined &&
+    opts.retryCount > config.errorRetryCount
+  )
+    return;
+  setTimeout(() => revalidate(opts), hintedMs);
 };
+
+/**
+ * How long the server asked us to wait before the next try: `null` to stop,
+ * `undefined` when it gave no hint and the usual backoff applies.
+ * `retryCount` is 1 for the first retry.
+ */
+export function getHintedRetryMs(
+  error: { status?: number; retryAfterMs?: number } | undefined,
+  retryCount: number,
+): number | null | undefined {
+  if (error?.status === 429)
+    return retryCount <= 1 ? RATE_LIMITED_RETRY_MS : null;
+  if (error?.status === 503 && typeof error.retryAfterMs === "number")
+    return Math.min(error.retryAfterMs, MAX_RETRY_AFTER_MS);
+  return;
+}
 
 type NormalizedError = { error: string };
 

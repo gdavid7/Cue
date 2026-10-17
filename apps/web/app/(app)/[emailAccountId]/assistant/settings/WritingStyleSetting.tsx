@@ -38,6 +38,7 @@ export function WritingStyleSetting() {
       description="Define your tone and style."
       right={
         <LoadingContent
+          hasData={Boolean(data)}
           loading={isLoading}
           error={error}
           loadingComponent={<Skeleton className="h-8 w-32" />}

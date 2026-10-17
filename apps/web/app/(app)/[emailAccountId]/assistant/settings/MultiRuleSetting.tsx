@@ -59,6 +59,7 @@ export function MultiRuleSetting() {
       description={`Allow ${BRAND_NAME} to apply more than one rule to an email when it fits.`}
       right={
         <LoadingContent
+          hasData={Boolean(data)}
           loading={isLoading}
           error={error}
           loadingComponent={<Skeleton className="h-8 w-32" />}

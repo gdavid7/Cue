@@ -40,7 +40,7 @@ export function AccountCommandList({
   );
 
   return (
-    <LoadingContent loading={isLoading} error={error}>
+    <LoadingContent hasData={Boolean(data)} loading={isLoading} error={error}>
       {data && (
         <>
           <CommandEmpty>No accounts found.</CommandEmpty>

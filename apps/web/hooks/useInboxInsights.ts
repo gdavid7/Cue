@@ -1,10 +1,15 @@
 import groupBy from "lodash/groupBy";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import type { GetInboxInsightsResponse } from "@/app/api/user/inbox-insights/route";
 import type { ThreadInsightData } from "@/utils/inbox-insights/get-inbox-insights";
+import { getHintedRetryMs } from "@/utils/swr";
 
 const CHUNK_SIZE = 50;
+// A page where only some accounts answered asks the rest again this many
+// times; an account that keeps failing then waits for the next change.
+const PARTIAL_RETRY_LIMIT = 5;
+const PARTIAL_RETRY_BASE_MS = 5000;
 
 type InboxInsightItem = {
   /** Where the caller looks the insight up; unique across accounts. */
@@ -40,14 +45,16 @@ export function useInboxInsights(
         ] as const)
       : null;
 
-  return useSWR<Record<string, ThreadInsightData>>(
+  const result = useSWR<InboxInsightsResult>(
     key,
     async () => {
       if (!fetcher) throw new Error("SWR fetcher is not configured");
       const accountFetcher = fetcher as (
         key: [string, string],
       ) => Promise<GetInboxInsightsResponse>;
-      const responses = await Promise.all(
+      // Each account answers on its own budget: one that is busy must not
+      // take the other accounts' rows down with it.
+      const settled = await Promise.allSettled(
         requests.map(async (request) => {
           const { insights } = await accountFetcher([
             `/api/user/inbox-insights?items=${request.items.map((item) => item.pair).join(",")}`,
@@ -59,11 +66,60 @@ export function useInboxInsights(
           });
         }),
       );
-      return Object.fromEntries(responses.flat());
+      const failures = settled.flatMap((outcome) =>
+        outcome.status === "rejected" ? [outcome.reason] : [],
+      );
+      // Nothing to show: SWR keeps the previous rows and retries as usual.
+      if (failures.length === settled.length) throw failures[0];
+      return {
+        insights: Object.fromEntries(
+          settled.flatMap((outcome) =>
+            outcome.status === "fulfilled" ? outcome.value : [],
+          ),
+        ),
+        failure: failures[0],
+      };
     },
     { revalidateOnFocus: false, keepPreviousData: true },
   );
+
+  // SWR retries only a fetch that throws, so accounts that failed beside ones
+  // that answered are asked again here, when the server's hint allows.
+  const { data, mutate } = result;
+  const keyId = key?.[1] ?? "";
+  const partialRetries = useRef({ keyId, count: 0 });
+  useEffect(() => {
+    if (partialRetries.current.keyId !== keyId)
+      partialRetries.current = { keyId, count: 0 };
+    if (!data?.failure) {
+      partialRetries.current.count = 0;
+      return;
+    }
+    const retryCount = partialRetries.current.count + 1;
+    if (retryCount > PARTIAL_RETRY_LIMIT) return;
+    const delayMs =
+      getHintedRetryMs(data.failure, retryCount) ??
+      PARTIAL_RETRY_BASE_MS * 2 ** (retryCount - 1);
+    if (delayMs === null) return;
+    const timer = setTimeout(() => {
+      partialRetries.current.count = retryCount;
+      mutate();
+    }, delayMs);
+    return () => clearTimeout(timer);
+  }, [data, keyId, mutate]);
+
+  return {
+    data: data?.insights,
+    error: result.error,
+    isLoading: result.isLoading,
+  };
 }
+
+type InboxInsightsResult = {
+  insights: Record<string, ThreadInsightData>;
+  /** One account's error, when only some of the accounts answered. */
+  failure?: { status?: number; retryAfterMs?: number };
+};
 
 /**
  * The open thread's insight, as the reader's features ask for it. They share

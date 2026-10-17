@@ -160,7 +160,11 @@ export function FixWithChat({
           <DialogTitle>Fix how Cue sorted this</DialogTitle>
         </DialogHeader>
 
-        <LoadingContent loading={isLoading} error={error}>
+        <LoadingContent
+          hasData={Boolean(data)}
+          loading={isLoading}
+          error={error}
+        >
           {data && !showExplanation ? (
             <RuleMismatch
               results={results}

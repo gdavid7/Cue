@@ -51,7 +51,7 @@ export function FilingActivity() {
   return (
     <div>
       <SectionHeader className="mb-3">Recent Activity</SectionHeader>
-      <LoadingContent loading={isLoading} error={error}>
+      <LoadingContent hasData={Boolean(data)} loading={isLoading} error={error}>
         {data?.filings.length === 0 ? (
           <MutedText className="italic">No recently filed documents.</MutedText>
         ) : (
