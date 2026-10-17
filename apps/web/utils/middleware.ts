@@ -55,6 +55,7 @@ import {
 const logger = createScopedLogger("middleware");
 const SLOW_MIDDLEWARE_STEP_MS = 2000;
 const SLOW_MIDDLEWARE_TOTAL_MS = 4000;
+const SLOW_REQUEST_MS = 1000;
 const UUID_V4_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -125,6 +126,9 @@ function withMiddleware<T extends NextRequest>(
     const reqWithLogger = req as NextRequest & { logger?: Logger };
     reqWithLogger.logger = baseLogger;
     let requestForError = reqWithLogger as NextRequest;
+    const startedAt = Date.now();
+    // The scope names the route template; a bare path holds only ids.
+    const route = scope ?? getRequestPath(req);
 
     return runWithAuditContext(
       {
@@ -168,9 +172,7 @@ function withMiddleware<T extends NextRequest>(
           flushLogger(requestForError);
 
           // redirects work by throwing an error. allow these
-          if (error instanceof Error && error.message === "NEXT_REDIRECT") {
-            throw error;
-          }
+          if (isRedirectError(error)) throw error;
 
           const requestPath = getRequestPath(requestForError);
           const publicApiRequest = isPublicApiPath(
@@ -352,6 +354,27 @@ function withMiddleware<T extends NextRequest>(
           requestTimer?.logSlowCompletion();
           requestTimer?.stop();
         }
+      },
+    ).then(
+      (response) => {
+        logRequestCompleted(getLogger(requestForError), {
+          route,
+          method: req.method,
+          status: response.status,
+          durationMs: Date.now() - startedAt,
+        });
+        return response;
+      },
+      (error: unknown) => {
+        logRequestCompleted(getLogger(requestForError), {
+          route,
+          method: req.method,
+          // Only a redirect is rethrown on purpose; Next answers anything else
+          // with a 500.
+          status: isRedirectError(error) ? 307 : 500,
+          durationMs: Date.now() - startedAt,
+        });
+        throw error;
       },
     );
   };
@@ -857,6 +880,24 @@ async function runTimedMiddlewareStep<T>({
       });
     }
   }
+}
+
+// Slow and failed requests log at info, which ships to Axiom. The rest log at
+// trace, which ships only while ENABLE_DEBUG_LOGS is on, so the hot polling
+// routes add nothing by default.
+function logRequestCompleted(
+  logger: Logger,
+  fields: { route: string; method: string; status: number; durationMs: number },
+) {
+  if (fields.durationMs >= SLOW_REQUEST_MS || fields.status >= 500) {
+    logger.info("Request completed", fields);
+  } else {
+    logger.trace("Request completed", fields);
+  }
+}
+
+function isRedirectError(error: unknown) {
+  return error instanceof Error && error.message === "NEXT_REDIRECT";
 }
 
 function logSlowMiddlewareTotal({

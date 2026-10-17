@@ -70,6 +70,7 @@ export async function saveAiUsage({
   toolCallCount,
   modelFallbacks,
   usageIncomplete,
+  durationMs,
 }: {
   userId?: string;
   email: string;
@@ -93,6 +94,8 @@ export async function saveAiUsage({
   // A call that failed after streaming output reports no usage, so the totals
   // undercount it.
   usageIncomplete?: boolean;
+  // Wall time of the provider call (or the whole run, for multi-step runs).
+  durationMs?: number;
 }) {
   const estimatedCost = calculateUsageCost({
     provider,
@@ -139,6 +142,7 @@ export async function saveAiUsage({
     toolCallCount,
     modelFallbacks,
     usageIncomplete,
+    durationMs,
   });
 
   notifyAiUsageListeners({

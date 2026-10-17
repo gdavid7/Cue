@@ -650,10 +650,14 @@ describe("saveAiUsage", () => {
       providerRequestIds: ["gen-step-1", "gen-step-2"],
       stepCount: 2,
       toolCallCount: 4,
+      durationMs: 1234,
     });
 
     expect(consoleLogSpy).toHaveBeenCalledWith(
       expect.stringContaining("[usage]: AI call completed"),
+    );
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      expect.stringContaining('"durationMs": 1234'),
     );
     expect(consoleLogSpy).toHaveBeenCalledWith(
       expect.stringContaining('"inputTokens": 1000'),

@@ -369,6 +369,7 @@ export function createGenerateText({
         bridged,
       });
 
+      const callStartedAt = Date.now();
       const result = await generateText(
         {
           ...protectedRequestOptions,
@@ -399,6 +400,7 @@ export function createGenerateText({
           model: candidate.modelName,
           label,
           hasUserApiKey: effectiveModelOptions.hasUserApiKey,
+          durationMs: Date.now() - callStartedAt,
         });
       }
 
@@ -603,6 +605,7 @@ export function createGenerateObject({
       >[0];
 
       let result: GenerateObjectResult<RESULT>;
+      const callStartedAt = Date.now();
 
       try {
         result = await generateObject<SCHEMA, OUTPUT, RESULT>(request);
@@ -622,6 +625,7 @@ export function createGenerateObject({
               model: candidate.modelName,
               label,
               hasUserApiKey: effectiveModelOptions.hasUserApiKey,
+              durationMs: Date.now() - callStartedAt,
             });
           } catch (usageError) {
             logger.error("Failed to save usage for failed object generation", {
@@ -648,6 +652,7 @@ export function createGenerateObject({
             model: candidate.modelName,
             label,
             hasUserApiKey: effectiveModelOptions.hasUserApiKey,
+            durationMs: Date.now() - callStartedAt,
           });
         } catch (usageError) {
           logger.error("Failed to save usage for object generation", {
@@ -672,6 +677,7 @@ export function createGenerateObject({
       return result;
     };
 
+    const generationStartedAt = Date.now();
     for (let index = 0; index < modelCandidates.length; index++) {
       const candidate = modelCandidates[index];
       const nextCandidate = modelCandidates[index + 1];
@@ -692,6 +698,8 @@ export function createGenerateObject({
 
         logger.info("LLM object generation completed", {
           label,
+          // Across retries and fallbacks, from the first attempt.
+          durationMs: Date.now() - generationStartedAt,
           candidateCount: modelCandidates.length,
           fallbackUsed: index > 0,
           fallbackDepth: index,
@@ -821,6 +829,7 @@ export async function chatCompletionStream(
       model: candidate.model,
       tools: protectedChatTools,
     });
+    const streamStartedAt = Date.now();
     try {
       return streamText({
         model: bridgedChat.model,
@@ -854,6 +863,7 @@ export async function chatCompletionStream(
             model: candidate.modelName,
             label,
             hasUserApiKey: modelOptions.hasUserApiKey,
+            durationMs: Date.now() - streamStartedAt,
           });
 
           const finishPromise = onEnd?.(result);
@@ -1064,6 +1074,7 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
     providerOptions: primary.providerOptions,
   });
 
+  const runStartedAt = Date.now();
   const agent = new ToolLoopAgent({
     model: fallbackModel ?? runCandidates[0].model,
     tools: bridgedAgent.tools,
@@ -1098,6 +1109,7 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
         model: finalCandidate.modelName,
         label,
         hasUserApiKey: modelOptions.hasUserApiKey,
+        durationMs: Date.now() - runStartedAt,
         modelFallbacks: modelFallbacks.length > 0 ? modelFallbacks : undefined,
         usageIncomplete: usageIncomplete || undefined,
       });
@@ -1985,6 +1997,7 @@ async function saveUsageWithMetadata({
   hasUserApiKey,
   modelFallbacks,
   usageIncomplete,
+  durationMs,
 }: {
   result: unknown;
   usage: Parameters<typeof saveAiUsage>[0]["usage"];
@@ -1997,6 +2010,7 @@ async function saveUsageWithMetadata({
   hasUserApiKey: boolean;
   modelFallbacks?: ModelFallbackRecord[];
   usageIncomplete?: boolean;
+  durationMs?: number;
 }) {
   const usageMetadata = getUsageMetadata(result);
 
@@ -2018,6 +2032,7 @@ async function saveUsageWithMetadata({
     toolCallCount: usageMetadata.toolCallCount,
     modelFallbacks,
     usageIncomplete,
+    durationMs,
   });
 }
 
