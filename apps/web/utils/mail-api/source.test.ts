@@ -21,6 +21,7 @@ import {
 import { createNodeSqliteDriver } from "@inboxzero/mail-sqlite/node";
 import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
 import { redis } from "@/utils/redis";
+import { forgetEmailProviderRateLimitState } from "@/utils/redis/email-provider-rate-limit";
 import {
   LocalMailSyncPausedError,
   withLocalMailSyncBudget,
@@ -418,6 +419,12 @@ describe("createEmailProviderMailboxSource", () => {
     it.each(
       calls,
     )("pauses for Graph's Retry-After when %s is throttled", async (_name, call) => {
+      // Each case records a window for the same account. Without this, the
+      // previous case's window stays in this instance's rate-limit memo, and a
+      // case that starts within the same millisecond sees an equal window
+      // already recorded and correctly skips the write.
+      forgetEmailProviderRateLimitState("acc-1");
+      vi.mocked(redis.get).mockResolvedValue(null);
       vi.mocked(redis.set).mockClear();
       const throttle = () => {
         const error = new GraphError(
@@ -1378,7 +1385,9 @@ describe("createEmailProviderMailboxSource", () => {
   });
 
   it("backs off for Gmail's quota window and records rate-limit mode when Gmail throttles", async () => {
+    forgetEmailProviderRateLimitState("acc-1");
     vi.mocked(redis.get).mockResolvedValue(null);
+    vi.mocked(redis.set).mockClear();
     const quotaError = Object.assign(
       new Error(
         "Quota exceeded for quota metric 'Total Query Cost' and limit 'Units per minute per user' of service 'gmail.googleapis.com'",
