@@ -16,6 +16,8 @@ import {
   InvalidClientError,
   InvalidGrantError,
 } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { env } from "@/env";
+import { BRAND_NAME } from "@/utils/branding";
 import prisma from "@/utils/prisma";
 import { createScopedLogger } from "@/utils/logger";
 import { getMcpFetch } from "@/utils/mcp/safe-fetch";
@@ -533,7 +535,7 @@ async function getOAuthClient(
   const scope = integration.scopes.join(" ");
 
   const clientMetadata: OAuthClientMetadata = {
-    client_name: "Inbox Zero",
+    client_name: BRAND_NAME,
     redirect_uris: [redirectUri],
     grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],
@@ -541,8 +543,8 @@ async function getOAuthClient(
     // Omit rather than send an empty string: some servers reject `scope: ""`
     // with invalid_scope instead of falling back to their defaults
     ...(scope && { scope }),
-    logo_uri: "https://getinboxzero.com/icon.png",
-    tos_uri: "https://getinboxzero.com/terms",
+    logo_uri: `${env.NEXT_PUBLIC_BASE_URL}/icon.png`,
+    tos_uri: `${env.NEXT_PUBLIC_BASE_URL}/terms`,
   };
 
   const registered = await registerClient(metadata.registration_endpoint, {

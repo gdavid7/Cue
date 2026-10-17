@@ -112,6 +112,8 @@ vi.mock("@/env", () => ({
     BEDROCK_REGION: "us-west-2",
     BEDROCK_ACCESS_KEY: "",
     BEDROCK_SECRET_KEY: "",
+    NEXT_PUBLIC_BASE_URL: "https://cue.example.com",
+    NEXT_PUBLIC_BRAND_NAME: "Cue",
   },
 }));
 
@@ -172,6 +174,14 @@ describe("Models", () => {
       const result = getModel(userAi);
       expect(result.provider).toBe(Provider.OPENROUTER);
       expect(result.modelName).toBe("openai/gpt-5.4-mini");
+      expect(createOpenRouter).toHaveBeenCalledWith(
+        expect.objectContaining({
+          headers: {
+            "HTTP-Referer": "https://cue.example.com",
+            "X-Title": "Cue",
+          },
+        }),
+      );
     });
 
     it("should use LLM_API_KEY when provider-specific OpenAI key is not set", () => {
@@ -521,8 +531,8 @@ describe("Models", () => {
       expect(createGateway).toHaveBeenCalledWith({
         apiKey: "test-ai-gateway-key",
         headers: {
-          "http-referer": "https://www.getinboxzero.com",
-          "x-title": "Inbox Zero",
+          "http-referer": "https://cue.example.com",
+          "x-title": "Cue",
         },
       });
     });

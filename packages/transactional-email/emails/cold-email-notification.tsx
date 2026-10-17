@@ -31,15 +31,15 @@ const ColdEmailNotification: ColdEmailNotificationComponent = ({
           <Section className="p-8 text-center">
             <Link href={baseUrl} className="text-[15px]">
               <Img
-                src={"https://www.getinboxzero.com/icon.png"}
+                src={`${baseUrl}/icon.png`}
                 width="40"
                 height="40"
-                alt="Inbox Zero"
+                alt="Cue"
                 className="mx-auto my-0"
               />
             </Link>
             <Text className="mx-0 mb-8 mt-4 p-0 text-center text-2xl font-normal">
-              <span className="font-semibold tracking-tighter">Inbox Zero</span>
+              <span className="font-semibold tracking-tighter">Cue</span>
             </Text>
           </Section>
 
@@ -47,7 +47,7 @@ const ColdEmailNotification: ColdEmailNotificationComponent = ({
             <Text className="text-[16px] text-gray-700 mb-4 mt-0">
               The recipient uses{" "}
               <Link href={baseUrl} className="text-blue-600 underline">
-                Inbox Zero
+                Cue
               </Link>{" "}
               to automatically detect and filter cold emails from first-time
               senders.
@@ -67,7 +67,7 @@ const ColdEmailNotification: ColdEmailNotificationComponent = ({
             <Text className="m-0">
               This is an automated message from{" "}
               <Link href={baseUrl} className="text-blue-600 underline">
-                Inbox Zero
+                Cue
               </Link>
               .
             </Text>

@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockEnv } = vi.hoisted(() => ({
-  mockEnv: {} as {
+  mockEnv: {
+    NEXT_PUBLIC_BASE_URL: "https://cue.example.com",
+    NEXT_PUBLIC_BRAND_NAME: "Cue",
+  } as {
+    NEXT_PUBLIC_BASE_URL: string;
+    NEXT_PUBLIC_BRAND_NAME: string;
     STRIPE_API_BASE_URL?: string;
     STRIPE_SECRET_KEY?: string;
   },

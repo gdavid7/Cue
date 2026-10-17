@@ -31,7 +31,6 @@ import {
 import { env } from "@/env";
 import { BRAND_NAME } from "@/utils/branding";
 import {
-  PUBLIC_API_DOCS_URL,
   PUBLIC_API_OPENAPI_PATH,
   createPublicApiErrorBody,
 } from "@/utils/public-api-error";
@@ -71,7 +70,6 @@ export function createPublicOpenApiDocument() {
       version: "1.0.0",
       description: [
         `Programmatic access to ${BRAND_NAME} inbox stats, automation rules, and sender unsubscribe.`,
-        `Docs: ${PUBLIC_API_DOCS_URL}`,
         `Machine-readable schema: ${PUBLIC_API_OPENAPI_PATH}`,
         "Authenticate with an account-scoped API key via the API-Key header.",
         "Errors return JSON with error.code, error.message, and error.hint.",

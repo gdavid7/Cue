@@ -4,7 +4,6 @@ import {
   Container,
   Head,
   Html,
-  Img,
   Link,
   Preview,
   Row,
@@ -44,14 +43,11 @@ export function StatsEmailLayout({
         <Body className="m-0 bg-[#FDFDFD] p-0" style={{ fontFamily: FONT }}>
           <Container className="mx-auto w-full max-w-[600px] px-3 pb-12 pt-10">
             <Section className="pb-9 text-center">
-              <Link href={baseUrl}>
-                <Img
-                  src={`${baseUrl}/logo-wordmark.png`}
-                  width="209"
-                  height="25"
-                  alt="Inbox Zero"
-                  className="mx-auto my-0"
-                />
+              <Link
+                href={baseUrl}
+                className="text-[25px] font-semibold tracking-[-0.02em] text-[#242424] no-underline"
+              >
+                Cue
               </Link>
             </Section>
 

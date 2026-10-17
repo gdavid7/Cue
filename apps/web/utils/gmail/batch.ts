@@ -46,7 +46,7 @@ export async function getBatch(
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "multipart/mixed; boundary=batch_boundary",
       "Accept-Encoding": "gzip",
-      "User-Agent": "Inbox-Zero (gzip)",
+      "User-Agent": "Cue (gzip)",
     },
     body: batchRequestBody,
   });

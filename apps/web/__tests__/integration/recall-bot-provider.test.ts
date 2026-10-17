@@ -58,14 +58,14 @@ describe.skipIf(!RUN_INTEGRATION_TESTS)(
       const joinAt = new Date("2026-05-04T09:00:00.000Z");
 
       const { externalBotId } = await provider.scheduleBot({
-        botName: "Barbara's Inbox Zero Notetaker",
+        botName: "Barbara's Cue Notetaker",
         meetingUrl: "https://meet.google.com/abc-defg-hij",
         joinAt,
       });
 
       expect(emulator.getBot(externalBotId)).toMatchObject({
         meeting_url: "https://meet.google.com/abc-defg-hij",
-        bot_name: "Barbara's Inbox Zero Notetaker",
+        bot_name: "Barbara's Cue Notetaker",
         join_at: joinAt.toISOString(),
       });
 
@@ -271,7 +271,7 @@ describe.skipIf(!RUN_INTEGRATION_TESTS)(
 
     test("replaces a bot when Recall rejects a near-term reschedule", async () => {
       const meetingUrl = "https://meet.google.com/abc-defg-hij";
-      const botName = "Barbara's Inbox Zero Notetaker";
+      const botName = "Barbara's Cue Notetaker";
       const { externalBotId } = await provider.scheduleBot({
         botName,
         meetingUrl,

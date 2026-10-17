@@ -4,6 +4,7 @@ import DigestEmail, {
   type DigestEmailProps,
 } from "@inboxzero/transactional-email/emails/digest";
 import { digestPreviewBody } from "@/app/api/digest-preview/validation";
+import { env } from "@/env";
 
 // http://localhost:3000/api/digest-preview?categories=["Newsletter","Receipt","Marketing","Cold Emails"]
 export async function GET(request: NextRequest) {
@@ -43,7 +44,7 @@ export async function GET(request: NextRequest) {
 
 function createMockDigestData(categories: string[]): DigestEmailProps {
   const digestData: DigestEmailProps = {
-    baseUrl: "https://www.getinboxzero.com",
+    baseUrl: env.NEXT_PUBLIC_BASE_URL,
     unsubscribeToken: "preview-token",
     emailAccountId: "preview-account",
     date: new Date(),

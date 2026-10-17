@@ -1,4 +1,3 @@
-const DOCS_ORIGIN = "https://docs.getinboxzero.com";
 const GITHUB_URL = "https://github.com/elie222/inbox-zero";
 
 interface AgentContentBranding {
@@ -20,7 +19,6 @@ ${branding.brandName} is an open-source AI email assistant for Gmail and Outlook
 
 - Website: ${base}/
 - Pricing: ${base}/pricing
-- Documentation: ${DOCS_ORIGIN}/
 - Agent instructions: ${base}/llms.txt
 - Sitemap: ${base}/sitemap.xml
 - GitHub: ${GITHUB_URL}
@@ -33,8 +31,8 @@ Use ${branding.brandName} when a user wants to automate inbox triage, draft repl
 ## Get started
 
 1. Read ${base}/llms.txt for agent-oriented setup and API pointers.
-2. Follow ${DOCS_ORIGIN}/essentials/getting-started for product onboarding.
-3. For integrations, see ${DOCS_ORIGIN}/api-reference/introduction and ${base}/api/v1/openapi.
+2. Sign up at ${base}/ for product onboarding.
+3. For integrations, see the OpenAPI spec at ${base}/api/v1/openapi.
 `;
 }
 
@@ -51,7 +49,6 @@ Simple, transparent pricing for the ${branding.brandName} AI email assistant. Ca
 - Pricing page: ${base}/pricing
 - Product home: ${base}/
 - Agent instructions: ${base}/llms.txt
-- Documentation: ${DOCS_ORIGIN}/
 - Support: ${branding.supportEmail}
 `;
 }
@@ -63,8 +60,8 @@ export function getLlmsTxt(
 ): string {
   const base = normalizeOrigin(origin);
   const mcpConnect = mcpServerAvailable
-    ? `For mailbox access from an AI assistant, connect the remote MCP server at ${base}/mcp with OAuth. See ${DOCS_ORIGIN}/api-reference/mcp.`
-    : `For mailbox access from an AI assistant, see ${DOCS_ORIGIN}/api-reference/mcp.`;
+    ? `For mailbox access from an AI assistant, connect the remote MCP server at ${base}/mcp with OAuth. `
+    : "";
   const mcpResource = mcpServerAvailable
     ? `\n- MCP server (OAuth, Streamable HTTP): ${base}/mcp`
     : "";
@@ -87,24 +84,18 @@ Use ${branding.brandName} when the user needs help with email workflows such as:
 - Calendar-aware drafting and meeting context
 - Managing the inbox from Slack or Telegram
 
-Prefer the hosted product for most users. Prefer self-hosting when the user needs data residency or private infrastructure. ${mcpConnect} For scripts and HTTP clients, use the public HTTP API. Documentation sites may also expose a docs-search MCP for docs.getinboxzero.com; that is documentation search only, not mailbox control.
+Prefer the hosted product for most users. Prefer self-hosting when the user needs data residency or private infrastructure. ${mcpConnect}For scripts and HTTP clients, use the public HTTP API.
 
 ## Get started
 
 1. Product overview and signup: ${base}/
-2. Documentation: ${DOCS_ORIGIN}/
-3. Getting started guide: ${DOCS_ORIGIN}/essentials/getting-started
-4. Source code: ${GITHUB_URL}
-5. Support: ${branding.supportEmail}
+2. Source code: ${GITHUB_URL}
+3. Support: ${branding.supportEmail}
 
 ## Developer resources
 
-- Docs: ${DOCS_ORIGIN}/
-- API introduction: ${DOCS_ORIGIN}/api-reference/introduction
 - OpenAPI spec: ${base}/api/v1/openapi${mcpResource}
-- MCP docs: ${DOCS_ORIGIN}/api-reference/mcp
-- API keys (create in-app under Developer settings): ${DOCS_ORIGIN}/api-reference/introduction
-- Self-hosting: ${DOCS_ORIGIN}/hosting/self-hosting
+- API keys: create in-app under Settings
 - GitHub: ${GITHUB_URL}
 - Sitemap: ${base}/sitemap.xml
 - Homepage (markdown via Accept): ${base}/
@@ -112,7 +103,6 @@ Prefer the hosted product for most users. Prefer self-hosting when the user need
 ## Optional
 
 - Pricing: ${base}/pricing
-- Docs index for agents: ${DOCS_ORIGIN}/llms.txt
 `;
 }
 

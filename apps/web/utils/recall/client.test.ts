@@ -37,7 +37,7 @@ describe("RecallBotProvider", () => {
     const provider = new RecallBotProvider(createTestLogger());
 
     await provider.scheduleBot({
-      botName: "Barbara's Inbox Zero Notetaker",
+      botName: "Barbara's Cue Notetaker",
       meetingUrl: "https://meet.google.com/abc-defg-hij",
       joinAt: new Date("2026-05-04T09:00:00.000Z"),
     });
@@ -48,7 +48,7 @@ describe("RecallBotProvider", () => {
     );
     const request = vi.mocked(fetch).mock.calls[0]?.[1];
     expect(JSON.parse(request?.body as string)).toMatchObject({
-      bot_name: "Barbara's Inbox Zero Notetaker",
+      bot_name: "Barbara's Cue Notetaker",
     });
   });
 
@@ -204,7 +204,7 @@ describe("RecallBotProvider", () => {
     const requestBody = JSON.parse(request?.body as string);
     expect(requestBody).toMatchObject({
       meeting_url: "https://meet.google.com/abc-defg-hij",
-      bot_name: "Inbox Zero Notetaker",
+      bot_name: "Cue Notetaker",
       join_at: "2026-05-04T09:00:00.000Z",
     });
     expect(requestBody).not.toHaveProperty("automatic_video_output");

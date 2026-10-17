@@ -99,7 +99,7 @@ export function createCalendarReply(
   const original = new ICAL.Component(ICAL.parse(invitation.content));
   const source = original.getFirstSubcomponent("vevent")!;
   const calendar = new ICAL.Component("vcalendar");
-  calendar.addPropertyWithValue("prodid", "-//Inbox Zero//Calendar//EN");
+  calendar.addPropertyWithValue("prodid", "-//Cue//Calendar//EN");
   calendar.addPropertyWithValue("version", "2.0");
   calendar.addPropertyWithValue("method", "REPLY");
   for (const zone of original.getAllSubcomponents("vtimezone")) {

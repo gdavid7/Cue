@@ -3,7 +3,7 @@
   "info": {
     "title": "Inbox Zero API",
     "version": "1.0.0",
-    "description": "Programmatic access to Inbox Zero inbox stats, automation rules, and sender unsubscribe. Docs: https://docs.getinboxzero.com/api-reference/introduction Machine-readable schema: /openapi.json Authenticate with an account-scoped API key via the API-Key header. Errors return JSON with error.code, error.message, and error.hint."
+    "description": "Programmatic access to Inbox Zero inbox stats, automation rules, and sender unsubscribe. Machine-readable schema: /openapi.json Authenticate with an account-scoped API key via the API-Key header. Errors return JSON with error.code, error.message, and error.hint."
   },
   "servers": [
     {

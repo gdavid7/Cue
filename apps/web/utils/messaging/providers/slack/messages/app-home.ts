@@ -1,3 +1,4 @@
+import { env } from "@/env";
 import { BRAND_NAME } from "@/utils/branding";
 import type { KnownBlock, Block } from "@slack/types";
 
@@ -7,6 +8,9 @@ type AppHomeView = {
 };
 
 export function buildAppHomeBlocks(): AppHomeView {
+  const baseUrl = env.NEXT_PUBLIC_BASE_URL;
+  const host = new URL(baseUrl).host;
+
   return {
     type: "home",
     blocks: [
@@ -38,7 +42,7 @@ export function buildAppHomeBlocks(): AppHomeView {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: "*1.* Connect your email at <https://www.getinboxzero.com|getinboxzero.com>\n*2.* Connect Slack on the Channels page\n*3.* Choose where notifications go (email alerts, drafted replies, meeting briefs)\n*4.* DM me or @mention me in any channel to chat about your emails",
+          text: `*1.* Connect your email at <${baseUrl}|${host}>\n*2.* Connect Slack on the Channels page\n*3.* Choose where notifications go (email alerts, drafted replies, meeting briefs)\n*4.* DM me or @mention me in any channel to chat about your emails`,
         },
       },
       { type: "divider" },
@@ -92,7 +96,7 @@ export function buildAppHomeBlocks(): AppHomeView {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*Meeting Briefs* — Get a briefing on attendees before your meetings, delivered to your chosen Slack channel.\n\n*Attachment Filing* — ${BRAND_NAME} can auto-file attachments to Google Drive and notify you here.\n\n*AI Automation* — Set up rules to auto-label, archive, or draft replies. Configure at <https://www.getinboxzero.com|getinboxzero.com>.`,
+          text: `*Meeting Briefs* — Get a briefing on attendees before your meetings, delivered to your chosen Slack channel.\n\n*Attachment Filing* — ${BRAND_NAME} can auto-file attachments to Google Drive and notify you here.\n\n*AI Automation* — Set up rules to auto-label, archive, or draft replies. Configure at <${baseUrl}|${host}>.`,
         },
       },
       { type: "divider" },
@@ -101,7 +105,7 @@ export function buildAppHomeBlocks(): AppHomeView {
         elements: [
           {
             type: "mrkdwn",
-            text: "<https://www.getinboxzero.com|Settings> · <https://www.getinboxzero.com/support|Support> · <https://www.getinboxzero.com/privacy|Privacy Policy>",
+            text: `<${baseUrl}|Settings> · <${baseUrl}/privacy|Privacy Policy>`,
           },
         ],
       },

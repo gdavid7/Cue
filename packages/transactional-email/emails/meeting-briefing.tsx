@@ -153,7 +153,7 @@ export default function MeetingBriefingEmail({
             <Section className="px-8 pb-8">
               <Text className="text-xs text-gray-500 mt-0 mb-2">
                 You're receiving this briefing because you enabled Meeting
-                Briefs in your Inbox Zero settings.
+                Briefs in your Cue settings.
               </Text>
               <Text className="text-xs text-gray-500 mt-0 mb-0">
                 <Link
