@@ -24,12 +24,17 @@ releaseDate: '2026-08-16T10:00:00.000Z'
 `;
 
 describe("desktop update feed", () => {
-  it("points the generic feed at a stable GitHub release tag", () => {
-    expect(getDesktopUpdateFeedUrl()).toBe(
-      "https://github.com/elie222/inbox-zero/releases/download/desktop-updates",
+  it("has no update feed until a Cue-owned release repository is configured", () => {
+    expect(getDesktopUpdateFeedUrl()).toBeNull();
+    expect(getDesktopAssetBaseUrl("desktop-v0.1.0")).toBeNull();
+  });
+
+  it("points the generic feed at a stable GitHub release tag of a configured repository", () => {
+    expect(getDesktopUpdateFeedUrl("owner/app")).toBe(
+      "https://github.com/owner/app/releases/download/desktop-updates",
     );
-    expect(getDesktopAssetBaseUrl("desktop-v0.1.0")).toBe(
-      "https://github.com/elie222/inbox-zero/releases/download/desktop-v0.1.0",
+    expect(getDesktopAssetBaseUrl("desktop-v0.1.0", "owner/app")).toBe(
+      "https://github.com/owner/app/releases/download/desktop-v0.1.0",
     );
   });
 

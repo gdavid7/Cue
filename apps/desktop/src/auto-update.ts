@@ -35,6 +35,10 @@ export function isDesktopUpdateReady() {
   return downloadedVersion !== null;
 }
 
+export function isDesktopAutoUpdateEnabled() {
+  return getDesktopUpdateFeedUrl() !== null;
+}
+
 export async function startDesktopAutoUpdate(
   isPackaged = app.isPackaged,
   handlers?: {
@@ -42,7 +46,7 @@ export async function startDesktopAutoUpdate(
     onDownloadProgress?: (percent: number | null) => void;
   },
 ): Promise<boolean> {
-  if (!isPackaged) return false;
+  if (!isPackaged || !isDesktopAutoUpdateEnabled()) return false;
 
   try {
     const autoUpdater = await getDesktopAutoUpdater(handlers);
@@ -133,11 +137,11 @@ async function getDesktopAutoUpdater(handlers?: {
     onDownloadProgress = handlers.onDownloadProgress;
   }
 
+  const feedUrl = getDesktopUpdateFeedUrl();
+  if (!feedUrl) throw new Error("Desktop update feed is not configured");
+
   const { autoUpdater } = await import("electron-updater");
-  autoUpdater.setFeedURL({
-    provider: "generic",
-    url: getDesktopUpdateFeedUrl(),
-  });
+  autoUpdater.setFeedURL({ provider: "generic", url: feedUrl });
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
   bindUpdateDownloaded(autoUpdater);

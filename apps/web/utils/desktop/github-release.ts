@@ -3,8 +3,16 @@ import {
   isPrereleaseDesktopVersion,
 } from "./desktop-version";
 
-export const DESKTOP_GITHUB_REPO = "elie222/inbox-zero";
+// Unset until Cue publishes its own desktop releases, so no download link
+// sends people to a build Cue does not control.
+export const DESKTOP_GITHUB_REPO: string | null = null;
 export const DESKTOP_TAG_PREFIX = "desktop-v";
+
+export function getDesktopReleasesUrl(
+  repo: string | null = DESKTOP_GITHUB_REPO,
+): string | null {
+  return repo ? `https://github.com/${repo}/releases` : null;
+}
 
 export type GitHubReleaseAsset = {
   browser_download_url: string;

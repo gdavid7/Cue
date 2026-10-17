@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   detectDesktopClientPlatform,
   getDesktopDownloadCtas,
+  getDesktopReleasesUrl,
   pickLatestDesktopRelease,
   type DesktopDownloadLinks,
   type GitHubRelease,
@@ -36,6 +37,15 @@ const DOWNLOADS: DesktopDownloadLinks = {
   winArm64Exe:
     "https://github.com/elie222/inbox-zero/releases/download/desktop-v0.2.0/Inbox-Zero-0.2.0-win-arm64.exe",
 };
+
+describe("getDesktopReleasesUrl", () => {
+  it("links nowhere until a Cue-owned release repository is configured", () => {
+    expect(getDesktopReleasesUrl()).toBeNull();
+    expect(getDesktopReleasesUrl("owner/app")).toBe(
+      "https://github.com/owner/app/releases",
+    );
+  });
+});
 
 describe("pickLatestDesktopRelease", () => {
   it("picks the newest non-prerelease desktop tag and its installers", () => {

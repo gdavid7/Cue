@@ -30,10 +30,13 @@ if (!directory || !tag) {
   process.exit(1);
 }
 
-const rewritten = rewriteUpdateFeedFiles(
-  directory,
-  getDesktopAssetBaseUrl(tag),
-);
+const assetBaseUrl = getDesktopAssetBaseUrl(tag);
+if (!assetBaseUrl) {
+  process.stderr.write("No desktop release repository is configured\n");
+  process.exit(1);
+}
+
+const rewritten = rewriteUpdateFeedFiles(directory, assetBaseUrl);
 if (rewritten.length === 0) {
   process.stderr.write(`No electron-updater yml files found in ${directory}\n`);
   process.exit(1);

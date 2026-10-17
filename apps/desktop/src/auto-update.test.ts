@@ -3,6 +3,7 @@ import {
   checkForDesktopUpdatesManually,
   DESKTOP_UPDATE_INTERVAL_MS,
   installDownloadedDesktopUpdate,
+  isDesktopAutoUpdateEnabled,
   resetDesktopAutoUpdateForTests,
   startDesktopAutoUpdate,
 } from "./auto-update";
@@ -51,6 +52,15 @@ const {
 vi.mock("electron", () => ({ app, dialog, Notification }));
 vi.mock("electron-updater", () => ({ autoUpdater }));
 vi.mock("./sentry", () => ({ captureDesktopError: vi.fn() }));
+const getDesktopUpdateFeedUrl = vi.hoisted(() => vi.fn<() => string | null>());
+vi.mock("./update-feed", () => ({ getDesktopUpdateFeedUrl }));
+
+const FEED_URL = "https://updates.example.com/desktop";
+
+beforeEach(() => {
+  getDesktopUpdateFeedUrl.mockReset();
+  getDesktopUpdateFeedUrl.mockReturnValue(FEED_URL);
+});
 
 describe("startDesktopAutoUpdate", () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
@@ -81,6 +91,28 @@ describe("startDesktopAutoUpdate", () => {
   it("skips the update check in development", async () => {
     await expect(startDesktopAutoUpdate(false)).resolves.toBe(false);
     expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+  });
+
+  it("never contacts an updater when no update feed is configured", async () => {
+    getDesktopUpdateFeedUrl.mockReturnValue(null);
+    vi.mocked(captureDesktopError).mockClear();
+
+    expect(isDesktopAutoUpdateEnabled()).toBe(false);
+    await expect(startDesktopAutoUpdate(true)).resolves.toBe(false);
+    expect(autoUpdater.setFeedURL).not.toHaveBeenCalled();
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+    expect(captureDesktopError).not.toHaveBeenCalled();
+  });
+
+  it("checks the configured update feed", async () => {
+    autoUpdater.checkForUpdates.mockResolvedValue(null);
+
+    expect(isDesktopAutoUpdateEnabled()).toBe(true);
+    await expect(startDesktopAutoUpdate(true)).resolves.toBe(true);
+    expect(autoUpdater.setFeedURL).toHaveBeenCalledWith({
+      provider: "generic",
+      url: FEED_URL,
+    });
   });
 
   it("records updater failures instead of reporting success", async () => {

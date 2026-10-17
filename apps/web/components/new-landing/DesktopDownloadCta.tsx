@@ -7,14 +7,14 @@ import { Button } from "@/components/new-landing/common/Button";
 import { Paragraph } from "@/components/new-landing/common/Typography";
 import { Apple } from "@/components/new-landing/icons/Apple";
 import {
-  DESKTOP_GITHUB_REPO,
   detectDesktopClientPlatform,
   getDesktopDownloadCtas,
+  getDesktopReleasesUrl,
   type DesktopClientPlatform,
   type DesktopDownloadLinks,
 } from "@/utils/desktop/github-release";
 
-const GITHUB_RELEASES_URL = `https://github.com/${DESKTOP_GITHUB_REPO}/releases`;
+const GITHUB_RELEASES_URL = getDesktopReleasesUrl();
 const DEFAULT_PLATFORM: DesktopClientPlatform = {
   arch: "unknown",
   os: "other",
@@ -61,6 +61,9 @@ export function DesktopDownloadCta({
         );
       });
   }, []);
+
+  // Offer nothing rather than links to desktop builds Cue does not publish.
+  if (!GITHUB_RELEASES_URL) return null;
 
   const ctas = downloads
     ? getDesktopDownloadCtas(downloads, platform)

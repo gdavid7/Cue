@@ -10,7 +10,8 @@ export function configureDesktopApplicationMenu({
   downloadPercent = null,
   platform = process.platform,
 }: {
-  checkForUpdates: () => void;
+  /** Omitted when the build has no update feed, which hides the menu item. */
+  checkForUpdates?: () => void;
   createWindow: () => void;
   recordDiagnostics: () => void;
   updateReady?: boolean;
@@ -22,10 +23,14 @@ export function configureDesktopApplicationMenu({
     applicationVersion: app.getVersion(),
   });
 
-  const checkForUpdatesItem: MenuItemConstructorOptions = {
-    label: updateMenuLabel(updateReady, downloadPercent),
-    click: checkForUpdates,
-  };
+  const checkForUpdatesItems: MenuItemConstructorOptions[] = checkForUpdates
+    ? [
+        {
+          label: updateMenuLabel(updateReady, downloadPercent),
+          click: checkForUpdates,
+        },
+      ]
+    : [];
   const recordDiagnosticsItem: MenuItemConstructorOptions = {
     label: "Record Diagnostics…",
     click: recordDiagnostics,
@@ -34,7 +39,7 @@ export function configureDesktopApplicationMenu({
     platform === "darwin"
       ? [recordDiagnosticsItem]
       : [
-          checkForUpdatesItem,
+          ...checkForUpdatesItems,
           recordDiagnosticsItem,
           { type: "separator" },
           {
@@ -50,8 +55,9 @@ export function configureDesktopApplicationMenu({
             submenu: [
               { label: `About ${PRODUCT_NAME}`, role: "about" },
               { type: "separator" },
-              checkForUpdatesItem,
-              { type: "separator" },
+              ...(checkForUpdatesItems.length > 0
+                ? [...checkForUpdatesItems, { type: "separator" as const }]
+                : []),
               { role: "services" },
               { type: "separator" },
               { label: `Hide ${PRODUCT_NAME}`, role: "hide" },

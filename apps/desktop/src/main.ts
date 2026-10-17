@@ -29,6 +29,7 @@ import { recordDesktopDiagnostics } from "./diagnostics";
 import {
   checkForDesktopUpdatesManually,
   installDownloadedDesktopUpdate,
+  isDesktopAutoUpdateEnabled,
   logDesktopUpdateError,
   startDesktopAutoUpdate,
 } from "./auto-update";
@@ -254,15 +255,17 @@ function startDesktopApp() {
       configureDesktopApplicationMenu({
         updateReady: desktopUpdateReady,
         downloadPercent,
-        checkForUpdates: () => {
-          if (desktopUpdateReady) {
-            installUpdate();
-            return;
-          }
-          checkForDesktopUpdatesManually(() => {
-            isQuitting = true;
-          }).catch(logDesktopUpdateError);
-        },
+        checkForUpdates: isDesktopAutoUpdateEnabled()
+          ? () => {
+              if (desktopUpdateReady) {
+                installUpdate();
+                return;
+              }
+              checkForDesktopUpdatesManually(() => {
+                isQuitting = true;
+              }).catch(logDesktopUpdateError);
+            }
+          : undefined,
         createWindow: () => createAppWindow(),
         recordDiagnostics: () => {
           recordDesktopDiagnostics({

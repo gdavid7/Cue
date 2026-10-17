@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_APP_URL,
   findDesktopProtocolUrl,
   getDesktopAppOrigin,
   getDesktopBrowserStartUrl,
@@ -25,16 +26,27 @@ import {
 } from "./desktop";
 
 describe("desktop shell helpers", () => {
-  it("uses the production origin by default", () => {
-    expect(getDesktopAppOrigin("https://www.getinboxzero.com/ignored")).toBe(
-      "https://www.getinboxzero.com",
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("uses Cue's production origin by default", () => {
+    vi.stubEnv("INBOX_ZERO_APP_URL", undefined);
+
+    expect(DEFAULT_APP_URL).toBe("https://cue-inbox.vercel.app");
+    expect(getDesktopAppOrigin()).toBe("https://cue-inbox.vercel.app");
+    expect(getDesktopLoginUrl(getDesktopAppOrigin())).toBe(
+      "https://cue-inbox.vercel.app/login",
     );
-    expect(getDesktopLoginUrl("https://www.getinboxzero.com")).toBe(
-      "https://www.getinboxzero.com/login",
+    expect(getDesktopHomeUrl(getDesktopAppOrigin())).toBe(
+      "https://cue-inbox.vercel.app/welcome-redirect?mode=mail",
     );
-    expect(getDesktopHomeUrl("https://www.getinboxzero.com")).toBe(
-      "https://www.getinboxzero.com/welcome-redirect?mode=mail",
-    );
+  });
+
+  it("lets INBOX_ZERO_APP_URL override the default origin", () => {
+    vi.stubEnv("INBOX_ZERO_APP_URL", "http://127.0.0.1:3000/welcome");
+
+    expect(getDesktopAppOrigin()).toBe("http://127.0.0.1:3000");
   });
 
   it("rejects non-http app URLs", () => {

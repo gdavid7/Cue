@@ -46,6 +46,6 @@ nsis:
   oneClick: true
   perMachine: false
   allowToChangeInstallationDirectory: false
-publish:
-  provider: generic
-  url: https://github.com/elie222/inbox-zero/releases/download/desktop-updates
+# Explicitly null so electron-builder neither embeds an update feed nor infers
+# one from the git remote; the app only updates from a feed Cue owns.
+publish: null

@@ -51,6 +51,34 @@ describe("desktop application menu", () => {
     expect(app.showAboutPanel).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    "darwin",
+    "win32",
+  ] as const)("hides Check for Updates on %s when the build has no update feed", (platform) => {
+    configureDesktopApplicationMenu({
+      createWindow: vi.fn(),
+      recordDiagnostics: vi.fn(),
+      platform,
+    });
+
+    const template: MenuItemConstructorOptions[] =
+      Menu.buildFromTemplate.mock.results[0].value;
+    const items = template.flatMap(
+      (item) => (item.submenu as MenuItemConstructorOptions[]) ?? [],
+    );
+    expect(items.some((item) => item.label === "Check for Updates…")).toBe(
+      false,
+    );
+    const appMenu = template.find((item) => item.label === "Inbox Zero");
+    const appItems = (appMenu?.submenu as MenuItemConstructorOptions[]) ?? [];
+    for (let i = 1; i < appItems.length; i++) {
+      expect(
+        appItems[i].type === "separator" &&
+          appItems[i - 1].type === "separator",
+      ).toBe(false);
+    }
+  });
+
   it("adds New Window to the File menu", () => {
     const createWindow = vi.fn();
     configureDesktopApplicationMenu({

@@ -5,7 +5,9 @@ import {
   isPrereleaseDesktopVersion,
 } from "../../web/utils/desktop/desktop-version.ts";
 
-export const DESKTOP_GITHUB_REPO = "elie222/inbox-zero";
+// Unset until Cue publishes its own desktop releases, so a packaged app never
+// installs a build from a feed Cue does not control.
+export const DESKTOP_GITHUB_REPO: string | null = null;
 export const DESKTOP_UPDATE_FEED_TAG = "desktop-updates";
 export const DESKTOP_TAG_PREFIX = "desktop-v";
 
@@ -14,12 +16,15 @@ const FILE_FIELD = /^([ \t]*(?:- )?url: |path: )(.+)$/gm;
 
 export function getDesktopAssetBaseUrl(
   tag: string,
-  repo = DESKTOP_GITHUB_REPO,
-): string {
+  repo: string | null = DESKTOP_GITHUB_REPO,
+): string | null {
+  if (!repo) return null;
   return `https://github.com/${repo}/releases/download/${tag}`;
 }
 
-export function getDesktopUpdateFeedUrl(repo = DESKTOP_GITHUB_REPO): string {
+export function getDesktopUpdateFeedUrl(
+  repo: string | null = DESKTOP_GITHUB_REPO,
+): string | null {
   return getDesktopAssetBaseUrl(DESKTOP_UPDATE_FEED_TAG, repo);
 }
 
