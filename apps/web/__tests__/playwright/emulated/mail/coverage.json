@@ -161,6 +161,11 @@
     "app/(app)/[emailAccountId]/mail/MailboxItemContextMenu.tsx",
     "app/(app)/[emailAccountId]/mail/ReaderToolbar.tsx"
   ],
+  "offline-actions.spec.ts": [
+    "utils/mail-engine/MailEngineConnectionBanner.tsx",
+    "utils/mail-engine/connection-notice.ts",
+    "utils/mail-engine/MailEngineHost.tsx"
+  ],
   "offline-loading.spec.ts": [
     "app/sw.ts",
     "providers/GlobalProviders.tsx",

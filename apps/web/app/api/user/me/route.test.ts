@@ -67,7 +67,7 @@ describe("user/me route", () => {
     } as unknown as Awaited<ReturnType<typeof prisma.user.findUnique>>);
   });
 
-  it("returns 401 with isKnownError when not authenticated", async () => {
+  it("tags a signed-out request as an expired session", async () => {
     authMock.mockResolvedValue(null);
 
     const response = await GET(
@@ -77,8 +77,11 @@ describe("user/me route", () => {
 
     expect(response.status).toBe(401);
     const body = await response.json();
-    expect(body.error).toBe("Not authenticated");
-    expect(body.isKnownError).toBe(true);
+    expect(body).toEqual({
+      error: "Not authenticated",
+      errorCode: "SESSION_EXPIRED",
+      isKnownError: true,
+    });
   });
 
   it("returns secret presence flags instead of raw secret values", async () => {

@@ -32,6 +32,16 @@ describe("emulated Playwright suite selection", () => {
       "__tests__/playwright/emulated/mail",
     );
   });
+  test("traces the mail route into components it renders", () => {
+    const selection = selectChangedPlaywrightTargets(
+      "apps/web/utils/mail-engine/MailEngineConnectionBanner.tsx",
+      appRoot,
+    );
+    expect(selection.runFullSuite).toBe(false);
+    expect(selection.targetFiles).toContain(
+      "__tests__/playwright/emulated/mail/offline-actions.spec.ts",
+    );
+  });
   test.each([
     "components/CommandK.tsx",
     "hooks/useCommandPaletteCommands.ts",
