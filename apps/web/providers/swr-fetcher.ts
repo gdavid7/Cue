@@ -105,11 +105,14 @@ export const swrFetcher = async (
   return res.json();
 };
 
+// Retry-After is either whole seconds or an HTTP date; anything else (a
+// negative number, garbage) is no hint at all. The retry bounds the result.
 function parseRetryAfterMs(value: string | null): number | undefined {
-  if (!value) return;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
-  const date = Date.parse(value);
+  const trimmed = value?.trim();
+  if (!trimmed) return;
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000;
+  if (/^[+-]?[\d.]+$/.test(trimmed)) return;
+  const date = Date.parse(trimmed);
   if (Number.isNaN(date)) return;
   return Math.max(0, date - Date.now());
 }

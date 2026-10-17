@@ -87,19 +87,49 @@ describe("CueStrip", () => {
 
   // A deferral means the summary is on its way, not that there is none.
   it("keeps loading while its summary's read is deferred, then shows it", async () => {
-    mocks.briefDeferrals = 1;
-    renderStrip({ labels: ["Label_reply"] }, { onErrorRetry: onSWRErrorRetry });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mocks.briefDeferrals = 1;
+      renderStrip(
+        { labels: ["Label_reply"] },
+        { onErrorRetry: onSWRErrorRetry },
+      );
 
-    const strip = screen.getByRole("region", { name: "Cue summary" });
-    await waitForRequest("/api/user/thread-brief");
-    await flush();
-    expect(strip.getAttribute("aria-busy")).toBe("true");
-    expect(within(strip).queryByText(/No summary/)).toBeNull();
+      const strip = screen.getByRole("region", { name: "Cue summary" });
+      await waitForRequest("/api/user/thread-brief");
+      await flush();
+      expect(strip.getAttribute("aria-busy")).toBe("true");
+      expect(within(strip).queryByText(/No summary/)).toBeNull();
 
-    expect(await within(strip).findByText(SUMMARY)).toBeTruthy();
-    expect(
-      mocks.requests.filter((r) => r.url.startsWith("/api/user/thread-brief")),
-    ).toHaveLength(2);
+      await act(() => vi.advanceTimersByTimeAsync(2000));
+      expect(within(strip).getByText(SUMMARY)).toBeTruthy();
+      expect(
+        mocks.requests.filter((r) =>
+          r.url.startsWith("/api/user/thread-brief"),
+        ),
+      ).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops waiting for a summary that stays deferred", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mocks.briefDeferrals = 1000;
+      renderStrip(
+        { labels: ["Label_reply"] },
+        { onErrorRetry: onSWRErrorRetry },
+      );
+      const strip = screen.getByRole("region", { name: "Cue summary" });
+      await waitForRequest("/api/user/thread-brief");
+
+      await act(() => vi.advanceTimersByTimeAsync(11_000));
+      expect(strip.getAttribute("aria-busy")).toBe("false");
+      expect(within(strip).getByText(/No summary/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stays hidden for a newsletter and never asks for a summary", async () => {

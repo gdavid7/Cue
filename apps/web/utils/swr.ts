@@ -65,8 +65,10 @@ export function getDevSWRErrorRetryMs(
 // spending quota the provider has not restored and keeping the account limited.
 const RATE_LIMITED_RETRY_MS = 60_000;
 // A deferred read (503) says how long the account's budget needs. Waiting it
-// out asks once instead of several times inside the window; the cap keeps a
-// bad header from parking the screen.
+// out asks once instead of several times inside the window. The bounds keep a
+// bad header from either hammering the server or parking the screen, and the
+// jitter keeps tabs deferred together from all asking at the same moment.
+const MIN_RETRY_AFTER_MS = 1000;
 const MAX_RETRY_AFTER_MS = 90_000;
 
 export const onSWRErrorRetry: NonNullable<SWRConfiguration["onErrorRetry"]> = (
@@ -76,34 +78,47 @@ export const onSWRErrorRetry: NonNullable<SWRConfiguration["onErrorRetry"]> = (
   revalidate,
   opts,
 ) => {
-  const hintedMs = getHintedRetryMs(error, opts.retryCount);
-  if (hintedMs === undefined) {
+  const hint = getRetryHint(error, opts.retryCount);
+  if (hint.kind === "backoff") {
     SWRConfig.defaultValue.onErrorRetry(error, key, config, revalidate, opts);
     return;
   }
-  if (hintedMs === null) return;
+  if (hint.kind === "stop") return;
   if (
     config.errorRetryCount !== undefined &&
     opts.retryCount > config.errorRetryCount
   )
     return;
-  setTimeout(() => revalidate(opts), hintedMs);
+  setTimeout(() => whenVisible(() => revalidate(opts)), hint.ms);
 };
 
+type RetryHint =
+  | { kind: "wait"; ms: number }
+  | { kind: "stop" }
+  /** The server gave no hint: use the usual backoff. */
+  | { kind: "backoff" };
+
 /**
- * How long the server asked us to wait before the next try: `null` to stop,
- * `undefined` when it gave no hint and the usual backoff applies.
- * `retryCount` is 1 for the first retry.
+ * What the server's answer says about the next try. `retryCount` is 1 for the
+ * first retry; `jitter` (0.75–1.25) spreads the wait for a Retry-After hint.
  */
-export function getHintedRetryMs(
+export function getRetryHint(
   error: { status?: number; retryAfterMs?: number } | undefined,
   retryCount: number,
-): number | null | undefined {
+  jitter = 0.75 + Math.random() / 2,
+): RetryHint {
   if (error?.status === 429)
-    return retryCount <= 1 ? RATE_LIMITED_RETRY_MS : null;
-  if (error?.status === 503 && typeof error.retryAfterMs === "number")
-    return Math.min(error.retryAfterMs, MAX_RETRY_AFTER_MS);
-  return;
+    return retryCount <= 1
+      ? { kind: "wait", ms: RATE_LIMITED_RETRY_MS }
+      : { kind: "stop" };
+  if (error?.status === 503 && typeof error.retryAfterMs === "number") {
+    const bounded = Math.min(
+      Math.max(error.retryAfterMs, MIN_RETRY_AFTER_MS),
+      MAX_RETRY_AFTER_MS,
+    );
+    return { kind: "wait", ms: Math.round(bounded * jitter) };
+  }
+  return { kind: "backoff" };
 }
 
 type NormalizedError = { error: string };
@@ -163,4 +178,16 @@ export function processSWRResponse<
     data: data as TData | null, // SWR handles undefined during load
     error: undefined,
   } as SWRResponse<TData | null, NormalizedError>;
+}
+
+// As SWR's own retries: a hidden tab doesn't ask, it asks once it is back.
+function whenVisible(run: () => void) {
+  if (typeof document === "undefined" || document.visibilityState !== "hidden")
+    return run();
+  const onChange = () => {
+    if (document.visibilityState === "hidden") return;
+    document.removeEventListener("visibilitychange", onChange);
+    run();
+  };
+  document.addEventListener("visibilitychange", onChange);
 }
