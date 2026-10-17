@@ -46,6 +46,9 @@ const MESSAGE_PROCESSED_TTL_SECONDS = 60 * 60 * 24 * 8;
 const MESSAGE_PROCESSED_STATUS = "processed";
 
 const MESSAGE_RETRY_STATUS_PREFIX = "retry:";
+// A run arriving a little early, such as its catch-up delivered on a clock
+// slightly ahead, still retries the message rather than wait on it again.
+const MESSAGE_RETRY_DUE_MARGIN_MS = 5000;
 
 /**
  * Claims a message for a Gmail history run. A message another run holds is
@@ -63,21 +66,25 @@ export async function acquireMessageProcessing(key: {
   | { status: "retry-pending"; retryAt: number }
 > {
   try {
-    const lockToken = await acquireOwnedLock({
-      key: getProcessingKey(key),
-      processingTtlSeconds: MESSAGE_PROCESSING_TTL_SECONDS,
-    });
+    const claim = () =>
+      acquireOwnedLock({
+        key: getProcessingKey(key),
+        processingTtlSeconds: MESSAGE_PROCESSING_TTL_SECONDS,
+      });
+    const lockToken = await claim();
     if (lockToken) return { status: "acquired", lockToken };
     const stored = await redis.get<string>(getProcessingKey(key));
     if (stored === MESSAGE_PROCESSED_STATUS) return { status: "processed" };
-    if (
-      typeof stored === "string" &&
-      stored.startsWith(MESSAGE_RETRY_STATUS_PREFIX)
-    ) {
-      const retryAt = Number(stored.slice(MESSAGE_RETRY_STATUS_PREFIX.length));
-      if (Number.isFinite(retryAt)) return { status: "retry-pending", retryAt };
-    }
-    return { status: "held" };
+    const retryAt = getRetryAt(stored);
+    if (retryAt === undefined) return { status: "held" };
+    if (retryAt > Date.now() + MESSAGE_RETRY_DUE_MARGIN_MS)
+      return { status: "retry-pending", retryAt };
+
+    await redis.del(getProcessingKey(key));
+    const dueLockToken = await claim();
+    return dueLockToken
+      ? { status: "acquired", lockToken: dueLockToken }
+      : { status: "held" };
   } catch (error) {
     throw new MessageLockUnavailableError(error);
   }
@@ -96,15 +103,21 @@ export async function deferMessageProcessing({
   messageId: string;
   retryAt: number;
 }) {
-  await redis
-    .multi()
-    .set(getProcessingKey(key), `${MESSAGE_RETRY_STATUS_PREFIX}${retryAt}`, {
-      px: Math.max(1, retryAt - Date.now()),
-      nx: true,
-    })
-    .hset(getFailuresKey(key), { nextRetryAt: retryAt })
-    .expire(getFailuresKey(key), MESSAGE_FAILURES_TTL_SECONDS)
-    .exec();
+  await redis.set(
+    getProcessingKey(key),
+    `${MESSAGE_RETRY_STATUS_PREFIX}${retryAt}`,
+    { px: Math.max(1, retryAt - Date.now()), nx: true },
+  );
+}
+
+function getRetryAt(stored: string | null) {
+  if (
+    typeof stored !== "string" ||
+    !stored.startsWith(MESSAGE_RETRY_STATUS_PREFIX)
+  )
+    return;
+  const retryAt = Number(stored.slice(MESSAGE_RETRY_STATUS_PREFIX.length));
+  return Number.isFinite(retryAt) ? retryAt : undefined;
 }
 
 /**

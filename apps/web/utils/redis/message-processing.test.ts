@@ -20,6 +20,7 @@ vi.mock("@/utils/redis", () => ({
     set: vi.fn(),
     get: vi.fn(),
     eval: vi.fn(),
+    del: vi.fn(),
     multi: vi.fn(),
   },
 }));
@@ -50,26 +51,24 @@ describe("countMessageProcessingFailure", () => {
 });
 
 describe("message retries", () => {
-  it("keeps a failed message from being claimed until its retry is due", async () => {
-    const commands: unknown[][] = [];
-    const transaction: Record<string, unknown> = {};
-    for (const command of ["set", "hset", "expire"]) {
-      transaction[command] = vi.fn((...args: unknown[]) => {
-        commands.push([command, ...args]);
-        return transaction;
-      });
-    }
-    transaction.exec = vi.fn().mockResolvedValue(["OK", 1, 1]);
-    vi.mocked(redis.multi).mockReturnValue(transaction as any);
-    const key = { userEmail: "user@example.com", messageId: "message-1" };
-    const retryAt = Date.now() + 5 * 60_000;
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
+  const key = { userEmail: "user@example.com", messageId: "message-1" };
+
+  async function deferAndReadBack(retryAt: number) {
     await deferMessageProcessing({ ...key, retryAt });
-    const [, processingKey, value, options] = commands.find(
-      ([command]) => command === "set",
-    )!;
-    vi.mocked(redis.set).mockResolvedValue(null);
+    const [processingKey, value, options] = vi.mocked(redis.set).mock
+      .calls[0] as [string, string, object];
     vi.mocked(redis.get).mockResolvedValue(value);
+    return { processingKey, options };
+  }
+
+  it("keeps a failed message from being claimed until its retry is due", async () => {
+    const retryAt = Date.now() + 5 * 60_000;
+    const { processingKey, options } = await deferAndReadBack(retryAt);
+    vi.mocked(redis.set).mockResolvedValue(null);
 
     expect(processingKey).toBe("processing-message:user@example.com:message-1");
     expect(options).toEqual(expect.objectContaining({ nx: true }));
@@ -77,11 +76,21 @@ describe("message retries", () => {
       status: "retry-pending",
       retryAt,
     });
-    expect(commands).toContainEqual([
-      "hset",
-      "processing-message-failures:user@example.com:message-1",
-      { nextRetryAt: retryAt },
-    ]);
+  });
+
+  it("claims a message whose retry is due within moments, for a run arriving a little early", async () => {
+    await deferAndReadBack(Date.now() + 2000);
+    vi.mocked(redis.set)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce("OK");
+
+    expect(await acquireMessageProcessing(key)).toEqual({
+      status: "acquired",
+      lockToken: "lock-uuid",
+    });
+    expect(redis.del).toHaveBeenCalledWith(
+      "processing-message:user@example.com:message-1",
+    );
   });
 });
 
