@@ -3,6 +3,7 @@ import { APICallError } from "ai";
 import { Prisma } from "@/generated/prisma/client";
 import prisma from "@/utils/prisma";
 import { createTestLogger } from "@/__tests__/helpers";
+import { markAsHandledUserKeyError } from "@/utils/error";
 import { AutomatedAiCallTimeoutError } from "@/utils/llms/automated-call-bound";
 import {
   isTransientMessageProcessingError,
@@ -35,19 +36,26 @@ describe("recordMessageProcessingFailure", () => {
   });
 });
 
-const outOfCredits = new APICallError({
-  message: "You exceeded your current quota",
-  url: "https://api.example.com",
-  requestBodyValues: {},
-  statusCode: 402,
-  isRetryable: true,
-});
-const anthropicBalanceTooLow = new APICallError({
-  message: "Your credit balance is too low to access the Anthropic API",
-  url: "https://api.example.com",
-  requestBodyValues: {},
-  statusCode: 400,
-});
+const outOfCredits = () =>
+  new APICallError({
+    message: "You exceeded your current quota",
+    url: "https://api.example.com",
+    requestBodyValues: {},
+    statusCode: 402,
+    isRetryable: true,
+  });
+const anthropicBalanceTooLow = () =>
+  new APICallError({
+    message: "Your credit balance is too low to access the Anthropic API",
+    url: "https://api.example.com",
+    requestBodyValues: {},
+    statusCode: 400,
+  });
+// As the LLM layer marks an error from the user's own key once it told them.
+const fromUsersOwnKey = (error: Error) => {
+  markAsHandledUserKeyError(error);
+  return error;
+};
 
 describe("isTransientMessageProcessingError", () => {
   it.each([
@@ -77,6 +85,15 @@ describe("isTransientMessageProcessingError", () => {
         clientVersion: "test",
       }),
     },
+    { failure: "the operator's key out of credits", error: outOfCredits() },
+    {
+      failure: "the operator's Anthropic balance running low",
+      error: anthropicBalanceTooLow(),
+    },
+    {
+      failure: "a call out of time on the operator's key out of credits",
+      error: new AutomatedAiCallTimeoutError("Choose rule", outOfCredits()),
+    },
   ])("retries $failure", ({ error }) => {
     expect(isTransientMessageProcessingError(error)).toBe(true);
   });
@@ -93,11 +110,20 @@ describe("isTransientMessageProcessingError", () => {
         clientVersion: "test",
       }),
     },
-    { failure: "a key out of credits", error: outOfCredits },
-    { failure: "a low Anthropic balance", error: anthropicBalanceTooLow },
     {
-      failure: "a call out of time on a key out of credits",
-      error: new AutomatedAiCallTimeoutError("Choose rule", outOfCredits),
+      failure: "the user's own key out of credits",
+      error: fromUsersOwnKey(outOfCredits()),
+    },
+    {
+      failure: "the user's own Anthropic balance running low",
+      error: fromUsersOwnKey(anthropicBalanceTooLow()),
+    },
+    {
+      failure: "a call out of time on the user's own key out of credits",
+      error: new AutomatedAiCallTimeoutError(
+        "Choose rule",
+        fromUsersOwnKey(outOfCredits()),
+      ),
     },
     {
       failure: "a bug",

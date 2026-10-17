@@ -45,10 +45,13 @@ const MESSAGE_PROCESSING_TTL_SECONDS = 60 * 5;
 const MESSAGE_PROCESSED_TTL_SECONDS = 60 * 60 * 24 * 8;
 const MESSAGE_PROCESSED_STATUS = "processed";
 
+const MESSAGE_RETRY_STATUS_PREFIX = "retry:";
+
 /**
  * Claims a message for a Gmail history run. A message another run holds is
  * `held`; one handled before is `processed`, so a catch-up skips it with one
- * read instead of handling it again.
+ * read instead of handling it again. One that failed is `retry-pending` until
+ * its retry is due, so runs before then skip it just as cheaply.
  */
 export async function acquireMessageProcessing(key: {
   userEmail: string;
@@ -57,6 +60,7 @@ export async function acquireMessageProcessing(key: {
   | { status: "acquired"; lockToken: string }
   | { status: "held" }
   | { status: "processed" }
+  | { status: "retry-pending"; retryAt: number }
 > {
   try {
     const lockToken = await acquireOwnedLock({
@@ -65,12 +69,42 @@ export async function acquireMessageProcessing(key: {
     });
     if (lockToken) return { status: "acquired", lockToken };
     const stored = await redis.get<string>(getProcessingKey(key));
-    return stored === MESSAGE_PROCESSED_STATUS
-      ? { status: "processed" }
-      : { status: "held" };
+    if (stored === MESSAGE_PROCESSED_STATUS) return { status: "processed" };
+    if (
+      typeof stored === "string" &&
+      stored.startsWith(MESSAGE_RETRY_STATUS_PREFIX)
+    ) {
+      const retryAt = Number(stored.slice(MESSAGE_RETRY_STATUS_PREFIX.length));
+      if (Number.isFinite(retryAt)) return { status: "retry-pending", retryAt };
+    }
+    return { status: "held" };
   } catch (error) {
     throw new MessageLockUnavailableError(error);
   }
+}
+
+/**
+ * Leaves a message that failed unclaimed until `retryAt`, when a run may try
+ * it again. Only for a message whose claim was released, never one marked
+ * processed.
+ */
+export async function deferMessageProcessing({
+  retryAt,
+  ...key
+}: {
+  userEmail: string;
+  messageId: string;
+  retryAt: number;
+}) {
+  await redis
+    .multi()
+    .set(getProcessingKey(key), `${MESSAGE_RETRY_STATUS_PREFIX}${retryAt}`, {
+      px: Math.max(1, retryAt - Date.now()),
+      nx: true,
+    })
+    .hset(getFailuresKey(key), { nextRetryAt: retryAt })
+    .expire(getFailuresKey(key), MESSAGE_FAILURES_TTL_SECONDS)
+    .exec();
 }
 
 /**

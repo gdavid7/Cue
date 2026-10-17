@@ -461,6 +461,7 @@ export function createGenerateText({
               label,
               candidate.modelName,
               effectiveModelOptions.hasUserApiKey,
+              { timedOut: true },
             );
             throw timedOut(error, { label, candidate, isToolLoop });
           }
@@ -767,6 +768,7 @@ export function createGenerateObject({
               label,
               candidate.modelName,
               effectiveModelOptions.hasUserApiKey,
+              { timedOut: true },
             );
             throw timedOut(error, { label, candidate, isToolLoop: false });
           }
@@ -1359,6 +1361,8 @@ async function handleError(
   label: string,
   modelName: string,
   hasUserApiKey: boolean,
+  // A call that ran out of time is retried with its message, so isn't an error yet.
+  { timedOut = false }: { timedOut?: boolean } = {},
 ) {
   const apiError = getAIApiCallError(error);
   const isUserKeyInsufficientCredits =
@@ -1372,14 +1376,16 @@ async function handleError(
       modelName,
     });
   } else {
-    logger.error("Error in LLM call", {
+    const fields = {
       error,
       userId,
       userEmail,
       emailAccountId,
       label,
       modelName,
-    });
+    };
+    if (timedOut) logger.warn("Error in LLM call", fields);
+    else logger.error("Error in LLM call", fields);
   }
 
   const notifyUser = async (

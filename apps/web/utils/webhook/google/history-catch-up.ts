@@ -93,10 +93,14 @@ export async function scheduleGmailHistoryCatchUp({
   retryAt?: Date;
   logger: Logger;
 }): Promise<boolean> {
+  const now = Date.now();
   const notBefore = new Date(
-    Math.max(Date.now() + CATCH_UP_DELAY_MS, retryAt?.getTime() ?? 0),
+    Math.max(now + CATCH_UP_DELAY_MS, retryAt?.getTime() ?? 0),
   );
-  const window = Math.floor(notBefore.getTime() / CATCH_UP_DELAY_MS);
+  // Runs deferred to the same future time, such as a failed message's retry,
+  // share one delivery however many pushes defer to it.
+  const windowStart = retryAt && retryAt.getTime() > now ? retryAt : notBefore;
+  const window = Math.floor(windowStart.getTime() / CATCH_UP_DELAY_MS);
   await raiseGmailHistoryCatchUpTarget(emailAccountId, historyId, logger);
   try {
     const scheduled = await publishToQstashAt({

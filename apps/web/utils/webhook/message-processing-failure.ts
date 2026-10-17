@@ -5,6 +5,7 @@ import type { Logger } from "@/utils/logger";
 import {
   getAIApiCallError,
   isAnthropicInsufficientBalanceError,
+  isHandledUserKeyError,
   isInsufficientCreditsError,
 } from "@/utils/error";
 import { isAutomatedAiCallTimeoutError } from "@/utils/llms/automated-call-bound";
@@ -33,10 +34,14 @@ const PROCESSING_FAILED_REASON = "Processing failed";
  * such as a request the provider rejects, would fail the same way again.
  */
 export function isTransientMessageProcessingError(error: unknown): boolean {
-  // A key out of credits looks like a rate limit, but waits on the user.
-  if (isOutOfCreditsError(error)) return false;
-  if (isAutomatedAiCallTimeoutError(error))
-    return !isOutOfCreditsError(error.cause);
+  const providerError = isAutomatedAiCallTimeoutError(error)
+    ? error.cause
+    : error;
+  // The user's own key, out of credits or invalid, waits on the user, who was
+  // told. The operator's key out of credits passes once it's topped up.
+  if (isHandledUserKeyError(providerError)) return false;
+  if (isOutOfCreditsError(providerError)) return true;
+  if (isAutomatedAiCallTimeoutError(error)) return true;
   if (isTransientNetworkError(error)) return true;
   if (error instanceof Error) {
     if (error.name === "TimeoutError" || error.name === "UpstashError")

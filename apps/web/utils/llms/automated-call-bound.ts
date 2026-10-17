@@ -8,38 +8,44 @@ import { getRequestDeadline } from "@/utils/request-deadline-reader";
 // before the email instead, leaving it for the next run.
 const AUTOMATED_AI_CALL_BUDGET_MS = 45_000;
 
-const automatedWorkContext = new AsyncLocalStorage<true>();
+// Within a 300s function, with room to save progress before it is killed, so
+// a call cut off there fails like any other call that ran out of time.
+export const AUTOMATED_RUN_AI_DEADLINE_MS = 270_000;
+
+const automatedWorkContext = new AsyncLocalStorage<{ runDeadlineAt: number }>();
 
 /**
  * Runs work no one is waiting on, such as triaging incoming mail, so each AI
- * call it makes, with its retries and fallbacks, is bounded in time.
+ * call it makes, with its retries and fallbacks, is bounded in time. Calls
+ * also end by `runDeadlineAt` when the request has no deadline of its own.
  */
 export function runWithAutomatedAiCallBound<T>(
   operation: () => Promise<T>,
+  { runDeadlineAt }: { runDeadlineAt: number },
 ): Promise<T> {
-  return automatedWorkContext.run(true, operation);
+  return automatedWorkContext.run({ runDeadlineAt }, operation);
 }
 
 /**
- * Starts one AI call's time bound: the request deadline, and when `budgeted`,
- * no later than the automated call budget. Undefined outside automated work,
- * where chat and other calls someone is waiting on keep their own limits, and
- * when there is nothing to bound by.
+ * Starts one AI call's time bound: the request or run deadline, and when
+ * `budgeted`, no later than the automated call budget. Undefined outside
+ * automated work, where chat and other calls someone is waiting on keep their
+ * own limits.
  */
 export function startAutomatedAiCallBound({
   budgeted,
 }: {
   budgeted: boolean;
 }): { signal: AbortSignal; clear: () => void } | undefined {
-  if (!automatedWorkContext.getStore()) return;
+  const store = automatedWorkContext.getStore();
+  if (!store) return;
 
   const deadlineAt = Math.min(
     budgeted
       ? Date.now() + AUTOMATED_AI_CALL_BUDGET_MS
       : Number.POSITIVE_INFINITY,
-    getRequestDeadline() ?? Number.POSITIVE_INFINITY,
+    getRequestDeadline() ?? store.runDeadlineAt,
   );
-  if (deadlineAt === Number.POSITIVE_INFINITY) return;
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(),

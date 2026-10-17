@@ -263,6 +263,28 @@ describe("processHistoryItem", () => {
     expect(markMessageProcessed).not.toHaveBeenCalled();
   });
 
+  it("leaves a message that failed alone until its retry is due, without reading it or calling AI", async () => {
+    const retryAt = Date.now() + 5 * 60_000;
+    vi.mocked(acquireMessageProcessing).mockResolvedValueOnce({
+      status: "retry-pending",
+      retryAt,
+    });
+    const getMessage = vi.fn();
+    vi.mocked(createEmailProvider).mockResolvedValueOnce({
+      getMessage,
+      isSentMessage: vi.fn().mockReturnValue(false),
+    } as any);
+
+    const outcome = await processHistoryItem(
+      createHistoryItem(),
+      { ...defaultOptions, emailAccount: getDefaultEmailAccount() },
+      logger,
+    );
+
+    expect(outcome).toEqual({ retryPendingUntil: retryAt });
+    expect(getMessage).not.toHaveBeenCalled();
+  });
+
   it("skips a message already processed without reading it from Gmail again", async () => {
     vi.mocked(acquireMessageProcessing).mockResolvedValueOnce({
       status: "processed",

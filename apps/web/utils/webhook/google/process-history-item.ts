@@ -12,8 +12,14 @@ import {
 } from "@/utils/redis/message-processing";
 import { GmailLabel } from "@/utils/gmail/label";
 import type { Logger } from "@/utils/logger";
-import { isRetryableGmailMessageFailure } from "@/utils/webhook/google/message-failure";
-import { runWithAutomatedAiCallBound } from "@/utils/llms/automated-call-bound";
+import {
+  isRetryableGmailMessageFailure,
+  type MessageRetryPending,
+} from "@/utils/webhook/google/message-failure";
+import {
+  AUTOMATED_RUN_AI_DEADLINE_MS,
+  runWithAutomatedAiCallBound,
+} from "@/utils/llms/automated-call-bound";
 
 /**
  * Another processor holds the message. It isn't handled yet, and that holder
@@ -68,24 +74,34 @@ export async function processHistoryItem(
       logger.info("Skipping. Message already being processed.");
       return MESSAGE_HELD_ELSEWHERE;
     }
+    if (claim.status === "retry-pending") {
+      logger.info("Skipping. Message failed and waits to be retried.");
+      const pending: MessageRetryPending = { retryPendingUntil: claim.retryAt };
+      return pending;
+    }
     const lock = { ...lockKey, lockToken: claim.lockToken };
 
     logger.info("Gmail lock acquired, calling shared processor");
 
     try {
-      const result = await runWithAutomatedAiCallBound(() =>
-        processHistoryItemShared(
-          { messageId, threadId },
-          {
-            provider,
-            isNewMessage: type === HistoryEventType.MESSAGE_ADDED,
-            emailAccount,
-            hasAutomationRules,
-            hasAiAccess,
-            rules,
-            logger,
-          },
-        ),
+      const result = await runWithAutomatedAiCallBound(
+        () =>
+          processHistoryItemShared(
+            { messageId, threadId },
+            {
+              provider,
+              isNewMessage: type === HistoryEventType.MESSAGE_ADDED,
+              emailAccount,
+              hasAutomationRules,
+              hasAiAccess,
+              rules,
+              logger,
+            },
+          ),
+        {
+          runDeadlineAt:
+            options.aiDeadlineAt ?? Date.now() + AUTOMATED_RUN_AI_DEADLINE_MS,
+        },
       );
       await markMessageProcessed(lock).catch((error) =>
         logger.warn("Failed to mark message processed", { error }),

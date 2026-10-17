@@ -14,6 +14,7 @@ import { captureException } from "@/utils/error";
 import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import {
   countMessageProcessingFailure,
+  deferMessageProcessing,
   MessageLockUnavailableError,
 } from "@/utils/redis/message-processing";
 import { AutomatedAiCallTimeoutError } from "@/utils/llms/automated-call-bound";
@@ -116,6 +117,7 @@ vi.mock("@/utils/redis/message-processing", async (importOriginal) => ({
     typeof import("@/utils/redis/message-processing")
   >()),
   countMessageProcessingFailure: vi.fn(),
+  deferMessageProcessing: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/utils/upstash", () => ({
@@ -1379,6 +1381,102 @@ describe("processHistoryForUser - backlogs", () => {
     expect(prisma.executedRule.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ messageId: "m2", status: "ERROR" }),
     });
+  });
+
+  it("goes on with older threads past a message that failed, keeping the cursor before it", async () => {
+    vi.mocked(getHistory).mockResolvedValue({
+      history: inboxHistory(
+        ["1100", "m1"],
+        ["1200", "m2"],
+        ["1300", "m3"],
+        ["1400", "m4"],
+        ["1500", "m5"],
+      ),
+    } as any);
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      if (event.item.message?.id === "m4")
+        throw Object.assign(new Error("Overloaded"), { statusCode: 529 });
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1500 },
+      {},
+      logger,
+    );
+
+    expect(processedMessageIds()).toEqual(
+      expect.arrayContaining(["m5", "m4", "m3", "m2", "m1"]),
+    );
+    expect(lastCursorUpdate()).toBe("1300");
+    expect(deferMessageProcessing).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "m4" }),
+    );
+  });
+
+  it("stops the run once a few messages fail, so an outage costs few AI calls", async () => {
+    vi.mocked(getHistory).mockResolvedValue({
+      history: inboxHistory(
+        ["1100", "m1"],
+        ["1200", "m2"],
+        ["1300", "m3"],
+        ["1400", "m4"],
+        ["1500", "m5"],
+      ),
+    } as any);
+    vi.mocked(processHistoryItem).mockRejectedValue(
+      Object.assign(new Error("Overloaded"), { statusCode: 529 }),
+    );
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1500 },
+      {},
+      logger,
+    );
+
+    expect(processHistoryItem).toHaveBeenCalledTimes(3);
+    expect(cursorUpdates()).toEqual([]);
+    expect(publishToQstashAt).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one catch-up among the runs that find a failed message still waiting on its retry", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.mocked(getHistory).mockResolvedValue({
+      history: inboxHistory(["1100", "m1"], ["1200", "m2"]),
+    } as any);
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      if (event.item.message?.id === "m2")
+        throw Object.assign(new Error("Overloaded"), { statusCode: 529 });
+    });
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1200 },
+      {},
+      logger,
+    );
+    const [{ retryAt }] = vi.mocked(deferMessageProcessing).mock.calls[0];
+
+    // Pushes before the retry is due find the message deferred at its claim.
+    vi.mocked(processHistoryItem).mockReset();
+    vi.mocked(processHistoryItem).mockImplementation(async (event) =>
+      event.item.message?.id === "m2"
+        ? { retryPendingUntil: retryAt }
+        : undefined,
+    );
+    for (let push = 0; push < 3; push++) {
+      vi.setSystemTime(Date.now() + 20_000);
+      await processHistoryForUser(
+        { emailAddress: backlogAccount.email, historyId: 1200 },
+        {},
+        logger,
+      );
+    }
+
+    const deliveries = vi
+      .mocked(publishToQstashAt)
+      .mock.calls.map(([delivery]) => delivery.deduplicationId);
+    expect(deliveries).toHaveLength(4);
+    expect(new Set(deliveries).size).toBe(1);
+    expect(countMessageProcessingFailure).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 
   it("retries a message whose failures can't be counted, but not forever", async () => {

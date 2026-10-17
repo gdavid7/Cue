@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { redis } from "@/utils/redis";
 import {
   countMessageProcessingFailure,
+  deferMessageProcessing,
   acquireMessageProcessing,
   markMessageProcessed,
   acquireOutboundMessageLock,
@@ -45,6 +46,42 @@ describe("countMessageProcessingFailure", () => {
     expect(commands).toContainEqual(
       `expire processing-message-failures:user@example.com:message-1 ${8 * 24 * 60 * 60}`,
     );
+  });
+});
+
+describe("message retries", () => {
+  it("keeps a failed message from being claimed until its retry is due", async () => {
+    const commands: unknown[][] = [];
+    const transaction: Record<string, unknown> = {};
+    for (const command of ["set", "hset", "expire"]) {
+      transaction[command] = vi.fn((...args: unknown[]) => {
+        commands.push([command, ...args]);
+        return transaction;
+      });
+    }
+    transaction.exec = vi.fn().mockResolvedValue(["OK", 1, 1]);
+    vi.mocked(redis.multi).mockReturnValue(transaction as any);
+    const key = { userEmail: "user@example.com", messageId: "message-1" };
+    const retryAt = Date.now() + 5 * 60_000;
+
+    await deferMessageProcessing({ ...key, retryAt });
+    const [, processingKey, value, options] = commands.find(
+      ([command]) => command === "set",
+    )!;
+    vi.mocked(redis.set).mockResolvedValue(null);
+    vi.mocked(redis.get).mockResolvedValue(value);
+
+    expect(processingKey).toBe("processing-message:user@example.com:message-1");
+    expect(options).toEqual(expect.objectContaining({ nx: true }));
+    expect(await acquireMessageProcessing(key)).toEqual({
+      status: "retry-pending",
+      retryAt,
+    });
+    expect(commands).toContainEqual([
+      "hset",
+      "processing-message-failures:user@example.com:message-1",
+      { nextRetryAt: retryAt },
+    ]);
   });
 });
 
