@@ -41,6 +41,7 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/use-unsubscribe-sender", () => ({
 const THREAD_ACCOUNT = "account-2";
 const SUMMARY =
   "Recruiter asks whether your graduation date is changing or you're going to grad school.";
+const LIVE_REGION = '[aria-live], [role="status"], [role="alert"]';
 const LABELS: EmailLabels = {
   Label_reply: { id: "Label_reply", name: "To Reply" },
   Label_news: { id: "Label_news", name: "Newsletter" },
@@ -63,6 +64,22 @@ describe("CueStrip", () => {
 
     const strip = await screen.findByRole("region", { name: "Cue summary" });
     expect(await within(strip).findByText(SUMMARY)).toBeTruthy();
+  });
+
+  // Opening each conversation already speaks its subject; the strip filling in
+  // beside it must not talk over that, so it is read, not announced.
+  it("says it's summarizing to a screen reader without a live region", async () => {
+    renderStrip({ labels: ["Label_reply"] });
+
+    const strip = screen.getByRole("region", { name: "Cue summary" });
+    expect(
+      within(strip).getByText("Summarizing this conversation"),
+    ).toBeTruthy();
+    expect(strip.getAttribute("aria-busy")).toBe("true");
+    expect(strip.querySelector(LIVE_REGION)).toBeNull();
+
+    await within(strip).findByText(SUMMARY);
+    expect(strip.querySelector(LIVE_REGION)).toBeNull();
   });
 
   it("stays hidden for a newsletter and never asks for a summary", async () => {

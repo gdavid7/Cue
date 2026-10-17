@@ -61,8 +61,11 @@ export function EmailThread({
   afterLatestMessage,
   replyStatus,
   earlierMessages,
+  messageHeadingLevel,
 }: {
   messages: ThreadMessage[];
+  /** Each message's heading level: one below the page's subject heading. */
+  messageHeadingLevel?: 2 | 3;
   missingBodyIds?: Set<string>;
   /** Sends queued on this device, shown after the thread until they sync. */
   outgoing?: OutgoingThreadMessage[];
@@ -501,6 +504,7 @@ export function EmailThread({
               recoveredMode ?? autoOpenMode ?? localDraftModeFor(message);
             return (
               <EmailMessage
+                headingLevel={messageHeadingLevel}
                 bodyAvailable={!missingBodyIds?.has(message.id)}
                 missingBodyIds={missingBodyIds}
                 onNavigateMessage={

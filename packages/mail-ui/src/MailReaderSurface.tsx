@@ -43,6 +43,11 @@ export type MailReaderToolbarProps = {
    * menu stays mounted, invisibly, as the anchor the bar's More opens.
    */
   bottomBarBelowLg?: boolean;
+  /**
+   * 2 when the page already has its h1, such as a mail list beside the
+   * reader; the subject is then the second level, not a second h1.
+   */
+  subjectHeadingLevel?: 1 | 2;
   messageExpansion?: {
     allExpanded: boolean;
     canExpand: boolean;
@@ -71,6 +76,7 @@ export function MailReaderToolbar({
   onMarkUnread,
   menu,
   bottomBarBelowLg = false,
+  subjectHeadingLevel = 1,
   messageExpansion,
   icons,
   renderButton = defaultToolbarButton,
@@ -84,6 +90,7 @@ export function MailReaderToolbar({
     : "Expand all messages";
   const readAction = isUnread ? "mark_read" : "mark_unread";
   const readLabel = isUnread ? "Mark as read" : "Mark as unread";
+  const SubjectHeading = subjectHeadingLevel === 2 ? "h2" : "h1";
 
   const actionButton = (button: MailReaderToolbarButton) =>
     renderActionTooltip(button, renderButton(button));
@@ -126,13 +133,13 @@ export function MailReaderToolbar({
               />
             )}
             {/* Focusable from script so opening a conversation can land here. */}
-            <h1
+            <SubjectHeading
               className="line-clamp-2 font-title font-medium text-2xl text-foreground leading-tight tracking-tight outline-none max-sm:text-lg"
               data-mail-reader-subject
               tabIndex={-1}
             >
               {subject}
-            </h1>
+            </SubjectHeading>
           </div>
           {labelChips}
         </div>

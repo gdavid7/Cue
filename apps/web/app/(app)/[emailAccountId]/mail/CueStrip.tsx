@@ -191,10 +191,11 @@ export function CueStrip({
             ) : (
               <>
                 <Skeleton className="h-3 w-full max-w-sm motion-reduce:animate-none" />
+                {/* Found by reading the strip, never announced: a live
+                    region here would speak on every conversation opened, and
+                    inside the busy section it may be ignored anyway. */}
                 {visibility === "show" && enabled ? (
-                  <span className="sr-only" role="status">
-                    Summarizing this conversation
-                  </span>
+                  <span className="sr-only">Summarizing this conversation</span>
                 ) : null}
               </>
             )}
