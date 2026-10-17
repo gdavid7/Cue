@@ -12,7 +12,8 @@ const OVERFETCH_FACTOR = 3;
 /**
  * Conversations with an open reply tracker, newest first, read from Cue's
  * database rather than mailbox labels. With `inboxOnly`, conversations that
- * have left the inbox are skipped.
+ * have left the inbox are skipped. Messages carry headers, labels and
+ * snippets but no bodies: callers render them as list rows.
  */
 export async function getTrackedThreads({
   emailAccountId,
@@ -45,11 +46,13 @@ export async function getTrackedThreads({
       page,
       THREAD_CONCURRENCY,
       ({ threadId }) =>
-        emailProvider.getThread(threadId).catch((error): EmailThread | null => {
-          // Waiting for the account's Gmail budget is not a missing thread.
-          if (isGmailCallDeferredError(error)) throw error;
-          return null;
-        }),
+        emailProvider
+          .getThread(threadId, { messageFormat: "metadata" })
+          .catch((error): EmailThread | null => {
+            // Waiting for the account's Gmail budget is not a missing thread.
+            if (isGmailCallDeferredError(error)) throw error;
+            return null;
+          }),
     );
     found.push(
       ...threads.filter(

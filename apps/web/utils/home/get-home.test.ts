@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { createTestLogger, getMockMessage } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
+import type { gmail_v1 } from "@googleapis/gmail";
+import { GmailProvider } from "@/utils/email/google";
 import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import {
@@ -147,6 +149,73 @@ describe("getHomeData", () => {
       fromName: "Alex Kim",
       subject: "Superday",
     });
+  });
+
+  it("builds reply rows from Gmail's headers-only thread reads", async () => {
+    const at = "1760371200000";
+    // Gmail's metadata format: no bodies, and only the headers asked for.
+    const threadGet = vi.fn(
+      async (params: {
+        id: string;
+        format?: string;
+        metadataHeaders?: string[];
+      }) => {
+        const headers = [
+          { name: "From", value: "Sarah Chen <sarah@acme.com>" },
+          { name: "To", value: USER },
+          { name: "Subject", value: "Re: Renewal" },
+          { name: "Date", value: "Mon, 13 Oct 2025 16:00:00 +0000" },
+        ].filter((h) => params.metadataHeaders?.includes(h.name));
+        return {
+          data: {
+            id: params.id,
+            snippet: "Can you send pricing before Friday?",
+            messages: [
+              {
+                id: "m1",
+                threadId: params.id,
+                internalDate: at,
+                labelIds: ["INBOX", "UNREAD", "STARRED", "Label_Customer"],
+                snippet: "Can you send pricing before Friday?",
+                payload: { mimeType: "multipart/alternative", headers },
+              },
+            ],
+          },
+        };
+      },
+    );
+    const gmail = new GmailProvider({
+      users: { threads: { get: threadGet } },
+    } as unknown as gmail_v1.Gmail);
+    const provider = mockProvider({
+      NEEDS_REPLY: [thread("sarah", { from: "", subject: "", labels: [] })],
+    });
+    vi.mocked(provider.getThread).mockImplementation((id, options) =>
+      gmail.getThread(id, options),
+    );
+
+    const home = await run(provider);
+
+    expect(threadGet).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "sarah", format: "metadata" }),
+      expect.anything(),
+    );
+    expect(home.needsYou).toEqual([
+      {
+        threadId: "sarah",
+        fromName: "Sarah Chen",
+        fromEmail: "sarah@acme.com",
+        subject: "Renewal",
+        preview: "Can you send pricing before Friday?",
+        at: new Date(Number(at)).toISOString(),
+        tag: "Customer",
+        priority: "high",
+        unread: true,
+        messageId: "m1",
+        starred: true,
+        inInbox: true,
+      },
+    ]);
   });
 
   it("reads what needs a reply from Cue's records, only while it's in the inbox", async () => {

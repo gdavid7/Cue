@@ -66,6 +66,25 @@ describe("getTrackedThreads", () => {
     expect(emailProvider.getThread).toHaveBeenCalledTimes(2);
   });
 
+  it("reads headers only, since the conversations show as list rows", async () => {
+    const threads = [thread("open", ["INBOX"])];
+    prisma.threadTracker.findMany.mockResolvedValue([
+      { threadId: "open" },
+    ] as never);
+    const emailProvider = provider(threads);
+
+    await getTrackedThreads({
+      emailAccountId: "account",
+      emailProvider,
+      type: ThreadTrackerType.AWAITING,
+      limit: 5,
+    });
+
+    expect(emailProvider.getThread).toHaveBeenCalledWith("open", {
+      messageFormat: "metadata",
+    });
+  });
+
   it("loads conversations a few at a time and skips ones that fail", async () => {
     const threads = Array.from({ length: 12 }, (_, index) =>
       thread(`t${index}`, ["INBOX"]),

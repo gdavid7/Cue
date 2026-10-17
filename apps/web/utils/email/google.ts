@@ -21,7 +21,7 @@ import {
   type ThreadWithPayloadMessages,
 } from "@/utils/types";
 import { redis } from "@/utils/redis";
-import { parseMessage } from "@/utils/gmail/message";
+import { GMAIL_METADATA_HEADERS, parseMessage } from "@/utils/gmail/message";
 import {
   getMessage,
   getMessages,
@@ -233,7 +233,16 @@ export class GmailProvider implements EmailProvider {
         ? await getCompleteGmailThread(threadId, this.client, options.signal)
         : (
             await this.client.users.threads.get(
-              { userId: "me", id: threadId },
+              {
+                userId: "me",
+                id: threadId,
+                ...(options?.messageFormat === "metadata"
+                  ? {
+                      format: "metadata",
+                      metadataHeaders: GMAIL_METADATA_HEADERS,
+                    }
+                  : {}),
+              },
               { signal: options?.signal },
             )
           ).data;

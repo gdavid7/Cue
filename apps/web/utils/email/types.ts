@@ -158,6 +158,12 @@ export type GetThreadOptions = {
   complete?: boolean;
   signal?: AbortSignal;
   includeDrafts?: boolean;
+  /**
+   * "metadata" reads headers, labels and snippets without bodies, for list
+   * rows. Gmail honours it unless `complete` is set; Outlook always returns
+   * full messages.
+   */
+  messageFormat?: "full" | "metadata";
 };
 
 export type ProviderMailboxSearch = {

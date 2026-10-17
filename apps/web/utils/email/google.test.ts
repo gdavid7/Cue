@@ -583,6 +583,71 @@ describe("GmailProvider.getThread", () => {
       "draft-1",
     ]);
   });
+
+  it("reads only the row headers when asked for metadata", async () => {
+    const threadGet = vi.fn().mockResolvedValue({
+      data: {
+        id: "thread-1",
+        messages: [
+          {
+            id: "message-1",
+            internalDate: "1767225600000",
+            labelIds: [GmailLabel.INBOX, GmailLabel.UNREAD],
+            payload: {
+              headers: [
+                { name: "From", value: "Ana <ana@example.org>" },
+                { name: "To", value: "me@example.com" },
+                { name: "Subject", value: "Question" },
+                { name: "Date", value: "Thu, 1 Jan 2026 00:00:00 +0000" },
+              ],
+              mimeType: "multipart/alternative",
+            },
+            snippet: "Can we talk?",
+            threadId: "thread-1",
+          },
+        ],
+        snippet: "Can we talk?",
+      },
+    });
+    const provider = new GmailProvider({
+      users: { threads: { get: threadGet } },
+    } as unknown as gmail_v1.Gmail);
+
+    const thread = await provider.getThread("thread-1", {
+      messageFormat: "metadata",
+    });
+
+    expect(threadGet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        format: "metadata",
+        id: "thread-1",
+        metadataHeaders: expect.arrayContaining(["From", "To", "Subject"]),
+      }),
+      expect.anything(),
+    );
+    expect(thread.snippet).toBe("Can we talk?");
+    expect(thread.messages[0]).toMatchObject({
+      headers: {
+        from: "Ana <ana@example.org>",
+        subject: "Question",
+        to: "me@example.com",
+      },
+      internalDate: "1767225600000",
+      labelIds: [GmailLabel.INBOX, GmailLabel.UNREAD],
+      snippet: "Can we talk?",
+    });
+  });
+
+  it("reads the full thread by default", async () => {
+    const threadGet = vi.fn().mockResolvedValue({ data: { messages: [] } });
+    const provider = new GmailProvider({
+      users: { threads: { get: threadGet } },
+    } as unknown as gmail_v1.Gmail);
+
+    await provider.getThread("thread-1");
+
+    expect(threadGet.mock.calls[0][0]).not.toHaveProperty("format");
+  });
 });
 
 describe("GmailProvider.getLatestMessageInThread", () => {

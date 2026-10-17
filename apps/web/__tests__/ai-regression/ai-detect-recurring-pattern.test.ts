@@ -12,12 +12,6 @@ import { formatUtcDate } from "@/utils/date";
 const TIMEOUT = 15_000;
 const logger = createTestLogger();
 
-vi.mock("@/utils/braintrust", () => ({
-  Braintrust: class {
-    insertToDataset() {}
-  },
-}));
-
 // Skip tests unless explicitly running AI tests
 const isAiTest = process.env.RUN_AI_TESTS === "true";
 

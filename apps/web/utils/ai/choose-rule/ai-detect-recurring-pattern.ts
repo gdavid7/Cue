@@ -12,8 +12,6 @@ import {
 import { decideRecurringPattern } from "@/utils/decision-model/recurring-pattern";
 import { runDecisionModelOrFallback } from "@/utils/decision-model/decision-model";
 
-// const braintrust = new Braintrust("recurring-pattern-detection");
-
 const schema = z.object({
   matchedRule: z.string().nullable(),
   explanation: z.string(),
@@ -193,20 +191,6 @@ ${getEmailListPrompt({
     prompt,
     schema,
   });
-
-  // braintrust.insertToDataset({
-  //   id: emails[0].id,
-  //   input: {
-  //     senderEmail,
-  //     emailCount: emails.length,
-  //     sampleEmails: emails.map((email) => ({
-  //       from: email.from,
-  //       subject: email.subject,
-  //     })),
-  //     rules: rules.map((rule) => rule.name),
-  //   },
-  //   expected: aiResponse.object.matchedRule,
-  // });
 
   return aiResponse.object;
 }
