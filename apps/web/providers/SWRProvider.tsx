@@ -25,6 +25,9 @@ import {
   onSWRErrorRetry,
 } from "@/utils/swr";
 
+// swr/infinite stores each list under its first page's key with this prefix.
+const INFINITE_KEY_PREFIX = "$inf$";
+
 interface Context {
   resetCache: () => void;
 }
@@ -124,13 +127,24 @@ function PersistedSwrCache() {
       // data on screen. Hooks still mounted ask again for this account; a
       // clear without revalidating would also drop the fetch they already
       // started, leaving them loading. Persisted keys are re-seeded below.
-      scopedMutate(
-        (key) =>
-          !(PERSISTED_SWR_KEYS as readonly unknown[]).includes(key) &&
-          !(Array.isArray(key) && key.includes(emailAccountId)),
-        undefined,
-        { revalidate: true },
-      );
+      const isKeptOnSwitch = (key: unknown) =>
+        (PERSISTED_SWR_KEYS as readonly unknown[]).includes(key) ||
+        (Array.isArray(key) && key.includes(emailAccountId));
+      scopedMutate((key) => !isKeptOnSwitch(key), undefined, {
+        revalidate: true,
+      });
+      // That filter skips useSWRInfinite's entries, which hold the pages a
+      // list shows. Each is named after its first page's key, whose cache
+      // entry keeps the original key to judge it by.
+      for (const key of [...cache.keys()]) {
+        if (!key.startsWith(INFINITE_KEY_PREFIX)) continue;
+        // `_k` is where SWR keeps an entry's original key; it isn't typed.
+        const firstPage = cache.get(key.slice(INFINITE_KEY_PREFIX.length)) as
+          | { _k?: unknown }
+          | undefined;
+        if (isKeptOnSwitch(firstPage?._k)) continue;
+        scopedMutate(key, undefined, { revalidate: true });
+      }
     }
     for (const key of PERSISTED_SWR_KEYS) {
       const data = persisted.get(key)?.data;

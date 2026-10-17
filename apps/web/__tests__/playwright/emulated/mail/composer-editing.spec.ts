@@ -521,16 +521,23 @@ test("edits a table signature with a hosted logo in place", async ({
     await page.goto(`/${emailAccountId}/mail?accountScope=all`);
     await page.getByRole("button", { name: /^Compose/ }).click();
     const dialog = page.getByRole("dialog", { name: "New Message" });
-    await dialog.getByRole("combobox", { name: "From" }).click();
+    const from = dialog.getByRole("combobox", { name: "From" });
+    await from.click();
     await page
       .getByRole("option", {
         name: `${secondAccount.name} (${secondAccount.email})`,
         exact: true,
       })
       .click();
+    // Changing From moves the draft: the form is inert until the new
+    // account's composer replaces it, so keys typed before then are lost.
+    await expect(from).toContainText(secondAccount.email);
 
     const editor = dialog.getByRole("textbox", { name: "Email message" });
     await editor.pressSequentially("Body before the signature");
+    await expect(editor.locator(":scope > div").first()).toHaveText(
+      "Body before the signature",
+    );
     await dialog.getByRole("button", { name: "Show signature" }).click();
     const signature = editor.locator("[data-smartmail]");
     await expect(signature.locator("table td")).toHaveCount(2);

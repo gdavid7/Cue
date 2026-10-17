@@ -2,6 +2,7 @@
 import { render, waitFor } from "@testing-library/react";
 import type { Cache } from "swr";
 import useSWR, { useSWRConfig } from "swr";
+import useSWRInfinite from "swr/infinite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EMAIL_ACCOUNT_ID_REQUIRED_ERROR } from "@/utils/config";
 import { SWRProvider } from "./SWRProvider";
@@ -231,6 +232,61 @@ describe("SWRProvider persisted cache", () => {
 
     await waitFor(() => {
       expect(view.getByTestId("group").textContent).toBe("error");
+    });
+  });
+
+  it("never shows the previous account's pages in an infinite list", async () => {
+    let account = "account-a";
+    const fetcher = vi.fn(async (key: string) => {
+      if (account === "account-b") {
+        throw Object.assign(new Error("Server error"), { status: 500 });
+      }
+      return { threads: [`${account} ${key}`] };
+    });
+
+    function ThreadListProbe() {
+      const { data, error } = useSWRInfinite<{ threads: string[] }>(
+        (index) => (index < 2 ? `/api/threads?page=${index}` : null),
+        fetcher,
+        {
+          initialSize: 2,
+          shouldRetryOnError: false,
+          revalidateOnFocus: false,
+          dedupingInterval: 0,
+        },
+      );
+      return (
+        <div data-testid="threads">
+          {data
+            ? data.flatMap((page) => page.threads).join(", ")
+            : error
+              ? "error"
+              : "loading"}
+        </div>
+      );
+    }
+
+    const view = render(
+      <SWRProvider>
+        <ThreadListProbe />
+      </SWRProvider>,
+    );
+    await waitFor(() => {
+      expect(view.getByTestId("threads").textContent).toBe(
+        "account-a /api/threads?page=0, account-a /api/threads?page=1",
+      );
+    });
+
+    account = "account-b";
+    accountState.emailAccountId = "account-b";
+    view.rerender(
+      <SWRProvider>
+        <ThreadListProbe />
+      </SWRProvider>,
+    );
+
+    await waitFor(() => {
+      expect(view.getByTestId("threads").textContent).toBe("error");
     });
   });
 
