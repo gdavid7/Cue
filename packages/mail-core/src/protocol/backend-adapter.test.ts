@@ -407,6 +407,16 @@ describe("backend operation executor", () => {
       expected: { status: "not_dispatched", reason: "unavailable" },
     },
     {
+      name: "a mail API refusal that does not say whether it ran",
+      status: 401,
+      json: {
+        protocolVersion: MAIL_PROTOCOL_VERSION,
+        requestId: "r1",
+        error: { code: "unauthorized", retryable: true },
+      },
+      expected: { status: "uncertain" },
+    },
+    {
       name: "a platform rate limit",
       status: 429,
       json: { error: "Rate limited" },

@@ -128,14 +128,17 @@ describe("createOriginMailRequest", () => {
     });
   });
 
-  it("marks a signed-out app session so the engine does not ask to reconnect the account", async () => {
+  it.each([
+    { errorCode: "SESSION_EXPIRED", sessionExpired: true },
+    { errorCode: "NO_REFRESH_TOKEN", sessionExpired: false },
+  ])("marks a 401 with $errorCode as a signed-out app session: $sessionExpired", async ({
+    errorCode,
+    sessionExpired,
+  }) => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async () =>
-        Response.json(
-          { error: "Unauthorized", errorCode: "SESSION_EXPIRED" },
-          { status: 401 },
-        ),
+        Response.json({ error: "Unauthorized", errorCode }, { status: 401 }),
       ),
     );
     const request = createOriginMailRequest({
@@ -147,6 +150,6 @@ describe("createOriginMailRequest", () => {
       body: {},
       signal: new AbortController().signal,
     });
-    expect(result.sessionExpired).toBe(true);
+    expect(Boolean(result.sessionExpired)).toBe(sessionExpired);
   });
 });

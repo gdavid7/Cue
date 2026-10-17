@@ -660,18 +660,16 @@ function ComposeEmailFormContent({
   // session waits for the user. The draft is already kept on this device.
   useEffect(
     () =>
-      holdSessionExpiredRedirect((signIn) => {
-        toastError({
-          id: SESSION_EXPIRED_TOAST_ID,
-          description: SESSION_EXPIRED_MESSAGE,
-          duration: Number.POSITIVE_INFINITY,
-          action: {
-            label: "Sign in again",
-            onClick: () => {
-              flushDraft().finally(signIn);
-            },
-          },
-        });
+      holdSessionExpiredRedirect({
+        beforeRedirect: flushDraft,
+        prompt: (signIn) => {
+          toastError({
+            id: SESSION_EXPIRED_TOAST_ID,
+            description: SESSION_EXPIRED_MESSAGE,
+            duration: Number.POSITIVE_INFINITY,
+            action: { label: "Sign in again", onClick: signIn },
+          });
+        },
       }),
     [flushDraft],
   );

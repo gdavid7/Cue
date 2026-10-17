@@ -520,10 +520,12 @@ function readError(response: {
   sessionExpired?: boolean;
 }): Pick<MailHttpError, "error"> | null {
   if (response.status < 400) return null;
+  // The host's sign-in was refused before the request reached the mail API:
+  // nothing ran, and the mailbox grant is not in question.
   if (response.sessionExpired) {
     return {
       error: {
-        code: "unauthorized",
+        code: "unavailable",
         retryable: true,
         retryAfterMs: UNSTRUCTURED_ERROR_RETRY_MS,
       },
@@ -594,11 +596,7 @@ function mapExecutionError(error: Pick<MailHttpError, "error">) {
       retryAfterMs: error.error.retryAfterMs ?? 1000,
     };
   }
-  // A signed-out caller is turned away before anything reaches the provider.
-  if (
-    error.error.code === "unavailable" ||
-    error.error.code === "unauthorized"
-  ) {
+  if (error.error.code === "unavailable") {
     return {
       status: "not_dispatched" as const,
       reason: "unavailable" as const,
