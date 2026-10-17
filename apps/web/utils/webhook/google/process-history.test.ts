@@ -115,7 +115,7 @@ vi.mock("@/utils/redis/message-processing", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/utils/redis/message-processing")
   >()),
-  countMessageProcessingFailure: vi.fn().mockResolvedValue(1),
+  countMessageProcessingFailure: vi.fn(),
 }));
 
 vi.mock("@/utils/upstash", () => ({
@@ -854,7 +854,7 @@ describe("processHistoryForUser - authentication failures", () => {
 describe("processHistoryForUser - backlogs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(countMessageProcessingFailure).mockResolvedValue(1);
+    givenMessageFailures(1, 0);
     vi.mocked(getEmailProviderRateLimitState).mockResolvedValue(null);
     vi.mocked(processHistoryItem).mockReset().mockResolvedValue(undefined);
     vi.mocked(getWebhookEmailAccount).mockResolvedValue(backlogAccount as any);
@@ -1272,8 +1272,65 @@ describe("processHistoryForUser - backlogs", () => {
     expect(prisma.executedRule.create).not.toHaveBeenCalled();
   });
 
-  it("gives up on a message that keeps failing, records it as failed and moves on", async () => {
-    vi.mocked(countMessageProcessingFailure).mockResolvedValue(3);
+  it.each([
+    { failures: 2, failingForMs: 7 * HOUR_MS },
+    { failures: 10, failingForMs: 5 * HOUR_MS },
+  ])("keeps retrying a message that failed $failures times over $failingForMs ms", async ({
+    failures,
+    failingForMs,
+  }) => {
+    givenMessageFailures(failures, failingForMs);
+    vi.mocked(getHistory).mockResolvedValue({
+      history: inboxHistory(["1100", "m1"], ["1200", "m2"]),
+    } as any);
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      if (event.item.message?.id === "m2")
+        throw Object.assign(new Error("Overloaded"), { statusCode: 529 });
+    });
+
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1200 },
+      {},
+      logger,
+    );
+
+    expect(cursorUpdates()).toEqual(["1100"]);
+    expect(prisma.executedRule.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { failures: 1, delayMs: 90_000 },
+    { failures: 2, delayMs: 5 * 60_000 },
+    { failures: 3, delayMs: 15 * 60_000 },
+    { failures: 8, delayMs: 30 * 60_000 },
+  ])("waits longer for each retry of a failing message ($failures failures)", async ({
+    failures,
+    delayMs,
+  }) => {
+    givenMessageFailures(failures, 0);
+    vi.mocked(getHistory).mockResolvedValue({
+      history: inboxHistory(["1100", "m1"], ["1200", "m2"]),
+    } as any);
+    vi.mocked(processHistoryItem).mockImplementation(async (event) => {
+      if (event.item.message?.id === "m2") throw new Error("fetch failed");
+    });
+
+    const before = Date.now();
+    await processHistoryForUser(
+      { emailAddress: backlogAccount.email, historyId: 1200 },
+      {},
+      logger,
+    );
+
+    const { notBefore } = vi.mocked(publishToQstashAt).mock.calls[0][0] as {
+      notBefore: Date;
+    };
+    expect(notBefore.getTime() - before).toBeGreaterThanOrEqual(delayMs);
+    expect(notBefore.getTime() - before).toBeLessThan(delayMs + 5000);
+  });
+
+  it("gives up on a message that keeps failing for hours, records it as failed and moves on", async () => {
+    givenMessageFailures(3, 7 * HOUR_MS);
     vi.mocked(getHistory).mockResolvedValue({
       history: inboxHistory(["1100", "m1"], ["1200", "m2"], ["1300", "m3"]),
     } as any);
@@ -1324,25 +1381,37 @@ describe("processHistoryForUser - backlogs", () => {
     });
   });
 
-  it("keeps the cursor before a failed message when its failures can't be counted", async () => {
+  it("retries a message whose failures can't be counted, but not forever", async () => {
     vi.mocked(countMessageProcessingFailure).mockRejectedValue(
       new Error("fetch failed"),
     );
     vi.mocked(getHistory).mockResolvedValue({
-      history: inboxHistory(["1100", "m1"], ["1200", "m2"]),
+      history: inboxHistory(["1100", "m1"], ["1200", "uncounted"]),
     } as any);
     vi.mocked(processHistoryItem).mockImplementation(async (event) => {
-      if (event.item.message?.id === "m2") throw new Error("fetch failed");
+      if (event.item.message?.id === "uncounted")
+        throw new Error("fetch failed");
     });
+    const runOnce = async () => {
+      vi.mocked(prisma.$executeRaw).mockClear();
+      await processHistoryForUser(
+        { emailAddress: backlogAccount.email, historyId: 1200 },
+        {},
+        logger,
+      );
+      return lastCursorUpdate();
+    };
 
-    await processHistoryForUser(
-      { emailAddress: backlogAccount.email, historyId: 1200 },
-      {},
-      logger,
-    );
-
-    expect(cursorUpdates()).toEqual(["1100"]);
+    expect(await runOnce()).toBe("1100");
+    expect(await runOnce()).toBe("1100");
     expect(prisma.executedRule.create).not.toHaveBeenCalled();
+    expect(await runOnce()).toBe("1200");
+    expect(prisma.executedRule.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        messageId: "uncounted",
+        status: "ERROR",
+      }),
+    });
   });
 
   it("continues a backlog in a scheduled catch-up once the run's time budget is spent", async () => {
@@ -2007,6 +2076,15 @@ function cursorUpdates() {
   return vi
     .mocked(prisma.$executeRaw)
     .mock.calls.map((call) => call[1] as unknown as string);
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+
+function givenMessageFailures(failures: number, failingForMs: number) {
+  vi.mocked(countMessageProcessingFailure).mockResolvedValue({
+    failures,
+    firstFailedAt: Date.now() - failingForMs,
+  });
 }
 
 function lastCursorUpdate() {

@@ -33,6 +33,7 @@ vi.mock("@/utils/redis/message-processing", () => ({
   markMessageProcessed: vi.fn().mockResolvedValue(true),
   releaseMessageProcessing: vi.fn().mockResolvedValue(true),
   markOutboundMessageProcessed: vi.fn().mockResolvedValue(true),
+  isMessageLockUnavailableError: vi.fn(() => false),
 }));
 
 vi.mock("@/utils/gmail/thread", () => ({

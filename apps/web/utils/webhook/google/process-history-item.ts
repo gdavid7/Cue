@@ -11,11 +11,8 @@ import {
   releaseMessageProcessing,
 } from "@/utils/redis/message-processing";
 import { GmailLabel } from "@/utils/gmail/label";
-import { isGmailCallDeferredError } from "@/utils/gmail/quota";
-import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
 import type { Logger } from "@/utils/logger";
-import { isInvalidGrantError } from "@/utils/error";
-import { isTransientMessageProcessingError } from "@/utils/webhook/message-processing-failure";
+import { isRetryableGmailMessageFailure } from "@/utils/webhook/google/message-failure";
 import { runWithAutomatedAiCallBound } from "@/utils/llms/automated-call-bound";
 
 /**
@@ -97,13 +94,8 @@ export async function processHistoryItem(
     } catch (error) {
       // The history cursor stays before this message so a catch-up (or the
       // first run after a reconnect) retries it; the lock would make that run
-      // skip it. So does a failure that should pass, such as an AI outage.
-      if (
-        isGmailCallDeferredError(error) ||
-        isEmailProviderRateLimitError({ error, provider: "google" }) ||
-        isInvalidGrantError(error) ||
-        isTransientMessageProcessingError(error)
-      ) {
+      // skip it.
+      if (isRetryableGmailMessageFailure(error)) {
         await releaseMessageProcessing(lock).catch((clearError) =>
           logger.warn("Failed to release message processing lock", {
             error: clearError,

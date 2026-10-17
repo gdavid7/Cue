@@ -41,10 +41,11 @@ import {
   countMessageProcessingFailure,
   isMessageLockUnavailableError,
 } from "@/utils/redis/message-processing";
+import { recordMessageProcessingFailure } from "@/utils/webhook/message-processing-failure";
 import {
-  isTransientMessageProcessingError,
-  recordMessageProcessingFailure,
-} from "@/utils/webhook/message-processing-failure";
+  isGmailRunStopError,
+  isRetryableGmailMessageFailure,
+} from "@/utils/webhook/google/message-failure";
 import { mapWithConcurrency } from "@/utils/async";
 import {
   acquireGmailHistoryLease,
@@ -77,9 +78,18 @@ const EXPIRED_GAP_START_MARGIN_MS = 60 * 60 * 1000;
 // As far back as messages keep their processed marker, so older mail that was
 // triaged before is never handled twice.
 const MAX_EXPIRED_GAP_AGE_MS = 8 * 24 * 60 * 60 * 1000;
-// A message that fails this many runs for reasons that should pass, such as
-// an AI outage, is given up on, so it can't hold the account's history back.
-const MAX_TRANSIENT_MESSAGE_FAILURES = 3;
+// A message that keeps failing for reasons that should pass, such as an AI
+// outage, is retried for at least this long and this many runs, then given up
+// on, so it can't hold the account's history back for good.
+const MIN_MESSAGE_RETRY_MS = 6 * 60 * 60 * 1000;
+const MIN_MESSAGE_FAILURES = 3;
+// Each further failure waits longer for its catch-up, up to the last delay.
+const MESSAGE_RETRY_DELAYS_MS = [90_000, 5 * 60_000, 15 * 60_000, 30 * 60_000];
+// When Redis can't count a message's failures, this many in a row on one
+// instance give up on it rather than defer it forever.
+const MAX_UNCOUNTED_MESSAGE_FAILURES = 3;
+const MAX_TRACKED_UNCOUNTED_MESSAGES = 1000;
+const uncountedMessageFailures = new Map<string, number>();
 
 export async function processHistoryForUser(
   decodedData: {
@@ -550,8 +560,10 @@ export async function processHistoryForUser(
 
     // Logged with its cause where the message failed.
     if (error instanceof MessageRetryDeferredError) {
-      logger.info("Webhook history deferred to retry a failed message");
-      return await deferToCatchUp();
+      logger.info("Webhook history deferred to retry a failed message", {
+        retryInSeconds: Math.round(error.retryInMs / 1000),
+      });
+      return await deferToCatchUp(new Date(Date.now() + error.retryInMs));
     }
 
     if (
@@ -582,11 +594,12 @@ export async function processHistoryForUser(
     return NextResponse.json({ error: true });
   }
 
-  async function deferToCatchUp() {
+  async function deferToCatchUp(retryAt?: Date) {
     await markGmailHistoryCatchUp(validatedEmailAccount.id, logger);
     await scheduleGmailHistoryCatchUp({
       emailAccountId: validatedEmailAccount.id,
       historyId: catchUpHistoryId(),
+      retryAt,
       logger,
     });
     return NextResponse.json({ ok: true });
@@ -621,52 +634,65 @@ async function processHistory(
       // held back), so the catch-up picks it up again.
       // A revoked grant fails every message after it too, and the run's
       // error handling disconnects the account.
-      if (
-        isEmailProviderRateLimitError({ error, provider: "google" }) ||
-        isGmailCallDeferredError(error) ||
-        isMessageLockUnavailableError(error) ||
-        isInvalidGrantError(error)
-      ) {
+      if (isGmailRunStopError(error)) {
         stopError ??= error;
         return;
       }
       // A failure that should pass, such as an AI outage, stops the run before
-      // the message too, until the message has failed too many runs.
-      const transient = isTransientMessageProcessingError(error);
-      const failures = transient ? await countFailure(event, log) : undefined;
-      if (failures !== undefined && failures < MAX_TRANSIENT_MESSAGE_FAILURES) {
+      // the message too, until the message has been retried long enough.
+      const retryable = isRetryableGmailMessageFailure(error);
+      const retry = retryable ? await planRetry(event, log) : undefined;
+      if (retry) {
         log.warn("Message failed; retrying it in a catch-up", {
           error,
-          failures,
+          failures: retry.failures,
         });
-        stopError ??= new MessageRetryDeferredError(error);
+        stopError ??= new MessageRetryDeferredError(error, retry.retryInMs);
         return;
       }
       captureException(error, {
         userEmail,
         extra: { messageId: event.item.message?.id },
       });
-      log.error("Error processing history item", {
-        error,
-        transient,
-        failures,
-      });
+      log.error("Error processing history item", { error, retryable });
       await recordFailure(event, log);
     }
     done.add(event);
     await saveProgress();
   };
 
-  // Without a count, the message can't be given up on safely, so it stays
-  // before the cursor as after its first failure.
-  async function countFailure(event: HistoryEvent, log: Logger) {
+  // Undefined once the message has been retried long enough.
+  async function planRetry(
+    event: HistoryEvent,
+    log: Logger,
+  ): Promise<{ failures?: number; retryInMs: number } | undefined> {
     const messageId = event.item.message?.id;
     if (!messageId) return;
+    const key = `${userEmail}:${messageId}`;
     try {
-      return await countMessageProcessingFailure({ userEmail, messageId });
+      const { failures, firstFailedAt } = await countMessageProcessingFailure({
+        userEmail,
+        messageId,
+      });
+      uncountedMessageFailures.delete(key);
+      if (
+        failures >= MIN_MESSAGE_FAILURES &&
+        Date.now() - firstFailedAt >= MIN_MESSAGE_RETRY_MS
+      )
+        return;
+      const delayIndex = Math.min(failures, MESSAGE_RETRY_DELAYS_MS.length) - 1;
+      return { failures, retryInMs: MESSAGE_RETRY_DELAYS_MS[delayIndex] };
     } catch (error) {
       log.warn("Failed to count message failure", { error });
-      return 0;
+      const uncounted = (uncountedMessageFailures.get(key) ?? 0) + 1;
+      if (uncountedMessageFailures.size >= MAX_TRACKED_UNCOUNTED_MESSAGES)
+        uncountedMessageFailures.clear();
+      if (uncounted >= MAX_UNCOUNTED_MESSAGE_FAILURES) {
+        uncountedMessageFailures.delete(key);
+        return;
+      }
+      uncountedMessageFailures.set(key, uncounted);
+      return { retryInMs: MESSAGE_RETRY_DELAYS_MS[0] };
     }
   }
 
@@ -791,9 +817,12 @@ type HistoryEvent = Parameters<typeof processHistoryItem>[0];
 
 /** A message failed for a reason that should pass; a catch-up retries it. */
 class MessageRetryDeferredError extends Error {
-  constructor(cause: unknown) {
+  readonly retryInMs: number;
+
+  constructor(cause: unknown, retryInMs: number) {
     super("A message failed and is retried in a catch-up", { cause });
     this.name = "MessageRetryDeferredError";
+    this.retryInMs = retryInMs;
   }
 }
 

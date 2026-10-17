@@ -16,6 +16,7 @@ import { getEmailTerminology } from "@/utils/terminology";
 import { sortActionsByPriority } from "@/utils/action-sort";
 import { getMessagingProviderName } from "@/utils/messaging/platforms";
 import { getIntegrationActionLabel } from "@/utils/mcp/tool-specs";
+import { BRAND_NAME } from "@/utils/branding";
 
 type PlanAction = ExecutedAction & {
   messagingChannel?: { provider: MessagingProvider } | null;
@@ -26,11 +27,17 @@ type Plan = Pick<ExecutedRule, "reason" | "status"> & {
   actionItems: PlanAction[];
 };
 
+// Shown for a message Cue failed to process, which has no rule.
+export const PROCESSING_FAILED_COPY = `${BRAND_NAME} couldn't sort this email`;
+
 export function PlanBadge(props: { plan?: Plan; provider: string }) {
   const { plan, provider } = props;
 
   // if (!plan) return <Badge color="gray">Not planned</Badge>;
   if (!plan) return null;
+
+  if (!plan.rule && plan.status === ExecutedRuleStatus.ERROR)
+    return <Badge color="red">{PROCESSING_FAILED_COPY}</Badge>;
 
   if (!plan.rule) {
     const component = <Badge color="yellow">No plan</Badge>;

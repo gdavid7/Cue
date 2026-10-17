@@ -18,6 +18,7 @@ import { getEmailAccountForRuleExecution } from "@/utils/user/get";
 import { SafeError } from "@/utils/error";
 import { createEmailProvider } from "@/utils/email/provider";
 import { checkHasAccess } from "@/utils/premium/server";
+import { ExecutedRuleStatus } from "@/generated/prisma/enums";
 import {
   RERUN_MINIMUM_TIER,
   RERUN_UPGRADE_MESSAGE,
@@ -110,6 +111,8 @@ export const runRulesAction = actionClient
               emailAccountId,
               threadId,
               messageId,
+              // Mail Cue failed to process is still to be sorted.
+              NOT: { status: ExecutedRuleStatus.ERROR, ruleId: null },
             },
             select: {
               id: true,

@@ -21,19 +21,25 @@ export function runWithAutomatedAiCallBound<T>(
 }
 
 /**
- * Starts one AI call's time bound, ending at the request deadline if that
- * comes sooner. Undefined outside automated work: chat and other calls someone
- * is waiting on keep their own limits.
+ * Starts one AI call's time bound: the request deadline, and when `budgeted`,
+ * no later than the automated call budget. Undefined outside automated work,
+ * where chat and other calls someone is waiting on keep their own limits, and
+ * when there is nothing to bound by.
  */
-export function startAutomatedAiCallBound():
-  | { signal: AbortSignal; clear: () => void }
-  | undefined {
+export function startAutomatedAiCallBound({
+  budgeted,
+}: {
+  budgeted: boolean;
+}): { signal: AbortSignal; clear: () => void } | undefined {
   if (!automatedWorkContext.getStore()) return;
 
   const deadlineAt = Math.min(
-    Date.now() + AUTOMATED_AI_CALL_BUDGET_MS,
+    budgeted
+      ? Date.now() + AUTOMATED_AI_CALL_BUDGET_MS
+      : Number.POSITIVE_INFINITY,
     getRequestDeadline() ?? Number.POSITIVE_INFINITY,
   );
+  if (deadlineAt === Number.POSITIVE_INFINITY) return;
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(),
@@ -49,6 +55,8 @@ export class AutomatedAiCallTimeoutError extends Error {
   }
 }
 
-export function isAutomatedAiCallTimeoutError(error: unknown) {
+export function isAutomatedAiCallTimeoutError(
+  error: unknown,
+): error is AutomatedAiCallTimeoutError {
   return error instanceof AutomatedAiCallTimeoutError;
 }

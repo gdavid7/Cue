@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { redis } from "@/utils/redis";
 import {
+  countMessageProcessingFailure,
   acquireMessageProcessing,
   markMessageProcessed,
   acquireOutboundMessageLock,
@@ -18,8 +19,34 @@ vi.mock("@/utils/redis", () => ({
     set: vi.fn(),
     get: vi.fn(),
     eval: vi.fn(),
+    multi: vi.fn(),
   },
 }));
+
+describe("countMessageProcessingFailure", () => {
+  it("counts a failure and keeps when the message first failed, expiring both together", async () => {
+    const commands: string[] = [];
+    const transaction: Record<string, unknown> = {};
+    for (const command of ["hincrby", "hsetnx", "expire", "hget"]) {
+      transaction[command] = vi.fn((...args: unknown[]) => {
+        commands.push(`${command} ${args.join(" ")}`);
+        return transaction;
+      });
+    }
+    transaction.exec = vi.fn().mockResolvedValue([2, 0, 1, 1_700_000_000_000]);
+    vi.mocked(redis.multi).mockReturnValue(transaction as any);
+
+    const result = await countMessageProcessingFailure({
+      userEmail: "user@example.com",
+      messageId: "message-1",
+    });
+
+    expect(result).toEqual({ failures: 2, firstFailedAt: 1_700_000_000_000 });
+    expect(commands).toContainEqual(
+      `expire processing-message-failures:user@example.com:message-1 ${8 * 24 * 60 * 60}`,
+    );
+  });
+});
 
 describe("message-processing redis locks", () => {
   beforeEach(() => {

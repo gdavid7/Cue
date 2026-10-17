@@ -458,6 +458,35 @@ describe("Outlook processHistoryForUser - Folder Filtering", () => {
       });
     });
 
+    it.each([
+      {
+        failure: "Microsoft throttling",
+        error: Object.assign(new Error("Throttled"), {
+          code: "ApplicationThrottled",
+          statusCode: 429,
+        }),
+      },
+      {
+        failure: "a revoked grant",
+        error: new Error("Token refresh failed: invalid_grant"),
+      },
+    ])("doesn't record mail as failed on $failure", async ({ error }) => {
+      vi.mocked(createEmailProvider).mockResolvedValue({
+        getMessage: vi
+          .fn()
+          .mockResolvedValue(getMockParsedMessage({ labelIds: ["INBOX"] })),
+      } as any);
+      vi.mocked(processHistoryItem).mockRejectedValue(error);
+
+      await processHistoryForUser({
+        subscriptionId: "sub-123",
+        resourceData: mockResourceData as any,
+        logger,
+      });
+
+      expect(prisma.executedRule.create).not.toHaveBeenCalled();
+    });
+
     it("captures unknown errors in Sentry", async () => {
       const error = new Error("Something unexpected");
       const mockProvider = { getMessage: vi.fn().mockRejectedValue(error) };

@@ -309,7 +309,12 @@ export function createGenerateText({
         emailAccountId: emailAccount.id,
         label,
       });
-    const timeBound = startAutomatedAiCallBound();
+    const isToolLoop = Boolean(options.tools);
+    // A tool loop takes several model turns, and a local model's speed is the
+    // operator's to judge, so those keep only the request deadline.
+    const timeBound = startAutomatedAiCallBound({
+      budgeted: !isToolLoop && !modelCandidates.some(isLocalModel),
+    });
     const abortSignal = combineAbortSignals(
       options.abortSignal,
       timeBound?.signal,
@@ -445,8 +450,20 @@ export function createGenerateText({
           );
         } catch (error) {
           if (error instanceof SafeError) throw error;
-          if (timeBound?.signal.aborted)
-            throw timedOut(error, { label, candidate });
+          if (timeBound?.signal.aborted) {
+            // A user's own key that is out of credits or invalid still
+            // notifies them, though the call ran out of time.
+            await handleError(
+              error,
+              emailAccount.userId,
+              emailAccount.email,
+              emailAccount.id,
+              label,
+              candidate.modelName,
+              effectiveModelOptions.hasUserApiKey,
+            );
+            throw timedOut(error, { label, candidate, isToolLoop });
+          }
 
           if (nextCandidate && shouldFallbackToNextModel(error)) {
             logModelFallback("LLM call failed, trying fallback model", error, {
@@ -521,7 +538,9 @@ export function createGenerateObject({
       });
     let latestRepairAttempt: RepairAttemptState | undefined;
     const fallbackFailures: LlmFallbackFailure[] = [];
-    const timeBound = startAutomatedAiCallBound();
+    const timeBound = startAutomatedAiCallBound({
+      budgeted: !modelCandidates.some(isLocalModel),
+    });
     const abortSignal = combineAbortSignals(
       options.abortSignal,
       timeBound?.signal,
@@ -737,8 +756,20 @@ export function createGenerateObject({
           return result;
         } catch (error) {
           if (error instanceof SafeError) throw error;
-          if (timeBound?.signal.aborted)
-            throw timedOut(error, { label, candidate });
+          if (timeBound?.signal.aborted) {
+            // A user's own key that is out of credits or invalid still
+            // notifies them, though the call ran out of time.
+            await handleError(
+              error,
+              emailAccount.userId,
+              emailAccount.email,
+              emailAccount.id,
+              label,
+              candidate.modelName,
+              effectiveModelOptions.hasUserApiKey,
+            );
+            throw timedOut(error, { label, candidate, isToolLoop: false });
+          }
 
           attachLlmRepairMetadata(
             error,
@@ -2349,13 +2380,34 @@ function timedOut(
   {
     label,
     candidate,
-  }: { label: string; candidate: { provider: string; modelName: string } },
+    isToolLoop,
+  }: {
+    label: string;
+    candidate: { provider: string; modelName: string };
+    isToolLoop: boolean;
+  },
 ) {
-  logger.warn("Automated AI call ran out of time", {
-    label,
-    provider: candidate.provider,
-    model: candidate.modelName,
-    error,
-  });
+  logger.warn(
+    isToolLoop
+      ? "Automated AI tool loop ran out of time"
+      : "Automated AI call ran out of time",
+    {
+      label,
+      provider: candidate.provider,
+      model: candidate.modelName,
+      error,
+    },
+  );
   return new AutomatedAiCallTimeoutError(label, error);
+}
+
+const LOCAL_MODEL_PROVIDERS = new Set<string>([
+  Provider.OLLAMA,
+  Provider.OPENAI_COMPATIBLE,
+  Provider.CODEX_CLI,
+  Provider.CLAUDE_CODE,
+]);
+
+function isLocalModel({ provider }: { provider: string }) {
+  return LOCAL_MODEL_PROVIDERS.has(provider);
 }

@@ -26,6 +26,7 @@ import {
   DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import { ExecutedRuleStatus } from "@/generated/prisma/enums";
+import { PROCESSING_FAILED_COPY } from "@/components/PlanBadge";
 import type { ParsedMessage } from "@/utils/types";
 import { BRAND_NAME } from "@/utils/branding";
 
@@ -147,16 +148,22 @@ function RuleAttribution({
 
   return (
     <div className="min-w-0 border-border border-b px-3 py-3 last:border-b-0">
-      <div className="min-w-0 text-xs">
-        <span className="text-muted-foreground">
-          {plan.status === ExecutedRuleStatus.APPLIED
-            ? "Applied rule:"
-            : "Matched rule:"}{" "}
-        </span>
-        <span className="font-medium text-foreground break-words [overflow-wrap:anywhere]">
-          {plan.rule?.name ?? "a deleted rule"}
-        </span>
-      </div>
+      {!plan.rule && plan.status === ExecutedRuleStatus.ERROR ? (
+        <div className="min-w-0 font-medium text-foreground text-xs">
+          {PROCESSING_FAILED_COPY}
+        </div>
+      ) : (
+        <div className="min-w-0 text-xs">
+          <span className="text-muted-foreground">
+            {plan.status === ExecutedRuleStatus.APPLIED
+              ? "Applied rule:"
+              : "Matched rule:"}{" "}
+          </span>
+          <span className="font-medium text-foreground break-words [overflow-wrap:anywhere]">
+            {plan.rule?.name ?? "a deleted rule"}
+          </span>
+        </div>
+      )}
 
       {reasonDisplay.reason ? (
         <p className="mt-1.5 whitespace-pre-wrap text-foreground text-xs leading-relaxed break-words [overflow-wrap:anywhere]">

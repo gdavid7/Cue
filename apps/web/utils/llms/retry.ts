@@ -135,7 +135,7 @@ export async function withNetworkRetry<T>(
 
         // Exponential backoff: 1s, 2s, 4s
         const delayMs = 1000 * 2 ** attempt;
-        await sleepUnlessAborted(delayMs, signal);
+        await sleepUnlessAborted(delayMs, signal, error);
         continue;
       }
 
@@ -273,21 +273,27 @@ export async function withLLMRetry<T>(
         retryAfterMs: errorInfo.retryAfterMs,
       });
 
-      await sleepUnlessAborted(totalDelayMs, signal);
+      await sleepUnlessAborted(totalDelayMs, signal, error);
     },
   });
 }
 
-async function sleepUnlessAborted(ms: number, signal: AbortSignal | undefined) {
+// Gives up with the failed attempt's error, so callers can still tell what the
+// provider said, such as a user's key being out of credits.
+async function sleepUnlessAborted(
+  ms: number,
+  signal: AbortSignal | undefined,
+  failedAttemptError: unknown,
+) {
   if (!signal) return sleep(ms);
 
-  signal.throwIfAborted();
+  if (signal.aborted) throw failedAttemptError;
   let onAbort: (() => void) | undefined;
   try {
     await Promise.race([
       sleep(ms),
       new Promise<never>((_, reject) => {
-        onAbort = () => reject(signal.reason);
+        onAbort = () => reject(failedAttemptError);
         signal.addEventListener("abort", onAbort, { once: true });
       }),
     ]);

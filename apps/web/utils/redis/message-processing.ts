@@ -116,24 +116,29 @@ export async function releaseMessageProcessing({
   return clearOwnedLock({ key: getProcessingKey(key), lockToken });
 }
 
-// Spans the catch-ups that retry a message, and is gone long before its
-// processed marker.
-const MESSAGE_FAILURES_TTL_SECONDS = 60 * 60 * 24;
+// As long as the processed marker, so a message is never retried afresh while
+// a run could still reach it.
+const MESSAGE_FAILURES_TTL_SECONDS = MESSAGE_PROCESSED_TTL_SECONDS;
 
 /**
  * Counts one more run that failed to process a message for a reason that may
- * pass, so a message that keeps failing is given up on instead of holding the
- * account's history back.
+ * pass, and when it first failed, so a message that keeps failing is given up
+ * on instead of holding the account's history back.
  */
 export async function countMessageProcessingFailure(key: {
   userEmail: string;
   messageId: string;
-}): Promise<number> {
+}): Promise<{ failures: number; firstFailedAt: number }> {
   const failuresKey = getFailuresKey(key);
-  const count = await redis.incr(failuresKey);
-  if (count === 1)
-    await redis.expire(failuresKey, MESSAGE_FAILURES_TTL_SECONDS);
-  return count;
+  // One transaction, so the count never outlives its expiry.
+  const [failures, , , firstFailedAt] = await redis
+    .multi()
+    .hincrby(failuresKey, "failures", 1)
+    .hsetnx(failuresKey, "firstFailedAt", Date.now())
+    .expire(failuresKey, MESSAGE_FAILURES_TTL_SECONDS)
+    .hget<number>(failuresKey, "firstFailedAt")
+    .exec<[number, number, number, number | null]>();
+  return { failures, firstFailedAt: Number(firstFailedAt ?? Date.now()) };
 }
 
 function getFailuresKey({

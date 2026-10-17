@@ -239,22 +239,20 @@ describe("withLLMRetry", () => {
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
-  it("stops waiting for the next attempt once its signal aborts", async () => {
+  it("stops waiting for the next attempt once its signal aborts, with the provider's error", async () => {
     vi.mocked(sleep).mockReturnValueOnce(new Promise(() => {}));
-    const fn = vi
-      .fn()
-      .mockRejectedValue(createError("Rate limited", { status: 429 }));
+    const rateLimited = createError("Rate limited", { status: 429 });
+    const fn = vi.fn().mockRejectedValue(rateLimited);
     const controller = new AbortController();
-    const timedOut = new Error("time bound reached");
 
     const outcome = withLLMRetry(fn, {
       label: "test",
       signal: controller.signal,
     }).catch((error) => error);
     await vi.waitFor(() => expect(sleep).toHaveBeenCalled());
-    controller.abort(timedOut);
+    controller.abort();
 
-    expect(await outcome).toBe(timedOut);
+    expect(await outcome).toBe(rateLimited);
     expect(fn).toHaveBeenCalledTimes(1);
   });
 

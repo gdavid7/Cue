@@ -2,6 +2,11 @@ import { Prisma } from "@/generated/prisma/client";
 import { ExecutedRuleStatus } from "@/generated/prisma/enums";
 import prisma from "@/utils/prisma";
 import type { Logger } from "@/utils/logger";
+import {
+  getAIApiCallError,
+  isAnthropicInsufficientBalanceError,
+  isInsufficientCreditsError,
+} from "@/utils/error";
 import { isAutomatedAiCallTimeoutError } from "@/utils/llms/automated-call-bound";
 import {
   extractLLMErrorInfo,
@@ -28,7 +33,10 @@ const PROCESSING_FAILED_REASON = "Processing failed";
  * such as a request the provider rejects, would fail the same way again.
  */
 export function isTransientMessageProcessingError(error: unknown): boolean {
-  if (isAutomatedAiCallTimeoutError(error)) return true;
+  // A key out of credits looks like a rate limit, but waits on the user.
+  if (isOutOfCreditsError(error)) return false;
+  if (isAutomatedAiCallTimeoutError(error))
+    return !isOutOfCreditsError(error.cause);
   if (isTransientNetworkError(error)) return true;
   if (error instanceof Error) {
     if (error.name === "TimeoutError" || error.name === "UpstashError")
@@ -76,4 +84,13 @@ export async function recordMessageProcessingFailure({
   } catch (error) {
     logger.error("Failed to record message processing failure", { error });
   }
+}
+
+function isOutOfCreditsError(error: unknown) {
+  const apiError = getAIApiCallError(error);
+  return (
+    !!apiError &&
+    (isInsufficientCreditsError(apiError) ||
+      isAnthropicInsufficientBalanceError(apiError))
+  );
 }
