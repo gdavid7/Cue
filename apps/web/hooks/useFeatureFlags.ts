@@ -1,4 +1,4 @@
-import { useFeatureFlagEnabled } from "@/utils/analytics/posthog-client";
+import { useFeatureFlagEnabled } from "@/utils/analytics/posthog-flags";
 import { env } from "@/env";
 import {
   INTEGRATION_ACTION_FEATURE_FLAG,

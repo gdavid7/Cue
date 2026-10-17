@@ -1,6 +1,6 @@
 import type { GenericEndpointContext } from "better-auth";
-import type { AuthFunnelProvider } from "@/utils/analytics/auth-funnel";
-import { normalizeAuthProvider } from "@/utils/analytics/auth-funnel";
+import type { AuthFunnelProvider } from "@/utils/analytics/auth-funnel-provider";
+import { normalizeAuthProvider } from "@/utils/analytics/auth-funnel-provider";
 import { posthogCaptureEvent } from "@/utils/posthog";
 
 const newUserAuthContexts = new WeakSet<object>();

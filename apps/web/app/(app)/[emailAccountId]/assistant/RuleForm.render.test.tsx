@@ -41,8 +41,11 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/utils/analytics/posthog-client", () => ({
-  useFeatureFlagEnabled: () => false,
   posthog: { capture: vi.fn() },
+}));
+
+vi.mock("@/utils/analytics/posthog-flags", () => ({
+  useFeatureFlagEnabled: () => false,
 }));
 
 vi.mock("@/providers/EmailAccountProvider", () => ({
