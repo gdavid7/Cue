@@ -5,6 +5,10 @@ import { isDraftUnmodified } from "@/utils/ai/choose-rule/draft-management";
 import type { Logger } from "@/utils/logger";
 import { DEFAULT_AI_DRAFT_CLEANUP_DAYS } from "@/utils/ai/draft-cleanup-settings";
 import { withPrismaRetry } from "@/utils/prisma-retry";
+import { hasTimeBeforeRequestDeadline } from "@/utils/request-deadline-reader";
+
+// Room for the account in progress to finish before the cron is killed.
+const ACCOUNT_RESERVE_MS = 30_000;
 
 export async function cleanupAIDraftsForAccount({
   emailAccountId,
@@ -211,8 +215,17 @@ export async function cleanupConfiguredAIDrafts({
   let alreadyGone = 0;
   let errors = 0;
   let failedAccounts = 0;
+  let accountsLeft = 0;
 
-  for (const emailAccount of emailAccounts) {
+  for (const [index, emailAccount] of emailAccounts.entries()) {
+    if (!hasTimeBeforeRequestDeadline(ACCOUNT_RESERVE_MS)) {
+      // Their drafts stay candidates, so tomorrow's run picks them up.
+      accountsLeft = emailAccounts.length - index;
+      logger.warn("Stopping draft cleanup before the deadline", {
+        accountsLeft,
+      });
+      break;
+    }
     if (emailAccount.draftCleanupDays === null) continue;
 
     try {
@@ -239,7 +252,8 @@ export async function cleanupConfiguredAIDrafts({
   }
 
   return {
-    accountsChecked: emailAccounts.length,
+    accountsChecked: emailAccounts.length - accountsLeft,
+    accountsLeft,
     failedAccounts,
     total,
     deleted,

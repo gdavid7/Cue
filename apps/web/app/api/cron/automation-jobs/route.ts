@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/utils/prisma";
 import { withError } from "@/utils/middleware";
-import { hasCronSecret, hasPostCronSecret } from "@/utils/cron";
+import { hasCronSecret, hasPostCronSecret, runCronJob } from "@/utils/cron";
 import { captureException } from "@/utils/error";
 import type { Logger } from "@/utils/logger";
 import { getNextAutomationJobRunAt } from "@/utils/automation-jobs/cron";
@@ -27,7 +27,11 @@ export const GET = withError("cron/automation-jobs", async (request) => {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  const result = await enqueueDueAutomationJobs(request.logger);
+  const result = await runCronJob({
+    cron: "cron/automation-jobs",
+    logger: request.logger,
+    run: () => enqueueDueAutomationJobs(request.logger),
+  });
   return NextResponse.json(result);
 });
 
@@ -39,7 +43,11 @@ export const POST = withError("cron/automation-jobs", async (request) => {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  const result = await enqueueDueAutomationJobs(request.logger);
+  const result = await runCronJob({
+    cron: "cron/automation-jobs",
+    logger: request.logger,
+    run: () => enqueueDueAutomationJobs(request.logger),
+  });
   return NextResponse.json(result);
 });
 
@@ -165,14 +173,6 @@ async function enqueueDueAutomationJobs(logger: Logger) {
       }
     }
   }
-
-  logger.info("Finished enqueueing due automation jobs", {
-    due: dueJobs.length,
-    claimed,
-    queued,
-    skipped,
-    failed,
-  });
 
   return {
     due: dueJobs.length,

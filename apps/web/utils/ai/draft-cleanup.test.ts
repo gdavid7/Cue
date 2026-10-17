@@ -5,6 +5,7 @@ import {
   markTrackedDraftDeleted,
 } from "@/utils/ai/draft-cleanup";
 import { createTestLogger } from "@/__tests__/helpers";
+import { runWithRequestDeadline } from "@/utils/request-deadline";
 import { ActionType, DraftEmailStatus } from "@/generated/prisma/enums";
 
 const mocks = vi.hoisted(() => ({
@@ -384,5 +385,35 @@ describe("cleanupConfiguredAIDrafts", () => {
       total: 0,
       deleted: 0,
     });
+  });
+
+  it("stops before the route's deadline and reports the accounts it left", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(logger, "warn");
+    mocks.prisma.emailAccount.findMany.mockResolvedValue(
+      ["email-account-1", "email-account-2", "email-account-3"].map((id) => ({
+        id,
+        draftCleanupDays: 14,
+        account: { provider: "google" },
+      })),
+    );
+    // The first account takes most of the route's five minutes.
+    mocks.prisma.executedAction.findMany.mockImplementationOnce(async () => {
+      vi.advanceTimersByTime(270_000);
+      return [];
+    });
+    mocks.prisma.executedAction.findMany.mockResolvedValue([]);
+
+    const result = await runWithRequestDeadline(300, () =>
+      cleanupConfiguredAIDrafts({ logger }),
+    );
+
+    expect(mocks.prisma.executedAction.findMany).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ accountsChecked: 1, accountsLeft: 2 });
+    expect(warn).toHaveBeenCalledWith(
+      "Stopping draft cleanup before the deadline",
+      { accountsLeft: 2 },
+    );
+    warn.mockRestore();
   });
 });

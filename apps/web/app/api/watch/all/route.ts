@@ -1,43 +1,70 @@
 import { NextResponse } from "next/server";
-import { hasCronSecret, hasPostCronSecret } from "@/utils/cron";
+import { hasCronSecret, hasPostCronSecret, runCronJob } from "@/utils/cron";
 import { withError } from "@/utils/middleware";
 import { captureException } from "@/utils/error";
 import type { Logger } from "@/utils/logger";
-import { ensureEmailAccountsWatched } from "@/utils/email/watch-manager";
+import {
+  ensureEmailAccountsWatched,
+  type WatchEmailAccountResult,
+} from "@/utils/email/watch-manager";
 import { notifyLapsedWatches } from "@/utils/email/notify-lapsed-watches";
 
 export const maxDuration = 300;
 
-export const GET = withError("watch/all", async (request) => {
-  if (!hasCronSecret(request)) {
-    captureException(new Error("Unauthorized cron request: api/watch/all"));
-    return new Response("Unauthorized", { status: 401 });
-  }
+const CRON_NAME = "watch/all";
 
-  return watchAllEmails(request.logger);
-});
+export const GET = withError(
+  CRON_NAME,
+  async (request) => {
+    if (!hasCronSecret(request)) {
+      captureException(new Error("Unauthorized cron request: api/watch/all"));
+      return new Response("Unauthorized", { status: 401 });
+    }
 
-export const POST = withError("watch/all", async (request) => {
-  if (!(await hasPostCronSecret(request))) {
-    captureException(new Error("Unauthorized cron request: api/watch/all"));
-    return new Response("Unauthorized", { status: 401 });
-  }
+    return watchAllEmails(request.logger);
+  },
+  { maxDuration },
+);
 
-  return watchAllEmails(request.logger);
-});
+export const POST = withError(
+  CRON_NAME,
+  async (request) => {
+    if (!(await hasPostCronSecret(request))) {
+      captureException(new Error("Unauthorized cron request: api/watch/all"));
+      return new Response("Unauthorized", { status: 401 });
+    }
+
+    return watchAllEmails(request.logger);
+  },
+  { maxDuration },
+);
 
 async function watchAllEmails(logger: Logger) {
   try {
-    const results = await ensureEmailAccountsWatched({ userIds: null, logger });
+    // The per-account results go in the response; the log line keeps counts.
+    let results: WatchEmailAccountResult[] = [];
+    await runCronJob({
+      cron: CRON_NAME,
+      logger,
+      run: async () => {
+        results = await ensureEmailAccountsWatched({ userIds: null, logger });
 
-    // Runs after the renewal pass so only watches still failing renewal count
-    // as lapsed.
-    try {
-      await notifyLapsedWatches({ logger });
-    } catch (error) {
-      logger.error("Failed to notify lapsed watches", { error });
-      captureException(error);
-    }
+        // Runs after the renewal pass so only watches still failing renewal
+        // count as lapsed.
+        try {
+          await notifyLapsedWatches({ logger });
+        } catch (error) {
+          logger.error("Failed to notify lapsed watches", { error });
+          captureException(error);
+        }
+
+        return {
+          watched: results.filter((result) => result.status === "success")
+            .length,
+          failed: results.filter((result) => result.status === "error").length,
+        };
+      },
+    });
 
     return NextResponse.json({ success: true, results });
   } catch (error) {

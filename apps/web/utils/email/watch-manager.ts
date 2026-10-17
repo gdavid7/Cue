@@ -20,8 +20,11 @@ import { clearWatchLapsedErrorIfResolved } from "@/utils/error-messages";
 import { syncGoogleEmailFromProfile } from "@/utils/auth/rename-email";
 import { resumeAfterGmailDeferral } from "@/utils/gmail/deferred-resume";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
+import { hasTimeBeforeRequestDeadline } from "@/utils/request-deadline-reader";
 
 export const WATCH_RESUME_PATH = "/api/watch/resume";
+// Room for the account in progress to finish before the request is killed.
+const ACCOUNT_RESERVE_MS = 30_000;
 
 export type WatchEmailAccountResult =
   | {
@@ -109,7 +112,14 @@ async function watchEmailAccounts(
 
   const results: WatchEmailAccountResult[] = [];
 
-  for (const emailAccount of emailAccounts) {
+  for (const [index, emailAccount] of emailAccounts.entries()) {
+    // Soonest-expiring go first, so the ones left can wait for the next run.
+    if (!hasTimeBeforeRequestDeadline(ACCOUNT_RESERVE_MS)) {
+      logger.warn("Stopping email watch renewal before the deadline", {
+        accountsLeft: emailAccounts.length - index,
+      });
+      break;
+    }
     try {
       const log = logger.with({
         emailAccountId: emailAccount.id,

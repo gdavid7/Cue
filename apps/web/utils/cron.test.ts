@@ -3,6 +3,7 @@ import {
   hasCronSecret,
   hasPostCronSecret,
   isAuthorizedCronOrInternalRequest,
+  runCronJob,
 } from "./cron";
 import type { RequestWithLogger } from "@/utils/middleware";
 import { createTestLogger } from "@/__tests__/helpers";
@@ -134,5 +135,53 @@ describe("isAuthorizedCronOrInternalRequest", () => {
 
     expect(isAuthorizedCronOrInternalRequest(request)).toBe(false);
     expect(errorSpy).toHaveBeenCalled();
+  });
+});
+
+describe("runCronJob", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("logs one finished line with the run's counts, even when there was nothing to do", async () => {
+    const info = vi.spyOn(logger, "info");
+    const warn = vi.spyOn(logger, "warn");
+
+    const result = await runCronJob({
+      cron: "cron/test",
+      logger,
+      run: async () => ({ processed: 0, firstHourHealth: { sent: 0 } }),
+    });
+
+    expect(result).toEqual({ processed: 0, firstHourHealth: { sent: 0 } });
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info).toHaveBeenCalledWith("Cron finished", {
+      cron: "cron/test",
+      durationMs: expect.any(Number),
+      processed: 0,
+      firstHourHealth: { sent: 0 },
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("warns when a run gets close to the route's limit", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(logger, "warn");
+
+    await runCronJob({
+      cron: "cron/test",
+      logger,
+      run: async () => {
+        vi.advanceTimersByTime(241_000);
+        return { processed: 1 };
+      },
+    });
+
+    expect(warn).toHaveBeenCalledWith("Cron ran long", {
+      cron: "cron/test",
+      durationMs: 241_000,
+      thresholdMs: 240_000,
+    });
   });
 });
