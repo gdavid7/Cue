@@ -23,7 +23,7 @@ export function SnippetsSetting() {
               Manage
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-h-[80vh] max-w-4xl overflow-y-auto">
+          <DialogContent className="max-h-[80dvh] max-w-4xl overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Snippets</DialogTitle>
               <DialogDescription>

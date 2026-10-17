@@ -60,7 +60,7 @@ export function AllAccountsSelectionDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid max-h-[50vh] gap-1 overflow-y-auto py-2">
+        <div className="grid max-h-[50dvh] gap-1 overflow-y-auto py-2">
           {emailAccounts.map((emailAccount) => {
             const checked = selectedAccountIds.has(emailAccount.id);
             const isOnlySelected = checked && selectedAccountIds.size === 1;

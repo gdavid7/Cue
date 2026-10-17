@@ -113,7 +113,7 @@ export function MeetingDetail({
 
   return (
     <Dialog open={!!meetingId} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <div className="flex items-start justify-between gap-3 pr-8">
             <div className="space-y-1.5">
@@ -288,7 +288,7 @@ export function MeetingDetail({
                 </CollapsibleTrigger>
 
                 <CollapsibleContent>
-                  <div className="max-h-[40vh] space-y-3 overflow-y-auto border-t p-4">
+                  <div className="max-h-[40dvh] space-y-3 overflow-y-auto border-t p-4">
                     {transcript.map((utterance, index) => (
                       <div key={`${utterance.startTime}-${index}`}>
                         <p className="text-xs font-medium text-muted-foreground">

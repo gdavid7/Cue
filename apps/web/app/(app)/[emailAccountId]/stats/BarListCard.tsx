@@ -90,7 +90,7 @@ export function BarListCard({ tabs, icon, title }: BarListCardProps) {
                         </DialogTitle>
                       </div>
                     </DialogHeader>
-                    <div className="max-h-[60vh] overflow-y-auto p-6">
+                    <div className="max-h-[60dvh] overflow-y-auto p-6">
                       <HorizontalBarChart data={selectedTabData} />
                     </div>
                   </DialogContent>

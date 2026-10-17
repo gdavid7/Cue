@@ -497,6 +497,56 @@ describe("EmailMessage forward", () => {
   });
 });
 
+describe("EmailMessage reply with an on-screen keyboard", () => {
+  afterEach(() => {
+    cleanup();
+    Reflect.deleteProperty(window, "visualViewport");
+    Reflect.deleteProperty(window, "matchMedia");
+  });
+
+  it("follows the area the keyboard leaves visible on a touchscreen", () => {
+    const viewport = stubVisualViewport({ coarsePointer: true });
+    renderReply();
+    const panel = replyPanel();
+
+    viewport.change({ height: 508, offsetTop: 40 });
+
+    expect(panel.style.getPropertyValue("--visual-viewport-height")).toBe(
+      "508px",
+    );
+    expect(panel.style.getPropertyValue("--visual-viewport-top")).toBe("40px");
+  });
+
+  it("leaves the reply alone when a mouse is the main input", () => {
+    const viewport = stubVisualViewport({ coarsePointer: false });
+    renderReply();
+    const panel = replyPanel();
+
+    viewport.change({ height: 508, offsetTop: 0 });
+
+    expect(panel.style.getPropertyValue("--visual-viewport-height")).toBe("");
+  });
+
+  function renderReply() {
+    render(
+      <EmailMessage
+        expanded
+        message={createMessage("message-1")}
+        onSendSuccess={vi.fn()}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+  }
+
+  function replyPanel() {
+    const panel = screen.getByTestId("composer").parentElement;
+    if (!panel) throw new Error("The composer has no reply panel");
+    return panel;
+  }
+});
+
 function createMessage(id: string) {
   return {
     date: "2026-01-01T00:00:00.000Z",
@@ -527,4 +577,29 @@ function createMessage(id: string) {
     textPlain: "Message body",
     threadId: "thread-1",
   } as ThreadMessage;
+}
+
+function stubVisualViewport({ coarsePointer }: { coarsePointer: boolean }) {
+  const viewport = Object.assign(new EventTarget(), {
+    height: 844,
+    offsetTop: 0,
+    change(next: { height: number; offsetTop: number }) {
+      viewport.height = next.height;
+      viewport.offsetTop = next.offsetTop;
+      viewport.dispatchEvent(new Event("resize"));
+    },
+  });
+  Object.defineProperty(window, "visualViewport", {
+    configurable: true,
+    value: viewport,
+  });
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: (query: string) => ({
+      matches: query === "(pointer: coarse)" && coarsePointer,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }),
+  });
+  return viewport;
 }

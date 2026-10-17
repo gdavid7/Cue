@@ -31,7 +31,7 @@ export function SettingsDialog() {
         if (!open) closeSettings();
       }}
     >
-      <DialogContent className="max-h-[85vh] max-w-3xl grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0">
+      <DialogContent className="max-h-[85dvh] max-w-3xl grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0">
         <DialogHeader className="border-b px-6 py-4">
           <DialogTitle>Settings</DialogTitle>
         </DialogHeader>

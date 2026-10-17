@@ -242,7 +242,7 @@ function AttachmentPreviewDialogContent({
   }, [url, emailAccountId, tooLarge]);
 
   return (
-    <DialogContent className="flex h-[90vh] max-w-5xl flex-col gap-0 overflow-hidden p-0">
+    <DialogContent className="flex h-[90dvh] max-w-5xl flex-col gap-0 overflow-hidden p-0">
       <div className="flex items-center gap-3 border-b py-3 pr-12 pl-4">
         <DialogTitle className="min-w-0 flex-1 truncate font-medium text-sm">
           {filename}
