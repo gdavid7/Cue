@@ -167,7 +167,7 @@ describe("ThreadReader", () => {
     });
     const moreActions = screen.getByRole("button", { name: "More actions" });
     moreActions.focus();
-    expect(screen.getByLabelText("Loading email")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("Loading email");
     // Expanding needs the thread view, so it waits for it.
     expect(
       screen.queryByRole("button", { name: "Expand all messages" }),
@@ -185,7 +185,8 @@ describe("ThreadReader", () => {
     ).toBeTruthy();
   });
 
-  it("shows a loading indicator while the thread view's code loads", () => {
+  // A polite status, so a screen reader hears it without focus moving to it.
+  it("announces that the email is loading while the thread view's code loads", () => {
     threadView.mode = "pending";
 
     renderReader({
@@ -193,11 +194,19 @@ describe("ThreadReader", () => {
       messages: [createMessage("message-1", "Office hours", ["INBOX"])],
     });
 
-    const indicator = screen.getByLabelText("Loading email");
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("Loading email");
+    expect(status.contains(document.activeElement)).toBe(false);
     // BufferedThreadReader keeps the previous thread up while this marker shows.
-    const marker = indicator.closest("[data-thread-view-loading]");
+    const marker = status.closest("[data-thread-view-loading]");
     expect(marker).toBeTruthy();
     expect(marker?.hasAttribute("hidden")).toBe(false);
+  });
+
+  it("announces that the email is loading before any message has arrived", () => {
+    renderReader({ loading: true, refetch: vi.fn() });
+
+    expect(screen.getByRole("status").textContent).toBe("Loading email");
   });
 
   it("explains a thread that failed to load and offers a retry", () => {
@@ -313,10 +322,12 @@ describe("ThreadReader", () => {
 
 function renderReader({
   error,
+  loading = false,
   refetch,
   messages = [],
 }: {
   error?: Parameters<typeof ThreadReader>[0]["error"];
+  loading?: boolean;
   refetch: () => void;
   messages?: ThreadMessage[];
 }) {
@@ -328,7 +339,7 @@ function renderReader({
         error={error}
         labelHref={() => "/labels"}
         layout="split"
-        loading={false}
+        loading={loading}
         messages={messages}
         onArchive={vi.fn()}
         isUnread={false}

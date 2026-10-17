@@ -236,10 +236,9 @@ export function ThreadReader({
           loading={loading}
           errorComponent={<ThreadReaderError error={error} onRetry={refetch} />}
           loadingComponent={
-            <Loader2Icon
-              aria-label="Loading email"
-              className="size-6 animate-spin text-muted-foreground"
-            />
+            <div role="status">
+              <LoadingEmail />
+            </div>
           }
         >
           <MailIcon className="size-6 text-muted-foreground" />
@@ -353,11 +352,9 @@ export function ThreadReader({
               <div
                 className="flex flex-1 items-center justify-center py-16"
                 data-thread-view-loading
+                role="status"
               >
-                <Loader2Icon
-                  aria-label="Loading email"
-                  className="size-6 animate-spin text-muted-foreground"
-                />
+                <LoadingEmail />
               </div>
             }
           >
@@ -430,6 +427,22 @@ export function ThreadReader({
         />
       )}
     </MailReaderSurface>
+  );
+}
+
+/**
+ * A polite status rather than a labelled icon: an SVG's aria-label is neither
+ * announced nor reliably exposed, and focus stays wherever the user left it.
+ */
+function LoadingEmail() {
+  return (
+    <>
+      <Loader2Icon
+        aria-hidden
+        className="size-6 animate-spin text-muted-foreground"
+      />
+      <span className="sr-only">Loading email</span>
+    </>
   );
 }
 
