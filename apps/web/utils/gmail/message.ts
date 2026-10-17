@@ -126,15 +126,20 @@ export async function getMessage(
   gmail: gmail_v1.Gmail,
   format?: "full" | "metadata",
 ): Promise<MessageWithPayload> {
-  return withGmailRetry(async () => {
-    const message = await gmail.users.messages.get({
-      userId: "me",
-      id: messageId,
-      format,
-    });
+  return withGmailRetry(
+    async () => {
+      const message = await gmail.users.messages.get({
+        userId: "me",
+        id: messageId,
+        format,
+      });
 
-    return message.data as MessageWithPayload;
-  });
+      return message.data as MessageWithPayload;
+    },
+    5,
+    // Mail deleted since it was listed is routine; callers decide what it means.
+    { notFoundIsExpected: true },
+  );
 }
 
 /** The message exactly as Gmail stores it, as RFC 822 bytes. */

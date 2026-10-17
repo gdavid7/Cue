@@ -63,6 +63,52 @@ describe("useInboxInsights", () => {
     );
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps the insights already shown when a new page is rate limited", async () => {
+    const fetcher = vi.fn(async ([url]: [string, string]) => {
+      if (url.includes("t2")) {
+        throw Object.assign(new Error("Rate limited"), { status: 429 });
+      }
+      return {
+        insights: { t1: { insight: null, meeting: null, reply: "ready" } },
+      };
+    });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(
+        SWRConfig,
+        {
+          value: {
+            fetcher,
+            provider: () => new Map(),
+            shouldRetryOnError: false,
+          },
+        },
+        children,
+      );
+
+    const { result, rerender } = renderHook(
+      ({ items }) => useInboxInsights(items),
+      {
+        wrapper,
+        initialProps: {
+          items: [item({ emailAccountId: "work", threadId: "t1" })],
+        },
+      },
+    );
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    const shown = result.current.data;
+
+    rerender({
+      items: [
+        item({ emailAccountId: "work", threadId: "t1" }),
+        item({ emailAccountId: "work", threadId: "t2" }),
+      ],
+    });
+    await waitFor(() => expect(result.current.error).toBeDefined());
+
+    expect(result.current.error).toMatchObject({ status: 429 });
+    expect(result.current.data).toEqual(shown);
+  });
 });
 
 function item({

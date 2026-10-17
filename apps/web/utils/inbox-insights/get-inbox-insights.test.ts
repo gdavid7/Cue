@@ -12,6 +12,7 @@ const { cache, redisCalls } = vi.hoisted(() => ({
 }));
 vi.mock("@/utils/redis", () => ({
   redis: {
+    eval: async () => 1,
     get: async (key: string) => {
       redisCalls.push("get");
       return cache.get(key) ?? null;
@@ -64,6 +65,7 @@ describe("getInboxInsights", () => {
 
     const { insights } = await getInboxInsights({
       emailAccountId: "a1",
+      userId: "u1",
       userEmail: "me@example.com",
       items,
       emailProvider: { getMessage } as unknown as EmailProvider,
@@ -90,6 +92,7 @@ describe("getInboxInsights", () => {
 
     await getInboxInsights({
       emailAccountId: "a1",
+      userId: "u1",
       userEmail: "me@example.com",
       items: [{ threadId: "t-big", messageId: "m-big" }],
       emailProvider: { getMessage } as unknown as EmailProvider,

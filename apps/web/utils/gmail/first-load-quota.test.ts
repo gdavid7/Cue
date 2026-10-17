@@ -233,6 +233,7 @@ describe("Gmail quota on a first load", () => {
       retried("user/inbox-insights", () =>
         getInboxInsights({
           emailAccountId: ACCOUNT,
+          userId: "user-1",
           userEmail: "me@example.com",
           items,
           emailProvider: provider,
@@ -525,6 +526,7 @@ describe("Gmail quota on a first load", () => {
       retried("user/inbox-insights", () =>
         getInboxInsights({
           emailAccountId: ACCOUNT,
+          userId: "user-1",
           userEmail: "me@example.com",
           items: Array.from({ length: 25 }, (_, i) => ({
             threadId: `t${i}`,

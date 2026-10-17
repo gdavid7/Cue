@@ -40,6 +40,7 @@ export const GET = withEmailProvider("user/inbox-insights", async (request) => {
 
   const result = await getInboxInsights({
     emailAccountId: request.auth.emailAccountId,
+    userId: request.auth.userId,
     userEmail: request.auth.email,
     items,
     emailProvider: request.emailProvider,

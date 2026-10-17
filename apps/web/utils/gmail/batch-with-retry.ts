@@ -1,7 +1,7 @@
 import chunk from "lodash/chunk";
 import { type BatchError, isBatchError, isDefined } from "@/utils/types";
 import { getBatch } from "@/utils/gmail/batch";
-import { isRetryableError } from "@/utils/gmail/retry";
+import { isGmailNotFound, isRetryableError } from "@/utils/gmail/retry";
 import { sleep } from "@/utils/sleep";
 import type { Logger } from "@/utils/logger";
 import {
@@ -136,11 +136,18 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
         });
 
         if (!retryable) {
-          logger.warn("Skipping batch item due to non-retryable error", {
-            code,
-            reason,
-            errorMessage,
-          });
+          const fields = { code, reason, errorMessage };
+          // Deleted since it was listed; callers handle the gap.
+          if (isGmailNotFound({ status: code, reason }))
+            logger.info(
+              "Skipping batch item due to non-retryable error",
+              fields,
+            );
+          else
+            logger.warn(
+              "Skipping batch item due to non-retryable error",
+              fields,
+            );
           return;
         }
 

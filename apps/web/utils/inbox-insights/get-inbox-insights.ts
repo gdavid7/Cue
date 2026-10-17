@@ -15,6 +15,7 @@ import {
 } from "@/utils/inbox-insights/extract-insight";
 import type { Logger } from "@/utils/logger";
 import { assertHasAiAccess } from "@/utils/premium/limits";
+import { assertWithinUserRateLimit } from "@/utils/rate-limit";
 import { redis } from "@/utils/redis";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import {
@@ -32,6 +33,10 @@ const EXTRACT_CONCURRENCY = 4;
 const CACHE_TTL_SECONDS = 30 * 24 * 60 * 60;
 const NO_AI_CACHE_TTL_SECONDS = 24 * 60 * 60;
 const MEETING_WINDOW_DAYS = 14;
+// Only a request with uncached emails is charged, and it can make up to
+// MAX_NEW_PER_REQUEST model calls, so this sits below the per-call limits.
+const NEW_INSIGHT_REQUESTS_PER_WINDOW = 30;
+const RATE_LIMIT_WINDOW_SECONDS = 5 * 60;
 const SKIP_LABELS = ["SPAM", "TRASH", "DRAFT"];
 // Kept with each cached insight for a month; a mailing's full recipient list
 // would make one entry many kilobytes for meetings it can't usefully match.
@@ -57,6 +62,7 @@ export type ThreadInsightData = {
  */
 export async function getInboxInsights({
   emailAccountId,
+  userId,
   userEmail,
   items,
   emailProvider,
@@ -64,6 +70,7 @@ export async function getInboxInsights({
   now = new Date(),
 }: {
   emailAccountId: string;
+  userId: string;
   userEmail: string;
   items: { threadId: string; messageId: string }[];
   emailProvider: EmailProvider;
@@ -80,6 +87,17 @@ export async function getInboxInsights({
   const missing = items
     .filter((_, i) => !cached[i])
     .slice(0, MAX_NEW_PER_REQUEST);
+
+  // A page answered from the cache alone costs nothing and is not charged.
+  if (missing.length) {
+    await assertWithinUserRateLimit({
+      scope: "inbox-insights",
+      userId,
+      limit: NEW_INSIGHT_REQUESTS_PER_WINDOW,
+      windowSeconds: RATE_LIMIT_WINDOW_SECONDS,
+      logger,
+    });
+  }
 
   const fresh = missing.length
     ? await extractMissing({

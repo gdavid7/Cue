@@ -14,6 +14,8 @@ const GMAIL_CALL_DEFERRED_CODE = "GMAIL_CALL_DEFERRED";
 
 interface RetryLogContext {
   logger?: Logger;
+  /** The caller handles an item that no longer exists, such as a deleted message. */
+  notFoundIsExpected?: boolean;
 }
 
 interface ErrorInfo {
@@ -72,6 +74,8 @@ async function withGmailRetryPolicy<T>(
       return {
         // The quota gate held the call back on purpose; callers handle it.
         expected: errorInfo.code === GMAIL_CALL_DEFERRED_CODE,
+        routine:
+          Boolean(context?.notFoundIsExpected) && isGmailNotFound(errorInfo),
         retryable,
         isRateLimit,
         delayMs: calculateRetryDelay(
@@ -186,6 +190,17 @@ export function isRetryableError(errorInfo: ErrorInfo): {
     isServerError,
     isFailedPrecondition,
   };
+}
+
+/** Gmail's answer for an item that no longer exists, such as a deleted message. */
+export function isGmailNotFound({
+  status,
+  reason,
+}: {
+  status?: number;
+  reason?: string;
+}): boolean {
+  return status === 404 && reason === "notFound";
 }
 
 export function isExistingGmailPushClientError(errorInfo: {

@@ -14,6 +14,8 @@ interface ProviderRetryDecision {
   isRateLimit: boolean;
   logFields: Record<string, unknown>;
   retryable: boolean;
+  /** A non-retryable outcome in normal operation, such as a deleted item. */
+  routine?: boolean;
 }
 
 export async function withProviderRetry<T>(
@@ -40,16 +42,14 @@ export async function withProviderRetry<T>(
     // backoff would double it.
     minTimeout: 0,
     onFailedAttempt: async (attempt) => {
-      const { retryable, isRateLimit, delayMs, logFields, expected } =
+      const { retryable, isRateLimit, delayMs, logFields, expected, routine } =
         classify(attempt);
       if (expected) throw attempt.error;
 
       if (!retryable || (retryPolicy === "rate-limit-only" && !isRateLimit)) {
-        logger.warn("Non-retryable error encountered", {
-          error: attempt.error,
-          ...logFields,
-          retryPolicy,
-        });
+        const fields = { error: attempt.error, ...logFields, retryPolicy };
+        if (routine) logger.info("Non-retryable error encountered", fields);
+        else logger.warn("Non-retryable error encountered", fields);
         // Throwing the attempt context would hand callers p-retry's wrapper
         // instead of the provider error, so error classifiers would never match.
         throw attempt.error;

@@ -319,6 +319,52 @@ describe("Gmail retry helpers", () => {
       expect(warn).not.toHaveBeenCalled();
     });
 
+    it("logs a missing item at info when the caller expects it, without retrying", async () => {
+      // A message deleted since it was listed is routine, not a warning.
+      const logger = createScopedLogger("gmail-retry-test");
+      const warn = vi.spyOn(logger, "warn");
+      const info = vi.spyOn(logger, "info");
+      const error = gmailError(
+        404,
+        "notFound",
+        "Requested entity was not found.",
+      );
+      const operation = vi.fn().mockRejectedValue(error);
+
+      await expect(
+        withGmailRetry(operation, 5, { logger, notFoundIsExpected: true }),
+      ).rejects.toBe(error);
+
+      expect(operation).toHaveBeenCalledTimes(1);
+      expect(warn).not.toHaveBeenCalled();
+      expect(info).toHaveBeenCalledWith(
+        "Non-retryable error encountered",
+        expect.objectContaining({ status: 404, reason: "notFound" }),
+      );
+    });
+
+    it("still warns about a missing item no caller expects, or other refusals", async () => {
+      const logger = createScopedLogger("gmail-retry-test");
+      const warn = vi.spyOn(logger, "warn");
+
+      await expect(
+        withGmailRetry(
+          vi.fn().mockRejectedValue(gmailError(404, "notFound", "Not Found")),
+          5,
+          { logger },
+        ),
+      ).rejects.toThrow();
+      await expect(
+        withGmailRetry(
+          vi.fn().mockRejectedValue(gmailError(403, "forbidden", "Forbidden")),
+          5,
+          { logger, notFoundIsExpected: true },
+        ),
+      ).rejects.toThrow();
+
+      expect(warn).toHaveBeenCalledTimes(2);
+    });
+
     it("rethrows original non-retryable errors", async () => {
       const error = Object.assign(new Error("Not Found"), { status: 404 });
       const operation = vi.fn().mockRejectedValue(error);
@@ -359,3 +405,11 @@ describe("Gmail retry helpers", () => {
     });
   });
 });
+
+// The shape the googleapis client rejects with.
+function gmailError(status: number, reason: string, message: string) {
+  return Object.assign(new Error(message), {
+    status,
+    errors: [{ reason, message }],
+  });
+}
