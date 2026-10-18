@@ -364,9 +364,10 @@ export function createGenerateText({
         modelProviderOptions: candidate.providerOptions as
           | LLMProviderOptions
           | undefined,
-        requestProviderOptions: options.providerOptions as
-          | LLMProviderOptions
-          | undefined,
+        requestProviderOptions: getRequestProviderOptions(
+          options.providerOptions,
+          modelOptions,
+        ),
         userId: emailAccount.userId,
         label,
         emailAccountId: emailAccount.id,
@@ -607,9 +608,10 @@ export function createGenerateObject({
         modelProviderOptions: candidate.providerOptions as
           | LLMProviderOptions
           | undefined,
-        requestProviderOptions: options.providerOptions as
-          | LLMProviderOptions
-          | undefined,
+        requestProviderOptions: getRequestProviderOptions(
+          options.providerOptions,
+          modelOptions,
+        ),
         userId: emailAccount.userId,
         label,
         emailAccountId: emailAccount.id,
@@ -1734,6 +1736,18 @@ function mergeProviderOptions(
   }
 
   return merged;
+}
+
+// Callers spread their SelectModel into the request, which copies the primary
+// model's own providerOptions in. Each candidate already brings its own, and
+// the primary's (such as Claude 5 adaptive thinking) break a fallback or the
+// spend guard's nano model, so only options the caller set themselves count.
+function getRequestProviderOptions(
+  requestProviderOptions: unknown,
+  modelOptions: SelectModel,
+): LLMProviderOptions | undefined {
+  if (requestProviderOptions === modelOptions.providerOptions) return;
+  return requestProviderOptions as LLMProviderOptions | undefined;
 }
 
 function buildProviderOptions({
