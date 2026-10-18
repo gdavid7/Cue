@@ -12,7 +12,11 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
   reset(): void;
 } {
   const buckets = new Map<string, { tokens: number; at: number }>();
-  const windows = new Map<string, Array<{ at: number; cost: number }>>();
+  const windows = new Map<
+    string,
+    Array<{ at: number; cost: number; id?: string }>
+  >();
+  let sequence = 0;
   // Demand episodes: when the yield ends and when the next may start.
   const demands = new Map<string, { endsAt: number; renewsAt: number }>();
   const blocks = new Map<string, number>();
@@ -46,6 +50,28 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
           usageKey: input.usageKey,
         })),
       );
+      for (const { reservation, kept, soonerMs } of input.release ?? []) {
+        const entries = windows.get(input.pace.key) ?? [];
+        const held = entries.find((entry) => entry.id === reservation);
+        if (!held) continue;
+        windows.set(
+          input.pace.key,
+          entries
+            .flatMap((entry) =>
+              entry !== held
+                ? [entry]
+                : kept > 0
+                  ? [
+                      {
+                        at: entry.at - Math.max(0, Math.floor(soonerMs)),
+                        cost: kept,
+                      },
+                    ]
+                  : [],
+            )
+            .sort((a, b) => a.at - b.at),
+        );
+      }
       const held = input.blockers.filter(({ key }) => ttl(key) > 0);
       const defer = held.some(({ deferMs }) => deferMs);
       let wait = Math.max(
@@ -123,7 +149,8 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
           endsAt: now + pace.demand.markMs,
           renewsAt: now + (pace.demand.everyMs ?? pace.demand.markMs),
         });
-      if (wait > 0) return { waitMs: wait, defer, queued: 0, ahead: 0 };
+      if (wait > 0)
+        return { waitMs: wait, defer, queued: 0, ahead: 0, reservation: null };
 
       const grantCap =
         pace.demand.yieldCap !== undefined && demandTtl > 0
@@ -131,7 +158,9 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
           : cap;
       let used = input.cost;
       let queued = 0;
-      for (const queuedCost of input.queued ?? []) {
+      const admittedQueued: { cost: number; field: string }[] = [];
+      for (const entry of input.queued ?? []) {
+        const queuedCost = entry.cost;
         if (
           tokens - used - queuedCost < input.floor ||
           inWindow + used + queuedCost > grantCap
@@ -139,6 +168,7 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
           break;
         used += queuedCost;
         queued++;
+        admittedQueued.push(entry);
       }
       let ahead = 0;
       if (input.ahead && input.ahead.units > 0 && input.ahead.step > 0) {
@@ -152,20 +182,28 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
       }
       buckets.set(input.bucketKey, { tokens: tokens - used - ahead, at: now });
       recent.push({ at: now, cost: used });
-      if (ahead > 0)
-        recent.push({ at: now + (input.ahead?.leaseMs ?? 0), cost: ahead });
+      sequence++;
+      const reservation = ahead > 0 ? `${sequence}:ahead:${ahead}` : null;
+      if (reservation)
+        recent.push({
+          at: now + (input.ahead?.leaseMs ?? 0),
+          cost: ahead,
+          id: reservation,
+        });
       recent.sort((a, b) => a.at - b.at);
       trailingUnits(budget.trailingKey, budget.trailingWindowMs);
-      trailing.get(budget.trailingKey)?.push({ at: now, cost: used + ahead });
+      trailing.get(budget.trailingKey)?.push({ at: now, cost: used });
       const fields = usage.get(input.usageKey) ?? {};
       fields[input.usageField] = (fields[input.usageField] ?? 0) + input.cost;
+      for (const entry of admittedQueued)
+        fields[entry.field] = (fields[entry.field] ?? 0) + entry.cost;
       fields["budget:perMinute"] = Math.floor(current.perMinute);
       fields["peak:second"] = Math.max(
         fields["peak:second"] ?? 0,
         inWindow + used,
       );
       usage.set(input.usageKey, fields);
-      return { waitMs: 0, defer: false, queued, ahead };
+      return { waitMs: 0, defer: false, queued, ahead, reservation };
     },
     async cutBudget(input) {
       const units = trailingUnits(input.trailingKey, input.trailingWindowMs);

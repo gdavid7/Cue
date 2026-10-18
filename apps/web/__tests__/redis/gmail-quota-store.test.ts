@@ -84,9 +84,10 @@ const admit = (input: {
     markMs?: number;
     everyMs?: number;
   };
-  queued?: number[];
+  queued?: { cost: number; field: string }[];
   ahead?: { units: number; step: number; leaseMs: number; share: number };
   notes?: { field: string; amount: number }[];
+  release?: { reservation: string; kept: number; soonerMs: number }[];
 }) =>
   gmailQuotaStore.take({
     bucketKey: keys.bucket,
@@ -117,6 +118,7 @@ const admit = (input: {
     queued: input.queued,
     ahead: input.ahead,
     notes: input.notes,
+    release: input.release,
   });
 
 let server: ChildProcess | null = null;
@@ -410,18 +412,36 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
         floor: 200,
         paceCap: 100,
         usageField: "interactive:leader",
-        queued: [30, 30, 30],
+        queued: ["a", "b", "c"].map((name) => ({
+          cost: 30,
+          field: `interactive:${name}`,
+        })),
       });
       // 30 + 30 + 30 fit the second's 100; a fourth 30 would not.
-      expect(result).toEqual({ waitMs: 0, defer: false, queued: 2, ahead: 0 });
+      expect(result).toEqual({
+        waitMs: 0,
+        defer: false,
+        queued: 2,
+        ahead: 0,
+        reservation: null,
+      });
       expect(
         await take({ cost: 20, floor: 200, paceCap: 100 }),
       ).toBeGreaterThan(0);
-      // The queued callers' usage is theirs to record.
-      expect(await redis!.hgetall(keys.usage)).toMatchObject({
+      // Each admitted caller's units are its own; the one left out has none.
+      const usage = await redis!.hgetall(keys.usage);
+      expect(usage).toMatchObject({
         "interactive:leader": "30",
+        "interactive:a": "30",
+        "interactive:b": "30",
         "peak:second": "90",
       });
+      expect(usage["interactive:c"]).toBeUndefined();
+      // The trailing minute counts what was sent.
+      const trailing = await redis!.zrange(keys.trailing, "0", "-1");
+      expect(
+        trailing.map((member) => Number(member.split(":").at(-1))),
+      ).toEqual([90]);
     });
 
     it("reserves ahead only from the spare half of the second, held in the pace window until its lease ends", async () => {
@@ -429,7 +449,18 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       const startedAt = Date.now();
       const result = await admit({ cost: 10, floor: 200, paceCap: 100, ahead });
       // Half of the 100 a second, less the call itself.
-      expect(result).toEqual({ waitMs: 0, defer: false, queued: 0, ahead: 40 });
+      expect(result).toMatchObject({
+        waitMs: 0,
+        defer: false,
+        queued: 0,
+        ahead: 40,
+        reservation: expect.stringContaining(":ahead:40"),
+      });
+      // Reserved units are not counted as sent.
+      const trailing = await redis!.zrange(keys.trailing, "0", "-1");
+      expect(
+        trailing.map((member) => Number(member.split(":").at(-1))),
+      ).toEqual([10]);
       const reservation = (await redis!.zrange(keys.pace, "0", "-1")).find(
         (member) => member.includes(":ahead:"),
       );
@@ -459,6 +490,64 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
         500,
         -1,
       );
+    });
+
+    it("reads blockers, queued callers, notes and releases from their own places in one call", async () => {
+      const ahead = { units: 100, step: 10, leaseMs: 500, share: 0.5 };
+      const first = await admit({ cost: 10, floor: 200, paceCap: 100, ahead });
+      expect(first.ahead).toBe(40);
+      const reservedAt = Number(
+        await redis!.zscore(keys.pace, first.reservation!),
+      );
+
+      // Two blockers that are not set, so their defer times are read but not used.
+      const other = "gmail-quota:test:other-pause";
+      const result = await admit({
+        cost: 10,
+        floor: 200,
+        paceCap: 100,
+        usageField: "sync:leader",
+        blockers: [
+          { key: keys.pause, deferMs: 5000 },
+          { key: other, deferMs: 7000 },
+        ],
+        queued: [
+          { cost: 10, field: "sync:q1" },
+          { cost: 10, field: "sync:q2" },
+        ],
+        notes: [{ field: "deferred:x", amount: 3 }],
+        release: [{ reservation: first.reservation!, kept: 15, soonerMs: 300 }],
+      });
+      expect(result).toMatchObject({ waitMs: 0, defer: false, queued: 2 });
+      expect(await redis!.hgetall(keys.usage)).toMatchObject({
+        "sync:leader": "10",
+        "sync:q1": "10",
+        "sync:q2": "10",
+        "deferred:x": "3",
+      });
+      // The unspent 25 left the window; the 15 spent stay, 300 ms sooner.
+      expect(await redis!.zscore(keys.pace, first.reservation!)).toBeNull();
+      const kept = `${first.reservation}:kept:15`;
+      expect(Number(await redis!.zscore(keys.pace, kept))).toBe(
+        reservedAt - 300,
+      );
+
+      // With the second blocker set, its own defer time comes back.
+      await gmailQuotaStore.block({ key: other, ms: 60_000 });
+      expect(
+        await admit({
+          cost: 10,
+          floor: 200,
+          blockers: [
+            { key: keys.pause, deferMs: 5000 },
+            { key: other, deferMs: 7000 },
+          ],
+          queued: [{ cost: 10, field: "sync:q3" }],
+          notes: [{ field: "deferred:y", amount: 1 }],
+        }),
+      ).toMatchObject({ waitMs: 7000, defer: true, queued: 0 });
+      expect(await redis!.hget(keys.usage, "deferred:y")).toBe("1");
+      expect(await redis!.hget(keys.usage, "sync:q3")).toBeNull();
     });
 
     it("records batched usage notes even when nothing is admitted", async () => {

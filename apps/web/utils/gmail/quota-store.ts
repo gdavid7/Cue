@@ -32,13 +32,16 @@ export type GmailQuotaStore = {
    *
    * Once `cost` is admitted, the same round trip also admits, in order, the
    * `queued` requests waiting behind it on this instance while each still
-   * fits the same rules (`queued` in the result says how many), and then
-   * reserves up to `ahead.units` (whole multiples of `ahead.step`) for calls
-   * this instance expects within `ahead.leaseMs`. Units reserved ahead come
-   * only from the part of the second's pace and of the bucket above
-   * `ahead.share` of each, and stay in the pace window until the lease ends,
-   * so a second never carries more than its cap however late they are spent.
-   * `notes` are added to the usage hash whether or not anything is admitted.
+   * fits the same rules, recording each one's units under its own `field`
+   * (`queued` in the result says how many). It then reserves up to
+   * `ahead.units` (whole multiples of `ahead.step`) for calls this instance
+   * expects within `ahead.leaseMs`. Units reserved ahead come only from the
+   * part of the second's pace above `ahead.share` of its cap and the upper
+   * half of the bucket, and stay in the pace window until the lease ends, so
+   * a second never carries more than its cap however late they are spent.
+   * The result names that reservation (`reservation`), so a later request
+   * can `release` what was not spent of it. Releases and `notes` are applied
+   * before anything else, whether or not anything is admitted.
    */
   take(input: {
     bucketKey: string;
@@ -74,14 +77,20 @@ export type GmailQuotaStore = {
         everyMs?: number;
       };
     };
-    queued?: number[];
+    queued?: { cost: number; field: string }[];
     ahead?: { units: number; step: number; leaseMs: number; share: number };
     notes?: { field: string; amount: number }[];
+    /**
+     * Reservations on `pace.key` to cut down to the units `kept`, which then
+     * leave the window `soonerMs` before the reservation would have.
+     */
+    release?: { reservation: string; kept: number; soonerMs: number }[];
   }): Promise<{
     waitMs: number;
     defer: boolean;
     queued: number;
     ahead: number;
+    reservation: string | null;
   }>;
   /**
    * Lowers the budget in `key` to `fraction` of the units admitted within
@@ -162,13 +171,29 @@ local aheadStep = tonumber(ARGV[19])
 local aheadLease = tonumber(ARGV[20])
 local aheadShare = tonumber(ARGV[21])
 local noteCount = tonumber(ARGV[22])
+local releaseCount = tonumber(ARGV[23])
 local blockerCount = #KEYS - 8
-local queuedAt = 23 + blockerCount
-local notesAt = queuedAt + queuedCount
+local queuedAt = 24 + blockerCount
+local notesAt = queuedAt + 2 * queuedCount
+local releasesAt = notesAt + 2 * noteCount
 for n = 0, noteCount - 1 do
   redis.call('HINCRBY', KEYS[2], ARGV[notesAt + 2 * n], tonumber(ARGV[notesAt + 2 * n + 1]))
 end
 if noteCount > 0 then redis.call('PEXPIRE', KEYS[2], 300000) end
+-- What a lease spent stays in the window until a second after it was last
+-- spent from; the rest leaves it now.
+for r = 0, releaseCount - 1 do
+  local member = ARGV[releasesAt + 3 * r]
+  local kept = tonumber(ARGV[releasesAt + 3 * r + 1])
+  local sooner = tonumber(ARGV[releasesAt + 3 * r + 2])
+  local score = redis.call('ZSCORE', KEYS[3], member)
+  if score then
+    redis.call('ZREM', KEYS[3], member)
+    if kept > 0 then
+      redis.call('ZADD', KEYS[3], tonumber(score) - sooner, member .. ':kept:' .. kept)
+    end
+  end
+end
 local budget = redis.call('HMGET', KEYS[7], 'perMinute', 'at')
 local perMinute = tonumber(budget[1])
 local budgetAt = tonumber(budget[2]) or now
@@ -188,7 +213,7 @@ local wait = 0
 local defer = 0
 for i = 9, #KEYS do
   local ttl = redis.call('PTTL', KEYS[i])
-  local deferMs = tonumber(ARGV[i + 14])
+  local deferMs = tonumber(ARGV[i + 15])
   if ttl > 0 and deferMs and deferMs > 0 then
     ttl = deferMs
     defer = 1
@@ -243,14 +268,14 @@ wait = math.max(wait, paceWait)
 if demandMs > 0 and (waitBudget < 0 or unpacedWait <= waitBudget) then
   redis.call('SET', KEYS[5], tostring(now + demandMs), 'PX', demandEvery, 'NX')
 end
-if wait > 0 then return {wait, defer, 0, 0} end
+if wait > 0 then return {wait, defer, 0, 0, ''} end
 -- What this second may still carry, at the cap this caller's priority has now.
 local grantCap = paceCap
 if yieldCap >= 0 and demandTtl > 0 then grantCap = math.min(paceCap, yieldCap) end
 local used = cost
 local admittedQueued = 0
 for q = 0, queuedCount - 1 do
-  local queuedCost = tonumber(ARGV[queuedAt + q])
+  local queuedCost = tonumber(ARGV[queuedAt + 2 * q])
   if tokens - used - queuedCost < floor or inWindow + used + queuedCost > grantCap then break end
   used = used + queuedCost
   admittedQueued = admittedQueued + 1
@@ -268,22 +293,28 @@ redis.call('PEXPIRE', KEYS[1], 300000)
 local seq = redis.call('INCR', KEYS[4])
 redis.call('PEXPIRE', KEYS[4], 300000)
 redis.call('ZADD', KEYS[3], now, seq .. ':' .. used)
+local reservation = ''
 if ahead > 0 then
   -- Scored at the lease's end: it holds its place in the window until then.
-  redis.call('ZADD', KEYS[3], now + aheadLease, seq .. ':ahead:' .. ahead)
+  reservation = seq .. ':ahead:' .. ahead
+  redis.call('ZADD', KEYS[3], now + aheadLease, reservation)
 end
 redis.call('PEXPIRE', KEYS[3], paceWindow * 2 + aheadLease)
-redis.call('ZADD', KEYS[8], now, seq .. ':' .. (used + ahead))
+-- Only what was sent: a cut follows what Gmail accepted, not what was held.
+redis.call('ZADD', KEYS[8], now, seq .. ':' .. used)
 redis.call('ZREMRANGEBYSCORE', KEYS[8], '-inf', now - trailingWindow)
 redis.call('PEXPIRE', KEYS[8], trailingWindow * 2)
 redis.call('HINCRBY', KEYS[2], ARGV[5], cost)
+for q = 0, admittedQueued - 1 do
+  redis.call('HINCRBY', KEYS[2], ARGV[queuedAt + 2 * q + 1], tonumber(ARGV[queuedAt + 2 * q]))
+end
 redis.call('HSET', KEYS[2], 'budget:perMinute', math.floor(perMinute))
 local peak = tonumber(redis.call('HGET', KEYS[2], 'peak:second')) or 0
 if inWindow + used > peak then
   redis.call('HSET', KEYS[2], 'peak:second', inWindow + used)
 end
 redis.call('PEXPIRE', KEYS[2], 300000)
-return {0, 0, admittedQueued, ahead}
+return {0, 0, admittedQueued, ahead, reservation}
 `;
 
 const cutBudgetScript = `
@@ -364,7 +395,8 @@ export const gmailQuotaStore: GmailQuotaStore = {
   async take(input) {
     const queued = input.queued ?? [];
     const notes = input.notes ?? [];
-    const result = await redis.eval<string[], number[] | null>(
+    const release = input.release ?? [];
+    const result = await redis.eval<string[], (number | string)[] | null>(
       takeScript,
       [
         input.bucketKey,
@@ -400,9 +432,15 @@ export const gmailQuotaStore: GmailQuotaStore = {
         String(input.ahead?.leaseMs ?? 0),
         String(input.ahead?.share ?? 0),
         String(notes.length),
+        String(release.length),
         ...input.blockers.map((blocker) => String(blocker.deferMs ?? 0)),
-        ...queued.map(String),
+        ...queued.flatMap((entry) => [String(entry.cost), entry.field]),
         ...notes.flatMap((note) => [note.field, String(note.amount)]),
+        ...release.flatMap((entry) => [
+          entry.reservation,
+          String(entry.kept),
+          String(Math.max(0, Math.floor(entry.soonerMs))),
+        ]),
       ],
     );
     const waitMs = Number(result?.[0]);
@@ -412,8 +450,15 @@ export const gmailQuotaStore: GmailQuotaStore = {
         defer: false,
         queued: Number(result?.[2]) || 0,
         ahead: Number(result?.[3]) || 0,
+        reservation: result?.[4] ? String(result[4]) : null,
       };
-    return { waitMs, defer: Number(result?.[1]) === 1, queued: 0, ahead: 0 };
+    return {
+      waitMs,
+      defer: Number(result?.[1]) === 1,
+      queued: 0,
+      ahead: 0,
+      reservation: null,
+    };
   },
   async cutBudget(input) {
     const budget = await redis.eval<string[], number>(

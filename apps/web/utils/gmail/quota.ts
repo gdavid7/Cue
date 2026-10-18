@@ -281,11 +281,19 @@ const unattributedCallers = new Set<string>();
 
 type LaneWaiter = {
   cost: number;
+  field: string;
   outcome: "admitted" | "unavailable" | null;
   error?: unknown;
 };
 type Lane = {
-  leases: { units: number; from: number; until: number }[];
+  leases: {
+    units: number;
+    total: number;
+    reservation: string | null;
+    from: number;
+    until: number;
+    lastSpentAt: number | null;
+  }[];
   /** Units this instance admitted on the lane recently, to size a lease. */
   recent: { at: number; units: number }[];
   inflight: Promise<void> | null;
@@ -299,6 +307,12 @@ type Lane = {
 };
 const lanes = new Map<string, Lane>();
 const pendingNotes = new Map<string, Map<string, Map<string, number>>>();
+// Reservations this instance gave up early, cut down with the account's next
+// round trip; one that no request carries in time simply ages out.
+const pendingReleases = new Map<
+  string,
+  { reservation: string; kept: number; soonerMs: number; until: number }[]
+>();
 let pendingNoteFields = 0;
 let pendingNotesSince: number | null = null;
 const gateStats = {
@@ -528,6 +542,9 @@ export async function admitGmailCall({
     priority === "interactive" && cost >= INTERACTIVE_DEMAND_MIN_UNITS
       ? null
       : laneFor(emailAccountId, priority);
+  // What sync and background hold here would only delay it; their unspent
+  // reservations are cut with its own round trip.
+  if (!lane) forgetLanes(emailAccountId, ["sync", "background"]);
   const waitKey = context.caller === ENGINE_SCAN_CALLER ? "scan" : "";
   const usageField = `${priority}:${context.caller}`;
   const admittedHere = () => {
@@ -548,12 +565,14 @@ export async function admitGmailCall({
         return admittedHere();
       }
       if (lane.inflight) {
-        const waiter: LaneWaiter = { cost, outcome: null };
+        const waiter: LaneWaiter = { cost, field: usageField, outcome: null };
         lane.queue.push(waiter);
         await lane.inflight;
         if (waiter.outcome === "admitted") {
+          // The store recorded its units with the request it rode on.
           gateStats.batchedAdmissions += 1;
-          return admittedHere();
+          noteLaneUnits(lane, cost);
+          return admitted();
         }
         if (waiter.outcome === "unavailable") {
           noteStoreUnavailable(emailAccountId, context.caller, waiter.error);
@@ -614,7 +633,9 @@ export async function admitGmailCall({
           ? await takeForLane(lane, request, {
               emailAccountId,
               waitKey,
-              aheadCap: PACE_CAP[priority],
+              // A person's large request needs an empty second, which an
+              // interactive lane's own unspent reservation would hold up.
+              aheadCap: priority === "interactive" ? 0 : PACE_CAP[priority],
             })
           : await takeFromStore(request, emailAccountId);
       } catch (error) {
@@ -662,12 +683,6 @@ export async function noteGmailQuotaRefusal(
     return;
   forgetLanes(ticket.emailAccountId, GMAIL_QUOTA_PRIORITIES);
   const keys = accountKeys(ticket.emailAccountId);
-  queueNote(
-    ticket.emailAccountId,
-    keys.usage(minuteOf(Date.now())),
-    `refused:${ticket.caller}`,
-    1,
-  );
   // A volume refusal says the account sent too much this minute; anything
   // else (too many requests at once, a daily sending limit, a retry time
   // far off) says nothing about the minute, so it neither cuts the budget
@@ -679,6 +694,13 @@ export async function noteGmailQuotaRefusal(
       key: keys.backgroundPause,
       ms: Math.max(BACKGROUND_PAUSE_MIN_MS, retryAfterMs),
     }),
+    gmailQuotaStore.note([
+      {
+        usageKey: keys.usage(minuteOf(Date.now())),
+        field: `refused:${ticket.caller}`,
+        amount: 1,
+      },
+    ]),
   ];
   if (ticket.priority !== "background")
     writes.push(
@@ -851,7 +873,8 @@ export async function logGmailQuotaUsage() {
       }
     }),
   );
-  if (pendingNotesDue()) await flushNotes();
+  // A request's end may be the instance's last moment.
+  if (pendingNoteFields > 0) await flushNotes();
 }
 
 /**
@@ -862,6 +885,7 @@ export async function logGmailQuotaUsage() {
 export function resetGmailQuotaInstanceState() {
   lanes.clear();
   pendingNotes.clear();
+  pendingReleases.clear();
   pendingNoteFields = 0;
   pendingNotesSince = null;
 }
@@ -1125,16 +1149,28 @@ async function takeFromStore(
 ) {
   gateStats.storeTakes += 1;
   const notes = takeNotes(emailAccountId, request.usageKey);
+  const now = Date.now();
+  const releases = (pendingReleases.get(emailAccountId) ?? []).filter(
+    (entry) => entry.until > now,
+  );
+  pendingReleases.delete(emailAccountId);
   try {
     return await withinStoreTimeout(
       gmailQuotaStore.take({
         ...request,
         ...extra,
         notes: notes.map(({ field, amount }) => ({ field, amount })),
+        release: releases.map(({ reservation, kept, soonerMs }) => ({
+          reservation,
+          kept,
+          soonerMs,
+        })),
       }),
     );
   } catch (error) {
     requeueUnlessTimedOut(emailAccountId, notes, error);
+    if (!(error instanceof StoreTimeoutError) && releases.length > 0)
+      pendingReleases.set(emailAccountId, releases);
     throw error;
   }
 }
@@ -1175,14 +1211,13 @@ async function takeForLane(
     // A lane that has had to wait is using all it may; units reserved ahead
     // would only hold window time it could have spent.
     const expected =
-      lane.waitedAt !== null &&
-      lane.waitedAt <= Date.now() &&
-      Date.now() - lane.waitedAt < 2 * LEASE_MS
+      aheadCap === 0 ||
+      (lane.waitedAt !== null && Date.now() - lane.waitedAt < 2 * LEASE_MS)
         ? 0
         : recentLaneUnits(lane);
     const sentAt = Date.now();
     const result = await takeFromStore(request, emailAccountId, {
-      queued: queued.map((waiter) => waiter.cost),
+      queued: queued.map(({ cost, field }) => ({ cost, field })),
       ahead:
         expected > 0
           ? {
@@ -1201,8 +1236,11 @@ async function takeForLane(
     if (result.ahead > 0) {
       lane.leases.push({
         units: result.ahead,
+        total: result.ahead,
+        reservation: result.reservation,
         from: sentAt,
         until: sentAt + LEASE_MS,
+        lastSpentAt: null,
       });
       gateStats.leasedUnits += result.ahead;
     }
@@ -1241,10 +1279,12 @@ function laneFor(emailAccountId: string, priority: GmailQuotaPriority) {
       waits: new Map(),
     };
     lanes.set(key, lane);
-    if (lanes.size > 3000) {
-      const oldest = [...lanes].find(([, entry]) => !entry.inflight);
-      if (oldest) lanes.delete(oldest[0]);
-    }
+    if (lanes.size > 3000)
+      for (const [oldestKey, oldest] of lanes)
+        if (!oldest.inflight) {
+          lanes.delete(oldestKey);
+          break;
+        }
   }
   return lane;
 }
@@ -1263,6 +1303,7 @@ function spendLease(lane: Lane, cost: number) {
   for (const lease of lane.leases) {
     const paid = Math.min(lease.units, owed);
     lease.units -= paid;
+    if (paid > 0) lease.lastSpentAt = now;
     owed -= paid;
     if (owed === 0) break;
   }
@@ -1309,7 +1350,22 @@ function forgetLanes(
   for (const priority of priorities) {
     const lane = lanes.get(`${emailAccountId}:${priority}`);
     if (!lane) continue;
-    for (const lease of lane.leases) gateStats.unspentLeaseUnits += lease.units;
+    const now = Date.now();
+    for (const lease of lane.leases) {
+      gateStats.unspentLeaseUnits += lease.units;
+      if (!lease.reservation || lease.units === 0 || lease.until <= now)
+        continue;
+      const releases = pendingReleases.get(emailAccountId) ?? [];
+      // What was spent left at the latest when it was last spent from.
+      releases.push({
+        reservation: lease.reservation,
+        kept: lease.total - lease.units,
+        soonerMs: lease.until - (lease.lastSpentAt ?? lease.until),
+        until: lease.until + PACE_WINDOW_MS,
+      });
+      pendingReleases.set(emailAccountId, releases);
+      trimOldest(pendingReleases);
+    }
     lane.leases = [];
     lane.waits.clear();
   }

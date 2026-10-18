@@ -1378,6 +1378,152 @@ describe("Gmail quota gate", () => {
       await expect(read()).rejects.toBeInstanceOf(GmailCallDeferredError);
     });
 
+    it("doesn't hold a person's large request behind what lanes reserved ahead", async () => {
+      let lastRead = 0;
+      let stop = false;
+      const stream = (priority: "sync" | "interactive") =>
+        (async () => {
+          while (!stop) {
+            await runWithGmailQuota(
+              { caller: `test/${priority}`, priority },
+              () =>
+                meterGmailCall(
+                  { emailAccountId: "account-large-after-lease", cost: 5 },
+                  async () => {
+                    lastRead = Date.now();
+                  },
+                ),
+            );
+            await sleep(150);
+          }
+        })();
+      const streams = [stream("sync"), stream("interactive")];
+      await vi.advanceTimersByTimeAsync(3000);
+      stop = true;
+      await vi.advanceTimersByTimeAsync(150);
+      await Promise.all(streams);
+
+      // A first inbox page needs a second to itself.
+      let pageAt: number | null = null;
+      interactive(
+        "account-large-after-lease",
+        async () => {
+          pageAt = Date.now();
+        },
+        505,
+      );
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(pageAt).not.toBeNull();
+      // It waits only for what was really sent to age out of the second.
+      expect(pageAt! - lastRead).toBeLessThanOrEqual(1050);
+    });
+
+    it("writes what it counted when a request ends, so a short-lived instance loses nothing", async () => {
+      vi.setSystemTime(new Date("2026-10-14T17:00:10Z"));
+      const info = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      await setGmailInitialSync("account-short-lived", true);
+      const insight = () =>
+        expect(
+          runWithGmailQuota(
+            { caller: "user/inbox-insights", priority: "background" },
+            () =>
+              meterGmailCall(
+                { emailAccountId: "account-short-lived", cost: 20 },
+                async () => "insight",
+              ),
+          ),
+        ).rejects.toBeInstanceOf(GmailCallDeferredError);
+      // Two requests end within the minute; the instance ends with the second.
+      await insight();
+      await logGmailQuotaUsage();
+      await vi.advanceTimersByTimeAsync(600);
+      await insight();
+      await logGmailQuotaUsage();
+      resetGmailQuotaInstanceState();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await logGmailQuotaUsage();
+      const summary = info.mock.calls
+        .map(([line]) => String(line))
+        .find(
+          (line) =>
+            line.includes("Gmail quota usage") &&
+            line.includes("account-short-lived"),
+        );
+      expect(JSON.parse(summary!.slice(summary!.indexOf("{")))).toMatchObject({
+        deferredByCaller: [{ caller: "user/inbox-insights", calls: 2 }],
+      });
+    });
+
+    it("lets every caller waiting on a shared round trip through when the store refuses it", async () => {
+      vi.setSystemTime(new Date("2026-10-14T18:00:10Z"));
+      const info = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const take = vi
+        .spyOn(gmailQuotaStore, "take")
+        .mockRejectedValueOnce(new Error("Redis unavailable"));
+      const reads = Array.from({ length: 3 }, () =>
+        interactive("account-shared-failure", async () => "message"),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(Promise.all(reads)).resolves.toEqual([
+        "message",
+        "message",
+        "message",
+      ]);
+      expect(take).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await logGmailQuotaUsage();
+      const summary = info.mock.calls
+        .map(([line]) => String(line))
+        .find(
+          (line) =>
+            line.includes("Gmail quota usage") &&
+            line.includes("account-shared-failure"),
+        );
+      expect(JSON.parse(summary!.slice(summary!.indexOf("{")))).toMatchObject({
+        storeUnavailableCalls: 3,
+      });
+    });
+
+    it("doesn't count a note twice when the round trip carrying it times out", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      await setGmailInitialSync("account-note-timeout", true);
+      const insight = () =>
+        runWithGmailQuota(
+          { caller: "user/inbox-insights", priority: "background" },
+          () =>
+            meterGmailCall(
+              { emailAccountId: "account-note-timeout", cost: 20 },
+              async () => "insight",
+            ),
+        );
+      await expect(insight()).rejects.toBeInstanceOf(GmailCallDeferredError);
+      // The next round trip carries the deferral's note, and never answers:
+      // a slow store may still write it, so it is not queued again.
+      const take = vi.spyOn(gmailQuotaStore, "take");
+      take.mockReturnValueOnce(new Promise(() => undefined));
+      await vi.advanceTimersByTimeAsync(600);
+      const call = insight();
+      await vi.advanceTimersByTimeAsync(300);
+      await call;
+      expect(take.mock.calls[0]?.[0].notes).toEqual([
+        { field: "deferred:user/inbox-insights", amount: 1 },
+      ]);
+
+      const claim = vi.spyOn(gmailQuotaStore, "claimUsages");
+      const note = vi.spyOn(gmailQuotaStore, "note");
+      await logGmailQuotaUsage();
+      const written = [
+        ...claim.mock.calls.flatMap(([, notes]) => notes ?? []),
+        ...note.mock.calls.flatMap(([notes]) => notes),
+      ];
+      expect(written.map(({ field }) => field)).not.toContain(
+        "deferred:user/inbox-insights",
+      );
+    });
+
     it("records deferrals without a store write for each one", async () => {
       vi.setSystemTime(new Date("2026-10-14T16:00:10Z"));
       const info = vi.spyOn(console, "log").mockImplementation(() => undefined);
