@@ -240,7 +240,6 @@ export function ThreadActionsMenu({
                 <MailXIcon className="mr-2 size-4" />
               </MenuItemIcon>
               {unsubscribeLabel}
-              <MenuShortcut id="unsubscribe" />
             </DropdownMenuItem>
           ) : null}
 

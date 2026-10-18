@@ -77,7 +77,7 @@ test("opens a complete conversation and updates its read state", async ({
   await expect(moveDialog).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(moveDialog).toBeHidden();
-  await page.keyboard.press("KeyU");
+  await page.keyboard.press("Shift+KeyU");
   await expect(
     page.getByText("Marked as unread", { exact: true }),
   ).toBeVisible();

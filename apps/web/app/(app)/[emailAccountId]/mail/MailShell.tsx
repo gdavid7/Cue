@@ -1133,6 +1133,18 @@ export function MailShell() {
     },
   );
 
+  const archiveAndOpenPrevious = useStableCallback(async () => {
+    // Rows above the archived one keep their place, so this stays valid.
+    const previousRow = threads[clampedIndex - 1];
+    const wasReaderOpen = Boolean(openThreadId);
+    await archiveTargets();
+    if (!previousRow) return;
+    setFocusedIndex(clampedIndex - 1);
+    if (wasReaderOpen || layout === "split") {
+      setOpenThread(getListThreadSelection(previousRow, emailAccountId));
+    }
+  });
+
   const openAt = useStableCallback((index: number) => {
     const thread = threads[index];
     if (!thread) return;
@@ -1261,6 +1273,14 @@ export function MailShell() {
     () => runOn((ids) => setImportantState(ids, !allImportant), false),
     [allImportant, runOn, setImportantState],
   );
+  const markImportantTargets = useCallback(
+    () => runOn((ids) => setImportantState(ids, true), false),
+    [runOn, setImportantState],
+  );
+  const markNotImportantTargets = useCallback(
+    () => runOn((ids) => setImportantState(ids, false), false),
+    [runOn, setImportantState],
+  );
   const trashTargets = useCallback(
     () => runOn(trash, true, true),
     [runOn, trash],
@@ -1312,6 +1332,9 @@ export function MailShell() {
     (isGoogleProvider(labelAccount?.account.provider) ||
       isMicrosoftProvider(labelAccount?.account.provider)) &&
     !mixedLabelAccounts;
+  // Importance is a Gmail concept; other providers have no equivalent to set.
+  const canMarkImportant =
+    isGoogleProvider(labelAccount?.account.provider) && !mixedLabelAccounts;
   const openLabelPicker = useStableCallback(() => {
     if (canLabel)
       setLabelPicker({ mode: "label", targets: currentLabelTargets });
@@ -1508,10 +1531,6 @@ export function MailShell() {
   const handlers: ShortcutHandlers = (() => {
     if (sidePanelThreadId || labelPicker) return {};
     return {
-      unsubscribe:
-        !isMailOverlayOpen && !senderCommands?.isUnsubscribeDisabled
-          ? senderCommands?.unsubscribe
-          : undefined,
       toggleAutoArchive:
         !isMailOverlayOpen && !senderCommands?.isAutoArchiveDisabled
           ? senderCommands?.toggleAutoArchive
@@ -1526,6 +1545,8 @@ export function MailShell() {
       },
       open: openThreadId
         ? (event) => {
+            // `o` opens; only Enter replies from an open conversation.
+            if (event?.key !== "Enter") return;
             if (
               event?.target instanceof Element &&
               event.target.closest("[data-thread-message-id]")
@@ -1535,6 +1556,7 @@ export function MailShell() {
           }
         : () => openAt(clampedIndex),
       backToList: getBackToList(),
+      returnToList: getBackToList(),
       nextSplit: () => {
         const index = splits.findIndex(
           (split) => split.id === displayedActiveSplitId,
@@ -1558,6 +1580,19 @@ export function MailShell() {
       switchAllAccounts: selectAllAccounts,
       select: () => selection.toggle(clampedIndex),
       selectAll: selection.selectAll,
+      selectNone: selection.clear,
+      selectRead: () =>
+        selection.selectOnly(
+          threads
+            .filter((thread) => !isThreadUnread(thread.messages))
+            .map(getListThreadKey),
+        ),
+      selectUnread: () =>
+        selection.selectOnly(
+          threads
+            .filter((thread) => isThreadUnread(thread.messages))
+            .map(getListThreadKey),
+        ),
       // The cursor travels with the extension; without that, every repeat
       // re-extends from the same row and the range never grows.
       extendSelectionDown: () => extendSelection(1),
@@ -1565,6 +1600,10 @@ export function MailShell() {
       label: canLabel ? openLabelPicker : undefined,
       move: canLabel ? openMovePicker : undefined,
       archive: targetsArchived ? undefined : archiveTargets,
+      archiveAndNext: targetsArchived ? undefined : archiveTargets,
+      archiveAndPrevious: targetsArchived ? undefined : archiveAndOpenPrevious,
+      markImportant: canMarkImportant ? markImportantTargets : undefined,
+      markNotImportant: canMarkImportant ? markNotImportantTargets : undefined,
       star: starTargets,
       markSpam: markSpamTargets,
       markUnread: markUnreadTargets,

@@ -9,7 +9,12 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Suspense, startTransition } from "react";
-import type { ShortcutHandlers, ShortcutScope } from "./registry";
+import {
+  SEQUENCE_TIMEOUT_MS,
+  SHORTCUTS,
+  type ShortcutHandlers,
+  type ShortcutScope,
+} from "./registry";
 import { ShortcutsProvider } from "./ShortcutsProvider";
 import { useShortcuts } from "./useShortcuts";
 
@@ -306,7 +311,7 @@ describe("useShortcuts", () => {
 
     expect(backToList).toHaveBeenCalledOnce();
 
-    press({ key: "u", code: "KeyU" });
+    press({ key: "U", code: "KeyU", shiftKey: true });
 
     expect(backToList).toHaveBeenCalledOnce();
     expect(markUnread).toHaveBeenCalledOnce();
@@ -397,6 +402,190 @@ describe("useShortcuts", () => {
     press({ key: "I", code: "KeyI", shiftKey: true });
 
     expect(markRead).toHaveBeenCalledOnce();
+  });
+
+  it("marks as unread with shift+U and never unsubscribes", () => {
+    const markUnread = vi.fn();
+    const returnToList = vi.fn();
+    const handlers = { markUnread, returnToList };
+    renderShortcuts(handlers);
+
+    press({ key: "U", code: "KeyU", shiftKey: true });
+
+    expect(markUnread).toHaveBeenCalledOnce();
+    expect(returnToList).not.toHaveBeenCalled();
+    expect(SHORTCUTS.map((entry) => entry.id)).not.toContain("unsubscribe");
+  });
+
+  it("returns to the list with a plain U, like Gmail", () => {
+    const markUnread = vi.fn();
+    const returnToList = vi.fn();
+    renderShortcuts({ markUnread, returnToList });
+
+    press({ key: "u", code: "KeyU" });
+
+    expect(returnToList).toHaveBeenCalledOnce();
+    expect(markUnread).not.toHaveBeenCalled();
+  });
+
+  it("opens with O as well as Enter", () => {
+    const open = vi.fn();
+    renderShortcuts({ open });
+
+    press({ key: "o", code: "KeyO" });
+    press({ key: "Enter", code: "Enter" });
+
+    expect(open).toHaveBeenCalledTimes(2);
+  });
+
+  it("snoozes with B as well as H", () => {
+    const snooze = vi.fn();
+    renderShortcuts({ snooze });
+
+    press({ key: "b", code: "KeyB" });
+    press({ key: "h", code: "KeyH" });
+
+    expect(snooze).toHaveBeenCalledTimes(2);
+  });
+
+  it("runs the star-prefixed selection sequences", () => {
+    const handlers = {
+      selectAll: vi.fn(),
+      selectNone: vi.fn(),
+      selectRead: vi.fn(),
+      selectUnread: vi.fn(),
+      reply: vi.fn(),
+      returnToList: vi.fn(),
+    };
+    renderShortcuts(handlers);
+
+    for (const [key, code] of [
+      ["a", "KeyA"],
+      ["n", "KeyN"],
+      ["r", "KeyR"],
+      ["u", "KeyU"],
+    ]) {
+      press({ key: "*", code: "Digit8", shiftKey: true });
+      press({ key, code });
+    }
+
+    expect(handlers.selectAll).toHaveBeenCalledOnce();
+    expect(handlers.selectNone).toHaveBeenCalledOnce();
+    expect(handlers.selectRead).toHaveBeenCalledOnce();
+    expect(handlers.selectUnread).toHaveBeenCalledOnce();
+    expect(handlers.reply).not.toHaveBeenCalled();
+    expect(handlers.returnToList).not.toHaveBeenCalled();
+  });
+
+  it("lets a sequence lapse after the timeout", () => {
+    vi.useFakeTimers();
+    try {
+      const goToInbox = vi.fn();
+      const markImportant = vi.fn();
+      renderShortcuts({ goToInbox, selectRead: vi.fn() });
+
+      press({ key: "g", code: "KeyG" });
+      vi.advanceTimersByTime(SEQUENCE_TIMEOUT_MS + 100);
+      press({ key: "i", code: "KeyI" });
+
+      expect(goToInbox).not.toHaveBeenCalled();
+      expect(markImportant).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks importance with + and - and archives with brackets", () => {
+    const handlers = {
+      markImportant: vi.fn(),
+      markNotImportant: vi.fn(),
+      archiveAndPrevious: vi.fn(),
+      archiveAndNext: vi.fn(),
+    };
+    renderShortcuts(handlers);
+
+    press({ key: "=", code: "Equal" });
+    press({ key: "-", code: "Minus" });
+    press({ key: "[", code: "BracketLeft" });
+    press({ key: "]", code: "BracketRight" });
+
+    expect(handlers.markImportant).toHaveBeenCalledOnce();
+    expect(handlers.markNotImportant).toHaveBeenCalledOnce();
+    expect(handlers.archiveAndPrevious).toHaveBeenCalledOnce();
+    expect(handlers.archiveAndNext).toHaveBeenCalledOnce();
+  });
+
+  it("navigates and expands messages with n, p, ; and :", () => {
+    const handlers = {
+      nextMessage: vi.fn(),
+      previousMessage: vi.fn(),
+      expandAllMessages: vi.fn(),
+      collapseAllMessages: vi.fn(),
+    };
+    renderShortcuts(handlers);
+
+    press({ key: "n", code: "KeyN" });
+    press({ key: "p", code: "KeyP" });
+    press({ key: ";", code: "Semicolon" });
+    press({ key: ":", code: "Semicolon", shiftKey: true });
+
+    expect(handlers.nextMessage).toHaveBeenCalledOnce();
+    expect(handlers.previousMessage).toHaveBeenCalledOnce();
+    expect(handlers.expandAllMessages).toHaveBeenCalledOnce();
+    expect(handlers.collapseAllMessages).toHaveBeenCalledOnce();
+  });
+
+  it("ignores every new single-key shortcut while typing", () => {
+    const handlers = {
+      markUnread: vi.fn(),
+      returnToList: vi.fn(),
+      open: vi.fn(),
+      snooze: vi.fn(),
+      nextMessage: vi.fn(),
+      archiveAndNext: vi.fn(),
+      markImportant: vi.fn(),
+      selectAll: vi.fn(),
+      selectNone: vi.fn(),
+    };
+    renderShortcuts(handlers);
+    const field = screen.getByRole("textbox");
+
+    for (const init of [
+      { key: "U", code: "KeyU", shiftKey: true },
+      { key: "u", code: "KeyU" },
+      { key: "o", code: "KeyO" },
+      { key: "b", code: "KeyB" },
+      { key: "n", code: "KeyN" },
+      { key: "]", code: "BracketRight" },
+      { key: "=", code: "Equal" },
+      { key: "*", code: "Digit8", shiftKey: true },
+      { key: "a", code: "KeyA" },
+      { key: "n", code: "KeyN" },
+    ]) {
+      const event = press(init, field);
+      expect(event.defaultPrevented).toBe(false);
+    }
+
+    for (const handler of Object.values(handlers)) {
+      expect(handler).not.toHaveBeenCalled();
+    }
+  });
+
+  it("runs the compose combos while typing", () => {
+    const saveDraft = vi.fn();
+    const addCc = vi.fn();
+    const addBcc = vi.fn();
+    renderShortcuts({ saveDraft, addCc, addBcc });
+    const field = screen.getByRole("textbox");
+
+    const save = press({ key: "s", code: "KeyS", ctrlKey: true }, field);
+    press({ key: "C", code: "KeyC", ctrlKey: true, shiftKey: true }, field);
+    press({ key: "B", code: "KeyB", ctrlKey: true, shiftKey: true }, field);
+
+    expect(saveDraft).toHaveBeenCalledOnce();
+    expect(addCc).toHaveBeenCalledOnce();
+    expect(addBcc).toHaveBeenCalledOnce();
+    expect(save.defaultPrevented).toBe(true);
   });
 
   it("lets an abandoned sequence prefix through to the next shortcut", () => {

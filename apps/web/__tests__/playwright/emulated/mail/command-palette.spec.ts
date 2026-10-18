@@ -146,7 +146,9 @@ test("Command K acts on highlighted and selected conversations", async ({
   await expect(
     palette.getByRole("option", { name: "Mark as read" }),
   ).toBeVisible();
-  await expect(palette.getByRole("option", { name: "Snooze H" })).toBeVisible();
+  await expect(
+    palette.getByRole("option", { name: "Snooze H / B" }),
+  ).toBeVisible();
   await expect(palette.getByRole("option", { name: "Label L" })).toBeVisible();
   await expect(palette.getByRole("option", { name: "Move V" })).toBeVisible();
   await expect(
@@ -208,7 +210,9 @@ test("Command K acts on highlighted and selected conversations", async ({
     palette.getByPlaceholder("When should it return? Try Friday at 3pm"),
   ).toBeFocused();
   await page.keyboard.press("Escape");
-  await expect(palette.getByRole("option", { name: "Snooze H" })).toBeVisible();
+  await expect(
+    palette.getByRole("option", { name: "Snooze H / B" }),
+  ).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(palette).toBeHidden();
 

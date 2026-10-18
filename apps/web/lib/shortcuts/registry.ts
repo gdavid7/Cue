@@ -81,13 +81,6 @@ export type ShortcutEntry = {
 
 const SHORTCUT_DEFINITIONS = [
   {
-    id: "unsubscribe",
-    keys: ["shift+u"],
-    scope: "mail",
-    group: "Triage",
-    label: "Unsubscribe or block sender",
-  },
-  {
     id: "toggleAutoArchive",
     keys: ["shift+e"],
     scope: "mail",
@@ -110,7 +103,7 @@ const SHORTCUT_DEFINITIONS = [
   },
   {
     id: "open",
-    keys: ["enter"],
+    keys: ["enter", "o"],
     scope: "mail",
     group: "Navigate",
     label: "Open message",
@@ -122,6 +115,44 @@ const SHORTCUT_DEFINITIONS = [
     group: "Navigate",
     label: "Back to the list",
     allowWhileTyping: true,
+  },
+  {
+    // Gmail's `u`. Escape also leaves a selection or search, which Gmail's
+    // `u` does too, so both run the same handler.
+    id: "returnToList",
+    keys: ["u"],
+    scope: "mail",
+    group: "Navigate",
+    label: "Back to the list",
+  },
+  {
+    id: "nextMessage",
+    keys: ["n"],
+    scope: "mail",
+    group: "Navigate",
+    label: "Next message in the conversation",
+  },
+  {
+    id: "previousMessage",
+    keys: ["p"],
+    scope: "mail",
+    group: "Navigate",
+    label: "Previous message in the conversation",
+  },
+  {
+    id: "expandAllMessages",
+    keys: [";"],
+    scope: "mail",
+    group: "Navigate",
+    label: "Expand all messages",
+  },
+  {
+    id: "collapseAllMessages",
+    keys: [":", "shift+:"],
+    display: [":"],
+    scope: "mail",
+    group: "Navigate",
+    label: "Collapse all messages",
   },
   {
     id: "nextSplit",
@@ -227,10 +258,36 @@ const SHORTCUT_DEFINITIONS = [
   },
   {
     id: "selectAll",
-    keys: ["mod+a"],
+    keys: ["mod+a", "shift+*>a", "*>a"],
+    display: ["mod+a", "*>a"],
     scope: "mail",
     group: "Triage",
     label: "Select all",
+  },
+  {
+    // `*` sits behind shift on US layouts and in front of it on others.
+    id: "selectNone",
+    keys: ["shift+*>n", "*>n"],
+    display: ["*>n"],
+    scope: "mail",
+    group: "Triage",
+    label: "Select none",
+  },
+  {
+    id: "selectRead",
+    keys: ["shift+*>r", "*>r"],
+    display: ["*>r"],
+    scope: "mail",
+    group: "Triage",
+    label: "Select read",
+  },
+  {
+    id: "selectUnread",
+    keys: ["shift+*>u", "*>u"],
+    display: ["*>u"],
+    scope: "mail",
+    group: "Triage",
+    label: "Select unread",
   },
   {
     id: "extendSelectionDown",
@@ -288,7 +345,7 @@ const SHORTCUT_DEFINITIONS = [
   },
   {
     id: "markUnread",
-    keys: ["u"],
+    keys: ["shift+u"],
     scope: "mail",
     group: "Triage",
     label: "Mark as unread",
@@ -311,10 +368,39 @@ const SHORTCUT_DEFINITIONS = [
   },
   {
     id: "snooze",
-    keys: ["h"],
+    keys: ["h", "b"],
     scope: "mail",
     group: "Triage",
     label: "Snooze",
+  },
+  {
+    id: "archiveAndPrevious",
+    keys: ["["],
+    scope: "mail",
+    group: "Triage",
+    label: "Archive and go to the previous conversation",
+  },
+  {
+    id: "archiveAndNext",
+    keys: ["]"],
+    scope: "mail",
+    group: "Triage",
+    label: "Archive and go to the next conversation",
+  },
+  {
+    // `+` can't be written as a hotkey (it is the combo separator).
+    id: "markImportant",
+    keys: ["="],
+    scope: "mail",
+    group: "Triage",
+    label: "Mark as important",
+  },
+  {
+    id: "markNotImportant",
+    keys: ["-"],
+    scope: "mail",
+    group: "Triage",
+    label: "Mark as not important",
   },
   {
     // `#` sits behind shift on US layouts and in front of it on others.
@@ -437,6 +523,33 @@ const SHORTCUT_DEFINITIONS = [
     scope: "mail",
     group: "Compose",
     label: "Send and mark done",
+    allowWhileTyping: true,
+    capture: true,
+  },
+  {
+    id: "saveDraft",
+    keys: ["mod+s"],
+    scope: "mail",
+    group: "Compose",
+    label: "Save draft",
+    allowWhileTyping: true,
+    capture: true,
+  },
+  {
+    id: "addCc",
+    keys: ["mod+shift+c"],
+    scope: "mail",
+    group: "Compose",
+    label: "Add Cc recipients",
+    allowWhileTyping: true,
+    capture: true,
+  },
+  {
+    id: "addBcc",
+    keys: ["mod+shift+b"],
+    scope: "mail",
+    group: "Compose",
+    label: "Add Bcc recipients",
     allowWhileTyping: true,
     capture: true,
   },

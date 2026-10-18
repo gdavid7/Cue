@@ -77,7 +77,7 @@ describe("buildMailCommandPalette", () => {
     const snooze = commands.find((command) => command.id === "mail-snooze");
     expect(snooze).toMatchObject({
       label: "Snooze 3 conversations",
-      shortcut: "H",
+      shortcut: "H / B",
       closeOnSelect: false,
     });
     snooze?.action();
@@ -141,7 +141,7 @@ describe("buildMailCommandPalette", () => {
       shortcut: "V",
     });
     expect(commands.find(({ id }) => id === "mail-mark-unread")).toMatchObject({
-      shortcut: "U",
+      shortcut: "⇧U",
     });
     expect(commands.find(({ id }) => id === "mail-unsubscribe")).toMatchObject({
       disabled: true,
