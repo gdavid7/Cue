@@ -69,7 +69,7 @@ import { isGoogleProvider } from "@/utils/email/provider-types";
 
 export const maxDuration = 300;
 // Increment when chat prompts, tools, or routing change so run quality remains attributable.
-export const ASSISTANT_CHAT_PIPELINE_VERSION = 21;
+export const ASSISTANT_CHAT_PIPELINE_VERSION = 22;
 // Someone is watching the reply, so past these the model stops looking and
 // answers from what it found rather than searching on for minutes.
 const ASSISTANT_CHAT_TOOL_BUDGET_MS = {

@@ -29,14 +29,9 @@ const conditionalOperatorSchema = z
 const optionalAiInstructionsSchema = z
   .string()
   .nullish()
-  .transform((v) => (v?.trim() ? v : null))
-  .describe(AI_INSTRUCTIONS_PROMPT_DESCRIPTION);
+  .transform((v) => (v?.trim() ? v : null));
 
-const requiredAiInstructionsSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .describe(AI_INSTRUCTIONS_PROMPT_DESCRIPTION);
+const requiredAiInstructionsSchema = z.string().trim().min(1);
 
 const optionalStaticFromSchema = z
   .string()
@@ -44,8 +39,7 @@ const optionalStaticFromSchema = z
   .transform((v) => (v?.trim() ? v : null))
   .refine((value) => !isInvalidStaticFromValue(value), {
     message: INVALID_STATIC_FROM_MESSAGE,
-  })
-  .describe(STATIC_FROM_CONDITION_DESCRIPTION);
+  });
 
 const requiredStaticFromSchema = z
   .string()
@@ -53,34 +47,16 @@ const requiredStaticFromSchema = z
   .min(1)
   .refine((value) => !isInvalidStaticFromValue(value), {
     message: INVALID_STATIC_FROM_MESSAGE,
-  })
-  .describe(STATIC_FROM_CONDITION_DESCRIPTION);
+  });
 
-const optionalStaticToSchema = z
-  .string()
-  .nullish()
-  .describe("The to email address to match");
+const STATIC_TO_DESCRIPTION = "The to email address to match";
+const STATIC_SUBJECT_DESCRIPTION =
+  "Subject-line text to match. Use this when the user explicitly asks to match the email subject. If the user describes email content, topic, meaning, or general keyword matching without naming the subject line, use aiInstructions instead.";
 
-const requiredStaticToSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .describe("The to email address to match");
-
-const optionalStaticSubjectSchema = z
-  .string()
-  .nullish()
-  .describe(
-    "Subject-line text to match. Use this when the user explicitly asks to match the email subject. If the user describes email content, topic, meaning, or general keyword matching without naming the subject line, use aiInstructions instead.",
-  );
-
-const requiredStaticSubjectSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .describe(
-    "Subject-line text to match. Use this when the user explicitly asks to match the email subject. If the user describes email content, topic, meaning, or general keyword matching without naming the subject line, use aiInstructions instead.",
-  );
+const optionalStaticToSchema = z.string().nullish();
+const requiredStaticToSchema = z.string().trim().min(1);
+const optionalStaticSubjectSchema = z.string().nullish();
+const requiredStaticSubjectSchema = z.string().trim().min(1);
 
 const optionalStaticConditionSchema = z
   .object({
@@ -88,10 +64,7 @@ const optionalStaticConditionSchema = z
     to: optionalStaticToSchema,
     subject: optionalStaticSubjectSchema,
   })
-  .nullish()
-  .describe(
-    "The static conditions to match. If multiple static conditions are specified, the rule will match if ALL of the conditions match (AND operation)",
-  );
+  .nullish();
 
 const semanticConditionSchema = z.object({
   conditionalOperator: conditionalOperatorSchema,
@@ -129,16 +102,39 @@ const staticSubjectConditionSchema = z.object({
   }),
 });
 
-const conditionSchema = z
-  .union([
+// The model sees one flat condition object, with each field described once.
+// The union of valid shapes, which would otherwise repeat every description
+// in each variant of the tool schema, still validates the input.
+const modelFacingConditionSchema = z
+  .object({
+    conditionalOperator: conditionalOperatorSchema,
+    aiInstructions: z
+      .string()
+      .nullish()
+      .describe(AI_INSTRUCTIONS_PROMPT_DESCRIPTION),
+    static: z
+      .object({
+        from: z.string().nullish().describe(STATIC_FROM_CONDITION_DESCRIPTION),
+        to: z.string().nullish().describe(STATIC_TO_DESCRIPTION),
+        subject: z.string().nullish().describe(STATIC_SUBJECT_DESCRIPTION),
+      })
+      .nullish()
+      .describe(
+        "The static conditions to match. If multiple static conditions are specified, the rule will match if ALL of the conditions match (AND operation)",
+      ),
+  })
+  .describe(
+    "The conditions to match. Include at least one semantic condition in aiInstructions or one static condition in from, to, or subject.",
+  );
+
+const conditionSchema = modelFacingConditionSchema.pipe(
+  z.union([
     semanticConditionSchema,
     staticFromConditionSchema,
     staticToConditionSchema,
     staticSubjectConditionSchema,
-  ])
-  .describe(
-    "The conditions to match. Include at least one semantic condition in aiInstructions or one static condition in from, to, or subject.",
-  );
+  ]),
+);
 
 export function getAvailableActions(provider: string) {
   const availableActions = getAvailableActionsForRuleEditor({
@@ -176,6 +172,10 @@ export type RuleAction = {
   delayInMinutes?: number | null;
 };
 
+// The model sees one flat action object: the type, every field described
+// once, and which type needs which field. The per-type union, which would
+// otherwise repeat every field description in each variant of the tool
+// schema, still validates the input.
 export const createRuleActionSchema = (
   provider: string,
   integrationActionsEnabled = isIntegrationActionGloballyEnabled(),
@@ -187,66 +187,114 @@ export const createRuleActionSchema = (
   const integrationToolSpec = getOnlyIntegrationToolSpec();
   const optionalFieldsSchema = createOptionalActionFieldsSchema(provider);
 
-  const actionSchemas: [z.ZodTypeAny, z.ZodTypeAny, ...z.ZodTypeAny[]] = [
-    createActionObjectSchema(ActionType.ARCHIVE, optionalFieldsSchema),
-    createActionObjectSchema(
-      ActionType.LABEL,
-      createRequiredLabelFieldsSchema(provider),
-    ),
-    createActionObjectSchema(ActionType.MARK_READ, optionalFieldsSchema),
-    createActionObjectSchema(ActionType.STAR, optionalFieldsSchema),
-    createActionObjectSchema(ActionType.MARK_SPAM, optionalFieldsSchema),
-    createActionObjectSchema(ActionType.DIGEST, optionalFieldsSchema),
+  const variants: ActionVariant[] = [
+    { type: ActionType.ARCHIVE, fields: optionalFieldsSchema },
+    {
+      type: ActionType.LABEL,
+      fields: createRequiredFieldsSchema(provider, "label", "LABEL"),
+      requiredField: "label",
+    },
+    { type: ActionType.MARK_READ, fields: optionalFieldsSchema },
+    { type: ActionType.STAR, fields: optionalFieldsSchema },
+    { type: ActionType.MARK_SPAM, fields: optionalFieldsSchema },
+    { type: ActionType.DIGEST, fields: optionalFieldsSchema },
     ...(allowedActionTypes.has(ActionType.DRAFT_EMAIL)
-      ? [createActionObjectSchema(ActionType.DRAFT_EMAIL, optionalFieldsSchema)]
+      ? [{ type: ActionType.DRAFT_EMAIL, fields: optionalFieldsSchema }]
       : []),
     ...(allowedActionTypes.has(ActionType.REPLY)
-      ? [createActionObjectSchema(ActionType.REPLY, optionalFieldsSchema)]
+      ? [{ type: ActionType.REPLY, fields: optionalFieldsSchema }]
       : []),
     ...(allowedActionTypes.has(ActionType.FORWARD)
       ? [
-          createActionObjectSchema(
-            ActionType.FORWARD,
-            createRequiredRecipientFieldsSchema(provider),
-          ),
+          {
+            type: ActionType.FORWARD,
+            fields: createRequiredFieldsSchema(provider, "to", "FORWARD"),
+            requiredField: "to",
+          },
         ]
       : []),
     ...(allowedActionTypes.has(ActionType.SEND_EMAIL)
       ? [
-          createActionObjectSchema(
-            ActionType.SEND_EMAIL,
-            createRequiredRecipientFieldsSchema(provider),
-          ),
+          {
+            type: ActionType.SEND_EMAIL,
+            fields: createRequiredFieldsSchema(provider, "to", "SEND_EMAIL"),
+            requiredField: "to",
+          },
         ]
       : []),
     ...(allowedActionTypes.has(ActionType.CALL_WEBHOOK)
       ? [
-          createActionObjectSchema(
-            ActionType.CALL_WEBHOOK,
-            createRequiredWebhookFieldsSchema(provider),
-          ),
+          {
+            type: ActionType.CALL_WEBHOOK,
+            fields: createRequiredFieldsSchema(
+              provider,
+              "webhookUrl",
+              "CALL_WEBHOOK",
+            ),
+            requiredField: "webhookUrl",
+          },
         ]
       : []),
     ...(allowedActionTypes.has(ActionType.MOVE_FOLDER)
       ? [
-          createActionObjectSchema(
-            ActionType.MOVE_FOLDER,
-            createRequiredFolderFieldsSchema(provider),
-          ),
+          {
+            type: ActionType.MOVE_FOLDER,
+            fields: createRequiredFolderFieldsSchema(provider),
+            requiredField: "folderName",
+          },
         ]
       : []),
     ...(allowedActionTypes.has(ActionType.INTEGRATION) && integrationToolSpec
       ? [
-          createActionObjectSchema(
-            ActionType.INTEGRATION,
-            createIntegrationFieldsSchema(integrationToolSpec),
-            integrationToolSpec.llmDescription,
-          ),
+          {
+            type: ActionType.INTEGRATION,
+            fields: createIntegrationFieldsSchema(integrationToolSpec),
+            description: integrationToolSpec.llmDescription,
+          },
         ]
       : []),
   ];
 
-  return z.union(actionSchemas) as z.ZodType<RuleAction>;
+  const hasIntegration = variants.some(
+    (variant) => variant.type === ActionType.INTEGRATION,
+  );
+  const modelFacingSchema = z.object({
+    type: z
+      .enum(variants.map((variant) => variant.type) as [string, ...string[]])
+      .describe(
+        variants
+          .map(
+            (variant) =>
+              `${variant.type}: ${variant.description ?? getActionTypeDescription(variant.type)}`,
+          )
+          .join("\n"),
+      ),
+    fields: z
+      .object(
+        createModelFacingFieldShape(
+          provider,
+          hasIntegration ? integrationToolSpec : undefined,
+        ),
+      )
+      .nullish()
+      .describe(describeRequiredFields(variants)),
+    delayInMinutes: delayInMinutesLlmSchema,
+  });
+
+  const [first, second, ...rest] = variants.map((variant) =>
+    z.object({
+      type: z.literal(variant.type),
+      fields: variant.fields,
+      delayInMinutes: delayInMinutesLlmSchema,
+    }),
+  );
+
+  return modelFacingSchema.pipe(
+    z.union([first, second, ...rest]) as unknown as z.ZodType<
+      RuleAction,
+      z.output<typeof modelFacingSchema>
+    >,
+  ) as unknown as z.ZodType<RuleAction>;
 };
 
 export const createRuleSchema = (
@@ -270,18 +318,23 @@ export type CreateOrUpdateRuleSchema = CreateRuleSchema & {
   ruleId?: string;
 };
 
-function createActionObjectSchema(
-  type: ActionType,
-  fields: z.ZodTypeAny,
-  description?: string,
-) {
-  return z
-    .object({
-      type: z.literal(type),
-      fields,
-      delayInMinutes: delayInMinutesLlmSchema,
-    })
-    .describe(description ?? getActionTypeDescription(type));
+type ActionVariant = {
+  type: ActionType;
+  fields: z.ZodTypeAny;
+  requiredField?: string;
+  description?: string;
+};
+
+function describeRequiredFields(variants: ActionVariant[]) {
+  const required = variants.flatMap((variant) =>
+    variant.requiredField
+      ? [`${variant.type} requires ${variant.requiredField}`]
+      : [],
+  );
+
+  return `Values for the action. Leave fields the action type does not use empty.${
+    required.length ? ` ${required.join("; ")}.` : ""
+  }`;
 }
 
 function getActionTypeDescription(type: ActionType) {
@@ -315,37 +368,52 @@ function getActionTypeDescription(type: ActionType) {
   }
 }
 
+function createModelFacingFieldShape(
+  provider: string,
+  integrationToolSpec: IntegrationToolSpec | undefined,
+) {
+  const descriptions: Record<string, string> = {
+    label: "The label to apply to the email",
+    to: "The recipient email address. Use REPLY when responding to the triggering inbound email.",
+    cc: "The cc email address to send the email to",
+    bcc: "The bcc email address to send the email to",
+    subject: "The subject of the email",
+    content: "The content of the email",
+    webhookUrl:
+      "The webhook URL to call. Use CALL_WEBHOOK only when the user explicitly supplies a webhook URL.",
+    ...(isMicrosoftProvider(provider) && {
+      folderName: "The folder to move the email to",
+    }),
+  };
+
+  for (const arg of integrationToolSpec?.args ?? []) {
+    if (!arg.llmDescription) continue;
+    const integrationDescription = `For INTEGRATION: ${arg.llmDescription}`;
+    descriptions[arg.key] = descriptions[arg.key]
+      ? `${descriptions[arg.key]}. ${integrationDescription}`
+      : integrationDescription;
+  }
+
+  return Object.fromEntries(
+    Object.entries(descriptions).map(([key, description]) => [
+      key,
+      z.string().nullish().describe(description),
+    ]),
+  );
+}
+
 function createOptionalActionFieldsSchema(provider: string) {
   return z.object(createActionFieldShape(provider)).nullish();
 }
 
-function createRequiredLabelFieldsSchema(provider: string) {
+function createRequiredFieldsSchema(
+  provider: string,
+  field: "label" | "to" | "webhookUrl",
+  actionType: string,
+) {
   return z.object({
     ...createActionFieldShape(provider),
-    label: requiredStringField(
-      "The label to apply to the email",
-      "LABEL requires fields.label.",
-    ),
-  });
-}
-
-function createRequiredRecipientFieldsSchema(provider: string) {
-  return z.object({
-    ...createActionFieldShape(provider),
-    to: requiredStringField(
-      "The recipient email address. Required for SEND_EMAIL and FORWARD. Use REPLY when responding to the triggering inbound email.",
-      "fields.to is required.",
-    ),
-  });
-}
-
-function createRequiredWebhookFieldsSchema(provider: string) {
-  return z.object({
-    ...createActionFieldShape(provider),
-    webhookUrl: requiredStringField(
-      "The webhook URL to call. Required for CALL_WEBHOOK; use CALL_WEBHOOK only when the user explicitly supplies a webhook URL.",
-      "CALL_WEBHOOK requires fields.webhookUrl.",
-    ),
+    [field]: requiredStringField(`${actionType} requires fields.${field}.`),
   });
 }
 
@@ -358,58 +426,46 @@ function createRequiredFolderFieldsSchema(provider: string) {
 
   return z.object({
     ...fieldShape,
-    folderName: requiredStringField(
-      "The folder to move the email to",
-      "MOVE_FOLDER requires fields.folderName.",
-    ),
+    folderName: requiredStringField("MOVE_FOLDER requires fields.folderName."),
   });
 }
 
-/** Exposes exactly the args the spec marks as LLM-settable. */
+/** Accepts exactly the args the spec marks as LLM-settable. */
 function createIntegrationFieldsSchema(spec: IntegrationToolSpec) {
   return z.object(
     Object.fromEntries(
       spec.args
         .filter((arg) => arg.llmDescription)
-        .map((arg) => [
-          arg.key,
-          optionalStringField(arg.llmDescription as string),
-        ]),
+        .map((arg) => [arg.key, optionalStringField()]),
     ),
   );
 }
 
 function createActionFieldShape(provider: string) {
   return {
-    label: optionalStringField("The label to apply to the email"),
-    to: optionalStringField(
-      "The recipient email address. Required for SEND_EMAIL and FORWARD. Use REPLY when responding to the triggering inbound email.",
-    ),
-    cc: optionalStringField("The cc email address to send the email to"),
-    bcc: optionalStringField("The bcc email address to send the email to"),
-    subject: optionalStringField("The subject of the email"),
-    content: optionalStringField("The content of the email"),
-    webhookUrl: optionalStringField(
-      "The webhook URL to call. Only relevant for explicit webhook or external HTTP callback requests.",
-    ),
+    label: optionalStringField(),
+    to: optionalStringField(),
+    cc: optionalStringField(),
+    bcc: optionalStringField(),
+    subject: optionalStringField(),
+    content: optionalStringField(),
+    webhookUrl: optionalStringField(),
     ...(isMicrosoftProvider(provider) && {
-      folderName: optionalStringField("The folder to move the email to"),
+      folderName: optionalStringField(),
     }),
   };
 }
 
-function optionalStringField(description: string) {
+function optionalStringField() {
   return z
     .string()
     .nullish()
-    .transform((value) => value ?? null)
-    .describe(description);
+    .transform((value) => value ?? null);
 }
 
-function requiredStringField(description: string, message: string) {
+function requiredStringField(message: string) {
   return z
     .string()
     .transform((value) => value.trim())
-    .refine(Boolean, message)
-    .describe(description);
+    .refine(Boolean, message);
 }
