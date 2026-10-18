@@ -14,7 +14,9 @@ interface FooterProps {
 }
 
 // Simple footer for self-hosted deployments
-const selfHostedFooter = {
+type FooterLink = { name: string; href: string; target?: string };
+
+const selfHostedFooter: { resources: FooterLink[]; legal: FooterLink[] } = {
   resources: [
     { name: "Contact us", href: `mailto:${env.NEXT_PUBLIC_SUPPORT_EMAIL}` },
   ],
