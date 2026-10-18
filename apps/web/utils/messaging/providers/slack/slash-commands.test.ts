@@ -125,6 +125,20 @@ describe("processSlackSlashCommand", () => {
     );
   });
 
+  it("answers from the originally connected mailbox, like a Slack DM does", async () => {
+    await processSlackSlashCommand({
+      command: "/summary",
+      userId: "slack-user",
+      teamId: "slack-team",
+      responseUrl: "https://hooks.slack.com/commands/response",
+      logger,
+    });
+
+    expect(prisma.messagingChannel.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ orderBy: { createdAt: "asc" } }),
+    );
+  });
+
   it("does not use public Slack identifiers directly as the chat id", async () => {
     await processSlackSlashCommand({
       command: "/summary",

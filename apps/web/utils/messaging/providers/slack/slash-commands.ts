@@ -22,6 +22,7 @@ import { markdownToSlackMrkdwn } from "@/utils/messaging/providers/slack/format"
 import { disableSlackLinkUnfurls } from "@/utils/messaging/providers/slack/send";
 import prisma from "@/utils/prisma";
 import { getEmailAccountWithAi } from "@/utils/user/get";
+import { ORIGINAL_LINK_FIRST } from "@/utils/messaging/shared-channels";
 
 const MAX_CHAT_CONTEXT_MESSAGES = 12;
 
@@ -58,7 +59,7 @@ export async function processSlackSlashCommand({
       accessToken: { not: null },
     },
     select: { emailAccountId: true },
-    orderBy: { createdAt: "desc" },
+    orderBy: ORIGINAL_LINK_FIRST,
   });
 
   if (!channel) {

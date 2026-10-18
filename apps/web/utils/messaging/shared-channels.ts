@@ -15,6 +15,14 @@ import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 // and disconnecting clears it from all of them. The Slack bot token is
 // per workspace and already shared by every row with that teamId.
 
+/**
+ * Which of the person's mailboxes answers a Slack, Teams or Telegram user
+ * when the chat has none yet: the originally connected link. Every place
+ * that picks a mailbox for a messaging user orders by this, after preferring
+ * the chat's own mailbox.
+ */
+export const ORIGINAL_LINK_FIRST = { createdAt: "asc" } as const;
+
 const SHARED_FIELDS = {
   provider: true,
   teamId: true,
