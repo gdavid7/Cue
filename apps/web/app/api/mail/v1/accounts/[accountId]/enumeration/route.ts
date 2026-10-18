@@ -67,6 +67,10 @@ export const POST = withEmailProvider(
         bodies: result.value.bodies,
         nextPage: result.value.nextPage,
         catchUpFrom: result.value.catchUpFrom,
+        windowStartMs:
+          result.value.nextPage === null
+            ? result.value.windowStartMs
+            : undefined,
       }),
     );
   },

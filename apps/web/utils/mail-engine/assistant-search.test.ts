@@ -552,6 +552,40 @@ describe("searchLocalMail gating", () => {
     expect(result).toEqual({ status: "unavailable", reason: "not_synced" });
   });
 
+  it("answers only searches inside the window a first sync covered", async () => {
+    // A first Gmail sync keeps the last 30 days (and the inbox), so older
+    // mail may exist that the store has never seen.
+    const client = clientWith({
+      coverage: [
+        coverage({}),
+        coverage({
+          scopeId: "history",
+          windowStartMs: NOW.getTime() - 30 * 24 * 60 * 60 * 1000,
+        }),
+      ],
+    });
+    const search = (query: string) =>
+      searchLocalMail({
+        client,
+        accountId: ACCOUNT,
+        query,
+        limit: 20,
+        now: NOW,
+      });
+
+    expect(await search("from:jobs@acme.com")).toEqual({
+      status: "unavailable",
+      reason: "not_synced",
+    });
+    expect(await search("from:jobs@acme.com newer_than:60d")).toEqual({
+      status: "unavailable",
+      reason: "not_synced",
+    });
+    expect((await search("from:jobs@acme.com newer_than:7d")).status).toBe(
+      "ok",
+    );
+  });
+
   it("leaves word searches to Gmail until message bodies are indexed", async () => {
     const client = clientWith({
       coverage: [coverage({ indexedContent: "partial" })],

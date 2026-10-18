@@ -43,7 +43,16 @@ export type EnumerationPage = {
   bodies: BodyObservation[];
 } & (
   | { nextPage: string; catchUpFrom: null }
-  | { nextPage: null; catchUpFrom: SyncPosition }
+  | {
+      nextPage: null;
+      catchUpFrom: SyncPosition;
+      /**
+       * Set when the finished scan listed only mail received from this time
+       * on (plus what it says it always lists), so the scope holds a window
+       * of the mailbox rather than all of it. Omitted means all of it.
+       */
+      windowStartMs?: number;
+    }
 );
 
 export const MAX_CHANGES_BATCH_READS = 20;
@@ -69,6 +78,11 @@ export interface MailboxSource {
        * is not initial.
        */
       initial?: boolean;
+      /**
+       * The caller records a finished scan's `windowStartMs`, so the source
+       * may scan only a recent window. Without it, a scan covers everything.
+       */
+      windowedBackfill?: boolean;
     },
   ): Promise<
     ReadResult<{
