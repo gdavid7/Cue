@@ -68,11 +68,9 @@ function ContentWrapper({ children }: { children: React.ReactNode }) {
 export function SideNavWithTopNav({
   children,
   defaultOpen,
-  feedbackEnabled,
 }: {
   children: React.ReactNode;
   defaultOpen: boolean;
-  feedbackEnabled: boolean;
 }) {
   const pathname = usePathname();
 
@@ -107,7 +105,7 @@ export function SideNavWithTopNav({
         {!isMailRoute && (
           <>
             {!isChatPagePath(pathname) && <MobileHeader />}
-            <SideNav name="left-sidebar" feedbackEnabled={feedbackEnabled} />
+            <SideNav name="left-sidebar" />
           </>
         )}
         <ContentWrapper>{children}</ContentWrapper>

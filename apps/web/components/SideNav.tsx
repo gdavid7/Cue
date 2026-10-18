@@ -250,10 +250,7 @@ export const useNavigation = () => {
   };
 };
 
-export function SideNav({
-  feedbackEnabled,
-  ...props
-}: React.ComponentProps<typeof Sidebar> & { feedbackEnabled: boolean }) {
+export function SideNav({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const navigation = useNavigation();
   const { emailAccount, emailAccountId } = useAccount();
   const currentEmailAccountId = emailAccount?.id || emailAccountId;
@@ -328,13 +325,11 @@ export function SideNav({
       <PremiumCard isCollapsed={!isExpanded} />
 
       <SidebarFooter className="pb-4">
-        {feedbackEnabled && (
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <FeedbackSidebarButton />
-            </SidebarMenuItem>
-          </SidebarMenu>
-        )}
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <FeedbackSidebarButton />
+          </SidebarMenuItem>
+        </SidebarMenu>
 
         <NavUser />
       </SidebarFooter>
