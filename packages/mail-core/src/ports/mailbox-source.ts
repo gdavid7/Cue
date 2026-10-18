@@ -43,7 +43,16 @@ export type EnumerationPage = {
   bodies: BodyObservation[];
 } & (
   | { nextPage: string; catchUpFrom: null }
-  | { nextPage: null; catchUpFrom: SyncPosition }
+  | {
+      nextPage: null;
+      catchUpFrom: SyncPosition;
+      /**
+       * Set when the finished scan listed only mail received from this time
+       * on (plus what it says it always lists), so the scope holds a window
+       * of the mailbox rather than all of it. Omitted means all of it.
+       */
+      windowStartMs?: number;
+    }
 );
 
 export const MAX_CHANGES_BATCH_READS = 20;

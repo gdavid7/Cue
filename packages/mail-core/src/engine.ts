@@ -1215,6 +1215,10 @@ export function createMailEngine(input: {
         requiredHydration: enumerated.value.requiredHydration,
         bodies: enumerated.value.bodies,
         ownerId,
+        ...(enumerated.value.nextPage === null &&
+          enumerated.value.windowStartMs !== undefined && {
+            windowStartMs: enumerated.value.windowStartMs,
+          }),
       });
       if (applied.status === "stale") break;
       processedPages += 1;

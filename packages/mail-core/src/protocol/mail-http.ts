@@ -130,6 +130,7 @@ export const enumerationResultSchema = z.object({
   bodies: z.array(bodyObservationSchema).max(1000).optional(),
   nextPage: z.string().max(16_384).nullable(),
   catchUpFrom: syncPositionSchema.nullable(),
+  windowStartMs: z.number().int().optional(),
 });
 
 export const changesRequestSchema = z.object({

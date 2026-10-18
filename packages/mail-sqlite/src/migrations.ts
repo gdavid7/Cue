@@ -172,6 +172,7 @@ CREATE TABLE IF NOT EXISTS coverage (
   content TEXT NOT NULL,
   indexed_content TEXT NOT NULL,
   last_completed_sync_at_ms INTEGER,
+  window_start_ms INTEGER,
   PRIMARY KEY (account_id, scope_id)
 );
 
@@ -405,6 +406,11 @@ export async function migrateMailbox(
     await tx.exec(
       "ALTER TABLE effective_messages ADD COLUMN bcc_json TEXT NOT NULL DEFAULT '[]'",
     );
+  } catch {
+    // column already exists on freshly created databases
+  }
+  try {
+    await tx.exec("ALTER TABLE coverage ADD COLUMN window_start_ms INTEGER");
   } catch {
     // column already exists on freshly created databases
   }

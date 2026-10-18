@@ -17,6 +17,7 @@ import {
 import {
   connectionStatus,
   jsonStringArray,
+  coversWholeMailbox,
   readCoverage,
   readRevision,
   uniqueStrings,
@@ -67,7 +68,7 @@ async function readMailboxPages(
     conversationIndexFor(query.predicate),
   );
   const coverage = await readCoverage(tx, query.accountIds);
-  const complete = coverage.every((item) => item.metadata === "complete");
+  const complete = coversWholeMailbox(coverage);
   const accountConnections = await tx.query(
     `SELECT connection FROM accounts WHERE account_id IN (${query.accountIds.map(() => "?").join(",")})`,
     query.accountIds,

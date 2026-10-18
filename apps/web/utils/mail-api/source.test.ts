@@ -2066,6 +2066,172 @@ describe("Gmail history expiry", () => {
     await engine.close();
   });
 
+  it("first syncs only the last 30 days and the whole inbox, then a resync covers everything", async () => {
+    const day = 24 * 60 * 60 * 1000;
+    const archived = (id: string, at: number) => ({
+      ...gmailMessage(id, at),
+      labelIds: [],
+    });
+    const mailbox = new Map<string, ParsedMessage>([
+      ["recent", gmailMessage("recent", Date.now() - day)],
+      ["month", archived("month", Date.now() - 20 * day)],
+      ["old-inbox", gmailMessage("old-inbox", Date.now() - 400 * day)],
+      ["old-archived", archived("old-archived", Date.now() - 400 * day)],
+    ]);
+    const listed: Array<{ query?: string; after?: Date; before?: Date }> = [];
+    let historyExpired = false;
+    const cursor = encodeMailboxSyncCursor({
+      version: 1,
+      provider: "google",
+      phase: "delta",
+      historyId: "100",
+      after: "1970-01-01T00:00:00.000Z",
+    });
+    const provider = {
+      name: "google",
+      // Answers as Gmail does for the queries a scan sends.
+      async getMessagesWithPagination(options: {
+        query?: string;
+        after?: Date;
+        before?: Date;
+      }) {
+        listed.push(options);
+        const inboxOrAfter = options.query?.match(/^\{in:inbox after:(\d+)\}$/);
+        return {
+          messages: [...mailbox.values()].filter((message) => {
+            const at = Number(message.internalDate);
+            if (options.before && at >= options.before.getTime()) return false;
+            if (options.after && at < options.after.getTime()) return false;
+            if (inboxOrAfter) {
+              return (
+                message.labelIds?.includes("INBOX") ||
+                at >= Number(inboxOrAfter[1]) * 1000
+              );
+            }
+            return !options.query;
+          }),
+        };
+      },
+      async getMailboxSyncPage(options: { cursor?: string }) {
+        if (options.cursor && historyExpired) {
+          return {
+            cursor,
+            reset: true,
+            upsertedMessages: [],
+            deletedMessageIds: [],
+            hasMore: true,
+          };
+        }
+        return {
+          cursor,
+          reset: !options.cursor,
+          upsertedMessages: [],
+          deletedMessageIds: [],
+          hasMore: false,
+        };
+      },
+      async advanceMailboxSyncCursor(current: string) {
+        return historyExpired ? null : current;
+      },
+      async getMessage(id: string) {
+        const message = mailbox.get(id);
+        if (!message)
+          throw Object.assign(new Error("Not found"), { status: 404 });
+        return message;
+      },
+    } as unknown as EmailProvider;
+    let now = 1_000_000;
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    const engine = createMailEngine({
+      store,
+      source: createEmailProviderMailboxSource({
+        logger,
+        provider,
+        accountId: "acc-1",
+      }),
+      executor: {
+        async execute() {
+          return { status: "uncertain", receiptId: null };
+        },
+        async inspect() {
+          return { status: "uncertain", receiptId: null };
+        },
+      },
+      runtime: createHostRuntime({ nowMs: () => now }),
+    });
+    const localIds = async (mailboxName: "all" | "inbox") => {
+      const { view } = await store.readMailboxView({
+        accountIds: ["acc-1"],
+        predicate: { kind: "mailbox", mailbox: mailboxName },
+        order: "newest_first",
+        pageSize: 25,
+        after: null,
+      });
+      return view.conversations
+        .map((conversation) => conversation.key.conversationId)
+        .sort();
+    };
+    const historyCoverage = async () =>
+      (await engine.getDiagnostics("acc-1")).coverage.find(
+        (item) => item.scopeId === "history",
+      );
+    const runFor = async (rounds: number) => {
+      for (let round = 0; round < rounds; round++) {
+        await engine.runUntil(now + 20);
+      }
+    };
+
+    const startedAt = Date.now();
+    await engine.requestSync(["acc-1"]);
+    await runFor(5);
+
+    // Mail older than 30 days is skipped unless it is still in the inbox.
+    expect(await localIds("all")).toEqual([
+      "t-month",
+      "t-old-inbox",
+      "t-recent",
+    ]);
+    expect(await localIds("inbox")).toEqual(["t-old-inbox", "t-recent"]);
+    expect(listed.every((options) => options.query || options.after)).toBe(
+      true,
+    );
+    // The store knows the history it holds starts 30 days back, so nothing
+    // treats it as the whole mailbox.
+    const windowStartMs = (await historyCoverage())?.windowStartMs ?? 0;
+    expect(windowStartMs).toBeGreaterThanOrEqual(startedAt - 30 * day);
+    expect(windowStartMs).toBeLessThanOrEqual(Date.now() - 30 * day);
+    // Catching up keeps that window rather than calling the scope complete.
+    now += 60_000;
+    await runFor(3);
+    expect((await historyCoverage())?.windowStartMs).toBe(windowStartMs);
+
+    // Offline past Gmail's history retention, an old inbox message is
+    // archived; a resync walks the whole mailbox, so it and the old mail the
+    // first sync skipped are both brought up to date.
+    historyExpired = true;
+    mailbox.set("old-inbox", archived("old-inbox", Date.now() - 400 * day));
+    now += 11 * 60_000;
+    await runFor(5);
+    historyExpired = false;
+    now += 11 * 60_000;
+    await runFor(10);
+
+    expect(await localIds("inbox")).toEqual(["t-recent"]);
+    expect(await localIds("all")).toEqual([
+      "t-month",
+      "t-old-archived",
+      "t-old-inbox",
+      "t-recent",
+    ]);
+    expect((await historyCoverage())?.windowStartMs).toBeUndefined();
+    await engine.close();
+  });
+
   it("sends the bodies of at most 50 messages on one catch-up page and hydrates the rest", async () => {
     const ids = Array.from({ length: 120 }, (_, index) => `m-${index}`);
     const source = createEmailProviderMailboxSource({

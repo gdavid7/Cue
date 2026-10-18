@@ -221,6 +221,9 @@ export function createBackendMailboxSource(input: {
           bodies: parsed.bodies ?? [],
           nextPage: null,
           catchUpFrom: parsed.catchUpFrom,
+          ...(parsed.windowStartMs !== undefined && {
+            windowStartMs: parsed.windowStartMs,
+          }),
         },
       };
     },

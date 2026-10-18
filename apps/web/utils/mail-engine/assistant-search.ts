@@ -150,7 +150,10 @@ export async function searchLocalMail({
   if (!page) return { status: "unavailable", reason: "timeout" };
 
   const coverage = page.coverage.filter((item) => item.accountId === accountId);
-  if (!isComplete(coverage, "metadata"))
+  if (
+    !isComplete(coverage, "metadata") ||
+    !withinSyncedWindow(coverage, search.predicate)
+  )
     return { status: "unavailable", reason: "not_synced" };
   if (hasText(search.predicate) && !isComplete(coverage, "indexedContent"))
     return { status: "unavailable", reason: "not_indexed" };
@@ -601,6 +604,25 @@ function isComplete(
 ): boolean {
   return (
     coverage.length > 0 && coverage.every((item) => item[field] === "complete")
+  );
+}
+
+// A first sync can keep only recent mail (Gmail's last 30 days), so a search
+// is answered locally only when it asks for nothing older than that.
+function withinSyncedWindow(
+  coverage: Coverage[],
+  predicate: MailPredicate,
+): boolean {
+  const windowStartMs = Math.max(
+    ...coverage.map((item) => item.windowStartMs ?? Number.NEGATIVE_INFINITY),
+  );
+  if (windowStartMs === Number.NEGATIVE_INFINITY) return true;
+  const clauses = predicate.kind === "all" ? predicate.predicates : [predicate];
+  return clauses.some(
+    (clause) =>
+      clause.kind === "received" &&
+      clause.afterMs !== null &&
+      clause.afterMs >= windowStartMs,
   );
 }
 

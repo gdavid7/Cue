@@ -517,6 +517,58 @@ describe("engine bootstrap coverage", () => {
     await engine.close();
   });
 
+  it("keeps a windowed first sync from counting as the whole mailbox", async () => {
+    let now = 1000;
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    const engine = createMailEngine({
+      store,
+      source: slowBootstrapSource({
+        onBootstrap: () => {},
+        onEnumerate: () => {},
+        windowStartMs: 500,
+        catchUpRounds: true,
+      }),
+      executor: uncertainExecutor(),
+      runtime: createHostRuntime({ nowMs: () => now }),
+    });
+    await engine.requestSync(["acc-1"]);
+    for (let round = 0; round < 5; round++) {
+      now += 61_000;
+      await engine.runUntil(now + 2000);
+    }
+
+    const [coverage] = (await engine.getDiagnostics("acc-1")).coverage;
+    // The scan finished, so the account counts as synced, but only from the
+    // window's start: catching up must not widen it.
+    expect(coverage).toMatchObject({
+      metadata: "complete",
+      windowStartMs: 500,
+    });
+    expect(coverage?.lastCompletedSyncAtMs).not.toBeNull();
+    // Older messages of a conversation may not be local, so opening one
+    // still reads it from the provider.
+    expect(
+      await store.readConversationMembershipState(
+        { accountId: "acc-1", conversationId: "c1" },
+        now,
+      ),
+    ).toBe("incomplete");
+    const { view } = await store.readMailboxView({
+      accountIds: ["acc-1"],
+      predicate: { kind: "mailbox", mailbox: "all" },
+      order: "newest_first",
+      pageSize: 25,
+      after: null,
+    });
+    expect(view.counts.extent).toBe("local_coverage");
+    await engine.close();
+  });
+
   it("waits for the idle interval when the provider keeps asking for a resync", async () => {
     let now = 1000;
     let beginCalls = 0;
@@ -680,6 +732,8 @@ function slowBootstrapSource(hooks: {
   onBeginScope?: (scope: ScopeDescriptor) => void;
   repeatNextPage?: boolean;
   pauseFirstEnumerationMs?: number;
+  windowStartMs?: number;
+  catchUpRounds?: boolean;
 }): MailboxSource {
   const pages = hooks.pages ?? ["page-1"];
   const changesByPage = new Map(
@@ -777,10 +831,13 @@ function slowBootstrapSource(hooks: {
                 generation: "g1",
                 checkpoint: "enumerated",
               },
+              ...(hooks.windowStartMs !== undefined && {
+                windowStartMs: hooks.windowStartMs,
+              }),
             },
       };
     },
-    async readChanges() {
+    async readChanges(input) {
       hooks.onReadChanges?.();
       if (hooks.resetEveryRead) {
         return { status: "reset_required", scopeId: activeScopeId };
@@ -788,6 +845,20 @@ function slowBootstrapSource(hooks: {
       if (hooks.readChangesOnce && !resetConsumed) {
         resetConsumed = true;
         return hooks.readChangesOnce;
+      }
+      if (hooks.catchUpRounds) {
+        return {
+          status: "page",
+          page: {
+            session: input.session,
+            requestId: input.requestId,
+            from: input.position,
+            to: input.position,
+            changes: [],
+            requiredHydration: [],
+            roundComplete: true,
+          },
+        };
       }
       return { status: "paused", retryAfterMs: 0, reason: "unavailable" };
     },
