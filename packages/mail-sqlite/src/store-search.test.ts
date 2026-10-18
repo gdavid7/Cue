@@ -201,6 +201,41 @@ describe("local text search", () => {
     expect(await search(store, text("any", "attached"))).toEqual([]);
     await close();
   });
+
+  it("lists a typed search's index hits next to the messages the provider matched", async () => {
+    const { store, close } = await searchableMailbox();
+    const providerMatched = (rest: MailPredicate[]): MailPredicate => ({
+      kind: "all",
+      predicates: [
+        {
+          kind: "any",
+          predicates: [
+            {
+              kind: "all",
+              predicates: [text("any", "quarterly"), ...rest],
+            },
+            { kind: "message", ids: ["bare"] },
+          ],
+        },
+        { kind: "not", predicate: { kind: "role", role: "spam" } },
+      ],
+    });
+
+    expect(await search(store, providerMatched([]))).toEqual([
+      "bare",
+      "html",
+      "text",
+    ]);
+    // A hit must still pass the rest of the local search; a provider match
+    // needn't.
+    expect(
+      await search(store, providerMatched([{ kind: "read", value: false }])),
+    ).toEqual(["bare", "html"]);
+    expect(
+      await store.readMailboxView(query(providerMatched([]))),
+    ).toMatchObject({ view: { counts: { matchingConversations: 3 } } });
+    await close();
+  });
 });
 
 function text(field: "any" | "subject" | "body", value: string): MailPredicate {

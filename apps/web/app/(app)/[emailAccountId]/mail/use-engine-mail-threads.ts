@@ -11,6 +11,7 @@ import { useMailboxWindow } from "@inboxzero/mail-react/use-mailbox-window";
 import type { ListThread } from "@/app/(app)/[emailAccountId]/mail/types";
 import type { CombinedListThread } from "@/utils/threads/load-combined";
 import type { EmailLabels } from "@/providers/email-label-types";
+import type { SearchLabel } from "@/utils/mail-search/search-query-predicate";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 import { conversationSummaryToListThread } from "@/utils/mail-engine/list-thread";
 import { threadsQueryToConversationQuery } from "@/utils/mail-engine/threads-query";
@@ -34,6 +35,7 @@ export function useEngineMailThreads({
   accounts,
   query,
   predicate,
+  searchLabels,
   enabled = true,
 }: {
   emailAccountId: string;
@@ -41,6 +43,8 @@ export function useEngineMailThreads({
   accounts?: Record<string, CombinedListThread["account"]>;
   query: ThreadsQuery;
   predicate?: MailPredicate;
+  /** Lets a typed `label:Name` match locally, not only through the provider. */
+  searchLabels?: SearchLabel[];
   enabled?: boolean;
 }) {
   const client = useOptionalMailClient();
@@ -52,9 +56,10 @@ export function useEngineMailThreads({
     const baseQuery = threadsQueryToConversationQuery({
       accountIds: resolvedAccountIds,
       query,
+      search: { labels: searchLabels },
     });
     return predicate ? { ...baseQuery, predicate } : baseQuery;
-  }, [resolvedAccountIds, query, predicate]);
+  }, [resolvedAccountIds, query, predicate, searchLabels]);
   const mailbox = useMailboxWindow(conversationQuery, {
     client,
     enabled: enabled && Boolean(client),

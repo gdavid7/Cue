@@ -155,23 +155,83 @@ export function searchDrivenSource(
   if (!search.fts5 || !search.complete) return null;
   const clauses = topLevelClauses(predicate);
   for (const [index, clause] of clauses.entries()) {
-    if (clause.kind !== "text") continue;
-    const match = textMatchQuery(clause);
-    if (!match) continue;
-    return {
-      from: `(SELECT k.account_id, k.message_id
+    const driven = drivenClause(clause);
+    if (!driven) continue;
+    const others = clauses.filter((_clause, position) => position !== index);
+    const hits = `SELECT k.account_id, k.message_id
             FROM message_fts CROSS JOIN message_fts_keys k ON k.fts_rowid = message_fts.rowid
-            WHERE message_fts MATCH ?) hit
-          CROSS JOIN effective_messages e
-            ON e.account_id = hit.account_id AND e.message_id = hit.message_id`,
-      bindings: [match],
+            WHERE message_fts MATCH ?`;
+    const join = `CROSS JOIN effective_messages e
+            ON e.account_id = hit.account_id AND e.message_id = hit.message_id`;
+    if (!driven.messages) {
+      return {
+        from: `(${hits}) hit ${join}`,
+        bindings: [driven.match],
+        rest: { kind: "all", predicates: [...others, ...driven.rest] },
+      };
+    }
+    // A typed search with the provider's matches: the index hits and those
+    // messages. Either kind of row still has to pass the rest of the search,
+    // which an index hit already matches the text of, or be one of them.
+    const ids = driven.messages.ids;
+    return {
+      from: `(${hits}
+            UNION
+            SELECT m.account_id, m.message_id
+            FROM accounts a CROSS JOIN effective_messages m
+              ON m.account_id = a.account_id
+              AND m.message_id IN (${ids.map(() => "?").join(",")})) hit ${join}`,
+      bindings: [driven.match, ...ids],
       rest: {
         kind: "all",
-        predicates: clauses.filter((_clause, position) => position !== index),
+        predicates: [
+          ...others,
+          {
+            kind: "any",
+            predicates: [
+              { kind: "all", predicates: driven.rest },
+              driven.messages,
+            ],
+          },
+        ],
       },
     };
   }
   return null;
+}
+
+// A clause the index can start from: a text match, alone or with conditions
+// beside it, optionally or one of a set of messages.
+function drivenClause(clause: MailPredicate): {
+  match: string;
+  rest: MailPredicate[];
+  messages?: Extract<MailPredicate, { kind: "message" }>;
+} | null {
+  if (clause.kind === "text") {
+    const match = textMatchQuery(clause);
+    return match ? { match, rest: [] } : null;
+  }
+  if (clause.kind === "all") {
+    const parts = clause.predicates;
+    for (const [index, part] of parts.entries()) {
+      if (part.kind !== "text") continue;
+      const match = textMatchQuery(part);
+      if (match)
+        return {
+          match,
+          rest: parts.filter((_part, position) => position !== index),
+        };
+    }
+    return null;
+  }
+  if (clause.kind !== "any" || clause.predicates.length !== 2) return null;
+  const messages = clause.predicates.find((part) => part.kind === "message");
+  const other = clause.predicates.find((part) => part !== messages);
+  if (messages?.kind !== "message" || !messages.ids.length || !other)
+    return null;
+  if (other.kind === "any") return null;
+  const driven = drivenClause(other);
+  return driven && !driven.messages ? { ...driven, messages } : null;
 }
 
 // Indexed messages are matched through message_fts. A message without a

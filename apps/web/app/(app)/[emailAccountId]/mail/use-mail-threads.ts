@@ -5,6 +5,7 @@ import type { MailPredicate } from "@inboxzero/mail-core/queries";
 import { useEngineMailThreads } from "@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads";
 import { useCueMembership } from "@/hooks/useCueMembership";
 import { useHiddenDraftMessageIds } from "@/hooks/useHiddenDraftMessageIds";
+import { useLabels } from "@/hooks/useLabels";
 import {
   threadsQueryToPredicate,
   threadsQueryUsesCue,
@@ -27,6 +28,10 @@ export function useMailThreads({
     enabled && usesCue,
   );
   const waitingForCue = usesCue && !cueMembership;
+  const { userLabels } = useLabels();
+  // Only a search reads labels by name; other views keep their predicate
+  // while labels load.
+  const searchLabels = query.q ? userLabels : undefined;
   const predicate = useMemo<MailPredicate | undefined>(() => {
     if (usesCue) return threadsQueryToPredicate(query, cueMembership);
     // A conversation stays in Drafts only through drafts that aren't hidden.
@@ -42,6 +47,7 @@ export function useMailThreads({
     emailAccountId,
     query,
     predicate,
+    searchLabels,
     enabled: enabled && !waitingForCue,
   });
   return {

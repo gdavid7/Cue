@@ -3,6 +3,16 @@ import type { MessageMetadata } from "@inboxzero/mail-core/messages";
 import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import { createNodeSqliteDriver } from "@inboxzero/mail-sqlite/node";
 import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
+import {
+  buildMailSearchQuery,
+  EMPTY_MAIL_SEARCH_FIELDS,
+  type MailSearchFields,
+} from "@/app/(app)/[emailAccountId]/mail/mail-search-query";
+import {
+  buildOutlookSearchQuery,
+  EMPTY_OUTLOOK_SEARCH_FIELDS,
+  type OutlookSearchFields,
+} from "@/app/(app)/[emailAccountId]/mail/outlook-search-query";
 import { searchQueryToPredicate } from "@/utils/mail-search/search-query-predicate";
 
 const ACCOUNT = "account-1";
@@ -196,6 +206,80 @@ describe("searchQueryToPredicate, read by the local store", () => {
 
   it("has nothing to search for in an empty query", () => {
     expect(searchQueryToPredicate("  ", { now: NOW })).toBeNull();
+  });
+});
+
+// Every field of the advanced search forms writes a query the store reads as
+// that field means, rather than as literal words.
+describe("advanced search form queries", () => {
+  it.each<[string, Partial<MailSearchFields>, string[]]>([
+    ["from", { from: "amy@example.com" }, ["amy"]],
+    ["to", { to: "amy@example.com" }, ["sent"]],
+    ["subject", { subject: "Quarterly invoice" }, ["bob"]],
+    ["has the words", { hasWords: "dinner" }, ["amy", "sent"]],
+    ["doesn't have", { hasWords: "dinner", doesntHave: "movie" }, ["sent"]],
+    ["has attachment", { hasAttachment: true }, ["amy"]],
+    ["date within", { date: "2024-01-15", dateWithin: "1d" }, ["amy"]],
+    ["search in Inbox", { searchIn: "inbox" }, ["amy"]],
+    ["search in Starred", { searchIn: "starred" }, ["bob"]],
+    ["search in Sent", { searchIn: "sent" }, ["sent"]],
+    ["search in Drafts", { searchIn: "drafts" }, ["draft"]],
+    ["search in Spam", { searchIn: "spam" }, ["spam"]],
+    ["search in Trash", { searchIn: "trash" }, ["trash"]],
+    [
+      "search in Mail & Spam & Trash",
+      { searchIn: "anywhere", hasWords: "dinner" },
+      ["amy", "sent", "spam", "trash"],
+    ],
+    ["search in a label", { searchIn: "label:Work" }, ["amy"]],
+    [
+      "don't include chats",
+      { hasWords: "dinner", excludeChats: true },
+      ["amy", "sent"],
+    ],
+    // Sizes aren't stored locally; Gmail answers them.
+    ["size", { sizeValue: "5", sizeComparison: "greater" }, []],
+  ])("Gmail: %s", async (_field, fields, expected) => {
+    const query = buildMailSearchQuery({
+      ...EMPTY_MAIL_SEARCH_FIELDS,
+      ...fields,
+    });
+    expect(await localMatches(query)).toEqual(expected.sort());
+  });
+
+  it("writes the size Gmail reads", () => {
+    expect(
+      buildMailSearchQuery({
+        ...EMPTY_MAIL_SEARCH_FIELDS,
+        sizeValue: "5",
+        sizeComparison: "greater",
+      }),
+    ).toBe("larger:5M");
+  });
+
+  it.each<[string, Partial<OutlookSearchFields>, string[]]>([
+    ["from", { from: "amy@example.com" }, ["amy"]],
+    ["to", { to: "amy@example.com" }, ["sent"]],
+    ["subject", { subject: "Quarterly invoice" }, ["bob"]],
+    ["keywords", { keywords: "dinner" }, ["amy", "sent"]],
+    ["doesn't have", { keywords: "dinner", doesntHave: "movie" }, ["sent"]],
+    ["has attachment", { hasAttachment: true }, ["amy"]],
+    ["date within", { date: "2024-01-15", dateWithin: "1d" }, ["amy"]],
+    ["search in Inbox", { searchIn: "inbox" }, ["amy"]],
+    ["search in Flagged", { searchIn: "flagged" }, ["bob"]],
+    ["search in Sent", { searchIn: "sent" }, ["sent"]],
+    ["search in Drafts", { searchIn: "drafts" }, ["draft"]],
+    // Like Cue's Archive view: mail out of the inbox, spam and trash.
+    ["search in Archive", { searchIn: "archive" }, ["bob", "draft", "sent"]],
+    ["search in Junk", { searchIn: "junk" }, ["spam"]],
+    ["search in Deleted", { searchIn: "deleted" }, ["trash"]],
+    ["search in a category", { searchIn: "category:Work" }, ["amy"]],
+  ])("Outlook: %s", async (_field, fields, expected) => {
+    const query = buildOutlookSearchQuery({
+      ...EMPTY_OUTLOOK_SEARCH_FIELDS,
+      ...fields,
+    });
+    expect(await localMatches(query)).toEqual(expected.sort());
   });
 });
 
