@@ -37,7 +37,11 @@ const spendBucketWarnings = createMemoCache<boolean>({
   ttlMs: 60 * 60_000,
   maxEntries: 5000,
 });
-const spendUnreadable = new Map<string, { until: number; error: unknown }>();
+const spendUnreadable = createMemoCache<{ error: unknown } | null>({
+  ttlMs: SPEND_UNREADABLE_RETRY_MS,
+  maxEntries: 5000,
+  keep: (failure) => failure !== null,
+});
 
 export const TRIAL_AI_LIMIT_REACHED_MESSAGE =
   "Your trial has reached the AI usage limit. Start your paid plan now to continue using AI automation.";
@@ -376,22 +380,14 @@ async function getWeeklySpend(userId: string, legacyEmails: string[]) {
   return total;
 }
 
-function getWeeklySpendByBucket(userId: string, legacyEmails: string[]) {
+async function getWeeklySpendByBucket(userId: string, legacyEmails: string[]) {
   const key = `${userId}:${[...new Set(legacyEmails)].sort().join(",")}`;
-  const failed = spendUnreadable.get(key);
-  if (failed && failed.until > Date.now()) return Promise.reject(failed.error);
+  const failed = await spendUnreadable.get(key, async () => null);
+  if (failed) throw failed.error;
   return weeklySpendByBucket
     .get(key, () => getWeeklyUsageCostByBucket({ userId, legacyEmails }))
     .catch((error) => {
-      spendUnreadable.delete(key);
-      spendUnreadable.set(key, {
-        until: Date.now() + SPEND_UNREADABLE_RETRY_MS,
-        error,
-      });
-      if (spendUnreadable.size > 5000) {
-        const oldest = spendUnreadable.keys().next().value;
-        if (oldest !== undefined) spendUnreadable.delete(oldest);
-      }
+      spendUnreadable.set(key, { error });
       throw error;
     });
 }
