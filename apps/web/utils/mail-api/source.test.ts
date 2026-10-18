@@ -1647,7 +1647,6 @@ describe("createEmailProviderMailboxSource", () => {
     }
     const [recent, history] = windows;
     expect(recent?.before).toBeUndefined();
-    expect(history?.after).toBeUndefined();
     const recentFrom = recent?.after?.getTime() ?? 0;
     const historyTo = history?.before?.getTime() ?? 0;
     expect(recentFrom).toBeGreaterThan(now - 30 * 24 * 60 * 60 * 1000);
@@ -1678,6 +1677,83 @@ describe("createEmailProviderMailboxSource", () => {
     // backfill scope only checks that its history is still held.
     expect(getMailboxSyncPage).toHaveBeenCalledTimes(2);
     expect(advanceMailboxSyncCursor).toHaveBeenCalledWith("history-cursor");
+  });
+
+  it("bounds a first Gmail sync to the last 30 days, recent mail first", async () => {
+    const now = new Date("2026-10-18T12:00:00.000Z");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    try {
+      const getMessagesWithPagination = vi.fn(
+        async (_options: { after?: Date; before?: Date }) => ({
+          messages: [],
+        }),
+      );
+      const source = createEmailProviderMailboxSource({
+        logger,
+        accountId: "acc-1",
+        provider: {
+          name: "google",
+          getMessagesWithPagination,
+          getMailboxSyncPage: vi.fn(async () => ({
+            cursor: null,
+            upsertedMessages: [],
+            deletedMessageIds: [],
+            hasMore: false,
+          })),
+        } as unknown as EmailProvider,
+      });
+      const session = { accountId: "acc-1", generation: "g1" };
+      const scan = async (id: string) => {
+        const bootstrap = await source.beginBootstrap({
+          session,
+          requestId: `begin-${id}`,
+          signal: new AbortController().signal,
+          scope: { id, kind: "account", folderId: null },
+          afterMs: null,
+          initial: true,
+        });
+        if (bootstrap.status !== "ok") throw new Error("expected ok");
+        // Each later page carries the window forward from the first.
+        for (const page of [
+          bootstrap.value.enumerationToken,
+          JSON.stringify({
+            ...JSON.parse(bootstrap.value.enumerationToken),
+            pageToken: "page-2",
+          }),
+        ]) {
+          await source.enumerate({
+            session,
+            requestId: `enum-${id}`,
+            signal: new AbortController().signal,
+            bootstrapId: bootstrap.value.bootstrapId,
+            page,
+            pageSize: 50,
+          });
+        }
+      };
+
+      await scan("primary");
+      await scan("history");
+
+      const thirtyDaysAgo = now.getTime() - 30 * 24 * 60 * 60 * 1000;
+      const windows = getMessagesWithPagination.mock.calls.map(([options]) => ({
+        after: options.after?.getTime(),
+        before: options.before?.getTime(),
+      }));
+      expect(windows).toHaveLength(4);
+      for (const window of windows) {
+        expect(window.after).toBeGreaterThanOrEqual(thirtyDaysAgo);
+      }
+      const [recentFirst, , history] = windows;
+      // The inbox's recent mail is read before any of the backfill.
+      expect(recentFirst?.after).toBeGreaterThan(history?.after ?? 0);
+      expect(recentFirst?.before).toBeUndefined();
+      expect(history?.after).toBe(thirtyDaysAgo);
+      expect(history?.before).toBeGreaterThan(recentFirst?.after ?? 0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("starts Gmail catch-up from history rather than resuming a full mailbox snapshot", async () => {
@@ -1958,7 +2034,7 @@ describe("Gmail history expiry", () => {
     const day = 24 * 60 * 60 * 1000;
     const mailbox = new Map<string, ParsedMessage>([
       ["recent", gmailMessage("recent", Date.now() - day)],
-      ["old", gmailMessage("old", Date.now() - 30 * day)],
+      ["old", gmailMessage("old", Date.now() - 20 * day)],
     ]);
     let historyExpired = false;
     const cursor = encodeMailboxSyncCursor({
@@ -2053,7 +2129,7 @@ describe("Gmail history expiry", () => {
     // Offline past Gmail's history retention: changes to old mail are gone
     // from history, so only a fresh scan can bring them in.
     historyExpired = true;
-    mailbox.set("old", gmailMessage("old", Date.now() - 30 * day, ["STARRED"]));
+    mailbox.set("old", gmailMessage("old", Date.now() - 20 * day, ["STARRED"]));
     now += 11 * 60_000;
     await runFor(5);
     historyExpired = false;

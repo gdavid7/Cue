@@ -57,6 +57,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Gmail's first scan covers only recent mail so the inbox fills and live
 // catch-up starts within seconds; older mail backfills in its own scope.
 const GMAIL_RECENT_WINDOW_MS = 3 * DAY_MS;
+// The backfill stops at 30 days: walking a whole mailbox spent nearly all of
+// the Gmail quota on a first connect. Older mail stays reachable through
+// provider search and is fetched when a conversation is opened.
+const GMAIL_BACKFILL_WINDOW_MS = 30 * DAY_MS;
 const GMAIL_HISTORY_SCOPE_ID = "history";
 // The two scans start at different times, so the backfill reaches into the
 // recent window to leave no gap at the boundary between them.
@@ -154,17 +158,18 @@ export function createEmailProviderMailboxSource(input: {
     async beginBootstrap({ afterMs, initial, scope, session }) {
       try {
         const isHistory = isGmail && scope.id === GMAIL_HISTORY_SCOPE_ID;
+        const now = Date.now();
         const token: BootstrapToken = {
           afterMs: afterMs ?? 0,
           ...(initial && isGmail && !isHistory && { initial: true }),
           scopeId: scope.id,
           folderId: scopedFolderId(provider, scope),
-          receivedAfterMs:
-            isGmail && !isHistory
-              ? Date.now() - GMAIL_RECENT_WINDOW_MS
-              : undefined,
+          receivedAfterMs: isGmail
+            ? now -
+              (isHistory ? GMAIL_BACKFILL_WINDOW_MS : GMAIL_RECENT_WINDOW_MS)
+            : undefined,
           receivedBeforeMs: isHistory
-            ? Date.now() - GMAIL_RECENT_WINDOW_MS + GMAIL_HISTORY_OVERLAP_MS
+            ? now - GMAIL_RECENT_WINDOW_MS + GMAIL_HISTORY_OVERLAP_MS
             : undefined,
         };
         const catchUpFrom: SyncPosition = {
