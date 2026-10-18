@@ -29,6 +29,7 @@ import { CrispChatLoggedOutVisible } from "@/components/CrispChat";
 import { MutedText } from "@/components/Typography";
 import { normalizeInternalPath } from "@/utils/path";
 import { BRAND_NAME, getPossessiveBrandName } from "@/utils/branding";
+import { GOOGLE_APP_UNVERIFIED } from "@/utils/google-app-status";
 import { SITE_DESCRIPTION, SITE_TITLE } from "@/utils/site-metadata";
 
 export const metadata: Metadata = {
@@ -159,6 +160,13 @@ export default async function AuthenticationPage(props: {
               your calendar. That&apos;s how it knows what needs you, drafts
               replies and prepares briefs. Nothing sends without you.
             </p>
+            {GOOGLE_APP_UNVERIFIED && (
+              <p className="text-muted-foreground text-xs leading-relaxed">
+                During the private beta, Google may show an &ldquo;unverified
+                app&rdquo; warning. Choose Advanced, then Go to {BRAND_NAME} to
+                continue.
+              </p>
+            )}
 
             {fromApproval && waitlistEnabled && (
               <p className="text-muted-foreground text-xs">

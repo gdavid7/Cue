@@ -4,6 +4,10 @@ import * as Sentry from "@sentry/nextjs";
 import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { ErrorDisplay } from "@/components/ErrorDisplay";
+import {
+  GOOGLE_APP_UNVERIFIED,
+  GOOGLE_WEEKLY_SIGN_IN_NOTE,
+} from "@/utils/google-app-status";
 import { logOut } from "@/utils/user";
 
 export function LandingErrorBoundary({
@@ -24,6 +28,11 @@ export function LandingErrorBoundary({
       <Button variant="ghost" size="sm" onClick={() => logOut()}>
         Sign out and sign in again
       </Button>
+      {GOOGLE_APP_UNVERIFIED && (
+        <p className="text-muted-foreground text-xs">
+          {GOOGLE_WEEKLY_SIGN_IN_NOTE}
+        </p>
+      )}
     </div>
   );
 }
