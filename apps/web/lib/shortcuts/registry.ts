@@ -258,16 +258,16 @@ const SHORTCUT_DEFINITIONS = [
   },
   {
     id: "selectAll",
-    keys: ["mod+a", "shift+*>a", "*>a"],
+    keys: ["mod+a", "shift+8>a"],
     display: ["mod+a", "*>a"],
     scope: "mail",
     group: "Triage",
     label: "Select all",
   },
   {
-    // `*` sits behind shift on US layouts and in front of it on others.
+    // Bound as shift+8: react-hotkeys-hook reads a literal `*` as "any key".
     id: "selectNone",
-    keys: ["shift+*>n", "*>n"],
+    keys: ["shift+8>n"],
     display: ["*>n"],
     scope: "mail",
     group: "Triage",
@@ -275,7 +275,7 @@ const SHORTCUT_DEFINITIONS = [
   },
   {
     id: "selectRead",
-    keys: ["shift+*>r", "*>r"],
+    keys: ["shift+8>r"],
     display: ["*>r"],
     scope: "mail",
     group: "Triage",
@@ -283,7 +283,7 @@ const SHORTCUT_DEFINITIONS = [
   },
   {
     id: "selectUnread",
-    keys: ["shift+*>u", "*>u"],
+    keys: ["shift+8>u"],
     display: ["*>u"],
     scope: "mail",
     group: "Triage",

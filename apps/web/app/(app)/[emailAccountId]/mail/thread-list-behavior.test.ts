@@ -4,6 +4,7 @@ import {
   getActiveThreadIndex,
   getSearchFocus,
   groupThreadsByDate,
+  canMarkThreadsImportant,
   getNextThreadAfterRemoval,
   resolveThreadActionTargets,
   scrollElementIntoContainer,
@@ -101,6 +102,35 @@ describe("resolveThreadActionTargets", () => {
   });
 });
 
+describe("canMarkThreadsImportant", () => {
+  it("allows Gmail accounts", () => {
+    expect(
+      canMarkThreadsImportant({ provider: "google", mixedAccounts: false }),
+    ).toBe(true);
+  });
+
+  it("refuses Outlook accounts", () => {
+    expect(
+      canMarkThreadsImportant({
+        provider: "microsoft",
+        mixedAccounts: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("refuses a selection spanning several accounts", () => {
+    expect(
+      canMarkThreadsImportant({ provider: "google", mixedAccounts: true }),
+    ).toBe(false);
+  });
+
+  it("refuses when the account is unknown", () => {
+    expect(
+      canMarkThreadsImportant({ provider: undefined, mixedAccounts: false }),
+    ).toBe(false);
+  });
+});
+
 describe("getNextThreadAfterRemoval", () => {
   it("advances to the next surviving thread", () => {
     expect(
@@ -166,6 +196,42 @@ describe("getNextThreadAfterRemoval", () => {
         removedThreadIds: ["three"],
       }),
     ).toEqual({ id: "two", index: 1 });
+  });
+
+  it("prefers the surviving thread above when going previous", () => {
+    expect(
+      getNextThreadAfterRemoval({
+        threadIds: ["one", "two", "three", "four"],
+        currentThreadId: "three",
+        currentThreadIndex: 2,
+        removedThreadIds: ["three"],
+        direction: "previous",
+      }),
+    ).toEqual({ id: "two", index: 1 });
+  });
+
+  it("skips archived rows above, even the topmost of a multi-selection", () => {
+    expect(
+      getNextThreadAfterRemoval({
+        threadIds: ["one", "two", "three", "four"],
+        currentThreadId: "four",
+        currentThreadIndex: 3,
+        removedThreadIds: ["two", "three", "four"],
+        direction: "previous",
+      }),
+    ).toEqual({ id: "one", index: 0 });
+  });
+
+  it("falls forward when nothing survives above", () => {
+    expect(
+      getNextThreadAfterRemoval({
+        threadIds: ["one", "two", "three"],
+        currentThreadId: "one",
+        currentThreadIndex: 0,
+        removedThreadIds: ["one"],
+        direction: "previous",
+      }),
+    ).toEqual({ id: "two", index: 0 });
   });
 
   it("closes the reader when every thread is removed", () => {

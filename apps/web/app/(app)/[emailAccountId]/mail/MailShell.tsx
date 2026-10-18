@@ -60,6 +60,7 @@ import {
   getComposeTargetMessageId,
   getActiveThreadIndex,
   getSearchFocus,
+  canMarkThreadsImportant,
   getNextThreadAfterRemoval,
   resolveThreadActionTargets,
 } from "@/app/(app)/[emailAccountId]/mail/thread-list-behavior";
@@ -1081,12 +1082,17 @@ export function MailShell() {
 
   const getOpenThreadKey = useStableCallback(() => openThreadKey);
   const advanceReaderPast = useStableCallback(
-    (currentThreadKey: string, removedThreadKeys: string[]) => {
+    (
+      currentThreadKey: string,
+      removedThreadKeys: string[],
+      direction: "next" | "previous" = "next",
+    ) => {
       const nextThread = getNextThreadAfterRemoval({
         threadIds: orderedIds,
         currentThreadId: currentThreadKey,
         currentThreadIndex: focusedIndex,
         removedThreadIds: removedThreadKeys,
+        direction,
       });
       setFocusedIndex(nextThread?.index ?? 0);
       const nextRow = threads.find(
@@ -1102,12 +1108,13 @@ export function MailShell() {
       action: (ids: string[]) => Promise<string[]>,
       removeFromList: boolean,
       autoAdvanceReader = false,
+      advanceDirection: "next" | "previous" = "next",
     ) => {
       const ids = actionTargets.map((target) => target.key);
-      if (!ids.length) return;
+      if (!ids.length) return [];
       const hadSelection = selection.hasSelection;
       const queuedThreadKeys = await action(ids);
-      if (!queuedThreadKeys.length) return;
+      if (!queuedThreadKeys.length) return [];
       if (
         removeFromList &&
         openThreadKey &&
@@ -1116,7 +1123,7 @@ export function MailShell() {
         getOpenThreadKey() === openThreadKey
       ) {
         if (autoAdvanceReader) {
-          advanceReaderPast(openThreadKey, queuedThreadKeys);
+          advanceReaderPast(openThreadKey, queuedThreadKeys, advanceDirection);
         } else {
           setOpenThread(null);
         }
@@ -1130,20 +1137,9 @@ export function MailShell() {
           if (index >= 0) selection.toggle(index);
         }
       }
+      return queuedThreadKeys;
     },
   );
-
-  const archiveAndOpenPrevious = useStableCallback(async () => {
-    // Rows above the archived one keep their place, so this stays valid.
-    const previousRow = threads[clampedIndex - 1];
-    const wasReaderOpen = Boolean(openThreadId);
-    await archiveTargets();
-    if (!previousRow) return;
-    setFocusedIndex(clampedIndex - 1);
-    if (wasReaderOpen || layout === "split") {
-      setOpenThread(getListThreadSelection(previousRow, emailAccountId));
-    }
-  });
 
   const openAt = useStableCallback((index: number) => {
     const thread = threads[index];
@@ -1239,6 +1235,23 @@ export function MailShell() {
     () => runOn(archive, true, true),
     [archive, runOn],
   );
+  const archiveAndOpenPrevious = useStableCallback(async () => {
+    const wasReaderOpen = Boolean(openThreadKey);
+    const topmostTarget = actionTargets
+      .map((target) => target.key)
+      .sort((a, b) => orderedIds.indexOf(a) - orderedIds.indexOf(b))[0];
+    const queued = await runOn(archive, true, true, "previous");
+    // With the reader open, runOn already moved it; otherwise only the cursor.
+    if (!queued.length || wasReaderOpen || !topmostTarget) return;
+    const previous = getNextThreadAfterRemoval({
+      threadIds: orderedIds,
+      currentThreadId: topmostTarget,
+      currentThreadIndex: clampedIndex,
+      removedThreadIds: queued,
+      direction: "previous",
+    });
+    if (previous) setFocusedIndex(previous.index);
+  });
   // Archiving again would be a no-op, so archived targets offer the way back.
   const moveToInboxTargets = useCallback(
     () => runOn(moveToInbox, true, true),
@@ -1332,9 +1345,10 @@ export function MailShell() {
     (isGoogleProvider(labelAccount?.account.provider) ||
       isMicrosoftProvider(labelAccount?.account.provider)) &&
     !mixedLabelAccounts;
-  // Importance is a Gmail concept; other providers have no equivalent to set.
-  const canMarkImportant =
-    isGoogleProvider(labelAccount?.account.provider) && !mixedLabelAccounts;
+  const canMarkImportant = canMarkThreadsImportant({
+    provider: labelAccount?.account.provider,
+    mixedAccounts: mixedLabelAccounts,
+  });
   const openLabelPicker = useStableCallback(() => {
     if (canLabel)
       setLabelPicker({ mode: "label", targets: currentLabelTargets });

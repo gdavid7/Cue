@@ -758,20 +758,6 @@ function localDraftSnippet(draft: StoredReplyDraft | undefined) {
 
 // Drafts without reply headers still belong to this conversation. Keep each
 // composer, falling back to the latest message when its parent is unavailable.
-function isMessageNavigationBlocked(event: KeyboardEvent) {
-  return (
-    event.isComposing ||
-    window.getSelection()?.isCollapsed === false ||
-    isTypingTarget(event.target) ||
-    (event.target instanceof Element &&
-      Boolean(
-        event.target.closest(
-          '[role="dialog"], [role="menu"], [role="listbox"]',
-        ),
-      ))
-  );
-}
-
 export function organizeThreadMessages(messages: ThreadMessage[]) {
   const drafts: ThreadMessage[] = [];
   const regularMessages: ThreadMessage[] = [];
@@ -862,3 +848,17 @@ export type MessageExpansionControls = {
   canExpand: boolean;
   onToggleAll: () => void;
 };
+
+function isMessageNavigationBlocked(event: KeyboardEvent) {
+  return (
+    event.isComposing ||
+    window.getSelection()?.isCollapsed === false ||
+    isTypingTarget(event.target) ||
+    (event.target instanceof Element &&
+      Boolean(
+        event.target.closest(
+          '[role="dialog"], [role="menu"], [role="listbox"]',
+        ),
+      ))
+  );
+}

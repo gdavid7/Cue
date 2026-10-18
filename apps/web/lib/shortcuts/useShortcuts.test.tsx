@@ -588,6 +588,39 @@ describe("useShortcuts", () => {
     expect(save.defaultPrevented).toBe(true);
   });
 
+  it("keeps a second binding of the sequence's last key quiet", () => {
+    // The reader binds `n` for the next message while the list binds `*` then
+    // `n`; one press must not do both, whichever hook hears it first.
+    const selectNone = vi.fn();
+    const nextMessage = vi.fn();
+
+    for (const order of ["list-first", "reader-first"]) {
+      selectNone.mockClear();
+      nextMessage.mockClear();
+      const list = <Bindings handlers={{ selectNone }} isDesktopApp={false} />;
+      const reader = (
+        <Bindings handlers={{ nextMessage }} isDesktopApp={false} />
+      );
+      render(
+        <ShortcutsProvider scopes={MAIL_SCOPES}>
+          {order === "list-first" ? list : reader}
+          {order === "list-first" ? reader : list}
+        </ShortcutsProvider>,
+      );
+
+      press({ key: "*", code: "Digit8", shiftKey: true });
+      press({ key: "n", code: "KeyN" });
+
+      expect(selectNone).toHaveBeenCalledOnce();
+      expect(nextMessage).not.toHaveBeenCalled();
+
+      press({ key: "n", code: "KeyN" });
+
+      expect(nextMessage).toHaveBeenCalledOnce();
+      cleanup();
+    }
+  });
+
   it("lets an abandoned sequence prefix through to the next shortcut", () => {
     const goToAllMail = vi.fn();
     const next = vi.fn();
