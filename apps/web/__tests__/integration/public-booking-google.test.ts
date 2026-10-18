@@ -237,6 +237,14 @@ function mockBookingConfig() {
     },
   ]);
 
+  prisma.calendar.findMany.mockResolvedValue([
+    {
+      id: "calendar-row-id",
+      connectionId: "connection-id",
+      connection: { emailAccountId: "email-account-id" },
+    },
+  ]);
+
   prisma.calendar.findFirst.mockResolvedValue({
     calendarId: "primary",
     connection: {
