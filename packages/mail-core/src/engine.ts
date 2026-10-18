@@ -35,7 +35,10 @@ import type { AssistantStateSource } from "./ports/assistant-source";
 import type { ScopeDescriptor } from "./ports/mailbox-source";
 import type { HostRuntime } from "./ports/runtime";
 import { webCryptoSha256 } from "./canonical";
-import { extractTextPredicates } from "./query-semantics";
+import {
+  extractProviderSearches,
+  resolveSearchPredicates,
+} from "./query-semantics";
 import type {
   ContactSuggestion,
   ContactSuggestionQuery,
@@ -275,7 +278,7 @@ export function createMailEngine(input: {
     observeMailbox(query) {
       const searches = watchProviderSearches(query, query.pageSize);
       const handle = queries.observe(mailboxQueryKey(query), () =>
-        store.readMailboxView(query).then((result) => ({
+        store.readMailboxView(withProviderMatches(query)).then((result) => ({
           revision: result.revision,
           data: result.view,
         })),
@@ -301,13 +304,15 @@ export function createMailEngine(input: {
       const searches = watchProviderSearches(query, pageCount * query.pageSize);
       const key = `mailbox-pages:${runtime.randomId()}`;
       const handle = queries.observe(key, () =>
-        store.readMailboxWindow(query, pageCount).then((result) => ({
-          revision: {
-            databaseEpoch: `${result.revision.databaseEpoch}:pages:${pageCount}`,
-            sequence: result.revision.sequence,
-          },
-          data: result.view,
-        })),
+        store
+          .readMailboxWindow(withProviderMatches(query), pageCount)
+          .then((result) => ({
+            revision: {
+              databaseEpoch: `${result.revision.databaseEpoch}:pages:${pageCount}`,
+              sequence: result.revision.sequence,
+            },
+            data: result.view,
+          })),
       );
       return {
         ...handle,
@@ -653,6 +658,10 @@ export function createMailEngine(input: {
               });
             }
             search.matched += matches.length;
+            if (searched.value.semantics === "exact") {
+              for (const match of matches)
+                search.exactMatches.add(match.messageId);
+            }
             search.nextPage = searched.value.nextPage;
             requestNextSearchPage(search);
             await refreshViews();
@@ -998,11 +1007,25 @@ export function createMailEngine(input: {
     }
   }
 
+  // A typed search shows what the provider's own search matched next to what
+  // the store matches itself, for as long as a view keeps the search open.
+  function withProviderMatches(query: ConversationQuery): ConversationQuery {
+    return {
+      ...query,
+      predicate: resolveSearchPredicates(query.predicate, (search) =>
+        query.accountIds.flatMap((accountId) => [
+          ...(providerSearches.get(providerSearchKey(accountId, search))
+            ?.exactMatches ?? []),
+        ]),
+      ),
+    };
+  }
+
   function watchProviderSearches(query: ConversationQuery, wantedRows: number) {
     const observer = Symbol("mailbox-view");
     const watched: ProviderSearch[] = [];
     for (const accountId of query.accountIds) {
-      for (const predicate of extractTextPredicates(query.predicate)) {
+      for (const predicate of extractProviderSearches(query.predicate)) {
         const key = providerSearchKey(accountId, predicate);
         let search = providerSearches.get(key);
         if (!search) {
@@ -1013,6 +1036,7 @@ export function createMailEngine(input: {
             requestedPages: new Set([null]),
             nextPage: null,
             matched: 0,
+            exactMatches: new Set(),
             pagesSinceDemand: 1,
             wantedRows: new Map(),
           };
@@ -1860,6 +1884,8 @@ type ProviderSearch = {
   requestedPages: Set<string | null>;
   nextPage: string | null;
   matched: number;
+  /** What a provider that answers the query exactly matched, so far. */
+  exactMatches: Set<string>;
   pagesSinceDemand: number;
   wantedRows: Map<symbol, number>;
 };

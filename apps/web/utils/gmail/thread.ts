@@ -248,5 +248,7 @@ export async function getThreadMessages(
 
 /** Gmail drops spam and trash unless `includeSpamTrash` is set, even for `in:spam`. */
 export function queryIncludesSpamOrTrash(query: string) {
-  return /(?:^|[\s(])(?:in|label):(spam|trash)\b/i.test(query);
+  return /(?:^|[\s({])(?:(?:in|label):(?:spam|trash)|in:anywhere)\b/i.test(
+    query,
+  );
 }

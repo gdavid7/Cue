@@ -83,12 +83,12 @@ export function compilePredicate(
       };
     }
     case "address": {
-      const column =
-        predicate.field === "from"
-          ? `${alias}.from_address`
-          : predicate.field === "to"
-            ? `${alias}.to_json`
-            : `${alias}.cc_json`;
+      const column = {
+        from: `${alias}.from_address`,
+        to: `${alias}.to_json`,
+        cc: `${alias}.cc_json`,
+        bcc: `${alias}.bcc_json`,
+      }[predicate.field];
       if (predicate.field === "from" && predicate.match === "address") {
         return {
           sql: `(LOWER(${column}) = LOWER(?) OR LOWER(${column}) LIKE '%' || LOWER(?) || '%')`,
@@ -129,6 +129,10 @@ export function compilePredicate(
       };
     case "text":
       return compileTextPredicate(predicate, search, alias);
+    // The engine adds the provider's matches before a view reads; anything
+    // else answers from the store alone.
+    case "search":
+      return compilePredicate(predicate.local, search, alias);
     default: {
       const exhaustive: never = predicate;
       return exhaustive;
@@ -149,7 +153,7 @@ export function searchDrivenSource(
   search: SearchSupport,
 ): { from: string; bindings: SqlValue[]; rest: MailPredicate } | null {
   if (!search.fts5 || !search.complete) return null;
-  const clauses = predicate.kind === "all" ? predicate.predicates : [predicate];
+  const clauses = topLevelClauses(predicate);
   for (const [index, clause] of clauses.entries()) {
     if (clause.kind !== "text") continue;
     const match = textMatchQuery(clause);
@@ -230,6 +234,15 @@ function compileUnindexedText(
       columns.map(() => `%${escapeLike(term)}%`),
     ),
   };
+}
+
+// A typed search read here stands for its local part, which is spliced in.
+function topLevelClauses(predicate: MailPredicate): MailPredicate[] {
+  if (predicate.kind === "search") return topLevelClauses(predicate.local);
+  if (predicate.kind !== "all") return [predicate];
+  return predicate.predicates.flatMap((clause) =>
+    clause.kind === "search" ? topLevelClauses(clause.local) : [clause],
+  );
 }
 
 function compileMailboxPredicate(

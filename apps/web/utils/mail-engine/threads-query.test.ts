@@ -232,179 +232,47 @@ describe("threadsQueryToPredicate", () => {
     });
   });
 
-  it("maps free-text search to a text predicate", () => {
-    expect(threadsQueryToPredicate({ q: "invoice" })).toEqual({
-      kind: "text",
-      field: "any",
-      value: "invoice",
-      match: "term",
+  // What each operator matches is covered against the store in
+  // search-query-predicate.test.ts.
+  it("hands a typed search to the provider verbatim, inside Gmail's default scope", () => {
+    expect(
+      threadsQueryToPredicate({ q: " from:amy@example.com is:unread " }),
+    ).toEqual({
+      kind: "all",
+      predicates: [
+        {
+          kind: "search",
+          query: "from:amy@example.com is:unread",
+          local: {
+            kind: "all",
+            predicates: [
+              {
+                kind: "address",
+                field: "from",
+                value: "amy@example.com",
+                match: "address",
+              },
+              { kind: "read", value: false },
+            ],
+          },
+        },
+        { kind: "mailbox", mailbox: "all" },
+      ],
     });
   });
 
-  it("maps subject, from and to operators onto structured predicates", () => {
+  it("resolves label names with the labels it is given", () => {
     expect(
-      threadsQueryToPredicate({
-        q: 'from:alice@example.com to:bob@example.com subject:"Archive Action Message" has:attachment invoice',
+      threadsQueryToPredicate({ q: "label:work" }, undefined, {
+        labels: [{ id: "Label_1", name: "Work" }],
       }),
-    ).toEqual({
-      kind: "all",
+    ).toMatchObject({
       predicates: [
         {
-          kind: "text",
-          field: "subject",
-          value: "Archive Action Message",
-          match: "phrase",
+          kind: "search",
+          local: { kind: "membership", membership: "label", id: "Label_1" },
         },
-        {
-          kind: "address",
-          field: "from",
-          value: "alice@example.com",
-          match: "address",
-        },
-        {
-          kind: "address",
-          field: "to",
-          value: "bob@example.com",
-          match: "address",
-        },
-        { kind: "has_attachment", value: true },
-        { kind: "text", field: "any", value: "invoice", match: "term" },
-      ],
-    });
-  });
-
-  it.each([
-    "to:ada@example.com to:grace@example.com",
-    "(to:ada@example.com) (to:grace@example.com)",
-    'to:"ada@example.com" to:"grace@example.com"',
-  ])("extracts every recipient operator: %s", (q) => {
-    expect(threadsQueryToPredicate({ q })).toEqual({
-      kind: "all",
-      predicates: [
-        {
-          kind: "address",
-          field: "to",
-          value: "ada@example.com",
-          match: "address",
-        },
-        {
-          kind: "address",
-          field: "to",
-          value: "grace@example.com",
-          match: "address",
-        },
-      ],
-    });
-  });
-
-  it("leaves recipient operators inside quoted text in the phrase", () => {
-    expect(
-      threadsQueryToPredicate({
-        q: 'to:ada@example.com "sent to:grace@example.com"',
-      }),
-    ).toEqual({
-      kind: "all",
-      predicates: [
-        {
-          kind: "address",
-          field: "to",
-          value: "ada@example.com",
-          match: "address",
-        },
-        {
-          kind: "text",
-          field: "any",
-          value: '"sent to:grace@example.com"',
-          match: "term",
-        },
-      ],
-    });
-  });
-
-  it("maps the Outlook attachment operator onto the attachment predicate", () => {
-    expect(threadsQueryToPredicate({ q: "hasattachments:true" })).toEqual({
-      kind: "has_attachment",
-      value: true,
-    });
-    expect(
-      threadsQueryToPredicate({ q: "invoice hasattachments:yes" }),
-    ).toEqual({
-      kind: "all",
-      predicates: [
-        { kind: "has_attachment", value: true },
-        { kind: "text", field: "any", value: "invoice", match: "term" },
-      ],
-    });
-  });
-
-  it("negates the attachment predicate for hasattachments:false", () => {
-    expect(
-      threadsQueryToPredicate({ q: "invoice hasattachments:false" }),
-    ).toEqual({
-      kind: "all",
-      predicates: [
-        { kind: "has_attachment", value: false },
-        { kind: "text", field: "any", value: "invoice", match: "term" },
-      ],
-    });
-  });
-
-  it("keeps an attachment operator with an uninterpretable value as text", () => {
-    expect(
-      threadsQueryToPredicate({ q: "invoice hasattachments:maybe" }),
-    ).toEqual({
-      kind: "text",
-      field: "any",
-      value: "invoice hasattachments:maybe",
-      match: "term",
-    });
-  });
-
-  it("reads operators inside a parenthesized group without leaving the parens as text", () => {
-    expect(threadsQueryToPredicate({ q: "(hasattachments:true)" })).toEqual({
-      kind: "has_attachment",
-      value: true,
-    });
-    expect(threadsQueryToPredicate({ q: "(subject:invoice)" })).toEqual({
-      kind: "text",
-      field: "subject",
-      value: "invoice",
-      match: "phrase",
-    });
-  });
-
-  it("leaves operators inside a quoted phrase in the phrase", () => {
-    expect(
-      threadsQueryToPredicate({
-        q: '"looking for hasattachments:true in email"',
-      }),
-    ).toEqual({
-      kind: "text",
-      field: "any",
-      value: '"looking for hasattachments:true in email"',
-      match: "term",
-    });
-  });
-
-  it("keeps parens inside a quoted phrase", () => {
-    expect(threadsQueryToPredicate({ q: '"invoice (paid)"' })).toEqual({
-      kind: "text",
-      field: "any",
-      value: '"invoice (paid)"',
-      match: "term",
-    });
-    expect(
-      threadsQueryToPredicate({ q: '(hasattachments:true) "invoice (paid)"' }),
-    ).toEqual({
-      kind: "all",
-      predicates: [
-        { kind: "has_attachment", value: true },
-        {
-          kind: "text",
-          field: "any",
-          value: '"invoice (paid)"',
-          match: "term",
-        },
+        { kind: "mailbox", mailbox: "all" },
       ],
     });
   });

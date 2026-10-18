@@ -54,7 +54,7 @@ export const mailPredicateSchema: z.ZodType<MailPredicate> = z.lazy(() =>
     }),
     z.object({
       kind: z.literal("address"),
-      field: z.enum(["from", "to", "cc"]),
+      field: z.enum(["from", "to", "cc", "bcc"]),
       value: z.string().min(1).max(4096),
       match: z.enum(["address", "domain"]),
     }),
@@ -73,6 +73,11 @@ export const mailPredicateSchema: z.ZodType<MailPredicate> = z.lazy(() =>
       field: z.enum(["any", "subject", "body"]),
       value: z.string().min(1).max(4096),
       match: z.enum(["term", "phrase"]),
+    }),
+    z.object({
+      kind: z.literal("search"),
+      query: z.string().min(1).max(4096),
+      local: mailPredicateSchema,
     }),
   ]),
 );
@@ -94,7 +99,7 @@ export type MailPredicate =
     }
   | {
       kind: "address";
-      field: "from" | "to" | "cc";
+      field: "from" | "to" | "cc" | "bcc";
       value: string;
       match: "address" | "domain";
     }
@@ -106,7 +111,13 @@ export type MailPredicate =
       field: "any" | "subject" | "body";
       value: string;
       match: "term" | "phrase";
-    };
+    }
+  /**
+   * A search the user typed, in the provider's own syntax. `local` is what the
+   * store answers by itself, and never matches a message the whole query
+   * wouldn't. The provider's own search for `query` finds the rest.
+   */
+  | { kind: "search"; query: string; local: MailPredicate };
 
 export const conversationQuerySchema = z.object({
   accountIds: z.array(accountIdSchema).min(1).max(50),

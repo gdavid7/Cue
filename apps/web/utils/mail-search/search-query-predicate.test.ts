@@ -1,0 +1,250 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { MessageMetadata } from "@inboxzero/mail-core/messages";
+import type { ProviderChange } from "@inboxzero/mail-core/sync";
+import { createNodeSqliteDriver } from "@inboxzero/mail-sqlite/node";
+import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
+import { searchQueryToPredicate } from "@/utils/mail-search/search-query-predicate";
+
+const ACCOUNT = "account-1";
+const NOW = new Date("2024-03-10T12:00:00Z");
+const LABELS = [
+  { id: "Label_work", name: "Work" },
+  { id: "Label_trips", name: "Travel/Trips" },
+];
+
+const MESSAGES: Array<{ id: string } & Partial<MessageMetadata>> = [
+  {
+    id: "amy",
+    from: "Amy Pond <amy@example.com>",
+    to: ["me@example.com"],
+    cc: ["rory@example.com"],
+    bcc: ["doctor@example.com"],
+    subject: "Dinner plans",
+    preview: "Movie at eight",
+    receivedAtMs: Date.parse("2024-01-15T12:00:00Z"),
+    read: false,
+    roles: ["inbox"],
+    hasAttachments: true,
+    labelIds: ["Label_work"],
+    categoryIds: ["CATEGORY_SOCIAL"],
+  },
+  {
+    id: "bob",
+    from: "bob@corp.com",
+    subject: "Quarterly invoice",
+    preview: "Please pay",
+    receivedAtMs: Date.parse("2024-03-01T12:00:00Z"),
+    starred: true,
+    roles: [],
+    labelIds: ["IMPORTANT", "Label_trips"],
+    categoryIds: ["CATEGORY_UPDATES"],
+  },
+  {
+    id: "sent",
+    from: "me@example.com",
+    to: ["amy@example.com"],
+    subject: "Re: Dinner plans",
+    preview: "Sounds good",
+    receivedAtMs: Date.parse("2024-01-16T12:00:00Z"),
+    roles: ["sent"],
+  },
+  {
+    id: "draft",
+    from: "me@example.com",
+    subject: "Draft note",
+    preview: "Unfinished",
+    receivedAtMs: Date.parse("2024-03-05T12:00:00Z"),
+    roles: ["draft"],
+  },
+  {
+    id: "spam",
+    from: "winner@lottery.biz",
+    subject: "You won",
+    preview: "Claim your dinner prize",
+    receivedAtMs: Date.parse("2024-02-20T12:00:00Z"),
+    roles: ["spam"],
+  },
+  {
+    id: "trash",
+    from: "amy@example.com",
+    subject: "Old dinner",
+    preview: "Deleted",
+    receivedAtMs: Date.parse("2024-01-10T12:00:00Z"),
+    roles: ["trash"],
+  },
+];
+
+let store: Awaited<ReturnType<typeof createSqliteMailStore>>;
+
+beforeAll(async () => {
+  store = await createSqliteMailStore(createNodeSqliteDriver());
+  await store.ensureAccount({
+    accountId: ACCOUNT,
+    provider: "google",
+    generation: "g1",
+  });
+  await store.applySyncPage({
+    ownerId: "owner",
+    page: {
+      session: { accountId: ACCOUNT, generation: "g1" },
+      requestId: "seed",
+      from: { streamId: "primary", generation: "g1", checkpoint: null },
+      to: { streamId: "primary", generation: "g1", checkpoint: "1" },
+      changes: MESSAGES.map(messagePatch),
+      requiredHydration: [],
+      roundComplete: true,
+    },
+  });
+});
+
+afterAll(async () => {
+  await store.close();
+});
+
+describe("searchQueryToPredicate, read by the local store", () => {
+  it.each<[string, string[]]>([
+    // Free text and phrases; spam and trash stay out, as in Gmail.
+    ["dinner", ["amy", "sent"]],
+    ['"dinner plans"', ["amy", "sent"]],
+    ["dinner plans", ["amy", "sent"]],
+    // Senders and recipients.
+    ["from:amy@example.com", ["amy"]],
+    ["from:amy", ["amy"]],
+    ["from:corp.com", ["bob"]],
+    ["to:amy@example.com", ["sent"]],
+    ["to:rory@example.com", ["amy"]],
+    ["cc:rory", ["amy"]],
+    ["bcc:doctor@example.com", ["amy"]],
+    ["subject:invoice", ["bob"]],
+    ['subject:"dinner plans"', ["amy", "sent"]],
+    // Attachments.
+    ["has:attachment", ["amy"]],
+    ["hasattachments:true", ["amy"]],
+    // State.
+    ["is:unread", ["amy"]],
+    ["is:starred", ["bob"]],
+    ["is:flagged", ["bob"]],
+    ["is:important", ["bob"]],
+    // Mailboxes.
+    ["in:inbox", ["amy"]],
+    ["in:sent", ["sent"]],
+    ["in:drafts", ["draft"]],
+    ["in:spam", ["spam"]],
+    ["in:trash", ["trash"]],
+    ["in:anywhere dinner", ["amy", "sent", "spam", "trash"]],
+    ["dinner -in:chats", ["amy", "sent"]],
+    // Labels by name, as the advanced search form writes them.
+    ["label:Work", ["amy"]],
+    ["label:work", ["amy"]],
+    ["label:travel-trips", ["bob"]],
+    ["label:important", ["bob"]],
+    ["category:social", ["amy"]],
+    ["category:updates", ["bob"]],
+    // Dates, at midnight Pacific time like the Gmail API.
+    ["after:2024/02/01", ["bob", "draft"]],
+    ["before:2024/01/16", ["amy"]],
+    ["after:2024-01-15 before:2024-01-17", ["amy", "sent"]],
+    ["after:1/15/2024 before:1/17/2024", ["amy", "sent"]],
+    ["newer_than:7d", ["draft"]],
+    ["older_than:1m", ["amy", "sent"]],
+    ["received>=2024-03-01", ["bob", "draft"]],
+    // Boolean structure.
+    ["dinner OR invoice", ["amy", "sent", "bob"]],
+    ["{dinner invoice}", ["amy", "sent", "bob"]],
+    ["dinner -from:me@example.com", ["amy"]],
+    ["-in:inbox dinner", ["sent"]],
+    ["NOT in:inbox dinner", ["sent"]],
+    ["(dinner OR invoice) is:unread", ["amy"]],
+    ["from:(amy OR bob)", ["amy", "bob"]],
+    ["subject:(dinner plans)", ["amy", "sent"]],
+  ])("%s", async (query, expected) => {
+    expect(await localMatches(query)).toEqual(expected.sort());
+  });
+
+  it.each([
+    "larger:5M",
+    "smaller:10K",
+    "filename:pdf",
+    "has:drive",
+    "list:info@example.com",
+    "from:me",
+    "label:Unknown",
+    "dinner AROUND 3 movie",
+    // A negated condition the store can't evaluate leaves nothing it can
+    // vouch for.
+    "dinner -larger:5M",
+  ])("leaves %s to the provider instead of guessing", async (query) => {
+    expect(await localMatches(query)).toEqual([]);
+  });
+
+  it("still answers the parts it can of an alternative it can't", async () => {
+    expect(await localMatches("dinner OR larger:5M")).toEqual(["amy", "sent"]);
+  });
+
+  it("hands the provider the query exactly as typed", () => {
+    const query = "from:amy  {dinner movie} -larger:5M";
+    expect(
+      searchQueryToPredicate(query, { now: NOW, labels: LABELS }),
+    ).toMatchObject({
+      kind: "all",
+      predicates: [
+        { kind: "search", query: query.trim() },
+        { kind: "mailbox" },
+      ],
+    });
+  });
+
+  it("has nothing to search for in an empty query", () => {
+    expect(searchQueryToPredicate("  ", { now: NOW })).toBeNull();
+  });
+});
+
+async function localMatches(query: string) {
+  const predicate = searchQueryToPredicate(query, {
+    now: NOW,
+    labels: LABELS,
+    timeZone: "UTC",
+  });
+  if (!predicate) throw new Error("No predicate");
+  const { view } = await store.readMailboxView({
+    accountIds: [ACCOUNT],
+    predicate,
+    order: "newest_first",
+    pageSize: 50,
+    after: null,
+  });
+  return view.conversations.map((row) => row.key.conversationId).sort();
+}
+
+function messagePatch(
+  message: (typeof MESSAGES)[number],
+): Extract<ProviderChange, { kind: "message_patch" }> {
+  const { id, ...fields } = message;
+  return {
+    kind: "message_patch",
+    key: { accountId: ACCOUNT, messageId: id },
+    reference: {
+      provider: "google",
+      messageId: id,
+      conversationId: id,
+      version: "1",
+    },
+    fields: {
+      subject: "",
+      preview: "",
+      from: "someone@example.com",
+      to: ["me@example.com"],
+      cc: [],
+      bcc: [],
+      receivedAtMs: 0,
+      read: true,
+      starred: false,
+      folderId: null,
+      labelIds: [],
+      categoryIds: [],
+      roles: [],
+      hasAttachments: false,
+      ...fields,
+    },
+  };
+}

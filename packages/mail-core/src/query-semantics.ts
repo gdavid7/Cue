@@ -1,7 +1,7 @@
 import type { MetadataChange } from "./commands";
 import { applyMetadataChange } from "./effective-state";
 import type { MessageMetadata } from "./messages";
-import type { MailPredicate } from "./queries";
+import { MAX_MESSAGE_PREDICATE_IDS, type MailPredicate } from "./queries";
 
 export type EffectiveMessage = MessageMetadata & {
   accountId: string;
@@ -80,6 +80,8 @@ export function messageMatchesPredicate(
         predicate.value,
         predicate.match,
       );
+    case "search":
+      return messageMatchesPredicate(message, predicate.local);
     default: {
       const exhaustive: never = predicate;
       return exhaustive;
@@ -146,6 +148,12 @@ export function conversationMatchesAfterChange(
       );
       return result === null ? null : !result;
     }
+    case "search":
+      // The provider's own matches can keep a conversation the local part
+      // drops, so only a match is decided here.
+      return conversationMatchesAfterChange(predicate.local, change) === true
+        ? true
+        : null;
     case "role":
     case "mailbox":
     case "read":
@@ -170,31 +178,85 @@ export function conversationMatchesAfterChange(
   }
 }
 
-export function extractTextPredicates(
+/**
+ * The parts of a predicate the provider is asked to search for: each typed
+ * search as a whole, and each text condition outside one.
+ */
+export function extractProviderSearches(
   predicate: MailPredicate,
-): Array<Extract<MailPredicate, { kind: "text" }>> {
-  if (predicate.kind === "text") return [predicate];
+): Array<Extract<MailPredicate, { kind: "text" | "search" }>> {
+  if (predicate.kind === "text" || predicate.kind === "search")
+    return [predicate];
   if (predicate.kind === "all" || predicate.kind === "any") {
-    return predicate.predicates.flatMap(extractTextPredicates);
+    return predicate.predicates.flatMap(extractProviderSearches);
   }
   if (predicate.kind === "not") {
-    return extractTextPredicates(predicate.predicate);
+    return extractProviderSearches(predicate.predicate);
   }
   return [];
 }
 
+/**
+ * Replaces each typed search with its local part, or with its local part or
+ * the messages `providerMatches` says the provider's search returned for it.
+ * A search nested in an `all` is spliced into it, so a text condition in it
+ * stays at the top level, where the store drives the query from its index.
+ */
+export function resolveSearchPredicates(
+  predicate: MailPredicate,
+  providerMatches: (
+    search: Extract<MailPredicate, { kind: "search" }>,
+  ) => string[],
+): MailPredicate {
+  switch (predicate.kind) {
+    case "search": {
+      const local = resolveSearchPredicates(predicate.local, providerMatches);
+      const ids = providerMatches(predicate).slice(-MAX_MESSAGE_PREDICATE_IDS);
+      if (!ids.length) return local;
+      return { kind: "any", predicates: [local, { kind: "message", ids }] };
+    }
+    case "all":
+      return {
+        kind: "all",
+        predicates: predicate.predicates.flatMap((child) => {
+          const resolved = resolveSearchPredicates(child, providerMatches);
+          return child.kind === "search" && resolved.kind === "all"
+            ? resolved.predicates
+            : [resolved];
+        }),
+      };
+    case "any":
+      return {
+        kind: "any",
+        predicates: predicate.predicates.map((child) =>
+          resolveSearchPredicates(child, providerMatches),
+        ),
+      };
+    case "not":
+      return {
+        kind: "not",
+        predicate: resolveSearchPredicates(
+          predicate.predicate,
+          providerMatches,
+        ),
+      };
+    default:
+      return predicate;
+  }
+}
+
 function addressMatches(
   message: EffectiveMessage,
-  field: "from" | "to" | "cc",
+  field: "from" | "to" | "cc" | "bcc",
   value: string,
   match: "address" | "domain",
 ): boolean {
-  const candidates =
-    field === "from"
-      ? [message.from]
-      : field === "to"
-        ? message.to
-        : message.cc;
+  const candidates = {
+    from: [message.from],
+    to: message.to,
+    cc: message.cc,
+    bcc: message.bcc ?? [],
+  }[field];
   const needle = value.toLowerCase();
   return candidates.some((candidate) => {
     const email = extractEmail(candidate).toLowerCase();
