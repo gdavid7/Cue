@@ -12,7 +12,6 @@ import {
 import { ConnectorLogo } from "@/components/connectors/ConnectorLogo";
 import { IntelligenceDemo } from "@/app/(landing)/login/IntelligenceDemo";
 import { BRAND_NAME } from "@/utils/branding";
-import { MCP_INTEGRATIONS } from "@/utils/mcp/integrations";
 
 const KEEP_GMAIL_POINTS = [
   {
@@ -42,7 +41,7 @@ const MORE_THAN_SORTING = [
   {
     icon: PenLineIcon,
     title: "Replies that sound like you",
-    description: "Suggested replies that learn from every edit you make.",
+    description: "Suggested replies that learn from your edits.",
   },
   {
     icon: SunIcon,
@@ -52,8 +51,7 @@ const MORE_THAN_SORTING = [
   {
     icon: MessageCircleQuestionIcon,
     title: "Ask anything",
-    description:
-      "Chat that searches your mail, calendar, connected apps and the web.",
+    description: "Chat that searches your mail and calendar.",
   },
   {
     icon: WandSparklesIcon,
@@ -62,45 +60,11 @@ const MORE_THAN_SORTING = [
   },
 ];
 
-type IntegrationTile = { name: string; domain: string; logo?: string };
+type IntegrationTile = { name: string; domain: string };
 
-const INTEGRATION_GROUPS: { label: string; apps: IntegrationTile[] }[] = [
-  {
-    label: "Classes and files",
-    apps: [
-      fromConnector("canvas"),
-      fromConnector("googledrive"),
-      fromConnector("one_drive"),
-      fromConnector("googlesheets"),
-      fromConnector("airtable"),
-    ],
-  },
-  {
-    label: "Chat and tasks",
-    apps: [
-      fromConnector("slack"),
-      { ...fromConnector("microsoft_teams"), name: "Teams" },
-      fromConnector("jira"),
-      fromConnector("asana"),
-      fromConnector("clickup"),
-    ],
-  },
-  {
-    label: "Calendar",
-    apps: [
-      { name: "Google Calendar", domain: "google.com" },
-      fromConnector("calendly"),
-    ],
-  },
-  {
-    label: "Customers and money",
-    apps: [
-      fromConnector("hubspot"),
-      fromConnector("salesforce"),
-      fromConnector("zendesk"),
-      fromConnector("quickbooks"),
-    ],
-  },
+const INTEGRATIONS: IntegrationTile[] = [
+  { name: "Gmail", domain: "gmail.com" },
+  { name: "Google Calendar", domain: "google.com" },
 ];
 
 const FAQS: { question: string; answer: string }[] = [
@@ -109,16 +73,13 @@ const FAQS: { question: string; answer: string }[] = [
     answer: `No. ${BRAND_NAME} works on top of the Gmail account you already have. Your mail stays in Gmail, nothing is migrated, and Gmail keeps working everywhere you use it. ${BRAND_NAME}'s tabs and sorting live inside ${BRAND_NAME}, so it doesn't label, move or filter anything in Gmail unless you set up a rule that does. You can disconnect any time.`,
   },
   {
-    question: `How is ${BRAND_NAME} different from other AI email apps like Superhuman?`,
-    answer: `Superhuman is a fast, polished email app with years of work behind it, Outlook support and mobile apps. Its integrations lean toward sales tools like CRMs. ${BRAND_NAME} is built for students, freelancers, founders and small teams. It connects your email to tools like Canvas, Google Drive, Slack, Jira and Asana, and shows what each email needs with the related files, assignments, messages and tasks next to it. ${BRAND_NAME} doesn't have a phone app yet, but it works in your phone's browser. Put simply: Superhuman connects your email to your sales tools. ${BRAND_NAME} connects it to everything else. (Based on Superhuman's public website, October 2026.)`,
-  },
-  {
     question: `Who is ${BRAND_NAME} for?`,
-    answer: `Anyone who isn't inside a large enterprise: students, individuals, freelancers, founders and small teams. If you live in Gmail and your work is spread across other apps, ${BRAND_NAME} is for you.`,
+    answer:
+      "Students, freelancers, founders and small teams who live in Gmail.",
   },
   {
     question: `What does ${BRAND_NAME} do with my email?`,
-    answer: `${BRAND_NAME} reads your mail to tell you what each email needs from you, find related files and messages, and suggest replies. Parts of your mail are processed by AI providers to do that, and your mail is never used to train AI models. Nothing sends without you.`,
+    answer: `${BRAND_NAME} reads your mail to tell you what most emails need from you and to suggest replies. Parts of your mail are processed by AI providers to do that, and your mail is never used to train AI models. Nothing sends without you.`,
   },
   {
     question: "Does it work with Outlook?",
@@ -152,7 +113,7 @@ export function IntelligenceSection() {
     <LandingSection
       id="intelligence"
       title="Email has worked the same way for over 50 years."
-      description={`A list of messages, newest first, and the rest is up to you: what each one wants, where the file is, what your team already said. ${BRAND_NAME} does a lot more than sorting. It tells you what each email needs from you, like “Reply with your flight time” or “Confirm Wednesday 4 PM”, right under the email, and brings everything related to it.`}
+      description={`A list of messages, newest first, and the rest is up to you: what each one wants and what to say back. ${BRAND_NAME} does a lot more than sorting. It tells you what most emails need from you, like “Reply with your flight time” or “Confirm Wednesday 4 PM”, right under the email.`}
     >
       <h3 className="mb-3 font-medium text-foreground">
         Intelligence, not just sorting.
@@ -171,35 +132,20 @@ export function IntegrationsSection() {
   return (
     <LandingSection
       id="integrations"
-      title="Connected to everything else you use."
-      description={`${BRAND_NAME} connects your email to your classes, files, chats, tasks and calendar, then shows what's related next to each email: the assignment, the doc, the thread, the ticket.`}
+      title="Works with Gmail and Google Calendar."
+      description={`${BRAND_NAME} reads your Gmail and your calendar to understand what each email needs. More connections are coming.`}
     >
-      <div className="space-y-6">
-        {INTEGRATION_GROUPS.map((group) => (
-          <div key={group.label}>
-            <h3 className="font-medium text-muted-foreground text-sm">
-              {group.label}
-            </h3>
-            <ul className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-              {group.apps.map((app) => (
-                <li
-                  key={app.name}
-                  className="flex min-w-0 items-center gap-2.5 rounded-lg border bg-card px-3 py-2.5"
-                >
-                  <ConnectorLogo
-                    logo={app.logo}
-                    domain={app.domain}
-                    size={20}
-                  />
-                  <span className="truncate text-foreground text-sm">
-                    {app.name}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
+      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+        {INTEGRATIONS.map((app) => (
+          <li
+            key={app.name}
+            className="flex min-w-0 items-center gap-2.5 rounded-lg border bg-card px-3 py-2.5"
+          >
+            <ConnectorLogo domain={app.domain} size={20} />
+            <span className="truncate text-foreground text-sm">{app.name}</span>
+          </li>
         ))}
-      </div>
+      </ul>
     </LandingSection>
   );
 }
@@ -281,13 +227,4 @@ function FeatureItem({
       </p>
     </li>
   );
-}
-
-function fromConnector(key: keyof typeof MCP_INTEGRATIONS): IntegrationTile {
-  const connector = MCP_INTEGRATIONS[key];
-  return {
-    name: connector.displayName,
-    domain: connector.url,
-    logo: connector.logo,
-  };
 }

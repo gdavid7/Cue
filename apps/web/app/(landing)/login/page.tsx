@@ -79,8 +79,8 @@ export default async function AuthenticationPage(props: {
             The better email.
           </h1>
           <p className="mt-3 text-foreground/80 text-lg leading-snug">
-            {BRAND_NAME} tells you what every email needs, and brings in
-            everything around it: your classes, docs, chats and tasks.
+            {BRAND_NAME} tells you what most emails need from you and suggests a
+            reply, so you decide what goes out.
           </p>
           <p className="mt-6 flex gap-2 text-foreground text-sm leading-snug">
             <CheckIcon
