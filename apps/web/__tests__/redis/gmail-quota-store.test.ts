@@ -12,7 +12,10 @@ import {
   vi,
 } from "vitest";
 import { createRedisHttpServer } from "@/scripts/local-dev/redis-http";
-import { gmailQuotaStore } from "@/utils/gmail/quota-store";
+import {
+  type GmailQuotaNote,
+  gmailQuotaStore,
+} from "@/utils/gmail/quota-store";
 import {
   GmailCallDeferredError,
   meterGmailCall,
@@ -81,6 +84,9 @@ const admit = (input: {
     markMs?: number;
     everyMs?: number;
   };
+  queued?: number[];
+  ahead?: { units: number; step: number; leaseMs: number; share: number };
+  notes?: { field: string; amount: number }[];
 }) =>
   gmailQuotaStore.take({
     bucketKey: keys.bucket,
@@ -108,6 +114,9 @@ const admit = (input: {
       slowKey: input.slowKey,
       demand: input.demand ?? { key: keys.demand },
     },
+    queued: input.queued,
+    ahead: input.ahead,
+    notes: input.notes,
   });
 
 let server: ChildProcess | null = null;
@@ -215,12 +224,12 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
     it("defers callers behind a blocker that lifts early, asking them back soon", async () => {
       await gmailQuotaStore.block({ key: keys.pause, ms: 90_000 });
       const blockers = [{ key: keys.pause, deferMs: 5000 }];
-      expect(await admit({ cost: 10, floor: 500, blockers })).toEqual({
+      expect(await admit({ cost: 10, floor: 500, blockers })).toMatchObject({
         waitMs: 5000,
         defer: true,
       });
       await gmailQuotaStore.clear(keys.pause);
-      expect(await admit({ cost: 10, floor: 500, blockers })).toEqual({
+      expect(await admit({ cost: 10, floor: 500, blockers })).toMatchObject({
         waitMs: 0,
         defer: false,
       });
@@ -395,25 +404,106 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       expect(await redis!.pttl(keys.demand)).toBeLessThanOrEqual(1000);
     });
 
-    it("hands a minute's usage to exactly one caller", async () => {
-      await gmailQuotaStore.note({
-        usageKey: keys.usage,
-        field: "deferred:user/stats",
-        amount: 2,
+    it("admits the requests queued behind one in the same round trip while each still fits", async () => {
+      const result = await admit({
+        cost: 30,
+        floor: 200,
+        paceCap: 100,
+        usageField: "interactive:leader",
+        queued: [30, 30, 30],
       });
+      // 30 + 30 + 30 fit the second's 100; a fourth 30 would not.
+      expect(result).toEqual({ waitMs: 0, defer: false, queued: 2, ahead: 0 });
+      expect(
+        await take({ cost: 20, floor: 200, paceCap: 100 }),
+      ).toBeGreaterThan(0);
+      // The queued callers' usage is theirs to record.
+      expect(await redis!.hgetall(keys.usage)).toMatchObject({
+        "interactive:leader": "30",
+        "peak:second": "90",
+      });
+    });
+
+    it("reserves ahead only from the spare half of the second, held in the pace window until its lease ends", async () => {
+      const ahead = { units: 100, step: 10, leaseMs: 500, share: 0.5 };
+      const startedAt = Date.now();
+      const result = await admit({ cost: 10, floor: 200, paceCap: 100, ahead });
+      // Half of the 100 a second, less the call itself.
+      expect(result).toEqual({ waitMs: 0, defer: false, queued: 0, ahead: 40 });
+      const reservation = (await redis!.zrange(keys.pace, "0", "-1")).find(
+        (member) => member.includes(":ahead:"),
+      );
+      const reservedUntil = Number(
+        await redis!.zscore(keys.pace, reservation!),
+      );
+      expect(reservedUntil).toBeGreaterThanOrEqual(startedAt + 400);
+      // The second is half full, so another reservation gets nothing...
+      expect(
+        await admit({ cost: 10, floor: 200, paceCap: 100, ahead }),
+      ).toMatchObject({ waitMs: 0, ahead: 0 });
+      // ...and a call that needs the rest waits for the first to age out.
+      expect(
+        await take({ cost: 50, floor: 200, paceCap: 100 }),
+      ).toBeGreaterThan(0);
+    });
+
+    it("reserves ahead only from the bucket's upper half", async () => {
+      const result = await admit({
+        cost: 10,
+        floor: 200,
+        ahead: { units: 600, step: 10, leaseMs: 500, share: 0.5 },
+      });
+      // 1,000 tokens, less the call, down to half the bucket.
+      expect(result).toMatchObject({ waitMs: 0, ahead: 490 });
+      expect(Number(await redis!.hget(keys.bucket, "tokens"))).toBeCloseTo(
+        500,
+        -1,
+      );
+    });
+
+    it("records batched usage notes even when nothing is admitted", async () => {
+      await gmailQuotaStore.block({ key: keys.pause, ms: 20_000 });
+      await admit({
+        cost: 10,
+        floor: 500,
+        blockers: [{ key: keys.pause }],
+        notes: [
+          { field: "sync:a", amount: 15 },
+          { field: "deferred:b", amount: 2 },
+        ],
+      });
+      expect(await redis!.hgetall(keys.usage)).toEqual({
+        "sync:a": "15",
+        "deferred:b": "2",
+      });
+    });
+
+    it("hands a minute's usage to exactly one caller", async () => {
+      await gmailQuotaStore.note([
+        { usageKey: keys.usage, field: "deferred:user/stats", amount: 2 },
+      ]);
       expect(await take({ cost: 40, floor: -200, usageField: "chat" })).toBe(0);
-      const claim = () =>
-        gmailQuotaStore.claimUsages([
-          { usageKey: keys.usage, claimKey: `${keys.usage}:logged` },
-          {
-            usageKey: "gmail-quota:test:usage:2",
-            claimKey: "gmail-quota:test:usage:2:logged",
-          },
-        ]);
-      expect(await claim()).toEqual([
+      const claim = (notes: GmailQuotaNote[] = []) =>
+        gmailQuotaStore.claimUsages(
+          [
+            { usageKey: keys.usage, claimKey: `${keys.usage}:logged` },
+            {
+              usageKey: "gmail-quota:test:usage:2",
+              claimKey: "gmail-quota:test:usage:2:logged",
+            },
+          ],
+          notes,
+        );
+      // Notes written with the claim count in what it hands over.
+      expect(
+        await claim([
+          { usageKey: keys.usage, field: "interactive:a", amount: 5 },
+        ]),
+      ).toEqual([
         {
           "deferred:user/stats": 2,
           chat: 40,
+          "interactive:a": 5,
           "peak:second": 40,
           "budget:perMinute": 3600,
         },

@@ -1,4 +1,7 @@
-import type { GmailQuotaStore } from "@/utils/gmail/quota-store";
+import type {
+  GmailQuotaNote,
+  GmailQuotaStore,
+} from "@/utils/gmail/quota-store";
 
 /**
  * In-memory stand-in for the Redis quota store, following the same bucket
@@ -26,9 +29,23 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
   const claimed = new Set<string>();
   const ttl = (key: string) => Math.max(0, (blocks.get(key) ?? 0) - Date.now());
 
+  const addNotes = (notes: GmailQuotaNote[]) => {
+    for (const { usageKey, field, amount } of notes) {
+      const fields = usage.get(usageKey) ?? {};
+      fields[field] = (fields[field] ?? 0) + amount;
+      usage.set(usageKey, fields);
+    }
+  };
+
   return {
     async take(input) {
       const now = Date.now();
+      addNotes(
+        (input.notes ?? []).map((note) => ({
+          ...note,
+          usageKey: input.usageKey,
+        })),
+      );
       const held = input.blockers.filter(({ key }) => ttl(key) > 0);
       const defer = held.some(({ deferMs }) => deferMs);
       let wait = Math.max(
@@ -106,21 +123,49 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
           endsAt: now + pace.demand.markMs,
           renewsAt: now + (pace.demand.everyMs ?? pace.demand.markMs),
         });
-      if (wait > 0) return { waitMs: wait, defer };
+      if (wait > 0) return { waitMs: wait, defer, queued: 0, ahead: 0 };
 
-      buckets.set(input.bucketKey, { tokens: tokens - input.cost, at: now });
-      recent.push({ at: now, cost: input.cost });
+      const grantCap =
+        pace.demand.yieldCap !== undefined && demandTtl > 0
+          ? Math.min(cap, pace.demand.yieldCap)
+          : cap;
+      let used = input.cost;
+      let queued = 0;
+      for (const queuedCost of input.queued ?? []) {
+        if (
+          tokens - used - queuedCost < input.floor ||
+          inWindow + used + queuedCost > grantCap
+        )
+          break;
+        used += queuedCost;
+        queued++;
+      }
+      let ahead = 0;
+      if (input.ahead && input.ahead.units > 0 && input.ahead.step > 0) {
+        const room = Math.min(
+          grantCap * input.ahead.share - inWindow - used,
+          tokens - used - Math.max(input.floor, input.capacity / 2),
+          input.ahead.units,
+        );
+        if (room > 0)
+          ahead = Math.floor(room / input.ahead.step) * input.ahead.step;
+      }
+      buckets.set(input.bucketKey, { tokens: tokens - used - ahead, at: now });
+      recent.push({ at: now, cost: used });
+      if (ahead > 0)
+        recent.push({ at: now + (input.ahead?.leaseMs ?? 0), cost: ahead });
+      recent.sort((a, b) => a.at - b.at);
       trailingUnits(budget.trailingKey, budget.trailingWindowMs);
-      trailing.get(budget.trailingKey)?.push({ at: now, cost: input.cost });
+      trailing.get(budget.trailingKey)?.push({ at: now, cost: used + ahead });
       const fields = usage.get(input.usageKey) ?? {};
       fields[input.usageField] = (fields[input.usageField] ?? 0) + input.cost;
       fields["budget:perMinute"] = Math.floor(current.perMinute);
       fields["peak:second"] = Math.max(
         fields["peak:second"] ?? 0,
-        inWindow + input.cost,
+        inWindow + used,
       );
       usage.set(input.usageKey, fields);
-      return { waitMs: 0, defer: false };
+      return { waitMs: 0, defer: false, queued, ahead };
     },
     async cutBudget(input) {
       const units = trailingUnits(input.trailingKey, input.trailingWindowMs);
@@ -148,12 +193,11 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
       const now = Date.now();
       demands.set(key, { endsAt: now, renewsAt: now + gapMs });
     },
-    async note({ usageKey, field, amount }) {
-      const fields = usage.get(usageKey) ?? {};
-      fields[field] = (fields[field] ?? 0) + amount;
-      usage.set(usageKey, fields);
+    async note(notes) {
+      addNotes(notes);
     },
-    async claimUsages(input) {
+    async claimUsages(input, notes = []) {
+      addNotes(notes);
       return input.map(({ usageKey, claimKey }) => {
         const fields = usage.get(usageKey);
         if (!fields || claimed.has(claimKey)) return null;

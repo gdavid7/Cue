@@ -13,6 +13,7 @@ import {
   holdGmailInteractiveDemand,
   logGmailQuotaUsage,
   meterGmailCall,
+  resetGmailQuotaInstanceState,
   runWithGmailQuota,
   setGmailInitialSync,
 } from "@/utils/gmail/quota";
@@ -75,6 +76,7 @@ const quotaRefusal = {
 describe("Gmail quota gate", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    resetGmailQuotaInstanceState();
     (gmailQuotaStore as unknown as { reset(): void }).reset();
   });
   afterEach(() => {
@@ -1255,6 +1257,183 @@ describe("Gmail quota gate", () => {
     expect(insight).toBe(false);
     await vi.advanceTimersByTimeAsync(1000);
     expect(insight).toBe(true);
+  });
+
+  describe("store round trips", () => {
+    it("admits a person's reads that arrive together in one store round trip", async () => {
+      const take = vi.spyOn(gmailQuotaStore, "take");
+      const reads = Array.from({ length: 5 }, () =>
+        interactive("account-fan-out", async () => "message"),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(Promise.all(reads)).resolves.toHaveLength(5);
+      expect(take).toHaveBeenCalledTimes(1);
+    });
+
+    it("serves a steady stream of small reads with a fraction of the store round trips, all counted", async () => {
+      vi.setSystemTime(new Date("2026-10-14T15:00:00Z"));
+      const info = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const take = vi.spyOn(gmailQuotaStore, "take");
+      let reads = 0;
+      // A sync reading one small message every 100 ms.
+      for (let read = 0; read < 100; read++) {
+        await runWithGmailQuota(
+          { caller: "mail/v1/enumeration", priority: "sync" },
+          () =>
+            meterGmailCall(
+              { emailAccountId: "account-stream", cost: 5 },
+              async () => {
+                reads++;
+              },
+            ),
+        );
+        await vi.advanceTimersByTimeAsync(100);
+      }
+
+      expect(reads).toBe(100);
+      expect(take.mock.calls.length).toBeLessThanOrEqual(30);
+      // Every unit read is still in the minute's usage summary.
+      await vi.advanceTimersByTimeAsync(60_000);
+      await logGmailQuotaUsage();
+      const totals = info.mock.calls
+        .map(([line]) => String(line))
+        .filter(
+          (line) =>
+            line.includes("Gmail quota usage") &&
+            line.includes("account-stream"),
+        )
+        .map((line) => JSON.parse(line.slice(line.indexOf("{"))).totalUnits);
+      expect(totals.reduce((sum, units) => sum + units, 0)).toBe(500);
+    });
+
+    it("keeps a second within its cap when units reserved ahead are spent late", async () => {
+      const admissions: Array<{ at: number; cost: number }> = [];
+      const admit = (priority: "sync" | "interactive", cost: number) =>
+        runWithGmailQuota({ caller: `test/${priority}`, priority }, () =>
+          meterGmailCall(
+            { emailAccountId: "account-ahead", cost },
+            async () => {
+              admissions.push({ at: Date.now(), cost });
+            },
+          ),
+        );
+      let stop = false;
+      // A steady sync, well under its cap, holds units reserved ahead...
+      const sync = (async () => {
+        while (!stop) {
+          await admit("sync", 5);
+          await sleep(100);
+        }
+      })();
+      await vi.advanceTimersByTimeAsync(1500);
+      // ...while a person's reads take everything else the second has.
+      const reads = (async () => {
+        while (!stop) {
+          await admit("interactive", 20);
+          await sleep(50);
+        }
+      })();
+      await vi.advanceTimersByTimeAsync(1000);
+      stop = true;
+      await vi.advanceTimersByTimeAsync(2000);
+      await Promise.all([sync, reads]);
+
+      const peakSecond = Math.max(
+        ...admissions.map(({ at }) =>
+          admissions
+            .filter((entry) => entry.at >= at && entry.at < at + 1000)
+            .reduce((sum, entry) => sum + entry.cost, 0),
+        ),
+      );
+      expect(peakSecond).toBeLessThanOrEqual(200);
+    });
+
+    it("stops admitting from what this instance reserved ahead once Gmail refuses", async () => {
+      const read = (operation: () => Promise<unknown> = async () => "x") =>
+        runWithGmailQuota(
+          {
+            caller: "mail/v1/enumeration",
+            priority: "sync",
+            maxTotalWaitMs: 1000,
+          },
+          () =>
+            meterGmailCall(
+              { emailAccountId: "account-lease-refused", cost: 5 },
+              operation,
+            ),
+        );
+      // A steady stream, so the lane holds units reserved ahead.
+      for (let call = 0; call < 5; call++) {
+        await read();
+        await vi.advanceTimersByTimeAsync(150);
+      }
+      await expect(
+        read(async () => {
+          throw quotaRefusal;
+        }),
+      ).rejects.toBe(quotaRefusal);
+
+      // Sync stands back after a refusal, whatever this instance held.
+      await expect(read()).rejects.toBeInstanceOf(GmailCallDeferredError);
+    });
+
+    it("records deferrals without a store write for each one", async () => {
+      vi.setSystemTime(new Date("2026-10-14T16:00:10Z"));
+      const info = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      await setGmailInitialSync("account-deferrals", true);
+      const take = vi.spyOn(gmailQuotaStore, "take");
+      const note = vi.spyOn(gmailQuotaStore, "note");
+
+      for (let call = 0; call < 10; call++)
+        await expect(
+          runWithGmailQuota(
+            { caller: "user/inbox-insights", priority: "background" },
+            () =>
+              meterGmailCall(
+                { emailAccountId: "account-deferrals", cost: 20 },
+                async () => "insight",
+              ),
+          ),
+        ).rejects.toBeInstanceOf(GmailCallDeferredError);
+
+      expect(take).toHaveBeenCalledTimes(1);
+      expect(note).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await logGmailQuotaUsage();
+      const summary = info.mock.calls
+        .map(([line]) => String(line))
+        .find(
+          (line) =>
+            line.includes("Gmail quota usage") &&
+            line.includes("account-deferrals"),
+        );
+      expect(JSON.parse(summary!.slice(summary!.indexOf("{")))).toMatchObject({
+        deferredByCaller: [{ caller: "user/inbox-insights", calls: 10 }],
+      });
+    });
+
+    it("logs how often the gate asked its store, every five minutes per instance", async () => {
+      vi.setSystemTime(new Date("2027-01-01T00:00:00Z"));
+      const info = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      await logGmailQuotaUsage();
+      const reads = Array.from({ length: 4 }, () =>
+        interactive("account-gate-summary", async () => "message"),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.all(reads);
+
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await logGmailQuotaUsage();
+      const summaries = info.mock.calls
+        .map(([line]) => String(line))
+        .filter((line) => line.includes("Gmail quota gate"))
+        .map((line) => JSON.parse(line.slice(line.indexOf("{"))));
+      expect(summaries.at(-1)).toMatchObject({
+        calls: 4,
+        storeTakes: 1,
+      });
+    });
   });
 
   it("tells the assistant when Gmail is limiting requests", () => {
