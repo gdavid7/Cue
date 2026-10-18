@@ -13,6 +13,7 @@ import { MailMobileNav } from "@/app/(app)/[emailAccountId]/mail/MailMobileNav";
 import { MailShellSidebar } from "@/app/(app)/[emailAccountId]/mail/MailShellSidebar";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
 import { useMailHref } from "@/hooks/useMailHref";
+import { getTodayPath, useAllAccountsScope } from "@/hooks/useTodayHref";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 import { prefixPath } from "@/utils/path";
@@ -30,7 +31,7 @@ export function MailFrame({
   activeType: string | null;
   children: ReactNode;
 }) {
-  const { accountIds } = useAccount();
+  const { accountIds, emailAccountId } = useAccount();
   const mailHref = useMailHref();
   const router = useRouter();
   const isDesktopApp = useSyncExternalStore(
@@ -39,6 +40,9 @@ export function MailFrame({
     () => false,
   );
   const isToday = activeType === "today";
+  const allAccountsScope = useAllAccountsScope();
+  // Today across accounts keeps the sidebar and switcher All inboxes shows.
+  const isAllAccounts = isToday && allAccountsScope;
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   // Switching accounts keeps you where you are.
   const selectAccount = useCallback(
@@ -50,9 +54,15 @@ export function MailFrame({
       ),
     [accountIds, isToday],
   );
+  // On Today, all accounts is Today across them, as one account keeps Today.
   const selectAllAccounts = useCallback(
-    () => router.push(mailHref({ allInboxes: true })),
-    [mailHref, router],
+    () =>
+      router.push(
+        isToday
+          ? getTodayPath(emailAccountId, true)
+          : mailHref({ allInboxes: true }),
+      ),
+    [emailAccountId, isToday, mailHref, router],
   );
 
   return (
@@ -63,7 +73,7 @@ export function MailFrame({
           accountSwitcher={
             <MailAccountSwitcher
               isDesktopApp={isDesktopApp}
-              isAllAccounts={false}
+              isAllAccounts={isAllAccounts}
               onSelectAccount={selectAccount}
               onSelectAll={selectAllAccounts}
               variant="bar"
@@ -76,7 +86,7 @@ export function MailFrame({
         activeType={activeType}
         activeLabelId={null}
         activeFolderId={null}
-        isAllAccounts={false}
+        isAllAccounts={isAllAccounts}
         isDesktopApp={isDesktopApp}
         onSelectAccount={selectAccount}
         onSelectAllAccounts={selectAllAccounts}

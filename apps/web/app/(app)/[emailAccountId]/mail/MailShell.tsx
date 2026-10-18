@@ -153,7 +153,7 @@ import {
   type MailUrlView,
   resolveSlug,
 } from "@/utils/mail-url";
-import { prefixPath } from "@/utils/path";
+import { getTodayPath } from "@/hooks/useTodayHref";
 import { getRouteResolution } from "@/app/(app)/[emailAccountId]/mail/route-resolution";
 import { redirectToSafeUrl } from "@/utils/redirect";
 import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
@@ -406,7 +406,7 @@ export function MailShell() {
     settings?.layout === MailLayout.SPLIT ? "split" : "list";
   // A split reader needs the room `lg` gives it; below that the saved choice
   // waits, rather than leaving a phone a reader a hundred pixels wide.
-  const canSplit = !isAllAccounts && isLargeScreen;
+  const canSplit = isLargeScreen;
   const layout = canSplit ? accountLayout : "list";
   const expandedPreview = settings?.expandedPreview ?? false;
 
@@ -492,11 +492,9 @@ export function MailShell() {
   const searchQuery = searchValue.trim() || null;
   // Scheduled sends live in our own database, so this view has no thread
   // list to fetch.
-  const isScheduledView =
-    !isAllAccounts && !searchQuery && scopeType === MAIL_SCHEDULED_TYPE;
+  const isScheduledView = !searchQuery && scopeType === MAIL_SCHEDULED_TYPE;
   // The mailbox doesn't know what's snoozed or until when; our database does.
-  const isSnoozedView =
-    !isAllAccounts && !searchQuery && scopeType === MAIL_SNOOZED_TYPE;
+  const isSnoozedView = !searchQuery && scopeType === MAIL_SNOOZED_TYPE;
   const [settledSearch, setSettledSearch] = useState(searchQuery);
   useEffect(() => {
     const timeout = setTimeout(() => setSettledSearch(searchQuery), 250);
@@ -628,7 +626,8 @@ export function MailShell() {
   const combinedThreadState = useCombinedMailThreads({
     accounts: combinedAccounts,
     emailAccountId,
-    enabled: isAllAccounts && searchSettled,
+    enabled:
+      isAllAccounts && searchSettled && !isScheduledView && !isSnoozedView,
     isUnread:
       !searchQuery &&
       !!activeSplit?.filters.length &&
@@ -1477,18 +1476,26 @@ export function MailShell() {
   ]);
 
   const openSnoozedThread = useCallback(
-    (threadId: string) => setOpenThread({ emailAccountId, threadId }),
-    [emailAccountId, setOpenThread],
+    (threadId: string, threadAccountId: string) =>
+      setOpenThread({ emailAccountId: threadAccountId, threadId }),
+    [setOpenThread],
   );
 
   const closeReader = useCallback(() => {
     if (openedFrom === "today") {
-      router.push(prefixPath(emailAccountId, "/home"));
+      router.push(getTodayPath(emailAccountId, isAllAccounts));
       return;
     }
     focusListWhenShown();
     setOpenThread(null);
-  }, [openedFrom, router, emailAccountId, setOpenThread, focusListWhenShown]);
+  }, [
+    openedFrom,
+    router,
+    emailAccountId,
+    isAllAccounts,
+    setOpenThread,
+    focusListWhenShown,
+  ]);
 
   const senderCommands =
     senderCommandContext?.emailAccountId ===
@@ -1819,9 +1826,17 @@ export function MailShell() {
 
   // Views kept in our database rather than the mailbox list their own rows.
   let databaseList: ReactNode = null;
-  if (isScheduledView) databaseList = <ScheduledEmailList />;
+  // All inboxes lists every account's.
+  const databaseListAccounts = isAllAccounts ? combinedAccounts : undefined;
+  if (isScheduledView)
+    databaseList = <ScheduledEmailList accounts={databaseListAccounts} />;
   else if (isSnoozedView)
-    databaseList = <SnoozedThreadList onOpenThread={openSnoozedThread} />;
+    databaseList = (
+      <SnoozedThreadList
+        accounts={databaseListAccounts}
+        onOpenThread={openSnoozedThread}
+      />
+    );
 
   const showList = layout === "split" || !openThreadSelection;
   const showReader = layout === "split" || Boolean(openThreadSelection);

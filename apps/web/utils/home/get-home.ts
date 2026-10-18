@@ -28,6 +28,11 @@ import {
 } from "@/utils/gmail/quota";
 import { getTrackedThreads } from "@/utils/reply-tracker/tracked-threads";
 import { getNextUp } from "@/utils/home/next-up";
+import {
+  HOME_LANE_LIMIT,
+  MINUTES_PER_REPLY,
+  PRIORITY_ORDER,
+} from "@/utils/home/today-constants";
 import { getRuleLabel } from "@/utils/rule/consts";
 import {
   getUserTier,
@@ -40,7 +45,7 @@ import {
   REPLY_TRACKING_RULES,
 } from "@/utils/reply-tracker/reply-tracking-status";
 
-const LIST_LIMIT = 10;
+const LIST_LIMIT = HOME_LANE_LIMIT;
 // Well inside the route's 30 seconds, and about as long as a person watches a
 // loading page before giving up on it.
 const HOME_BUDGET_MS = 10_000;
@@ -65,8 +70,6 @@ const HIDDEN_TAGS = new Set([
   "important",
   "starred",
 ]);
-// A rough per-email estimate, shown with a "~" so nobody reads it as measured.
-const MINUTES_PER_REPLY = 3;
 const URGENT =
   /\b(today|tonight|tomorrow|asap|urgent|deadline|due|before (mon|tues|wednes|thurs|fri|satur|sun)day|by (mon|tues|wednes|thurs|fri|satur|sun)day)\b/i;
 
@@ -84,6 +87,11 @@ export type HomeThread = {
   unread: boolean;
   /** The newest message that isn't a draft. */
   messageId: string;
+  /**
+   * That message's Message-ID header, the same in every mailbox it is in, so
+   * Today across accounts can show a conversation once.
+   */
+  rfcMessageId?: string;
   starred: boolean;
   /** Waiting-on conversations can be archived; the other lanes are inbox mail. */
   inInbox: boolean;
@@ -105,6 +113,7 @@ export type AgentTask = {
 export async function getHomeData({
   emailAccountId,
   userEmail,
+  ownAddresses = [userEmail],
   emailProvider,
   logger,
   timeZone = "UTC",
@@ -112,6 +121,8 @@ export async function getHomeData({
 }: {
   emailAccountId: string;
   userEmail: string;
+  /** Every address the user has connected; a meeting any of them declined is off. */
+  ownAddresses?: string[];
   emailProvider: EmailProvider;
   logger: Logger;
   /** The user's IANA time zone, which decides where "today" starts. */
@@ -189,7 +200,7 @@ export async function getHomeData({
       emailAccountId,
       since: startOfDay(new TZDate(now, timeZone)),
     }),
-    getNextUp({ emailAccountId, userEmail, timeZone, logger, now }),
+    getNextUp({ emailAccountId, ownAddresses, timeZone, logger, now }),
   ]).finally(() => releaseDemand.then((release) => release()));
 
   const labels = labelsResult.ok ? labelsResult.value : [];
@@ -272,8 +283,6 @@ export async function getHomeData({
     },
   };
 }
-
-const PRIORITY_ORDER: Record<Priority, number> = { high: 0, medium: 1, low: 2 };
 
 /**
  * What Cue did with today's mail, from its own records rather than the
@@ -542,6 +551,9 @@ function toHomeThread(
     }),
     unread,
     messageId: latest.id,
+    ...(latest.headers["message-id"]
+      ? { rfcMessageId: latest.headers["message-id"] }
+      : {}),
     starred: labelIds.has("STARRED"),
     inInbox: labelIds.has("INBOX"),
   };

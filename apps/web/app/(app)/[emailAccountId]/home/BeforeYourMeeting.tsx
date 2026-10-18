@@ -1,7 +1,10 @@
 "use client";
 
 import { NewspaperIcon } from "lucide-react";
-import { useMeetingNews } from "@/hooks/useMeetingNews";
+import {
+  useAllAccountsMeetingNews,
+  useMeetingNews,
+} from "@/hooks/useMeetingNews";
 
 /**
  * Recent public news about the outside organization in each meeting of the
@@ -10,10 +13,15 @@ import { useMeetingNews } from "@/hooks/useMeetingNews";
  */
 export function BeforeYourMeeting({
   emailAccountId,
+  accountIds,
 }: {
   emailAccountId: string;
+  /** Across accounts: every account's meetings, each organization once. */
+  accountIds?: string[];
 }) {
-  const { data } = useMeetingNews(emailAccountId);
+  const one = useMeetingNews(accountIds ? null : emailAccountId);
+  const all = useAllAccountsMeetingNews(accountIds ?? null);
+  const { data } = accountIds ? all : one;
   if (!data?.meetings.length) return null;
 
   return (

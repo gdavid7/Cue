@@ -307,7 +307,7 @@ function InsightText({ line }: { line: InsightLine }) {
 
 // A color and initial rather than the profile photo: one person's accounts
 // often share a photo, which would make every row look the same.
-function AccountMarker({
+export function AccountMarker({
   account,
   colorClassName,
 }: {

@@ -30,6 +30,7 @@ type NavItem = {
   active?: boolean;
   beta?: boolean;
   new?: boolean;
+  account?: string;
 };
 
 export function SideNavMenu({
@@ -76,6 +77,11 @@ export function SideNavMenu({
             >
               <item.icon />
               <span>{item.name}</span>
+              {item.account ? (
+                <span className="ml-auto min-w-0 truncate font-normal text-muted-foreground text-xs">
+                  {item.account}
+                </span>
+              ) : null}
               {item.new && (
                 <Badge variant="green" className="ml-auto text-[10px]">
                   New!

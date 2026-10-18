@@ -3,6 +3,12 @@
 import { useState } from "react";
 import { AlertCircleIcon, ClockIcon, LoaderCircleIcon } from "lucide-react";
 import type { UpcomingScheduledEmailsResponse } from "@/app/api/user/scheduled-emails/route";
+import { AllInboxesFailedNotice } from "@/app/(app)/[emailAccountId]/mail/AllInboxesFailedNotice";
+import {
+  AccountRowMarker,
+  useAllAccountsList,
+} from "@/app/(app)/[emailAccountId]/mail/all-accounts-list";
+import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { InlineActionButton } from "@/components/InlineActionButton";
 import { LoadingContent } from "@/components/LoadingContent";
 import {
@@ -12,24 +18,50 @@ import {
 import { getActionErrorMessage } from "@/utils/error";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useMailHref } from "@/hooks/useMailHref";
-import { useUpcomingScheduledEmails } from "@/hooks/useHiddenDraftMessageIds";
+import {
+  scheduledEmailsRefreshInterval,
+  useUpcomingScheduledEmails,
+} from "@/hooks/useHiddenDraftMessageIds";
+
+const SCHEDULED_PATH = "/api/user/scheduled-emails";
 
 type ScheduledEmail =
   UpcomingScheduledEmailsResponse["scheduledEmails"][number];
+type ScheduledRow = ScheduledEmail & { accountId: string };
 
-export function ScheduledEmailList() {
+/**
+ * Sends waiting to go out. In All inboxes it lists every account's, soonest
+ * first, each naming its account and acting in it.
+ */
+export function ScheduledEmailList({
+  accounts,
+}: {
+  /** All inboxes: the accounts to list scheduled sends from. */
+  accounts?: AllInboxesAccount[];
+} = {}) {
   const { emailAccountId } = useAccount();
   const mailHref = useMailHref();
   const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState(false);
-  const { data, isLoading, error, mutate } =
-    useUpcomingScheduledEmails(emailAccountId);
+  const one = useUpcomingScheduledEmails(accounts ? null : emailAccountId);
+  const all = useAllAccountsList<UpcomingScheduledEmailsResponse>(
+    SCHEDULED_PATH,
+    accounts,
+    {
+      refreshInterval: (current) =>
+        scheduledEmailsRefreshInterval(
+          current?.byAccount.flatMap(({ data }) => data.scheduledEmails) ?? [],
+        ),
+    },
+  );
+  const { isLoading, error, mutate } = accounts ? all : one;
 
   const runScheduledAction = async (
     action: typeof cancelScheduledEmailAction,
-    id: string,
+    row: ScheduledRow,
   ) => {
-    const result = await action(emailAccountId, { id });
+    // The send's own account, which the action checks is the user's.
+    const result = await action(row.accountId, { id: row.id });
     if (result?.serverError || result?.validationErrors)
       throw new Error(getActionErrorMessage(result));
   };
@@ -51,10 +83,28 @@ export function ScheduledEmailList() {
     }
   };
 
-  const rows = data?.scheduledEmails ?? [];
+  const rows: ScheduledRow[] = accounts
+    ? (all.data?.byAccount ?? [])
+        .flatMap(({ accountId, data }) =>
+          data.scheduledEmails.map((row) => ({ ...row, accountId })),
+        )
+        .sort(
+          (a, b) => new Date(a.sendAt).getTime() - new Date(b.sendAt).getTime(),
+        )
+    : (one.data?.scheduledEmails ?? []).map((row) => ({
+        ...row,
+        accountId: emailAccountId,
+      }));
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      {accounts ? (
+        <AllInboxesFailedNotice
+          accounts={accounts}
+          failedAccountIds={all.data?.failedAccountIds ?? []}
+          onRetry={() => mutate()}
+        />
+      ) : null}
       {actionError && (
         <p role="alert" className="px-4 py-2 text-destructive text-xs">
           {actionError}
@@ -71,9 +121,13 @@ export function ScheduledEmailList() {
             <ul aria-label="Scheduled emails">
               {rows.map((row) => (
                 <li
-                  key={row.id}
+                  key={`${row.accountId}:${row.id}`}
                   className="flex flex-wrap items-center gap-x-3 gap-y-1 border-border border-b px-4 py-3"
                 >
+                  <AccountRowMarker
+                    accountId={row.accountId}
+                    accounts={accounts}
+                  />
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium text-foreground text-sm">
                       {row.subject?.trim() || "(no subject)"}
@@ -97,10 +151,7 @@ export function ScheduledEmailList() {
                         disabled={busy}
                         onClick={() =>
                           act(() =>
-                            runScheduledAction(
-                              cancelScheduledEmailAction,
-                              row.id,
-                            ),
+                            runScheduledAction(cancelScheduledEmailAction, row),
                           )
                         }
                       >
@@ -113,6 +164,7 @@ export function ScheduledEmailList() {
                       <a
                         className="text-xs underline underline-offset-4"
                         href={mailHref({
+                          accountId: row.accountId,
                           view: { kind: "type", type: "sent" },
                         })}
                       >
@@ -124,10 +176,7 @@ export function ScheduledEmailList() {
                         disabled={busy}
                         onClick={() =>
                           act(() =>
-                            runScheduledAction(
-                              retryScheduledEmailAction,
-                              row.id,
-                            ),
+                            runScheduledAction(retryScheduledEmailAction, row),
                           )
                         }
                       >

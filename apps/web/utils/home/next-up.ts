@@ -12,6 +12,7 @@ import {
   ownedBySameUser,
 } from "@/utils/mcp/user-connections";
 import prisma from "@/utils/prisma";
+import { NEXT_UP_SHOWN, sortByDue } from "@/utils/home/today-constants";
 import { redis } from "@/utils/redis";
 import {
   isAppServerError,
@@ -22,7 +23,6 @@ import {
 } from "@/utils/thread-context/connector-context";
 
 const EVENTS_SHOWN = 2;
-const ITEMS_SHOWN = 4;
 const DEADLINE_WINDOW_DAYS = 7;
 // Today shouldn't wait on a slow app or calendar: what's late is left out.
 const CALENDAR_TIMEOUT_MS = 3000;
@@ -37,6 +37,8 @@ export type NextUpItem = {
   kind: "event" | "deadline";
   title: string;
   at: string;
+  /** When a meeting ends, which tells two calendars' copies of it apart. */
+  endAt?: string;
   /** Due on a date rather than at a time: by the end of that day. */
   allDay?: boolean;
   /** Where it comes from, such as "Canvas". */
@@ -84,13 +86,14 @@ const DEADLINE_SOURCES: Record<
  */
 export async function getNextUp({
   emailAccountId,
-  userEmail,
+  ownAddresses,
   timeZone,
   logger,
   now,
 }: {
   emailAccountId: string;
-  userEmail: string;
+  /** Every address the user has connected. */
+  ownAddresses: string[];
   timeZone: string;
   logger: Logger;
   now: Date;
@@ -113,13 +116,13 @@ export async function getNextUp({
     ? null
     : await connectSuggestion({ emailAccountId, now, logger });
 
-  const self = userEmail.toLowerCase();
+  const self = new Set(ownAddresses.map((address) => address.toLowerCase()));
   const events = calendar.events.filter(
     (event) =>
       !event.allDay &&
       event.startTime > now &&
       !event.attendees.some(
-        (a) => a.declined && a.email.toLowerCase() === self,
+        (a) => a.declined && self.has(a.email.toLowerCase()),
       ),
   );
   // Late in the day, what's left tonight matters less than how tomorrow starts.
@@ -143,7 +146,7 @@ export async function getNextUp({
     nextUp: sortByDue([
       ...events.slice(0, EVENTS_SHOWN).map(eventItem),
       ...deadlines.items,
-    ]).slice(0, ITEMS_SHOWN),
+    ]).slice(0, NEXT_UP_SHOWN),
     suggestion,
   };
 }
@@ -521,20 +524,10 @@ function eventItem(event: CalendarEvent): NextUpItem {
     kind: "event",
     title: event.title,
     at: event.startTime.toISOString(),
+    endAt: event.endTime.toISOString(),
     source: "Calendar",
     url: event.eventUrl,
   };
-}
-
-/** Soonest first; ties broken by source, then title, so the order never flickers. */
-function sortByDue(items: NextUpItem[]) {
-  return [...items].sort(
-    (a, b) =>
-      a.at.localeCompare(b.at) ||
-      a.source.localeCompare(b.source) ||
-      a.title.localeCompare(b.title) ||
-      a.id.localeCompare(b.id),
-  );
 }
 
 /** The last minute of a `YYYY-MM-DD` date in the user's time zone. */

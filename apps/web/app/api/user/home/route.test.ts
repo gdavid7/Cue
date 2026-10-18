@@ -23,7 +23,12 @@ vi.mock("@/utils/home/get-home", () => ({
 vi.mock("@/utils/analytics/activation", () => ({
   recordActiveDay: vi.fn(),
 }));
+vi.mock("@/utils/user/own-addresses", () => ({
+  getUserOwnAddresses: vi.fn(async () => []),
+}));
 
+import { getHomeData } from "@/utils/home/get-home";
+import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 import { GET } from "./route";
 
 describe("GET /api/user/home", () => {
@@ -43,4 +48,31 @@ describe("GET /api/user/home", () => {
     for (const callback of afterCallbacks) await callback();
     expect(recordActiveDay).toHaveBeenCalledWith("email-account-1");
   });
+
+  it("checks declined meetings against every address the user has connected", async () => {
+    vi.mocked(getUserOwnAddresses).mockResolvedValue(["other@example.com"]);
+
+    await getToday();
+
+    expect(vi.mocked(getHomeData).mock.calls[0][0].ownAddresses).toEqual(
+      expect.arrayContaining(["other@example.com"]),
+    );
+  });
+
+  it("still loads Today when the user's addresses can't be read", async () => {
+    vi.mocked(getUserOwnAddresses).mockRejectedValue(new Error("Redis down"));
+
+    const response = await getToday();
+
+    expect(response.status).toBe(200);
+    expect(vi.mocked(getHomeData).mock.calls[0][0].ownAddresses).toHaveLength(
+      1,
+    );
+  });
 });
+
+function getToday() {
+  return GET(new NextRequest("http://localhost:3000/api/user/home"), {
+    params: Promise.resolve({}),
+  });
+}
