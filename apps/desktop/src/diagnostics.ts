@@ -82,7 +82,7 @@ export async function recordDesktopDiagnostics(input: {
 }
 
 export function diagnosticsFolderName(date: Date) {
-  return `Inbox-Zero-Diagnostics-${date.toISOString().slice(0, 19).replaceAll(":", "-")}`;
+  return `Cue-Diagnostics-${date.toISOString().slice(0, 19).replaceAll(":", "-")}`;
 }
 
 /**
@@ -182,7 +182,7 @@ async function recordDiagnostics({
     cancelId: 1,
     message: "Record Diagnostics",
     detail:
-      "Inbox Zero will record 30 seconds of performance data while you reproduce the problem. It includes timings and app state, not email content.",
+      "Cue will record 30 seconds of performance data while you reproduce the problem. It includes timings and app state, not email content.",
   });
   if (response !== 0) return;
 
@@ -249,18 +249,18 @@ async function recordDiagnostics({
     await showMessage({
       type: "info",
       message: "Diagnostics saved",
-      detail: `Saved to ${folder}. Send these files to Inbox Zero support.`,
+      detail: `Saved to ${folder}. Send these files to Cue support.`,
     });
     return;
   }
 
   const send = await showMessage({
     type: "info",
-    buttons: ["Send to Inbox Zero", "Done"],
+    buttons: ["Send to Cue", "Done"],
     defaultId: 0,
     cancelId: 1,
     message: "Diagnostics saved",
-    detail: `Saved to ${folder}. Send them to Inbox Zero so we can look into the problem.`,
+    detail: `Saved to ${folder}. Send them to Cue so we can look into the problem.`,
   });
   if (send.response !== 0) return;
 
@@ -272,7 +272,7 @@ async function recordDiagnostics({
     await showMessage({
       type: "warning",
       message: "Could not send diagnostics",
-      detail: `Send the files in ${folder} to Inbox Zero support instead.`,
+      detail: `Send the files in ${folder} to Cue support instead.`,
     });
     return;
   }
