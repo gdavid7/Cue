@@ -6,10 +6,8 @@ import { cleanupConfiguredAIDrafts } from "@/utils/ai/draft-cleanup";
 
 export const maxDuration = 300;
 
-const CRON_NAME = "cron/draft-cleanup";
-
 export const GET = withError(
-  CRON_NAME,
+  "cron/draft-cleanup",
   async (request) => {
     if (!hasCronSecret(request)) {
       captureException(
@@ -24,7 +22,7 @@ export const GET = withError(
 );
 
 export const POST = withError(
-  CRON_NAME,
+  "cron/draft-cleanup",
   async (request) => {
     if (!(await hasPostCronSecret(request))) {
       captureException(
@@ -40,7 +38,6 @@ export const POST = withError(
 
 async function runDraftCleanup(request: RequestWithLogger) {
   const result = await runCronJob({
-    cron: CRON_NAME,
     logger: request.logger,
     run: () => cleanupConfiguredAIDrafts({ logger: request.logger }),
   });

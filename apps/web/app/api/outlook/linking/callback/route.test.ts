@@ -189,7 +189,7 @@ describe("outlook linking callback route", () => {
       session: { emailOtp: false },
     });
     prisma.account.findUnique.mockResolvedValue(null);
-    mockEnsureEmailAccountsWatched.mockResolvedValue([]);
+    mockEnsureEmailAccountsWatched.mockResolvedValue({ results: [], left: 0 });
   });
 
   it("does not let an email code session link a mailbox", async () => {

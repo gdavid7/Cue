@@ -6,9 +6,13 @@ import type { Logger } from "@/utils/logger";
 import { DEFAULT_AI_DRAFT_CLEANUP_DAYS } from "@/utils/ai/draft-cleanup-settings";
 import { withPrismaRetry } from "@/utils/prisma-retry";
 import { hasTimeBeforeRequestDeadline } from "@/utils/request-deadline-reader";
+import { redis } from "@/utils/redis";
 
 // Room for the account in progress to finish before the cron is killed.
 const ACCOUNT_RESERVE_MS = 30_000;
+// The last account a run reached, so the next run starts after it.
+const CLEANUP_CURSOR_KEY = "draft-cleanup:cursor";
+const CLEANUP_CURSOR_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export async function cleanupAIDraftsForAccount({
   emailAccountId,
@@ -207,7 +211,23 @@ export async function cleanupConfiguredAIDrafts({
       draftCleanupDays: true,
       account: { select: { provider: true } },
     },
+    orderBy: { id: "asc" },
   });
+
+  // A run cut short by the deadline would otherwise skip the same tail
+  // accounts every day, so each run starts after the account the last one
+  // reached and wraps around.
+  const cursor = await redis.get<string>(CLEANUP_CURSOR_KEY).catch((error) => {
+    logger.warn("Failed to read draft cleanup cursor", { error });
+    return null;
+  });
+  const start = cursor
+    ? emailAccounts.findIndex((emailAccount) => emailAccount.id > cursor)
+    : 0;
+  const accountsInOrder =
+    start > 0
+      ? [...emailAccounts.slice(start), ...emailAccounts.slice(0, start)]
+      : emailAccounts;
 
   let total = 0;
   let deleted = 0;
@@ -216,16 +236,18 @@ export async function cleanupConfiguredAIDrafts({
   let errors = 0;
   let failedAccounts = 0;
   let accountsLeft = 0;
+  let lastAccountId: string | undefined;
 
-  for (const [index, emailAccount] of emailAccounts.entries()) {
+  for (const [index, emailAccount] of accountsInOrder.entries()) {
     if (!hasTimeBeforeRequestDeadline(ACCOUNT_RESERVE_MS)) {
-      // Their drafts stay candidates, so tomorrow's run picks them up.
-      accountsLeft = emailAccounts.length - index;
+      // Their drafts stay candidates, and the next run starts with them.
+      accountsLeft = accountsInOrder.length - index;
       logger.warn("Stopping draft cleanup before the deadline", {
         accountsLeft,
       });
       break;
     }
+    lastAccountId = emailAccount.id;
     if (emailAccount.draftCleanupDays === null) continue;
 
     try {
@@ -249,6 +271,16 @@ export async function cleanupConfiguredAIDrafts({
       failedAccounts++;
       errors++;
     }
+  }
+
+  if (lastAccountId) {
+    await redis
+      .set(CLEANUP_CURSOR_KEY, lastAccountId, {
+        ex: CLEANUP_CURSOR_TTL_SECONDS,
+      })
+      .catch((error) => {
+        logger.warn("Failed to save draft cleanup cursor", { error });
+      });
   }
 
   return {

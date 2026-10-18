@@ -10,8 +10,9 @@ import { clearLocalReplyDrafts } from "@/utils/mail-engine/reply-drafts";
 import { clearPersistedSwrCache } from "@/utils/swr-persistence";
 import { clearCachedToday } from "@/utils/home/today-cache";
 
-// Enough for a normal wipe (and the last-account cookie clear) to finish before leaving. A slower one stays marked
-// and the next mail engine finishes it before opening.
+// Enough for a normal wipe (and the last-account cookie clear) to finish
+// before leaving. A slower one stays marked and the next mail engine finishes
+// it before opening.
 const LOCAL_WIPE_WAIT_MS = 1500;
 
 let signingOut: Promise<void> | undefined;
@@ -31,9 +32,9 @@ async function signOutAndLeave(callbackUrl: string) {
   const localWipe = wipeLocalMailbox();
   // Needs no session, so it may finish after sign-out; awaited below so
   // leaving the page does not cancel it.
-  const lastAccountCleared = Promise.resolve(
-    clearLastEmailAccountAction(),
-  ).catch(() => undefined);
+  const lastAccountCleared = clearLastEmailAccountAction().catch(
+    () => undefined,
+  );
   // Leaving before the session cookie is cleared would land back in the app.
   await signOut().catch(() => undefined);
   await Promise.race([

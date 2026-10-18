@@ -24,10 +24,21 @@ const mocks = vi.hoisted(() => ({
     deleteDraft: vi.fn(),
   },
   createEmailProvider: vi.fn(),
+  redisStore: new Map<string, string>(),
 }));
 
 vi.mock("@/utils/prisma", () => ({
   default: mocks.prisma,
+}));
+
+vi.mock("@/utils/redis", () => ({
+  redis: {
+    get: async (key: string) => mocks.redisStore.get(key) ?? null,
+    set: async (key: string, value: string) => {
+      mocks.redisStore.set(key, value);
+      return "OK";
+    },
+  },
 }));
 
 vi.mock("@/utils/email/provider", () => ({
@@ -328,6 +339,7 @@ describe("markTrackedDraftDeleted", () => {
 describe("cleanupConfiguredAIDrafts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.redisStore.clear();
     mocks.createEmailProvider.mockResolvedValue(mocks.provider);
   });
 
@@ -378,6 +390,7 @@ describe("cleanupConfiguredAIDrafts", () => {
         draftCleanupDays: true,
         account: { select: { provider: true } },
       },
+      orderBy: { id: "asc" },
     });
     expect(result).toMatchObject({
       accountsChecked: 1,
@@ -415,5 +428,43 @@ describe("cleanupConfiguredAIDrafts", () => {
       { accountsLeft: 2 },
     );
     warn.mockRestore();
+  });
+
+  it("starts the next run with the accounts a deadline-cut run left, then wraps around", async () => {
+    vi.useFakeTimers();
+    mocks.prisma.emailAccount.findMany.mockResolvedValue(
+      ["email-account-1", "email-account-2", "email-account-3"].map((id) => ({
+        id,
+        draftCleanupDays: 14,
+        account: { provider: "google" },
+      })),
+    );
+    const cleanedAccounts = () =>
+      mocks.prisma.executedAction.findMany.mock.calls.map(
+        ([args]) => args.where.executedRule.emailAccountId,
+      );
+
+    // Day one only has time for the first account.
+    mocks.prisma.executedAction.findMany.mockImplementationOnce(async () => {
+      vi.advanceTimersByTime(270_000);
+      return [];
+    });
+    mocks.prisma.executedAction.findMany.mockResolvedValue([]);
+    await runWithRequestDeadline(300, () =>
+      cleanupConfiguredAIDrafts({ logger }),
+    );
+    expect(cleanedAccounts()).toEqual(["email-account-1"]);
+
+    // Day two starts where day one stopped, and has time for everyone.
+    mocks.prisma.executedAction.findMany.mockClear();
+    const result = await runWithRequestDeadline(300, () =>
+      cleanupConfiguredAIDrafts({ logger }),
+    );
+    expect(cleanedAccounts()).toEqual([
+      "email-account-2",
+      "email-account-3",
+      "email-account-1",
+    ]);
+    expect(result).toMatchObject({ accountsChecked: 3, accountsLeft: 0 });
   });
 });

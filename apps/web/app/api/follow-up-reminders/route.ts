@@ -17,9 +17,7 @@ const FOLLOW_UP_REMINDER_ACCOUNT_TOPIC = "follow-up-reminders-account";
 const INTERNAL_DISPATCH_CONCURRENCY = 10;
 const QUEUE_ENQUEUE_CONCURRENCY = 10;
 
-const CRON_NAME = "follow-up-reminders";
-
-export const GET = withError(CRON_NAME, async (request) => {
+export const GET = withError("follow-up-reminders", async (request) => {
   if (!hasCronSecret(request)) {
     captureException(
       new Error("Unauthorized request: api/follow-up-reminders"),
@@ -30,7 +28,7 @@ export const GET = withError(CRON_NAME, async (request) => {
   return runFollowUpReminders(request.logger);
 });
 
-export const POST = withError(CRON_NAME, async (request) => {
+export const POST = withError("follow-up-reminders", async (request) => {
   if (!(await hasPostCronSecret(request))) {
     captureException(
       new Error("Unauthorized cron request: api/follow-up-reminders"),
@@ -43,7 +41,6 @@ export const POST = withError(CRON_NAME, async (request) => {
 
 async function runFollowUpReminders(logger: Logger) {
   const { enabled, eligibleAccounts } = await runCronJob({
-    cron: CRON_NAME,
     logger,
     run: async () => {
       if (!env.NEXT_PUBLIC_FOLLOW_UP_REMINDERS_ENABLED) {

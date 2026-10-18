@@ -30,7 +30,6 @@ export const POST = withError("cron/mobile-push-retention", async (request) => {
 
 async function runRetention(request: RequestWithLogger) {
   const result = await runCronJob({
-    cron: "cron/mobile-push-retention",
     logger: request.logger,
     run: async () => ({ deleted: await deleteExpiredMobilePushDeliveries() }),
   });

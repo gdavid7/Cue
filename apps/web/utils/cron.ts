@@ -55,30 +55,37 @@ export async function hasPostCronSecret(request: RequestWithLogger) {
 
 /**
  * Runs a cron's work and logs one "Cron finished" line with its duration and
- * counts, so a run with nothing to do still leaves a daily heartbeat. The
- * counts are spread into the line, so their keys must be fixed names.
+ * counts, so a run with nothing to do still leaves a daily heartbeat, or one
+ * "Cron failed" line when it throws. The middleware scope on the logger names
+ * the cron. The counts are spread into the line, so their keys must be fixed
+ * names.
  */
 export async function runCronJob<T extends Record<string, unknown>>({
-  cron,
   logger,
   run,
 }: {
-  cron: string;
   logger: Logger;
   run: () => Promise<T>;
 }): Promise<T> {
   const startedAt = Date.now();
-  const result = await run();
-  const durationMs = Date.now() - startedAt;
-  logger.info("Cron finished", { cron, durationMs, ...result });
-  if (durationMs > CRON_RAN_LONG_MS) {
-    logger.warn("Cron ran long", {
-      cron,
-      durationMs,
-      thresholdMs: CRON_RAN_LONG_MS,
-    });
+  let durationMs = 0;
+  try {
+    const result = await run();
+    durationMs = Date.now() - startedAt;
+    logger.info("Cron finished", { durationMs, ...result });
+    return result;
+  } catch (error) {
+    durationMs = Date.now() - startedAt;
+    logger.error("Cron failed", { durationMs, error });
+    throw error;
+  } finally {
+    if (durationMs > CRON_RAN_LONG_MS) {
+      logger.warn("Cron ran long", {
+        durationMs,
+        thresholdMs: CRON_RAN_LONG_MS,
+      });
+    }
   }
-  return result;
 }
 
 export function getCronSecretHeader() {

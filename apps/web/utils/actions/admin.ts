@@ -494,7 +494,7 @@ export const adminWatchEmailsAction = adminActionClient
       throw new SafeError("Email account not found");
     }
 
-    const results = await ensureEmailAccountsWatched({
+    const { results } = await ensureEmailAccountsWatched({
       userIds: [emailAccount.userId],
       logger,
     });

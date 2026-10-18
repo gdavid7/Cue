@@ -630,7 +630,10 @@ describe("handleLinkAccount", () => {
     );
     const transactionResult = [{ id: "email_account_1" }, { id: "account_1" }];
     prisma.$transaction.mockResolvedValue(transactionResult as never);
-    vi.mocked(ensureEmailAccountsWatched).mockResolvedValue([]);
+    vi.mocked(ensureEmailAccountsWatched).mockResolvedValue({
+      results: [],
+      left: 0,
+    });
 
     await handleLinkAccount(getGoogleAccount());
 
@@ -708,7 +711,10 @@ describe("handleLinkAccount", () => {
         >,
       );
     prisma.$transaction.mockResolvedValue([] as never);
-    vi.mocked(ensureEmailAccountsWatched).mockResolvedValue([]);
+    vi.mocked(ensureEmailAccountsWatched).mockResolvedValue({
+      results: [],
+      left: 0,
+    });
 
     await handleLinkAccount(getGoogleAccount());
 

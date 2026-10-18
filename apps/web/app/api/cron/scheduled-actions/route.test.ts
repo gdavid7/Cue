@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   processDueSnoozedThreads: vi.fn(),
   processDueScheduledEmails: vi.fn(),
   recordFirstHourHealth: vi.fn(),
+  markQStashActionAsExecuting: vi.fn(),
 }));
 
 vi.mock("@/env", () => ({
@@ -22,7 +23,7 @@ vi.mock("@/utils/scheduled-actions/executor", () => ({
   executeScheduledAction: vi.fn(),
 }));
 vi.mock("@/utils/scheduled-actions/scheduler", () => ({
-  markQStashActionAsExecuting: vi.fn(),
+  markQStashActionAsExecuting: mocks.markQStashActionAsExecuting,
 }));
 vi.mock("@/utils/snooze/process-due", () => ({
   processDueSnoozedThreads: mocks.processDueSnoozedThreads,
@@ -42,6 +43,7 @@ vi.mock("@/utils/middleware", async () => {
   return createWithErrorTestMiddleware({ logger: mocks.logger });
 });
 
+import { runWithRequestDeadline } from "@/utils/request-deadline";
 import { GET } from "./route";
 
 describe("scheduled actions cron route", () => {
@@ -79,10 +81,51 @@ describe("scheduled actions cron route", () => {
     );
     expect(finished).toHaveLength(1);
     expect(finished[0][1]).toMatchObject({
-      cron: "cron/scheduled-actions",
       durationMs: expect.any(Number),
       scheduledActions: { processed: 0, failed: 0, total: 0 },
       firstHourHealth: { candidates: 3, sent: 2, failed: 0 },
     });
+  });
+
+  it("stops before the route's deadline and leaves the rest pending", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(mocks.logger!, "warn");
+    mocks.findScheduledActions.mockResolvedValue(
+      ["action-1", "action-2", "action-3"].map((id) => ({
+        id,
+        emailAccountId: "email-account-1",
+        executedRuleId: "executed-rule-1",
+        emailAccount: { account: { provider: "google" } },
+      })),
+    );
+    // The first action takes most of the route's five minutes, and another
+    // run already claimed it.
+    mocks.markQStashActionAsExecuting.mockImplementationOnce(async () => {
+      vi.advanceTimersByTime(270_000);
+      return null;
+    });
+
+    const response = await runWithRequestDeadline(300, () =>
+      GET(
+        new Request("http://localhost:3000/api/cron/scheduled-actions", {
+          headers: { authorization: "Bearer cron-secret" },
+        }) as never,
+        { params: Promise.resolve({}) },
+      ),
+    );
+    vi.useRealTimers();
+
+    expect(mocks.markQStashActionAsExecuting).toHaveBeenCalledTimes(1);
+    expect((await response.json()).scheduledActions).toEqual({
+      processed: 0,
+      failed: 0,
+      skipped: 1,
+      left: 2,
+      total: 3,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "Stopping scheduled actions before the deadline",
+      { left: 2 },
+    );
   });
 });

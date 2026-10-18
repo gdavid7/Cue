@@ -16,6 +16,7 @@ import {
 import { ErrorType, watchLapsedErrorKey } from "@/utils/error-messages";
 import { createScopedLogger } from "@/utils/logger";
 import { redis } from "@/utils/redis";
+import { runWithRequestDeadline } from "@/utils/request-deadline";
 
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/redis", () => ({
@@ -290,6 +291,35 @@ describe("recordFirstHourHealthForNewMailboxes", () => {
 
     await recordFirstHourHealthForNewMailboxes(logger);
     expect(loggedEvents()).toHaveLength(1);
+  });
+
+  it("stops before the route's deadline and leaves the rest unclaimed", async () => {
+    const warn = vi.spyOn(logger, "warn");
+    prisma.emailAccount.findMany.mockResolvedValue([
+      mailbox("account-1"),
+      mailbox("account-2"),
+      mailbox("account-3"),
+    ] as never);
+    // The first snapshot takes most of the route's five minutes.
+    prisma.rule.findMany.mockImplementationOnce((async () => {
+      vi.advanceTimersByTime(270_000);
+      return [];
+    }) as never);
+
+    const result = await runWithRequestDeadline(300, () =>
+      recordFirstHourHealthForNewMailboxes(logger),
+    );
+
+    expect(result).toEqual({ candidates: 3, unsent: 3, sent: 1, failed: 0 });
+    expect(loggedEvents().map((event) => event.emailAccountId)).toEqual([
+      "account-1",
+    ]);
+    expect(claimedKeys.size).toBe(1);
+    expect(warn).toHaveBeenCalledWith(
+      "Stopping first-hour health before the deadline",
+      { mailboxesLeft: 2 },
+    );
+    warn.mockRestore();
   });
 
   function loggedEvents(): Record<string, unknown>[] {

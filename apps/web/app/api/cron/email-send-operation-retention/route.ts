@@ -40,7 +40,6 @@ export const POST = withError(
 
 async function runRetention(request: RequestWithLogger) {
   const result = await runCronJob({
-    cron: "cron/email-send-operation-retention",
     logger: request.logger,
     run: async () => ({ deleted: await deleteExpiredEmailSendOperations() }),
   });

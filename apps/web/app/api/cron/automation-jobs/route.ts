@@ -28,7 +28,6 @@ export const GET = withError("cron/automation-jobs", async (request) => {
   }
 
   const result = await runCronJob({
-    cron: "cron/automation-jobs",
     logger: request.logger,
     run: () => enqueueDueAutomationJobs(request.logger),
   });
@@ -44,7 +43,6 @@ export const POST = withError("cron/automation-jobs", async (request) => {
   }
 
   const result = await runCronJob({
-    cron: "cron/automation-jobs",
     logger: request.logger,
     run: () => enqueueDueAutomationJobs(request.logger),
   });

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest, NextResponse } from "next/server";
+import { permanentRedirect, redirect } from "next/navigation";
 import { ZodError, type ZodIssue } from "zod";
 import {
   withError,
@@ -181,7 +182,7 @@ describe("Middleware", () => {
           .filter((line) => line.includes("Request completed"));
       }
 
-      it("logs a slow request at info with its route template, status and duration", async () => {
+      it("logs a slow request at info under its route's scope, with status and duration", async () => {
         vi.useFakeTimers();
         const consoleLogSpy = vi
           .spyOn(console, "log")
@@ -200,7 +201,9 @@ describe("Middleware", () => {
 
           const lines = completionLines(consoleLogSpy);
           expect(lines).toHaveLength(1);
-          expect(lines[0]).toContain('"route": "threads/detail"');
+          expect(lines[0]).toMatch(/^\[threads\/detail\]: Request completed/);
+          expect(lines[0]).toContain('"url": "/api/threads/thread-123"');
+          expect(lines[0]).not.toContain('"route"');
           expect(lines[0]).toContain('"method": "GET"');
           expect(lines[0]).toContain('"status": 200');
           expect(lines[0]).toContain('"durationMs": 1500');
@@ -228,11 +231,41 @@ describe("Middleware", () => {
           expect(response.status).toBe(500);
           const lines = completionLines(consoleLogSpy);
           expect(lines).toHaveLength(1);
-          expect(lines[0]).toContain('"route": "user/home"');
+          expect(lines[0]).toMatch(/^\[user\/home\]: Request completed/);
           expect(lines[0]).toContain('"status": 500');
         } finally {
           consoleLogSpy.mockRestore();
           consoleErrorSpy.mockRestore();
+        }
+      });
+
+      it.each([
+        { redirectTo: redirect, status: 307 },
+        { redirectTo: permanentRedirect, status: 308 },
+      ])("rethrows a redirect and logs it with its $status status", async ({
+        redirectTo,
+        status,
+      }) => {
+        vi.useFakeTimers();
+        const consoleLogSpy = vi
+          .spyOn(console, "log")
+          .mockImplementation(() => {});
+        try {
+          const wrappedHandler = withError("user/home", async () => {
+            vi.advanceTimersByTime(1500);
+            redirectTo("/login");
+          });
+
+          await expect(wrappedHandler(mockReq, mockContext)).rejects.toThrow(
+            "NEXT_REDIRECT",
+          );
+
+          const lines = completionLines(consoleLogSpy);
+          expect(lines).toHaveLength(1);
+          expect(lines[0]).toContain(`"status": ${status}`);
+        } finally {
+          consoleLogSpy.mockRestore();
+          vi.useRealTimers();
         }
       });
 
