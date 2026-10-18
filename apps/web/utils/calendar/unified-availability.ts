@@ -28,7 +28,14 @@ export async function getUnifiedCalendarAvailability({
   endDate: Date | string;
   timezone?: string;
   logger: Logger;
-  failClosed?: boolean;
+  /**
+   * Throw instead of skipping a calendar that cannot be read: for every
+   * connection, or only those the predicate picks (say, the one a booking is
+   * written to), while the others are skipped and logged.
+   */
+  failClosed?:
+    | boolean
+    | ((connection: { id: string; emailAccountId: string }) => boolean);
   excludeGoogleVirtualCalendars?: boolean;
 }): Promise<BusyPeriod[]> {
   // Compute day boundaries in the user's timezone
@@ -92,6 +99,7 @@ export async function getUnifiedCalendarAvailability({
     if (!availabilityCalendarIds.length) continue;
 
     const googleAvailabilityProvider = createGoogleAvailabilityProvider(logger);
+    const mustRead = mustReadConnection(failClosed, connection);
 
     promises.push(
       googleAvailabilityProvider
@@ -104,7 +112,7 @@ export async function getUnifiedCalendarAvailability({
           calendarIds: availabilityCalendarIds,
           timeMin,
           timeMax,
-          failOnCalendarError: failClosed,
+          failOnCalendarError: mustRead,
         })
         .catch((error) => {
           logger.error("Error fetching Google calendar availability", {
@@ -112,7 +120,7 @@ export async function getUnifiedCalendarAvailability({
             connectionId: connection.id,
             ...getCalendarAvailabilityErrorLogContext(error),
           });
-          if (failClosed) throw error;
+          if (mustRead) throw error;
           return [];
         }),
     );
@@ -131,6 +139,7 @@ export async function getUnifiedCalendarAvailability({
 
     const microsoftAvailabilityProvider =
       createMicrosoftAvailabilityProvider(logger);
+    const mustRead = mustReadConnection(failClosed, connection);
 
     promises.push(
       microsoftAvailabilityProvider
@@ -142,7 +151,7 @@ export async function getUnifiedCalendarAvailability({
           calendarIds,
           timeMin,
           timeMax,
-          failOnCalendarError: failClosed,
+          failOnCalendarError: mustRead,
         })
         .catch((error) => {
           logger.error("Error fetching Microsoft calendar availability", {
@@ -150,7 +159,7 @@ export async function getUnifiedCalendarAvailability({
             connectionId: connection.id,
             ...getCalendarAvailabilityErrorLogContext(error),
           });
-          if (failClosed) throw error;
+          if (mustRead) throw error;
           return [];
         }),
     );
@@ -217,4 +226,13 @@ function parseDateInTimezone(
   const dateStr = dateInput.includes("T") ? dateInput.split("T")[0] : dateInput;
   const [year, month, day] = dateStr.split("-").map(Number);
   return new TZDate(year, month - 1, day, 0, 0, 0, 0, timezone);
+}
+
+function mustReadConnection(
+  failClosed:
+    | boolean
+    | ((connection: { id: string; emailAccountId: string }) => boolean),
+  connection: { id: string; emailAccountId: string },
+) {
+  return typeof failClosed === "function" ? failClosed(connection) : failClosed;
 }

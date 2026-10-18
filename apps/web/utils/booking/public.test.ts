@@ -52,7 +52,7 @@ describe("public booking", () => {
     vi.setSystemTime(new Date("2026-05-04T00:00:00.000Z"));
     vi.mocked(getUnifiedCalendarAvailability).mockResolvedValue([]);
     prisma.calendar.findMany.mockResolvedValue([
-      { id: "calendar-row-id" },
+      hostCalendar("calendar-row-id", "own-connection", "email-account-id"),
     ] as never);
     vi.mocked(createCalendarEvent).mockResolvedValue({
       id: "provider-event-id",
@@ -1055,6 +1055,88 @@ describe("public booking", () => {
     expect(result).toBeNull();
   });
 
+  it("fails closed only for the calendar the booking is written to", async () => {
+    mockBookingLinkConfig();
+    prisma.calendar.findMany.mockResolvedValue([
+      hostCalendar("calendar-row-id", "work-connection", "email-account-id"),
+      hostCalendar(
+        "personal-calendar-id",
+        "personal-connection",
+        "personal-id",
+      ),
+    ] as never);
+    prisma.booking.findMany.mockResolvedValue([]);
+
+    await getPublicAvailability({
+      slug: "intro",
+      start: new Date("2026-05-04T00:00:00.000Z"),
+      end: new Date("2026-05-05T00:00:00.000Z"),
+      logger,
+    });
+
+    const { failClosed } = vi.mocked(getUnifiedCalendarAvailability).mock
+      .calls[0][0];
+    expect(typeof failClosed).toBe("function");
+    const mustCheck = failClosed as (connection: {
+      id: string;
+      emailAccountId: string;
+    }) => boolean;
+    expect(
+      mustCheck({ id: "work-connection", emailAccountId: "email-account-id" }),
+    ).toBe(true);
+    expect(
+      mustCheck({ id: "personal-connection", emailAccountId: "personal-id" }),
+    ).toBe(false);
+  });
+
+  it("without a destination, fails closed for the host mailbox's own calendars", async () => {
+    mockBookingLinkConfig({ destinationCalendarId: null });
+    prisma.booking.findMany.mockResolvedValue([]);
+
+    await getPublicAvailability({
+      slug: "intro",
+      start: new Date("2026-05-04T00:00:00.000Z"),
+      end: new Date("2026-05-05T00:00:00.000Z"),
+      logger,
+    });
+
+    const mustCheck = vi.mocked(getUnifiedCalendarAvailability).mock.calls[0][0]
+      .failClosed as (connection: {
+      id: string;
+      emailAccountId: string;
+    }) => boolean;
+    expect(
+      mustCheck({ id: "own-connection", emailAccountId: "email-account-id" }),
+    ).toBe(true);
+    expect(
+      mustCheck({ id: "personal-connection", emailAccountId: "personal-id" }),
+    ).toBe(false);
+  });
+
+  it("without a destination or a calendar of its own, the host mailbox fails closed for all of the host's calendars", async () => {
+    mockBookingLinkConfig({ destinationCalendarId: null });
+    prisma.calendar.findMany.mockResolvedValue([
+      hostCalendar("work-calendar-id", "work-connection", "work-id"),
+    ] as never);
+    prisma.booking.findMany.mockResolvedValue([]);
+
+    await getPublicAvailability({
+      slug: "intro",
+      start: new Date("2026-05-04T00:00:00.000Z"),
+      end: new Date("2026-05-05T00:00:00.000Z"),
+      logger,
+    });
+
+    const mustCheck = vi.mocked(getUnifiedCalendarAvailability).mock.calls[0][0]
+      .failClosed as (connection: {
+      id: string;
+      emailAccountId: string;
+    }) => boolean;
+    expect(
+      mustCheck({ id: "work-connection", emailAccountId: "work-id" }),
+    ).toBe(true);
+  });
+
   it("takes bookings on the host's calendars from any of their mailboxes", async () => {
     mockBookingLinkConfig();
     prisma.booking.findMany.mockResolvedValue([]);
@@ -1074,7 +1156,11 @@ describe("public booking", () => {
           isConnected: true,
         },
       },
-      select: { id: true },
+      select: {
+        id: true,
+        connectionId: true,
+        connection: { select: { emailAccountId: true } },
+      },
     });
   });
 
@@ -1098,7 +1184,7 @@ describe("public booking", () => {
       },
     });
     prisma.calendar.findMany.mockResolvedValue([
-      { id: "other-calendar-id" },
+      hostCalendar("other-calendar-id", "own-connection", "email-account-id"),
     ] as never);
 
     await expect(
@@ -1111,6 +1197,14 @@ describe("public booking", () => {
     ).rejects.toThrow("No enabled calendar is available for this host");
   });
 });
+
+function hostCalendar(
+  id: string,
+  connectionId: string,
+  emailAccountId: string,
+) {
+  return { id, connectionId, connection: { emailAccountId } };
+}
 
 function publicBookingInput(
   overrides: Partial<Parameters<typeof createPublicBooking>[0]["input"]> = {},
@@ -1131,6 +1225,7 @@ function mockBookingLinkConfig(
     durationMinutes?: number;
     windows?: { weekday: number; startMinutes: number; endMinutes: number }[];
     timezone?: string;
+    destinationCalendarId?: string | null;
   } = {},
 ) {
   prisma.bookingLink.findFirst.mockResolvedValue({
@@ -1143,7 +1238,10 @@ function mockBookingLinkConfig(
     minimumNoticeMinutes: 0,
     maxDaysAhead: 30,
     emailAccountId: "email-account-id",
-    destinationCalendarId: "calendar-row-id",
+    destinationCalendarId:
+      overrides.destinationCalendarId === undefined
+        ? "calendar-row-id"
+        : overrides.destinationCalendarId,
     availabilitySchedule: {
       windows: overrides.windows ?? [
         { weekday: 1, startMinutes: 9 * 60, endMinutes: 10 * 60 },
