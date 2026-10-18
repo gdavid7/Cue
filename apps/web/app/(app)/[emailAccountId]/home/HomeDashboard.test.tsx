@@ -25,7 +25,7 @@ const mocks = vi.hoisted(() => ({
   },
   push: vi.fn(),
   searchParams: new URLSearchParams(),
-  emailAccounts: [] as unknown[],
+  emailAccounts: [] as unknown[] | undefined,
   homes: {} as Record<string, GetHomeResponse | undefined>,
   markNeedsReply: vi.fn(),
   markNoReplyNeeded: vi.fn(),
@@ -45,7 +45,11 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => mocks.searchParams,
 }));
 vi.mock("@/hooks/useAccounts", () => ({
-  useAccounts: () => ({ data: { emailAccounts: mocks.emailAccounts } }),
+  useAccounts: () => ({
+    data: mocks.emailAccounts
+      ? { emailAccounts: mocks.emailAccounts }
+      : undefined,
+  }),
 }));
 vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
   useOptionalMailClient: () => mocks.client,
@@ -677,6 +681,15 @@ describe("HomeDashboard across accounts", () => {
     expect(
       within(rowFor("account-b:b1")).getByText("Also in a@example.com"),
     ).toBeTruthy();
+  });
+
+  it("shows Today loading while the account list loads, not an empty page", () => {
+    mocks.emailAccounts = undefined;
+
+    renderToday();
+
+    expect(skeletons()).not.toEqual([]);
+    expect(screen.queryByText("All clear.")).toBeNull();
   });
 
   it("is one account's Today with one account in All inboxes", () => {

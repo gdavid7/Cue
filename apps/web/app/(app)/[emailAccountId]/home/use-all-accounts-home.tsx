@@ -85,14 +85,18 @@ export function useAllAccountsHome(
       }),
     );
     const { data, failedAccountIds } = mergeHomeData(entries);
-    const errors = entries.filter((entry) => !entry.data && entry.error);
+    const errors = entries.filter(
+      (entry) => !entry.data && entry.error !== undefined,
+    );
     return {
       data: data ?? undefined,
       failedAccountIds,
-      // Until one account answers, as one account's Today waits for it.
-      isLoading: !data && errors.length < entries.length,
+      // Until one account answers, as one account's Today waits for it, and
+      // while the account list itself loads.
+      isLoading:
+        !data && (entries.length === 0 || errors.length < entries.length),
       error:
-        !data && entries.length && errors.length === entries.length
+        !data && entries.length > 0 && errors.length === entries.length
           ? errors[0].error
           : undefined,
     };

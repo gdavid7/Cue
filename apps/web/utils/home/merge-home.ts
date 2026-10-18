@@ -81,8 +81,9 @@ export function mergeHomeData(accounts: AccountHome[]): {
   const failedAccountIds: string[] = [];
   for (const entry of accounts) {
     if (!entry.data) {
-      for (const lane of LANES) (entry.error ? failed : pending).add(lane);
-      if (entry.error) failedAccountIds.push(entry.account.id);
+      for (const lane of LANES)
+        (entry.error !== undefined ? failed : pending).add(lane);
+      if (entry.error !== undefined) failedAccountIds.push(entry.account.id);
       continue;
     }
     for (const lane of entry.data.failed) failed.add(lane);
