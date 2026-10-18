@@ -131,6 +131,96 @@ const promotionalBoundaryCases = [
   },
 ];
 
+// Platforms that relay a person's message add their own footer, unsubscribe
+// link and List-Unsubscribe header. The body decides: a personal message is a
+// conversation, a mass digest from the same kind of platform is not.
+const platformRelayedCases = [
+  {
+    name: "recruiter's personal question relayed by a recruiting platform",
+    email: getEmail({
+      from: "Recruiter via HireLoop <messages@hireloop.example>",
+      subject: "New message from a recruiter at Northfield Labs",
+      listUnsubscribe: "<https://hireloop.example/unsubscribe?u=synthetic>",
+      content: `Hi,
+
+I'm a recruiter at Northfield Labs. I came across your profile and noticed your project on offline-first sync. We're hiring a backend engineer for our data platform team, and I think your background is a strong fit.
+
+Would you be open to a quick chat about it? Also, are you looking for internships for this summer or full-time roles after graduation?
+
+Thanks,
+Recruiter, Northfield Labs
+
+---
+Reply to this message on HireLoop: https://hireloop.example/messages/synthetic
+You received this message because you have a HireLoop profile.
+Manage notification settings: https://hireloop.example/settings
+Unsubscribe: https://hireloop.example/unsubscribe?u=synthetic
+HireLoop Inc. | 500 Market St, San Francisco, CA`,
+    }),
+    acceptableRules: ["Conversations"],
+  },
+  {
+    name: "mass job digest from a recruiting platform",
+    email: getEmail({
+      from: "HireLoop <jobs@hireloop.example>",
+      subject: "12 new jobs you may like this week",
+      listUnsubscribe: "<https://hireloop.example/unsubscribe?u=synthetic>",
+      content: `Hi there,
+
+Based on your profile, here are new roles we think you'll like:
+
+- Backend Engineer Intern at Northfield Labs (Remote)
+- Software Engineer, New Grad at Brightwave (New York, NY)
+- Data Engineer Intern at Coastline Analytics (Austin, TX)
+- Platform Engineer at Meridian Systems (Seattle, WA)
+
+See all 12 matches: https://hireloop.example/jobs/recommended
+Complete your profile to get better recommendations.
+
+---
+You received this email because you have a HireLoop profile.
+Manage notification settings | Unsubscribe
+HireLoop Inc. | 500 Market St, San Francisco, CA`,
+    }),
+    acceptableRules: ["Newsletter", "Marketing", "Notification"],
+  },
+  {
+    name: "renter's personal question relayed by a rental marketplace",
+    email: getEmail({
+      from: "Guest via StayNest <messages@staynest.example>",
+      subject: "New inquiry about your listing: Garden studio",
+      listUnsubscribe: "<https://staynest.example/unsubscribe?u=synthetic>",
+      content: `You have a new message about Garden studio.
+
+"Hi! My partner and I are visiting for a family wedding and would love to stay at your studio for four nights in early June. Is there space to park a car nearby, and would an early check-in around 11am be possible? We'd be arriving on an overnight flight. Thank you!"
+
+Reply on StayNest: https://staynest.example/inbox/synthetic
+Always communicate through StayNest to stay protected.
+
+---
+StayNest | Notification preferences | Unsubscribe`,
+    }),
+    acceptableRules: ["Conversations"],
+  },
+  {
+    name: "client's personal note relayed by a scheduling tool",
+    email: getEmail({
+      from: "MeetSlot <notifications@meetslot.example>",
+      subject: "New message from a client on MeetSlot",
+      listUnsubscribe: "<https://meetslot.example/unsubscribe?u=synthetic>",
+      content: `A client sent you a message through your MeetSlot page:
+
+"Hi, thanks for the proposal you sent last week. My co-founder and I read through it and have two questions: does the price include the onboarding workshop, and could the first phase be split into two smaller milestones so we can pay in stages? Let me know what you think."
+
+Reply to this message: https://meetslot.example/messages/synthetic
+
+---
+Sent by MeetSlot. Manage email preferences or unsubscribe.`,
+    }),
+    acceptableRules: ["Conversations"],
+  },
+];
+
 const multiRuleStressRules = [
   getRule(
     "Receipts, invoices, purchase confirmations, payment receipts, renewal receipts, and order summaries where a payment succeeded or an invoice is available.",
@@ -859,6 +949,38 @@ describe.runIf(shouldRunEval)("Eval: Choose Rule", () => {
     },
     { multiRuleSelectionEnabled: true },
   );
+
+  describeEvalMatrix("platform-relayed messages", (model, emailAccount) => {
+    for (const tc of platformRelayedCases) {
+      test(
+        `${tc.name} -> ${tc.acceptableRules.join(" | ")}`,
+        async () => {
+          const result = await aiChooseRule({
+            email: tc.email,
+            rules,
+            emailAccount,
+            logger,
+          });
+
+          const primaryRule = result.rules.find((r) => r.isPrimary);
+          const actual =
+            primaryRule?.rule.name ?? result.rules[0]?.rule.name ?? "no match";
+          const pass = tc.acceptableRules.includes(actual);
+
+          evalReporter.record({
+            testName: `platform-relayed: ${tc.name}`,
+            model: model.label,
+            pass,
+            expected: tc.acceptableRules.join(" | "),
+            actual,
+          });
+
+          expect(tc.acceptableRules).toContain(actual);
+        },
+        TIMEOUT,
+      );
+    }
+  });
 
   describeEvalMatrix(
     "choose-rule multi-rule false positives",

@@ -38,7 +38,7 @@ async function runSmoke() {
     origin: `http://127.0.0.1:${port}`,
     fork: () => {
       child = utilityProcess.fork(requiredEnv("ELECTRON_MAIL_CHILD"), [], {
-        serviceName: "Inbox Zero Mail Engine",
+        serviceName: "Cue Mail Engine",
       });
       return child;
     },

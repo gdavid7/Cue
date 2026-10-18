@@ -1,17 +1,10 @@
 import { withSentryConfig } from "@sentry/nextjs";
 import { withAxiom } from "next-axiom";
-import nextMdx from "@next/mdx";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { env } from "./env";
 import { isIndexingAllowed } from "./utils/indexing";
 import type { NextConfig } from "next";
-
-const withMDX = nextMdx({
-  options: {
-    remarkPlugins: [[require.resolve("remark-gfm")]],
-  },
-});
 
 const isDevelopment = process.env.NODE_ENV === "development";
 const isProductionBuild = process.env.NODE_ENV === "production";
@@ -251,7 +244,6 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/mcp": ["./generated/mcp-app/*"],
   },
-  pageExtensions: ["js", "jsx", "mdx", "ts", "tsx"],
   reactStrictMode: true,
   async redirects() {
     return [
@@ -278,26 +270,9 @@ const nextConfig: NextConfig = {
         source: "/",
       },
       {
-        destination: "https://go.getinboxzero.com/github",
+        destination: "https://github.com/gdavid7/Cue",
         permanent: true,
         source: "/github",
-      },
-      {
-        destination:
-          "https://apps.apple.com/app/inbox-zero-ai-email/id6759736561",
-        permanent: false,
-        source: "/ios",
-      },
-      {
-        destination:
-          "https://play.google.com/store/apps/details?id=com.getinboxzero.app",
-        permanent: false,
-        source: "/android",
-      },
-      {
-        destination: "/support",
-        permanent: true,
-        source: "/contact",
       },
       // Cue's own waitlist is the request form on /login.
       {
@@ -370,6 +345,12 @@ const nextConfig: NextConfig = {
   ],
   turbopack: {
     root: turbopackRoot,
+    resolveAlias: {
+      // zod's entry points re-export every locale as `z.locales`, which keeps
+      // ~40 translations in the client bundle. Nothing in the app reads them.
+      // Only zod imports this exact relative path in our dependency tree.
+      "../locales/index.js": "./utils/zod-locales-en.ts",
+    },
     rules: {
       "*.svg": {
         as: "*.js",
@@ -421,16 +402,14 @@ const sentryConfig = {
   tunnelRoute: "/monitoring",
 };
 
-const mdxConfig = withMDX(nextConfig);
-
 const useSentry =
   process.env.NEXT_PUBLIC_SENTRY_DSN &&
   process.env.SENTRY_ORGANIZATION &&
   process.env.SENTRY_PROJECT;
 
 const exportConfig = useSentry
-  ? withSentryConfig(mdxConfig, { ...sentryOptions, ...sentryConfig })
-  : mdxConfig;
+  ? withSentryConfig(nextConfig, { ...sentryOptions, ...sentryConfig })
+  : nextConfig;
 
 // NEXTAUTH_SECRET is deprecated but kept as an option to not break the build. At least one must be set.
 if (!env.AUTH_SECRET && !env.NEXTAUTH_SECRET) {

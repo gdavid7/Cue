@@ -55,9 +55,9 @@ export function registerMailClient(
   server.registerTool(
     "open_mail",
     {
-      title: "Open Inbox Zero",
+      title: "Open Cue",
       description:
-        "Open the mail client to browse, read, compose, and organize linked mailboxes. Link an Inbox Zero account first. Does not change mail.",
+        "Open the mail client to browse, read, compose, and organize linked mailboxes. Link a Cue account first. Does not change mail.",
       inputSchema: {
         emailAccountId: z
           .string()
@@ -73,7 +73,7 @@ export function registerMailClient(
           ),
       },
       annotations: {
-        title: "Open Inbox Zero",
+        title: "Open Cue",
         readOnlyHint: true,
         destructiveHint: false,
         openWorldHint: false,

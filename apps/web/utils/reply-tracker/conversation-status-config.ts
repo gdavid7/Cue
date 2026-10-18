@@ -31,11 +31,12 @@ Match when:
 - Updates or FYI information from real people
 - Follow-ups on ongoing conversations
 - Conversations that have been resolved or concluded
+- Messages a real person wrote personally to the user, even when sent through a platform (recruiting, scheduling, marketplace or messaging tools) that adds its own footer or unsubscribe link
 
 EXCLUDE:
 - All automated notifications (LinkedIn, GitHub, Slack, Figma, Jira, Facebook, social media platforms, marketing)
 - System emails (order confirmations, receipts, calendar invites)
-- Emails with List-Unsubscribe headers or unsubscribe links are a strong signal of mass/automated emails
+- Emails with List-Unsubscribe headers or unsubscribe links are usually mass or automated, unless the body is a personal message written to the user by a real person
 
 IMPORTANT:
 - Only use this rule for human-to-human communication. If an email is automated or system-generated and another rule is a better fit, do not use this rule.

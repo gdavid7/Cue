@@ -40,12 +40,12 @@ describe("desktop application menu", () => {
     const update = submenu.find((item) => item.label === "Check for Updates…");
     expect(update?.click).toBe(checkForUpdates);
 
-    const about = submenu.find((item) => item.label === "About Inbox Zero");
+    const about = submenu.find((item) => item.label === "About Cue");
     expect(about?.click).toEqual(expect.any(Function));
     about?.click?.({} as never, {} as never, {} as never);
 
     expect(app.setAboutPanelOptions).toHaveBeenCalledWith({
-      applicationName: "Inbox Zero",
+      applicationName: "Cue",
       applicationVersion: "0.2.0",
     });
     expect(app.showAboutPanel).toHaveBeenCalledOnce();
@@ -69,7 +69,7 @@ describe("desktop application menu", () => {
     expect(items.some((item) => item.label === "Check for Updates…")).toBe(
       false,
     );
-    const appMenu = template.find((item) => item.label === "Inbox Zero");
+    const appMenu = template.find((item) => item.label === "Cue");
     const appItems = (appMenu?.submenu as MenuItemConstructorOptions[]) ?? [];
     for (let i = 1; i < appItems.length; i++) {
       expect(
@@ -110,7 +110,7 @@ describe("desktop application menu", () => {
 
     const template: MenuItemConstructorOptions[] =
       Menu.buildFromTemplate.mock.results[0].value;
-    const appMenu = template.find((item) => item.label === "Inbox Zero");
+    const appMenu = template.find((item) => item.label === "Cue");
     const submenu = appMenu?.submenu as MenuItemConstructorOptions[];
     const update = submenu.find((item) => item.label === "Restart to Update");
     expect(update?.click).toBe(checkForUpdates);
@@ -127,7 +127,7 @@ describe("desktop application menu", () => {
 
     const template: MenuItemConstructorOptions[] =
       Menu.buildFromTemplate.mock.results[0].value;
-    const appMenu = template.find((item) => item.label === "Inbox Zero");
+    const appMenu = template.find((item) => item.label === "Cue");
     const submenu = appMenu?.submenu as MenuItemConstructorOptions[];
     expect(
       submenu.some((item) => item.label === "Downloading update… 42%"),

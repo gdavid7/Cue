@@ -96,7 +96,7 @@ export function MailApp({
 
   const sidebar = (
     <aside style={styles.sidebar}>
-      <div style={styles.brand}>Inbox Zero</div>
+      <div style={styles.brand}>Cue</div>
       {host.compose ? (
         <button
           style={styles.primaryButton}

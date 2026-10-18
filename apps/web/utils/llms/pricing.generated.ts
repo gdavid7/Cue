@@ -127,7 +127,7 @@ export const OPENROUTER_MODEL_PRICING: Record<string, ModelPricing> = {
   "anthropic/claude-sonnet-5.5": {
     input: 0.000_002,
     output: 0.000_01,
-    cachedInput: 1e-7,
+    cachedInput: 2e-7,
     cacheWrite: 0.000_002_5,
   },
   "au.anthropic.claude-sonnet-5": {
@@ -217,7 +217,7 @@ export const OPENROUTER_MODEL_PRICING: Record<string, ModelPricing> = {
   "claude-sonnet-5-5": {
     input: 0.000_002,
     output: 0.000_01,
-    cachedInput: 1e-7,
+    cachedInput: 2e-7,
     cacheWrite: 0.000_002_5,
   },
   "DeepSeek-V4-Flash": {
