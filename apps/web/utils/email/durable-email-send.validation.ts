@@ -15,12 +15,14 @@ export const durableEmailSendBody = z.object({
 
 export type DurableEmailSendBody = z.infer<typeof durableEmailSendBody>;
 
+// The files travel in the request body, which the hosting platform caps at
+// 4.5 MB. Draft uploads have no such cap, so larger files go through a draft.
 export const DURABLE_MULTIPART_EMAIL_SEND_LIMITS = {
   maxAttachmentBytes: 3 * 1024 * 1024,
   maxPayloadBytes: 5 * 1024 * 1024,
 } as const;
 export const DURABLE_MULTIPART_ATTACHMENT_LIMIT_MESSAGE =
-  "Attachments must total 3 MB or less. Use Gmail or Outlook for larger files.";
+  "Attachments sent this way can total up to 3 MB. Add larger files to the draft, then send it.";
 
 const multipartAttachmentMetadata = z.strictObject({
   id: z.string().min(1).max(512),

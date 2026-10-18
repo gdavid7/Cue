@@ -6,12 +6,14 @@ import {
 import {
   EMAIL_ATTACHMENT_LIMITS,
   combineEmailHtml,
+  formatAttachmentSize,
   createInlineContentId,
   detectInlineImageMimeType,
   finalizeEditableEmailHtml,
   prepareEmailDraft,
   sanitizePreservedEmailHtmlForPreview,
   splitQuotedHtml,
+  validateEmailAttachmentMetadata,
   validateEmailAttachments,
   type EmailComposerAttachment,
 } from "./email-html";
@@ -331,3 +333,61 @@ function attachment(
     ...overrides,
   };
 }
+
+describe("attachment size limits", () => {
+  const file = (id: string, size: number) => ({
+    id,
+    filename: `${id}.pdf`,
+    mimeType: "application/pdf",
+    size,
+    disposition: "attachment" as const,
+  });
+
+  it("accepts files up to Gmail's 25 MB total, including one large file", () => {
+    expect(
+      validateEmailAttachmentMetadata([file("report", 25_000_000)]),
+    ).toEqual({ valid: true });
+    expect(
+      validateEmailAttachmentMetadata([
+        file("first", 12_000_000),
+        file("second", 13_000_000),
+      ]),
+    ).toEqual({ valid: true });
+  });
+
+  it("names the limit and the actual total when files go over it", () => {
+    expect(
+      validateEmailAttachmentMetadata([
+        file("first", 20_000_000),
+        file("second", 11_200_000),
+      ]),
+    ).toEqual({
+      valid: false,
+      error: "Attachments can total up to 25 MB. These add up to 31.2 MB.",
+    });
+  });
+
+  it("never rounds a total that is over the limit down to the limit", () => {
+    const result = validateEmailAttachmentMetadata([
+      file("report", EMAIL_ATTACHMENT_LIMITS.maxTotalBytes + 1),
+    ]);
+    expect(result).toEqual({
+      valid: false,
+      error: "Attachments can total up to 25 MB. These add up to 25.1 MB.",
+    });
+  });
+});
+
+describe("formatAttachmentSize", () => {
+  it.each([
+    [0, "0 B"],
+    [999, "999 B"],
+    [1000, "1 KB"],
+    [1001, "2 KB"],
+    [999_999, "1 MB"],
+    [1_500_000, "1.5 MB"],
+    [25_000_000, "25 MB"],
+  ])("formats %i bytes as %s", (bytes, label) => {
+    expect(formatAttachmentSize(bytes)).toBe(label);
+  });
+});

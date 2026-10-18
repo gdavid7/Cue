@@ -1,4 +1,8 @@
-import type { EmailAttachmentMetadata } from "@inboxzero/email-editor/core";
+import {
+  EMAIL_ATTACHMENT_LIMITS,
+  EMAIL_INLINE_IMAGE_MIME_TYPES,
+  type EmailAttachmentMetadata,
+} from "@inboxzero/email-editor/core";
 import type { DraftAttachment } from "@/utils/email/types";
 import type { ComposeAttachmentReference } from "@/utils/mail-engine/reply-drafts";
 
@@ -96,4 +100,26 @@ export function getEditorInlineAttachments(attachments: ComposeAttachment[]) {
       attachment.disposition === "inline" &&
       attachment.status !== "failed",
   );
+}
+
+/**
+ * Where pasted or dropped files go, as in Gmail: images that mail clients
+ * show in the body go inline when they land in it, and every other file is
+ * attached rather than refused.
+ */
+export function routeComposeFiles(
+  files: File[],
+  { into, inlineCount }: { into: "body" | "window"; inlineCount: number },
+) {
+  const inline: File[] = [];
+  const attachments: File[] = [];
+  for (const file of files) {
+    const canInline =
+      into === "body" &&
+      inlineCount + inline.length < EMAIL_ATTACHMENT_LIMITS.maxInlineFiles &&
+      file.size <= EMAIL_ATTACHMENT_LIMITS.maxInlineBytes &&
+      (EMAIL_INLINE_IMAGE_MIME_TYPES as readonly string[]).includes(file.type);
+    (canInline ? inline : attachments).push(file);
+  }
+  return { inline, attachments };
 }

@@ -1,4 +1,7 @@
-import { EMAIL_ATTACHMENT_LIMITS } from "@inboxzero/email-editor/core";
+import {
+  EMAIL_ATTACHMENT_LIMITS,
+  getAttachmentTotalLimitError,
+} from "@inboxzero/email-editor/core";
 import { SafeError } from "@/utils/error";
 
 /**
@@ -12,6 +15,10 @@ export const DRAFT_ATTACHMENT_DIRECT_UPLOAD_LIMIT_BYTES = 3 * 1024 * 1024;
 
 const GMAIL_UPLOAD_GRANULARITY_BYTES = 256 * 1024;
 export const GMAIL_UPLOAD_CHUNK_BYTES = 16 * GMAIL_UPLOAD_GRANULARITY_BYTES;
+
+// Gmail's media upload takes a whole message, base64 files included, up to
+// 35 MB. Decimal, as the smaller reading of Google's documented limit.
+export const GMAIL_MAX_MESSAGE_UPLOAD_BYTES = 35_000_000;
 
 // Graph takes each upload session range under 4 MB.
 export const GRAPH_UPLOAD_CHUNK_BYTES = 10 * 320 * 1024;
@@ -40,7 +47,18 @@ export function assertDraftAttachmentLimits(
       `Attach at most ${EMAIL_ATTACHMENT_LIMITS.maxFiles} files.`,
     );
   if (totalBytes > EMAIL_ATTACHMENT_LIMITS.maxTotalBytes)
-    throw new SafeError("Attachments must total 15 MB or less.");
+    throw new SafeError(getAttachmentTotalLimitError(totalBytes));
+}
+
+/**
+ * Files within the attachment limit can still pass Gmail's message limit
+ * once a long body is added, so the built message is checked too.
+ */
+export function assertGmailMessageUploadSize(messageBytes: number) {
+  if (messageBytes > GMAIL_MAX_MESSAGE_UPLOAD_BYTES)
+    throw new SafeError(
+      "This message is too large for Gmail. Remove an attachment or shorten the message.",
+    );
 }
 
 export function usesDirectDraftAttachmentUpload(size: number) {

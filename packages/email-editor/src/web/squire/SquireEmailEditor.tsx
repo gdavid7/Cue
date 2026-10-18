@@ -68,7 +68,8 @@ type SquireEmailEditorProps = {
   preservedBlocks: RenderedPreservedEmailBlock[];
   spellCheck: boolean;
   onAssist?: () => void;
-  onImageFiles?: (files: File[]) => void;
+  /** Files pasted or dropped into the body; the app attaches or inlines them. */
+  onFiles?: (files: File[]) => void;
   onSlashKeyDown?: (event: KeyboardEvent) => boolean;
   onSlashTrigger?: (trigger: EmailEditorSlashTrigger | null) => void;
   onStateChange?: (state: EmailEditorState) => void;
@@ -567,17 +568,17 @@ export const SquireEmailEditor = forwardRef<
       );
     });
 
-    const interceptImageFiles = (event: ClipboardEvent | DragEvent) => {
+    // Any pasted or dropped file goes to the app, as Gmail attaches it, rather
+    // than letting the browser open it or insert it as a data: image.
+    const interceptFiles = (event: ClipboardEvent | DragEvent) => {
       const transfer =
         "clipboardData" in event ? event.clipboardData : event.dataTransfer;
-      const files = Array.from(transfer?.files ?? []).filter((file) =>
-        file.type.startsWith("image/"),
-      );
-      const onImageFiles = propsRef.current.onImageFiles;
-      if (!files.length || !onImageFiles) return;
+      const files = Array.from(transfer?.files ?? []);
+      const onFiles = propsRef.current.onFiles;
+      if (!files.length || !onFiles) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      onImageFiles(files);
+      onFiles(files);
     };
     // Markdown copied as plain text (from a chat, an editor or a README)
     // arrives formatted. Shift pastes it as typed, and clipboard HTML keeps
@@ -613,8 +614,8 @@ export const SquireEmailEditor = forwardRef<
       event.preventDefault();
       openSafeLink(link.getAttribute("href") ?? "");
     };
-    root.addEventListener("paste", interceptImageFiles, true);
-    root.addEventListener("drop", interceptImageFiles, true);
+    root.addEventListener("paste", interceptFiles, true);
+    root.addEventListener("drop", interceptFiles, true);
     // Listening above the root guarantees this runs before Squire's own
     // paste handler, even when the root itself is the event target.
     const body = root.parentElement;
@@ -670,8 +671,8 @@ export const SquireEmailEditor = forwardRef<
 
     return () => {
       window.removeEventListener("keydown", onWindowKeyDown, true);
-      root.removeEventListener("paste", interceptImageFiles, true);
-      root.removeEventListener("drop", interceptImageFiles, true);
+      root.removeEventListener("paste", interceptFiles, true);
+      root.removeEventListener("drop", interceptFiles, true);
       body?.removeEventListener("paste", pasteMarkdown, true);
       root.removeEventListener("click", onClick);
       root.removeEventListener("compositionend", onCompositionEnd);

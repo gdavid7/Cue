@@ -5,9 +5,10 @@ import { isSafeContentId, isRemoteImageSource } from "./email-profile";
 export const EMAIL_ATTACHMENT_LIMITS = {
   maxFiles: 10,
   maxInlineFiles: 5,
-  maxFileBytes: 10 * 1024 * 1024,
   maxInlineBytes: 3 * 1024 * 1024,
-  maxTotalBytes: 15 * 1024 * 1024,
+  // Gmail's limit for the files on one message. Base64 makes the sent
+  // message about 37% larger, which still fits Gmail's 35 MB upload.
+  maxTotalBytes: 25_000_000,
 } as const;
 
 export const EMAIL_INLINE_IMAGE_MIME_TYPES = [
@@ -267,12 +268,6 @@ export function validateEmailAttachmentMetadata(
     if (!Number.isSafeInteger(attachment.size) || attachment.size < 0) {
       return { valid: false, error: "Attachment sizes are invalid." };
     }
-    if (attachment.size > EMAIL_ATTACHMENT_LIMITS.maxFileBytes) {
-      return {
-        valid: false,
-        error: "Attachments must be 10 MB or smaller.",
-      };
-    }
     totalBytes += attachment.size;
     if (attachment.disposition !== "inline") continue;
 
@@ -304,13 +299,25 @@ export function validateEmailAttachmentMetadata(
   }
 
   if (totalBytes > EMAIL_ATTACHMENT_LIMITS.maxTotalBytes) {
-    return {
-      valid: false,
-      error: "Attachments must total 15 MB or less.",
-    };
+    return { valid: false, error: getAttachmentTotalLimitError(totalBytes) };
   }
 
   return { valid: true };
+}
+
+export function getAttachmentTotalLimitError(totalBytes: number) {
+  return `Attachments can total up to ${formatAttachmentSize(EMAIL_ATTACHMENT_LIMITS.maxTotalBytes)}. These add up to ${formatAttachmentSize(totalBytes)}.`;
+}
+
+/**
+ * Decimal units, as Gmail and Finder count them, so a file at the limit
+ * reads as "25 MB". Rounds up so a size over a limit never reads as the limit.
+ */
+export function formatAttachmentSize(bytes: number) {
+  if (bytes < 1000) return `${bytes} B`;
+  const kilobytes = Math.ceil(bytes / 1000);
+  if (kilobytes < 1000) return `${kilobytes} KB`;
+  return `${Math.ceil(bytes / 100_000) / 10} MB`;
 }
 
 /**
