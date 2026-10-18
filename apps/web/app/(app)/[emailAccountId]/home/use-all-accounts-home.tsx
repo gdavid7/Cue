@@ -78,11 +78,12 @@ export function useAllAccountsHome(
   );
   const merged = useMemo(() => {
     if (!todayAccounts) return null;
-    const entries = todayAccounts.map((account) => ({
-      account,
-      gaveUp: false,
-      ...feeds[account.id],
-    }));
+    const entries = todayAccounts.map(
+      (account): AccountHome => ({
+        ...(feeds[account.id] ?? { gaveUp: false }),
+        account,
+      }),
+    );
     const { data, failedAccountIds } = mergeHomeData(entries);
     const errors = entries.filter((entry) => !entry.data && entry.error);
     return {

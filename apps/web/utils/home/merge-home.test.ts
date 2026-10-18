@@ -212,7 +212,12 @@ describe("mergeHomeData", () => {
       loaded(A, {
         calendar: {
           connected: true,
-          next: { title: "Late", at: "2026-10-14T15:00:00Z", tomorrow: false },
+          next: {
+            title: "Late",
+            at: "2026-10-14T15:00:00Z",
+            url: undefined,
+            tomorrow: false,
+          },
         },
         agentTasks: [
           {
@@ -228,14 +233,24 @@ describe("mergeHomeData", () => {
       loaded(B, {
         calendar: {
           connected: false,
-          next: { title: "Early", at: "2026-10-14T10:00:00Z", tomorrow: false },
+          next: {
+            title: "Early",
+            at: "2026-10-14T10:00:00Z",
+            url: undefined,
+            tomorrow: false,
+          },
         },
       }),
     ]);
 
     expect(data?.calendar).toEqual({
       connected: true,
-      next: { title: "Early", at: "2026-10-14T10:00:00Z", tomorrow: false },
+      next: {
+        title: "Early",
+        at: "2026-10-14T10:00:00Z",
+        url: undefined,
+        tomorrow: false,
+      },
     });
     expect(data?.agentTasks.map((task) => task.account)).toEqual([A]);
   });
