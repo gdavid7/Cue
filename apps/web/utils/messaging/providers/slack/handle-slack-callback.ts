@@ -23,6 +23,7 @@ import {
   setOAuthCodeResult,
 } from "@/utils/redis/oauth-code";
 import { syncSlackInstallation } from "@/utils/messaging/chat-sdk/bot";
+import { shareConnectedChannel } from "@/utils/messaging/shared-channels";
 import { sendSlackOnboardingDirectMessageWithLogging } from "@/utils/messaging/providers/slack/send-onboarding-direct-message";
 
 const slackOAuthStateSchema = z.object({
@@ -99,7 +100,7 @@ export async function handleSlackCallback(
 
     const tokens = await exchangeCodeForTokens(code, logger);
 
-    await upsertMessagingChannel({
+    const channel = await upsertMessagingChannel({
       teamId: tokens.team.id,
       teamName: tokens.team.name,
       accessToken: tokens.access_token,
@@ -119,6 +120,15 @@ export async function handleSlackCallback(
         botUserId: tokens.bot_user_id,
         teamName: tokens.team.name,
       },
+    });
+
+    await shareConnectedChannel({
+      channelId: channel.id,
+      logger: callbackLogger,
+    }).catch((error) => {
+      callbackLogger.error("Failed to share Slack with other mailboxes", {
+        error,
+      });
     });
 
     await syncSlackInstallation({

@@ -88,6 +88,7 @@ import {
   getEmailUrlForOptionalMessage,
 } from "@/utils/url";
 import { getEmailAccountWithAi } from "@/utils/user/get";
+import { shareConnectedChannel } from "@/utils/messaging/shared-channels";
 
 const MAX_CHAT_CONTEXT_MESSAGES = 12;
 const CHAT_SDK_STATE_KEY_PREFIX = "inbox-zero:chat-sdk";
@@ -1888,6 +1889,15 @@ async function handleMessagingLinkCommand({
     },
   });
 
+  await shareConnectedChannel({
+    channelId: messagingChannel.id,
+    logger,
+  }).catch((error) => {
+    logger.error("Failed to share messaging channel with other mailboxes", {
+      error,
+    });
+  });
+
   await postMessagingThreadMessage({
     thread,
     logger,
@@ -2161,6 +2171,9 @@ async function resolveSlackMessagingContext({
       providerUserId: userId,
       ...(teamId ? { teamId } : {}),
     },
+    // Every mailbox of a person shares their Slack link; a new DM talks to
+    // the mailbox that connected Slack first.
+    orderBy: { createdAt: "asc" },
     select: {
       id: true,
       accessToken: true,
