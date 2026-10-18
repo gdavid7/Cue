@@ -8,6 +8,7 @@ import {
 } from "@/generated/prisma/enums";
 import {
   findSharedChannelIds,
+  shareChannelsAcrossMailboxes,
   shareChannelsWithMailbox,
   shareConnectedChannel,
 } from "@/utils/messaging/shared-channels";
@@ -251,6 +252,74 @@ describe("shareChannelsWithMailbox", () => {
     expect(prisma.messagingChannel.upsert).not.toHaveBeenCalled();
   });
 });
+
+describe("shareChannelsAcrossMailboxes", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("shares in both directions when a mailbox joins a person, as after merging two sign-ups", async () => {
+    // "moved" brings Telegram; "work" already had Slack.
+    prisma.emailAccount.findMany.mockResolvedValue([
+      { id: "work" },
+      { id: "moved" },
+    ] as never);
+    prisma.emailAccount.findUnique.mockImplementation((async ({
+      where,
+    }: {
+      where: { id: string };
+    }) => ({
+      id: where.id,
+      userId: "user-1",
+      messagingChannels:
+        where.id === "work"
+          ? [{ provider: MessagingProvider.SLACK, teamId: "T1" }]
+          : [{ provider: MessagingProvider.TELEGRAM, teamId: "42" }],
+    })) as never);
+    prisma.messagingChannel.findMany.mockImplementation((async ({
+      where,
+    }: {
+      where: { emailAccountId: { not: string } };
+    }) =>
+      where.emailAccountId.not === "work"
+        ? [telegramFrom("moved")]
+        : [{ ...slack, routes: [] }]) as never);
+
+    await shareChannelsAcrossMailboxes({ userId: "user-1", logger });
+
+    expect(prisma.emailAccount.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: "user-1" } }),
+    );
+    const linked = prisma.messagingChannel.upsert.mock.calls.map(
+      ([args]) => args.where.emailAccountId_provider_teamId,
+    );
+    expect(linked).toEqual(
+      expect.arrayContaining([
+        {
+          emailAccountId: "work",
+          provider: MessagingProvider.TELEGRAM,
+          teamId: "42",
+        },
+        {
+          emailAccountId: "moved",
+          provider: MessagingProvider.SLACK,
+          teamId: "T1",
+        },
+      ]),
+    );
+  });
+});
+
+function telegramFrom(_mailbox: string) {
+  return {
+    ...slack,
+    provider: MessagingProvider.TELEGRAM,
+    teamId: "42",
+    accessToken: null,
+    botUserId: null,
+    routes: [],
+  };
+}
 
 describe("findSharedChannelIds", () => {
   beforeEach(() => {

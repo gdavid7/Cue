@@ -34,7 +34,7 @@ import { isDuplicateError } from "@/utils/prisma-helpers";
 import { SafeError } from "@/utils/error";
 import { scheduleWatchAfterLinking } from "@/utils/email/watch-after-linking";
 import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
-import { shareChannelsWithMailbox } from "@/utils/messaging/shared-channels";
+import { shareChannelsAcrossMailboxes } from "@/utils/messaging/shared-channels";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 import { INITIAL_REPLY_TRACKING_RULES } from "@/utils/reply-tracker/initial-rules";
 import { recordFirstSignIn } from "@/utils/analytics/activation";
@@ -481,7 +481,7 @@ async function completeGoogleAccountLinking({
   targetUserId: string;
 }) {
   await connectCalendarAtSignIn({ accountId, logger });
-  await shareChannelsWithMailbox({ mailbox: { accountId }, logger }).catch(
+  await shareChannelsAcrossMailboxes({ userId: targetUserId, logger }).catch(
     (error) => {
       logger.error("Failed to share messaging channels with mailbox", {
         error,

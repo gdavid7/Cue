@@ -175,6 +175,29 @@ export async function shareChannelsWithMailbox({
 }
 
 /**
+ * Shares every connected channel among all of a person's mailboxes, in both
+ * directions. Used whenever a mailbox joins a person (linking, sign-in with
+ * another provider, merging two sign-ups), since the mailbox may bring links
+ * of its own as well as need the person's.
+ */
+export async function shareChannelsAcrossMailboxes({
+  userId,
+  logger,
+}: {
+  userId: string;
+  logger: Logger;
+}) {
+  const mailboxes = await prisma.emailAccount.findMany({
+    where: { userId },
+    select: { id: true },
+    orderBy: { createdAt: "asc" },
+  });
+  for (const mailbox of mailboxes) {
+    await shareChannelsWithMailbox({ mailbox: { id: mailbox.id }, logger });
+  }
+}
+
+/**
  * The person's rows for the same workspace link as `channelId`: what a
  * disconnect from any mailbox clears. `emailAccountId` must already be
  * authorised for the requester.

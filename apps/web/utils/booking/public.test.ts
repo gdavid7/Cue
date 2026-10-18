@@ -59,6 +59,7 @@ describe("public booking", () => {
       provider: "google",
       providerConnectionId: "connection-id",
       providerCalendarId: "primary",
+      calendarAccountEmail: "host@example.com",
     });
     vi.mocked(sendBookingConfirmationEmails).mockResolvedValue(undefined);
     vi.mocked(sendBookingCancellationEmails).mockResolvedValue(undefined);
@@ -218,6 +219,7 @@ describe("public booking", () => {
       provider: "google",
       providerConnectionId: "connection-id",
       providerCalendarId: "primary",
+      calendarAccountEmail: "host@example.com",
       videoConferenceLink: "https://meet.example.com/meeting",
     });
     prisma.booking.findFirst.mockResolvedValue(null);

@@ -33,6 +33,7 @@ import {
 import { ensureEmailAccountsWatched } from "@/utils/email/watch-manager";
 import { captureException } from "@/utils/error";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
+import { shareChannelsAcrossMailboxes } from "@/utils/messaging/shared-channels";
 import { SCOPES as GMAIL_SCOPES } from "@/utils/gmail/scopes";
 import {
   fetchGoogleOpenIdProfile,
@@ -892,6 +893,18 @@ export async function handleLinkAccount(
     });
 
     await connectCalendarAtSignIn({ accountId: account.id, logger });
+
+    // A newly linked mailbox gets the person's Slack, Teams and Telegram.
+    if (!linkedEmailAccount) {
+      await shareChannelsAcrossMailboxes({
+        userId: account.userId,
+        logger,
+      }).catch((error) => {
+        logger.error("[linkAccount] Error sharing messaging channels", {
+          error,
+        });
+      });
+    }
 
     scheduleEmailWatchesAfterLink(account.userId);
 
