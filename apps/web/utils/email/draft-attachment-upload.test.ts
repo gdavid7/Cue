@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertDraftAttachmentLimits,
+  getAttachmentTotalLimitBytes,
+  usesDirectDraftAttachmentUpload,
   encodeMimeBase64,
   GMAIL_UPLOAD_CHUNK_BYTES,
   getDraftMessageUploadLength,
@@ -107,3 +110,30 @@ describe("parseContentRange", () => {
 function bytesOf(size: number) {
   return Uint8Array.from({ length: size }, (_, index) => (index * 31) % 256);
 }
+
+describe("getAttachmentTotalLimitBytes", () => {
+  it("allows Gmail's 25 MB and a smaller total for Outlook", () => {
+    expect(getAttachmentTotalLimitBytes("google")).toBe(25_000_000);
+    expect(getAttachmentTotalLimitBytes("microsoft")).toBe(20_000_000);
+  });
+});
+
+describe("assertDraftAttachmentLimits", () => {
+  it("counts the files already on the draft against the provider's limit", () => {
+    const existing = [{ size: 15_000_000 }];
+    expect(() =>
+      assertDraftAttachmentLimits(existing, 6_000_000, 20_000_000),
+    ).toThrow("Attachments can total up to 20 MB. These add up to 21 MB.");
+    expect(() =>
+      assertDraftAttachmentLimits(existing, 6_000_000, 25_000_000),
+    ).not.toThrow();
+  });
+});
+
+describe("usesDirectDraftAttachmentUpload", () => {
+  // Graph takes a single POST only for files under 3 MB (decimal).
+  it("sends files under 3,000,000 bytes in one request", () => {
+    expect(usesDirectDraftAttachmentUpload(2_999_999)).toBe(true);
+    expect(usesDirectDraftAttachmentUpload(3_000_000)).toBe(false);
+  });
+});

@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import type { DraftAttachment } from "@/utils/email/types";
 import {
   type ComposeAttachment,
+  describeUnattachedFiles,
+  fitComposeAttachments,
+  getGmailAttachmentDraftSaveIntervalMs,
   mergeDraftAttachments,
   routeComposeFiles,
   toAttachmentReference,
@@ -207,5 +210,75 @@ describe("routeComposeFiles", () => {
     expect(
       routeComposeFiles([pdf, first, second], { into: "body", inlineCount }),
     ).toEqual({ inline: [first], attachments: [pdf, second] });
+  });
+});
+
+describe("fitComposeAttachments", () => {
+  const meta = (id: string, size: number) => ({
+    id,
+    filename: `${id}.pdf`,
+    mimeType: "application/pdf",
+    size,
+    disposition: "attachment" as const,
+  });
+
+  it("attaches the files that fit and names the ones that don't", () => {
+    const result = fitComposeAttachments({
+      existing: [meta("on-draft", 10_000_000)],
+      candidates: [
+        meta("small", 4_000_000),
+        meta("video", 15_000_000),
+        meta("notes", 1_000_000),
+      ],
+      maxTotalBytes: 25_000_000,
+    });
+
+    expect(result.accepted.map(({ id }) => id)).toEqual(["small", "notes"]);
+    expect(result.rejected.map(({ id }) => id)).toEqual(["video"]);
+    expect(result.error).toBe(
+      "Attachments can total up to 25 MB. These add up to 29 MB.",
+    );
+  });
+
+  it("accepts everything within the limit", () => {
+    expect(
+      fitComposeAttachments({
+        existing: [],
+        candidates: [meta("a", 1), meta("b", 2)],
+        maxTotalBytes: 25_000_000,
+      }),
+    ).toMatchObject({ rejected: [], error: undefined });
+  });
+});
+
+describe("getGmailAttachmentDraftSaveIntervalMs", () => {
+  // Each Gmail save re-reads and re-uploads every file on the draft.
+  it.each([
+    [0, 0],
+    [100_000, 15_000],
+    [3_000_000, 15_000],
+    [10_000_000, 50_000],
+    [25_000_000, 120_000],
+  ])("spaces saves for %i attached bytes %i ms apart", (bytes, interval) => {
+    expect(getGmailAttachmentDraftSaveIntervalMs(bytes)).toBe(interval);
+  });
+});
+
+describe("describeUnattachedFiles", () => {
+  const reason = "Attachments can total up to 25 MB. These add up to 30 MB.";
+
+  it("names a single file that wasn't attached and why", () => {
+    expect(describeUnattachedFiles([{ filename: "video.mp4" }], reason)).toBe(
+      `video.mp4 wasn't attached. ${reason}`,
+    );
+  });
+
+  it("names every file that wasn't attached", () => {
+    expect(
+      describeUnattachedFiles(
+        [{ filename: "video.mp4" }, { filename: "photos.zip" }],
+        reason,
+      ),
+    ).toBe(`2 files weren't attached (video.mp4, photos.zip). ${reason}`);
   });
 });

@@ -2,14 +2,12 @@
 
 import {
   type EmailAttachmentMetadata,
-  EMAIL_ATTACHMENT_LIMITS,
   EMAIL_INLINE_IMAGE_MIME_TYPES,
   combineEmailHtml,
   detectInlineImageMimeType,
   finalizeEditableEmailHtml,
   formatAttachmentSize,
   prepareEmailDraft,
-  validateEmailAttachmentMetadata,
 } from "@inboxzero/email-editor/core";
 import {
   EmailEditor,
@@ -164,12 +162,16 @@ import { useComposeDraftAttachments } from "./useComposeDraftAttachments";
 import {
   type ComposeAttachment,
   getEditorInlineAttachments,
+  describeUnattachedFiles,
+  fitComposeAttachments,
+  getGmailAttachmentDraftSaveIntervalMs,
   mergeDraftAttachments,
   routeComposeFiles,
   toAttachmentMetadata,
   toAttachmentReference,
 } from "./compose-attachments";
 import { useFileDropTarget } from "./useFileDropTarget";
+import { getAttachmentTotalLimitBytes } from "@/utils/email/draft-attachment-upload";
 import {
   finishComposeDraftMove,
   getMoveErrorMessage,
@@ -550,6 +552,7 @@ function ComposeEmailFormContent({
   const forwardedAttachments = savedToMailbox
     ? []
     : (replyingToEmail?.forwardedAttachments ?? []);
+  const attachmentLimitBytes = getAttachmentTotalLimitBytes(accountProvider);
   // Failed files aren't on the draft, so they don't count toward the limit.
   const attachmentTotalBytes = [
     ...forwardedAttachments,
@@ -822,10 +825,9 @@ function ComposeEmailFormContent({
     },
     enabled: Boolean(providerDraftMessageId) || Boolean(localDraftIdentity),
     sessionKey: providerDraftMessageId ? undefined : draftQueueKey,
-    minIntervalMs:
-      attachments.length && isGoogleProvider(accountProvider)
-        ? GMAIL_ATTACHMENT_DRAFT_SAVE_INTERVAL_MS
-        : 0,
+    minIntervalMs: isGoogleProvider(accountProvider)
+      ? getGmailAttachmentDraftSaveIntervalMs(attachmentTotalBytes)
+      : 0,
     getContent: getProviderDraftContent,
     save: (content) =>
       enqueueDraftOperation(draftQueueKey, async () => {
@@ -1044,20 +1046,27 @@ function ComposeEmailFormContent({
       return { file, attachment };
     });
     if (!created.length) return;
-    const validation = validateEmailAttachmentMetadata([
-      ...forwardedAttachments.map((attachment) => ({
-        ...attachment,
-        disposition: "attachment" as const,
-      })),
-      ...attachmentsRef.current.filter((item) => item.status !== "failed"),
-      ...created.map(({ attachment }) => attachment),
-    ]);
-    if (!validation.valid) {
-      toastError({ description: validation.error });
-      return;
-    }
+    const fit = fitComposeAttachments({
+      existing: [
+        ...forwardedAttachments.map((attachment) => ({
+          ...attachment,
+          disposition: "attachment" as const,
+        })),
+        ...attachmentsRef.current.filter((item) => item.status !== "failed"),
+      ],
+      candidates: created.map(({ attachment }) => attachment),
+      maxTotalBytes: attachmentLimitBytes,
+    });
+    if (fit.error)
+      toastError({
+        description: describeUnattachedFiles(fit.rejected, fit.error),
+      });
+    const fitting = created.filter(({ attachment }) =>
+      fit.accepted.includes(attachment),
+    );
+    if (!fitting.length) return;
 
-    const accepted = created.filter(({ file, attachment }) => {
+    const accepted = fitting.filter(({ file, attachment }) => {
       if (attachment.disposition !== "inline" || !attachment.contentId)
         return true;
       attachment.previewUrl = URL.createObjectURL(file);
@@ -1071,7 +1080,7 @@ function ComposeEmailFormContent({
       revokePreview(attachment);
       return false;
     });
-    if (accepted.length !== created.length) {
+    if (accepted.length !== fitting.length) {
       toastError({
         description: "One of the inline images could not be inserted.",
       });
@@ -2150,12 +2159,11 @@ function ComposeEmailFormContent({
           <p
             className={cn(
               "text-muted-foreground text-xs tabular-nums",
-              attachmentTotalBytes > EMAIL_ATTACHMENT_LIMITS.maxTotalBytes &&
-                "text-destructive",
+              attachmentTotalBytes > attachmentLimitBytes && "text-destructive",
             )}
           >
             {formatAttachmentSize(attachmentTotalBytes)} of{" "}
-            {formatAttachmentSize(EMAIL_ATTACHMENT_LIMITS.maxTotalBytes)}
+            {formatAttachmentSize(attachmentLimitBytes)}
           </p>
         </div>
       )}
@@ -2325,9 +2333,6 @@ function ComposeEmailFormContent({
     </form>
   );
 }
-
-// Gmail rebuilds the whole message on each save, files included.
-const GMAIL_ATTACHMENT_DRAFT_SAVE_INTERVAL_MS = 15_000;
 
 const ATTACHMENT_STATUS_LABELS: Partial<
   Record<ComposeAttachment["status"], string>

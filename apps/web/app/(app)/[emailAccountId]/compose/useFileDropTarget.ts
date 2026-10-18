@@ -1,4 +1,4 @@
-import { type DragEvent, useRef, useState } from "react";
+import { type DragEvent, useEffect, useRef, useState } from "react";
 
 /**
  * Shows a drop target while files are dragged over an element. Drag events
@@ -19,6 +19,28 @@ export function useFileDropTarget({
     depth.current = 0;
     setActive(false);
   };
+
+  // A file let go just outside the composer (its frame, the page behind it)
+  // would still open in the tab. Drops something else on the page handles,
+  // and file inputs, keep their own behavior.
+  useEffect(() => {
+    const keepFileInTab = (event: globalThis.DragEvent) => {
+      if (event.defaultPrevented || !carriesFiles(event)) return;
+      if (
+        event.target instanceof HTMLInputElement &&
+        event.target.type === "file"
+      )
+        return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
+    };
+    window.addEventListener("dragover", keepFileInTab);
+    window.addEventListener("drop", keepFileInTab);
+    return () => {
+      window.removeEventListener("dragover", keepFileInTab);
+      window.removeEventListener("drop", keepFileInTab);
+    };
+  }, []);
 
   return {
     active: active && enabled,
@@ -51,6 +73,6 @@ export function useFileDropTarget({
   };
 }
 
-function carriesFiles(event: DragEvent) {
+function carriesFiles(event: { dataTransfer: DataTransfer | null }) {
   return Array.from(event.dataTransfer?.types ?? []).includes("Files");
 }

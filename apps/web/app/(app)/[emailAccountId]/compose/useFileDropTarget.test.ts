@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import { act, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import type { DragEvent } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useFileDropTarget } from "./useFileDropTarget";
+
+afterEach(cleanup);
 
 describe("useFileDropTarget", () => {
   it("stays active while the drag crosses child elements", () => {
@@ -91,6 +93,50 @@ describe("useFileDropTarget", () => {
     expect(result.current.active).toBe(false);
   });
 });
+
+describe("useFileDropTarget outside the composer", () => {
+  it.each([
+    "dragover",
+    "drop",
+  ])("keeps a file %s anywhere on the page from opening in the tab", (type) => {
+    const { unmount } = renderHook(() =>
+      useFileDropTarget({ enabled: true, onDrop: vi.fn() }),
+    );
+
+    const event = windowDrag(type, ["Files"]);
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+
+    unmount();
+    const afterClose = windowDrag(type, ["Files"]);
+    window.dispatchEvent(afterClose);
+    expect(afterClose.defaultPrevented).toBe(false);
+  });
+
+  it("leaves text drags and file inputs elsewhere on the page alone", () => {
+    renderHook(() => useFileDropTarget({ enabled: true, onDrop: vi.fn() }));
+
+    const text = windowDrag("drop", ["text/plain"]);
+    window.dispatchEvent(text);
+    expect(text.defaultPrevented).toBe(false);
+
+    const input = document.createElement("input");
+    input.type = "file";
+    document.body.append(input);
+    const onInput = windowDrag("drop", ["Files"]);
+    input.dispatchEvent(onInput);
+    expect(onInput.defaultPrevented).toBe(false);
+    input.remove();
+  });
+});
+
+function windowDrag(type: string, types: string[]) {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", {
+    value: { types, files: [], dropEffect: "" },
+  });
+  return event;
+}
 
 function fileDrag({
   types = ["Files"],

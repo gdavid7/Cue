@@ -5,9 +5,10 @@ import { isSafeContentId, isRemoteImageSource } from "./email-profile";
 export const EMAIL_ATTACHMENT_LIMITS = {
   maxFiles: 10,
   maxInlineFiles: 5,
-  maxInlineBytes: 3 * 1024 * 1024,
-  // Gmail's limit for the files on one message. Base64 makes the sent
-  // message about 37% larger, which still fits Gmail's 35 MB upload.
+  maxInlineBytes: 3_000_000,
+  // Gmail's limit for the files on one message, and the most any provider
+  // allows. Base64 makes the sent message about 37% larger, which still fits
+  // Gmail's 35 MB upload. Providers with a smaller limit pass their own.
   maxTotalBytes: 25_000_000,
 } as const;
 
@@ -234,6 +235,7 @@ export function validateEmailAttachments(
 
 export function validateEmailAttachmentMetadata(
   attachments: EmailAttachmentMetadata[],
+  { maxTotalBytes = EMAIL_ATTACHMENT_LIMITS.maxTotalBytes as number } = {},
 ): { valid: true } | { valid: false; error: string } {
   if (attachments.length > EMAIL_ATTACHMENT_LIMITS.maxFiles) {
     return {
@@ -298,15 +300,21 @@ export function validateEmailAttachmentMetadata(
     seenContentIds.add(attachment.contentId);
   }
 
-  if (totalBytes > EMAIL_ATTACHMENT_LIMITS.maxTotalBytes) {
-    return { valid: false, error: getAttachmentTotalLimitError(totalBytes) };
+  if (totalBytes > maxTotalBytes) {
+    return {
+      valid: false,
+      error: getAttachmentTotalLimitError(totalBytes, maxTotalBytes),
+    };
   }
 
   return { valid: true };
 }
 
-export function getAttachmentTotalLimitError(totalBytes: number) {
-  return `Attachments can total up to ${formatAttachmentSize(EMAIL_ATTACHMENT_LIMITS.maxTotalBytes)}. These add up to ${formatAttachmentSize(totalBytes)}.`;
+export function getAttachmentTotalLimitError(
+  totalBytes: number,
+  maxTotalBytes: number = EMAIL_ATTACHMENT_LIMITS.maxTotalBytes,
+) {
+  return `Attachments can total up to ${formatAttachmentSize(maxTotalBytes)}. These add up to ${formatAttachmentSize(totalBytes)}.`;
 }
 
 /**

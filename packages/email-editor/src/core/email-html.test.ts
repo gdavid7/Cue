@@ -367,6 +367,17 @@ describe("attachment size limits", () => {
     });
   });
 
+  it("holds files to a smaller provider limit when one is given", () => {
+    expect(
+      validateEmailAttachmentMetadata([file("report", 21_000_000)], {
+        maxTotalBytes: 20_000_000,
+      }),
+    ).toEqual({
+      valid: false,
+      error: "Attachments can total up to 20 MB. These add up to 21 MB.",
+    });
+  });
+
   it("never rounds a total that is over the limit down to the limit", () => {
     const result = validateEmailAttachmentMetadata([
       file("report", EMAIL_ATTACHMENT_LIMITS.maxTotalBytes + 1),

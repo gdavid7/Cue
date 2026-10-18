@@ -108,7 +108,10 @@ import type {
   DraftAttachmentUploadStart,
 } from "@/utils/email/types";
 import type { DraftAttachmentMetadata } from "@/utils/actions/draft-attachments.validation";
-import { assertDraftAttachmentLimits } from "@/utils/email/draft-attachment-upload";
+import {
+  assertDraftAttachmentLimits,
+  OUTLOOK_MAX_ATTACHMENT_TOTAL_BYTES,
+} from "@/utils/email/draft-attachment-upload";
 import {
   addOutlookDraftAttachment,
   createOutlookDraftAttachmentUploadSession,
@@ -850,7 +853,11 @@ export class OutlookProvider implements EmailProvider {
     attachment: DraftAttachmentMetadata & { content: Buffer },
   ) {
     const { attachments } = await this.getEditableDraftAttachments(draftId);
-    assertDraftAttachmentLimits(attachments, attachment.size);
+    assertDraftAttachmentLimits(
+      attachments,
+      attachment.size,
+      OUTLOOK_MAX_ATTACHMENT_TOTAL_BYTES,
+    );
     const attachmentId = await addOutlookDraftAttachment({
       client: this.client,
       draftId,
@@ -876,7 +883,11 @@ export class OutlookProvider implements EmailProvider {
     attachment: DraftAttachmentMetadata,
   ): Promise<DraftAttachmentUploadStart> {
     const { attachments } = await this.getEditableDraftAttachments(draftId);
-    assertDraftAttachmentLimits(attachments, attachment.size);
+    assertDraftAttachmentLimits(
+      attachments,
+      attachment.size,
+      OUTLOOK_MAX_ATTACHMENT_TOTAL_BYTES,
+    );
     const uploadUrl = await createOutlookDraftAttachmentUploadSession({
       client: this.client,
       draftId,
