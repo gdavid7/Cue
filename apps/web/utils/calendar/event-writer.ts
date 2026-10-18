@@ -25,6 +25,12 @@ export type CreateCalendarEventInput = {
 };
 
 export type CreatedCalendarEvent = CalendarEventWriteResult & {
+  /**
+   * The calendar login the event went to. Without an explicit destination it
+   * can be a calendar connected from another of the person's mailboxes, so
+   * callers say where the event landed.
+   */
+  calendarAccountEmail: string;
   provider: string;
   providerConnectionId: string;
 };
@@ -73,6 +79,7 @@ export async function createCalendarEvent({
 
   return {
     ...createdEvent,
+    calendarAccountEmail: destination.connection.email,
     provider: destination.connection.provider,
     providerConnectionId: destination.connection.id,
   };
@@ -223,6 +230,7 @@ async function getWritableCalendar({
           select: {
             id: true,
             emailAccountId: true,
+            email: true,
             provider: true,
             accessToken: true,
             refreshToken: true,

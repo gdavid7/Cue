@@ -101,6 +101,7 @@ describe("createCalendarEvent", () => {
       connection: {
         id: "work-connection-id",
         emailAccountId: "work-account-id",
+        email: "me@work.example.com",
         provider: "google",
         accessToken: "access-token",
         refreshToken: "refresh-token",
@@ -108,7 +109,7 @@ describe("createCalendarEvent", () => {
       },
     });
 
-    await createCalendarEvent({
+    const result = await createCalendarEvent({
       attendees: [],
       destinationCalendarId: "work-calendar-row-id",
       emailAccountId: "personal-account-id",
@@ -131,6 +132,7 @@ describe("createCalendarEvent", () => {
         }),
       }),
     );
+    expect(result.calendarAccountEmail).toBe("me@work.example.com");
     // Refreshed tokens are saved against the connection's own mailbox.
     expect(providerMocks.googleConstructor).toHaveBeenCalledWith(
       expect.objectContaining({
