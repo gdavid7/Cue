@@ -2,6 +2,8 @@
 // connected from another of their mailboxes. Connecting and linking a mailbox
 // now share these on their own; this sweeps people who connected before that.
 // It only adds rows: nothing is deleted, and a disconnected row is left alone.
+// A new link copies only direct-message destinations; team-channel routing
+// stays with the mailbox it was chosen for.
 //
 // Dry run: `pnpm --filter inbox-zero-ai exec tsx scripts/share-messaging-channels.ts`
 // Apply:   `pnpm --filter inbox-zero-ai exec tsx scripts/share-messaging-channels.ts --apply`

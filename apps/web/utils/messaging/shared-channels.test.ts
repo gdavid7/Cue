@@ -23,6 +23,13 @@ const dmRoute = {
   targetId: "U1",
 };
 
+// A team channel chosen for one mailbox's digests.
+const teamChannelRoute = {
+  purpose: MessagingRoutePurpose.DIGESTS,
+  targetType: MessagingRouteTargetType.CHANNEL,
+  targetId: "C-team",
+};
+
 const slack = {
   provider: MessagingProvider.SLACK,
   teamId: "T1",
@@ -100,6 +107,25 @@ describe("shareConnectedChannel", () => {
     });
   });
 
+  it("gives other mailboxes the source's direct messages, never a team channel chosen for the source", async () => {
+    prisma.messagingChannel.findUnique.mockResolvedValue({
+      ...slack,
+      isConnected: true,
+      emailAccountId: "work",
+      emailAccount: { userId: "user-1" },
+      routes: [dmRoute, teamChannelRoute],
+    } as never);
+    prisma.emailAccount.findMany.mockResolvedValue([
+      { id: "personal", messagingChannels: [] },
+    ] as never);
+
+    await shareConnectedChannel({ channelId: "channel-work", logger });
+
+    const upsert = prisma.messagingChannel.upsert.mock.calls[0][0];
+    expect(upsert.create.routes).toEqual({ create: [dmRoute] });
+    expect(upsert.update.routes).toEqual({ create: [dmRoute] });
+  });
+
   it("leaves a mailbox connected to the workspace as a different Slack user alone", async () => {
     prisma.emailAccount.findMany.mockResolvedValue([
       {
@@ -168,6 +194,22 @@ describe("shareChannelsWithMailbox", () => {
     );
     expect(shared).toBe(1);
     expect(prisma.messagingChannel.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  it("backfills direct messages only, so no mailbox starts posting into a team channel", async () => {
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      id: "personal",
+      userId: "user-1",
+      messagingChannels: [],
+    } as never);
+    prisma.messagingChannel.findMany.mockResolvedValue([
+      { ...slack, routes: [teamChannelRoute, dmRoute] },
+    ] as never);
+
+    await shareChannelsWithMailbox({ mailbox: { id: "personal" }, logger });
+
+    const upsert = prisma.messagingChannel.upsert.mock.calls[0][0];
+    expect(upsert.create.routes).toEqual({ create: [dmRoute] });
   });
 
   it("never revives a workspace the mailbox already has a row for, even a disconnected one", async () => {

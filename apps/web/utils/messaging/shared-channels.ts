@@ -1,6 +1,6 @@
-import type {
-  MessagingProvider,
-  MessagingRoutePurpose,
+import {
+  type MessagingProvider,
+  type MessagingRoutePurpose,
   MessagingRouteTargetType,
 } from "@/generated/prisma/enums";
 import type { Logger } from "@/utils/logger";
@@ -230,10 +230,15 @@ async function linkChannel({
     expiresAt: source.expiresAt,
     isConnected: true,
   };
-  // Where notifications go stays per mailbox; a newly linked mailbox starts
-  // out delivering where the source does.
+  // Where notifications go stays per mailbox. A newly linked mailbox gets the
+  // source's direct messages to the person, but never a team channel picked
+  // for the source: a personal mailbox must not start posting into it.
   const routes = source.routes
-    .filter((route) => !existingPurposes.includes(route.purpose))
+    .filter(
+      (route) =>
+        route.targetType === MessagingRouteTargetType.DIRECT_MESSAGE &&
+        !existingPurposes.includes(route.purpose),
+    )
     .map(({ purpose, targetType, targetId }) => ({
       purpose,
       targetType,
