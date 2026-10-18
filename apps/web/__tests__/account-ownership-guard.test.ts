@@ -25,6 +25,10 @@ const OWNERSHIP_CHECKS: Record<string, OwnershipCheck> = {
     how: "looks the account up by id and userId",
     check: /where: \{ id: emailAccountId, userId \}/,
   },
+  "utils/actions/feedback.ts#submitFeedbackAction": {
+    how: "keeps the account only when it is the user's own",
+    check: /where: \{ id: emailAccountId, userId \}/,
+  },
   "utils/actions/rule.ts#copyRulesFromAccountAction": {
     how: "compares both accounts' owner with the user",
     check:
