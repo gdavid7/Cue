@@ -20,11 +20,10 @@ import type { ReactNode, Ref } from "react";
 import { barItemClassName } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
 import { SnoozeButton } from "@/app/(app)/[emailAccountId]/mail/SnoozeButton";
 import { useMailHref } from "@/hooks/useMailHref";
-import { useAccount } from "@/providers/EmailAccountProvider";
+import { useAllAccountsScope, useTodayHref } from "@/hooks/useTodayHref";
 import { useComposeModal } from "@/providers/ComposeModalProvider";
 import { cn } from "@/utils";
 import { parseMailPath } from "@/utils/mail-url";
-import { prefixPath } from "@/utils/path";
 
 export type MailMobileReaderActions = {
   onBack: () => void;
@@ -59,8 +58,9 @@ export function MailMobileNav({
   onOpenMailboxes?: () => void;
   readerActions?: MailMobileReaderActions | null;
 }) {
-  const { emailAccountId } = useAccount();
   const mailHref = useMailHref();
+  const todayHref = useTodayHref();
+  const allAccounts = useAllAccountsScope();
   const { onOpen: openCompose } = useComposeModal();
   const pathname = usePathname() ?? "";
   const isToday = pathname.endsWith("/home");
@@ -157,7 +157,7 @@ export function MailMobileNav({
           barItemClassName,
           isInbox ? "text-foreground" : "text-muted-foreground",
         )}
-        href={mailHref()}
+        href={mailHref(allAccounts ? { allInboxes: true } : {})}
         // From Today the inbox is a route away; fetched ahead, it opens at once.
         prefetch={isToday ? true : undefined}
       >
@@ -178,7 +178,7 @@ export function MailMobileNav({
           barItemClassName,
           isToday ? "text-foreground" : "text-muted-foreground",
         )}
-        href={prefixPath(emailAccountId, "/home")}
+        href={todayHref}
         prefetch
       >
         <SunIcon className="size-5" />

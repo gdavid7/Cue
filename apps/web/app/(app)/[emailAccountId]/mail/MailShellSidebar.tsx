@@ -36,6 +36,7 @@ import {
 } from "@/app/(app)/[emailAccountId]/mail/use-mail-route";
 import { useMailHref } from "@/hooks/useMailHref";
 import { useWarmHome } from "@/hooks/useHome";
+import { useTodayHref } from "@/hooks/useTodayHref";
 import { useIntent } from "@/hooks/useIntent";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Sidebar, useSidebar } from "@/components/ui/sidebar";
@@ -62,7 +63,6 @@ import { getActionErrorMessage } from "@/utils/error";
 import { GMAIL_LABEL_COLORS } from "@/utils/gmail/label-colors";
 import type { MailboxLabelCount } from "@/utils/mail-engine/label-count-targets";
 import { OUTLOOK_CATEGORY_COLORS } from "@/utils/outlook/category-colors";
-import { prefixPath } from "@/utils/path";
 import { getEmailTerminology } from "@/utils/terminology";
 import { logOut } from "@/utils/user";
 
@@ -136,6 +136,7 @@ export const MailShellSidebar = memo(function MailShellSidebar({
   const { appLinks, toolLinks } = useMailAppLinks();
   const { state: openSidebars } = useSidebar();
   const isMailSidebarOpen = openSidebars.includes("left-sidebar");
+  const todayHref = useTodayHref();
 
   // Dragging writes straight to the CSS variable: re-rendering on every
   // pointer move would make the sidebar edge lag behind the cursor. It lives
@@ -279,7 +280,7 @@ export const MailShellSidebar = memo(function MailShellSidebar({
           />
         ) : undefined
       }
-      todayHref={prefixPath(emailAccountId, "/home")}
+      todayHref={todayHref}
       onTodayIntent={todayIntent.begin}
       onTodayIntentEnd={todayIntent.end}
       appLinks={appLinks}

@@ -153,7 +153,7 @@ import {
   type MailUrlView,
   resolveSlug,
 } from "@/utils/mail-url";
-import { prefixPath } from "@/utils/path";
+import { getTodayPath } from "@/hooks/useTodayHref";
 import { getRouteResolution } from "@/app/(app)/[emailAccountId]/mail/route-resolution";
 import { redirectToSafeUrl } from "@/utils/redirect";
 import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
@@ -1483,12 +1483,19 @@ export function MailShell() {
 
   const closeReader = useCallback(() => {
     if (openedFrom === "today") {
-      router.push(prefixPath(emailAccountId, "/home"));
+      router.push(getTodayPath(emailAccountId, isAllAccounts));
       return;
     }
     focusListWhenShown();
     setOpenThread(null);
-  }, [openedFrom, router, emailAccountId, setOpenThread, focusListWhenShown]);
+  }, [
+    openedFrom,
+    router,
+    emailAccountId,
+    isAllAccounts,
+    setOpenThread,
+    focusListWhenShown,
+  ]);
 
   const senderCommands =
     senderCommandContext?.emailAccountId ===

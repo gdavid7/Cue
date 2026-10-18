@@ -4,7 +4,13 @@ import { useMemo } from "react";
 import { type NavItem, useNavigation } from "@/components/SideNav";
 import { isMailPath } from "@/utils/mail-url";
 
-export type MailAppLink = { name: string; href: string; icon: React.ReactNode };
+export type MailAppLink = {
+  name: string;
+  href: string;
+  icon: React.ReactNode;
+  /** The account the page opens, named while all accounts show together. */
+  account?: string;
+};
 
 /**
  * The app's places beyond the mailbox and Today, read from the app's own
@@ -21,7 +27,7 @@ export function useMailAppLinks() {
           (item) =>
             !isMailPath(item.href) &&
             !item.href.endsWith("/mail") &&
-            !item.href.endsWith("/home"),
+            !item.href.split("?")[0].endsWith("/home"),
         )
         .map(toMailAppLink),
       toolLinks: toolsItems.map(toMailAppLink),
@@ -34,6 +40,7 @@ function toMailAppLink(item: NavItem): MailAppLink {
   return {
     name: item.name,
     href: item.href,
+    account: item.account,
     icon: (
       <span className="flex shrink-0 [&>svg]:size-4">
         <item.icon />

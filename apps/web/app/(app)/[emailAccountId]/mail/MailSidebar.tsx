@@ -62,6 +62,7 @@ import type { OutlookFolder } from "@/utils/outlook/folders";
 import { OUTLOOK_INBOX_SECTIONS } from "@/utils/outlook/inbox-sections";
 import { getLabelTree, type SidebarLabel } from "./label-tree";
 import { showMailView } from "./show-mail-view";
+import type { MailAppLink } from "./use-mail-app-links";
 import {
   isSidebarRowActive,
   type PendingNavigation,
@@ -126,9 +127,9 @@ export type MailSidebarProps = {
   /** The pointer or focus left the Today row. */
   onTodayIntentEnd?: () => void;
   /** The app's other places, such as Chat and Rules, above the footer. */
-  appLinks?: { name: string; href: string; icon: ReactNode }[];
+  appLinks?: MailAppLink[];
   /** The app's rarer tools, such as Unsubscribe, behind a Tools toggle. */
-  toolLinks?: { name: string; href: string; icon: ReactNode }[];
+  toolLinks?: MailAppLink[];
   /** False where something else opens and closes the sidebar, like a sheet. */
   showSidebarToggle?: boolean;
   /** Each account's own labels and folders, shown in their place in All inboxes. */
@@ -276,6 +277,8 @@ function MailSidebarContent({
   accountSections,
   className,
 }: MailSidebarProps) {
+  // Today across accounts shows the unified sidebar, with All inboxes a link.
+  const unifiedMail = unified && activeType !== "today";
   const isCategoryActive =
     !activeLabelId &&
     !activeFolderId &&
@@ -364,8 +367,8 @@ function MailSidebarContent({
         <div className="flex flex-col gap-px">
           {unified || allInboxesHref ? (
             <NavRow
-              href={unified ? undefined : allInboxesHref}
-              active={unified}
+              href={unifiedMail ? undefined : allInboxesHref}
+              active={unifiedMail}
               icon={<LayersIcon className="size-4 shrink-0" />}
               name="All inboxes"
               count={null}
@@ -543,6 +546,7 @@ function MailSidebarContent({
                     active={false}
                     icon={link.icon}
                     name={link.name}
+                    detail={link.account}
                     count={null}
                   />
                 ))}
@@ -565,6 +569,7 @@ function MailSidebarContent({
               active={false}
               icon={link.icon}
               name={link.name}
+              detail={link.account}
               count={null}
               collapsed={collapsed}
             />
@@ -1010,6 +1015,7 @@ function NavRow({
   active,
   icon,
   name,
+  detail,
   count,
   emphasizeCount,
   nested,
@@ -1028,6 +1034,7 @@ function NavRow({
   active: boolean;
   icon: ReactNode;
   name: string;
+  detail?: string;
   count: number | null;
   emphasizeCount?: boolean;
   nested?: boolean;
@@ -1051,7 +1058,19 @@ function NavRow({
     collapsed,
   });
   const className = cn(presentation.className);
-  const content = presentation.content;
+  // The account a page opens follows its name, quieter, where there's room.
+  const content =
+    detail && !collapsed ? (
+      <>
+        {icon}
+        <span className="shrink-0">{name}</span>
+        <span className="min-w-0 flex-1 truncate text-sidebar-muted-foreground text-xs">
+          {detail}
+        </span>
+      </>
+    ) : (
+      presentation.content
+    );
 
   const row = href ? (
     reloadDocument ? (
