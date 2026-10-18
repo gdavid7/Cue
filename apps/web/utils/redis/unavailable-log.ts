@@ -1,6 +1,6 @@
 import type { Logger } from "@/utils/logger";
 
-const QUIET_PERIOD_MS = 10 * 60_000;
+const DEFAULT_QUIET_PERIOD_MS = 10 * 60_000;
 
 const lastLogged = new Map<string, { at: number; suppressed: number }>();
 
@@ -14,10 +14,11 @@ export function logRedisFailureOnce(
   logger: Pick<Logger, "warn">,
   message: string,
   fields: Record<string, unknown>,
+  { quietPeriodMs = DEFAULT_QUIET_PERIOD_MS }: { quietPeriodMs?: number } = {},
 ) {
   const now = Date.now();
   const previous = lastLogged.get(message);
-  if (previous && now - previous.at < QUIET_PERIOD_MS) {
+  if (previous && now - previous.at < quietPeriodMs) {
     previous.suppressed += 1;
     return;
   }

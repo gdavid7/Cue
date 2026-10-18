@@ -40,23 +40,59 @@ describe("weekly spend guard reads", () => {
     expect(getWeeklyUsageCostByBucket).toHaveBeenCalledOnce();
   });
 
-  it("fails open, and retries, when the spend can't be read", async () => {
+  // Spend that can't be read is spend that can't be capped: the cheap tier
+  // keeps AI working without letting an outage run up the bill.
+  it("falls back to the nano model, and retries, when the spend can't be read", async () => {
     vi.mocked(getWeeklyUsageCostByBucket)
       .mockRejectedValueOnce(new Error("limit exceeded"))
-      .mockResolvedValue(spend(5));
+      .mockResolvedValue(spend(1));
     const options = {
       userEmail: "user@example.com",
       hasUserApiKey: false,
-      label: "assistant-chat",
+      label: "chat-compaction",
       userId: "user-down",
     };
 
     expect(await shouldForceNanoModel(options)).toMatchObject({
-      shouldForce: false,
+      shouldForce: true,
+      weeklySpendUsd: null,
     });
     expect(await shouldForceNanoModel(options)).toMatchObject({
-      shouldForce: true,
+      shouldForce: false,
+      weeklySpendUsd: 1,
     });
+  });
+
+  it("warns about an unreadable spend once a minute per instance, not per call", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // Clear of any warning an earlier case left in this instance's minute.
+    vi.setSystemTime(Date.now() + 365 * 24 * 60 * 60_000);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.mocked(getWeeklyUsageCostByBucket).mockRejectedValue(
+      new Error("max requests limit exceeded"),
+    );
+    const options = {
+      userEmail: "user@example.com",
+      hasUserApiKey: false,
+      label: "chat-compaction",
+      userId: "user-capped",
+    };
+    const warnings = () =>
+      warn.mock.calls.filter(([line]) =>
+        String(line).includes("Failed to evaluate nano model guard"),
+      ).length;
+
+    try {
+      for (let call = 0; call < 5; call++) await shouldForceNanoModel(options);
+      expect(warnings()).toBe(1);
+
+      vi.advanceTimersByTime(60_000);
+      await shouldForceNanoModel(options);
+      expect(warnings()).toBe(2);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });
 

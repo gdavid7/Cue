@@ -17,6 +17,7 @@ import {
 const logger = createScopedLogger("llms/model-usage-guard");
 const TRIAL_AI_LIMIT_NOTIFICATION_TTL_SECONDS = 60 * 24 * 60 * 60;
 const SPEND_BUCKET_WARNING_TTL_SECONDS = 8 * 24 * 60 * 60;
+const SPEND_UNREADABLE_WARNING_INTERVAL_MS = 60_000;
 
 // Both guards run before every AI call, and a chat turn or a processed email
 // makes several in a row. The limits are weekly budgets, so each instance
@@ -239,14 +240,22 @@ export async function shouldForceNanoModel(options: {
     const spend = await getWeeklySpendByBucket(userId, [options.userEmail]);
     weeklySpendUsd = spend[spendBucket];
   } catch (error) {
-    logRedisFailureOnce(logger, "Failed to evaluate nano model guard", {
-      label: options.label,
-      userId: options.userId,
-      emailAccountId: options.emailAccountId,
-      error,
-    });
+    // Fails closed to the cheap tier: spend that can't be read can't be
+    // capped, and an outage (or the store's own command limit) would
+    // otherwise leave every user on full-price models, uncounted.
+    logRedisFailureOnce(
+      logger,
+      "Failed to evaluate nano model guard",
+      {
+        label: options.label,
+        userId: options.userId,
+        emailAccountId: options.emailAccountId,
+        error,
+      },
+      { quietPeriodMs: SPEND_UNREADABLE_WARNING_INTERVAL_MS },
+    );
     return {
-      shouldForce: false,
+      shouldForce: true,
       spendBucket,
       weeklySpendUsd: null,
       weeklyLimitUsd,
