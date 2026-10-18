@@ -40,9 +40,14 @@ export default async function AdminPage() {
     <PageWrapper>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <PageHeader title="Admin" />
-        <Button asChild variant="outline" size="sm">
-          <Link href="/admin/access">Access requests</Link>
-        </Button>
+        <div className="flex gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/admin/feedback">Feedback</Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/admin/access">Access requests</Link>
+          </Button>
+        </div>
       </div>
 
       <div className="space-y-8 mt-4 mb-20">
