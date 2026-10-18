@@ -1,4 +1,5 @@
 import {
+  announcePreferenceChange,
   hasBeenAskedToEnable,
   markAskedToEnable,
   writeStoredMode,
@@ -27,6 +28,8 @@ export async function chooseWebNotificationMode(
     return await Notification.requestPermission();
   } catch {
     return getWebNotificationPermission();
+  } finally {
+    announcePreferenceChange();
   }
 }
 

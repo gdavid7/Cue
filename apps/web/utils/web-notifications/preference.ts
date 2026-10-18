@@ -29,6 +29,11 @@ export function writeStoredMode(mode: WebNotificationMode) {
   } catch {
     // Without storage the choice lasts until reload.
   }
+  announcePreferenceChange();
+}
+
+/** Also called when the browser's permission answer arrives, which isn't an event. */
+export function announcePreferenceChange() {
   window.dispatchEvent(new Event(CHANGE_EVENT));
 }
 

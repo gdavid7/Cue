@@ -16,6 +16,8 @@ import { SentryIdentify } from "@/app/(app)/sentry-identify";
 import { AiAutomationStatusBanner } from "@/app/(app)/AiAutomationStatusBanner";
 import { ErrorMessages } from "@/app/(app)/ErrorMessages";
 import { DesktopMailIndicators } from "@/app/(app)/DesktopMailIndicators";
+import { TabUnreadTitle } from "@/app/(app)/TabUnreadTitle";
+import { WebNewMailNotifications } from "@/app/(app)/WebNewMailNotifications";
 import { ProviderRateLimitBanner } from "@/app/(app)/ProviderRateLimitBanner";
 import { MailEngineRuntime } from "@/utils/mail-engine/MailEngineHost";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -109,6 +111,8 @@ export default async function AppLayout({
               feedbackEnabled={feedbackEnabled}
             >
               <DesktopMailIndicators />
+              <TabUnreadTitle />
+              <WebNewMailNotifications />
               <AiAutomationStatusBanner
                 aiAccess={aiAccess}
                 dismissed={
