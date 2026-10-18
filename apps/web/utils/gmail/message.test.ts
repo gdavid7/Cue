@@ -426,14 +426,14 @@ describe("getMessagesBatch", () => {
         ),
       )
       .mockResolvedValueOnce(
-        messageIds.slice(10, 20).map((id) => ({
+        messageIds.slice(10, 22).map((id) => ({
           id,
           threadId: `${id}-thread`,
           payload: { headers: [] },
         })),
       )
       .mockResolvedValueOnce(
-        messageIds.slice(20, 25).map((id) => ({
+        messageIds.slice(22, 25).map((id) => ({
           id,
           threadId: `${id}-thread`,
           payload: { headers: [] },
@@ -459,7 +459,7 @@ describe("getMessagesBatch", () => {
     expect(result).toHaveLength(55);
     expect(getBatch).toHaveBeenCalledTimes(5);
     expect(vi.mocked(getBatch).mock.calls.map(([ids]) => ids.length)).toEqual([
-      25, 10, 5, 25, 5,
+      25, 12, 3, 25, 5,
     ]);
     expect(
       warnSpy.mock.calls.filter(
@@ -479,7 +479,7 @@ describe("getMessagesBatch", () => {
     expect(sleep).toHaveBeenCalledWith(1500);
   });
 
-  it("keeps non-rate-limited failures separate from smaller rate-limit retries", async () => {
+  it("retries server errors and rate limits together in halved batches", async () => {
     const messageIds = Array.from(
       { length: 25 },
       (_, index) => `id${index + 1}`,

@@ -1,7 +1,12 @@
 import chunk from "lodash/chunk";
 import { type BatchError, isBatchError, isDefined } from "@/utils/types";
 import { getBatch } from "@/utils/gmail/batch";
-import { isGmailNotFound, isRetryableError } from "@/utils/gmail/retry";
+import {
+  getRetryTimeDelayMs,
+  isGmailNotFound,
+  isRetryableError,
+  MAX_GMAIL_BLOCKING_RETRY_DELAY_MS,
+} from "@/utils/gmail/retry";
 import { sleep } from "@/utils/sleep";
 import type { Logger } from "@/utils/logger";
 import {
@@ -14,7 +19,6 @@ import {
 // Each is sized to fit the gate's per-second pace at the caller's priority
 // (5 messages interactive, 4 sync, 2 background) rather than 25 at a time,
 // which Gmail answered by refusing the tail of each batch.
-const RATE_LIMIT_RETRY_BATCH_SIZE = 10;
 const MAX_BATCH_RETRIES = 3;
 const MAX_RETRY_JITTER_MS = 1000;
 
@@ -26,7 +30,8 @@ export type BatchWithRetryResult<TParsed> = {
 };
 
 // Gmail counts each subrequest toward per-user concurrency. Leave headroom for
-// other account activity, then reduce rate-limited retries even further.
+// other account activity, and halve the batch on each retry so a refused tail
+// meets less concurrency the next time.
 // Returns what loaded: once a batch runs out of retries the rest are left
 // unloaded rather than retried, since they would meet the same limit. Callers
 // that need every item use `requireCompleteBatch`.
@@ -118,10 +123,10 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
   }
 
   const missingIds = new Set<string>();
-  const rateLimitedIds = new Set<string>();
   let lastRetryableError = retryError;
   let retryableItemCount = 0;
   let rateLimitedItemCount = 0;
+  let serverHintDelayMs = 0;
 
   const parsed = batch
     .map((item, i) => {
@@ -154,8 +159,11 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
         retryableItemCount++;
         if (isRateLimit) {
           rateLimitedItemCount++;
-          rateLimitedIds.add(ids[i]);
         }
+        serverHintDelayMs = Math.max(
+          serverHintDelayMs,
+          getRetryTimeDelayMs(errorMessage) ?? 0,
+        );
         if (isRateLimit || !lastRetryableError) {
           lastRetryableError = item.error;
         }
@@ -190,20 +198,21 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
     });
     const exponentialDelayMs = Math.min(
       1000 * 2 ** (nextRetryCount - 1),
-      10_000,
+      MAX_GMAIL_BLOCKING_RETRY_DELAY_MS,
     );
     const jitterMs = Math.floor(Math.random() * (MAX_RETRY_JITTER_MS + 1));
-    await sleep(exponentialDelayMs + jitterMs);
-    const nonRateLimitedIds = remainingIds.filter(
-      (id) => !rateLimitedIds.has(id),
-    );
-    const retryChunks = [
-      ...chunk(nonRateLimitedIds, batchSizeFor(endpoint)),
-      ...chunk(
-        Array.from(rateLimitedIds),
-        Math.min(RATE_LIMIT_RETRY_BATCH_SIZE, batchSizeFor(endpoint)),
+    // A time Gmail names is a floor, not a suggestion; retrying before it
+    // only earns another refusal.
+    await sleep(
+      Math.min(
+        Math.max(exponentialDelayMs, serverHintDelayMs) + jitterMs,
+        MAX_GMAIL_BLOCKING_RETRY_DELAY_MS + MAX_RETRY_JITTER_MS,
       ),
-    ];
+    );
+    const retryChunks = chunk(
+      remainingIds,
+      Math.max(1, Math.floor(batchSizeFor(endpoint) / 2 ** nextRetryCount)),
+    );
     const refetched = await getChunksWithRetry(retryChunks, (idsChunk) =>
       getBatchChunkWithRetry<TRaw, TParsed>({
         ids: idsChunk,
