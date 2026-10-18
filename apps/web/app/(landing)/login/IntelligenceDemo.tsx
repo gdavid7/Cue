@@ -7,20 +7,15 @@ import { LoopPauseButton } from "@/app/(landing)/login/LoopPauseButton";
 import { useLoopPlayback } from "@/app/(landing)/login/useLoopPlayback";
 import { cn } from "@/utils";
 import { BRAND_NAME } from "@/utils/branding";
-import { MCP_INTEGRATIONS } from "@/utils/mcp/integrations";
 
-// A made-up inbox that shows what Cue adds to each email, using the same
-// next-step line and related-context cards as the real mail view.
+// A made-up inbox that shows what Cue adds to each email: a next-step line,
+// a related calendar event and a suggested reply.
 const DEMO_EMAILS: {
   id: string;
   from: string;
   subject: string;
   nextStep: string[];
-  related: {
-    app: keyof typeof MCP_INTEGRATIONS;
-    title: string;
-    meta: string;
-  }[];
+  event: { title: string; meta: string };
   reply: string;
 }[] = [
   {
@@ -32,23 +27,7 @@ const DEMO_EMAILS: {
       "Oct 21 4 PM",
       "CSE building",
     ],
-    related: [
-      {
-        app: "canvas",
-        title: "Milestone 2: design review",
-        meta: "Assignment · due Oct 24",
-      },
-      {
-        app: "googledrive",
-        title: "Team 7 design doc",
-        meta: "Edited yesterday",
-      },
-      {
-        app: "slack",
-        title: "#team-7",
-        meta: "Maya: can everyone do Tuesday at 4?",
-      },
-    ],
+    event: { title: "Milestone 2 check-in", meta: "Tue Oct 21 · 4 PM" },
     reply:
       "Hi Professor Lin, Tuesday Oct 21 at 4 PM works for our team. We'll see you in the CSE building. Thanks!",
   },
@@ -57,15 +36,7 @@ const DEMO_EMAILS: {
     from: "Jordan Reyes",
     subject: "Homepage edits, round 2",
     nextStep: ["Send a revised timeline", "edits due Fri"],
-    related: [
-      { app: "asana", title: "Homepage revisions", meta: "Task · due Fri" },
-      {
-        app: "googlesheets",
-        title: "Project budget",
-        meta: "Hours logged: 18 of 24",
-      },
-      { app: "quickbooks", title: "Invoice 0142", meta: "Sent Oct 2 · unpaid" },
-    ],
+    event: { title: "Homepage edits, round 2", meta: "Fri · due" },
     reply:
       "Hi Jordan, thanks for the notes. I can have round 2 to you by Friday and will send an updated timeline tomorrow.",
   },
@@ -74,15 +45,7 @@ const DEMO_EMAILS: {
     from: "Sam Patel",
     subject: "Is ENG-412 still blocked?",
     nextStep: ["Answer Sam about ENG-412", "blocks Thursday's release"],
-    related: [
-      { app: "jira", title: "ENG-412: Fix signup redirect", meta: "In review" },
-      {
-        app: "slack",
-        title: "#eng",
-        meta: "Priya: PR is up, needs one approval",
-      },
-      { app: "googledrive", title: "Release checklist", meta: "3 of 5 done" },
-    ],
+    event: { title: "Release sync", meta: "Thu · 9 AM" },
     reply:
       "Hi Sam, not blocked anymore. The fix is in review and should merge today, so Thursday's release is on track.",
   },
@@ -175,30 +138,19 @@ export function IntelligenceDemo() {
         >
           <div>
             <p className="font-medium text-muted-foreground text-xs">
-              Related to this email
+              On your calendar
             </p>
-            <ul className="mt-2 space-y-2">
-              {selected.related.map((item, index) => {
-                const app = MCP_INTEGRATIONS[item.app];
-                return (
-                  <li
-                    key={`${item.app}-${item.title}`}
-                    className="flex items-center gap-3 rounded-lg border bg-background px-3 py-2 motion-safe:animate-hero-rise"
-                    style={{ animationDelay: `${index * 140}ms` }}
-                  >
-                    <ConnectorLogo logo={app.logo} domain={app.url} size={20} />
-                    <span className="min-w-0">
-                      <span className="block truncate font-medium text-foreground text-sm">
-                        {item.title}
-                      </span>
-                      <span className="block truncate text-muted-foreground text-xs">
-                        {app.displayName} · {item.meta}
-                      </span>
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
+            <div className="mt-2 flex items-center gap-3 rounded-lg border bg-background px-3 py-2 motion-safe:animate-hero-rise">
+              <ConnectorLogo domain="google.com" size={20} />
+              <span className="min-w-0">
+                <span className="block truncate font-medium text-foreground text-sm">
+                  {selected.event.title}
+                </span>
+                <span className="block truncate text-muted-foreground text-xs">
+                  Google Calendar · {selected.event.meta}
+                </span>
+              </span>
+            </div>
           </div>
           <div>
             <p className="flex items-center gap-1.5 font-medium text-muted-foreground text-xs">

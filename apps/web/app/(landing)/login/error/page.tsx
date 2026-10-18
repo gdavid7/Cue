@@ -20,6 +20,10 @@ import { CrispChatLoggedOutVisible } from "@/components/CrispChat";
 import { getAndClearAuthErrorCookie } from "@/utils/auth-cookies";
 import { BRAND_NAME } from "@/utils/branding";
 import {
+  GOOGLE_APP_UNVERIFIED,
+  GOOGLE_WEEKLY_SIGN_IN_NOTE,
+} from "@/utils/google-app-status";
+import {
   getPendingAuthProvider,
   trackAuthFailure,
 } from "@/utils/analytics/auth-funnel";
@@ -50,8 +54,7 @@ const errorMessages: Record<string, { title: string; description: string }> = {
   },
   invalid_code: {
     title: "Sign-in session expired",
-    description:
-      "Your sign-in link is no longer valid. This can happen if the login flow was opened twice, timed out, or already used. Please start sign-in again from the login page.",
+    description: `Your sign-in link is no longer valid. This can happen if the login flow was opened twice, timed out, or already used. Please start sign-in again from the login page. ${GOOGLE_APP_UNVERIFIED ? GOOGLE_WEEKLY_SIGN_IN_NOTE : ""}`,
   },
   requiresreconsent: {
     title: "Permissions need to be refreshed",

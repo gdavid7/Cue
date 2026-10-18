@@ -65,18 +65,16 @@ const pricingFaqs: {
       "Yes, if you don't think we provided you with value send us an email within 14 days of upgrading and we'll refund you.",
   },
   {
-    question: "Need a custom plan for your enterprise?",
+    question: "Need a custom plan for your team?",
     answer: (
       <span>
         <Anchor href={`mailto:${env.NEXT_PUBLIC_SUPPORT_EMAIL}`}>
-          Contact our sales team
+          Contact us
         </Anchor>{" "}
-        for custom pricing, SSO, SCIM, on-premise deployment, and dedicated
-        support.
+        and we&apos;ll work out a plan that fits.
       </span>
     ),
-    answerText:
-      "Contact our sales team for custom pricing, SSO, SCIM, on-premise deployment, and dedicated support.",
+    answerText: "Contact us and we'll work out a plan that fits.",
   },
 ];
 

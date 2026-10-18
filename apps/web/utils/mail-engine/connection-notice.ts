@@ -1,4 +1,8 @@
 import { isMicrosoftProvider } from "@/utils/email/provider-types";
+import {
+  GOOGLE_APP_UNVERIFIED,
+  GOOGLE_WEEKLY_SIGN_IN_NOTE,
+} from "@/utils/google-app-status";
 
 export function mailEngineConnectionCopy(
   connection: "ready" | "offline" | "blocked_auth" | undefined,
@@ -10,7 +14,7 @@ export function mailEngineConnectionCopy(
     const isMicrosoft = isMicrosoftProvider(provider);
     return {
       title: `Sign in again to reconnect ${isMicrosoft ? "Outlook" : "Gmail"}`,
-      description: `${isMicrosoft ? "Microsoft" : "Google"} signed Cue out, so new mail is paused. Your mail and settings are still here.`,
+      description: `${isMicrosoft ? "Microsoft" : "Google"} signed Cue out, so new mail is paused. Your mail and settings are still here.${isMicrosoft || !GOOGLE_APP_UNVERIFIED ? "" : ` ${GOOGLE_WEEKLY_SIGN_IN_NOTE}`}`,
       action: "Sign in again",
     };
   }

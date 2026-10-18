@@ -153,10 +153,9 @@ export function Pricing() {
                   <Sparkle />
                 </div>
                 <div>
-                  <h3 className="font-title text-lg">Enterprise</h3>
+                  <h3 className="font-title text-lg">Teams</h3>
                   <Paragraph size="sm" className="mt-1">
-                    Need SSO, SCIM, on-premise deployment, or a dedicated
-                    account manager?
+                    Need a custom plan for your team?
                   </Paragraph>
                 </div>
               </div>
@@ -176,7 +175,7 @@ export function Pricing() {
                   }
                 >
                   <Chat />
-                  <span className="relative z-10">Speak to sales</span>
+                  <span className="relative z-10">Contact us</span>
                 </Link>
               </Button>
             </CardContent>
