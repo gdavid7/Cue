@@ -1,15 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import useSWR from "swr";
 import { AlertCircleIcon, ClockIcon, LoaderCircleIcon } from "lucide-react";
 import type { UpcomingScheduledEmailsResponse } from "@/app/api/user/scheduled-emails/route";
 import { AllInboxesFailedNotice } from "@/app/(app)/[emailAccountId]/mail/AllInboxesFailedNotice";
 import {
-  type AllInboxesAccount,
-  getAccountColorClassName,
-} from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
-import { AccountMarker } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
+  AccountRowMarker,
+  useAllAccountsList,
+} from "@/app/(app)/[emailAccountId]/mail/all-accounts-list";
+import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { InlineActionButton } from "@/components/InlineActionButton";
 import { LoadingContent } from "@/components/LoadingContent";
 import {
@@ -23,7 +22,6 @@ import {
   scheduledEmailsRefreshInterval,
   useUpcomingScheduledEmails,
 } from "@/hooks/useHiddenDraftMessageIds";
-import { fetchForAccounts } from "@/utils/fetch-for-accounts";
 
 const SCHEDULED_PATH = "/api/user/scheduled-emails";
 
@@ -45,15 +43,10 @@ export function ScheduledEmailList({
   const mailHref = useMailHref();
   const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState(false);
-  const accountIds = accounts?.map((account) => account.id);
-  const one = useUpcomingScheduledEmails(accounts ? "" : emailAccountId);
-  const all = useSWR(
-    accountIds ? [SCHEDULED_PATH, "all-accounts", ...accountIds] : null,
-    () =>
-      fetchForAccounts<UpcomingScheduledEmailsResponse>(
-        SCHEDULED_PATH,
-        accountIds ?? [],
-      ),
+  const one = useUpcomingScheduledEmails(accounts ? null : emailAccountId);
+  const all = useAllAccountsList<UpcomingScheduledEmailsResponse>(
+    SCHEDULED_PATH,
+    accounts,
     {
       refreshInterval: (current) =>
         scheduledEmailsRefreshInterval(
@@ -102,9 +95,6 @@ export function ScheduledEmailList({
         ...row,
         accountId: emailAccountId,
       }));
-  const accountById = new Map(
-    accounts?.map((account, index) => [account.id, { account, index }]),
-  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -134,7 +124,10 @@ export function ScheduledEmailList({
                   key={`${row.accountId}:${row.id}`}
                   className="flex flex-wrap items-center gap-x-3 gap-y-1 border-border border-b px-4 py-3"
                 >
-                  <RowAccount owner={accountById.get(row.accountId)} />
+                  <AccountRowMarker
+                    accountId={row.accountId}
+                    accounts={accounts}
+                  />
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium text-foreground text-sm">
                       {row.subject?.trim() || "(no subject)"}
@@ -203,20 +196,6 @@ export function ScheduledEmailList({
         </LoadingContent>
       </div>
     </div>
-  );
-}
-
-function RowAccount({
-  owner,
-}: {
-  owner?: { account: AllInboxesAccount; index: number };
-}) {
-  if (!owner) return null;
-  return (
-    <AccountMarker
-      account={owner.account}
-      colorClassName={getAccountColorClassName(owner.index)}
-    />
   );
 }
 

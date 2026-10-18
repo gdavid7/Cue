@@ -11,17 +11,16 @@ import type {
 } from "@/app/api/user/snoozed-threads/route";
 import { AllInboxesFailedNotice } from "@/app/(app)/[emailAccountId]/mail/AllInboxesFailedNotice";
 import {
-  type AllInboxesAccount,
-  getAccountColorClassName,
-} from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
+  AccountRowMarker,
+  useAllAccountsList,
+} from "@/app/(app)/[emailAccountId]/mail/all-accounts-list";
+import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { formatSnoozeTime } from "@/app/(app)/[emailAccountId]/mail/snooze-command-palette";
-import { AccountMarker } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
 import { InlineActionButton } from "@/components/InlineActionButton";
 import { LoadingContent } from "@/components/LoadingContent";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { extractNameFromEmail } from "@/utils/email";
 import { fetchWithAccount } from "@/utils/fetch";
-import { fetchForAccounts } from "@/utils/fetch-for-accounts";
 import { decodeSnippet } from "@/utils/gmail/decode";
 import { getAccountScopedKey } from "@/utils/swr";
 
@@ -47,14 +46,12 @@ export function SnoozedThreadList({
   const { emailAccountId } = useAccount();
   const client = useOptionalMailClient();
   const [busyThreadId, setBusyThreadId] = useState<string | null>(null);
-  const accountIds = accounts?.map((account) => account.id);
   const one = useSWR<SnoozedThreadsResponse>(
     accounts ? null : getAccountScopedKey(SNOOZED_PATH, emailAccountId),
   );
-  const all = useSWR(
-    accountIds ? [SNOOZED_PATH, "all-accounts", ...accountIds] : null,
-    () =>
-      fetchForAccounts<SnoozedThreadsResponse>(SNOOZED_PATH, accountIds ?? []),
+  const all = useAllAccountsList<SnoozedThreadsResponse>(
+    SNOOZED_PATH,
+    accounts,
   );
   const { isLoading, error, mutate } = accounts ? all : one;
   const rows: SnoozedRow[] = accounts
@@ -71,9 +68,6 @@ export function SnoozedThreadList({
         ...row,
         accountId: emailAccountId,
       }));
-  const accountById = new Map(
-    accounts?.map((account, index) => [account.id, { account, index }]),
-  );
 
   const unsnooze = async (row: SnoozedRow) => {
     const { threadId, accountId } = row;
@@ -122,51 +116,46 @@ export function SnoozedThreadList({
           </div>
         ) : (
           <ul aria-label="Snoozed conversations">
-            {rows.map((row) => {
-              const owner = accountById.get(row.accountId);
-              return (
-                <li
-                  className="flex items-center gap-3 border-border border-b px-4 py-3"
-                  key={`${row.accountId}:${row.id}`}
+            {rows.map((row) => (
+              <li
+                className="flex items-center gap-3 border-border border-b px-4 py-3"
+                key={`${row.accountId}:${row.id}`}
+              >
+                <AccountRowMarker
+                  accountId={row.accountId}
+                  accounts={accounts}
+                />
+                <button
+                  className="min-w-0 flex-1 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => onOpenThread(row.threadId, row.accountId)}
+                  type="button"
                 >
-                  {owner ? (
-                    <AccountMarker
-                      account={owner.account}
-                      colorClassName={getAccountColorClassName(owner.index)}
-                    />
-                  ) : null}
-                  <button
-                    className="min-w-0 flex-1 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    onClick={() => onOpenThread(row.threadId, row.accountId)}
-                    type="button"
-                  >
-                    <p className="truncate font-medium text-foreground text-sm">
-                      {row.subject.trim() || "(no subject)"}
-                    </p>
-                    <p className="truncate text-muted-foreground text-xs">
-                      {[
-                        extractNameFromEmail(row.from) || row.from,
-                        decodeSnippet(row.snippet),
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </p>
-                  </button>
-                  <p className="flex shrink-0 items-center gap-1.5 text-muted-foreground text-xs">
-                    <AlarmClockIcon className="size-3.5" />
-                    {row.status === "EXECUTING"
-                      ? "Coming back now"
-                      : formatSnoozeTime(new Date(row.scheduledFor))}
+                  <p className="truncate font-medium text-foreground text-sm">
+                    {row.subject.trim() || "(no subject)"}
                   </p>
-                  <InlineActionButton
-                    disabled={busyThreadId !== null}
-                    onClick={() => unsnooze(row)}
-                  >
-                    Unsnooze
-                  </InlineActionButton>
-                </li>
-              );
-            })}
+                  <p className="truncate text-muted-foreground text-xs">
+                    {[
+                      extractNameFromEmail(row.from) || row.from,
+                      decodeSnippet(row.snippet),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
+                </button>
+                <p className="flex shrink-0 items-center gap-1.5 text-muted-foreground text-xs">
+                  <AlarmClockIcon className="size-3.5" />
+                  {row.status === "EXECUTING"
+                    ? "Coming back now"
+                    : formatSnoozeTime(new Date(row.scheduledFor))}
+                </p>
+                <InlineActionButton
+                  disabled={busyThreadId !== null}
+                  onClick={() => unsnooze(row)}
+                >
+                  Unsnooze
+                </InlineActionButton>
+              </li>
+            ))}
           </ul>
         )}
       </LoadingContent>

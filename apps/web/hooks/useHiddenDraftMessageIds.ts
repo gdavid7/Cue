@@ -14,9 +14,10 @@ export function upcomingScheduledEmailsKey(emailAccountId: string) {
   return ["/api/user/scheduled-emails", emailAccountId];
 }
 
-export function useUpcomingScheduledEmails(emailAccountId: string) {
+/** Null reads nothing, as when the sends of several accounts are read instead. */
+export function useUpcomingScheduledEmails(emailAccountId: string | null) {
   return useSWR<UpcomingScheduledEmailsResponse>(
-    upcomingScheduledEmailsKey(emailAccountId),
+    emailAccountId ? upcomingScheduledEmailsKey(emailAccountId) : null,
     {
       refreshInterval: (current) =>
         scheduledEmailsRefreshInterval(current?.scheduledEmails ?? []),

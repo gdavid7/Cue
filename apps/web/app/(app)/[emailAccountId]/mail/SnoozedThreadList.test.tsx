@@ -159,6 +159,8 @@ describe("ScheduledEmailList across accounts", () => {
     renderWithSWR(<ScheduledEmailList accounts={ACCOUNTS} />);
 
     const list = await screen.findByRole("list", { name: "Scheduled emails" });
+    // Every request is made as an account; none goes out without one.
+    expect(requests.map((request) => request.accountId)).not.toContain(null);
     const [first] = within(list).getAllByRole("listitem");
     expect(first.textContent).toContain("Second");
     expect(
