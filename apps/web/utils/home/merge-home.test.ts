@@ -5,11 +5,11 @@ import type { MeetingNews } from "@/utils/home/meeting-news";
 import type { NextUpItem } from "@/utils/home/next-up";
 import {
   type AccountHome,
-  HOME_LANE_LIMIT,
   mergeHomeData,
   mergeMeetingNews,
   mergeNextUp,
 } from "./merge-home";
+import { HOME_LANE_LIMIT } from "./today-constants";
 
 const A = { id: "account-a", email: "a@example.com" };
 const B = { id: "account-b", email: "b@example.com" };
@@ -203,8 +203,48 @@ describe("mergeHomeData", () => {
       aiAccess: true,
       replyTracking: false,
       hasReadMail: true,
-      account: B,
+      replyTrackingOffAccount: B,
     });
+  });
+
+  it("names each notice's own account when accounts lack different things", () => {
+    const { data } = mergeHomeData([
+      loaded(A, {
+        cue: { aiAccess: true, replyTracking: true, hasReadMail: false },
+      }),
+      loaded(B, {
+        cue: { aiAccess: true, replyTracking: false, hasReadMail: true },
+      }),
+    ]);
+
+    expect(data?.cue).toMatchObject({
+      replyTrackingOffAccount: B,
+      readingAccount: A,
+    });
+  });
+
+  it("a row past a lane's cap doesn't hide the conversation's copy in another account", () => {
+    const newer = Array.from({ length: HOME_LANE_LIMIT }, (_, index) =>
+      thread(`a-${index}`, { at: `2026-10-14T0${index % 10}:00:00Z` }),
+    );
+    const { data } = mergeHomeData([
+      loaded(A, {
+        needsYou: [
+          ...newer,
+          thread("a-old", {
+            at: "2026-10-01T09:00:00Z",
+            rfcMessageId: "<shared@mail>",
+          }),
+        ],
+      }),
+      loaded(B, {
+        alsoInInbox: [thread("b-copy", { rfcMessageId: "<shared@mail>" })],
+      }),
+    ]);
+
+    expect(data?.needsYou.map((row) => row.threadId)).not.toContain("a-old");
+    expect(data?.stats.needsYouCapped).toBe(true);
+    expect(data?.alsoInInbox.map((row) => row.threadId)).toEqual(["b-copy"]);
   });
 
   it("takes the earliest next meeting and keeps tasks with their account", () => {

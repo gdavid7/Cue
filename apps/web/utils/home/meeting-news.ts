@@ -4,7 +4,7 @@ import type { CalendarEvent } from "@/utils/calendar/event-types";
 import { isExaSearchEnabled, searchExa } from "@/utils/exa/search";
 import type { Logger } from "@/utils/logger";
 import { redis } from "@/utils/redis";
-import { MEETING_NEWS_SHOWN } from "@/utils/home/merge-home";
+import { MEETING_NEWS_SHOWN } from "@/utils/home/today-constants";
 import { domainOf } from "@/utils/thread-context/linked-pages";
 
 const WINDOW_DAYS = 5;

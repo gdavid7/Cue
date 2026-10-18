@@ -32,7 +32,7 @@ import {
   HOME_LANE_LIMIT,
   MINUTES_PER_REPLY,
   PRIORITY_ORDER,
-} from "@/utils/home/merge-home";
+} from "@/utils/home/today-constants";
 import { getRuleLabel } from "@/utils/rule/consts";
 import {
   getUserTier,

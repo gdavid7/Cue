@@ -764,15 +764,15 @@ function cueNotice(
   // Across accounts, the notice names the account it is about.
   if (!cue.replyTracking)
     return replyTrackingOffNotice(
-      cue.account?.id ?? emailAccountId,
-      cue.account?.email,
+      cue.replyTrackingOffAccount?.id ?? emailAccountId,
+      cue.replyTrackingOffAccount?.email,
     );
   if (!cue.hasReadMail) {
     return {
       icon: MailSearchIcon,
       tone: "info",
-      title: cue.account
-        ? `Cue is reading the recent mail in ${cue.account.email}.`
+      title: cue.readingAccount
+        ? `Cue is reading the recent mail in ${cue.readingAccount.email}.`
         : "Cue is reading your recent mail.",
       detail: "What needs a reply will appear here.",
     };

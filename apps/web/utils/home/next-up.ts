@@ -12,7 +12,7 @@ import {
   ownedBySameUser,
 } from "@/utils/mcp/user-connections";
 import prisma from "@/utils/prisma";
-import { NEXT_UP_SHOWN, sortByDue } from "@/utils/home/merge-home";
+import { NEXT_UP_SHOWN, sortByDue } from "@/utils/home/today-constants";
 import { redis } from "@/utils/redis";
 import {
   isAppServerError,

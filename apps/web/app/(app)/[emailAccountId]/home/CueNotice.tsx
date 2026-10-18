@@ -25,7 +25,7 @@ export function replyTrackingOffNotice(
     icon: PauseIcon,
     tone: "quiet",
     title: accountEmail
-      ? `Reply tracking is off for ${accountEmail}, so Cue isn't checking what needs a reply there.`
+      ? `Reply tracking is off for ${accountEmail}, so Cue isn't checking what needs a reply.`
       : "Reply tracking is off, so Cue isn't checking what needs a reply.",
     link: {
       label: "Turn it on in Rules",

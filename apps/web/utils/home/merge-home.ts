@@ -1,28 +1,17 @@
 import type { GetHomeResponse } from "@/app/api/user/home/route";
-import type {
-  AgentTask,
-  HomeLane,
-  HomeThread,
-  Priority,
-} from "@/utils/home/get-home";
+import type { AgentTask, HomeLane, HomeThread } from "@/utils/home/get-home";
 import type { MeetingNews } from "@/utils/home/meeting-news";
 import type { NextUpItem } from "@/utils/home/next-up";
+import {
+  HOME_LANE_LIMIT,
+  MEETING_NEWS_SHOWN,
+  MINUTES_PER_REPLY,
+  NEXT_UP_SHOWN,
+  PRIORITY_ORDER,
+  sortByDue,
+} from "@/utils/home/today-constants";
 
-// Shared with the server's Today so one account and all of them sort and cap
-// alike. This file stays free of server imports: the browser merges.
-/** Each of Today's lanes holds at most this many conversations. */
-export const HOME_LANE_LIMIT = 10;
-/** Next up shows this many meetings and deadlines. */
-export const NEXT_UP_SHOWN = 4;
-/** Before your meeting shows this many meetings. */
-export const MEETING_NEWS_SHOWN = 3;
-// A rough per-email estimate, shown with a "~" so nobody reads it as measured.
-export const MINUTES_PER_REPLY = 3;
-export const PRIORITY_ORDER: Record<Priority, number> = {
-  high: 0,
-  medium: 1,
-  low: 2,
-};
+// The browser merges, so this file stays free of server imports.
 
 const LANES: HomeLane[] = ["needsYou", "waiting", "alsoInInbox"];
 
@@ -46,8 +35,11 @@ export type TodayData = Omit<
   waiting: TodayThread[];
   alsoInInbox: TodayThread[];
   agentTasks: TodayAgentTask[];
-  /** `account` names the mailbox a notice is about, across accounts. */
-  cue: GetHomeResponse["cue"] & { account?: TodayAccount };
+  /** Across accounts, the mailbox each notice is about. */
+  cue: GetHomeResponse["cue"] & {
+    replyTrackingOffAccount?: TodayAccount;
+    readingAccount?: TodayAccount;
+  };
   today: Omit<GetHomeResponse["today"], "filedLabel"> & {
     filedLabel:
       | (NonNullable<GetHomeResponse["today"]["filedLabel"]> & {
@@ -107,35 +99,49 @@ export function mergeHomeData(accounts: AccountHome[]): {
       data[lane].map((thread): TodayThread => ({ ...thread, account })),
     );
   const byDate = (a: TodayThread, b: TodayThread) => b.at.localeCompare(a.at);
+  // Rows a lane shows, by conversation. A row past a lane's cap isn't shown,
+  // so it never hides the conversation's copy in another account.
   const shown = new Map<string, TodayThread>();
-  const once = (threads: TodayThread[]) =>
-    threads.filter((thread) => {
+  const lane = (threads: TodayThread[]) => {
+    const rows: TodayThread[] = [];
+    let more = false;
+    for (const thread of threads) {
       const key = conversationKey(thread);
       const first = shown.get(key);
-      if (!first) {
-        shown.set(key, thread);
-        return true;
-      }
       // Within one mailbox Today shows what one account's Today shows.
-      if (!thread.account || first.account?.id === thread.account.id)
-        return true;
-      if (!first.alsoIn?.some(({ id }) => id === thread.account?.id))
-        first.alsoIn = [...(first.alsoIn ?? []), thread.account];
-      return false;
-    });
+      const sameMailbox =
+        first && (!thread.account || first.account?.id === thread.account.id);
+      if (first && !sameMailbox) {
+        if (!first.alsoIn?.some(({ id }) => id === thread.account?.id))
+          first.alsoIn = [
+            ...(first.alsoIn ?? []),
+            ...(thread.account ? [thread.account] : []),
+          ];
+        continue;
+      }
+      if (rows.length === HOME_LANE_LIMIT) {
+        more = true;
+        break;
+      }
+      // A copy, so noting "also in" doesn't change SWR's own data.
+      const row = { ...thread };
+      if (!first) shown.set(key, row);
+      rows.push(row);
+    }
+    return { rows, more };
+  };
 
-  const needsYouRows = tagged("needsYou").sort(
-    (a, b) =>
-      PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] || byDate(a, b),
+  const needsYou = lane(
+    tagged("needsYou").sort(
+      (a, b) =>
+        PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] || byDate(a, b),
+    ),
   );
-  // Copies, so the rows that note "also in" don't change SWR's own data.
-  const needsYou = once(needsYouRows.map(copy));
-  const waiting = once(tagged("waiting").sort(byDate).map(copy));
-  const alsoInInbox = once(tagged("alsoInInbox").sort(byDate).map(copy));
+  const waiting = lane(tagged("waiting").sort(byDate));
+  const alsoInInbox = lane(tagged("alsoInInbox").sort(byDate));
 
-  const cueReason = loaded.find(
-    ({ data }) => !data.cue.replyTracking || !data.cue.hasReadMail,
-  );
+  const replyTrackingOff = loaded.find(({ data }) => !data.cue.replyTracking);
+  const reading = loaded.find(({ data }) => !data.cue.hasReadMail);
   const filedAccounts = loaded.filter(({ data }) => data.today.filed > 0);
   const onlyFiled = filedAccounts.length === 1 ? filedAccounts[0] : undefined;
   const nextEvents = loaded
@@ -144,9 +150,9 @@ export function mergeHomeData(accounts: AccountHome[]): {
     .sort((a, b) => a.at.localeCompare(b.at));
 
   const lanes = {
-    needsYou: needsYou.slice(0, HOME_LANE_LIMIT),
-    waiting: waiting.slice(0, HOME_LANE_LIMIT),
-    alsoInInbox: alsoInInbox.slice(0, HOME_LANE_LIMIT),
+    needsYou: needsYou.rows,
+    waiting: waiting.rows,
+    alsoInInbox: alsoInInbox.rows,
   };
 
   return {
@@ -161,7 +167,10 @@ export function mergeHomeData(accounts: AccountHome[]): {
         aiAccess: loaded.every(({ data }) => data.cue.aiAccess),
         replyTracking: loaded.every(({ data }) => data.cue.replyTracking),
         hasReadMail: loaded.every(({ data }) => data.cue.hasReadMail),
-        ...(cueReason ? { account: cueReason.account } : {}),
+        ...(replyTrackingOff
+          ? { replyTrackingOffAccount: replyTrackingOff.account }
+          : {}),
+        ...(reading ? { readingAccount: reading.account } : {}),
       },
       today: {
         checked: sum(loaded.map(({ data }) => data.today.checked)),
@@ -188,11 +197,9 @@ export function mergeHomeData(accounts: AccountHome[]): {
         waiting: lanes.waiting.length,
         // Lists are capped, so a full one means "at least this many".
         needsYouCapped:
-          needsYou.length > HOME_LANE_LIMIT ||
-          loaded.some(({ data }) => data.stats.needsYouCapped),
+          needsYou.more || loaded.some(({ data }) => data.stats.needsYouCapped),
         waitingCapped:
-          waiting.length > HOME_LANE_LIMIT ||
-          loaded.some(({ data }) => data.stats.waitingCapped),
+          waiting.more || loaded.some(({ data }) => data.stats.waitingCapped),
       },
     },
     failedAccountIds,
@@ -238,17 +245,6 @@ export function mergeMeetingNews(lists: MeetingNews[][]): MeetingNews[] {
     .slice(0, MEETING_NEWS_SHOWN);
 }
 
-/** Soonest first; ties broken by source, then title, so the order never flickers. */
-export function sortByDue(items: NextUpItem[]) {
-  return [...items].sort(
-    (a, b) =>
-      a.at.localeCompare(b.at) ||
-      a.source.localeCompare(b.source) ||
-      a.title.localeCompare(b.title) ||
-      a.id.localeCompare(b.id),
-  );
-}
-
 /**
  * The same conversation in two mailboxes has its own thread id in each, but
  * its newest message carries one Message-ID header everywhere.
@@ -258,10 +254,6 @@ function conversationKey(thread: TodayThread) {
   return messageId
     ? `message:${messageId}`
     : `thread:${thread.account?.id ?? ""}:${thread.threadId}`;
-}
-
-function copy(thread: TodayThread): TodayThread {
-  return { ...thread };
 }
 
 function normalizeTitle(title: string) {
