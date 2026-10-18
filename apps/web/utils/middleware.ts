@@ -127,8 +127,6 @@ function withMiddleware<T extends NextRequest>(
     reqWithLogger.logger = baseLogger;
     let requestForError = reqWithLogger as NextRequest;
     const startedAt = Date.now();
-    // The scope names the route template; a bare path holds only ids.
-    const route = scope ?? getRequestPath(req);
 
     return runWithAuditContext(
       {
@@ -358,7 +356,6 @@ function withMiddleware<T extends NextRequest>(
     ).then(
       (response) => {
         logRequestCompleted(getLogger(requestForError), {
-          route,
           method: req.method,
           status: response.status,
           durationMs: Date.now() - startedAt,
@@ -367,11 +364,10 @@ function withMiddleware<T extends NextRequest>(
       },
       (error: unknown) => {
         logRequestCompleted(getLogger(requestForError), {
-          route,
           method: req.method,
           // Only a redirect is rethrown on purpose; Next answers anything else
           // with a 500.
-          status: isRedirectError(error) ? 307 : 500,
+          status: isRedirectError(error) ? getRedirectStatus(error) : 500,
           durationMs: Date.now() - startedAt,
         });
         throw error;
@@ -884,10 +880,10 @@ async function runTimedMiddlewareStep<T>({
 
 // Slow and failed requests log at info, which ships to Axiom. The rest log at
 // trace, which ships only while ENABLE_DEBUG_LOGS is on, so the hot polling
-// routes add nothing by default.
+// routes add nothing by default. The logger's scope and url name the route.
 function logRequestCompleted(
   logger: Logger,
-  fields: { route: string; method: string; status: number; durationMs: number },
+  fields: { method: string; status: number; durationMs: number },
 ) {
   if (fields.durationMs >= SLOW_REQUEST_MS || fields.status >= 500) {
     logger.info("Request completed", fields);
@@ -896,8 +892,17 @@ function logRequestCompleted(
   }
 }
 
-function isRedirectError(error: unknown) {
+function isRedirectError(error: unknown): error is Error {
   return error instanceof Error && error.message === "NEXT_REDIRECT";
+}
+
+// Next puts the status in the digest, "NEXT_REDIRECT;type;url;status;":
+// redirect() throws 307 and permanentRedirect() 308.
+function getRedirectStatus(error: Error) {
+  const digest = (error as Error & { digest?: unknown }).digest;
+  const status =
+    typeof digest === "string" ? Number(digest.split(";").at(-2)) : Number.NaN;
+  return Number.isInteger(status) ? status : 307;
 }
 
 function logSlowMiddlewareTotal({

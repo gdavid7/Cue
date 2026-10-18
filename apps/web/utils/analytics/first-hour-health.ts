@@ -65,7 +65,8 @@ export async function recordFirstHourHealthForNewMailboxes(logger: Logger) {
   let failed = 0;
   for (const [index, mailbox] of unsent.entries()) {
     if (sent + failed >= FIRST_HOUR_HEALTH_MAX_PER_RUN) break;
-    // Unclaimed mailboxes get the event from a later tick inside the window.
+    // The ones left are the newest. The next daily tick still reaches those
+    // under about two hours old; older ones leave the window and miss it.
     if (!hasTimeBeforeRequestDeadline(MAILBOX_RESERVE_MS)) {
       logger.warn("Stopping first-hour health before the deadline", {
         mailboxesLeft: unsent.length - index,

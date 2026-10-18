@@ -145,7 +145,7 @@ describe("google linking callback route", () => {
     });
     mockGetOAuthCodeResult.mockResolvedValue(null);
     mockAcquireOAuthCodeLock.mockResolvedValue(true);
-    mockEnsureEmailAccountsWatched.mockResolvedValue([]);
+    mockEnsureEmailAccountsWatched.mockResolvedValue({ results: [], left: 0 });
     mockAuth.mockResolvedValue({
       user: {
         id: "user-123",

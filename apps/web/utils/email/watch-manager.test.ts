@@ -9,6 +9,7 @@ import { fetchGoogleOpenIdProfile } from "@/utils/gmail/oauth";
 import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import { logErrorWithDedupe } from "@/utils/log-error-with-dedupe";
 import { publishToQstashAt } from "@/utils/upstash";
+import { runWithRequestDeadline } from "@/utils/request-deadline";
 import {
   ensureEmailAccountsWatched,
   stopWatchingEmailAccount,
@@ -104,7 +105,7 @@ describe("ensureEmailAccountsWatched", () => {
         ),
     } as any);
 
-    const results = await ensureEmailAccountsWatched({
+    const { results } = await ensureEmailAccountsWatched({
       userIds: null,
       logger,
     });
@@ -142,7 +143,7 @@ describe("ensureEmailAccountsWatched", () => {
       }),
     } as any);
 
-    const results = await ensureEmailAccountsWatched({
+    const { results } = await ensureEmailAccountsWatched({
       userIds: null,
       logger,
     });
@@ -289,7 +290,7 @@ describe("ensureEmailAccountsWatched", () => {
     });
     const before = Date.now();
 
-    const results = await ensureEmailAccountsWatched({
+    const { results } = await ensureEmailAccountsWatched({
       userIds: ["user-id"],
       logger,
     });
@@ -349,13 +350,57 @@ describe("ensureEmailAccountsWatched", () => {
     for (let hour = 0; hour < 24; hour++) {
       vi.useFakeTimers({ now: Date.UTC(2026, 0, 1, hour), toFake: ["Date"] });
       results.push(
-        ...(await ensureEmailAccountsWatched({ userIds: null, logger })),
+        ...(await ensureEmailAccountsWatched({ userIds: null, logger }))
+          .results,
       );
     }
 
     expect(fetchGoogleOpenIdProfile).toHaveBeenCalledTimes(1);
     expect(results).toHaveLength(24);
     expect(results.every((result) => result.status === "success")).toBe(true);
+  });
+
+  it("stops before the route's deadline and reports the accounts it left", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(logger, "warn");
+    vi.mocked(prisma.emailAccount.findMany).mockResolvedValue(
+      ["email-account-1", "email-account-2", "email-account-3"].map((id) => ({
+        ...getWatchedEmailAccount({ watchEmailsExpirationDate: null }),
+        id,
+      })) as any,
+    );
+    const watchEmails = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        // The first renewal takes most of the route's five minutes.
+        vi.advanceTimersByTime(270_000);
+        return { expirationDate: new Date(Date.now() + 3_600_000) };
+      })
+      .mockResolvedValue({
+        expirationDate: new Date(Date.now() + 3_600_000),
+      });
+    vi.mocked(createEmailProvider).mockResolvedValue({
+      ...getGoogleProvider(),
+      watchEmails,
+    });
+
+    const { results, left } = await runWithRequestDeadline(300, () =>
+      ensureEmailAccountsWatched({ userIds: null, logger }),
+    );
+
+    expect(watchEmails).toHaveBeenCalledTimes(1);
+    expect(results).toEqual([
+      expect.objectContaining({
+        emailAccountId: "email-account-1",
+        status: "success",
+      }),
+    ]);
+    expect(left).toBe(2);
+    expect(warn).toHaveBeenCalledWith(
+      "Stopping email watch renewal before the deadline",
+      { accountsLeft: 2 },
+    );
+    warn.mockRestore();
   });
 });
 

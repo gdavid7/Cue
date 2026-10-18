@@ -22,10 +22,8 @@ export const maxDuration = 300;
 const BATCH_SIZE = 100;
 // Room for the action in progress to finish before the route is killed.
 const ITEM_RESERVE_MS = 30_000;
-const CRON_NAME = "cron/scheduled-actions";
-
 export const GET = withError(
-  CRON_NAME,
+  "cron/scheduled-actions",
   async (request) => {
     if (!hasCronSecret(request)) {
       captureException(
@@ -42,7 +40,7 @@ export const GET = withError(
 );
 
 export const POST = withError(
-  CRON_NAME,
+  "cron/scheduled-actions",
   async (request) => {
     if (!(await hasPostCronSecret(request))) {
       captureException(
@@ -168,7 +166,6 @@ async function processScheduledActions(logger: Logger) {
 // The most frequent tick in the app, so new-mailbox health piggybacks on it.
 function runScheduledWork(logger: Logger) {
   return runCronJob({
-    cron: CRON_NAME,
     logger,
     run: async () => {
       const [mail, firstHourHealth] = await Promise.all([

@@ -18,7 +18,9 @@ vi.mock("@/utils/qstash", () => ({
         : new Response("Unauthorized", { status: 401 }),
 }));
 vi.mock("@/utils/email/watch-manager", () => ({
-  ensureEmailAccountsWatched: vi.fn().mockResolvedValue([]),
+  ensureEmailAccountsWatched: vi
+    .fn()
+    .mockResolvedValue({ results: [], left: 0 }),
 }));
 
 describe("deferred watch resume", () => {

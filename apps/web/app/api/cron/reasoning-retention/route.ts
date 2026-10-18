@@ -34,7 +34,6 @@ export const POST = withError("cron/reasoning-retention", async (request) => {
 
 async function runReasoningRetention(request: RequestWithLogger) {
   const result = await runCronJob({
-    cron: "cron/reasoning-retention",
     logger: request.logger,
     run: async () => {
       const [reasoning, draftSentText] = await Promise.all([

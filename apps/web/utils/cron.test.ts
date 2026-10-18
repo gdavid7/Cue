@@ -149,7 +149,6 @@ describe("runCronJob", () => {
     const warn = vi.spyOn(logger, "warn");
 
     const result = await runCronJob({
-      cron: "cron/test",
       logger,
       run: async () => ({ processed: 0, firstHourHealth: { sent: 0 } }),
     });
@@ -157,7 +156,6 @@ describe("runCronJob", () => {
     expect(result).toEqual({ processed: 0, firstHourHealth: { sent: 0 } });
     expect(info).toHaveBeenCalledTimes(1);
     expect(info).toHaveBeenCalledWith("Cron finished", {
-      cron: "cron/test",
       durationMs: expect.any(Number),
       processed: 0,
       firstHourHealth: { sent: 0 },
@@ -170,7 +168,6 @@ describe("runCronJob", () => {
     const warn = vi.spyOn(logger, "warn");
 
     await runCronJob({
-      cron: "cron/test",
       logger,
       run: async () => {
         vi.advanceTimersByTime(241_000);
@@ -179,8 +176,35 @@ describe("runCronJob", () => {
     });
 
     expect(warn).toHaveBeenCalledWith("Cron ran long", {
-      cron: "cron/test",
       durationMs: 241_000,
+      thresholdMs: 240_000,
+    });
+  });
+
+  it("logs a failed run with its duration, warns when it ran long, and rethrows", async () => {
+    vi.useFakeTimers();
+    const info = vi.spyOn(logger, "info");
+    const error = vi.spyOn(logger, "error");
+    const warn = vi.spyOn(logger, "warn");
+    const failure = new Error("database unavailable");
+
+    await expect(
+      runCronJob({
+        logger,
+        run: async () => {
+          vi.advanceTimersByTime(250_000);
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+
+    expect(info).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith("Cron failed", {
+      durationMs: 250_000,
+      error: failure,
+    });
+    expect(warn).toHaveBeenCalledWith("Cron ran long", {
+      durationMs: 250_000,
       thresholdMs: 240_000,
     });
   });

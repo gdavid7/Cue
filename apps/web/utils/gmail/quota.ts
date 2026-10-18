@@ -710,12 +710,14 @@ export async function logGmailQuotaUsage() {
       try {
         await summarizeEndedMinutes(emailAccountId, minute);
       } catch (error) {
-        // A store that already warned for this account within the minute
-        // (as when the same slow reply failed an admission) is not warned
-        // about again.
-        const log = claimStoreWarning(emailAccountId)
-          ? logger.warn
-          : logger.info;
+        // A store timeout that already warned for this account within the
+        // minute (as when the same slow reply failed an admission) is not
+        // warned about again. Any other failure always warns.
+        const log =
+          error instanceof StoreTimeoutError &&
+          !claimStoreWarning(emailAccountId)
+            ? logger.info
+            : logger.warn;
         log("Failed to summarize Gmail quota usage", { emailAccountId, error });
       }
     }),
@@ -969,13 +971,19 @@ async function withinStoreTimeout<T>(operation: Promise<T>): Promise<T> {
       operation,
       new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error("Gmail quota store timed out")),
+          () => reject(new StoreTimeoutError()),
           STORE_TIMEOUT_MS,
         );
       }),
     ]);
   } finally {
     clearTimeout(timer);
+  }
+}
+
+class StoreTimeoutError extends Error {
+  constructor() {
+    super("Gmail quota store timed out");
   }
 }
 

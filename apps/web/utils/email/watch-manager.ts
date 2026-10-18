@@ -51,7 +51,7 @@ export async function ensureEmailAccountsWatched({
   /** How many times the Gmail quota gate has deferred this watch. */
   deferrals?: number;
   logger: Logger;
-}): Promise<WatchEmailAccountResult[]> {
+}): Promise<{ results: WatchEmailAccountResult[]; left: number }> {
   const emailAccounts = await getEmailAccountsToWatch(userIds, emailAccountId);
   return await watchEmailAccounts(emailAccounts, deferrals, logger);
 }
@@ -105,18 +105,20 @@ async function watchEmailAccounts(
   emailAccounts: Awaited<ReturnType<typeof getEmailAccountsToWatch>>,
   deferrals: number,
   logger: Logger,
-): Promise<WatchEmailAccountResult[]> {
-  if (!emailAccounts.length) return [];
+): Promise<{ results: WatchEmailAccountResult[]; left: number }> {
+  if (!emailAccounts.length) return { results: [], left: 0 };
 
   logger.info("Watching email accounts", { count: emailAccounts.length });
 
   const results: WatchEmailAccountResult[] = [];
+  let left = 0;
 
   for (const [index, emailAccount] of emailAccounts.entries()) {
     // Soonest-expiring go first, so the ones left can wait for the next run.
     if (!hasTimeBeforeRequestDeadline(ACCOUNT_RESERVE_MS)) {
+      left = emailAccounts.length - index;
       logger.warn("Stopping email watch renewal before the deadline", {
-        accountsLeft: emailAccounts.length - index,
+        accountsLeft: left,
       });
       break;
     }
@@ -159,7 +161,7 @@ async function watchEmailAccounts(
     }
   }
 
-  return results;
+  return { results, left };
 }
 
 async function watchEmailAccount(
