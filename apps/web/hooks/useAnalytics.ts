@@ -47,7 +47,4 @@ export const landingPageAnalytics = {
   ) => {
     posthog?.capture?.("Clicked Pricing CTA", properties);
   },
-  appDownloadClicked: (posthog: PostHogClient, platform: "ios" | "android") => {
-    posthog?.capture?.("Clicked App Download", { platform });
-  },
 };

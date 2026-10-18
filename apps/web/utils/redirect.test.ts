@@ -111,6 +111,15 @@ describe("getSafeRedirectUrl", () => {
     ).toBe("https://example.com/oauth");
   });
 
+  it("allows mailto links only when external redirects are allowed", () => {
+    expect(getSafeRedirectUrl("mailto:support@example.com")).toBe("/");
+    expect(
+      getSafeRedirectUrl("mailto:support@example.com", {
+        allowExternal: true,
+      }),
+    ).toBe("mailto:support@example.com");
+  });
+
   it("rejects script and non-HTTPS external redirects", () => {
     expect(
       getSafeRedirectUrl("javascript:alert(1)", {

@@ -11,11 +11,15 @@ import type {
 } from "@/generated/prisma/client";
 import { DocumentFilingStatus } from "@/generated/prisma/enums";
 import { aiParseFilingReply } from "@/utils/ai/document-filing/parse-filing-reply";
+import { createDriveProviderWithRefresh } from "@/utils/drive/provider";
 import { processFilingReply } from "./handle-filing-reply";
 
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/ai/document-filing/parse-filing-reply", () => ({
   aiParseFilingReply: vi.fn(),
+}));
+vi.mock("@/utils/drive/provider", () => ({
+  createDriveProviderWithRefresh: vi.fn(),
 }));
 vi.mock("@/utils/ai/content-sanitizer", () => ({
   emailToContentForAI: vi.fn().mockReturnValue("Update the second document"),
@@ -107,6 +111,57 @@ describe("processFilingReply", () => {
     expect(prisma.documentFiling.update).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ where: { id: "filing-2" } }),
+    );
+  });
+
+  it.each([
+    {
+      name: "creates the Cue to-delete folder when none exists",
+      existingFolders: [],
+      expectedFolderId: "new-folder",
+      expectCreate: true,
+    },
+    {
+      name: "reuses an existing pre-rename to-delete folder",
+      existingFolders: [
+        { id: "legacy-folder", name: "Inbox Zero - To Delete" },
+      ],
+      expectedFolderId: "legacy-folder",
+      expectCreate: false,
+    },
+  ])("undo $name", async ({
+    existingFolders,
+    expectedFolderId,
+    expectCreate,
+  }) => {
+    const filings = getFilingBatch();
+    prisma.documentFiling.findFirst.mockResolvedValue(filings[0]);
+    prisma.documentFiling.findMany.mockResolvedValue(filings);
+    const driveProvider = {
+      listFolders: vi.fn().mockResolvedValue(existingFolders),
+      createFolder: vi.fn().mockResolvedValue({ id: "new-folder" }),
+      moveFile: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createDriveProviderWithRefresh).mockResolvedValue(
+      driveProvider as never,
+    );
+    vi.mocked(aiParseFilingReply).mockResolvedValue({
+      actions: [{ filingId: "filing-1", action: "undo", folderPath: null }],
+      reply: "",
+    });
+
+    await processFilingReply(getReplyParams());
+
+    if (expectCreate) {
+      expect(driveProvider.createFolder).toHaveBeenCalledWith(
+        "Cue - To Delete",
+      );
+    } else {
+      expect(driveProvider.createFolder).not.toHaveBeenCalled();
+    }
+    expect(driveProvider.moveFile).toHaveBeenCalledWith(
+      "filing-1-file",
+      expectedFolderId,
     );
   });
 

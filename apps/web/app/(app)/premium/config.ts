@@ -416,7 +416,7 @@ const enterpriseTier: Tier = {
     },
   ],
   cta: "Speak to sales",
-  ctaLink: "https://www.getinboxzero.com/sales",
+  ctaLink: `mailto:${env.NEXT_PUBLIC_SUPPORT_EMAIL}`,
   mostPopular: false,
 };
 

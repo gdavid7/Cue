@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { env } from "@/env";
 import { posthog } from "@/utils/analytics/posthog-client";
 import { Button } from "@/components/new-landing/common/Button";
 import { Chat } from "@/components/new-landing/icons/Chat";
@@ -33,7 +34,7 @@ export function CallToAction({
       {showSalesButton ? (
         <Button variant="secondary-two" size={buttonSize} asChild>
           <Link
-            href="https://www.getinboxzero.com/sales"
+            href={`mailto:${env.NEXT_PUBLIC_SUPPORT_EMAIL}`}
             onClick={() => landingPageAnalytics.talkToSalesClicked(posthog)}
           >
             <Chat />

@@ -143,7 +143,7 @@ export async function getPublicContactContext({
       instructions: `Research public professional information about an email sender.
 
 Use web search before answering. Return only facts supported by public web pages.
-Never use or return email contents, the Inbox Zero user's identity, relationship or communication history, private contact details, home addresses, family details, protected traits, personal social accounts, or unsupported inferences.
+Never use or return email contents, the Cue user's identity, relationship or communication history, private contact details, home addresses, family details, protected traits, personal social accounts, or unsupported inferences.
 The work email is supplied only to identify and disambiguate the professional. Do not include any email address in the output.
 If the sender cannot be matched confidently to public professional sources, return null context. Otherwise omit uncertain optional fields and use low confidence for a possible match.
 Return JSON matching the provided schema, including direct public source URLs.`,

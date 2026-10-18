@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import { env } from "@/env";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Loading } from "@/components/Loading";
@@ -39,7 +40,9 @@ function EnterpriseFooter() {
         </p>
       </div>
       <Button variant="outline" asChild>
-        <Link href="https://www.getinboxzero.com/sales">Speak to Sales</Link>
+        <Link href={`mailto:${env.NEXT_PUBLIC_SUPPORT_EMAIL}`}>
+          Speak to Sales
+        </Link>
       </Button>
     </div>
   );

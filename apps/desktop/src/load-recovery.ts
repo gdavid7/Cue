@@ -231,7 +231,7 @@ function getDesktopRecoveryPage(targetUrl: string) {
   return `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
-<title>Inbox Zero</title><style>
+<title>Cue</title><style>
 body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #fafafa; color: #18181b; font: 16px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 main { max-width: 420px; padding: 40px; text-align: center; }
 h1 { font-size: 24px; letter-spacing: -.5px; } p { color: #52525b; line-height: 1.6; }
@@ -243,7 +243,7 @@ small { display: block; color: #71717a; }
   p, small { color: #a7a9af; }
   a { background: #fafafa; color: #18181b; }
 }
-</style></head><body><main><h1>Connecting to Inbox Zero</h1>
+</style></head><body><main><h1>Connecting to Cue</h1>
 <p>We couldn't load your mailbox. Check your connection. We'll retry automatically.</p>
 <a href="${href}">Retry now</a><small>You can also use View → Reload.</small>
 </main></body></html>`)}`;

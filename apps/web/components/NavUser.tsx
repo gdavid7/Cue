@@ -12,7 +12,6 @@ import {
   Building2Icon,
   CrownIcon,
   GiftIcon,
-  GlobeIcon,
   SettingsIcon,
 } from "lucide-react";
 import {
@@ -31,7 +30,6 @@ import { logOut } from "@/utils/user";
 import { isGoogleProvider } from "@/utils/email/provider-types";
 import { SidebarMenuButton, useSidebar } from "@/components/ui/sidebar";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { EXTENSION_URL } from "@/utils/config";
 import { useCurrentOrganization } from "@/hooks/useCurrentOrganization";
 import { env } from "@/env";
 import { Referrals } from "@/components/ReferralDialog";
@@ -152,19 +150,6 @@ export function NavUser() {
                 >
                   <Building2Icon className="mr-2 size-4" />
                   My Organization
-                </Link>
-              </DropdownMenuItem>
-            )}
-            {isGoogleProvider(provider) && (
-              <DropdownMenuItem asChild>
-                <Link
-                  href={EXTENSION_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={() => closeMobileSidebar("left-sidebar")}
-                >
-                  <GlobeIcon className="mr-2 size-4" />
-                  Install extension
                 </Link>
               </DropdownMenuItem>
             )}

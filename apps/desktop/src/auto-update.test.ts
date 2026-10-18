@@ -176,7 +176,7 @@ describe("startDesktopAutoUpdate", () => {
     expect(onUpdateReady).toHaveBeenCalledWith("0.2.0");
     expect(notificationOptions).toEqual([
       {
-        body: "Restart Inbox Zero to finish updating to 0.2.0.",
+        body: "Restart Cue to finish updating to 0.2.0.",
         title: "Update ready to install",
       },
     ]);
@@ -250,7 +250,7 @@ describe("checkForDesktopUpdatesManually", () => {
 
     expect(dialog.showMessageBox).toHaveBeenCalledWith(
       expect.objectContaining({
-        detail: "Inbox Zero 0.1.0 is the latest version.",
+        detail: "Cue 0.1.0 is the latest version.",
         message: "You're up to date",
       }),
     );
@@ -270,8 +270,8 @@ describe("checkForDesktopUpdatesManually", () => {
     expect(dialog.showMessageBox).toHaveBeenCalledWith(
       expect.objectContaining({
         detail:
-          "You can keep using Inbox Zero. Restart to Update will appear in the app menu when it's ready.",
-        message: "Downloading Inbox Zero 0.2.0",
+          "You can keep using Cue. Restart to Update will appear in the app menu when it's ready.",
+        message: "Downloading Cue 0.2.0",
       }),
     );
     expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();

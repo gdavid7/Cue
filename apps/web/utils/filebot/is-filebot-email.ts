@@ -9,7 +9,9 @@ import {
 // In prod: hello+ai@example.com
 // In dev: hello+ai-test@example.com
 const FILEBOT_SUFFIX = `ai${env.NODE_ENV === "development" ? "-test" : ""}`;
-const FILEBOT_DISPLAY_NAME = "Inbox Zero Assistant";
+const FILEBOT_DISPLAY_NAME = "Cue Assistant";
+// Notifications sent before the rename still sit in users' mailboxes.
+const LEGACY_FILEBOT_DISPLAY_NAME = "Inbox Zero Assistant";
 // Subjects written by utils/drive/filing-notifications.ts. Matched as a fallback
 // because some providers drop the Reply-To and From display name on replies.
 const FILEBOT_NOTIFICATION_SUBJECT =
@@ -110,7 +112,10 @@ export function isFilebotNotificationMessage({
   if (!toEmails.includes(normalizedUserEmail)) return false;
 
   const fromName = extractNameFromEmail(from).trim().toLowerCase();
-  return fromName === FILEBOT_DISPLAY_NAME.toLowerCase();
+  return (
+    fromName === FILEBOT_DISPLAY_NAME.toLowerCase() ||
+    fromName === LEGACY_FILEBOT_DISPLAY_NAME.toLowerCase()
+  );
 }
 
 /**

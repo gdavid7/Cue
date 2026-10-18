@@ -171,7 +171,7 @@ describe("stripTraceUrlQueries", () => {
 describe("diagnosticsFolderName", () => {
   it("avoids characters that Windows rejects in file names", () => {
     expect(diagnosticsFolderName(new Date("2026-09-24T10:11:12.345Z"))).toBe(
-      "Inbox-Zero-Diagnostics-2026-09-24T10-11-12",
+      "Cue-Diagnostics-2026-09-24T10-11-12",
     );
   });
 });
