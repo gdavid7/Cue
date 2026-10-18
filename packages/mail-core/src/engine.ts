@@ -1010,6 +1010,10 @@ export function createMailEngine(input: {
   // A typed search shows what the provider's own search matched next to what
   // the store matches itself, for as long as a view keeps the search open.
   function withProviderMatches(query: ConversationQuery): ConversationQuery {
+    const typed = extractProviderSearches(query.predicate).some(
+      (search) => search.kind === "search",
+    );
+    if (!typed) return query;
     return {
       ...query,
       predicate: resolveSearchPredicates(query.predicate, (search) =>
