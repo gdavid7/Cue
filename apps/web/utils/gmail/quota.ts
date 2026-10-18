@@ -545,6 +545,7 @@ export async function admitGmailCall({
   // What sync and background hold here would only delay it; their unspent
   // reservations are cut with its own round trip.
   if (!lane) forgetLanes(emailAccountId, ["sync", "background"]);
+
   const waitKey = context.caller === ENGINE_SCAN_CALLER ? "scan" : "";
   const usageField = `${priority}:${context.caller}`;
   const admittedHere = () => {
@@ -849,7 +850,12 @@ export async function setGmailInitialSync(
  */
 export async function logGmailQuotaUsage() {
   logGateSummary();
-  if (unsummarizedAccounts.size === 0) return;
+  // A request's end may be the instance's last moment. Notes written with a
+  // summary claim below are taken first; this writes whatever is left.
+  if (unsummarizedAccounts.size === 0) {
+    if (pendingNoteFields > 0) await flushNotes();
+    return;
+  }
   const minute = minuteOf(Date.now());
   await Promise.all(
     [...unsummarizedAccounts].map(async ([emailAccountId, lastMinute]) => {
@@ -873,7 +879,6 @@ export async function logGmailQuotaUsage() {
       }
     }),
   );
-  // A request's end may be the instance's last moment.
   if (pendingNoteFields > 0) await flushNotes();
 }
 
@@ -884,6 +889,8 @@ export async function logGmailQuotaUsage() {
  */
 export function resetGmailQuotaInstanceState() {
   lanes.clear();
+  unsummarizedAccounts.clear();
+  summaryCheckedMinute.clear();
   pendingNotes.clear();
   pendingReleases.clear();
   pendingNoteFields = 0;

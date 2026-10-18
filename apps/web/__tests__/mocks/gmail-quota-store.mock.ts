@@ -22,7 +22,10 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
   const blocks = new Map<string, number>();
   const usage = new Map<string, Record<string, number>>();
   const budgets = new Map<string, { perMinute: number; at: number }>();
-  const trailing = new Map<string, Array<{ at: number; cost: number }>>();
+  const trailing = new Map<
+    string,
+    Array<{ at: number; cost: number; id?: string }>
+  >();
   const trailingUnits = (key: string, windowMs: number) => {
     const recent = (trailing.get(key) ?? []).filter(
       (entry) => entry.at > Date.now() - windowMs,
@@ -50,6 +53,19 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
           usageKey: input.usageKey,
         })),
       );
+      for (const { reservation, kept } of input.release ?? []) {
+        const sent = trailing.get(input.budget.trailingKey) ?? [];
+        trailing.set(
+          input.budget.trailingKey,
+          sent.flatMap((entry) =>
+            entry.id !== reservation
+              ? [entry]
+              : kept > 0
+                ? [{ at: entry.at, cost: kept }]
+                : [],
+          ),
+        );
+      }
       for (const { reservation, kept, soonerMs } of input.release ?? []) {
         const entries = windows.get(input.pace.key) ?? [];
         const held = entries.find((entry) => entry.id === reservation);
@@ -193,6 +209,10 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
       recent.sort((a, b) => a.at - b.at);
       trailingUnits(budget.trailingKey, budget.trailingWindowMs);
       trailing.get(budget.trailingKey)?.push({ at: now, cost: used });
+      if (reservation)
+        trailing
+          .get(budget.trailingKey)
+          ?.push({ at: now, cost: ahead, id: reservation });
       const fields = usage.get(input.usageKey) ?? {};
       fields[input.usageField] = (fields[input.usageField] ?? 0) + input.cost;
       for (const entry of admittedQueued)

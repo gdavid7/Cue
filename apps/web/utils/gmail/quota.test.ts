@@ -1441,7 +1441,9 @@ describe("Gmail quota gate", () => {
       await logGmailQuotaUsage();
       resetGmailQuotaInstanceState();
 
+      // The next instance to meter the account reports the minute.
       await vi.advanceTimersByTimeAsync(60_000);
+      await interactive("account-short-lived", async () => "thread");
       await logGmailQuotaUsage();
       const summary = info.mock.calls
         .map(([line]) => String(line))
@@ -1453,6 +1455,39 @@ describe("Gmail quota gate", () => {
       expect(JSON.parse(summary!.slice(summary!.indexOf("{")))).toMatchObject({
         deferredByCaller: [{ caller: "user/inbox-insights", calls: 2 }],
       });
+    });
+
+    it("writes a count made after another request already summarized the account", async () => {
+      vi.setSystemTime(new Date("2026-10-14T19:00:59.500Z"));
+      const account = "account-late-count";
+      const background = (cost: number) =>
+        runWithGmailQuota(
+          { caller: "user/inbox-insights", priority: "background" },
+          () =>
+            meterGmailCall({ emailAccountId: account, cost }, async () => "x"),
+        );
+      // Background's second is full, so the next call waits on the pace...
+      await background(80);
+      const waiting = expect(background(20)).rejects.toBeInstanceOf(
+        GmailCallDeferredError,
+      );
+      await vi.advanceTimersByTimeAsync(600);
+      // ...while another request ends in the next minute and summarizes it,
+      await logGmailQuotaUsage();
+      // and a first sync starts, so the waiting call is deferred when it wakes.
+      await setGmailInitialSync(account, true);
+      await vi.advanceTimersByTimeAsync(1000);
+      await waiting;
+
+      const note = vi.spyOn(gmailQuotaStore, "note");
+      // The waiting call's own request ends, and the instance with it.
+      await logGmailQuotaUsage();
+      expect(note.mock.calls.flatMap(([notes]) => notes)).toContainEqual(
+        expect.objectContaining({
+          field: "deferred:user/inbox-insights",
+          amount: 1,
+        }),
+      );
     });
 
     it("lets every caller waiting on a shared round trip through when the store refuses it", async () => {

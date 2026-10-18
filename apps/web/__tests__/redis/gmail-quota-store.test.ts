@@ -456,11 +456,11 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
         ahead: 40,
         reservation: expect.stringContaining(":ahead:40"),
       });
-      // Reserved units are not counted as sent.
+      // A reservation counts as sent until it is cut down.
       const trailing = await redis!.zrange(keys.trailing, "0", "-1");
       expect(
-        trailing.map((member) => Number(member.split(":").at(-1))),
-      ).toEqual([10]);
+        trailing.map((member) => Number(member.split(":").at(-1))).sort(),
+      ).toEqual([10, 40]);
       const reservation = (await redis!.zrange(keys.pace, "0", "-1")).find(
         (member) => member.includes(":ahead:"),
       );
@@ -531,6 +531,9 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       expect(Number(await redis!.zscore(keys.pace, kept))).toBe(
         reservedAt - 300,
       );
+      // The trailing minute keeps the 15 spent, not the 40 reserved.
+      expect(await redis!.zscore(keys.trailing, first.reservation!)).toBeNull();
+      expect(await redis!.zscore(keys.trailing, kept)).not.toBeNull();
 
       // With the second blocker set, its own defer time comes back.
       await gmailQuotaStore.block({ key: other, ms: 60_000 });

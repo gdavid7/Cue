@@ -193,6 +193,14 @@ for r = 0, releaseCount - 1 do
       redis.call('ZADD', KEYS[3], tonumber(score) - sooner, member .. ':kept:' .. kept)
     end
   end
+  -- The trailing minute keeps what was sent from it, where it was reserved.
+  local reservedAt = redis.call('ZSCORE', KEYS[8], member)
+  if reservedAt then
+    redis.call('ZREM', KEYS[8], member)
+    if kept > 0 then
+      redis.call('ZADD', KEYS[8], reservedAt, member .. ':kept:' .. kept)
+    end
+  end
 end
 local budget = redis.call('HMGET', KEYS[7], 'perMinute', 'at')
 local perMinute = tonumber(budget[1])
@@ -300,8 +308,10 @@ if ahead > 0 then
   redis.call('ZADD', KEYS[3], now + aheadLease, reservation)
 end
 redis.call('PEXPIRE', KEYS[3], paceWindow * 2 + aheadLease)
--- Only what was sent: a cut follows what Gmail accepted, not what was held.
+-- A cut follows what was sent. A reservation counts as sent until a release
+-- cuts it down to what was spent from it.
 redis.call('ZADD', KEYS[8], now, seq .. ':' .. used)
+if ahead > 0 then redis.call('ZADD', KEYS[8], now, reservation) end
 redis.call('ZREMRANGEBYSCORE', KEYS[8], '-inf', now - trailingWindow)
 redis.call('PEXPIRE', KEYS[8], trailingWindow * 2)
 redis.call('HINCRBY', KEYS[2], ARGV[5], cost)
