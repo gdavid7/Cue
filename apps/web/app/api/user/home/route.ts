@@ -2,6 +2,7 @@ import { after, NextResponse } from "next/server";
 import { recordActiveDay } from "@/utils/analytics/activation";
 import { withEmailProvider } from "@/utils/middleware";
 import { getHomeData } from "@/utils/home/get-home";
+import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 
 export type GetHomeResponse = Awaited<ReturnType<typeof getHomeData>>;
 
@@ -10,10 +11,11 @@ export const maxDuration = 30;
 export const GET = withEmailProvider(
   "user/home",
   async (request) => {
-    const { emailAccountId } = request.auth;
+    const { emailAccountId, userId } = request.auth;
     const home = await getHomeData({
       emailAccountId,
       userEmail: request.auth.email,
+      ownAddresses: await ownAddresses(userId, request.auth.email),
       emailProvider: request.emailProvider,
       logger: request.logger,
       // "Today" and "after 5 pm" are the browser's, which the server can't see.
@@ -24,6 +26,13 @@ export const GET = withEmailProvider(
   },
   { maxDuration },
 );
+
+// Today still loads when the addresses can't be read; it then checks the
+// account's own address only.
+async function ownAddresses(userId: string, email: string) {
+  const addresses = await getUserOwnAddresses(userId).catch(() => []);
+  return [email, ...addresses];
+}
 
 function validTimeZone(value: string | null) {
   if (!value) return;

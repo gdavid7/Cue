@@ -4,10 +4,10 @@ import type { CalendarEvent } from "@/utils/calendar/event-types";
 import { isExaSearchEnabled, searchExa } from "@/utils/exa/search";
 import type { Logger } from "@/utils/logger";
 import { redis } from "@/utils/redis";
+import { MEETING_NEWS_SHOWN } from "@/utils/home/merge-home";
 import { domainOf } from "@/utils/thread-context/linked-pages";
 
 const WINDOW_DAYS = 5;
-const MAX_MEETINGS = 3;
 const NEWS_RESULTS = 3;
 const NEWS_MAX_AGE_DAYS = 14;
 const CACHE_TTL_SECONDS = 4 * 60 * 60;
@@ -53,7 +53,7 @@ export async function getMeetingNews({
 
   const meetings = meetingOrganizations(events, userEmail).slice(
     0,
-    MAX_MEETINGS,
+    MEETING_NEWS_SHOWN,
   );
   const withNews = await Promise.all(
     meetings.map(async ({ event, organization }) => ({
