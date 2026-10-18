@@ -552,7 +552,8 @@ export function getMockOrganizationMembership({
 
 /**
  * Asserts a nested Prisma `rules` create turns reply tracking on: every
- * conversation status rule, enabled, with no mailbox actions.
+ * conversation status rule, enabled, with no mailbox actions beyond To
+ * Reply's draft, which starts Auto draft replies on.
  */
 export function expectReplyTrackingOn(rules: unknown) {
   const created = (rules as { create?: unknown[] } | undefined)?.create ?? [];
@@ -573,6 +574,13 @@ export function expectReplyTrackingOn(rules: unknown) {
       SystemType.AWAITING_REPLY,
       SystemType.FYI,
       SystemType.TO_REPLY,
-    ].map((systemType) => ({ systemType, enabled: true, actions: undefined })),
+    ].map((systemType) => ({
+      systemType,
+      enabled: true,
+      actions:
+        systemType === SystemType.TO_REPLY
+          ? { create: [{ type: ActionType.DRAFT_EMAIL }] }
+          : undefined,
+    })),
   );
 }
