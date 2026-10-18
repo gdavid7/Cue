@@ -406,7 +406,7 @@ export function MailShell() {
     settings?.layout === MailLayout.SPLIT ? "split" : "list";
   // A split reader needs the room `lg` gives it; below that the saved choice
   // waits, rather than leaving a phone a reader a hundred pixels wide.
-  const canSplit = !isAllAccounts && isLargeScreen;
+  const canSplit = isLargeScreen;
   const layout = canSplit ? accountLayout : "list";
   const expandedPreview = settings?.expandedPreview ?? false;
 
