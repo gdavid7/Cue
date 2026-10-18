@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import prisma from "@/utils/prisma";
 import { withEmailAccount } from "@/utils/middleware";
+import { calendarConnectionsWhere } from "@/utils/calendar/connections";
+import { onePerExternalAccount } from "@/utils/user/owned-by-same-user";
 
 export type GetCalendarsResponse = Awaited<ReturnType<typeof getData>>;
 
@@ -12,38 +14,38 @@ export const GET = withEmailAccount("user/calendars", async (request) => {
 });
 
 async function getData({ emailAccountId }: { emailAccountId: string }) {
-  const emailAccount = await prisma.emailAccount.findUnique({
-    where: { id: emailAccountId },
-    select: {
-      timezone: true,
-      calendarBookingLink: true,
-      calendarConnections: {
-        select: {
-          id: true,
-          email: true,
-          provider: true,
-          isConnected: true,
-          calendars: {
-            select: {
-              id: true,
-              name: true,
-              isEnabled: true,
-              primary: true,
-              description: true,
-              timezone: true,
-            },
-            orderBy: {
-              name: "asc",
-            },
+  const [emailAccount, connections] = await Promise.all([
+    prisma.emailAccount.findUnique({
+      where: { id: emailAccountId },
+      select: { timezone: true, calendarBookingLink: true },
+    }),
+    prisma.calendarConnection.findMany({
+      where: calendarConnectionsWhere(emailAccountId),
+      select: {
+        id: true,
+        email: true,
+        provider: true,
+        isConnected: true,
+        calendars: {
+          select: {
+            id: true,
+            name: true,
+            isEnabled: true,
+            primary: true,
+            description: true,
+            timezone: true,
+          },
+          orderBy: {
+            name: "asc",
           },
         },
-        orderBy: { createdAt: "desc" },
       },
-    },
-  });
+      orderBy: { createdAt: "desc" },
+    }),
+  ]);
 
   return {
-    connections: emailAccount?.calendarConnections || [],
+    connections: onePerExternalAccount(connections),
     timezone: emailAccount?.timezone || null,
     calendarBookingLink: emailAccount?.calendarBookingLink || null,
   };

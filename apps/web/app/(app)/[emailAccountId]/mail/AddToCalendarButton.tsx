@@ -80,7 +80,7 @@ function AddToCalendarPopover({
       onSuccess: ({ data }) => {
         setOpen(false);
         toastSuccessWithLink({
-          description: `Added to calendar: ${data?.title ?? title}`,
+          description: `Added to ${data?.calendar ? `${data.calendar} calendar` : "calendar"}: ${data?.title ?? title}`,
           link: data?.eventUrl ? { label: "Open", href: data.eventUrl } : null,
         });
       },

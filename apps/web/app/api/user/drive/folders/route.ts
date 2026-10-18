@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import prisma from "@/utils/prisma";
+import {
+  onePerExternalAccount,
+  ownedBySameUser,
+} from "@/utils/user/owned-by-same-user";
 import { withEmailAccount } from "@/utils/middleware";
 import { createDriveProviderWithRefresh } from "@/utils/drive/provider";
 import { SafeError } from "@/utils/error";
@@ -27,26 +31,29 @@ async function getData({
   emailAccountId: string;
   logger: Logger;
 }) {
-  const emailAccount = await prisma.emailAccount.findUnique({
-    where: { id: emailAccountId },
-    select: {
-      driveConnections: {
-        where: { isConnected: true },
-      },
-      filingFolders: {
-        select: {
-          id: true,
-          folderId: true,
-          folderName: true,
-          folderPath: true,
-          driveConnectionId: true,
-          driveConnection: {
-            select: { provider: true },
+  const [emailAccount, connectedDrives] = await Promise.all([
+    prisma.emailAccount.findUnique({
+      where: { id: emailAccountId },
+      select: {
+        filingFolders: {
+          select: {
+            id: true,
+            folderId: true,
+            folderName: true,
+            folderPath: true,
+            driveConnectionId: true,
+            driveConnection: {
+              select: { provider: true },
+            },
           },
         },
       },
-    },
-  });
+    }),
+    // Drives belong to the person, so any of their mailboxes can file into one.
+    prisma.driveConnection.findMany({
+      where: { ...ownedBySameUser(emailAccountId), isConnected: true },
+    }),
+  ]);
 
   // Fetch top-level folders from each drive (depth 1 only)
   const availableFolders: Array<{
@@ -61,7 +68,7 @@ async function getData({
   const connectionErrors: Array<{ provider: string; error: unknown }> = [];
   const providersByConnectionId = new Map<string, DriveProvider>();
 
-  const driveConnections = emailAccount?.driveConnections ?? [];
+  const driveConnections = onePerExternalAccount(connectedDrives);
 
   for (const connection of driveConnections) {
     try {

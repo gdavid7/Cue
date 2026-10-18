@@ -5,6 +5,7 @@ import { actionClient } from "@/utils/actions/safe-action";
 import { upsertRuleAttachmentSourcesBody } from "@/utils/actions/attachment-sources.validation";
 import { getAttachmentSourceKey } from "@/utils/attachments/source-schema";
 import prisma from "@/utils/prisma";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import { SafeError } from "@/utils/error";
 import { checkHasAccess } from "@/utils/premium/server";
 
@@ -40,7 +41,7 @@ export const upsertRuleAttachmentSourcesAction = actionClient
         ? await prisma.driveConnection.findMany({
             where: {
               id: { in: sources.map((source) => source.driveConnectionId) },
-              emailAccountId,
+              ...ownedBySameUser(emailAccountId),
               isConnected: true,
             },
             select: { id: true },

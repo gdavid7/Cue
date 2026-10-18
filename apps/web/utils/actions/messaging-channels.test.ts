@@ -6,6 +6,7 @@ import {
 } from "@/generated/prisma/enums";
 import {
   createMessagingLinkCodeAction,
+  disconnectChannelAction,
   toggleRuleChannelAction,
   updateSlackRouteAction,
   updateMessagingFeatureRouteAction,
@@ -625,5 +626,54 @@ describe("toggleRuleChannelAction", () => {
       "Please reconnect Teams before configuring notifications.",
     );
     expect(prisma.action.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("disconnectChannelAction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      email: "user@example.com",
+      account: { userId: "user-1", provider: "google" },
+    } as any);
+    prisma.$transaction.mockResolvedValue([] as any);
+  });
+
+  it("disconnects the workspace from every mailbox of the person that shares it", async () => {
+    prisma.messagingChannel.findUnique.mockResolvedValue({
+      provider: "SLACK",
+      teamId: "T1",
+      providerUserId: "U1",
+    } as any);
+    prisma.messagingChannel.findMany.mockResolvedValue([
+      { id: "channel-1" },
+      { id: "channel-other-mailbox" },
+    ] as any);
+
+    const result = await disconnectChannelAction("email-account-1" as any, {
+      channelId: "channel-1",
+    });
+
+    expect(result?.serverError).toBeUndefined();
+    expect(prisma.messagingChannel.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ["channel-1", "channel-other-mailbox"] } },
+      data: { isConnected: false },
+    });
+    expect(prisma.messagingRoute.deleteMany).toHaveBeenCalledWith({
+      where: {
+        messagingChannelId: { in: ["channel-1", "channel-other-mailbox"] },
+      },
+    });
+  });
+
+  it("refuses a channel the mailbox does not hold", async () => {
+    prisma.messagingChannel.findUnique.mockResolvedValue(null);
+
+    const result = await disconnectChannelAction("email-account-1" as any, {
+      channelId: "someone-elses",
+    });
+
+    expect(result?.serverError).toBe("Messaging channel not found");
+    expect(prisma.messagingChannel.updateMany).not.toHaveBeenCalled();
   });
 });

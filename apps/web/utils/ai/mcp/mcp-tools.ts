@@ -10,10 +10,8 @@ import { createScopedLogger, type Logger } from "@/utils/logger";
 import { createMcpTransport } from "@/utils/mcp/transport";
 import { getMcpServerConnection } from "@/utils/mcp/server-connection";
 import { isValidMcpToolName } from "@/utils/mcp/tool-name";
-import {
-  onePerIntegration,
-  ownedBySameUser,
-} from "@/utils/mcp/user-connections";
+import { onePerIntegration } from "@/utils/mcp/user-connections";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 
 type MCPClient = Awaited<ReturnType<typeof createMCPClient>>;
 

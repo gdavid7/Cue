@@ -7,6 +7,7 @@ import { createCalendarEventProviders } from "@/utils/calendar/event-provider";
 import { addToCalendar } from "@/utils/calendar/add-to-calendar";
 import { SafeError } from "@/utils/error";
 import prisma from "@/utils/prisma";
+import { calendarConnectionsWhere } from "@/utils/calendar/connections";
 
 const getCalendarEventsInputSchema = z.object({
   startDate: z
@@ -60,7 +61,10 @@ export const getCalendarEventsTool = ({
 
         if (providers.length === 0) {
           const disconnected = await prisma.calendarConnection.count({
-            where: { emailAccountId, isConnected: false },
+            where: {
+              ...calendarConnectionsWhere(emailAccountId),
+              isConnected: false,
+            },
           });
           return {
             error: disconnected

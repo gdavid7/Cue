@@ -432,5 +432,65 @@ describe("getUnifiedCalendarAvailability", () => {
         }),
       ).rejects.toThrow("provider down");
     });
+
+    it("fails closed only for the calendars it is told to, skipping another that is down", async () => {
+      // A booking link writes to the work calendar; the person's personal
+      // calendar with an expired token must not take the link down.
+      vi.mocked(prisma.calendarConnection.findMany).mockResolvedValue([
+        getCalendarConnection({ provider: "google", calendarIds: ["cal-1"] }),
+        getCalendarConnection({
+          provider: "microsoft",
+          calendarIds: ["cal-2"],
+          emailAccountId: "work-account-id",
+        }),
+      ]);
+      vi.mocked(createGoogleAvailabilityProvider).mockReturnValue({
+        fetchBusyPeriods: vi.fn().mockRejectedValue(new Error("expired")),
+      } as any);
+      const busy = {
+        start: "2025-11-17T10:00:00Z",
+        end: "2025-11-17T11:00:00Z",
+      };
+      const microsoftProvider = {
+        fetchBusyPeriods: vi.fn().mockResolvedValue([busy]),
+      };
+      vi.mocked(createMicrosoftAvailabilityProvider).mockReturnValue(
+        microsoftProvider as any,
+      );
+
+      const result = await getUnifiedCalendarAvailability({
+        emailAccountId,
+        startDate: new Date("2025-11-17T00:00:00Z"),
+        endDate: new Date("2025-11-17T23:59:59Z"),
+        timezone: "UTC",
+        logger,
+        failClosed: (connection) => connection.id === "conn-microsoft",
+      });
+
+      expect(result).toHaveLength(1);
+      expect(microsoftProvider.fetchBusyPeriods).toHaveBeenCalledWith(
+        expect.objectContaining({ failOnCalendarError: true }),
+      );
+    });
+
+    it("still fails closed when the calendar it must check is down", async () => {
+      vi.mocked(prisma.calendarConnection.findMany).mockResolvedValue([
+        getCalendarConnection({ provider: "google", calendarIds: ["cal-1"] }),
+      ]);
+      vi.mocked(createGoogleAvailabilityProvider).mockReturnValue({
+        fetchBusyPeriods: vi.fn().mockRejectedValue(new Error("expired")),
+      } as any);
+
+      await expect(
+        getUnifiedCalendarAvailability({
+          emailAccountId,
+          startDate: new Date("2025-11-17T00:00:00Z"),
+          endDate: new Date("2025-11-17T23:59:59Z"),
+          timezone: "UTC",
+          logger,
+          failClosed: (connection) => connection.id === "conn-google",
+        }),
+      ).rejects.toThrow("expired");
+    });
   });
 });

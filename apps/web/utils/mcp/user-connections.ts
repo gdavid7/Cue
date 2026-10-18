@@ -1,23 +1,11 @@
-import type { Prisma } from "@/generated/prisma/client";
 import prisma from "@/utils/prisma";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 
 // Connected apps belong to the person, not to one mailbox: an app connected
 // from any of their email accounts serves all of them. Each connection stays on
 // the account it was made from, because that account is the identity its
 // provider (Composio's user_id) and stored credentials know, so anything that
 // acts on a connection uses its own emailAccountId.
-
-/**
- * Matches rows (connections or custom servers) owned by any email account of
- * the person who owns `emailAccountId`, and never another person's.
- */
-export function ownedBySameUser(emailAccountId: string): {
-  emailAccount: Prisma.EmailAccountWhereInput;
-} {
-  return {
-    emailAccount: { user: { emailAccounts: { some: { id: emailAccountId } } } },
-  };
-}
 
 /**
  * One connection per app. Should a person have connected the same app from

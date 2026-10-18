@@ -12,6 +12,7 @@ import {
 import { getSlotIntervalMinutes } from "@/utils/booking/policy";
 import prisma from "@/utils/prisma";
 import { BookingLinkLocationType } from "@/generated/prisma/enums";
+import { calendarConnectionsWhere } from "@/utils/calendar/connections";
 import {
   getProviderVideoLocationType,
   isProviderVideoLocationType,
@@ -295,7 +296,10 @@ async function getOwnedDestinationCalendar({
     where: {
       id: destinationCalendarId,
       isEnabled: true,
-      connection: { emailAccountId, isConnected: true },
+      connection: {
+        ...calendarConnectionsWhere(emailAccountId),
+        isConnected: true,
+      },
     },
     select: {
       id: true,

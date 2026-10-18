@@ -50,6 +50,7 @@ export async function addToCalendar({
       ? formatDate(new Date(times.endTime.getTime() - DAY_MS))
       : times.endTime.toISOString(),
     eventUrl: created.eventUrl ?? null,
+    calendar: created.calendarAccountEmail,
   };
 }
 

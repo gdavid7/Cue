@@ -1,6 +1,7 @@
 import type { z } from "zod";
 import { NextResponse } from "next/server";
 import prisma from "@/utils/prisma";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import { withEmailAccount } from "@/utils/middleware";
 import { createDriveProviderWithRefresh } from "@/utils/drive/provider";
 import { SafeError } from "@/utils/error";
@@ -49,7 +50,7 @@ async function getData({
   const driveConnection = await prisma.driveConnection.findFirst({
     where: {
       id: driveConnectionId,
-      emailAccountId,
+      ...ownedBySameUser(emailAccountId),
       isConnected: true,
     },
   });

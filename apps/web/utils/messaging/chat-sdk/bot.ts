@@ -88,6 +88,10 @@ import {
   getEmailUrlForOptionalMessage,
 } from "@/utils/url";
 import { getEmailAccountWithAi } from "@/utils/user/get";
+import {
+  ORIGINAL_LINK_FIRST,
+  shareConnectedChannel,
+} from "@/utils/messaging/shared-channels";
 
 const MAX_CHAT_CONTEXT_MESSAGES = 12;
 const CHAT_SDK_STATE_KEY_PREFIX = "inbox-zero:chat-sdk";
@@ -1888,6 +1892,15 @@ async function handleMessagingLinkCommand({
     },
   });
 
+  await shareConnectedChannel({
+    channelId: messagingChannel.id,
+    logger,
+  }).catch((error) => {
+    logger.error("Failed to share messaging channel with other mailboxes", {
+      error,
+    });
+  });
+
   await postMessagingThreadMessage({
     thread,
     logger,
@@ -2092,7 +2105,7 @@ async function handleUnsupportedCommand({
   return true;
 }
 
-async function resolveMessagingContext({
+export async function resolveMessagingContext({
   adapters,
   thread,
   message,
@@ -2161,6 +2174,7 @@ async function resolveSlackMessagingContext({
       providerUserId: userId,
       ...(teamId ? { teamId } : {}),
     },
+    orderBy: ORIGINAL_LINK_FIRST,
     select: {
       id: true,
       accessToken: true,
@@ -2221,7 +2235,11 @@ async function resolveSlackMessagingContext({
   return {
     provider: "slack",
     emailAccountId: messagingChannel.emailAccountId,
-    hasMultipleAccounts: false,
+    // Replies in a DM name the mailbox once the person has several; team
+    // channels map to one mailbox through their route and never show it.
+    hasMultipleAccounts:
+      thread.isDM &&
+      new Set(candidates.map((candidate) => candidate.emailAccountId)).size > 1,
     hasUnsupportedAttachments,
     imageParts,
     messageText,
@@ -2271,7 +2289,7 @@ async function resolveLinkedProviderMessagingContext({
     select: {
       emailAccountId: true,
     },
-    orderBy: { updatedAt: "desc" },
+    orderBy: ORIGINAL_LINK_FIRST,
   });
 
   const candidates =
@@ -2286,7 +2304,7 @@ async function resolveLinkedProviderMessagingContext({
           select: {
             emailAccountId: true,
           },
-          orderBy: { updatedAt: "desc" },
+          orderBy: ORIGINAL_LINK_FIRST,
         });
 
   if (candidates.length === 0) {

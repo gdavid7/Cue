@@ -6,10 +6,8 @@ import {
   ConnectionExpiredError,
 } from "@/utils/mcp/providers/types";
 import { parseUrl } from "@/utils/thread-context/linked-pages";
-import {
-  onePerIntegration,
-  ownedBySameUser,
-} from "@/utils/mcp/user-connections";
+import { onePerIntegration } from "@/utils/mcp/user-connections";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";

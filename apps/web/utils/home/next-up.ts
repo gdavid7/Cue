@@ -7,11 +7,10 @@ import type { Logger } from "@/utils/logger";
 import { findIntegration } from "@/utils/mcp/integrations";
 import { connectionExecutor } from "@/utils/mcp/provider-connection";
 import { getIntegrationProvider } from "@/utils/mcp/providers/registry";
-import {
-  onePerIntegration,
-  ownedBySameUser,
-} from "@/utils/mcp/user-connections";
+import { onePerIntegration } from "@/utils/mcp/user-connections";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import prisma from "@/utils/prisma";
+import { calendarConnectionsWhere } from "@/utils/calendar/connections";
 import { NEXT_UP_SHOWN, sortByDue } from "@/utils/home/today-constants";
 import { redis } from "@/utils/redis";
 import {
@@ -102,7 +101,7 @@ export async function getNextUp({
   const tomorrow = addDays(today, 1);
   const dayAfter = addDays(today, 2);
 
-  const [calendar, deadlines] = await Promise.all([
+  const [calendar, deadlines, calendarAccounts] = await Promise.all([
     upcomingEvents({ emailAccountId, now, until: dayAfter, logger }),
     getDeadlines({
       emailAccountId,
@@ -111,12 +110,22 @@ export async function getNextUp({
       timeZone,
       logger,
     }),
+    prisma.calendarConnection.findMany({
+      where: calendarConnectionsWhere(emailAccountId),
+      select: { email: true },
+    }),
   ]);
   const suggestion = deadlines.connected
     ? null
     : await connectSuggestion({ emailAccountId, now, logger });
 
-  const self = new Set(ownAddresses.map((address) => address.toLowerCase()));
+  // Events come from all of the person's calendars, so a decline by any of
+  // their connected addresses or the calendars' own addresses counts.
+  const self = new Set(
+    [...ownAddresses, ...calendarAccounts.map((account) => account.email)].map(
+      (email) => email.toLowerCase(),
+    ),
+  );
   const events = calendar.events.filter(
     (event) =>
       !event.allDay &&

@@ -8,22 +8,28 @@ import {
   isGoogleProvider,
   isMicrosoftProvider,
 } from "@/utils/email/provider-types";
+import { calendarConnectionsWhere } from "@/utils/calendar/connections";
+import { onePerExternalAccount } from "@/utils/user/owned-by-same-user";
 
 /**
- * Create calendar event providers for all connected calendars.
+ * Create calendar event providers for all of the person's connected calendars.
  * Fetches calendar connections once and creates providers that can be reused.
  */
 export async function createCalendarEventProviders(
   emailAccountId: string,
   logger: Logger,
+  options?: { ownConnectionsOnly?: boolean },
 ): Promise<CalendarEventProvider[]> {
-  const connections = await prisma.calendarConnection.findMany({
+  const allConnections = await prisma.calendarConnection.findMany({
     where: {
-      emailAccountId,
+      ...calendarConnectionsWhere(emailAccountId, options),
       isConnected: true,
     },
+    orderBy: { createdAt: "asc" },
     select: {
       id: true,
+      emailAccountId: true,
+      email: true,
       provider: true,
       accessToken: true,
       refreshToken: true,
@@ -33,6 +39,7 @@ export async function createCalendarEventProviders(
       calendars: { where: { isEnabled: true }, select: { calendarId: true } },
     },
   });
+  const connections = onePerExternalAccount(allConnections);
 
   if (connections.length === 0) {
     logger.info("No calendar connections found", { emailAccountId });
@@ -53,7 +60,7 @@ export async function createCalendarEventProviders(
               (calendar) => calendar.calendarId,
             ),
           },
-          emailAccountId,
+          emailAccountId: connection.emailAccountId,
           logger,
         }),
       );
@@ -73,7 +80,7 @@ export async function createCalendarEventProviders(
 export async function hasUsableCalendarConnection(emailAccountId: string) {
   const connections = await prisma.calendarConnection.findMany({
     where: {
-      emailAccountId,
+      ...calendarConnectionsWhere(emailAccountId),
       isConnected: true,
     },
     select: {

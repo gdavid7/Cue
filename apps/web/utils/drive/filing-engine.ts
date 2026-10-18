@@ -1,4 +1,5 @@
 import prisma from "@/utils/prisma";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import type { DriveConnection } from "@/generated/prisma/client";
 import type { EmailProvider } from "@/utils/email/types";
 import type { ParsedMessage, Attachment } from "@/utils/types";
@@ -98,11 +99,14 @@ export async function processAttachment({
 
     const [existingFiling, driveConnections] = await Promise.all([
       findAttachmentFiling(attachmentLookup),
+      // Filing folders may sit in a drive connected from another of the
+      // person's mailboxes.
       prisma.driveConnection.findMany({
         where: {
-          emailAccountId: emailAccount.id,
+          ...ownedBySameUser(emailAccount.id),
           isConnected: true,
         },
+        orderBy: { createdAt: "asc" },
       }),
     ]);
 

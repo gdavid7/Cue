@@ -1,7 +1,7 @@
 import { createCalendarEventProviders } from "@/utils/calendar/event-provider";
 import type { CalendarEvent } from "@/utils/calendar/event-types";
 import type { Logger } from "@/utils/logger";
-import prisma from "@/utils/prisma";
+import { countConnectedCalendars } from "@/utils/calendar/connections";
 
 export interface CalendarEventsInWindow {
   /**
@@ -26,16 +26,24 @@ export async function fetchCalendarEventsInWindow({
   timeMin,
   timeMax,
   maxResultsPerProvider,
+  ownConnectionsOnly = false,
   logger,
 }: {
   emailAccountId: string;
   timeMin: Date;
   timeMax: Date;
   maxResultsPerProvider: number;
+  /** See `calendarConnectionsWhere`: for automations that act once per calendar. */
+  ownConnectionsOnly?: boolean;
   logger: Logger;
 }): Promise<CalendarEventsInWindow> {
   logger.trace("Starting calendar event window fetch");
-  const providers = await createCalendarEventProviders(emailAccountId, logger);
+  const scope = { ownConnectionsOnly };
+  const providers = await createCalendarEventProviders(
+    emailAccountId,
+    logger,
+    scope,
+  );
   logger.trace("Created calendar event providers", {
     providerCount: providers.length,
   });
@@ -44,9 +52,10 @@ export async function fetchCalendarEventsInWindow({
   // error may already have flipped them disconnected. Reporting complete here
   // would let callers treat every booked meeting as deleted.
   if (providers.length === 0) {
-    const connectedCalendars = await prisma.calendarConnection.count({
-      where: { emailAccountId, isConnected: true },
-    });
+    const connectedCalendars = await countConnectedCalendars(
+      emailAccountId,
+      scope,
+    );
     logger.info("Completed calendar event window fetch", {
       complete: false,
       eventCount: 0,
@@ -60,9 +69,10 @@ export async function fetchCalendarEventsInWindow({
     };
   }
 
-  const connectedCalendars = await prisma.calendarConnection.count({
-    where: { emailAccountId, isConnected: true },
-  });
+  const connectedCalendars = await countConnectedCalendars(
+    emailAccountId,
+    scope,
+  );
   logger.trace("Counted connected calendars", { connectedCalendars });
 
   const results = await Promise.allSettled(
@@ -110,9 +120,14 @@ export async function fetchCalendarEventsInWindow({
     (result) => result.value.length >= maxResultsPerProvider,
   );
 
-  const events = fulfilled
-    .flatMap((result) => result.value)
-    .sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+  const eventsByCalendar = fulfilled.map((result) => result.value);
+  // Automations key their own rows by event id, so they keep every copy as
+  // before rather than one whose id could change between runs.
+  const events = (
+    ownConnectionsOnly
+      ? eventsByCalendar.flat()
+      : dropCrossCalendarDuplicates(eventsByCalendar)
+  ).sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
 
   const filteredEvents = events.filter(
     (event) => !isCancelledEventTitle(event.title),
@@ -141,6 +156,33 @@ export async function fetchCalendarEventsInWindow({
   });
 
   return { events: filteredEvents, complete };
+}
+
+// One meeting the person was invited to on two of their calendars (say their
+// work and personal accounts) comes back from both, under different ids. The
+// first calendar's copy is kept; events within one calendar are never merged.
+function dropCrossCalendarDuplicates(
+  eventsByCalendar: CalendarEvent[][],
+): CalendarEvent[] {
+  const seen = new Set<string>();
+  const kept: CalendarEvent[] = [];
+  for (const calendarEvents of eventsByCalendar) {
+    const keys = calendarEvents.map(meetingKey);
+    calendarEvents.forEach((event, index) => {
+      if (!seen.has(keys[index])) kept.push(event);
+    });
+    for (const key of keys) seen.add(key);
+  }
+  return kept;
+}
+
+function meetingKey(event: CalendarEvent) {
+  return [
+    event.startTime.getTime(),
+    event.endTime.getTime(),
+    event.title.trim().toLowerCase(),
+    event.videoConferenceLink ?? "",
+  ].join("|");
 }
 
 // Some clients keep a cancelled event on the calendar with a renamed title

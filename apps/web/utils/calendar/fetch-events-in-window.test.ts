@@ -3,10 +3,10 @@ import { createTestLogger } from "@/__tests__/helpers";
 import { createCalendarEventProviders } from "@/utils/calendar/event-provider";
 import type { CalendarEvent } from "@/utils/calendar/event-types";
 import { fetchCalendarEventsInWindow } from "@/utils/calendar/fetch-events-in-window";
-import prisma from "@/utils/prisma";
+import { countConnectedCalendars } from "@/utils/calendar/connections";
 
-vi.mock("@/utils/prisma", () => ({
-  default: { calendarConnection: { count: vi.fn() } },
+vi.mock("@/utils/calendar/connections", () => ({
+  countConnectedCalendars: vi.fn(),
 }));
 
 vi.mock("@/utils/calendar/event-provider", () => ({
@@ -26,7 +26,7 @@ const fetchParams = {
 describe("fetchCalendarEventsInWindow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(prisma.calendarConnection.count).mockResolvedValue(1);
+    vi.mocked(countConnectedCalendars).mockResolvedValue(1);
   });
 
   it("reports incomplete when no provider could be created", async () => {
@@ -45,7 +45,7 @@ describe("fetchCalendarEventsInWindow", () => {
   });
 
   it("says when no calendar is connected at all", async () => {
-    vi.mocked(prisma.calendarConnection.count).mockResolvedValue(0);
+    vi.mocked(countConnectedCalendars).mockResolvedValue(0);
     vi.mocked(createCalendarEventProviders).mockResolvedValue([]);
 
     const result = await fetchCalendarEventsInWindow(fetchParams);
@@ -58,7 +58,7 @@ describe("fetchCalendarEventsInWindow", () => {
   });
 
   it("reports incomplete when fewer providers were built than calendars are connected", async () => {
-    vi.mocked(prisma.calendarConnection.count).mockResolvedValue(2);
+    vi.mocked(countConnectedCalendars).mockResolvedValue(2);
     vi.mocked(createCalendarEventProviders).mockResolvedValue([
       fakeProvider([makeEvent("event-1")]),
     ]);
@@ -70,7 +70,7 @@ describe("fetchCalendarEventsInWindow", () => {
   });
 
   it("reports incomplete when a provider fetch fails", async () => {
-    vi.mocked(prisma.calendarConnection.count).mockResolvedValue(2);
+    vi.mocked(countConnectedCalendars).mockResolvedValue(2);
     vi.mocked(createCalendarEventProviders).mockResolvedValue([
       fakeProvider([makeEvent("event-1")]),
       {
@@ -94,12 +94,52 @@ describe("fetchCalendarEventsInWindow", () => {
     expect(result.complete).toBe(true);
     expect(result.events.map((event) => event.id)).toEqual(["event-1"]);
   });
+
+  it("shows a meeting the person was invited to on two of their calendars once", async () => {
+    vi.mocked(countConnectedCalendars).mockResolvedValue(2);
+    vi.mocked(createCalendarEventProviders).mockResolvedValue([
+      fakeProvider([makeEvent("work-copy"), makeEvent("work-only", "Retro")]),
+      fakeProvider([makeEvent("personal-copy")]),
+    ]);
+
+    const result = await fetchCalendarEventsInWindow(fetchParams);
+
+    expect(result.events.map((event) => event.id).sort()).toEqual([
+      "work-copy",
+      "work-only",
+    ]);
+    expect(createCalendarEventProviders).toHaveBeenCalledWith(
+      "account-1",
+      logger,
+      { ownConnectionsOnly: false },
+    );
+  });
+
+  it("keeps every copy for automations reading only the account's own calendars", async () => {
+    vi.mocked(countConnectedCalendars).mockResolvedValue(2);
+    vi.mocked(createCalendarEventProviders).mockResolvedValue([
+      fakeProvider([makeEvent("work-copy")]),
+      fakeProvider([makeEvent("personal-copy")]),
+    ]);
+
+    const result = await fetchCalendarEventsInWindow({
+      ...fetchParams,
+      ownConnectionsOnly: true,
+    });
+
+    expect(result.events).toHaveLength(2);
+    expect(createCalendarEventProviders).toHaveBeenCalledWith(
+      "account-1",
+      logger,
+      { ownConnectionsOnly: true },
+    );
+  });
 });
 
-function makeEvent(id: string): CalendarEvent {
+function makeEvent(id: string, title = "Planning"): CalendarEvent {
   return {
     id,
-    title: `Meeting ${id}`,
+    title,
     startTime: new Date("2026-07-29T10:30:00.000Z"),
     endTime: new Date("2026-07-29T10:55:00.000Z"),
     attendees: [],
