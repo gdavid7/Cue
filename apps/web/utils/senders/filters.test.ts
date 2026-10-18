@@ -25,8 +25,56 @@ describe("getEmailFilters", () => {
         ),
     } as unknown as EmailProvider;
 
-    await expect(getEmailFilters(provider, logger)).resolves.toEqual([]);
+    await expect(getEmailFilters(provider, logger)).resolves.toEqual({
+      filters: [],
+      available: false,
+    });
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns the filters as available when the provider answers", async () => {
+    const logger = createScopedLogger("test");
+    const filters = [{ id: "f1", criteria: { from: "a@example.com" } }];
+    const provider = {
+      getFiltersList: vi.fn().mockResolvedValue(filters),
+    } as unknown as EmailProvider;
+
+    await expect(getEmailFilters(provider, logger)).resolves.toEqual({
+      filters,
+      available: true,
+    });
+  });
+
+  it.each([
+    [
+      "a Gmail rate limit",
+      Object.assign(new Error("User-rate limit exceeded"), { code: 429 }),
+    ],
+    [
+      "missing Gmail scope",
+      Object.assign(new Error("Insufficient Permission"), {
+        cause: { errors: [{ reason: "insufficientPermissions" }] },
+      }),
+    ],
+    ["a revoked grant", new Error("invalid_grant")],
+    [
+      "Outlook throttling",
+      Object.assign(new Error("slow down"), { statusCode: 429 }),
+    ],
+  ])("logs %s as a warning, not an error, and reports unavailable", async (_name, failure) => {
+    const logger = createScopedLogger("test");
+    const errorSpy = vi.spyOn(logger, "error");
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    const provider = {
+      getFiltersList: vi.fn().mockRejectedValue(failure),
+    } as unknown as EmailProvider;
+
+    await expect(getEmailFilters(provider, logger)).resolves.toEqual({
+      filters: [],
+      available: false,
+    });
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalled();
   });
 
   it("still reports a real provider failure as an error", async () => {
@@ -37,7 +85,10 @@ describe("getEmailFilters", () => {
       getFiltersList: vi.fn().mockRejectedValue(new Error("Backend Error")),
     } as unknown as EmailProvider;
 
-    await expect(getEmailFilters(provider, logger)).resolves.toEqual([]);
+    await expect(getEmailFilters(provider, logger)).resolves.toEqual({
+      filters: [],
+      available: false,
+    });
     expect(errorSpy).toHaveBeenCalledWith(
       "Error getting email filters",
       expect.anything(),

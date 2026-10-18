@@ -77,6 +77,7 @@ describe("GET /api/user/stats/newsletters", () => {
       ],
       nextCursor: "cursor-2",
       searchedSenderStatus: undefined,
+      filtersAvailable: true,
     });
     expect(mockGetSenderEmailStats).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -85,6 +86,26 @@ describe("GET /api/user/stats/newsletters", () => {
         orderBy: "newest",
       }),
     );
+  });
+
+  it("reports filters as unavailable when the provider filters cannot be read", async () => {
+    mockEmailProvider.getFiltersList.mockRejectedValue(
+      new Error("Backend Error"),
+    );
+    const consoleErrorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+
+    const response = await GET(
+      new NextRequest("http://localhost/api/user/stats/newsletters"),
+      {} as never,
+    );
+    consoleErrorSpy.mockRestore();
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.filtersAvailable).toBe(false);
+    expect(body.newsletters[0].autoArchived).toBeUndefined();
   });
 
   it("rejects a limit below 1", async () => {
