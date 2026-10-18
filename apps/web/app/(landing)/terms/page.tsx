@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { LegalPage } from "@/components/LegalPage";
 import { BRAND_NAME, getBrandTitle } from "@/utils/branding";
+import { LEGAL } from "@/utils/legal";
 
 export const metadata: Metadata = {
   title: getBrandTitle("Terms"),
@@ -11,23 +12,21 @@ export const metadata: Metadata = {
 
 const linkClass = "underline underline-offset-4 hover:text-foreground";
 
-// DRAFT: placeholders in [BRACKETS] must be resolved by the founder before
-// this is deployed.
 export default function TermsPage() {
   return (
     <LegalPage
       title="Terms of service"
-      effectiveDate="[EFFECTIVE DATE]"
+      effectiveDate={LEGAL.effectiveDate}
       sections={[
         {
           heading: "About these terms",
           body: (
             <p>
-              These terms are an agreement between you and [OPERATOR LEGAL NAME]
-              (&quot;we&quot;, &quot;us&quot;), [OPERATOR ADDRESS], for your use
-              of {BRAND_NAME}, an AI email client. By signing in or using{" "}
-              {BRAND_NAME} you agree to them. If you do not agree, do not use{" "}
-              {BRAND_NAME}. Our{" "}
+              These terms are an agreement between you and{" "}
+              {LEGAL.operatorLegalName} (&quot;we&quot;, &quot;us&quot;),{" "}
+              {LEGAL.operatorAddress}, for your use of {BRAND_NAME}, an AI email
+              client. By signing in or using {BRAND_NAME} you agree to them. If
+              you do not agree, do not use {BRAND_NAME}. Our{" "}
               <Link href="/privacy" className={linkClass}>
                 privacy policy
               </Link>{" "}
@@ -198,11 +197,12 @@ export default function TermsPage() {
           heading: "Governing law",
           body: (
             <p>
-              These terms are governed by the laws of [GOVERNING LAW
-              JURISDICTION], without regard to conflict-of-law rules. Disputes
-              will be brought in the courts of [VENUE / COURTS], unless the law
-              of your place of residence requires otherwise. Please contact us
-              first and give us a chance to resolve a problem informally.
+              These terms are governed by the laws of{" "}
+              {LEGAL.governingLawJurisdiction}, without regard to
+              conflict-of-law rules. Disputes will be brought in the courts of{" "}
+              {LEGAL.venue}, unless the law of your place of residence requires
+              otherwise. Please contact us first and give us a chance to resolve
+              a problem informally.
             </p>
           ),
         },
@@ -234,9 +234,9 @@ export default function TermsPage() {
           heading: "Contact",
           body: (
             <p>
-              [OPERATOR LEGAL NAME], [OPERATOR ADDRESS]
+              {LEGAL.operatorLegalName}, {LEGAL.operatorAddress}
               <br />
-              Email: [SUPPORT CONTACT EMAIL]
+              Email: {LEGAL.supportContactEmail}
             </p>
           ),
         },

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { LegalPage } from "@/components/LegalPage";
 import { BRAND_NAME, getBrandTitle } from "@/utils/branding";
+import { LEGAL } from "@/utils/legal";
 
 export const metadata: Metadata = {
   title: getBrandTitle("Privacy"),
@@ -12,23 +13,28 @@ export const metadata: Metadata = {
 const linkClass = "underline underline-offset-4 hover:text-foreground";
 const listClass = "list-disc space-y-1 pl-5";
 
-// DRAFT: placeholders in [BRACKETS] and [VERIFY] notes must be resolved by the
-// founder before this is deployed.
+// Subprocessors and retention below match the code and the providers the
+// operator confirmed are in use. Sentry, PostHog, Resend, Loops and Tinybird
+// have code paths but are deliberately not listed; add them back here (and to
+// the collection and deletion text) if any is enabled in production.
+// The AI training statement assumes paid API access with Anthropic and Google;
+// Gemini's free tier can use inputs for training, so keep it on a paid plan.
 export default function PrivacyPage() {
   return (
     <LegalPage
       title="Privacy policy"
-      effectiveDate="[EFFECTIVE DATE]"
+      effectiveDate={LEGAL.effectiveDate}
       sections={[
         {
           heading: "Who we are",
           body: (
             <>
               <p>
-                {BRAND_NAME} is an AI email client operated by [OPERATOR LEGAL
-                NAME] (&quot;we&quot;, &quot;us&quot;), [OPERATOR ADDRESS].{" "}
-                {BRAND_NAME} is in private beta. This policy explains what data{" "}
-                {BRAND_NAME} handles, why, and what control you have.
+                {BRAND_NAME} is an AI email client operated by{" "}
+                {LEGAL.operatorLegalName} (&quot;we&quot;, &quot;us&quot;),{" "}
+                {LEGAL.operatorAddress}. {BRAND_NAME} is in private beta. This
+                policy explains what data {BRAND_NAME} handles, why, and what
+                control you have.
               </p>
               <ul className={listClass}>
                 <li>
@@ -71,7 +77,11 @@ export default function PrivacyPage() {
                 kept in a local mail cache in your browser. Content can also be
                 stored where it is part of something {BRAND_NAME} produced for
                 you, such as a draft, a note, a chat answer, or the reason a
-                rule ran.
+                rule ran, and for emails you send or schedule while they are
+                held for undo or sending. Short-lived caches in our Redis
+                service (recently loaded thread pages, AI summaries, research on
+                people you correspond with) expire automatically, most within a
+                day and the longest after 30 days.
               </li>
               <li>
                 <strong className="text-foreground">Calendar data.</strong>{" "}
@@ -109,10 +119,9 @@ export default function PrivacyPage() {
                 <strong className="text-foreground">
                   Usage and technical data.
                 </strong>{" "}
-                Logs, error reports and, if enabled, product analytics (pages
-                used, device, performance). Used to keep {BRAND_NAME} secure and
-                working. {BRAND_NAME} uses essential cookies for sign-in;
-                analytics, if any, depends on your cookie choices.
+                Server logs and error details. Used to keep {BRAND_NAME} secure
+                and working. {BRAND_NAME} uses essential cookies for sign-in and
+                to remember your selected mailbox.
               </li>
             </ul>
           ),
@@ -128,13 +137,19 @@ export default function PrivacyPage() {
                 settings (gmail.settings.basic), read and edit calendar events
                 and free/busy (calendar.readonly, calendar.events,
                 calendar.freebusy), your basic profile and email, and, if
-                enabled, contacts.
+                enabled, contacts (contacts, contacts.other.readonly). If you
+                connect Google Drive for attachment filing, we also ask for
+                access to files created by or opened with {BRAND_NAME}
+                (drive.file).
               </p>
               <p>
-                <strong className="text-foreground">Microsoft:</strong> read and
-                write your mail (Mail.ReadWrite, plus Mail.Send when sending is
-                enabled), mailbox settings, calendars, basic profile, offline
-                access for refresh tokens, and, if enabled, contacts and people.
+                <strong className="text-foreground">
+                  Microsoft (if you connect a Microsoft account):
+                </strong>{" "}
+                read and write your mail (Mail.ReadWrite, plus Mail.Send when
+                sending is enabled), mailbox settings, calendars, basic profile,
+                offline access for refresh tokens, and, if enabled, contacts and
+                people.
               </p>
               <p>
                 We ask only for what {BRAND_NAME}&apos;s features use. You can
@@ -154,12 +169,12 @@ export default function PrivacyPage() {
                 feature. It can include a message or thread, calendar details,
                 your instruction, and your saved preferences. {BRAND_NAME}{" "}
                 currently uses Anthropic as its primary AI provider and Google
-                (Gemini) as a fallback. [VERIFY]
+                (Gemini) as a fallback.
               </p>
               <p>
-                {BRAND_NAME} uses these providers through their APIs. Under the
-                providers&apos; API terms, they do not use API inputs or outputs
-                to train their models. [VERIFY]
+                {BRAND_NAME} uses these providers through their APIs. We do not
+                authorize them to train models on your data, and their API terms
+                govern how they handle what we send.
               </p>
               <p>
                 We do not use your mail or other Google user data to develop,
@@ -234,27 +249,19 @@ export default function PrivacyPage() {
                 <li>Anthropic: AI processing (primary)</li>
                 <li>Google (Gemini API): AI processing (fallback)</li>
                 <li>
-                  Google and Microsoft: the Gmail, Calendar, Contacts and
-                  Microsoft Graph APIs you authorize
+                  Google (and Microsoft, if you connect a Microsoft account):
+                  the Gmail, Calendar, Contacts and Graph APIs you authorize
                 </li>
                 <li>Axiom: application logs</li>
-                <li>Sentry: error reporting (if enabled)</li>
-                <li>PostHog: product analytics (if enabled)</li>
-                <li>
-                  Resend and Loops: email such as sign-in codes and invites (if
-                  enabled)
-                </li>
-                <li>Tinybird: email analytics (if enabled)</li>
                 <li>
                   Integrations you connect (Slack, Notion, MCP servers and
                   similar): only when you connect them
                 </li>
               </ul>
               <p>
-                [VERIFY: remove providers that are not in use.] We may also
-                disclose data if the law requires it. Data may be processed in
-                the United States and other countries where these providers
-                operate.
+                We may also disclose data if the law requires it. Data may be
+                processed in the United States and other countries where these
+                providers operate.
               </p>
             </>
           ),
@@ -277,8 +284,8 @@ export default function PrivacyPage() {
                   sent: removed after 14 days.
                 </li>
                 <li>
-                  AI reasoning notes on automation history: may be removed after
-                  a set period. [VERIFY]
+                  AI reasoning notes on automation history: kept with that
+                  history, and we may redact them after a set period.
                 </li>
                 <li>
                   Unedited AI drafts left in your mailbox: removed after the
@@ -294,11 +301,12 @@ export default function PrivacyPage() {
                   delete your account.
                 </li>
                 <li>
-                  Logs: kept for a limited period by our logging provider.
+                  Logs: kept for a limited period by our logging provider
+                  (Axiom).
                 </li>
                 <li>
-                  Backups: deleted data may remain in backups for a limited
-                  time. [VERIFY]
+                  Backups: deleted data may remain in our database
+                  provider&apos;s backups until they expire.
                 </li>
               </ul>
               <p>
@@ -306,9 +314,8 @@ export default function PrivacyPage() {
                   Deleting your account.
                 </strong>{" "}
                 In Settings you can delete your account. This removes your{" "}
-                {BRAND_NAME} data, stops mailbox notifications, and asks our
-                analytics and email providers to delete your contact records.
-                You can also delete a single connected mailbox.
+                {BRAND_NAME} data and stops mailbox notifications. You can also
+                delete a single connected mailbox.
               </p>
               <p>
                 <strong className="text-foreground">Disconnecting.</strong> You
@@ -324,12 +331,12 @@ export default function PrivacyPage() {
           heading: "Security",
           body: (
             <p>
-              Traffic uses HTTPS, mail content is fetched on demand rather than
-              copied wholesale into our database, and access to production data
-              is limited to the operator. [VERIFY] No system is perfectly
-              secure, and {BRAND_NAME} is run by one person during the beta, so
-              we cannot promise enterprise-grade controls. Tell us promptly if
-              you suspect a problem.
+              Traffic uses HTTPS, OAuth tokens are encrypted before they are
+              stored, and mail content is fetched on demand rather than copied
+              wholesale into our database. No system is perfectly secure, and{" "}
+              {BRAND_NAME} is run by one person during the beta, so we cannot
+              promise enterprise-grade controls. Tell us promptly if you suspect
+              a problem.
             </p>
           ),
         },
@@ -380,9 +387,9 @@ export default function PrivacyPage() {
           heading: "Contact",
           body: (
             <p>
-              [OPERATOR LEGAL NAME], [OPERATOR ADDRESS]
+              {LEGAL.operatorLegalName}, {LEGAL.operatorAddress}
               <br />
-              Email: [PRIVACY CONTACT EMAIL]
+              Email: {LEGAL.privacyContactEmail}
             </p>
           ),
         },
