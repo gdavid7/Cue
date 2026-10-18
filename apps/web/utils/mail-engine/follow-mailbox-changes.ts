@@ -100,15 +100,18 @@ export function followMailboxChanges({
 
 /**
  * The accounts whose new mail should show at once: the open one, and, while
- * the user keeps two or more in All inboxes, those too, since All inboxes
- * and Today show them. Others catch up on the engine's idle sync.
+ * the user looks at all their accounts together (All inboxes, Today across
+ * accounts), every account those show. Each stream holds a server function
+ * open, so one account's pages follow that account only; the others catch
+ * up on the engine's idle sync.
  */
 export function getFollowedAccountIds(
   emailAccountId: string,
   allInboxesAccountIds: string[],
+  allAccounts: boolean,
 ) {
   const others =
-    allInboxesAccountIds.length > 1
+    allAccounts && allInboxesAccountIds.length > 1
       ? allInboxesAccountIds.filter((id) => id !== emailAccountId)
       : [];
   return [emailAccountId, ...others].slice(0, MAX_FOLLOWED_ACCOUNTS);

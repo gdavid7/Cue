@@ -40,6 +40,7 @@ import {
 } from "@/utils/mail-engine/follow-mailbox-changes";
 import { getAllInboxesAccounts } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { useAccounts } from "@/hooks/useAccounts";
+import { useAllAccountsScope } from "@/hooks/useTodayHref";
 import { announceTodayChanged } from "@/utils/home/today-changes";
 import { browserMailEngineCapabilities } from "@/utils/mail-engine/worker-protocol";
 import {
@@ -394,6 +395,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
   }, [client, emailAccountId]);
 
   const { data: accountsData } = useAccounts();
+  const allAccounts = useAllAccountsScope();
   // A string, so a refetched account list that changed nothing keeps the streams.
   const followedAccountIds = emailAccountId
     ? getFollowedAccountIds(
@@ -401,6 +403,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
         getAllInboxesAccounts(accountsData?.emailAccounts ?? []).map(
           (account) => account.id,
         ),
+        allAccounts,
       ).join(",")
     : "";
   useEffect(() => {
