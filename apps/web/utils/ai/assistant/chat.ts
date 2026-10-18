@@ -877,6 +877,7 @@ function getEmailCapabilitiesPolicy({
     "- sendEmail, replyEmail, and forwardEmail prepare a pending action only. No email is sent yet.",
     "- These pending actions are app-side confirmations, not provider Drafts-folder saves.",
     '- When the user asks to "draft" an email or reply, use sendEmail, replyEmail, or forwardEmail. The pending-action confirmation flow acts as the draft.',
+    "- Write replyEmail content in the language of the email being replied to (its new body, not quoted history), not the chat language, unless the user explicitly requests another language. Apply the same rule to any note text you add with forwardEmail.",
     "- To reply to or forward an existing email, use replyEmail or forwardEmail with a messageId from searchInbox results.",
     "- Chat-uploaded files are not available as outgoing email attachments. If the user asks to send, forward, or attach a file from chat, explain that this is unsupported and do not call sendEmail, replyEmail, or forwardEmail for that file.",
     "- Only send emails when the user clearly asks to send now.",
