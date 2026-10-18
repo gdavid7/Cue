@@ -38,7 +38,7 @@ import {
   getOnlyIntegrationToolSpec,
   normalizeSelectArgValue,
 } from "@/utils/mcp/tool-specs";
-import { ownedBySameUser } from "@/utils/mcp/user-connections";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import { assertNoSenderOnlyOverlap } from "@/utils/rule/sender-scope-overlap";
 import { isIntegrationActionEnabledForEmailAccountId } from "@/utils/integration-action.server";
 

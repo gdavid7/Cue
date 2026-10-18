@@ -57,6 +57,8 @@ async function getData({
       timeMin,
       timeMax,
       maxResultsPerProvider: MAX_EVENTS_PER_PROVIDER,
+      // Same calendars the recorder cron reconciles for this account.
+      ownConnectionsOnly: true,
       logger,
     }),
   ]);

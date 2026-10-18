@@ -73,11 +73,14 @@ export async function reconcileAccount({
   const timeMax = addMinutes(timeMin, RECONCILE_WINDOW_MINUTES);
 
   logger.info("Starting calendar fetch for meeting recorder reconciliation");
+  // Each calendar is recorded by the account that connected it, so a person
+  // with two mailboxes never gets two bots in one meeting.
   const { events, complete } = await fetchCalendarEventsInWindow({
     emailAccountId: emailAccount.id,
     timeMin,
     timeMax,
     maxResultsPerProvider: MAX_EVENTS_PER_PROVIDER,
+    ownConnectionsOnly: true,
     logger,
   });
 

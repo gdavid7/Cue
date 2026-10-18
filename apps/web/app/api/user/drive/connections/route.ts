@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import prisma from "@/utils/prisma";
+import {
+  onePerExternalAccount,
+  ownedBySameUser,
+} from "@/utils/user/owned-by-same-user";
 import { withEmailAccount } from "@/utils/middleware";
 
 export type GetDriveConnectionsResponse = Awaited<ReturnType<typeof getData>>;
@@ -15,8 +19,10 @@ export const GET = withEmailAccount(
 );
 
 async function getData({ emailAccountId }: { emailAccountId: string }) {
+  // Drives belong to the person: one connected from any of their mailboxes
+  // shows, and works, in all of them.
   const connections = await prisma.driveConnection.findMany({
-    where: { emailAccountId },
+    where: ownedBySameUser(emailAccountId),
     select: {
       id: true,
       email: true,
@@ -27,5 +33,5 @@ async function getData({ emailAccountId }: { emailAccountId: string }) {
     orderBy: { createdAt: "desc" },
   });
 
-  return { connections };
+  return { connections: onePerExternalAccount(connections) };
 }

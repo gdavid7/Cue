@@ -15,6 +15,7 @@ import {
   fileAttachmentBody,
 } from "@/utils/actions/drive.validation";
 import prisma from "@/utils/prisma";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import { SafeError } from "@/utils/error";
 import { createDriveProviderWithRefresh } from "@/utils/drive/provider";
 import { createEmailProvider } from "@/utils/email/provider";
@@ -29,19 +30,26 @@ export const disconnectDriveAction = actionClient
   .inputSchema(disconnectDriveBody)
   .action(
     async ({ ctx: { emailAccountId }, parsedInput: { connectionId } }) => {
-      const connection = await prisma.driveConnection.findUnique({
+      const connection = await prisma.driveConnection.findFirst({
         where: {
           id: connectionId,
-          emailAccountId,
+          ...ownedBySameUser(emailAccountId),
         },
+        select: { provider: true, email: true },
       });
 
       if (!connection) {
         throw new SafeError("Drive connection not found");
       }
 
-      await prisma.driveConnection.delete({
-        where: { id: connectionId, emailAccountId },
+      // The same drive may also be connected from another of the person's
+      // mailboxes; the page shows it once, so disconnecting removes it once.
+      await prisma.driveConnection.deleteMany({
+        where: {
+          ...ownedBySameUser(emailAccountId),
+          provider: connection.provider,
+          email: { equals: connection.email, mode: "insensitive" },
+        },
       });
     },
   );
@@ -90,10 +98,10 @@ export const addFilingFolderAction = actionClient
       ctx: { emailAccountId },
       parsedInput: { folderId, folderName, folderPath, driveConnectionId },
     }) => {
-      const connection = await prisma.driveConnection.findUnique({
+      const connection = await prisma.driveConnection.findFirst({
         where: {
           id: driveConnectionId,
-          emailAccountId,
+          ...ownedBySameUser(emailAccountId),
         },
       });
 
@@ -223,10 +231,10 @@ export const createDriveFolderAction = actionClient
       ctx: { emailAccountId, logger },
       parsedInput: { folderName, driveConnectionId },
     }) => {
-      const connection = await prisma.driveConnection.findUnique({
+      const connection = await prisma.driveConnection.findFirst({
         where: {
           id: driveConnectionId,
-          emailAccountId,
+          ...ownedBySameUser(emailAccountId),
         },
       });
 

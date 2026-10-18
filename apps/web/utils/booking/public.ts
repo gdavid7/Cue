@@ -29,6 +29,7 @@ import {
   sendBookingRescheduledEmails,
 } from "@/utils/booking/emails";
 import { secureCompareBuffers } from "@/utils/crypto-compare";
+import { calendarConnectionsWhere } from "@/utils/calendar/connections";
 
 const MAX_AVAILABILITY_RANGE_MS = 32 * 24 * 60 * 60 * 1000;
 const PENDING_BOOKING_TIMEOUT_MS = 15 * 60 * 1000;
@@ -639,16 +640,6 @@ async function loadPublicBookingLink(slug: string) {
         select: {
           name: true,
           timezone: true,
-          calendarConnections: {
-            where: { isConnected: true },
-            select: {
-              id: true,
-              calendars: {
-                where: { isEnabled: true },
-                select: { id: true },
-              },
-            },
-          },
         },
       },
     },
@@ -656,9 +647,18 @@ async function loadPublicBookingLink(slug: string) {
 
   if (!link) throw new SafeError("Booking link not found", 404);
 
-  const enabledCalendarIds = link.emailAccount.calendarConnections.flatMap(
-    (connection) => connection.calendars.map((calendar) => calendar.id),
-  );
+  // The host's calendars from any of their mailboxes can take the booking.
+  const enabledCalendars = await prisma.calendar.findMany({
+    where: {
+      isEnabled: true,
+      connection: {
+        ...calendarConnectionsWhere(link.emailAccountId),
+        isConnected: true,
+      },
+    },
+    select: { id: true },
+  });
+  const enabledCalendarIds = enabledCalendars.map((calendar) => calendar.id);
   if (enabledCalendarIds.length === 0) {
     throw new SafeError("No enabled calendar is available for this host");
   }

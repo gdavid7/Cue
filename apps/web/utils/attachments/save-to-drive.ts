@@ -9,8 +9,8 @@ import { ConnectionExpiredError } from "@/utils/mcp/providers/types";
 import {
   findConnectionAccountId,
   onePerIntegration,
-  ownedBySameUser,
 } from "@/utils/mcp/user-connections";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import prisma from "@/utils/prisma";
 
 const MB = 1024 * 1024;

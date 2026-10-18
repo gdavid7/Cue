@@ -4,10 +4,8 @@ import type { Logger } from "@/utils/logger";
 import { findIntegration, MCP_INTEGRATIONS } from "@/utils/mcp/integrations";
 import { fromDbAuthType } from "@/utils/mcp/resolve-integration";
 import { getIntegrationProvider } from "@/utils/mcp/providers/registry";
-import {
-  onePerIntegration,
-  ownedBySameUser,
-} from "@/utils/mcp/user-connections";
+import { onePerIntegration } from "@/utils/mcp/user-connections";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import prisma from "@/utils/prisma";
 
 const STATUS_TIMEOUT_MS = 3000;

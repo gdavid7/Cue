@@ -1,6 +1,7 @@
 import { createCalendarEventProvider } from "@/utils/calendar/event-provider";
 import { SafeError } from "@/utils/error";
 import prisma from "@/utils/prisma";
+import { calendarConnectionsWhere } from "@/utils/calendar/connections";
 import type { Logger } from "@/utils/logger";
 import { getProviderAlignedLocationType } from "@/utils/booking/location";
 import type { BookingLinkLocationType } from "@/generated/prisma/enums";
@@ -50,7 +51,7 @@ export async function createCalendarEvent({
   });
   const provider = createCalendarEventProvider({
     connection: destination.connection,
-    emailAccountId,
+    emailAccountId: destination.connection.emailAccountId,
     logger,
   });
 
@@ -153,9 +154,14 @@ async function getWritableProviderForExistingEvent({
   // — a host can have multiple connections of the same provider, and
   // calendarIds like "primary" recur across them.
   const connection = await prisma.calendarConnection.findFirst({
-    where: { id: providerConnectionId, emailAccountId, isConnected: true },
+    where: {
+      id: providerConnectionId,
+      ...calendarConnectionsWhere(emailAccountId),
+      isConnected: true,
+    },
     select: {
       id: true,
+      emailAccountId: true,
       provider: true,
       accessToken: true,
       refreshToken: true,
@@ -177,7 +183,7 @@ async function getWritableProviderForExistingEvent({
 
   return createCalendarEventProvider({
     connection,
-    emailAccountId,
+    emailAccountId: connection.emailAccountId,
     logger,
   });
 }
@@ -191,37 +197,42 @@ async function getWritableCalendar({
 }) {
   // Without an explicit destination, prefer the primary calendar (via
   // orderBy) but accept any enabled calendar — accounts synced before
-  // Microsoft primary tracking have no primary row.
+  // Microsoft primary tracking have no primary row. The mailbox's own
+  // calendars come first, then the rest of the person's.
   const where = destinationCalendarId ? { id: destinationCalendarId } : {};
-  // Availability scans only consider enabled calendars, so writing to a
-  // disabled one would silently bypass conflict detection.
-  const calendar = await prisma.calendar.findFirst({
-    where: {
-      ...where,
-      isEnabled: true,
-      connection: {
-        emailAccountId,
-        isConnected: true,
+  const scopes = destinationCalendarId
+    ? [calendarConnectionsWhere(emailAccountId)]
+    : [
+        calendarConnectionsWhere(emailAccountId, { ownConnectionsOnly: true }),
+        calendarConnectionsWhere(emailAccountId),
+      ];
+
+  for (const scope of scopes) {
+    // Availability scans only consider enabled calendars, so writing to a
+    // disabled one would silently bypass conflict detection.
+    const calendar = await prisma.calendar.findFirst({
+      where: {
+        ...where,
+        isEnabled: true,
+        connection: { ...scope, isConnected: true },
       },
-    },
-    orderBy: [{ primary: "desc" }, { createdAt: "asc" }],
-    select: {
-      calendarId: true,
-      connection: {
-        select: {
-          id: true,
-          provider: true,
-          accessToken: true,
-          refreshToken: true,
-          expiresAt: true,
+      orderBy: [{ primary: "desc" }, { createdAt: "asc" }],
+      select: {
+        calendarId: true,
+        connection: {
+          select: {
+            id: true,
+            emailAccountId: true,
+            provider: true,
+            accessToken: true,
+            refreshToken: true,
+            expiresAt: true,
+          },
         },
       },
-    },
-  });
-
-  if (!calendar) {
-    throw new SafeError("Destination calendar not found");
+    });
+    if (calendar) return calendar;
   }
 
-  return calendar;
+  throw new SafeError("Destination calendar not found");
 }

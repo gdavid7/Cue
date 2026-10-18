@@ -15,6 +15,7 @@ import {
   getDocumentPreview,
 } from "@/utils/drive/document-extraction";
 import prisma from "@/utils/prisma";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import { checkHasAccess } from "@/utils/premium/server";
 import type { SelectedAttachment } from "@/utils/attachments/source-schema";
 
@@ -198,7 +199,7 @@ export async function resolveDraftAttachments({
 
   const driveConnections = await prisma.driveConnection.findMany({
     where: {
-      emailAccountId,
+      ...ownedBySameUser(emailAccountId),
       id: {
         in: [
           ...new Set(selectedAttachments.map((item) => item.driveConnectionId)),

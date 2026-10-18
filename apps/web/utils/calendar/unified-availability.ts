@@ -8,6 +8,8 @@ import { createGoogleAvailabilityProvider } from "./providers/google-availabilit
 import { createMicrosoftAvailabilityProvider } from "./providers/microsoft-availability";
 import { isGoogleVirtualCalendarId } from "./providers/google-calendar-id";
 import { isGoogleProvider } from "@/utils/email/provider-types";
+import { calendarConnectionsWhere } from "@/utils/calendar/connections";
+import { onePerExternalAccount } from "@/utils/user/owned-by-same-user";
 
 /**
  * Fetch calendar availability across all connected calendars (Google and Microsoft)
@@ -46,21 +48,23 @@ export async function getUnifiedCalendarAvailability({
     timeMax,
   });
 
-  // Fetch all calendar connections with their calendars
-  const calendarConnections = await prisma.calendarConnection.findMany({
-    where: {
-      emailAccountId,
-      isConnected: true,
-    },
-    include: {
-      calendars: {
-        where: { isEnabled: true },
-        select: {
-          calendarId: true,
+  // Busy on any of the person's calendars is busy, whichever mailbox asks.
+  const calendarConnections = onePerExternalAccount(
+    await prisma.calendarConnection.findMany({
+      where: {
+        ...calendarConnectionsWhere(emailAccountId),
+        isConnected: true,
+      },
+      include: {
+        calendars: {
+          where: { isEnabled: true },
+          select: {
+            calendarId: true,
+          },
         },
       },
-    },
-  });
+    }),
+  );
 
   if (!calendarConnections.length) {
     logger.info("No calendar connections found", { emailAccountId });
@@ -96,7 +100,7 @@ export async function getUnifiedCalendarAvailability({
           connectionId: connection.id,
           refreshToken: connection.refreshToken,
           expiresAt: connection.expiresAt?.getTime() || null,
-          emailAccountId,
+          emailAccountId: connection.emailAccountId,
           calendarIds: availabilityCalendarIds,
           timeMin,
           timeMax,
@@ -134,7 +138,7 @@ export async function getUnifiedCalendarAvailability({
           accessToken: connection.accessToken,
           refreshToken: connection.refreshToken,
           expiresAt: connection.expiresAt?.getTime() || null,
-          emailAccountId,
+          emailAccountId: connection.emailAccountId,
           calendarIds,
           timeMin,
           timeMax,

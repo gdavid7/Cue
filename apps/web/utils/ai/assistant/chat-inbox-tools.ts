@@ -2,6 +2,7 @@ import { type InferUITool, tool } from "ai";
 import { z } from "zod";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import { posthogCaptureEvent } from "@/utils/posthog";
 import { createEmailProvider } from "@/utils/email/provider";
 import { describeProviderRateLimitError } from "@/utils/email/rate-limit";
@@ -212,7 +213,7 @@ const accountOverviewTool = ({
     execute: async () => {
       trackToolCall({ tool: "get_account_overview", email, logger });
       try {
-        const [emailAccount, labelNames] = await Promise.all([
+        const [emailAccount, labelNames, connectedDrives] = await Promise.all([
           prisma.emailAccount.findUnique({
             where: { id: emailAccountId },
             select: {
@@ -230,18 +231,15 @@ const accountOverviewTool = ({
                 },
                 take: 50,
               },
-              driveConnections: {
-                select: {
-                  id: true,
-                },
-                take: 1,
-              },
             },
           }),
           listLabelNames({
             emailAccountId,
             provider,
             logger,
+          }),
+          prisma.driveConnection.count({
+            where: ownedBySameUser(emailAccountId),
           }),
         ]);
 
@@ -263,7 +261,7 @@ const accountOverviewTool = ({
           attachmentFiling: {
             enabled: emailAccount.filingEnabled,
             promptConfigured: Boolean(emailAccount.filingPrompt),
-            driveConnected: emailAccount.driveConnections.length > 0,
+            driveConnected: connectedDrives > 0,
             folders: emailAccount.filingFolders.map((folder) => ({
               name: folder.folderName,
               path: folder.folderPath,

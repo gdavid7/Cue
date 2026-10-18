@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/utils/prisma";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import { withEmailProvider } from "@/utils/middleware";
 import { SafeError } from "@/utils/error";
 import {
@@ -77,9 +78,6 @@ async function getPreviewData({
       filingFolders: {
         include: { driveConnection: true },
       },
-      driveConnections: {
-        where: { isConnected: true },
-      },
     },
   });
 
@@ -97,7 +95,10 @@ async function getPreviewData({
     throw new SafeError("Please select at least one folder before previewing");
   }
 
-  if (emailAccount.driveConnections.length === 0) {
+  const connectedDrives = await prisma.driveConnection.count({
+    where: { ...ownedBySameUser(emailAccountId), isConnected: true },
+  });
+  if (connectedDrives === 0) {
     throw new SafeError("No connected drives found");
   }
 
