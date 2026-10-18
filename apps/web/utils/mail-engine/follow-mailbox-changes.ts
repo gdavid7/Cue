@@ -1,4 +1,7 @@
 const CLOSED_STREAM_RETRY_MS = 30_000;
+// One stream per account. Browsers hold about six connections to a host over
+// HTTP/1.1, and requests need the rest.
+const MAX_FOLLOWED_ACCOUNTS = 4;
 // While the stream is down, a visible tab polls instead. Each sync request is
 // one cheap history read that the engine coalesces with any already queued.
 const DISCONNECTED_POLL_MS = 15_000;
@@ -93,4 +96,20 @@ export function followMailboxChanges({
     window.removeEventListener("focus", onFocus);
     close();
   };
+}
+
+/**
+ * The accounts whose new mail should show at once: the open one, and, while
+ * the user keeps two or more in All inboxes, those too, since All inboxes
+ * and Today show them. Others catch up on the engine's idle sync.
+ */
+export function getFollowedAccountIds(
+  emailAccountId: string,
+  allInboxesAccountIds: string[],
+) {
+  const others =
+    allInboxesAccountIds.length > 1
+      ? allInboxesAccountIds.filter((id) => id !== emailAccountId)
+      : [];
+  return [emailAccountId, ...others].slice(0, MAX_FOLLOWED_ACCOUNTS);
 }
