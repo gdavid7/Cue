@@ -278,26 +278,9 @@ const nextConfig: NextConfig = {
         source: "/",
       },
       {
-        destination: "https://go.getinboxzero.com/github",
+        destination: "https://github.com/gdavid7/Cue",
         permanent: true,
         source: "/github",
-      },
-      {
-        destination:
-          "https://apps.apple.com/app/inbox-zero-ai-email/id6759736561",
-        permanent: false,
-        source: "/ios",
-      },
-      {
-        destination:
-          "https://play.google.com/store/apps/details?id=com.getinboxzero.app",
-        permanent: false,
-        source: "/android",
-      },
-      {
-        destination: "/support",
-        permanent: true,
-        source: "/contact",
       },
       // Cue's own waitlist is the request form on /login.
       {

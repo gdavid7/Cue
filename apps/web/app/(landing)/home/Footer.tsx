@@ -1,16 +1,10 @@
 import Link from "next/link";
 import { env } from "@/env";
-import { EXTENSION_URL } from "@/utils/config";
 import { BRAND_NAME } from "@/utils/branding";
 import { CookieSettingsButton } from "@/components/CookieConsent";
 
 export const footerNavigation = {
   main: [
-    {
-      name: `${BRAND_NAME} Tabs (Chrome Extension)`,
-      href: EXTENSION_URL,
-      target: "_blank",
-    },
     { name: "AI Email Assistant", href: "/ai-automation" },
     { name: "Email Client", href: "/email-client" },
     { name: "Mobile App", href: "/mobile-app" },
@@ -81,18 +75,7 @@ export const footerNavigation = {
   ],
   support: [
     { name: "Pricing", href: "/pricing" },
-    { name: "Support", href: "/support" },
     { name: "Contact us", href: `mailto:${env.NEXT_PUBLIC_SUPPORT_EMAIL}` },
-    {
-      name: "Documentation",
-      href: "https://docs.getinboxzero.com",
-      target: "_blank",
-    },
-    {
-      name: "Status",
-      href: "https://inbox-zero.openstatus.dev/",
-      target: "_blank",
-    },
     { name: "CLI", href: "/cli" },
     { name: "OpenClaw Skill", href: "/openclaw" },
   ],
@@ -111,22 +94,12 @@ export const footerNavigation = {
   legal: [
     { name: "Terms", href: "/terms" },
     { name: "Privacy", href: "/privacy" },
-    {
-      name: "SOC2 Compliant",
-      href: "https://security.getinboxzero.com",
-      target: "_blank",
-    },
   ],
 };
 
 // Simple footer for self-hosted deployments
 const selfHostedFooter = {
   resources: [
-    {
-      name: "Documentation",
-      href: "https://docs.getinboxzero.com",
-      target: "_blank",
-    },
     { name: "Contact us", href: `mailto:${env.NEXT_PUBLIC_SUPPORT_EMAIL}` },
   ],
   legal: [
@@ -136,9 +109,6 @@ const selfHostedFooter = {
 };
 
 export function Footer() {
-  const copyrightName =
-    BRAND_NAME === "Inbox Zero" ? "Inbox Zero Inc." : BRAND_NAME;
-
   if (env.NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS) {
     return (
       <footer className="relative">
@@ -214,8 +184,7 @@ export function Footer() {
         </nav>
 
         <p className="mt-10 text-center text-xs leading-5 text-gray-500">
-          &copy; {new Date().getFullYear()} {copyrightName}. All rights
-          reserved.
+          &copy; {new Date().getFullYear()} {BRAND_NAME}. All rights reserved.
         </p>
       </div>
     </footer>

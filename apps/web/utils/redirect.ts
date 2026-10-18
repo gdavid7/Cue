@@ -69,6 +69,7 @@ export function getSafeRedirectUrl(
     if (!options.allowExternal) return fallbackUrl;
     if (
       parsedUrl.protocol === "https:" ||
+      parsedUrl.protocol === "mailto:" ||
       isDevelopmentLocalHttpUrl(parsedUrl)
     ) {
       return parsedUrl.toString();

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { env } from "@/env";
 import { type PostHogClient, posthog } from "@/utils/analytics/posthog-client";
 import { Label, Radio, RadioGroup } from "@headlessui/react";
 import { Sparkle } from "@/components/new-landing/icons/Sparkle";
@@ -161,7 +162,7 @@ export function Pricing() {
               </div>
               <Button variant="secondary-two" size="lg" asChild>
                 <Link
-                  href="https://www.getinboxzero.com/sales"
+                  href={`mailto:${env.NEXT_PUBLIC_SUPPORT_EMAIL}`}
                   onClick={() =>
                     landingPageAnalytics.pricingCtaClicked(posthog, {
                       tier: "Enterprise",

@@ -65,7 +65,7 @@ export const getCalendarEventsTool = ({
           return {
             error: disconnected
               ? "The user's calendar connection has expired. They need to reconnect it on the Calendars page."
-              : "No calendar connected. The user needs to connect their calendar in Inbox Zero settings.",
+              : "No calendar connected. The user needs to connect their calendar in Cue settings.",
           };
         }
 

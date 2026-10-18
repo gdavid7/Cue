@@ -16,11 +16,6 @@ interface FooterProps {
 // Simple footer for self-hosted deployments
 const selfHostedFooter = {
   resources: [
-    {
-      name: "Documentation",
-      href: "https://docs.getinboxzero.com",
-      target: "_blank",
-    },
     { name: "Contact us", href: `mailto:${env.NEXT_PUBLIC_SUPPORT_EMAIL}` },
   ],
   legal: [

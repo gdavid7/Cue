@@ -18,7 +18,6 @@ export const DARK_EMAIL_OPTIONS = [
  * onboarding, follows the chosen theme.
  */
 const LIGHT_ONLY_PATHS = [
-  "/app",
   "/home",
   "/oss-friends",
   "/pricing",

@@ -171,7 +171,9 @@ async function handleApprove(filingId: string): Promise<void> {
   });
 }
 
-const TO_DELETE_FOLDER = "Inbox Zero - To Delete";
+const TO_DELETE_FOLDER = "Cue - To Delete";
+// Reused when it exists so accounts that already have it don't get a second one.
+const LEGACY_TO_DELETE_FOLDER = "Inbox Zero - To Delete";
 
 async function handleUndo({
   filingId,
@@ -196,7 +198,10 @@ async function handleUndo({
 
       // Get or create the "To Delete" folder at root
       const folders = await driveProvider.listFolders();
-      let toDeleteFolder = folders.find((f) => f.name === TO_DELETE_FOLDER);
+      let toDeleteFolder = folders.find(
+        (f) =>
+          f.name === TO_DELETE_FOLDER || f.name === LEGACY_TO_DELETE_FOLDER,
+      );
 
       if (!toDeleteFolder) {
         toDeleteFolder = await driveProvider.createFolder(TO_DELETE_FOLDER);
