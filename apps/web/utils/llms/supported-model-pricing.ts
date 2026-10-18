@@ -33,12 +33,13 @@ const haiku = {
   cachedInput: 0.1 / 1_000_000,
   cacheWrite: 1.25 / 1_000_000,
 };
-// Claude Sonnet 5.5 and Opus 5.5 read their cache at 0.05x the input rate,
-// not 0.1x. https://platform.claude.com/docs/en/about-claude/pricing
+// Sonnet 5.5 cache reads are $0.20/MTok (0.1x input), same as Sonnet 5.
+// Opus 5.5 reads its cache at 0.05x input, not 0.1x.
+// https://platform.claude.com/docs/en/about-claude/pricing
 const sonnet5_5 = {
   input: 2 / 1_000_000,
   output: 10 / 1_000_000,
-  cachedInput: 0.1 / 1_000_000,
+  cachedInput: 0.2 / 1_000_000,
   cacheWrite: 2.5 / 1_000_000,
 };
 const opus5_5 = {

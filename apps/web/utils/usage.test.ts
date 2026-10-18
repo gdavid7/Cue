@@ -290,7 +290,7 @@ describe("calculateUsageCost", () => {
 
   it.each([
     // [model, input, output, cache read, cache write] in $ per million tokens
-    ["claude-sonnet-5-5", 2, 10, 0.1, 2.5],
+    ["claude-sonnet-5-5", 2, 10, 0.2, 2.5],
     ["claude-opus-5-5", 4, 20, 0.2, 5],
     ["claude-haiku-5-5", 0.1, 0.5, 0.01, 0.125],
   ])("prices current Claude model %s on the Anthropic API", (model, input, output, cacheRead, cacheWrite) => {
