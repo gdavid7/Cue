@@ -10,7 +10,10 @@ import {
 } from "./chat-memory-policy";
 
 export const RECENT_MESSAGES_TO_KEEP = 6;
-const COMPACTION_TOKEN_THRESHOLD = 80_000;
+// Measured on the history the model is sent, with earlier turns' tool results
+// already shortened. Every step of every later turn re-sends this history, so
+// a summary pays for itself well before the prompt nears its hard cap.
+const COMPACTION_TOKEN_THRESHOLD = 30_000;
 const COMPACTION_TOOL_RESULT_CHAR_LIMIT = 4000;
 const MEMORY_EXTRACTION_MESSAGE_CHAR_LIMIT = 2000;
 const MEMORY_EXTRACTION_TOTAL_CHAR_LIMIT = 20_000;

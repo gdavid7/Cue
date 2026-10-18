@@ -26,6 +26,7 @@ import {
   extractMemories,
   RECENT_MESSAGES_TO_KEEP,
 } from "@/utils/ai/assistant/compact";
+import { projectEarlierTurnToolResults } from "@/utils/ai/assistant/trim-stale-tool-results";
 import { getInboxStatsForChatContext } from "@/utils/ai/assistant/get-inbox-stats-for-chat-context";
 import { formatUtcDate } from "@/utils/date";
 import {
@@ -246,7 +247,7 @@ export const POST = withEmailAccount("chat", async (request) => {
       ];
     }
 
-    if (shouldCompact(modelMessages)) {
+    if (shouldCompact(projectEarlierTurnToolResults(modelMessages))) {
       try {
         const { compactedMessages, summary, compactedCount } =
           await compactMessages({

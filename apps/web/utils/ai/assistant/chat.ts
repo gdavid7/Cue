@@ -1,4 +1,4 @@
-import type { JSONValue, ModelMessage, Tool } from "ai";
+import { asSchema, type JSONValue, type ModelMessage, type Tool } from "ai";
 import type { Logger } from "@/utils/logger";
 import type { MessageContext } from "@/utils/ai/assistant/chat-context-validation";
 import { stringifyEmail } from "@/utils/stringify-email";
@@ -61,6 +61,10 @@ import {
   trimStaleToolResults,
 } from "@/utils/ai/assistant/trim-stale-tool-results";
 import { withChatToolRuntime } from "@/utils/ai/assistant/chat-tool-runtime";
+import {
+  estimateTextTokens,
+  fitPromptToBudget,
+} from "@/utils/ai/assistant/chat-prompt-budget";
 import { withChatAccountScope } from "@/utils/ai/assistant/chat-other-accounts";
 import { getLowThinkingStepOptions } from "@/utils/llms/model";
 import { holdGmailInteractiveDemand } from "@/utils/gmail/quota";
@@ -348,13 +352,15 @@ export async function aiProcessAssistantChat({
       contextMessages,
     });
 
-  const stableCacheBreakpointIndexes = getStableCacheBreakpointIndexes(
-    cacheOptimizedMessages,
-    stablePrefixEndIndex,
+  // The last message from earlier turns; it moves if the prompt budget drops
+  // old turns.
+  let historyEndIndex = Math.max(
+    0,
+    Math.min(stablePrefixEndIndex, cacheOptimizedMessages.length - 1),
   );
   const messagesWithCacheControl = addAnthropicCacheControl(
     cacheOptimizedMessages,
-    stableCacheBreakpointIndexes,
+    new Set([0, historyEndIndex]),
   );
 
   const runtimeTools = withChatToolRuntime({
@@ -435,6 +441,7 @@ export async function aiProcessAssistantChat({
   });
 
   const allTools = addAnthropicToolCacheControl(runtimeTools);
+  const toolDefinitionTokens = await estimateToolDefinitionTokens(allTools);
 
   logger.trace("Resolved system prompt", {
     systemPromptLength: system.length,
@@ -467,6 +474,7 @@ export async function aiProcessAssistantChat({
         toolNames: step.toolCalls.map((call) => call.toolName),
         inputTokens: step.usage?.inputTokens,
         cachedInputTokens: step.usage?.inputTokenDetails?.cacheReadTokens,
+        cacheWriteInputTokens: step.usage?.inputTokenDetails?.cacheWriteTokens,
         outputTokens: step.usage?.outputTokens,
         reasoningTokens: step.usage?.outputTokenDetails?.reasoningTokens,
       });
@@ -492,16 +500,28 @@ export async function aiProcessAssistantChat({
     },
     stopWhen: () => false,
     prepareStep: ({ messages: stepMessages, stepNumber, model }) => {
-      const trimmedMessages = trimStaleToolResults(stepMessages);
+      const budgeted = fitPromptToBudget({
+        messages: trimStaleToolResults(stepMessages),
+        fixedTokens: toolDefinitionTokens,
+        historyEndIndex,
+      });
+      if (budgeted.stage) {
+        historyEndIndex = budgeted.historyEndIndex;
+        logger.warn("Assistant chat prompt reduced to fit the token budget", {
+          stepNumber,
+          stage: budgeted.stage,
+          estimatedTokens: budgeted.estimatedTokens,
+        });
+      }
       const preparedMessages =
         model &&
         typeof model !== "string" &&
         model.provider.startsWith("anthropic")
           ? moveAnthropicTailCacheBreakpoint(
-              trimmedMessages,
-              stableCacheBreakpointIndexes,
+              budgeted.messages,
+              new Set([0, historyEndIndex]),
             )
-          : trimmedMessages;
+          : budgeted.messages;
       const messages =
         preparedMessages === stepMessages ? undefined : preparedMessages;
 
@@ -607,17 +627,6 @@ function buildCacheOptimizedMessages({
   };
 }
 
-// The system prompt and the end of the earlier turns' history.
-function getStableCacheBreakpointIndexes(
-  messages: ModelMessage[],
-  stablePrefixEndIndex: number,
-) {
-  return new Set([
-    0,
-    Math.max(0, Math.min(stablePrefixEndIndex, messages.length - 1)),
-  ]);
-}
-
 function addAnthropicCacheControl(
   messages: ModelMessage[],
   cacheBreakpointIndexes: Set<number>,
@@ -642,8 +651,11 @@ function moveAnthropicTailCacheBreakpoint(
   const lastIndex = messages.length - 1;
 
   return messages.map((message, index) => {
-    if (stableBreakpointIndexes.has(index)) return message;
-    if (index === lastIndex) return withAnthropicCacheControl(message);
+    if (stableBreakpointIndexes.has(index) || index === lastIndex) {
+      return message.providerOptions?.anthropic?.cacheControl
+        ? message
+        : withAnthropicCacheControl(message);
+    }
     if (!message.providerOptions?.anthropic?.cacheControl) return message;
 
     const { cacheControl: _cacheControl, ...anthropic } =
@@ -691,6 +703,21 @@ function addAnthropicToolCacheControl<T extends Record<string, Tool>>(
       },
     },
   };
+}
+
+// Anthropic caches the tool definitions but still counts them toward the
+// prompt, ahead of the system prompt.
+async function estimateToolDefinitionTokens(tools: Record<string, Tool>) {
+  const definitions = await Promise.all(
+    Object.entries(tools).map(async ([name, definition]) =>
+      JSON.stringify({
+        name,
+        description: definition.description,
+        input_schema: await asSchema(definition.inputSchema).jsonSchema,
+      }),
+    ),
+  );
+  return estimateTextTokens(definitions.join(""));
 }
 
 function formatFixRuleResultContext({

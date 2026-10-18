@@ -66,7 +66,7 @@ export function projectEarlierTurnToolResults(messages: ModelMessage[]) {
       ...message,
       content: message.content.map((part) =>
         part.type === "tool-result"
-          ? shortenEarlierTurnResult(projectEarlierTurnResult(part))
+          ? shortenToolResult(projectEarlierTurnResult(part))
           : part,
       ),
     };
@@ -83,7 +83,9 @@ function projectEarlierTurnResult(part: ToolResultPart): ToolResultPart {
   };
 }
 
-function shortenEarlierTurnResult(part: ToolResultPart): ToolResultPart {
+// Reduces a result to what the model needs to keep acting on it, leaving
+// results a later write saves back whole, and short ones, as they are.
+export function shortenToolResult(part: ToolResultPart): ToolResultPart {
   if (!isTrimmable(part)) return part;
 
   return { ...part, output: trimOutput(part.toolName, part.output) };
