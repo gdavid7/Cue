@@ -397,7 +397,7 @@ describe("getMessagesBatch", () => {
     ]);
   });
 
-  it("retries only rate-limited items in smaller sequential batches", async () => {
+  it("retries only rate-limited items in halved sequential batches", async () => {
     const messageIds = Array.from(
       { length: 55 },
       (_, index) => `id${index + 1}`,
@@ -473,6 +473,8 @@ describe("getMessagesBatch", () => {
           rateLimitedItemCount: 15,
           retryableItemCount: 15,
           retryCount: 1,
+          firstCode: 429,
+          firstReason: "rateLimitExceeded",
         },
       ],
     ]);

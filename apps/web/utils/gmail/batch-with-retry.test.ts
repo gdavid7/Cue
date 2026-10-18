@@ -70,6 +70,60 @@ describe("getBatchWithRetry", () => {
     expect(sleep.mock.calls[0][0]).toBeLessThanOrEqual(11_000);
   });
 
+  it("gives up on an interactive read when Gmail names a distant time", async () => {
+    const retryAt = new Date(Date.now() + 90_000).toISOString();
+    getBatch.mockResolvedValue([
+      { id: "m1" },
+      batchError(429, "rateLimitExceeded", `Retry after ${retryAt}`),
+    ]);
+
+    const result = await runWithGmailQuota({ priority: "interactive" }, () =>
+      fetchBatch(createScopedLogger("batch-with-retry-test")),
+    );
+
+    expect(sleep).not.toHaveBeenCalled();
+    expect(getBatch).toHaveBeenCalledTimes(1);
+    expect(result.items).toEqual([{ id: "m1" }]);
+    expect(result.unloadedIds).toEqual(["m2"]);
+  });
+
+  it("keeps an interactive read's total sleep within its budget across chunks", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const failed = new Set<string>();
+    getBatch.mockImplementation(async (ids: string[]) =>
+      ids.map((id) => {
+        if (failed.has(id)) return { id };
+        failed.add(id);
+        return batchError(503, "backendError", "Backend Error");
+      }),
+    );
+    const ids = Array.from({ length: 100 }, (_, i) => `m${i}`);
+
+    const result = await runWithGmailQuota({ priority: "interactive" }, () =>
+      fetchBatch(createScopedLogger("batch-with-retry-test"), ids),
+    );
+
+    const slept = sleep.mock.calls.reduce((sum, [ms]) => sum + ms, 0);
+    expect(slept).toBeLessThanOrEqual(15_000);
+    expect(result.unloadedIds.length).toBeGreaterThan(0);
+    expect(result.items.length + result.unloadedIds.length).toBe(100);
+  });
+
+  it("includes the status and reason Gmail gave in the retry log", async () => {
+    getBatch
+      .mockResolvedValueOnce([batchError(503, "backendError", "Backend Error")])
+      .mockResolvedValueOnce([{ id: "m1" }]);
+    const logger = createScopedLogger("batch-with-retry-test");
+    const warn = vi.spyOn(logger, "warn");
+
+    await fetchBatch(logger, ["m1"]);
+
+    expect(warn).toHaveBeenCalledWith(
+      "Retrying Gmail batch items",
+      expect.objectContaining({ firstCode: 503, firstReason: "backendError" }),
+    );
+  });
+
   it("keeps the backoff within the blocking limit when Gmail names a distant time", async () => {
     const retryAt = new Date(Date.now() + 120_000).toISOString();
     getBatch
@@ -78,7 +132,9 @@ describe("getBatchWithRetry", () => {
       ])
       .mockResolvedValueOnce([{ id: "m1" }]);
 
-    await fetchBatch(createScopedLogger("batch-with-retry-test"), ["m1"]);
+    await runWithGmailQuota({ priority: "sync" }, () =>
+      fetchBatch(createScopedLogger("batch-with-retry-test"), ["m1"]),
+    );
 
     expect(sleep.mock.calls[0][0]).toBeLessThanOrEqual(11_000);
   });
