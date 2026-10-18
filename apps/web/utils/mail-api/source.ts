@@ -58,12 +58,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // catch-up starts within seconds; older mail backfills in its own scope.
 const GMAIL_RECENT_WINDOW_MS = 3 * DAY_MS;
 const GMAIL_HISTORY_SCOPE_ID = "history";
-// A first sync's backfill lists the whole inbox but only the last 30 days of
+// A first sync's backfill lists the whole inbox, starred mail and drafts
+// (lists with no older-mail fallback) but only the last 30 days of
 // everything else: walking all of a mailbox's history spent nearly all of the
 // Gmail quota on a first connect. Its coverage records the window, so search
 // leaves older mail to Gmail and opening a conversation reads it whole. A
 // resync after expired history still walks everything, since mail it skipped
-// may have changed meanwhile.
+// may have changed meanwhile, and so does a client that can't record the
+// window.
 const GMAIL_FIRST_BACKFILL_WINDOW_MS = 30 * DAY_MS;
 // The two scans start at different times, so the backfill reaches into the
 // recent window to leave no gap at the boundary between them.
@@ -102,7 +104,7 @@ type BootstrapToken = {
   receivedAfterMs?: number;
   receivedBeforeMs?: number;
   scopeId?: string;
-  /** A first sync's backfill: the inbox, and other mail from this time on. */
+  /** A first sync's backfill: inbox, starred and drafts, and other mail from this time on. */
   windowStartMs?: number;
 };
 
@@ -160,14 +162,21 @@ export function createEmailProviderMailboxSource(input: {
         },
       };
     },
-    async beginBootstrap({ afterMs, initial, scope, session }) {
+    async beginBootstrap({
+      afterMs,
+      initial,
+      scope,
+      session,
+      windowedBackfill,
+    }) {
       try {
         const isHistory = isGmail && scope.id === GMAIL_HISTORY_SCOPE_ID;
         const token: BootstrapToken = {
           afterMs: afterMs ?? 0,
           ...(initial && isGmail && !isHistory && { initial: true }),
           ...(initial &&
-            isHistory && {
+            isHistory &&
+            windowedBackfill && {
               windowStartMs: Date.now() - GMAIL_FIRST_BACKFILL_WINDOW_MS,
             }),
           scopeId: scope.id,
@@ -218,7 +227,7 @@ export function createEmailProviderMailboxSource(input: {
         const listPage = () =>
           provider.getMessagesWithPagination({
             ...(token.windowStartMs != null && {
-              query: `{in:inbox after:${Math.floor(token.windowStartMs / 1000) - 1}}`,
+              query: `{in:inbox is:starred in:drafts after:${Math.floor(token.windowStartMs / 1000) - 1}}`,
             }),
             maxResults,
             folderId: token.folderId ?? undefined,

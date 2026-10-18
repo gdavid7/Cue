@@ -207,6 +207,49 @@ describe("useThread", () => {
     });
   });
 
+  it("shows earlier messages loading while a windowed sync fills in an older conversation", async () => {
+    let complete: (value: { status: "complete" }) => void = () => undefined;
+    mail.client.ensureConversationMessages.mockReturnValue(
+      new Promise((resolve) => {
+        complete = resolve;
+      }),
+    );
+    // The first sync finished, but only reached back 30 days.
+    mail.client.observeConversation.mockReturnValue(
+      handle(
+        readySnapshot(
+          view({
+            coverage: [
+              {
+                accountId: "account",
+                scopeId: "history",
+                metadata: "complete",
+                content: "partial",
+                indexedContent: "partial",
+                lastCompletedSyncAtMs: 1,
+                windowStartMs: 1000,
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+    const { result } = renderHook(() =>
+      useThread({ id: "c-1" }, { fillConversation: true }),
+    );
+    await waitFor(() => expect(result.current.data?.thread.id).toBe("c-1"));
+
+    expect(result.current.localAvailability).toMatchObject({
+      hasMore: true,
+      loadingMore: true,
+    });
+    await act(async () => complete({ status: "complete" }));
+    expect(result.current.localAvailability).toMatchObject({
+      hasMore: false,
+      loadingMore: false,
+    });
+  });
+
   it("stops showing earlier messages loading when the fill gives up", async () => {
     mail.client.ensureConversationMessages.mockResolvedValue({
       status: "unavailable",

@@ -136,6 +136,7 @@ export function createBackendMailboxSource(input: {
       scope,
       afterMs,
       initial,
+      windowedBackfill,
       signal,
     }) {
       const response = await request({
@@ -148,6 +149,7 @@ export function createBackendMailboxSource(input: {
           scope,
           afterMs,
           initial,
+          windowedBackfill,
         }),
         signal,
       });

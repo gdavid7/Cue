@@ -116,7 +116,11 @@ export function useThread(
   const completing = Boolean(
     openKey &&
       !completedConversations.has(openKey) &&
-      view?.coverage.some((coverage) => coverage.metadata !== "complete"),
+      view?.coverage.some(
+        (coverage) =>
+          coverage.metadata !== "complete" ||
+          coverage.windowStartMs !== undefined,
+      ),
   );
 
   const data = useMemo<ThreadResponse | undefined>(() => {

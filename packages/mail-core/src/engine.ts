@@ -1134,6 +1134,8 @@ export function createMailEngine(input: {
           (await resolveScope(input.session, scopeId, input.signal)),
         afterMs: null,
         initial: input.from.checkpoint === null,
+        // The store keeps the window a finished scan reports.
+        windowedBackfill: true,
       });
       if (bootstrap.status !== "ok") {
         await noteConnection(input.session.accountId, bootstrap);

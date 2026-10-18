@@ -1548,6 +1548,67 @@ describe("createEmailProviderMailboxSource", () => {
     expect(priorities).toEqual(["interactive", "sync", "sync", "background"]);
   });
 
+  it("keeps a first backfill whole for a client that can't record a window", async () => {
+    const listed: Array<{ query?: string; after?: Date }> = [];
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        async getMessagesWithPagination(options: {
+          query?: string;
+          after?: Date;
+        }) {
+          listed.push(options);
+          return { messages: [] };
+        },
+        getMailboxSyncPage: vi.fn(async () => ({
+          cursor: null,
+          upsertedMessages: [],
+          deletedMessageIds: [],
+          hasMore: false,
+        })),
+      } as unknown as EmailProvider,
+    });
+    const backfill = async (windowedBackfill?: boolean) => {
+      const begun = await source.beginBootstrap({
+        session: { accountId: "acc-1", generation: "g1" },
+        requestId: "r1",
+        signal: new AbortController().signal,
+        scope: { id: "history", kind: "account", folderId: null },
+        afterMs: null,
+        initial: true,
+        ...(windowedBackfill && { windowedBackfill }),
+      });
+      if (begun.status !== "ok") throw new Error("expected ok");
+      return source.enumerate({
+        session: { accountId: "acc-1", generation: "g1" },
+        requestId: "r1",
+        signal: new AbortController().signal,
+        bootstrapId: begun.value.bootstrapId,
+        page: begun.value.enumerationToken,
+        pageSize: 50,
+      });
+    };
+
+    // An older client drops the window from the result, so it would record a
+    // 30-day scan as the whole mailbox.
+    const whole = await backfill();
+    expect(listed[0]?.query).toBeUndefined();
+    expect(listed[0]?.after).toBeUndefined();
+    expect(whole.status === "ok" && whole.value).not.toHaveProperty(
+      "windowStartMs",
+    );
+
+    const windowed = await backfill(true);
+    expect(listed[1]?.query).toMatch(/^\{in:inbox /);
+    expect(
+      windowed.status === "ok" && windowed.value.nextPage === null
+        ? windowed.value.windowStartMs
+        : undefined,
+    ).toBeGreaterThan(0);
+  });
+
   it("remembers a first sync in the primary scan's page token only", async () => {
     const source = createEmailProviderMailboxSource({
       logger,
@@ -2066,7 +2127,7 @@ describe("Gmail history expiry", () => {
     await engine.close();
   });
 
-  it("first syncs only the last 30 days and the whole inbox, then a resync covers everything", async () => {
+  it("first syncs the last 30 days plus the whole inbox, starred and drafts, then a resync covers everything", async () => {
     const day = 24 * 60 * 60 * 1000;
     const archived = (id: string, at: number) => ({
       ...gmailMessage(id, at),
@@ -2077,6 +2138,20 @@ describe("Gmail history expiry", () => {
       ["month", archived("month", Date.now() - 20 * day)],
       ["old-inbox", gmailMessage("old-inbox", Date.now() - 400 * day)],
       ["old-archived", archived("old-archived", Date.now() - 400 * day)],
+      [
+        "old-starred",
+        {
+          ...archived("old-starred", Date.now() - 400 * day),
+          labelIds: ["STARRED"],
+        },
+      ],
+      [
+        "old-draft",
+        {
+          ...archived("old-draft", Date.now() - 400 * day),
+          labelIds: ["DRAFT"],
+        },
+      ],
     ]);
     const listed: Array<{ query?: string; after?: Date; before?: Date }> = [];
     let historyExpired = false;
@@ -2096,16 +2171,19 @@ describe("Gmail history expiry", () => {
         before?: Date;
       }) {
         listed.push(options);
-        const inboxOrAfter = options.query?.match(/^\{in:inbox after:(\d+)\}$/);
+        const keptOrAfter = options.query?.match(
+          /^\{in:inbox is:starred in:drafts after:(\d+)\}$/,
+        );
         return {
           messages: [...mailbox.values()].filter((message) => {
             const at = Number(message.internalDate);
             if (options.before && at >= options.before.getTime()) return false;
             if (options.after && at < options.after.getTime()) return false;
-            if (inboxOrAfter) {
+            if (keptOrAfter) {
               return (
-                message.labelIds?.includes("INBOX") ||
-                at >= Number(inboxOrAfter[1]) * 1000
+                ["INBOX", "STARRED", "DRAFT"].some((label) =>
+                  message.labelIds?.includes(label),
+                ) || at >= Number(keptOrAfter[1]) * 1000
               );
             }
             return !options.query;
@@ -2164,7 +2242,9 @@ describe("Gmail history expiry", () => {
       },
       runtime: createHostRuntime({ nowMs: () => now }),
     });
-    const localIds = async (mailboxName: "all" | "inbox") => {
+    const localIds = async (
+      mailboxName: "all" | "inbox" | "starred" | "drafts",
+    ) => {
       const { view } = await store.readMailboxView({
         accountIds: ["acc-1"],
         predicate: { kind: "mailbox", mailbox: mailboxName },
@@ -2190,13 +2270,12 @@ describe("Gmail history expiry", () => {
     await engine.requestSync(["acc-1"]);
     await runFor(5);
 
-    // Mail older than 30 days is skipped unless it is still in the inbox.
-    expect(await localIds("all")).toEqual([
-      "t-month",
-      "t-old-inbox",
-      "t-recent",
-    ]);
+    // Mail older than 30 days is skipped unless it is in the inbox, starred
+    // or a draft: those lists have no older-mail fallback to Gmail.
     expect(await localIds("inbox")).toEqual(["t-old-inbox", "t-recent"]);
+    expect(await localIds("starred")).toEqual(["t-old-starred"]);
+    expect(await localIds("drafts")).toEqual(["t-old-draft"]);
+    expect(await localIds("all")).not.toContain("t-old-archived");
     expect(listed.every((options) => options.query || options.after)).toBe(
       true,
     );
@@ -2222,12 +2301,14 @@ describe("Gmail history expiry", () => {
     await runFor(10);
 
     expect(await localIds("inbox")).toEqual(["t-recent"]);
-    expect(await localIds("all")).toEqual([
-      "t-month",
-      "t-old-archived",
-      "t-old-inbox",
-      "t-recent",
-    ]);
+    expect(await localIds("all")).toEqual(
+      expect.arrayContaining([
+        "t-month",
+        "t-old-archived",
+        "t-old-inbox",
+        "t-recent",
+      ]),
+    );
     expect((await historyCoverage())?.windowStartMs).toBeUndefined();
     await engine.close();
   });

@@ -115,6 +115,36 @@ describe("backend mailbox source", () => {
     ).resolves.toMatchObject(expected);
   });
 
+  it("tells the server it can keep a windowed backfill", async () => {
+    const bodies: unknown[] = [];
+    const source = createBackendMailboxSource({
+      accountId: "acc-1",
+      request: async ({ body }) => {
+        bodies.push(body);
+        return {
+          status: 200,
+          json: {
+            protocolVersion: MAIL_PROTOCOL_VERSION,
+            requestId: "r1",
+            bootstrapId: "mailbox",
+            enumerationToken: "{}",
+            catchUpFrom: null,
+          },
+        };
+      },
+    });
+    await source.beginBootstrap({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      scope: { id: "history", kind: "account", folderId: null },
+      afterMs: null,
+      initial: true,
+      windowedBackfill: true,
+      signal: new AbortController().signal,
+    });
+    expect(bodies[0]).toMatchObject({ initial: true, windowedBackfill: true });
+  });
+
   it("keeps the window a finished scan covered", async () => {
     const catchUpFrom = {
       streamId: "history",

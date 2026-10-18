@@ -78,6 +78,11 @@ export interface MailboxSource {
        * is not initial.
        */
       initial?: boolean;
+      /**
+       * The caller records a finished scan's `windowStartMs`, so the source
+       * may scan only a recent window. Without it, a scan covers everything.
+       */
+      windowedBackfill?: boolean;
     },
   ): Promise<
     ReadResult<{
