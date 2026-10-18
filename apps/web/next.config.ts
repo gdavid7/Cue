@@ -370,6 +370,12 @@ const nextConfig: NextConfig = {
   ],
   turbopack: {
     root: turbopackRoot,
+    resolveAlias: {
+      // zod's entry points re-export every locale as `z.locales`, which keeps
+      // ~40 translations in the client bundle. Nothing in the app reads them.
+      // Only zod imports this exact relative path in our dependency tree.
+      "../locales/index.js": "./utils/zod-locales-en.ts",
+    },
     rules: {
       "*.svg": {
         as: "*.js",
