@@ -149,6 +149,7 @@ type SystemItem = {
 
 export const MAIL_SCHEDULED_TYPE = "scheduled";
 export const MAIL_SNOOZED_TYPE = "snoozed";
+const UNIFIED_VIEW_TYPES = new Set([MAIL_SNOOZED_TYPE, MAIL_SCHEDULED_TYPE]);
 
 /** Visited often enough to sit beside the inbox. */
 const PRIMARY_MAILBOX_ITEMS: SystemItem[] = [
@@ -277,8 +278,16 @@ function MailSidebarContent({
   accountSections,
   className,
 }: MailSidebarProps) {
-  // Today across accounts shows the unified sidebar, with All inboxes a link.
-  const unifiedMail = unified && activeType !== "today";
+  // Views All inboxes merges beyond its inbox, kept in Cue's own database.
+  const unifiedViews = unified
+    ? MORE_MAILBOX_ITEMS.filter((item) => UNIFIED_VIEW_TYPES.has(item.type))
+    : [];
+  // Today across accounts, and those views, show the unified sidebar with
+  // All inboxes a link.
+  const unifiedMail =
+    unified &&
+    activeType !== "today" &&
+    !unifiedViews.some((item) => item.type === activeType);
   const isCategoryActive =
     !activeLabelId &&
     !activeFolderId &&
@@ -404,6 +413,17 @@ function MailSidebarContent({
               onIntentEnd={onTodayIntentEnd}
             />
           ) : null}
+          {unifiedViews.map(({ name, type, Icon }) => (
+            <NavRow
+              key={type}
+              href={hrefFor({ kind: "type", type })}
+              active={isTypeActive(type)}
+              icon={<Icon className="size-4 shrink-0" />}
+              name={name}
+              count={null}
+              collapsed={collapsed}
+            />
+          ))}
           {unified
             ? null
             : PRIMARY_MAILBOX_ITEMS.map(({ name, type, countId, Icon }) => (

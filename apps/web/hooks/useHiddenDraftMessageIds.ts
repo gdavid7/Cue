@@ -18,18 +18,23 @@ export function useUpcomingScheduledEmails(emailAccountId: string) {
   return useSWR<UpcomingScheduledEmailsResponse>(
     upcomingScheduledEmailsKey(emailAccountId),
     {
-      refreshInterval: (current) => {
-        const rows = current?.scheduledEmails ?? [];
-        if (rows.some((row) => row.status === "PROCESSING")) return 5000;
-        const dueTimes = rows
-          .filter((row) => row.status === "PENDING")
-          .map((row) => new Date(row.sendAt).getTime());
-        return dueTimes.length
-          ? Math.min(60_000, Math.max(5000, Math.min(...dueTimes) - Date.now()))
-          : 0;
-      },
+      refreshInterval: (current) =>
+        scheduledEmailsRefreshInterval(current?.scheduledEmails ?? []),
     },
   );
+}
+
+/** Soon after the next send is due, or often while one is going out. */
+export function scheduledEmailsRefreshInterval(
+  rows: UpcomingScheduledEmailsResponse["scheduledEmails"],
+) {
+  if (rows.some((row) => row.status === "PROCESSING")) return 5000;
+  const dueTimes = rows
+    .filter((row) => row.status === "PENDING")
+    .map((row) => new Date(row.sendAt).getTime());
+  return dueTimes.length
+    ? Math.min(60_000, Math.max(5000, Math.min(...dueTimes) - Date.now()))
+    : 0;
 }
 
 /**

@@ -150,10 +150,14 @@ export const MailShellSidebar = memo(function MailShellSidebar({
 
   const mailHref = useMailHref();
   const mailSlugs = useMailSlugs(allLabels, folders);
+  // In All inboxes, its own views stay in All inboxes.
   const hrefFor = useCallback(
     (target: MailNavTarget) =>
-      mailHref({ view: getMailNavView(target, mailSlugs) }),
-    [mailHref, mailSlugs],
+      mailHref({
+        ...(isAllAccounts ? { allInboxes: true } : {}),
+        view: getMailNavView(target, mailSlugs),
+      }),
+    [isAllAccounts, mailHref, mailSlugs],
   );
 
   const onCreateLabel = useCallback(

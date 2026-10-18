@@ -492,11 +492,9 @@ export function MailShell() {
   const searchQuery = searchValue.trim() || null;
   // Scheduled sends live in our own database, so this view has no thread
   // list to fetch.
-  const isScheduledView =
-    !isAllAccounts && !searchQuery && scopeType === MAIL_SCHEDULED_TYPE;
+  const isScheduledView = !searchQuery && scopeType === MAIL_SCHEDULED_TYPE;
   // The mailbox doesn't know what's snoozed or until when; our database does.
-  const isSnoozedView =
-    !isAllAccounts && !searchQuery && scopeType === MAIL_SNOOZED_TYPE;
+  const isSnoozedView = !searchQuery && scopeType === MAIL_SNOOZED_TYPE;
   const [settledSearch, setSettledSearch] = useState(searchQuery);
   useEffect(() => {
     const timeout = setTimeout(() => setSettledSearch(searchQuery), 250);
@@ -628,7 +626,8 @@ export function MailShell() {
   const combinedThreadState = useCombinedMailThreads({
     accounts: combinedAccounts,
     emailAccountId,
-    enabled: isAllAccounts && searchSettled,
+    enabled:
+      isAllAccounts && searchSettled && !isScheduledView && !isSnoozedView,
     isUnread:
       !searchQuery &&
       !!activeSplit?.filters.length &&
@@ -1477,8 +1476,9 @@ export function MailShell() {
   ]);
 
   const openSnoozedThread = useCallback(
-    (threadId: string) => setOpenThread({ emailAccountId, threadId }),
-    [emailAccountId, setOpenThread],
+    (threadId: string, threadAccountId: string) =>
+      setOpenThread({ emailAccountId: threadAccountId, threadId }),
+    [setOpenThread],
   );
 
   const closeReader = useCallback(() => {
@@ -1826,9 +1826,17 @@ export function MailShell() {
 
   // Views kept in our database rather than the mailbox list their own rows.
   let databaseList: ReactNode = null;
-  if (isScheduledView) databaseList = <ScheduledEmailList />;
+  // All inboxes lists every account's.
+  const databaseListAccounts = isAllAccounts ? combinedAccounts : undefined;
+  if (isScheduledView)
+    databaseList = <ScheduledEmailList accounts={databaseListAccounts} />;
   else if (isSnoozedView)
-    databaseList = <SnoozedThreadList onOpenThread={openSnoozedThread} />;
+    databaseList = (
+      <SnoozedThreadList
+        accounts={databaseListAccounts}
+        onOpenThread={openSnoozedThread}
+      />
+    );
 
   const showList = layout === "split" || !openThreadSelection;
   const showReader = layout === "split" || Boolean(openThreadSelection);
