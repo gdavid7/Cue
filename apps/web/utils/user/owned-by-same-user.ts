@@ -12,6 +12,11 @@ import type { Prisma } from "@/generated/prisma/client";
 export function ownedBySameUser(emailAccountId: string): {
   emailAccount: Prisma.EmailAccountWhereInput;
 } {
+  // Prisma drops an undefined filter, so `some: { id: undefined }` would match
+  // every person's rows.
+  if (!emailAccountId) {
+    throw new Error("ownedBySameUser requires an email account id");
+  }
   return {
     emailAccount: { user: { emailAccounts: { some: { id: emailAccountId } } } },
   };
