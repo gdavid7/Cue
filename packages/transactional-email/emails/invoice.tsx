@@ -9,7 +9,7 @@ import {
   Tailwind,
   Text,
 } from "@react-email/components";
-import { InboxZeroFooter } from "./components/inbox-zero-footer";
+import { BrandFooter } from "./components/brand-footer";
 
 export type InvoiceEmailProps = {
   baseUrl: string;
@@ -48,7 +48,7 @@ export default function InvoiceEmail({
                 .
               </Text>
             </Section>
-            <InboxZeroFooter />
+            <BrandFooter />
           </Container>
         </Body>
       </Tailwind>

@@ -9,7 +9,7 @@ import {
   Text,
 } from "@react-email/components";
 import type { ReactNode } from "react";
-import { InboxZeroFooter } from "./inbox-zero-footer";
+import { BrandFooter } from "./brand-footer";
 
 export function BookingEmailLayout({
   headline,
@@ -40,7 +40,7 @@ export function BookingEmailLayout({
 
             <Section className="px-8 pb-6 pt-2">{children}</Section>
 
-            <InboxZeroFooter />
+            <BrandFooter />
           </Container>
         </Body>
       </Tailwind>
