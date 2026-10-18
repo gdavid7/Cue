@@ -1529,18 +1529,20 @@ async function getCostControlledModelOptions({
       return modelOptions;
     }
 
-    logger.info("Switching to nano model due to weekly AI spend", {
-      label,
-      userId,
-      emailAccountId,
-      spendBucket: guard.spendBucket,
-      weeklySpendUsd: guard.weeklySpendUsd,
-      weeklyLimitUsd: guard.weeklyLimitUsd,
-      previousProvider: modelOptions.provider,
-      previousModel: modelOptions.modelName,
-      nextProvider: nanoModelOptions.provider,
-      nextModel: nanoModelOptions.modelName,
-    });
+    // An unreadable spend is already warned about once a minute by the guard.
+    if (guard.reason !== "spend_unreadable")
+      logger.info("Switching to nano model due to weekly AI spend", {
+        label,
+        userId,
+        emailAccountId,
+        spendBucket: guard.spendBucket,
+        weeklySpendUsd: guard.weeklySpendUsd,
+        weeklyLimitUsd: guard.weeklyLimitUsd,
+        previousProvider: modelOptions.provider,
+        previousModel: modelOptions.modelName,
+        nextProvider: nanoModelOptions.provider,
+        nextModel: nanoModelOptions.modelName,
+      });
 
     return nanoModelOptions;
   } catch (error) {

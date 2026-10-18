@@ -42,7 +42,8 @@ describe("weekly spend guard reads", () => {
 
   // Spend that can't be read is spend that can't be capped: the cheap tier
   // keeps AI working without letting an outage run up the bill.
-  it("falls back to the nano model, and retries, when the spend can't be read", async () => {
+  it("falls back to the nano model, and retries later, when the spend can't be read", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     vi.mocked(getWeeklyUsageCostByBucket)
       .mockRejectedValueOnce(new Error("limit exceeded"))
       .mockResolvedValue(spend(1));
@@ -53,14 +54,27 @@ describe("weekly spend guard reads", () => {
       userId: "user-down",
     };
 
-    expect(await shouldForceNanoModel(options)).toMatchObject({
-      shouldForce: true,
-      weeklySpendUsd: null,
-    });
-    expect(await shouldForceNanoModel(options)).toMatchObject({
-      shouldForce: false,
-      weeklySpendUsd: 1,
-    });
+    try {
+      expect(await shouldForceNanoModel(options)).toMatchObject({
+        shouldForce: true,
+        reason: "spend_unreadable",
+        weeklySpendUsd: null,
+      });
+      // Each call doesn't wait on a store that just refused.
+      expect(await shouldForceNanoModel(options)).toMatchObject({
+        shouldForce: true,
+        reason: "spend_unreadable",
+      });
+      expect(getWeeklyUsageCostByBucket).toHaveBeenCalledOnce();
+
+      vi.advanceTimersByTime(30_000);
+      expect(await shouldForceNanoModel(options)).toMatchObject({
+        shouldForce: false,
+        weeklySpendUsd: 1,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("warns about an unreadable spend once a minute per instance, not per call", async () => {

@@ -18,6 +18,9 @@ const logger = createScopedLogger("llms/model-usage-guard");
 const TRIAL_AI_LIMIT_NOTIFICATION_TTL_SECONDS = 60 * 24 * 60 * 60;
 const SPEND_BUCKET_WARNING_TTL_SECONDS = 8 * 24 * 60 * 60;
 const SPEND_UNREADABLE_WARNING_INTERVAL_MS = 60_000;
+// While the store refuses, every AI call would wait on it again only to fail;
+// for this long each instance takes the failure as the answer.
+const SPEND_UNREADABLE_RETRY_MS = 30_000;
 
 // Both guards run before every AI call, and a chat turn or a processed email
 // makes several in a row. The limits are weekly budgets, so each instance
@@ -34,6 +37,7 @@ const spendBucketWarnings = createMemoCache<boolean>({
   ttlMs: 60 * 60_000,
   maxEntries: 5000,
 });
+const spendUnreadable = new Map<string, { until: number; error: unknown }>();
 
 export const TRIAL_AI_LIMIT_REACHED_MESSAGE =
   "Your trial has reached the AI usage limit. Start your paid plan now to continue using AI automation.";
@@ -185,6 +189,8 @@ export async function shouldForceNanoModel(options: {
   emailAccountId?: string;
 }): Promise<{
   shouldForce: boolean;
+  /** Why the nano model is forced, when it is. */
+  reason?: "over_limit" | "spend_unreadable";
   spendBucket: AiSpendBucket;
   weeklySpendUsd: number | null;
   weeklyLimitUsd: number | null;
@@ -256,6 +262,7 @@ export async function shouldForceNanoModel(options: {
     );
     return {
       shouldForce: true,
+      reason: "spend_unreadable",
       spendBucket,
       weeklySpendUsd: null,
       weeklyLimitUsd,
@@ -272,7 +279,13 @@ export async function shouldForceNanoModel(options: {
     });
   }
 
-  return { shouldForce, spendBucket, weeklySpendUsd, weeklyLimitUsd };
+  return {
+    shouldForce,
+    reason: shouldForce ? "over_limit" : undefined,
+    spendBucket,
+    weeklySpendUsd,
+    weeklyLimitUsd,
+  };
 }
 
 // Fire-and-forget: the warning must never delay or fail the AI call.
@@ -365,9 +378,22 @@ async function getWeeklySpend(userId: string, legacyEmails: string[]) {
 
 function getWeeklySpendByBucket(userId: string, legacyEmails: string[]) {
   const key = `${userId}:${[...new Set(legacyEmails)].sort().join(",")}`;
-  return weeklySpendByBucket.get(key, () =>
-    getWeeklyUsageCostByBucket({ userId, legacyEmails }),
-  );
+  const failed = spendUnreadable.get(key);
+  if (failed && failed.until > Date.now()) return Promise.reject(failed.error);
+  return weeklySpendByBucket
+    .get(key, () => getWeeklyUsageCostByBucket({ userId, legacyEmails }))
+    .catch((error) => {
+      spendUnreadable.delete(key);
+      spendUnreadable.set(key, {
+        until: Date.now() + SPEND_UNREADABLE_RETRY_MS,
+        error,
+      });
+      if (spendUnreadable.size > 5000) {
+        const oldest = spendUnreadable.keys().next().value;
+        if (oldest !== undefined) spendUnreadable.delete(oldest);
+      }
+      throw error;
+    });
 }
 
 // Monday of the current UTC week.
