@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { useId } from "react";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
-import type { GetHomeResponse } from "@/app/api/user/home/route";
 import { useMailHref } from "@/hooks/useMailHref";
 import { cn } from "@/utils";
+import type { TodayData } from "@/utils/home/merge-home";
 import { ConnectLine } from "./NextUp";
 import { TodayStatus } from "./TodayStatus";
 import { formatDay, formatFromNow, formatTime } from "./today-format";
@@ -23,7 +23,7 @@ export function AllClear({
   onToggleWaiting,
   children,
 }: {
-  data: GetHomeResponse;
+  data: TodayData;
   emailAccountId: string;
   now: Date;
   /** How many people the user is waiting on. */
@@ -130,12 +130,14 @@ export function AllClear({
  * "Cue checked 42 emails today and filed 12.", the proof Cue looked. Filed
  * mail links to where it went, when that's one label.
  */
-export function CueChecked({ today }: { today: GetHomeResponse["today"] }) {
+export function CueChecked({ today }: { today: TodayData["today"] }) {
   const mailHref = useMailHref();
   const filed = today.filedLabel ? (
     <Link
       className="text-foreground underline decoration-muted-foreground/40 underline-offset-2 hover:decoration-current"
       href={mailHref({
+        // Across accounts, the label is in the one account that filed today.
+        accountId: today.filedLabel.accountId,
         view: { kind: "label", slug: today.filedLabel.labelId },
       })}
     >

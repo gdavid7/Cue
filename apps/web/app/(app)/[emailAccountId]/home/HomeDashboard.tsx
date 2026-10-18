@@ -13,10 +13,16 @@ import {
   useState,
 } from "react";
 import { useSetAtom } from "jotai";
+import type { KeyedMutator } from "swr";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import { CheckIcon, FlagIcon, MailSearchIcon, PauseIcon } from "lucide-react";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
-import type { ActionableThread } from "@/app/(app)/[emailAccountId]/mail/types";
+import { AllInboxesFailedNotice } from "@/app/(app)/[emailAccountId]/mail/AllInboxesFailedNotice";
+import { getAccountColorClassName } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
+import {
+  type ActionableThread,
+  getListThreadKey,
+} from "@/app/(app)/[emailAccountId]/mail/types";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
 import { useThreadActions } from "@/app/(app)/[emailAccountId]/mail/use-thread-actions";
 import { PlaceholderRow } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
@@ -36,7 +42,14 @@ import { markNoReplyNeededAction } from "@/utils/actions/rule-feedback";
 import { markNeedsReplyAction } from "@/utils/actions/thread-assist";
 import { formatShortDate } from "@/utils/date";
 import { getActionErrorMessage } from "@/utils/error";
-import type { AgentTask, HomeLane, HomeThread } from "@/utils/home/get-home";
+import { isMicrosoftProvider } from "@/utils/email/provider-types";
+import type { HomeLane, HomeThread } from "@/utils/home/get-home";
+import type {
+  TodayAccount,
+  TodayAgentTask,
+  TodayData,
+  TodayThread,
+} from "@/utils/home/merge-home";
 import { AllClear, CueChecked } from "./AllClear";
 import {
   type CueNotice,
@@ -51,6 +64,7 @@ import {
   type TodayRowHandlers,
   TodayThreadRow,
 } from "./TodayThreadRow";
+import { useAllAccountsHome, useTodayAccounts } from "./use-all-accounts-home";
 
 const NO_THREADS: ReadonlySet<string> = new Set();
 const NO_LANES: ReadonlySet<HomeLane> = new Set();
@@ -64,17 +78,31 @@ const SKELETON_ROWS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2"];
  * shortcuts and undo, through the same mail engine commands.
  */
 export function HomeDashboard() {
-  const { emailAccountId, emailAccount, userId } = useAccount();
-  const { data, isLoading, error, mutate, gaveUp, retry } = useHome(
-    emailAccountId,
-    userId,
+  const { emailAccountId, emailAccount, userId, accountIds } = useAccount();
+  // Set on Today across accounts, which shows every account in All inboxes
+  // as one account's Today shows it.
+  const allInboxesAccounts = useTodayAccounts();
+  const single = useHome(allInboxesAccounts ? null : emailAccountId, userId);
+  const all = useAllAccountsHome(allInboxesAccounts, userId);
+  const { merged } = all;
+  const data: TodayData | undefined = merged ? merged.data : single.data;
+  const isLoading = merged ? merged.isLoading : single.isLoading;
+  const error = merged ? merged.error : single.error;
+  const gaveUp = merged ? false : single.gaveUp;
+  const accountColorIndexById = useMemo(
+    () =>
+      Object.fromEntries(
+        (allInboxesAccounts ?? []).map((account, index) => [account.id, index]),
+      ),
+    [allInboxesAccounts],
   );
   const greetingText = useGreeting();
   const firstName = (emailAccount?.name || "").split(" ")[0];
   const mailHref = useMailHref();
   const router = useRouter();
   const isLargeScreen = useIsLargeScreen();
-  const engineReady = Boolean(useOptionalMailClient());
+  const mailClient = useOptionalMailClient();
+  const engineReady = Boolean(mailClient);
   const rootRef = useRef<HTMLDivElement>(null);
   const pendingFocus = useRef<string | null | undefined>(undefined);
   // Rows the user archived, deleted or snoozed. The lanes are a server
@@ -83,10 +111,27 @@ export function HomeDashboard() {
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [waitingShown, setWaitingShown] = useState(false);
 
+  // The local engine syncs, and so acts in, only accounts it was told about;
+  // the routed one is told on startup. All inboxes tells it the same way.
+  useEffect(() => {
+    if (!mailClient?.ensureAccount || !allInboxesAccounts) return;
+    for (const account of allInboxesAccounts) {
+      if (account.id === emailAccountId) continue;
+      mailClient
+        .ensureAccount({
+          accountId: account.id,
+          provider: isMicrosoftProvider(account.provider)
+            ? "microsoft"
+            : "google",
+        })
+        .catch(() => undefined);
+    }
+  }, [allInboxesAccounts, emailAccountId, mailClient]);
+
   const lanes = useMemo(() => {
     if (!data) return null;
-    const visible = (threads: HomeThread[]) =>
-      threads.filter((thread) => !hidden.has(thread.threadId));
+    const visible = (threads: TodayThread[]) =>
+      threads.filter((thread) => !hidden.has(rowKey(thread)));
     return {
       needsYou: visible(data.needsYou),
       waiting: visible(data.waiting),
@@ -122,18 +167,33 @@ export function HomeDashboard() {
         : [],
     [lanes, allClear, waitingShown],
   );
-  const focused = rows.find((thread) => thread.threadId === focusedId);
+  const focused = rows.find((thread) => rowKey(thread) === focusedId);
+  const allRows = useMemo(
+    () =>
+      data ? [...data.needsYou, ...data.waiting, ...data.alsoInInbox] : [],
+    [data],
+  );
   const actionable = useMemo<ActionableThread[]>(
     () =>
-      data
-        ? [...data.needsYou, ...data.waiting, ...data.alsoInInbox].map(
-            (thread) => ({
-              id: thread.threadId,
-              messageIds: [thread.messageId],
-            }),
-          )
-        : [],
-    [data],
+      allRows.map((thread) => ({
+        id: thread.threadId,
+        // Across accounts each row acts in its own account.
+        ...(thread.account ? { account: { id: thread.account.id } } : {}),
+        messageIds: [thread.messageId],
+      })),
+    [allRows],
+  );
+  const rowByKey = useMemo(
+    () => new Map(allRows.map((thread) => [rowKey(thread), thread])),
+    [allRows],
+  );
+  // The row's own account's Today, which its changes are made to.
+  const mutateFor = useCallback(
+    (thread: TodayThread): KeyedMutator<GetHomeResponse> | undefined =>
+      merged
+        ? thread.account && all.mutateAccount(thread.account.id)
+        : single.mutate,
+    [all.mutateAccount, merged, single.mutate],
   );
   const showThreads = useCallback((threadIds: string[]) => {
     setHidden((current) => {
@@ -157,10 +217,24 @@ export function HomeDashboard() {
   });
 
   const threadHref = useCallback(
-    (threadId: string, reply = false) =>
+    (thread: { threadId: string; account?: TodayAccount }, reply = false) => {
+      // Across accounts a row opens in All inboxes, in its own account, so
+      // the reader comes back to Today across accounts.
+      const threadAccountIndex = thread.account
+        ? accountIds.indexOf(thread.account.id)
+        : -1;
+      const href =
+        threadAccountIndex >= 0
+          ? mailHref({
+              allInboxes: true,
+              threadId: thread.threadId,
+              threadAccountIndex,
+            })
+          : mailHref({ threadId: thread.threadId });
       // from=today lets the reader return here rather than to the inbox.
-      `${mailHref({ threadId })}?from=today${reply ? "&reply=1" : ""}`,
-    [mailHref],
+      return `${href}${href.includes("?") ? "&" : "?"}from=today${reply ? "&reply=1" : ""}`;
+    },
+    [accountIds, mailHref],
   );
 
   const focusRow = (threadId: string | null) => {
@@ -187,38 +261,44 @@ export function HomeDashboard() {
 
   // Gone at once, with focus on its neighbour; back if the engine refuses it.
   const removeRow = useStableCallback(
-    async (
-      threadId: string,
-      run: (threadKeys: string[]) => Promise<string[]>,
-    ) => {
-      const index = rows.findIndex((thread) => thread.threadId === threadId);
+    async (key: string, run: (threadKeys: string[]) => Promise<string[]>) => {
+      const index = rows.findIndex((thread) => rowKey(thread) === key);
       const neighbour = rows[index + 1] ?? rows[index - 1];
-      setHidden((current) => new Set(current).add(threadId));
-      focusRow(neighbour?.threadId ?? null);
-      const done = await run([threadId]);
-      if (!done.length) showThreads([threadId]);
+      setHidden((current) => new Set(current).add(key));
+      focusRow(neighbour ? rowKey(neighbour) : null);
+      const done = await run([key]);
+      if (!done.length) showThreads([key]);
     },
   );
 
   // Flags change in place; the server snapshot catches up on its next load.
   const patchRow = useStableCallback(
     async (
-      threadId: string,
+      key: string,
       change: Partial<HomeThread>,
       undo: Partial<HomeThread>,
       run: (threadKeys: string[]) => Promise<string[]>,
     ) => {
-      mutate((current) => current && patchThread(current, threadId, change), {
-        revalidate: false,
-      });
-      const done = await run([threadId]);
+      const thread = rowByKey.get(key);
+      const mutate = thread && mutateFor(thread);
+      if (!thread || !mutate) return;
+      mutate(
+        (current) => current && patchThread(current, thread.threadId, change),
+        { revalidate: false },
+      );
+      const done = await run([key]);
       if (!done.length) {
-        mutate((current) => current && patchThread(current, threadId, undo), {
-          revalidate: false,
-        });
+        mutate(
+          (current) => current && patchThread(current, thread.threadId, undo),
+          { revalidate: false },
+        );
       }
     },
   );
+  const openRow = useStableCallback((key: string, reply?: boolean) => {
+    const thread = rowByKey.get(key);
+    if (thread) router.push(threadHref(thread, reply));
+  });
 
   const handlers = useMemo<TodayRowHandlers>(
     () => ({
@@ -235,56 +315,60 @@ export function HomeDashboard() {
         patchRow(id, { starred }, { starred: !starred }, (keys) =>
           setStarredState(keys, starred),
         ),
-      open: (id) => router.push(threadHref(id)),
-      reply: (id) => router.push(threadHref(id, true)),
+      open: (id) => openRow(id),
+      reply: (id) => openRow(id, true),
     }),
     [
       archive,
       moveToInbox,
+      openRow,
       patchRow,
       removeRow,
-      router,
       setReadState,
       setStarredState,
       snooze,
-      threadHref,
       trash,
     ],
   );
 
   const moveFocus = (step: number) => {
-    const index = rows.findIndex((thread) => thread.threadId === focusedId);
+    const index = rows.findIndex((thread) => rowKey(thread) === focusedId);
     const next =
       index === -1
         ? rows[0]
         : rows[Math.min(Math.max(index + step, 0), rows.length - 1)];
-    if (next) focusRow(next.threadId);
+    if (next) focusRow(rowKey(next));
   };
 
   // Changes go through the mail engine, which starts with the page; until it
   // has, rows only open and reply.
   const target = engineReady ? focused : undefined;
+  const targetKey = target ? rowKey(target) : undefined;
+  const focusedKey = focused ? rowKey(focused) : undefined;
 
   // The inbox's triage keys act on the focused row. `h` (snooze) and ⌘K
   // reach it through the command palette, as they do in Mail.
   useShortcuts({
     next: () => moveFocus(1),
     previous: () => moveFocus(-1),
-    archive: target?.inInbox
-      ? () => handlers.archive(target.threadId)
-      : undefined,
-    delete: target ? () => handlers.trash(target.threadId) : undefined,
-    star: target
-      ? () => handlers.setStarred(target.threadId, !target.starred)
-      : undefined,
-    markRead: target?.unread
-      ? () => handlers.setRead(target.threadId, true)
-      : undefined,
-    markUnread:
-      target && !target.unread
-        ? () => handlers.setRead(target.threadId, false)
+    archive:
+      target?.inInbox && targetKey
+        ? () => handlers.archive(targetKey)
         : undefined,
-    reply: focused ? () => handlers.reply(focused.threadId) : undefined,
+    delete: targetKey ? () => handlers.trash(targetKey) : undefined,
+    star:
+      target && targetKey
+        ? () => handlers.setStarred(targetKey, !target.starred)
+        : undefined,
+    markRead:
+      target?.unread && targetKey
+        ? () => handlers.setRead(targetKey, true)
+        : undefined,
+    markUnread:
+      target && targetKey && !target.unread
+        ? () => handlers.setRead(targetKey, false)
+        : undefined,
+    reply: focusedKey ? () => handlers.reply(focusedKey) : undefined,
     undo: async () => {
       if (await undoLatestToast()) return;
       await undo();
@@ -294,7 +378,7 @@ export function HomeDashboard() {
   const setMailCommandContext = useSetAtom(mailCommandContextAtom);
   useEffect(() => {
     if (!target) return;
-    const id = target.threadId;
+    const id = rowKey(target);
     setMailCommandContext({
       actions: {
         archive: () => handlers.archive(id),
@@ -310,7 +394,10 @@ export function HomeDashboard() {
       allStarred: target.starred,
       hasRead: !target.unread,
       hasUnread: target.unread,
-      target: { emailAccountId, threadId: id },
+      target: {
+        emailAccountId: target.account?.id ?? emailAccountId,
+        threadId: target.threadId,
+      },
       targetCount: 1,
     });
     return () => setMailCommandContext(null);
@@ -318,27 +405,21 @@ export function HomeDashboard() {
 
   // The row moves lanes at once; the server catches up behind it.
   const correct = async (
-    thread: HomeThread,
+    thread: TodayThread,
     needsReply: boolean,
   ): Promise<void> => {
-    if (!data) return;
-    const moved: GetHomeResponse = needsReply
-      ? {
-          ...data,
-          needsYou: [thread, ...data.needsYou],
-          alsoInInbox: data.alsoInInbox.filter(
-            (t) => t.threadId !== thread.threadId,
-          ),
-        }
-      : {
-          ...data,
-          needsYou: data.needsYou.filter((t) => t.threadId !== thread.threadId),
-          alsoInInbox: [thread, ...data.alsoInInbox],
-        };
-    mutate(moved, false);
+    const mutate = mutateFor(thread);
+    if (!data || !mutate) return;
+    const { account, alsoIn: _alsoIn, ...row } = thread;
+    mutate((current) => current && moveLane(current, row, needsReply), {
+      revalidate: false,
+    });
 
+    // Across accounts the row's own account is told, not the page's.
     const action = needsReply ? markNeedsReplyAction : markNoReplyNeededAction;
-    const result = await action(emailAccountId, { threadId: thread.threadId });
+    const result = await action(account?.id ?? emailAccountId, {
+      threadId: thread.threadId,
+    });
     if (result?.serverError || result?.validationErrors) {
       mutate();
       toastError({
@@ -400,6 +481,8 @@ export function HomeDashboard() {
             waitingShown={waitingShown}
             onToggleWaiting={() => setWaitingShown((shown) => !shown)}
             emailAccountId={emailAccountId}
+            accountIds={allInboxesAccounts?.map((account) => account.id)}
+            accountColorIndexById={accountColorIndexById}
             focusedId={focused ? focusedId : null}
             handlers={handlers}
             canChange={engineReady}
@@ -410,17 +493,27 @@ export function HomeDashboard() {
             threadHref={threadHref}
           />
         ) : null}
-        {gaveUp || failed.size > 0 ? (
+        {merged ? (
+          <div className="overflow-hidden rounded-md">
+            <AllInboxesFailedNotice
+              accounts={allInboxesAccounts ?? []}
+              failedAccountIds={merged.failedAccountIds}
+              onRetry={() => all.retryAccounts(merged.failedAccountIds)}
+            />
+          </div>
+        ) : null}
+        {!merged && (gaveUp || failed.size > 0) ? (
           <ErrorDisplay
             error={{
               error: gaveUp
                 ? "Today's lanes didn't load in time"
                 : "Some of Today's lanes didn't load",
             }}
-            onRetry={retry}
+            onRetry={single.retry}
           />
         ) : null}
       </LoadingContent>
+      {all.loaders}
     </div>
   );
 }
@@ -433,6 +526,8 @@ function HomeLanes({
   waitingShown,
   onToggleWaiting,
   emailAccountId,
+  accountIds,
+  accountColorIndexById,
   focusedId,
   handlers,
   canChange,
@@ -441,11 +536,11 @@ function HomeLanes({
   onCorrect,
   pending,
 }: {
-  data: GetHomeResponse;
+  data: TodayData;
   lanes: {
-    needsYou: HomeThread[];
-    waiting: HomeThread[];
-    alsoInInbox: HomeThread[];
+    needsYou: TodayThread[];
+    waiting: TodayThread[];
+    alsoInInbox: TodayThread[];
   };
   /** Why Cue can't yet say what needs a reply, which then says so instead. */
   notice: ReturnType<typeof cueNotice>;
@@ -453,13 +548,16 @@ function HomeLanes({
   waitingShown: boolean;
   onToggleWaiting: () => void;
   emailAccountId: string;
+  /** Across accounts: every account Today shows. */
+  accountIds?: string[];
+  accountColorIndexById: Record<string, number>;
   focusedId: string | null;
   handlers: TodayRowHandlers;
   /** Whether the mail engine is up to take archive, delete and the rest. */
   canChange: boolean;
   layout: "list" | "split";
-  threadHref: (threadId: string) => string;
-  onCorrect: (thread: HomeThread, needsReply: boolean) => Promise<void>;
+  threadHref: (thread: { threadId: string; account?: TodayAccount }) => string;
+  onCorrect: (thread: TodayThread, needsReply: boolean) => Promise<void>;
   pending: ReadonlySet<HomeLane>;
 }) {
   const { cue, stats } = data;
@@ -468,22 +566,30 @@ function HomeLanes({
   const drafts = data.agentTasks.filter((task) => task.kind === "draft");
   const otherTasks = data.agentTasks.filter((task) => task.kind !== "draft");
   const row = (
-    thread: HomeThread,
+    thread: TodayThread,
     options: { waiting?: boolean; correction?: TodayRowCorrection } = {},
   ) => (
     <TodayThreadRow
+      accountColorClassName={
+        thread.account
+          ? getAccountColorClassName(
+              accountColorIndexById[thread.account.id] ?? 0,
+            )
+          : undefined
+      }
       canChange={canChange}
       correction={options.correction}
       handlers={handlers}
-      isFocused={thread.threadId === focusedId}
-      key={thread.threadId}
+      isFocused={rowKey(thread) === focusedId}
+      key={rowKey(thread)}
       layout={layout}
+      rowKey={rowKey(thread)}
       thread={thread}
       waiting={options.waiting}
     />
   );
-  const hasFocus = (threads: HomeThread[]) =>
-    threads.some((thread) => thread.threadId === focusedId);
+  const hasFocus = (threads: TodayThread[]) =>
+    threads.some((thread) => rowKey(thread) === focusedId);
 
   return (
     <>
@@ -509,7 +615,12 @@ function HomeLanes({
         </AllClear>
       ) : null}
       {/* What needs the user comes first; meeting news sits with what's next. */}
-      {allClear ? <BeforeYourMeeting emailAccountId={emailAccountId} /> : null}
+      {allClear ? (
+        <BeforeYourMeeting
+          accountIds={accountIds}
+          emailAccountId={emailAccountId}
+        />
+      ) : null}
 
       {pending.has("needsYou") ? <HomeSkeleton layout={layout} /> : null}
       {lanes.needsYou.length > 0 ? (
@@ -542,8 +653,8 @@ function HomeLanes({
           <div className="-mx-4 sm:mx-0 border-border/60 border-t">
             {[...drafts, ...otherTasks].map((task) => (
               <TaskRow
-                href={threadHref(task.threadId)}
-                key={task.id}
+                href={threadHref(task)}
+                key={`${task.account?.id ?? ""}:${task.id}`}
                 task={task}
               />
             ))}
@@ -569,7 +680,12 @@ function HomeLanes({
           ) : null}
         </Section>
       ) : null}
-      {allClear ? null : <BeforeYourMeeting emailAccountId={emailAccountId} />}
+      {allClear ? null : (
+        <BeforeYourMeeting
+          accountIds={accountIds}
+          emailAccountId={emailAccountId}
+        />
+      )}
 
       {pending.has("waiting") ? <HomeSkeleton layout={layout} /> : null}
       {!allClear && lanes.waiting.length > 0 ? (
@@ -629,7 +745,7 @@ function HomeLanes({
 
 /** Why Cue can't yet say what needs a reply, or null when it can. */
 function cueNotice(
-  cue: GetHomeResponse["cue"],
+  cue: TodayData["cue"],
   emailAccountId: string,
   { hasTrackedThreads }: { hasTrackedThreads: boolean },
 ): CueNotice | null {
@@ -645,12 +761,19 @@ function cueNotice(
       link: { label: "See plans", href: "/premium" },
     };
   }
-  if (!cue.replyTracking) return replyTrackingOffNotice(emailAccountId);
+  // Across accounts, the notice names the account it is about.
+  if (!cue.replyTracking)
+    return replyTrackingOffNotice(
+      cue.account?.id ?? emailAccountId,
+      cue.account?.email,
+    );
   if (!cue.hasReadMail) {
     return {
       icon: MailSearchIcon,
       tone: "info",
-      title: "Cue is reading your recent mail.",
+      title: cue.account
+        ? `Cue is reading the recent mail in ${cue.account.email}.`
+        : "Cue is reading your recent mail.",
       detail: "What needs a reply will appear here.",
     };
   }
@@ -717,7 +840,7 @@ function ThreadList({
   );
 }
 
-function TaskRow({ task, href }: { task: AgentTask; href: string }) {
+function TaskRow({ task, href }: { task: TodayAgentTask; href: string }) {
   return (
     <Link
       // Text starts where the lanes' rows put it, past their unread-dot slot.
@@ -759,7 +882,7 @@ function HomeSkeleton({ layout }: { layout: "list" | "split" }) {
  * "3 need a reply · next: Design review 2:00 PM". The meeting is left to the
  * Next up list when that shows, rather than said twice.
  */
-function busySummary(data: GetHomeResponse, needsReply: number) {
+function busySummary(data: TodayData, needsReply: number) {
   const count = formatCount(needsReply, data.stats.needsYouCapped) ?? "0";
   const status = `${count} ${needsReply === 1 ? "needs" : "need"} a reply`;
   const next = data.calendar.next;
@@ -795,6 +918,32 @@ function useGreeting() {
 function formatCount(count: number, capped: boolean) {
   if (!count) return;
   return capped ? `${count}+` : String(count);
+}
+
+/** A row's key for its actions: across accounts it names the account. */
+function rowKey(thread: TodayThread) {
+  return getListThreadKey({ id: thread.threadId, account: thread.account });
+}
+
+/** Moves a conversation between Needs reply and the rest of the inbox. */
+function moveLane(
+  data: GetHomeResponse,
+  thread: HomeThread,
+  needsReply: boolean,
+): GetHomeResponse {
+  const others = (threads: HomeThread[]) =>
+    threads.filter((t) => t.threadId !== thread.threadId);
+  return needsReply
+    ? {
+        ...data,
+        needsYou: [thread, ...data.needsYou],
+        alsoInInbox: others(data.alsoInInbox),
+      }
+    : {
+        ...data,
+        needsYou: others(data.needsYou),
+        alsoInInbox: [thread, ...data.alsoInInbox],
+      };
 }
 
 function patchThread(

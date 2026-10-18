@@ -24,6 +24,11 @@ const mocks = vi.hoisted(() => ({
     submitConversations: vi.fn(),
   },
   push: vi.fn(),
+  searchParams: new URLSearchParams(),
+  emailAccounts: [] as unknown[],
+  homes: {} as Record<string, GetHomeResponse | undefined>,
+  markNeedsReply: vi.fn(),
+  markNoReplyNeeded: vi.fn(),
   toastUndo: vi.fn(),
   undoLatestToast: vi.fn(),
   home: {
@@ -37,6 +42,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/env", () => ({ env: {} }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mocks.push }),
+  useSearchParams: () => mocks.searchParams,
+}));
+vi.mock("@/hooks/useAccounts", () => ({
+  useAccounts: () => ({ data: { emailAccounts: mocks.emailAccounts } }),
 }));
 vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
   useOptionalMailClient: () => mocks.client,
@@ -52,6 +61,7 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
   useAccount: () => ({
     emailAccountId: "account",
     emailAccount: { name: "Ada Lovelace" },
+    accountIds: ["account", "account-b"],
   }),
 }));
 vi.mock("@/hooks/useMailHref", () => ({
@@ -60,19 +70,32 @@ vi.mock("@/hooks/useMailHref", () => ({
     ({
       threadId,
       view,
+      accountId,
+      allInboxes,
+      threadAccountIndex,
     }: {
       threadId?: string;
       view?: { kind: string; slug: string };
-    } = {}) =>
-      view
-        ? `/mail/u/0/${view.kind}/${view.slug}`
-        : `/mail/u/0/inbox${threadId ? `/${threadId}` : ""}`,
+      accountId?: string;
+      allInboxes?: boolean;
+      threadAccountIndex?: number;
+    } = {}) => {
+      const index = accountId === "account-b" ? 1 : 0;
+      if (view) return `/mail/u/${index}/${view.kind}/${view.slug}`;
+      if (allInboxes)
+        return `/mail/u/0/all-inboxes/inbox/${threadId}?account=${threadAccountIndex}`;
+      return `/mail/u/${index}/inbox${threadId ? `/${threadId}` : ""}`;
+    },
 }));
 vi.mock("@/hooks/use-mobile", () => ({ useIsLargeScreen: () => true }));
 vi.mock("@/hooks/useHome", () => ({
   // A stand-in for SWR's cache: local mutations apply, nothing revalidates.
-  useHome: () => {
-    const [data, setData] = useState(mocks.home.data);
+  useHome: (emailAccountId?: string | null) => {
+    const [data, setData] = useState(
+      emailAccountId && emailAccountId in mocks.homes
+        ? mocks.homes[emailAccountId]
+        : mocks.home.data,
+    );
     return {
       data,
       isLoading: false,
@@ -93,10 +116,10 @@ vi.mock("@/hooks/useHome", () => ({
   },
 }));
 vi.mock("@/utils/actions/rule-feedback", () => ({
-  markNoReplyNeededAction: vi.fn(),
+  markNoReplyNeededAction: mocks.markNoReplyNeeded,
 }));
 vi.mock("@/utils/actions/thread-assist", () => ({
-  markNeedsReplyAction: vi.fn(),
+  markNeedsReplyAction: mocks.markNeedsReply,
 }));
 vi.mock("./BeforeYourMeeting", () => ({ BeforeYourMeeting: () => null }));
 
@@ -514,6 +537,169 @@ describe("HomeDashboard states", () => {
     expect(screen.queryByText("Couldn't load this")).toBeNull();
   });
 });
+
+describe("HomeDashboard across accounts", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.client.getDiagnostics.mockResolvedValue({ revision: 1 });
+    mocks.client.submitConversations.mockResolvedValue({ status: "queued" });
+    mocks.client.cancelOperation.mockResolvedValue({ status: "cancelled" });
+    mocks.undoLatestToast.mockResolvedValue(false);
+    mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
+    mocks.home.data = undefined;
+    mocks.searchParams = new URLSearchParams("accounts=all");
+    mocks.emailAccounts = [
+      emailAccount("account", "a@example.com"),
+      emailAccount("account-b", "b@example.com"),
+    ];
+    mocks.homes = {
+      account: homeData([thread("a1", "Quarterly numbers")]),
+      "account-b": homeData([thread("b1", "Lunch on Friday?")]),
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+    mocks.searchParams = new URLSearchParams();
+    mocks.emailAccounts = [];
+    mocks.homes = {};
+  });
+
+  it("shows both accounts' rows in one lane, each naming its account", () => {
+    renderToday();
+
+    expect(within(lane("Needs reply")).getAllByRole("option")).toHaveLength(2);
+    expect(
+      within(rowFor("account-b:b1")).getByRole("img", {
+        name: "Inbox: b@example.com",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(rowFor("account:a1")).getByRole("img", {
+        name: "Inbox: a@example.com",
+      }),
+    ).toBeTruthy();
+    expect(onlyStatus().textContent).toBe("2 need a reply");
+  });
+
+  it("archives the second account's row in that account, and undo brings it back", async () => {
+    renderToday();
+
+    await act(async () => {
+      fireEvent.click(
+        within(rowFor("account-b:b1")).getAllByRole("button", {
+          name: "Archive conversation",
+        })[0],
+      );
+    });
+
+    expect(screen.queryByText("Lunch on Friday?")).toBeNull();
+    expect(mocks.client.submitConversations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "account-b",
+        conversations: [{ accountId: "account-b", conversationId: "b1" }],
+        change: { kind: "archive" },
+      }),
+    );
+
+    const [{ onUndo }] = mocks.toastUndo.mock.calls[0];
+    await act(async () => onUndo());
+    expect(screen.getByText("Lunch on Friday?")).toBeTruthy();
+    expect(mocks.client.cancelOperation).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "account-b" }),
+    );
+  });
+
+  it("tells the row's own account that no reply is needed", async () => {
+    renderToday();
+
+    await act(async () => {
+      fireEvent.click(
+        within(rowFor("account-b:b1")).getAllByRole("button", {
+          name: "No reply needed",
+        })[0],
+      );
+    });
+
+    expect(mocks.markNoReplyNeeded).toHaveBeenCalledWith("account-b", {
+      threadId: "b1",
+    });
+    expect(
+      within(lane("Also in your inbox")).getByText("Lunch on Friday?"),
+    ).toBeTruthy();
+  });
+
+  it("opens a row in All inboxes, in its account, returning to Today", () => {
+    renderToday();
+
+    fireEvent.click(
+      within(rowFor("account-b:b1")).getAllByRole("button", {
+        name: "Reply to conversation",
+      })[0],
+    );
+
+    expect(mocks.push).toHaveBeenCalledWith(
+      "/mail/u/0/all-inboxes/inbox/b1?account=1&from=today&reply=1",
+    );
+  });
+
+  it("names an account whose lane failed, and never says all is clear", () => {
+    mocks.homes = {
+      account: homeData([]),
+      "account-b": { ...homeData([]), failed: ["needsYou"] },
+    };
+
+    renderToday();
+
+    expect(screen.queryByText("All clear.")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain(
+      "b@example.com couldn't be loaded",
+    );
+  });
+
+  it("shows a conversation in both mailboxes once, saying where else it is", () => {
+    mocks.homes = {
+      account: {
+        ...homeData([]),
+        alsoInInbox: [
+          { ...thread("a1", "Contract"), rfcMessageId: "<same@mail>" },
+        ],
+      },
+      "account-b": homeData([
+        { ...thread("b1", "Contract"), rfcMessageId: "<same@mail>" },
+      ]),
+    };
+
+    renderToday();
+
+    expect(screen.getAllByText("Contract")).toHaveLength(1);
+    expect(
+      within(rowFor("account-b:b1")).getByText("Also in a@example.com"),
+    ).toBeTruthy();
+  });
+
+  it("is one account's Today with one account in All inboxes", () => {
+    mocks.emailAccounts = [emailAccount("account", "a@example.com")];
+    mocks.home.data = homeData([thread("a1", "Quarterly numbers")]);
+
+    renderToday();
+
+    expect(rowFor("a1")).toBeTruthy();
+    expect(screen.queryByRole("img", { name: /^Inbox:/ })).toBeNull();
+  });
+});
+
+function emailAccount(id: string, email: string) {
+  return {
+    id,
+    email,
+    name: null,
+    image: null,
+    includeInAllAccounts: true,
+    account: { disconnectedAt: null, provider: "google" },
+  };
+}
 
 function onlyStatus() {
   const statuses = screen.getAllByRole("status");

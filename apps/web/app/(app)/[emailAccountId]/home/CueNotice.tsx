@@ -13,12 +13,20 @@ export type CueNotice = {
   link?: { label: string; href: string };
 };
 
-/** Shown on Today and in Mail, so a mailbox without it never looks sorted. */
-export function replyTrackingOffNotice(emailAccountId: string): CueNotice {
+/**
+ * Shown on Today and in Mail, so a mailbox without it never looks sorted.
+ * Across accounts it names the mailbox it is about.
+ */
+export function replyTrackingOffNotice(
+  emailAccountId: string,
+  accountEmail?: string,
+): CueNotice {
   return {
     icon: PauseIcon,
     tone: "quiet",
-    title: "Reply tracking is off, so Cue isn't checking what needs a reply.",
+    title: accountEmail
+      ? `Reply tracking is off for ${accountEmail}, so Cue isn't checking what needs a reply there.`
+      : "Reply tracking is off, so Cue isn't checking what needs a reply.",
     link: {
       label: "Turn it on in Rules",
       href: prefixPath(emailAccountId, "/automation"),

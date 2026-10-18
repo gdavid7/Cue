@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { MailThreadRow } from "@inboxzero/mail-ui/MailThreadRow";
 import { MailLabelChip } from "@/app/(app)/[emailAccountId]/mail/MailLabelChip";
+import { AccountMarker } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
 import { getSnoozePresets } from "@/app/(app)/[emailAccountId]/mail/snooze-command-palette";
 import {
   RowButton,
@@ -25,7 +26,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/utils";
-import type { HomeThread } from "@/utils/home/get-home";
+import type { TodayThread } from "@/utils/home/merge-home";
 
 export type TodayRowHandlers = ThreadRowActionHandlers & {
   open: (threadId: string) => void;
@@ -46,6 +47,8 @@ export type TodayRowCorrection = {
  */
 export function TodayThreadRow({
   thread,
+  rowKey,
+  accountColorClassName,
   canChange,
   layout,
   isFocused,
@@ -53,7 +56,11 @@ export function TodayThreadRow({
   correction,
   handlers,
 }: {
-  thread: HomeThread;
+  thread: TodayThread;
+  /** The row's key for its actions, which names its account across accounts. */
+  rowKey: string;
+  /** Across accounts: the color of the marker naming the row's account. */
+  accountColorClassName?: string;
   /** False until the mail engine is up: the row can open and reply only. */
   canChange: boolean;
   layout: MailLayoutMode;
@@ -63,12 +70,20 @@ export function TodayThreadRow({
   correction?: TodayRowCorrection;
   handlers: TodayRowHandlers;
 }) {
-  const id = thread.threadId;
+  const id = rowKey;
   const CorrectionIcon = correction?.icon;
 
   return (
     <div className="contents" data-today-thread={id}>
       <MailThreadRow
+        accountAvatar={
+          thread.account ? (
+            <AccountMarker
+              account={thread.account}
+              colorClassName={accountColorClassName}
+            />
+          ) : null
+        }
         actions={
           <>
             {/* Over the date column, which the row hides on hover. */}
@@ -202,9 +217,20 @@ export function TodayThreadRow({
         isSelected={false}
         isStarred={thread.starred}
         isUnread={thread.unread}
-        labels={
-          thread.tag ? [<MailLabelChip key="tag" name={thread.tag} />] : []
-        }
+        labels={[
+          ...(thread.tag
+            ? [<MailLabelChip key="tag" name={thread.tag} />]
+            : []),
+          // The same conversation in another of the user's mailboxes.
+          ...(thread.alsoIn?.length
+            ? [
+                <MailLabelChip
+                  key="also-in"
+                  name={`Also in ${thread.alsoIn.map((account) => account.email).join(", ")}`}
+                />,
+              ]
+            : []),
+        ]}
         layout={layout}
         messageCount={1}
         onOpen={() => handlers.open(id)}
