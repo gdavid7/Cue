@@ -42,13 +42,14 @@ export const disconnectDriveAction = actionClient
         throw new SafeError("Drive connection not found");
       }
 
-      // The same drive may also be connected from another of the person's
-      // mailboxes; the page shows it once, so disconnecting removes it once.
+      // Removes the row shown and this mailbox's own copy of that drive.
+      // Another mailbox's own copy, and the filing that depends on it, stays.
       await prisma.driveConnection.deleteMany({
         where: {
           ...ownedBySameUser(emailAccountId),
           provider: connection.provider,
           email: { equals: connection.email, mode: "insensitive" },
+          OR: [{ id: connectionId }, { emailAccountId }],
         },
       });
     },

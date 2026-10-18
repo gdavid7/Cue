@@ -30,13 +30,15 @@ export const disconnectCalendarAction = actionClient
         throw new SafeError("Calendar connection not found");
       }
 
-      // The same calendar may also be connected from another of the person's
-      // mailboxes; the page shows it once, so disconnecting removes it once.
+      // Removes the row shown and this mailbox's own copy of that calendar.
+      // Another mailbox's own copy stays, because that mailbox's briefs and
+      // recorder read only its own calendars.
       await prisma.calendarConnection.deleteMany({
         where: {
           ...calendarConnectionsWhere(emailAccountId),
           provider: connection.provider,
           email: { equals: connection.email, mode: "insensitive" },
+          OR: [{ id: connectionId }, { emailAccountId }],
         },
       });
 
