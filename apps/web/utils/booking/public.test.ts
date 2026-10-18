@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import { createTestLogger } from "@/__tests__/helpers";
 import {
   BookingLinkLocationType,
@@ -50,6 +51,9 @@ describe("public booking", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-04T00:00:00.000Z"));
     vi.mocked(getUnifiedCalendarAvailability).mockResolvedValue([]);
+    prisma.calendar.findMany.mockResolvedValue([
+      { id: "calendar-row-id" },
+    ] as never);
     vi.mocked(createCalendarEvent).mockResolvedValue({
       id: "provider-event-id",
       provider: "google",
@@ -1051,6 +1055,29 @@ describe("public booking", () => {
     expect(result).toBeNull();
   });
 
+  it("takes bookings on the host's calendars from any of their mailboxes", async () => {
+    mockBookingLinkConfig();
+    prisma.booking.findMany.mockResolvedValue([]);
+
+    await getPublicAvailability({
+      slug: "intro",
+      start: new Date("2026-05-04T00:00:00.000Z"),
+      end: new Date("2026-05-05T00:00:00.000Z"),
+      logger,
+    });
+
+    expect(prisma.calendar.findMany).toHaveBeenCalledWith({
+      where: {
+        isEnabled: true,
+        connection: {
+          ...ownedBySameUser("email-account-id"),
+          isConnected: true,
+        },
+      },
+      select: { id: true },
+    });
+  });
+
   it("rejects availability when the destination calendar is no longer enabled", async () => {
     prisma.bookingLink.findFirst.mockResolvedValue({
       id: "booking-link-id",
@@ -1068,11 +1095,11 @@ describe("public booking", () => {
       },
       emailAccount: {
         timezone: "UTC",
-        calendarConnections: [
-          { id: "connection-id", calendars: [{ id: "other-calendar-id" }] },
-        ],
       },
     });
+    prisma.calendar.findMany.mockResolvedValue([
+      { id: "other-calendar-id" },
+    ] as never);
 
     await expect(
       getPublicAvailability({
@@ -1125,9 +1152,6 @@ function mockBookingLinkConfig(
     emailAccount: {
       timezone: overrides.timezone ?? "UTC",
       name: "Host User",
-      calendarConnections: [
-        { id: "connection-id", calendars: [{ id: "calendar-row-id" }] },
-      ],
     },
   });
 }
