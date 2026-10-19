@@ -42,9 +42,11 @@ export async function fetchUpcomingEvents({
 export function filterEventsWithExternalGuests(
   events: CalendarEvent[],
   userEmail: string,
+  ownAddresses: string[] = [],
 ): CalendarEvent[] {
   return events.filter(
     (event) =>
-      partitionAttendeesForBriefing(event, userEmail).external.length > 0,
+      partitionAttendeesForBriefing(event, userEmail, ownAddresses).external
+        .length > 0,
   );
 }
