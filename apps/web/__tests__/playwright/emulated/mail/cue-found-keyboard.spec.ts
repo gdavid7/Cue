@@ -33,8 +33,7 @@ test("J and K cross between Cue's rows and the plain list", async ({
 }) => {
   const { cueRows, plainRows } = await openCueSearch(page);
 
-  await cueRows[0].row.focus();
-  await expect(cueRows[0].row).toBeFocused();
+  await focusFirstCueRow(page, cueRows);
 
   await page.keyboard.press("j");
   await expect(cueRows[1].row).toBeFocused();
@@ -54,7 +53,7 @@ test("J and K cross between Cue's rows and the plain list", async ({
 test("Enter opens the focused Cue row", async ({ page }) => {
   const { cueRows } = await openCueSearch(page);
 
-  await cueRows[0].row.focus();
+  await focusFirstCueRow(page, cueRows);
   await page.keyboard.press("j");
   await expect(cueRows[1].row).toBeFocused();
   await page.keyboard.press("Enter");
@@ -70,7 +69,7 @@ test("Enter opens the focused Cue row", async ({ page }) => {
 test("Space selects the focused Cue row", async ({ page }) => {
   const { cueRows, plainRows } = await openCueSearch(page);
 
-  await cueRows[0].row.focus();
+  await focusFirstCueRow(page, cueRows);
   await page.keyboard.press("Space");
 
   await expect(cueRows[0].row).toHaveAttribute("aria-selected", "true");
@@ -82,7 +81,7 @@ test("Space selects the focused Cue row", async ({ page }) => {
 test("archives the focused Cue row and no other thread", async ({ page }) => {
   const { cueRows, plainRows, emailAccountId } = await openCueSearch(page);
 
-  await cueRows[0].row.focus();
+  await focusFirstCueRow(page, cueRows);
   await page.keyboard.press("j");
   await expect(cueRows[1].row).toBeFocused();
   await page.keyboard.press("e");
@@ -100,7 +99,7 @@ test("archives a selection of a Cue row and a plain row together", async ({
 }) => {
   const { cueRows, plainRows, emailAccountId } = await openCueSearch(page);
 
-  await cueRows[0].row.focus();
+  await focusFirstCueRow(page, cueRows);
   await page.keyboard.press("Space");
   await expect(cueRows[0].row).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("j");
@@ -187,6 +186,22 @@ async function openCueSearch(page: Page) {
       seeded.filter((mail) => !mail.cue),
     ),
   };
+}
+
+/**
+ * Takes the keyboard to Cue's first row the way a person gets there. The
+ * cursor stays on the row it held as the results came in, so once Cue's rows
+ * land above the plain ones it may be on either list. Focus starts on that
+ * row, the one Tab reaches, and K climbs to the top, stopping on Cue's first.
+ */
+async function focusFirstCueRow(page: Page, cueRows: { row: Locator }[]) {
+  const cursorRow = page.locator('[data-mail-thread-row][tabindex="0"]');
+  await expect(cursorRow).toHaveCount(1);
+  await cursorRow.focus();
+  // One K for each row the cursor can sit below the first: one more of
+  // Cue's and both plain ones.
+  for (let row = 0; row < 3; row++) await page.keyboard.press("k");
+  await expect(cueRows[0].row).toBeFocused();
 }
 
 async function expectArchived(
