@@ -78,15 +78,19 @@ describe.runIf(isAiTest)("AI Sender Categorization", () => {
       TIMEOUT,
     );
 
-    it("should handle empty senders list", async () => {
-      const result = await aiCategorizeSenders({
-        emailAccount,
-        senders: [],
-        categories: [],
-      });
+    it(
+      "should handle empty senders list",
+      async () => {
+        const result = await aiCategorizeSenders({
+          emailAccount,
+          senders: [],
+          categories: [],
+        });
 
-      expect(result).toEqual([]);
-    });
+        expect(result).toEqual([]);
+      },
+      TIMEOUT,
+    );
 
     it(
       "should categorize senders for all valid SenderCategory values",

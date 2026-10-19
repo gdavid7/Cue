@@ -16,27 +16,35 @@ describe.runIf(isAiTest)(
       vi.clearAllMocks();
     });
 
-    test("successfully analyzes writing style from emails", async () => {
-      const result = await aiAnalyzeWritingStyle({
-        emails: getTestEmails(),
-        emailAccount: getEmailAccount(),
-      });
+    test(
+      "successfully analyzes writing style from emails",
+      async () => {
+        const result = await aiAnalyzeWritingStyle({
+          emails: getTestEmails(),
+          emailAccount: getEmailAccount(),
+        });
 
-      expect(result).toHaveProperty("typicalLength");
-      expect(result).toHaveProperty("formality");
-      expect(result).toHaveProperty("commonGreeting");
-      expect(result?.notableTraits).toBeInstanceOf(Array);
-      expect(result?.examples).toBeInstanceOf(Array);
-    });
+        expect(result).toHaveProperty("typicalLength");
+        expect(result).toHaveProperty("formality");
+        expect(result).toHaveProperty("commonGreeting");
+        expect(result?.notableTraits).toBeInstanceOf(Array);
+        expect(result?.examples).toBeInstanceOf(Array);
+      },
+      TIMEOUT,
+    );
 
-    test("handles empty emails array gracefully", async () => {
-      const result = await aiAnalyzeWritingStyle({
-        emails: [],
-        emailAccount: getEmailAccount(),
-      });
+    test(
+      "handles empty emails array gracefully",
+      async () => {
+        const result = await aiAnalyzeWritingStyle({
+          emails: [],
+          emailAccount: getEmailAccount(),
+        });
 
-      expect(result).toBeNull();
-    });
+        expect(result).toBeNull();
+      },
+      TIMEOUT,
+    );
   },
   TIMEOUT,
 );

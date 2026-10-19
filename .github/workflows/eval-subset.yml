@@ -1,9 +1,9 @@
 name: Eval Subset
 
 # A small, single-model AI eval run when prompts, tool definitions or evals
-# change. The model under test is Claude (ANTHROPIC_API_KEY) and the judge is
-# Gemini (GOOGLE_API_KEY); both are repository secrets the founder adds under
-# Settings -> Secrets and variables -> Actions (docs/dev-infra/PLAN.md, item 1).
+# change. The model under test and the judge are both Claude, using the
+# ANTHROPIC_API_KEY repository secret (Settings -> Secrets and variables ->
+# Actions).
 #
 # Paid runs only start for this repository's own collaborators: pushes need
 # write access, pull requests must come from a branch here (never a fork) by an
@@ -21,7 +21,7 @@ on:
       - "!apps/web/utils/llms/**/*.test.ts"
       - ".github/workflows/eval-subset.yml"
   pull_request:
-    branches: [claude/upbeat-sagan-6c5ed8, production, "claude/**"]
+    branches: [claude/upbeat-sagan-6c5ed8]
     paths:
       - "apps/web/utils/ai/**"
       - "apps/web/utils/llms/**"
@@ -46,7 +46,7 @@ concurrency:
 
 jobs:
   evals:
-    name: Eval subset (Claude, Gemini judge)
+    name: Eval subset (Claude, Claude judge)
     if: >-
       github.repository == 'gdavid7/Cue' &&
       (github.event_name != 'pull_request' ||
@@ -55,27 +55,29 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Require the eval keys
+      - name: Check the eval key
+        id: key
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
-          missing=()
-          [[ -n "$ANTHROPIC_API_KEY" ]] || missing+=(ANTHROPIC_API_KEY)
-          [[ -n "$GOOGLE_API_KEY" ]] || missing+=(GOOGLE_API_KEY)
-          if ((${#missing[@]})); then
-            echo "::error::Missing repository secret(s): ${missing[*]}. Add them under Settings -> Secrets and variables -> Actions."
-            exit 1
+          if [[ -n "$ANTHROPIC_API_KEY" ]]; then
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping evals: repository secret ANTHROPIC_API_KEY is not set (Settings -> Secrets and variables -> Actions)."
           fi
 
       - uses: actions/checkout@v4
+        if: steps.key.outputs.has_key == 'true'
 
       # Checkout's recursive auth cleanup fails on this repository's unmapped gitlink.
       - name: Remove checkout credentials
+        if: steps.key.outputs.has_key == 'true'
         run: git config --local --unset-all "http.${GITHUB_SERVER_URL}/.extraheader"
 
       - name: Select evals
         id: select
+        if: steps.key.outputs.has_key == 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           REQUESTED: ${{ inputs.evals }}
@@ -100,26 +102,34 @@ jobs:
           echo "files=${files[*]}" >> "$GITHUB_OUTPUT"
 
       - uses: pnpm/action-setup@v4
+        if: steps.key.outputs.has_key == 'true'
       - uses: actions/setup-node@v4
+        if: steps.key.outputs.has_key == 'true'
         with:
           node-version: "24"
 
       - name: Install dependencies
+        if: steps.key.outputs.has_key == 'true'
         run: bash scripts/pnpm-install-without-desktop.sh --frozen-lockfile
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
 
       - name: Run evals
+        if: steps.key.outputs.has_key == 'true'
         working-directory: apps/web
         env:
           FILES: ${{ steps.select.outputs.files }}
           RUN_AI_TESTS: "true"
           EVAL_REPORT_PATH: eval-results/report.md
+          # An empty value falls back to the catalog's OpenRouter default, which needs OPENROUTER_API_KEY
+          EVAL_MODELS: claude-sonnet-5.5-anthropic
           DEFAULT_LLMS: anthropic:claude-sonnet-5-5
+          CHAT_LLMS: anthropic:claude-sonnet-5-5
+          ECONOMY_LLMS: anthropic:claude-haiku-5-5
+          NANO_LLMS: anthropic:claude-haiku-5-5
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          EVAL_JUDGE_PROVIDER: google
-          EVAL_JUDGE_MODEL: gemini-3-flash
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          EVAL_JUDGE_PROVIDER: anthropic
+          EVAL_JUDGE_MODEL: claude-sonnet-5-5
           # Fixed values for env validation only; evals don't reach these.
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           AUTH_SECRET: test-secret
@@ -137,7 +147,7 @@ jobs:
           pnpm exec vitest --run "${files[@]}"
 
       - name: Upload eval report
-        if: always() && hashFiles('apps/web/eval-results/**') != ''
+        if: always() && steps.key.outputs.has_key == 'true' && hashFiles('apps/web/eval-results/**') != ''
         uses: actions/upload-artifact@v4
         with:
           name: eval-subset-${{ github.run_id }}

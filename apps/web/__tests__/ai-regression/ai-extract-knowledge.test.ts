@@ -158,18 +158,22 @@ describe.runIf(isAiTest)("aiExtractRelevantKnowledge", () => {
     TIMEOUT,
   );
 
-  test("handles empty knowledge base", async () => {
-    const emailContent = "What are your sponsorship rates?";
+  test(
+    "handles empty knowledge base",
+    async () => {
+      const emailContent = "What are your sponsorship rates?";
 
-    const result = await aiExtractRelevantKnowledge({
-      knowledgeBase: [],
-      emailContent,
-      emailAccount: getEmailAccount(),
-      logger,
-    });
+      const result = await aiExtractRelevantKnowledge({
+        knowledgeBase: [],
+        emailContent,
+        emailAccount: getEmailAccount(),
+        logger,
+      });
 
-    expect(result?.relevantContent).toBe("");
-  });
+      expect(result?.relevantContent).toBe("");
+    },
+    TIMEOUT,
+  );
 
   test(
     "extracts multiple platform knowledge for general sponsorship inquiry",
