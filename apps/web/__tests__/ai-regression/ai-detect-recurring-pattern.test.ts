@@ -196,90 +196,114 @@ describe.runIf(isAiTest)(
       }));
     }
 
-    test("detects newsletter pattern and suggests Newsletter rule", async () => {
-      const result = await aiDetectRecurringPattern({
-        emails: getNewsletterEmails(),
-        emailAccount: getEmailAccount(),
-        rules: getRealisticRules(),
-        logger,
-      });
+    test(
+      "detects newsletter pattern and suggests Newsletter rule",
+      async () => {
+        const result = await aiDetectRecurringPattern({
+          emails: getNewsletterEmails(),
+          emailAccount: getEmailAccount(),
+          rules: getRealisticRules(),
+          logger,
+        });
 
-      console.debug("Newsletter pattern detection result:", result);
+        console.debug("Newsletter pattern detection result:", result);
 
-      expect(result?.matchedRule).toBe(getRuleName(SystemType.NEWSLETTER));
-      expect(result?.explanation).toBeDefined();
-    });
+        expect(result?.matchedRule).toBe(getRuleName(SystemType.NEWSLETTER));
+        expect(result?.explanation).toBeDefined();
+      },
+      TIMEOUT,
+    );
 
-    test("detects receipt pattern and suggests Receipt rule", async () => {
-      const result = await aiDetectRecurringPattern({
-        emails: getReceiptEmails(),
-        emailAccount: getEmailAccount(),
-        rules: getRealisticRules(),
-        logger,
-      });
+    test(
+      "detects receipt pattern and suggests Receipt rule",
+      async () => {
+        const result = await aiDetectRecurringPattern({
+          emails: getReceiptEmails(),
+          emailAccount: getEmailAccount(),
+          rules: getRealisticRules(),
+          logger,
+        });
 
-      console.debug("Receipt pattern detection result:", result);
+        console.debug("Receipt pattern detection result:", result);
 
-      expect(result?.matchedRule).toBe(getRuleName(SystemType.RECEIPT));
-      expect(result?.explanation).toBeDefined();
-    });
+        expect(result?.matchedRule).toBe(getRuleName(SystemType.RECEIPT));
+        expect(result?.explanation).toBeDefined();
+      },
+      TIMEOUT,
+    );
 
-    test("detects calendar pattern and suggests Calendar rule", async () => {
-      const result = await aiDetectRecurringPattern({
-        emails: getCalendarEmails(),
-        emailAccount: getEmailAccount(),
-        rules: getRealisticRules(),
-        logger,
-      });
+    test(
+      "detects calendar pattern and suggests Calendar rule",
+      async () => {
+        const result = await aiDetectRecurringPattern({
+          emails: getCalendarEmails(),
+          emailAccount: getEmailAccount(),
+          rules: getRealisticRules(),
+          logger,
+        });
 
-      console.debug("Calendar pattern detection result:", result);
+        console.debug("Calendar pattern detection result:", result);
 
-      expect(result?.matchedRule).toBe(getRuleName(SystemType.CALENDAR));
-      expect(result?.explanation).toBeDefined();
-    });
+        expect(result?.matchedRule).toBe(getRuleName(SystemType.CALENDAR));
+        expect(result?.explanation).toBeDefined();
+      },
+      TIMEOUT,
+    );
 
-    test("detects reply needed pattern and suggests To Reply rule", async () => {
-      const result = await aiDetectRecurringPattern({
-        emails: getNeedsReplyEmails(),
-        emailAccount: getEmailAccount(),
-        rules: getRealisticRules(),
-        logger,
-      });
+    test(
+      "detects reply needed pattern and suggests To Reply rule",
+      async () => {
+        const result = await aiDetectRecurringPattern({
+          emails: getNeedsReplyEmails(),
+          emailAccount: getEmailAccount(),
+          rules: getRealisticRules(),
+          logger,
+        });
 
-      console.debug("Reply needed pattern detection result:", result);
+        console.debug("Reply needed pattern detection result:", result);
 
-      expect(result?.matchedRule).toBe("To Reply");
-      expect(result?.explanation).toBeDefined();
-    });
+        expect(result?.matchedRule).toBe("To Reply");
+        expect(result?.explanation).toBeDefined();
+      },
+      TIMEOUT,
+    );
 
-    test("returns null for mixed inconsistent emails", async () => {
-      const result = await aiDetectRecurringPattern({
-        emails: getMixedInconsistentEmails(),
-        emailAccount: getEmailAccount(),
-        rules: getRealisticRules(),
-        logger,
-      });
+    test(
+      "returns null for mixed inconsistent emails",
+      async () => {
+        const result = await aiDetectRecurringPattern({
+          emails: getMixedInconsistentEmails(),
+          emailAccount: getEmailAccount(),
+          rules: getRealisticRules(),
+          logger,
+        });
 
-      console.debug("Mixed inconsistent emails result:", result);
+        console.debug("Mixed inconsistent emails result:", result);
 
-      expect(result).toBeNull();
-    });
+        expect(result).toBeNull();
+      },
+      TIMEOUT,
+    );
 
-    test("returns null or matches Notification rule for same sender but different types of content", async () => {
-      const result = await aiDetectRecurringPattern({
-        emails: getDifferentContentEmails(),
-        emailAccount: getEmailAccount(),
-        rules: getRealisticRules(),
-        logger,
-      });
+    test(
+      "returns null or matches Notification rule for same sender but different types of content",
+      async () => {
+        const result = await aiDetectRecurringPattern({
+          emails: getDifferentContentEmails(),
+          emailAccount: getEmailAccount(),
+          rules: getRealisticRules(),
+          logger,
+        });
 
-      console.debug("Same sender different content result:", result);
+        console.debug("Same sender different content result:", result);
 
-      expect(
-        result === null ||
-          result?.matchedRule === getRuleName(SystemType.NOTIFICATION),
-      ).toBeTruthy();
-    });
+        expect(
+          result === null ||
+            result?.matchedRule === getRuleName(SystemType.NOTIFICATION),
+        ).toBeTruthy();
+      },
+      TIMEOUT,
+    );
   },
   TIMEOUT,
 );

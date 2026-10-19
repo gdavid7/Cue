@@ -124,18 +124,22 @@ describe.runIf(isAiTest)("aiPromptToRules", () => {
     TIMEOUT,
   );
 
-  it("should handle errors gracefully", async () => {
-    const emailAccount = {
-      ...getEmailAccount(),
-      user: { ...getEmailAccount().user, aiApiKey: "invalid-api-key" },
-    };
+  it(
+    "should handle errors gracefully",
+    async () => {
+      const emailAccount = {
+        ...getEmailAccount(),
+        user: { ...getEmailAccount().user, aiApiKey: "invalid-api-key" },
+      };
 
-    const promptFile = "Some prompt";
+      const promptFile = "Some prompt";
 
-    await expect(
-      aiPromptToRules({ emailAccount, promptFile }),
-    ).rejects.toThrow();
-  });
+      await expect(
+        aiPromptToRules({ emailAccount, promptFile }),
+      ).rejects.toThrow();
+    },
+    TIMEOUT,
+  );
 
   it(
     "should handle complex email forwarding rules",

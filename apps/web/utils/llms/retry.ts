@@ -4,6 +4,7 @@ import { RetryError } from "ai";
 import pRetry from "p-retry";
 import { createScopedLogger } from "@/utils/logger";
 import { sleep } from "@/utils/sleep";
+import { logLlmError } from "@/utils/llms/log-llm-error";
 import { getAIApiCallError, isAnthropicBillingLimitError } from "@/utils/error";
 
 const logger = createScopedLogger("llms");
@@ -125,13 +126,13 @@ export async function withNetworkRetry<T>(
 
       if (isRetryable && attempt < MAX_RETRIES) {
         const errorType = isNetworkError ? "network" : "validation";
-        logger.warn(`Retrying after ${errorType} error`, {
-          label,
-          attempt,
-          maxRetries: MAX_RETRIES,
-          errorType,
+        logLlmError(
+          logger,
+          "warn",
+          `Retrying after ${errorType} error`,
+          { label, attempt, maxRetries: MAX_RETRIES, errorType },
           error,
-        });
+        );
 
         // Exponential backoff: 1s, 2s, 4s
         const delayMs = 1000 * 2 ** attempt;
