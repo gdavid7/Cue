@@ -17,7 +17,8 @@ const mocks = vi.hoisted(() => ({
   useReplySuggestion: vi.fn(),
   useSuggestedReply: vi.fn(),
   insights: undefined as Record<string, ThreadInsightData> | undefined,
-  draftReplies: { enabled: true, loading: false },
+  draftReplies: drafting("on"),
+  plans: [] as { status: string; rule: { systemType: string | null } }[],
 }));
 
 vi.mock("@/hooks/useReplySuggestion", () => ({
@@ -28,6 +29,11 @@ vi.mock("@/hooks/useSuggestedReply", () => ({
 }));
 vi.mock("@/app/(app)/[emailAccountId]/assistant/settings/DraftReplies", () => ({
   useDraftReplies: () => mocks.draftReplies,
+}));
+vi.mock("@/hooks/useThreadPlans", () => ({
+  useThreadPlans: ({ threadId }: { threadId: string | null }) => ({
+    data: threadId ? { plans: mocks.plans } : undefined,
+  }),
 }));
 vi.mock("@/hooks/useInboxInsights", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/useInboxInsights")>()),
@@ -54,7 +60,8 @@ describe("useReaderReplySuggestion", () => {
     });
     mocks.useSuggestedReply.mockReturnValue({ data: undefined });
     mocks.insights = undefined;
-    mocks.draftReplies = { enabled: true, loading: false };
+    mocks.draftReplies = drafting("on");
+    mocks.plans = [];
   });
   afterEach(cleanup);
 
@@ -66,6 +73,15 @@ describe("useReaderReplySuggestion", () => {
 
   it("writes a reply to a conversation labelled To Reply", () => {
     renderSuggestion([incoming("ask", ["INBOX", "Label_to_reply"])]);
+
+    expect(lastEnabled()).toBe(true);
+  });
+
+  // Cue files To Reply in its own database, without a mailbox label.
+  it("writes a reply to a conversation Cue filed To Reply without a label", () => {
+    mocks.plans = [{ status: "APPLIED", rule: { systemType: "TO_REPLY" } }];
+
+    renderSuggestion([incoming("ask", ["INBOX"])]);
 
     expect(lastEnabled()).toBe(true);
   });
@@ -137,21 +153,39 @@ describe("useReaderReplySuggestion", () => {
 
   // "Auto draft replies" off means Cue doesn't write replies in the reader either.
   it("doesn't write a reply while Auto draft replies is off", () => {
-    mocks.draftReplies = { enabled: false, loading: false };
+    mocks.draftReplies = drafting("off");
 
     renderSuggestion([incoming("ask", ["INBOX", "Label_to_reply"])]);
 
     expect(lastEnabled()).toBe(false);
   });
 
+  // Never turned on isn't turned off: nothing drafts unasked, but "Draft a
+  // reply" is offered and works.
+  it("offers a draft without writing one unasked when drafting was never chosen", () => {
+    mocks.draftReplies = drafting("unset");
+    const { result } = renderSuggestion([
+      incoming("ask", ["INBOX", "Label_to_reply"]),
+    ]);
+
+    expect(lastEnabled()).toBe(false);
+    expect(result.current.reply.offer).toBe(true);
+    expect(result.current.reply.drafts).toBe(true);
+
+    act(() => result.current.reply.request());
+
+    expect(lastEnabled()).toBe(true);
+    expect(result.current.reply.offer).toBe(false);
+  });
+
   it("waits for the Auto draft replies setting before deciding", () => {
-    mocks.draftReplies = { enabled: false, loading: true };
+    mocks.draftReplies = drafting("unset", true);
     const { rerender } = renderSuggestion([
       incoming("ask", ["INBOX", "Label_to_reply"]),
     ]);
     expect(lastEnabled()).toBe(false);
 
-    mocks.draftReplies = { enabled: true, loading: false };
+    mocks.draftReplies = drafting("on");
     rerender();
 
     expect(lastEnabled()).toBe(true);
@@ -176,8 +210,9 @@ describe("useReaderReplySuggestion", () => {
     // The setting turns off every AI-written reply; asking opens the
     // composer straight away instead of waiting on one.
     it("writes none while Auto draft replies is off", () => {
-      mocks.draftReplies = { enabled: false, loading: false };
+      mocks.draftReplies = drafting("off");
       const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
+      expect(result.current.reply.offer).toBe(false);
 
       act(() => result.current.reply.request());
 
@@ -227,6 +262,10 @@ function renderSuggestion(messages: ThreadMessage[]) {
       onOpenThread: vi.fn(),
     }),
   );
+}
+
+function drafting(setting: "on" | "off" | "unset", loading = false) {
+  return { enabled: setting === "on", setting, loading };
 }
 
 function lastEnabled() {

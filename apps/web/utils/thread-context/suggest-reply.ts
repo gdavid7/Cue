@@ -31,7 +31,11 @@ import type { ParsedMessage } from "@/utils/types";
 import { isExaSearchEnabled, searchExa } from "@/utils/exa/search";
 import { domainOf } from "@/utils/thread-context/linked-pages";
 import { getEmailAccountWithAi } from "@/utils/user/get";
-import { isDraftRepliesEnabled } from "@/utils/rule/draft-replies-enabled";
+import {
+  canWriteRequestedReplies,
+  type DraftRepliesSetting,
+  getDraftRepliesSetting,
+} from "@/utils/rule/draft-replies-enabled";
 
 const MAX_THREAD_MESSAGES = 6;
 const CONNECTOR_SOURCE_LABEL = {
@@ -171,8 +175,10 @@ export async function suggestReply({
   const settings =
     knownSettings ?? (await getSuggestedReplySettings(emailAccountId));
   // Turning off "Auto draft replies" stops every AI-written reply, cached
-  // ones included.
-  if (!settings.draftRepliesEnabled) return { status: "unavailable" };
+  // ones included. Never having chosen still allows one: Cue only works one
+  // out unasked when the setting is on, and the reader decides that.
+  if (!canWriteRequestedReplies(settings.draftReplies))
+    return { status: "unavailable" };
   const searchWeb = searchWebRequested && settings.webLookupEnabled;
 
   // A new message changes the key, so a cached suggestion is never stale.
@@ -601,7 +607,7 @@ ${he.escape(source.text)}
 }
 
 export type SuggestedReplySettings = {
-  draftRepliesEnabled: boolean;
+  draftReplies: DraftRepliesSetting;
   webLookupEnabled: boolean;
 };
 
@@ -620,7 +626,7 @@ export async function getSuggestedReplySettings(
     },
   });
   return {
-    draftRepliesEnabled: isDraftRepliesEnabled(settings?.rules[0]),
+    draftReplies: getDraftRepliesSetting(settings?.rules[0]),
     webLookupEnabled: Boolean(settings?.webLookupEnabled),
   };
 }
@@ -651,7 +657,7 @@ export async function getCachedSuggestedReplies(
   keys: { emailAccountId: string; threadId: string; messageId: string }[],
   settings: SuggestedReplySettings,
 ): Promise<(SuggestedReply | null)[]> {
-  if (!settings.draftRepliesEnabled)
+  if (!canWriteRequestedReplies(settings.draftReplies))
     return keys.map(() => ({ status: "unavailable" }));
   if (keys.length === 0) return [];
   const perKey = settings.webLookupEnabled ? 2 : 1;

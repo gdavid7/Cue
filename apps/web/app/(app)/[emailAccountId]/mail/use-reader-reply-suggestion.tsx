@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { useDraftReplies } from "@/app/(app)/[emailAccountId]/assistant/settings/DraftReplies";
+import { getThreadCategories } from "@/app/(app)/[emailAccountId]/mail/cue-strip";
+import { getReaderReplyGate } from "@/app/(app)/[emailAccountId]/mail/reader-reply-gate";
 import type { ThreadMessage } from "@/components/email-list/types";
 import type { ReplyAssist } from "@/components/email-list/reply-assist";
 import {
@@ -13,13 +15,13 @@ import { SystemType } from "@/generated/prisma/enums";
 import { threadInsightItem, useInboxInsights } from "@/hooks/useInboxInsights";
 import { useReplySuggestion } from "@/hooks/useReplySuggestion";
 import { useSuggestedReply } from "@/hooks/useSuggestedReply";
+import { useThreadPlans } from "@/hooks/useThreadPlans";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { extractEmailAddress, isSameEmailAddress } from "@/utils/email";
 import { GmailLabel } from "@/utils/gmail/label";
-import { getRuleLabel } from "@/utils/rule/consts";
 
-const TO_REPLY_LABEL = getRuleLabel(SystemType.TO_REPLY);
+const NO_PLANS: never[] = [];
 
 /**
  * Cue's suggested reply for the open conversation, delivered where the user
@@ -29,7 +31,8 @@ const TO_REPLY_LABEL = getRuleLabel(SystemType.TO_REPLY);
  *
  * It writes one as soon as a conversation that needs one opens: its newest
  * message isn't from the user, it has no draft, it is waiting on a reply, and
- * the user has "Auto draft replies" on.
+ * the user has "Auto draft replies" on. Otherwise `reply.offer` says to show
+ * a "Draft a reply" button, unless the user turned drafting off.
  */
 export function useReaderReplySuggestion({
   emailAccountId,
@@ -68,33 +71,44 @@ export function useReaderReplySuggestion({
     eligible: boolean;
     run: boolean;
   }>();
+  const gate = getReaderReplyGate({
+    setting: draftReplies.setting,
+    settingLoading: draftReplies.loading,
+    hasLatest: Boolean(latest),
+    latestIsFromUser,
+    hasDraft,
+  });
   if (latest && decision?.id !== latest.id && !draftReplies.loading) {
-    setDecision({
-      id: latest.id,
-      eligible: draftReplies.enabled && !latestIsFromUser && !hasDraft,
-      run: false,
-    });
+    setDecision({ id: latest.id, eligible: gate.autoEligible, run: false });
   }
   const current = latest && decision?.id === latest.id ? decision : undefined;
 
   // Only mail waiting on a reply gets one: the rules filed it To Reply, or
   // Cue's read of the newest message says the sender is waiting, or Cue has
-  // already tried a reply to it.
-  const hasToReplyLabel = messages.some((message) =>
-    message.labelIds?.some((id) => userLabels[id]?.name === TO_REPLY_LABEL),
-  );
+  // already tried a reply to it. Cue files To Reply in its own database, not
+  // as a mailbox label, so the rule's runs count as well as a legacy label.
+  const { data: planData } = useThreadPlans({
+    threadId: enabled && current?.eligible ? threadId : null,
+    emailAccountId,
+  });
+  const filedToReply = getThreadCategories({
+    messages,
+    userLabels,
+    plans: planData?.plans ?? NO_PLANS,
+  }).has(SystemType.TO_REPLY);
   const latestId = latest?.id;
   const insightItems = useMemo(
     () =>
-      current?.eligible && !hasToReplyLabel && threadId && latestId
+      current?.eligible && !filedToReply && threadId && latestId
         ? [threadInsightItem({ emailAccountId, threadId, messageId: latestId })]
         : [],
-    [current?.eligible, hasToReplyLabel, threadId, latestId, emailAccountId],
+    [current?.eligible, filedToReply, threadId, latestId, emailAccountId],
   );
-  const { data: insights } = useInboxInsights(insightItems);
+  const { data: insights, isLoading: insightLoading } =
+    useInboxInsights(insightItems);
   const insight = threadId ? insights?.[threadId] : undefined;
   const needsReply =
-    hasToReplyLabel ||
+    filedToReply ||
     insight?.insight?.action === "reply" ||
     Boolean(insight?.reply);
   if (current?.eligible && !current.run && needsReply) {
@@ -103,10 +117,10 @@ export function useReaderReplySuggestion({
 
   const run = Boolean(current?.run);
   // Asked for by the user, so it runs for any message someone else sent,
-  // whether or not Cue thinks it needs a reply. "Auto draft replies" off
-  // still means no AI-written reply at all; the server enforces it too.
-  const canRequestReply = Boolean(latest) && !latestIsFromUser && !hasDraft;
-  const writesReplies = draftReplies.enabled || draftReplies.loading;
+  // whether or not Cue thinks it needs a reply, and whether or not "Auto
+  // draft replies" was ever turned on. Turned off still means no AI-written
+  // reply at all; the server enforces it too.
+  const { canRequest: canRequestReply, writesReplies } = gate;
   const requestReply = () => {
     if (!latest || !canRequestReply || !writesReplies || run) return;
     setDecision({ id: latest.id, eligible: true, run: true });
@@ -165,6 +179,15 @@ export function useReaderReplySuggestion({
       canRequest: canRequestReply,
       /** Whether asking gets Cue's draft, or just the composer. */
       drafts: writesReplies,
+      /**
+       * Whether to offer "Draft a reply" under the reply actions: nothing is
+       * on its way, and Cue isn't still deciding to write one unasked.
+       */
+      offer:
+        canRequestReply &&
+        writesReplies &&
+        !run &&
+        !(current?.eligible && insightLoading),
       request: requestReply,
       /** Whether Cue is still working out the reply. */
       pending: phase === "checking-mail" || phase === "checking-web",

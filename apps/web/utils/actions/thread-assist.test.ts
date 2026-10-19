@@ -189,6 +189,6 @@ function createMailbox() {
 }
 
 const SUGGESTION_SETTINGS = {
-  draftRepliesEnabled: true,
+  draftReplies: "on" as const,
   webLookupEnabled: true,
 };

@@ -9,7 +9,12 @@ import {
 } from "react";
 import dynamic from "next/dynamic";
 import { useMailRoute } from "@/app/(app)/[emailAccountId]/mail/use-mail-route";
-import { AlertCircleIcon, Loader2Icon, MailIcon } from "lucide-react";
+import {
+  AlertCircleIcon,
+  Loader2Icon,
+  MailIcon,
+  SparklesIcon,
+} from "lucide-react";
 import { AddToCalendarButton } from "@/app/(app)/[emailAccountId]/mail/AddToCalendarButton";
 import { CueStrip } from "@/app/(app)/[emailAccountId]/mail/CueStrip";
 import { ReaderToolbar } from "@/app/(app)/[emailAccountId]/mail/ReaderToolbar";
@@ -389,7 +394,23 @@ export function ThreadReader({
                   </div>
                 ) : null
               }
-              replyStatus={replyStatus}
+              replyStatus={
+                replyStatus ??
+                (reply.offer ? (
+                  // Where Cue's progress and answer appear once asked, so the
+                  // button gives way to them in place.
+                  <Button
+                    onClick={requestDraftReply}
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                    className="-ml-2 text-muted-foreground"
+                  >
+                    <SparklesIcon aria-hidden className="mr-2 size-4" />
+                    Draft a reply
+                  </Button>
+                ) : null)
+              }
               earlierMessages={
                 localAvailability?.hasMore
                   ? {

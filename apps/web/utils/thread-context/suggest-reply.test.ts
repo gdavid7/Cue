@@ -235,7 +235,7 @@ describe("webSearchQuery", () => {
 
 describe("getCachedSuggestedReply", () => {
   const key = { emailAccountId: "a1", threadId: "t1", messageId: "m1" };
-  const enabled = { draftRepliesEnabled: true, webLookupEnabled: true };
+  const enabled = { draftReplies: "on" as const, webLookupEnabled: true };
 
   // The reader shows the web pass's answer when there was one, so the
   // inbox row must agree with it.
@@ -271,9 +271,27 @@ describe("getCachedSuggestedReply", () => {
     expect(
       await getCachedSuggestedReply(key, {
         ...enabled,
-        draftRepliesEnabled: false,
+        draftReplies: "off" as const,
       }),
     ).toEqual({ status: "unavailable" });
+  });
+
+  // "Draft a reply" works for a mailbox that never turned drafting on, so
+  // the reply it got must read back too.
+  it("returns the reply while auto draft replies were never chosen", async () => {
+    cache.clear();
+    cache.set("suggested-reply:v2:a1:t1:m1", {
+      status: "suggested",
+      reply: "Yes.",
+      citations: [],
+    });
+
+    expect(
+      await getCachedSuggestedReply(key, {
+        ...enabled,
+        draftReplies: "unset" as const,
+      }),
+    ).toMatchObject({ status: "suggested", reply: "Yes." });
   });
 
   it("ignores the web pass's answer while web lookup is off", async () => {
@@ -337,7 +355,7 @@ describe("getCachedSuggestedReply", () => {
     expect(
       await getCachedSuggestedReplies([key], {
         ...enabled,
-        draftRepliesEnabled: false,
+        draftReplies: "off" as const,
       }),
     ).toEqual([{ status: "unavailable" }]);
     expect(redisCalls).toEqual([]);
@@ -622,7 +640,7 @@ describe("suggestReply when auto draft replies are off", () => {
     });
     prisma.emailAccount.findUnique.mockResolvedValue({
       webLookupEnabled: true,
-      rules: [{ enabled: true, actions: [{ type: ActionType.LABEL }] }],
+      rules: [{ enabled: false, actions: [{ type: ActionType.LABEL }] }],
     } as never);
 
     const result = await suggestReply({
@@ -635,6 +653,39 @@ describe("suggestReply when auto draft replies are off", () => {
 
     expect(result).toEqual({ status: "unavailable" });
     expect(getEmailAccountWithAi).not.toHaveBeenCalled();
+  });
+
+  // Mailboxes from before drafting was the default never chose: the reader
+  // only asks for these when the user presses "Draft a reply".
+  it("answers a mailbox that never chose", async () => {
+    const latest = getMockMessage({
+      id: "m4",
+      threadId: "t4",
+      from: "sarah@example.com",
+    });
+    collectThreadContext.mockResolvedValue({
+      thread: { id: "t4", messages: [latest], snippet: "" },
+      items: [],
+    });
+    cache.set("suggested-reply:v2:a1:t4:m4", {
+      status: "suggested",
+      reply: "Sure, Friday works.",
+      citations: [],
+    });
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      webLookupEnabled: true,
+      rules: [{ enabled: true, actions: [{ type: ActionType.LABEL }] }],
+    } as never);
+
+    const result = await suggestReply({
+      emailAccountId: "a1",
+      userEmail: "me@example.com",
+      threadId: "t4",
+      emailProvider: {} as EmailProvider,
+      logger,
+    });
+
+    expect(result).toMatchObject({ status: "suggested" });
   });
 
   it("suggests nothing when the To Reply rule is turned off", async () => {

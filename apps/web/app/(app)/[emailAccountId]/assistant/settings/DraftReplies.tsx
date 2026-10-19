@@ -10,7 +10,7 @@ import { ActionType, SystemType } from "@/generated/prisma/enums";
 import { LoadingContent } from "@/components/LoadingContent";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SettingCard } from "@/components/SettingCard";
-import { isDraftRepliesEnabled } from "@/utils/rule/draft-replies-enabled";
+import { getDraftRepliesSetting } from "@/utils/rule/draft-replies-enabled";
 
 export function DraftReplies() {
   const { enabled, toggleDraftReplies, loading, error } = useDraftReplies();
@@ -131,8 +131,10 @@ export function useDraftReplies() {
     [data, mutate, emailAccountId],
   );
 
+  const setting = getDraftRepliesSetting(toReplyRule);
   return {
-    enabled: isDraftRepliesEnabled(toReplyRule),
+    enabled: setting === "on",
+    setting,
     toggleDraftReplies,
     loading: isLoading,
     error,
