@@ -158,7 +158,7 @@ describe("useThread", () => {
     ).toEqual([["outgoing:send-1", "<p>On my way</p>"]]);
   });
 
-  it("shows earlier messages loading while a first sync fills in the conversation", async () => {
+  it("fills in the conversation during a first sync without holding an earlier-messages row", async () => {
     let complete: (value: { status: "complete" }) => void = () => undefined;
     mail.client.ensureConversationMessages.mockReturnValue(
       new Promise((resolve) => {
@@ -178,18 +178,18 @@ describe("useThread", () => {
       conversationId: "c-1",
     });
     expect(result.current.localAvailability).toMatchObject({
-      hasMore: true,
-      loadingMore: true,
+      hasMore: false,
+      filling: true,
     });
 
     await act(async () => complete({ status: "complete" }));
     expect(result.current.localAvailability).toMatchObject({
       hasMore: false,
-      loadingMore: false,
+      filling: false,
     });
   });
 
-  it("shows nothing loading for a mailbox sync has fully covered", async () => {
+  it("fills nothing in for a mailbox sync has fully covered", async () => {
     mail.client.ensureConversationMessages.mockReturnValue(
       new Promise(() => undefined),
     );
@@ -203,11 +203,11 @@ describe("useThread", () => {
 
     expect(result.current.localAvailability).toMatchObject({
       hasMore: false,
-      loadingMore: false,
+      filling: false,
     });
   });
 
-  it("shows earlier messages loading while a windowed sync fills in an older conversation", async () => {
+  it("fills in a conversation a windowed sync may not have reached, without holding a row", async () => {
     let complete: (value: { status: "complete" }) => void = () => undefined;
     mail.client.ensureConversationMessages.mockReturnValue(
       new Promise((resolve) => {
@@ -240,17 +240,17 @@ describe("useThread", () => {
     await waitFor(() => expect(result.current.data?.thread.id).toBe("c-1"));
 
     expect(result.current.localAvailability).toMatchObject({
-      hasMore: true,
-      loadingMore: true,
+      hasMore: false,
+      filling: true,
     });
     await act(async () => complete({ status: "complete" }));
     expect(result.current.localAvailability).toMatchObject({
       hasMore: false,
-      loadingMore: false,
+      filling: false,
     });
   });
 
-  it("stops showing earlier messages loading when the fill gives up", async () => {
+  it("stops filling when the fill gives up", async () => {
     mail.client.ensureConversationMessages.mockResolvedValue({
       status: "unavailable",
     });
@@ -264,7 +264,7 @@ describe("useThread", () => {
     await waitFor(() =>
       expect(result.current.localAvailability).toMatchObject({
         hasMore: false,
-        loadingMore: false,
+        filling: false,
       }),
     );
   });
@@ -301,7 +301,7 @@ describe("useThread", () => {
     expect(mail.client.ensureConversationMessages).not.toHaveBeenCalled();
     expect(result.current.localAvailability).toMatchObject({
       hasMore: false,
-      loadingMore: false,
+      filling: false,
     });
   });
 

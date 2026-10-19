@@ -154,10 +154,12 @@ export function useThread(
       missingBodyIds: missingConversationBodyIds(view),
       outgoing: conversationOutgoingMessages(view),
       sendOperationIds: conversationSendOperationIds(view),
-      // The messages being fetched are the conversation's earlier ones, so
-      // they load where earlier pages do.
-      hasMore: Boolean(view.nextPage) || completing,
-      loadingMore: loadingMore || completing,
+      hasMore: Boolean(view.nextPage),
+      loadingMore,
+      // Most fills find nothing older, so they hold no row above the
+      // messages: one that went away again would move the newest message
+      // up after it had painted.
+      filling: completing,
       loadMore: () =>
         setPagination({
           accountId: emailAccountId,
