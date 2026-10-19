@@ -250,6 +250,26 @@ describe("projectEarlierTurnToolResults", () => {
     expect(confirmed.trimmedForContext).toBeDefined();
   });
 
+  it("keeps a change that is still being applied whole", () => {
+    const messages = [
+      userMessage("Email Sam the update"),
+      ...toolRound("sendEmail", "processing-0", {
+        actionType: "send_email",
+        requiresConfirmation: true,
+        confirmationState: "processing",
+        pendingAction: { content: "b".repeat(3000) },
+      }),
+      userMessage("Thanks"),
+    ];
+
+    expect(
+      getToolOutputValue(
+        projectEarlierTurnToolResults(messages),
+        "processing-0",
+      ),
+    ).toEqual(getToolOutputValue(messages, "processing-0"));
+  });
+
   it.each([
     "getUserRulesAndSettings",
     "getLearnedPatterns",

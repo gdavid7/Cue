@@ -112,7 +112,7 @@ export async function compactMessages({
 
 Preserve:
 - All specific actions taken (rules created/modified, emails archived, labels applied) with exact names and IDs
-- Changes still waiting for the user's confirmation (results with confirmationState pending), marked as pending and not applied, with what each would change. Results with confirmationState confirmed were applied after the user confirmed; report them as done
+- Changes still waiting for the user's confirmation (results with confirmationState pending), marked as pending and not applied, with what each would change. Results with confirmationState confirmed were applied after the user confirmed; report them as done. Results with confirmationState processing have no known outcome yet; report them as neither done nor pending
 - The identifiers later requests may refer to: thread and message IDs of emails discussed or listed (with the number each was shown under), and exact rule and label names
 - Tool call results and data retrieved (sender names, email counts, rule names)
 - User preferences and instructions expressed

@@ -101,9 +101,10 @@ function isTrimmable(part: ToolResultPart) {
     (output.type === "json" &&
       isJsonObject(output.value) &&
       !("trimmedForContext" in output.value) &&
-      // A change still waiting for the user's yes stays whole, so it is
-      // never reported from a partial copy.
-      output.value.confirmationState !== "pending");
+      // A change not yet confirmed (pending, or still being applied) stays
+      // whole, so it is never reported from a partial copy.
+      (output.value.confirmationState === undefined ||
+        output.value.confirmationState === "confirmed"));
 
   return (
     canShorten && getToolOutputText(output).length >= MIN_TRIMMABLE_RESULT_CHARS

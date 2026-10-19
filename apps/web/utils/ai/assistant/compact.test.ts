@@ -241,6 +241,7 @@ describe("chat compaction", () => {
     expect(prompt).toContain('"confirmationState":"confirmed"');
     expect(prompt).toContain("confirmationState pending");
     expect(prompt).toContain("confirmationState confirmed");
+    expect(prompt).toContain("confirmationState processing");
   });
 
   it("gives the summary pending confirmations whole and every listed email's ids", async () => {
