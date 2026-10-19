@@ -81,8 +81,12 @@ vi.mock("@/components/email-list/EmailThread", () => ({
     focusAutoOpenedReply,
     replyStatus,
     messageHeadingLevel = 2,
+    earlierMessages,
+    onThreadDiscarded,
   }: {
     messageHeadingLevel?: number;
+    earlierMessages?: unknown;
+    onThreadDiscarded?: () => void;
     onMessageExpansionChange?: (controls: {
       allExpanded: boolean;
       canExpand: boolean;
@@ -95,7 +99,11 @@ vi.mock("@/components/email-list/EmailThread", () => ({
   }) => (
     <>
       <ReportsExpansion onChange={onMessageExpansionChange} />
-      <div data-testid="thread-view">
+      <div
+        data-earlier-messages-row={String(Boolean(earlierMessages))}
+        data-leaves-when-discarded={String(Boolean(onThreadDiscarded))}
+        data-testid="thread-view"
+      >
         <div aria-level={messageHeadingLevel} role="heading">
           Message from sender
         </div>
@@ -304,6 +312,35 @@ describe("ThreadReader", () => {
     expect(screen.queryByRole("region", { name: "Related" })).toBeNull();
   });
 
+  // Most fills find nothing older; a row held for them would go away again
+  // and move the newest message up after it had painted.
+  it("holds no earlier-messages row while a fill looks for older messages", () => {
+    renderReader({
+      refetch: vi.fn(),
+      messages: [createMessage("message-1", "Office hours", ["INBOX"])],
+      localAvailability: { hasMore: false, filling: true },
+    });
+
+    const view = screen.getByTestId("thread-view");
+    expect(view.getAttribute("data-earlier-messages-row")).toBe("false");
+    // Until the fill settles the conversation may be more than it looks.
+    expect(view.getAttribute("data-leaves-when-discarded")).toBe("false");
+  });
+
+  it("offers earlier messages the conversation is known to have", () => {
+    renderReader({
+      refetch: vi.fn(),
+      messages: [createMessage("message-1", "Office hours", ["INBOX"])],
+      localAvailability: { hasMore: true, filling: false },
+    });
+
+    expect(
+      screen
+        .getByTestId("thread-view")
+        .getAttribute("data-earlier-messages-row"),
+    ).toBe("true");
+  });
+
   describe("Draft a reply", () => {
     beforeEach(() => {
       replyState.offer = true;
@@ -384,12 +421,14 @@ function renderReader({
   layout = "split",
   refetch,
   messages = [],
+  localAvailability,
 }: {
   error?: Parameters<typeof ThreadReader>[0]["error"];
   loading?: boolean;
   layout?: "list" | "split";
   refetch: () => void;
   messages?: ThreadMessage[];
+  localAvailability?: { hasMore: boolean; filling: boolean };
 }) {
   const element = () => (
     <NuqsTestingAdapter>
@@ -400,6 +439,16 @@ function renderReader({
         labelHref={() => "/labels"}
         layout={layout}
         loading={loading}
+        localAvailability={
+          localAvailability && {
+            ...localAvailability,
+            missingBodyIds: new Set(),
+            outgoing: [],
+            sendOperationIds: new Map(),
+            loadingMore: false,
+            loadMore: vi.fn(),
+          }
+        }
         messages={messages}
         onArchive={vi.fn()}
         isUnread={false}
