@@ -14,6 +14,9 @@ vi.mock("@/utils/error", () => ({
 vi.mock("@/utils/mobile-push-retention", () => ({
   deleteExpiredMobilePushDeliveries: () => deleteExpiredMock(),
 }));
+vi.mock("@/utils/web-push/retention", () => ({
+  deleteExpiredWebPushDeliveries: async () => 2,
+}));
 vi.mock("@/utils/middleware", async () => {
   const { createWithErrorTestMiddleware } = await vi.importActual<
     typeof import("@/__tests__/helpers")
@@ -48,7 +51,10 @@ describe("mobile push retention cron route", () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ deleted: 3 });
+    await expect(response.json()).resolves.toEqual({
+      deleted: 3,
+      webPushDeleted: 2,
+    });
     expect(deleteExpiredMock).toHaveBeenCalledOnce();
   });
 
@@ -75,7 +81,10 @@ describe("mobile push retention cron route", () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ deleted: 3 });
+    await expect(response.json()).resolves.toEqual({
+      deleted: 3,
+      webPushDeleted: 2,
+    });
     expect(deleteExpiredMock).toHaveBeenCalledOnce();
     expect(captureExceptionMock).not.toHaveBeenCalled();
   });

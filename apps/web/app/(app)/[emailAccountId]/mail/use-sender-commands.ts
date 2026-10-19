@@ -21,6 +21,7 @@ export function useSenderCommands(
     canManageAutoArchive,
     isAutoArchived,
     isAutoArchiveStatusLoading,
+    isAutoArchiveStatusUnknown,
     isUpdatingAutoArchive,
     isUnsubscribeDisabled,
     unsubscribeLabel,
@@ -34,7 +35,9 @@ export function useSenderCommands(
             emailAccountId,
             isAutoArchived,
             isAutoArchiveDisabled:
-              isAutoArchiveStatusLoading || isUpdatingAutoArchive,
+              isAutoArchiveStatusLoading ||
+              isAutoArchiveStatusUnknown ||
+              isUpdatingAutoArchive,
             isUnsubscribeDisabled,
             unsubscribeLabel,
             threadId: message?.threadId ?? "",
@@ -49,6 +52,7 @@ export function useSenderCommands(
       emailAccountId,
       isAutoArchived,
       isAutoArchiveStatusLoading,
+      isAutoArchiveStatusUnknown,
       isUpdatingAutoArchive,
       onToggleAutoArchive,
       onUnsubscribe,

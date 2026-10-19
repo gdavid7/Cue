@@ -5,7 +5,7 @@ import type {
 } from "@/utils/actions/mail-bulk-matching.validation";
 import { getGmailViewLabelIds, GmailLabel } from "@/utils/gmail/label";
 import { withGmailRetry } from "@/utils/gmail/retry";
-import { queryIncludesSpamOrTrash } from "@/utils/gmail/thread";
+import { searchReachesSpamOrTrash } from "@/utils/mail-search/search-query-predicate";
 
 // The most messages.list returns in one page.
 const MATCHING_PAGE_SIZE = 500;
@@ -34,7 +34,7 @@ export function gmailMatchingListQuery(
       labelIds.some(
         (labelId) =>
           labelId === GmailLabel.SPAM || labelId === GmailLabel.TRASH,
-      ) || queryIncludesSpamOrTrash(q ?? ""),
+      ) || searchReachesSpamOrTrash(q ?? "", "google"),
   };
 }
 

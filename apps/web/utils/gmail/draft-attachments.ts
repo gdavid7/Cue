@@ -5,6 +5,7 @@ import type Mail from "nodemailer/lib/mailer";
 import type { DraftAttachmentMetadata } from "@/utils/actions/draft-attachments.validation";
 import {
   assertDraftAttachmentLimits,
+  assertGmailMessageUploadSize,
   type DraftMessageUploadPart,
   getDraftMessageUploadLength,
 } from "@/utils/email/draft-attachment-upload";
@@ -97,6 +98,7 @@ export async function rewriteGmailDraft({
   const message = await buildMailMessage(
     draftMailOptions(current, attachments, text),
   );
+  assertGmailMessageUploadSize(message.length);
   await uploadGmailDraftMessage(
     gmail,
     { draftId, threadId: current.threadId },
@@ -186,11 +188,9 @@ export async function buildGmailDraftUploadTemplate({
   }
   parts.push({ type: "text", text: message.slice(cursor) });
 
-  return {
-    threadId: current.threadId,
-    parts,
-    totalBytes: getDraftMessageUploadLength(parts),
-  };
+  const totalBytes = getDraftMessageUploadLength(parts);
+  assertGmailMessageUploadSize(totalBytes);
+  return { threadId: current.threadId, parts, totalBytes };
 }
 
 /**

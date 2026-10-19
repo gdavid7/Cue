@@ -41,7 +41,7 @@ export const UnsubscribeShareCard = forwardRef<
       <SparklesIcon className="pointer-events-none absolute right-7 top-7 size-6 text-white/50" />
       <SparklesIcon className="pointer-events-none absolute right-16 top-16 size-3.5 text-white/30" />
 
-      <Logo className="relative h-5 w-auto text-white" />
+      <Logo className="relative h-5 w-auto text-white" monochrome />
 
       <div className="relative mt-7">
         <div className="bg-gradient-to-b from-white to-sky-100 bg-clip-text text-7xl font-bold leading-none tracking-tight text-transparent tabular-nums sm:text-8xl">

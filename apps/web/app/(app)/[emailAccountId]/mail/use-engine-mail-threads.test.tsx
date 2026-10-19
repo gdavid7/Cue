@@ -107,6 +107,107 @@ describe("useEngineMailThreads", () => {
     expect(observeMailbox).toHaveBeenCalledTimes(1);
   });
 
+  type AccountSearch = NonNullable<MailboxView["providerSearch"]>[number];
+  function renderSearch(q: string, providerSearch: AccountSearch[]) {
+    const snapshot = mailboxSnapshot([]);
+    if (snapshot.data) snapshot.data.providerSearch = providerSearch;
+    const client = {
+      observeMailbox: vi.fn(() => staticMailboxHandle(snapshot)),
+      requestSync: vi.fn(async () => ({ status: "scheduled" as const })),
+    } as unknown as MailClient;
+    return renderHook(
+      () => useEngineMailThreads({ emailAccountId: "acc-1", query: { q } }),
+      {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <MailEngineProvider client={client}>{children}</MailEngineProvider>
+        ),
+      },
+    );
+  }
+
+  it.each([
+    // Busy, out of reach and signed out are told apart, whatever the local
+    // mail answers.
+    ["busy", "from:amy", "busy"],
+    ["unavailable", "from:amy", "unavailable"],
+    ["reconnect", "from:amy", "reconnect"],
+    ["unavailable", "larger:5M", "unavailable"],
+    // Only a search the local mail can't answer at all needs the provider.
+    ["unsupported", "larger:5M", "unsupported"],
+    ["unsupported", "from:amy", null],
+    ["searching", "larger:5M", null],
+    ["complete", "larger:5M", null],
+  ] as const)("reports a provider search that is %s for %s", async (state, q, kind) => {
+    const { result } = renderSearch(q, [
+      { accountId: "acc-1", state, answered: false },
+    ]);
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.providerSearchNotice).toEqual(
+      kind ? { kind, accountId: "acc-1", partial: false } : null,
+    );
+  });
+
+  it("names the most pressing account, and says when it already answered part", async () => {
+    const { result } = renderSearch("larger:5M", [
+      { accountId: "gmail", state: "busy", answered: true },
+      { accountId: "outlook", state: "reconnect", answered: false },
+      { accountId: "other", state: "complete", answered: true },
+    ]);
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.providerSearchNotice).toEqual({
+      kind: "reconnect",
+      accountId: "outlook",
+      partial: false,
+    });
+
+    const partial = renderSearch("larger:5M", [
+      { accountId: "gmail", state: "busy", answered: true },
+    ]);
+    await waitFor(() => expect(partial.result.current.isLoading).toBe(false));
+    expect(partial.result.current.providerSearchNotice?.partial).toBe(true);
+  });
+
+  it("holds back an empty answer while a committed search is still running", async () => {
+    const searching = renderSearch("larger:5M", [
+      { accountId: "acc-1", state: "searching", answered: false },
+    ]);
+    await waitFor(() => expect(searching.result.current.isLoading).toBe(false));
+    expect(searching.result.current.providerSearchPending).toBe(true);
+
+    const answered = renderSearch("larger:5M", [
+      { accountId: "acc-1", state: "complete", answered: true },
+    ]);
+    await waitFor(() => expect(answered.result.current.isLoading).toBe(false));
+    expect(answered.result.current.providerSearchPending).toBe(false);
+  });
+
+  it("keeps a search still being typed off the provider", async () => {
+    const observeMailbox = vi.fn(() =>
+      staticMailboxHandle(mailboxSnapshot([])),
+    );
+    const client = {
+      observeMailbox,
+      requestSync: vi.fn(async () => ({ status: "scheduled" as const })),
+    } as unknown as MailClient;
+    renderHook(
+      () =>
+        useEngineMailThreads({
+          emailAccountId: "acc-1",
+          query: { q: "is:unr" },
+          providerSearch: false,
+        }),
+      {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <MailEngineProvider client={client}>{children}</MailEngineProvider>
+        ),
+      },
+    );
+    await waitFor(() => expect(observeMailbox).toHaveBeenCalled());
+    expect(observeMailbox).toHaveBeenCalledWith(
+      expect.objectContaining({ providerSearch: false }),
+    );
+  });
+
   it("passes explicit account-scoped predicates to the engine", async () => {
     const predicate: MailPredicate = {
       kind: "all",

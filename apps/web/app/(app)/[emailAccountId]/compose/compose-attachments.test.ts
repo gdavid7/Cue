@@ -1,8 +1,13 @@
+import { EMAIL_ATTACHMENT_LIMITS } from "@inboxzero/email-editor/core";
 import { describe, expect, it } from "vitest";
 import type { DraftAttachment } from "@/utils/email/types";
 import {
   type ComposeAttachment,
+  describeUnattachedFiles,
+  fitComposeAttachments,
+  getGmailAttachmentDraftSaveIntervalMs,
   mergeDraftAttachments,
+  routeComposeFiles,
   toAttachmentReference,
 } from "./compose-attachments";
 
@@ -143,3 +148,137 @@ function listed(overrides: Partial<DraftAttachment>): DraftAttachment {
     ...overrides,
   };
 }
+
+describe("routeComposeFiles", () => {
+  const file = (name: string, type: string, size = 10) =>
+    new File([new Uint8Array(size)], name, { type });
+
+  it.each([
+    ["a PDF", file("report.pdf", "application/pdf")],
+    [
+      "a Word document",
+      file(
+        "notes.docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ),
+    ],
+    ["a zip archive", file("photos.zip", "application/zip")],
+    ["a file with no type", file("data.bin", "")],
+    [
+      "an image mail clients can't show inline",
+      file("photo.heic", "image/heic"),
+    ],
+    ["an SVG", file("logo.svg", "image/svg+xml")],
+    [
+      "an image too large to inline",
+      file("scan.png", "image/png", EMAIL_ATTACHMENT_LIMITS.maxInlineBytes + 1),
+    ],
+  ])("attaches %s dropped into the message", (_, dropped) => {
+    expect(
+      routeComposeFiles([dropped], { into: "body", inlineCount: 0 }),
+    ).toEqual({ inline: [], attachments: [dropped] });
+  });
+
+  it.each([
+    ["PNG", "image/png"],
+    ["JPEG", "image/jpeg"],
+    ["GIF", "image/gif"],
+    ["WebP", "image/webp"],
+  ])("puts a %s dropped into the message inline", (_, type) => {
+    const image = file("photo", type);
+    expect(
+      routeComposeFiles([image], { into: "body", inlineCount: 0 }),
+    ).toEqual({
+      inline: [image],
+      attachments: [],
+    });
+  });
+
+  it("attaches images dropped outside the message body", () => {
+    const image = file("photo.png", "image/png");
+    expect(
+      routeComposeFiles([image], { into: "window", inlineCount: 0 }),
+    ).toEqual({ inline: [], attachments: [image] });
+  });
+
+  it("splits a mixed drop and attaches images past the inline limit", () => {
+    const pdf = file("report.pdf", "application/pdf");
+    const first = file("first.png", "image/png");
+    const second = file("second.png", "image/png");
+    const inlineCount = EMAIL_ATTACHMENT_LIMITS.maxInlineFiles - 1;
+
+    expect(
+      routeComposeFiles([pdf, first, second], { into: "body", inlineCount }),
+    ).toEqual({ inline: [first], attachments: [pdf, second] });
+  });
+});
+
+describe("fitComposeAttachments", () => {
+  const meta = (id: string, size: number) => ({
+    id,
+    filename: `${id}.pdf`,
+    mimeType: "application/pdf",
+    size,
+    disposition: "attachment" as const,
+  });
+
+  it("attaches the files that fit and names the ones that don't", () => {
+    const result = fitComposeAttachments({
+      existing: [meta("on-draft", 10_000_000)],
+      candidates: [
+        meta("small", 4_000_000),
+        meta("video", 15_000_000),
+        meta("notes", 1_000_000),
+      ],
+      maxTotalBytes: 25_000_000,
+    });
+
+    expect(result.accepted.map(({ id }) => id)).toEqual(["small", "notes"]);
+    expect(result.rejected.map(({ id }) => id)).toEqual(["video"]);
+    expect(result.error).toBe(
+      "Attachments can total up to 25 MB. These add up to 29 MB.",
+    );
+  });
+
+  it("accepts everything within the limit", () => {
+    expect(
+      fitComposeAttachments({
+        existing: [],
+        candidates: [meta("a", 1), meta("b", 2)],
+        maxTotalBytes: 25_000_000,
+      }),
+    ).toMatchObject({ rejected: [], error: undefined });
+  });
+});
+
+describe("getGmailAttachmentDraftSaveIntervalMs", () => {
+  // Each Gmail save re-reads and re-uploads every file on the draft.
+  it.each([
+    [0, 0],
+    [100_000, 15_000],
+    [3_000_000, 15_000],
+    [10_000_000, 50_000],
+    [25_000_000, 120_000],
+  ])("spaces saves for %i attached bytes %i ms apart", (bytes, interval) => {
+    expect(getGmailAttachmentDraftSaveIntervalMs(bytes)).toBe(interval);
+  });
+});
+
+describe("describeUnattachedFiles", () => {
+  const reason = "Attachments can total up to 25 MB. These add up to 30 MB.";
+
+  it("names a single file that wasn't attached and why", () => {
+    expect(describeUnattachedFiles([{ filename: "video.mp4" }], reason)).toBe(
+      `video.mp4 wasn't attached. ${reason}`,
+    );
+  });
+
+  it("names every file that wasn't attached", () => {
+    expect(
+      describeUnattachedFiles(
+        [{ filename: "video.mp4" }, { filename: "photos.zip" }],
+        reason,
+      ),
+    ).toBe(`2 files weren't attached (video.mp4, photos.zip). ${reason}`);
+  });
+});

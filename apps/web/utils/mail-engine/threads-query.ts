@@ -9,7 +9,11 @@ import {
   isCueFilterValue,
   splitUsesCue,
 } from "@/utils/split-inbox/cue-filter";
-import { parseBooleanSearchValue } from "@/utils/tokenize-search-query";
+import {
+  gmailTokenToPredicate,
+  type SearchQueryContext,
+  searchQueryToPredicate,
+} from "@/utils/mail-search/search-query-predicate";
 import type {
   ThreadsQuery,
   ThreadsQueryLeaf,
@@ -20,10 +24,11 @@ export function threadsQueryToConversationQuery(input: {
   query: ThreadsQuery;
   pageSize?: number;
   after?: string | null;
+  search?: Partial<SearchQueryContext>;
 }): ConversationQuery {
   return {
     accountIds: input.accountIds,
-    predicate: threadsQueryToPredicate(input.query),
+    predicate: threadsQueryToPredicate(input.query, undefined, input.search),
     order: "newest_first",
     pageSize: input.pageSize ?? 50,
     after: input.after ?? null,
@@ -70,11 +75,15 @@ export function threadsQueryUsesCue(query: ThreadsQuery) {
 export function threadsQueryToPredicate(
   query: ThreadsQuery,
   cueMembership?: CueMembership,
+  search?: Partial<SearchQueryContext>,
 ): MailPredicate {
   const clauses: MailPredicate[] = [];
-  if (query.q) {
-    clauses.push(...textQueryPredicates(query.q));
-  }
+  const searched = query.q
+    ? searchQueryToPredicate(query.q, { now: new Date(), ...search })
+    : null;
+  // Kept flat, so the search's text stays where the store's index drives it.
+  if (searched?.kind === "all") clauses.push(...searched.predicates);
+  else if (searched) clauses.push(searched);
   if (query.type === "unread") {
     clauses.push({ kind: "role", role: "inbox" });
     clauses.push({ kind: "read", value: false });
@@ -197,156 +206,6 @@ function leafToPredicate(
   return { kind: "read", value: false };
 }
 
-function textQueryPredicates(query: string): MailPredicate[] {
-  const clauses: MailPredicate[] = [];
-  let remaining = query.trim();
-  remaining = takePrefixedValues(remaining, "subject:", (value) => {
-    clauses.push({
-      kind: "text",
-      field: "subject",
-      value,
-      match: "phrase",
-    });
-    return true;
-  });
-  for (const field of ["from", "to"] as const) {
-    remaining = takePrefixedValues(remaining, `${field}:`, (value) => {
-      clauses.push({ kind: "address", field, value, match: "address" });
-      return true;
-    });
-  }
-  let hasAttachment: boolean | undefined;
-  remaining = takeToken(remaining, "has:attachment", () => {
-    hasAttachment = true;
-  });
-  // The Outlook search form emits hasattachments:true where the Gmail form
-  // emits has:attachment. See outlook-search-query.ts and mail-search-query.ts.
-  remaining = takePrefixedValue(remaining, "hasattachments:", (value) => {
-    const parsed = parseBooleanSearchValue(value);
-    if (parsed === undefined) return false;
-    hasAttachment = parsed;
-    return true;
-  });
-  if (hasAttachment !== undefined) {
-    clauses.push({ kind: "has_attachment", value: hasAttachment });
-  }
-  remaining = stripGroupingParens(remaining);
-  if (remaining) {
-    clauses.push({
-      kind: "text",
-      field: "any",
-      value: remaining,
-      match: "term",
-    });
-  }
-  return clauses;
-}
-
-// Consumes every occurrence, so `to:ada@x to:grace@x` yields two address
-// predicates instead of leaving the second operator behind as literal search
-// text that matches nothing.
-function takePrefixedValues(
-  input: string,
-  prefix: string,
-  onValue: (value: string) => boolean,
-) {
-  let remaining = input;
-  while (true) {
-    const next = takePrefixedValue(remaining, prefix, onValue);
-    if (next === remaining) return remaining;
-    remaining = next;
-  }
-}
-
-function takePrefixedValue(
-  input: string,
-  prefix: string,
-  // Returning false declines the token, leaving it in the remaining text so a
-  // value we cannot interpret still reaches the free-text clause.
-  onValue: (value: string) => boolean,
-) {
-  const at = findStandaloneToken(input, prefix);
-  if (at === -1) return input;
-  const valueStart = at + prefix.length;
-  if (input[valueStart] === '"') {
-    const closing = input.indexOf('"', valueStart + 1);
-    if (closing === -1) return input;
-    const value = input.slice(valueStart + 1, closing);
-    if (!value) return input;
-    if (!onValue(value)) return input;
-    return `${input.slice(0, at)} ${input.slice(closing + 1)}`;
-  }
-  const valueEnd = findValueEnd(input, valueStart);
-  const value = input.slice(valueStart, valueEnd);
-  if (!value) return input;
-  if (!onValue(value)) return input;
-  return `${input.slice(0, at)} ${input.slice(valueEnd)}`;
-}
-
-function takeToken(input: string, token: string, onMatch: () => void) {
-  const at = findStandaloneToken(input, token);
-  if (at === -1) return input;
-  onMatch();
-  return `${input.slice(0, at)} ${input.slice(at + token.length)}`;
-}
-
-function findStandaloneToken(input: string, token: string) {
-  const haystack = input.toLowerCase();
-  const needle = token.toLowerCase();
-  let start = 0;
-  while (start <= haystack.length - needle.length) {
-    const at = haystack.indexOf(needle, start);
-    if (at === -1) return -1;
-    const before = at === 0 ? " " : input[at - 1];
-    const standalone = before === " " || before === "(";
-    if (standalone && !isInsideQuotes(input, at)) return at;
-    start = at + 1;
-  }
-  return -1;
-}
-
-// An operator inside a quoted phrase belongs to the phrase, not to the query.
-function isInsideQuotes(input: string, at: number) {
-  let quotes = 0;
-  for (let index = 0; index < at; index++) {
-    if (input[index] === '"') quotes += 1;
-  }
-  return quotes % 2 === 1;
-}
-
-// A closing paren ends a value so grouped queries like (hasattachments:true)
-// still reach their operator.
-function findValueEnd(input: string, from: number) {
-  const match = input.slice(from).match(/[\s)]/);
-  return match?.index === undefined ? input.length : from + match.index;
-}
-
-// The local index has no boolean grouping, so parens left behind by the
-// operators above would otherwise be matched as literal search terms. A quoted
-// phrase keeps its parens and spacing: there they are search text, and the
-// clause is also handed to the provider search, where quoting is meaningful.
-function stripGroupingParens(input: string) {
-  let output = "";
-  let quoted = false;
-  for (const char of input) {
-    if (char === '"') {
-      quoted = !quoted;
-      output += char;
-      continue;
-    }
-    if (quoted) {
-      output += char;
-      continue;
-    }
-    if (char === "(" || char === ")" || /\s/.test(char)) {
-      if (!output.endsWith(" ")) output += " ";
-      continue;
-    }
-    output += char;
-  }
-  return output.trim();
-}
-
 function splitFilterToPredicate(
   filter: { kind: string; value?: string | null },
   cueMembership: CueMembership | undefined,
@@ -374,20 +233,6 @@ function splitFilterToPredicate(
     return { kind: "inbox_section", section: filter.value };
   }
   return gmailTokenToPredicate(filter.value || "INBOX");
-}
-
-function gmailTokenToPredicate(id: string): MailPredicate {
-  if (id === "INBOX") return { kind: "role", role: "inbox" };
-  if (id === "SENT") return { kind: "role", role: "sent" };
-  if (id === "DRAFT") return { kind: "role", role: "draft" };
-  if (id === "TRASH") return { kind: "role", role: "trash" };
-  if (id === "SPAM") return { kind: "role", role: "spam" };
-  if (id === "UNREAD") return { kind: "read", value: false };
-  if (id === "STARRED") return { kind: "starred", value: true };
-  if (id.startsWith("CATEGORY_")) {
-    return { kind: "membership", membership: "category", id };
-  }
-  return { kind: "membership", membership: "label", id };
 }
 
 function cuePredicate(

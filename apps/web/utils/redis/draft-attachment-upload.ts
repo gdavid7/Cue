@@ -1,6 +1,6 @@
 import { redis } from "@/utils/redis";
 
-// Long enough to upload 15 MB on a slow connection; Gmail keeps the session
+// Long enough to upload 25 MB on a slow connection; Gmail keeps the session
 // for about a week, so ours always expires first.
 const UPLOAD_TTL_SECONDS = 60 * 60;
 

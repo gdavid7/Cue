@@ -1,4 +1,9 @@
-import type { EmailAttachmentMetadata } from "@inboxzero/email-editor/core";
+import {
+  EMAIL_ATTACHMENT_LIMITS,
+  EMAIL_INLINE_IMAGE_MIME_TYPES,
+  type EmailAttachmentMetadata,
+  validateEmailAttachmentMetadata,
+} from "@inboxzero/email-editor/core";
 import type { DraftAttachment } from "@/utils/email/types";
 import type { ComposeAttachmentReference } from "@/utils/mail-engine/reply-drafts";
 
@@ -97,3 +102,88 @@ export function getEditorInlineAttachments(attachments: ComposeAttachment[]) {
       attachment.status !== "failed",
   );
 }
+
+/**
+ * Where pasted or dropped files go, as in Gmail: images that mail clients
+ * show in the body go inline when they land in it, and every other file is
+ * attached rather than refused.
+ */
+export function routeComposeFiles(
+  files: File[],
+  { into, inlineCount }: { into: "body" | "window"; inlineCount: number },
+) {
+  const inline: File[] = [];
+  const attachments: File[] = [];
+  for (const file of files) {
+    const canInline =
+      into === "body" &&
+      inlineCount + inline.length < EMAIL_ATTACHMENT_LIMITS.maxInlineFiles &&
+      file.size <= EMAIL_ATTACHMENT_LIMITS.maxInlineBytes &&
+      (EMAIL_INLINE_IMAGE_MIME_TYPES as readonly string[]).includes(file.type);
+    (canInline ? inline : attachments).push(file);
+  }
+  return { inline, attachments };
+}
+
+/**
+ * Adds files in order while they fit, so one large file doesn't keep the
+ * others off the draft. The first refusal explains why the rest were left.
+ */
+export function fitComposeAttachments<T extends EmailAttachmentMetadata>({
+  existing,
+  candidates,
+  maxTotalBytes,
+}: {
+  existing: EmailAttachmentMetadata[];
+  candidates: T[];
+  maxTotalBytes: number;
+}) {
+  const accepted: T[] = [];
+  const rejected: T[] = [];
+  let error: string | undefined;
+  for (const candidate of candidates) {
+    const validation = validateEmailAttachmentMetadata(
+      [...existing, ...accepted, candidate],
+      { maxTotalBytes },
+    );
+    if (validation.valid) {
+      accepted.push(candidate);
+    } else {
+      rejected.push(candidate);
+      error ??= validation.error;
+    }
+  }
+  return { accepted, rejected, error };
+}
+
+export function describeUnattachedFiles(
+  rejected: Pick<EmailAttachmentMetadata, "filename">[],
+  reason: string,
+) {
+  const names = rejected.map(({ filename }) => filename);
+  return names.length === 1
+    ? `${names[0]} wasn't attached. ${reason}`
+    : `${names.length} files weren't attached (${names.join(", ")}). ${reason}`;
+}
+
+/**
+ * Gmail can only replace a draft whole, so each save re-reads and re-uploads
+ * every attached file (about 2.4x their size in transfer). Saves are spaced
+ * by how much is attached; the device keeps every keystroke meanwhile, and
+ * hiding, closing or sending still saves at once.
+ */
+export function getGmailAttachmentDraftSaveIntervalMs(attachedBytes: number) {
+  if (!attachedBytes) return 0;
+  return Math.min(
+    MAX_GMAIL_DRAFT_SAVE_INTERVAL_MS,
+    Math.max(
+      MIN_GMAIL_DRAFT_SAVE_INTERVAL_MS,
+      attachedBytes / ATTACHED_BYTES_PER_SAVE_INTERVAL_MS,
+    ),
+  );
+}
+
+const MIN_GMAIL_DRAFT_SAVE_INTERVAL_MS = 15_000;
+const MAX_GMAIL_DRAFT_SAVE_INTERVAL_MS = 120_000;
+// 200 bytes per ms: 3 MB attached saves every 15 s, 10 MB every 50 s.
+const ATTACHED_BYTES_PER_SAVE_INTERVAL_MS = 200;

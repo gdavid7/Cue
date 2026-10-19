@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   clearLastEmailAccount: vi.fn(),
   swrFetcher: vi.fn(),
   clearCachedToday: vi.fn(),
+  syncWebPush: vi.fn(),
 }));
 
 vi.mock("@/utils/auth-client", () => ({ signOut: mocks.signOut }));
@@ -29,6 +30,10 @@ vi.mock("@/utils/swr-persistence", () => ({
 vi.mock("@/utils/home/today-cache", () => ({
   clearCachedToday: mocks.clearCachedToday,
 }));
+vi.mock("@/utils/web-push/subscription", () => ({
+  isWebPushAvailable: () => true,
+  syncWebPushSubscription: mocks.syncWebPush,
+}));
 
 describe("logOut", () => {
   beforeEach(() => {
@@ -36,6 +41,7 @@ describe("logOut", () => {
     mocks.signOut.mockResolvedValue({ data: { success: true } });
     mocks.wipeLocalMailbox.mockResolvedValue(undefined);
     mocks.clearLastEmailAccount.mockResolvedValue(undefined);
+    mocks.syncWebPush.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -115,6 +121,25 @@ describe("logOut", () => {
     await logOut();
 
     expect(mocks.clearCachedToday).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops push notifications to this browser before leaving", async () => {
+    const logOut = await loadLogOut();
+
+    await logOut();
+
+    expect(mocks.syncWebPush).toHaveBeenCalledExactlyOnceWith("off");
+  });
+
+  it("leaves without waiting for a push unsubscribe that never finishes", async () => {
+    mocks.syncWebPush.mockReturnValue(new Promise(() => {}));
+    const logOut = await loadLogOut();
+
+    const done = logOut();
+    await vi.advanceTimersByTimeAsync(1500);
+    await done;
+
+    expect(mocks.redirect).toHaveBeenCalledWith("/login");
   });
 
   it("still leaves when the sign-out request fails", async () => {

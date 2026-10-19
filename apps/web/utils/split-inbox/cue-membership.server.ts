@@ -71,17 +71,85 @@ export async function getCueMembership({
     MARKETING: [],
   };
 
-  // Marking a newsletter as needing a reply is a correction: it leaves Reading.
-  const seenThreadIds = new Set(trackers.map((tracker) => tracker.threadId));
+  const decisions = latestReadingDecisions(
+    executions,
+    new Set(trackers.map((tracker) => tracker.threadId)),
+  );
+  for (const { messageId, type } of decisions) {
+    if (membership[type].length < MEMBERSHIP_LIMIT)
+      membership[type].push(messageId);
+  }
+
+  return membership;
+}
+
+/**
+ * Whether Cue sorted a thread into Reading (Newsletter or Marketing), by the
+ * same rule as the Reading tabs. Null when it didn't, or hasn't decided yet.
+ */
+export async function getCueReadingType({
+  emailAccountId,
+  threadId,
+}: {
+  emailAccountId: string;
+  threadId: string;
+}): Promise<CueFilterValue | null> {
+  const [awaitingReply, executions] = await Promise.all([
+    prisma.threadTracker.findFirst({
+      where: {
+        emailAccountId,
+        threadId,
+        type: ThreadTrackerType.NEEDS_REPLY,
+        resolved: false,
+      },
+      select: { threadId: true },
+    }),
+    prisma.executedRule.findMany({
+      where: {
+        emailAccountId,
+        threadId,
+        status: ExecutedRuleStatus.APPLIED,
+        rule: {
+          systemType: { in: [...READING_TYPES, ...CONVERSATION_STATUS_TYPES] },
+        },
+      },
+      select: {
+        threadId: true,
+        messageId: true,
+        rule: { select: { systemType: true } },
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 1,
+    }),
+  ]);
+  const [decision] = latestReadingDecisions(
+    executions,
+    new Set(awaitingReply ? [threadId] : []),
+  );
+  return decision?.type ?? null;
+}
+
+/**
+ * Cue's latest decision per thread decides Reading, from executions newest
+ * first. Marking a newsletter as needing a reply is a correction: it leaves
+ * Reading.
+ */
+function latestReadingDecisions(
+  executions: {
+    threadId: string;
+    messageId: string;
+    rule: { systemType: SystemType | null } | null;
+  }[],
+  awaitingReplyThreadIds: Set<string>,
+) {
+  const seenThreadIds = new Set(awaitingReplyThreadIds);
+  const decisions: { messageId: string; type: CueFilterValue }[] = [];
   for (const execution of executions) {
     if (seenThreadIds.has(execution.threadId)) continue;
     seenThreadIds.add(execution.threadId);
     const systemType = execution.rule?.systemType;
-    const list = READING_TYPES.find((type) => type === systemType);
-    if (list && membership[list].length < MEMBERSHIP_LIMIT) {
-      membership[list].push(execution.messageId);
-    }
+    const type = READING_TYPES.find((candidate) => candidate === systemType);
+    if (type) decisions.push({ messageId: execution.messageId, type });
   }
-
-  return membership;
+  return decisions;
 }
