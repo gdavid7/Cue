@@ -109,6 +109,18 @@ describe("buildResolvedSystemPrompt", () => {
     expect(plainPrompt).toContain("numbered list");
   });
 
+  it("reads a write's confirmation state, not requiresConfirmation, as pending or applied", () => {
+    // Confirmed results replayed in history still carry requiresConfirmation.
+    const prompt = buildPrompt();
+
+    expect(prompt).toContain('confirmationState "pending"');
+    expect(prompt).toContain('confirmationState "confirmed"');
+    expect(prompt).not.toMatch(
+      /requiresConfirmation(=true)?,? (means|explain)/,
+    );
+    expect(prompt).not.toContain("returns requiresConfirmation");
+  });
+
   it("never asks for inline email card markup on messaging surfaces", () => {
     const prompt = buildPrompt({
       responseSurface: "messaging",
