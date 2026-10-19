@@ -3,12 +3,16 @@ import { BRAND_LOGO_URL, BRAND_NAME } from "@/utils/branding";
 
 interface LogoProps {
   className?: string;
+  /** Draws the dot in the text color, for colored backgrounds where the accent blue disappears. */
+  monochrome?: boolean;
 }
 
 const DEFAULT_BRAND_NAME = "Cue";
 const ACCENT_CLASS = "fill-[#2563EB] dark:fill-[#60A5FA]";
 
-export function Logo({ className }: LogoProps) {
+export function Logo({ className, monochrome }: LogoProps) {
+  const dotClass = monochrome ? "fill-current" : ACCENT_CLASS;
+
   if (BRAND_LOGO_URL) {
     return (
       <Image
@@ -29,6 +33,7 @@ export function Logo({ className }: LogoProps) {
       <svg
         viewBox={`0 0 ${30 + BRAND_NAME.length * 14} 24`}
         fill="none"
+        role="img"
         className={className}
       >
         <title>{BRAND_NAME}</title>
@@ -38,7 +43,7 @@ export function Logo({ className }: LogoProps) {
           strokeWidth="4.2"
           strokeLinecap="round"
         />
-        <circle cx="18.9" cy="12" r="3.1" className={ACCENT_CLASS} />
+        <circle cx="18.9" cy="12" r="3.1" className={dotClass} />
         <text
           x="30"
           y="19"
@@ -55,7 +60,7 @@ export function Logo({ className }: LogoProps) {
   }
 
   return (
-    <svg viewBox="3 3 82 22" fill="none" className={className}>
+    <svg viewBox="3 3 82 22" fill="none" role="img" className={className}>
       <title>{BRAND_NAME}</title>
       <g transform="scale(1.17)">
         <path
@@ -64,7 +69,7 @@ export function Logo({ className }: LogoProps) {
           strokeWidth="3.4"
           strokeLinecap="round"
         />
-        <circle cx="19.2" cy="12" r="2.5" className={ACCENT_CLASS} />
+        <circle cx="19.2" cy="12" r="2.5" className={dotClass} />
       </g>
       <g
         transform="translate(36.5 0)"

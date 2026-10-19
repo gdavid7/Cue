@@ -13,12 +13,12 @@ export function FooterLineLogo({ className }: FooterLineLogoProps) {
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
+      aria-hidden="true"
       opacity="0.09"
       stroke={COLORS.footer.gray}
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <title>Cue</title>
       <g transform="scale(1.17)">
         <path d="M16.49 6.18A7.6 7.6 0 1 0 16.49 17.82" strokeWidth="3.4" />
         <circle
