@@ -100,7 +100,14 @@ type ChatContextType = {
    */
   replyFinishing: boolean;
   context: MessageContext | null;
-  setContext: (context: MessageContext | null) => void;
+  /**
+   * Attaches context to the next message. Context about an email names the
+   * email's account, and the chat moves there if it is in another one.
+   */
+  setContext: (
+    context: MessageContext | null,
+    options?: { accountId: string },
+  ) => void;
   attachments: Attachment[];
   setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>;
   /**
@@ -542,14 +549,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     chat.setMessages([]);
   }, [chat.setMessages, chatAccountMissing, setChatAccountIdParam, setChatId]);
 
-  // Fix context comes from the page's account (its rules and mail).
-  const setContextForPage = useCallback(
-    (nextContext: MessageContext | null) => {
-      if (nextContext && emailAccountId !== routeAccountId)
-        moveChatToAccount(routeAccountId, null);
+  // Fix context is about one account's rules and mail, which in All inboxes
+  // need not be the page's.
+  const setContextForAccount = useCallback(
+    (nextContext: MessageContext | null, options?: { accountId: string }) => {
+      if (nextContext && options && options.accountId !== emailAccountId)
+        moveChatToAccount(options.accountId, null);
       setContext(nextContext);
     },
-    [emailAccountId, moveChatToAccount, routeAccountId],
+    [emailAccountId, moveChatToAccount],
   );
 
   const sendMessageParts = useCallback(
@@ -750,7 +758,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         stop,
         replyFinishing,
         context,
-        setContext: setContextForPage,
+        setContext: setContextForAccount,
         attachments,
         setAttachments,
         inputFocusRequested,

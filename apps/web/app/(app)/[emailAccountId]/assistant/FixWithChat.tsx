@@ -55,7 +55,7 @@ export function FixWithChat({
   const [showExplanation, setShowExplanation] = useState(false);
 
   const { setOpen } = useSidebar();
-  const { setContext, switchChatAccount } = useChat();
+  const { setContext } = useChat();
   // The reader's account, which in All inboxes may not be the chat's.
   const { emailAccountId } = useAccount();
 
@@ -127,9 +127,8 @@ export function FixWithChat({
                 name: selectedRuleName || "Unknown",
               },
     };
-    // The fix is to this account's rules, so the chat moves to it first.
-    switchChatAccount(emailAccountId);
-    setContext(context);
+    // The fix is to this account's rules, so the chat works in it.
+    setContext(context, { accountId: emailAccountId });
 
     setInput(input);
     setOpen((arr) => [...arr, "chat-sidebar"]);
