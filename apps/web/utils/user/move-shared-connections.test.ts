@@ -19,26 +19,28 @@ describe("getMoveSharedConnectionsOperations", () => {
 
   it("moves the removed mailbox's calendars, Drive and apps to the one that stays", async () => {
     const operations = await getMoveSharedConnectionsOperations({
+      userId: "user-1",
       fromEmailAccountId: "removed",
       toEmailAccountId: "remaining",
     });
 
     expect(operations).toHaveLength(4);
     expect(prisma.calendarConnection.updateMany).toHaveBeenCalledWith({
-      where: { emailAccountId: "removed" },
+      where: { emailAccountId: "removed", emailAccount: { userId: "user-1" } },
       data: { emailAccountId: "remaining" },
     });
     expect(prisma.driveConnection.updateMany).toHaveBeenCalledWith({
-      where: { emailAccountId: "removed" },
+      where: { emailAccountId: "removed", emailAccount: { userId: "user-1" } },
       data: { emailAccountId: "remaining" },
     });
     expect(prisma.mcpIntegration.updateMany).toHaveBeenCalledWith({
-      where: { emailAccountId: "removed" },
+      where: { emailAccountId: "removed", emailAccount: { userId: "user-1" } },
       data: { emailAccountId: "remaining" },
     });
     expect(prisma.mcpConnection.updateMany).toHaveBeenCalledWith({
       where: {
         emailAccountId: "removed",
+        emailAccount: { userId: "user-1" },
         // A provider-hosted app knows the person by the removed mailbox's id.
         integration: { name: { notIn: providerHostedApps } },
       },
@@ -58,6 +60,7 @@ describe("getMoveSharedConnectionsOperations", () => {
     ] as never);
 
     await getMoveSharedConnectionsOperations({
+      userId: "user-1",
       fromEmailAccountId: "removed",
       toEmailAccountId: "remaining",
     });
@@ -69,17 +72,23 @@ describe("getMoveSharedConnectionsOperations", () => {
     expect(prisma.calendarConnection.updateMany).toHaveBeenCalledWith({
       where: {
         emailAccountId: "removed",
+        emailAccount: { userId: "user-1" },
         NOT: [{ provider: "google", email: "cal@example.com" }],
       },
       data: { emailAccountId: "remaining" },
     });
     expect(prisma.driveConnection.updateMany).toHaveBeenCalledWith({
-      where: { emailAccountId: "removed", provider: { notIn: ["microsoft"] } },
+      where: {
+        emailAccountId: "removed",
+        emailAccount: { userId: "user-1" },
+        provider: { notIn: ["microsoft"] },
+      },
       data: { emailAccountId: "remaining" },
     });
     expect(prisma.mcpConnection.updateMany).toHaveBeenCalledWith({
       where: {
         emailAccountId: "removed",
+        emailAccount: { userId: "user-1" },
         integration: { name: { notIn: providerHostedApps } },
         integrationId: { notIn: ["notion-id"] },
       },

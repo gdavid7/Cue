@@ -311,6 +311,7 @@ async function prepareSharedConnectionsMove({
   if (!remainingEmailAccountId) return [];
   await shareChannelsAcrossMailboxes({ userId, logger });
   return getMoveSharedConnectionsOperations({
+    userId,
     fromEmailAccountId: emailAccountId,
     toEmailAccountId: remainingEmailAccountId,
   });

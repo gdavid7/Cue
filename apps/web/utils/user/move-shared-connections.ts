@@ -20,9 +20,11 @@ const PROVIDER_HOSTED_APPS = Object.values(MCP_INTEGRATIONS)
  * only if the mailbox is actually deleted.
  */
 export async function getMoveSharedConnectionsOperations({
+  userId,
   fromEmailAccountId,
   toEmailAccountId,
 }: {
+  userId: string;
   fromEmailAccountId: string;
   toEmailAccountId: string;
 }): Promise<Prisma.PrismaPromise<unknown>[]> {
@@ -46,6 +48,7 @@ export async function getMoveSharedConnectionsOperations({
     prisma.calendarConnection.updateMany({
       where: {
         emailAccountId: fromEmailAccountId,
+        emailAccount: { userId },
         ...(calendars.length > 0
           ? {
               NOT: calendars.map(({ provider, email }) => ({
@@ -60,6 +63,7 @@ export async function getMoveSharedConnectionsOperations({
     prisma.driveConnection.updateMany({
       where: {
         emailAccountId: fromEmailAccountId,
+        emailAccount: { userId },
         ...(drives.length > 0
           ? { provider: { notIn: drives.map(({ provider }) => provider) } }
           : {}),
@@ -68,12 +72,13 @@ export async function getMoveSharedConnectionsOperations({
     }),
     // Custom app servers the person registered from this mailbox.
     prisma.mcpIntegration.updateMany({
-      where: { emailAccountId: fromEmailAccountId },
+      where: { emailAccountId: fromEmailAccountId, emailAccount: { userId } },
       data,
     }),
     prisma.mcpConnection.updateMany({
       where: {
         emailAccountId: fromEmailAccountId,
+        emailAccount: { userId },
         integration: { name: { notIn: PROVIDER_HOSTED_APPS } },
         ...(apps.length > 0
           ? {

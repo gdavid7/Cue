@@ -131,16 +131,16 @@ export async function undoPendingSend() {
   const current = tracked;
   if (!current?.holding || current.undoing) return false;
   current.undoing = true;
-  const result = { status: await cancelSend(current) };
+  const status = await cancelSend(current);
   current.undoing = false;
-  if (result.status === "unavailable") {
+  if (status === "unavailable") {
     // The send is still held, so the user can try again within the window.
     toastError({
       description: "Couldn't reach the server to undo. Try again.",
     });
     return false;
   }
-  if (result.status === "cancelled") {
+  if (status === "cancelled") {
     if (tracked === current) stopTracking({ dismiss: false });
     current.restoreComposer();
     toastSendUndone(current.toastId);
@@ -148,14 +148,14 @@ export async function undoPendingSend() {
   }
   // Too late means the send is on its way, so the toast keeps reporting it.
   current.holding = false;
-  if (result.status === "too_late") {
+  if (status === "too_late") {
     if (tracked === current) toastSending({ id: current.toastId });
   } else if (tracked === current) {
     stopTracking({ dismiss: true });
   }
   toastError({
     description:
-      result.status === "too_late"
+      status === "too_late"
         ? "Too late to undo. This email was already sent."
         : "Couldn't undo send",
   });

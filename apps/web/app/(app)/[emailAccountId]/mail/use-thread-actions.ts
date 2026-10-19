@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useInsertionEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { format } from "date-fns";
 import groupBy from "lodash/groupBy";
 import { toast } from "sonner";
@@ -67,13 +67,6 @@ export function useThreadActions({
   const listTargetsByKey = useRef(new Map<string, ThreadActionTarget>());
   const activeReaderTarget = useRef<ThreadActionTarget | undefined>(undefined);
   const client = useOptionalMailClient();
-  // Switching account replaces the engine, and an undo (the shortcut, or a
-  // toast shown before the switch) must reach the one running now. Batches
-  // carry their own accounts, so the last one stays undoable across a switch.
-  const clientRef = useRef(client);
-  useInsertionEffect(() => {
-    clientRef.current = client;
-  });
   useEffect(() => {
     if (retainedEmailAccountId.current !== emailAccountId) {
       retainedEmailAccountId.current = emailAccountId;
@@ -145,23 +138,23 @@ export function useThreadActions({
     [client],
   );
 
-  const undoBatch = useCallback(
-    async (batch: UndoableBatch) => {
-      const client = clientRef.current;
-      if (batch.undone || !client) return [];
-      batch.undone = true;
-      if (lastAction.current === batch) lastAction.current = null;
-      const snapshots = await batch.snapshots;
-      if (!snapshots.length) return [];
+  // Switching account replaces the engine, and an undo (the shortcut, or a
+  // toast shown before the switch) must reach the one running now. Batches
+  // carry their own accounts, so the last one stays undoable across a switch.
+  const undoBatch = useStableCallback(async (batch: UndoableBatch) => {
+    if (batch.undone || !client) return [];
+    batch.undone = true;
+    if (lastAction.current === batch) lastAction.current = null;
+    const snapshots = await batch.snapshots;
+    if (!snapshots.length) return [];
 
-      const compensation = mutationPayloadToChange({
-        kind: UNDOABLE_COPY[batch.action].compensation,
-      });
-      if (!compensation) return [];
-      const results = await Promise.allSettled(
-        Object.values(
-          groupBy(snapshots, (snapshot) => snapshot.mutationId),
-        ).map(async (snapshots) => {
+    const compensation = mutationPayloadToChange({
+      kind: UNDOABLE_COPY[batch.action].compensation,
+    });
+    if (!compensation) return [];
+    const results = await Promise.allSettled(
+      Object.values(groupBy(snapshots, (snapshot) => snapshot.mutationId)).map(
+        async (snapshots) => {
           const { emailAccountId, mutationId } = snapshots[0];
           const cancelled =
             (
@@ -187,33 +180,32 @@ export function useThreadActions({
             }
           }
           return snapshots.map((snapshot) => snapshot.key);
-        }),
-      );
-      const restoredKeys = results.flatMap((result) =>
-        result.status === "fulfilled" ? result.value : [],
-      );
-      const failedCount = snapshots.length - restoredKeys.length;
+        },
+      ),
+    );
+    const restoredKeys = results.flatMap((result) =>
+      result.status === "fulfilled" ? result.value : [],
+    );
+    const failedCount = snapshots.length - restoredKeys.length;
 
-      if (restoredKeys.length) {
-        notifyRestored(restoredKeys);
-        toast.success(summarise("Restored", restoredKeys.length));
-      }
-      if (failedCount) {
-        toast.error(
-          failedCount === snapshots.length
-            ? "Couldn't restore"
-            : `Couldn't restore ${failedCount} of ${snapshots.length}`,
-        );
-      }
-      if (!restoredKeys.length) {
-        batch.undone = false;
-        // An action taken while this undo ran is now the one to undo.
-        if (lastAction.current === null) lastAction.current = batch;
-      }
-      return restoredKeys;
-    },
-    [notifyRestored],
-  );
+    if (restoredKeys.length) {
+      notifyRestored(restoredKeys);
+      toast.success(summarise("Restored", restoredKeys.length));
+    }
+    if (failedCount) {
+      toast.error(
+        failedCount === snapshots.length
+          ? "Couldn't restore"
+          : `Couldn't restore ${failedCount} of ${snapshots.length}`,
+      );
+    }
+    if (!restoredKeys.length) {
+      batch.undone = false;
+      // An action taken while this undo ran is now the one to undo.
+      if (lastAction.current === null) lastAction.current = batch;
+    }
+    return restoredKeys;
+  });
 
   const undo = useCallback(async () => {
     const batch = lastAction.current;
