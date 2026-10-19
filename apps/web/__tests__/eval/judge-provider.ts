@@ -1,5 +1,6 @@
 const DEFAULT_EVAL_JUDGE_PROVIDER = "openrouter";
 const DEFAULT_EVAL_JUDGE_MODEL = "deepseek/deepseek-v4.1-flash";
+const ANTHROPIC_EVAL_JUDGE_MODEL = "claude-sonnet-5-5";
 
 /**
  * Lives apart from the judge implementations because those reach vitest through
@@ -7,9 +8,16 @@ const DEFAULT_EVAL_JUDGE_MODEL = "deepseek/deepseek-v4.1-flash";
  * not vitest) still need to resolve which model grades the run.
  */
 export function getEvalJudgeUserAi() {
+  const useAnthropicDefault =
+    !process.env.OPENROUTER_API_KEY && Boolean(process.env.ANTHROPIC_API_KEY);
   const aiProvider =
-    process.env.EVAL_JUDGE_PROVIDER || DEFAULT_EVAL_JUDGE_PROVIDER;
-  const aiModel = process.env.EVAL_JUDGE_MODEL || DEFAULT_EVAL_JUDGE_MODEL;
+    process.env.EVAL_JUDGE_PROVIDER ||
+    (useAnthropicDefault ? "anthropic" : DEFAULT_EVAL_JUDGE_PROVIDER);
+  const aiModel =
+    process.env.EVAL_JUDGE_MODEL ||
+    (aiProvider === "anthropic"
+      ? ANTHROPIC_EVAL_JUDGE_MODEL
+      : DEFAULT_EVAL_JUDGE_MODEL);
   const aiApiKey = getEvalJudgeApiKey(aiProvider);
   if (!aiApiKey) return;
 
