@@ -32,6 +32,14 @@ describe("vercel.json", () => {
     }
   });
 
+  it("leaves the type check to CI", () => {
+    const script = readFileSync(
+      path.join(webRoot, "scripts/vercel-build.sh"),
+      "utf8",
+    );
+    expect(script).toMatch(/^export SKIP_TYPE_CHECK=true$/m);
+  });
+
   it("builds one package at a time", () => {
     const script = readFileSync(
       path.join(webRoot, "scripts/vercel-build.sh"),
