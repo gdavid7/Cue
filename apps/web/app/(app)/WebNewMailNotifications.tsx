@@ -26,6 +26,11 @@ import {
   readEffectiveMode,
   readStoredMode,
 } from "@/utils/web-notifications/preference";
+import {
+  isWebPushAvailable,
+  isWebPushResyncDue,
+  syncWebPushSubscription,
+} from "@/utils/web-push/subscription";
 
 const WATCHED_UNREAD_PAGE_SIZE = 25;
 const TRIAGE_SETTLE_MS = 15_000;
@@ -151,6 +156,16 @@ export function WebNewMailNotifications() {
       releaseLeadership();
     };
   }, [client, connectedAccountIds]);
+
+  // Keeps the server's copy of this browser's push subscription fresh, so mail
+  // still notifies after the browser rotates it or the server dropped it.
+  useEffect(() => {
+    if (!isWebPushAvailable() || getWebNotificationPermission() !== "granted")
+      return;
+    const mode = readEffectiveMode();
+    if (mode === "off" || !isWebPushResyncDue()) return;
+    syncWebPushSubscription(mode).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     if (!firstSyncCompleted) return;

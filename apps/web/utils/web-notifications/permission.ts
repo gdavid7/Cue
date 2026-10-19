@@ -5,6 +5,10 @@ import {
   writeStoredMode,
   type WebNotificationMode,
 } from "@/utils/web-notifications/preference";
+import {
+  isWebPushAvailable,
+  syncWebPushSubscription,
+} from "@/utils/web-push/subscription";
 
 export type WebNotificationPermission = NotificationPermission | "unsupported";
 
@@ -21,16 +25,11 @@ export async function chooseWebNotificationMode(
   mode: WebNotificationMode,
 ): Promise<WebNotificationPermission> {
   writeStoredMode(mode);
-  if (mode === "off") return getWebNotificationPermission();
-  if (getWebNotificationPermission() !== "default")
-    return getWebNotificationPermission();
-  try {
-    return await Notification.requestPermission();
-  } catch {
-    return getWebNotificationPermission();
-  } finally {
-    announcePreferenceChange();
-  }
+  const permission = await requestPermissionFor(mode);
+  // Push carries the same choice to the server for when no tab is open.
+  if (isWebPushAvailable() && (mode === "off" || permission === "granted"))
+    syncWebPushSubscription(mode).catch(() => undefined);
+  return permission;
 }
 
 /** One quiet offer, after the first sync, to people who haven't been asked. */
@@ -51,4 +50,19 @@ export function shouldOfferWebNotifications(input: {
 
 export function recordWebNotificationOffer() {
   markAskedToEnable();
+}
+
+async function requestPermissionFor(
+  mode: WebNotificationMode,
+): Promise<WebNotificationPermission> {
+  if (mode === "off") return getWebNotificationPermission();
+  if (getWebNotificationPermission() !== "default")
+    return getWebNotificationPermission();
+  try {
+    return await Notification.requestPermission();
+  } catch {
+    return getWebNotificationPermission();
+  } finally {
+    announcePreferenceChange();
+  }
 }
