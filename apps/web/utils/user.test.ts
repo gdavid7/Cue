@@ -7,7 +7,6 @@ const mocks = vi.hoisted(() => ({
   toastLoading: vi.fn(),
   clearLastEmailAccount: vi.fn(),
   swrFetcher: vi.fn(),
-  clearCachedToday: vi.fn(),
   clearBrowserCaches: vi.fn(),
   syncWebPush: vi.fn(),
 }));
@@ -27,9 +26,6 @@ vi.mock("@/utils/mail-engine/reply-drafts", () => ({
 vi.mock("@/providers/swr-fetcher", () => ({ swrFetcher: mocks.swrFetcher }));
 vi.mock("@/utils/swr-persistence", () => ({
   clearPersistedSwrCache: vi.fn(),
-}));
-vi.mock("@/utils/home/today-cache", () => ({
-  clearCachedToday: mocks.clearCachedToday,
 }));
 vi.mock("@/utils/browser-cache", () => ({
   clearBrowserCaches: mocks.clearBrowserCaches,
@@ -117,14 +113,6 @@ describe("logOut", () => {
     await done;
 
     expect(mocks.redirect).toHaveBeenCalledWith("/login");
-  });
-
-  it("forgets Today's saved lanes before leaving", async () => {
-    const logOut = await loadLogOut();
-
-    await logOut();
-
-    expect(mocks.clearCachedToday).toHaveBeenCalledTimes(1);
   });
 
   it("forgets the briefs, replies and insights kept in this browser", async () => {

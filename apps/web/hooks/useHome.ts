@@ -1,6 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import useSWR, { unstable_serialize, useSWRConfig } from "swr";
-import type { GetHomeResponse } from "@/app/api/user/home/route";
+import useSWR, {
+  type Cache,
+  type BareFetcher,
+  unstable_serialize,
+  useSWRConfig,
+} from "swr";
+import {
+  keepShownLanes,
+  type TodayHomeData,
+} from "@/utils/home/keep-shown-lanes";
 import { readCachedToday, writeCachedToday } from "@/utils/home/today-cache";
 import { onTodayChanged } from "@/utils/home/today-changes";
 import { getAccountScopedKey } from "@/utils/swr";
@@ -14,14 +22,15 @@ const FOCUS_REFRESH_MIN_MS = 30_000;
 const CHANGE_REFRESH_MIN_MS = 10_000;
 
 // Saved copies as they went into SWR's cache, so they aren't saved back.
-const seededCopies = new WeakSet<GetHomeResponse>();
+const seededCopies = new WeakSet<TodayHomeData>();
 
 /**
  * Today's data. It opens on what Today last showed in this browser, then
- * refreshes. `gaveUp` is set once a lane has stayed pending through every
- * refresh; `retry` asks again from the start.
+ * refreshes; a lane Gmail is slow to serve keeps its rows meanwhile.
+ * `gaveUp` is set once a lane has stayed pending through every refresh;
+ * `retry` asks again from the start.
  */
-export function useHome(emailAccountId?: string | null, userId?: string) {
+export function useHome(emailAccountId?: string | null) {
   // Loads in a row that came back with a lane still pending. SWR may call
   // refreshInterval from an earlier render, so it reads the ref.
   const pendingLoadsRef = useRef(0);
@@ -31,9 +40,9 @@ export function useHome(emailAccountId?: string | null, userId?: string) {
     setPendingLoads(loads);
   };
   const key = homeKey(emailAccountId);
-  const { cache, mutate: mutateKey } = useSWRConfig();
-  useSavedHomeSeed(emailAccountId, userId);
-  const home = useSWR<GetHomeResponse>(key, {
+  const { cache, mutate: mutateKey, fetcher } = useSWRConfig();
+  useSavedHomeSeed(emailAccountId);
+  const home = useSWR<TodayHomeData>(key, loadHome(cache, fetcher), {
     // A row action while a load is on its way makes SWR drop that load's
     // answer; ask again so the fresh lanes still arrive. A newer load still
     // running will answer instead: asking again then would replace it, and
@@ -44,19 +53,18 @@ export function useHome(emailAccountId?: string | null, userId?: string) {
     // Each load spends Gmail quota, so tab switches share one.
     focusThrottleInterval: FOCUS_REFRESH_MIN_MS,
     onSuccess: (data) =>
-      countPendingLoads(data.pending.length ? pendingLoadsRef.current + 1 : 0),
+      countPendingLoads(isRefreshing(data) ? pendingLoadsRef.current + 1 : 0),
     refreshInterval: (data) =>
-      data?.pending.length && pendingLoadsRef.current < PENDING_LOAD_LIMIT
+      data && isRefreshing(data) && pendingLoadsRef.current < PENDING_LOAD_LIMIT
         ? PENDING_REFRESH_MS
         : 0,
   });
   const { mutate } = home;
 
   useEffect(() => {
-    if (!home.data || seededCopies.has(home.data) || !emailAccountId || !userId)
-      return;
-    writeCachedToday({ userId, emailAccountId, data: home.data });
-  }, [home.data, emailAccountId, userId]);
+    if (!home.data || seededCopies.has(home.data) || !emailAccountId) return;
+    writeCachedToday({ emailAccountId, data: home.data });
+  }, [home.data, emailAccountId]);
 
   // Cue sorted new mail or the user's reply changed a lane: show it now
   // rather than on the next reload. A backlog sorts a message every second
@@ -92,7 +100,9 @@ export function useHome(emailAccountId?: string | null, userId?: string) {
     isLoading: home.isLoading && !home.data,
     mutate,
     gaveUp: Boolean(
-      home.data?.pending.length && pendingLoads >= PENDING_LOAD_LIMIT,
+      home.data &&
+        isRefreshing(home.data) &&
+        pendingLoads >= PENDING_LOAD_LIMIT,
     ),
     retry: () => {
       countPendingLoads(0);
@@ -109,15 +119,14 @@ export function useHome(emailAccountId?: string | null, userId?: string) {
 export function useWarmHome(
   emailAccountId: string | null | undefined,
   enabled: boolean,
-  userId?: string,
 ) {
   const key = enabled ? homeKey(emailAccountId) : null;
-  const { cache, mutate } = useSWRConfig();
+  const { cache, mutate, fetcher } = useSWRConfig();
   // With a saved copy, the hover puts it in place instead of loading: a
   // load on its way when Today opened would be dropped as overtaken by the
   // copy, and Today loads once itself.
-  useSavedHomeSeed(enabled ? emailAccountId : null, userId);
-  useSWR<GetHomeResponse>(key, {
+  useSavedHomeSeed(enabled ? emailAccountId : null);
+  useSWR<TodayHomeData>(key, loadHome(cache, fetcher), {
     revalidateIfStale: false,
     revalidateOnFocus: false,
     revalidateOnReconnect: false,
@@ -137,21 +146,38 @@ export function useWarmHome(
  * overtaken by it. Effects only run in the browser after hydration, so the
  * server's render still matches.
  */
-function useSavedHomeSeed(
-  emailAccountId: string | null | undefined,
-  userId: string | undefined,
-) {
+function useSavedHomeSeed(emailAccountId: string | null | undefined) {
   const key = homeKey(emailAccountId);
   const serializedKey = key ? unstable_serialize(key) : null;
   const { cache, mutate } = useSWRConfig();
   useLayoutEffect(() => {
-    if (!serializedKey || !emailAccountId || !userId) return;
+    if (!serializedKey || !emailAccountId) return;
     if (cache.get(serializedKey)?.data !== undefined) return;
-    const saved = readCachedToday({ userId, emailAccountId });
+    const saved = readCachedToday({ emailAccountId });
     if (!saved) return;
     seededCopies.add(saved);
     mutate(serializedKey, saved, { revalidate: false });
-  }, [serializedKey, emailAccountId, userId, cache, mutate]);
+  }, [serializedKey, emailAccountId, cache, mutate]);
+}
+
+/** The app's fetcher, keeping what Today shows of each lane still loading. */
+function loadHome(cache: Cache, fetcher: BareFetcher | undefined) {
+  return async (
+    key: NonNullable<ReturnType<typeof homeKey>>,
+  ): Promise<TodayHomeData> => {
+    if (!fetcher) throw new Error("No SWR fetcher configured");
+    const fresh = (await fetcher(key)) as TodayHomeData;
+    // Read once it answers, so changes made meanwhile are what is kept.
+    const shown = cache.get(unstable_serialize(key))?.data as
+      | TodayHomeData
+      | undefined;
+    return keepShownLanes(shown, fresh);
+  };
+}
+
+/** Lanes still to load, whether shown as placeholders or as kept rows. */
+function isRefreshing(data: TodayHomeData) {
+  return Boolean(data.pending?.length || data.stale?.length);
 }
 
 function homeKey(emailAccountId: string | null | undefined) {

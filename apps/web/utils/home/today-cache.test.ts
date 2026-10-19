@@ -3,110 +3,99 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
 import {
-  clearCachedToday,
-  clearCachedTodayForAccount,
-  readCachedToday,
-  resetCachedTodayBlocksForTesting,
-  writeCachedToday,
-} from "./today-cache";
+  clearBrowserCaches,
+  clearBrowserCachesForAccount,
+  resetBrowserCacheForTesting,
+  setBrowserCacheUser,
+} from "@/utils/browser-cache";
+import { readCachedToday, writeCachedToday } from "./today-cache";
 
 // Local times: what counts as "today" is the browser's own day.
 const NOW = new Date(2026, 9, 16, 12, 0).getTime();
 const HOUR = 60 * 60 * 1000;
-const owner = { userId: "user-1", emailAccountId: "account-1" };
+const DAY = 24 * HOUR;
+const account = { emailAccountId: "account-1" };
 
 describe("Today's cache", () => {
   beforeEach(() => {
     window.localStorage.clear();
-    resetCachedTodayBlocksForTesting();
+    resetBrowserCacheForTesting("user-1");
   });
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
   it("opens Today on what it last showed this account", () => {
-    writeCachedToday({ ...owner, data: home(), now: NOW });
-    expect(readCachedToday({ ...owner, now: NOW + HOUR })).toEqual(home());
+    writeCachedToday({ ...account, data: home(), now: NOW });
+    expect(readCachedToday({ ...account, now: NOW + HOUR })).toEqual(home());
   });
 
   it("never shows one account's Today under another account or user", () => {
-    writeCachedToday({ ...owner, data: home(), now: NOW });
+    writeCachedToday({ ...account, data: home(), now: NOW });
     expect(
-      readCachedToday({ ...owner, emailAccountId: "account-2", now: NOW }),
+      readCachedToday({ emailAccountId: "account-2", now: NOW }),
     ).toBeUndefined();
-    expect(
-      readCachedToday({ ...owner, userId: "user-2", now: NOW }),
-    ).toBeUndefined();
-  });
 
-  it("forgets the previous user's Today when another user saves theirs", () => {
-    writeCachedToday({ ...owner, data: home(), now: NOW });
-    writeCachedToday({
-      userId: "user-2",
-      emailAccountId: "account-9",
-      data: home(),
-      now: NOW,
-    });
-    expect(window.localStorage.length).toBe(1);
-    expect(readCachedToday({ ...owner, now: NOW })).toBeUndefined();
-  });
-
-  it("drops a Today saved on an earlier day, however recently", () => {
-    // Its counts and "Next up" were yesterday's.
-    const lateEvening = new Date(2026, 9, 16, 23, 30).getTime();
-    const afterMidnight = new Date(2026, 9, 17, 0, 30).getTime();
-    writeCachedToday({ ...owner, data: home(), now: lateEvening });
-    expect(readCachedToday({ ...owner, now: afterMidnight })).toBeUndefined();
+    setBrowserCacheUser("user-2");
+    expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
+    // The next user on this browser doesn't keep the last one's either.
     expect(window.localStorage.length).toBe(0);
   });
 
-  it("forgets other users' and out-of-date entries when it reads", () => {
+  it("keeps a returning user's Today from an earlier day, without that day's counts", () => {
+    const lateEvening = new Date(2026, 9, 16, 23, 30).getTime();
+    const nextMorning = new Date(2026, 9, 17, 8, 0).getTime();
     writeCachedToday({
-      userId: "user-2",
-      emailAccountId: "account-9",
-      data: home(),
-      now: NOW - HOUR,
+      ...account,
+      data: home({
+        calendar: {
+          connected: true,
+          next: {
+            title: "Standup",
+            at: "2026-10-17T09:00:00Z",
+            tomorrow: true,
+          },
+        },
+        nextUp: [
+          upcoming("yesterday", new Date(2026, 9, 16, 22, 0)),
+          upcoming("later", new Date(2026, 9, 17, 15, 0)),
+        ],
+      } as Partial<GetHomeResponse>),
+      now: lateEvening,
     });
-    window.localStorage.setItem(
-      "cue:today:v1:user-1:account-2",
-      JSON.stringify({
-        userId: "user-1",
-        emailAccountId: "account-2",
-        savedAt: NOW - 30 * HOUR,
-        data: home(),
-      }),
-    );
-    writeCachedToday({ ...owner, data: home(), now: NOW - HOUR });
-    // Saving user-1's Today already forgot user-2's; put one back.
-    window.localStorage.setItem(
-      "cue:today:v1:user-2:account-9",
-      JSON.stringify({
-        userId: "user-2",
-        emailAccountId: "account-9",
-        savedAt: NOW - HOUR,
-        data: home(),
-      }),
-    );
 
-    expect(readCachedToday({ ...owner, now: NOW })).toEqual(home());
-    expect(Object.keys(window.localStorage)).toEqual([
-      "cue:today:v1:user-1:account-1",
-    ]);
+    const cached = readCachedToday({ ...account, now: nextMorning });
+    expect(cached?.needsYou).toEqual(home().needsYou);
+    expect(cached?.alsoInInbox).toEqual(home().alsoInInbox);
+    expect(cached?.today).toEqual({ checked: 0, filed: 0, filedLabel: null });
+    expect(cached?.calendar.next).toBeNull();
+    expect(cached?.nextUp.map((item) => item.id)).toEqual(["later"]);
+  });
+
+  it("drops a copy too old to say much about the inbox now", () => {
+    writeCachedToday({ ...account, data: home(), now: NOW });
+    expect(readCachedToday({ ...account, now: NOW + 2 * DAY })).toBeDefined();
+    expect(readCachedToday({ ...account, now: NOW + 3 * DAY })).toBeUndefined();
   });
 
   it("keeps only a Today whose lanes all loaded", () => {
     // A lane still pending would be read later as an empty one: "All clear".
     writeCachedToday({
-      ...owner,
+      ...account,
       data: home({ pending: ["needsYou"] }),
       now: NOW,
     });
     writeCachedToday({
-      ...owner,
+      ...account,
       data: home({ failed: ["waiting"] }),
       now: NOW,
     });
-    expect(readCachedToday({ ...owner, now: NOW })).toBeUndefined();
+    writeCachedToday({
+      ...account,
+      data: { ...home(), stale: ["alsoInInbox"] },
+      now: NOW,
+    });
+    expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
   });
 
   it("keeps the rows Today shows, with short previews", () => {
@@ -114,37 +103,40 @@ describe("Today's cache", () => {
       thread(`thread-${index}`, "x".repeat(500)),
     );
     writeCachedToday({
-      ...owner,
+      ...account,
       data: home({ alsoInInbox: rows }),
       now: NOW,
     });
-    const cached = readCachedToday({ ...owner, now: NOW });
+    const cached = readCachedToday({ ...account, now: NOW });
     expect(cached?.alsoInInbox).toHaveLength(5);
     expect(cached?.alsoInInbox[0].preview.length).toBeLessThanOrEqual(140);
   });
 
   it("clears every Today on sign-out and saves none after", () => {
-    writeCachedToday({ ...owner, data: home(), now: NOW });
-    clearCachedToday();
-    expect(readCachedToday({ ...owner, now: NOW })).toBeUndefined();
-    // A load landing during sign-out must not bring it back.
-    writeCachedToday({ ...owner, data: home(), now: NOW });
+    writeCachedToday({ ...account, data: home(), now: NOW });
+    clearBrowserCaches();
     expect(window.localStorage.length).toBe(0);
+    // A load landing during sign-out must not bring it back.
+    writeCachedToday({ ...account, data: home(), now: NOW });
+    expect(window.localStorage.length).toBe(0);
+    setBrowserCacheUser("user-1");
+    expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
   });
 
   it("clears a removed account's Today only", () => {
-    writeCachedToday({ ...owner, data: home(), now: NOW });
-    writeCachedToday({
-      ...owner,
-      emailAccountId: "account-2",
-      data: home(),
-      now: NOW,
-    });
-    clearCachedTodayForAccount("account-1");
-    expect(readCachedToday({ ...owner, now: NOW })).toBeUndefined();
-    expect(
-      readCachedToday({ ...owner, emailAccountId: "account-2", now: NOW }),
-    ).toEqual(home());
+    writeCachedToday({ ...account, data: home(), now: NOW });
+    writeCachedToday({ emailAccountId: "account-2", data: home(), now: NOW });
+    clearBrowserCachesForAccount("account-1");
+    expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
+    expect(readCachedToday({ emailAccountId: "account-2", now: NOW })).toEqual(
+      home(),
+    );
+  });
+
+  it("forgets the copy kept before Today moved into the browser cache", () => {
+    window.localStorage.setItem("cue:today:v1:user-1:account-1", "{}");
+    resetBrowserCacheForTesting("user-1");
+    expect(window.localStorage.length).toBe(0);
   });
 
   it("works without storage, as in a private window", () => {
@@ -155,17 +147,21 @@ describe("Today's cache", () => {
       throw new Error("blocked");
     });
     expect(() =>
-      writeCachedToday({ ...owner, data: home(), now: NOW }),
+      writeCachedToday({ ...account, data: home(), now: NOW }),
     ).not.toThrow();
-    expect(readCachedToday({ ...owner, now: NOW })).toBeUndefined();
-    expect(() => clearCachedToday()).not.toThrow();
-  });
-
-  it("ignores a corrupt entry", () => {
-    window.localStorage.setItem("cue:today:v1:user-1:account-1", "{nope");
-    expect(readCachedToday({ ...owner, now: NOW })).toBeUndefined();
+    expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
   });
 });
+
+function upcoming(id: string, at: Date) {
+  return {
+    id,
+    kind: "event" as const,
+    title: id,
+    at: at.toISOString(),
+    source: "Calendar",
+  };
+}
 
 function thread(threadId: string, preview = "A short preview") {
   return {

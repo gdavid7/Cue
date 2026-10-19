@@ -8,8 +8,9 @@
  * only costs asking the server again.
  */
 const PREFIX = "cue:browser-cache:v2:";
-// Stores from before entries were scoped to the signed-in user.
-const STALE_PREFIXES = ["cue:browser-cache:v1:"];
+// Stores from before entries were scoped to the signed-in user, and
+// Today's copy from before it moved into this cache.
+const STALE_PREFIXES = ["cue:browser-cache:v1:", "cue:today:v1:"];
 
 /** The chat composer's unsent message, which sign-out clears too. */
 export const CHAT_DRAFT_STORAGE_KEY = "input";

@@ -78,12 +78,12 @@ const SKELETON_ROWS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2"];
  * shortcuts and undo, through the same mail engine commands.
  */
 export function HomeDashboard() {
-  const { emailAccountId, emailAccount, userId, accountIds } = useAccount();
+  const { emailAccountId, emailAccount, accountIds } = useAccount();
   // Set on Today across accounts, which shows every account in All inboxes
   // as one account's Today shows it.
   const allInboxesAccounts = useTodayAccounts();
-  const single = useHome(allInboxesAccounts ? null : emailAccountId, userId);
-  const all = useAllAccountsHome(allInboxesAccounts, userId);
+  const single = useHome(allInboxesAccounts ? null : emailAccountId);
+  const all = useAllAccountsHome(allInboxesAccounts);
   const { merged } = all;
   const data: TodayData | undefined = merged ? merged.data : single.data;
   const isLoading = merged ? merged.isLoading : single.isLoading;
