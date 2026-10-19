@@ -152,7 +152,9 @@ export function useIngestInboxPreview() {
     )
       return;
     ingestedPreviews.add(seed.preview);
-    seed.preview
+    // A promise streamed from the server is a thenable whose then() returns
+    // nothing, so it is wrapped before chaining.
+    Promise.resolve(seed.preview)
       .then((preview) => {
         const changes = previewChangesSchema.safeParse(preview?.changes);
         if (!changes.success || !changes.data.length) return;

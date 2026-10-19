@@ -210,6 +210,27 @@ describe("InboxPreviewList", () => {
     ]);
   });
 
+  it("hands over rows streamed from the server, whose then() returns nothing", async () => {
+    const loaded = await previewOf("t1");
+    // React's streamed promise: then() takes callbacks and returns nothing.
+    const streamed = {
+      // biome-ignore lint/suspicious/noThenProperty: a streamed promise has a then
+      then(resolve: (value: unknown) => void) {
+        resolve(loaded);
+      },
+    } as unknown as Promise<InboxPreview>;
+    const view = await renderSeeded(streamed);
+
+    engine.client = mailClient;
+    await act(async () => {
+      view.rerender(seeded(null));
+    });
+
+    expect(mailClient.ingestMessages.mock.calls).toEqual([
+      [{ accountId: "acc-1", changes: [patch("t1")] }],
+    ]);
+  });
+
   it("hands the engine nothing once it has shown this account's mail", async () => {
     const view = await renderSeeded(previewOf("t1"));
     fireEvent.click(screen.getByText("engine has mail"));
@@ -260,7 +281,7 @@ async function renderSeeded(preview: Promise<InboxPreview | null>) {
     view = render(seeded(preview));
   });
   await act(async () => {
-    await preview.catch(() => undefined);
+    await Promise.resolve(preview).catch(() => undefined);
   });
   if (!view) throw new Error("not rendered");
   return view;
