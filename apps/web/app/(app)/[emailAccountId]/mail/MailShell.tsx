@@ -1972,11 +1972,11 @@ export function MailShell() {
               ref={listSectionRef}
               className={
                 layout === "split"
-                  ? "flex min-h-0 w-[clamp(258px,32vw,400px)] shrink-0 flex-col border-r border-border"
+                  ? "relative flex min-h-0 w-[clamp(258px,32vw,400px)] shrink-0 flex-col border-r border-border"
                   : // min-w-0 matters: a flex item won't shrink below its content
                     // width without it, so long snippets would widen the column
                     // past the viewport instead of truncating.
-                    "flex min-h-0 min-w-0 flex-1 flex-col"
+                    "relative flex min-h-0 min-w-0 flex-1 flex-col"
               }
             >
               <ListToolbar
