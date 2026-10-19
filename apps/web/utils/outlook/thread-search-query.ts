@@ -45,6 +45,10 @@ const FOLDER_KEY_BY_IN_VALUE: Record<string, OutlookWellKnownFolder> = {
 const KQL_TEXT_FIELDS = new Set(["from", "to", "subject"]);
 const GROUP_OPEN = "(";
 const GROUP_CLOSE = ")";
+const NOT = "NOT";
+const OR = "OR";
+// Stands for `-(` until the brackets are known to pair up.
+const NEGATED_GROUP = "\u0000-(";
 
 /**
  * Compiles an Outlook search-box query into Graph `$search` KQL plus the
@@ -58,21 +62,34 @@ export function compileOutlookThreadSearch(
   const scope: OutlookSearchScope = { flagged: false };
 
   const tokens = splitGroupBrackets(tokenizeSearchQuery(query));
+  let depth = 0;
+  // Outside a group a negation can move to the end; inside one, or after an
+  // OR, it stays in place, where the OR applies to it.
+  const negate = (term: string) =>
+    (depth > 0 || included.at(-1) === OR ? included : excluded).push(
+      `${NOT} ${term}`,
+    );
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index];
     if (!token) continue;
 
     if (token === GROUP_OPEN || token === GROUP_CLOSE) {
+      depth = Math.max(0, depth + (token === GROUP_OPEN ? 1 : -1));
       included.push(token);
       continue;
     }
 
-    if (/^not$/i.test(token)) {
+    // KQL's operators are uppercase; a lowercase "not" is a word.
+    if (token === NOT) {
       const next = tokens[index + 1];
-      // Only a single term is negated; NOT before a group is dropped.
-      if (!next || next === GROUP_OPEN || next === GROUP_CLOSE) continue;
+      if (!next || next === GROUP_CLOSE) continue;
+      // KQL negates a bracketed group as a whole.
+      if (next === GROUP_OPEN) {
+        included.push(NOT);
+        continue;
+      }
       const term = toKqlTerm(parseOutlookSearchToken(next));
-      if (term) excluded.push(`NOT ${term}`);
+      if (term) negate(term);
       index += 1;
       continue;
     }
@@ -82,18 +99,18 @@ export function compileOutlookThreadSearch(
 
     const term = toKqlTerm(parsed);
     if (!term) continue;
-    if (parsed.excluded) excluded.push(`NOT ${term}`);
+    if (parsed.excluded) negate(term);
     else included.push(term);
   }
 
   const { folderKey, folderName, flagged, category } = scope;
-  dropEmptyGroups(included);
+  tidyKqlTerms(included);
 
   if (!included.length && !excluded.length) {
     return { search: "", folderKey, folderName, flagged, category };
   }
   // KQL rejects purely negative queries, so anchor them to every message.
-  if (!included.length) included.push("size>=0");
+  if (!hasPositiveTerm(included)) included.unshift("size>=0");
 
   return {
     search: `"${[...included, ...excluded].join(" ")}"`,
@@ -218,16 +235,20 @@ function toKqlTerm(parsed: OutlookSearchToken): string | null {
 /**
  * Splits the brackets outside quotes off each token: `(lease` and
  * `"rental agreement")` become `(`, `lease` and `"rental agreement"`, `)`.
- * Brackets that don't pair up are dropped rather than sent to KQL, which
- * would reject them.
+ * `-(` negates its group, as `NOT (`. Brackets that don't pair up are
+ * dropped rather than sent to KQL, which would reject them.
  */
 function splitGroupBrackets(tokens: string[]): string[] {
   const split = tokens.flatMap((token) => {
+    const parts: string[] = [];
     let rest = token;
-    let opening = 0;
+    if (rest.startsWith(`-${GROUP_OPEN}`)) {
+      parts.push(NEGATED_GROUP);
+      rest = rest.slice(2);
+    }
     while (rest.startsWith(GROUP_OPEN)) {
+      parts.push(GROUP_OPEN);
       rest = rest.slice(1);
-      opening += 1;
     }
     let closing = 0;
     // A bracket inside a phrase, before its closing quote, is the phrase's.
@@ -236,33 +257,101 @@ function splitGroupBrackets(tokens: string[]): string[] {
       closing += 1;
     }
     return [
-      ...new Array<string>(opening).fill(GROUP_OPEN),
+      ...parts,
       ...(rest ? [rest] : []),
       ...new Array<string>(closing).fill(GROUP_CLOSE),
     ];
   });
   let depth = 0;
   for (const token of split) {
-    if (token === GROUP_OPEN) depth += 1;
+    if (token === GROUP_OPEN || token === NEGATED_GROUP) depth += 1;
     if (token === GROUP_CLOSE) depth -= 1;
     if (depth < 0) break;
   }
-  if (depth === 0) return split;
-  return split.filter((token) => token !== GROUP_OPEN && token !== GROUP_CLOSE);
+  if (depth === 0)
+    return split.flatMap((token) =>
+      token === NEGATED_GROUP ? [NOT, GROUP_OPEN] : [token],
+    );
+  // Unpaired: a negated group's first word stays negated.
+  const flat: string[] = [];
+  for (let index = 0; index < split.length; index++) {
+    const token = split[index];
+    if (token === GROUP_OPEN || token === GROUP_CLOSE) continue;
+    if (token !== NEGATED_GROUP) {
+      flat.push(token);
+      continue;
+    }
+    const next = split[index + 1];
+    if (next && next !== GROUP_OPEN && next !== GROUP_CLOSE) {
+      flat.push(`-${next}`);
+      index += 1;
+    }
+  }
+  return flat;
 }
 
 function isQuoteBalanced(value: string) {
   return (value.match(/"/g)?.length ?? 0) % 2 === 0;
 }
 
-/** Removes groups left empty once their terms became scopes or were dropped. */
-function dropEmptyGroups(terms: string[]) {
-  for (let index = 0; index < terms.length - 1; index++) {
-    if (terms[index] === GROUP_OPEN && terms[index + 1] === GROUP_CLOSE) {
-      terms.splice(index, 2);
-      index = Math.max(-1, index - 2);
+/**
+ * Leaves only valid KQL once scopes and dropped terms have left gaps: no OR
+ * beside a bracket, at either end or next to another OR, no NOT with
+ * nothing after it, and no empty group.
+ */
+function tidyKqlTerms(terms: string[]) {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let index = 0; index < terms.length; index++) {
+      const term = terms[index];
+      const previous = terms[index - 1];
+      const next = terms[index + 1];
+      const strayOr =
+        term === OR &&
+        (previous === undefined ||
+          previous === GROUP_OPEN ||
+          previous === OR ||
+          previous === NOT ||
+          next === undefined ||
+          next === GROUP_CLOSE);
+      const strayNot =
+        term === NOT &&
+        (next === undefined || next === GROUP_CLOSE || next === OR);
+      if (strayOr || strayNot) {
+        terms.splice(index, 1);
+        changed = true;
+        break;
+      }
+      if (term === GROUP_OPEN && next === GROUP_CLOSE) {
+        // A NOT before the group would otherwise negate what follows it.
+        if (previous === NOT) terms.splice(index - 1, 3);
+        else terms.splice(index, 2);
+        changed = true;
+        break;
+      }
     }
   }
+}
+
+/** Whether any term matches mail rather than ruling it out. */
+function hasPositiveTerm(terms: string[]) {
+  // Whether each open group is negated.
+  const negated: boolean[] = [];
+  for (let index = 0; index < terms.length; index++) {
+    const term = terms[index];
+    if (term === GROUP_OPEN) {
+      negated.push(terms[index - 1] === NOT || negated.at(-1) === true);
+      continue;
+    }
+    if (term === GROUP_CLOSE) {
+      negated.pop();
+      continue;
+    }
+    if (term === OR || term === NOT || term.startsWith(`${NOT} `)) continue;
+    if (!negated.at(-1)) return true;
+  }
+  return false;
 }
 
 function toKqlValue(value: string): string | null {

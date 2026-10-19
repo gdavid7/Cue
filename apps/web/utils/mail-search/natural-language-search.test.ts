@@ -67,6 +67,12 @@ describe("widenSearch", () => {
     expect(widenSearch("from:sarah lease")).toBe("from:sarah");
   });
 
+  it("keeps a group of senders as the people", () => {
+    expect(
+      widenSearch('(from:sarah OR from:"Ana Lima") (lease OR contract)'),
+    ).toBe('from:sarah OR from:"Ana Lima"');
+  });
+
   it("returns null when a search can't get wider", () => {
     expect(widenSearch("lease")).toBeNull();
     expect(widenSearch("from:sarah")).toBeNull();

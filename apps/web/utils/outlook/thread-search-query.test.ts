@@ -130,6 +130,24 @@ describe("compileOutlookThreadSearch with brackets", () => {
   });
 });
 
+describe("compileOutlookThreadSearch negation and gaps", () => {
+  it.each([
+    ["NOT before a group", "NOT (a b) c", '"NOT ( a b ) c"'],
+    ["- before a group", "-(a b) c", '"NOT ( a b ) c"'],
+    ["a negated group alone", "NOT (a b)", '"size>=0 NOT ( a b )"'],
+    ["a negation inside a group", "(a OR -b) c", '"( a OR NOT b ) c"'],
+    ["a negation after OR", "a OR -b", '"a OR NOT b"'],
+    ["a scope inside a group", "(in:inbox OR lease)", '"( lease )"'],
+    ["a group of only OR", "(OR) b", '"b"'],
+    ["OR left between words", "x ( OR ) y", '"x y"'],
+    ["a negated group left empty", "NOT (in:inbox) c", '"c"'],
+    ["an unpaired negated group", "-(a b", '"b NOT a"'],
+    ["a lowercase not, which KQL reads as a word", "not spam", '"not spam"'],
+  ])("compiles %s into valid KQL", (_name, query, expected) => {
+    expect(compileOutlookThreadSearch(query).search).toBe(expected);
+  });
+});
+
 describe("Cue's generated Outlook searches", () => {
   const NONE: SearchIntentParts = {
     senders: [],

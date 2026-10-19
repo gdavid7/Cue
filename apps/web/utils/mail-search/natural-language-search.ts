@@ -126,8 +126,13 @@ function stripNarrowing(node: SearchNode): SearchNode | null {
 
 function broadenTerms(node: SearchNode): SearchNode | null {
   if (node.kind !== "and") return null;
+  const isPerson = (child: SearchNode) =>
+    child.kind === "operator" && PEOPLE_OPERATORS.has(child.name);
+  // A group of senders is people too, not words to widen into.
   const people = node.children.filter(
-    (child) => child.kind === "operator" && PEOPLE_OPERATORS.has(child.name),
+    (child) =>
+      isPerson(child) ||
+      (child.kind === "or" && child.children.every(isPerson)),
   );
   const terms = node.children.filter((child) => !people.includes(child));
   if (people.length && terms.length)
