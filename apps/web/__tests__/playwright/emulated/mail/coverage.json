@@ -13,6 +13,15 @@
     "utils/home/get-thread-brief.ts",
     "app/api/user/thread-brief/route.ts"
   ],
+  "rule-reply-suggestion.spec.ts": [
+    "app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion.tsx",
+    "app/(app)/[emailAccountId]/compose/ComposeEmailForm.tsx",
+    "components/email-list/EmailMessage.tsx",
+    "components/email-list/reply-assist.ts",
+    "utils/actions/thread-assist.ts",
+    "utils/ai/actions.ts",
+    "utils/reply-tracker/draft-tracking.ts"
+  ],
   "today.spec.ts": [
     "app/(app)/[emailAccountId]/home/HomeDashboard.tsx",
     "app/(app)/[emailAccountId]/home/TodayThreadRow.tsx",
