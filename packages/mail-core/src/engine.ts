@@ -1766,10 +1766,15 @@ export function createMailEngine(input: {
     ) {
       return;
     }
-    const advanced = await catchUpAssistant(account, signal);
-    idleGate.nextAssistantCatchUpAtMs = advanced
-      ? 0
-      : runtime.nowMs() + changesCatchUpIntervalMs;
+    const result = await catchUpAssistant(account, signal);
+    // A failed read retries on the idle clock, not the stretched one.
+    idleGate.nextAssistantCatchUpAtMs =
+      result === "advanced"
+        ? 0
+        : runtime.nowMs() +
+          (result === "failed"
+            ? idleCatchUpIntervalMs
+            : changesCatchUpIntervalMs);
   }
 
   async function catchUpAssistant(
@@ -1778,8 +1783,8 @@ export function createMailEngine(input: {
       "accountId" | "generation" | "assistantCursor"
     >,
     signal?: AbortSignal,
-  ) {
-    if (!assistant) return false;
+  ): Promise<"advanced" | "caught_up" | "failed"> {
+    if (!assistant) return "caught_up";
     const session = {
       accountId: account.accountId,
       generation: account.generation,
@@ -1789,7 +1794,7 @@ export function createMailEngine(input: {
       cursor: account?.assistantCursor ?? null,
       signal: signal ?? new AbortController().signal,
     });
-    if (page.status !== "ok") return false;
+    if (page.status !== "ok") return "failed";
     await store.applyAssistantEntries({
       accountId: session.accountId,
       cursor: page.page.nextCursor,
@@ -1803,7 +1808,9 @@ export function createMailEngine(input: {
       })),
     });
     await refreshViews();
-    return page.page.nextCursor !== (account.assistantCursor ?? null);
+    return page.page.nextCursor !== (account.assistantCursor ?? null)
+      ? "advanced"
+      : "caught_up";
   }
 
   async function resolveScope(

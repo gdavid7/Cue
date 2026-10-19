@@ -547,6 +547,37 @@ describe("mail engine idle catch-up scheduling", () => {
     await harness.engine.close();
   });
 
+  it("retries a failed assistant read on the idle clock, and waits out the stretched one when caught up", async () => {
+    const assistantCursors: Array<string | null> = [];
+    const caughtUp = assistantSource(assistantCursors);
+    let failNext = true;
+    const harness = idleCatchUpHarness({
+      streamIds: ["inbox"],
+      changesCatchUpIntervalMs: 5 * 60_000,
+      assistant: {
+        async read(request) {
+          if (!failNext) return caughtUp.read(request);
+          failNext = false;
+          assistantCursors.push("failed");
+          return { status: "paused", retryAfterMs: 1000 };
+        },
+      },
+    });
+    await harness.engine.runUntil(10_000);
+    harness.advance(60_000);
+    await harness.engine.runUntil(harness.nowMs + 1000);
+    expect(assistantCursors).toEqual(["failed", null]);
+
+    harness.advance(60_000);
+    await harness.engine.runUntil(harness.nowMs + 1000);
+    expect(assistantCursors).toEqual(["failed", null]);
+
+    harness.advance(5 * 60_000);
+    await harness.engine.runUntil(harness.nowMs + 1000);
+    expect(assistantCursors).toEqual(["failed", null, null]);
+    await harness.engine.close();
+  });
+
   it("continues assistant pages without waiting for the idle interval", async () => {
     const assistantCursors: Array<string | null> = [];
     const harness = idleCatchUpHarness({
