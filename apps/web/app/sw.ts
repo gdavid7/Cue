@@ -98,6 +98,9 @@ self.addEventListener("push", (event) => {
       data: readPushData(event.data),
       origin: self.location.origin,
       clients: self.clients,
+      getSubscriptionEndpoint: async () =>
+        (await self.registration.pushManager.getSubscription())?.endpoint ??
+        null,
       showNotification: (title, options) =>
         self.registration.showNotification(title, options),
     }).catch(() => {}),

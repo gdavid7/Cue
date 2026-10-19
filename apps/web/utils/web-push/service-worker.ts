@@ -1,6 +1,14 @@
 // Relative so the separately bundled service worker resolves it.
 import { parseNewMailPushPayload } from "./new-mail-payload";
 
+const FALLBACK_PAYLOAD = {
+  title: "New mail",
+  body: "",
+  tag: "cue-mail",
+  url: "/",
+  icon: undefined,
+};
+
 // Pure handlers for app/sw.ts, written against the parts of the service worker
 // API they use so they can run outside a worker.
 
@@ -24,23 +32,35 @@ export async function handleNewMailPush({
   data,
   origin,
   clients,
+  getSubscriptionEndpoint,
   showNotification,
 }: {
   data: unknown;
   origin: string;
   clients: Pick<WindowClients, "matchAll">;
+  getSubscriptionEndpoint: () => Promise<string | null>;
   showNotification: (
     title: string,
     options: NotificationOptions,
   ) => Promise<void>;
 }) {
-  const payload = parseNewMailPushPayload(data);
-  if (!payload) return;
+  // Safari revokes a subscription after a few pushes that show nothing, so
+  // even an unreadable push shows something.
+  const payload = parseNewMailPushPayload(data) ?? FALLBACK_PAYLOAD;
 
-  // A Cue tab on screen notifies by itself when it isn't focused and needs no
-  // notification when it is. Browsers allow a silent push while one is visible.
-  const windows = await findCueWindows(clients, origin);
-  if (windows.some((client) => client.visibilityState === "visible")) return;
+  // Only a focused Cue tab makes a notification pointless; anywhere else the
+  // tab's own notification shares this tag and the browser keeps one. Safari
+  // (the only browser on Apple's push service) always gets one.
+  const [windows, endpoint] = await Promise.all([
+    findCueWindows(clients, origin),
+    getSubscriptionEndpoint().catch(() => null),
+  ]);
+  if (
+    windows.some((client) => client.focused) &&
+    endpoint &&
+    !isApplePushEndpoint(endpoint)
+  )
+    return;
 
   await showNotification(payload.title, {
     body: payload.body,
@@ -105,5 +125,14 @@ function isSameOrigin(url: string, origin: string) {
     return new URL(url).origin === origin;
   } catch {
     return false;
+  }
+}
+
+function isApplePushEndpoint(endpoint: string) {
+  try {
+    const host = new URL(endpoint).hostname;
+    return host === "push.apple.com" || host.endsWith(".push.apple.com");
+  } catch {
+    return true;
   }
 }
