@@ -6,6 +6,7 @@ import type { EmailProvider } from "@/utils/email/types";
 import { convertEmailHtmlToText } from "@/utils/mail";
 import type { ParsedMessage } from "@/utils/types";
 import { stripQuotedHtmlContent } from "@/utils/email/parse-message-reply";
+import { logReplySuggestionStage } from "@/utils/reply-tracker/suggestion-funnel";
 
 export type PreviousDraftHandlingResult =
   | {
@@ -150,6 +151,11 @@ export async function markReplySuggestionPending({
     await prisma.executedAction.update({
       where: { id: actionId },
       data: { draftStatus: DraftEmailStatus.PENDING },
+    });
+    logReplySuggestionStage({
+      logger,
+      stage: "generated",
+      executedActionId: actionId,
     });
   } catch (error) {
     logger.error("Failed to mark reply suggestion pending", {

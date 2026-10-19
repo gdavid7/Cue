@@ -197,6 +197,52 @@ test("opens a rule's reply to someone else addressed and labelled as theirs", as
   expect(await countDrafts(page, threadId)).toBe(0);
 });
 
+// DR-1f: the user's own Reply answers the sender; Cue's reply to someone else
+// is one choice away, with its own recipients.
+test("replies to the sender on Reply, and to the rule's recipient on Use Cue's draft", async ({
+  page,
+}, testInfo) => {
+  const emailAccountId = await getEmailAccountId(page);
+  const subject = `Invoice reply ${testInfo.retry}-${Date.now()}`;
+  const { threadId, messageId } = await insertMessage(page, subject);
+  await seedSuggestion({
+    emailAccountId,
+    threadId,
+    messageId,
+    to: "finance@partner.example",
+  });
+
+  await openThread(page, emailAccountId, threadId, subject);
+  const reader = page.getByTestId("thread-reader");
+  await expect(
+    reader.getByText("Cue's draft to finance@partner.example"),
+  ).toBeVisible({ timeout: 60_000 });
+  const recipients = reader.locator("button[aria-expanded]", {
+    hasText: /^(for|to) /,
+  });
+
+  await reader
+    .getByRole("button", { name: "Reply", exact: true })
+    .first()
+    .click();
+  await expect(recipients).toContainText(/jonas/i);
+  await expect(recipients).not.toContainText("finance");
+  await expect(reader.locator("[data-email-editor-content]")).not.toContainText(
+    SUGGESTION,
+  );
+  await capturePlaywrightCheckpoint(page, testInfo, "own-reply-to-sender");
+
+  await reader.getByRole("button", { name: "Use Cue's draft" }).click();
+  await expect(reader.locator("[data-email-editor-content]")).toContainText(
+    SUGGESTION,
+  );
+  await expect(recipients).toContainText("finance");
+  await expect(recipients).not.toContainText(/jonas/i);
+  await capturePlaywrightCheckpoint(page, testInfo, "use-cue-draft");
+  await page.waitForTimeout(AUTOSAVE_WINDOW_MS);
+  expect(await countDrafts(page, threadId)).toBe(0);
+});
+
 test("dismisses the rule's suggestion when its reply is discarded", async ({
   page,
 }, testInfo) => {

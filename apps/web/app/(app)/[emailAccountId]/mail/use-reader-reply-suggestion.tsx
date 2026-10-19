@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { GetThreadPlansResponse } from "@/app/api/user/thread-plans/route";
 import { useDraftReplies } from "@/app/(app)/[emailAccountId]/assistant/settings/DraftReplies";
 import { getThreadCategories } from "@/app/(app)/[emailAccountId]/mail/cue-strip";
@@ -33,7 +33,10 @@ import {
 } from "@/utils/email";
 import { DRAFT_WINDOW_DAYS } from "@/utils/reply-tracker/suggestion-window";
 import { GmailLabel } from "@/utils/gmail/label";
-import { dismissReplySuggestionAction } from "@/utils/actions/thread-assist";
+import {
+  dismissReplySuggestionAction,
+  recordReplySuggestionStageAction,
+} from "@/utils/actions/thread-assist";
 
 const NO_PLANS: never[] = [];
 
@@ -244,11 +247,12 @@ export function useReaderReplySuggestion({
     const { executedActionId, recipients, files } = ruleSuggestion;
     const sender = extractEmailAddress(latest.headers.from);
     // A rule can write to someone else: never pass that off as the reply.
-    const toSomeoneElse =
+    const toSomeoneElse = Boolean(
       recipients.to &&
-      !splitRecipientList(recipients.to).every((recipient) =>
-        isSameEmailAddress(extractEmailAddress(recipient), sender),
-      );
+        !splitRecipientList(recipients.to).every((recipient) =>
+          isSameEmailAddress(extractEmailAddress(recipient), sender),
+        ),
+    );
     assist = {
       messageId: latest.id,
       reply: ruleSuggestion.reply,
@@ -257,9 +261,22 @@ export function useReaderReplySuggestion({
       dismiss: () => dismissRuleSuggestion(executedActionId),
       recipients,
       files,
+      toSomeoneElse,
       label: toSomeoneElse ? `Cue's draft to ${recipients.to}` : undefined,
     };
   }
+
+  // The draft funnel's "shown" stage. The server keeps the first time only.
+  const shownSuggestionId = assist?.executedActionId;
+  useEffect(() => {
+    if (!shownSuggestionId) return;
+    recordReplySuggestionStageAction(emailAccountId, {
+      executedActionId: shownSuggestionId,
+      stage: "shown",
+    }).catch(() => {
+      // Only the funnel's count is lost.
+    });
+  }, [emailAccountId, shownSuggestionId]);
 
   let replyStatus: React.ReactNode = null;
   if (latest && (phase === "checking-mail" || phase === "checking-web")) {

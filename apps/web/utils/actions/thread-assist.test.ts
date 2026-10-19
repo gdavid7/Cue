@@ -3,6 +3,7 @@ import { getMockEmailAccountWithAccount } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
 import {
   dismissReplySuggestionAction,
+  recordReplySuggestionStageAction,
   recordSuggestedReplyDraftAction,
   saveSuggestedReplyAction,
 } from "@/utils/actions/thread-assist";
@@ -210,6 +211,7 @@ describe("recordSuggestedReplyDraftAction", () => {
 describe("dismissReplySuggestionAction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    prisma.executedAction.updateMany.mockResolvedValue({ count: 1 });
     prisma.emailAccount.findUnique.mockResolvedValue(
       getMockEmailAccountWithAccount({
         email: "user@example.com",
@@ -234,6 +236,54 @@ describe("dismissReplySuggestionAction", () => {
       data: { draftStatus: "DISMISSED" },
     });
     expect(mocks.createEmailProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe("recordReplySuggestionStageAction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    prisma.executedAction.updateMany.mockResolvedValue({ count: 1 });
+    vi.useFakeTimers({ now: new Date("2026-10-19T12:00:00Z") });
+    prisma.emailAccount.findUnique.mockResolvedValue(
+      getMockEmailAccountWithAccount({
+        email: "user@example.com",
+        userId: "user-1",
+      }),
+    );
+  });
+
+  // Counted once: showing the same suggestion again keeps the first time.
+  it.each([
+    ["shown", "replySuggestionShownAt"],
+    ["opened", "replySuggestionOpenedAt"],
+  ] as const)("records when this account's suggestion was first %s", async (stage, field) => {
+    await recordReplySuggestionStageAction(EMAIL_ACCOUNT_ID, {
+      executedActionId: "suggestion-1",
+      stage,
+    });
+
+    expect(prisma.executedAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "suggestion-1",
+        type: "DRAFT_EMAIL",
+        draftId: null,
+        executedRule: { emailAccountId: EMAIL_ACCOUNT_ID },
+        [field]: null,
+      },
+      data: { [field]: new Date("2026-10-19T12:00:00Z") },
+    });
+    vi.useRealTimers();
+  });
+
+  it("refuses a stage the reader doesn't record", async () => {
+    const result = await recordReplySuggestionStageAction(EMAIL_ACCOUNT_ID, {
+      executedActionId: "suggestion-1",
+      stage: "sent" as never,
+    });
+
+    expect(result?.validationErrors).toBeDefined();
+    expect(prisma.executedAction.updateMany).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });
 

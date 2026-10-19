@@ -18,6 +18,7 @@ import {
   ForwardIcon,
   ReplyAllIcon,
   ReplyIcon,
+  SparklesIcon,
   UserSearchIcon,
 } from "lucide-react";
 import { Tooltip } from "@/components/Tooltip";
@@ -100,6 +101,7 @@ export function EmailMessage({
   replyStatus,
   defaultComposeMode,
   defaultReplyAll = false,
+  ownReplyRequested = false,
   composerOpen = true,
   openDraftSessionId,
   dismissedDraftIds: dismissedDraftIdsProp,
@@ -146,6 +148,11 @@ export function EmailMessage({
   defaultComposeMode?: ReplyDraftMode;
   /** Opens a default reply addressed to everyone on the message. */
   defaultReplyAll?: boolean;
+  /**
+   * The user's own Reply (the reader's `r` or `a`) opened the default reply,
+   * not Cue: it answers the sender, whoever Cue's reply was for.
+   */
+  ownReplyRequested?: boolean;
   /** Whether the thread's one open composer is this message's reply or forward. */
   composerOpen?: boolean;
   /** The thread's open mailbox draft, by session id, if that is what's open. */
@@ -625,6 +632,7 @@ export function EmailMessage({
                 key={`${composerKey}:${replyAll}`}
                 autoFocus={takeFocus}
                 replyAll={replyAll}
+                ownReply={ownReplyRequested || composeOverride === "reply"}
                 autoScroll
                 bodyAvailable={bodyAvailable}
                 draftSessionMessageId={composerSessionMessageId}
@@ -980,6 +988,7 @@ function ReplyPanel({
   bodyAvailable = true,
   replyAnchor,
   replyAll = false,
+  ownReply = false,
 }: {
   message: ParsedMessage;
   refetch: () => void;
@@ -1000,27 +1009,49 @@ function ReplyPanel({
   bodyAvailable?: boolean;
   replyAnchor?: ParsedMessage;
   replyAll?: boolean;
+  /** The user's own Reply opened this composer, not Cue. */
+  ownReply?: boolean;
 }) {
   const { emailAccountId } = useAccount();
   const ownEmails = useOwnEmailAddresses();
   const { popOutReply } = useComposeModal();
   const replyTargetId = replyAnchor?.id ?? message.id;
   const replyAssist = useContext(ReplyAssistContext);
-  const assist =
+  const offeredAssist =
     replyAssist &&
     composeMode === "reply" &&
     replyAssist.messageId === message.id
       ? replyAssist
       : undefined;
+  // The user's own Reply answers the sender. Cue's reply to someone else
+  // waits for "Use Cue's draft", which brings its recipients with it.
+  const [choseCueReply, setChoseCueReply] = useState(false);
+  const setAsideCueReply = Boolean(
+    offeredAssist?.toSomeoneElse && ownReply && !choseCueReply && !draftMessage,
+  );
+  const assist = setAsideCueReply ? undefined : offeredAssist;
   // Taken as the composer opens: a suggestion that lands after the user
   // started their own reply must not fill it, and a saved draft keeps its text.
-  const [suggestedBodyHtml] = useState(() =>
-    assist && !draftMessage ? textToHtmlParagraphs(assist.reply) : undefined,
+  // Switching between the user's reply and Cue's starts the composer over.
+  const takeOpening = (switched: boolean) => ({
+    setAside: setAsideCueReply,
+    switched,
+    assist: assist && !draftMessage ? assist : undefined,
+  });
+  const [opening, setOpening] = useState(() => takeOpening(false));
+  if (opening.setAside !== setAsideCueReply) setOpening(takeOpening(true));
+  const suggestedBodyHtml = useMemo(
+    () =>
+      opening.assist ? textToHtmlParagraphs(opening.assist.reply) : undefined,
+    [opening.assist],
   );
   // A rule's reply can go to other people, or under its own subject.
-  const [suggestedRecipients] = useState(() =>
-    assist && !draftMessage ? assist.recipients : undefined,
-  );
+  const suggestedRecipients = opening.assist?.recipients;
+  // A reply that is still Cue's untouched reply to someone else isn't the
+  // user's own. Choosing Cue's reply replaces what the user hadn't saved.
+  let replaceLocalDraft: "untouched-suggestion" | "unsaved" | undefined;
+  if (opening.setAside) replaceLocalDraft = "untouched-suggestion";
+  else if (opening.switched) replaceLocalDraft = "unsaved";
   const draftSessionId = getReplyDraftSessionId(
     draftSessionMessageId ?? message.id,
     composeMode,
@@ -1198,7 +1229,27 @@ function ReplyPanel({
       )}
       ref={setReplyRef}
     >
+      {setAsideCueReply && (
+        <div className="mb-2 flex flex-wrap items-center gap-x-2 text-muted-foreground text-xs">
+          <Button
+            className="-ml-2 text-muted-foreground"
+            onClick={() => setChoseCueReply(true)}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
+            <SparklesIcon aria-hidden className="mr-2 size-4" />
+            Use Cue's draft
+          </Button>
+          {offeredAssist?.recipients?.to && (
+            <span>to {offeredAssist.recipients.to}</span>
+          )}
+        </div>
+      )}
       <ComposeEmailFormLazy
+        // Remounts when the reply switches between the user's and Cue's.
+        key={opening.setAside ? "own-reply" : "cue-reply"}
+        replaceLocalDraft={replaceLocalDraft}
         autoFocus={autoFocus}
         initialBodyHtml={suggestedBodyHtml}
         suggestion={assist}

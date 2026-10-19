@@ -376,6 +376,7 @@ export function ThreadReader({
                 requestedReplyFor ??
                 assist?.messageId
               }
+              ownReplyForMessageId={autoOpenReplyForMessageId}
               focusAutoOpenedReply={Boolean(
                 autoOpenReplyForMessageId ?? requestedReplyFor,
               )}

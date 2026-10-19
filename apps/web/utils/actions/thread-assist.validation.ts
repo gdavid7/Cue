@@ -33,3 +33,9 @@ export const recordSuggestedReplyDraftBody = z
 export const dismissReplySuggestionBody = z.object({
   executedActionId: z.string().trim().min(1).max(64),
 });
+
+export const recordReplySuggestionStageBody = z.object({
+  executedActionId: z.string().trim().min(1).max(64),
+  /** The stages only the reader sees; the server records the rest itself. */
+  stage: z.enum(["shown", "opened"]),
+});

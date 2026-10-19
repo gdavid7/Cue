@@ -20,6 +20,11 @@ export type ReplyAssist = {
   recipients?: { to?: string; cc?: string; bcc?: string; subject?: string };
   /** Names of the files the rule attaches. */
   files?: string[];
+  /**
+   * The rule's reply goes to someone other than the sender, so the user's own
+   * Reply doesn't open with it.
+   */
+  toSomeoneElse?: boolean;
   /** How the composer credits it, when "Suggested by Cue" would mislead. */
   label?: string;
 };

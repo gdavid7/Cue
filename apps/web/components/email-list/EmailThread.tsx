@@ -48,6 +48,7 @@ export function EmailThread({
   showReplyButton,
   autoOpenReplyForMessageId,
   autoOpenReplyAll = false,
+  ownReplyForMessageId,
   autoOpenForwardForMessageId,
   focusAutoOpenedReply = true,
   topRightComponent,
@@ -77,6 +78,11 @@ export function EmailThread({
   autoOpenReplyForMessageId?: string;
   /** Addresses the auto-opened reply to everyone on the message. */
   autoOpenReplyAll?: boolean;
+  /**
+   * The message the user's own Reply is for, as opposed to a reply Cue
+   * opened: that reply answers the sender.
+   */
+  ownReplyForMessageId?: string;
   autoOpenForwardForMessageId?: string;
   /** False when Cue, not the user, opened the reply, so it leaves focus alone. */
   focusAutoOpenedReply?: boolean;
@@ -563,6 +569,10 @@ export function EmailThread({
                 focusComposer={focusOpenComposer}
                 defaultComposeMode={defaultComposeMode}
                 defaultReplyAll={autoOpenMode === "reply" && autoOpenReplyAll}
+                ownReplyRequested={
+                  autoOpenMode === "reply" &&
+                  ownReplyForMessageId === message.id
+                }
                 draftMessages={draftMessages}
                 expanded={expanded(
                   message.id,

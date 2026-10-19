@@ -879,6 +879,9 @@ describe("trackSentDraftStatus for reply suggestions", () => {
     } as any);
     vi.mocked(calculateSimilarity).mockReturnValue(0.52);
     vi.mocked(isMeaningfulDraftEdit).mockReturnValue(true);
+    vi.mocked(prisma.executedAction.updateMany).mockResolvedValue({
+      count: 1,
+    });
     const provider = {
       getDraft: vi.fn().mockResolvedValue(null),
       getMessage: vi.fn().mockResolvedValue(createSourceMessage()),

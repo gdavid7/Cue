@@ -22,6 +22,7 @@ import { FIRST_TIME_EVENTS, trackFirstTimeEvent } from "@/utils/posthog";
 import { recordFirstSuggestedReplySent } from "@/utils/analytics/activation";
 import { messageRepliesToSourceSender } from "@/utils/email";
 import { getDraftSendLogSimilarityFields } from "./draft-similarity";
+import { logReplySuggestionStage } from "./suggestion-funnel";
 import { logReplyTrackerError } from "./error-logging";
 
 const DRAFT_SENT_SIMILARITY_THRESHOLD = 0.7;
@@ -642,7 +643,7 @@ async function trackSentSuggestedReplyDraft({
   // The rule's suggestion this draft began as was used, or not, with it.
   if (suggestedReplyDraft.executedActionId) {
     const executedActionId = suggestedReplyDraft.executedActionId;
-    await withPrismaRetry(
+    const { count } = await withPrismaRetry(
       () =>
         prisma.executedAction.updateMany({
           where: {
@@ -661,6 +662,13 @@ async function trackSentSuggestedReplyDraft({
         }),
       { logger },
     );
+    if (count && isDraftSentStatus(draftStatus))
+      logReplySuggestionStage({
+        logger,
+        stage: "sent",
+        executedActionId,
+        similarityScore,
+      });
   }
 
   if (sentMessageRepliesToSource === false) return;
@@ -761,6 +769,12 @@ async function trackSentReplySuggestion({
 
   const wasSent = isDraftSentStatus(draftStatus);
   if (wasSent) {
+    logReplySuggestionStage({
+      logger,
+      stage: "sent",
+      executedActionId,
+      similarityScore,
+    });
     after(() =>
       trackFirstTimeEvent({
         emailAccountId,

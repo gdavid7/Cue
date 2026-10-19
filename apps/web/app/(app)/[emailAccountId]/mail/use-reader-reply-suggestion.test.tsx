@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   plans: [] as Record<string, unknown>[],
   mutatePlans: vi.fn(),
   dismiss: vi.fn(),
+  recordStage: vi.fn(),
   toastError: vi.fn(),
 }));
 
@@ -55,6 +56,7 @@ vi.mock("@/env", () => ({ env: {} }));
 vi.mock("@/utils/actions/thread-assist", () => ({
   saveSuggestedReplyAction: vi.fn(),
   dismissReplySuggestionAction: mocks.dismiss,
+  recordReplySuggestionStageAction: mocks.recordStage,
 }));
 vi.mock("@/components/Toast", () => ({ toastError: mocks.toastError }));
 
@@ -76,6 +78,7 @@ describe("useReaderReplySuggestion", () => {
     mocks.plans = [];
     mocks.mutatePlans.mockReset();
     mocks.dismiss.mockReset().mockResolvedValue({});
+    mocks.recordStage.mockReset().mockResolvedValue({});
     mocks.toastError.mockReset();
   });
   afterEach(cleanup);
@@ -187,6 +190,38 @@ describe("useReaderReplySuggestion", () => {
       "Cue's draft to finance@example.com",
     );
     expect(result.current.assist?.recipients?.to).toBe("finance@example.com");
+    expect(result.current.assist?.toSomeoneElse).toBe(true);
+  });
+
+  it("doesn't count a rule's reply to the sender as to someone else", () => {
+    mocks.plans = [
+      ruleSuggestionPlan("ask", { to: "Sender <sender@example.com>" }),
+    ];
+
+    const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
+
+    expect(result.current.assist?.toSomeoneElse).toBe(false);
+  });
+
+  // The draft funnel's "shown" stage: once per suggestion, by its ID only.
+  it("records the rule's reply as shown once", () => {
+    mocks.plans = [ruleSuggestionPlan("ask")];
+
+    const { rerender } = renderSuggestion([incoming("ask", ["INBOX"])]);
+    rerender();
+
+    expect(mocks.recordStage).toHaveBeenCalledTimes(1);
+    expect(mocks.recordStage).toHaveBeenCalledWith("account-1", {
+      executedActionId: expect.any(String),
+      stage: "shown",
+    });
+  });
+
+  it("records nothing as shown for a reply the rule didn't write", () => {
+    const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
+
+    expect(result.current.assist).toBeNull();
+    expect(mocks.recordStage).not.toHaveBeenCalled();
   });
 
   it("dismisses the rule's reply at once, and for good", async () => {

@@ -10,6 +10,10 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThreadMessage } from "@/components/email-list/types";
 import { EmailMessage } from "@/components/email-list/EmailMessage";
+import {
+  type ReplyAssist,
+  ReplyAssistContext,
+} from "@/components/email-list/reply-assist";
 
 const mocks = vi.hoisted(() => ({
   executeAsync: vi.fn(),
@@ -76,9 +80,11 @@ vi.mock("@/app/(app)/[emailAccountId]/compose/ComposeEmailFormLazy", () => ({
     onDiscard,
     onPopOut,
     replyingToEmail,
+    initialBodyHtml,
   }: {
     onDiscard: () => void;
     onPopOut?: () => void;
+    initialBodyHtml?: string;
     replyingToEmail?: {
       to?: string;
       cc?: string;
@@ -92,6 +98,8 @@ vi.mock("@/app/(app)/[emailAccountId]/compose/ComposeEmailFormLazy", () => ({
       data-inline-reply="true"
       data-thread-id={replyingToEmail?.threadId}
       data-cc={replyingToEmail?.cc}
+      data-to={replyingToEmail?.to}
+      data-body={initialBodyHtml ?? ""}
       data-forwarded-message-id={replyingToEmail?.forwardedMessageId}
       data-forwarded-attachments={replyingToEmail?.forwardedAttachments
         ?.map((attachment) => attachment.filename)
@@ -346,6 +354,114 @@ describe("EmailMessage reply", () => {
 });
 
 // D5: the user's other connected mailbox is "me", never someone to copy.
+// DR-1f: the user's own Reply answers the sender. Cue's reply to someone
+// else stays one choice away, with its own recipients.
+describe("EmailMessage with a rule's reply to someone else", () => {
+  afterEach(cleanup);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const toFinance: ReplyAssist = {
+    messageId: "message-1",
+    reply: "Forwarding the invoice for payment.",
+    evidence: null,
+    executedActionId: "suggestion-1",
+    recipients: { to: "finance@example.com" },
+    toSomeoneElse: true,
+    label: "Cue's draft to finance@example.com",
+  };
+
+  it("opens Cue's reply to its own recipients when Cue opens it", () => {
+    renderWithAssist(toFinance, { defaultComposeMode: "reply" });
+
+    expect(composer().dataset.to).toBe("finance@example.com");
+    expect(composer().dataset.body).toContain("Forwarding the invoice");
+  });
+
+  it("replies to the sender when the user presses Reply", () => {
+    renderWithAssist(toFinance);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    expect(composer().dataset.to).toBe("sender@example.com");
+    expect(composer().dataset.body).toBe("");
+  });
+
+  it("replies to the sender when Reply is pressed over Cue's open reply", () => {
+    renderWithAssist(toFinance, { defaultComposeMode: "reply" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    expect(composer().dataset.to).toBe("sender@example.com");
+  });
+
+  it("replies to the sender when the reader's own reply asked for it", () => {
+    renderWithAssist(toFinance, {
+      defaultComposeMode: "reply",
+      ownReplyRequested: true,
+    });
+
+    expect(composer().dataset.to).toBe("sender@example.com");
+  });
+
+  it("switches to Cue's reply, recipients and all, when the user chooses it", () => {
+    renderWithAssist(toFinance);
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Use Cue's draft" }));
+
+    expect(composer().dataset.to).toBe("finance@example.com");
+    expect(composer().dataset.body).toContain("Forwarding the invoice");
+    expect(
+      screen.queryByRole("button", { name: "Use Cue's draft" }),
+    ).toBeNull();
+  });
+
+  it("keeps Cue's reply to the sender in the user's own Reply", () => {
+    renderWithAssist({
+      ...toFinance,
+      recipients: undefined,
+      toSomeoneElse: false,
+      label: undefined,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    expect(composer().dataset.to).toBe("sender@example.com");
+    expect(composer().dataset.body).toContain("Forwarding the invoice");
+    expect(
+      screen.queryByRole("button", { name: "Use Cue's draft" }),
+    ).toBeNull();
+  });
+
+  function renderWithAssist(
+    assist: ReplyAssist,
+    props: {
+      defaultComposeMode?: "reply";
+      ownReplyRequested?: boolean;
+    } = {},
+  ) {
+    return render(
+      <ReplyAssistContext.Provider value={assist}>
+        <EmailMessage
+          {...props}
+          expanded
+          message={createMessage("message-1")}
+          onSendSuccess={vi.fn()}
+          refetch={vi.fn()}
+          showReplyButton
+        />
+      </ReplyAssistContext.Provider>,
+    );
+  }
+
+  function composer() {
+    return screen.getByTestId("composer");
+  }
+});
+
 describe("EmailMessage reply across the user's mailboxes", () => {
   afterEach(() => {
     cleanup();
