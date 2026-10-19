@@ -262,6 +262,8 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     "/api/user/drive/preview/attachments",
     // Connecting an account: the person waits on the redirect.
     "google/linking/callback",
+    // A server-rendered page that waits on Gmail.
+    "clean/onboarding",
     "outlook/linking/callback",
     // Another assistant's tool call, asked for by the person using it.
     "mcp-server",
@@ -287,6 +289,10 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     // What a person scheduled, due now.
     "scheduled-actions/execute",
     "snoozed-threads/execute",
+    // A durable send it delivers raises itself to interactive.
+    "scheduled-emails/execute",
+    // Push for an account just signed in or linked.
+    "auth/link-watch",
   ]),
   ...withPriority("background", [
     "user/inbox-insights",

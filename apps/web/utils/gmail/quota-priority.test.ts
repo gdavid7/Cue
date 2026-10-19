@@ -45,6 +45,7 @@ const PINNED: Record<string, GmailQuotaPriority> = {
   "user/home": "interactive",
   labels: "interactive",
   "google/linking/callback": "interactive",
+  "clean/onboarding": "interactive",
   // The engine and push.
   "mail/v1/changes": "sync",
   "mail/v1/changes-batch": "sync",
@@ -55,6 +56,8 @@ const PINNED: Record<string, GmailQuotaPriority> = {
   "google/webhook": "sync",
   "mobile/mailbox-sync": "sync",
   "snoozed-threads/execute": "sync",
+  "scheduled-emails/execute": "sync",
+  "auth/link-watch": "sync",
   // Work nobody asked for and can't see yet.
   "user/inbox-insights": "background",
   "user/stats/newsletters": "background",
@@ -71,6 +74,13 @@ const PINNED: Record<string, GmailQuotaPriority> = {
   "mail/bulk-matching": "background",
   // Only shares a prefix with a listed route.
   "user/stats-preview": "background",
+  // Better Auth's routes name no scope; what they start after sign-in
+  // names its own caller (auth/link-watch).
+  "/api/auth/callback/google": "background",
+  // The public API's reads serve other people's automation, not a person
+  // waiting in Cue, so they only spend what nobody else is using (its
+  // unsubscribe, an action, is listed as interactive above).
+  "/api/v1/stats/by-period": "background",
   "some/route-nobody-listed": "background",
   "/api/some/unscoped/path": "background",
 };
@@ -83,7 +93,7 @@ describe("Gmail quota priority by caller", () => {
     expect(context.priority).toBe(priority);
   });
 
-  it("treats a caller with no source as background", () => {
+  it("treats a caller with no source, as a server component has, as background", () => {
     expect(currentGmailQuotaContext().priority).toBe("background");
   });
 });

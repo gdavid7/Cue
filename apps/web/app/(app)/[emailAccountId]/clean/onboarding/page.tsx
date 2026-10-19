@@ -10,6 +10,7 @@ import { getUnhandledCount } from "@/utils/assess";
 import { CleanStep } from "@/app/(app)/[emailAccountId]/clean/types";
 import { CleanAction } from "@/generated/prisma/enums";
 import { createEmailProvider } from "@/utils/email/provider";
+import { runWithGmailQuota } from "@/utils/gmail/quota";
 import { checkUserOwnsEmailAccount } from "@/utils/email-account";
 import prisma from "@/utils/prisma";
 import { createScopedLogger } from "@/utils/logger";
@@ -49,7 +50,11 @@ export default async function CleanPage(props: {
     provider: emailAccount.account.provider,
     logger: createScopedLogger("clean-onboarding").with({ emailAccountId }),
   });
-  const { unhandledCount } = await getUnhandledCount(emailProvider);
+  // The page someone opened waits on this count (D-086).
+  const { unhandledCount } = await runWithGmailQuota(
+    { caller: "clean/onboarding", priority: "interactive" },
+    () => getUnhandledCount(emailProvider),
+  );
 
   const step = Number.parseInt(searchParams.step || "") || CleanStep.INTRO;
 

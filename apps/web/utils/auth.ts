@@ -31,6 +31,7 @@ import {
   isMicrosoftProvider,
 } from "@/utils/email/provider-types";
 import { ensureEmailAccountsWatched } from "@/utils/email/watch-manager";
+import { runWithGmailQuota } from "@/utils/gmail/quota";
 import { captureException } from "@/utils/error";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 import { shareChannelsAcrossMailboxes } from "@/utils/messaging/shared-channels";
@@ -995,12 +996,16 @@ async function autoJoinOrganization(emailAccountId: string) {
   });
 }
 
+// Push keeps the new mailbox current, so it starts at sync priority:
+// background waits out a first sync and would leave it to the cron.
 function scheduleEmailWatchesAfterLink(userId: string) {
   after(() =>
-    ensureEmailAccountsWatched({
-      userIds: [userId],
-      logger,
-    }).catch((error) => {
+    runWithGmailQuota({ caller: "auth/link-watch", priority: "sync" }, () =>
+      ensureEmailAccountsWatched({
+        userIds: [userId],
+        logger,
+      }),
+    ).catch((error) => {
       logger.error("[linkAccount] Error re-registering email watches", {
         userId,
         error,
