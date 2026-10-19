@@ -6,10 +6,11 @@ import {
   currentGmailQuotaContext,
 } from "@/utils/gmail/quota";
 import { createScopedLogger } from "@/utils/logger";
-import type {
-  MailBulkJobState,
-  MailBulkTarget,
-  mailBulkJobStore,
+import {
+  ACTIVE_MAIL_BULK_JOB_STATUSES,
+  type MailBulkJobState,
+  type MailBulkTarget,
+  type mailBulkJobStore,
 } from "@/utils/redis/mail-bulk-job";
 import {
   MAIL_BULK_JOB_PATH,
@@ -268,23 +269,84 @@ describe("runMailBulkJobStep", () => {
     expect(provider.listMatchingMessages).not.toHaveBeenCalled();
   });
 
-  it("keeps a Stop that lands while the job is still listing", async () => {
+  it("ends the listing at the page a Stop lands on", async () => {
     const store = createStore();
     await store.create(JOB_ID, newJob({ action: "archive" }));
-    const provider = createProvider({ pages: [[message("m1", "t1")]] });
+    const provider = createProvider({
+      pages: [[message("m1", "t1")], [message("m2", "t2")]],
+    });
     vi.mocked(provider.listMatchingMessages).mockImplementationOnce(
       async () => {
-        await store.transition(JOB_ID, ["listing"], "cancelled");
-        return { messages: [message("m1", "t1")] };
+        await stop(store, JOB_ID);
+        return { messages: [message("m1", "t1")], nextPageToken: "page-1" };
       },
     );
 
     const result = await runStep({ store, provider });
 
     expect(result).toBe("cancelled");
+    expect(provider.listMatchingMessages).toHaveBeenCalledTimes(1);
     expect(provider.archiveMessages).not.toHaveBeenCalled();
     await expect(store.get(JOB_ID)).resolves.toMatchObject({
       status: "cancelled",
+    });
+  });
+
+  it("finishes and counts the chunk in flight when Stop lands, then stops", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "trash" }));
+    // Per-item chunks are 25 conversations, so this is two chunks.
+    const page = Array.from({ length: 30 }, (_, index) =>
+      message(`m${index}`, `t${index}`),
+    );
+    const provider = createProvider({ pages: [page] });
+    vi.mocked(provider.trashThread).mockImplementationOnce(async () => {
+      await stop(store, JOB_ID);
+    });
+
+    const result = await runStep({ store, provider });
+
+    expect(result).toBe("cancelled");
+    expect(provider.trashThread).toHaveBeenCalledTimes(25);
+    await expect(store.get(JOB_ID)).resolves.toMatchObject({
+      status: "cancelled",
+      applied: 25,
+    });
+  });
+
+  it("settles a job asked to stop between deliveries", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ status: "stopping" }));
+    const provider = createProvider({ pages: [[message("m1", "t1")]] });
+
+    await expect(runStep({ store, provider })).resolves.toBe("cancelled");
+    expect(provider.listMatchingMessages).not.toHaveBeenCalled();
+  });
+
+  it("saves progress after each small per-item chunk, so a cut-off delivery loses little", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "spam" }));
+    const page = Array.from({ length: 60 }, (_, index) =>
+      message(`m${index}`, `t${index}`),
+    );
+    const provider = createProvider({ pages: [page] });
+    let clock = 0;
+
+    // Time runs out after the first chunk.
+    const result = await runStep({
+      store,
+      provider,
+      budgetMs: 100,
+      now: () => {
+        clock += vi.mocked(provider.markSpam).mock.calls.length ? 100 : 1;
+        return clock;
+      },
+    });
+
+    expect(result).toBe("continued");
+    await expect(store.get(JOB_ID)).resolves.toMatchObject({
+      status: "applying",
+      applied: 25,
     });
   });
 
@@ -356,40 +418,50 @@ describe("runMailBulkJobStep", () => {
     });
   });
 
-  it("starts an undo only once the job it reverses has stopped", async () => {
+  it("an undo pressed mid-chunk also restores the chunk in flight", async () => {
     const store = createStore();
-    await store.create(
-      JOB_ID,
-      newJob({ action: "archive", status: "applying" }),
-    );
-    await store.appendTargets(JOB_ID, [
-      { messageId: "m1", threadId: "t1" },
-      { messageId: "m2", threadId: "t2" },
-    ]);
-    await store.create(
-      UNDO_JOB_ID,
-      newJob({ action: "unarchive", status: "applying", sourceJobId: JOB_ID }),
-    );
-    const provider = createProvider({ pages: [] });
-    // The source finishes its last chunk while the undo waits.
-    const wait = vi.fn(async () => {
-      await store.increment(JOB_ID, "applied", 2);
-      await store.transition(JOB_ID, ["applying"], "cancelled");
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const provider = createProvider({
+      pages: [[message("m1", "t1"), message("m2", "t2")]],
+    });
+    let undoRun: ReturnType<typeof runMailBulkJobStep> | undefined;
+    vi.mocked(provider.archiveMessages).mockImplementationOnce(async () => {
+      // Undo is pressed while this chunk is with the provider, in the order
+      // undoMatchingBulkActionAction takes: ask the source to stop, then
+      // create the undo job and deliver it.
+      await stop(store, JOB_ID);
+      await store.create(
+        UNDO_JOB_ID,
+        newJob({
+          action: "unarchive",
+          status: "applying",
+          sourceJobId: JOB_ID,
+        }),
+      );
+      undoRun = runMailBulkJobStep({
+        body: { jobId: UNDO_JOB_ID, emailAccountId: ACCOUNT_ID, deferrals: 0 },
+        provider,
+        ownerEmail: "owner@example.com",
+        logger,
+        store,
+        durable: true,
+        wait: () => new Promise((resolve) => setTimeout(resolve, 1)),
+      });
+      // The undo is now waiting while the chunk is still in flight.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    const sourceStatusAtUndo: string[] = [];
+    vi.mocked(provider.unarchiveMessages).mockImplementation(async () => {
+      sourceStatusAtUndo.push((await store.get(JOB_ID))?.status ?? "");
     });
 
-    const result = await runMailBulkJobStep({
-      body: { jobId: UNDO_JOB_ID, emailAccountId: ACCOUNT_ID, deferrals: 0 },
-      provider,
-      ownerEmail: "owner@example.com",
-      logger,
-      store,
-      durable: true,
-      wait,
-    });
+    const sourceResult = await runStep({ store, provider });
 
-    expect(result).toBe("done");
-    expect(wait).toHaveBeenCalled();
+    expect(sourceResult).toBe("cancelled");
+    await expect(undoRun).resolves.toBe("done");
     expect(provider.unarchiveMessages).toHaveBeenCalledWith(["m1", "m2"]);
+    expect(sourceStatusAtUndo).toEqual(["cancelled"]);
+    await expect(store.get(JOB_ID)).resolves.toMatchObject({ applied: 2 });
   });
 
   it("ignores a delivery for another account's job", async () => {
@@ -432,6 +504,11 @@ function runStep({
     durable: true,
     ...options,
   });
+}
+
+// What the Stop and Undo actions do to the job they end.
+function stop(store: ReturnType<typeof createStore>, jobId: string) {
+  return store.transition(jobId, ACTIVE_MAIL_BULK_JOB_STATUSES, "stopping");
 }
 
 function message(id: string, threadId: string) {

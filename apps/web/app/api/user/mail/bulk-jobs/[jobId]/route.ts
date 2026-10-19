@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { matchingBulkJobSchema } from "@/utils/actions/mail-bulk-matching.validation";
 import { withEmailAccount } from "@/utils/middleware";
 import {
-  ACTIVE_MAIL_BULK_JOB_STATUSES,
+  failStaleMailBulkJob,
   isStaleMailBulkJob,
   mailBulkJobStore,
 } from "@/utils/redis/mail-bulk-job";
@@ -38,14 +38,7 @@ async function getData({
   // A job that stopped writing lost its delivery; saying so ends the
   // progress toast instead of leaving it spinning.
   let status = job.status;
-  if (
-    isStaleMailBulkJob(job) &&
-    (await mailBulkJobStore.transition(
-      jobId,
-      ACTIVE_MAIL_BULK_JOB_STATUSES,
-      "failed",
-    ))
-  )
+  if (isStaleMailBulkJob(job) && (await failStaleMailBulkJob(jobId)))
     status = "failed";
   return {
     action: job.action,

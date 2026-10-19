@@ -64,7 +64,7 @@ export const MailReaderPane = memo(function MailReaderPane({
   showFixWithChat: boolean;
   lastMessage: ThreadMessage | null;
   isStarred: boolean;
-  onToggleStar: () => void;
+  onToggleStar?: () => void;
   isImportant: boolean;
   onToggleImportant?: () => void;
   onMarkSpam: () => void;

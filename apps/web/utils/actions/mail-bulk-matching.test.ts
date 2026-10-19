@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getMockEmailAccountWithAccount } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
 import {
+  cancelMatchingBulkActionAction,
   startMatchingBulkActionAction,
   undoMatchingBulkActionAction,
 } from "@/utils/actions/mail-bulk-matching";
@@ -127,7 +128,7 @@ describe("mail bulk matching actions", () => {
     });
 
     const undoJobId = result?.data?.jobId as string;
-    expect(jobs.get(SOURCE_JOB_ID)?.status).toBe("cancelled");
+    expect(jobs.get(SOURCE_JOB_ID)?.status).toBe("stopping");
     expect(jobs.get(undoJobId)).toMatchObject({
       action: "unarchive",
       sourceJobId: SOURCE_JOB_ID,
@@ -138,6 +139,17 @@ describe("mail bulk matching actions", () => {
       emailAccountId: "account-1",
       deferrals: 0,
     });
+  });
+
+  it("Stop asks a running job to stop and leaves a finished one alone", async () => {
+    jobs.set(SOURCE_JOB_ID, sourceJob({ status: "applying" }));
+    await cancelMatchingBulkActionAction("account-1", { jobId: SOURCE_JOB_ID });
+    // The delivery marks it cancelled once its chunk in flight is counted.
+    expect(jobs.get(SOURCE_JOB_ID)?.status).toBe("stopping");
+
+    jobs.set(SOURCE_JOB_ID, sourceJob({ status: "done" }));
+    await cancelMatchingBulkActionAction("account-1", { jobId: SOURCE_JOB_ID });
+    expect(jobs.get(SOURCE_JOB_ID)?.status).toBe("done");
   });
 
   it("won't undo another account's job or an irreversible one", async () => {

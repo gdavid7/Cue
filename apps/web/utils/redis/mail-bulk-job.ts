@@ -31,6 +31,9 @@ export const MAIL_BULK_JOB_ACTIONS = [
 export const MAIL_BULK_JOB_STATUSES = [
   "listing",
   "applying",
+  // Stop was asked for; the delivery moves it to cancelled once the chunk it
+  // is in has finished and been counted.
+  "stopping",
   "done",
   "cancelled",
   "failed",
@@ -66,27 +69,46 @@ export type MailBulkJobAction = MailBulkJobState["action"];
 export type MailBulkTarget = { messageId: string; threadId: string };
 type MailBulkJobStatus = MailBulkJobState["status"];
 
+/** Statuses a delivery is working through, and so the ones Stop can end. */
 export const ACTIVE_MAIL_BULK_JOB_STATUSES: MailBulkJobStatus[] = [
   "listing",
   "applying",
+];
+const UNFINISHED_MAIL_BULK_JOB_STATUSES: MailBulkJobStatus[] = [
+  ...ACTIVE_MAIL_BULK_JOB_STATUSES,
+  "stopping",
 ];
 
 export function isActiveMailBulkJob(status: MailBulkJobStatus) {
   return ACTIVE_MAIL_BULK_JOB_STATUSES.includes(status);
 }
 
-/** A job still marked running that has stopped writing. */
+/** Done, cancelled or failed: nothing will change the job's counts again. */
+export function isFinishedMailBulkJob(status: MailBulkJobStatus) {
+  return !UNFINISHED_MAIL_BULK_JOB_STATUSES.includes(status);
+}
+
+/** A job not yet finished that has stopped writing. */
 export function isStaleMailBulkJob(job: MailBulkJobState, now = Date.now()) {
   return (
-    isActiveMailBulkJob(job.status) &&
+    !isFinishedMailBulkJob(job.status) &&
     now - job.updatedAt > MAIL_BULK_JOB_STALE_MS
+  );
+}
+
+/** Marks a job that lost its delivery as failed, if it hasn't finished. */
+export function failStaleMailBulkJob(jobId: string) {
+  return mailBulkJobStore.transition(
+    jobId,
+    UNFINISHED_MAIL_BULK_JOB_STATUSES,
+    "failed",
   );
 }
 
 export const mailBulkJobStore = {
   async create(jobId: string, state: MailBulkJobState) {
     const key = jobKey(jobId);
-    await redis.hset(key, stripUndefined(state));
+    await redis.hset(key, toHashFields(state));
     await redis.expire(key, MAIL_BULK_JOB_TTL_SECONDS);
   },
 
@@ -98,7 +120,7 @@ export const mailBulkJobStore = {
   },
 
   async setCapped(jobId: string) {
-    await redis.hset(jobKey(jobId), { capped: true, updatedAt: Date.now() });
+    await redis.hset(jobKey(jobId), { capped: "true", updatedAt: Date.now() });
   },
 
   /** Resolves whether the status moved, which it only does from `from`. */
@@ -180,8 +202,15 @@ function conversationIdsKey(jobId: string) {
   return `mail-bulk-job:${jobId}:conversations`;
 }
 
-function stripUndefined<T extends Record<string, unknown>>(value: T) {
+// Hash fields are strings and numbers; a boolean is written as "true" or
+// "false", which the schema reads back, rather than left to the client.
+function toHashFields<T extends Record<string, unknown>>(value: T) {
   return Object.fromEntries(
-    Object.entries(value).filter(([, entry]) => entry !== undefined),
-  ) as Record<string, unknown>;
+    Object.entries(value)
+      .filter(([, entry]) => entry !== undefined)
+      .map(([key, entry]) => [
+        key,
+        typeof entry === "boolean" ? String(entry) : entry,
+      ]),
+  ) as Record<string, string | number>;
 }

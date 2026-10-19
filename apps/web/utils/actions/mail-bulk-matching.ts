@@ -76,12 +76,13 @@ export const undoMatchingBulkActionAction = actionClient
       if (!action || source.sourceJobId)
         throw new SafeError("That action can't be undone");
 
-      // Stops the source where it is. The undo job waits for it to finish
-      // its last chunk, then restores everything it got through.
+      // Asks the source to stop. Its delivery marks it cancelled once the
+      // chunk in flight is counted, and the undo job waits for that before
+      // restoring everything the source got through.
       await mailBulkJobStore.transition(
         jobId,
         ACTIVE_MAIL_BULK_JOB_STATUSES,
-        "cancelled",
+        "stopping",
       );
 
       const undoJobId = randomUUID();
@@ -120,6 +121,6 @@ export const cancelMatchingBulkActionAction = actionClient
     await mailBulkJobStore.transition(
       jobId,
       ACTIVE_MAIL_BULK_JOB_STATUSES,
-      "cancelled",
+      "stopping",
     );
   });

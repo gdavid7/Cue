@@ -16,6 +16,7 @@ import type { Logger } from "@/utils/logger";
 import {
   ACTIVE_MAIL_BULK_JOB_STATUSES,
   isActiveMailBulkJob,
+  isFinishedMailBulkJob,
   isStaleMailBulkJob,
   type MailBulkJobAction,
   type MailBulkJobState,
@@ -30,11 +31,15 @@ export const MAIL_BULK_JOB_CALLER = "mail/bulk-matching";
 
 // With QStash, each delivery stops well inside the route's five minutes and
 // hands the rest to the next one. Without it nothing delivers the rest
-// reliably, so one delivery does the whole job, using most of its time.
+// reliably, so one delivery does the whole job. Either way no new chunk
+// starts in the route's last minute, so the one in flight can finish.
 const DURABLE_STEP_BUDGET_MS = 200_000;
-const SINGLE_DELIVERY_BUDGET_MS = 270_000;
+const SINGLE_DELIVERY_BUDGET_MS = 240_000;
 // One Gmail batchModify takes up to 1000 ids; half keeps a failed chunk small.
-const APPLY_CHUNK_SIZE = 500;
+const BATCH_CHUNK_SIZE = 500;
+// Per-item work takes one request per conversation or message, so its
+// chunks are small enough to finish well within the last minute.
+const PER_ITEM_CHUNK_SIZE = 25;
 const PER_ITEM_CONCURRENCY = 2;
 // A job's targets live in Redis until it expires; this bounds that list.
 const MAX_JOB_TARGETS = 100_000;
@@ -96,7 +101,8 @@ export async function runMailBulkJobStep({
 }): Promise<StepResult> {
   const job = await store.get(body.jobId);
   if (!job || job.emailAccountId !== body.emailAccountId) return "missing";
-  if (!isActiveMailBulkJob(job.status)) return job.status;
+  if (!isActiveMailBulkJob(job.status))
+    return settleStatus(store, body.jobId, job.status);
 
   const deadline =
     now() +
@@ -135,6 +141,11 @@ export async function runMailBulkJobStep({
         total += targets.length;
         pageToken = page.nextPageToken;
 
+        // A Stop ends the listing at the page it lands on.
+        const latest = await store.get(body.jobId);
+        if (latest?.status !== "listing")
+          return settleStatus(store, body.jobId, latest?.status);
+
         if (pageToken && total >= targetCap) {
           await store.setCapped(body.jobId);
           pageToken = undefined;
@@ -146,7 +157,12 @@ export async function runMailBulkJobStep({
       } while (pageToken);
       // A Stop during listing leaves the job cancelled rather than applying.
       const moved = await store.transition(body.jobId, ["listing"], "applying");
-      if (!moved) return (await store.get(body.jobId))?.status ?? "missing";
+      if (!moved)
+        return settleStatus(
+          store,
+          body.jobId,
+          (await store.get(body.jobId))?.status,
+        );
     }
 
     return applyTargets({
@@ -243,8 +259,27 @@ async function failOrResume({
   } else {
     logger.error("Bulk mail action failed", { error, action: job.action });
   }
+  // A job asked to stop ends as stopped, not failed.
+  if (await store.transition(body.jobId, ["stopping"], "cancelled"))
+    return "cancelled";
   await store.transition(body.jobId, ACTIVE_MAIL_BULK_JOB_STATUSES, "failed");
   return "failed";
+}
+
+/**
+ * The step's result for a job no longer listing or applying. A job asked to
+ * stop is only marked cancelled here, by the delivery, once the chunk it was
+ * in has been counted, so an undo waiting on it sees every change it made.
+ */
+async function settleStatus(
+  store: typeof mailBulkJobStore,
+  jobId: string,
+  status: MailBulkJobState["status"] | undefined,
+): Promise<StepResult> {
+  if (!status) return "missing";
+  if (status !== "stopping") return status;
+  await store.transition(jobId, ["stopping"], "cancelled");
+  return (await store.get(jobId))?.status ?? "missing";
 }
 
 async function applyTargets({
@@ -268,8 +303,14 @@ async function applyTargets({
   wait: (ms: number) => Promise<unknown>;
   continueLater: () => Promise<void>;
 }): Promise<StepResult> {
-  // An undo reads what its source job listed only once that job has stopped,
-  // so nothing the source changes afterwards is left unrestored.
+  // Progress is saved after each chunk, so a delivery cut off mid-chunk only
+  // redoes that one; per-item chunks stay small for that reason.
+  const chunkSize = isBatchedAction(job.action, provider)
+    ? BATCH_CHUNK_SIZE
+    : PER_ITEM_CHUNK_SIZE;
+  // An undo reads how far its source got only once the source has finished
+  // (or lost its delivery), so a chunk still in flight when Undo was pressed
+  // is restored too.
   const targetsJobId = job.sourceJobId ?? jobId;
   let limit: number | undefined;
   if (job.sourceJobId) {
@@ -277,7 +318,7 @@ async function applyTargets({
       const source = await store.get(job.sourceJobId);
       if (
         !source ||
-        !isActiveMailBulkJob(source.status) ||
+        isFinishedMailBulkJob(source.status) ||
         isStaleMailBulkJob(source)
       ) {
         limit = source?.applied ?? 0;
@@ -294,17 +335,20 @@ async function applyTargets({
   while (true) {
     const current = await store.get(jobId);
     if (!current) return "missing";
-    if (current.status !== "applying") return current.status;
+    if (current.status !== "applying")
+      return settleStatus(store, jobId, current.status);
 
     const end = limit ?? current.total;
     const targets = await store.readTargets(
       targetsJobId,
       current.applied,
-      Math.min(APPLY_CHUNK_SIZE, end - current.applied),
+      Math.min(chunkSize, end - current.applied),
     );
     if (!targets.length) {
       const moved = await store.transition(jobId, ["applying"], "done");
-      return moved ? "done" : ((await store.get(jobId))?.status ?? "missing");
+      return moved
+        ? "done"
+        : settleStatus(store, jobId, (await store.get(jobId))?.status);
     }
 
     const failed = await applyChunk({
@@ -429,14 +473,22 @@ function singleDeliveryTargetCap(
   action: MailBulkJobAction,
   provider: EmailProvider,
 ) {
-  const batched =
+  return isBatchedAction(action, provider)
+    ? SINGLE_DELIVERY_BATCH_TARGETS
+    : SINGLE_DELIVERY_PER_ITEM_TARGETS;
+}
+
+/**
+ * Gmail's batch calls change many messages in one request; conversation
+ * trash and spam, deleting forever, and every Outlook call go one by one.
+ */
+function isBatchedAction(action: MailBulkJobAction, provider: EmailProvider) {
+  return (
     provider.name === "google" &&
     action !== "trash" &&
     action !== "spam" &&
-    action !== "delete_forever";
-  return batched
-    ? SINGLE_DELIVERY_BATCH_TARGETS
-    : SINGLE_DELIVERY_PER_ITEM_TARGETS;
+    action !== "delete_forever"
+  );
 }
 
 // A deferral resumes the job later and lost access can't be retried past, so

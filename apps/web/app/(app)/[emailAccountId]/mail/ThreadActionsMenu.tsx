@@ -50,7 +50,8 @@ import type { ParsedMessage } from "@/utils/types";
 export type ThreadActionsMenuProps = {
   message: ParsedMessage | null;
   isStarred: boolean;
-  onToggleStar: () => void;
+  /** Omitted while every matching conversation is selected. */
+  onToggleStar?: () => void;
   isImportant?: boolean;
   /** Gmail only: Outlook has no per-thread importance in the mail engine. */
   onToggleImportant?: () => void;
@@ -186,15 +187,17 @@ export function ThreadActionsMenu({
             </DropdownMenuItem>
           )}
 
-          <DropdownMenuItem onSelect={onToggleStar}>
-            {isStarred ? (
-              <StarOffIcon className="mr-2 size-4" />
-            ) : (
-              <StarIcon className="mr-2 size-4" />
-            )}
-            {isStarred ? "Unstar" : "Star"}
-            <MenuShortcut id="star" />
-          </DropdownMenuItem>
+          {onToggleStar && (
+            <DropdownMenuItem onSelect={onToggleStar}>
+              {isStarred ? (
+                <StarOffIcon className="mr-2 size-4" />
+              ) : (
+                <StarIcon className="mr-2 size-4" />
+              )}
+              {isStarred ? "Unstar" : "Star"}
+              <MenuShortcut id="star" />
+            </DropdownMenuItem>
+          )}
 
           {onToggleImportant && (
             <DropdownMenuItem onSelect={onToggleImportant}>

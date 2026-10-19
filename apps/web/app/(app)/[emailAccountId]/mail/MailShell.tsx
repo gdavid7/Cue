@@ -2444,7 +2444,7 @@ export function MailShell() {
                 onAskCue={threadInChatAccount ? onAskCueAboutThread : undefined}
                 lastMessage={openMessages.at(-1) ?? null}
                 isStarred={allStarred}
-                onToggleStar={starTargets}
+                onToggleStar={matching.active ? undefined : starTargets}
                 isImportant={allImportant}
                 onToggleImportant={
                   isGoogleProvider(readerEmailAccount?.account.provider) &&
