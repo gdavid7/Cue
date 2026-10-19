@@ -39,7 +39,8 @@ export function GoogleSignInReminder() {
   const warning = getGoogleSignInWarning({
     accounts: data.emailAccounts,
     now: new Date(),
-    dismissed,
+    // A hand-edited or old value must not break the page.
+    dismissed: dismissed && typeof dismissed === "object" ? dismissed : {},
   });
   if (!warning) return null;
 
@@ -65,7 +66,7 @@ export function GoogleSignInReminder() {
   return (
     <AppAlertBanner
       tone="notice"
-      title={`Google asks you to sign in again by ${warning.weekday}`}
+      title={`Google asks you to sign in again by ${warning.when}`}
       description={
         warning.hasMultipleAccounts
           ? `For ${warning.email}. Reconnecting now keeps mail flowing.`
@@ -81,7 +82,9 @@ export function GoogleSignInReminder() {
             variant="ghost"
             onClick={() =>
               setDismissed({
-                ...dismissed,
+                ...(dismissed && typeof dismissed === "object"
+                  ? dismissed
+                  : {}),
                 [warning.emailAccountId]: localDayKey(new Date()),
               })
             }

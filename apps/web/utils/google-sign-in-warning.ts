@@ -1,3 +1,4 @@
+import { isGoogleProvider } from "@/utils/email/provider-types";
 import { GOOGLE_APP_UNVERIFIED } from "@/utils/google-app-status";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -34,7 +35,11 @@ export function getGoogleSignInWarning({
     .flatMap((emailAccount) => {
       const { provider, disconnectedAt, refreshTokenIssuedAt } =
         emailAccount.account;
-      if (provider !== "google" || disconnectedAt || !refreshTokenIssuedAt)
+      if (
+        !isGoogleProvider(provider) ||
+        disconnectedAt ||
+        !refreshTokenIssuedAt
+      )
         return [];
       return [
         { emailAccount, issuedAt: new Date(refreshTokenIssuedAt).getTime() },
@@ -55,13 +60,20 @@ export function getGoogleSignInWarning({
   return {
     emailAccountId: first.emailAccount.id,
     email: first.emailAccount.email,
-    weekday: expiresAt.toLocaleDateString("en-US", { weekday: "long" }),
+    when: describeDay(expiresAt, now),
     hasMultipleAccounts:
-      accounts.filter(({ account }) => account.provider === "google").length >
-      1,
+      accounts.filter(({ account }) => isGoogleProvider(account.provider))
+        .length > 1,
   };
 }
 
 export function localDayKey(date: Date) {
   return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+}
+
+function describeDay(date: Date, now: Date) {
+  const key = localDayKey(date);
+  if (key === localDayKey(now)) return "today";
+  if (key === localDayKey(new Date(now.getTime() + DAY_MS))) return "tomorrow";
+  return date.toLocaleDateString("en-US", { weekday: "long" });
 }

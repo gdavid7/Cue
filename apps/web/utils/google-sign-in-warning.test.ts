@@ -46,7 +46,20 @@ describe("getGoogleSignInWarning", () => {
     });
     expect(warning?.emailAccountId).toBe("a1");
     // Consent was Oct 14, so Google ends the sign-in on Wednesday the 21st.
-    expect(warning?.weekday).toBe("Wednesday");
+    expect(warning?.when).toBe("Wednesday");
+  });
+
+  it("says today or tomorrow when the sign-in ends that soon", () => {
+    const tomorrow = getGoogleSignInWarning({
+      accounts: [account({ daysAgo: 6.2 })],
+      now,
+    });
+    const today = getGoogleSignInWarning({
+      accounts: [account({ daysAgo: 6.9 })],
+      now,
+    });
+    expect(tomorrow?.when).toBe("tomorrow");
+    expect(today?.when).toBe("today");
   });
 
   it("leaves already-expired sign-ins to the existing reconnect flow", () => {

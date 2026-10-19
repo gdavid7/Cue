@@ -242,6 +242,65 @@ describe("google linking callback route", () => {
     });
   });
 
+  describe("consent time", () => {
+    const withoutRefreshToken = () =>
+      mockGetToken.mockResolvedValue({
+        tokens: {
+          access_token: "access-token",
+          expiry_date: 1_700_000_000_000,
+          id_token: "id-token",
+          scope: "openid email profile",
+          token_type: "Bearer",
+        },
+      });
+
+    beforeEach(() => {
+      mockHandleAccountLinking.mockResolvedValue({ type: "continue_create" });
+    });
+
+    it("stamps a new account when Google issued a refresh token", async () => {
+      await GET(
+        createRequest("http://localhost:3000/api/google/linking/callback"),
+      );
+      expect(
+        prisma.account.create.mock.calls[0]?.[0].data.refreshTokenIssuedAt,
+      ).toBeInstanceOf(Date);
+    });
+
+    it("does not stamp a new account without a refresh token", async () => {
+      withoutRefreshToken();
+      await GET(
+        createRequest("http://localhost:3000/api/google/linking/callback"),
+      );
+      expect(
+        prisma.account.create.mock.calls[0]?.[0].data.refreshTokenIssuedAt,
+      ).toBeNull();
+    });
+
+    it("stamps a reconnected account only when a refresh token came back", async () => {
+      prisma.emailAccount.findFirst.mockResolvedValue({
+        accountId: "existing-account-123",
+      } as Awaited<ReturnType<typeof prisma.emailAccount.findFirst>>);
+
+      await GET(
+        createRequest("http://localhost:3000/api/google/linking/callback"),
+      );
+      expect(
+        prisma.account.update.mock.calls[0]?.[0].data.refreshTokenIssuedAt,
+      ).toBeInstanceOf(Date);
+
+      prisma.account.update.mockClear();
+      mockGetOAuthCodeResult.mockResolvedValue(null);
+      withoutRefreshToken();
+      await GET(
+        createRequest("http://localhost:3000/api/google/linking/callback"),
+      );
+      expect(prisma.account.update.mock.calls[0]?.[0].data).not.toHaveProperty(
+        "refreshTokenIssuedAt",
+      );
+    });
+  });
+
   it("does not let an email code session link a mailbox", async () => {
     mockAuth.mockResolvedValue({
       user: { id: "user-123" },

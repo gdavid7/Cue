@@ -13,14 +13,16 @@ export function AppAlertBanner({
   description: React.ReactNode;
   action?: React.ReactNode;
   className?: string;
-  /** "notice" is for heads-ups that aren't faults: calmer colors, no alert role. */
+  /** "notice" is for heads-ups that aren't faults: calmer colors, a labelled region instead of an alert. */
   tone?: "alert" | "notice";
 }) {
   const isNotice = tone === "notice";
   const Icon = isNotice ? InfoIcon : AlertCircleIcon;
+  const Root = isNotice ? "section" : "div";
   return (
-    <div
-      role={isNotice ? "status" : "alert"}
+    <Root
+      aria-label={isNotice ? title : undefined}
+      role={isNotice ? undefined : "alert"}
       className={cn(
         "relative z-10 flex w-full flex-col gap-4 border-y px-4 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:pl-[calc(var(--mail-rail-width,0px)+1.5rem)]",
         isNotice
@@ -53,6 +55,6 @@ export function AppAlertBanner({
         </div>
       </div>
       {action ? <div className="shrink-0 pl-8 sm:pl-0">{action}</div> : null}
-    </div>
+    </Root>
   );
 }
