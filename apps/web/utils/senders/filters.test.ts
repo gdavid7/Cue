@@ -5,6 +5,7 @@ import { GmailLabel } from "@/utils/gmail/label";
 import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import { createScopedLogger } from "@/utils/logger";
 import {
+  filterNewsletters,
   findNewsletterStatus,
   findSenderLabelFilters,
   getEmailFilters,
@@ -228,5 +229,32 @@ describe("findSenderLabelFilters", () => {
     ];
 
     expect(findSenderLabelFilters(filters, "")).toEqual([]);
+  });
+});
+
+describe("filterNewsletters", () => {
+  const senders = [
+    { name: "none", status: null },
+    { name: "approved", status: NewsletterStatus.APPROVED },
+  ];
+
+  it("lists senders with no status as unhandled when filters were read", () => {
+    expect(
+      filterNewsletters(senders, ["unhandled"]).map((sender) => sender.name),
+    ).toEqual(["none"]);
+  });
+
+  it("does not call a sender unhandled when filters could not be read", () => {
+    expect(
+      filterNewsletters(senders, ["unhandled"], { filtersAvailable: false }),
+    ).toEqual([]);
+  });
+
+  it("still lists recorded statuses when filters could not be read", () => {
+    expect(
+      filterNewsletters(senders, ["approved"], { filtersAvailable: false }).map(
+        (sender) => sender.name,
+      ),
+    ).toEqual(["approved"]);
   });
 });
