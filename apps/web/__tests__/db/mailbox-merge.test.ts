@@ -9,7 +9,7 @@ vi.mock("@/utils/user/merge-premium", () => ({
   getPremiumTransferOperations: vi.fn(),
 }));
 vi.mock("@/utils/redis/account-validation", () => ({
-  invalidateAccountValidation: vi.fn(),
+  invalidateAccountOwnership: vi.fn(async () => {}),
 }));
 
 const sourceUserId = "mailbox-merge-db-source";

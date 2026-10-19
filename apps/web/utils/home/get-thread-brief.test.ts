@@ -2,31 +2,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestLogger, getMockMessage } from "@/__tests__/helpers";
 import type { EmailProvider } from "@/utils/email/types";
 import { getEmailAccountWithAi } from "@/utils/user/get";
-import {
-  extractBrief,
-  getCachedThreadBrief,
-  getThreadBrief,
-} from "./get-thread-brief";
+import { recordingRedis } from "@/__tests__/mocks/recording-redis.mock";
+import { extractBrief, getThreadBrief } from "./get-thread-brief";
 
 const mocks = vi.hoisted(() => ({
-  store: new Map<string, unknown>(),
-  ttls: new Map<string, number>(),
   generateObject: vi.fn(),
   assertHasAiAccess: vi.fn(),
 }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/user/get", () => ({ getEmailAccountWithAi: vi.fn() }));
-vi.mock("@/utils/redis", () => ({
-  redis: {
-    get: vi.fn(async (key: string) => mocks.store.get(key) ?? null),
-    set: vi.fn(
-      async (key: string, value: unknown, options?: { ex?: number }) => {
-        mocks.store.set(key, value);
-        if (options?.ex) mocks.ttls.set(key, options.ex);
-      },
-    ),
-  },
+vi.mock("@/utils/redis", async () => ({
+  redis: (await import("@/__tests__/mocks/recording-redis.mock")).recordingRedis
+    .client,
 }));
 vi.mock("@/utils/llms", () => ({
   createGenerateObject: () => mocks.generateObject,
@@ -52,8 +40,7 @@ const message = (
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.store.clear();
-  mocks.ttls.clear();
+  recordingRedis.reset();
 });
 
 describe("extractBrief", () => {
@@ -119,7 +106,7 @@ describe("getThreadBrief", () => {
   });
 });
 
-describe("thread brief caching", () => {
+describe("thread brief and the server cache", () => {
   beforeEach(() => {
     vi.mocked(getEmailAccountWithAi).mockResolvedValue({
       userId: "u1",
@@ -131,80 +118,29 @@ describe("thread brief caching", () => {
     });
   });
 
-  it("serves a reopened conversation from the cache, with no model call", async () => {
-    const provider = providerWith([message("Pricing by Friday?")]);
-    await brief(provider);
-
-    const cached = await getCachedThreadBrief({
-      emailAccountId: "a1",
-      threadId: "t1",
-      messageId: "msg1",
-    });
-
-    expect(cached?.summary).toBe("Sarah wants pricing by Friday.");
-    await brief(provider);
-    expect(mocks.generateObject).toHaveBeenCalledTimes(1);
-  });
-
-  it("writes a fresh brief once a new message arrives", async () => {
-    await brief(providerWith([message("Pricing by Friday?")]));
-    await brief(
-      providerWith([
-        message("Pricing by Friday?"),
-        message("Actually, Thursday.", { id: "msg2" }),
-      ]),
-    );
-
-    expect(mocks.generateObject).toHaveBeenCalledTimes(2);
-  });
-
-  it("keys the brief by the newest received message, not an unsent draft", async () => {
-    await brief(
-      providerWith([
-        message("Pricing by Friday?"),
-        message("Draft reply", { id: "draft1", labelIds: ["DRAFT"] }),
-      ]),
-    );
-
+  // RD-3: a brief is derived from the mail, so the browser keeps it.
+  it("writes a brief without keeping it or the email in the server cache", async () => {
     await expect(
-      getCachedThreadBrief({
-        emailAccountId: "a1",
-        threadId: "t1",
-        messageId: "msg1",
-      }),
+      brief(providerWith([message("Pricing by Friday?")])),
     ).resolves.toMatchObject({ summary: "Sarah wants pricing by Friday." });
+
+    expect(recordingRedis.everythingWritten()).not.toContain("Sarah");
+    expect(recordingRedis.everythingWritten()).not.toContain("Friday");
   });
 
-  it("never hands one account the brief cached for another", async () => {
-    await brief(providerWith([message("Pricing by Friday?")]));
-
-    await expect(
-      getCachedThreadBrief({
-        emailAccountId: "a2",
-        threadId: "t1",
-        messageId: "msg1",
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("keeps the email's own words for an hour when there's no AI access", async () => {
+  it("marks the email's own words when there's no AI access", async () => {
     mocks.assertHasAiAccess.mockRejectedValue(new Error("upgrade"));
-    await brief(providerWith([message("Can you send the pricing?")]));
 
     await expect(
-      getCachedThreadBrief({
-        emailAccountId: "a1",
-        threadId: "t1",
-        messageId: "msg1",
-      }),
+      brief(providerWith([message("Can you send the pricing?")])),
     ).resolves.toMatchObject({
       summary: "Can you send the pricing?",
       source: "extract",
+      aiUnavailable: true,
     });
-    expect(mocks.ttls.get("thread-brief:a1:t1:msg1")).toBe(60 * 60);
   });
 
-  it("doesn't cache a failed model call, so the next open tries again", async () => {
+  it("falls back to the extract when the model fails, and tries the model next time", async () => {
     mocks.generateObject.mockRejectedValueOnce(new Error("overloaded"));
     const provider = providerWith([message("Can you send the pricing?")]);
 

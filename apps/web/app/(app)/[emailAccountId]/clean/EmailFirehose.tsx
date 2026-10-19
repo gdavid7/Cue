@@ -9,6 +9,7 @@ import { useEmailStream } from "./useEmailStream";
 import type { CleanThread } from "@/utils/redis/clean.types";
 import { CleanAction } from "@/generated/prisma/enums";
 import { useAccount } from "@/providers/EmailAccountProvider";
+import { useThreadsByIds } from "@/hooks/useThreadsByIds";
 
 export function EmailFirehose({
   threads,
@@ -45,6 +46,9 @@ export function EmailFirehose({
     estimateSize: () => 56, // Estimated height of each email item
     overscan: 10, // Number of items to render outside of the visible area
   });
+  const details = useVisibleThreadDetails(
+    virtualizer.getVirtualItems().map((item) => emails[item.index]?.threadId),
+  );
 
   // Handle scroll events to detect user interaction
   const handleScroll = () => {
@@ -115,6 +119,7 @@ export function EmailFirehose({
                 >
                   <EmailItem
                     email={emails[virtualItem.index]}
+                    details={details.get(emails[virtualItem.index].threadId)}
                     userEmail={userEmail}
                     emailAccountId={emailAccountId}
                     action={action}
@@ -180,4 +185,26 @@ export function EmailFirehose({
       </div> */}
     </div>
   );
+}
+
+/**
+ * Who sent each visible thread and its subject. The Deep Clean feed carries
+ * ids and status only (RD-3), so the browser asks for the rows it shows.
+ */
+function useVisibleThreadDetails(threadIds: (string | undefined)[]) {
+  const ids = [...new Set(threadIds.filter((id): id is string => !!id))].sort();
+  const { data } = useThreadsByIds(
+    { threadIds: ids },
+    { keepPreviousData: true },
+  );
+  const details = new Map<string, { subject: string; from: string }>();
+  for (const thread of data?.threads ?? []) {
+    const latest = thread.messages.at(-1);
+    if (latest)
+      details.set(thread.id, {
+        subject: latest.headers.subject,
+        from: latest.headers.from,
+      });
+  }
+  return details;
 }

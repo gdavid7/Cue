@@ -1,7 +1,6 @@
 import { isAutomatedAddress } from "@cue/context";
 import { mapWithConcurrency } from "@/utils/async";
 import { fetchCalendarEventsInWindow } from "@/utils/calendar/fetch-events-in-window";
-import type { CalendarEvent } from "@/utils/calendar/event-types";
 import {
   extractEmailAddress,
   extractNameFromEmail,
@@ -13,59 +12,66 @@ import {
   aiExtractInsight,
   type EmailInsight,
 } from "@/utils/inbox-insights/extract-insight";
+import {
+  type InsightEvent,
+  type InsightPerson,
+  type ThreadMeeting,
+  toInsightEvent,
+} from "@/utils/inbox-insights/meeting-match";
 import type { Logger } from "@/utils/logger";
 import { assertHasAiAccess } from "@/utils/premium/limits";
 import { assertWithinUserRateLimit } from "@/utils/rate-limit";
-import { redis } from "@/utils/redis";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
-import {
-  getCachedSuggestedReplies,
-  getSuggestedReplySettings,
-  type SuggestedReply,
-} from "@/utils/thread-context/suggest-reply";
+import { getSuggestedReplySettings } from "@/utils/thread-context/suggest-reply";
 import type { ParsedMessage } from "@/utils/types";
 import { getEmailAccountWithAi } from "@/utils/user/get";
 
-// Each new email costs one provider read and one small model call, once a
-// week at most: most mail leaves the first screens within days, and a month
-// of entries filled the Redis plan's storage at well under a hundred users.
+// Each new email costs one provider read and one small model call, once per
+// browser: the browser keeps what it was given (RD-3), and names the
+// messages it already holds so they aren't read again.
 const MAX_NEW_PER_REQUEST = 25;
 const EXTRACT_CONCURRENCY = 4;
-const CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
-const NO_AI_CACHE_TTL_SECONDS = 24 * 60 * 60;
 const MEETING_WINDOW_DAYS = 14;
 // Only a request with uncached emails is charged, and it can make up to
 // MAX_NEW_PER_REQUEST model calls, so this sits below the per-call limits.
 const NEW_INSIGHT_REQUESTS_PER_WINDOW = 30;
 const RATE_LIMIT_WINDOW_SECONDS = 5 * 60;
 const SKIP_LABELS = ["SPAM", "TRASH", "DRAFT"];
-// Kept with each cached insight for a week; a mailing's full recipient list
-// would make one entry many kilobytes for meetings it can't usefully match.
+// Kept by the browser with each insight for a month; a mailing's full
+// recipient list would make one entry many kilobytes for meetings it can't
+// usefully match.
 const MAX_PEOPLE = 25;
 
-type CachedMessage = {
+/** What Cue read from one email, for the browser to keep. */
+export type InboxInsightExtraction = {
+  messageId: string;
   insight: EmailInsight | null;
   /** Other people on the message, for matching meetings with them. */
-  people: { email: string; name: string }[];
+  people: InsightPerson[];
+  /** False when the account had no AI access: worth asking again later. */
+  withAi: boolean;
 };
 
 export type ThreadInsightData = {
   insight: EmailInsight | null;
-  meeting: { title: string; at: string; with: string; url?: string } | null;
+  meeting: ThreadMeeting | null;
   /** The evidence-checked reply for the latest message, once Cue has tried one. */
   reply: "ready" | "needs-info" | null;
 };
 
 /**
- * What Cue adds under each inbox row: what the latest email asks, the meeting
- * coming up with the people on it, and whether an evidence-checked reply is
- * waiting. Keyed by the latest message, so a new message gets a fresh look.
+ * What Cue adds under each inbox row, read fresh for the emails the browser
+ * doesn't hold yet: what the latest email asks and who is on it. With the
+ * upcoming meetings, so the browser can show the one with those people.
+ * Nothing is cached here (RD-3).
  */
 export async function getInboxInsights({
   emailAccountId,
   userId,
   userEmail,
   items,
+  known = [],
+  withEvents = false,
   emailProvider,
   logger,
   now = new Date(),
@@ -74,22 +80,24 @@ export async function getInboxInsights({
   userId: string;
   userEmail: string;
   items: { threadId: string; messageId: string }[];
+  /** Messages the browser already holds an insight for. */
+  known?: string[];
+  /** The browser holds people to match against meetings. */
+  withEvents?: boolean;
   emailProvider: EmailProvider;
   logger: Logger;
   now?: Date;
-}): Promise<{ insights: Record<string, ThreadInsightData> }> {
-  const cached = items.length
-    ? await redis
-        .mget<(CachedMessage | null)[]>(
-          ...items.map((item) => cacheKey(emailAccountId, item.messageId)),
-        )
-        .catch(() => [] as (CachedMessage | null)[])
-    : [];
+}): Promise<{
+  insights: Record<string, InboxInsightExtraction>;
+  events: InsightEvent[];
+  draftRepliesEnabled: boolean;
+}> {
+  const knownIds = new Set(known);
   const missing = items
-    .filter((_, i) => !cached[i])
+    .filter((item) => !knownIds.has(item.messageId))
     .slice(0, MAX_NEW_PER_REQUEST);
 
-  // A page answered from the cache alone costs nothing and is not charged.
+  // A page the browser already holds costs no model call and is not charged.
   if (missing.length) {
     await assertWithinUserRateLimit({
       scope: "inbox-insights",
@@ -109,50 +117,26 @@ export async function getInboxInsights({
         logger,
         now,
       })
-    : new Map<string, CachedMessage>();
+    : new Map<string, InboxInsightExtraction>();
 
-  const byThread = new Map(
-    items.map((item, i) => [
-      item.threadId,
-      cached[i] ?? fresh.get(item.messageId) ?? null,
-    ]),
-  );
-
-  const [events, replies] = await Promise.all([
-    [...byThread.values()].some((m) => m?.people.length)
-      ? upcomingEvents({ emailAccountId, now, logger })
-      : [],
-    // The same answer the reader shows: a reply Cue verified, maybe saved
-    // as a draft, reads "Draft ready" here too.
-    getSuggestedReplySettings(emailAccountId)
-      .then((settings) =>
-        getCachedSuggestedReplies(
-          items.map((item) => ({
-            emailAccountId,
-            threadId: item.threadId,
-            messageId: item.messageId,
-          })),
-          settings,
-        ),
-      )
-      .then((stored) => stored.map(replyState))
-      .catch(() => [] as ReturnType<typeof replyState>[]),
+  const needsEvents =
+    withEvents || [...fresh.values()].some((entry) => entry.people.length);
+  const [events, settings] = await Promise.all([
+    needsEvents ? upcomingEvents({ emailAccountId, now, logger }) : [],
+    getSuggestedReplySettings(emailAccountId),
   ]);
 
   return {
     insights: Object.fromEntries(
-      items.map((item, i) => {
-        const message = byThread.get(item.threadId);
-        return [
-          item.threadId,
-          {
-            insight: message?.insight ?? null,
-            meeting: nextMeetingWith(message?.people ?? [], events),
-            reply: replies[i] ?? null,
-          },
-        ];
+      items.flatMap((item) => {
+        const entry = fresh.get(item.messageId);
+        return entry ? [[item.threadId, entry]] : [];
       }),
     ),
+    events: events.map(toInsightEvent),
+    // A suggestion this browser kept shows as "Draft ready" only while
+    // drafting is on.
+    draftRepliesEnabled: settings.draftRepliesEnabled,
   };
 }
 
@@ -192,7 +176,8 @@ async function extractMissing({
         const needsLook =
           !isSameEmailAddress(message.headers.from, userEmail) &&
           !message.labelIds?.some((l) => SKIP_LABELS.includes(l));
-        const entry: CachedMessage = {
+        const entry: InboxInsightExtraction = {
+          messageId,
           insight:
             aiAccount && needsLook
               ? await aiExtractInsight({
@@ -203,13 +188,8 @@ async function extractMissing({
                 })
               : null,
           people: peopleOn(message, userEmail),
+          withAi: hasAi,
         };
-        // Without AI access, check back tomorrow rather than in a week.
-        await redis
-          .set(cacheKey(emailAccountId, messageId), entry, {
-            ex: hasAi ? CACHE_TTL_SECONDS : NO_AI_CACHE_TTL_SECONDS,
-          })
-          .catch(() => null);
         return [messageId, entry] as const;
       } catch (error) {
         if (isGmailCallDeferredError(error)) {
@@ -221,9 +201,10 @@ async function extractMissing({
       }
     },
   );
-  // Insights wait for spare Gmail quota. Failing the request lets the client
-  // retry; what was built is cached, so the retry only reads what is missing.
-  if (deferred) throw deferred;
+  // Insights wait for spare Gmail quota. With nothing built, failing the
+  // request lets the client retry; what was built goes back so the browser
+  // keeps it, and the rest is asked for when the rows next change.
+  if (deferred && !results.some(Boolean)) throw deferred;
   return new Map(results.filter((r) => r !== null));
 }
 
@@ -235,7 +216,7 @@ async function upcomingEvents({
   emailAccountId: string;
   now: Date;
   logger: Logger;
-}): Promise<CalendarEvent[]> {
+}) {
   return fetchCalendarEventsInWindow({
     emailAccountId,
     timeMin: now,
@@ -248,33 +229,6 @@ async function upcomingEvents({
       logger.warn("Failed to fetch calendar events for insights", { error });
       return [];
     });
-}
-
-/** The soonest meeting that someone on the email is also invited to. */
-export function nextMeetingWith(
-  people: CachedMessage["people"],
-  events: CalendarEvent[],
-): ThreadInsightData["meeting"] {
-  if (!people.length) return null;
-  const byEmail = new Map(people.map((p) => [p.email, p]));
-  let best: ThreadInsightData["meeting"] = null;
-  for (const event of events) {
-    const match = event.attendees
-      .filter((a) => !a.declined)
-      .map((a) => byEmail.get(a.email.toLowerCase()))
-      .find(Boolean);
-    if (!match) continue;
-    const at = event.startTime.toISOString();
-    if (!best || at < best.at) {
-      best = {
-        title: event.title,
-        at,
-        with: match.name || match.email,
-        url: event.eventUrl,
-      };
-    }
-  }
-  return best;
 }
 
 function peopleOn(message: ParsedMessage, userEmail: string) {
@@ -297,16 +251,4 @@ function peopleOn(message: ParsedMessage, userEmail: string) {
     if (people.size >= MAX_PEOPLE) break;
   }
   return [...people.values()];
-}
-
-function cacheKey(emailAccountId: string, messageId: string) {
-  return `inbox-insight:${emailAccountId}:${messageId}`;
-}
-
-function replyState(
-  suggestion: SuggestedReply | null,
-): ThreadInsightData["reply"] {
-  if (suggestion?.status === "suggested") return "ready";
-  if (suggestion?.status === "insufficient") return "needs-info";
-  return null;
 }

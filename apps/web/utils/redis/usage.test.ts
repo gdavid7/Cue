@@ -278,10 +278,15 @@ describe("redis usage tracking", () => {
       "cost",
       0.5,
     );
-    expect(redis.set).toHaveBeenCalledWith(
-      "usage-migration:weekly-usage-cost-user:user-1:done",
-      expect.any(String),
-    );
+    // RD-3: the migration's record names days, never the address.
+    const doneValue = vi
+      .mocked(redis.set)
+      .mock.calls.find(
+        ([key]) => key === "usage-migration:weekly-usage-cost-user:user-1:done",
+      )?.[1];
+    expect(JSON.parse(String(doneValue))).toEqual({
+      weeklyCostsByDay: { "2026-02-24": 1.5, "2026-02-23": 0.5 },
+    });
     expect(weeklyCost).toBeCloseTo(2.5);
   });
 
@@ -361,6 +366,30 @@ describe("redis usage tracking", () => {
     });
 
     expect(weeklyCost).toBeCloseTo(1.5);
+  });
+
+  // Upstash hands a stored JSON value back as an object, not a string.
+  it("reads a weekly migration record in the object shape Upstash returns", async () => {
+    vi.mocked(redis.get).mockImplementation(async (key: string) => {
+      if (key === "usage-migration:weekly-usage-cost-user:user-1:done") {
+        return { weeklyCostsByDay: { "2026-02-24": 1 } } as never;
+      }
+      return null;
+    });
+
+    mockRedisHashes({
+      "usage-weekly-cost:user:user-1:2026-02-24": { cost: "2.0" },
+      "usage-weekly-cost:user@example.com:2026-02-24": { cost: "1.5" },
+    });
+
+    const { total: weeklyCost } = await getWeeklyUsageCostByBucket({
+      userId: "user-1",
+      legacyEmails: ["user@example.com"],
+      now: NOW,
+    });
+
+    // Migrated: what the user key holds plus the legacy spend since then.
+    expect(weeklyCost).toBeCloseTo(2.5);
   });
 
   it("does not persist post-migration legacy weekly writes without the migration lock", async () => {
@@ -604,6 +633,32 @@ describe("redis usage tracking", () => {
     });
 
     expect(usage).toEqual({ calls: 3, cost: 1.5 });
+  });
+
+  it("reads a usage migration record in the object shape Upstash returns", async () => {
+    vi.mocked(redis.get).mockImplementation(async (key: string) => {
+      if (key === "usage-migration:usage-email-account:email-account-1:done") {
+        return { usage: { openaiCalls: 2, cost: 1 } } as never;
+      }
+      return null;
+    });
+
+    mockRedisHashes({
+      "usage:email-account:email-account-1": {
+        openaiCalls: 4,
+        cost: "2.0",
+      },
+      "usage:user@example.com": { openaiCalls: 3, cost: "1.5" },
+    });
+
+    const usage = await getUsage({
+      emailAccountId: "email-account-1",
+      legacyEmail: "user@example.com",
+      userId: "user-1",
+    });
+
+    // Migrated: the account's usage plus the legacy usage since then.
+    expect(usage).toEqual({ calls: 5, cost: 2.5 });
   });
 
   it("does not persist post-migration legacy usage writes without the migration lock", async () => {

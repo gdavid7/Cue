@@ -5,6 +5,7 @@ import {
   type GmailQuotaNote,
   gmailQuotaStore,
 } from "@/utils/gmail/quota-store";
+import { takeGmailInflightStats } from "@/utils/gmail/inflight";
 import { extractErrorInfo, isRetryableError } from "@/utils/gmail/retry";
 import { createScopedLogger } from "@/utils/logger";
 import { isEmailProviderRateLimitRedisConfigured } from "@/utils/redis/email-provider-rate-limit";
@@ -1449,14 +1450,20 @@ async function flushNotes() {
 }
 
 // How many store round trips the gate made for how many Gmail calls, so the
-// Redis commands it spends can be followed per instance.
+// Redis commands it spends can be followed per instance, and what calls met
+// at the in-flight cap.
 function logGateSummary() {
   const now = Date.now();
   if (now - gateStatsSince < GATE_SUMMARY_INTERVAL_MS) return;
+  const inflight = takeGmailInflightStats();
   if (gateStats.calls > 0 || gateStats.noteFlushes > 0)
     logger.info("Gmail quota gate", {
       intervalSeconds: Math.round((now - gateStatsSince) / 1000),
       ...gateStats,
+      inflightWaits: inflight.waits,
+      inflightWaitMsTotal: inflight.waitMsTotal,
+      inflightWaitMsMax: inflight.waitMsMax,
+      inflightOverCap: inflight.overCap,
     });
   for (const key of Object.keys(gateStats) as (keyof typeof gateStats)[])
     gateStats[key] = 0;

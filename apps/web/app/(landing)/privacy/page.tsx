@@ -78,10 +78,16 @@ export default function PrivacyPage() {
                 stored where it is part of something {BRAND_NAME} produced for
                 you, such as a draft, a note, a chat answer, or the reason a
                 rule ran, and for emails you send or schedule while they are
-                held for undo or sending. Short-lived caches in our Redis
-                service (recently loaded thread pages, AI summaries, research on
-                people you correspond with) expire automatically, most within a
-                day and the longest after 30 days.
+                held for undo or sending. Our Redis cache holds no message
+                content or personal data: only IDs, hashes, counters, locks and
+                timestamps that keep sync, rate limits and background jobs
+                running, and public news headlines about the organizations you
+                meet, stored under a hash of the organization. Briefs, suggested
+                replies, inbox insights and contact photos that {BRAND_NAME}{" "}
+                works out for you are sent to your browser and kept there, next
+                to your local mail cache. Messages in our job queue carry the
+                IDs, and for sorting senders the sender addresses, that a
+                background job needs, until the job runs.
               </li>
               <li>
                 <strong className="text-foreground">Calendar data.</strong>{" "}
@@ -245,7 +251,7 @@ export default function PrivacyPage() {
               <ul className={listClass}>
                 <li>Vercel: application hosting</li>
                 <li>Neon: Postgres database</li>
-                <li>Upstash: Redis cache and job queue</li>
+                <li>Upstash: Redis cache (no message content) and job queue</li>
                 <li>Anthropic: AI processing (primary)</li>
                 <li>Google (Gemini API): AI processing (fallback)</li>
                 <li>
@@ -276,8 +282,9 @@ export default function PrivacyPage() {
                   exists.
                 </li>
                 <li>
-                  Browser mail cache: lives in your browser and is cleared when
-                  you sign out.
+                  Browser mail cache, and the briefs, suggested replies and
+                  insights kept with it: live in your browser and are cleared
+                  when you sign out.
                 </li>
                 <li>
                   Sent-draft text captured to compare a draft with what you

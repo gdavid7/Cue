@@ -41,6 +41,7 @@ import { getActiveMailClient } from "@/utils/mail-engine/active-client";
 import { answerAssistantSearch } from "@/utils/mail-engine/assistant-search";
 import { LOCAL_MAIL_SEARCH_SYNTAXES } from "@/utils/actions/assistant-chat.validation";
 import { submitLocalMailSearchResult } from "@/utils/actions/assistant-chat";
+import { MAX_CHAT_RUN_MS } from "@/utils/chat/max-run";
 
 const logger = createClientLogger("assistant-chat");
 
@@ -56,6 +57,8 @@ export type Chat = ReturnType<typeof useAiChat<ChatMessage>>;
 type ChatMessagePart =
   | { type: "file"; url: string; filename: string; mediaType: string }
   | { type: "text"; text: string };
+
+const FINISHING_POLL_MS = 3000;
 
 type PendingChatRequest = {
   attachmentCount: number;
@@ -91,6 +94,11 @@ type ChatContextType = {
   submitTextMessage: (text: string) => Promise<void>;
   handleSubmit: () => void;
   stop: () => Promise<void>;
+  /**
+   * A reply is still running on the server but isn't streaming here, e.g.
+   * its connection dropped. It shows once the run saves it.
+   */
+  replyFinishing: boolean;
   context: MessageContext | null;
   setContext: (context: MessageContext | null) => void;
   attachments: Attachment[];
@@ -309,6 +317,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const isRunActive =
     chat.status === "submitted" || chat.status === "streaming";
+  const activeStreamId = data?.activeStreamId ?? null;
+  const activeStreamStartedAt = data?.activeStreamStartedAt ?? null;
+  // Set when a run outlives the chat route's limit without clearing its
+  // marker (its instance died), so the wait ends even if the data never
+  // changes again.
+  const [expiredStreamId, setExpiredStreamId] = useState<string | null>(null);
+  const replyFinishing =
+    !isRunActive &&
+    Boolean(activeStreamId) &&
+    activeStreamId !== expiredStreamId &&
+    isRecentRun(activeStreamStartedAt);
+  // The partial reply shown stays until the run saves the whole one.
+  const keepPartialReply =
+    replyFinishing && chat.messages.at(-1)?.id === activeStreamId;
   const handledDataRef = useRef<{ chatId: string; data: typeof data } | null>(
     null,
   );
@@ -320,9 +342,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // The reply is saved only when the run ends, so data fetched mid-run (e.g.
     // on window focus) is behind the local messages. onFinish refetches once
     // the run ends, which brings in the saved reply.
-    if (isRunActive) return;
+    if (isRunActive || keepPartialReply) return;
     chat.setMessages(data ? convertToUIMessages(data) : []);
-  }, [chat.id, chat.setMessages, data, isRunActive]);
+  }, [chat.id, chat.setMessages, data, isRunActive, keepPartialReply]);
 
   const resumeActiveRun = useCallback(async () => {
     if (!chatId || stoppedRef.current || resumingRef.current) return;
@@ -341,7 +363,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   // Reattach to a reply still running for this chat, e.g. after a reload or
   // when opening the chat mid-run, once its saved messages are shown.
-  const activeStreamId = data?.activeStreamId ?? null;
   useEffect(() => {
     if (!activeStreamId || resumedStreamIdRef.current === activeStreamId)
       return;
@@ -351,6 +372,33 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     resumedStreamIdRef.current = activeStreamId;
     resumeActiveRun();
   }, [activeStreamId, chat.messages, chat.status, resumeActiveRun]);
+
+  // The server keeps no copy of a streaming reply (RD-3), so a dropped one
+  // can't be reattached; its run still finishes and saves it. Until then the
+  // chat says the reply is finishing and checks back for it.
+  useEffect(() => {
+    if (!replyFinishing || !chatId || !activeStreamId || !activeStreamStartedAt)
+      return;
+    const poll = setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      mutate(chatMessagesKey(chatId, emailAccountId));
+    }, FINISHING_POLL_MS);
+    const deadline = setTimeout(
+      () => setExpiredStreamId(activeStreamId),
+      new Date(activeStreamStartedAt).getTime() + MAX_CHAT_RUN_MS - Date.now(),
+    );
+    return () => {
+      clearInterval(poll);
+      clearTimeout(deadline);
+    };
+  }, [
+    activeStreamId,
+    activeStreamStartedAt,
+    chatId,
+    emailAccountId,
+    mutate,
+    replyFinishing,
+  ]);
 
   // Mobile browsers drop the connection of a backgrounded tab while the reply
   // keeps running, so reattach when the tab comes back.
@@ -700,6 +748,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         submitTextMessage,
         handleSubmit,
         stop,
+        replyFinishing,
         context,
         setContext: setContextForPage,
         attachments,
@@ -722,6 +771,11 @@ export function useChat(): ChatContextType {
     throw new Error("useChat must be used within a ChatProvider");
   }
   return context;
+}
+
+function isRecentRun(startedAt: Date | string | null) {
+  if (!startedAt) return false;
+  return Date.now() - new Date(startedAt).getTime() < MAX_CHAT_RUN_MS;
 }
 
 // NOTE: not sure why we don't just use the default from AI SDK

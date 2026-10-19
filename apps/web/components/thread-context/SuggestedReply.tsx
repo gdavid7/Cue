@@ -164,7 +164,13 @@ function SuggestionBody({
             <Button
               disabled={!text.trim() || hasSucceeded}
               loading={isExecuting}
-              onClick={() => execute({ threadId, content: text })}
+              onClick={() =>
+                execute({
+                  threadId,
+                  content: text,
+                  suggested: suggestion.reply,
+                })
+              }
               size="sm"
               type="button"
             >

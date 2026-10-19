@@ -2,14 +2,36 @@ import groupBy from "lodash/groupBy";
 import { useCallback, useMemo } from "react";
 import useSWR, { unstable_serialize, useSWRConfig } from "swr";
 import type { GetInboxInsightsResponse } from "@/app/api/user/inbox-insights/route";
-import type { ThreadInsightData } from "@/utils/inbox-insights/get-inbox-insights";
+import { createBrowserCache } from "@/utils/browser-cache";
+import type {
+  InboxInsightExtraction,
+  ThreadInsightData,
+} from "@/utils/inbox-insights/get-inbox-insights";
+import { nextMeetingWith } from "@/utils/inbox-insights/meeting-match";
 import { getRetryHint } from "@/utils/swr";
+import { keptSuggestionFor } from "@/utils/thread-context/suggested-reply-store";
 
 const CHUNK_SIZE = 50;
 // A page where only some accounts answered asks the rest again this many
 // times; an account that keeps failing then waits for the next change.
 const PARTIAL_RETRY_LIMIT = 5;
 const PARTIAL_RETRY_BASE_MS = 5000;
+
+// What Cue read from each email, kept in this browser for as long as the
+// email could still be on screen: the server keeps none of it (RD-3).
+const extractions = createBrowserCache<InboxInsightExtraction>({
+  name: "inbox-insight",
+  ttlMs: 30 * 24 * 60 * 60 * 1000,
+  maxEntries: 500,
+});
+// Read without AI access: only who is on the email. Kept a day, like the
+// server once did, so each render doesn't read every message from the
+// provider again; once the account has AI, the next day asks again.
+const extractionsWithoutAi = createBrowserCache<InboxInsightExtraction>({
+  name: "inbox-insight-no-ai",
+  ttlMs: 24 * 60 * 60 * 1000,
+  maxEntries: 500,
+});
 
 type InboxInsightItem = {
   /** Where the caller looks the insight up; unique across accounts. */
@@ -21,8 +43,9 @@ type InboxInsightItem = {
 
 /**
  * Insights for the rows on screen, keyed by each item's `key`. Each thread is
- * sent with its latest message, which keys the server cache, so a new message
- * gets a fresh look and nothing else is recomputed. Rows from different
+ * sent with its latest message; what this browser already read from a
+ * message is kept here and named to the server, so a new message gets a
+ * fresh look and nothing else is recomputed. Rows from different
  * accounts are asked for with their own account, as the combined inbox mixes
  * them. While `enabled` is false nothing is asked for.
  */
@@ -72,13 +95,39 @@ export function useInboxInsights(
       // take the other accounts' rows down with it.
       const settled = await Promise.allSettled(
         requests.map(async (request) => {
-          const { insights } = await accountFetcher([
-            `/api/user/inbox-insights?items=${request.items.map((item) => item.pair).join(",")}`,
-            request.emailAccountId,
+          const { emailAccountId } = request;
+          const kept = new Map(
+            request.items.flatMap((item) => {
+              const entry =
+                extractions.get(emailAccountId, item.messageId) ??
+                extractionsWithoutAi.get(emailAccountId, item.messageId);
+              return entry ? [[item.messageId, entry] as const] : [];
+            }),
+          );
+          const known = [...kept.keys()].map(encodeURIComponent).join(",");
+          const keptPeople = [...kept.values()].some(
+            (entry) => entry.people.length,
+          );
+          const response = await accountFetcher([
+            `/api/user/inbox-insights?items=${request.items.map((item) => item.pair).join(",")}${known ? `&known=${known}` : ""}${keptPeople ? "&events=1" : ""}`,
+            emailAccountId,
           ]);
           return request.items.flatMap((item) => {
-            const insight = insights[item.threadId];
-            return insight ? [[item.key, insight] as const] : [];
+            const fresh = response.insights[item.threadId];
+            if (fresh?.messageId === item.messageId)
+              (fresh.withAi ? extractions : extractionsWithoutAi).set(
+                emailAccountId,
+                item.messageId,
+                fresh,
+              );
+            const entry = fresh ?? kept.get(item.messageId);
+            if (!entry) return [];
+            return [
+              [
+                item.key,
+                toThreadInsight({ entry, item, emailAccountId, response }),
+              ] as const,
+            ];
           });
         }),
       );
@@ -171,6 +220,7 @@ export function getInboxInsightRequests(items: InboxInsightItem[]) {
           {
             key: item.key,
             threadId: item.threadId,
+            messageId: item.messageId,
             pair: `${encodeURIComponent(item.threadId)}:${encodeURIComponent(item.messageId)}`,
           },
         ]),
@@ -183,6 +233,35 @@ export function getInboxInsightRequests(items: InboxInsightItem[]) {
         items: chunkItems,
       }));
     });
+}
+
+/** One row's insight: what the email asks, the meeting with its people, and the reply this browser kept. */
+function toThreadInsight({
+  entry,
+  item,
+  emailAccountId,
+  response,
+}: {
+  entry: InboxInsightExtraction;
+  item: { threadId: string; messageId: string };
+  emailAccountId: string;
+  response: GetInboxInsightsResponse;
+}): ThreadInsightData {
+  const suggestion = response.draftRepliesEnabled
+    ? keptSuggestionFor({
+        emailAccountId,
+        threadId: item.threadId,
+        messageId: item.messageId,
+      })
+    : null;
+  let reply: ThreadInsightData["reply"] = null;
+  if (suggestion?.status === "suggested") reply = "ready";
+  else if (suggestion?.status === "insufficient") reply = "needs-info";
+  return {
+    insight: entry.insight,
+    meeting: nextMeetingWith(entry.people, response.events),
+    reply,
+  };
 }
 
 function chunk<T>(items: T[], size: number): T[][] {

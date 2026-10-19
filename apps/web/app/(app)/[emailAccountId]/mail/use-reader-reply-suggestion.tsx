@@ -13,6 +13,7 @@ import { SystemType } from "@/generated/prisma/enums";
 import { threadInsightItem, useInboxInsights } from "@/hooks/useInboxInsights";
 import { useReplySuggestion } from "@/hooks/useReplySuggestion";
 import { useSuggestedReply } from "@/hooks/useSuggestedReply";
+import { contextWithText, useThreadContext } from "@/hooks/useThreadContext";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { extractEmailAddress, isSameEmailAddress } from "@/utils/email";
@@ -111,19 +112,34 @@ export function useReaderReplySuggestion({
     if (!latest || !canRequestReply || !writesReplies || run) return;
     setDecision({ id: latest.id, eligible: true, run: true });
   };
-  const { phase, suggestion } = useReplySuggestion({
+  // The same context the reader shows, handed to the suggestion so the server
+  // doesn't gather it (and read linked pages) again for each pass.
+  const context = useThreadContext({
+    threadId: enabled && run ? threadId : null,
+    emailAccountId,
+  });
+  const contextSettled = Boolean(context.data || context.error);
+  const replySuggestion = useReplySuggestion({
     threadId,
     emailAccountId,
-    enabled: enabled && run,
+    messageId: latestId,
+    enabled: enabled && run && contextSettled,
+    context: contextWithText(context.data),
   });
+  const { suggestion } = replySuggestion;
+  // Gathering the context is the first part of checking the user's mail.
+  const phase =
+    enabled && run && !contextSettled ? "checking-mail" : replySuggestion.phase;
 
-  // Reopened with a draft: the suggestion Cue made for this message, if any,
-  // so a draft that is still Cue's text keeps saying so.
+  // Reopened with a draft: the suggestion this browser kept for this message,
+  // if any, so a draft that is still Cue's text keeps saying so.
   const { data: saved } = useSuggestedReply({
     threadId,
     emailAccountId,
-    enabled: enabled && !run && !latestIsFromUser && hasDraft,
-    cachedFor: latestId,
+    messageId: latestId,
+    enabled:
+      enabled && !run && !latestIsFromUser && hasDraft && draftReplies.enabled,
+    keptOnly: true,
   });
   const latestSuggestion = suggestion ?? saved?.suggestion;
   const verified =

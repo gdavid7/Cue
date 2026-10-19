@@ -1,16 +1,19 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestLogger } from "@/__tests__/helpers";
+import { recordingRedis } from "@/__tests__/mocks/recording-redis.mock";
 
-const { envMock, getContactPhotosMock, redisMock } = vi.hoisted(() => ({
+const { envMock, getContactPhotosMock } = vi.hoisted(() => ({
   envMock: { NEXT_PUBLIC_CONTACTS_ENABLED: true },
   getContactPhotosMock: vi.fn(),
-  redisMock: { get: vi.fn(), set: vi.fn() },
 }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/env", () => ({ env: envMock }));
-vi.mock("@/utils/redis", () => ({ redis: redisMock }));
+vi.mock("@/utils/redis", async () => ({
+  redis: (await import("@/__tests__/mocks/recording-redis.mock")).recordingRedis
+    .client,
+}));
 vi.mock("@/utils/middleware", () => ({
   withEmailProvider:
     (
@@ -34,58 +37,35 @@ import { GET } from "./route";
 describe("GET /api/user/contacts/photos", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    recordingRedis.reset();
     envMock.NEXT_PUBLIC_CONTACTS_ENABLED = true;
   });
 
-  it("serves cached photos without sweeping the provider again", async () => {
-    redisMock.get.mockResolvedValue({ "a@example.com": "https://photo/a" });
-
-    const body = await getPhotos();
-
-    expect(getContactPhotosMock).not.toHaveBeenCalled();
-    expect(body).toEqual({ photos: { "a@example.com": "https://photo/a" } });
-  });
-
-  it("sweeps the provider once and caches the result, including an empty one", async () => {
-    redisMock.get.mockResolvedValue(null);
-    getContactPhotosMock.mockResolvedValue({});
-
-    const body = await getPhotos();
-
-    expect(getContactPhotosMock).toHaveBeenCalledTimes(1);
-    expect(redisMock.set).toHaveBeenCalledWith(
-      "contact-photos:account-1",
-      {},
-      { ex: 24 * 60 * 60 },
-    );
-    expect(body).toEqual({ photos: {} });
-  });
-
-  it("falls back to no photos and caches the miss briefly when the sweep fails", async () => {
-    redisMock.get.mockResolvedValue(null);
-    getContactPhotosMock.mockRejectedValue(new Error("rate limited"));
-
-    const body = await getPhotos();
-
-    expect(getContactPhotosMock).toHaveBeenCalledTimes(1);
-    expect(body).toEqual({ photos: {} });
-    expect(redisMock.set).toHaveBeenCalledWith(
-      "contact-photos:account-1",
-      {},
-      { ex: 15 * 60, nx: true },
-    );
-  });
-
-  it("still serves photos when the cache is unavailable", async () => {
-    redisMock.get.mockRejectedValue(new Error("redis down"));
-    redisMock.set.mockRejectedValue(new Error("redis down"));
+  // RD-3: photos name the user's contacts, so the browser keeps them.
+  it("returns the swept photos without keeping them on the server", async () => {
     getContactPhotosMock.mockResolvedValue({
       "a@example.com": "https://photo/a",
     });
 
-    const body = await getPhotos();
+    expect(await getPhotos()).toEqual({
+      photos: { "a@example.com": "https://photo/a" },
+      swept: true,
+    });
+    expect(await getPhotos()).toMatchObject({ swept: true });
+    expect(getContactPhotosMock).toHaveBeenCalledTimes(2);
+    expect(recordingRedis.everythingWritten()).not.toContain("a@example.com");
+  });
 
-    expect(body).toEqual({ photos: { "a@example.com": "https://photo/a" } });
+  it("pauses sweeping for a while after a failed sweep", async () => {
+    getContactPhotosMock.mockRejectedValue(new Error("rate limited"));
+
+    expect(await getPhotos()).toEqual({ photos: {}, swept: false });
+    expect(await getPhotos()).toEqual({ photos: {}, swept: false });
+
+    expect(getContactPhotosMock).toHaveBeenCalledTimes(1);
+    expect(recordingRedis.writes).toEqual([
+      { key: "contact-photos-paused:account-1", value: "1" },
+    ]);
   });
 
   it("does not query the provider when contacts are disabled", async () => {

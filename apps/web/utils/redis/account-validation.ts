@@ -1,100 +1,14 @@
 import "server-only";
-import { env } from "@/env";
-import { redis } from "@/utils/redis";
 import prisma from "@/utils/prisma";
-import { createMemoCache } from "@/utils/memo-cache";
-import { getSharedSubscriber } from "@/utils/redis/shared-subscriber";
+import { redis } from "@/utils/redis";
 
-const EXPIRATION = 60 * 60; // 1 hour
-const INVALIDATION_CHANNEL = "account-validation:invalidate";
-
-type Listen = (
-  channel: string,
-  listener: { onMessage: (message: string) => void; onLost: () => void },
-) => { ready: Promise<unknown>; close?: () => void };
+// "1" says the account is the user's. Ids only: the address never sits in
+// Redis (RD-3). Removal and merges delete it; the expiry bounds a missed path.
+const OWNER_TTL_SECONDS = 60 * 60;
 
 /**
- * Most authenticated requests check the account, so each instance trusts an
- * owned account for 15 seconds. An invalidation (a merge, transfer or
- * deletion) is published to every instance, which drops it at once; the TTL
- * bounds staleness when that message is missed, and an instance whose
- * subscription dropped forgets everything.
- */
-export function createOwnedAccountMemo({
-  listen,
-  publish,
-}: {
-  listen: Listen;
-  publish: (channel: string, message: string) => Promise<unknown>;
-}) {
-  const memo = createMemoCache<string | null>({
-    ttlMs: 15_000,
-    maxEntries: 5000,
-    keep: (email) => email !== null,
-  });
-  let listening = false;
-  const listenForInvalidations = () => {
-    if (listening) return;
-    listening = true;
-    try {
-      const subscription = listen(INVALIDATION_CHANNEL, {
-        onMessage: (key) => memo.delete(key),
-        // A dropped connection only reports to a subscription once, so this
-        // one is closed and the next check subscribes afresh, to hear about
-        // the next drop too.
-        onLost: () => {
-          memo.clear();
-          subscription.close?.();
-          listening = false;
-        },
-      });
-      subscription.ready.catch(() => {
-        subscription.close?.();
-        listening = false;
-      });
-    } catch {
-      listening = false;
-    }
-  };
-  return {
-    get(key: string, load: () => Promise<string | null>) {
-      listenForInvalidations();
-      return memo.get(key, load);
-    },
-    async invalidate(key: string) {
-      memo.delete(key);
-      await publish(INVALIDATION_CHANNEL, key);
-    },
-  };
-}
-
-const ownedAccounts = createOwnedAccountMemo({
-  // Without a pub/sub connection the 15-second TTL is the bound.
-  listen: (channel, listener) =>
-    env.REDIS_URL
-      ? getSharedSubscriber().listen(channel, listener)
-      : { ready: Promise.resolve() },
-  publish: (channel, message) => redis.publish(channel, message),
-});
-
-/**
- * Get the Redis key for account validation
- */
-function getValidationKey({
-  userId,
-  emailAccountId,
-}: {
-  userId: string;
-  emailAccountId: string;
-}): string {
-  return `account:${userId}:${emailAccountId}`;
-}
-
-/**
- * Validate that an account belongs to a user, using Redis for caching
- * @param userId The user ID
- * @param accountId The account ID to validate
- * @returns email address of the account if it belongs to the user, otherwise null
+ * The address of the account when it belongs to the user, otherwise null.
+ * One primary-key read: the address is needed, and it is never cached.
  */
 export async function getEmailAccount({
   userId,
@@ -105,17 +19,18 @@ export async function getEmailAccount({
 }): Promise<string | null> {
   if (!userId || !emailAccountId) return null;
 
-  const key = getValidationKey({ userId, emailAccountId });
-  return ownedAccounts.get(key, () =>
-    lookUpEmailAccount(key, emailAccountId, userId),
-  );
+  const emailAccount = await prisma.emailAccount.findUnique({
+    where: { id: emailAccountId, userId },
+    select: { email: true },
+  });
+  return emailAccount?.email ?? null;
 }
 
 /**
  * Reads one key per account for the accounts the user owns, in the same
  * command as the ownership check, so a frequent poll costs one Redis read.
- * Unowned accounts are left out. Ownership not cached yet falls back to
- * `getEmailAccount`.
+ * Unowned accounts are left out. Ownership not cached yet is read from the
+ * database and remembered.
  */
 export async function readKeyForOwnedAccounts({
   userId,
@@ -128,7 +43,7 @@ export async function readKeyForOwnedAccounts({
 }): Promise<Map<string, unknown>> {
   const values = await redis.mget<unknown[]>(
     ...emailAccountIds.map((emailAccountId) =>
-      getValidationKey({ userId, emailAccountId }),
+      getOwnerKey({ userId, emailAccountId }),
     ),
     ...emailAccountIds.map(keyFor),
   );
@@ -136,7 +51,7 @@ export async function readKeyForOwnedAccounts({
     emailAccountIds.map(
       async (emailAccountId, index) =>
         values[index] != null ||
-        (await getEmailAccount({ userId, emailAccountId })) !== null,
+        (await confirmOwnership({ userId, emailAccountId })),
     ),
   );
   const result = new Map<string, unknown>();
@@ -150,55 +65,47 @@ export async function readKeyForOwnedAccounts({
   return result;
 }
 
-async function lookUpEmailAccount(
-  key: string,
-  emailAccountId: string,
-  userId: string,
-): Promise<string | null> {
-  // Check Redis cache first
-  try {
-    const cachedResult = await redis.get<string>(key);
-    if (cachedResult !== null) {
-      return cachedResult;
-    }
-  } catch {
-    // Redis unavailable — fall through to database
-  }
-
-  // Not in cache, check database
-  const emailAccount = await prisma.emailAccount.findUnique({
-    where: { id: emailAccountId, userId },
-    select: { email: true },
-  });
-
-  // Cache the result (best-effort)
-  try {
-    await redis.set(key, emailAccount?.email ?? null, { ex: EXPIRATION });
-  } catch {
-    // Redis unavailable — skip caching
-  }
-
-  return emailAccount?.email ?? null;
-}
-
-/**
- * Invalidate the cached validation result for a user's account
- * Useful when account ownership changes
- */
-export async function invalidateAccountValidation({
+/** Forgets that the account is the user's, when it is removed or moved. */
+export async function invalidateAccountOwnership({
   userId,
   emailAccountId,
 }: {
   userId: string;
   emailAccountId: string;
-}): Promise<void> {
-  const key = getValidationKey({ userId, emailAccountId });
-  try {
-    await redis.del(key);
-  } catch {
-    // Redis unavailable — skip invalidation
-  }
-  await ownedAccounts.invalidate(key).catch(() => {
-    // Other instances drop it when their 15-second memo expires.
+}) {
+  await redis
+    .del(getOwnerKey({ userId, emailAccountId }))
+    .catch(() => undefined);
+}
+
+async function confirmOwnership({
+  userId,
+  emailAccountId,
+}: {
+  userId: string;
+  emailAccountId: string;
+}) {
+  const owned = await prisma.emailAccount.findUnique({
+    where: { id: emailAccountId, userId },
+    select: { id: true },
   });
+  if (!owned) return false;
+  await redis
+    .set(getOwnerKey({ userId, emailAccountId }), "1", {
+      ex: OWNER_TTL_SECONDS,
+    })
+    .catch(() => null);
+  return true;
+}
+
+// Not `account:*`: keys under that prefix held addresses and the RD-3
+// cleanup deletes them.
+function getOwnerKey({
+  userId,
+  emailAccountId,
+}: {
+  userId: string;
+  emailAccountId: string;
+}) {
+  return `account-owner:${userId}:${emailAccountId}`;
 }

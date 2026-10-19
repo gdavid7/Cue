@@ -17,15 +17,16 @@ vi.mock("@/utils/prisma", () => ({
   default: { emailAccount: { findUnique: vi.fn() } },
 }));
 
-// Redis as the push path and the account cache leave it, keyed like the app.
+// Redis as the push path and the ownership flag leave it, keyed like the app.
+// RD-3: the flag is "1", never the account's address.
 let store: Record<string, unknown>;
 
 describe("Mail version poll", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     store = {
-      "account:user-1:acc-a": "a@example.com",
-      "account:user-1:acc-b": "b@example.com",
+      "account-owner:user-1:acc-a": "1",
+      "account-owner:user-1:acc-b": "1",
       "local-mail-version:acc-a": "v1",
     };
     vi.mocked(redis.mget).mockImplementation((async (...keys: string[]) =>
@@ -33,6 +34,7 @@ describe("Mail version poll", () => {
     vi.mocked(redis.get).mockImplementation(
       (async (key: string) => store[key] ?? null) as never,
     );
+    vi.mocked(redis.set).mockResolvedValue("OK");
     vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue(null);
   });
 
@@ -71,15 +73,19 @@ describe("Mail version poll", () => {
   });
 
   it("checks ownership in the database when it is not cached", async () => {
-    store["account:user-1:acc-b"] = null;
+    store["account-owner:user-1:acc-b"] = null;
     store["local-mail-version:acc-b"] = "v2";
     vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue({
-      email: "b@example.com",
+      id: "acc-b",
     } as never);
 
     const response = await GET(request("acc-b"));
 
     expect((await response.json()).versions).toEqual({ "acc-b": "v2" });
+    // Remembered by id alone, so the next poll needs no database read.
+    expect(redis.set).toHaveBeenCalledWith("account-owner:user-1:acc-b", "1", {
+      ex: 3600,
+    });
   });
 
   it("tells the browser to sync directly when Redis is unavailable", async () => {

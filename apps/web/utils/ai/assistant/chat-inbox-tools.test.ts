@@ -1190,14 +1190,20 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     };
 
     function setup(local: unknown) {
+      const getMessagesBatch = vi.fn(async () => [asParsed(localMessage)]);
       const searchMessages = vi.fn().mockResolvedValue({ messages: [] });
       (createEmailProvider as any).mockResolvedValue({
         searchMessages,
         getLabels: vi
           .fn()
           .mockResolvedValue([{ id: "Label_7", name: "Recruiting" }]),
+        getMessagesBatch,
       });
-      const localMailSearch = { search: vi.fn().mockResolvedValue(local) };
+      // RD-3: the browser's answer reaches the run as ids; the messages
+      // themselves are read from the provider.
+      const localMailSearch = {
+        search: vi.fn().mockResolvedValue(idsOnly(local)),
+      };
       const toolInstance = searchInboxTool({
         email: TEST_EMAIL,
         emailAccountId: "email-account-1",
@@ -1307,6 +1313,7 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     };
 
     function setup(local: unknown) {
+      const getMessagesBatch = vi.fn(async () => [asParsed(localMessage)]);
       const searchMessages = vi.fn().mockResolvedValue({ messages: [] });
       (createEmailProvider as any).mockResolvedValue({
         searchMessages,
@@ -1314,8 +1321,13 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
           .fn()
           .mockResolvedValue([{ id: "cat-finance", name: "Finance" }]),
         getFolders: vi.fn().mockResolvedValue([]),
+        getMessagesBatch,
       });
-      const localMailSearch = { search: vi.fn().mockResolvedValue(local) };
+      // RD-3: the browser's answer reaches the run as ids; the messages
+      // themselves are read from the provider.
+      const localMailSearch = {
+        search: vi.fn().mockResolvedValue(idsOnly(local)),
+      };
       const toolInstance = searchInboxTool({
         email: TEST_EMAIL,
         emailAccountId: "email-account-1",
@@ -2785,3 +2797,43 @@ describe("chat inbox tools - sender categories", () => {
     expect(result.sendersCount).toBe(6);
   });
 });
+
+function idsOnly(local: unknown) {
+  const answer = local as {
+    status: string;
+    messages?: { id: string; threadId: string }[];
+  } | null;
+  if (!answer?.messages) return answer;
+  return {
+    ...answer,
+    messages: answer.messages.map(({ id, threadId }) => ({ id, threadId })),
+  };
+}
+
+function asParsed(message: {
+  id: string;
+  threadId: string;
+  subject: string;
+  from: string;
+  to: string;
+  snippet: string;
+  date: string;
+  labelIds: string[];
+  hasAttachments: boolean;
+}) {
+  return {
+    id: message.id,
+    threadId: message.threadId,
+    subject: message.subject,
+    snippet: message.snippet,
+    date: message.date,
+    labelIds: message.labelIds,
+    headers: {
+      from: message.from,
+      to: message.to,
+      subject: message.subject,
+      date: message.date,
+    },
+    attachments: message.hasAttachments ? [{ filename: "file.pdf" }] : [],
+  };
+}

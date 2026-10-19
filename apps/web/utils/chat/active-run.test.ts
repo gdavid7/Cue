@@ -27,10 +27,6 @@ vi.mock("@/env", () => ({ env: envState }));
 
 vi.mock("@/utils/prisma");
 
-vi.mock("resumable-stream/ioredis", () => ({
-  createResumableStreamContext: vi.fn(() => ({ name: "stream-context" })),
-}));
-
 // Every fake connection shares one bus, the way separate server instances
 // share one Redis.
 vi.mock("ioredis", () => ({
@@ -76,7 +72,9 @@ describe("assistant chat runs", () => {
     global.assistantChatRuns?.clear();
   });
 
-  it("skips resumable streams when Redis is not configured", () => {
+  // RD-3: resuming relays reply chunks, which quote mail, over pub/sub.
+  it("never offers a resumable stream, even with Redis configured", () => {
+    envState.REDIS_URL = "redis://localhost:6379";
     expect(getChatStreamContext()).toBeNull();
   });
 

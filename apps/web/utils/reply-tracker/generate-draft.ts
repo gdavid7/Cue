@@ -3,7 +3,6 @@ import { internalDateToDate, sortByInternalDate } from "@/utils/date";
 import { getEmailForLLM } from "@/utils/get-email-from-message";
 import { extractEmailAddress, extractEmailAddresses } from "@/utils/email";
 import { aiDraftReplyWithConfidence } from "@/utils/ai/reply/draft-reply";
-import { getReplyWithConfidence, saveReply } from "@/utils/redis/reply";
 import { getWritingStyle } from "@/utils/user/get";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import type { Logger } from "@/utils/logger";
@@ -155,42 +154,6 @@ async function generateDraftContent(
   const lastMessage = threadMessages.at(-1);
 
   if (!lastMessage) throw new Error("No message provided");
-
-  const cachedReply = await getReplyWithConfidence({
-    emailAccountId: emailAccount.id,
-    messageId: lastMessage.id,
-    ruleId: selectedRuleId,
-  });
-
-  if (cachedReply) {
-    const meetsThreshold = meetsDraftReplyConfidenceRequirement({
-      draftConfidence: cachedReply.confidence,
-      minimumConfidence,
-    });
-
-    if (meetsThreshold) {
-      return {
-        draft: cachedReply.reply,
-        confidence: cachedReply.confidence,
-        attribution: cachedReply.attribution,
-        draftContextMetadata: cachedReply.draftContextMetadata
-          ? {
-              ...cachedReply.draftContextMetadata,
-              draft: { confidence: cachedReply.confidence },
-            }
-          : cachedReply.draftContextMetadata,
-        ...(selectedRuleId ? { attachments: cachedReply.attachments } : {}),
-      };
-    }
-
-    logger.info("Skipping cached draft due to low confidence", {
-      emailAccountId: emailAccount.id,
-      draftConfidence: cachedReply.confidence,
-      minimumConfidence,
-      threadId: lastMessage.threadId,
-      messageId: lastMessage.id,
-    });
-  }
 
   const messages = threadMessages.map((msg, index) => ({
     date: internalDateToDate(msg.internalDate),
@@ -452,29 +415,6 @@ async function generateDraftContent(
       messageId: lastMessage.id,
     });
 
-    try {
-      await saveReply({
-        emailAccountId: emailAccount.id,
-        messageId: lastMessage.id,
-        reply,
-        confidence,
-        attribution,
-        draftContextMetadata,
-        ...(selectedRuleId
-          ? {
-              attachments: attachmentSelection.selectedAttachments,
-              ruleId: selectedRuleId,
-            }
-          : {}),
-      });
-    } catch (error) {
-      logger.error("Failed to cache low-confidence draft", {
-        error,
-        messageId: lastMessage.id,
-        confidence,
-      });
-    }
-
     return {
       draft: null,
       confidence,
@@ -484,29 +424,6 @@ async function generateDraftContent(
         ? { attachments: attachmentSelection.selectedAttachments }
         : {}),
     };
-  }
-
-  try {
-    await saveReply({
-      emailAccountId: emailAccount.id,
-      messageId: lastMessage.id,
-      reply,
-      confidence,
-      attribution,
-      draftContextMetadata,
-      ...(selectedRuleId
-        ? {
-            attachments: attachmentSelection.selectedAttachments,
-            ruleId: selectedRuleId,
-          }
-        : {}),
-    });
-  } catch (error) {
-    logger.error("Failed to cache draft", {
-      error,
-      messageId: lastMessage.id,
-      confidence,
-    });
   }
 
   return {

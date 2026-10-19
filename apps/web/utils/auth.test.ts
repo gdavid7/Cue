@@ -16,7 +16,6 @@ import {
   handleReferralOnSignUp,
 } from "@/utils/auth";
 import prisma from "@/utils/__mocks__/prisma";
-import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
 import { ACCOUNT_LINKING } from "@/utils/auth/account-linking";
 import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
 import { expectReplyTrackingOn } from "@/__tests__/helpers";
@@ -64,11 +63,8 @@ vi.mock("better-auth/cookies", async (importActual) => ({
   ...(await importActual<typeof import("better-auth/cookies")>()),
   setSessionCookie: vi.fn(),
 }));
-vi.mock("@/utils/user/own-addresses", () => ({
-  invalidateUserOwnAddresses: vi.fn(),
-}));
 vi.mock("@/utils/redis/account-validation", () => ({
-  invalidateAccountValidation: vi.fn(),
+  invalidateAccountOwnership: vi.fn(async () => {}),
 }));
 vi.mock("@/utils/error-messages", () => ({
   addUserErrorMessage: vi.fn().mockResolvedValue(undefined),
@@ -486,7 +482,6 @@ describe("handleLinkAccount", () => {
       { path: "/get-access-token", context: {} },
     );
     expect(prisma.user.update).not.toHaveBeenCalled();
-    expect(invalidateUserOwnAddresses).not.toHaveBeenCalled();
     expect(prisma.emailAccount.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { name: "Test User", image: null } }),
     );
@@ -741,7 +736,6 @@ describe("handleLinkAccount", () => {
     expectReplyTrackingOn(upsert?.create.rules);
     expect(upsert?.update).not.toHaveProperty("rules");
     expect(recordFirstSignIn).toHaveBeenCalledWith("email_account_1");
-    expect(invalidateUserOwnAddresses).toHaveBeenCalledWith("user_1");
     expect(mockAfter).toHaveBeenCalledOnce();
     expect(ensureEmailAccountsWatched).not.toHaveBeenCalled();
 

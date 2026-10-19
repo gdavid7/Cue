@@ -7,8 +7,6 @@ import {
   isAllowedProvenEmail,
   isGoogleAuthoritativeEmail,
 } from "@/utils/access/policy";
-import { invalidateAccountValidation } from "@/utils/redis/account-validation";
-import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
 import { fetchGoogleOpenIdProfile } from "@/utils/gmail/oauth";
 
 // Gmail push notifications identify the mailbox only by its current address,
@@ -140,13 +138,6 @@ export async function renameGoogleEmail({
     throw error;
   }
 
-  await Promise.all([
-    invalidateAccountValidation({
-      userId: account.userId,
-      emailAccountId: mailbox.id,
-    }),
-    invalidateUserOwnAddresses(account.userId),
-  ]);
   return {
     id: mailbox.id,
     renamedUser: isPrimary ? { userId: account.userId, email } : undefined,

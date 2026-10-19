@@ -3,6 +3,10 @@ import type { LanguageModelUsage } from "ai";
 import { redis } from "@/utils/redis";
 import { createScopedLogger } from "@/utils/logger";
 import { logRedisFailureOnce } from "@/utils/redis/unavailable-log";
+import {
+  readUsageMigrationRecord,
+  readWeeklyCostsByDay,
+} from "@/utils/redis/usage-migration-state";
 import type { AiSpendBucket } from "@/utils/llms/spend-bucket";
 
 const logger = createScopedLogger("redis/usage");
@@ -326,7 +330,7 @@ async function addLegacyWeeklyUsageCost({
   const uniqueLegacyEmails = Array.from(new Set(legacyEmails));
   if (!uniqueLegacyEmails.length) return migratedCost;
 
-  const legacyCostsByKey = await getLegacyWeeklyUsageCostsByKey({
+  const legacyCostsByKey = await getLegacyWeeklyUsageCostsByDay({
     emails: uniqueLegacyEmails,
     now,
   });
@@ -358,7 +362,7 @@ async function addLegacyWeeklyUsageCost({
           latestMigratedCost,
           latestRawMigrationState,
         ] = await Promise.all([
-          getLegacyWeeklyUsageCostsByKey({
+          getLegacyWeeklyUsageCostsByDay({
             emails: uniqueLegacyEmails,
             now,
           }),
@@ -387,9 +391,7 @@ async function addLegacyWeeklyUsageCost({
             ...getWeeklyCostIncrementOperations(userId, latestLegacyDeltaByKey),
             redis.set(
               doneKey,
-              JSON.stringify({
-                weeklyCosts: Object.fromEntries(latestLegacyCostsByKey),
-              }),
+              serializeWeeklyUsageMigrationState(latestLegacyCostsByKey),
             ),
           ]);
         }
@@ -429,10 +431,7 @@ async function addLegacyWeeklyUsageCost({
   try {
     await Promise.all([
       ...getWeeklyCostIncrementOperations(userId, legacyCostsByKey),
-      redis.set(
-        doneKey,
-        JSON.stringify({ weeklyCosts: Object.fromEntries(legacyCostsByKey) }),
-      ),
+      redis.set(doneKey, serializeWeeklyUsageMigrationState(legacyCostsByKey)),
     ]);
   } catch (error) {
     logger.error("Failed to migrate legacy weekly usage", {
@@ -648,28 +647,29 @@ function getLegacyWeeklyUsageCostKey(email: string, date: Date | string) {
   return `${WEEKLY_USAGE_COST_KEY_PREFIX}:${email}:${day}`;
 }
 
-async function getLegacyWeeklyUsageCostsByKey({
+async function getLegacyWeeklyUsageCostsByDay({
   emails,
   now,
 }: {
   emails: string[];
   now: Date;
 }) {
-  const costsByKey = new Map<string, number>();
-  if (!emails.length) return costsByKey;
+  // Summed per day across the user's legacy addresses: what is stored about
+  // a migration names days, never addresses (RD-3).
+  const costsByDay = new Map<string, number>();
+  if (!emails.length) return costsByDay;
 
+  const days = getWeeklyUsageCostDays(now);
   const keys = emails.flatMap((email) =>
-    getWeeklyUsageCostDays(now).map((day) =>
-      getLegacyWeeklyUsageCostKey(email, day),
-    ),
+    days.map((day) => ({ day, key: getLegacyWeeklyUsageCostKey(email, day) })),
   );
-  const costs = await readWeeklyCosts(keys);
-  keys.forEach((key, index) => {
+  const costs = await readWeeklyCosts(keys.map(({ key }) => key));
+  keys.forEach(({ day }, index) => {
     const cost = costs[index]?.cost ?? 0;
-    if (cost > 0) costsByKey.set(key, cost);
+    if (cost > 0) costsByDay.set(day, (costsByDay.get(day) ?? 0) + cost);
   });
 
-  return costsByKey;
+  return costsByDay;
 }
 
 function parseWeeklyUsageCostKey(key: string) {
@@ -744,13 +744,10 @@ function maxUsage(
 
 function getWeeklyCostIncrementOperations(
   userId: string,
-  legacyCostsByKey: Map<string, number>,
+  legacyCostsByDay: Map<string, number>,
 ) {
-  return Array.from(legacyCostsByKey.entries()).flatMap(([key, cost]) => {
-    const parsed = parseWeeklyUsageCostKey(key);
-    if (!parsed) return [];
-
-    const weeklyCostKey = getWeeklyUsageCostKey(userId, parsed.day);
+  return Array.from(legacyCostsByDay.entries()).flatMap(([day, cost]) => {
+    const weeklyCostKey = getWeeklyUsageCostKey(userId, day);
     return [
       redis.hincrbyfloat(weeklyCostKey, "cost", cost),
       redis.expire(weeklyCostKey, WEEKLY_USAGE_COST_TTL_SECONDS),
@@ -785,14 +782,10 @@ function getUsageMigrationLockKey(migrationName: string) {
 }
 
 function parseLegacyUsageMigrationState(rawState: unknown): RedisUsage | null {
-  if (typeof rawState !== "string") return null;
-
-  try {
-    const parsed = JSON.parse(rawState) as { usage?: Record<string, unknown> };
-    return parsed.usage ? normalizeUsageFields(parsed.usage) : null;
-  } catch {
-    return null;
-  }
+  const usage = readUsageMigrationRecord(rawState)?.usage;
+  return usage && typeof usage === "object"
+    ? normalizeUsageFields(usage as Record<string, unknown>)
+    : null;
 }
 
 function serializeLegacyUsageMigrationState(usage: RedisUsage) {
@@ -837,21 +830,9 @@ function normalizeUsageFields(
 function parseWeeklyUsageMigrationState(
   rawState: unknown,
 ): Map<string, number> | null {
-  if (typeof rawState !== "string") return null;
+  return readWeeklyCostsByDay(rawState)?.costsByDay ?? null;
+}
 
-  try {
-    const parsed = JSON.parse(rawState) as {
-      weeklyCosts?: Record<string, string | number>;
-    };
-    if (!parsed.weeklyCosts) return null;
-
-    return new Map(
-      Object.entries(parsed.weeklyCosts).flatMap(([key, value]) => {
-        const cost = parseRedisNumber(value);
-        return cost > 0 ? [[key, cost]] : [];
-      }),
-    );
-  } catch {
-    return null;
-  }
+function serializeWeeklyUsageMigrationState(costsByDay: Map<string, number>) {
+  return JSON.stringify({ weeklyCostsByDay: Object.fromEntries(costsByDay) });
 }

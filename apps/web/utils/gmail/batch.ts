@@ -1,12 +1,18 @@
+import chunk from "lodash/chunk";
 import { isBatchError, isDefined } from "@/utils/types";
 import { getGoogleGmailBatchUrl } from "@/utils/gmail/oauth";
 import { createScopedLogger } from "@/utils/logger";
 import {
   admitGmailCall,
+  currentGmailQuotaContext,
   gmailAccountForAccessToken,
   gmailRequestCost,
   noteGmailQuotaRefusal,
 } from "@/utils/gmail/quota";
+import {
+  gmailInflightBatchLimit,
+  withGmailInflightSlot,
+} from "@/utils/gmail/inflight";
 import { isRetryableError } from "@/utils/gmail/retry";
 
 const logger = createScopedLogger("gmail/batch");
@@ -28,6 +34,24 @@ export async function getBatch(
     );
   }
 
+  // Gmail counts every request inside a batch toward the user's requests in
+  // flight, so a set larger than one call may hold is sent as several batches
+  // that each wait for their slots, and their answers are joined in order.
+  const limit = gmailInflightBatchLimit(currentGmailQuotaContext().priority);
+  const parts = await Promise.all(
+    chunk(ids, limit).map((idsChunk) =>
+      sendBatch(idsChunk, endpoint, accessToken, queryString),
+    ),
+  );
+  return parts.flat();
+}
+
+async function sendBatch(
+  ids: string[],
+  endpoint: string,
+  accessToken: string,
+  queryString: string | undefined,
+) {
   let batchRequestBody = "";
   const query = queryString ? `?${queryString}` : "";
   for (const id of ids) {
@@ -35,25 +59,33 @@ export async function getBatch(
   }
   batchRequestBody += "--batch_boundary--";
 
+  const emailAccountId = gmailAccountForAccessToken(accessToken);
   // Gmail charges every request inside a batch at its own method's cost.
   const ticket = await admitGmailCall({
-    emailAccountId: gmailAccountForAccessToken(accessToken),
-    cost: ids.length * gmailRequestCost("GET", `${endpoint}/id`),
+    emailAccountId,
+    cost: ids.length * gmailRequestCost("GET", `${endpoint}/id${query}`),
   });
-  const res = await fetch(getGoogleGmailBatchUrl(), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "multipart/mixed; boundary=batch_boundary",
-      "Accept-Encoding": "gzip",
-      "User-Agent": "Cue (gzip)",
+  const { textRes, contentType } = await withGmailInflightSlot(
+    { emailAccountId, priority: ticket.priority, weight: ids.length },
+    async () => {
+      const res = await fetch(getGoogleGmailBatchUrl(), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "multipart/mixed; boundary=batch_boundary",
+          "Accept-Encoding": "gzip",
+          "User-Agent": "Cue (gzip)",
+        },
+        body: batchRequestBody,
+      });
+      return {
+        textRes: await res.text(),
+        contentType: res.headers.get("Content-Type"),
+      };
     },
-    body: batchRequestBody,
-  });
+  );
 
-  const textRes = await res.text();
-
-  const batch = parseBatchResponse(textRes, res.headers.get("Content-Type"));
+  const batch = parseBatchResponse(textRes, contentType);
   // The refusal's own error says whether it was for volume, which decides
   // whether the account's budget is cut and a person's reads held.
   const refusal = batch.find(isQuotaRefusal);

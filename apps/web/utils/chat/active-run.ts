@@ -1,20 +1,14 @@
 import "server-only";
 import Redis from "ioredis";
-import { after } from "next/server";
-import {
-  createResumableStreamContext,
-  type ResumableStreamContext,
-} from "resumable-stream/ioredis";
+import type { ResumableStreamContext } from "resumable-stream/ioredis";
 import { env } from "@/env";
+import { MAX_CHAT_RUN_MS } from "@/utils/chat/max-run";
 import { createScopedLogger, type Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { sleep } from "@/utils/sleep";
 
 const STOP_CHANNEL = "assistant-chat:stop";
 const SUBSCRIBE_TIMEOUT_MS = 2000;
-// The chat route's maxDuration. A marker older than this belongs to a run whose
-// instance died before it could clear it.
-const MAX_RUN_MS = 300_000;
 const logger = createScopedLogger("assistant-chat-run");
 
 declare global {
@@ -22,7 +16,6 @@ declare global {
   var assistantChatRedis:
     | {
         publisher: Redis;
-        streams: ResumableStreamContext;
         listening: Promise<void>;
       }
     | undefined;
@@ -31,10 +24,11 @@ declare global {
 const runs = global.assistantChatRuns ?? new Map<string, AbortController>();
 global.assistantChatRuns = runs;
 
-// Resuming needs a shared Redis; without one, replies still stream and save,
-// they just can't be reattached after a dropped connection.
-export function getChatStreamContext() {
-  return getRedis()?.streams ?? null;
+// Resuming would relay the reply's chunks, which quote the user's mail,
+// through Redis pub/sub, so replies are never resumable (RD-3). They still
+// stream and save; a dropped connection shows the reply once it is saved.
+export function getChatStreamContext(): ResumableStreamContext | null {
+  return null;
 }
 
 // A stop request can land on any server instance, so the instance running the
@@ -77,7 +71,9 @@ export async function claimActiveStream({
       OR: [
         { activeStreamId: null },
         { activeStreamStartedAt: null },
-        { activeStreamStartedAt: { lt: new Date(Date.now() - MAX_RUN_MS) } },
+        {
+          activeStreamStartedAt: { lt: new Date(Date.now() - MAX_CHAT_RUN_MS) },
+        },
       ],
     },
     data: { activeStreamId: streamId, activeStreamStartedAt: new Date() },
@@ -90,7 +86,7 @@ export function getLiveStreamId(chat: {
   activeStreamStartedAt: Date | null;
 }) {
   if (!chat.activeStreamId || !chat.activeStreamStartedAt) return null;
-  if (Date.now() - chat.activeStreamStartedAt.getTime() > MAX_RUN_MS) {
+  if (Date.now() - chat.activeStreamStartedAt.getTime() > MAX_CHAT_RUN_MS) {
     return null;
   }
   return chat.activeStreamId;
@@ -139,15 +135,6 @@ function getRedis() {
       logger.error("Unable to listen for assistant chat stops", { error });
     });
 
-  global.assistantChatRedis = {
-    publisher,
-    listening,
-    streams: createResumableStreamContext({
-      keyPrefix: "assistant-chat",
-      waitUntil: after,
-      publisher,
-      subscriber,
-    }),
-  };
+  global.assistantChatRedis = { publisher, listening };
   return global.assistantChatRedis;
 }

@@ -3,7 +3,7 @@ import prisma from "@/utils/prisma";
 import { renameGoogleEmail } from "@/utils/auth/rename-email";
 
 vi.mock("@/utils/redis/account-validation", () => ({
-  invalidateAccountValidation: vi.fn(),
+  invalidateAccountOwnership: vi.fn(async () => {}),
 }));
 
 const userId = "email-rename-test-user";

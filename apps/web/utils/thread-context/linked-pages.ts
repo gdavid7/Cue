@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { ContextCandidate } from "@cue/context";
 import { load } from "cheerio";
 import { getDomain } from "tldts";
@@ -6,13 +5,11 @@ import { extractEmailAddress } from "@/utils/email";
 import { getMessageTimestamp } from "@/utils/email/message-timestamp";
 import { getExaContents, isExaSearchEnabled } from "@/utils/exa/search";
 import type { Logger } from "@/utils/logger";
-import { redis } from "@/utils/redis";
 import type { ParsedMessage } from "@/utils/types";
 
 const MAX_LINKS = 2;
 // The same cap as any other source a suggested reply reads.
 const MAX_PAGE_TEXT = 2000;
-const CACHE_TTL_SECONDS = 24 * 60 * 60;
 // A path segment this long and unbroken is an encoded token, not a page name.
 const OPAQUE_SEGMENT = /^[\w\-=.%~]{40,}$/;
 const IMAGE_PATH = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i;
@@ -156,19 +153,14 @@ async function readPage(
   url: string,
   logger: Logger,
 ): Promise<LinkedPage | null> {
-  const key = `linked-page:${createHash("sha256").update(url).digest("hex")}`;
-  const cached = await redis.get<LinkedPage>(key).catch(() => null);
-  if (cached) return cached;
+  // Read each time: a page linked from an email is personal data (RD-3).
   try {
     const [result] = await getExaContents({
       urls: [url],
       maxTextCharacters: MAX_PAGE_TEXT,
       logger,
     });
-    // A page Exa couldn't read is cached too, so it isn't retried on every open.
-    const page = { title: result?.title ?? "", text: result?.text ?? "" };
-    await redis.set(key, page, { ex: CACHE_TTL_SECONDS }).catch(() => null);
-    return page;
+    return { title: result?.title ?? "", text: result?.text ?? "" };
   } catch (error) {
     logger.warn("Failed to read linked page", { error });
     return null;

@@ -1,8 +1,7 @@
 import prisma from "@/utils/prisma";
 import { getPremiumTransferOperations } from "@/utils/user/merge-premium";
 import type { Logger } from "@/utils/logger";
-import { invalidateAccountValidation } from "@/utils/redis/account-validation";
-import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
+import { invalidateAccountOwnership } from "@/utils/redis/account-validation";
 
 interface MergeAccountOptions {
   email: string;
@@ -84,14 +83,10 @@ export async function mergeAccount({
     } else {
       await prisma.$transaction([accountUpdate, emailAccountUpdate]);
     }
-    await Promise.all([
-      invalidateAccountValidation({
-        userId: sourceUserId,
-        emailAccountId: accountBeingMoved.id,
-      }),
-      invalidateUserOwnAddresses(sourceUserId),
-      invalidateUserOwnAddresses(targetUserId),
-    ]);
+    await invalidateAccountOwnership({
+      userId: sourceUserId,
+      emailAccountId: accountBeingMoved.id,
+    });
     return "partial_reassign";
   }
 
@@ -127,14 +122,9 @@ export async function mergeAccount({
     }),
   ]);
 
-  await Promise.all([
-    invalidateAccountValidation({
-      userId: sourceUserId,
-      emailAccountId: accountBeingMoved.id,
-    }),
-    invalidateUserOwnAddresses(sourceUserId),
-    invalidateUserOwnAddresses(targetUserId),
-  ]);
-
+  await invalidateAccountOwnership({
+    userId: sourceUserId,
+    emailAccountId: accountBeingMoved.id,
+  });
   return "full_merge";
 }

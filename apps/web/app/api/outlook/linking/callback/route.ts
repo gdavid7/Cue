@@ -52,7 +52,6 @@ import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calend
 import { scheduleWatchAfterLinking } from "@/utils/email/watch-after-linking";
 import { INITIAL_REPLY_TRACKING_RULES } from "@/utils/reply-tracker/initial-rules";
 import { recordFirstSignIn } from "@/utils/analytics/activation";
-import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
 import { shareChannelsAcrossMailboxes } from "@/utils/messaging/shared-channels";
 
 export const GET = withError("outlook/linking/callback", async (request) => {
@@ -590,7 +589,6 @@ async function completeMicrosoftAccountLinking({
       });
     },
   );
-  await invalidateUserOwnAddresses(targetUserId);
   await setOAuthCodeResult(code, { success });
 
   scheduleWatchAfterLinking({ targetUserId, logger });

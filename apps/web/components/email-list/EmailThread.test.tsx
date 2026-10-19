@@ -32,6 +32,8 @@ const { scheduledEmails } = vi.hoisted(() => ({
   },
 }));
 vi.mock("swr", () => ({
+  // useContactPhoto reads the configured fetcher.
+  useSWRConfig: () => ({}),
   default: (key: unknown) => ({
     data:
       Array.isArray(key) && key[0] === "/api/user/scheduled-emails"

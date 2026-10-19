@@ -1,120 +1,151 @@
 import type { GetHomeResponse } from "@/app/api/user/home/route";
+import { createBrowserCache } from "@/utils/browser-cache";
+import type { TodayHomeData } from "@/utils/home/keep-shown-lanes";
+import { MINUTES_PER_REPLY } from "@/utils/home/today-constants";
 
 /**
  * Today's last answer, kept in this browser so Today opens on it at once
  * while a fresh one loads from Gmail, which can take seconds. It holds what
  * Today shows: senders, subjects and short previews, like the local mail
- * store already does on this device. It is kept per user and account until
- * the browser's day ends, and is cleared on sign-out and when the account is
- * removed.
+ * store already does on this device. It lives in the browser cache, so it is
+ * the signed-in user's only, and is cleared on sign-out and when the account
+ * is removed.
  */
 
 /** "Also in your inbox" shows this many rows. */
 export const ALSO_IN_INBOX_LIMIT = 5;
 
-const PREFIX = "cue:today:v1:";
+// A returning user is shown what Today last said, even from days ago, while
+// it refreshes: an older copy is still closer than an empty page. Past this
+// it says too little about the inbox now to be worth showing.
+const KEPT_FOR_MS = 3 * 24 * 60 * 60 * 1000;
 // A row shows one line of preview; the rest would only take up storage.
 const PREVIEW_LENGTH = 140;
+const ENTRY_KEY = "home";
+// Bumped whenever Today's answer changes shape: a copy saved by an earlier
+// deploy is ignored rather than read as this one.
+const SAVED_VERSION = 1;
+// What an earlier day's copy says of Cue: no notice and no AI actions, as it
+// is never shown until the fresh answer says what Cue can do now.
+const UNKNOWN_CUE: GetHomeResponse["cue"] = {
+  aiAccess: false,
+  replyTracking: true,
+  hasReadMail: true,
+};
 
-type Entry = {
-  userId: string;
-  emailAccountId: string;
+type Saved = {
+  version: number;
   savedAt: number;
+  /** The time zone Today's answer counted "today" in. */
+  timeZone: string;
   data: GetHomeResponse;
 };
 
-type Owner = { userId: string; emailAccountId: string };
-
-// Set on sign-out, so a load that lands on the way out can't save Today
-// again. Module state ends with the page, which is the life the block needs.
-let blocked = false;
-const blockedAccountIds = new Set<string>();
+const savedToday = createBrowserCache<Saved>({
+  name: "today",
+  ttlMs: KEPT_FOR_MS,
+  maxEntries: 1,
+  maxBytes: 256 * 1024,
+});
 
 /**
- * Today's saved copy for this user and account, if it was saved today. Every
- * other user's copy and every out-of-date one is forgotten on the way.
+ * Today's saved copy for this account, less meetings and deadlines already
+ * past. One from an earlier day in `timeZone` keeps only its conversations
+ * and is marked `earlierDay`: its counts, Cue's status and the assistant's
+ * tasks were that day's.
  */
 export function readCachedToday({
-  userId,
   emailAccountId,
+  timeZone,
   now = Date.now(),
-}: Owner & { now?: number }): GetHomeResponse | undefined {
-  if (!userId || !emailAccountId) return;
-  const wanted = storageKey({ userId, emailAccountId });
-  let found: GetHomeResponse | undefined;
+}: {
+  emailAccountId: string;
+  /** The zone Today's answers count "today" in, as the server is asked. */
+  timeZone: string;
+  now?: number;
+}): TodayHomeData | undefined {
+  if (!emailAccountId) return;
   try {
-    for (const key of todayKeys()) {
-      const entry = key.startsWith(`${PREFIX}${userId}:`)
-        ? parseEntry(window.localStorage.getItem(key))
-        : undefined;
-      if (!entry || !sameDay(entry.savedAt, now) || key !== storageKey(entry)) {
-        window.localStorage.removeItem(key);
-        continue;
-      }
-      if (key === wanted) found = entry.data;
-    }
+    const saved = savedToday.get(emailAccountId, ENTRY_KEY, now);
+    if (!isSaved(saved)) return;
+    const data = withoutPast(saved.data, now);
+    if (
+      saved.timeZone === timeZone &&
+      dayOf(saved.savedAt, timeZone) === dayOf(now, timeZone)
+    )
+      return data;
+    return {
+      ...data,
+      earlierDay: true,
+      agentTasks: [],
+      cue: UNKNOWN_CUE,
+      today: { checked: 0, filed: 0, filedLabel: null },
+      stats: { ...data.stats, agentWorking: 0 },
+    };
   } catch {
+    // A copy this build can't read only costs the instant first paint.
     return;
   }
-  return found;
 }
 
 /** Saves Today when every lane loaded: a pending lane would read as empty. */
 export function writeCachedToday({
-  userId,
   emailAccountId,
+  timeZone,
   data,
   now = Date.now(),
-}: Owner & { data: GetHomeResponse; now?: number }) {
-  if (!userId || !emailAccountId) return;
-  if (blocked || blockedAccountIds.has(emailAccountId)) return;
-  if (data.pending.length || data.failed.length) return;
-  try {
-    // One user's Today at a time on a shared device.
-    for (const key of todayKeys())
-      if (!key.startsWith(`${PREFIX}${userId}:`))
-        window.localStorage.removeItem(key);
-    const entry: Entry = {
-      userId,
-      emailAccountId,
-      savedAt: now,
-      data: toStored(data),
-    };
-    window.localStorage.setItem(
-      storageKey({ userId, emailAccountId }),
-      JSON.stringify(entry),
-    );
-  } catch {
-    // Full or blocked storage only costs the instant first paint.
-  }
+}: {
+  emailAccountId: string;
+  timeZone: string;
+  data: TodayHomeData;
+  now?: number;
+}) {
+  if (!emailAccountId || data.earlierDay) return;
+  if (data.pending.length || data.failed.length || data.stale?.length) return;
+  savedToday.set(
+    emailAccountId,
+    ENTRY_KEY,
+    { version: SAVED_VERSION, savedAt: now, timeZone, data: toStored(data) },
+    now,
+  );
 }
 
-export function clearCachedToday() {
-  blocked = true;
-  try {
-    for (const key of todayKeys()) window.localStorage.removeItem(key);
-  } catch {
-    // Ignore storage failures on the way out.
-  }
+/**
+ * Takes conversations the user archived, deleted or snoozed out of the saved
+ * copy, so they don't come back on the next visit before Today refreshes.
+ */
+export function removeFromCachedToday(
+  emailAccountId: string,
+  threadIds: string[],
+  now = Date.now(),
+) {
+  if (!emailAccountId || !threadIds.length) return;
+  const saved = savedToday.get(emailAccountId, ENTRY_KEY, now);
+  if (!isSaved(saved)) return;
+  const gone = new Set(threadIds);
+  const keep = <T extends { threadId: string }>(rows: T[]) =>
+    rows.filter((row) => !gone.has(row.threadId));
+  const data = {
+    ...saved.data,
+    needsYou: keep(saved.data.needsYou),
+    waiting: keep(saved.data.waiting),
+    alsoInInbox: keep(saved.data.alsoInInbox),
+  };
+  data.stats = {
+    ...data.stats,
+    needsYou: data.needsYou.length,
+    estimatedMinutes: data.needsYou.length * MINUTES_PER_REPLY,
+    waiting: data.waiting.length,
+  };
+  // Keeps when it was saved: its rows are no newer for this.
+  savedToday.set(emailAccountId, ENTRY_KEY, { ...saved, data }, saved.savedAt);
 }
 
-export function clearCachedTodayForAccount(emailAccountId: string) {
-  blockedAccountIds.add(emailAccountId);
-  try {
-    for (const key of todayKeys())
-      if (key.endsWith(`:${emailAccountId}`))
-        window.localStorage.removeItem(key);
-  } catch {
-    // Ignore storage failures.
-  }
-}
-
-export function resetCachedTodayBlocksForTesting() {
-  blocked = false;
-  blockedAccountIds.clear();
-}
-
-function toStored(data: GetHomeResponse): GetHomeResponse {
+function toStored({
+  stale: _stale,
+  earlierDay: _earlierDay,
+  ...data
+}: TodayHomeData): GetHomeResponse {
   const shorten = <T extends { preview: string }>(rows: T[]) =>
     rows.map((row) =>
       row.preview.length > PREVIEW_LENGTH
@@ -129,37 +160,50 @@ function toStored(data: GetHomeResponse): GetHomeResponse {
   };
 }
 
-function parseEntry(raw: string | null): Entry | undefined {
-  if (!raw) return;
-  try {
-    const entry = JSON.parse(raw) as Partial<Entry>;
-    if (
-      typeof entry.userId !== "string" ||
-      typeof entry.emailAccountId !== "string" ||
-      typeof entry.savedAt !== "number" ||
-      !entry.data
-    )
-      return;
-    return entry as Entry;
-  } catch {
-    return;
-  }
+// Whatever the day, a meeting that started or a deadline that passed isn't
+// next any more.
+function withoutPast(data: GetHomeResponse, now: number): GetHomeResponse {
+  const next = data.calendar.next;
+  return {
+    ...data,
+    calendar: {
+      ...data.calendar,
+      next: next && Date.parse(next.at) > now ? next : null,
+    },
+    nextUp: data.nextUp.filter(
+      (item) => Date.parse(item.endAt ?? item.at) > now,
+    ),
+  };
 }
 
-// "Today" counts and "Next up" belong to the day they were loaded.
-function sameDay(a: number, b: number) {
-  return new Date(a).toDateString() === new Date(b).toDateString();
+/** Whether a stored copy has the shape this build reads. */
+function isSaved(saved: Saved | undefined): saved is Saved {
+  if (!saved || saved.version !== SAVED_VERSION) return false;
+  if (typeof saved.savedAt !== "number" || typeof saved.timeZone !== "string")
+    return false;
+  const data = saved.data as Partial<GetHomeResponse> | undefined;
+  return Boolean(
+    data &&
+      Array.isArray(data.needsYou) &&
+      Array.isArray(data.waiting) &&
+      Array.isArray(data.alsoInInbox) &&
+      Array.isArray(data.pending) &&
+      Array.isArray(data.failed) &&
+      Array.isArray(data.agentTasks) &&
+      Array.isArray(data.nextUp) &&
+      data.cue &&
+      data.today &&
+      data.calendar &&
+      data.stats,
+  );
 }
 
-function storageKey({ userId, emailAccountId }: Owner) {
-  return `${PREFIX}${userId}:${emailAccountId}`;
-}
-
-function todayKeys() {
-  const keys: string[] = [];
-  for (let index = 0; index < window.localStorage.length; index++) {
-    const key = window.localStorage.key(index);
-    if (key?.startsWith(PREFIX)) keys.push(key);
-  }
-  return keys;
+/** The calendar day of `ms` in `timeZone`, as Today's answer counts it. */
+function dayOf(ms: number, timeZone: string) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(ms);
 }

@@ -656,6 +656,10 @@ describe("getHomeData: what's next", () => {
       // Due on a date, not at a time: by the end of the user's day.
       ["deadline", "OPS-12 Rotate keys", "Jira"],
     ]);
+    // RD-3: the user's own tasks go to the browser, not the server cache.
+    expect(JSON.stringify(vi.mocked(redis.set).mock.calls)).not.toContain(
+      "Problem set",
+    );
     expect(home.nextUp[0]).toMatchObject({
       at: "2026-10-13T20:00:00.000Z",
       detail: "Linear Algebra",

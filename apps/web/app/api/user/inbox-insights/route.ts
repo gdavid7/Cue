@@ -18,13 +18,19 @@ const inboxInsightsQuery = z.object({
     .max(MAX_ITEMS),
 });
 
+const knownQuery = z.array(z.string().min(1).max(512)).max(MAX_ITEMS);
+
 export type GetInboxInsightsResponse = Awaited<
   ReturnType<typeof getInboxInsights>
 >;
 
 export const maxDuration = 300;
 
-/** `?items=threadId:messageId,...` — each thread with its latest message. */
+/**
+ * `?items=threadId:messageId,...` — each thread with its latest message.
+ * `known=messageId,...` names the messages the browser already holds an
+ * insight for; `events=1` asks for upcoming meetings to match its people.
+ */
 export const GET = withEmailProvider("user/inbox-insights", async (request) => {
   const raw = new URL(request.url).searchParams.get("items") ?? "";
   const { items } = inboxInsightsQuery.parse({
@@ -38,11 +44,18 @@ export const GET = withEmailProvider("user/inbox-insights", async (request) => {
       }),
   });
 
+  const searchParams = new URL(request.url).searchParams;
+  const known = knownQuery.parse(
+    (searchParams.get("known") ?? "").split(",").filter(Boolean),
+  );
+
   const result = await getInboxInsights({
     emailAccountId: request.auth.emailAccountId,
     userId: request.auth.userId,
     userEmail: request.auth.email,
     items,
+    known,
+    withEvents: searchParams.get("events") === "1",
     emailProvider: request.emailProvider,
     logger: request.logger,
   });

@@ -7,7 +7,6 @@ import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
 import type { Logger } from "@/utils/logger";
 import { parseReply } from "@/utils/mail";
 import { assertHasAiAccess } from "@/utils/premium/limits";
-import { redis } from "@/utils/redis";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import { GmailLabel } from "@/utils/gmail/label";
 import type { ParsedMessage } from "@/utils/types";
@@ -16,8 +15,6 @@ import { getEmailAccountWithAi } from "@/utils/user/get";
 const MAX_MESSAGES = 6;
 const MAX_MESSAGE_LENGTH = 1500;
 const MAX_KEY_POINTS = 4;
-const CACHE_TTL_SECONDS = 24 * 60 * 60;
-const EXTRACT_CACHE_TTL_SECONDS = 60 * 60;
 // The fallback quotes sentences that ask for something or set a date. English
 // only: it's a stand-in for when no model is available, not the main path.
 const ASK =
@@ -48,9 +45,10 @@ export type ThreadBrief = {
 };
 
 /**
- * A short summary and the key asks of a thread, cached per version of the
- * thread. Falls back to the email's own sentences without AI access, or when
- * the model fails or returns nothing.
+ * A short summary and the key asks of a thread. Falls back to the email's own
+ * sentences without AI access, or when the model fails or returns nothing.
+ * Never cached here: a brief is derived from the mail, so the browser keeps
+ * it (RD-3).
  */
 export async function getThreadBrief({
   emailAccountId,
@@ -76,46 +74,14 @@ export async function getThreadBrief({
   const latest = messages.at(-1);
   if (!latest) return null;
 
-  const cacheKey = briefCacheKey({
-    emailAccountId,
-    threadId,
-    messageId: latest.id,
-  });
-  const cached = await redis.get<ThreadBrief>(cacheKey).catch(() => null);
-  if (cached) return cached;
-
   const ai = await aiBrief({ emailAccountId, messages }).catch((error) => {
     logger.warn("AI thread brief failed, using extract", { error });
     return null;
   });
-  if (ai && "summary" in ai) {
-    await redis.set(cacheKey, ai, { ex: CACHE_TTL_SECONDS }).catch(() => null);
-    return ai;
-  }
+  if (ai && "summary" in ai) return ai;
   const extract = extractBrief(messages);
-  if (extract && ai?.aiUnavailable) {
-    const unavailable = { ...extract, aiUnavailable: true };
-    // Without AI access every open would read the thread again for the same
-    // words. Kept briefly, so an upgrade soon gets a written brief. A model
-    // failure isn't kept at all: the next open tries again.
-    await redis
-      .set(cacheKey, unavailable, { ex: EXTRACT_CACHE_TTL_SECONDS })
-      .catch(() => null);
-    return unavailable;
-  }
+  if (extract && ai?.aiUnavailable) return { ...extract, aiUnavailable: true };
   return extract;
-}
-
-/**
- * The brief already written for a thread's latest message, without loading the
- * thread or calling a model, so reopening a conversation costs one cache read.
- */
-export async function getCachedThreadBrief(key: {
-  emailAccountId: string;
-  threadId: string;
-  messageId: string;
-}): Promise<ThreadBrief | null> {
-  return redis.get<ThreadBrief>(briefCacheKey(key)).catch(() => null);
 }
 
 async function aiBrief({
@@ -208,18 +174,4 @@ function splitSentences(text: string) {
           s,
         ),
     );
-}
-
-// Scoped to the account and keyed by the newest message: a new message gets a
-// fresh brief, and one account never reads another's.
-function briefCacheKey({
-  emailAccountId,
-  threadId,
-  messageId,
-}: {
-  emailAccountId: string;
-  threadId: string;
-  messageId: string;
-}) {
-  return `thread-brief:${emailAccountId}:${threadId}:${messageId}`;
 }

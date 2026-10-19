@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   rateLimitCount: vi.fn(),
   getThreadBrief: vi.fn(),
-  getCachedThreadBrief: vi.fn(),
 }));
 
 vi.mock("server-only", () => ({}));
@@ -13,7 +12,6 @@ vi.mock("@/utils/redis", () => ({
 }));
 vi.mock("@/utils/home/get-thread-brief", () => ({
   getThreadBrief: mocks.getThreadBrief,
-  getCachedThreadBrief: mocks.getCachedThreadBrief,
 }));
 vi.mock("@/utils/middleware", async () => {
   const { createWithEmailProviderTestMiddleware } = await vi.importActual<
@@ -35,7 +33,6 @@ describe("GET /api/user/thread-brief", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getThreadBrief.mockResolvedValue(null);
-    mocks.getCachedThreadBrief.mockResolvedValue(null);
   });
 
   it("briefs threads for a user under the rate limit", async () => {
@@ -60,27 +57,11 @@ describe("GET /api/user/thread-brief", () => {
     expect(mocks.getThreadBrief).not.toHaveBeenCalled();
   });
 
-  it("answers a reopened conversation from the cache alone", async () => {
-    mocks.getCachedThreadBrief.mockResolvedValue(BRIEF);
-
-    const response = await get("&messageId=m2");
-
-    expect(await response.json()).toEqual({ brief: BRIEF });
-    // Looked up under the signed-in account, never one the caller names.
-    expect(mocks.getCachedThreadBrief).toHaveBeenCalledWith({
-      emailAccountId: "email-account-1",
-      threadId: "t1",
-      messageId: "m2",
-    });
-    expect(mocks.getThreadBrief).not.toHaveBeenCalled();
-    expect(mocks.rateLimitCount).not.toHaveBeenCalled();
-  });
-
   it("writes a brief when the newest message has none yet", async () => {
     mocks.rateLimitCount.mockResolvedValue(1);
     mocks.getThreadBrief.mockResolvedValue(BRIEF);
 
-    const response = await get("&messageId=m3");
+    const response = await get();
 
     expect(await response.json()).toEqual({ brief: BRIEF });
     expect(mocks.getThreadBrief).toHaveBeenCalledWith(

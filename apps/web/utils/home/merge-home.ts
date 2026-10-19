@@ -1,5 +1,6 @@
 import type { GetHomeResponse } from "@/app/api/user/home/route";
 import type { AgentTask, HomeLane, HomeThread } from "@/utils/home/get-home";
+import type { TodayHomeData } from "@/utils/home/keep-shown-lanes";
 import type { MeetingNews } from "@/utils/home/meeting-news";
 import type { NextUpItem } from "@/utils/home/next-up";
 import {
@@ -28,7 +29,7 @@ export type TodayAgentTask = AgentTask & { account?: TodayAccount };
 
 /** What Today shows, for one account or merged across several. */
 export type TodayData = Omit<
-  GetHomeResponse,
+  TodayHomeData,
   "needsYou" | "waiting" | "alsoInInbox" | "agentTasks" | "cue" | "today"
 > & {
   needsYou: TodayThread[];
@@ -52,7 +53,7 @@ export type TodayData = Omit<
 /** One account's Today as it stands in the browser. */
 export type AccountHome = {
   account: TodayAccount;
-  data?: GetHomeResponse;
+  data?: TodayHomeData;
   error?: unknown;
   /** A lane stayed pending through every refresh. */
   gaveUp: boolean;
@@ -73,7 +74,7 @@ export function mergeHomeData(accounts: AccountHome[]): {
   failedAccountIds: string[];
 } {
   const loaded = accounts.filter(
-    (entry): entry is AccountHome & { data: GetHomeResponse } =>
+    (entry): entry is AccountHome & { data: TodayHomeData } =>
       Boolean(entry.data),
   );
   const pending = new Set<HomeLane>();
@@ -161,6 +162,11 @@ export function mergeHomeData(accounts: AccountHome[]): {
       ...lanes,
       pending: LANES.filter((lane) => pending.has(lane)),
       failed: LANES.filter((lane) => failed.has(lane)),
+      stale: LANES.filter((lane) =>
+        loaded.some(({ data }) => data.stale?.includes(lane)),
+      ),
+      // One account's copy from an earlier day leaves the day's counts unknown.
+      earlierDay: loaded.some(({ data }) => data.earlierDay),
       agentTasks: loaded.flatMap(({ account, data }) =>
         data.agentTasks.map((task) => ({ ...task, account })),
       ),

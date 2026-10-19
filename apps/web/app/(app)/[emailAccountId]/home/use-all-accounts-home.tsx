@@ -47,10 +47,7 @@ export function useTodayAccounts(): AllInboxesAccount[] | null {
  * own request, which the server checks is the user's, with its own cache,
  * pending refreshes and quota. Render `loaders` for them to load.
  */
-export function useAllAccountsHome(
-  accounts: AllInboxesAccount[] | null,
-  userId?: string,
-) {
+export function useAllAccountsHome(accounts: AllInboxesAccount[] | null) {
   const [feeds, setFeeds] = useState<Record<string, AccountFeed>>({});
   const controls = useRef(new Map<string, FeedControls>());
   const report = useCallback(
@@ -109,7 +106,6 @@ export function useAllAccountsHome(
         accountId={account.id}
         key={account.id}
         onReport={report}
-        userId={userId}
       />
     )),
     mutateAccount: useCallback(
@@ -125,18 +121,16 @@ export function useAllAccountsHome(
 
 function HomeAccountFeed({
   accountId,
-  userId,
   onReport,
 }: {
   accountId: string;
-  userId?: string;
   onReport: (
     accountId: string,
     feed: AccountFeed,
     control: FeedControls,
   ) => void;
 }) {
-  const { data, error, gaveUp, mutate, retry } = useHome(accountId, userId);
+  const { data, error, gaveUp, mutate, retry } = useHome(accountId);
   const stableRetry = useStableCallback(retry);
   useEffect(() => {
     onReport(

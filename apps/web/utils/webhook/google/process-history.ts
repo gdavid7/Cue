@@ -42,6 +42,7 @@ import {
   deferMessageProcessing,
   isMessageLockUnavailableError,
 } from "@/utils/redis/message-processing";
+import { hashAddressForKey } from "@/utils/redis/address-key";
 import { recordMessageProcessingFailure } from "@/utils/webhook/message-processing-failure";
 import {
   isGmailRunStopError,
@@ -712,7 +713,8 @@ async function processHistory(
   ): Promise<{ failures?: number; retryAt: number } | undefined> {
     const messageId = event.item.message?.id;
     if (!messageId) return;
-    const key = `${userEmail}:${messageId}`;
+    // In memory, so keyed by a hash rather than the address (RD-3).
+    const key = `${hashAddressForKey(userEmail)}:${messageId}`;
     let counted: Awaited<ReturnType<typeof countMessageProcessingFailure>>;
     try {
       counted = await countMessageProcessingFailure({ userEmail, messageId });

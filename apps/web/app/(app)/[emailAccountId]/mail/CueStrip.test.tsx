@@ -15,6 +15,7 @@ import { CueStrip } from "@/app/(app)/[emailAccountId]/mail/CueStrip";
 import type { ThreadMessage } from "@/components/email-list/types";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { onSWRErrorRetry } from "@/utils/swr";
+import { resetBrowserCacheForTesting } from "@/utils/browser-cache";
 
 const mocks = vi.hoisted(() => ({
   requests: [] as { url: string; emailAccountId: string | undefined }[],
@@ -25,6 +26,8 @@ const mocks = vi.hoisted(() => ({
   briefRetryAfterMs: 50,
   insightByMessage: {} as Record<string, "reply" | "do" | "none">,
   insightGate: null as Promise<void> | null,
+  /** Gmail defers every read: only a note the browser names as kept answers. */
+  insightDeferredUnlessKept: false,
   aiAccess: true,
 }));
 
@@ -62,7 +65,10 @@ describe("CueStrip", () => {
     mocks.briefRetryAfterMs = 50;
     mocks.insightByMessage = {};
     mocks.insightGate = null;
+    mocks.insightDeferredUnlessKept = false;
     mocks.aiAccess = true;
+    window.localStorage.clear();
+    resetBrowserCacheForTesting();
   });
   afterEach(cleanup);
 
@@ -71,6 +77,20 @@ describe("CueStrip", () => {
 
     const strip = await screen.findByRole("region", { name: "Cue summary" });
     expect(await within(strip).findByText(SUMMARY)).toBeTruthy();
+  });
+
+  // RD-3: the server keeps no briefs, so this browser keeps the one it got.
+  it("shows a reopened conversation's brief from this browser without asking again", async () => {
+    renderStrip({ labels: ["Label_reply"] });
+    await screen.findByText(SUMMARY);
+    cleanup();
+
+    renderStrip({ labels: ["Label_reply"] });
+
+    expect(await screen.findByText(SUMMARY)).toBeTruthy();
+    expect(
+      mocks.requests.filter((r) => r.url.startsWith("/api/user/thread-brief")),
+    ).toHaveLength(1);
   });
 
   // Opening each conversation already speaks its subject; the strip filling in
@@ -205,6 +225,26 @@ describe("CueStrip", () => {
     await waitForRequest("/api/user/inbox-insights");
     expect(screen.getByRole("region", { name: "Cue summary" })).toBeTruthy();
     expect(await screen.findByText(SUMMARY)).toBeTruthy();
+  });
+
+  // RD-3: the server keeps no notes, so a note the inbox already read is
+  // this browser's. Opening the email names it as kept, and the strip shows
+  // even while the account's Gmail budget defers every new read.
+  it("shows from the note this browser kept while Gmail defers new reads", async () => {
+    mocks.insight = { action: "reply" };
+    renderStrip({ labels: [] });
+    expect(await screen.findByText(SUMMARY)).toBeTruthy();
+    cleanup();
+
+    mocks.insightDeferredUnlessKept = true;
+    renderStrip({ labels: [] });
+
+    expect(await screen.findByText(SUMMARY)).toBeTruthy();
+    expect(
+      mocks.requests
+        .filter((r) => r.url.startsWith("/api/user/inbox-insights"))
+        .at(-1)?.url,
+    ).toContain("known=m1");
   });
 
   it("folds away if Cue can't decide in time, and stays folded", async () => {
@@ -477,6 +517,17 @@ async function fetcher(key: string | [string, string]) {
   }
   if (url.startsWith("/api/user/thread-brief"))
     return { brief: { summary: SUMMARY, keyPoints: [], source: "ai" } };
+  if (
+    url.startsWith("/api/user/inbox-insights") &&
+    mocks.insightDeferredUnlessKept
+  ) {
+    if (!url.includes("known="))
+      throw Object.assign(new Error("Gmail is busy for this account"), {
+        status: 503,
+        retryAfterMs: 60_000,
+      });
+    return { insights: {}, events: [], draftRepliesEnabled: true };
+  }
   if (url.startsWith("/api/user/inbox-insights") && mocks.insightFailures > 0) {
     mocks.insightFailures -= 1;
     throw new Error("Gmail is busy for this account");
@@ -487,7 +538,18 @@ async function fetcher(key: string | [string, string]) {
     if (byMessage && mocks.insightGate) await mocks.insightGate;
     const insight = byMessage ? { action: byMessage } : mocks.insight;
     return {
-      insights: insight ? { t1: { insight, meeting: null, reply: null } } : {},
+      insights: insight
+        ? {
+            t1: {
+              messageId: asked,
+              insight,
+              people: [],
+              withAi: true,
+            },
+          }
+        : {},
+      events: [],
+      draftRepliesEnabled: true,
     };
   }
   if (url.startsWith("/api/user/save-destinations")) return { calendar: false };

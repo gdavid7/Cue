@@ -2,17 +2,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestLogger, getMockMessage } from "@/__tests__/helpers";
 import { fetchCalendarEventsInWindow } from "@/utils/calendar/fetch-events-in-window";
 import type { EmailProvider, EmailThread } from "@/utils/email/types";
-import { redis } from "@/utils/redis";
+import { recordingRedis } from "@/__tests__/mocks/recording-redis.mock";
 import { fetchConnectorCandidates } from "@/utils/thread-context/connector-context";
 import { fetchLinkedPages } from "@/utils/thread-context/linked-pages";
-import { getThreadContext } from "./get-thread-context";
+import {
+  CONTEXT_TEXT_LIMIT,
+  collectThreadContext,
+  getThreadContext,
+} from "./get-thread-context";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/calendar/fetch-events-in-window", () => ({
   fetchCalendarEventsInWindow: vi.fn(),
 }));
-vi.mock("@/utils/redis", () => ({
-  redis: { get: vi.fn(async () => null), set: vi.fn(async () => "OK") },
+vi.mock("@/utils/redis", async () => ({
+  redis: (await import("@/__tests__/mocks/recording-redis.mock")).recordingRedis
+    .client,
 }));
 vi.mock("@/utils/thread-context/connector-context", () => ({
   fetchConnectorCandidates: vi.fn(),
@@ -30,6 +35,7 @@ const NOW = new Date("2026-10-13T16:00:00Z");
 describe("getThreadContext", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    recordingRedis.reset();
     vi.mocked(fetchCalendarEventsInWindow).mockResolvedValue({
       events: [],
       complete: true,
@@ -44,99 +50,62 @@ describe("getThreadContext", () => {
     });
   });
 
-  it("caches a complete result for minutes, not an hour", async () => {
-    await run(renewalProvider(), "renewal");
+  // RD-3: related mail and events are personal data, so a second open asks
+  // the sources again and nothing reaches the server cache.
+  it("gathers context afresh on every open and caches none of it", async () => {
+    const provider = renewalProvider();
 
-    expect(redis.set).toHaveBeenCalledTimes(1);
-    const [, , options] = vi.mocked(redis.set).mock.calls[0]!;
-    expect((options as { ex: number }).ex).toBeLessThanOrEqual(10 * 60);
+    await run(provider, "renewal");
+    const second = await run(provider, "renewal");
+
+    expect(provider.getThread).toHaveBeenCalledTimes(2);
+    expect(provider.getThreadsWithParticipant).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(second)).toContain("Pricing sheet");
+    expect(recordingRedis.everythingWritten()).not.toContain("Pricing sheet");
+    expect(recordingRedis.everythingWritten()).not.toContain("northwind");
   });
 
-  it("caches a result for someone with no calendar connected", async () => {
-    vi.mocked(fetchCalendarEventsInWindow).mockResolvedValue({
-      events: [],
-      complete: false,
-      noCalendarConnected: true,
+  // RD-3g: the reader's context reaches the suggested reply with its text,
+  // capped, so the suggestion doesn't gather it again.
+  it("returns each item's text, capped, for the reader to hand on", async () => {
+    const { items } = await run(renewalProvider(), "renewal");
+
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(typeof item.text).toBe("string");
+      expect(item.text.length).toBeLessThanOrEqual(CONTEXT_TEXT_LIMIT);
+    }
+  });
+
+  it("reads only the thread when the reader already has its context", async () => {
+    const provider = renewalProvider();
+    const known = [
+      {
+        id: "pricing",
+        kind: "email" as const,
+        title: "Pricing sheet",
+        snippet: "",
+        at: NOW.toISOString(),
+        reasons: [],
+        text: "The price is 40.",
+      },
+    ];
+
+    const result = await collectThreadContext({
+      emailAccountId: "account-1",
+      userEmail: USER,
+      threadId: "renewal",
+      emailProvider: provider,
+      logger: createTestLogger(),
+      now: NOW,
+      knownItems: known,
     });
 
-    await run(renewalProvider(), "renewal");
-
-    expect(redis.set).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not cache a result missing a source that failed", async () => {
-    const failures: Array<[string, () => void]> = [
-      [
-        "mail search",
-        () => {
-          const provider = renewalProvider();
-          vi.mocked(provider.searchThreads).mockRejectedValue(
-            new Error("search down"),
-          );
-          return provider;
-        },
-      ],
-      [
-        "threads with a participant",
-        () => {
-          const provider = renewalProvider();
-          vi.mocked(provider.getThreadsWithParticipant).mockRejectedValue(
-            new Error("down"),
-          );
-          return provider;
-        },
-      ],
-      [
-        "calendar error",
-        () => {
-          vi.mocked(fetchCalendarEventsInWindow).mockRejectedValueOnce(
-            new Error("calendar down"),
-          );
-          return renewalProvider();
-        },
-      ],
-      [
-        "calendar partly read",
-        () => {
-          vi.mocked(fetchCalendarEventsInWindow).mockResolvedValueOnce({
-            events: [],
-            complete: false,
-          });
-          return renewalProvider();
-        },
-      ],
-      [
-        "connected app",
-        () => {
-          vi.mocked(fetchConnectorCandidates).mockResolvedValueOnce({
-            candidates: [],
-            complete: false,
-          });
-          return renewalProvider();
-        },
-      ],
-      [
-        "linked page",
-        () => {
-          vi.mocked(fetchLinkedPages).mockResolvedValueOnce({
-            candidates: [],
-            complete: false,
-          });
-          return renewalProvider();
-        },
-      ],
-    ] as never;
-    for (const [source, setUp] of failures) {
-      vi.mocked(redis.set).mockClear();
-      const provider = setUp() as unknown as EmailProvider;
-
-      await run(provider, "renewal");
-
-      expect([source, vi.mocked(redis.set).mock.calls.length]).toEqual([
-        source,
-        0,
-      ]);
-    }
+    expect(result.thread?.id).toBe("renewal");
+    expect(result.items).toBe(known);
+    expect(provider.getThreadsWithParticipant).not.toHaveBeenCalled();
+    expect(fetchLinkedPages).not.toHaveBeenCalled();
+    expect(fetchCalendarEventsInWindow).not.toHaveBeenCalled();
   });
 
   it("finds other conversations with the people on the thread, never the thread itself", async () => {

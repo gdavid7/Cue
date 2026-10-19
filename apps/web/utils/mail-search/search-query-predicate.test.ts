@@ -152,6 +152,7 @@ describe("searchQueryToPredicate, read by the local store", () => {
     ["label:Work", ["amy"]],
     ["label:work", ["amy"]],
     ["label:travel-trips", ["bob"]],
+    ["label:Label_work", ["amy"]],
     ["label:important", ["bob"]],
     ["category:social", ["amy"]],
     ["category:updates", ["bob"]],
@@ -442,6 +443,150 @@ describe("searching across a Gmail and an Outlook account", () => {
     ).toEqual(
       searchQueryToPredicate("dinner", { now: NOW, provider: "google" }),
     );
+  });
+});
+
+describe("label:Name across accounts", () => {
+  // Each account names its labels with its own ids; one id even means a
+  // different label in another account.
+  const ACCOUNTS = [
+    {
+      id: "gmail-a",
+      provider: "google",
+      labels: [
+        { id: "Label_1", name: "Work" },
+        { id: "Label_2", name: "Parent/Child" },
+      ],
+    },
+    {
+      id: "gmail-b",
+      provider: "google",
+      labels: [
+        { id: "Label_9", name: "work" },
+        { id: "Label_1", name: "Personal" },
+      ],
+    },
+    {
+      id: "outlook",
+      provider: "microsoft",
+      labels: [{ id: "category-work", name: "WORK" }],
+    },
+  ];
+  const MAIL: Record<string, Array<[string, string[]]>> = {
+    "gmail-a": [
+      ["a-work", ["Label_1"]],
+      ["a-nested", ["Label_2"]],
+      ["a-plain", []],
+    ],
+    "gmail-b": [
+      ["b-work", ["Label_9"]],
+      ["b-personal", ["Label_1"]],
+    ],
+    outlook: [
+      ["o-work", ["category-work"]],
+      ["o-plain", []],
+    ],
+  };
+  let labelled: Awaited<ReturnType<typeof createSqliteMailStore>>;
+
+  beforeAll(async () => {
+    labelled = await createSqliteMailStore(createNodeSqliteDriver());
+    for (const account of ACCOUNTS) {
+      await labelled.ensureAccount({
+        accountId: account.id,
+        provider: account.provider as "google" | "microsoft",
+        generation: "g1",
+      });
+      await labelled.applySyncPage({
+        ownerId: "owner",
+        page: {
+          session: { accountId: account.id, generation: "g1" },
+          requestId: "seed",
+          from: { streamId: "primary", generation: "g1", checkpoint: null },
+          to: { streamId: "primary", generation: "g1", checkpoint: "1" },
+          changes: MAIL[account.id].map(([id, labelIds]) => ({
+            ...messagePatch({ id, labelIds, roles: ["inbox"] }),
+            key: { accountId: account.id, messageId: id },
+          })),
+          requiredHydration: [],
+          roundComplete: true,
+        },
+      });
+    }
+  });
+
+  afterAll(async () => {
+    await labelled.close();
+  });
+
+  async function labelledMatches(
+    query: string,
+    accounts: Array<{
+      id: string;
+      provider: string;
+      labels?: Array<{ id: string; name: string }>;
+    }> = ACCOUNTS,
+  ) {
+    const predicate = searchQueryForAccounts(query, { now: NOW }, accounts);
+    if (!predicate) throw new Error("No predicate");
+    const { view } = await labelled.readMailboxView({
+      accountIds: accounts.map((account) => account.id),
+      predicate: resolveSearchPredicates(predicate, () => []),
+      order: "newest_first",
+      pageSize: 50,
+      after: null,
+    });
+    return view.conversations.map((row) => row.key.conversationId).sort();
+  }
+
+  it.each<[string, string[]]>([
+    // Matched by name in every account, whatever its case or provider.
+    ["label:Work", ["a-work", "b-work", "o-work"]],
+    ["label:work", ["a-work", "b-work", "o-work"]],
+    // A label only one account has.
+    ["label:Personal", ["b-personal"]],
+    ["label:Parent/Child", ["a-nested"]],
+    ["label:parent-child", ["a-nested"]],
+    ["-label:Work", ["a-nested", "a-plain", "b-personal", "o-plain"]],
+  ])("%s", async (query, expected) => {
+    expect(await labelledMatches(query)).toEqual(expected);
+  });
+
+  it("reads one provider's accounts by each account's own labels", async () => {
+    expect(await labelledMatches("label:Work", ACCOUNTS.slice(0, 2))).toEqual([
+      "a-work",
+      "b-work",
+    ]);
+  });
+
+  it("doesn't read a raw label id across accounts, where it means a different label in each", async () => {
+    expect(await labelledMatches("label:Label_1")).toEqual([]);
+  });
+
+  it("still matches the other accounts by name when one account's labels failed to load", async () => {
+    // A failed fetch reads as an account with no labels.
+    const failed = ACCOUNTS.map((account) =>
+      account.id === "gmail-b" ? { ...account, labels: [] } : account,
+    );
+    expect(await labelledMatches("label:Work", failed)).toEqual([
+      "a-work",
+      "o-work",
+    ]);
+  });
+
+  it("leaves a provider group's labels to its providers while any of its accounts' labels are unknown", async () => {
+    const partial = ACCOUNTS.map((account) =>
+      account.id === "gmail-b"
+        ? { id: account.id, provider: account.provider }
+        : account,
+    );
+    // The Outlook group has its labels; the Gmail group waits on gmail-b.
+    expect(await labelledMatches("label:Work", partial)).toEqual(["o-work"]);
+  });
+
+  it("leaves a label to the providers while labels load", async () => {
+    const loading = ACCOUNTS.map(({ id, provider }) => ({ id, provider }));
+    expect(await labelledMatches("label:Work", loading)).toEqual([]);
   });
 });
 

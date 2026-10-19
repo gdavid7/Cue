@@ -62,7 +62,7 @@ const OWNERSHIP_CHECKS: Record<string, OwnershipCheck> = {
     delegate: {
       file: "utils/redis/account-validation.ts",
       check:
-        /export async function readKeyForOwnedAccounts\([\s\S]*?getValidationKey\(\{ userId, emailAccountId \}\)[\s\S]*?getEmailAccount\(\{ userId, emailAccountId \}\)/,
+        /export async function readKeyForOwnedAccounts\([\s\S]*?getOwnerKey\(\{ userId, emailAccountId \}\)[\s\S]*?confirmOwnership\(\{ userId, emailAccountId \}\)/,
     },
   },
   "app/api/mail-stream/route.ts#GET": {

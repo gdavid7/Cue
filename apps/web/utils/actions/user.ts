@@ -4,7 +4,6 @@ import { z } from "zod";
 import { after } from "next/server";
 import { Prisma } from "@/generated/prisma/client";
 import prisma from "@/utils/prisma";
-import { withThreadPageBufferDeletion } from "@/utils/redis/thread-page-buffer";
 import { deleteUser } from "@/utils/user/delete";
 import { stopWatchingEmailAccount } from "@/utils/email/watch-manager";
 import { actionClient, actionClientUser } from "@/utils/actions/safe-action";
@@ -31,8 +30,6 @@ import {
 } from "@/utils/ai/draft-cleanup";
 import { isDuplicateError, isNotFoundError } from "@/utils/prisma-helpers";
 import { type Logger, toLogJson } from "@/utils/logger";
-import { invalidateAccountValidation } from "@/utils/redis/account-validation";
-import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
 import { getMoveSharedConnectionsOperations } from "@/utils/user/move-shared-connections";
 import { shareChannelsAcrossMailboxes } from "@/utils/messaging/shared-channels";
 import { prepareMemberRemovalNotifications } from "@/utils/team-comments/member-removal";
@@ -46,6 +43,7 @@ import {
   isMemberEmailAccountForeignKeyError,
   isOrganizationOwnerInvariantError,
 } from "@/utils/organizations/ownership";
+import { invalidateAccountOwnership } from "@/utils/redis/account-validation";
 
 export const saveAboutAction = actionClient
   .metadata({ name: "saveAbout" })
@@ -170,35 +168,31 @@ export const deleteEmailAccountAction = actionClientUser
         },
       });
 
-      if (isPrimaryAccount) {
-        // Check if there are other email accounts
-        const otherEmailAccounts = await prisma.emailAccount.findMany({
-          where: { userId, id: { not: emailAccountId } },
-          orderBy: { createdAt: "asc" },
-          take: 1,
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            image: true,
-          },
-        });
+      // The oldest other mailbox: the next primary, and where shared
+      // connections move.
+      const remainingEmailAccount = await prisma.emailAccount.findFirst({
+        where: { userId, id: { not: emailAccountId } },
+        orderBy: { createdAt: "asc" },
+        select: { id: true, email: true, name: true, image: true },
+      });
 
-        if (otherEmailAccounts.length === 0) {
-          throw new SafeError(
-            "Cannot delete your only email account. Go to the Settings page to delete your entire account.",
-          );
-        }
+      if (isPrimaryAccount && !remainingEmailAccount) {
+        throw new SafeError(
+          "Cannot delete your only email account. Go to the Settings page to delete your entire account.",
+        );
+      }
 
+      const moveSharedConnections = await prepareSharedConnectionsMove({
+        userId,
+        emailAccountId,
+        remainingEmailAccountId: remainingEmailAccount?.id,
+        logger,
+      });
+
+      if (isPrimaryAccount && remainingEmailAccount) {
         // Promote the next email account to primary
-        const newPrimaryAccount = otherEmailAccounts[0];
+        const newPrimaryAccount = remainingEmailAccount;
         const oldEmail = emailAccount.user.email;
-        const moveSharedConnections = await prepareSharedConnectionsMove({
-          userId,
-          emailAccountId,
-          remainingEmailAccountId: newPrimaryAccount.id,
-          logger,
-        });
 
         await stopWatchingEmailAccount({
           emailAccountId,
@@ -247,18 +241,6 @@ export const deleteEmailAccountAction = actionClientUser
           });
         });
       } else {
-        const remainingEmailAccount = await prisma.emailAccount.findFirst({
-          where: { userId, id: { not: emailAccountId } },
-          orderBy: { createdAt: "asc" },
-          select: { id: true },
-        });
-        const moveSharedConnections = await prepareSharedConnectionsMove({
-          userId,
-          emailAccountId,
-          remainingEmailAccountId: remainingEmailAccount?.id,
-          logger,
-        });
-
         await stopWatchingEmailAccount({
           emailAccountId,
           provider: emailAccount.account.provider,
@@ -344,17 +326,15 @@ async function runDeleteEmailAccountTransaction(
   },
 ) {
   try {
-    await withThreadPageBufferDeletion([context.emailAccountId], () =>
-      prisma.$transaction([
-        prisma.$queryRaw`
+    await prisma.$transaction([
+      prisma.$queryRaw`
         SELECT true AS locked
         FROM (
           SELECT pg_advisory_xact_lock(539114481, hashtext(${userId}))
         ) lock
       `,
-        ...operations,
-      ]),
-    );
+      ...operations,
+    ]);
   } catch (error) {
     context.logger.error("Delete email account transaction failed", {
       error,
@@ -401,13 +381,10 @@ async function runDeleteEmailAccountTransaction(
     );
   }
 
-  await Promise.all([
-    invalidateAccountValidation({
-      userId,
-      emailAccountId: context.emailAccountId,
-    }),
-    invalidateUserOwnAddresses(userId),
-  ]);
+  await invalidateAccountOwnership({
+    userId,
+    emailAccountId: context.emailAccountId,
+  });
 }
 
 function getPrismaErrorCode(error: unknown) {
