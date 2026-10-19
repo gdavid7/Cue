@@ -17,20 +17,9 @@ export const saveWebPushSubscriptionAction = actionClientUser
   .metadata({ name: "saveWebPushSubscription" })
   .inputSchema(saveWebPushSubscriptionBody)
   .action(
-    async ({
-      ctx: { userId },
-      parsedInput: { endpoint, keys, mode, emailAccountId },
-    }) => {
+    async ({ ctx: { userId }, parsedInput: { endpoint, keys, mode } }) => {
       if (!getWebPushVapidConfig())
         throw new SafeError("Push notifications aren't available.");
-
-      if (emailAccountId) {
-        const owned = await prisma.emailAccount.findFirst({
-          where: { id: emailAccountId, userId },
-          select: { id: true },
-        });
-        if (!owned) throw new SafeError("Email account not found.");
-      }
 
       const userAgent =
         (await headers()).get("user-agent")?.slice(0, USER_AGENT_MAX_LENGTH) ??
@@ -40,7 +29,6 @@ export const saveWebPushSubscriptionAction = actionClientUser
         auth: keys.auth,
         mode: mode === "all" ? WebPushMode.ALL : WebPushMode.IMPORTANT,
         userId,
-        emailAccountId: emailAccountId ?? null,
         userAgent,
       };
 

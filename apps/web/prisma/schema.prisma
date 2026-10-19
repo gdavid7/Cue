@@ -262,7 +262,6 @@ model EmailAccount {
   apiKeys                ApiKey[]
   classificationFeedback ClassificationFeedback[]
   mailSplits             MailSplit[]
-  webPushSubscriptions   WebPushSubscription[]
   webPushDeliveries      WebPushDelivery[]
 
   @@index([userId])
@@ -2186,14 +2185,10 @@ model WebPushSubscription {
   // Consecutive failed sends that weren't the push service saying it's gone.
   failureCount  Int         @default(0)
 
-  userId         String
-  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  // Null covers every account the user has.
-  emailAccountId String?
-  emailAccount   EmailAccount? @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
-  @@index([emailAccountId])
 }
 
 // One row per notified message so a retried webhook doesn't notify twice.

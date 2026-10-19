@@ -65,7 +65,6 @@ describe("web push subscription actions", () => {
         auth: "auth-key",
         mode: "IMPORTANT",
         userId: "user-1",
-        emailAccountId: null,
         userAgent: "Test Browser",
       }),
       update: expect.objectContaining({
@@ -84,41 +83,6 @@ describe("web push subscription actions", () => {
         update: expect.objectContaining({ mode: "ALL" }),
       }),
     );
-  });
-
-  it("scopes a subscription to one of the user's own accounts", async () => {
-    prisma.emailAccount.findFirst.mockResolvedValue({
-      id: "account-1",
-    } as never);
-
-    await saveWebPushSubscriptionAction({
-      ...subscription,
-      mode: "all",
-      emailAccountId: "account-1",
-    });
-
-    expect(prisma.emailAccount.findFirst).toHaveBeenCalledWith({
-      where: { id: "account-1", userId: "user-1" },
-      select: { id: true },
-    });
-    expect(prisma.webPushSubscription.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        create: expect.objectContaining({ emailAccountId: "account-1" }),
-      }),
-    );
-  });
-
-  it("refuses to scope a subscription to someone else's account", async () => {
-    prisma.emailAccount.findFirst.mockResolvedValue(null);
-
-    const result = await saveWebPushSubscriptionAction({
-      ...subscription,
-      mode: "all",
-      emailAccountId: "someone-elses",
-    });
-
-    expect(result?.serverError).toBeTruthy();
-    expect(prisma.webPushSubscription.upsert).not.toHaveBeenCalled();
   });
 
   it("only accepts endpoints on a browser push service", async () => {

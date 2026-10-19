@@ -14,7 +14,6 @@ CREATE TABLE "WebPushSubscription" (
     "lastSuccessAt" TIMESTAMP(3),
     "failureCount" INTEGER NOT NULL DEFAULT 0,
     "userId" TEXT NOT NULL,
-    "emailAccountId" TEXT,
 
     CONSTRAINT "WebPushSubscription_pkey" PRIMARY KEY ("id")
 );
@@ -36,9 +35,6 @@ CREATE UNIQUE INDEX "WebPushSubscription_endpoint_key" ON "WebPushSubscription"(
 CREATE INDEX "WebPushSubscription_userId_idx" ON "WebPushSubscription"("userId");
 
 -- CreateIndex
-CREATE INDEX "WebPushSubscription_emailAccountId_idx" ON "WebPushSubscription"("emailAccountId");
-
--- CreateIndex
 CREATE INDEX "WebPushDelivery_createdAt_idx" ON "WebPushDelivery"("createdAt");
 
 -- CreateIndex
@@ -46,9 +42,6 @@ CREATE UNIQUE INDEX "WebPushDelivery_emailAccountId_messageId_key" ON "WebPushDe
 
 -- AddForeignKey
 ALTER TABLE "WebPushSubscription" ADD CONSTRAINT "WebPushSubscription_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "WebPushSubscription" ADD CONSTRAINT "WebPushSubscription_emailAccountId_fkey" FOREIGN KEY ("emailAccountId") REFERENCES "EmailAccount"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "WebPushDelivery" ADD CONSTRAINT "WebPushDelivery_emailAccountId_fkey" FOREIGN KEY ("emailAccountId") REFERENCES "EmailAccount"("id") ON DELETE CASCADE ON UPDATE CASCADE;

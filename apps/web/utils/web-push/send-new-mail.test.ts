@@ -102,10 +102,7 @@ describe("sendNewMailWebPush", () => {
 
     expect(prisma.webPushSubscription.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: {
-          userId: "user-1",
-          OR: [{ emailAccountId: null }, { emailAccountId: "account-1" }],
-        },
+        where: { userId: "user-1" },
       }),
     );
     expect(sentEndpoints()).toEqual([

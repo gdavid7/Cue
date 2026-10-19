@@ -62,10 +62,7 @@ export async function sendNewMailWebPush({
     return;
 
   const subscriptions = await prisma.webPushSubscription.findMany({
-    where: {
-      userId,
-      OR: [{ emailAccountId: null }, { emailAccountId }],
-    },
+    where: { userId },
     select: { id: true, endpoint: true, p256dh: true, auth: true, mode: true },
   });
   if (subscriptions.length === 0) return;

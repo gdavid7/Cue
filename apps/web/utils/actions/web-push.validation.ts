@@ -20,8 +20,6 @@ export const saveWebPushSubscriptionBody = z.object({
     auth: z.string().min(1).max(128),
   }),
   mode: z.enum(["important", "all"]),
-  /** Omit to be notified for every connected account. */
-  emailAccountId: z.string().min(1).optional(),
 });
 export type SaveWebPushSubscriptionBody = z.infer<
   typeof saveWebPushSubscriptionBody
