@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { permanentRedirect, redirect } from "next/navigation";
 import { ZodError, type ZodIssue } from "zod";
 import {
+  isFastRequestSampled,
   withError,
   withAuth,
   withAdmin,
@@ -236,6 +237,58 @@ describe("Middleware", () => {
         } finally {
           consoleLogSpy.mockRestore();
           consoleErrorSpy.mockRestore();
+        }
+      });
+
+      it("logs a fast request only for a deterministic share of request ids, marked as sampled", async () => {
+        const consoleLogSpy = vi
+          .spyOn(console, "log")
+          .mockImplementation(() => {});
+        try {
+          const ids = Array.from(
+            { length: 400 },
+            (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+          );
+          const sampledId = ids.find((id) => isFastRequestSampled(id));
+          const skippedId = ids.find((id) => !isFastRequestSampled(id));
+          expect(sampledId).toBeDefined();
+          expect(skippedId).toBeDefined();
+          const share = ids.filter((id) => isFastRequestSampled(id)).length;
+          expect(share / ids.length).toBeGreaterThan(0.03);
+          expect(share / ids.length).toBeLessThan(0.15);
+
+          const wrappedHandler = withError("threads/list", async () =>
+            NextResponse.json({ ok: true }),
+          );
+          await wrappedHandler(
+            createMockRequest("GET", "http://localhost/api/threads", {
+              "x-request-id": skippedId as string,
+            }),
+            mockContext,
+          );
+          expect(completionLines(consoleLogSpy)).toHaveLength(0);
+
+          await wrappedHandler(
+            createMockRequest("GET", "http://localhost/api/threads", {
+              "x-request-id": sampledId as string,
+            }),
+            mockContext,
+          );
+          await wrappedHandler(
+            createMockRequest("GET", "http://localhost/api/threads", {
+              "x-request-id": sampledId as string,
+            }),
+            mockContext,
+          );
+          const lines = completionLines(consoleLogSpy);
+          expect(lines).toHaveLength(2);
+          expect(lines[0]).toMatch(/^\[threads\/list\]: Request completed/);
+          expect(lines[0]).toContain('"sampled": true');
+          expect(lines[0]).toContain('"sampleRate": 0.08');
+          expect(lines[0]).toContain('"status": 200');
+          expect(lines[0]).toContain('"durationMs"');
+        } finally {
+          consoleLogSpy.mockRestore();
         }
       });
 

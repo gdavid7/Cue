@@ -1,6 +1,6 @@
 import { ZodError } from "zod";
 import { type NextRequest, NextResponse, after } from "next/server";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
 import {
   captureException,
@@ -56,6 +56,9 @@ const logger = createScopedLogger("middleware");
 const SLOW_MIDDLEWARE_STEP_MS = 2000;
 const SLOW_MIDDLEWARE_TOTAL_MS = 4000;
 const SLOW_REQUEST_MS = 1000;
+// Share of fast, successful requests logged so latency percentiles can be
+// computed from Axiom. Lines carry sampleRate so counts can be re-weighted.
+const FAST_REQUEST_SAMPLE_RATE = 0.08;
 const UUID_V4_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -355,7 +358,7 @@ function withMiddleware<T extends NextRequest>(
       },
     ).then(
       (response) => {
-        logRequestCompleted(getLogger(requestForError), {
+        logRequestCompleted(getLogger(requestForError), requestId, {
           method: req.method,
           status: response.status,
           durationMs: Date.now() - startedAt,
@@ -363,7 +366,7 @@ function withMiddleware<T extends NextRequest>(
         return response;
       },
       (error: unknown) => {
-        logRequestCompleted(getLogger(requestForError), {
+        logRequestCompleted(getLogger(requestForError), requestId, {
           method: req.method,
           // Only a redirect is rethrown on purpose; Next answers anything else
           // with a 500.
@@ -878,18 +881,34 @@ async function runTimedMiddlewareStep<T>({
   }
 }
 
-// Slow and failed requests log at info, which ships to Axiom. The rest log at
-// trace, which ships only while ENABLE_DEBUG_LOGS is on, so the hot polling
-// routes add nothing by default. The logger's scope and url name the route.
+// Slow and failed requests always log at info, which ships to Axiom. Fast ones
+// ship for a deterministic share of request ids, marked `sampled` with their
+// `sampleRate`; the rest log at trace, which ships only while ENABLE_DEBUG_LOGS
+// is on. The logger's scope and url name the route.
 function logRequestCompleted(
   logger: Logger,
+  requestId: string,
   fields: { method: string; status: number; durationMs: number },
 ) {
   if (fields.durationMs >= SLOW_REQUEST_MS || fields.status >= 500) {
     logger.info("Request completed", fields);
+  } else if (isFastRequestSampled(requestId)) {
+    logger.info("Request completed", {
+      ...fields,
+      sampled: true,
+      sampleRate: FAST_REQUEST_SAMPLE_RATE,
+    });
   } else {
     logger.trace("Request completed", fields);
   }
+}
+
+export function isFastRequestSampled(
+  requestId: string,
+  rate = FAST_REQUEST_SAMPLE_RATE,
+) {
+  const hash = createHash("sha256").update(requestId).digest().readUInt32BE(0);
+  return hash / 2 ** 32 < rate;
 }
 
 function isRedirectError(error: unknown): error is Error {
