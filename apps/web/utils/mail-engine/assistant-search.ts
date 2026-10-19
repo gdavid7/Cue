@@ -1,5 +1,4 @@
 import { TZDate } from "@date-fns/tz";
-import { subDays, subMonths, subYears } from "date-fns";
 import type { MailClient } from "@inboxzero/mail-core/engine";
 import type {
   Coverage,
@@ -15,12 +14,13 @@ import {
   localMailSearchResultSchema,
 } from "@/utils/actions/assistant-local-search.validation";
 import {
+  gmailDateMs,
+  relativeAgeMs,
+} from "@/utils/mail-search/search-query-predicate";
+import {
   parseSearchToken,
   tokenizeSearchQuery,
 } from "@/utils/tokenize-search-query";
-
-// The Gmail API reads after:/before: dates as midnight Pacific time.
-const GMAIL_QUERY_TIME_ZONE = "America/Los_Angeles";
 const DEFAULT_TIMEOUT_MS = 1500;
 
 export type AssistantSearchRequest = {
@@ -505,25 +505,6 @@ function inClause(value: string): MailPredicate | null {
 
 function isWholeAddress(value: string) {
   return /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(value);
-}
-
-function gmailDateMs(value: string): number | null {
-  if (/^\d{9,11}$/.test(value)) return Number(value) * 1000;
-  const match = value.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/);
-  if (!match) return null;
-  const [year, month, day] = match.slice(1).map(Number);
-  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-  return new TZDate(year, month - 1, day, GMAIL_QUERY_TIME_ZONE).getTime();
-}
-
-function relativeAgeMs(value: string, now: Date): number | null {
-  const match = value.toLowerCase().match(/^(\d{1,4})([dmy])$/);
-  if (!match) return null;
-  const amount = Number(match[1]);
-  const at = { d: subDays, m: subMonths, y: subYears }[
-    match[2] as "d" | "m" | "y"
-  ](now, amount);
-  return at.getTime();
 }
 
 function toResult(page: MessageSearchPage): LocalMailSearchResult {

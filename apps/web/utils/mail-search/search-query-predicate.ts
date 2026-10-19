@@ -40,7 +40,7 @@ export type SearchQueryContext = {
 
 // The Gmail API reads after:/before: dates as midnight Pacific time, so the
 // store does too and both halves of a search agree on the day's edges.
-const GMAIL_QUERY_TIME_ZONE = "America/Los_Angeles";
+export const GMAIL_QUERY_TIME_ZONE = "America/Los_Angeles";
 
 // Outlook's KQL, which Gmail reads as words.
 const KQL_OPERATORS = new Set([
@@ -493,14 +493,16 @@ function accountLabels(accounts: SearchAccount[]): SearchLabel[] | undefined {
   return labels;
 }
 
-function labelQueryName(name: string) {
+/** A label name as Gmail writes it in a query: spaces and slashes as hyphens. */
+export function labelQueryName(name: string) {
   return name
     .trim()
     .toLowerCase()
     .replace(/[\s/-]+/g, "-");
 }
 
-function gmailDateMs(value: string): number | null {
+/** A Gmail after:/before: value: epoch seconds, or a day at midnight Pacific. */
+export function gmailDateMs(value: string): number | null {
   if (/^\d{9,11}$/.test(value)) return Number(value) * 1000;
   let parts = value.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/)?.slice(1);
   const monthFirst = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
@@ -513,8 +515,9 @@ function gmailDateMs(value: string): number | null {
   return new TZDate(year, month - 1, day, GMAIL_QUERY_TIME_ZONE).getTime();
 }
 
-function relativeAgeMs(value: string, now: Date): number | null {
-  const match = value.match(/^(\d{1,4})([dmy])$/);
+/** When a Gmail newer_than:/older_than: age (7d, 2m, 1y) began. */
+export function relativeAgeMs(value: string, now: Date): number | null {
+  const match = value.toLowerCase().match(/^(\d{1,4})([dmy])$/);
   if (!match) return null;
   const amount = Number(match[1]);
   const subtract = { d: subDays, m: subMonths, y: subYears }[

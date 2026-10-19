@@ -32,6 +32,7 @@ describe("SearchAnswerCard", () => {
         noResults
         onContinueInChat={onContinueInChat}
         query="when is the offsite"
+        request={{ query: "when is the offsite" }}
       />,
     );
 
@@ -49,6 +50,7 @@ describe("SearchAnswerCard", () => {
         noResults={false}
         onContinueInChat={vi.fn()}
         query="offsite"
+        request={{ query: "offsite" }}
       />,
     );
 
@@ -63,6 +65,7 @@ describe("SearchAnswerCard", () => {
         noResults
         onContinueInChat={vi.fn()}
         query="offsite"
+        request={{ query: "offsite" }}
       />,
     );
 
@@ -83,6 +86,7 @@ describe("SearchAnswerCard", () => {
         noResults={false}
         onContinueInChat={vi.fn()}
         query="when is the offsite"
+        request={{ query: "when is the offsite" }}
       />,
     );
 
