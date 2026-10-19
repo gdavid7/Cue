@@ -290,6 +290,8 @@ async function createWorkerOwnedEngine(
       callWorker(worker, pending, "getDiagnostics", [accountId]),
     forgetDeletedDrafts: (input) =>
       callWorker<void>(worker, pending, "forgetDeletedDrafts", [input]),
+    ingestMessages: (input) =>
+      callWorker<void>(worker, pending, "ingestMessages", [input]),
     purgeAccount: (accountId) =>
       callWorker(worker, pending, "purgeAccount", [accountId]),
     retainAccounts: (accountIds) =>

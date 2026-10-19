@@ -14,9 +14,11 @@ import {
   useState,
 } from "react";
 import { usePathname } from "next/navigation";
+import { z } from "zod";
 import type { MessageKey } from "@inboxzero/mail-core/identities";
+import { providerChangeSchema } from "@inboxzero/mail-core/sync";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
-import type { ThreadsListResponse } from "@/app/api/threads/route";
+import type { InboxPreview as LoadedInboxPreview } from "@/utils/threads/inbox-preview.server";
 import {
   MailListPlaceholder,
   MailLoadingNote,
@@ -35,8 +37,11 @@ const IGNORE = () => undefined;
 // message, a long thread's earlier messages wait for the sync.
 const OPENED_MESSAGES = 10;
 
-type InboxPreview = ThreadsListResponse | null;
+type InboxPreview = LoadedInboxPreview | null;
 type Seed = { emailAccountId: string; preview: Promise<InboxPreview> };
+const previewChangesSchema = z.array(providerChangeSchema);
+// Each page's rows are handed to the engine once, however often it renders.
+const ingestedPreviews = new WeakSet<Promise<InboxPreview>>();
 
 const InboxPreviewSeedContext = createContext<{
   seed: Seed | null;
@@ -128,6 +133,39 @@ export function useFetchOpenedPreviewThreads() {
 }
 
 /**
+ * Hands the messages behind the server's rows to the mail engine as soon as
+ * it runs, so the inbox shows them from the engine, where they open and
+ * triage like any other row, rather than after its first sync reads them
+ * again. The engine keeps any newer copy it already has.
+ */
+export function useIngestInboxPreview() {
+  const { emailAccountId } = useAccount();
+  const { seed, retired } = useContext(InboxPreviewSeedContext);
+  const client = useOptionalMailClient();
+  useEffect(() => {
+    if (
+      !client?.ingestMessages ||
+      !seed ||
+      retired ||
+      seed.emailAccountId !== emailAccountId ||
+      ingestedPreviews.has(seed.preview)
+    )
+      return;
+    ingestedPreviews.add(seed.preview);
+    seed.preview
+      .then((preview) => {
+        const changes = previewChangesSchema.safeParse(preview?.changes);
+        if (!changes.success || !changes.data.length) return;
+        return client.ingestMessages?.({
+          accountId: seed.emailAccountId,
+          changes: changes.data,
+        });
+      })
+      .catch(IGNORE);
+  }, [client, seed, retired, emailAccountId]);
+}
+
+/**
  * Stands in for the inbox while the local mailbox opens or first syncs,
  * showing the newest conversations the server fetched with the page, so the
  * inbox reads at once rather than after the engine has booted and synced.
@@ -199,7 +237,7 @@ function PreviewRows({
   layout,
   withChrome,
 }: {
-  preview: ThreadsListResponse;
+  preview: LoadedInboxPreview;
   message: string;
   layout: MailLayoutMode;
   withChrome: boolean;

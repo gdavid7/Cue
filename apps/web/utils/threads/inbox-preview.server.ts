@@ -1,4 +1,5 @@
 import "server-only";
+import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import type { ThreadsListResponse } from "@/app/api/threads/route";
 import { createEmailProvider } from "@/utils/email/provider";
 import type { EmailThread } from "@/utils/email/types";
@@ -7,6 +8,7 @@ import {
   runWithGmailQuota,
 } from "@/utils/gmail/quota";
 import { createScopedLogger } from "@/utils/logger";
+import { parsedMessagePatch } from "@/utils/mail-api/observations";
 import { sleep } from "@/utils/sleep";
 import { attachThreadPlans, toListThreads } from "@/utils/threads/load";
 import type { ParsedMessage } from "@/utils/types";
@@ -28,11 +30,18 @@ const MAX_QUOTA_WAIT_MS = 4000;
 const MAX_DEFERRAL_WAIT_MS = 2500;
 const PREVIEW_TIMEOUT_MS = 5000 + MAX_DEFERRAL_WAIT_MS;
 
+export type InboxPreview = ThreadsListResponse & {
+  /** The same messages as the mail engine records them, to hand it. */
+  changes: ProviderChange[];
+};
+
 /**
  * The inbox's newest conversations, as the mail list shows them, for a
- * browser that has no local mailbox for the account yet. Someone is waiting
- * on it, so it runs at interactive Gmail priority. Resolves null rather than
- * failing or holding up the page.
+ * browser that has no local mailbox for the account yet, and the messages
+ * they were read from for its mail engine, so the rows can be acted on as
+ * soon as the engine starts rather than after its first sync. Someone is
+ * waiting on it, so it runs at interactive Gmail priority. Resolves null
+ * rather than failing or holding up the page.
  */
 export async function loadInboxPreview({
   emailAccountId,
@@ -40,7 +49,7 @@ export async function loadInboxPreview({
 }: {
   emailAccountId: string;
   provider: string;
-}): Promise<ThreadsListResponse | null> {
+}): Promise<InboxPreview | null> {
   const log = logger.with({ emailAccountId });
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
@@ -70,12 +79,25 @@ export async function loadInboxPreview({
           format: "metadata",
           allowPartial: true,
         });
-        return toListThreads(
+        const list = toListThreads(
           await attachThreadPlans({
             emailAccountId,
             threads: groupByThread(messages),
           }),
         );
+        // Outlook's engine reads its mail by folder, which these rows
+        // were not read by, so only Gmail's are handed over.
+        return {
+          ...list,
+          changes:
+            emailProvider.name === "google"
+              ? messages.map((message) =>
+                  parsedMessagePatch(emailAccountId, "google", message, {
+                    format: "metadata",
+                  }),
+                )
+              : [],
+        };
       },
     );
   const loaded = load()

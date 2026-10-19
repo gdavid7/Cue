@@ -56,7 +56,7 @@ import {
   mailboxCountsQueryKey,
   mailboxQueryKey,
 } from "./subscriptions";
-import type { SyncPage } from "./sync";
+import type { ProviderChange, SyncPage } from "./sync";
 import type { ClaimedWork, ConversationView } from "./ports/mail-store";
 
 const MAX_BOOTSTRAP_PAGES_PER_RUN = 25;
@@ -194,6 +194,16 @@ export type MailClient = {
   forgetDeletedDrafts?(input: {
     accountId: string;
     messageIds: string[];
+  }): Promise<void>;
+  /**
+   * Merges messages the host already read from the provider, such as the
+   * inbox rows a server sent with the page, so they show and can be acted on
+   * before the first sync reaches them. A newer local copy of a message is
+   * kept. Hosts that never have such reads leave it out.
+   */
+  ingestMessages?(input: {
+    accountId: string;
+    changes: ProviderChange[];
   }): Promise<void>;
   purgeAccount(accountId: string): Promise<LocalRevision>;
   /** Purges every local account outside `accountIds`; an empty list is ignored. */
@@ -491,6 +501,20 @@ export function createMailEngine(input: {
       if (input.messageIds.length === 0) return;
       await store.forgetDeletedDrafts(input);
       await refreshViews();
+    },
+    async ingestMessages({ accountId, changes }) {
+      if (closed || changes.length === 0) return;
+      const account = (await store.readAccountSyncStates()).find(
+        (candidate) => candidate.accountId === accountId,
+      );
+      if (!account) return;
+      const applied = await store.applyHydration({
+        session: { accountId, generation: account.generation },
+        requestId: runtime.randomId(),
+        changes,
+        bodies: [],
+      });
+      if (applied.status === "committed") await refreshViews();
     },
     async purgeAccount(accountId) {
       stopSyncLane(accountId);
