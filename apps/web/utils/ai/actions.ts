@@ -37,9 +37,7 @@ import {
 } from "@/utils/messaging/rule-notifications";
 import { isMessagingDraftActionType } from "@/utils/actions/draft-reply";
 import { checkHasAccess } from "@/utils/premium/server";
-import { handlePreviousDraftDeletion } from "@/utils/ai/choose-rule/draft-management";
 import { isIntegrationActionEnabledForUserId } from "@/utils/integration-action.server";
-import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 
 const MODULE = "ai-actions";
 
@@ -194,102 +192,34 @@ const label: ActionFunction<{
   }
 };
 
+/**
+ * A rule's reply is a suggestion kept in Cue, not a mailbox draft: the reader
+ * shows it, and it reaches the mailbox only as a draft once the user edits it
+ * (or as a sent reply). Its text is already stored on the executed action, so
+ * there is nothing to write here; `execute` marks it pending when told so.
+ */
 const draft: ActionFunction<{
   messagingChannelId?: string | null;
-  subject?: string | null;
-  content?: string | null;
-  to?: string | null;
-  cc?: string | null;
-  bcc?: string | null;
-  staticAttachments?: ActionItem["staticAttachments"];
-  selectedAttachments?: ActionItem["selectedAttachments"];
-}> = async ({ client, email, args, emailAccount, executedRule, logger }) => {
+}> = async ({ email, args, executedRule, logger }) => {
   if (env.NEXT_PUBLIC_AUTO_DRAFT_DISABLED) return;
 
+  // A rule made before messaging drafts had their own action: Slack or Teams
+  // shows the reply, and sends it from there.
   if (
+    args.id &&
     isLegacyMessagingDraft({
       executedRule,
       messagingChannelId: args.messagingChannelId,
     })
   ) {
-    if (args.id) {
-      const notificationResult = await getMessagingRuleNotificationResult({
-        executedActionId: args.id,
-        email,
-        logger,
-      });
-
-      if (
-        notificationResult.delivered &&
-        notificationResult.kind === "interactive"
-      ) {
-        return;
-      }
-
-      if (!notificationResult.delivered) {
-        logger.warn(
-          "Falling back to mailbox draft after messaging delivery failure",
-          {
-            actionId: args.id,
-          },
-        );
-      }
-    }
-  }
-
-  const previousDraftHandling = await handlePreviousDraftDeletion({
-    client,
-    executedRule,
-    logger,
-  });
-
-  if (!previousDraftHandling.shouldCreateDraft) {
-    logger.info("Skipping draft creation", {
-      existingDraftId: previousDraftHandling.existingDraftId,
-      reason: previousDraftHandling.reason,
+    await getMessagingRuleNotificationResult({
+      executedActionId: args.id,
+      email,
+      logger,
     });
-    return { draftId: "" };
   }
 
-  const attachments = await resolveActionAttachments({
-    email,
-    emailAccount,
-    executedRule,
-    logger,
-    staticAttachments: args.staticAttachments,
-    selectedAttachments: args.selectedAttachments,
-    includeAiSelectedAttachments: true,
-  });
-
-  const draftArgs = {
-    to: args.to ?? undefined,
-    subject: args.subject ?? undefined,
-    content: args.content ?? "",
-    cc: args.cc ?? undefined,
-    bcc: args.bcc ?? undefined,
-    attachments,
-  };
-
-  const result = await client.draftEmail(
-    {
-      id: email.id,
-      threadId: email.threadId,
-      headers: email.headers,
-      internalDate: email.internalDate,
-      snippet: "",
-      historyId: "",
-      inline: [],
-      subject: email.headers.subject,
-      date: email.headers.date,
-      labelIds: [],
-      textPlain: email.textPlain,
-      textHtml: email.textHtml,
-      attachments: email.attachments,
-    },
-    draftArgs,
-    [emailAccount.email, ...(await getUserOwnAddresses(emailAccount.userId))],
-  );
-  return { draftId: result.draftId };
+  return { replySuggestion: true };
 };
 
 const draft_messaging_channel: ActionFunction<{

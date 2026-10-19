@@ -115,6 +115,60 @@ describe("executeAct", () => {
     });
   });
 
+  // The rule's reply waits in Cue for the reader; no mailbox draft id exists.
+  it("marks a drafted reply as a pending suggestion", async () => {
+    mockRunActionFunction.mockResolvedValue({ replySuggestion: true });
+    const executedRule = {
+      ...baseExecutedRule,
+      actionItems: [
+        { id: "action-1", type: ActionType.DRAFT_EMAIL, content: "Sure." },
+        { id: "action-2", type: ActionType.DRAFT_EMAIL, content: null },
+      ],
+    } as any;
+
+    await executeAct({
+      client: mockClient,
+      executedRule,
+      message,
+      emailAccount,
+      logger,
+    });
+
+    expect(mockExecutedActionUpdate).toHaveBeenCalledWith({
+      where: { id: "action-1" },
+      data: { draftStatus: "PENDING" },
+    });
+    // Nothing was written, so there is nothing to suggest.
+    expect(mockExecutedActionUpdate).not.toHaveBeenCalledWith({
+      where: { id: "action-2" },
+      data: { draftStatus: "PENDING" },
+    });
+  });
+
+  // Drafting turned off on the server: the action kept nothing to suggest.
+  it("leaves a reply the draft action didn't keep unmarked", async () => {
+    mockRunActionFunction.mockResolvedValue(undefined);
+    const executedRule = {
+      ...baseExecutedRule,
+      actionItems: [
+        { id: "action-1", type: ActionType.DRAFT_EMAIL, content: "Sure." },
+      ],
+    } as any;
+
+    await executeAct({
+      client: mockClient,
+      executedRule,
+      message,
+      emailAccount,
+      logger,
+    });
+
+    expect(mockExecutedActionUpdate).not.toHaveBeenCalledWith({
+      where: { id: "action-1" },
+      data: { draftStatus: "PENDING" },
+    });
+  });
+
   it("keeps labels but skips archive for protected company senders", async () => {
     envMock.WHITELIST_FROM = "onboarding@getinboxzero.com";
     mockRunActionFunction.mockResolvedValueOnce({ success: true });

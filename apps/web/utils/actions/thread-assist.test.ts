@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getMockEmailAccountWithAccount } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
-import { saveSuggestedReplyAction } from "@/utils/actions/thread-assist";
+import {
+  dismissReplySuggestionAction,
+  recordReplySuggestionStageAction,
+  recordSuggestedReplyDraftAction,
+  saveSuggestedReplyAction,
+} from "@/utils/actions/thread-assist";
 import type { ParsedMessage } from "@/utils/types";
 
 vi.mock("@/utils/prisma");
@@ -109,6 +114,179 @@ describe("saveSuggestedReplyAction", () => {
   });
 });
 
+// The reader's first edit of a suggestion made it a mailbox draft.
+describe("recordSuggestedReplyDraftAction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    prisma.emailAccount.findUnique.mockResolvedValue(
+      getMockEmailAccountWithAccount({
+        email: "user@example.com",
+        userId: "user-1",
+      }),
+    );
+  });
+
+  // The rule's text comes from the database, so the browser can't pass off
+  // other text as Cue's.
+  it("remembers a rule's suggestion by its stored text and links it", async () => {
+    prisma.executedAction.findFirst.mockResolvedValue({
+      id: "suggestion-1",
+      content: "Thursday works for me.",
+    } as never);
+
+    await recordSuggestedReplyDraftAction(EMAIL_ACCOUNT_ID, {
+      threadId: "thread-1",
+      messageId: "m1",
+      draftId: "draft-9",
+      executedActionId: "suggestion-1",
+      suggested: "Something else entirely.",
+    });
+
+    expect(prisma.executedAction.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: "suggestion-1",
+        type: "DRAFT_EMAIL",
+        draftId: null,
+        executedRule: {
+          emailAccountId: EMAIL_ACCOUNT_ID,
+          threadId: "thread-1",
+        },
+      },
+      select: { id: true, content: true },
+    });
+    expect(prisma.suggestedReplyDraft.upsert).toHaveBeenCalledWith({
+      where: {
+        emailAccountId_draftId: {
+          emailAccountId: EMAIL_ACCOUNT_ID,
+          draftId: "draft-9",
+        },
+      },
+      create: {
+        emailAccountId: EMAIL_ACCOUNT_ID,
+        threadId: "thread-1",
+        messageId: "m1",
+        draftId: "draft-9",
+        content: "Thursday works for me.",
+        executedActionId: "suggestion-1",
+      },
+      update: {
+        messageId: "m1",
+        content: "Thursday works for me.",
+        executedActionId: "suggestion-1",
+      },
+    });
+    // A suggestion belongs to one draft: an older record lets go of it first,
+    // in the same batch, so the unique link can't conflict.
+    expect(prisma.suggestedReplyDraft.updateMany).toHaveBeenCalledWith({
+      where: {
+        executedActionId: "suggestion-1",
+        NOT: { emailAccountId: EMAIL_ACCOUNT_ID, draftId: "draft-9" },
+      },
+      data: { executedActionId: null },
+    });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(prisma.$transaction).mock.calls[0][0]).toHaveLength(2);
+  });
+
+  it("remembers a suggestion this browser kept by its text", async () => {
+    await recordSuggestedReplyDraftAction(EMAIL_ACCOUNT_ID, {
+      threadId: "thread-1",
+      messageId: "m1",
+      draftId: "draft-9",
+      suggested: "Wednesday works.",
+    });
+
+    expect(prisma.executedAction.findFirst).not.toHaveBeenCalled();
+    expect(prisma.suggestedReplyDraft.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          content: "Wednesday works.",
+          executedActionId: undefined,
+        }),
+      }),
+    );
+  });
+});
+
+describe("dismissReplySuggestionAction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    prisma.executedAction.updateMany.mockResolvedValue({ count: 1 });
+    prisma.emailAccount.findUnique.mockResolvedValue(
+      getMockEmailAccountWithAccount({
+        email: "user@example.com",
+        userId: "user-1",
+      }),
+    );
+  });
+
+  it("dismisses only this account's waiting suggestion", async () => {
+    await dismissReplySuggestionAction(EMAIL_ACCOUNT_ID, {
+      executedActionId: "suggestion-1",
+    });
+
+    expect(prisma.executedAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "suggestion-1",
+        type: "DRAFT_EMAIL",
+        draftId: null,
+        draftStatus: "PENDING",
+        executedRule: { emailAccountId: EMAIL_ACCOUNT_ID },
+      },
+      data: { draftStatus: "DISMISSED" },
+    });
+    expect(mocks.createEmailProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe("recordReplySuggestionStageAction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    prisma.executedAction.updateMany.mockResolvedValue({ count: 1 });
+    vi.useFakeTimers({ now: new Date("2026-10-19T12:00:00Z") });
+    prisma.emailAccount.findUnique.mockResolvedValue(
+      getMockEmailAccountWithAccount({
+        email: "user@example.com",
+        userId: "user-1",
+      }),
+    );
+  });
+
+  // Counted once: showing the same suggestion again keeps the first time.
+  it.each([
+    ["shown", "replySuggestionShownAt"],
+    ["opened", "replySuggestionOpenedAt"],
+  ] as const)("records when this account's suggestion was first %s", async (stage, field) => {
+    await recordReplySuggestionStageAction(EMAIL_ACCOUNT_ID, {
+      executedActionId: "suggestion-1",
+      stage,
+    });
+
+    expect(prisma.executedAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "suggestion-1",
+        type: "DRAFT_EMAIL",
+        draftId: null,
+        executedRule: { emailAccountId: EMAIL_ACCOUNT_ID },
+        [field]: null,
+      },
+      data: { [field]: new Date("2026-10-19T12:00:00Z") },
+    });
+    vi.useRealTimers();
+  });
+
+  it("refuses a stage the reader doesn't record", async () => {
+    const result = await recordReplySuggestionStageAction(EMAIL_ACCOUNT_ID, {
+      executedActionId: "suggestion-1",
+      stage: "sent" as never,
+    });
+
+    expect(result?.validationErrors).toBeDefined();
+    expect(prisma.executedAction.updateMany).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+});
+
 // A provider that keeps drafts in the thread the way Gmail and Outlook do.
 function createMailbox() {
   const received = {
@@ -174,6 +352,6 @@ function createMailbox() {
 }
 
 const SUGGESTION_SETTINGS = {
-  draftRepliesEnabled: true,
+  draftReplies: "on" as const,
   webLookupEnabled: true,
 };

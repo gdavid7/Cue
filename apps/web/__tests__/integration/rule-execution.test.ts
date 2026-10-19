@@ -35,9 +35,9 @@ vi.mock("@inboxzero/tinybird", () => ({
   publishArchive: vi.fn().mockResolvedValue(undefined),
 }));
 
-// Mock draft management — updateExecutedActionWithDraftId is called if draft actions exist
+// Mock draft management — markReplySuggestionPending is called if draft actions exist
 vi.mock("@/utils/ai/choose-rule/draft-management", () => ({
-  updateExecutedActionWithDraftId: vi.fn().mockResolvedValue(undefined),
+  markReplySuggestionPending: vi.fn().mockResolvedValue(undefined),
   handlePreviousDraftDeletion: vi.fn().mockResolvedValue(undefined),
 }));
 

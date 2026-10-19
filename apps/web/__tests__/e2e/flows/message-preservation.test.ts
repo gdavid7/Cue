@@ -7,7 +7,7 @@
  *
  * Scenario being tested:
  * 1. External sender sends first message to user
- * 2. AI creates draft reply
+ * 2. The rule keeps a reply suggestion in Cue (no mailbox draft)
  * 3. External sender sends SECOND message (follow-up) to the same thread
  * 4. Verify: The second message is preserved (NOT deleted)
  *
@@ -20,6 +20,7 @@ import { shouldRunFlowTests, TIMEOUTS } from "./config";
 import { initializeFlowTests, setupFlowTest } from "./setup";
 import { generateTestSummary } from "./teardown";
 import {
+  assertNoThreadDrafts,
   sendTestEmail,
   sendTestReply,
   TEST_EMAIL_SCENARIOS,
@@ -28,8 +29,11 @@ import {
   waitForExecutedRule,
   waitForMessageInInbox,
   waitForSentMessage,
+  waitForReplySuggestion,
+  waitForSuggestionStatus,
   waitForThreadMessageCount,
 } from "./helpers/polling";
+import { DraftEmailStatus } from "@/generated/prisma/enums";
 import { logStep, clearLogs } from "./helpers/logging";
 import type { TestAccount } from "./helpers/accounts";
 
@@ -95,9 +99,9 @@ describe.skipIf(!shouldRunFlowTests())("Message Preservation", () => {
       });
 
       // ========================================
-      // Step 2: Wait for AI draft to be created
+      // Step 2: Wait for the rule's reply suggestion
       // ========================================
-      logStep("Step 2: Waiting for AI draft creation");
+      logStep("Step 2: Waiting for the reply suggestion");
 
       const executedRule = await waitForExecutedRule({
         threadId: firstReceived.threadId,
@@ -111,22 +115,17 @@ describe.skipIf(!shouldRunFlowTests())("Message Preservation", () => {
         actionItems: executedRule.actionItems.length,
       });
 
-      const draftAction = executedRule.actionItems.find(
-        (a) => a.type === "DRAFT_EMAIL" && a.draftId,
-      );
-
-      expect(draftAction).toBeDefined();
-      expect(draftAction?.draftId).toBeTruthy();
-      const aiDraftId = draftAction!.draftId!;
-
-      logStep("AI draft created", { draftId: aiDraftId });
-
-      // Verify draft exists
-      const aiDraft = await gmail.emailProvider.getDraft(aiDraftId);
-      expect(aiDraft).toBeDefined();
-      logStep("Verified AI draft exists", {
-        draftId: aiDraftId,
-        draftMessageId: aiDraft?.id,
+      // The rule's reply waits in Cue; the mailbox holds no draft for it
+      const suggestion = await waitForReplySuggestion({
+        threadId: firstReceived.threadId,
+        emailAccountId: gmail.id,
+      });
+      await assertNoThreadDrafts({
+        provider: gmail.emailProvider,
+        threadId: firstReceived.threadId,
+      });
+      logStep("Reply suggestion kept in Cue", {
+        executedActionId: suggestion.executedActionId,
       });
 
       // ========================================
@@ -229,17 +228,18 @@ describe.skipIf(!shouldRunFlowTests())("Message Preservation", () => {
       }
 
       // ========================================
-      // Step 6: Additional check - verify draft still exists (it should, since user hasn't replied)
+      // Step 6: The follow-up sets the earlier suggestion aside
       // ========================================
-      logStep("Step 6: Checking if AI draft still exists");
+      logStep("Step 6: Checking the earlier suggestion was set aside");
 
-      const draftAfterFollowUp = await gmail.emailProvider.getDraft(aiDraftId);
-      logStep("AI draft status after follow-up", {
-        draftId: aiDraftId,
-        stillExists: !!draftAfterFollowUp,
+      await waitForSuggestionStatus({
+        executedActionId: suggestion.executedActionId,
+        statuses: [DraftEmailStatus.CLEANED_UP_UNUSED],
       });
-      // Note: Draft may or may not exist depending on implementation
-      // The key thing is that the follow-up message was NOT deleted
+      await assertNoThreadDrafts({
+        provider: gmail.emailProvider,
+        threadId: firstReceived.threadId,
+      });
     },
     TIMEOUTS.FULL_CYCLE,
   );
@@ -295,11 +295,18 @@ describe.skipIf(!shouldRunFlowTests())("Message Preservation", () => {
         timeout: TIMEOUTS.WEBHOOK_PROCESSING,
       });
 
-      const draftAction = executedRule.actionItems.find(
-        (a) => a.type === "DRAFT_EMAIL" && a.draftId,
-      );
-      const aiDraftId = draftAction?.draftId;
-      logStep("AI draft created", { draftId: aiDraftId });
+      // The rule's reply waits in Cue; the mailbox holds no draft for it
+      const suggestion = await waitForReplySuggestion({
+        threadId: firstReceived.threadId,
+        emailAccountId: gmail.id,
+      });
+      await assertNoThreadDrafts({
+        provider: gmail.emailProvider,
+        threadId: firstReceived.threadId,
+      });
+      logStep("Reply suggestion kept in Cue", {
+        executedActionId: suggestion.executedActionId,
+      });
 
       // Second message from sender (follow-up)
       // Use Outlook-side IDs retrieved from Sent folder (sendMail doesn't return them)
@@ -428,9 +435,9 @@ describe.skipIf(!shouldRunFlowTests())("Message Preservation", () => {
       });
 
       // ========================================
-      // Step 2: Wait for AI draft to be created
+      // Step 2: Wait for the rule's reply suggestion
       // ========================================
-      logStep("Step 2: Waiting for AI draft creation");
+      logStep("Step 2: Waiting for the reply suggestion");
 
       const executedRule = await waitForExecutedRule({
         threadId: firstReceived.threadId,
@@ -444,22 +451,17 @@ describe.skipIf(!shouldRunFlowTests())("Message Preservation", () => {
         actionItems: executedRule.actionItems.length,
       });
 
-      const draftAction = executedRule.actionItems.find(
-        (a) => a.type === "DRAFT_EMAIL" && a.draftId,
-      );
-
-      expect(draftAction).toBeDefined();
-      expect(draftAction?.draftId).toBeTruthy();
-      const aiDraftId = draftAction!.draftId!;
-
-      logStep("AI draft created", { draftId: aiDraftId });
-
-      // Verify draft exists
-      const aiDraft = await outlook.emailProvider.getDraft(aiDraftId);
-      expect(aiDraft).toBeDefined();
-      logStep("Verified AI draft exists", {
-        draftId: aiDraftId,
-        draftMessageId: aiDraft?.id,
+      // The rule's reply waits in Cue; the mailbox holds no draft for it
+      const suggestion = await waitForReplySuggestion({
+        threadId: firstReceived.threadId,
+        emailAccountId: outlook.id,
+      });
+      await assertNoThreadDrafts({
+        provider: outlook.emailProvider,
+        threadId: firstReceived.threadId,
+      });
+      logStep("Reply suggestion kept in Cue", {
+        executedActionId: suggestion.executedActionId,
       });
 
       // ========================================
@@ -555,15 +557,17 @@ describe.skipIf(!shouldRunFlowTests())("Message Preservation", () => {
       }
 
       // ========================================
-      // Step 6: Additional check - verify draft still exists
+      // Step 6: The follow-up sets the earlier suggestion aside
       // ========================================
-      logStep("Step 6: Checking if AI draft still exists");
+      logStep("Step 6: Checking the earlier suggestion was set aside");
 
-      const draftAfterFollowUp =
-        await outlook.emailProvider.getDraft(aiDraftId);
-      logStep("AI draft status after follow-up", {
-        draftId: aiDraftId,
-        stillExists: !!draftAfterFollowUp,
+      await waitForSuggestionStatus({
+        executedActionId: suggestion.executedActionId,
+        statuses: [DraftEmailStatus.CLEANED_UP_UNUSED],
+      });
+      await assertNoThreadDrafts({
+        provider: outlook.emailProvider,
+        threadId: firstReceived.threadId,
       });
     },
     TIMEOUTS.FULL_CYCLE,
@@ -607,13 +611,18 @@ describe.skipIf(!shouldRunFlowTests())("Message Preservation", () => {
         timeout: TIMEOUTS.WEBHOOK_PROCESSING,
       });
 
-      const draftAction = executedRule.actionItems.find(
-        (a) => a.type === "DRAFT_EMAIL" && a.draftId,
-      );
-      // Assert draft was created before continuing
-      expect(draftAction?.draftId).toBeTruthy();
-      const aiDraftId = draftAction!.draftId!;
-      logStep("AI draft created", { draftId: aiDraftId });
+      // The rule's reply waits in Cue; the mailbox holds no draft for it
+      const suggestion = await waitForReplySuggestion({
+        threadId: firstReceived.threadId,
+        emailAccountId: outlook.id,
+      });
+      await assertNoThreadDrafts({
+        provider: outlook.emailProvider,
+        threadId: firstReceived.threadId,
+      });
+      logStep("Reply suggestion kept in Cue", {
+        executedActionId: suggestion.executedActionId,
+      });
 
       // Second message from sender (follow-up)
       // Use Gmail-side IDs since Gmail is the sender

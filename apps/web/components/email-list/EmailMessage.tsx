@@ -8,7 +8,10 @@ import {
   useRef,
   useEffect,
 } from "react";
-import { ReplyAssistContext } from "@/components/email-list/reply-assist";
+import {
+  isUnwrittenReply,
+  ReplyAssistContext,
+} from "@/components/email-list/reply-assist";
 import { useAction } from "next-safe-action/hooks";
 import { useTheme } from "next-themes";
 import { isDesignedHtmlEmail } from "@inboxzero/mail-ui/MailBody";
@@ -18,6 +21,7 @@ import {
   ForwardIcon,
   ReplyAllIcon,
   ReplyIcon,
+  SparklesIcon,
   UserSearchIcon,
 } from "lucide-react";
 import { Tooltip } from "@/components/Tooltip";
@@ -73,7 +77,11 @@ import { LoadingMiniSpinner } from "@/components/Loading";
 import { getActionErrorMessage } from "@/utils/error";
 import {
   getDraftSessionMessageId,
+  createReplyDraftWriter,
+  getCueReplyDraftSessionId,
+  getReplyDraft,
   getReplyDraftSessionId,
+  getReplyDraftSessionIds,
   type ReplyDraftMode,
 } from "@/utils/mail-engine/reply-drafts";
 import {
@@ -100,6 +108,7 @@ export function EmailMessage({
   replyStatus,
   defaultComposeMode,
   defaultReplyAll = false,
+  ownReplyRequested = false,
   composerOpen = true,
   openDraftSessionId,
   dismissedDraftIds: dismissedDraftIdsProp,
@@ -146,6 +155,11 @@ export function EmailMessage({
   defaultComposeMode?: ReplyDraftMode;
   /** Opens a default reply addressed to everyone on the message. */
   defaultReplyAll?: boolean;
+  /**
+   * The user's own Reply (the reader's `r` or `a`) opened the default reply,
+   * not Cue: it answers the sender, whoever Cue's reply was for.
+   */
+  ownReplyRequested?: boolean;
   /** Whether the thread's one open composer is this message's reply or forward. */
   composerOpen?: boolean;
   /** The thread's open mailbox draft, by session id, if that is what's open. */
@@ -231,8 +245,11 @@ export function EmailMessage({
     composeOverride,
     defaultComposeMode,
     (mode) =>
-      getReplyDraftSessionId(composerSessionMessageId ?? message.id, mode) ===
-      poppedOutDraftSessionId,
+      isPoppedOut(
+        poppedOutDraftSessionId,
+        composerSessionMessageId ?? message.id,
+        mode,
+      ),
   );
   const composeMode = composerOpen ? requestedComposeMode : undefined;
   const serverDrafts = (draftMessages ?? []).map((draft) => ({
@@ -259,8 +276,7 @@ export function EmailMessage({
   const visibleDrafts = serverDrafts.filter(
     (draft) =>
       !dismissedDraftIds.has(draft.sessionMessageId) &&
-      getReplyDraftSessionId(draft.sessionMessageId, "reply") !==
-        poppedOutDraftSessionId,
+      !isPoppedOut(poppedOutDraftSessionId, draft.sessionMessageId, "reply"),
   );
   const composingMailboxReply =
     composeMode === "reply" && visibleDrafts.length > 0;
@@ -288,7 +304,9 @@ export function EmailMessage({
   const composeSessionRef = useRef(0);
   const messageRef = useRef<HTMLLIElement>(null);
 
+  const [ownReplyRequests, setOwnReplyRequests] = useState(0);
   const startReply = useCallback(() => {
+    setOwnReplyRequests((count) => count + 1);
     onStartCompose?.();
     composeSessionRef.current += 1;
     const savedDraft = serverDrafts.at(-1);
@@ -625,6 +643,8 @@ export function EmailMessage({
                 key={`${composerKey}:${replyAll}`}
                 autoFocus={takeFocus}
                 replyAll={replyAll}
+                ownReply={ownReplyRequested || composeOverride === "reply"}
+                ownReplyRequest={ownReplyRequests}
                 autoScroll
                 bodyAvailable={bodyAvailable}
                 draftSessionMessageId={composerSessionMessageId}
@@ -980,6 +1000,8 @@ function ReplyPanel({
   bodyAvailable = true,
   replyAnchor,
   replyAll = false,
+  ownReply = false,
+  ownReplyRequest = 0,
 }: {
   message: ParsedMessage;
   refetch: () => void;
@@ -1000,27 +1022,59 @@ function ReplyPanel({
   bodyAvailable?: boolean;
   replyAnchor?: ParsedMessage;
   replyAll?: boolean;
+  /** The user's own Reply opened this composer, not Cue. */
+  ownReply?: boolean;
+  /** Counts the user's presses of Reply, each of which brings back their reply. */
+  ownReplyRequest?: number;
 }) {
   const { emailAccountId } = useAccount();
   const ownEmails = useOwnEmailAddresses();
   const { popOutReply } = useComposeModal();
   const replyTargetId = replyAnchor?.id ?? message.id;
   const replyAssist = useContext(ReplyAssistContext);
-  const assist =
+  const offeredAssist =
     replyAssist &&
     composeMode === "reply" &&
     replyAssist.messageId === message.id
       ? replyAssist
       : undefined;
-  // Taken as the composer opens: a suggestion that lands after the user
-  // started their own reply must not fill it, and a saved draft keeps its text.
-  const [suggestedBodyHtml] = useState(() =>
-    assist && !draftMessage ? textToHtmlParagraphs(assist.reply) : undefined,
+  // The user's own Reply answers the sender. Cue's reply to someone else
+  // waits for "Use Cue's draft", which brings its recipients with it.
+  const [choseCueReply, setChoseCueReply] = useState(false);
+  // Each press of Reply goes back to the user's own reply.
+  const [seenOwnReplyRequest, setSeenOwnReplyRequest] =
+    useState(ownReplyRequest);
+  if (seenOwnReplyRequest !== ownReplyRequest) {
+    setSeenOwnReplyRequest(ownReplyRequest);
+    setChoseCueReply(false);
+  }
+  const setAsideCueReply = Boolean(
+    offeredAssist?.toSomeoneElse && ownReply && !choseCueReply && !draftMessage,
   );
-  const draftSessionId = getReplyDraftSessionId(
-    draftSessionMessageId ?? message.id,
-    composeMode,
+  const assist = setAsideCueReply ? undefined : offeredAssist;
+  // What the composer opens with is taken once, as it opens: a suggestion
+  // that lands after the user started their own reply must not fill it, and a
+  // saved draft keeps its text. Switching between the user's reply and Cue's
+  // reply to someone else is the one time it is taken again. The two are
+  // separate local drafts (see draftSessionId), so the composer remounts on
+  // the other one's draft and each keeps what was typed in it.
+  const takeOpening = () => ({
+    setAside: setAsideCueReply,
+    assist: assist && !draftMessage ? assist : undefined,
+  });
+  const [opening, setOpening] = useState(takeOpening);
+  if (opening.setAside !== setAsideCueReply) setOpening(takeOpening());
+  const suggestedBodyHtml = useMemo(
+    () =>
+      opening.assist ? textToHtmlParagraphs(opening.assist.reply) : undefined,
+    [opening.assist],
   );
+  // A rule's reply can go to other people, or under its own subject.
+  const suggestedRecipients = opening.assist?.recipients;
+  const sessionMessageId = draftSessionMessageId ?? message.id;
+  const draftSessionId = opening.assist?.toSomeoneElse
+    ? getCueReplyDraftSessionId(sessionMessageId)
+    : getReplyDraftSessionId(sessionMessageId, composeMode);
 
   const replyRef = useRef<HTMLDivElement | null>(null);
   const visualViewportBoxRef = useVisualViewportBox(useIsCoarsePointer());
@@ -1064,12 +1118,19 @@ function ReplyPanel({
     if (composeMode === "reply") {
       if (draftSource) return prepareDraftReplyEmail(draftSource);
 
-      return prepareReplyingToEmail({
+      const reply = prepareReplyingToEmail({
         message,
         threadOn: replyAnchor,
         replyAll,
         ownEmails,
       });
+      return {
+        ...reply,
+        to: suggestedRecipients?.to ?? reply.to,
+        cc: suggestedRecipients?.cc ?? reply.cc,
+        bcc: suggestedRecipients?.bcc ?? reply.bcc,
+        subject: suggestedRecipients?.subject ?? reply.subject,
+      };
     }
     return forwardSource
       ? prepareForwardingEmail(forwardSource, Boolean(replyAnchor))
@@ -1082,6 +1143,7 @@ function ReplyPanel({
     replyAnchor,
     replyAll,
     ownEmails,
+    suggestedRecipients,
   ]);
 
   const { executeAsync: discardDraft } = useAction(
@@ -1090,7 +1152,10 @@ function ReplyPanel({
 
   const onDiscard = useCallback(
     async (draftId?: string) => {
+      // Discarding the rule's suggestion turns it down, so it isn't offered
+      // again for this message.
       if (composeMode === "forward" || !draftMessage) {
+        assist?.dismiss?.();
         onCloseCompose();
         return true;
       }
@@ -1132,10 +1197,12 @@ function ReplyPanel({
       } finally {
         refetch();
       }
+      assist?.dismiss?.();
       onDraftDiscarded?.();
       return true;
     },
     [
+      assist,
       composeMode,
       draftMessage,
       discardDraft,
@@ -1181,7 +1248,26 @@ function ReplyPanel({
       )}
       ref={setReplyRef}
     >
+      {setAsideCueReply && (
+        <div className="mb-2 flex flex-wrap items-center gap-x-2 text-muted-foreground text-xs">
+          <Button
+            className="-ml-2 text-muted-foreground"
+            onClick={() => setChoseCueReply(true)}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
+            <SparklesIcon aria-hidden className="mr-2 size-4" />
+            Use Cue's draft
+          </Button>
+          {offeredAssist?.recipients?.to && (
+            <span>to {offeredAssist.recipients.to}</span>
+          )}
+        </div>
+      )}
       <ComposeEmailFormLazy
+        // Remounts on the other reply's draft when the user switches.
+        key={draftSessionId}
         autoFocus={autoFocus}
         initialBodyHtml={suggestedBodyHtml}
         suggestion={assist}
@@ -1194,6 +1280,15 @@ function ReplyPanel({
         onClose={() => {
           onCloseCompose();
           onSent?.();
+          if (offeredAssist?.toSomeoneElse)
+            dropOtherReplyIfUnwritten({
+              emailAccountId,
+              threadId: replyingToEmail.threadId ?? message.threadId,
+              sentSessionId: draftSessionId,
+              sessionMessageId,
+            }).catch(() => {
+              // The other reply stays on this device; nothing is lost.
+            });
         }}
         onRestore={onRestore}
         onDiscard={onDiscard}
@@ -1220,6 +1315,47 @@ function ReplyPanel({
       />
     </div>
   );
+}
+
+/**
+ * Once one of a message's two replies (the user's, or Cue's to someone else)
+ * is sent, the other goes too, but only when nothing in it was written.
+ */
+async function dropOtherReplyIfUnwritten({
+  emailAccountId,
+  threadId,
+  sentSessionId,
+  sessionMessageId,
+}: {
+  emailAccountId: string;
+  threadId: string;
+  sentSessionId: string;
+  sessionMessageId: string;
+}) {
+  const other = getReplyDraftSessionIds(sessionMessageId).find(
+    (sessionId) => sessionId !== sentSessionId,
+  );
+  if (!other) return;
+  const identity = { emailAccountId, threadId, messageId: other };
+  const draft = await getReplyDraft(identity);
+  const content = draft?.content;
+  if (!draft || !content || content.providerDraftId) return;
+  if (!isUnwrittenReply(content)) return;
+  await createReplyDraftWriter(identity, draft.revision).clear();
+}
+
+/** A reply popped out is written in its own window; Cue's has its own draft. */
+function isPoppedOut(
+  poppedOutDraftSessionId: string | undefined,
+  sessionMessageId: string,
+  mode: ReplyDraftMode,
+) {
+  if (!poppedOutDraftSessionId) return false;
+  const sessionIds =
+    mode === "reply"
+      ? getReplyDraftSessionIds(sessionMessageId)
+      : [getReplyDraftSessionId(sessionMessageId, mode)];
+  return sessionIds.includes(poppedOutDraftSessionId);
 }
 
 function resolveComposeMode(

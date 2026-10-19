@@ -79,6 +79,7 @@ vi.mock("@/components/email-list/EmailThread", () => ({
     afterLatestMessage,
     autoOpenReplyForMessageId,
     focusAutoOpenedReply,
+    replyStatus,
     messageHeadingLevel = 2,
   }: {
     messageHeadingLevel?: number;
@@ -90,6 +91,7 @@ vi.mock("@/components/email-list/EmailThread", () => ({
     afterLatestMessage?: ReactNode;
     autoOpenReplyForMessageId?: string;
     focusAutoOpenedReply?: boolean;
+    replyStatus?: ReactNode;
   }) => (
     <>
       <ReportsExpansion onChange={onMessageExpansionChange} />
@@ -99,6 +101,7 @@ vi.mock("@/components/email-list/EmailThread", () => ({
         </div>
       </div>
       {afterLatestMessage}
+      {replyStatus}
       {autoOpenReplyForMessageId ? (
         <div
           data-focused={String(Boolean(focusAutoOpenedReply))}
@@ -111,18 +114,8 @@ vi.mock("@/components/email-list/EmailThread", () => ({
   ),
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/CueStrip", () => ({
-  CueStrip: ({
-    emailAccountId,
-    onDraftReply,
-  }: {
-    emailAccountId: string;
-    onDraftReply: () => void;
-  }) => (
-    <section aria-label="Cue summary" data-account={emailAccountId}>
-      <button onClick={onDraftReply} type="button">
-        Draft reply
-      </button>
-    </section>
+  CueStrip: ({ emailAccountId }: { emailAccountId: string }) => (
+    <section aria-label="Cue summary" data-account={emailAccountId} />
   ),
 }));
 vi.mock(
@@ -154,8 +147,7 @@ vi.mock("@/utils/actions/thread-assist", () => ({
 
 const replyState = {
   canRequest: true,
-  drafts: true,
-  pending: false,
+  offer: true,
   settledFor: undefined as string | undefined,
   request: vi.fn(),
 };
@@ -312,8 +304,9 @@ describe("ThreadReader", () => {
     expect(screen.queryByRole("region", { name: "Related" })).toBeNull();
   });
 
-  describe("Draft reply from the Cue strip", () => {
+  describe("Draft a reply", () => {
     beforeEach(() => {
+      replyState.offer = true;
       replyState.settledFor = undefined;
       replyState.request.mockClear();
     });
@@ -324,7 +317,7 @@ describe("ThreadReader", () => {
         messages: [createMessage("message-1", "Start date", ["INBOX"])],
       });
 
-      fireEvent.click(screen.getByRole("button", { name: "Draft reply" }));
+      fireEvent.click(screen.getByRole("button", { name: "Draft a reply" }));
       expect(replyState.request).toHaveBeenCalledTimes(1);
       expect(screen.queryByTestId("composer")).toBeNull();
 
@@ -334,6 +327,30 @@ describe("ThreadReader", () => {
       const composer = screen.getByTestId("composer");
       expect(composer.textContent).toBe("message-1");
       expect(composer.getAttribute("data-focused")).toBe("true");
+    });
+
+    // One place to ask: the Cue strip has no draft button of its own.
+    it("is offered once, under the reply actions", () => {
+      renderReader({
+        refetch: vi.fn(),
+        messages: [createMessage("message-1", "Start date", ["INBOX"])],
+      });
+
+      expect(
+        screen.getAllByRole("button", { name: /draft (a )?reply/i }),
+      ).toHaveLength(1);
+    });
+
+    it("isn't offered when Cue doesn't write replies here", () => {
+      replyState.offer = false;
+      renderReader({
+        refetch: vi.fn(),
+        messages: [createMessage("message-1", "Start date", ["INBOX"])],
+      });
+
+      expect(
+        screen.queryByRole("button", { name: "Draft a reply" }),
+      ).toBeNull();
     });
 
     it("leaves the composer closed when Cue settles a reply nobody asked for", () => {

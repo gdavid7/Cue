@@ -763,6 +763,290 @@ describe("trackSentDraftStatus for saved suggested replies", () => {
   });
 });
 
+// A rule's reply is a suggestion kept in Cue: no mailbox draft to look for.
+describe("trackSentDraftStatus for reply suggestions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(calculateSimilarityDetails).mockImplementation(
+      (storedContent, providerMessage, options) => ({
+        score: calculateSimilarity(storedContent, providerMessage, options),
+        normalizedStoredContentLength: storedContent?.length ?? 0,
+        normalizedProviderMessageLength:
+          typeof providerMessage === "string" ? providerMessage.length : 0,
+      }),
+    );
+    vi.mocked(prisma.suggestedReplyDraft.findFirst).mockResolvedValue(null);
+    vi.mocked(prisma.executedAction.findFirst).mockResolvedValue(
+      createReplySuggestion(),
+    );
+    vi.mocked(prisma.$transaction).mockResolvedValue([
+      { id: "draft-send-log-1" },
+      { count: 1 },
+    ] as any);
+  });
+
+  it("looks for a waiting suggestion as well as a mailbox draft", async () => {
+    vi.mocked(prisma.executedAction.findFirst).mockResolvedValue(null);
+
+    await trackSentDraftStatus({
+      emailAccountId: "account-1",
+      message: createSentMessage(),
+      provider: { getDraft: vi.fn(), getMessage: vi.fn() } as any,
+      logger,
+    });
+
+    expect(prisma.executedAction.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: [
+            { draftId: { not: null } },
+            { draftStatus: DraftEmailStatus.PENDING, content: { not: null } },
+          ],
+        }),
+      }),
+    );
+  });
+
+  // Sent from the reader without an edit: the normal send, no draft involved.
+  it("counts a suggestion sent as it was, without asking the mailbox for a draft", async () => {
+    vi.mocked(calculateSimilarity).mockReturnValue(1);
+    vi.mocked(isMeaningfulDraftEdit).mockReturnValue(false);
+    const provider = {
+      getDraft: vi.fn(),
+      getMessage: vi.fn().mockResolvedValue(createSourceMessage()),
+    };
+
+    await trackSentDraftStatus({
+      emailAccountId: "account-1",
+      message: createSentMessage(),
+      provider: provider as any,
+      logger,
+    });
+
+    expect(provider.getDraft).not.toHaveBeenCalled();
+    expect(prisma.draftSendLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        executedActionId: "action-1",
+        sentMessageId: "sent-1",
+        similarityScore: 1,
+      }),
+    });
+    expect(prisma.executedAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "action-1",
+        draftId: null,
+        draftStatus: DraftEmailStatus.PENDING,
+      },
+      data: { draftStatus: DraftEmailStatus.LIKELY_SENT },
+    });
+    expect(recordFirstSuggestedReplySent).toHaveBeenCalledWith("account-1");
+    expect(
+      replaceMessagingDraftNotificationsWithDraftSentState,
+    ).toHaveBeenCalledWith({ executedRuleId: "executed-rule-1", logger });
+  });
+
+  // The draft funnel counts a suggestion sent once: only the send that
+  // settled it logs the stage.
+  it.each([
+    [1, 1],
+    [0, 0],
+  ])("logs the funnel's sent stage when it settled %s suggestion(s)", async (count, lines) => {
+    vi.mocked(prisma.$transaction).mockResolvedValue([
+      { id: "draft-send-log-1" },
+      { count },
+    ] as any);
+    vi.mocked(calculateSimilarity).mockReturnValue(1);
+    vi.mocked(isMeaningfulDraftEdit).mockReturnValue(false);
+    const info = vi.spyOn(logger, "info");
+
+    await trackSentDraftStatus({
+      emailAccountId: "account-1",
+      message: createSentMessage(),
+      provider: {
+        getDraft: vi.fn(),
+        getMessage: vi.fn().mockResolvedValue(createSourceMessage()),
+      } as any,
+      logger,
+    });
+
+    const sentLines = info.mock.calls.filter(
+      ([message, fields]) =>
+        message === "Reply suggestion funnel" &&
+        (fields as { stage?: string })?.stage === "sent",
+    );
+    expect(sentLines).toHaveLength(lines);
+    info.mockRestore();
+  });
+
+  // No draft vanished, so a reply to the sender alone doesn't make it used.
+  it("treats a different reply as written without the suggestion, and learns from it", async () => {
+    vi.mocked(calculateSimilarity).mockReturnValue(0.2);
+    vi.mocked(isMeaningfulDraftEdit).mockReturnValue(true);
+    const provider = {
+      getDraft: vi.fn(),
+      getMessage: vi.fn().mockResolvedValue(createSourceMessage()),
+    };
+
+    await trackSentDraftStatus({
+      emailAccountId: "account-1",
+      message: createSentMessage(),
+      provider: provider as any,
+      logger,
+    });
+
+    expect(prisma.executedAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "action-1",
+        draftId: null,
+        draftStatus: DraftEmailStatus.PENDING,
+      },
+      data: { draftStatus: DraftEmailStatus.REPLIED_WITHOUT_DRAFT },
+    });
+    expect(recordFirstSuggestedReplySent).not.toHaveBeenCalled();
+    expect(saveDraftSendLogReplyMemory).toHaveBeenCalledWith({
+      draftSendLogId: "draft-send-log-1",
+      sentText: "Please include pricing for seat counts.",
+    });
+  });
+
+  // Edited in the reader, it became a mailbox draft: that draft is compared,
+  // and the rule's suggestion it came from is settled with it.
+  it("settles the rule's suggestion when its edited draft is sent", async () => {
+    vi.mocked(prisma.suggestedReplyDraft.findFirst).mockResolvedValue(
+      createSuggestedReplyDraft({ executedActionId: "action-1" }),
+    );
+    vi.mocked(prisma.draftSendLog.create).mockResolvedValue({
+      id: "draft-send-log-1",
+    } as any);
+    vi.mocked(calculateSimilarity).mockReturnValue(0.52);
+    vi.mocked(isMeaningfulDraftEdit).mockReturnValue(true);
+    vi.mocked(prisma.executedAction.updateMany).mockResolvedValue({
+      count: 1,
+    });
+    const provider = {
+      getDraft: vi.fn().mockResolvedValue(null),
+      getMessage: vi.fn().mockResolvedValue(createSourceMessage()),
+    };
+
+    await trackSentDraftStatus({
+      emailAccountId: "account-1",
+      message: createSentMessage(),
+      provider: provider as any,
+      logger,
+    });
+
+    expect(prisma.draftSendLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        suggestedReplyDraftId: "suggested-reply-draft-1",
+      }),
+    });
+    expect(prisma.executedAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "action-1",
+        draftId: null,
+        draftStatus: {
+          in: [DraftEmailStatus.PENDING, DraftEmailStatus.CLEANED_UP_UNUSED],
+        },
+      },
+      data: { draftStatus: DraftEmailStatus.LIKELY_SENT },
+    });
+    expect(saveDraftSendLogReplyMemory).toHaveBeenCalled();
+  });
+
+  // "Thanks!" is close to many replies: only a near-exact send counts.
+  it.each([
+    [0.8, DraftEmailStatus.REPLIED_WITHOUT_DRAFT],
+    [0.9, DraftEmailStatus.LIKELY_SENT],
+  ])("needs a near-exact match for a short suggestion (%s)", async (score, status) => {
+    vi.mocked(prisma.executedAction.findFirst).mockResolvedValue({
+      ...createReplySuggestion(),
+      content: "Thanks, works for me!",
+    });
+    vi.mocked(calculateSimilarity).mockReturnValue(score);
+    vi.mocked(isMeaningfulDraftEdit).mockReturnValue(false);
+
+    await trackSentDraftStatus({
+      emailAccountId: "account-1",
+      message: createSentMessage(),
+      provider: {
+        getDraft: vi.fn(),
+        getMessage: vi.fn().mockResolvedValue(createSourceMessage()),
+      } as any,
+      logger,
+    });
+
+    expect(prisma.executedAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "action-1",
+        draftId: null,
+        draftStatus: DraftEmailStatus.PENDING,
+      },
+      data: { draftStatus: status },
+    });
+  });
+
+  it("counts a long suggestion sent with light changes as used", async () => {
+    vi.mocked(prisma.executedAction.findFirst).mockResolvedValue({
+      ...createReplySuggestion(),
+      content:
+        "Thanks for the note, Wednesday at three works well for our team.",
+    });
+    vi.mocked(calculateSimilarity).mockReturnValue(0.75);
+    vi.mocked(isMeaningfulDraftEdit).mockReturnValue(false);
+
+    await trackSentDraftStatus({
+      emailAccountId: "account-1",
+      message: createSentMessage(),
+      provider: {
+        getDraft: vi.fn(),
+        getMessage: vi.fn().mockResolvedValue(createSourceMessage()),
+      } as any,
+      logger,
+    });
+
+    expect(prisma.executedAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "action-1",
+        draftId: null,
+        draftStatus: DraftEmailStatus.PENDING,
+      },
+      data: { draftStatus: DraftEmailStatus.LIKELY_SENT },
+    });
+  });
+
+  // A rule's reply to someone else isn't a reply to the sender, by design.
+  it("counts a suggestion addressed to someone else as used when sent", async () => {
+    vi.mocked(prisma.executedAction.findFirst).mockResolvedValue({
+      ...createReplySuggestion(),
+      to: "finance@example.com",
+    });
+    vi.mocked(calculateSimilarity).mockReturnValue(1);
+    vi.mocked(isMeaningfulDraftEdit).mockReturnValue(false);
+
+    await trackSentDraftStatus({
+      emailAccountId: "account-1",
+      message: {
+        ...createSentMessage(),
+        headers: { ...createSentMessage().headers, to: "finance@example.com" },
+      },
+      provider: {
+        getDraft: vi.fn(),
+        getMessage: vi.fn().mockResolvedValue(createSourceMessage()),
+      } as any,
+      logger,
+    });
+
+    expect(prisma.executedAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "action-1",
+        draftId: null,
+        draftStatus: DraftEmailStatus.PENDING,
+      },
+      data: { draftStatus: DraftEmailStatus.LIKELY_SENT },
+    });
+  });
+});
+
 describe("cleanupThreadAIDrafts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -809,6 +1093,35 @@ describe("cleanupThreadAIDrafts", () => {
         draftStatus: DraftEmailStatus.CLEANED_UP_UNUSED,
       },
     });
+  });
+
+  // A newer message makes earlier suggestions moot; the mailbox is untouched.
+  it("settles earlier messages' suggestions without touching the mailbox", async () => {
+    vi.mocked(prisma.executedAction.findMany).mockResolvedValue([]);
+    const provider = { getDraft: vi.fn(), deleteDraft: vi.fn() };
+
+    await cleanupThreadAIDrafts({
+      threadId: "thread-1",
+      emailAccountId: "account-1",
+      provider: provider as any,
+      logger,
+      excludeMessageId: "message-2",
+    });
+
+    expect(prisma.executedAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        executedRule: {
+          emailAccountId: "account-1",
+          threadId: "thread-1",
+          messageId: { not: "message-2" },
+        },
+        type: ActionType.DRAFT_EMAIL,
+        draftId: null,
+        draftStatus: DraftEmailStatus.PENDING,
+      },
+      data: { draftStatus: DraftEmailStatus.CLEANED_UP_UNUSED },
+    });
+    expect(provider.deleteDraft).not.toHaveBeenCalled();
   });
 
   it("transitions replied-without-draft records after deleting stale drafts", async () => {
@@ -978,14 +1291,31 @@ function createDraftMessage({
   } as ParsedMessage;
 }
 
-function createSuggestedReplyDraft(overrides: { updatedAt?: Date } = {}): any {
+function createSuggestedReplyDraft(
+  overrides: { updatedAt?: Date; executedActionId?: string | null } = {},
+): any {
   return {
     id: "suggested-reply-draft-1",
     updatedAt: overrides.updatedAt ?? new Date("2026-03-17T10:05:00.000Z"),
     draftId: "suggested-draft-1",
     messageId: "source-1",
     content: "Thanks, Wednesday works.",
+    executedActionId: overrides.executedActionId ?? null,
     emailAccount: { signature: "Best, User" },
+  };
+}
+
+function createReplySuggestion(): any {
+  return {
+    id: "action-1",
+    createdAt: new Date("2026-03-17T10:00:00.000Z"),
+    draftId: null,
+    content: "Thanks, Wednesday works.",
+    executedRuleId: "executed-rule-1",
+    executedRule: {
+      messageId: "source-1",
+      emailAccount: { signature: "Best, User" },
+    },
   };
 }
 

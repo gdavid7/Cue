@@ -108,7 +108,9 @@ async function findExecutedDraftActions(ruleIds: string[]) {
   return prisma.executedAction.findMany({
     where: {
       executedRule: { ruleId: { in: ruleIds } },
-      draftId: { not: null },
+      type: ActionType.DRAFT_EMAIL,
+      // Mailbox drafts from before, and the suggestions that replaced them.
+      OR: [{ draftId: { not: null } }, { draftStatus: { not: null } }],
       createdAt: { lt: oneDayAgo }, // Only check drafts older than a day
     },
     select: {
