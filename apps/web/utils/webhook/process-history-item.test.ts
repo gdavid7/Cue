@@ -193,6 +193,13 @@ describe("Provider Edge Cases", () => {
       expect(sendMobilePushNotification).not.toHaveBeenCalled();
     });
 
+    it("triages incoming mail on the economy tier, not default", async () => {
+      await processArrival();
+      expect(runRules).toHaveBeenCalledWith(
+        expect.objectContaining({ modelType: "economy", isTest: false }),
+      );
+    });
+
     it("does not alert for old messages", async () => {
       await processArrival({ old: true });
       expect(sendMobilePushNotification).not.toHaveBeenCalled();

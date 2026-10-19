@@ -229,7 +229,9 @@ export async function processHistoryItem(
         rules,
         emailAccount,
         isTest: false,
-        modelType: "default",
+        // Runs for every incoming email, so it bills at mail volume. Bulk
+        // processing already runs the same rules on economy.
+        modelType: "economy",
         logger,
       });
 
