@@ -146,7 +146,9 @@ test("Command K acts on highlighted and selected conversations", async ({
   await expect(
     palette.getByRole("option", { name: "Mark as read" }),
   ).toBeVisible();
-  await expect(palette.getByRole("option", { name: "Snooze H" })).toBeVisible();
+  await expect(
+    palette.getByRole("option", { name: "Snooze H / B" }),
+  ).toBeVisible();
   await expect(palette.getByRole("option", { name: "Label L" })).toBeVisible();
   await expect(palette.getByRole("option", { name: "Move V" })).toBeVisible();
   await expect(
@@ -208,7 +210,9 @@ test("Command K acts on highlighted and selected conversations", async ({
     palette.getByPlaceholder("When should it return? Try Friday at 3pm"),
   ).toBeFocused();
   await page.keyboard.press("Escape");
-  await expect(palette.getByRole("option", { name: "Snooze H" })).toBeVisible();
+  await expect(
+    palette.getByRole("option", { name: "Snooze H / B" }),
+  ).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(palette).toBeHidden();
 
@@ -380,7 +384,7 @@ test("sender actions are available for a selected list row and match the reader"
   await page.keyboard.press(`${commandModifier}+KeyK`);
   const palette = page.getByRole("dialog");
   await expect(
-    palette.getByRole("option", { name: "Block sender ⇧U" }),
+    palette.getByRole("option", { name: "Block sender", exact: true }),
   ).toBeEnabled();
   await expect(
     palette.getByRole("option", { name: "Skip inbox for this sender ⇧E" }),
@@ -399,7 +403,7 @@ test("sender actions are available for a selected list row and match the reader"
   await page.getByRole("button", { name: /^More actions/ }).click();
   const menu = page.getByRole("menu");
   await expect(
-    menu.getByRole("menuitem", { name: "Block sender ⇧U" }),
+    menu.getByRole("menuitem", { name: "Block sender", exact: true }),
   ).toBeEnabled();
   await expect(
     menu.getByRole("menuitem", { name: "Skip inbox for this sender ⇧E" }),

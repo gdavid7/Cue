@@ -165,7 +165,7 @@ async function sendEmail({
     return { success: false, skipped: "provider action required" };
   }
 
-  const [senderStats, newsletterStatuses, emailFilters] = await Promise.all([
+  const [senderStats, newsletterStatuses, filtersResult] = await Promise.all([
     getSenderEmailStats({
       emailAccountId,
       fromDate: subMonths(now, 3).getTime(),
@@ -173,6 +173,20 @@ async function sendEmail({
     getNewsletterStatuses({ emailAccountId }),
     getEmailFilters(emailProvider, logger),
   ]);
+
+  if (!filtersResult.available) {
+    // Suggesting senders to auto archive without knowing which already are
+    // would be wrong. Only a cause the user must fix burns the window; a
+    // transient failure retries on the next run.
+    logger.info("Skipping inbox health email: filters unavailable", {
+      permanent: filtersResult.permanent,
+    });
+    if (filtersResult.permanent) {
+      await startNextInboxHealthWindow(emailAccountId);
+    }
+    return { success: true, skipped: "filters unavailable" };
+  }
+  const emailFilters = filtersResult.filters;
 
   const senders = senderStats.senders.map((stats) => {
     const email = canonicalizeEmailAddress(stats.from);

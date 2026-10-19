@@ -284,5 +284,11 @@
     "app/(app)/[emailAccountId]/mail/MailFrame.tsx",
     "app/(app)/[emailAccountId]/home/HomeDashboard.tsx",
     "hooks/useHome.ts"
+  ],
+  "gmail-shortcuts.spec.ts": [
+    "lib/shortcuts/registry.ts",
+    "lib/shortcuts/useShortcuts.ts",
+    "app/(app)/[emailAccountId]/mail/thread-list-behavior.ts",
+    "components/email-list/EmailThread.tsx"
   ]
 }

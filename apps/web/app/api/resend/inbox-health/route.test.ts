@@ -31,6 +31,10 @@ vi.mock("@/utils/middleware", async () => {
   };
 });
 
+vi.mock("@/utils/sender-stats", () => ({
+  getSenderEmailStats: vi.fn().mockResolvedValue({ senders: [] }),
+}));
+
 vi.mock("@/utils/cron", () => ({
   isAuthorizedCronOrInternalRequest: (...args: unknown[]) =>
     mockIsAuthorizedCronOrInternalRequest(...args),
@@ -44,6 +48,7 @@ vi.mock("@inboxzero/transactional-email", () => ({
   sendInboxHealthEmail: vi.fn(),
 }));
 
+import { sendInboxHealthEmail } from "@inboxzero/transactional-email";
 import { POST } from "./route";
 
 const emailAccount = {
@@ -117,5 +122,35 @@ describe("inbox health email route", () => {
 
     expect(response.status).toBe(500);
     expect(prisma.emailAccount.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "a transient filters failure",
+      Object.assign(new Error("slow down"), { statusCode: 429 }),
+      false,
+    ],
+    ["a revoked grant on the filters call", new Error("invalid_grant"), true],
+  ])("on %s skips the email and advances the window only if permanent", async (_name, failure, advances) => {
+    mockCreateEmailProvider.mockResolvedValue({
+      name: "google",
+      getFiltersList: vi.fn().mockRejectedValue(failure),
+    });
+    prisma.newsletter.findMany.mockResolvedValue([] as never);
+
+    const response = await POST(
+      new NextRequest("http://localhost:3000/api/resend/inbox-health", {
+        method: "POST",
+        body: JSON.stringify({ emailAccountId: "email-account-id" }),
+      }),
+    );
+
+    await expect(response.json()).resolves.toEqual({ success: true });
+    expect(sendInboxHealthEmail).not.toHaveBeenCalled();
+    if (advances) {
+      expect(prisma.emailAccount.update).toHaveBeenCalled();
+    } else {
+      expect(prisma.emailAccount.update).not.toHaveBeenCalled();
+    }
   });
 });

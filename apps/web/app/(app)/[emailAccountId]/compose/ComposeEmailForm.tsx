@@ -6,8 +6,8 @@ import {
   combineEmailHtml,
   detectInlineImageMimeType,
   finalizeEditableEmailHtml,
+  formatAttachmentSize,
   prepareEmailDraft,
-  validateEmailAttachmentMetadata,
 } from "@inboxzero/email-editor/core";
 import {
   EmailEditor,
@@ -162,10 +162,16 @@ import { useComposeDraftAttachments } from "./useComposeDraftAttachments";
 import {
   type ComposeAttachment,
   getEditorInlineAttachments,
+  describeUnattachedFiles,
+  fitComposeAttachments,
+  getGmailAttachmentDraftSaveIntervalMs,
   mergeDraftAttachments,
+  routeComposeFiles,
   toAttachmentMetadata,
   toAttachmentReference,
 } from "./compose-attachments";
+import { useFileDropTarget } from "./useFileDropTarget";
+import { getAttachmentTotalLimitBytes } from "@/utils/email/draft-attachment-upload";
 import {
   finishComposeDraftMove,
   getMoveErrorMessage,
@@ -546,6 +552,12 @@ function ComposeEmailFormContent({
   const forwardedAttachments = savedToMailbox
     ? []
     : (replyingToEmail?.forwardedAttachments ?? []);
+  const attachmentLimitBytes = getAttachmentTotalLimitBytes(accountProvider);
+  // Failed files aren't on the draft, so they don't count toward the limit.
+  const attachmentTotalBytes = [
+    ...forwardedAttachments,
+    ...attachments.filter((attachment) => attachment.status !== "failed"),
+  ].reduce((total, attachment) => total + attachment.size, 0);
   const attachmentsRef = useRef<ComposeAttachment[]>(
     initialComposer.attachments,
   );
@@ -581,6 +593,12 @@ function ComposeEmailFormContent({
     cc: false,
     bcc: false,
   });
+  const showRecipientRow = (field: "cc" | "bcc") => {
+    flushSync(() =>
+      setShownRecipientRows((shown) => ({ ...shown, [field]: true })),
+    );
+    formRef.current?.querySelector<HTMLElement>(`#${field}`)?.focus();
+  };
   const isRecipientRowShown = (field: ComposeRecipientField) =>
     field === "to" ||
     shownRecipientRows[field] ||
@@ -813,10 +831,9 @@ function ComposeEmailFormContent({
     },
     enabled: Boolean(providerDraftMessageId) || Boolean(localDraftIdentity),
     sessionKey: providerDraftMessageId ? undefined : draftQueueKey,
-    minIntervalMs:
-      attachments.length && isGoogleProvider(accountProvider)
-        ? GMAIL_ATTACHMENT_DRAFT_SAVE_INTERVAL_MS
-        : 0,
+    minIntervalMs: isGoogleProvider(accountProvider)
+      ? getGmailAttachmentDraftSaveIntervalMs(attachmentTotalBytes)
+      : 0,
     getContent: getProviderDraftContent,
     save: (content) =>
       enqueueDraftOperation(draftQueueKey, async () => {
@@ -1008,40 +1025,56 @@ function ComposeEmailFormContent({
     captureDraft();
   };
 
-  const addFiles = async (
-    files: File[],
-    disposition: ComposeAttachment["disposition"],
-  ) => {
+  const addFiles = async ({
+    inline = [],
+    attachments: attached = [],
+  }: {
+    inline?: File[];
+    attachments?: File[];
+  }) => {
     if (isSubmitting) return;
-    const created = files.map((file) => {
+    // A file named like an image that holds something else is attached as is.
+    const inlineContent = await Promise.all(inline.map(isInlineImageContent));
+    if (!isMountedRef.current) return;
+    const created = [
+      ...inline.map((file, index) => ({
+        file,
+        disposition: inlineContent[index]
+          ? ("inline" as const)
+          : ("attachment" as const),
+      })),
+      ...attached.map((file) => ({ file, disposition: "attachment" as const })),
+    ].map(({ file, disposition }) => {
       const attachment: ComposeAttachment = {
         ...createComposeAttachmentMetadata(file, disposition),
         status: "uploading",
       };
       return { file, attachment };
     });
-    const validation = validateEmailAttachmentMetadata([
-      ...attachmentsRef.current.filter((item) => item.status !== "failed"),
-      ...created.map(({ attachment }) => attachment),
-    ]);
-    if (!validation.valid) {
-      toastError({ description: validation.error });
-      return;
-    }
-    if (disposition === "inline") {
-      for (const { file } of created) {
-        if (!(await isInlineImageContent(file))) {
-          toastError({
-            description: "Inline image content does not match its file type.",
-          });
-          return;
-        }
-      }
-      if (!isMountedRef.current) return;
-    }
+    if (!created.length) return;
+    const fit = fitComposeAttachments({
+      existing: [
+        ...forwardedAttachments.map((attachment) => ({
+          ...attachment,
+          disposition: "attachment" as const,
+        })),
+        ...attachmentsRef.current.filter((item) => item.status !== "failed"),
+      ],
+      candidates: created.map(({ attachment }) => attachment),
+      maxTotalBytes: attachmentLimitBytes,
+    });
+    if (fit.error)
+      toastError({
+        description: describeUnattachedFiles(fit.rejected, fit.error),
+      });
+    const fitting = created.filter(({ attachment }) =>
+      fit.accepted.includes(attachment),
+    );
+    if (!fitting.length) return;
 
-    const accepted = created.filter(({ file, attachment }) => {
-      if (disposition !== "inline" || !attachment.contentId) return true;
+    const accepted = fitting.filter(({ file, attachment }) => {
+      if (attachment.disposition !== "inline" || !attachment.contentId)
+        return true;
       attachment.previewUrl = URL.createObjectURL(file);
       attachment.managed = true;
       const inserted = editorRef.current?.insertInlineImage({
@@ -1053,7 +1086,7 @@ function ComposeEmailFormContent({
       revokePreview(attachment);
       return false;
     });
-    if (accepted.length !== created.length) {
+    if (accepted.length !== fitting.length) {
       toastError({
         description: "One of the inline images could not be inserted.",
       });
@@ -1069,6 +1102,20 @@ function ComposeEmailFormContent({
       ),
     );
   };
+
+  const addDroppedFiles = (files: File[], into: "body" | "window") => {
+    const inlineCount = attachmentsRef.current.filter(
+      (attachment) =>
+        attachment.disposition === "inline" && attachment.status !== "failed",
+    ).length;
+    addFiles(routeComposeFiles(files, { into, inlineCount })).catch(() =>
+      toastError({ description: "One of the files could not be read." }),
+    );
+  };
+  const fileDrop = useFileDropTarget({
+    enabled: !isSubmitting,
+    onDrop: (files) => addDroppedFiles(files, "window"),
+  });
 
   const removeAttachment = (attachment: ComposeAttachment) => {
     // Detached first, so the editor change this causes finds nothing to remove.
@@ -1564,7 +1611,9 @@ function ComposeEmailFormContent({
       const files = Array.from(event.target.files ?? []);
       event.target.value = "";
       if (files.length) {
-        addFiles(files, disposition).catch(() =>
+        addFiles(
+          disposition === "inline" ? { inline: files } : { attachments: files },
+        ).catch(() =>
           toastError({ description: "One of the files could not be read." }),
         );
       }
@@ -1800,6 +1849,18 @@ function ComposeEmailFormContent({
               deliveryOptionsRef.current?.open("remindMe");
           }
         : undefined,
+    saveDraft: async (event) => {
+      if (!isShortcutForForm(event, formRef.current, shortcutOwnerId)) return;
+      if (await flushDraft()) toastSuccess({ description: "Draft saved" });
+    },
+    addCc: (event) => {
+      if (isShortcutForForm(event, formRef.current, shortcutOwnerId))
+        showRecipientRow("cc");
+    },
+    addBcc: (event) => {
+      if (isShortcutForForm(event, formRef.current, shortcutOwnerId))
+        showRecipientRow("bcc");
+    },
     askCue: (event) => {
       if (
         !isShortcutForForm(event, formRef.current, shortcutOwnerId) ||
@@ -1846,7 +1907,9 @@ function ComposeEmailFormContent({
           : undefined
       }
       onSubmit={handleSubmit(onSubmit)}
+      {...fileDrop.handlers}
       className={cn(
+        "relative",
         isComposeWindow
           ? "flex h-full min-h-0 flex-col overflow-hidden [&_[data-email-editor-root]]:min-h-0 [&_[data-email-editor-root]]:flex-1"
           : "space-y-2",
@@ -1981,18 +2044,7 @@ function ComposeEmailFormContent({
                           aria-label={`Add ${RECIPIENT_LABELS[hidden]} recipients`}
                           className="shrink-0 rounded-sm px-1 text-muted-foreground text-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                           key={hidden}
-                          onClick={(event) => {
-                            const form = event.currentTarget.form;
-                            flushSync(() =>
-                              setShownRecipientRows((shown) => ({
-                                ...shown,
-                                [hidden]: true,
-                              })),
-                            );
-                            form
-                              ?.querySelector<HTMLElement>(`#${hidden}`)
-                              ?.focus();
-                          }}
+                          onClick={() => showRecipientRow(hidden)}
                           type="button"
                         >
                           {RECIPIENT_LABELS[hidden]}
@@ -2045,10 +2097,10 @@ function ComposeEmailFormContent({
         initialHtml={initialDraft.editableHtml}
         mode={initialDraft.mode}
         onStateChange={handleEditorStateChange}
-        onImageFiles={(files) => {
-          addFiles(files, "inline").catch(() =>
-            toastError({ description: "The image could not be read." }),
-          );
+        onFiles={(files) => {
+          // The editor takes the drop itself, so the form never sees it end.
+          fileDrop.reset();
+          addDroppedFiles(files, "body");
         }}
         preservedBlocks={preservedBlocks}
         resolveRemoteImages={resolveRemoteImages}
@@ -2066,54 +2118,61 @@ function ComposeEmailFormContent({
         </p>
       )}
       {!!(attachments.length || forwardedAttachments.length) && (
-        <ul
-          aria-label="Attachments"
-          className={cn(
-            "flex flex-wrap gap-2",
-            isComposeWindow && "shrink-0 px-4 py-2",
-          )}
+        <div
+          className={cn("space-y-1.5", isComposeWindow && "shrink-0 px-4 py-2")}
         >
-          {forwardedAttachments.map((attachment) => (
-            <li
-              className="flex max-w-full items-center gap-2 rounded-md border bg-muted/40 px-2 py-1 text-xs"
-              key={attachment.id}
-              title="Included from the message you are forwarding"
-            >
-              <PaperclipIcon aria-hidden className="size-3.5 shrink-0" />
-              <span className="max-w-52 truncate">{attachment.filename}</span>
-              <span className="text-muted-foreground">
-                {formatFileSize(attachment.size)}
-              </span>
-            </li>
-          ))}
-          {attachments.map((attachment) => (
-            <li
-              aria-busy={attachment.status === "uploading" || undefined}
-              className={cn(
-                "flex max-w-full items-center gap-2 rounded-md border bg-muted/40 px-2 py-1 text-xs",
-                attachment.status === "failed" &&
-                  "border-destructive/50 text-destructive",
-              )}
-              key={attachment.id}
-              title={attachment.error}
-            >
-              <AttachmentIcon attachment={attachment} />
-              <span className="max-w-52 truncate">{attachment.filename}</span>
-              <span className="text-muted-foreground">
-                {ATTACHMENT_STATUS_LABELS[attachment.status] ??
-                  formatFileSize(attachment.size)}
-              </span>
-              <button
-                aria-label={`Remove ${attachment.filename}`}
-                className="rounded-sm p-0.5 hover:bg-muted"
-                onClick={() => removeAttachment(attachment)}
-                type="button"
+          <ul aria-label="Attachments" className="flex flex-wrap gap-2">
+            {forwardedAttachments.map((attachment) => (
+              <li
+                className="flex max-w-full items-center gap-2 rounded-md border bg-muted/40 px-2 py-1 text-xs"
+                key={attachment.id}
+                title="Included from the message you are forwarding"
               >
-                <XIcon className="size-3" />
-              </button>
-            </li>
-          ))}
-        </ul>
+                <PaperclipIcon aria-hidden className="size-3.5 shrink-0" />
+                <span className="max-w-52 truncate">{attachment.filename}</span>
+                <span className="text-muted-foreground">
+                  {formatAttachmentSize(attachment.size)}
+                </span>
+              </li>
+            ))}
+            {attachments.map((attachment) => (
+              <li
+                aria-busy={attachment.status === "uploading" || undefined}
+                className={cn(
+                  "flex max-w-full items-center gap-2 rounded-md border bg-muted/40 px-2 py-1 text-xs",
+                  attachment.status === "failed" &&
+                    "border-destructive/50 text-destructive",
+                )}
+                key={attachment.id}
+                title={attachment.error}
+              >
+                <AttachmentIcon attachment={attachment} />
+                <span className="max-w-52 truncate">{attachment.filename}</span>
+                <span className="text-muted-foreground">
+                  {ATTACHMENT_STATUS_LABELS[attachment.status] ??
+                    formatAttachmentSize(attachment.size)}
+                </span>
+                <button
+                  aria-label={`Remove ${attachment.filename}`}
+                  className="rounded-sm p-0.5 hover:bg-muted"
+                  onClick={() => removeAttachment(attachment)}
+                  type="button"
+                >
+                  <XIcon className="size-3" />
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p
+            className={cn(
+              "text-muted-foreground text-xs tabular-nums",
+              attachmentTotalBytes > attachmentLimitBytes && "text-destructive",
+            )}
+          >
+            {formatAttachmentSize(attachmentTotalBytes)} of{" "}
+            {formatAttachmentSize(attachmentLimitBytes)}
+          </p>
+        </div>
       )}
 
       <div
@@ -2260,12 +2319,27 @@ function ComposeEmailFormContent({
           {draftSaveError}
         </p>
       )}
+      <div
+        aria-hidden
+        className={cn(
+          "pointer-events-none absolute inset-0 z-20 !mt-0 flex flex-col items-center justify-center gap-1.5 rounded-[inherit] border-2 border-primary/60 border-dashed bg-background/90 text-center",
+          // Fades in place for reduced motion; otherwise also settles from
+          // slightly smaller, as the surface rises to meet the file.
+          "opacity-0 transition-opacity duration-150 ease-out motion-safe:scale-[0.98] motion-safe:transition-[opacity,transform]",
+          fileDrop.active && "opacity-100 motion-safe:scale-100",
+        )}
+      >
+        <PaperclipIcon className="size-5 text-primary" />
+        <p className="font-medium text-foreground text-sm">
+          Drop files to attach
+        </p>
+        <p className="text-muted-foreground text-xs">
+          Images dropped in the message appear inline
+        </p>
+      </div>
     </form>
   );
 }
-
-// Gmail rebuilds the whole message on each save, files included.
-const GMAIL_ATTACHMENT_DRAFT_SAVE_INTERVAL_MS = 15_000;
 
 const ATTACHMENT_STATUS_LABELS: Partial<
   Record<ComposeAttachment["status"], string>
@@ -2340,12 +2414,6 @@ function ComposeFieldLabel({
       {label}
     </label>
   );
-}
-
-function formatFileSize(size: number) {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${Math.ceil(size / 1024)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 const SESSION_EXPIRED_TOAST_ID = "session-expired";

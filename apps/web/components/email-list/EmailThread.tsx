@@ -11,6 +11,7 @@ import {
 import { flushSync } from "react-dom";
 import { useHotkeys } from "react-hotkeys-hook";
 import { isTypingTarget } from "@/lib/shortcuts/registry";
+import { useShortcuts } from "@/lib/shortcuts/useShortcuts";
 import { ChevronsDownUpIcon, ChevronsUpDownIcon } from "lucide-react";
 import { Tooltip } from "@/components/Tooltip";
 import type { ThreadMessage } from "@/components/email-list/types";
@@ -414,18 +415,33 @@ export function EmailThread({
       scopes: ["mail"],
       useKey: true,
       preventDefault: true,
-      ignoreEventWhen: (event: KeyboardEvent) =>
-        event.isComposing ||
-        window.getSelection()?.isCollapsed === false ||
-        isTypingTarget(event.target) ||
-        (event.target instanceof Element &&
-          Boolean(
-            event.target.closest(
-              '[role="dialog"], [role="menu"], [role="listbox"]',
-            ),
-          )),
+      ignoreEventWhen: isMessageNavigationBlocked,
     },
   );
+  // Gmail's n/p and ;/: ; guarded like the arrow keys above.
+  const runMessageShortcut = (
+    event: KeyboardEvent | undefined,
+    action: () => void,
+  ) => {
+    if (!event || isMessageNavigationBlocked(event)) return;
+    action();
+  };
+  useShortcuts({
+    nextMessage: enableMessageNavigation
+      ? (event) => runMessageShortcut(event, () => selectRelativeMessage(1))
+      : undefined,
+    previousMessage: enableMessageNavigation
+      ? (event) => runMessageShortcut(event, () => selectRelativeMessage(-1))
+      : undefined,
+    expandAllMessages:
+      enableMessageNavigation && canExpand && !allExpanded
+        ? (event) => runMessageShortcut(event, toggleAll)
+        : undefined,
+    collapseAllMessages:
+      enableMessageNavigation && canExpand && allExpanded
+        ? (event) => runMessageShortcut(event, toggleAll)
+        : undefined,
+  });
 
   return (
     // White regardless of the surface it is dropped on: an email body renders
@@ -832,3 +848,17 @@ export type MessageExpansionControls = {
   canExpand: boolean;
   onToggleAll: () => void;
 };
+
+function isMessageNavigationBlocked(event: KeyboardEvent) {
+  return (
+    event.isComposing ||
+    window.getSelection()?.isCollapsed === false ||
+    isTypingTarget(event.target) ||
+    (event.target instanceof Element &&
+      Boolean(
+        event.target.closest(
+          '[role="dialog"], [role="menu"], [role="listbox"]',
+        ),
+      ))
+  );
+}

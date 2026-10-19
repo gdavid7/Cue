@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { permanentRedirect, redirect } from "next/navigation";
 import { ZodError, type ZodIssue } from "zod";
 import {
+  getFastRequestSampleRate,
+  isFastRequestSampled,
   withError,
   withAuth,
   withAdmin,
@@ -24,6 +26,18 @@ import { isProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-erro
 import { recordRateLimitFromApiError } from "@/utils/email/rate-limit";
 import { getAuditContext } from "@/utils/audit/context";
 import { getRequestDeadline } from "@/utils/request-deadline-reader";
+
+const uuidOverride = vi.hoisted(() => ({
+  current: undefined as string | undefined,
+}));
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return {
+    ...actual,
+    default: actual,
+    randomUUID: () => uuidOverride.current ?? actual.randomUUID(),
+  };
+});
 
 vi.mock("better-auth", () => {
   const mockAuthFn = vi.fn();
@@ -239,6 +253,59 @@ describe("Middleware", () => {
         }
       });
 
+      it("samples fast requests by a server-generated id, ignoring a client x-request-id", async () => {
+        const ids = Array.from(
+          { length: 400 },
+          (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+        );
+        const sampledId = ids.find((id) => isFastRequestSampled(id, 0.08));
+        const skippedId = ids.find((id) => !isFastRequestSampled(id, 0.08));
+        expect(sampledId).toBeDefined();
+        expect(skippedId).toBeDefined();
+        const share = ids.filter((id) => isFastRequestSampled(id, 0.08)).length;
+        expect(share / ids.length).toBeGreaterThan(0.03);
+        expect(share / ids.length).toBeLessThan(0.15);
+
+        const consoleLogSpy = vi
+          .spyOn(console, "log")
+          .mockImplementation(() => {});
+        const wrappedHandler = withError("threads/list", async () =>
+          NextResponse.json({ ok: true }),
+        );
+        const run = async (serverId: string, clientId: string) => {
+          uuidOverride.current = serverId;
+          await wrappedHandler(
+            createMockRequest("GET", "http://localhost/api/threads", {
+              "x-request-id": clientId,
+            }),
+            mockContext,
+          );
+        };
+        try {
+          // A client picking an id that would be sampled cannot force a line.
+          await run(skippedId as string, sampledId as string);
+          expect(completionLines(consoleLogSpy)).toHaveLength(0);
+
+          await run(sampledId as string, skippedId as string);
+          const lines = completionLines(consoleLogSpy);
+          expect(lines).toHaveLength(1);
+          expect(lines[0]).toMatch(/^\[threads\/list\]: Request completed/);
+          expect(lines[0]).toContain('"sampled": true');
+          expect(lines[0]).toContain('"sampleRate": 0.08');
+          expect(lines[0]).toContain('"status": 200');
+        } finally {
+          uuidOverride.current = undefined;
+          consoleLogSpy.mockRestore();
+        }
+      });
+
+      it("samples polling scopes at a lower rate than other routes", () => {
+        expect(getFastRequestSampleRate("mail-stream")).toBe(0.015);
+        expect(getFastRequestSampleRate("mail/v1/enumeration")).toBe(0.015);
+        expect(getFastRequestSampleRate("threads/list")).toBe(0.08);
+        expect(getFastRequestSampleRate(undefined)).toBe(0.08);
+      });
+
       it.each([
         { redirectTo: redirect, status: 307 },
         { redirectTo: permanentRedirect, status: 308 },
@@ -278,10 +345,16 @@ describe("Middleware", () => {
             NextResponse.json({ ok: true }),
           );
 
+          uuidOverride.current = Array.from(
+            { length: 100 },
+            (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+          ).find((id) => !isFastRequestSampled(id, 0.08));
+
           await wrappedHandler(mockReq, mockContext);
 
           expect(completionLines(consoleLogSpy)).toEqual([]);
         } finally {
+          uuidOverride.current = undefined;
           consoleLogSpy.mockRestore();
         }
       });

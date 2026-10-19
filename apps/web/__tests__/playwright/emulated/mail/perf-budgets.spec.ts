@@ -151,7 +151,7 @@ test("opening, triaging, switching and searching respond within budget", async (
 
       const isUnread = await rowHasText(page, target, "Unread,");
       await armInteraction(page);
-      await page.keyboard.press(isUnread ? "Shift+I" : "u");
+      await page.keyboard.press(isUnread ? "Shift+I" : "Shift+U");
       recorder.add(
         "mark-read",
         await timeSinceInput(page, rowWithSubjectMatches, {
@@ -160,7 +160,7 @@ test("opening, triaging, switching and searching respond within budget", async (
           present: !isUnread,
         }),
       );
-      await page.keyboard.press(isUnread ? "u" : "Shift+I");
+      await page.keyboard.press(isUnread ? "Shift+U" : "Shift+I");
 
       await armInteraction(page);
       await page.keyboard.press("e");

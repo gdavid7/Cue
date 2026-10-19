@@ -232,7 +232,6 @@ export function buildMailCommandPalette({
     commands.push({
       id: "mail-unsubscribe",
       label: unsubscribeLabel,
-      shortcut: getShortcutHint("unsubscribe"),
       icon: MailXIcon,
       section: "actions",
       priority: 12,

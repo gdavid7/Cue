@@ -26,11 +26,12 @@ import {
 import type { ParsedMessage } from "@/utils/types";
 import { getEmailAccountWithAi } from "@/utils/user/get";
 
-// Each new email costs one provider read and one small model call, once:
-// the result is cached for as long as the email could still be on screen.
+// Each new email costs one provider read and one small model call, once a
+// week at most: most mail leaves the first screens within days, and a month
+// of entries filled the Redis plan's storage at well under a hundred users.
 const MAX_NEW_PER_REQUEST = 25;
 const EXTRACT_CONCURRENCY = 4;
-const CACHE_TTL_SECONDS = 30 * 24 * 60 * 60;
+const CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
 const NO_AI_CACHE_TTL_SECONDS = 24 * 60 * 60;
 const MEETING_WINDOW_DAYS = 14;
 // Only a request with uncached emails is charged, and it can make up to
@@ -38,7 +39,7 @@ const MEETING_WINDOW_DAYS = 14;
 const NEW_INSIGHT_REQUESTS_PER_WINDOW = 30;
 const RATE_LIMIT_WINDOW_SECONDS = 5 * 60;
 const SKIP_LABELS = ["SPAM", "TRASH", "DRAFT"];
-// Kept with each cached insight for a month; a mailing's full recipient list
+// Kept with each cached insight for a week; a mailing's full recipient list
 // would make one entry many kilobytes for meetings it can't usefully match.
 const MAX_PEOPLE = 25;
 
@@ -203,7 +204,7 @@ async function extractMissing({
               : null,
           people: peopleOn(message, userEmail),
         };
-        // Without AI access, check back tomorrow rather than for a month.
+        // Without AI access, check back tomorrow rather than in a week.
         await redis
           .set(cacheKey(emailAccountId, messageId), entry, {
             ex: hasAi ? CACHE_TTL_SECONDS : NO_AI_CACHE_TTL_SECONDS,

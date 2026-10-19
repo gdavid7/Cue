@@ -1,6 +1,6 @@
-import { env } from "@/env";
 import { MAIL_ANALYTICS_EVENTS } from "@/utils/analytics/product";
 import { scheduleSummaryFlush } from "@/utils/analytics/summary-flush";
+import { createClientLogger } from "@/utils/logger-client";
 
 export const MAIL_PERFORMANCE_SAMPLE_RATE = 0.05;
 
@@ -24,9 +24,7 @@ let sampled: boolean | undefined;
  */
 export function isMailPerformanceSampled(): boolean {
   if (sampled === undefined) {
-    sampled =
-      Boolean(env.NEXT_PUBLIC_POSTHOG_KEY) &&
-      shouldSampleSession(Math.random());
+    sampled = shouldSampleSession(Math.random());
     if (sampled) startCollecting();
   }
   return sampled;
@@ -99,11 +97,23 @@ function startCollecting() {
     const summary = buildMailPerformanceSummary(samples);
     samples = emptySamples();
     if (!summary) return;
-    capture(MAIL_ANALYTICS_EVENTS.performanceSummary, {
+    const properties = {
       ...summary,
+      ...getMailEngineReadyTiming(),
       sample_rate: MAIL_PERFORMANCE_SAMPLE_RATE,
-    });
+    };
+    capture(MAIL_ANALYTICS_EVENTS.performanceSummary, properties);
+    // Numbers only, no PII. Axiom is where this is read while PostHog is off.
+    const logger = createClientLogger("mail-performance");
+    logger.info("Mail performance summary", properties);
+    logger.flush().catch(() => {});
   });
+}
+
+function getMailEngineReadyTiming(): Record<string, number> {
+  if (typeof performance === "undefined") return {};
+  const ready = performance.getEntriesByName("mail-engine:ready")[0];
+  return ready ? { mail_engine_ready_ms: Math.round(ready.startTime) } : {};
 }
 
 function observe(

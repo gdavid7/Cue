@@ -369,13 +369,7 @@ function getMeetingBotCameraImage(): Promise<string> {
 async function readMeetingBotCameraImage(): Promise<string> {
   try {
     return await readFile(
-      join(
-        process.cwd(),
-        "public",
-        "images",
-        "meetings",
-        "inbox-zero-notetaker.jpg",
-      ),
+      join(process.cwd(), "public", "images", "meetings", "cue-notetaker.jpg"),
       "base64",
     );
   } catch (error) {
@@ -391,7 +385,7 @@ async function readMeetingBotCameraImage(): Promise<string> {
         "public",
         "images",
         "meetings",
-        "inbox-zero-notetaker.jpg",
+        "cue-notetaker.jpg",
       ),
       "base64",
     );

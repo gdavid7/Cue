@@ -39,7 +39,7 @@ export const POST = withEmailProvider(
     );
     if (usesDirectDraftAttachmentUpload(attachment.size))
       throw new SafeError(
-        "Files under 3 MiB attach in one request. POST them to the draft's attachments instead.",
+        "Files under 3 MB attach in one request. POST them to the draft's attachments instead.",
       );
 
     const upload = await request.emailProvider.startDraftAttachmentUpload(

@@ -59,6 +59,114 @@ describe("engine search and body hydration", () => {
   });
 });
 
+describe("a provider's exact search matches", () => {
+  it.each([
+    [
+      "archived under in:inbox",
+      { kind: "mailbox", mailbox: "inbox" },
+      { kind: "archive" },
+    ],
+    [
+      "read under is:unread",
+      { kind: "read", value: false },
+      { kind: "set_read", read: true },
+    ],
+  ] as const)("drop out live once %s", async (_case, possible, change) => {
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    const source = searchSource();
+    source.search = async () => ({
+      status: "ok",
+      value: {
+        matches: [{ accountId: "acc-1", messageId: "m-search" }],
+        changes: [searchMatch()],
+        nextPage: null,
+        semantics: "exact",
+      },
+    });
+    const engine = createMailEngine({
+      store,
+      source,
+      executor: {
+        async execute() {
+          return { status: "uncertain", receiptId: null };
+        },
+        async inspect() {
+          return { status: "uncertain", receiptId: null };
+        },
+      },
+      runtime: createHostRuntime(),
+    });
+    // What the store can't answer itself (say larger:5M) leaves the local
+    // part empty: the conversation shows only as Gmail's match.
+    const view = engine.observeMailbox({
+      accountIds: ["acc-1"],
+      predicate: {
+        kind: "search",
+        query: "larger:5M",
+        local: { kind: "any", predicates: [] },
+        possible,
+      },
+      order: "newest_first",
+      pageSize: 25,
+      after: null,
+    });
+    await engine.runUntil(Date.now() + 2000);
+    await waitFor(() => view.getSnapshot().data?.conversations.length === 1);
+
+    await engine.submitMetadata({
+      accountId: "acc-1",
+      commandId: "op-change",
+      targets: [{ accountId: "acc-1", messageId: "m-search" }],
+      change,
+    });
+    await waitFor(() => view.getSnapshot().data?.conversations.length === 0);
+    expect(view.getSnapshot().data?.conversations).toEqual([]);
+    view.close();
+    await engine.close();
+  });
+});
+
+async function waitFor(condition: () => boolean) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("condition never held");
+}
+
+function searchMatch() {
+  return {
+    kind: "message_patch" as const,
+    key: { accountId: "acc-1", messageId: "m-search" },
+    reference: {
+      provider: "google" as const,
+      messageId: "m-search",
+      conversationId: "c-search",
+      version: "1",
+    },
+    fields: {
+      subject: "Big file",
+      preview: "Attached",
+      from: "ada@example.com",
+      to: ["me@example.com"],
+      cc: [],
+      receivedAtMs: 1000,
+      read: false,
+      starred: false,
+      folderId: "inbox",
+      labelIds: ["INBOX"],
+      categoryIds: [],
+      roles: ["inbox" as const],
+      hasAttachments: true,
+    },
+  };
+}
+
 async function waitForReady(handle: { getSnapshot: () => { status: string } }) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     if (handle.getSnapshot().status === "ready") return;

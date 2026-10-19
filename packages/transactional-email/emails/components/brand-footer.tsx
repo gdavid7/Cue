@@ -1,6 +1,6 @@
 import { Hr, Section, Text } from "@react-email/components";
 
-export function InboxZeroFooter() {
+export function BrandFooter() {
   return (
     <>
       <Hr className="m-0 border-gray-200" />
