@@ -99,7 +99,7 @@ export function deferCallbackStep(
         ms: elapsedMs(startedAt),
       });
     } catch (error) {
-      logger.warn("Deferred sign-in step failed", {
+      logger.error("Deferred sign-in step failed", {
         step: name,
         ms: elapsedMs(startedAt),
         error,
