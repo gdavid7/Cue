@@ -581,6 +581,12 @@ function ComposeEmailFormContent({
     cc: false,
     bcc: false,
   });
+  const showRecipientRow = (field: "cc" | "bcc") => {
+    flushSync(() =>
+      setShownRecipientRows((shown) => ({ ...shown, [field]: true })),
+    );
+    formRef.current?.querySelector<HTMLElement>(`#${field}`)?.focus();
+  };
   const isRecipientRowShown = (field: ComposeRecipientField) =>
     field === "to" ||
     shownRecipientRows[field] ||
@@ -1800,6 +1806,18 @@ function ComposeEmailFormContent({
               deliveryOptionsRef.current?.open("remindMe");
           }
         : undefined,
+    saveDraft: async (event) => {
+      if (!isShortcutForForm(event, formRef.current, shortcutOwnerId)) return;
+      if (await flushDraft()) toastSuccess({ description: "Draft saved" });
+    },
+    addCc: (event) => {
+      if (isShortcutForForm(event, formRef.current, shortcutOwnerId))
+        showRecipientRow("cc");
+    },
+    addBcc: (event) => {
+      if (isShortcutForForm(event, formRef.current, shortcutOwnerId))
+        showRecipientRow("bcc");
+    },
     askCue: (event) => {
       if (
         !isShortcutForForm(event, formRef.current, shortcutOwnerId) ||
@@ -1981,18 +1999,7 @@ function ComposeEmailFormContent({
                           aria-label={`Add ${RECIPIENT_LABELS[hidden]} recipients`}
                           className="shrink-0 rounded-sm px-1 text-muted-foreground text-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                           key={hidden}
-                          onClick={(event) => {
-                            const form = event.currentTarget.form;
-                            flushSync(() =>
-                              setShownRecipientRows((shown) => ({
-                                ...shown,
-                                [hidden]: true,
-                              })),
-                            );
-                            form
-                              ?.querySelector<HTMLElement>(`#${hidden}`)
-                              ?.focus();
-                          }}
+                          onClick={() => showRecipientRow(hidden)}
                           type="button"
                         >
                           {RECIPIENT_LABELS[hidden]}

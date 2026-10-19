@@ -1,3 +1,4 @@
+import { isGoogleProvider } from "@/utils/email/provider-types";
 import { GmailLabel } from "@/utils/gmail/label";
 import { formatDateGroupLabel } from "@/utils/date";
 import { getThreadTimestamp } from "@/utils/threads/sort";
@@ -83,41 +84,67 @@ export function resolveThreadActionTargets<T extends { key: string }>({
   return focusedTarget ? [focusedTarget] : [];
 }
 
+/** Importance is a Gmail concept; other providers have nothing to set. */
+export function canMarkThreadsImportant({
+  provider,
+  mixedAccounts,
+}: {
+  provider: string | null | undefined;
+  mixedAccounts: boolean;
+}) {
+  return isGoogleProvider(provider) && !mixedAccounts;
+}
+
 export function getNextThreadAfterRemoval({
   threadIds,
   currentThreadId,
   currentThreadIndex,
   removedThreadIds,
+  direction = "next",
 }: {
   threadIds: string[];
   currentThreadId: string;
   currentThreadIndex: number;
   removedThreadIds: string[];
+  /** Which side to prefer; the other side is the fallback. */
+  direction?: "next" | "previous";
 }): { id: string; index: number } | null {
   const currentIndex = threadIds.indexOf(currentThreadId);
 
   const removed = new Set(removedThreadIds);
-  let nextThreadId: string | undefined;
-  const nextIndex =
-    currentIndex >= 0 ? currentIndex + 1 : Math.max(0, currentThreadIndex);
-  for (let index = nextIndex; index < threadIds.length; index++) {
-    const threadId = threadIds[index];
-    if (threadId && !removed.has(threadId)) {
-      nextThreadId = threadId;
-      break;
-    }
-  }
-  if (!nextThreadId) {
-    const previousIndex =
-      currentIndex >= 0
-        ? currentIndex - 1
-        : Math.min(currentThreadIndex - 1, threadIds.length - 1);
-    for (let index = previousIndex; index >= 0; index--) {
+  const findSurvivor = (from: number, step: 1 | -1) => {
+    for (
+      let index = from;
+      index >= 0 && index < threadIds.length;
+      index += step
+    ) {
       const threadId = threadIds[index];
-      if (threadId && !removed.has(threadId)) {
-        nextThreadId = threadId;
-        break;
-      }
+      if (threadId && !removed.has(threadId)) return threadId;
+    }
+  };
+
+  let nextThreadId: string | undefined;
+  if (direction === "previous") {
+    // The topmost removed row bounds the search, so a multi-selection never
+    // lands on a row the same action archived.
+    const removedIndexes = [currentThreadId, ...removedThreadIds]
+      .map((id) => threadIds.indexOf(id))
+      .filter((index) => index >= 0);
+    const topmost = removedIndexes.length
+      ? Math.min(...removedIndexes)
+      : currentThreadIndex;
+    nextThreadId =
+      findSurvivor(topmost - 1, -1) ?? findSurvivor(topmost + 1, 1);
+  } else {
+    const nextIndex =
+      currentIndex >= 0 ? currentIndex + 1 : Math.max(0, currentThreadIndex);
+    nextThreadId = findSurvivor(nextIndex, 1);
+    if (!nextThreadId) {
+      const previousIndex =
+        currentIndex >= 0
+          ? currentIndex - 1
+          : Math.min(currentThreadIndex - 1, threadIds.length - 1);
+      nextThreadId = findSurvivor(previousIndex, -1);
     }
   }
   if (!nextThreadId) return null;

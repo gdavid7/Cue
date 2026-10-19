@@ -30,6 +30,15 @@ describe("useThreadSelection", () => {
     expect([...result.current.selectedIds]).toEqual(IDS);
   });
 
+  it("replaces the selection with only the given visible rows", () => {
+    const { result } = setup();
+
+    act(() => result.current.toggle(0));
+    act(() => result.current.selectOnly(["c", "e", "not-in-view"]));
+
+    expect([...result.current.selectedIds]).toEqual(["c", "e"]);
+  });
+
   it("shift-clicks a range from the last toggled row", () => {
     const { result } = setup();
 
