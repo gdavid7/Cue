@@ -70,6 +70,23 @@ describe("aiPromptToRules", () => {
     ).rejects.toBeInstanceOf(SafeError);
   });
 
+  it("rejects an empty response with a 4xx error", async () => {
+    mockGenerateObject.mockResolvedValue({
+      object: null,
+      finishReason: "stop",
+      response: { modelId: "model" },
+      usage: { totalTokens: 1 },
+    });
+
+    const error = await aiPromptToRules({
+      emailAccount: getEmailAccount(),
+      promptFile: "Label receipts.",
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(SafeError);
+    expect((error as SafeError).statusCode).toBe(422);
+  });
+
   it("returns every rule when all are valid", async () => {
     mockGenerateObject.mockResolvedValue({
       object: { rules: [validRule, { ...validRule, name: "Invoices" }] },

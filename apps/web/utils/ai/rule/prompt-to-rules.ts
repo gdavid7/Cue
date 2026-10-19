@@ -70,7 +70,7 @@ ${cleanedPromptFile}
       modelId: aiResponse.response.modelId,
       totalTokens: aiResponse.usage.totalTokens,
     });
-    throw new Error("No rules found in AI response");
+    throw new SafeError(INVALID_RULES_MESSAGE, 422);
   }
 
   const generated = aiResponse.object.rules;
