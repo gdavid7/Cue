@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import {
+  createGmailQuotaStats,
+  OPEN_THREAD_GMAIL_WAIT_MS,
+  runWithGmailQuota,
+} from "@/utils/gmail/quota";
 import { getInboxInsights } from "@/utils/inbox-insights/get-inbox-insights";
 import { withEmailProvider } from "@/utils/middleware";
 
@@ -30,6 +35,9 @@ export const maxDuration = 300;
  * `?items=threadId:messageId,...` — each thread with its latest message.
  * `known=messageId,...` names the messages the browser already holds an
  * insight for; `events=1` asks for upcoming meetings to match its people.
+ * `open=1` asks for the one conversation on screen, which someone is looking
+ * at, so its reads run at interactive priority (D-086) and answer or defer
+ * within the open thread's wait budget; the rows' stay background.
  */
 export const GET = withEmailProvider("user/inbox-insights", async (request) => {
   const raw = new URL(request.url).searchParams.get("items") ?? "";
@@ -49,15 +57,27 @@ export const GET = withEmailProvider("user/inbox-insights", async (request) => {
     (searchParams.get("known") ?? "").split(",").filter(Boolean),
   );
 
-  const result = await getInboxInsights({
-    emailAccountId: request.auth.emailAccountId,
-    userId: request.auth.userId,
-    userEmail: request.auth.email,
-    items,
-    known,
-    withEvents: searchParams.get("events") === "1",
-    emailProvider: request.emailProvider,
-    logger: request.logger,
-  });
+  const load = () =>
+    getInboxInsights({
+      emailAccountId: request.auth.emailAccountId,
+      userId: request.auth.userId,
+      userEmail: request.auth.email,
+      items,
+      known,
+      withEvents: searchParams.get("events") === "1",
+      emailProvider: request.emailProvider,
+      logger: request.logger,
+    });
+  const result =
+    searchParams.get("open") === "1" && items.length === 1
+      ? await runWithGmailQuota(
+          {
+            priority: "interactive",
+            maxTotalWaitMs: OPEN_THREAD_GMAIL_WAIT_MS,
+            stats: createGmailQuotaStats(),
+          },
+          load,
+        )
+      : await load();
   return NextResponse.json(result satisfies GetInboxInsightsResponse);
 });

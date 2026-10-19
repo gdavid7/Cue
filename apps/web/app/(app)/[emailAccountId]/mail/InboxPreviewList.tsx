@@ -38,7 +38,12 @@ const IGNORE = () => undefined;
 const OPENED_MESSAGES = 10;
 
 type InboxPreview = LoadedInboxPreview | null;
-type Seed = { emailAccountId: string; preview: Promise<InboxPreview> };
+type Seed = {
+  emailAccountId: string;
+  preview: Promise<InboxPreview>;
+  /** For a local mailbox that has fallen behind, rather than none. */
+  catchUp: boolean;
+};
 const previewChangesSchema = z.array(providerChangeSchema);
 // Each page's rows are handed to the engine once, however often it renders.
 const ingestedPreviews = new WeakSet<Promise<InboxPreview>>();
@@ -68,20 +73,22 @@ const InboxPreviewSeedContext = createContext<{
 export function InboxPreviewSeed({
   emailAccountId,
   preview,
+  catchUp = false,
   children,
 }: {
   emailAccountId: string;
   preview: Promise<InboxPreview> | null;
+  catchUp?: boolean;
   children: ReactNode;
 }) {
   const [seed, setSeed] = useState<Seed | null>(() =>
-    preview ? { emailAccountId, preview } : null,
+    preview ? { emailAccountId, preview, catchUp } : null,
   );
   if (
     preview &&
     (seed?.preview !== preview || seed.emailAccountId !== emailAccountId)
   ) {
-    setSeed({ emailAccountId, preview });
+    setSeed({ emailAccountId, preview, catchUp });
   }
   const [retired, setRetired] = useState(false);
   const retire = useCallback(() => setRetired(true), []);
@@ -136,8 +143,11 @@ export function useFetchOpenedPreviewThreads() {
  * Hands the messages behind the server's rows to the mail engine as soon as
  * it runs, so the inbox shows them from the engine, where they open and
  * triage like any other row, rather than after its first sync reads them
- * again. The engine only adds messages it doesn't have, and nothing is
- * handed over once the engine has shown this account's mail.
+ * again. The engine only adds messages it doesn't have, so nothing it holds,
+ * such as a message just archived, changes. After a sign-in nothing is
+ * handed over once the engine has shown this account's mail; for a mailbox
+ * that has fallen behind, which shows its own mail at once, the newest mail
+ * is handed over whenever it arrives, ahead of the catch-up.
  */
 export function useIngestInboxPreview() {
   const { emailAccountId } = useAccount();
@@ -147,7 +157,7 @@ export function useIngestInboxPreview() {
     if (
       !client?.ingestMessages ||
       !seed ||
-      retired ||
+      (retired && !seed.catchUp) ||
       seed.emailAccountId !== emailAccountId ||
       ingestedPreviews.has(seed.preview)
     )

@@ -179,6 +179,12 @@ export function useEngineMailThreads({
       !mailbox.data?.coverage.some(
         (coverage) => coverage.lastCompletedSyncAtMs != null,
       ),
+    /**
+     * When the mailbox last finished catching up: its primary stream's last
+     * round where there is one, as Gmail's other scopes finish rounds that
+     * read no mail.
+     */
+    lastSyncedAtMs: lastSyncedAtMs(mailbox.data?.coverage ?? []),
     /** Included accounts with no finished sync yet, once the mailbox has loaded. */
     firstSyncAccountIds,
     failedAccountIds,
@@ -187,6 +193,17 @@ export function useEngineMailThreads({
       await client?.requestSync(resolvedAccountIds);
     },
   };
+}
+
+function lastSyncedAtMs(
+  coverage: { scopeId: string; lastCompletedSyncAtMs: number | null }[],
+) {
+  const primary = coverage.find((scope) => scope.scopeId === "primary");
+  if (primary) return primary.lastCompletedSyncAtMs;
+  const times = coverage.flatMap((scope) =>
+    scope.lastCompletedSyncAtMs == null ? [] : [scope.lastCompletedSyncAtMs],
+  );
+  return times.length ? Math.max(...times) : null;
 }
 
 export function useEngineMailClient(): MailClient | null {

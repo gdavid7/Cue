@@ -4,7 +4,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   clearLocalMailboxCookie,
   hasLocalMailbox,
+  isLocalMailboxStale,
   LOCAL_MAILBOX_COOKIE,
+  localMailboxSyncedAt,
   markLocalMailboxSynced,
 } from "./local-mailbox-cookie";
 
@@ -22,6 +24,44 @@ describe("local mailbox cookie", () => {
     expect(hasLocalMailbox(value, "acc-1")).toBe(true);
     expect(hasLocalMailbox(value, "acc-2")).toBe(true);
     expect(hasLocalMailbox(value, "acc-3")).toBe(false);
+  });
+
+  // RL-1: a mailbox opened again after days needs the newest inbox mail
+  // fetched for the page, as a first visit does.
+  it("records when each account's mailbox last finished a sync", () => {
+    const syncedAt = Date.parse("2026-10-16T09:30:00Z");
+    markLocalMailboxSynced("acc-1", syncedAt);
+    markLocalMailboxSynced("acc-2");
+
+    const value = readCookie();
+    expect(localMailboxSyncedAt(value, "acc-1")).toBe(syncedAt);
+    expect(localMailboxSyncedAt(value, "acc-2")).toBe(0);
+    expect(localMailboxSyncedAt(value, "acc-3")).toBeNull();
+    expect(hasLocalMailbox(value, "acc-1")).toBe(true);
+  });
+
+  it("moves an account's time forward, never back, and not on every sync", () => {
+    const syncedAt = Date.parse("2026-10-19T20:00:00Z");
+    markLocalMailboxSynced("acc-1", syncedAt);
+    markLocalMailboxSynced("acc-1", syncedAt + 30_000);
+    expect(localMailboxSyncedAt(readCookie(), "acc-1")).toBe(syncedAt);
+
+    markLocalMailboxSynced("acc-1", syncedAt + 120_000);
+    markLocalMailboxSynced("acc-1", null);
+    expect(localMailboxSyncedAt(readCookie(), "acc-1")).toBe(
+      syncedAt + 120_000,
+    );
+  });
+
+  it("reads a cookie from before times were kept as a mailbox of unknown age", () => {
+    expect(localMailboxSyncedAt("acc-1.acc-2", "acc-2")).toBe(0);
+    expect(isLocalMailboxStale(0)).toBe(true);
+  });
+
+  it("calls a mailbox stale once it is a quarter of an hour behind", () => {
+    const now = Date.parse("2026-10-19T20:23:00Z");
+    expect(isLocalMailboxStale(now - 5 * 60_000, now)).toBe(false);
+    expect(isLocalMailboxStale(now - 3 * 24 * 3_600_000, now)).toBe(true);
   });
 
   it("forgets every account when the local mailbox is wiped", () => {

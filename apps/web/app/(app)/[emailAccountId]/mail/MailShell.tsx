@@ -53,7 +53,10 @@ import { withoutPlainDuplicates } from "@/app/(app)/[emailAccountId]/mail/cue-se
 import { usePremium } from "@/hooks/usePremium";
 import { preloadEmailThread } from "@/components/email-list/EmailThreadLazy";
 import { useWarmComposer } from "@/app/(app)/[emailAccountId]/compose/use-warm-composer";
-import { markFirstMailListShown } from "@/utils/mail-engine/first-mail-list";
+import {
+  markFirstMailListShown,
+  markMailCaughtUp,
+} from "@/utils/mail-engine/first-mail-list";
 import { scheduleAfterPageLoad } from "@/utils/schedule-after-page-load";
 import { MailTitlebarNav } from "@/app/(app)/[emailAccountId]/mail/MailTitlebarNav";
 import {
@@ -718,13 +721,25 @@ export function MailShell() {
   // there, so the server stops fetching the inbox for them, and the rows it
   // fetched at sign-in are put away for good.
   const hasLocalMail = !isAllAccounts && accountThreadState.threads.length > 0;
+  const lastSyncedAtMs = isAllAccounts
+    ? null
+    : accountThreadState.lastSyncedAtMs;
   const retireInboxPreview = useRetireInboxPreview();
   useEffect(() => {
     if (!hasLocalMail) return;
-    markLocalMailboxSynced(emailAccountId);
     retireInboxPreview();
     markFirstMailListShown();
-  }, [hasLocalMail, emailAccountId, retireInboxPreview]);
+  }, [hasLocalMail, retireInboxPreview]);
+  // When the mailbox last caught up, so a visit after it has fallen behind
+  // has the server fetch the newest inbox mail with the page (RL-1).
+  useEffect(() => {
+    if (!hasLocalMail) return;
+    markLocalMailboxSynced(emailAccountId, lastSyncedAtMs);
+    // A round finished since this page opened: what arrived while Cue was
+    // closed is in, so background reads stop waiting on it.
+    if (lastSyncedAtMs != null && lastSyncedAtMs >= performance.timeOrigin)
+      markMailCaughtUp();
+  }, [hasLocalMail, emailAccountId, lastSyncedAtMs]);
   useFetchOpenedPreviewThreads();
   useIngestInboxPreview();
   const listPlaceholderMessage = getListPlaceholderMessage({

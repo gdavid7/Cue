@@ -21,6 +21,9 @@ const logger = createScopedLogger("mail/inbox-preview");
 // 410 for ten, more than two seconds of that pace before anything else on
 // the account is counted. The mail engine fills in the rest as it syncs.
 const PREVIEW_MESSAGES = 10;
+// A mailbox days behind has a screen of new mail, not a handful: 20
+// messages are about 405 units, inside one second of interactive pace.
+const CATCH_UP_PREVIEW_MESSAGES = 20;
 // The page's shell is sent before this settles; only the stream stays open
 // for the rows. Past these, the list waits for the mail engine instead.
 const MAX_QUOTA_WAIT_MS = 4000;
@@ -46,9 +49,12 @@ export type InboxPreview = ThreadsListResponse & {
 export async function loadInboxPreview({
   emailAccountId,
   provider,
+  catchUp = false,
 }: {
   emailAccountId: string;
   provider: string;
+  /** For a local mailbox that has fallen behind, rather than none. */
+  catchUp?: boolean;
 }): Promise<InboxPreview | null> {
   const log = logger.with({ emailAccountId });
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -75,7 +81,7 @@ export async function loadInboxPreview({
         });
         const { messages } = await emailProvider.getMessagesWithPagination({
           inboxOnly: true,
-          maxResults: PREVIEW_MESSAGES,
+          maxResults: catchUp ? CATCH_UP_PREVIEW_MESSAGES : PREVIEW_MESSAGES,
           format: "metadata",
           allowPartial: true,
         });

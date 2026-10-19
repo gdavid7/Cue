@@ -1,24 +1,62 @@
 /**
- * Which accounts this browser holds a synced local mailbox for, so the server
- * knows when a first visit needs the inbox from the provider instead. It only
- * carries account ids the signed-in user owns; the server still resolves the
- * account from the session.
+ * Which accounts this browser holds a synced local mailbox for, and when each
+ * last finished a sync, so the server knows when a visit needs the inbox's
+ * newest mail from the provider: a first visit, or a return after the local
+ * mailbox has fallen behind. It only carries account ids the signed-in user
+ * owns; the server still resolves the account from the session.
  */
 export const LOCAL_MAILBOX_COOKIE = "cue-local-mail";
 
 const MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
+// A mailbox that synced this recently catches up in one short read on open;
+// past it, the newest inbox mail is fetched for the page while it does.
+const STALE_AFTER_MS = 15 * 60_000;
+// The time is rewritten at most this often while Cue stays open.
+const REWRITE_EVERY_MS = 60_000;
+const SYNCED_AT_SEPARATOR = "~";
+
+/**
+ * When the browser's local mailbox for the account last finished a sync, in
+ * epoch ms: 0 when it has one but the time is unknown, null when it has none.
+ */
+export function localMailboxSyncedAt(
+  cookieValue: string | undefined,
+  accountId: string,
+): number | null {
+  return readEntries(cookieValue).get(accountId) ?? null;
+}
 
 export function hasLocalMailbox(
   cookieValue: string | undefined,
   accountId: string,
 ) {
-  return readAccountIds(cookieValue).includes(accountId);
+  return localMailboxSyncedAt(cookieValue, accountId) !== null;
 }
 
-export function markLocalMailboxSynced(accountId: string) {
-  const accountIds = readAccountIds(readCookie());
-  if (accountIds.includes(accountId)) return;
-  writeCookie([...accountIds, accountId].join("."), MAX_AGE_SECONDS);
+export function isLocalMailboxStale(syncedAtMs: number, nowMs = Date.now()) {
+  return nowMs - syncedAtMs > STALE_AFTER_MS;
+}
+
+/** `syncedAtMs` is when its last sync finished, if one has. */
+export function markLocalMailboxSynced(
+  accountId: string,
+  syncedAtMs: number | null = null,
+) {
+  const entries = readEntries(readCookie());
+  const recorded = entries.get(accountId);
+  const at = syncedAtMs ?? 0;
+  if (recorded !== undefined && at - recorded < REWRITE_EVERY_MS) return;
+  entries.set(accountId, Math.max(at, recorded ?? 0));
+  writeCookie(
+    [...entries]
+      .map(([id, time]) =>
+        time
+          ? `${id}${SYNCED_AT_SEPARATOR}${Math.floor(time / 1000).toString(36)}`
+          : id,
+      )
+      .join("."),
+    MAX_AGE_SECONDS,
+  );
 }
 
 /** Part of wiping the local mailbox, on sign-out. */
@@ -27,9 +65,17 @@ export function clearLocalMailboxCookie() {
 }
 
 // Account ids are cuids, safe in a cookie as they are, so the value is never
-// percent-encoded: decoding it here again would throw on a stray "%".
-function readAccountIds(cookieValue: string | undefined) {
-  return cookieValue ? cookieValue.split(".") : [];
+// percent-encoding: decoding it here again would throw on a stray "%". An
+// entry from before times were kept is an account with an unknown time.
+function readEntries(cookieValue: string | undefined) {
+  const entries = new Map<string, number>();
+  for (const entry of cookieValue ? cookieValue.split(".") : []) {
+    const [id, time] = entry.split(SYNCED_AT_SEPARATOR);
+    if (!id) continue;
+    const seconds = time ? Number.parseInt(time, 36) : 0;
+    entries.set(id, Number.isFinite(seconds) ? seconds * 1000 : 0);
+  }
+  return entries;
 }
 
 function readCookie() {

@@ -15,8 +15,15 @@ const SETTLE_MS = 2500;
 // The page's load event can be held up indefinitely by a slow resource.
 const CAP_MS = 10_000;
 
+// Background reads that compete with sync (inbox insights) also wait for the
+// engine to catch up on what arrived while Cue was closed, up to this long
+// after the first list; a backlog that takes longer still gets them.
+const CAUGHT_UP_CAP_MS = 30_000;
+
 let shown = false;
 const waiters = new Set<() => void>();
+let caughtUp = false;
+const caughtUpWaiters = new Set<() => void>();
 
 export function markFirstMailListShown() {
   if (shown) return;
@@ -71,7 +78,47 @@ export function afterFirstMailList(
   };
 }
 
+/** The engine finished a catch-up round since this page opened. */
+export function markMailCaughtUp() {
+  if (caughtUp) return;
+  caughtUp = true;
+  for (const waiter of [...caughtUpWaiters]) waiter();
+  caughtUpWaiters.clear();
+}
+
+/**
+ * Like `afterFirstMailList`, and then also after the engine has caught up,
+ * or `capMs` after the first list, whichever comes first.
+ */
+export function afterMailCaughtUp(
+  callback: () => void,
+  { capMs = CAUGHT_UP_CAP_MS }: { capMs?: number } = {},
+) {
+  let cap: ReturnType<typeof setTimeout> | undefined;
+  let done = false;
+  const run = () => {
+    if (done) return;
+    done = true;
+    caughtUpWaiters.delete(run);
+    clearTimeout(cap);
+    callback();
+  };
+  const cancelFirstList = afterFirstMailList(() => {
+    if (caughtUp) return run();
+    caughtUpWaiters.add(run);
+    cap = setTimeout(run, capMs);
+  });
+  return () => {
+    done = true;
+    cancelFirstList();
+    caughtUpWaiters.delete(run);
+    clearTimeout(cap);
+  };
+}
+
 export function resetFirstMailListForTesting() {
   shown = false;
   waiters.clear();
+  caughtUp = false;
+  caughtUpWaiters.clear();
 }

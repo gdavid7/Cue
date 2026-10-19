@@ -9,9 +9,30 @@ import {
   keptSuggestions,
   suggestionKey,
 } from "@/utils/thread-context/suggested-reply-store";
-import { getInboxInsightRequests, useInboxInsights } from "./useInboxInsights";
+import {
+  getInboxInsightRequests,
+  resetInboxInsightRequestsForTesting,
+  threadInsightItem,
+  useInboxInsights,
+} from "./useInboxInsights";
+
+const mail = vi.hoisted(() => ({
+  settled: true,
+  waiting: [] as (() => void)[],
+  settle() {
+    mail.settled = true;
+    for (const callback of mail.waiting.splice(0)) callback();
+  },
+}));
 
 vi.mock("@/providers/EmailAccountProvider", () => ({ useAccount: vi.fn() }));
+vi.mock("@/utils/mail-engine/first-mail-list", () => ({
+  afterMailCaughtUp: (callback: () => void) => {
+    if (mail.settled) callback();
+    else mail.waiting.push(callback);
+    return () => undefined;
+  },
+}));
 
 const INSIGHT = {
   action: "reply",
@@ -26,6 +47,9 @@ const SHOWN = { insight: INSIGHT, meeting: null, reply: null };
 beforeEach(() => {
   window.localStorage.clear();
   resetBrowserCacheForTesting();
+  resetInboxInsightRequestsForTesting();
+  mail.settled = true;
+  mail.waiting = [];
 });
 
 describe("getInboxInsightRequests", () => {
@@ -83,6 +107,7 @@ describe("useInboxInsights", () => {
   });
 
   it("keeps the insights already shown when a new page is rate limited", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     const fetcher = vi.fn(async ([url]: [string, string]) => {
       if (url.includes("t2")) {
         throw Object.assign(new Error("Rate limited"), { status: 429 });
@@ -120,16 +145,89 @@ describe("useInboxInsights", () => {
         item({ emailAccountId: "work", threadId: "t2" }),
       ],
     });
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
     await waitFor(() => expect(result.current.error).toBeDefined());
 
     expect(result.current.error).toMatchObject({ status: 429 });
     expect(result.current.data).toEqual(shown);
+    vi.useRealTimers();
+  });
+
+  // The storm behind a 45 s inbox (RL-1): each page a catch-up commits changed
+  // the rows, and each change was a request of its own.
+  it("asks once more, not once per change, while sync keeps changing the rows", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetcher = vi.fn(async ([url]: [string, string]) =>
+      fromServer(
+        Object.fromEntries(
+          [...url.matchAll(/(t\d+):/g)].map(([, threadId]) => [
+            threadId,
+            extraction(threadId),
+          ]),
+        ),
+      ),
+    );
+    const rows = (count: number) =>
+      Array.from({ length: count }, (_, index) =>
+        item({ emailAccountId: "work", threadId: `t${index}` }),
+      );
+    const { result, rerender } = renderHook(
+      ({ items }) => useInboxInsights(items),
+      { wrapper: wrapperFor(fetcher), initialProps: { items: rows(2) } },
+    );
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+
+    for (let page = 3; page <= 8; page++) {
+      rerender({ items: rows(page) });
+      await act(() => vi.advanceTimersByTimeAsync(2000));
+    }
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    await act(() => vi.advanceTimersByTimeAsync(5000));
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await waitFor(() =>
+      expect(Object.keys(result.current.data ?? {})).toHaveLength(8),
+    );
+    vi.useRealTimers();
+  });
+
+  it("waits for the mail list to catch up before asking about rows, but not for the open conversation", async () => {
+    mail.settled = false;
+    const fetcher = vi.fn(async ([url]: [string, string]) =>
+      fromServer(
+        url.includes("t9")
+          ? { t9: extraction("t9") }
+          : { t1: extraction("t1") },
+      ),
+    );
+    renderHook(
+      () => [
+        useInboxInsights([item({ emailAccountId: "work", threadId: "t1" })]),
+        useInboxInsights([
+          threadInsightItem({
+            emailAccountId: "work",
+            threadId: "t9",
+            messageId: "t9-latest",
+          }),
+        ]),
+      ],
+      { wrapper: wrapperFor(fetcher) },
+    );
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(fetcher.mock.calls[0]?.[0][0]).toContain("items=t9:t9-latest");
+    expect(fetcher.mock.calls[0]?.[0][0]).toContain("open=1");
+
+    act(() => mail.settle());
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(fetcher.mock.calls[1]?.[0][0]).toContain("items=t1:t1-latest");
+    expect(fetcher.mock.calls[1]?.[0][0]).not.toContain("open=1");
   });
 });
 
 // RD-3: the server keeps none of this, so the browser does.
 describe("useInboxInsights and what this browser keeps", () => {
-  it("keeps what it read from each email and names it to the server next time", async () => {
+  it("never asks again on this page, and names what it kept on the next", async () => {
     const fetcher = vi.fn(async ([url]: [string, string]) =>
       url.includes("known=")
         ? fromServer({})
@@ -144,13 +242,21 @@ describe("useInboxInsights and what this browser keeps", () => {
       expect(first.result.current.data).toEqual({ "work:t1": SHOWN }),
     );
     first.unmount();
+    const again = renderHook(() => useInboxInsights(items), {
+      wrapper: wrapperFor(fetcher),
+    });
+    expect(again.result.current.data).toEqual({ "work:t1": SHOWN });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    again.unmount();
+
+    // The next page load.
+    resetInboxInsightRequestsForTesting();
     const second = renderHook(() => useInboxInsights(items), {
       wrapper: wrapperFor(fetcher),
     });
 
-    await waitFor(() =>
-      expect(second.result.current.data).toEqual({ "work:t1": SHOWN }),
-    );
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(second.result.current.data).toEqual({ "work:t1": SHOWN });
     expect(fetcher.mock.calls.at(-1)?.[0][0]).toContain("known=t1-latest");
   });
 
@@ -173,6 +279,7 @@ describe("useInboxInsights and what this browser keeps", () => {
       });
       await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
       first.unmount();
+      resetInboxInsightRequestsForTesting();
 
       const second = renderHook(() => useInboxInsights(items), {
         wrapper: wrapperFor(fetcher),
@@ -180,6 +287,7 @@ describe("useInboxInsights and what this browser keeps", () => {
       await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
       expect(fetcher.mock.calls[1]?.[0][0]).toContain("known=t1-latest");
       second.unmount();
+      resetInboxInsightRequestsForTesting();
 
       vi.advanceTimersByTime(25 * 60 * 60 * 1000);
       renderHook(() => useInboxInsights(items), {
