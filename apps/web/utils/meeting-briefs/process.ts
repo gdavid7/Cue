@@ -32,6 +32,13 @@ export type EmailAccountForBrief = {
   };
 };
 
+type ClaimedBriefing = {
+  id: string;
+  createdAt: Date;
+  eventTitle: string;
+  eventStartTime: Date;
+};
+
 export async function processMeetingBriefings({
   emailAccountId,
   userEmail,
@@ -183,6 +190,20 @@ export async function runMeetingBrief({
       eventLog.info("Event already claimed by another process, skipping");
       return { success: false, message: "Already being processed" };
     }
+
+    if (await isBriefedElsewhere({ claimed, userId: emailAccount.userId })) {
+      eventLog.info("Meeting already briefed from another calendar, skipping");
+      await upsertMeetingBriefingStatus({
+        emailAccountId,
+        calendarEventId: event.id,
+        eventTitle: event.title,
+        eventStartTime: event.startTime,
+        guestCount: externalGuestCount,
+        status: MeetingBriefingStatus.SKIPPED,
+        logger: eventLog,
+      });
+      return { success: false, message: "Already briefed" };
+    }
   }
 
   try {
@@ -273,9 +294,9 @@ async function claimMeetingBriefing({
   eventTitle: string;
   eventStartTime: Date;
   guestCount: number;
-}): Promise<boolean> {
+}): Promise<ClaimedBriefing | null> {
   try {
-    await prisma.meetingBriefing.create({
+    return await prisma.meetingBriefing.create({
       data: {
         emailAccountId,
         calendarEventId,
@@ -284,14 +305,53 @@ async function claimMeetingBriefing({
         guestCount,
         status: MeetingBriefingStatus.PENDING,
       },
+      select: {
+        id: true,
+        createdAt: true,
+        eventTitle: true,
+        eventStartTime: true,
+      },
     });
-    return true;
   } catch (error) {
     if (isDuplicateError(error)) {
-      return false;
+      return null;
     }
     throw error;
   }
+}
+
+/**
+ * One meeting on two of the user's calendars (two mailboxes invited, or two
+ * calendars on one mailbox) has a different event id on each, so each is
+ * claimed. The two are recognised by title and start, and only the earliest
+ * claim is briefed; claims made at the same moment each see the other and
+ * agree which one that is.
+ */
+async function isBriefedElsewhere({
+  claimed,
+  userId,
+}: {
+  claimed: ClaimedBriefing;
+  userId: string;
+}) {
+  const others = await prisma.meetingBriefing.findMany({
+    where: {
+      id: { not: claimed.id },
+      emailAccount: { userId },
+      eventTitle: claimed.eventTitle,
+      eventStartTime: claimed.eventStartTime,
+      status: {
+        in: [MeetingBriefingStatus.PENDING, MeetingBriefingStatus.SENT],
+      },
+    },
+    select: { id: true, createdAt: true },
+  });
+  return others.some(
+    (other) =>
+      other.createdAt.getTime() < claimed.createdAt.getTime() ||
+      (other.createdAt.getTime() === claimed.createdAt.getTime() &&
+        other.id < claimed.id),
+  );
 }
 
 async function upsertMeetingBriefingStatus({
