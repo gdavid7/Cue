@@ -45,7 +45,7 @@ export const searchIntentSchema = z.object({
   keywordGroups: z
     .array(z.array(z.string()))
     .describe(
-      'Words the mail itself would contain, one group per thing it must mention: a mail matches with a word from every group. Put a thing\'s synonyms and translations in its group, e.g. [["lease", "rental agreement"]], and different things in different groups: a generic word beside a specific one matches almost any mail. Use as few groups as find the mail, usually one or two. Leave out filler, question words and words about the search itself (email, message, find).',
+      'Words the mail itself would contain, one group per thing it must mention: a mail matches with a word from every group. Put a thing\'s synonyms and translations in its group, e.g. [["lease", "rental agreement"]]. Use as few groups as find the mail, usually one or two. Leave out filler, question words and words about the search itself (email, message, find).',
     ),
   hasAttachment: z
     .boolean()
@@ -90,7 +90,7 @@ export const searchIntentSchema = z.object({
   explanation: z
     .string()
     .describe(
-      'How you read the search, as one short line in the language the user typed in, e.g. "Mail from Sarah with attachments in September about a lease".',
+      'One short line describing the search your other fields make, and only that: leave out what you didn\'t fill in, e.g. "Mail from Sarah with attachments in September about a lease".',
     ),
   isQuestion: z
     .boolean()

@@ -147,7 +147,8 @@ export async function aiInterpretSearch({
 }
 
 export const SEARCH_INTENT_INSTRUCTIONS = `You read what the user typed into their mailbox search bar and name the parts of the mail they mean, which Cue turns into a search.
-Fill only what the user states or clearly implies, and leave everything else empty: an added sender, date or condition hides the mail they want.`;
+Fill only what the user states or clearly implies, and leave everything else empty: an added sender, date or condition hides the mail they want.
+Write the explanation in the language the user typed in.`;
 
 export function buildSearchIntentPrompt({
   query,
