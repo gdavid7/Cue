@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildGeneratedSearch,
+  readableSearch,
   resolveDateRange,
   type SearchIntentParts,
 } from "@/utils/mail-search/generated-search";
@@ -67,7 +68,7 @@ describe("buildGeneratedSearch", () => {
   it("lets any of several senders match", () => {
     expect(
       build({ senders: ["sarah", "Ana Lima"], keywordGroups: [["lease"]] }),
-    ).toBe('from:sarah OR from:"Ana Lima" lease');
+    ).toBe('(from:sarah OR from:"Ana Lima") lease');
   });
 
   it("writes Outlook's syntax for an Outlook account", () => {
@@ -137,6 +138,17 @@ describe("buildGeneratedSearch", () => {
         },
       ),
     ).toBe("from:sarah received>=2026-10-20");
+  });
+});
+
+describe("readableSearch", () => {
+  it("writes epoch dates as the account's local days, leaving the rest", () => {
+    expect(
+      readableSearch(
+        `from:sarah after:${epoch("2026-10-19T15:00:00Z")} before:${epoch("2026-10-20T15:00:00Z")} 1760886000x`,
+        "Asia/Tokyo",
+      ),
+    ).toBe("from:sarah after:2026/10/20 before:2026/10/21 1760886000x");
   });
 });
 

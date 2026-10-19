@@ -80,13 +80,11 @@ export function formatSearchNode(node: SearchNode): string {
         ? `-(${formatSearchNode(node.child)})`
         : `-${formatSearchNode(node.child)}`;
     case "and":
-      // Bracketed so alternatives read as one group. An OR of operators
-      // stays bare: Outlook can't read a bracket before an operator, and OR
-      // binding tighter than the implicit AND gives the same search.
+      // Bracketed so alternatives read as one group, whichever binds
+      // tighter in the provider's syntax.
       return node.children
         .map((child) =>
-          child.kind === "or" &&
-          !child.children.every((leaf) => leaf.kind === "operator")
+          child.kind === "or"
             ? `(${formatSearchNode(child)})`
             : formatSearchNode(child),
         )

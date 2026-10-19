@@ -43,6 +43,8 @@ const FOLDER_KEY_BY_IN_VALUE: Record<string, OutlookWellKnownFolder> = {
 };
 
 const KQL_TEXT_FIELDS = new Set(["from", "to", "subject"]);
+const GROUP_OPEN = "(";
+const GROUP_CLOSE = ")";
 
 /**
  * Compiles an Outlook search-box query into Graph `$search` KQL plus the
@@ -55,14 +57,20 @@ export function compileOutlookThreadSearch(
   const excluded: string[] = [];
   const scope: OutlookSearchScope = { flagged: false };
 
-  const tokens = tokenizeSearchQuery(query);
+  const tokens = splitGroupBrackets(tokenizeSearchQuery(query));
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index];
     if (!token) continue;
 
+    if (token === GROUP_OPEN || token === GROUP_CLOSE) {
+      included.push(token);
+      continue;
+    }
+
     if (/^not$/i.test(token)) {
       const next = tokens[index + 1];
-      if (!next) continue;
+      // Only a single term is negated; NOT before a group is dropped.
+      if (!next || next === GROUP_OPEN || next === GROUP_CLOSE) continue;
       const term = toKqlTerm(parseOutlookSearchToken(next));
       if (term) excluded.push(`NOT ${term}`);
       index += 1;
@@ -79,6 +87,7 @@ export function compileOutlookThreadSearch(
   }
 
   const { folderKey, folderName, flagged, category } = scope;
+  dropEmptyGroups(included);
 
   if (!included.length && !excluded.length) {
     return { search: "", folderKey, folderName, flagged, category };
@@ -204,6 +213,56 @@ function toKqlTerm(parsed: OutlookSearchToken): string | null {
   }
 
   return toKqlValue(value);
+}
+
+/**
+ * Splits the brackets outside quotes off each token: `(lease` and
+ * `"rental agreement")` become `(`, `lease` and `"rental agreement"`, `)`.
+ * Brackets that don't pair up are dropped rather than sent to KQL, which
+ * would reject them.
+ */
+function splitGroupBrackets(tokens: string[]): string[] {
+  const split = tokens.flatMap((token) => {
+    let rest = token;
+    let opening = 0;
+    while (rest.startsWith(GROUP_OPEN)) {
+      rest = rest.slice(1);
+      opening += 1;
+    }
+    let closing = 0;
+    // A bracket inside a phrase, before its closing quote, is the phrase's.
+    while (rest.endsWith(GROUP_CLOSE) && isQuoteBalanced(rest.slice(0, -1))) {
+      rest = rest.slice(0, -1);
+      closing += 1;
+    }
+    return [
+      ...new Array<string>(opening).fill(GROUP_OPEN),
+      ...(rest ? [rest] : []),
+      ...new Array<string>(closing).fill(GROUP_CLOSE),
+    ];
+  });
+  let depth = 0;
+  for (const token of split) {
+    if (token === GROUP_OPEN) depth += 1;
+    if (token === GROUP_CLOSE) depth -= 1;
+    if (depth < 0) break;
+  }
+  if (depth === 0) return split;
+  return split.filter((token) => token !== GROUP_OPEN && token !== GROUP_CLOSE);
+}
+
+function isQuoteBalanced(value: string) {
+  return (value.match(/"/g)?.length ?? 0) % 2 === 0;
+}
+
+/** Removes groups left empty once their terms became scopes or were dropped. */
+function dropEmptyGroups(terms: string[]) {
+  for (let index = 0; index < terms.length - 1; index++) {
+    if (terms[index] === GROUP_OPEN && terms[index + 1] === GROUP_CLOSE) {
+      terms.splice(index, 2);
+      index = Math.max(-1, index - 2);
+    }
+  }
 }
 
 function toKqlValue(value: string): string | null {
