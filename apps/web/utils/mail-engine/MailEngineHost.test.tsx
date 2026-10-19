@@ -7,6 +7,10 @@ import { MailCoverageGate } from "./MailEngineHost";
 vi.mock("@/utils/actions/email-account-cookie", () => ({
   setLastEmailAccountAction: vi.fn(),
 }));
+vi.mock("@/utils/actions/web-push", () => ({
+  saveWebPushSubscriptionAction: vi.fn(),
+  deleteWebPushSubscriptionAction: vi.fn(),
+}));
 
 beforeEach(() => {
   vi.stubGlobal("navigator", {

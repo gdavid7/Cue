@@ -175,6 +175,72 @@ describe("uploadDraftAttachment", () => {
   });
 });
 
+describe("uploadDraftAttachment at Gmail's 25 MB limit", () => {
+  // The hosting platform rejects request bodies over 4.5 MB.
+  const PLATFORM_BODY_LIMIT_BYTES = 4.5 * 1024 * 1024;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends a 24 MB Gmail file without any request to our server nearing the body limit", async () => {
+    const size = 24_000_000;
+    const head = "Content-Type: multipart/mixed\r\n\r\n";
+    const tail = "\r\n--b--\r\n";
+    const encodedLength = Math.ceil(size / 3) * 4;
+    const totalBytes =
+      head.length +
+      encodedLength +
+      2 * (Math.ceil(encodedLength / 76) - 1) +
+      tail.length;
+    fetchMock.mockResolvedValueOnce(
+      Response.json({
+        type: "gmail-message",
+        uploadId: "upload-1",
+        totalBytes,
+        chunkBytes: GMAIL_UPLOAD_CHUNK_BYTES,
+        parts: [
+          { type: "text", text: head },
+          { type: "attachment", attachmentId: "file-1", size },
+          { type: "text", text: tail },
+        ],
+      }),
+    );
+    const bodySizes: number[] = [];
+    fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
+      bodySizes.push((init.body as Blob).size);
+      const range = new Headers(init.headers).get("content-range")!;
+      const end = Number(range.match(/-(\d+)\//)![1]);
+      return end + 1 < totalBytes
+        ? Response.json({ status: "incomplete", nextOffset: end + 1 })
+        : Response.json({
+            status: "complete",
+            attachmentId: "file-1",
+            messageId: "message-2",
+            attachments: [],
+          });
+    });
+
+    const result = await uploadDraftAttachment({
+      emailAccountId: "account-1",
+      draftId: "draft-1",
+      file: new Blob([new Uint8Array(size)]),
+      attachment: { ...metadata(size), filename: "walkthrough.mp4" },
+    });
+
+    expect(result.attachmentId).toBe("file-1");
+    expect(bodySizes.reduce((total, bytes) => total + bytes, 0)).toBe(
+      totalBytes,
+    );
+    expect(Math.max(...bodySizes)).toBeLessThan(PLATFORM_BODY_LIMIT_BYTES);
+  });
+});
+
 describe("removeDraftAttachment", () => {
   beforeEach(() => {
     vi.resetAllMocks();

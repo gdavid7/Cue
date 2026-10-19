@@ -74,7 +74,8 @@ export type EmailEditorProps = {
   /** Follows changes, unlike the props read once when the editor loads. */
   spellCheck?: boolean;
   onStateChange?: (state: EmailEditorState) => void;
-  onImageFiles?: (files: File[]) => void;
+  /** Files pasted or dropped into the body; the app attaches or inlines them. */
+  onFiles?: (files: File[]) => void;
   // Shows an "Ask Cue" item in the selection toolbar.
   onAssist?: () => void;
   // A "/" typed at a line start or after whitespace.
@@ -107,7 +108,7 @@ export const EmailEditor = forwardRef<EmailEditorHandle, EmailEditorProps>(
       autofocus = true,
       spellCheck = true,
       onStateChange,
-      onImageFiles,
+      onFiles,
       onAssist,
       onSlashKeyDown,
       onSlashTrigger,
@@ -141,7 +142,7 @@ export const EmailEditor = forwardRef<EmailEditorHandle, EmailEditorProps>(
           initialHtml={initialState.initialHtml}
           initialMode={initialState.mode}
           onAssist={onAssist}
-          onImageFiles={onImageFiles}
+          onFiles={onFiles}
           onSlashKeyDown={onSlashKeyDown}
           onSlashTrigger={onSlashTrigger}
           onStateChange={onStateChange}

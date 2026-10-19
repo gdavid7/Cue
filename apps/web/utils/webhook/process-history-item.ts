@@ -26,6 +26,7 @@ import { logErrorWithDedupe } from "@/utils/log-error-with-dedupe";
 import { sendToReplyPushNotification } from "@/utils/to-reply-push";
 import { sendOtpPushNotification } from "@/utils/otp-push";
 import { internalDateToDate } from "@/utils/date";
+import { sendNewMailWebPush } from "@/utils/web-push/send-new-mail";
 
 export type SharedProcessHistoryOptions = {
   provider: EmailProvider;
@@ -183,8 +184,28 @@ export async function processHistoryItem(
       logger.warn("OTP push notification processing failed", { error });
     }
 
+    // Runs once this message's rules are done so "important" browsers can use
+    // their triage, and after the response so sends never hold up processing.
+    const scheduleWebPush = () => {
+      if (!options.isNewMessage) return;
+      after(() =>
+        runWithBackgroundLoggerFlush({
+          logger,
+          task: () =>
+            sendNewMailWebPush({
+              emailAccountId,
+              userId: emailAccount.userId,
+              message: parsedMessage,
+              logger,
+            }),
+          extra: { operation: "web-push-new-mail" },
+        }),
+      );
+    };
+
     if (!hasAiAccess) {
       logger.info("Skipping. No AI access.");
+      scheduleWebPush();
       return;
     }
 
@@ -244,6 +265,8 @@ export async function processHistoryItem(
         });
       }
     }
+
+    scheduleWebPush();
 
     // Process attachments for document filing (runs in parallel with rules if both enabled)
     if (

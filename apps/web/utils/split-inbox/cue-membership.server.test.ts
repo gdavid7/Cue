@@ -5,7 +5,10 @@ import {
   ThreadTrackerType,
 } from "@/generated/prisma/enums";
 import prisma from "@/utils/__mocks__/prisma";
-import { getCueMembership } from "@/utils/split-inbox/cue-membership.server";
+import {
+  getCueMembership,
+  getCueReadingType,
+} from "@/utils/split-inbox/cue-membership.server";
 
 vi.mock("@/utils/prisma");
 
@@ -83,6 +86,57 @@ describe("getCueMembership", () => {
 
     expect(membership.TO_REPLY).toEqual(["news-1"]);
     expect(membership.NEWSLETTER).toEqual([]);
+  });
+});
+
+describe("getCueReadingType", () => {
+  beforeEach(() => {
+    prisma.threadTracker.findFirst.mockResolvedValue(null);
+    prisma.executedRule.findMany.mockResolvedValue([]);
+  });
+
+  it("follows Cue's latest decision about the thread", async () => {
+    prisma.executedRule.findMany.mockResolvedValue([
+      execution("t1", "m2", SystemType.MARKETING),
+    ] as never);
+
+    await expect(
+      getCueReadingType({ emailAccountId: "account", threadId: "t1" }),
+    ).resolves.toBe(SystemType.MARKETING);
+    expect(prisma.executedRule.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          emailAccountId: "account",
+          threadId: "t1",
+          status: ExecutedRuleStatus.APPLIED,
+        }),
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 1,
+      }),
+    );
+  });
+
+  it("is not Reading once the latest decision is a conversation status", async () => {
+    prisma.executedRule.findMany.mockResolvedValue([
+      execution("t1", "m2", SystemType.TO_REPLY),
+    ] as never);
+
+    await expect(
+      getCueReadingType({ emailAccountId: "account", threadId: "t1" }),
+    ).resolves.toBeNull();
+  });
+
+  it("is never Reading while the thread awaits a reply", async () => {
+    prisma.threadTracker.findFirst.mockResolvedValue({
+      threadId: "t1",
+    } as never);
+    prisma.executedRule.findMany.mockResolvedValue([
+      execution("t1", "m1", SystemType.NEWSLETTER),
+    ] as never);
+
+    await expect(
+      getCueReadingType({ emailAccountId: "account", threadId: "t1" }),
+    ).resolves.toBeNull();
   });
 });
 

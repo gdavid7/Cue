@@ -60,6 +60,7 @@ import {
   getComposeTargetMessageId,
   getActiveThreadIndex,
   getSearchFocus,
+  canMarkThreadsImportant,
   getNextThreadAfterRemoval,
   resolveThreadActionTargets,
 } from "@/app/(app)/[emailAccountId]/mail/thread-list-behavior";
@@ -161,6 +162,10 @@ import { LoadingContent } from "@/components/LoadingContent";
 import { useTeamCommentsAvailable } from "@/components/team-comments/use-team-comments-available";
 import { getEmailMessageCellActions } from "@/components/EmailMessageCellActions";
 import type { ThreadsQuery } from "@/utils/threads/validation";
+import {
+  SearchProviderNotice,
+  searchOnEnterHint,
+} from "@/app/(app)/[emailAccountId]/mail/SearchProviderNotice";
 
 // Module-level so an "empty" reader doesn't hand children a new array each render.
 const NO_MESSAGES: ThreadMessage[] = [];
@@ -613,9 +618,15 @@ export function MailShell() {
       : { type: "inbox" };
   }, [searchQuery, scopeQuery, activeSplit, splits]);
 
+  // Typing searches local mail as you go; the provider is only asked once
+  // the search is committed (Enter, or a search address), so a pause
+  // mid-word never spends a provider search on half a query.
+  const searchCommitted = !!searchParam && searchQuery === searchParam.trim();
+  const providerSearch = !searchQuery || searchCommitted;
   const accountThreadState = useMailThreads({
     emailAccountId,
     query,
+    providerSearch,
     enabled:
       !isAllAccounts &&
       searchSettled &&
@@ -636,6 +647,7 @@ export function MailShell() {
       ),
     labelNames: searchQuery ? undefined : activeCombinedLabelNames,
     searchQuery: searchQuery ?? undefined,
+    providerSearch,
   });
   const { labelsByAccount } = combinedThreadState;
   const splitCountAccountIds = useMemo(
@@ -714,12 +726,19 @@ export function MailShell() {
   }, [orderedIds, focusedIndex, searchQuery, searchViewIdentity]);
   const { data: searchAnswer } = useSearchAnswer(emailAccountId, searchParam);
   const searchFoundNothing = Boolean(
-    searchQuery && hasProviderResponse && !threads.length,
+    searchQuery &&
+      hasProviderResponse &&
+      !threads.length &&
+      // A committed search the provider is still running hasn't found
+      // nothing yet.
+      !providerState.providerSearchPending,
   );
-  const isSearchCommitted = !!searchParam && searchQuery === searchParam.trim();
+  const isSearchCommitted = searchCommitted;
   let emptySearchMessage: string | undefined;
   if (searchFoundNothing)
-    emptySearchMessage = `No emails match “${searchQuery}”.`;
+    emptySearchMessage = searchCommitted
+      ? `No emails match “${searchQuery}”.`
+      : searchOnEnterHint(isAllAccounts ? null : provider);
   // A committed search's card above speaks for it: the answer leads to the
   // mail, and with no answer it offers to ask in chat instead.
   if ((searchAnswer || searchFoundNothing) && isSearchCommitted)
@@ -1080,12 +1099,17 @@ export function MailShell() {
 
   const getOpenThreadKey = useStableCallback(() => openThreadKey);
   const advanceReaderPast = useStableCallback(
-    (currentThreadKey: string, removedThreadKeys: string[]) => {
+    (
+      currentThreadKey: string,
+      removedThreadKeys: string[],
+      direction: "next" | "previous" = "next",
+    ) => {
       const nextThread = getNextThreadAfterRemoval({
         threadIds: orderedIds,
         currentThreadId: currentThreadKey,
         currentThreadIndex: focusedIndex,
         removedThreadIds: removedThreadKeys,
+        direction,
       });
       setFocusedIndex(nextThread?.index ?? 0);
       const nextRow = threads.find(
@@ -1101,12 +1125,13 @@ export function MailShell() {
       action: (ids: string[]) => Promise<string[]>,
       removeFromList: boolean,
       autoAdvanceReader = false,
+      advanceDirection: "next" | "previous" = "next",
     ) => {
       const ids = actionTargets.map((target) => target.key);
-      if (!ids.length) return;
+      if (!ids.length) return [];
       const hadSelection = selection.hasSelection;
       const queuedThreadKeys = await action(ids);
-      if (!queuedThreadKeys.length) return;
+      if (!queuedThreadKeys.length) return [];
       if (
         removeFromList &&
         openThreadKey &&
@@ -1115,7 +1140,7 @@ export function MailShell() {
         getOpenThreadKey() === openThreadKey
       ) {
         if (autoAdvanceReader) {
-          advanceReaderPast(openThreadKey, queuedThreadKeys);
+          advanceReaderPast(openThreadKey, queuedThreadKeys, advanceDirection);
         } else {
           setOpenThread(null);
         }
@@ -1129,6 +1154,7 @@ export function MailShell() {
           if (index >= 0) selection.toggle(index);
         }
       }
+      return queuedThreadKeys;
     },
   );
 
@@ -1226,6 +1252,23 @@ export function MailShell() {
     () => runOn(archive, true, true),
     [archive, runOn],
   );
+  const archiveAndOpenPrevious = useStableCallback(async () => {
+    const wasReaderOpen = Boolean(openThreadKey);
+    const topmostTarget = actionTargets
+      .map((target) => target.key)
+      .sort((a, b) => orderedIds.indexOf(a) - orderedIds.indexOf(b))[0];
+    const queued = await runOn(archive, true, true, "previous");
+    // With the reader open, runOn already moved it; otherwise only the cursor.
+    if (!queued.length || wasReaderOpen || !topmostTarget) return;
+    const previous = getNextThreadAfterRemoval({
+      threadIds: orderedIds,
+      currentThreadId: topmostTarget,
+      currentThreadIndex: clampedIndex,
+      removedThreadIds: queued,
+      direction: "previous",
+    });
+    if (previous) setFocusedIndex(previous.index);
+  });
   // Archiving again would be a no-op, so archived targets offer the way back.
   const moveToInboxTargets = useCallback(
     () => runOn(moveToInbox, true, true),
@@ -1259,6 +1302,14 @@ export function MailShell() {
   const importantTargets = useCallback(
     () => runOn((ids) => setImportantState(ids, !allImportant), false),
     [allImportant, runOn, setImportantState],
+  );
+  const markImportantTargets = useCallback(
+    () => runOn((ids) => setImportantState(ids, true), false),
+    [runOn, setImportantState],
+  );
+  const markNotImportantTargets = useCallback(
+    () => runOn((ids) => setImportantState(ids, false), false),
+    [runOn, setImportantState],
   );
   const trashTargets = useCallback(
     () => runOn(trash, true, true),
@@ -1311,6 +1362,10 @@ export function MailShell() {
     (isGoogleProvider(labelAccount?.account.provider) ||
       isMicrosoftProvider(labelAccount?.account.provider)) &&
     !mixedLabelAccounts;
+  const canMarkImportant = canMarkThreadsImportant({
+    provider: labelAccount?.account.provider,
+    mixedAccounts: mixedLabelAccounts,
+  });
   const openLabelPicker = useStableCallback(() => {
     if (canLabel)
       setLabelPicker({ mode: "label", targets: currentLabelTargets });
@@ -1515,10 +1570,6 @@ export function MailShell() {
   const handlers: ShortcutHandlers = (() => {
     if (sidePanelThreadId || labelPicker) return {};
     return {
-      unsubscribe:
-        !isMailOverlayOpen && !senderCommands?.isUnsubscribeDisabled
-          ? senderCommands?.unsubscribe
-          : undefined,
       toggleAutoArchive:
         !isMailOverlayOpen && !senderCommands?.isAutoArchiveDisabled
           ? senderCommands?.toggleAutoArchive
@@ -1533,6 +1584,8 @@ export function MailShell() {
       },
       open: openThreadId
         ? (event) => {
+            // `o` opens; only Enter replies from an open conversation.
+            if (event?.key !== "Enter") return;
             if (
               event?.target instanceof Element &&
               event.target.closest("[data-thread-message-id]")
@@ -1542,6 +1595,7 @@ export function MailShell() {
           }
         : () => openAt(clampedIndex),
       backToList: getBackToList(),
+      returnToList: getBackToList(),
       nextSplit: () => {
         const index = splits.findIndex(
           (split) => split.id === displayedActiveSplitId,
@@ -1565,6 +1619,19 @@ export function MailShell() {
       switchAllAccounts: selectAllAccounts,
       select: () => selection.toggle(clampedIndex),
       selectAll: selection.selectAll,
+      selectNone: selection.clear,
+      selectRead: () =>
+        selection.selectOnly(
+          threads
+            .filter((thread) => !isThreadUnread(thread.messages))
+            .map(getListThreadKey),
+        ),
+      selectUnread: () =>
+        selection.selectOnly(
+          threads
+            .filter((thread) => isThreadUnread(thread.messages))
+            .map(getListThreadKey),
+        ),
       // The cursor travels with the extension; without that, every repeat
       // re-extends from the same row and the range never grows.
       extendSelectionDown: () => extendSelection(1),
@@ -1572,6 +1639,10 @@ export function MailShell() {
       label: canLabel ? openLabelPicker : undefined,
       move: canLabel ? openMovePicker : undefined,
       archive: targetsArchived ? undefined : archiveTargets,
+      archiveAndNext: targetsArchived ? undefined : archiveTargets,
+      archiveAndPrevious: targetsArchived ? undefined : archiveAndOpenPrevious,
+      markImportant: canMarkImportant ? markImportantTargets : undefined,
+      markNotImportant: canMarkImportant ? markNotImportantTargets : undefined,
       star: starTargets,
       markSpam: markSpamTargets,
       markUnread: markUnreadTargets,
@@ -2042,6 +2113,20 @@ export function MailShell() {
                   onRetry={() => {
                     combinedThreadState.refetch().catch(() => undefined);
                   }}
+                />
+              ) : null}
+              {searchQuery && providerState.providerSearchNotice ? (
+                <SearchProviderNotice
+                  notice={providerState.providerSearchNotice}
+                  provider={
+                    isAllAccounts
+                      ? combinedAccounts.find(
+                          (account) =>
+                            account.id ===
+                            providerState.providerSearchNotice?.accountId,
+                        )?.provider
+                      : provider
+                  }
                 />
               ) : null}
               {!isAllAccounts && accountThreadState.cueSortingUnavailable ? (

@@ -294,6 +294,12 @@ const parsedEnv = createEnv({
     // `fake` records sends in memory instead of contacting Apple. Emulator only.
     APNS_TRANSPORT: z.enum(["apns", "fake"]).optional(),
 
+    // Web push for browsers with no Cue tab open. Unset turns the feature off.
+    VAPID_PUBLIC_KEY: z.preprocess(optionalEnvValue, z.string().optional()),
+    VAPID_PRIVATE_KEY: z.preprocess(optionalEnvValue, z.string().optional()),
+    // A mailto: or https: contact the push services can reach.
+    VAPID_SUBJECT: z.preprocess(optionalEnvValue, z.string().optional()),
+
     TINYBIRD_TOKEN: z.string().optional(),
     TINYBIRD_DELETE_TOKEN: z.string().optional(),
     TINYBIRD_BASE_URL: z.string().default("https://api.us-east.tinybird.co/"),
@@ -457,6 +463,10 @@ const parsedEnv = createEnv({
       .string()
       .default("https://cal.com/team/inbox-zero/feedback"),
     NEXT_PUBLIC_POSTHOG_KEY: z.string().optional(),
+    NEXT_PUBLIC_VAPID_PUBLIC_KEY: z.preprocess(
+      optionalEnvValue,
+      z.string().optional(),
+    ),
     NEXT_PUBLIC_POSTHOG_API_HOST: z.string().optional(),
     NEXT_PUBLIC_POSTHOG_ONBOARDING_SURVEY_ID: z.string().optional(),
     NEXT_PUBLIC_BASE_URL: z.string(),
@@ -572,6 +582,7 @@ const parsedEnv = createEnv({
 
     NEXT_PUBLIC_CALL_LINK: process.env.NEXT_PUBLIC_CALL_LINK,
     NEXT_PUBLIC_POSTHOG_KEY: process.env.NEXT_PUBLIC_POSTHOG_KEY,
+    NEXT_PUBLIC_VAPID_PUBLIC_KEY: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
     NEXT_PUBLIC_POSTHOG_API_HOST: process.env.NEXT_PUBLIC_POSTHOG_API_HOST,
     NEXT_PUBLIC_POSTHOG_ONBOARDING_SURVEY_ID:
       process.env.NEXT_PUBLIC_POSTHOG_ONBOARDING_SURVEY_ID,

@@ -83,21 +83,23 @@ export function compilePredicate(
       };
     }
     case "address": {
-      const column =
-        predicate.field === "from"
-          ? `${alias}.from_address`
-          : predicate.field === "to"
-            ? `${alias}.to_json`
-            : `${alias}.cc_json`;
+      const column = {
+        from: `${alias}.from_address`,
+        to: `${alias}.to_json`,
+        cc: `${alias}.cc_json`,
+        bcc: `${alias}.bcc_json`,
+      }[predicate.field];
+      // Typed text, so `_` and `%` are matched as themselves.
+      const contains = `%${escapeLike(predicate.value.toLowerCase())}%`;
       if (predicate.field === "from" && predicate.match === "address") {
         return {
-          sql: `(LOWER(${column}) = LOWER(?) OR LOWER(${column}) LIKE '%' || LOWER(?) || '%')`,
-          bindings: [predicate.value, predicate.value],
+          sql: `(LOWER(${column}) = LOWER(?) OR LOWER(${column}) LIKE ? ESCAPE '\\')`,
+          bindings: [predicate.value, contains],
         };
       }
       return {
-        sql: `LOWER(${column}) LIKE '%' || LOWER(?) || '%'`,
-        bindings: [predicate.value],
+        sql: `LOWER(${column}) LIKE ? ESCAPE '\\'`,
+        bindings: [contains],
       };
     }
     case "received": {
@@ -121,14 +123,33 @@ export function compilePredicate(
         sql: `${alias}.has_attachments = ?`,
         bindings: [predicate.value ? 1 : 0],
       };
-    case "message":
+    case "message": {
       if (predicate.ids.length === 0) return { sql: "0=1", bindings: [] };
+      const ids = `${alias}.message_id IN (${predicate.ids.map(() => "?").join(",")})`;
+      if (!predicate.accountId) return { sql: ids, bindings: predicate.ids };
       return {
-        sql: `${alias}.message_id IN (${predicate.ids.map(() => "?").join(",")})`,
-        bindings: predicate.ids,
+        sql: `(${alias}.account_id = ? AND ${ids})`,
+        bindings: [predicate.accountId, ...predicate.ids],
       };
+    }
     case "text":
       return compileTextPredicate(predicate, search, alias);
+    // The engine adds the provider's matches before a view reads; anything
+    // else answers from the store alone.
+    case "search": {
+      const local = compilePredicate(predicate.local, search, alias);
+      if (!predicate.accountIds) return local;
+      return {
+        sql: `(${alias}.account_id IN (${predicate.accountIds.map(() => "?").join(",")}) AND ${local.sql})`,
+        bindings: [...predicate.accountIds, ...local.bindings],
+      };
+    }
+    case "account":
+      if (!predicate.ids.length) return { sql: "0=1", bindings: [] };
+      return {
+        sql: `${alias}.account_id IN (${predicate.ids.map(() => "?").join(",")})`,
+        bindings: predicate.ids,
+      };
     default: {
       const exhaustive: never = predicate;
       return exhaustive;
@@ -149,23 +170,121 @@ export function searchDrivenSource(
   search: SearchSupport,
 ): { from: string; bindings: SqlValue[]; rest: MailPredicate } | null {
   if (!search.fts5 || !search.complete) return null;
-  const clauses = predicate.kind === "all" ? predicate.predicates : [predicate];
+  const clauses = topLevelClauses(predicate);
   for (const [index, clause] of clauses.entries()) {
-    if (clause.kind !== "text") continue;
-    const match = textMatchQuery(clause);
-    if (!match) continue;
-    return {
-      from: `(SELECT k.account_id, k.message_id
+    const driven = drivenClause(clause);
+    if (!driven) continue;
+    const others = clauses.filter((_clause, position) => position !== index);
+    const hits = `SELECT k.account_id, k.message_id
             FROM message_fts CROSS JOIN message_fts_keys k ON k.fts_rowid = message_fts.rowid
-            WHERE message_fts MATCH ?) hit
-          CROSS JOIN effective_messages e
-            ON e.account_id = hit.account_id AND e.message_id = hit.message_id`,
-      bindings: [match],
+            WHERE message_fts MATCH ?`;
+    const join = `CROSS JOIN effective_messages e
+            ON e.account_id = hit.account_id AND e.message_id = hit.message_id`;
+    if (!driven.matched) {
+      return {
+        from: `(${hits}) hit ${join}`,
+        bindings: [driven.match],
+        rest: { kind: "all", predicates: [...others, ...driven.rest] },
+      };
+    }
+    // A typed search with the provider's matches: the index hits and those
+    // messages. Either kind of row still has to pass the rest of the search,
+    // which an index hit already matches the text of, or the provider's side.
+    const lookups = driven.matched.messages.map((messages) => {
+      const ids = messages.ids.map(() => "?").join(",");
+      return messages.accountId
+        ? {
+            sql: `SELECT m.account_id, m.message_id FROM effective_messages m
+              WHERE m.account_id = ? AND m.message_id IN (${ids})`,
+            bindings: [messages.accountId, ...messages.ids],
+          }
+        : {
+            sql: `SELECT m.account_id, m.message_id
+              FROM accounts a CROSS JOIN effective_messages m
+                ON m.account_id = a.account_id AND m.message_id IN (${ids})`,
+            bindings: messages.ids,
+          };
+    });
+    return {
+      from: `(${[hits, ...lookups.map((lookup) => lookup.sql)].join(
+        "\n            UNION\n            ",
+      )}) hit ${join}`,
+      bindings: [driven.match, ...lookups.flatMap((lookup) => lookup.bindings)],
       rest: {
         kind: "all",
-        predicates: clauses.filter((_clause, position) => position !== index),
+        predicates: [
+          ...others,
+          {
+            kind: "any",
+            predicates: [
+              { kind: "all", predicates: driven.rest },
+              driven.matched.filter,
+            ],
+          },
+        ],
       },
     };
+  }
+  return null;
+}
+
+type DrivenClause = {
+  match: string;
+  rest: MailPredicate[];
+  /** The provider's matches, and the condition they are listed under. */
+  matched?: {
+    messages: Array<Extract<MailPredicate, { kind: "message" }>>;
+    filter: MailPredicate;
+  };
+};
+
+// A clause the index can start from: a text match, alone or with conditions
+// beside it, optionally or one of the provider's matches.
+function drivenClause(clause: MailPredicate): DrivenClause | null {
+  if (clause.kind === "text") {
+    const match = textMatchQuery(clause);
+    return match ? { match, rest: [] } : null;
+  }
+  if (clause.kind === "all") {
+    const parts = clause.predicates;
+    for (const [index, part] of parts.entries()) {
+      if (part.kind !== "text") continue;
+      const match = textMatchQuery(part);
+      if (match)
+        return {
+          match,
+          rest: parts.filter((_part, position) => position !== index),
+        };
+    }
+    return null;
+  }
+  if (clause.kind !== "any" || clause.predicates.length !== 2) return null;
+  for (const [index, part] of clause.predicates.entries()) {
+    const messages = listedMessages(part);
+    if (!messages?.length) continue;
+    const other = clause.predicates[1 - index];
+    if (other.kind === "any") return null;
+    const driven = drivenClause(other);
+    return driven ? { ...driven, matched: { messages, filter: part } } : null;
+  }
+  return null;
+}
+
+// The messages a condition is limited to: a message list, alternatives of
+// them, or either alongside other conditions.
+function listedMessages(
+  predicate: MailPredicate,
+): Array<Extract<MailPredicate, { kind: "message" }>> | null {
+  if (predicate.kind === "message") return [predicate];
+  if (predicate.kind === "any") {
+    const lists = predicate.predicates.map(listedMessages);
+    return lists.every((list) => list !== null) ? lists.flat() : null;
+  }
+  if (predicate.kind === "all") {
+    for (const part of predicate.predicates) {
+      const list = listedMessages(part);
+      if (list) return list;
+    }
   }
   return null;
 }
@@ -230,6 +349,24 @@ function compileUnindexedText(
       columns.map(() => `%${escapeLike(term)}%`),
     ),
   };
+}
+
+// A typed search read here stands for its local part, which is spliced in.
+function topLevelClauses(predicate: MailPredicate): MailPredicate[] {
+  if (predicate.kind === "search") return searchClauses(predicate);
+  if (predicate.kind !== "all") return [predicate];
+  return predicate.predicates.flatMap((clause) =>
+    clause.kind === "search" ? searchClauses(clause) : [clause],
+  );
+}
+
+function searchClauses(
+  search: Extract<MailPredicate, { kind: "search" }>,
+): MailPredicate[] {
+  const local = topLevelClauses(search.local);
+  return search.accountIds
+    ? [{ kind: "account", ids: search.accountIds }, ...local]
+    : local;
 }
 
 function compileMailboxPredicate(

@@ -530,19 +530,59 @@ describe("Squire email editor", () => {
     expect(textbox().querySelector("a")).toBeNull();
   });
 
-  it("hands pasted image files to the app instead of inserting them", async () => {
-    const onImageFiles = vi.fn();
-    const { textbox } = await renderEditor({ onImageFiles });
-    const file = new File(["x"], "photo.png", { type: "image/png" });
+  it.each([
+    ["an image", "photo.png", "image/png"],
+    ["a PDF", "report.pdf", "application/pdf"],
+    [
+      "a Word document",
+      "notes.docx",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ],
+    ["a zip archive", "photos.zip", "application/zip"],
+    ["a file with no type", "data.bin", ""],
+  ])("hands %s to the app when it is pasted or dropped", async (_, name, type) => {
+    const onFiles = vi.fn();
+    const { textbox } = await renderEditor({ onFiles });
+    const file = new File(["x"], name, { type });
+
+    for (const [eventName, property] of [
+      ["paste", "clipboardData"],
+      ["drop", "dataTransfer"],
+    ] as const) {
+      const event = new Event(eventName, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, property, {
+        value: {
+          files: [file],
+          getData: () => "",
+          items: [],
+          types: ["Files"],
+        },
+      });
+      textbox().dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+    }
+
+    expect(onFiles).toHaveBeenNthCalledWith(1, [file]);
+    expect(onFiles).toHaveBeenNthCalledWith(2, [file]);
+    expect(textbox().textContent).toBe("");
+  });
+
+  it("leaves pasted text to the editor", async () => {
+    const onFiles = vi.fn();
+    const { textbox } = await renderEditor({ onFiles });
 
     const paste = new Event("paste", { bubbles: true, cancelable: true });
     Object.defineProperty(paste, "clipboardData", {
-      value: { files: [file], getData: () => "", items: [], types: ["Files"] },
+      value: {
+        files: [],
+        getData: () => "hi",
+        items: [],
+        types: ["text/plain"],
+      },
     });
     textbox().dispatchEvent(paste);
 
-    expect(onImageFiles).toHaveBeenCalledWith([file]);
-    expect(paste.defaultPrevented).toBe(true);
+    expect(onFiles).not.toHaveBeenCalled();
   });
 });
 

@@ -5,6 +5,12 @@ import type { MailPredicate } from "@inboxzero/mail-core/queries";
 import { useEngineMailThreads } from "@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads";
 import { useCueMembership } from "@/hooks/useCueMembership";
 import { useHiddenDraftMessageIds } from "@/hooks/useHiddenDraftMessageIds";
+import { useLabels } from "@/hooks/useLabels";
+import { useAccount } from "@/providers/EmailAccountProvider";
+import {
+  type SearchQueryContext,
+  searchProvider,
+} from "@/utils/mail-search/search-query-predicate";
 import {
   threadsQueryToPredicate,
   threadsQueryUsesCue,
@@ -15,10 +21,13 @@ import type { ThreadsQuery } from "@/utils/threads/validation";
 export function useMailThreads({
   emailAccountId,
   query,
+  providerSearch,
   enabled = true,
 }: {
   emailAccountId: string;
   query: ThreadsQuery;
+  /** False while a search is still being typed: it reads local mail only. */
+  providerSearch?: boolean;
   enabled?: boolean;
 }) {
   const hiddenDraftMessageIds = useHiddenDraftMessageIds(emailAccountId);
@@ -27,6 +36,20 @@ export function useMailThreads({
     enabled && usesCue,
   );
   const waitingForCue = usesCue && !cueMembership;
+  const { userLabels } = useLabels();
+  const { provider } = useAccount();
+  // Only a search reads labels and syntax; other views keep their predicate
+  // while labels load.
+  const search = useMemo<Partial<SearchQueryContext> | undefined>(
+    () =>
+      query.q
+        ? {
+            labels: userLabels,
+            provider: searchProvider(provider),
+          }
+        : undefined,
+    [query.q, userLabels, provider],
+  );
   const predicate = useMemo<MailPredicate | undefined>(() => {
     if (usesCue) return threadsQueryToPredicate(query, cueMembership);
     // A conversation stays in Drafts only through drafts that aren't hidden.
@@ -42,6 +65,8 @@ export function useMailThreads({
     emailAccountId,
     query,
     predicate,
+    search,
+    providerSearch,
     enabled: enabled && !waitingForCue,
   });
   return {
