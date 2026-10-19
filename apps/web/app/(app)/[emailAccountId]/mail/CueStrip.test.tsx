@@ -39,7 +39,9 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/use-unsubscribe-sender", () => ({
     isUnsubscribeDisabled: false,
     onUnsubscribe: vi.fn(),
     PremiumModal: () => null,
+    unsubscribeConfirm: {},
   }),
+  UnsubscribeConfirmDialog: () => null,
 }));
 
 const THREAD_ACCOUNT = "account-2";

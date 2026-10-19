@@ -186,6 +186,15 @@ export type MailClient = {
    */
   releaseConversationMessages(key: ConversationKey): Promise<void>;
   getDiagnostics(accountId: string): Promise<MailDiagnostics>;
+  /**
+   * Drops mailbox drafts the provider confirmed deleted, as after a discard,
+   * so they stay gone across reloads before sync reports it. Desktop engines
+   * older than the web app leave it out.
+   */
+  forgetDeletedDrafts?(input: {
+    accountId: string;
+    messageIds: string[];
+  }): Promise<void>;
   purgeAccount(accountId: string): Promise<LocalRevision>;
   /** Purges every local account outside `accountIds`; an empty list is ignored. */
   retainAccounts(accountIds: string[]): Promise<void>;
@@ -477,6 +486,11 @@ export function createMailEngine(input: {
     },
     getDiagnostics(accountId) {
       return store.getDiagnostics(accountId);
+    },
+    async forgetDeletedDrafts(input) {
+      if (input.messageIds.length === 0) return;
+      await store.forgetDeletedDrafts(input);
+      await refreshViews();
     },
     async purgeAccount(accountId) {
       stopSyncLane(accountId);

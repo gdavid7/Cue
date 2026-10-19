@@ -146,6 +146,9 @@ describe("buildMailCommandPalette", () => {
     expect(commands.find(({ id }) => id === "mail-unsubscribe")).toMatchObject({
       disabled: true,
     });
+    expect(
+      commands.find(({ id }) => id === "mail-unsubscribe")?.shortcut,
+    ).toBeUndefined();
     expect(commands.find(({ id }) => id === "mail-auto-archive")).toMatchObject(
       { label: "Skip inbox for this sender", disabled: false },
     );

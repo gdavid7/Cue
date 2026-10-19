@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { isNotFoundError, isAlreadyExistsError } from "./errors";
+import {
+  isNotFoundError,
+  isAlreadyExistsError,
+  isMessageTooLargeError,
+} from "./errors";
 
 describe("isNotFoundError", () => {
   it("should return true for statusCode 404", () => {
@@ -71,5 +75,23 @@ describe("isAlreadyExistsError", () => {
 
   it("should return false for object without message", () => {
     expect(isAlreadyExistsError({ code: 409 })).toBe(false);
+  });
+});
+
+describe("isMessageTooLargeError", () => {
+  it("recognises Graph size-limit codes and 413 responses", () => {
+    expect(isMessageTooLargeError({ code: "ErrorMessageSizeExceeded" })).toBe(
+      true,
+    );
+    expect(
+      isMessageTooLargeError({ code: "ErrorAttachmentSizeLimitExceeded" }),
+    ).toBe(true);
+    expect(isMessageTooLargeError({ statusCode: 413 })).toBe(true);
+  });
+
+  it("ignores other failures", () => {
+    expect(isMessageTooLargeError({ statusCode: 429 })).toBe(false);
+    expect(isMessageTooLargeError(new Error("boom"))).toBe(false);
+    expect(isMessageTooLargeError(null)).toBe(false);
   });
 });

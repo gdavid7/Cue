@@ -32,6 +32,7 @@ async function getEmailAccounts({ userId }: { userId: string }) {
       account: {
         select: {
           disconnectedAt: true,
+          refreshTokenIssuedAt: true,
           provider: true,
         },
       },
@@ -58,6 +59,8 @@ async function getEmailAccounts({ userId }: { userId: string }) {
         account: {
           ...account.account,
           disconnectedAt: account.account.disconnectedAt?.toISOString() ?? null,
+          refreshTokenIssuedAt:
+            account.account.refreshTokenIssuedAt?.toISOString() ?? null,
         },
         providerRateLimit: providerRateLimit
           ? {

@@ -52,6 +52,39 @@ export const GMAIL_SYSTEM_LABELS = [
   GmailLabel.UPDATES,
 ];
 
+/**
+ * The labels a mail view lists, by its type. Returns nothing for views that
+ * span every label, and treats an unknown type as a label id.
+ */
+export function getGmailViewLabelIds(type?: string | null) {
+  switch (type) {
+    case "inbox":
+      return [GmailLabel.INBOX];
+    case "sent":
+      return [GmailLabel.SENT];
+    case "draft":
+      return [GmailLabel.DRAFT];
+    case "trash":
+      return [GmailLabel.TRASH];
+    case "spam":
+      return [GmailLabel.SPAM];
+    case "starred":
+      return [GmailLabel.STARRED];
+    case "important":
+      return [GmailLabel.IMPORTANT];
+    case "unread":
+      return [GmailLabel.UNREAD];
+    case "archive":
+      return;
+    case "all":
+      return;
+    default:
+      if (!type || type === "undefined" || type === "null")
+        return [GmailLabel.INBOX];
+      return [type];
+  }
+}
+
 export async function labelThread(options: {
   gmail: gmail_v1.Gmail;
   threadId: string;

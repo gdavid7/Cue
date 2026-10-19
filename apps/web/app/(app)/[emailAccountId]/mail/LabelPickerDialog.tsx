@@ -32,11 +32,17 @@ export function LabelPickerDialog({
   threadIds,
   onClose,
   onApplied,
+  onPick,
   mode = "label",
 }: {
   threadIds: string[];
   onClose: () => void;
   onApplied: (threadIds: string[], labelId: string) => void;
+  /**
+   * Hands the chosen label back instead of applying it, for a select-all
+   * that labels every matching conversation on the server.
+   */
+  onPick?: (labelId: string) => void;
   mode?: "label" | "move";
 }) {
   const { emailAccountId } = useAccount();
@@ -85,6 +91,11 @@ export function LabelPickerDialog({
           createdLabel.current = { name, id };
           mutate().catch(() => {});
         }
+      }
+      if (onPick) {
+        onPick(id);
+        onClose();
+        return;
       }
       if (!client) throw new Error("Mail engine is unavailable");
       const { succeededThreadIds, failedThreadIds, error } =

@@ -5,6 +5,8 @@ import {
   getReplyDraft,
   type ReplyDraftIdentity,
 } from "@/utils/mail-engine/reply-drafts";
+import { getActiveMailClient } from "@/utils/mail-engine/active-client";
+import { forgetDeletedDrafts } from "@/utils/mail-engine/forget-deleted-drafts";
 import { forgetAttachedFiles } from "./upload-draft-attachment";
 
 /** What a new message left on the account it was moved away from. */
@@ -31,17 +33,21 @@ export async function finishComposeDraftMove({
   filesMoved: boolean;
 }): Promise<"moved" | "kept"> {
   if (!newMailboxDraftId) return "kept";
+  const stored = from.localDraft
+    ? await getReplyDraft(from.localDraft)
+    : undefined;
   if (from.draftId && filesMoved) {
     const result = await discardComposeDraftAction(from.emailAccountId, {
       draftId: from.draftId,
     });
     if (!result?.data) throw new Error(getActionErrorMessage(result ?? {}));
+    await forgetDeletedDrafts(getActiveMailClient(), from.emailAccountId, [
+      ...(stored?.content?.providerDraftMessageIds ?? []),
+      result.data.deletedMessageId,
+    ]);
   }
-  if (from.localDraft) {
-    const stored = await getReplyDraft(from.localDraft);
-    if (stored?.content)
-      await createReplyDraftWriter(from.localDraft, stored.revision).clear();
-  }
+  if (from.localDraft && stored?.content)
+    await createReplyDraftWriter(from.localDraft, stored.revision).clear();
   forgetAttachedFiles(from.emailAccountId, from.attachmentIds);
   return "moved";
 }

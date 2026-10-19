@@ -327,7 +327,7 @@ export function MailboxItemContextMenu({
             <AlertDialogDescription>
               {item.kind === "folder"
                 ? `“${item.name}” and its contents will be removed from your mailbox.`
-                : `“${item.name}” will be removed from your mailbox. Emails using it will remain.`}
+                : `“${item.name}” will be removed from your mailbox. Your emails aren't deleted, only the ${typeName}.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

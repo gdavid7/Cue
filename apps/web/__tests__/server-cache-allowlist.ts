@@ -412,6 +412,27 @@ export const SERVER_CACHE_WRITES: Record<
       },
     ],
   },
+  "utils/redis/mail-bulk-job.ts": {
+    writes: 11,
+    keys: [
+      {
+        key: "mail-bulk-job:{jobId}",
+        holds:
+          "a select-all job's state: account id, action, status, label id, source job id, counts, capped flag, updatedAt; no mail content, no addresses or label names",
+        ttl: "24 hours",
+      },
+      {
+        key: "mail-bulk-job:{jobId}:targets",
+        holds: "the job's targets as provider message and thread ids",
+        ttl: "24 hours",
+      },
+      {
+        key: "mail-bulk-job:{jobId}:conversations",
+        holds: "provider thread ids, to count distinct conversations",
+        ttl: "24 hours",
+      },
+    ],
+  },
   "utils/redis/message-processing.ts": {
     writes: 8,
     keys: [

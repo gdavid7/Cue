@@ -519,6 +519,13 @@ export function BulkUnsubscribe() {
         <ArchiveProgress />
       </ClientOnly>
 
+      {filter === "unhandled" && data?.filtersAvailable === false && (
+        <p className="mt-2 text-muted-foreground text-sm" role="status">
+          Couldn't read your mailbox filters, so senders that may already skip
+          your inbox are hidden. Try again in a moment.
+        </p>
+      )}
+
       <Card className="mt-2 md:mt-4 max-sm:border-0 max-sm:shadow-none">
         {(isStatsLoading && !isLoading && !data?.newsletters.length) ||
         showSkeleton ? (

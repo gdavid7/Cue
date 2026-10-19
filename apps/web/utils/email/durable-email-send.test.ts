@@ -84,6 +84,35 @@ describe("executeDurableEmailSend", () => {
     expect(prisma.emailSendOperation.updateMany).not.toHaveBeenCalled();
   });
 
+  it("tells the sender when Outlook rejects the message as too large", async () => {
+    const provider = createMockEmailProvider({
+      sendEmailWithHtml: vi.fn().mockRejectedValue(
+        Object.assign(new Error("The message exceeds the size limit."), {
+          statusCode: 413,
+          code: "ErrorMessageSizeExceeded",
+        }),
+      ),
+    });
+
+    const outcome = await executeDurableEmailSend({
+      logger: createScopedLogger("test"),
+      emailAccountId: "account",
+      getEmailProvider: async () => provider,
+      input,
+      provider: "microsoft",
+    });
+
+    expect(outcome).toEqual({
+      status: "rejected",
+      error:
+        "This message is too large for Outlook. Remove an attachment and try again.",
+    });
+    expect(prisma.emailSendOperation.deleteMany).toHaveBeenCalledWith({
+      where: { id: "operation" },
+    });
+    expect(prisma.emailSendOperation.updateMany).not.toHaveBeenCalled();
+  });
+
   it("rejects provider setup failures without marking delivery uncertain", async () => {
     const outcome = await executeDurableEmailSend({
       logger: createScopedLogger("test"),

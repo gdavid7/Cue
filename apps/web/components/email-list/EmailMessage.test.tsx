@@ -17,12 +17,15 @@ const mocks = vi.hoisted(() => ({
   popOutReply: vi.fn(),
   poppedOutDraftSessionId: undefined as string | undefined,
   connectedEmails: [] as string[],
+  forgetDeletedDrafts: vi.fn(async () => {}),
 }));
 
 vi.mock("next-safe-action/hooks", () => ({
   useAction: () => ({ executeAsync: mocks.executeAsync }),
 }));
 vi.mock("swr", () => ({
+  // useContactPhoto reads the configured fetcher.
+  useSWRConfig: () => ({}),
   default: () => ({ data: undefined }),
 }));
 vi.mock("@/providers/EmailAccountProvider", () => ({
@@ -63,6 +66,11 @@ vi.mock("@/components/email-list/EmailDetails", () => ({
 }));
 vi.mock("@/components/Toast", () => ({ toastError: mocks.toastError }));
 vi.mock("@/utils/actions/mail", () => ({ deleteDraftAction: vi.fn() }));
+vi.mock("@/utils/mail-engine/active-client", () => ({
+  getActiveMailClient: () => ({
+    forgetDeletedDrafts: mocks.forgetDeletedDrafts,
+  }),
+}));
 vi.mock("@/app/(app)/[emailAccountId]/compose/ComposeEmailFormLazy", () => ({
   ComposeEmailFormLazy: ({
     onDiscard,
@@ -126,6 +134,51 @@ describe("EmailMessage draft recovery", () => {
 
     expect(document.activeElement).toBe(screen.getByRole("listitem"));
     expect(screen.getByTestId("composer")).toBeTruthy();
+  });
+
+  it("drops a discarded draft from the local mailbox once the provider deletes it", async () => {
+    mocks.executeAsync.mockResolvedValue({
+      data: { deletedMessageId: "draft-2" },
+    });
+
+    render(
+      <EmailMessage
+        draftMessages={[createMessage("draft-1")]}
+        expanded
+        message={createMessage("message-1")}
+        onSendSuccess={vi.fn()}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Discard draft" }));
+    });
+
+    expect(mocks.forgetDeletedDrafts).toHaveBeenCalledWith({
+      accountId: "account-1",
+      messageIds: ["draft-1", "draft-2"],
+    });
+  });
+
+  it("keeps the draft locally when the provider did not delete it", async () => {
+    mocks.executeAsync.mockResolvedValue({ data: { deletedMessageId: null } });
+
+    render(
+      <EmailMessage
+        draftMessages={[createMessage("draft-1")]}
+        expanded
+        message={createMessage("message-1")}
+        onSendSuccess={vi.fn()}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Discard draft" }));
+    });
+
+    expect(mocks.forgetDeletedDrafts).not.toHaveBeenCalled();
   });
 
   it("restores a provider draft when discard returns an empty server error", async () => {

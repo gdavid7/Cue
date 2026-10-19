@@ -109,7 +109,7 @@ async function getEmailMessages(
   // from the last aggregated sender.
   return {
     newsletters: options.filters?.length
-      ? filterNewsletters(newsletters, options.filters)
+      ? filterNewsletters(newsletters, options.filters, { filtersAvailable })
       : newsletters,
     nextCursor: senderStats.nextCursor,
     searchedSenderStatus,

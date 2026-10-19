@@ -12,7 +12,10 @@ import {
   getThreadCategories,
   isFromPerson,
 } from "@/app/(app)/[emailAccountId]/mail/cue-strip";
-import { useUnsubscribeSender } from "@/app/(app)/[emailAccountId]/mail/use-unsubscribe-sender";
+import {
+  UnsubscribeConfirmDialog,
+  useUnsubscribeSender,
+} from "@/app/(app)/[emailAccountId]/mail/use-unsubscribe-sender";
 import type { ThreadMessage } from "@/components/email-list/types";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -293,8 +296,12 @@ function StripSummary({
 }
 
 function StripUnsubscribeButton({ message }: { message: ThreadMessage }) {
-  const { isUnsubscribeDisabled, onUnsubscribe, PremiumModal } =
-    useUnsubscribeSender(message);
+  const {
+    isUnsubscribeDisabled,
+    onUnsubscribe,
+    PremiumModal,
+    unsubscribeConfirm,
+  } = useUnsubscribeSender(message);
   return (
     <>
       <StripButton
@@ -305,6 +312,7 @@ function StripUnsubscribeButton({ message }: { message: ThreadMessage }) {
         Unsubscribe
       </StripButton>
       <PremiumModal />
+      <UnsubscribeConfirmDialog {...unsubscribeConfirm} />
     </>
   );
 }

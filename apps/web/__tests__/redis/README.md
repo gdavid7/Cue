@@ -23,3 +23,11 @@ If the test runner is forcibly terminated before teardown, remove only the conta
 ```sh
 RUN_INTEGRATION_TESTS=true pnpm --filter inbox-zero-ai exec vitest --run __tests__/redis/gmail-quota-store.test.ts
 ```
+
+## Mail bulk job store
+
+`mail-bulk-job-store.test.ts` runs the select-all job store, including its status compare-and-set Lua, against the same kind of private `/usr/bin/redis-server` behind the HTTP shim. It needs no Docker.
+
+```sh
+RUN_INTEGRATION_TESTS=true pnpm --filter inbox-zero-ai exec vitest --run __tests__/redis/mail-bulk-job-store.test.ts
+```

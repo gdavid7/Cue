@@ -487,6 +487,85 @@ describe("handleLinkAccount", () => {
     );
   });
 
+  describe("consent time", () => {
+    const hooks = () => (betterAuthConfig as any).options.databaseHooks.account;
+    const consentWrites = () =>
+      prisma.account.update.mock.calls.filter(
+        ([args]) => "refreshTokenIssuedAt" in args.data,
+      );
+
+    beforeEach(() => {
+      mockGoogleProfile();
+      prisma.emailAccount.findUnique.mockResolvedValue({
+        id: "mailbox",
+        email: "user@example.com",
+        userId: "user_1",
+        accountId: "account_1",
+        account: { provider: "google" },
+      } as any);
+      prisma.user.findUnique.mockResolvedValue({
+        email: "user@example.com",
+      } as any);
+      prisma.$transaction.mockResolvedValue([{ id: "mailbox" }, {}] as never);
+    });
+
+    it("records consent when Google issues a refresh token on sign-in", async () => {
+      await hooks().create.after({
+        ...getGoogleAccount(),
+        refreshToken: "refresh_token",
+      });
+      expect(prisma.account.update).toHaveBeenCalledWith({
+        where: { id: "account_1" },
+        data: { refreshTokenIssuedAt: expect.any(Date) },
+      });
+    });
+
+    it("records consent when a Google callback updates the account", async () => {
+      await hooks().update.after(
+        { ...getGoogleAccount(), refreshToken: "refresh_token" },
+        { path: "/callback/google", params: { id: "google" }, context: {} },
+      );
+      expect(consentWrites()).toHaveLength(1);
+    });
+
+    it("does not record consent for a Microsoft account", async () => {
+      await hooks()
+        .create.after({
+          ...getGoogleAccount(),
+          providerId: "microsoft",
+          refreshToken: "refresh_token",
+        })
+        .catch(() => {});
+      expect(consentWrites()).toHaveLength(0);
+    });
+
+    it("does not record consent without a new refresh token", async () => {
+      await hooks().create.after(getGoogleAccount());
+      expect(consentWrites()).toHaveLength(0);
+    });
+
+    it.each([
+      "/get-access-token",
+      "/refresh-token",
+    ])("does not record consent when %s refreshes tokens", async (path) => {
+      await hooks().update.after(
+        { ...getGoogleAccount(), refreshToken: "refresh_token" },
+        { path, context: {} },
+      );
+      expect(consentWrites()).toHaveLength(0);
+    });
+
+    it("still signs the user in when the consent write fails", async () => {
+      prisma.account.update.mockRejectedValue(new Error("db down"));
+      await expect(
+        hooks().create.after({
+          ...getGoogleAccount(),
+          refreshToken: "refresh_token",
+        }),
+      ).resolves.not.toThrow();
+    });
+  });
+
   it("skips auth-only providers without requiring an access token", async () => {
     await expect(
       handleLinkAccount({

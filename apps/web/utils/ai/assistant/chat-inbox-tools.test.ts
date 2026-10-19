@@ -1823,6 +1823,73 @@ describe("chat inbox tools - bulk pagination guidance (INB-134)", () => {
     );
   });
 
+  it("searchInbox gives the model its results without the card-only fields", async () => {
+    (createEmailProvider as any).mockResolvedValue({
+      searchMessages: vi.fn().mockResolvedValue({
+        messages: [
+          getMockMessage({ id: "m1", threadId: "t1", labelIds: ["UNREAD"] }),
+          {
+            ...getMockMessage({ id: "m2", threadId: "t2" }),
+            attachments: [{ filename: "contract.pdf" }],
+          },
+        ].map((message) => ({
+          ...message,
+          externalUrl: `https://mail.google.com/mail/u/0/#all/${message.id}`,
+        })),
+        nextPageToken: "PAGE_TOKEN_2",
+      }),
+      getLabels: vi.fn().mockResolvedValue([]),
+    });
+    const toolInstance = searchInboxTool({
+      email: TEST_EMAIL,
+      emailAccountId: "email-account-1",
+      userId: "user-1",
+      provider: "google",
+      logger,
+    });
+
+    const result: any = await (toolInstance.execute as any)({
+      query: "in:inbox",
+      limit: 20,
+    });
+    const modelOutput: any = await toolInstance.toModelOutput!({
+      toolCallId: "search-1",
+      input: { query: "in:inbox", limit: 20 },
+      output: result,
+    });
+
+    expect(result.messages).toEqual([
+      expect.objectContaining({
+        messageId: "m1",
+        externalUrl: "https://mail.google.com/mail/u/0/#all/m1",
+        hasAttachments: false,
+      }),
+      expect.objectContaining({
+        messageId: "m2",
+        externalUrl: "https://mail.google.com/mail/u/0/#all/m2",
+        hasAttachments: true,
+      }),
+    ]);
+    expect(modelOutput.type).toBe("json");
+    expect(modelOutput.value).toMatchObject({
+      queryUsed: "in:inbox",
+      nextPageToken: "PAGE_TOKEN_2",
+      hasMore: true,
+      summary: { total: 2, unread: 1 },
+    });
+    const [first, second] = modelOutput.value.messages;
+    expect(first).toMatchObject({
+      messageId: "m1",
+      threadId: "t1",
+      isUnread: true,
+      category: "uncategorized",
+    });
+    expect(first).not.toHaveProperty("externalUrl");
+    expect(first).not.toHaveProperty("hasAttachments");
+    expect(second).toMatchObject({ messageId: "m2", hasAttachments: true });
+    expect(second).not.toHaveProperty("externalUrl");
+  });
+
   it("searchInbox resolves a folder independently of a same-named category across all pages", async () => {
     const messages = Array.from({ length: 24 }, (_, index) =>
       getMockMessage({

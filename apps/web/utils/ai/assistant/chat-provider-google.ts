@@ -13,7 +13,7 @@ export const googleChatProviderConfig: AssistantChatProviderConfig = {
       "the label in label, boolean actions in archive/draft/markread, the notification provider in notify, and use do only for an action that cannot be represented by those attributes",
   },
   searchSyntaxPolicy: `Provider search syntax:
-- Use Gmail search syntax: from:, to:, subject:, in:inbox, is:unread, has:attachment, after:YYYY/MM/DD, before:YYYY/MM/DD, label:, newer_than:, and older_than:.`,
+- searchInbox queries use Gmail search syntax.`,
   inboxTriagePolicy: `Provider inbox defaults:
 - For inbox triage, default to \`is:unread\` unless the user asks to include read messages.
 - For reply triage, do not rely only on unread; include reply-needed signals like \`label:"To Reply"\` when helpful.

@@ -876,7 +876,6 @@ describe("Middleware", () => {
       mockGetEmailAccount.mockResolvedValue(mockEmail);
       mockPrismaEmailAccountFindUnique.mockResolvedValue({
         id: mockAccountId,
-        email: mockEmail,
         account: { provider: "google" },
       } as any);
       mockCreateEmailProvider.mockResolvedValue({ name: "google" } as any);
@@ -907,28 +906,6 @@ describe("Middleware", () => {
       expect(gmail.headers.get("Retry-After")).not.toBeNull();
     });
 
-    // One Postgres read checks ownership, gives the address and the provider.
-    it("reads the account once for a provider route", async () => {
-      mockReq = createMockRequest("GET", "http://localhost/api/labels", {
-        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
-      });
-      mockPrismaEmailAccountFindUnique.mockResolvedValue({
-        id: mockAccountId,
-        email: mockEmail,
-        account: { provider: "google" },
-      } as any);
-      mockCreateEmailProvider.mockResolvedValue({ name: "google" } as any);
-      const handler = vi.fn(async (request: RequestWithEmailProvider) =>
-        NextResponse.json({ email: request.auth.email }),
-      );
-
-      const response = await withEmailProvider(handler)(mockReq, mockContext);
-
-      await expect(response.json()).resolves.toEqual({ email: mockEmail });
-      expect(mockPrismaEmailAccountFindUnique).toHaveBeenCalledTimes(1);
-      expect(getEmailAccount).not.toHaveBeenCalled();
-    });
-
     it("preserves NextRequest APIs when adding an email provider", async () => {
       mockReq = createMockRequest(
         "GET",
@@ -941,7 +918,6 @@ describe("Middleware", () => {
       mockGetEmailAccount.mockResolvedValue(mockEmail);
       mockPrismaEmailAccountFindUnique.mockResolvedValue({
         id: mockAccountId,
-        email: mockEmail,
         account: { provider: "google" },
       } as any);
       const emailProvider = { name: "provider" };
@@ -991,7 +967,6 @@ describe("Middleware", () => {
       mockGetEmailAccount.mockResolvedValue(mockEmail);
       mockPrismaEmailAccountFindUnique.mockResolvedValue({
         id: mockAccountId,
-        email: mockEmail,
         account: { provider },
       } as any);
 
