@@ -122,6 +122,66 @@ describe("drafts the provider removed", () => {
     await second.engine.close();
   });
 
+  it("keeps the sent message when the provider sent the draft under its own id", async () => {
+    const path = await databasePath();
+    const first = await openEngine(path, {
+      status: "confirmed",
+      receiptId: "receipt-1",
+      observations: [patch("acc-1", "thread-1", "draft-1", ["sent"])],
+      targets: [],
+    });
+    await seed(first.store, "acc-1", [
+      patch("acc-1", "thread-1", "draft-1", ["draft"]),
+    ]);
+    await queueSend(first.engine);
+
+    await first.engine.runUntil(Date.now() + 300);
+    await first.engine.close();
+
+    const second = await openEngine(path);
+    expect(await draftConversations(second.store)).toEqual([]);
+    expect(await liveMessageIds(second.store)).toEqual(["draft-1"]);
+    await second.engine.close();
+  });
+
+  // Gmail keeps the draft's id for the sent message, so a row still marked a
+  // draft here may be the message just sent; it waits for sync instead.
+  it("keeps the draft's row when the confirmed send names no sent message", async () => {
+    const path = await databasePath();
+    const first = await openEngine(path, {
+      status: "confirmed",
+      receiptId: "receipt-1",
+      observations: [],
+      targets: [],
+    });
+    await seed(first.store, "acc-1", [
+      patch("acc-1", "thread-1", "draft-1", ["draft"]),
+    ]);
+    await queueSend(first.engine);
+
+    await first.engine.runUntil(Date.now() + 300);
+    await first.engine.close();
+
+    const second = await openEngine(path);
+    expect(await liveMessageIds(second.store)).toEqual(["draft-1"]);
+    await second.engine.close();
+  });
+
+  it("leaves a message that isn't a draft when asked to forget it", async () => {
+    const { engine, store } = await openEngine(await databasePath());
+    await seed(store, "acc-1", [
+      patch("acc-1", "thread-1", "sent-1", ["sent"]),
+    ]);
+
+    await engine.forgetDeletedDrafts?.({
+      accountId: "acc-1",
+      messageIds: ["sent-1"],
+    });
+
+    expect(await liveMessageIds(store)).toEqual(["sent-1"]);
+    await engine.close();
+  });
+
   it("keeps the draft when the provider rejects the send", async () => {
     const path = await databasePath();
     const first = await openEngine(path, {
@@ -151,6 +211,15 @@ describe("drafts the provider removed", () => {
     await second.engine.close();
   });
 });
+
+async function liveMessageIds(
+  store: Awaited<ReturnType<typeof createSqliteMailStore>>,
+) {
+  const { messages } = await store.inspect({ accountIds: ["acc-1"] });
+  return messages
+    .filter((message) => !message.deleted)
+    .map((message) => message.messageId);
+}
 
 async function databasePath() {
   const directory = await mkdtemp(join(tmpdir(), "mail-draft-removal-"));

@@ -970,10 +970,13 @@ export async function createSqliteMailStore(
           );
           if (
             input.operation.intent.kind === "send" &&
-            input.operation.intent.providerDraftId
+            input.operation.intent.providerDraftId &&
+            sentMessageId
           ) {
             // Sending the mailbox draft removes it there; its copies here
-            // would stay in Drafts until sync reports that.
+            // would stay in Drafts until sync reports that. Without the sent
+            // message the draft's row may be that message (Gmail keeps the
+            // id), so it waits for sync.
             await removeDraftMessages(
               tx,
               input.operation.key.accountId,

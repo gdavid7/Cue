@@ -1117,9 +1117,14 @@ function ReplyPanel({
           onRestoreCompose(composeSession);
           return false;
         }
-        await forgetDeletedDrafts(getActiveMailClient(), emailAccountId, [
-          result?.data?.deletedMessageId,
-        ]);
+        // Only once the mailbox confirms the delete: a draft it refused to
+        // delete, as after an edit elsewhere, must stay.
+        const deletedMessageId = result?.data?.deletedMessageId;
+        if (deletedMessageId)
+          forgetDeletedDrafts(getActiveMailClient(), emailAccountId, [
+            draftMessage.id,
+            deletedMessageId,
+          ]);
       } catch {
         toastError({ description: "Failed to discard draft" });
         onRestoreCompose(composeSession);

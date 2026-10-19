@@ -157,7 +157,7 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
           return false;
         }
         const client = getActiveMailClient();
-        await forgetDeletedDrafts(client, reply.emailAccountId, [
+        forgetDeletedDrafts(client, reply.emailAccountId, [
           result.data?.deletedMessageId,
         ]);
         client?.requestSync([reply.emailAccountId]).catch(() => {});

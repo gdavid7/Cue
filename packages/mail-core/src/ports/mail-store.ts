@@ -339,15 +339,15 @@ export interface MailStore {
   }): Promise<
     { status: "committed"; revision: LocalRevision } | { status: "stale" }
   >;
-  finishPreparation(input: {
-    accountId: string;
-    commandId: string;
-  }): Promise<Admission | { status: "stale" }>;
   /**
    * Queues a preparing command whose every conversation's membership is
    * known. `claimWork` also does this for any it finds, so a host stopped
    * between settling the membership and this call recovers.
    */
+  finishPreparation(input: {
+    accountId: string;
+    commandId: string;
+  }): Promise<Admission | { status: "stale" }>;
   /**
    * Removes mailbox drafts the provider confirmed deleted, before sync reports
    * it. Messages that aren't drafts stay; a later provider patch restores one.
