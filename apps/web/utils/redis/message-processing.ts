@@ -23,7 +23,11 @@ function getProcessingKey({
 // Keys written before RD-3 named the address. Until the last of them expires
 // (eight days after RD-3 shipped; scripts/deletePiiCacheKeys.ts renames the
 // processed ones sooner), a message an older deploy holds or handled under
-// the address key counts as held or processed here too.
+// the address key counts as held or processed here too. That covers an old
+// deploy that runs first. Old and new can still both process a message while
+// both deploys are live: Outlook's check and claim are two commands, and an
+// old Gmail run never reads the new key. That window is accepted, because
+// writing the address key again would bring the address back into Redis.
 function getLegacyProcessingKey({
   userEmail,
   messageId,
