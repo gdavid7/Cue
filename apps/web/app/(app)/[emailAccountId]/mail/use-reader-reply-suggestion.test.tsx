@@ -394,25 +394,8 @@ describe("useReaderReplySuggestion", () => {
     expect(lastEnabled()).toBe(false);
   });
 
-  // Never turned on isn't turned off: nothing drafts unasked, but "Draft a
-  // reply" is offered and works.
-  it("offers a draft without writing one unasked when drafting was never chosen", () => {
-    mocks.draftReplies = drafting("unset");
-    const { result } = renderSuggestion([
-      incoming("ask", ["INBOX", "Label_to_reply"]),
-    ]);
-
-    expect(lastEnabled()).toBe(false);
-    expect(result.current.reply.offer).toBe(true);
-
-    act(() => result.current.reply.request());
-
-    expect(lastEnabled()).toBe(true);
-    expect(result.current.reply.offer).toBe(false);
-  });
-
   it("waits for the Auto draft replies setting before deciding", () => {
-    mocks.draftReplies = drafting("unset", true);
+    mocks.draftReplies = drafting("on", true);
     const { rerender } = renderSuggestion([
       incoming("ask", ["INBOX", "Label_to_reply"]),
     ]);
@@ -496,7 +479,7 @@ function renderSuggestion(messages: ThreadMessage[]) {
   );
 }
 
-function drafting(setting: "on" | "off" | "unset", loading = false) {
+function drafting(setting: "on" | "off", loading = false) {
   return { enabled: setting === "on", setting, loading };
 }
 

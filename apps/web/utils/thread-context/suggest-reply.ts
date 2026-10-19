@@ -186,8 +186,7 @@ export async function suggestReply({
   const settings =
     knownSettings ?? (await getSuggestedReplySettings(emailAccountId));
   // Turning off "Auto draft replies" stops every AI-written reply, cached
-  // ones included. Never having chosen still allows one: Cue only works one
-  // out unasked when the setting is on, and the reader decides that.
+  // ones included.
   if (!canWriteRequestedReplies(settings.draftReplies))
     return { status: "unavailable" };
   const searchWeb = searchWebRequested && settings.webLookupEnabled;
@@ -273,6 +272,35 @@ export async function suggestReply({
     );
   if (pages.length) return suggest(pages);
   return plain ?? suggest([]);
+}
+
+/**
+ * The reader's suggestion, with one line saying how it ended, so a reply the
+ * user never saw can be told apart from Cue choosing not to write one. IDs
+ * and fixed reasons only: never the reply, what was missing, or the query.
+ */
+export async function suggestReaderReply(
+  options: Parameters<typeof suggestReply>[0] & {
+    settings: SuggestedReplySettings;
+  },
+): Promise<SuggestedReply | null> {
+  const log = (outcome: SuggestReplyOutcome) =>
+    options.logger.info("Reply suggestion outcome", {
+      ...outcome,
+      threadId: options.threadId,
+      webPass: Boolean(options.searchWeb),
+    });
+  try {
+    const suggestion = await suggestReply(options);
+    log(getSuggestReplyOutcome(suggestion, options.settings.draftReplies));
+    return suggestion;
+  } catch (error) {
+    log({
+      outcome: "unavailable",
+      reason: isGmailCallDeferredError(error) ? "quota" : "error",
+    });
+    throw error;
+  }
 }
 
 /**
@@ -663,4 +691,41 @@ async function hasEmailed({
     })
     .catch(() => null);
   return !!sent;
+}
+
+type SuggestReplyOutcome = {
+  outcome: "suggested" | "declined" | "unavailable" | "gated";
+  reason?:
+    | "insufficient-evidence"
+    | "unsupported-claim"
+    | "already-replied"
+    | "drafting-off"
+    | "no-ai-access"
+    | "no-thread"
+    | "quota"
+    | "error";
+};
+
+export function getSuggestReplyOutcome(
+  suggestion: SuggestedReply | null,
+  draftReplies: DraftRepliesSetting,
+): SuggestReplyOutcome {
+  if (!suggestion) return { outcome: "unavailable", reason: "no-thread" };
+  switch (suggestion.status) {
+    case "suggested":
+      return { outcome: "suggested" };
+    case "insufficient":
+      return {
+        outcome: "declined",
+        reason: suggestion.unsupported.length
+          ? "unsupported-claim"
+          : "insufficient-evidence",
+      };
+    case "already-replied":
+      return { outcome: "gated", reason: "already-replied" };
+    case "unavailable":
+      return canWriteRequestedReplies(draftReplies)
+        ? { outcome: "unavailable", reason: "no-ai-access" }
+        : { outcome: "gated", reason: "drafting-off" };
+  }
 }

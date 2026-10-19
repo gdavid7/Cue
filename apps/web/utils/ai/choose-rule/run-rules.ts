@@ -62,6 +62,7 @@ import {
   isMessagingChannelActionType,
   isMessagingDraftActionType,
 } from "@/utils/actions/draft-reply";
+import { withDefaultDraftReply } from "@/utils/rule/draft-replies-enabled";
 
 const MODULE = "ai/choose-rule";
 
@@ -119,10 +120,12 @@ export async function runRules({
     canonicalizeEmailAddress(emailAccount.email),
     ...(await getUserOwnAddresses(emailAccount.userId)),
   ]);
+  // A To Reply rule that never chose drafts, as "Auto draft replies" is on
+  // unless turned off.
   const { regularRules, conversationRules } = prepareRulesWithMetaRule(
     fromSelf
       ? rules.filter((rule) => !isConversationStatusType(rule.systemType))
-      : rules,
+      : rules.map(withDefaultDraftReply),
   );
   const draftSkipReason = fromSelf
     ? OWN_ADDRESS_DRAFT_SKIP_REASON

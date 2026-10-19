@@ -65,7 +65,6 @@ import { ThreadList } from "@/app/(app)/[emailAccountId]/mail/ThreadList";
 import { InboxStyleCard } from "@/app/(app)/[emailAccountId]/mail/InboxStylePicker";
 import { CueLabelsCard } from "@/components/CueLabelsCleanup";
 import { ReplyTrackingNotice } from "@/app/(app)/[emailAccountId]/mail/ReplyTrackingNotice";
-import { DraftRepliesCard } from "@/app/(app)/[emailAccountId]/mail/DraftRepliesCard";
 import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
 import { TodayIntroLine } from "@/app/(app)/[emailAccountId]/mail/TodayIntroLine";
 import { MailLoadingNote } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
@@ -2288,9 +2287,6 @@ export function MailShell() {
                 />
               )}
               {showSplitTabs && !isAllAccounts && <CueLabelsCard />}
-              {!isAllAccounts && (
-                <DraftRepliesCard inboxStyleCardShown={showSplitTabs} />
-              )}
               {!isAllAccounts && <ReplyTrackingNotice />}
               {!isAllAccounts && (
                 <SampleThread

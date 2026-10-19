@@ -495,6 +495,58 @@ describe("runRules for mail from the user's other mailbox", () => {
   });
 });
 
+// DR-5: "Auto draft replies" is on unless the user turned it off, so a To
+// Reply rule that never chose still drafts when mail needs a reply.
+describe("runRules with a To Reply rule that never chose drafting", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getUserOwnAddresses).mockResolvedValue([]);
+    prisma.executedRule.findFirst.mockResolvedValue(null);
+    prisma.executedRule.findMany.mockResolvedValue([]);
+    vi.mocked(determineConversationStatus).mockImplementation(
+      async ({ conversationRules }) => ({
+        rule:
+          conversationRules.find(
+            (rule) => rule.systemType === SystemType.TO_REPLY,
+          ) ?? null,
+        reason: "Email needs a reply",
+      }),
+    );
+    vi.mocked(getActionItemsWithAiArgs).mockImplementation(
+      async ({ selectedRule }) => selectedRule.actions,
+    );
+  });
+
+  it("drafts a reply for mail filed To Reply", async () => {
+    mockMatchingRules([{ rule: conversationMetaRule, matchReasons: [] }]);
+    const createSpy = mockExecutedRuleCreate({ rule: toReplyRule });
+
+    await runRulesWithDefaults({ rules: [toReplyRule] });
+
+    const { selectedRule } = vi.mocked(getActionItemsWithAiArgs).mock
+      .calls[0]![0];
+    expect(selectedRule.id).toBe(toReplyRule.id);
+    expect(selectedRule.actions.map((action) => action.type)).toEqual([
+      ActionType.DRAFT_EMAIL,
+    ]);
+    expect(getCreatedActionItems(createSpy)).toEqual([
+      expect.objectContaining({ type: ActionType.DRAFT_EMAIL }),
+    ]);
+  });
+
+  it("still leaves the draft out of a bulk run that skips drafts", async () => {
+    mockMatchingRules([{ rule: conversationMetaRule, matchReasons: [] }]);
+    mockExecutedRuleCreate({ rule: toReplyRule });
+
+    await runRulesWithDefaults({
+      rules: [toReplyRule],
+      skipDraftReplies: true,
+    });
+
+    expect(getActionItemsWithAiArgs).not.toHaveBeenCalled();
+  });
+});
+
 describe("runRules draft attribution persistence", () => {
   beforeEach(() => {
     vi.clearAllMocks();
