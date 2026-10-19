@@ -41,6 +41,7 @@ export async function answerSearch({
   emailAccountId,
   userEmail,
   query,
+  searches,
   emailProvider,
   logger,
   now = new Date(),
@@ -48,6 +49,8 @@ export async function answerSearch({
   emailAccountId: string;
   userEmail: string;
   query: string;
+  /** Searches Cue made of a question typed as a sentence, to find its mail. */
+  searches?: string[];
   emailProvider: EmailProvider;
   logger: Logger;
   now?: Date;
@@ -56,6 +59,7 @@ export async function answerSearch({
     emailAccountId,
     userEmail,
     query,
+    searches,
     emailProvider,
     logger,
     now,
@@ -104,7 +108,12 @@ ${sources.map(({ id, result }) => renderResult(id, result)).join("\n")}
   })
     .then((result) => result.object)
     .catch((error) => {
-      logger.warn("Search answer failed", { error });
+      // A parse or validation error's message can quote the model's output,
+      // which quotes the user's mail.
+      logger.warn("Search answer failed", {
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+      logger.trace("Search answer error", { error });
       return null;
     });
   if (!object) return null;

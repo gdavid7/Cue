@@ -47,6 +47,10 @@ import type {
 } from "@/utils/actions/mail-bulk-matching.validation";
 import { deleteMessagesForeverAction } from "@/utils/actions/mail-bulk-action";
 import { MailReaderPane } from "@/app/(app)/[emailAccountId]/mail/MailReaderPane";
+import { CueFoundSection } from "@/app/(app)/[emailAccountId]/mail/CueFoundSection";
+import { useCueSearch } from "@/app/(app)/[emailAccountId]/mail/use-cue-search";
+import { withoutPlainDuplicates } from "@/app/(app)/[emailAccountId]/mail/cue-search";
+import { usePremium } from "@/hooks/usePremium";
 import { preloadEmailThread } from "@/components/email-list/EmailThreadLazy";
 import { useWarmComposer } from "@/app/(app)/[emailAccountId]/compose/use-warm-composer";
 import { markFirstMailListShown } from "@/utils/mail-engine/first-mail-list";
@@ -201,6 +205,7 @@ export function MailShell() {
   const { emailAccount, emailAccountId, userEmail, provider, accountIds } =
     useAccount();
   const { data: accountsData } = useAccounts();
+  const { hasAiAccess } = usePremium();
   const isGoogle = isGoogleProvider(provider);
   const isOutlook = isMicrosoftProvider(provider);
   const { userLabels } = useEmailLabels();
@@ -746,7 +751,15 @@ export function MailShell() {
     previousSearchFocus.current = next;
     if (next.index !== focusedIndex) setFocusedIndex(next.index);
   }, [orderedIds, focusedIndex, searchQuery, searchViewIdentity]);
-  const { data: searchAnswer } = useSearchAnswer(emailAccountId, searchParam);
+  const cueSearch = useCueSearch({
+    emailAccountId,
+    query: searchParam,
+    enabled: hasAiAccess && !isAllAccounts,
+  });
+  const { data: searchAnswer } = useSearchAnswer(
+    emailAccountId,
+    cueSearch.answerRequest,
+  );
   const searchFoundNothing = Boolean(
     searchQuery &&
       hasProviderResponse &&
@@ -765,6 +778,18 @@ export function MailShell() {
   // mail, and with no answer it offers to ask in chat instead.
   if ((searchAnswer || searchFoundNothing) && isSearchCommitted)
     emptySearchMessage = "";
+  // Like the answer card, it stays while the search is edited, so picking
+  // one of its searches to edit doesn't pull it out from under the pointer.
+  const showCueFound = cueSearch.stage !== "off";
+  // Nothing matched only once Cue's own searches have found nothing too.
+  const searchFoundNothingAtAll =
+    searchFoundNothing &&
+    isSearchCommitted &&
+    (!showCueFound || cueSearch.foundNothing);
+  const cueFoundThreads = useMemo(
+    () => withoutPlainDuplicates(cueSearch.threads, threads),
+    [cueSearch.threads, threads],
+  );
 
   const selection = useThreadSelection(orderedIds);
 
@@ -1262,6 +1287,21 @@ export function MailShell() {
     // Split layout keeps the list, and focus with it.
     if (layout === "list" && nextKey) focusReaderWhenShown(nextKey);
     setOpenThread(nextSelection);
+  });
+  // A row Cue found may not be in the list, so the cursor stays where it is.
+  const openCueFoundThread = useStableCallback((thread: ListThread) => {
+    setReplyToMessageId(undefined);
+    setForwardToMessageId(undefined);
+    selection.clear();
+    const nextSelection = getListThreadSelection(thread, emailAccountId);
+    const nextKey = getThreadSelectionKey(nextSelection);
+    if (layout === "list" && nextKey) focusReaderWhenShown(nextKey);
+    setOpenThread(nextSelection);
+  });
+  // Puts one of Cue's searches in the box to edit, without running it yet.
+  const editCueSearch = useStableCallback((search: string) => {
+    onSearchChange(search);
+    searchInputRef.current?.focus();
   });
 
   // Selecting from a row (its checkbox, Space, Shift+click, a touch hold)
@@ -2364,10 +2404,35 @@ export function MailShell() {
                   accountEmail={isAllAccounts ? userEmail : undefined}
                   emailAccountId={emailAccountId}
                   key={searchParam}
-                  noResults={searchFoundNothing && isSearchCommitted}
+                  noResults={searchFoundNothingAtAll}
                   onContinueInChat={onContinueInChat}
                   query={searchParam}
+                  request={cueSearch.answerRequest}
                 />
+              ) : null}
+              {cueSearch.natural ? (
+                <CueFoundSection
+                  expandedPreview={expandedPreview}
+                  foundNothing={cueSearch.foundNothing}
+                  allInPlainResults={
+                    cueSearch.threads.length > 0 && !cueFoundThreads.length
+                  }
+                  intent={cueSearch.intent}
+                  key={searchParam}
+                  layout={layout}
+                  onEditSearch={editCueSearch}
+                  onOpenThread={openCueFoundThread}
+                  stage={cueSearch.stage}
+                  threads={cueFoundThreads}
+                  userEmail={userEmail}
+                  userLabels={userLabels}
+                  widerSearches={cueSearch.widerSearches}
+                />
+              ) : null}
+              {showCueFound && threads.length ? (
+                <p className="px-4 pt-3 pb-1 text-muted-foreground text-xs">
+                  Matching words
+                </p>
               ) : null}
               <MailPanelErrorBoundary
                 resetKey={JSON.stringify([

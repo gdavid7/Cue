@@ -215,6 +215,7 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     "user/senders/unsubscribe",
     "v1/senders/unsubscribe",
     "user/search-answer",
+    "user/search-intent",
     // The select-all banner waits on it to say how many conversations match.
     "user/mail/matching-count",
     // An open composer waits on it before showing its editor.
