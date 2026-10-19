@@ -54,10 +54,14 @@ export async function processMeetingBriefings({
   logger.info("Fetched upcoming events", { count: allEvents.length });
 
   // 2. Filter to events with external guests
-  const eventsWithExternalGuests = filterEventsWithExternalGuests(
-    allEvents,
-    userEmail,
-  );
+  const eventsWithExternalGuests =
+    allEvents.length > 0
+      ? filterEventsWithExternalGuests(
+          allEvents,
+          userEmail,
+          await getOwnAddresses(emailAccountId),
+        )
+      : [];
 
   if (eventsWithExternalGuests.length === 0) {
     logger.info("No events with external guests, skipping");
@@ -156,7 +160,11 @@ export async function runMeetingBrief({
   const eventLog = logger.with({ eventId: event.id });
 
   const { external: externalAttendees, internal: internalAttendees } =
-    partitionAttendeesForBriefing(event, userEmail);
+    partitionAttendeesForBriefing(
+      event,
+      userEmail,
+      await getOwnAddresses(emailAccountId),
+    );
   const externalGuestCount = externalAttendees.length;
 
   if (!isTestSend) {
@@ -321,4 +329,13 @@ async function upsertMeetingBriefingStatus({
   } catch (error) {
     logger.error("Failed to upsert meeting briefing status", { error, status });
   }
+}
+
+// Read from the database, so briefs add no email addresses to Redis.
+async function getOwnAddresses(emailAccountId: string) {
+  const mailboxes = await prisma.emailAccount.findMany({
+    where: { user: { emailAccounts: { some: { id: emailAccountId } } } },
+    select: { email: true },
+  });
+  return mailboxes.map((mailbox) => mailbox.email);
 }
