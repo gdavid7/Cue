@@ -395,6 +395,7 @@ export const betterAuthConfig = betterAuth({
     account: {
       create: {
         after: async (account: Account) => {
+          await recordGoogleConsent(account);
           await handleLinkAccount(account);
         },
       },
@@ -405,6 +406,9 @@ export const betterAuthConfig = betterAuth({
               context?.path?.startsWith("/callback/") ||
               context?.path?.startsWith("/oauth2/callback/")
             ) && getAuthProviderFromContext(context) === "google";
+          // Token refreshes also fire this hook with the stored refresh token,
+          // which isn't a new consent.
+          if (isGoogleCallback) await recordGoogleConsent(account);
           const renamedUser = await handleLinkAccount(
             account,
             isGoogleCallback,
@@ -662,6 +666,22 @@ async function getProfileData(providerId: string, accessToken: string) {
 
 function shouldLinkEmailAccount(providerId: string) {
   return isGoogleProvider(providerId) || isMicrosoftProvider(providerId);
+}
+
+// Sign-in only returns a refresh token when the user just granted consent.
+async function recordGoogleConsent(account: Account) {
+  if (!isGoogleProvider(account.providerId) || !account.refreshToken) return;
+  try {
+    await prisma.account.update({
+      where: { id: account.id },
+      data: { refreshTokenIssuedAt: new Date() },
+    });
+  } catch (error) {
+    logger.warn("Failed to record Google consent time", {
+      accountId: account.id,
+      error,
+    });
+  }
 }
 
 export async function handleLinkAccount(
