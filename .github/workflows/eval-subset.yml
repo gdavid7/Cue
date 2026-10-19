@@ -1,9 +1,9 @@
 name: Eval Subset
 
 # A small, single-model AI eval run when prompts, tool definitions or evals
-# change. The model under test is Claude (ANTHROPIC_API_KEY) and the judge is
-# Gemini (GOOGLE_API_KEY); both are repository secrets the founder adds under
-# Settings -> Secrets and variables -> Actions (docs/dev-infra/PLAN.md, item 1).
+# change. The model under test and the judge are both Claude, using the
+# ANTHROPIC_API_KEY repository secret (Settings -> Secrets and variables ->
+# Actions).
 #
 # Paid runs only start for this repository's own collaborators: pushes need
 # write access, pull requests must come from a branch here (never a fork) by an
@@ -46,7 +46,7 @@ concurrency:
 
 jobs:
   evals:
-    name: Eval subset (Claude, Gemini judge)
+    name: Eval subset (Claude, Claude judge)
     if: >-
       github.repository == 'gdavid7/Cue' &&
       (github.event_name != 'pull_request' ||
@@ -55,16 +55,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Require the eval keys
+      - name: Require the eval key
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
-          missing=()
-          [[ -n "$ANTHROPIC_API_KEY" ]] || missing+=(ANTHROPIC_API_KEY)
-          [[ -n "$GOOGLE_API_KEY" ]] || missing+=(GOOGLE_API_KEY)
-          if ((${#missing[@]})); then
-            echo "::error::Missing repository secret(s): ${missing[*]}. Add them under Settings -> Secrets and variables -> Actions."
+          if [[ -z "$ANTHROPIC_API_KEY" ]]; then
+            echo "::error::Missing repository secret ANTHROPIC_API_KEY. Add it under Settings -> Secrets and variables -> Actions."
             exit 1
           fi
 
@@ -115,11 +111,15 @@ jobs:
           FILES: ${{ steps.select.outputs.files }}
           RUN_AI_TESTS: "true"
           EVAL_REPORT_PATH: eval-results/report.md
+          # An empty value falls back to the catalog's OpenRouter default, which needs OPENROUTER_API_KEY
+          EVAL_MODELS: claude-sonnet-5.5-anthropic
           DEFAULT_LLMS: anthropic:claude-sonnet-5-5
+          CHAT_LLMS: anthropic:claude-sonnet-5-5
+          ECONOMY_LLMS: anthropic:claude-haiku-5-5
+          NANO_LLMS: anthropic:claude-haiku-5-5
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          EVAL_JUDGE_PROVIDER: google
-          EVAL_JUDGE_MODEL: gemini-3-flash
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          EVAL_JUDGE_PROVIDER: anthropic
+          EVAL_JUDGE_MODEL: claude-sonnet-5-5
           # Fixed values for env validation only; evals don't reach these.
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           AUTH_SECRET: test-secret
