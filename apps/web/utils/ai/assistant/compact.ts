@@ -57,6 +57,8 @@ export async function compactMessages({
   compactedMessages: ModelMessage[];
   summary: string;
   compactedCount: number;
+  /** User messages in the kept part, which starts at one. */
+  keptUserMessageCount: number;
 }> {
   const systemMessages: ModelMessage[] = [];
   const conversationMessages: ModelMessage[] = [];
@@ -82,6 +84,7 @@ export async function compactMessages({
       compactedMessages: messages,
       summary: "",
       compactedCount: 0,
+      keptUserMessageCount: 0,
     };
   }
 
@@ -134,6 +137,9 @@ ${serialized}
     compactedMessages: [...systemMessages, summaryMessage, ...recentMessages],
     summary: result.text,
     compactedCount: messagesToCompact.length,
+    keptUserMessageCount: recentMessages.filter(
+      (message) => message.role === "user",
+    ).length,
   };
 }
 
