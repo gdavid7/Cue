@@ -21,6 +21,8 @@ interface MessagesProps {
   messages: Array<ChatMessage>;
   persistedMessageIds: Set<string>;
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
+  /** The reply runs on the server but isn't streaming here. */
+  replyFinishing?: boolean;
   setMessages: UseChatHelpers<ChatMessage>["setMessages"];
   status: UseChatHelpers<ChatMessage>["status"];
 }
@@ -29,6 +31,7 @@ export function Messages({
   status,
   messages,
   persistedMessageIds,
+  replyFinishing = false,
   footer,
 }: MessagesProps) {
   const isAnswering = status === "streaming" || status === "submitted";
@@ -38,6 +41,7 @@ export function Messages({
   if (isAnswering && !hasAnswered) setHasAnswered(true);
   let answerStatus = "";
   if (isAnswering) answerStatus = "Cue is thinking…";
+  else if (replyFinishing) answerStatus = "Cue's reply is finishing…";
   else if (hasAnswered && status === "ready") answerStatus = "Cue replied";
   const emailLookup = useMemo(() => buildEmailLookup(messages), [messages]);
   const firstAssistantIndex = useMemo(
@@ -96,6 +100,16 @@ export function Messages({
                   </MessageContent>
                 </Message>
               )}
+            {replyFinishing && !isAnswering && (
+              <Message from="assistant">
+                <MessageContent variant="flat">
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Loader />
+                    <span>Reply finishing…</span>
+                  </div>
+                </MessageContent>
+              </Message>
+            )}
           </div>
           <div className="sr-only" role="status">
             {answerStatus}

@@ -815,6 +815,77 @@ describe("ChatProvider interrupted replies", () => {
     expect(mockResumeStream).toHaveBeenCalledTimes(1);
   });
 
+  // The server keeps no copy of a streaming reply (RD-3), so a dropped reply
+  // can't be reattached; the chat says it is finishing and checks back.
+  it("says a dropped reply is finishing and checks back until it is saved", async () => {
+    vi.useFakeTimers();
+    const mutate = vi.fn();
+    mockUseSWRConfig.mockReturnValue({ mutate });
+    chatState.status = "error";
+    chatState.messages = [
+      { id: "question", role: "user" },
+      { id: "stream-1", role: "assistant" },
+    ];
+    let running = true;
+    mockUseChatMessages.mockImplementation(() => ({
+      data: {
+        messages: [],
+        activeStreamId: running ? "stream-1" : null,
+        activeStreamStartedAt: running ? new Date().toISOString() : null,
+      },
+    }));
+    let latest: ReturnType<typeof useChat> | undefined;
+    function Consumer() {
+      latest = useChat();
+      return null;
+    }
+
+    try {
+      const { rerender } = renderWithProvider(<Consumer />);
+      expect(latest?.replyFinishing).toBe(true);
+      // The partial reply stays on screen until the whole one is saved.
+      expect(mockSetMessages).not.toHaveBeenCalled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(3000);
+      });
+      expect(mutate).toHaveBeenCalledWith([
+        expect.stringMatching(/^\/api\/chats\//),
+        "account-a",
+      ]);
+
+      running = false;
+      rerender(
+        <ChatProvider>
+          <Consumer />
+        </ChatProvider>,
+      );
+      expect(latest?.replyFinishing).toBe(false);
+      expect(mockSetMessages).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("doesn't say a reply is finishing once its run is too old to be alive", () => {
+    mockUseChatMessages.mockReturnValue({
+      data: {
+        messages: [],
+        activeStreamId: "stream-1",
+        activeStreamStartedAt: new Date(Date.now() - 600_000).toISOString(),
+      },
+    });
+    let latest: ReturnType<typeof useChat> | undefined;
+    function Consumer() {
+      latest = useChat();
+      return null;
+    }
+
+    renderWithProvider(<Consumer />);
+
+    expect(latest?.replyFinishing).toBe(false);
+  });
+
   it("does not reattach after an explicit stop", async () => {
     let latestContext: ReturnType<typeof useChat> | undefined;
     function Consumer() {

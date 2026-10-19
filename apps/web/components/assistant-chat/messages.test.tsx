@@ -51,6 +51,20 @@ describe("Messages", () => {
     expect(screen.getByRole("log").getAttribute("aria-live")).toBe("polite");
     expect(screen.getByRole("status").textContent).toBe("Cue replied");
   });
+
+  it("says the reply is finishing while its run saves it after a dropped stream", () => {
+    const { rerender } = render(
+      view("error", [userMessage, reply("Here are")], { replyFinishing: true }),
+    );
+    expect(screen.getByText("Reply finishing…")).toBeTruthy();
+    expect(screen.getByText("Here are")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Cue's reply is finishing…",
+    );
+
+    rerender(view("ready", [userMessage, reply("Here are your bills.")]));
+    expect(screen.queryByText("Reply finishing…")).toBeNull();
+  });
 });
 
 const userMessage = {
@@ -68,8 +82,9 @@ function reply(text: string) {
 }
 
 function view(
-  status: "ready" | "submitted" | "streaming",
+  status: "ready" | "submitted" | "streaming" | "error",
   messages: ChatMessage[],
+  { replyFinishing = false } = {},
 ) {
   return (
     <Messages
@@ -78,6 +93,7 @@ function view(
       messages={messages}
       persistedMessageIds={new Set()}
       regenerate={vi.fn()}
+      replyFinishing={replyFinishing}
       setMessages={vi.fn()}
       status={status}
     />

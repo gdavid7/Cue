@@ -84,6 +84,7 @@ export function Chat({
     setAttachments,
     submitTextMessage,
     stop,
+    replyFinishing,
     chatAccount,
     switchedAccount,
     chatAccountError,
@@ -373,6 +374,7 @@ export function Chat({
             status={status}
             messages={messages}
             persistedMessageIds={persistedMessageIds}
+            replyFinishing={replyFinishing}
             setMessages={setMessages}
             regenerate={regenerate}
             context={context}
@@ -404,6 +406,7 @@ function ChatMessagesView({
   status,
   messages,
   persistedMessageIds,
+  replyFinishing,
   setMessages,
   regenerate,
   context,
@@ -413,6 +416,7 @@ function ChatMessagesView({
   status: UseChatHelpers<ChatMessage>["status"];
   messages: ChatMessage[];
   persistedMessageIds: Set<string>;
+  replyFinishing: boolean;
   setMessages: UseChatHelpers<ChatMessage>["setMessages"];
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
   context: MessageContext | null;
@@ -426,6 +430,7 @@ function ChatMessagesView({
         status={status}
         messages={messages}
         persistedMessageIds={persistedMessageIds}
+        replyFinishing={replyFinishing}
         setMessages={setMessages}
         regenerate={regenerate}
         isArtifactVisible={false}
