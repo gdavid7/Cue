@@ -3,7 +3,6 @@ import { ActionType } from "@/generated/prisma/enums";
 import {
   canWriteRequestedReplies,
   getDraftRepliesSetting,
-  isDraftRepliesEnabled,
 } from "@/utils/rule/draft-replies-enabled";
 
 const mockEnv = vi.hoisted(() => ({ autoDraftDisabled: false }));
@@ -49,7 +48,6 @@ describe("getDraftRepliesSetting", () => {
     const setting = getDraftRepliesSetting(rule);
 
     expect(setting).toBe("unset");
-    expect(isDraftRepliesEnabled(rule)).toBe(false);
     expect(canWriteRequestedReplies(setting)).toBe(true);
   });
 

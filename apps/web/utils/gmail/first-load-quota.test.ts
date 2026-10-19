@@ -113,7 +113,8 @@ vi.mock("@/utils/user/get", () => ({
   getEmailAccountWithAi: async () => null,
 }));
 vi.mock("@/utils/rule/draft-replies-enabled", () => ({
-  isDraftRepliesEnabled: () => true,
+  getDraftRepliesSetting: () => "on",
+  canWriteRequestedReplies: () => true,
 }));
 // Only the shared Gmail quota gate paces Gmail here: the engine's own
 // envelope admits everything, so the bound below cannot come from it.

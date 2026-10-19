@@ -87,7 +87,7 @@ export function useReaderReplySuggestion({
   // Cue's read of the newest message says the sender is waiting, or Cue has
   // already tried a reply to it. Cue files To Reply in its own database, not
   // as a mailbox label, so the rule's runs count as well as a legacy label.
-  const { data: planData } = useThreadPlans({
+  const { data: planData, error: plansError } = useThreadPlans({
     threadId: enabled && current?.eligible ? threadId : null,
     emailAccountId,
   });
@@ -96,13 +96,22 @@ export function useReaderReplySuggestion({
     userLabels,
     plans: planData?.plans ?? NO_PLANS,
   }).has(SystemType.TO_REPLY);
+  // The rule's runs answer first; Cue's note is only asked for without them.
+  const plansSettled = Boolean(planData || plansError);
   const latestId = latest?.id;
   const insightItems = useMemo(
     () =>
-      current?.eligible && !filedToReply && threadId && latestId
+      current?.eligible && plansSettled && !filedToReply && threadId && latestId
         ? [threadInsightItem({ emailAccountId, threadId, messageId: latestId })]
         : [],
-    [current?.eligible, filedToReply, threadId, latestId, emailAccountId],
+    [
+      current?.eligible,
+      plansSettled,
+      filedToReply,
+      threadId,
+      latestId,
+      emailAccountId,
+    ],
   );
   const { data: insights, isLoading: insightLoading } =
     useInboxInsights(insightItems);
@@ -179,13 +188,15 @@ export function useReaderReplySuggestion({
       canRequest: canRequestReply,
       /**
        * Whether to offer "Draft a reply" under the reply actions: nothing is
-       * on its way, and Cue isn't still deciding to write one unasked.
+       * on its way, and Cue isn't still deciding to write one unasked. Waits
+       * for the setting too, so the button appears once rather than flickers.
        */
       offer:
+        !draftReplies.loading &&
         canRequestReply &&
         writesReplies &&
         !run &&
-        !(current?.eligible && insightLoading),
+        !(current?.eligible && (!plansSettled || insightLoading)),
       request: requestReply,
       /**
        * The newest message once there's nothing to wait for: its suggestion

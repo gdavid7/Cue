@@ -7,10 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useUser } from "@/hooks/useUser";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { dismissHintAction } from "@/utils/actions/hints";
-import {
-  getInboxStyleHintId,
-  getInboxStyleOptions,
-} from "@/utils/split-inbox/inbox-styles";
+import { isInboxStyleCardPending } from "@/utils/split-inbox/inbox-styles";
 
 /**
  * Asks once per mailbox, above the mail list, whether Cue should draft
@@ -32,11 +29,6 @@ export function DraftRepliesCard({
   const [isTurningOn, setIsTurningOn] = useState(false);
 
   const hintId = getDraftRepliesHintId(emailAccountId);
-  // Waits for the inbox style card, so a mailbox never shows both at once.
-  const inboxStylePending =
-    inboxStyleCardShown &&
-    getInboxStyleOptions(provider).length > 1 &&
-    !user?.dismissedHints.includes(getInboxStyleHintId(emailAccountId));
   if (
     isClosed ||
     loading ||
@@ -44,7 +36,12 @@ export function DraftRepliesCard({
     setting !== "unset" ||
     !user ||
     user.dismissedHints.includes(hintId) ||
-    inboxStylePending
+    (inboxStyleCardShown &&
+      isInboxStyleCardPending({
+        provider,
+        emailAccountId,
+        dismissedHints: user.dismissedHints,
+      }))
   ) {
     return null;
   }
@@ -58,14 +55,17 @@ export function DraftRepliesCard({
     setIsTurningOn(true);
     try {
       await toggleDraftReplies(true);
-      dismiss();
-    } catch {
+    } catch (error) {
+      // The card stays, so the user can try again or choose "Not now".
       toastError({
-        description: "Couldn’t turn on draft replies. Try again.",
+        title: "Couldn’t turn on draft replies",
+        description: error instanceof Error ? error.message : "Try again.",
       });
+      return;
     } finally {
       setIsTurningOn(false);
     }
+    dismiss();
   }
 
   return (
@@ -77,8 +77,8 @@ export function DraftRepliesCard({
         Cue can draft replies for mail that needs one
       </h2>
       <p className="mt-0.5 text-muted-foreground text-xs">
-        Drafts wait in the conversation for you to edit and send. Cue never
-        sends them. You can change this anytime in Settings.
+        Cue will sort out the mail that needs a reply and draft one in your tone
+        for you to edit and send. It never sends anything itself.
       </p>
       <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
         <Button

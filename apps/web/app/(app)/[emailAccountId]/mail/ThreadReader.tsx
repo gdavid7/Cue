@@ -395,21 +395,25 @@ export function ThreadReader({
                 ) : null
               }
               replyStatus={
-                replyStatus ??
-                (reply.offer ? (
-                  // Where Cue's progress and answer appear once asked, so the
-                  // button gives way to them in place.
-                  <Button
-                    onClick={requestDraftReply}
-                    size="sm"
-                    type="button"
-                    variant="ghost"
-                    className="-ml-2 text-muted-foreground"
-                  >
-                    <SparklesIcon aria-hidden className="mr-2 size-4" />
-                    Draft a reply
-                  </Button>
-                ) : null)
+                replyStatus || reply.offer ? (
+                  // Where Cue's progress and answer appear once asked: the
+                  // button gives way to them in place, at the button's height,
+                  // so nothing below moves.
+                  <div className="flex min-h-9 items-center">
+                    {replyStatus ?? (
+                      <Button
+                        onClick={requestDraftReply}
+                        size="sm"
+                        type="button"
+                        variant="ghost"
+                        className="-ml-2 text-muted-foreground"
+                      >
+                        <SparklesIcon aria-hidden className="mr-2 size-4" />
+                        Draft a reply
+                      </Button>
+                    )}
+                  </div>
+                ) : null
               }
               earlierMessages={
                 localAvailability?.hasMore

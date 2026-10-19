@@ -41,7 +41,12 @@ import { isGoogleProvider } from "@/utils/email/provider-types";
 import type { AttachmentSourceInput } from "@/utils/attachments/source-schema";
 import { assertCanUseDigestsIfNeeded } from "@/utils/premium/server";
 import { toCreateOrUpdateRuleCondition } from "@/utils/rule/create-rule-condition";
-import { getRuleConfig } from "@/utils/rule/consts";
+import { replyTrackingRuleData } from "@/utils/reply-tracker/initial-rules";
+import {
+  createRuleHistory,
+  ruleHistoryRuleInclude,
+} from "@/utils/rule/rule-history";
+import { after } from "next/server";
 
 export const createRuleAction = actionClient
   .metadata({ name: "createRule" })
@@ -174,19 +179,19 @@ export const enableDraftRepliesAction = actionClient
       include: { actions: true },
     });
 
-    if (!existingRule && !enable) {
+    if (!existingRule) {
+      if (enable) await createDraftOnlyToReplyRule(emailAccountId);
       return;
     }
 
-    const rule = existingRule
-      ? existingRule.enabled === enable
+    const rule =
+      existingRule.enabled === enable
         ? existingRule
         : await setRuleEnabled({
             ruleId: existingRule.id,
             emailAccountId,
             enabled: enable,
-          })
-      : await createDraftOnlyToReplyRule(emailAccountId);
+          });
 
     if (enable) {
       const alreadyDraftingReplies = rule.actions.find(
@@ -768,26 +773,20 @@ export const importRulesAction = actionClient
 /**
  * To Reply as new mailboxes get it (see INITIAL_REPLY_TRACKING_RULES): Cue
  * sorts in its own database, so the rule only drafts and never creates or
- * applies a mailbox label. The caller adds the draft action.
+ * applies a mailbox label. It also turns reply tracking on, which To Reply is.
  */
 async function createDraftOnlyToReplyRule(emailAccountId: string) {
-  const config = getRuleConfig(SystemType.TO_REPLY);
+  const data = replyTrackingRuleData(SystemType.TO_REPLY);
   try {
-    return await prisma.rule.create({
-      data: {
-        emailAccountId,
-        name: config.name,
-        instructions: config.instructions,
-        systemType: SystemType.TO_REPLY,
-        runOnThreads: config.runOnThreads,
-        enabled: true,
-      },
-      include: { actions: true },
+    const rule = await prisma.rule.create({
+      data: { ...data, emailAccountId },
+      include: ruleHistoryRuleInclude,
     });
+    after(() => createRuleHistory({ rule, triggerType: "created" }));
   } catch (error) {
     if (isDuplicateError(error, "name")) {
       throw new SafeError(
-        `You already have a rule named "${config.name}". Rename it and try again.`,
+        `You already have a rule named "${data.name}". Rename it and try again.`,
       );
     }
     throw error;

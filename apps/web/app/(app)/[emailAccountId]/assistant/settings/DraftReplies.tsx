@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
+import { useSWRConfig } from "swr";
 import { Toggle } from "@/components/Toggle";
 import { enableDraftRepliesAction } from "@/utils/actions/rule";
 import { toastError } from "@/components/Toast";
@@ -11,6 +12,7 @@ import { LoadingContent } from "@/components/LoadingContent";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SettingCard } from "@/components/SettingCard";
 import { getDraftRepliesSetting } from "@/utils/rule/draft-replies-enabled";
+import { getActionErrorMessage } from "@/utils/error";
 
 export function DraftReplies() {
   const { enabled, toggleDraftReplies, loading, error } = useDraftReplies();
@@ -52,6 +54,7 @@ export function DraftReplies() {
 export function useDraftReplies() {
   const { data, mutate, isLoading, error } = useRules();
   const { emailAccountId } = useAccount();
+  const { mutate: mutateGlobal } = useSWRConfig();
 
   const toReplyRule = data?.find(
     (rule) => rule.systemType === SystemType.TO_REPLY,
@@ -113,22 +116,21 @@ export function useDraftReplies() {
       // Update SWR cache optimistically
       mutate(optimisticData, false);
 
+      let result: Awaited<ReturnType<typeof enableDraftRepliesAction>>;
       try {
-        // Call the actual API
-        const result = await enableDraftRepliesAction(emailAccountId, {
-          enable,
-        });
-
+        result = await enableDraftRepliesAction(emailAccountId, { enable });
+      } finally {
+        // Settles the optimistic update either way. To Reply is also reply
+        // tracking, so Mail's "Reply tracking is off" notice follows it.
         mutate();
-
-        return result;
-      } catch (error) {
-        // On error, revert the optimistic update
-        mutate();
-        throw error;
+        mutateGlobal("/api/mail/settings");
       }
+      if (result?.serverError || result?.validationErrors) {
+        throw new Error(getActionErrorMessage(result));
+      }
+      return result;
     },
-    [data, mutate, emailAccountId],
+    [data, mutate, mutateGlobal, emailAccountId],
   );
 
   const setting = getDraftRepliesSetting(toReplyRule);

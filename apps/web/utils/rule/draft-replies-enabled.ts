@@ -31,15 +31,6 @@ export function getDraftRepliesSetting(
 }
 
 /**
- * Whether "Auto draft replies" is on, so Cue drafts without being asked. The
- * settings toggle, rule drafting and the reader's pre-filled reply all follow
- * this one switch.
- */
-export function isDraftRepliesEnabled(toReplyRule: ToReplyRule) {
-  return getDraftRepliesSetting(toReplyRule) === "on";
-}
-
-/**
  * Whether Cue may write a reply the user asks for. Only an explicit "off"
  * stops it: that choice means no AI-written reply at all.
  */
