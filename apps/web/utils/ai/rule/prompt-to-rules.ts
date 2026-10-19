@@ -8,6 +8,7 @@ import {
   createRuleSchema,
 } from "@/utils/ai/rule/create-rule-schema";
 import { createScopedLogger } from "@/utils/logger";
+import { SafeError } from "@/utils/error";
 import { convertMentionsToLabels } from "@/utils/mention";
 import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
 import { isIntegrationActionEnabledForUserId } from "@/utils/integration-action.server";
@@ -72,29 +73,33 @@ ${cleanedPromptFile}
     throw new Error("No rules found in AI response");
   }
 
-  const generated = Array.isArray(aiResponse.object.rules)
-    ? aiResponse.object.rules
-    : [];
-  const parsed = generated.map((rule) => ruleSchema.safeParse(rule));
-  const rules = parsed.flatMap((result) =>
-    result.success ? [result.data] : [],
-  );
-  const firstError = parsed.find((result) => !result.success)?.error;
+  const generated = aiResponse.object.rules;
+  if (!Array.isArray(generated)) {
+    logger.warn("AI response had no rules list");
+    throw new SafeError(INVALID_RULES_MESSAGE, 422);
+  }
 
-  if (firstError) {
-    logger.warn("Dropped invalid rules from AI response", {
-      invalidCount: generated.length - rules.length,
-      generatedCount: generated.length,
-    });
-    if (rules.length === 0) {
-      throw new Error(
-        `The generated rule was invalid: ${firstError.issues[0]?.message}`,
+  // All or nothing, so a request never creates only some of its rules.
+  const rules: CreateRuleSchema[] = [];
+  for (const rule of generated) {
+    const parsed = ruleSchema.safeParse(rule);
+    if (!parsed.success) {
+      logger.warn("AI response had an invalid rule", {
+        generatedCount: generated.length,
+      });
+      throw new SafeError(
+        `${INVALID_RULES_MESSAGE} ${parsed.error.issues[0]?.message ?? ""}`.trim(),
+        422,
       );
     }
+    rules.push(parsed.data);
   }
 
   return rules;
 }
+
+const INVALID_RULES_MESSAGE =
+  "Could not turn that into a valid rule. Try describing it differently.";
 
 function getSystemPrompt() {
   return `You are an AI assistant that converts email management rules into a structured format. Parse the given prompt and convert it into rules.

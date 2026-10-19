@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getEmailAccount } from "@/__tests__/helpers";
 import { ActionType } from "@/generated/prisma/enums";
 import { aiPromptToRules } from "@/utils/ai/rule/prompt-to-rules";
+import { SafeError } from "@/utils/error";
 
 const { mockGenerateObject } = vi.hoisted(() => ({
   mockGenerateObject: vi.fn(),
@@ -40,18 +41,46 @@ describe("aiPromptToRules", () => {
     mockGenerateObject.mockReset();
   });
 
-  it("keeps the valid rules when one generated rule is invalid", async () => {
+  it("rejects the whole request with a 4xx error when any rule is invalid", async () => {
     mockGenerateObject.mockResolvedValue({
       object: { rules: [validRule, labelWithoutName] },
     });
 
-    const rules = await aiPromptToRules({
+    const error = await aiPromptToRules({
       emailAccount: getEmailAccount(),
       promptFile: "Label receipts. Label newsletters.",
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(SafeError);
+    expect((error as SafeError).statusCode).toBe(422);
+    expect((error as SafeError).safeMessage).toContain(
+      "LABEL requires fields.label.",
+    );
+    expect(mockGenerateObject).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a response without a rules list instead of returning none", async () => {
+    mockGenerateObject.mockResolvedValue({ object: {} });
+
+    await expect(
+      aiPromptToRules({
+        emailAccount: getEmailAccount(),
+        promptFile: "Label receipts.",
+      }),
+    ).rejects.toBeInstanceOf(SafeError);
+  });
+
+  it("returns every rule when all are valid", async () => {
+    mockGenerateObject.mockResolvedValue({
+      object: { rules: [validRule, { ...validRule, name: "Invoices" }] },
     });
 
-    expect(rules.map((rule) => rule.name)).toEqual(["Receipts"]);
-    expect(mockGenerateObject).toHaveBeenCalledTimes(1);
+    const rules = await aiPromptToRules({
+      emailAccount: getEmailAccount(),
+      promptFile: "Label receipts and invoices.",
+    });
+
+    expect(rules.map((rule) => rule.name)).toEqual(["Receipts", "Invoices"]);
   });
 
   it("does not ask the model layer to validate, so it never retries a schema failure", async () => {
