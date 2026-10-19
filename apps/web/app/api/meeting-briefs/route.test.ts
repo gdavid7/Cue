@@ -121,5 +121,38 @@ describe("meeting briefs cron route", () => {
     );
     expect(maxActive).toBe(5);
     expect(captureExceptionMock).toHaveBeenCalledTimes(2);
+    const [{ deadline }] = processUserMeetingBriefingsMock.mock.calls[0];
+    expect(deadline.getTime() - Date.now()).toBeGreaterThan(200_000);
+    expect(deadline.getTime() - Date.now()).toBeLessThanOrEqual(240_000);
+  });
+
+  it("does not hold other users back behind one slow user", async () => {
+    mockPrisma.emailAccount.findMany.mockResolvedValue(
+      Array.from({ length: 7 }, (_, index) => ({
+        id: `email-account-${index + 1}`,
+        userId: `user-${index + 1}`,
+        email: `account-${index + 1}@example.test`,
+        meetingBriefingsMinutesBefore: 60,
+      })),
+    );
+
+    const finished: string[] = [];
+    processUserMeetingBriefingsMock.mockImplementation(
+      async ({ userId }: { userId: string }) => {
+        await new Promise((resolve) =>
+          setTimeout(resolve, userId === "user-1" ? 50 : 0),
+        );
+        finished.push(userId);
+        return [];
+      },
+    );
+
+    await GET(
+      new Request("http://localhost:3000/api/meeting-briefs", {
+        headers: { authorization: "Bearer cron-secret" },
+      }),
+    );
+
+    expect(finished.at(-1)).toBe("user-1");
   });
 });

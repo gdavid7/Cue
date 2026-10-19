@@ -33,6 +33,7 @@ const logger = createTestLogger();
 const NOW = new Date("2026-03-02T09:00:00Z");
 const USER_ID = "user-1";
 
+type Account = { id: string; email: string };
 const ACCOUNT_A = { id: "acc-a", email: "me@alpha.test" };
 const ACCOUNT_B = { id: "acc-b", email: "me@beta.test" };
 const ACCOUNT_C = { id: "acc-c", email: "me@gamma.test" };
@@ -47,6 +48,8 @@ type Row = {
 let rows: Row[];
 let eventsByAccount: Record<string, CalendarEvent[]>;
 let failingClaims: Set<string>;
+let failingFetches: Set<string>;
+let knownAccounts: Account[];
 
 describe("processUserMeetingBriefings", () => {
   beforeEach(() => {
@@ -55,14 +58,20 @@ describe("processUserMeetingBriefings", () => {
     rows = [];
     eventsByAccount = {};
     failingClaims = new Set();
+    failingFetches = new Set();
+    knownAccounts = [ACCOUNT_A, ACCOUNT_B, ACCOUNT_C];
     mockBriefingStore();
     vi.mocked(fetchUpcomingEvents).mockImplementation(
-      async ({ emailAccountId }) => eventsByAccount[emailAccountId] ?? [],
+      async ({ emailAccountId }) => {
+        if (failingFetches.has(emailAccountId)) throw new Error("fetch failed");
+        return eventsByAccount[emailAccountId] ?? [];
+      },
     );
     vi.mocked(gatherContextForEvent).mockResolvedValue({
       externalGuests: [{ email: "guest@client.test" }],
       internalTeamMembers: [],
     } as never);
+    vi.mocked(aiGenerateMeetingBriefing).mockReset();
     vi.mocked(aiGenerateMeetingBriefing).mockResolvedValue({} as never);
     vi.mocked(sendBriefing).mockReset();
     vi.mocked(sendBriefing).mockResolvedValue(undefined as never);
@@ -97,7 +106,7 @@ describe("processUserMeetingBriefings", () => {
     expect(statusOf("acc-c", "c-1")).toBe(MeetingBriefingStatus.SKIPPED);
   });
 
-  it("takes over an unclaimed chosen copy once the meeting is within one cron interval", async () => {
+  it("takes over an unclaimed chosen copy near the start time", async () => {
     eventsByAccount = {
       [ACCOUNT_A.id]: [meeting("a-1", { startsIn: 10 })],
       [ACCOUNT_B.id]: [meeting("b-1", { startsIn: 10 })],
@@ -109,23 +118,46 @@ describe("processUserMeetingBriefings", () => {
     expect(briefedCopies()).toEqual([["acc-b", "b-1"]]);
   });
 
-  it("waits for an unclaimed chosen copy while a later tick can still brief it", async () => {
+  it("takes over at once from a chosen copy that crashed before claiming, and the chosen copy then stands down", async () => {
     eventsByAccount = {
-      [ACCOUNT_A.id]: [meeting("a-1", { startsIn: 40 })],
-      [ACCOUNT_B.id]: [meeting("b-1", { startsIn: 40 })],
+      [ACCOUNT_A.id]: [meeting("a-1", { startsIn: 60 })],
+      [ACCOUNT_B.id]: [meeting("b-1", { startsIn: 60 })],
     };
     failingClaims.add("acc-a");
 
     await runTick([ACCOUNT_A, ACCOUNT_B]);
 
-    expect(briefedCopies()).toEqual([]);
-    expect(statusOf("acc-b", "b-1")).toBeUndefined();
+    expect(briefedCopies()).toEqual([["acc-b", "b-1"]]);
+    expect(statusOf("acc-a", "a-1")).toBeUndefined();
 
     failingClaims.clear();
+    vi.setSystemTime(addMinutes(NOW, 15));
     await runTick([ACCOUNT_A, ACCOUNT_B]);
 
-    expect(briefedCopies()).toEqual([["acc-a", "a-1"]]);
-    expect(statusOf("acc-b", "b-1")).toBe(MeetingBriefingStatus.SKIPPED);
+    expect(briefedCopies()).toEqual([["acc-b", "b-1"]]);
+    expect(statusOf("acc-a", "a-1")).toBe(MeetingBriefingStatus.SKIPPED);
+  });
+
+  it("briefs once when the chosen copy's calendar fetch fails on one tick and succeeds on the next", async () => {
+    eventsByAccount = {
+      [ACCOUNT_A.id]: [meeting("a-1", { startsIn: 60 })],
+      [ACCOUNT_B.id]: [meeting("b-1", { startsIn: 60 })],
+    };
+    failingFetches.add("acc-a");
+
+    const firstTick = await runTick([ACCOUNT_A, ACCOUNT_B]);
+
+    expect(briefedCopies()).toEqual([["acc-b", "b-1"]]);
+    expect(firstTick.find((r) => r.emailAccountId === "acc-a")?.error).toEqual(
+      expect.any(Error),
+    );
+
+    failingFetches.clear();
+    vi.setSystemTime(addMinutes(NOW, 15));
+    await runTick([ACCOUNT_A, ACCOUNT_B]);
+
+    expect(briefedCopies()).toEqual([["acc-b", "b-1"]]);
+    expect(statusOf("acc-a", "a-1")).toBe(MeetingBriefingStatus.SKIPPED);
   });
 
   it("lets only the next copy in order take over a failed brief among three mailboxes", async () => {
@@ -165,8 +197,8 @@ describe("processUserMeetingBriefings", () => {
 
   it("takes over a chosen copy that has been pending past the cron's run limit", async () => {
     eventsByAccount = {
-      [ACCOUNT_A.id]: [meeting("a-1")],
-      [ACCOUNT_B.id]: [meeting("b-1")],
+      [ACCOUNT_A.id]: [meeting("a-1", { startsIn: 60 })],
+      [ACCOUNT_B.id]: [meeting("b-1", { startsIn: 60 })],
     };
     rows.push(
       row("acc-a", "a-1", MeetingBriefingStatus.PENDING, addMinutes(NOW, -7)),
@@ -177,10 +209,10 @@ describe("processUserMeetingBriefings", () => {
     expect(briefedCopies()).toEqual([["acc-b", "b-1"]]);
   });
 
-  it("waits on a chosen copy that is still pending within the run limit", async () => {
+  it("waits once on a fresh pending copy, and briefs even if the next tick is missed", async () => {
     eventsByAccount = {
-      [ACCOUNT_A.id]: [meeting("a-1")],
-      [ACCOUNT_B.id]: [meeting("b-1")],
+      [ACCOUNT_A.id]: [meeting("a-1", { startsIn: 40 })],
+      [ACCOUNT_B.id]: [meeting("b-1", { startsIn: 40 })],
     };
     rows.push(
       row("acc-a", "a-1", MeetingBriefingStatus.PENDING, addMinutes(NOW, -2)),
@@ -190,6 +222,26 @@ describe("processUserMeetingBriefings", () => {
 
     expect(briefedCopies()).toEqual([]);
     expect(statusOf("acc-b", "b-1")).toBeUndefined();
+
+    // The next tick is missed; the one after lands 10 minutes before start.
+    vi.setSystemTime(addMinutes(NOW, 30));
+    await runTick([ACCOUNT_A, ACCOUNT_B]);
+
+    expect(briefedCopies()).toEqual([["acc-b", "b-1"]]);
+  });
+
+  it("does not wait on a fresh pending copy when the next tick could land after the start", async () => {
+    eventsByAccount = {
+      [ACCOUNT_A.id]: [meeting("a-1", { startsIn: 16 })],
+      [ACCOUNT_B.id]: [meeting("b-1", { startsIn: 16 })],
+    };
+    rows.push(
+      row("acc-a", "a-1", MeetingBriefingStatus.PENDING, addMinutes(NOW, -1)),
+    );
+
+    await runTick([ACCOUNT_A, ACCOUNT_B]);
+
+    expect(briefedCopies()).toEqual([["acc-b", "b-1"]]);
   });
 
   it("keeps two different meetings with the same title and time apart", async () => {
@@ -210,6 +262,44 @@ describe("processUserMeetingBriefings", () => {
 
     expect(briefedCopies()).toEqual([
       ["acc-a", "a-1"],
+      ["acc-b", "b-1"],
+    ]);
+  });
+
+  it("keeps meetings apart that share only an internal attendee or the user's own address", async () => {
+    eventsByAccount = {
+      [ACCOUNT_A.id]: [
+        meeting("a-1", {
+          attendees: [
+            { email: "me@alpha.test" },
+            { email: "interviewer@alpha.test" },
+            { email: "candidate-1@client.test" },
+          ],
+        }),
+        meeting("a-2", {
+          attendees: [
+            { email: "me@alpha.test" },
+            { email: "interviewer@alpha.test" },
+            { email: "candidate-2@other.test" },
+          ],
+        }),
+      ],
+      [ACCOUNT_B.id]: [
+        meeting("b-1", {
+          attendees: [
+            { email: "me@alpha.test" },
+            { email: "me@beta.test" },
+            { email: "candidate-3@third.test" },
+          ],
+        }),
+      ],
+    };
+
+    await runTick([ACCOUNT_A, ACCOUNT_B]);
+
+    expect(briefedCopies()).toEqual([
+      ["acc-a", "a-1"],
+      ["acc-a", "a-2"],
       ["acc-b", "b-1"],
     ]);
   });
@@ -239,6 +329,45 @@ describe("processUserMeetingBriefings", () => {
     expect(statusOf("acc-a", "a-2")).toBe(MeetingBriefingStatus.SENT);
   });
 
+  it("briefs many mailboxes in parallel and starts no brief after the deadline", async () => {
+    const accounts = Array.from({ length: 8 }, (_, index) => ({
+      id: `acc-${index}`,
+      email: `me@mailbox-${index}.test`,
+    }));
+    knownAccounts = accounts;
+    eventsByAccount = Object.fromEntries(
+      accounts.map((account) => [
+        account.id,
+        [meeting(`${account.id}-event`, { title: `Call ${account.id}` })],
+      ]),
+    );
+    const deadline = new Date(NOW.getTime() + 240_000);
+    let active = 0;
+    let maxActive = 0;
+    const startedAt: number[] = [];
+    vi.mocked(aiGenerateMeetingBriefing).mockImplementation(async () => {
+      startedAt.push(Date.now());
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await Promise.resolve();
+      // Each brief takes a minute.
+      vi.setSystemTime(Date.now() + 60_000);
+      active--;
+      return {} as never;
+    });
+
+    await runTick(accounts, deadline);
+
+    expect(maxActive).toBeGreaterThan(1);
+    expect(startedAt.length).toBeGreaterThan(0);
+    expect(startedAt.every((time) => time < deadline.getTime())).toBe(true);
+    const unclaimed = accounts.filter(
+      (account) => !statusOf(account.id, `${account.id}-event`),
+    );
+    expect(unclaimed.length).toBeGreaterThan(0);
+    expect(unclaimed.length + briefedCopies().length).toBe(accounts.length);
+  });
+
   it("only reads briefing state from the user's own mailboxes", async () => {
     eventsByAccount = {
       [ACCOUNT_A.id]: [meeting("a-1")],
@@ -248,13 +377,7 @@ describe("processUserMeetingBriefings", () => {
     await runTick([ACCOUNT_A, ACCOUNT_B]);
 
     for (const [args] of prisma.meetingBriefing.findMany.mock.calls) {
-      const where = args?.where;
-      expect(
-        where?.emailAccount?.userId === USER_ID ||
-          [ACCOUNT_A.id, ACCOUNT_B.id].includes(
-            where?.emailAccountId as string,
-          ),
-      ).toBe(true);
+      expect(args?.where?.emailAccount?.userId).toBe(USER_ID);
     }
     for (const [args] of prisma.emailAccount.findUnique.mock.calls) {
       expect(args.where.userId).toBe(USER_ID);
@@ -262,13 +385,17 @@ describe("processUserMeetingBriefings", () => {
   });
 });
 
-function runTick(accounts: { id: string; email: string }[]) {
+function runTick(
+  accounts: Account[],
+  deadline = new Date(Date.now() + 240_000),
+) {
   return processUserMeetingBriefings({
     userId: USER_ID,
     emailAccounts: accounts.map((account) => ({
       ...account,
       meetingBriefingsMinutesBefore: 30,
     })),
+    deadline,
     logger,
   });
 }
@@ -277,13 +404,18 @@ function meeting(
   id: string,
   {
     startsIn = 30,
+    title = "Quarterly review",
     attendees = [{ email: "guest@client.test" }],
-  }: { startsIn?: number; attendees?: CalendarEvent["attendees"] } = {},
+  }: {
+    startsIn?: number;
+    title?: string;
+    attendees?: CalendarEvent["attendees"];
+  } = {},
 ): CalendarEvent {
   const startTime = addMinutes(NOW, startsIn);
   return {
     id,
-    title: "Quarterly review",
+    title,
     startTime,
     endTime: addMinutes(startTime, 30),
     attendees,
@@ -319,10 +451,8 @@ function mockBriefingStore() {
   }: {
     where: { id: string; userId?: string };
   }) => {
-    const account = [ACCOUNT_A, ACCOUNT_B, ACCOUNT_C].find(
-      (a) => a.id === where.id,
-    );
-    if (!account || (where.userId && where.userId !== USER_ID)) return null;
+    const account = knownAccounts.find((a) => a.id === where.id);
+    if (!account || where.userId !== USER_ID) return null;
     return {
       ...account,
       userId: USER_ID,
@@ -373,21 +503,17 @@ function mockBriefingStore() {
     where,
   }: {
     where: {
-      emailAccountId?: string;
-      calendarEventId?: { in: string[] };
-      OR?: { emailAccountId: string; calendarEventId: string }[];
+      emailAccount?: { userId: string };
+      OR: { emailAccountId: string; calendarEventId: string }[];
     };
   }) =>
     rows.filter(
       (r) =>
-        (!where.emailAccountId || r.emailAccountId === where.emailAccountId) &&
-        (!where.calendarEventId ||
-          where.calendarEventId.in.includes(r.calendarEventId)) &&
-        (!where.OR ||
-          where.OR.some(
-            (pair) =>
-              pair.emailAccountId === r.emailAccountId &&
-              pair.calendarEventId === r.calendarEventId,
-          )),
+        where.emailAccount?.userId === USER_ID &&
+        where.OR.some(
+          (pair) =>
+            pair.emailAccountId === r.emailAccountId &&
+            pair.calendarEventId === r.calendarEventId,
+        ),
     )) as never);
 }
