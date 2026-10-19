@@ -10,6 +10,8 @@ import { InboxIcon, Trash2, MoreVertical } from "lucide-react";
 import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
+import useSWR from "swr";
+import type { GetEmailAccountRemovalImpactResponse } from "@/app/api/user/email-account/removal-impact/route";
 import { AlertError } from "@/components/Alert";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { LoadingContent } from "@/components/LoadingContent";
@@ -242,9 +244,30 @@ function AccountOptionsDropdown({
           onConfirm={() => {
             execute({ emailAccountId: emailAccount.id });
           }}
-        />
+        >
+          <LostConnectionsWarning emailAccountId={emailAccount.id} />
+        </ConfirmDialog>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+// Connections that can't move to the mailbox that stays are deleted with this
+// one, so the person sees what to reconnect before deciding.
+function LostConnectionsWarning({
+  emailAccountId,
+}: {
+  emailAccountId: string;
+}) {
+  const { data } = useSWR<GetEmailAccountRemovalImpactResponse>([
+    "/api/user/email-account/removal-impact",
+    emailAccountId,
+  ]);
+  if (!data?.lostConnections.length) return null;
+  return (
+    <p className="text-muted-foreground text-sm" role="note">
+      {`These connections can't move to another mailbox and will be removed: ${data.lostConnections.join(", ")}. You can reconnect them afterwards.`}
+    </p>
   );
 }
 

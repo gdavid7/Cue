@@ -8,6 +8,20 @@ const PROVIDER_HOSTED_APPS = Object.values(MCP_INTEGRATIONS)
   .filter((integration) => integration.provider)
   .map((integration) => integration.name);
 
+/** The mailbox that stays when one is removed: the oldest other one. */
+export function remainingEmailAccountQuery({
+  userId,
+  removedEmailAccountId,
+}: {
+  userId: string;
+  removedEmailAccountId: string;
+}) {
+  return {
+    where: { userId, id: { not: removedEmailAccountId } },
+    orderBy: { createdAt: "asc" as const },
+  };
+}
+
 /**
  * Calendars, Drive and connected apps serve every mailbox of the person, but
  * each connection row belongs to the mailbox it was made from and is deleted
@@ -28,6 +42,86 @@ export async function getMoveSharedConnectionsOperations({
   fromEmailAccountId: string;
   toEmailAccountId: string;
 }): Promise<Prisma.PrismaPromise<unknown>[]> {
+  const stays = await getStayingConnectionFilters(toEmailAccountId);
+  const from = { emailAccountId: fromEmailAccountId, emailAccount: { userId } };
+  const data = { emailAccountId: toEmailAccountId };
+
+  return [
+    prisma.calendarConnection.updateMany({
+      where: { ...from, ...(stays.calendar ? { NOT: stays.calendar } : {}) },
+      data,
+    }),
+    prisma.driveConnection.updateMany({
+      where: { ...from, ...(stays.drive ? { NOT: stays.drive } : {}) },
+      data,
+    }),
+    // Custom app servers the person registered from this mailbox.
+    prisma.mcpIntegration.updateMany({ where: from, data }),
+    prisma.mcpConnection.updateMany({
+      where: { ...from, NOT: stays.app },
+      data,
+    }),
+  ];
+}
+
+/**
+ * The connections removing a mailbox deletes rather than moves, named for the
+ * person deciding whether to remove it.
+ */
+export async function getConnectionsLostOnRemoval({
+  userId,
+  fromEmailAccountId,
+  toEmailAccountId,
+}: {
+  userId: string;
+  fromEmailAccountId: string;
+  toEmailAccountId: string;
+}): Promise<string[]> {
+  const stays = await getStayingConnectionFilters(toEmailAccountId);
+  const from = { emailAccountId: fromEmailAccountId, emailAccount: { userId } };
+  const [calendars, drives, apps] = await Promise.all([
+    stays.calendar
+      ? prisma.calendarConnection.findMany({
+          where: { ...from, ...stays.calendar },
+          select: { provider: true, email: true },
+        })
+      : [],
+    stays.drive
+      ? prisma.driveConnection.findMany({
+          where: { ...from, ...stays.drive },
+          select: { provider: true, email: true },
+        })
+      : [],
+    prisma.mcpConnection.findMany({
+      where: { ...from, ...stays.app },
+      select: { integration: { select: { name: true } } },
+    }),
+  ]);
+
+  return [
+    ...calendars.map(
+      ({ provider, email }) =>
+        `${provider === "microsoft" ? "Outlook Calendar" : "Google Calendar"} (${email})`,
+    ),
+    ...drives.map(
+      ({ provider, email }) =>
+        `${provider === "microsoft" ? "OneDrive" : "Google Drive"} (${email})`,
+    ),
+    ...new Set(
+      apps.map(
+        ({ integration }) =>
+          MCP_INTEGRATIONS[integration.name]?.displayName ?? integration.name,
+      ),
+    ),
+  ];
+}
+
+/**
+ * Which of a removed mailbox's connections stay behind with it: what the
+ * remaining mailbox has its own copy of, and apps that can't change mailbox.
+ * A null filter means none of that kind stays.
+ */
+async function getStayingConnectionFilters(toEmailAccountId: string) {
   const [calendars, drives, apps] = await Promise.all([
     prisma.calendarConnection.findMany({
       where: { emailAccountId: toEmailAccountId },
@@ -42,53 +136,32 @@ export async function getMoveSharedConnectionsOperations({
       select: { integrationId: true },
     }),
   ]);
-  const data = { emailAccountId: toEmailAccountId };
-
-  return [
-    prisma.calendarConnection.updateMany({
-      where: {
-        emailAccountId: fromEmailAccountId,
-        emailAccount: { userId },
-        ...(calendars.length > 0
-          ? {
-              NOT: calendars.map(({ provider, email }) => ({
-                provider,
-                email,
-              })),
-            }
-          : {}),
-      },
-      data,
-    }),
-    prisma.driveConnection.updateMany({
-      where: {
-        emailAccountId: fromEmailAccountId,
-        emailAccount: { userId },
-        ...(drives.length > 0
-          ? { provider: { notIn: drives.map(({ provider }) => provider) } }
-          : {}),
-      },
-      data,
-    }),
-    // Custom app servers the person registered from this mailbox.
-    prisma.mcpIntegration.updateMany({
-      where: { emailAccountId: fromEmailAccountId, emailAccount: { userId } },
-      data,
-    }),
-    prisma.mcpConnection.updateMany({
-      where: {
-        emailAccountId: fromEmailAccountId,
-        emailAccount: { userId },
-        integration: { name: { notIn: PROVIDER_HOSTED_APPS } },
-        ...(apps.length > 0
-          ? {
-              integrationId: {
-                notIn: apps.map(({ integrationId }) => integrationId),
+  return {
+    calendar: calendars.length
+      ? {
+          OR: calendars.map(({ provider, email }) => ({ provider, email })),
+        }
+      : null,
+    drive: drives.length
+      ? { provider: { in: drives.map(({ provider }) => provider) } }
+      : null,
+    app: {
+      OR: [
+        { integration: { name: { in: PROVIDER_HOSTED_APPS } } },
+        ...(apps.length
+          ? [
+              {
+                integrationId: {
+                  in: apps.map(({ integrationId }) => integrationId),
+                },
               },
-            }
-          : {}),
-      },
-      data,
-    }),
-  ];
+            ]
+          : []),
+      ],
+    },
+  } satisfies {
+    calendar: Prisma.CalendarConnectionWhereInput | null;
+    drive: Prisma.DriveConnectionWhereInput | null;
+    app: Prisma.McpConnectionWhereInput;
+  };
 }
