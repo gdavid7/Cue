@@ -10,6 +10,7 @@ import prisma from "@/utils/__mocks__/prisma";
 import { getMockMessage } from "@/__tests__/helpers";
 import type { RunRulesResult } from "@/utils/ai/choose-rule/run-rules";
 import type { EmailProvider } from "@/utils/email/types";
+import { currentGmailQuotaContext } from "@/utils/gmail/quota";
 import { createScopedLogger } from "@/utils/logger";
 import { predraftReply } from "@/utils/reply-tracker/predraft-reply";
 
@@ -22,19 +23,24 @@ vi.mock("@/env", () => ({
   },
 }));
 
-const { counters, suggestReply, getSuggestedReplySettings } = vi.hoisted(
-  () => ({
+const { counters, claims, suggestReply, getSuggestedReplySettings } =
+  vi.hoisted(() => ({
     counters: new Map<string, number>(),
+    claims: new Set<string>(),
     suggestReply: vi.fn(),
     getSuggestedReplySettings: vi.fn(),
-  }),
-);
+  }));
 vi.mock("@/utils/redis", () => ({
   redis: {
     eval: vi.fn(async (_script: string, keys: string[]) => {
       const count = (counters.get(keys[0]) ?? 0) + 1;
       counters.set(keys[0], count);
       return count;
+    }),
+    set: vi.fn(async (key: string) => {
+      if (claims.has(key)) return null;
+      claims.add(key);
+      return "OK";
     }),
   },
 }));
@@ -57,6 +63,7 @@ describe("predraftReply", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     counters.clear();
+    claims.clear();
     getSuggestedReplySettings.mockResolvedValue({
       draftReplies: "on",
       webLookupEnabled: false,
@@ -123,7 +130,8 @@ describe("predraftReply", () => {
 
   it("skips the 21st pre-draft of the day", async () => {
     const outcomes = [];
-    for (let i = 0; i < 21; i++) outcomes.push(await run());
+    for (let i = 0; i < 21; i++)
+      outcomes.push(await run({ messageId: `message-${i}` }));
 
     expect(outcomes.slice(0, 20).every((o) => o === "drafted")).toBe(true);
     expect(outcomes[20]).toBe("daily-cap");
@@ -185,18 +193,54 @@ describe("predraftReply", () => {
     expect(await run()).toBe("no-suggestion");
     expect(prisma.executedAction.create).not.toHaveBeenCalled();
   });
+
+  // D-086: nobody asked for it, so it waits behind sync and the user.
+  it("reads Gmail at background priority", async () => {
+    let priority: string | undefined;
+    suggestReply.mockImplementation(async () => {
+      priority = currentGmailQuotaContext().priority;
+      return { status: "suggested", reply: REPLY, citations: [] };
+    });
+
+    await run();
+
+    expect(priority).toBe("background");
+  });
+
+  it("writes one pre-draft when two webhooks deliver the same message", async () => {
+    const outcomes = await Promise.all([run(), run()]);
+
+    expect(outcomes.sort()).toEqual(["already-suggested", "drafted"]);
+    expect(suggestReply).toHaveBeenCalledTimes(1);
+    const [key] = claims;
+    expect(key).toMatch(/^predraft-message:v1:account-1:[0-9a-f]{64}$/);
+    expect(key).not.toContain("message-1");
+  });
+
+  it("reports a failure instead of throwing", async () => {
+    const logger = createScopedLogger("predraft-test");
+    const error = vi.spyOn(logger, "error");
+    suggestReply.mockRejectedValue(new Error("model down"));
+
+    expect(await run({ logger })).toBe("failed");
+    expect(error).toHaveBeenCalledWith("Reply pre-draft failed", {
+      error: expect.any(Error),
+    });
+  });
 });
 
 function run({
   results = [toReplyResult],
   logger = createScopedLogger("predraft-test"),
+  messageId = "message-1",
 }: {
   results?: RunRulesResult[];
   logger?: ReturnType<typeof createScopedLogger>;
+  messageId?: string;
 } = {}) {
   return predraftReply({
     emailAccount,
-    message: getMockMessage({ id: "message-1", threadId: "thread-1" }),
+    message: getMockMessage({ id: messageId, threadId: "thread-1" }),
     results,
     provider,
     logger,

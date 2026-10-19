@@ -10,7 +10,12 @@ import type { EmailProvider } from "@/utils/email/types";
 import { TRIAGE_AI_LABELS } from "@/utils/llms/spend-bucket";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
-import { claimPredraftSlot } from "@/utils/redis/predraft-cap";
+import { captureException } from "@/utils/error";
+import { runWithGmailQuota } from "@/utils/gmail/quota";
+import {
+  claimPredraftMessage,
+  claimPredraftSlot,
+} from "@/utils/redis/predraft-cap";
 import { logReplySuggestionStage } from "@/utils/reply-tracker/suggestion-funnel";
 import {
   getSuggestedReplySettings,
@@ -25,7 +30,8 @@ type PredraftOutcome =
   | "already-suggested"
   | "daily-cap"
   | "no-suggestion"
-  | "drafted";
+  | "drafted"
+  | "failed";
 
 /**
  * Writes Cue's reply suggestion for incoming mail the rules just filed To
@@ -37,22 +43,42 @@ type PredraftOutcome =
  * Only with "Auto draft replies" on, which is what lets Cue reply unasked;
  * never twice for a message, so not where a rule already wrote one; and at
  * most the daily cap per account.
+ *
+ * Nobody asked for it, so its Gmail reads run at background priority (D-086),
+ * behind sync and the user's own requests. It never throws: a failure is
+ * logged and reported, by ID only.
  */
-export async function predraftReply({
-  emailAccount,
-  message,
-  results,
-  provider,
-  logger,
-  now = new Date(),
-}: {
+export async function predraftReply(
+  options: PredraftOptions,
+): Promise<PredraftOutcome> {
+  try {
+    return await runWithGmailQuota({ priority: "background" }, () =>
+      predraft(options),
+    );
+  } catch (error) {
+    options.logger.error("Reply pre-draft failed", { error });
+    captureException(error, { emailAccountId: options.emailAccount.id });
+    return "failed";
+  }
+}
+
+type PredraftOptions = {
   emailAccount: { id: string; email: string };
   message: ParsedMessage;
   results: RunRulesResult[];
   provider: EmailProvider;
   logger: Logger;
   now?: Date;
-}): Promise<PredraftOutcome> {
+};
+
+async function predraft({
+  emailAccount,
+  message,
+  results,
+  provider,
+  logger,
+  now = new Date(),
+}: PredraftOptions): Promise<PredraftOutcome> {
   const filedToReply = results.some(
     (result) =>
       !result.existing &&
@@ -90,6 +116,15 @@ export async function predraftReply({
   ]);
   if (!toReplyRun) return "not-needed";
   if (ruleSuggestion) return "already-suggested";
+  // Two deliveries of the same message's webhook pre-draft it once.
+  if (
+    !(await claimPredraftMessage({
+      emailAccountId: emailAccount.id,
+      messageId: message.id,
+      logger,
+    }))
+  )
+    return "already-suggested";
 
   if (
     !(await claimPredraftSlot({ emailAccountId: emailAccount.id, logger, now }))
