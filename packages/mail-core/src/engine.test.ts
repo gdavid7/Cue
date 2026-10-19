@@ -152,6 +152,20 @@ describe("mail engine idle catch-up scheduling", () => {
     await harness.engine.close();
   });
 
+  it("reads changes on its first turn after a reload, whatever the stretched clock says", async () => {
+    // Streams with checkpoints are what a reloaded page starts from.
+    const harness = idleCatchUpHarness({
+      streamIds: ["inbox", "archive"],
+      changesCatchUpIntervalMs: 5 * 60_000,
+    });
+
+    await harness.engine.runUntil(1000);
+
+    expect(harness.readChangeStreams).toEqual(["inbox", "archive"]);
+    expect(harness.nowMs).toBe(0);
+    await harness.engine.close();
+  });
+
   it("retries a failed change read on the idle clock, not the stretched one", async () => {
     const harness = idleCatchUpHarness({
       streamIds: ["inbox"],

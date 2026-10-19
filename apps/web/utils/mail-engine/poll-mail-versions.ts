@@ -45,7 +45,6 @@ export function pollMailVersions({
   let stopped = false;
   let interval: ReturnType<typeof setInterval> | undefined;
   let release: (() => void) | undefined;
-  const abort = new AbortController();
   // Used when storage is unavailable, so the baseline lasts while this tab
   // polls.
   let ownSeen: Seen = { key: null, etag: null, versions: {} };
@@ -67,13 +66,11 @@ export function pollMailVersions({
       onChanged(due);
       return;
     }
-    // An account first seen here sets its baseline; the engine syncs it
-    // when it starts anyway.
+    // An account with no baseline yet (first poll, or storage unavailable)
+    // syncs too: a change may have landed since this browser last looked.
     const moved = due.filter(
       (id) =>
-        id in answer.versions &&
-        id in seen.versions &&
-        answer.versions[id] !== seen.versions[id],
+        id in answer.versions && answer.versions[id] !== seen.versions[id],
     );
     ownSeen = {
       key,
@@ -84,36 +81,74 @@ export function pollMailVersions({
     if (moved.length > 0) onChanged(moved);
   };
 
-  const run = () => {
-    interval = setInterval(() => {
-      tick().catch(() => undefined);
-    }, POLL_MS);
+  const poll = () => {
+    tick().catch(() => undefined);
+  };
+  let request: AbortController | null = null;
+  // Polls at once on taking over, so a tab that just started, or took over
+  // from one that closed, does not wait a whole interval.
+  const lead = () => {
+    clearInterval(interval);
+    poll();
+    interval = setInterval(poll, POLL_MS);
+  };
+  const start = () => {
+    if (stopped || request || polled.length === 0) return;
+    const current = new AbortController();
+    request = current;
+    if (!locks) {
+      lead();
+      return;
+    }
+    locks
+      .request(POLL_LOCK, { signal: current.signal }, () => {
+        if (request !== current) return;
+        lead();
+        return new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      })
+      .catch(() => {
+        // Paused or stopped while another tab polled.
+      });
+  };
+  const pause = () => {
+    clearInterval(interval);
+    interval = undefined;
+    request?.abort();
+    request = null;
+    release?.();
+    release = undefined;
+  };
+  // A page kept in the back/forward cache must not keep the lock from the
+  // tabs still open.
+  const onPageHide = () => pause();
+  const onPageShow = (event: PageTransitionEvent) => {
+    if (event.persisted) start();
   };
 
-  if (polled.length > 0) {
-    if (locks) {
-      locks
-        .request(POLL_LOCK, { signal: abort.signal }, () => {
-          if (stopped) return;
-          run();
-          return new Promise<void>((resolve) => {
-            release = resolve;
-          });
-        })
-        .catch(() => {
-          // Stopped while another tab polled.
-        });
-    } else {
-      run();
-    }
-  }
+  window.addEventListener("pagehide", onPageHide);
+  window.addEventListener("pageshow", onPageShow);
+  start();
 
   return () => {
     stopped = true;
-    clearInterval(interval);
-    abort.abort();
-    release?.();
+    window.removeEventListener("pagehide", onPageHide);
+    window.removeEventListener("pageshow", onPageShow);
+    pause();
   };
+}
+
+/**
+ * Every account the engine keeps, so new mail reaches it (and its
+ * notifications) while no tab streams that account. In a stable order, so
+ * switching between those accounts keeps the poll and its lock.
+ */
+export function getPolledAccountIds(
+  emailAccountId: string,
+  accountIds: string[],
+) {
+  return [...new Set([emailAccountId, ...accountIds])].sort();
 }
 
 async function streamedAccounts(locks: PollLocks | undefined) {

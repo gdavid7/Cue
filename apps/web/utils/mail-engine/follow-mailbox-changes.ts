@@ -71,7 +71,11 @@ export function followMailboxChanges({
   let waiting: AbortController | null = null;
   let releaseLock: (() => void) | null = null;
 
+  // Set while the page sits in the back/forward cache.
+  let suspended = false;
+
   const engaged = () =>
+    !suspended &&
     document.visibilityState !== "hidden" &&
     Date.now() - lastInputAt < USER_IDLE_MS;
 
@@ -169,6 +173,17 @@ export function followMailboxChanges({
     lastInputAt = Date.now();
     if (wasIdle && document.visibilityState !== "hidden") resume();
   };
+  // A page kept in the back/forward cache must not hold the stream or its
+  // lock from the tabs still open.
+  const onPageHide = () => {
+    suspended = true;
+    stepDown();
+  };
+  const onPageShow = (event: PageTransitionEvent) => {
+    if (!event.persisted) return;
+    suspended = false;
+    if (document.visibilityState !== "hidden") resume();
+  };
   const tick = setInterval(() => {
     if (!engaged()) {
       stepDown();
@@ -179,6 +194,8 @@ export function followMailboxChanges({
 
   document.addEventListener("visibilitychange", onVisibilityChange);
   window.addEventListener("focus", onFocus);
+  window.addEventListener("pagehide", onPageHide);
+  window.addEventListener("pageshow", onPageShow);
   for (const type of ACTIVITY_EVENTS)
     window.addEventListener(type, onActivity, { passive: true, capture: true });
   lead();
@@ -186,6 +203,8 @@ export function followMailboxChanges({
     clearInterval(tick);
     document.removeEventListener("visibilitychange", onVisibilityChange);
     window.removeEventListener("focus", onFocus);
+    window.removeEventListener("pagehide", onPageHide);
+    window.removeEventListener("pageshow", onPageShow);
     for (const type of ACTIVITY_EVENTS)
       window.removeEventListener(type, onActivity, { capture: true });
     stepDown();

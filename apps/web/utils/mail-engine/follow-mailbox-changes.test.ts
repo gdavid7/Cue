@@ -235,6 +235,27 @@ describe("followMailboxChanges", () => {
     expect(second.onChange).not.toHaveBeenCalled();
   });
 
+  it("lets the stream and its lock go while the page sits in the back/forward cache", async () => {
+    const locks = new FakeLocks();
+    const tab = followTab(locks);
+    await flush();
+    expect(locks.held()).toEqual(["cue:mail-stream:acc/1"]);
+
+    window.dispatchEvent(new Event("pagehide"));
+    await flush();
+    expect(tab.sources[0].closed).toBe(true);
+    expect(locks.held()).toEqual([]);
+    // Input on a cached page does not take the stream back.
+    window.dispatchEvent(new Event("keydown"));
+    await flush();
+    expect(locks.held()).toEqual([]);
+
+    window.dispatchEvent(pageShow(true));
+    await flush();
+    expect(locks.held()).toEqual(["cue:mail-stream:acc/1"]);
+    expect(tab.sources.filter((source) => !source.closed)).toHaveLength(1);
+  });
+
   function followTab(locks: FakeLocks) {
     const tab = { sources: [] as FakeEventSource[], onChange: vi.fn() };
     const stop = followMailboxChanges({
@@ -311,6 +332,12 @@ class FakeLocks {
       });
     });
   }
+}
+
+function pageShow(persisted: boolean) {
+  const event = new Event("pageshow") as PageTransitionEvent;
+  Object.defineProperty(event, "persisted", { value: persisted });
+  return event;
 }
 
 async function flush() {
