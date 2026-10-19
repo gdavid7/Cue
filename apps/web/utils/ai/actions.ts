@@ -196,7 +196,7 @@ const label: ActionFunction<{
  * A rule's reply is a suggestion kept in Cue, not a mailbox draft: the reader
  * shows it, and it reaches the mailbox only as a draft once the user edits it
  * (or as a sent reply). Its text is already stored on the executed action, so
- * there is nothing to write here; `execute` marks it pending.
+ * there is nothing to write here; `execute` marks it pending when told so.
  */
 const draft: ActionFunction<{
   messagingChannelId?: string | null;
@@ -218,6 +218,8 @@ const draft: ActionFunction<{
       logger,
     });
   }
+
+  return { replySuggestion: true };
 };
 
 const draft_messaging_channel: ActionFunction<{

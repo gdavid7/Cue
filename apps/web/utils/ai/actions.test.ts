@@ -144,7 +144,7 @@ describe("runActionFunction", () => {
       logger,
     });
 
-    expect(result).toBeUndefined();
+    expect(result).toEqual({ replySuggestion: true });
     expect(client.draftEmail).not.toHaveBeenCalled();
     expect(client.deleteDraft).not.toHaveBeenCalled();
     expect(resolveDraftAttachments).not.toHaveBeenCalled();

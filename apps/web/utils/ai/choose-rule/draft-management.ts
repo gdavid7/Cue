@@ -136,9 +136,6 @@ export async function handlePreviousDraftDeletion({
 }
 
 /**
- * Updates the ExecutedAction record with the Gmail draft ID.
- */
-/**
  * A rule's reply waits in Cue as a suggestion: pending, with no mailbox draft.
  * The reader shows it, and outbound tracking compares the sent reply with it.
  */

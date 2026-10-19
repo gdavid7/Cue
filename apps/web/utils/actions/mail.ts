@@ -7,6 +7,7 @@ import { sendEmailBody } from "@/utils/types/mail";
 import { actionClient } from "@/utils/actions/safe-action";
 import { DraftNotFoundError, SafeError } from "@/utils/error";
 import { createEmailProvider } from "@/utils/email/provider";
+import { attachRuleSuggestionFiles } from "@/utils/reply-tracker/suggestion-attachments";
 import { sendHtmlEmailWithOpenTracking } from "@/utils/email/sent-message-open/sent-message-open.server";
 import {
   deleteMailboxItemBody,
@@ -525,8 +526,14 @@ export const saveComposeDraftAction = actionClient
   .inputSchema(saveComposeDraftBody)
   .action(
     async ({
-      ctx: { emailAccountId, provider: providerName, logger },
-      parsedInput,
+      ctx: {
+        emailAccountId,
+        userId,
+        emailAccount,
+        provider: providerName,
+        logger,
+      },
+      parsedInput: { ruleSuggestionId, ...parsedInput },
     }) => {
       const provider = await createEmailProvider({
         emailAccountId,
@@ -537,7 +544,15 @@ export const saveComposeDraftAction = actionClient
         provider,
         ...parsedInput,
       });
-      return saved;
+      if (!ruleSuggestionId || parsedInput.draftId) return saved;
+      const attachments = await attachRuleSuggestionFiles({
+        provider,
+        draftId: saved.draftId,
+        executedActionId: ruleSuggestionId,
+        emailAccount: { id: emailAccountId, userId, email: emailAccount.email },
+        logger,
+      });
+      return { ...saved, attachments: attachments ?? undefined };
     },
   );
 

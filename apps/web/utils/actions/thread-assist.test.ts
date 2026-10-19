@@ -174,6 +174,17 @@ describe("recordSuggestedReplyDraftAction", () => {
         executedActionId: "suggestion-1",
       },
     });
+    // A suggestion belongs to one draft: an older record lets go of it first,
+    // in the same batch, so the unique link can't conflict.
+    expect(prisma.suggestedReplyDraft.updateMany).toHaveBeenCalledWith({
+      where: {
+        executedActionId: "suggestion-1",
+        NOT: { emailAccountId: EMAIL_ACCOUNT_ID, draftId: "draft-9" },
+      },
+      data: { executedActionId: null },
+    });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(prisma.$transaction).mock.calls[0][0]).toHaveLength(2);
   });
 
   it("remembers a suggestion this browser kept by its text", async () => {

@@ -213,23 +213,37 @@ export const recordSuggestedReplyDraftAction = actionClient
       const content = ruleSuggestion?.content ?? suggested;
       if (!content) return;
 
+      const upsert = prisma.suggestedReplyDraft.upsert({
+        where: { emailAccountId_draftId: { emailAccountId, draftId } },
+        create: {
+          emailAccountId,
+          threadId,
+          messageId,
+          draftId,
+          content,
+          executedActionId: ruleSuggestion?.id,
+        },
+        update: {
+          messageId,
+          content,
+          executedActionId: ruleSuggestion?.id,
+        },
+      });
       try {
-        await prisma.suggestedReplyDraft.upsert({
-          where: { emailAccountId_draftId: { emailAccountId, draftId } },
-          create: {
-            emailAccountId,
-            threadId,
-            messageId,
-            draftId,
-            content,
-            executedActionId: ruleSuggestion?.id,
-          },
-          update: {
-            messageId,
-            content,
-            executedActionId: ruleSuggestion?.id,
-          },
-        });
+        // A suggestion belongs to one draft: the newest, when a discarded
+        // draft's record still holds it.
+        await (ruleSuggestion
+          ? prisma.$transaction([
+              prisma.suggestedReplyDraft.updateMany({
+                where: {
+                  executedActionId: ruleSuggestion.id,
+                  NOT: { emailAccountId, draftId },
+                },
+                data: { executedActionId: null },
+              }),
+              upsert,
+            ])
+          : upsert);
       } catch (error) {
         // The draft is saved; only learning from its edits is lost.
         logger.error("Failed to record suggested reply draft", { error });

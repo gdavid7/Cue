@@ -1017,6 +1017,10 @@ function ReplyPanel({
   const [suggestedBodyHtml] = useState(() =>
     assist && !draftMessage ? textToHtmlParagraphs(assist.reply) : undefined,
   );
+  // A rule's reply can go to other people, or under its own subject.
+  const [suggestedRecipients] = useState(() =>
+    assist && !draftMessage ? assist.recipients : undefined,
+  );
   const draftSessionId = getReplyDraftSessionId(
     draftSessionMessageId ?? message.id,
     composeMode,
@@ -1064,12 +1068,19 @@ function ReplyPanel({
     if (composeMode === "reply") {
       if (draftSource) return prepareDraftReplyEmail(draftSource);
 
-      return prepareReplyingToEmail({
+      const reply = prepareReplyingToEmail({
         message,
         threadOn: replyAnchor,
         replyAll,
         ownEmails,
       });
+      return {
+        ...reply,
+        to: suggestedRecipients?.to ?? reply.to,
+        cc: suggestedRecipients?.cc ?? reply.cc,
+        bcc: suggestedRecipients?.bcc ?? reply.bcc,
+        subject: suggestedRecipients?.subject ?? reply.subject,
+      };
     }
     return forwardSource
       ? prepareForwardingEmail(forwardSource, Boolean(replyAnchor))
@@ -1082,6 +1093,7 @@ function ReplyPanel({
     replyAnchor,
     replyAll,
     ownEmails,
+    suggestedRecipients,
   ]);
 
   const { executeAsync: discardDraft } = useAction(

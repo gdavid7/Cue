@@ -83,6 +83,11 @@ export const updateDraftBody = z.object({
 export const saveComposeDraftBody = z.object({
   draftId: z.string().min(1).optional(),
   content: sendEmailBody,
+  /**
+   * The rule's suggestion a new draft starts from: its files go on the draft
+   * with it, read on the server.
+   */
+  ruleSuggestionId: z.string().trim().min(1).max(64).optional(),
 });
 export const composeDraftParams = z.object({
   draftId: z.string().min(1),

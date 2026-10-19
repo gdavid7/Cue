@@ -25,6 +25,8 @@ import { getDraftSendLogSimilarityFields } from "./draft-similarity";
 import { logReplyTrackerError } from "./error-logging";
 
 const DRAFT_SENT_SIMILARITY_THRESHOLD = 0.7;
+const SUGGESTION_EXACT_SIMILARITY = 0.85;
+const SUGGESTION_MIN_COMPARABLE_LENGTH = 40;
 /**
  * Checks if a sent message originated from an AI draft (a rule's draft or a
  * suggested reply the user saved) and logs its similarity.
@@ -73,6 +75,7 @@ export async function trackSentDraftStatus({
         id: true,
         createdAt: true,
         content: true,
+        to: true,
         draftId: true,
         executedRuleId: true,
         executedRule: {
@@ -645,7 +648,14 @@ async function trackSentSuggestedReplyDraft({
           where: {
             id: executedActionId,
             draftId: null,
-            draftStatus: DraftEmailStatus.PENDING,
+            // A newer message may have settled it as unused meanwhile; the
+            // draft it became says otherwise.
+            draftStatus: {
+              in: [
+                DraftEmailStatus.PENDING,
+                DraftEmailStatus.CLEANED_UP_UNUSED,
+              ],
+            },
           },
           data: { draftStatus },
         }),
@@ -686,6 +696,8 @@ async function trackSentReplySuggestion({
   executedAction: {
     id: string;
     content: string | null;
+    /** Set when the rule's reply goes to someone other than the sender. */
+    to?: string | null;
     executedRuleId: string;
     executedRule: {
       messageId: string;
@@ -697,6 +709,7 @@ async function trackSentReplySuggestion({
   logger: Logger;
 }) {
   const executedActionId = executedAction.id;
+  const toSomeoneElse = Boolean(executedAction.to?.trim());
   const {
     sentMessageRepliesToSource,
     similarityScore,
@@ -713,11 +726,17 @@ async function trackSentReplySuggestion({
     logger,
   });
 
-  const draftStatus =
-    sentMessageRepliesToSource !== false &&
-    similarityScore >= DRAFT_SENT_SIMILARITY_THRESHOLD
-      ? DraftEmailStatus.LIKELY_SENT
-      : DraftEmailStatus.REPLIED_WITHOUT_DRAFT;
+  // A short suggestion ("Thanks!") is close to many replies, so it needs a
+  // near-exact match to count as used.
+  const wasUsed =
+    (toSomeoneElse || sentMessageRepliesToSource !== false) &&
+    (similarityScore >= SUGGESTION_EXACT_SIMILARITY ||
+      (similarityScore >= DRAFT_SENT_SIMILARITY_THRESHOLD &&
+        normalizedLength(executedAction.content) >=
+          SUGGESTION_MIN_COMPARABLE_LENGTH));
+  const draftStatus = wasUsed
+    ? DraftEmailStatus.LIKELY_SENT
+    : DraftEmailStatus.REPLIED_WITHOUT_DRAFT;
 
   const [draftSendLog] = await withPrismaRetry(
     () =>
@@ -757,7 +776,7 @@ async function trackSentReplySuggestion({
     logger,
   });
 
-  if (sentMessageRepliesToSource === false) return;
+  if (!toSomeoneElse && sentMessageRepliesToSource === false) return;
 
   queueReplyMemoryLearning({
     emailAccountId,
@@ -883,4 +902,8 @@ function getDraftCleanupStatusData({
     return null;
   }
   return { draftStatus: status };
+}
+
+function normalizedLength(text: string | null) {
+  return (text ?? "").replace(/\s+/g, "").length;
 }

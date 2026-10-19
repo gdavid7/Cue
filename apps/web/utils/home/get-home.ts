@@ -1,4 +1,5 @@
 import { TZDate } from "@date-fns/tz";
+import { DRAFT_WINDOW_DAYS } from "@/utils/reply-tracker/suggestion-window";
 import { startOfDay } from "date-fns";
 import {
   ActionType,
@@ -52,7 +53,6 @@ const HOME_BUDGET_MS = 10_000;
 const HANDLED_WINDOW_DAYS = 7;
 // Older pending drafts were most likely deleted in the mail app, and a rule
 // still "applying" after this long has crashed; neither is work in progress.
-const DRAFT_WINDOW_DAYS = 7;
 const RUNNING_WINDOW_MINUTES = 30;
 // A day's filing actions; far more than one inbox gets in a day.
 const FILED_ACTIONS_LIMIT = 2000;

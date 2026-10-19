@@ -16,6 +16,12 @@ export type ReplyAssist = {
   executedActionId?: string;
   /** Turns the rule's suggestion down, as discarding its reply does. */
   dismiss?: () => void;
+  /** Recipients and subject the rule chose, when not the usual reply's. */
+  recipients?: { to?: string; cc?: string; bcc?: string; subject?: string };
+  /** Names of the files the rule attaches. */
+  files?: string[];
+  /** How the composer credits it, when "Suggested by Cue" would mislead. */
+  label?: string;
 };
 
 export const ReplyAssistContext = createContext<ReplyAssist | null>(null);

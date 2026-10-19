@@ -100,7 +100,10 @@ import {
 import { scheduleEmailAction } from "@/utils/actions/scheduled-email";
 import { recordSuggestedReplyDraftAction } from "@/utils/actions/thread-assist";
 import { formatRecipientNames, splitRecipientList } from "@/utils/email";
-import type { StoredReplyDraft } from "@/utils/mail-engine/reply-drafts";
+import type {
+  ReplySuggestionOrigin,
+  StoredReplyDraft,
+} from "@/utils/mail-engine/reply-drafts";
 import {
   getDraftSessionMessageIds,
   forgetReplyDraftProvider,
@@ -237,6 +240,10 @@ type ComposeEmailFormProps = {
     evidence?: ReactNode;
     /** Set when the suggestion is a rule's, waiting in Cue. */
     executedActionId?: string;
+    /** Names of the rule's files, which go on the draft or the send with it. */
+    files?: string[];
+    /** Credit shown instead of "Suggested by Cue". */
+    label?: string;
   };
   /**
    * Whether the composer takes focus when it opens. Off for one that opens on
@@ -670,6 +677,7 @@ function ComposeEmailFormContent({
       attachments: attachmentsRef.current.flatMap(toAttachmentReference),
       sendAt: options?.sendAt ?? sendAt,
       remindAt: options?.remindAt ?? remindAt,
+      startedFrom: startedFrom.current,
     };
     lastDraftContent.current = content;
     return content;
@@ -727,6 +735,26 @@ function ComposeEmailFormContent({
 
   const [bodyHtml, setBodyHtml] = useState(initialDraft.editableHtml);
   const suggestedReply = suggestion?.reply;
+  // Cue's suggestion this reply opened with, kept in the local draft: a
+  // composer opened again (popped out, reloaded, or after the suggestion is
+  // no longer offered) still knows the reply is Cue's untouched text.
+  const startedFrom = useRef<ReplySuggestionOrigin | undefined>(
+    storedDraft
+      ? storedDraft.content?.startedFrom
+      : suggestion && initialBodyHtml && !movedDraft
+        ? {
+            reply: suggestion.reply,
+            executedActionId: suggestion.executedActionId,
+            files: suggestion.files?.length ? suggestion.files : undefined,
+            values: {
+              to: replyingToEmail?.to ?? "",
+              cc: replyingToEmail?.cc ?? "",
+              bcc: replyingToEmail?.bcc ?? "",
+              subject: replyingToEmail?.subject ?? "",
+            },
+          }
+        : undefined,
+  );
   const isCueSuggestion = useMemo(
     () =>
       suggestedReply !== undefined &&
@@ -797,6 +825,9 @@ function ComposeEmailFormContent({
           ...content,
           replyToEmail: getReplyToEmailPayload(getValues("replyToEmail")),
         },
+        ruleSuggestionId: startedFrom.current?.files?.length
+          ? startedFrom.current.executedActionId
+          : undefined,
       });
       if (!created?.data)
         throw new Error(
@@ -804,6 +835,10 @@ function ComposeEmailFormContent({
         );
       draftId = created.data.draftId;
       createdMessageId = created.data.messageId;
+      if ("attachments" in created.data && created.data.attachments?.length) {
+        setSavedToMailbox(true);
+        reconcileDraftAttachments(created.data.attachments);
+      }
     }
     // Keep the reference durable if the composer closes during mailbox sync.
     providerDraftId.current = draftId;
@@ -813,25 +848,21 @@ function ComposeEmailFormContent({
     return draftId;
   };
   // The draft an edited suggestion became, so sending it teaches reply
-  // memories what the user changed. Only the first save, and only once.
-  const suggestionToRemember = useRef(
-    suggestion && initialBodyHtml && !storedDraft && replyingToEmail?.threadId
-      ? suggestion
-      : undefined,
-  );
+  // memories what the user changed. Only the first save, and only once: the
+  // origin then leaves the local draft, as the mailbox draft now leads.
   const rememberSuggestionDraft = (draftId: string) => {
-    const startedFrom = suggestionToRemember.current;
+    const origin = startedFrom.current;
     const threadId = replyingToEmail?.threadId;
     const messageId = draftKeyMessageId ?? replyingToEmail?.messageId;
-    suggestionToRemember.current = undefined;
-    if (!startedFrom || !threadId || !messageId) return;
+    startedFrom.current = undefined;
+    if (!origin || !threadId || !messageId) return;
     recordSuggestedReplyDraftAction(selectedEmailAccountId, {
       threadId,
       messageId,
       draftId,
-      ...(startedFrom.executedActionId
-        ? { executedActionId: startedFrom.executedActionId }
-        : { suggested: startedFrom.reply }),
+      ...(origin.executedActionId
+        ? { executedActionId: origin.executedActionId }
+        : { suggested: origin.reply }),
     }).catch(() => {
       // The draft is saved; only learning from its edits is lost.
     });
@@ -900,13 +931,25 @@ function ComposeEmailFormContent({
     providerAutosave;
   // Cue's suggestion stays in Cue until the user changes it: only then does
   // the reply become a mailbox draft. Sending it as it is needs no draft.
+  // Until the reply is a mailbox draft, the rule's files are only named.
+  const [ruleFiles] = useState(() => startedFrom.current?.files);
+  // A reply already in the mailbox keeps saving, even typed back to Cue's text.
   const isUntouchedSuggestion = useCallback(() => {
-    if (suggestedReply === undefined || providerDraftId.current) return false;
+    const origin = startedFrom.current;
+    if (!origin || providerDraftId.current || providerDraftMessageId)
+      return false;
     if (attachmentsRef.current.length) return false;
     const bodyHtml =
-      editorRef.current?.getValue().editableHtml ?? initialBodyHtml ?? "";
-    return isUneditedSuggestion(bodyHtml, suggestedReply);
-  }, [suggestedReply, initialBodyHtml]);
+      editorRef.current?.getValue().editableHtml ??
+      storedDraft?.content?.draft.editableHtml ??
+      initialBodyHtml ??
+      "";
+    if (!isUneditedSuggestion(bodyHtml, origin.reply)) return false;
+    const values = getValues();
+    return (["to", "cc", "bcc", "subject"] as const).every(
+      (field) => (values[field] ?? "") === (origin.values?.[field] ?? ""),
+    );
+  }, [providerDraftMessageId, storedDraft, initialBodyHtml, getValues]);
   const captureDraft = useCallback(
     (options?: { sendAt?: string; remindAt?: string }) => {
       captureLocalDraft(options);
@@ -1304,6 +1347,9 @@ function ComposeEmailFormContent({
       await stopProviderAutosave();
       let deliveryAccepted = false;
       try {
+        // The rule's files are sent from the draft that carries them.
+        if (startedFrom.current?.files?.length && !providerDraftId.current)
+          await ensureProviderDraft();
         // Autosave can replace a draft's message ID; its provider draft ID survives.
         enrichedData.providerDraftId = await resolveSendDraftId(
           providerDraftId.current,
@@ -2041,7 +2087,7 @@ function ComposeEmailFormContent({
             </button>
             {isCueSuggestion ? (
               <span className="shrink-0 text-muted-foreground text-xs">
-                · Suggested by Cue
+                · {suggestion?.label ?? "Suggested by Cue"}
               </span>
             ) : null}
             {editedSuggestion ? (
@@ -2352,6 +2398,11 @@ function ComposeEmailFormContent({
         </div>
       </div>
       {(isCueSuggestion || editedSuggestion) && suggestion?.evidence}
+      {ruleFiles?.length && !savedToMailbox ? (
+        <p className="mt-2 text-muted-foreground text-xs">
+          Attaches {ruleFiles.join(", ")}
+        </p>
+      ) : null}
       {/* Inline replies say "Draft" in their header instead. */}
       {isComposeWindow && isMailboxDraft && !providerAutosave.error && (
         <p

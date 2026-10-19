@@ -900,11 +900,94 @@ describe("trackSentDraftStatus for reply suggestions", () => {
       where: {
         id: "action-1",
         draftId: null,
-        draftStatus: DraftEmailStatus.PENDING,
+        draftStatus: {
+          in: [DraftEmailStatus.PENDING, DraftEmailStatus.CLEANED_UP_UNUSED],
+        },
       },
       data: { draftStatus: DraftEmailStatus.LIKELY_SENT },
     });
     expect(saveDraftSendLogReplyMemory).toHaveBeenCalled();
+  });
+
+  // "Thanks!" is close to many replies: only a near-exact send counts.
+  it.each([
+    [0.8, DraftEmailStatus.REPLIED_WITHOUT_DRAFT],
+    [0.9, DraftEmailStatus.LIKELY_SENT],
+  ])("needs a near-exact match for a short suggestion (%s)", async (score, status) => {
+    vi.mocked(prisma.executedAction.findFirst).mockResolvedValue({
+      ...createReplySuggestion(),
+      content: "Thanks, works for me!",
+    });
+    vi.mocked(calculateSimilarity).mockReturnValue(score);
+    vi.mocked(isMeaningfulDraftEdit).mockReturnValue(false);
+
+    await trackSentDraftStatus({
+      emailAccountId: "account-1",
+      message: createSentMessage(),
+      provider: {
+        getDraft: vi.fn(),
+        getMessage: vi.fn().mockResolvedValue(createSourceMessage()),
+      } as any,
+      logger,
+    });
+
+    expect(prisma.executedAction.update).toHaveBeenCalledWith({
+      where: { id: "action-1" },
+      data: { draftStatus: status },
+    });
+  });
+
+  it("counts a long suggestion sent with light changes as used", async () => {
+    vi.mocked(prisma.executedAction.findFirst).mockResolvedValue({
+      ...createReplySuggestion(),
+      content:
+        "Thanks for the note, Wednesday at three works well for our team.",
+    });
+    vi.mocked(calculateSimilarity).mockReturnValue(0.75);
+    vi.mocked(isMeaningfulDraftEdit).mockReturnValue(false);
+
+    await trackSentDraftStatus({
+      emailAccountId: "account-1",
+      message: createSentMessage(),
+      provider: {
+        getDraft: vi.fn(),
+        getMessage: vi.fn().mockResolvedValue(createSourceMessage()),
+      } as any,
+      logger,
+    });
+
+    expect(prisma.executedAction.update).toHaveBeenCalledWith({
+      where: { id: "action-1" },
+      data: { draftStatus: DraftEmailStatus.LIKELY_SENT },
+    });
+  });
+
+  // A rule's reply to someone else isn't a reply to the sender, by design.
+  it("counts a suggestion addressed to someone else as used when sent", async () => {
+    vi.mocked(prisma.executedAction.findFirst).mockResolvedValue({
+      ...createReplySuggestion(),
+      to: "finance@example.com",
+    });
+    vi.mocked(calculateSimilarity).mockReturnValue(1);
+    vi.mocked(isMeaningfulDraftEdit).mockReturnValue(false);
+
+    await trackSentDraftStatus({
+      emailAccountId: "account-1",
+      message: {
+        ...createSentMessage(),
+        headers: { ...createSentMessage().headers, to: "finance@example.com" },
+      },
+      provider: {
+        getDraft: vi.fn(),
+        getMessage: vi.fn().mockResolvedValue(createSourceMessage()),
+      } as any,
+      logger,
+    });
+
+    expect(prisma.executedAction.update).toHaveBeenCalledWith({
+      where: { id: "action-1" },
+      data: { draftStatus: DraftEmailStatus.LIKELY_SENT },
+    });
   });
 });
 

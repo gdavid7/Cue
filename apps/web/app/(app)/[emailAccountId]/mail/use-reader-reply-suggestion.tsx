@@ -25,7 +25,12 @@ import { useThreadPlans } from "@/hooks/useThreadPlans";
 import { contextWithText, useThreadContext } from "@/hooks/useThreadContext";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import type { EmailLabels } from "@/providers/email-label-types";
-import { extractEmailAddress, isSameEmailAddress } from "@/utils/email";
+import {
+  extractEmailAddress,
+  isSameEmailAddress,
+  splitRecipientList,
+} from "@/utils/email";
+import { DRAFT_WINDOW_DAYS } from "@/utils/reply-tracker/suggestion-window";
 import { GmailLabel } from "@/utils/gmail/label";
 import { dismissReplySuggestionAction } from "@/utils/actions/thread-assist";
 
@@ -169,6 +174,13 @@ export function useReaderReplySuggestion({
   };
 
   const run = Boolean(current?.run);
+  // Opened on its own only while the conversation is in the inbox and the
+  // reply is recent; otherwise it waits for "Draft a reply".
+  const showRuleSuggestion = Boolean(
+    ruleSuggestion &&
+      (run ||
+        (isInInbox(messages) && isWithinDraftWindow(ruleSuggestion.createdAt))),
+  );
   // Asked for by the user, so it runs for any message someone else sent,
   // whether or not Cue thinks it needs a reply, and whether or not "Auto
   // draft replies" was ever turned on. Turned off still means no AI-written
@@ -181,7 +193,7 @@ export function useReaderReplySuggestion({
   // The same context the reader shows, handed to the suggestion so the server
   // doesn't gather it (and read linked pages) again for each pass.
   const context = useThreadContext({
-    threadId: enabled && run ? threadId : null,
+    threadId: enabled && run && !ruleSuggestion ? threadId : null,
     emailAccountId,
   });
   const contextSettled = Boolean(context.data || context.error);
@@ -189,13 +201,15 @@ export function useReaderReplySuggestion({
     threadId,
     emailAccountId,
     messageId: latestId,
-    enabled: enabled && run && contextSettled,
+    enabled: enabled && run && !ruleSuggestion && contextSettled,
     context: contextWithText(context.data),
   });
   const { suggestion } = replySuggestion;
   // Gathering the context is the first part of checking the user's mail.
   const phase =
-    enabled && run && !contextSettled ? "checking-mail" : replySuggestion.phase;
+    enabled && run && !ruleSuggestion && !contextSettled
+      ? "checking-mail"
+      : replySuggestion.phase;
 
   // Reopened with a draft: the suggestion this browser kept for this message,
   // if any, so a draft that is still Cue's text keeps saying so.
@@ -225,14 +239,24 @@ export function useReaderReplySuggestion({
       : null;
 
   // Asked-for help wins; otherwise the rule's reply, ready at once.
-  if (!assist && latest && ruleSuggestion) {
-    const { executedActionId } = ruleSuggestion;
+  if (!assist && latest && ruleSuggestion && showRuleSuggestion) {
+    const { executedActionId, recipients, files } = ruleSuggestion;
+    const sender = extractEmailAddress(latest.headers.from);
+    // A rule can write to someone else: never pass that off as the reply.
+    const toSomeoneElse =
+      recipients.to &&
+      !splitRecipientList(recipients.to).every((recipient) =>
+        isSameEmailAddress(extractEmailAddress(recipient), sender),
+      );
     assist = {
       messageId: latest.id,
       reply: ruleSuggestion.reply,
       evidence: null,
       executedActionId,
       dismiss: () => dismissRuleSuggestion(executedActionId),
+      recipients,
+      files,
+      label: toSomeoneElse ? `Cue's draft to ${recipients.to}` : undefined,
     };
   }
 
@@ -266,7 +290,7 @@ export function useReaderReplySuggestion({
         canRequestReply &&
         writesReplies &&
         !run &&
-        !ruleSuggestion &&
+        !showRuleSuggestion &&
         !(current?.eligible && (!plansSettled || insightLoading)),
       request: requestReply,
       /**
@@ -290,7 +314,7 @@ type ThreadPlan = GetThreadPlansResponse["plans"][number];
 function findRuleSuggestion(
   plans: ThreadPlan[] | undefined,
   messageId: string,
-): { executedActionId: string; reply: string } | undefined {
+) {
   for (const plan of plans ?? []) {
     if (plan.messageId !== messageId) continue;
     const action = plan.actionItems.find(
@@ -300,10 +324,65 @@ function findRuleSuggestion(
         item.draftStatus === DraftEmailStatus.PENDING &&
         item.content?.trim(),
     );
-    if (action?.content)
-      return { executedActionId: action.id, reply: action.content.trim() };
+    if (!action?.content) continue;
+    return {
+      executedActionId: action.id,
+      reply: action.content.trim(),
+      createdAt: action.createdAt,
+      recipients: {
+        to: action.to || undefined,
+        cc: action.cc || undefined,
+        bcc: action.bcc || undefined,
+        subject: action.subject || undefined,
+      },
+      files: attachmentNames(action),
+    };
   }
   return;
+}
+
+/** The names of the files a rule's reply carries: its own, and the AI's. */
+function attachmentNames(action: {
+  staticAttachments: unknown;
+  selectedAttachments: unknown;
+}) {
+  const names = [
+    ...namesFrom(action.staticAttachments, "name"),
+    ...namesFrom(action.selectedAttachments, "filename"),
+  ];
+  return [...new Set(names)];
+}
+
+function namesFrom(raw: unknown, key: "name" | "filename") {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item) => {
+    const name =
+      item && typeof item === "object"
+        ? (item as Record<string, unknown>)[key]
+        : null;
+    return typeof name === "string" && name.trim() ? [name.trim()] : [];
+  });
+}
+
+function isInInbox(messages: ThreadMessage[]) {
+  const latest = messages.findLast(
+    (message) => !message.labelIds?.includes(GmailLabel.DRAFT),
+  );
+  return (
+    Boolean(latest?.labelIds?.includes(GmailLabel.INBOX)) &&
+    !messages.some(
+      (message) =>
+        message.labelIds?.includes(GmailLabel.TRASH) ||
+        message.labelIds?.includes(GmailLabel.SPAM),
+    )
+  );
+}
+
+function isWithinDraftWindow(createdAt: Date | string) {
+  return (
+    Date.now() - new Date(createdAt).getTime() <
+    DRAFT_WINDOW_DAYS * 24 * 60 * 60 * 1000
+  );
 }
 
 function withoutSuggestion(plans: ThreadPlan[], executedActionId: string) {

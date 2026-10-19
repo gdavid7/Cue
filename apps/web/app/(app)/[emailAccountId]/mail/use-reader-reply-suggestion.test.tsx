@@ -131,6 +131,60 @@ describe("useReaderReplySuggestion", () => {
     expect(result.current.assist).toBeNull();
   });
 
+  // Out of the inbox, or a week old: shown only once the user asks.
+  it.each([
+    ["archived", ["Label_to_reply"], undefined],
+    ["in the trash", ["TRASH"], undefined],
+    ["more than a week old", ["INBOX"], "2020-01-01T00:00:00.000Z"],
+  ])("waits for Draft a reply when the conversation is %s", (_, labelIds, createdAt) => {
+    mocks.plans = [ruleSuggestionPlan("ask", { createdAt })];
+
+    const { result } = renderSuggestion([incoming("ask", labelIds)]);
+
+    expect(result.current.assist).toBeNull();
+    expect(result.current.reply.offer).toBe(true);
+    expect(lastEnabled()).toBe(false);
+
+    act(() => result.current.reply.request());
+
+    expect(result.current.assist?.reply).toBe("Thursday works for me.");
+    // The rule's reply is ready; Cue doesn't work out another.
+    expect(lastEnabled()).toBe(false);
+  });
+
+  it("carries the rule's recipients, subject and files", () => {
+    mocks.plans = [
+      ruleSuggestionPlan("ask", {
+        subject: "Re: Lease",
+        staticAttachments: [{ name: "lease.pdf" }],
+        selectedAttachments: [
+          { filename: "floorplan.pdf" },
+          { filename: "lease.pdf" },
+        ],
+      }),
+    ];
+
+    const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
+
+    expect(result.current.assist).toMatchObject({
+      recipients: { subject: "Re: Lease" },
+      files: ["lease.pdf", "floorplan.pdf"],
+      label: undefined,
+    });
+  });
+
+  // Never presented as a reply to the sender when it goes to someone else.
+  it("labels a rule's reply to someone other than the sender", () => {
+    mocks.plans = [ruleSuggestionPlan("ask", { to: "finance@example.com" })];
+
+    const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
+
+    expect(result.current.assist?.label).toBe(
+      "Cue's draft to finance@example.com",
+    );
+    expect(result.current.assist?.recipients?.to).toBe("finance@example.com");
+  });
+
   it("dismisses the rule's reply at once, and for good", async () => {
     mocks.plans = [ruleSuggestionPlan("ask")];
     const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
@@ -427,7 +481,15 @@ function incoming(id: string, labelIds: string[]) {
 
 function ruleSuggestionPlan(
   messageId: string,
-  action: { draftStatus?: string; draftId?: string | null } = {},
+  action: {
+    draftStatus?: string;
+    draftId?: string | null;
+    createdAt?: string;
+    to?: string | null;
+    subject?: string | null;
+    staticAttachments?: unknown;
+    selectedAttachments?: unknown;
+  } = {},
 ) {
   return {
     messageId,
@@ -440,6 +502,13 @@ function ruleSuggestionPlan(
         content: "Thursday works for me.",
         draftId: action.draftId ?? null,
         draftStatus: action.draftStatus ?? "PENDING",
+        createdAt: action.createdAt ?? new Date().toISOString(),
+        to: action.to ?? null,
+        cc: null,
+        bcc: null,
+        subject: action.subject ?? null,
+        staticAttachments: action.staticAttachments ?? null,
+        selectedAttachments: action.selectedAttachments ?? null,
       },
     ],
   };

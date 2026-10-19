@@ -35,6 +35,22 @@ export type ReplyDraftContent = {
   attachments: ComposeAttachmentReference[];
   sendAt?: string;
   remindAt?: string;
+  /**
+   * Cue's suggestion this reply opened with. Kept with the draft, so however
+   * the composer opens again, a reply still exactly that suggestion is not
+   * saved to the mailbox until the user changes it.
+   */
+  startedFrom?: ReplySuggestionOrigin;
+};
+
+export type ReplySuggestionOrigin = {
+  reply: string;
+  /** Set for a rule's suggestion, which waits in Cue. */
+  executedActionId?: string;
+  /** The recipients and subject it opened with. */
+  values?: { to?: string; cc?: string; bcc?: string; subject?: string };
+  /** The rule's files, which go on the draft or the send with it. */
+  files?: string[];
 };
 
 export type StoredReplyDraft = {

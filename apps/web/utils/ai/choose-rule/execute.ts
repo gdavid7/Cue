@@ -9,7 +9,6 @@ import {
 import type { Logger } from "@/utils/logger";
 import type { ParsedMessage } from "@/utils/types";
 import { markReplySuggestionPending } from "@/utils/ai/choose-rule/draft-management";
-import { env } from "@/env";
 import type { EmailProvider } from "@/utils/email/types";
 import { logErrorWithDedupe } from "@/utils/log-error-with-dedupe";
 import type { ActionExecutionEmailAccount } from "@/utils/ai/types";
@@ -132,7 +131,7 @@ export async function executeAct({
         action.type === ActionType.DRAFT_EMAIL &&
         !actionResultError &&
         action.content?.trim() &&
-        !env.NEXT_PUBLIC_AUTO_DRAFT_DISABLED
+        isReplySuggestion(actionResult)
       ) {
         await markReplySuggestionPending({ actionId: action.id, logger: log });
       }
@@ -229,4 +228,13 @@ function buildFailureReason(
 
   if (!existingReason) return failureReason;
   return `${existingReason}\n${failureReason}`;
+}
+
+function isReplySuggestion(actionResult: unknown) {
+  return (
+    typeof actionResult === "object" &&
+    actionResult !== null &&
+    "replySuggestion" in actionResult &&
+    actionResult.replySuggestion === true
+  );
 }
