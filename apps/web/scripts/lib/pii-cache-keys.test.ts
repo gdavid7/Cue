@@ -24,6 +24,10 @@ describe("deletePiiCacheKeys", () => {
       "rate-limit:inbox-insights:u1": 3,
       "contact-photos-paused:a1": "1",
       "usage:me@example.com": { cost: 4 },
+      "usage:email-account:a1": { cost: 4 },
+      "account-owner:u1:a1": "1",
+      "inbox-zero:chat-sdk:cache:modal-context:slack:1": { text: "Rent" },
+      "inbox-zero:chat-sdk:cache:callback:abc": { url: "https://x.test" },
     });
 
     await deletePiiCacheKeys({ redis: redis.client });
@@ -34,18 +38,36 @@ describe("deletePiiCacheKeys", () => {
         "usage-weekly-cost:user:u1:2026-10-18",
         "rate-limit:inbox-insights:u1",
         "contact-photos-paused:a1",
-        // Lifetime counters go only when asked for.
-        "usage:me@example.com",
+        "usage:email-account:a1",
+        // The id-only ownership flag that replaced account:{user}:{acct}.
+        "account-owner:u1:a1",
+        "inbox-zero:chat-sdk:cache:callback:abc",
       ].sort(),
     );
   });
 
-  it("deletes the legacy usage counters only when asked", async () => {
-    const redis = fakeRedis({ "usage:me@example.com": { cost: 4 } });
+  it("rewrites weekly-spend migration records by day, without addresses", async () => {
+    const redis = fakeRedis({
+      "usage-migration:weekly-usage-cost-user:u1:done": JSON.stringify({
+        weeklyCosts: {
+          "usage-weekly-cost:me@example.com:2026-10-18": 1.5,
+          "usage-weekly-cost:me@work.example:2026-10-18": 0.5,
+          "usage-weekly-cost:me@example.com:2026-10-17": 2,
+        },
+      }),
+    });
 
-    await deletePiiCacheKeys({ redis: redis.client, includeLegacyUsage: true });
+    await deletePiiCacheKeys({ redis: redis.client });
+    const again = await deletePiiCacheKeys({ redis: redis.client });
 
-    expect(redis.store.size).toBe(0);
+    expect(
+      JSON.parse(
+        String(
+          redis.store.get("usage-migration:weekly-usage-cost-user:u1:done"),
+        ),
+      ),
+    ).toEqual({ weeklyCostsByDay: { "2026-10-18": 2, "2026-10-17": 2 } });
+    expect(again["usage-migration:weekly-usage-cost-user:*:done"]).toBe(0);
   });
 
   it("moves a message claim to its hashed key, so a handled message stays handled", async () => {
@@ -54,6 +76,8 @@ describe("deletePiiCacheKeys", () => {
       [`processing-message:${hashAddressForKey("me@example.com")}:m2`]:
         "lock-token",
       "processing-message:me@example.com:m2": "processed",
+      // A run on an older deploy still holds this one; it expires with it.
+      "processing-message:me@example.com:m3": "live-lock-token",
     });
 
     await deletePiiCacheKeys({ redis: redis.client });
@@ -64,6 +88,7 @@ describe("deletePiiCacheKeys", () => {
       // The newer claim under the hashed key wins.
       [`processing-message:${hashAddressForKey("me@example.com")}:m2`]:
         "lock-token",
+      "processing-message:me@example.com:m3": "live-lock-token",
     });
   });
 
@@ -130,6 +155,13 @@ function fakeRedis(initial: Record<string, unknown>, pageSize = 1000) {
       const page = all.slice(start, start + pageSize);
       const next = start + pageSize >= all.length ? 0 : start + pageSize;
       return [String(next), page];
+    },
+    async get(key) {
+      return store.get(key) ?? null;
+    },
+    async set(key, value) {
+      store.set(key, value);
+      return "OK";
     },
     async unlink(...keys) {
       return keys.filter((key) => store.delete(key)).length;

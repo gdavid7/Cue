@@ -23,6 +23,7 @@ vi.mock("@/utils/redis", () => ({
     get: vi.fn(),
     eval: vi.fn(),
     del: vi.fn(),
+    exists: vi.fn(),
     multi: vi.fn(),
   },
 }));
@@ -105,6 +106,7 @@ describe("message-processing redis locks", () => {
 
   it("acquires the short-lived webhook processing lock", async () => {
     vi.mocked(redis.set).mockResolvedValue("OK");
+    vi.mocked(redis.exists).mockResolvedValue(0);
 
     const acquired = await markMessageAsProcessing({
       userEmail: "user@example.com",
@@ -193,6 +195,50 @@ describe("message-processing redis locks", () => {
     );
     for (const [key] of vi.mocked(redis.set).mock.calls)
       expect(key).not.toContain("@");
+  });
+
+  it.each([
+    ["lock-token-from-an-older-deploy", { status: "held" }],
+    ["true", { status: "held" }],
+    [
+      `retry:${Date.now() - 1000}`,
+      { status: "acquired", lockToken: "lock-uuid" },
+    ],
+  ] as const)("respects an older deploy's claim under the address key (%s)", async (legacy, expected) => {
+    vi.mocked(redis.set).mockResolvedValue("OK");
+    vi.mocked(redis.eval).mockResolvedValue(1);
+    vi.mocked(redis.get).mockImplementation(async (key: string) =>
+      key === "processing-message:user@example.com:message-1" ? legacy : null,
+    );
+
+    expect(
+      await acquireMessageProcessing({
+        userEmail: "user@example.com",
+        messageId: "message-1",
+      }),
+    ).toEqual(expected);
+    if (expected.status === "held")
+      // The new claim is let go, so the older run's finish isn't blocked.
+      expect(redis.eval).toHaveBeenCalledWith(
+        expect.stringContaining('redis.call("DEL"'),
+        [PROCESSING_KEY],
+        ["lock-uuid"],
+      );
+  });
+
+  it("leaves an Outlook message to an older deploy that holds it", async () => {
+    vi.mocked(redis.exists).mockResolvedValue(1);
+
+    expect(
+      await markMessageAsProcessing({
+        userEmail: "user@example.com",
+        messageId: "message-1",
+      }),
+    ).toBe(false);
+    expect(redis.exists).toHaveBeenCalledWith(
+      "processing-message:user@example.com:message-1",
+    );
+    expect(redis.set).not.toHaveBeenCalled();
   });
 
   it("remembers a handled message for longer than Gmail keeps history", async () => {

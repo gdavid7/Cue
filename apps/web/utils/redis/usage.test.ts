@@ -278,10 +278,15 @@ describe("redis usage tracking", () => {
       "cost",
       0.5,
     );
-    expect(redis.set).toHaveBeenCalledWith(
-      "usage-migration:weekly-usage-cost-user:user-1:done",
-      expect.any(String),
-    );
+    // RD-3: the migration's record names days, never the address.
+    const doneValue = vi
+      .mocked(redis.set)
+      .mock.calls.find(
+        ([key]) => key === "usage-migration:weekly-usage-cost-user:user-1:done",
+      )?.[1];
+    expect(JSON.parse(String(doneValue))).toEqual({
+      weeklyCostsByDay: { "2026-02-24": 1.5, "2026-02-23": 0.5 },
+    });
     expect(weeklyCost).toBeCloseTo(2.5);
   });
 

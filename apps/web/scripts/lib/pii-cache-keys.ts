@@ -3,8 +3,9 @@ import { hashAddressForKey } from "@/utils/redis/address-key";
 /**
  * RD-3: keys written before Cue stopped keeping email content and personal
  * data in Redis. Each still expires on its own (30 days at most) except the
- * legacy usage counters; this clears them now. Running it again finds
- * nothing more to do.
+ * legacy usage counters and migration records; this clears them now.
+ * Running it again finds nothing more to do. Run it at least 15 minutes after
+ * the RD-3 deploy is fully live, so no older instance is still writing them.
  */
 type Pattern = {
   match: string;
@@ -60,23 +61,38 @@ export const PII_KEY_PATTERNS: Pattern[] = [
     match: "inbox-zero:chat-sdk:list:transcripts:*",
     holds: "chat transcripts",
   },
+  {
+    match: "inbox-zero:chat-sdk:cache:modal-context:*",
+    holds: "modal contexts that may quote messages",
+  },
+  {
+    match: "inbox-zero:chat-sdk:queue:*",
+    holds: "queued bot messages",
+  },
+  {
+    // Counters not yet migrated to the account's key are dropped with them.
+    match: "usage:*@*",
+    holds: "lifetime AI usage counters keyed by address",
+  },
 ];
 
-/** Lifetime usage counters keyed by address; not yet migrated ones are lost. */
-export const LEGACY_USAGE_PATTERN: Pattern = {
-  match: "usage:*@*",
-  holds: "lifetime AI usage counters keyed by address",
-};
-
-// A message claimed or marked processed under the address. Renamed to the
-// hashed key, TTL and all, so a catch-up still skips what was handled.
+// A message claimed or marked processed under the address. Handled ones are
+// renamed to the hashed key, TTL and all, so a catch-up still skips them; a
+// claim still in flight is left to expire with the run that holds it.
 const LEGACY_CLAIM_PATTERN = "processing-message:*@*";
+
+// Weekly-spend migration records written before RD-3 were keyed by legacy
+// keys that named the address; the current code keys them by day.
+const WEEKLY_MIGRATION_PATTERN =
+  "usage-migration:weekly-usage-cost-user:*:done";
 
 export type CleanupRedis = {
   scan(
     cursor: string | number,
     options: { match: string; count: number },
   ): Promise<[string | number, string[]]>;
+  get(key: string): Promise<unknown>;
+  set(key: string, value: string): Promise<unknown>;
   unlink(...keys: string[]): Promise<number>;
   renamenx(source: string, destination: string): Promise<number>;
 };
@@ -84,20 +100,15 @@ export type CleanupRedis = {
 export async function deletePiiCacheKeys({
   redis,
   dryRun = false,
-  includeLegacyUsage = false,
   log = () => {},
 }: {
   redis: CleanupRedis;
   dryRun?: boolean;
-  includeLegacyUsage?: boolean;
   log?: (line: string) => void;
 }) {
-  const patterns = includeLegacyUsage
-    ? [...PII_KEY_PATTERNS, LEGACY_USAGE_PATTERN]
-    : PII_KEY_PATTERNS;
   const counts: Record<string, number> = {};
 
-  for (const pattern of patterns) {
+  for (const pattern of PII_KEY_PATTERNS) {
     let removed = 0;
     for await (const batch of scanKeys(redis, pattern.match)) {
       const keys = batch.filter((key) => !pattern.keep?.(key));
@@ -115,7 +126,7 @@ export async function deletePiiCacheKeys({
   for await (const batch of scanKeys(redis, LEGACY_CLAIM_PATTERN)) {
     for (const key of batch) {
       const destination = hashedClaimKey(key);
-      if (!destination) continue;
+      if (!destination || !isSettledClaim(await redis.get(key))) continue;
       renamed++;
       if (dryRun) continue;
       // The hashed key wins when both exist: it is the newer claim.
@@ -127,7 +138,55 @@ export async function deletePiiCacheKeys({
     `${dryRun ? "would rename" : "renamed"} ${renamed} ${LEGACY_CLAIM_PATTERN} to hashed keys`,
   );
 
+  let rewritten = 0;
+  for await (const batch of scanKeys(redis, WEEKLY_MIGRATION_PATTERN)) {
+    for (const key of batch) {
+      const byDay = weeklyCostsByDay(await redis.get(key));
+      if (!byDay) continue;
+      rewritten++;
+      if (!dryRun)
+        await redis.set(
+          key,
+          JSON.stringify({ weeklyCostsByDay: Object.fromEntries(byDay) }),
+        );
+    }
+  }
+  counts[WEEKLY_MIGRATION_PATTERN] = rewritten;
+  log(
+    `${dryRun ? "would rewrite" : "rewrote"} ${rewritten} ${WEEKLY_MIGRATION_PATTERN} by day`,
+  );
+
   return counts;
+}
+
+/** A handled or retry-later claim; a live lock token is left alone. */
+function isSettledClaim(value: unknown) {
+  return (
+    value === "processed" ||
+    (typeof value === "string" && value.startsWith("retry:"))
+  );
+}
+
+/** An old weekly migration record summed by day, or null if already by day. */
+export function weeklyCostsByDay(value: unknown) {
+  let state: unknown = value;
+  if (typeof value === "string") {
+    try {
+      state = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  const legacy = (state as { weeklyCosts?: Record<string, unknown> } | null)
+    ?.weeklyCosts;
+  if (!legacy || typeof legacy !== "object") return null;
+  const byDay = new Map<string, number>();
+  for (const [key, raw] of Object.entries(legacy)) {
+    const day = /:(\d{4}-\d{2}-\d{2})$/.exec(key)?.[1];
+    const cost = Number(raw);
+    if (day && cost > 0) byDay.set(day, (byDay.get(day) ?? 0) + cost);
+  }
+  return byDay;
 }
 
 /** `processing-message:{address}:{messageId}` with the address hashed. */

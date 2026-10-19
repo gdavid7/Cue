@@ -20,9 +20,10 @@ function getProcessingKey({
   return `processing-message:${hashAddressForKey(userEmail)}:${messageId}`;
 }
 
-// Keys written before RD-3 named the address. A message an older deploy
-// marked processed is still recognized until those markers expire, eight
-// days after RD-3 shipped; scripts/deletePiiCacheKeys.ts renames them sooner.
+// Keys written before RD-3 named the address. Until the last of them expires
+// (eight days after RD-3 shipped; scripts/deletePiiCacheKeys.ts renames the
+// processed ones sooner), a message an older deploy holds or handled under
+// the address key counts as held or processed here too.
 function getLegacyProcessingKey({
   userEmail,
   messageId,
@@ -40,6 +41,10 @@ export async function markMessageAsProcessing({
   userEmail: string;
   messageId: string;
 }): Promise<boolean> {
+  // An older deploy may hold the message under the address key for its
+  // five minutes.
+  if (await redis.exists(getLegacyProcessingKey({ userEmail, messageId })))
+    return false;
   const result = await redis.set(
     getProcessingKey({ userEmail, messageId }),
     "true",
@@ -88,15 +93,21 @@ export async function acquireMessageProcessing(key: {
     const lockToken = await claim();
     if (lockToken) {
       const legacy = await redis.get<string>(getLegacyProcessingKey(key));
-      if (legacy !== MESSAGE_PROCESSED_STATUS)
+      // A retry marker only says when to try again, which this run may do.
+      if (legacy == null || getRetryAt(legacy) !== undefined)
         return { status: "acquired", lockToken };
-      await markOwnedLockProcessed({
-        key: getProcessingKey(key),
-        lockToken,
-        processedStatus: MESSAGE_PROCESSED_STATUS,
-        processedTtlSeconds: MESSAGE_PROCESSED_TTL_SECONDS,
-      });
-      return { status: "processed" };
+      if (legacy === MESSAGE_PROCESSED_STATUS) {
+        await markOwnedLockProcessed({
+          key: getProcessingKey(key),
+          lockToken,
+          processedStatus: MESSAGE_PROCESSED_STATUS,
+          processedTtlSeconds: MESSAGE_PROCESSED_TTL_SECONDS,
+        });
+        return { status: "processed" };
+      }
+      // An older deploy's run holds it under the address key.
+      await clearOwnedLock({ key: getProcessingKey(key), lockToken });
+      return { status: "held" };
     }
     const stored = await redis.get<string>(getProcessingKey(key));
     if (stored === MESSAGE_PROCESSED_STATUS) return { status: "processed" };
