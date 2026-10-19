@@ -92,6 +92,47 @@ describe("getBatch", () => {
     expect(maxSubrequests).toBe(6);
   });
 
+  it("splits a large set into batches that fit the in-flight cap, in order", async () => {
+    resetGmailInflightState();
+    rememberGmailAccessToken("split-token", "account-batch-split");
+    let subrequests = 0;
+    let maxSubrequests = 0;
+    let largestBatch = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: { body: string }) => {
+        const ids = [...init.body.matchAll(/GET \S+\/labels\/(\S+)/g)].map(
+          (match) => match[1],
+        );
+        subrequests += ids.length;
+        largestBatch = Math.max(largestBatch, ids.length);
+        maxSubrequests = Math.max(maxSubrequests, subrequests);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        subrequests -= ids.length;
+        return new Response(
+          `${ids
+            .map(
+              (id) =>
+                `--b\r\nContent-Type: application/http\r\n\r\nHTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{"id":"${id}"}\r\n`,
+            )
+            .join("")}--b--`,
+          { headers: { "Content-Type": "multipart/mixed; boundary=b" } },
+        );
+      }),
+    );
+    const ids = Array.from({ length: 50 }, (_, index) => `label-${index}`);
+
+    const items = await getBatch(
+      ids,
+      "/gmail/v1/users/me/labels",
+      "split-token",
+    );
+
+    expect(items.map((item: { id: string }) => item.id)).toEqual(ids);
+    expect(largestBatch).toBe(6);
+    expect(maxSubrequests).toBe(6);
+  });
+
   it("prevents message IDs from injecting multipart subrequests", async () => {
     const validId = "18f4c6b280d6f124";
     const injectedId =

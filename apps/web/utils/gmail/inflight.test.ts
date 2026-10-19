@@ -137,28 +137,93 @@ describe("Gmail in-flight cap", () => {
     await Promise.all(calls);
   });
 
-  it("runs a call made while holding a slot without waiting for another", async () => {
+  it("sends a full sync batch promptly while a person keeps reading", async () => {
     vi.useFakeTimers();
+    let inflight = 0;
+    let maxInflight = 0;
+    const roundTrip = (weight: number, ms: number) => async () => {
+      inflight += weight;
+      maxInflight = Math.max(maxInflight, inflight);
+      await sleep(ms);
+      inflight -= weight;
+    };
+    let reading = true;
+    const reader = async (delayMs: number) => {
+      await sleep(delayMs);
+      while (reading)
+        await withGmailInflightSlot(
+          { emailAccountId: ACCOUNT, priority: "interactive" },
+          roundTrip(1, 100),
+        );
+    };
+    const readers = [reader(0), reader(50)];
+    await vi.advanceTimersByTimeAsync(10);
+
+    const startedAt = Date.now();
+    let batchSentAfter: number | null = null;
+    const batch = withGmailInflightSlot(
+      { emailAccountId: ACCOUNT, priority: "sync", weight: 6 },
+      async () => {
+        batchSentAfter = Date.now() - startedAt;
+        await roundTrip(6, 200)();
+      },
+    );
+    const singles = Array.from({ length: 10 }, () =>
+      withGmailInflightSlot(
+        { emailAccountId: ACCOUNT, priority: "sync" },
+        roundTrip(1, 50),
+      ),
+    );
+
+    await vi.advanceTimersByTimeAsync(2000);
+    reading = false;
+    await vi.advanceTimersByTimeAsync(200);
+    await Promise.all([batch, ...singles, ...readers]);
+
+    expect(batchSentAfter).not.toBeNull();
+    expect(batchSentAfter).toBeLessThan(500);
+    expect(maxInflight).toBeLessThanOrEqual(GMAIL_INFLIGHT_LIMIT);
+    expect(takeGmailInflightStats().overCap).toBe(0);
+  });
+
+  it("refuses a set larger than one call may hold, for the caller to split", async () => {
+    await expect(
+      withGmailInflightSlot(
+        { emailAccountId: ACCOUNT, priority: "sync", weight: 7 },
+        async () => "sent",
+      ),
+    ).rejects.toThrow("exceeds");
+  });
+
+  it("drops a waiting call whose request is aborted", async () => {
     const gmail = fakeGmail();
-    const others = Array.from({ length: GMAIL_INFLIGHT_LIMIT - 1 }, () =>
+    const held = Array.from({ length: GMAIL_INFLIGHT_LIMIT }, () =>
       send(gmail, "interactive"),
     );
+    await flush();
 
-    // A batch whose send makes another batch call while every slot is taken.
-    const nested = withGmailInflightSlot(
-      { emailAccountId: ACCOUNT, priority: "interactive" },
-      () =>
-        withGmailInflightSlot(
-          { emailAccountId: ACCOUNT, priority: "sync", weight: 4 },
-          async () => "inner",
-        ),
+    const controller = new AbortController();
+    const sendAborted = vi.fn(async () => "sent");
+    const aborted = withGmailInflightSlot(
+      {
+        emailAccountId: ACCOUNT,
+        priority: "interactive",
+        signal: controller.signal,
+      },
+      sendAborted,
     );
+    const next = send(gmail, "sync");
+    controller.abort(new Error("closed"));
+    await expect(aborted).rejects.toThrow("closed");
 
-    await expect(nested).resolves.toBe("inner");
-    expect(takeGmailInflightStats().waits).toBe(0);
+    // The aborted call never sends and no longer holds back the queue.
+    gmail.settleOldest(1);
+    await flush();
+    expect(sendAborted).not.toHaveBeenCalled();
+    expect(gmail.inflightBy("sync")).toBe(1);
 
     await gmail.settleAll();
-    await Promise.all(others);
+    await Promise.all([...held, next]);
   });
 
   it("keeps accounts apart", async () => {
@@ -233,6 +298,10 @@ function fakeGmail() {
     maxInflight: () => maxInflight,
     sent: () => sent,
   };
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function flush() {

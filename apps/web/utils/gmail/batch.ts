@@ -1,13 +1,18 @@
+import chunk from "lodash/chunk";
 import { isBatchError, isDefined } from "@/utils/types";
 import { getGoogleGmailBatchUrl } from "@/utils/gmail/oauth";
 import { createScopedLogger } from "@/utils/logger";
 import {
   admitGmailCall,
+  currentGmailQuotaContext,
   gmailAccountForAccessToken,
   gmailRequestCost,
   noteGmailQuotaRefusal,
 } from "@/utils/gmail/quota";
-import { withGmailInflightSlot } from "@/utils/gmail/inflight";
+import {
+  gmailInflightBatchLimit,
+  withGmailInflightSlot,
+} from "@/utils/gmail/inflight";
 import { isRetryableError } from "@/utils/gmail/retry";
 
 const logger = createScopedLogger("gmail/batch");
@@ -29,6 +34,24 @@ export async function getBatch(
     );
   }
 
+  // Gmail counts every request inside a batch toward the user's requests in
+  // flight, so a set larger than one call may hold is sent as several batches
+  // that each wait for their slots, and their answers are joined in order.
+  const limit = gmailInflightBatchLimit(currentGmailQuotaContext().priority);
+  const parts = await Promise.all(
+    chunk(ids, limit).map((idsChunk) =>
+      sendBatch(idsChunk, endpoint, accessToken, queryString),
+    ),
+  );
+  return parts.flat();
+}
+
+async function sendBatch(
+  ids: string[],
+  endpoint: string,
+  accessToken: string,
+  queryString: string | undefined,
+) {
   let batchRequestBody = "";
   const query = queryString ? `?${queryString}` : "";
   for (const id of ids) {
@@ -37,18 +60,13 @@ export async function getBatch(
   batchRequestBody += "--batch_boundary--";
 
   const emailAccountId = gmailAccountForAccessToken(accessToken);
-  // Gmail charges every request inside a batch at its own method's cost, and
-  // counts each one toward the user's requests in flight.
+  // Gmail charges every request inside a batch at its own method's cost.
   const ticket = await admitGmailCall({
     emailAccountId,
-    cost: ids.length * gmailRequestCost("GET", `${endpoint}/id`),
+    cost: ids.length * gmailRequestCost("GET", `${endpoint}/id${query}`),
   });
   const { textRes, contentType } = await withGmailInflightSlot(
-    {
-      emailAccountId,
-      priority: ticket.priority,
-      weight: ids.length,
-    },
+    { emailAccountId, priority: ticket.priority, weight: ids.length },
     async () => {
       const res = await fetch(getGoogleGmailBatchUrl(), {
         method: "POST",

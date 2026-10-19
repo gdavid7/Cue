@@ -5,6 +5,7 @@ import {
   runWithGmailQuota,
 } from "@/utils/gmail/quota";
 import { gmailQuotaStore } from "@/utils/gmail/quota-store";
+import { GMAIL_INFLIGHT_LIMIT } from "@/utils/gmail/inflight";
 import { uploadGmailDraftChunk } from "@/utils/gmail/resumable-draft-upload";
 
 vi.mock("@/utils/gmail/quota-store", async () => {
@@ -57,6 +58,40 @@ describe("Gmail traffic the quota gate must see", () => {
         bucketKey: "gmail-quota:account-upload:bucket",
       }),
     );
+  });
+
+  it("keeps no more of the account's upload chunks in flight than the cap", async () => {
+    let inflight = 0;
+    let maxInflight = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        inflight += 1;
+        maxInflight = Math.max(maxInflight, inflight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inflight -= 1;
+        return new Response(null, { status: 200 });
+      }),
+    );
+
+    await runWithGmailQuota(
+      { caller: "draft-upload", priority: "interactive" },
+      () =>
+        Promise.all(
+          Array.from({ length: 2 * GMAIL_INFLIGHT_LIMIT }, (_, index) =>
+            uploadGmailDraftChunk({
+              emailAccountId: "account-upload-cap",
+              accessToken: "upload-token",
+              sessionUri: SESSION_URI,
+              start: index,
+              bytes: new Uint8Array(1),
+              totalBytes: 2 * GMAIL_INFLIGHT_LIMIT,
+            }),
+          ),
+        ),
+    );
+
+    expect(maxInflight).toBe(GMAIL_INFLIGHT_LIMIT);
   });
 
   it("reports a caller whose Gmail calls name no account, once", async () => {

@@ -245,8 +245,14 @@ function meterGmailRequests(
       // meterGmailCall admitted the first attempt.
       if (attempts++ > 0) await admitGmailCall({ emailAccountId, cost });
       // Held for the round trip only, not Gaxios's sleep between attempts.
+      // A streamed response (a complete thread, an attachment) gives its
+      // slot back once its headers arrive, before its body is read.
       return withGmailInflightSlot(
-        { emailAccountId, priority: currentGmailQuotaContext().priority },
+        {
+          emailAccountId,
+          priority: currentGmailQuotaContext().priority,
+          signal: prepared.signal ?? undefined,
+        },
         () =>
           options.adapter
             ? options.adapter(prepared, defaultAdapter)

@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import type { GmailQuotaPriority as Priority } from "@/utils/gmail/quota";
 import { createScopedLogger } from "@/utils/logger";
 
@@ -14,13 +13,11 @@ import { createScopedLogger } from "@/utils/logger";
 // memory: one Redis round trip per Gmail call is what the gate's leases exist
 // to avoid.
 export const GMAIL_INFLIGHT_LIMIT = 8;
-// Sync and background never take the last slots, so a person's call waits
-// only behind other calls of theirs, or one round trip at most.
-const CEILING: Record<Priority, number> = {
-  interactive: GMAIL_INFLIGHT_LIMIT,
-  sync: 6,
-  background: 3,
-};
+// Sync and background together never take the last two slots, so a person's
+// call waits only behind other calls of theirs, or one round trip at most.
+// Background alone takes at most three, so sync always has room beside it.
+const SYNC_SHARE = 6;
+const BACKGROUND_SHARE = 3;
 // A call that waits this long is sent anyway, over the cap: a stuck request
 // must never hold a person's thread or search, nor stall a sync for good.
 export const GMAIL_INFLIGHT_MAX_WAIT_MS: Record<Priority, number> = {
@@ -39,51 +36,64 @@ type Waiter = {
   permits: number;
   grant: () => void;
 };
-type AccountSlots = { inflight: number; waiters: Waiter[] };
+type AccountSlots = {
+  inflight: Record<Priority, number>;
+  waiters: Waiter[];
+};
 
 const logger = createScopedLogger("gmail-inflight");
 const accounts = new Map<string, AccountSlots>();
-// Accounts whose slot the current async call already holds: a call made while
-// holding one runs on it rather than wait for a slot it would never get.
-const heldSlots = new AsyncLocalStorage<ReadonlySet<string>>();
 const stats = { waits: 0, waitMsTotal: 0, waitMsMax: 0, overCap: 0 };
 
 /**
+ * The most requests one call at `priority` may send at once, such as the
+ * requests in one HTTP batch. Larger sets must be split to fit.
+ */
+export function gmailInflightBatchLimit(priority: Priority) {
+  return priority === "background" ? BACKGROUND_SHARE : SYNC_SHARE;
+}
+
+/**
  * Sends one Gmail request (or one batch of `weight` requests) while holding
- * that many of the account's in-flight slots, released when it settles.
- * Wrap only the network round trip, not quota waits or retry sleeps.
+ * that many of the account's in-flight slots, released when `send` settles.
+ * `send` must be the network round trip alone and make no Gmail calls of its
+ * own; quota waits and retry sleeps stay outside it. A streamed response
+ * releases its slots once its headers arrive, before its body is read.
  */
 export async function withGmailInflightSlot<T>(
   {
     emailAccountId,
     priority,
     weight = 1,
+    signal,
   }: {
     emailAccountId: string | undefined;
     priority: Priority;
     weight?: number;
+    signal?: AbortSignal;
   },
   send: () => Promise<T>,
 ): Promise<T> {
-  const held = heldSlots.getStore();
-  if (!emailAccountId || held?.has(emailAccountId)) return send();
+  if (!emailAccountId) return send();
+  // Gmail counts every request, so a larger set is the caller's to split.
+  if (weight > gmailInflightBatchLimit(priority))
+    throw new Error(
+      `Gmail in-flight weight ${weight} exceeds ${gmailInflightBatchLimit(priority)} at ${priority}`,
+    );
 
   const account = accounts.get(emailAccountId) ?? {
-    inflight: 0,
+    inflight: { interactive: 0, sync: 0, background: 0 },
     waiters: [],
   };
   accounts.set(emailAccountId, account);
-  const permits = Math.min(Math.max(1, Math.ceil(weight)), CEILING[priority]);
-  await acquire(emailAccountId, account, priority, permits);
+  const permits = Math.max(1, Math.ceil(weight));
+  await acquire(emailAccountId, account, priority, permits, signal);
   try {
-    return await heldSlots.run(
-      new Set([...(held ?? []), emailAccountId]),
-      send,
-    );
+    return await send();
   } finally {
-    account.inflight -= permits;
+    account.inflight[priority] -= permits;
     grantWaiters(account);
-    if (account.inflight <= 0 && account.waiters.length === 0)
+    if (total(account) <= 0 && account.waiters.length === 0)
       accounts.delete(emailAccountId);
   }
 }
@@ -109,31 +119,48 @@ async function acquire(
   account: AccountSlots,
   priority: Priority,
   permits: number,
+  signal: AbortSignal | undefined,
 ) {
-  const aheadOrEqual = account.waiters.some(
+  signal?.throwIfAborted();
+  const queuedAhead = account.waiters.some(
     (waiter) => RANK[waiter.priority] <= RANK[priority],
   );
-  if (!aheadOrEqual && account.inflight + permits <= CEILING[priority]) {
-    account.inflight += permits;
+  if (!queuedAhead && fits(account, priority, permits)) {
+    account.inflight[priority] += permits;
     return;
   }
 
   const startedAt = Date.now();
-  const granted = await new Promise<boolean>((resolve) => {
+  const granted = await new Promise<boolean>((resolve, reject) => {
+    const remove = () => {
+      const index = account.waiters.indexOf(waiter);
+      if (index !== -1) account.waiters.splice(index, 1);
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      // The waiter may have been the head holding back calls that now fit.
+      grantWaiters(account);
+    };
+    const onAbort = () => {
+      remove();
+      if (total(account) <= 0 && account.waiters.length === 0)
+        accounts.delete(emailAccountId);
+      reject(signal?.reason);
+    };
     const waiter: Waiter = {
       priority,
       permits,
       grant: () => {
         clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
         resolve(true);
       },
     };
     const timer = setTimeout(() => {
-      account.waiters.splice(account.waiters.indexOf(waiter), 1);
-      account.inflight += permits;
-      grantWaiters(account);
+      remove();
+      account.inflight[priority] += permits;
       resolve(false);
     }, GMAIL_INFLIGHT_MAX_WAIT_MS[priority]);
+    signal?.addEventListener("abort", onAbort, { once: true });
     // Higher priorities first, arrival order within one.
     const before = account.waiters.findIndex(
       (other) => RANK[other.priority] > RANK[priority],
@@ -155,10 +182,22 @@ async function acquire(
       emailAccountId,
       priority,
       permits,
-      inflight: account.inflight,
+      inflight: total(account),
       waitedMs,
     });
   }
+}
+
+// Each share counts only the calls it limits: a sync call is judged by what
+// sync and background hold, not by a person's calls in the reserved slots, so
+// a steady trickle of reads cannot keep a sync batch waiting.
+function fits(account: AccountSlots, priority: Priority, permits: number) {
+  const { interactive, sync, background } = account.inflight;
+  if (interactive + sync + background + permits > GMAIL_INFLIGHT_LIMIT)
+    return false;
+  if (priority === "interactive") return true;
+  if (sync + background + permits > SYNC_SHARE) return false;
+  return priority === "sync" || background + permits <= BACKGROUND_SHARE;
 }
 
 // Grants in queue order and stops at the first that does not fit, so a later,
@@ -166,9 +205,14 @@ async function acquire(
 function grantWaiters(account: AccountSlots) {
   while (account.waiters.length > 0) {
     const next = account.waiters[0];
-    if (account.inflight + next.permits > CEILING[next.priority]) return;
+    if (!fits(account, next.priority, next.permits)) return;
     account.waiters.shift();
-    account.inflight += next.permits;
+    account.inflight[next.priority] += next.permits;
     next.grant();
   }
+}
+
+function total(account: AccountSlots) {
+  const { interactive, sync, background } = account.inflight;
+  return interactive + sync + background;
 }
