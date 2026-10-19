@@ -15,17 +15,18 @@ import { sleep } from "@/utils/sleep";
 // The per-user Gmail limit for this Google Cloud project, shared by every
 // route, tab, device and job of one account.
 // https://developers.google.com/workspace/gmail/api/reference/quota
-export const GMAIL_USER_UNITS_PER_MINUTE = 15_000;
+export const GMAIL_USER_UNITS_PER_MINUTE = 6000;
 
-// Google may enforce less than that in practice, and what it refuses follows
-// an account's own units over the last minute or two rather than its busiest
-// second. So each account has its own per-minute budget, which the bucket
-// refills at. It starts at 80% of a third of the limit; a refusal for volume
-// cuts it to 85% of what the gate let through in the minute before, never
-// below `floor`; each ten minutes without one raise it a tenth, up to 80% of
-// the limit.
+// What Google refuses follows an account's own units over the last minute or
+// two rather than its busiest second. So each account has its own per-minute
+// budget, which the bucket refills at. It starts at 80% of half the limit
+// (the published limit was once 15,000 and Google refused well under it, so
+// this started at a third; the 6,000 now published is close to what it
+// enforced); a refusal for volume cuts it to 85% of what the gate let through
+// in the minute before, never below `floor`; each ten minutes without one
+// raise it a tenth, up to 80% of the limit.
 const BUDGET = {
-  start: Math.round((GMAIL_USER_UNITS_PER_MINUTE * 0.8) / 3),
+  start: Math.round((GMAIL_USER_UNITS_PER_MINUTE * 0.8) / 2),
   max: GMAIL_USER_UNITS_PER_MINUTE * 0.8,
   floor: 1200,
   cutFraction: 0.85,
@@ -43,8 +44,9 @@ const FLOOR: Record<GmailQuotaPriority, number> = {
   sync: 400,
   background: 600,
 };
-// Any one second admits at most `PACE_CAP` units in all, 80% of the
-// limit's minute spread evenly. Each priority may fill the
+// Any one second admits at most `PACE_CAP` units in all, under the bursts
+// Gmail refuses within a second. It caps bursts only: the per-minute budget,
+// not this, bounds what an account spends over time. Each priority may fill the
 // second up to its own level: sync leaves interactive calls room, and
 // background only runs below sync's level, so it never slows the sync that
 // fills the inbox.
@@ -119,8 +121,8 @@ const SUMMARY_LOOKBACK_MINUTES = 4;
 //   however late it is spent. The one slack is across minutes: units
 //   reserved just before a minute can be spent in it. All live reservations
 //   fit in half the largest per-second cap, so a minute can carry at most
-//   100 units more than the gate debited for it (0.7% of Gmail's 15,000
-//   units per user, under 1% of the highest budget).
+//   100 units more than the gate debited for it (1.7% of Gmail's 6,000
+//   units per user, about 2% of the highest budget).
 // - A call whose lane was just told to wait, for a call costing no more, takes
 //   that answer for up to `SHARED_WAIT_MS` instead of asking again. This can
 //   only make a call wait, never admit it.
@@ -903,9 +905,12 @@ export function resetGmailQuotaInstanceState() {
  * URL. Unknown calls are charged like a write so they are never undercounted.
  */
 export function gmailRequestCost(method: string, url: string | URL): number {
-  const pathname =
-    typeof url === "string" ? new URL(url, "https://x").pathname : url.pathname;
-  const match = pathname.match(/\/gmail\/v1\/users\/[^/]+(\/.*)?$/);
+  const parsed = typeof url === "string" ? new URL(url, "https://x") : url;
+  const match = parsed.pathname.match(/\/gmail\/v1\/users\/[^/]+(\/.*)?$/);
+  // Gmail reads a message, thread or draft in full when no format is given,
+  // and charges a full read three times a lighter one.
+  const format = parsed.searchParams.get("format")?.toLowerCase() ?? "full";
+  const fullRead = format === "full" || format === "raw" || format === "html";
   const parts = (match?.[1] ?? "").split("/").filter(Boolean);
   const verb = method.toUpperCase();
   const [resource, id, action] = parts;
@@ -933,18 +938,20 @@ export function gmailRequestCost(method: string, url: string | URL): number {
     if (action === "attachments") return 20;
     if (action === "modify" || action === "untrash") return 5;
     if (action === "trash") return 20;
-    return verb === "DELETE" ? 10 : 20;
+    if (verb === "DELETE") return 10;
+    return verb === "GET" && fullRead ? 60 : 20;
   }
   if (resource === "threads") {
     if (!id) return 10;
     if (action === "modify" || action === "untrash") return 10;
     if (action === "trash") return 20;
-    return verb === "DELETE" ? 20 : 40;
+    if (verb === "DELETE") return 20;
+    return verb === "GET" && format === "full" ? 120 : 40;
   }
   if (resource === "drafts") {
     if (!id) return verb === "GET" ? 5 : 10;
     if (id === "send") return 100;
-    if (verb === "GET") return 20;
+    if (verb === "GET") return fullRead ? 60 : 20;
     if (verb === "DELETE") return 10;
     return 15;
   }
