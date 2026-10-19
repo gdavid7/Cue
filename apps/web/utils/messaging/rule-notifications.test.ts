@@ -623,6 +623,56 @@ describe("handleRuleNotificationAction", () => {
     ).not.toContain("Send reply");
   });
 
+  // RD-3: the Chat SDK keeps no modal context (it quotes the card), so a
+  // submitted "Edit draft" modal has no related message. The card is updated
+  // through the Slack message stored on the action instead.
+  it("updates the card through the stored Slack message when the modal has no related message", async () => {
+    const provider = {
+      updateDraft: vi.fn().mockResolvedValue(undefined),
+      sendDraft: vi.fn().mockResolvedValue(undefined),
+      getDraft: vi
+        .fn()
+        .mockResolvedValue(
+          getMockMessage({ id: "draft-1", textPlain: "Edited draft body" }),
+        ),
+      getMessage: vi.fn().mockResolvedValue(getMockMessage()),
+    };
+    mockCreateEmailProvider.mockResolvedValue(provider);
+    mockNotificationContext({
+      id: "action-1",
+      type: ActionType.DRAFT_MESSAGING_CHANNEL,
+      content: "Initial draft body",
+      messagingMessageId: "slack-ts-1",
+      mailboxDraftAction: {
+        id: "draft-action-1",
+        draftId: "draft-1",
+        subject: "Re: Test subject",
+      },
+    });
+    prisma.executedAction.update.mockResolvedValue({} as never);
+    prisma.executedAction.updateMany.mockResolvedValue({ count: 2 } as never);
+
+    const response = await handleSlackRuleNotificationModalSubmit({
+      event: {
+        privateMetadata: "action-1",
+        values: { draft_content: "Edited draft body" },
+        user: { userId: "user-1" },
+        raw: { team: { id: "team-1" } },
+      } as never,
+      logger,
+    });
+
+    expect(response).toEqual({ action: "close" });
+    expect(provider.sendDraft).toHaveBeenCalledWith("draft-1");
+    expect(mockSlackUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C123",
+        ts: "slack-ts-1",
+        text: expect.stringContaining("Reply sent. ✅"),
+      }),
+    );
+  });
+
   it("sends Telegram draft replies from the notification Send button", async () => {
     const provider = {
       sendDraft: vi.fn().mockResolvedValue(undefined),

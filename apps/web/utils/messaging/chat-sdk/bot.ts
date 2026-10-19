@@ -510,6 +510,9 @@ function registerMessagingHandlers({
     });
   });
 
+  // The state keeps no modal context (it quotes the card, RD-3), so this
+  // arrives without `relatedMessage`; the card is updated through the Slack
+  // message stored on the action.
   bot.onModalSubmit(SLACK_DRAFT_EDIT_MODAL_ID, async (event) => {
     const handlerLogger = getHandlerLogger();
     return handleSlackRuleNotificationModalSubmit({
