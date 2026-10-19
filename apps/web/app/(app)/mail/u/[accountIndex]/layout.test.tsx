@@ -123,12 +123,45 @@ describe("MailRouteLayout", () => {
     expect(mocks.loadInboxPreview).not.toHaveBeenCalled();
   });
 
-  it("leaves a mailbox this browser has synced to the local engine", async () => {
-    mocks.localMailCookie = "acc_a.acc_b";
+  it("leaves a mailbox this browser synced a moment ago to the local engine", async () => {
+    mocks.localMailCookie = `acc_a.acc_b~${syncedAgo(5 * 60_000)}`;
 
     await renderAt("1");
 
     expect(mocks.loadInboxPreview).not.toHaveBeenCalled();
+  });
+
+  // RL-1: a laptop opened after days shows its own mail at once, and the
+  // engine adds the newest from the provider while it catches up.
+  it("fetches the newest inbox mail for a mailbox that fell behind, for the engine only", async () => {
+    mocks.localMailCookie = `acc_b~${syncedAgo(3 * 24 * 3_600_000)}`;
+    mocks.splits = [
+      { id: "all", filters: [] },
+      {
+        id: "primary",
+        filters: [{ kind: "CATEGORY", value: "CATEGORY_PERSONAL" }],
+      },
+    ];
+
+    const layout = await renderAt("1");
+
+    expect(screenOf(layout).props.catchUp).toBe(true);
+    await vi.waitFor(() =>
+      expect(mocks.loadInboxPreview).toHaveBeenCalledWith({
+        emailAccountId: "acc_b",
+        provider: "microsoft",
+        catchUp: true,
+      }),
+    );
+  });
+
+  it("treats a mailbox recorded before sync times were kept as fallen behind", async () => {
+    mocks.localMailCookie = "acc_a.acc_b";
+
+    const layout = await renderAt("1");
+
+    expect(screenOf(layout).props.catchUp).toBe(true);
+    await vi.waitFor(() => expect(mocks.loadInboxPreview).toHaveBeenCalled());
   });
 
   it("does not fetch the whole inbox when the inbox opens on a tab", async () => {
@@ -177,7 +210,7 @@ describe("MailRouteLayout", () => {
 
   it("keeps the mail screen in the same place whether or not it seeds the inbox", async () => {
     const seeded = await renderAt("1");
-    mocks.localMailCookie = "acc_b";
+    mocks.localMailCookie = `acc_b~${syncedAgo(60_000)}`;
     const unseeded = await renderAt("1");
 
     expect(screenOf(seeded).type).toBe(InboxPreviewSeed);
@@ -231,3 +264,7 @@ describe("MailRouteLayout", () => {
     await expect(renderAt("0")).rejects.toThrow("redirect:/connect-mailbox");
   });
 });
+
+function syncedAgo(ms: number) {
+  return Math.floor((Date.now() - ms) / 1000).toString(36);
+}

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { redis } from "@/utils/redis";
 import { ProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
 import { createTestLogger } from "@/__tests__/helpers";
+import { runWithAuditContext } from "@/utils/audit/context";
 import {
   assertProviderNotRateLimited,
   getEmailProviderRateLimitState,
@@ -158,32 +159,33 @@ describe("email provider rate-limit state", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("records rate-limit mode from gmail retry errors", async () => {
-    const retryAt = new Date(Date.now() + 120_000).toISOString();
-    vi.mocked(redis.get).mockResolvedValueOnce(null);
+  it("records rate-limit mode from gmail retry errors", () =>
+    asSyncCaller(async () => {
+      const retryAt = new Date(Date.now() + 120_000).toISOString();
+      vi.mocked(redis.get).mockResolvedValueOnce(null);
 
-    const state = await recordProviderRateLimitFromError({
-      emailAccountId: "account-1",
-      provider: "google",
-      error: {
-        cause: {
-          status: 429,
-          message: `User-rate limit exceeded. Retry after ${retryAt}`,
+      const state = await recordProviderRateLimitFromError({
+        emailAccountId: "account-1",
+        provider: "google",
+        error: {
+          cause: {
+            status: 429,
+            message: `User-rate limit exceeded. Retry after ${retryAt}`,
+          },
         },
-      },
-      source: "test",
-      logger,
-    });
+        source: "test",
+        logger,
+      });
 
-    expect(state).not.toBeNull();
-    expect(redis.set).toHaveBeenCalledWith(
-      "email-provider-rate-limit:account-1",
-      expect.any(String),
-      expect.objectContaining({
-        ex: expect.any(Number),
-      }),
-    );
-  });
+      expect(state).not.toBeNull();
+      expect(redis.set).toHaveBeenCalledWith(
+        "email-provider-rate-limit:account-1",
+        expect.any(String),
+        expect.objectContaining({
+          ex: expect.any(Number),
+        }),
+      );
+    }));
 
   it.each([
     [
@@ -214,109 +216,115 @@ describe("email provider rate-limit state", () => {
     expect(redis.set).not.toHaveBeenCalled();
   });
 
-  it("holds rate-limit mode for at most two minutes", async () => {
-    vi.mocked(redis.get).mockResolvedValueOnce(null);
-    const retryAt = new Date(Date.now() + 4 * 60_000).toISOString();
+  it("holds rate-limit mode for at most two minutes", () =>
+    asSyncCaller(async () => {
+      vi.mocked(redis.get).mockResolvedValueOnce(null);
+      const retryAt = new Date(Date.now() + 4 * 60_000).toISOString();
 
-    const state = await recordProviderRateLimitFromError({
-      emailAccountId: "account-1",
-      provider: "google",
-      error: {
+      const state = await recordProviderRateLimitFromError({
+        emailAccountId: "account-1",
+        provider: "google",
+        error: {
+          cause: {
+            status: 429,
+            message: `User-rate limit exceeded. Retry after ${retryAt}`,
+          },
+        },
+        source: "test",
+        logger,
+      });
+
+      expect(state!.retryAt.getTime() - Date.now()).toBeLessThanOrEqual(
+        2 * 60_000,
+      );
+    }));
+
+  it("records and rethrows from wrapped operations", () =>
+    asSyncCaller(async () => {
+      const retryAt = new Date(Date.now() + 120_000).toISOString();
+      const rateLimitError = {
         cause: {
           status: 429,
           message: `User-rate limit exceeded. Retry after ${retryAt}`,
         },
-      },
-      source: "test",
-      logger,
-    });
+      };
+      vi.mocked(redis.get).mockResolvedValueOnce(null);
 
-    expect(state!.retryAt.getTime() - Date.now()).toBeLessThanOrEqual(
-      2 * 60_000,
-    );
-  });
+      await expect(
+        withRateLimitRecording(
+          {
+            emailAccountId: "account-1",
+            provider: "google",
+            source: "test-wrapper",
+            logger,
+          },
+          async () => {
+            throw rateLimitError;
+          },
+        ),
+      ).rejects.toBe(rateLimitError);
 
-  it("records and rethrows from wrapped operations", async () => {
-    const retryAt = new Date(Date.now() + 120_000).toISOString();
-    const rateLimitError = {
-      cause: {
-        status: 429,
-        message: `User-rate limit exceeded. Retry after ${retryAt}`,
-      },
-    };
-    vi.mocked(redis.get).mockResolvedValueOnce(null);
+      expect(redis.set).toHaveBeenCalledWith(
+        "email-provider-rate-limit:account-1",
+        expect.any(String),
+        expect.objectContaining({
+          ex: expect.any(Number),
+        }),
+      );
+    }));
 
-    await expect(
-      withRateLimitRecording(
-        {
-          emailAccountId: "account-1",
+  it("rethrows original error when recording state fails", () =>
+    asSyncCaller(async () => {
+      const rateLimitError = {
+        cause: {
+          status: 429,
+          message: "Rate limit exceeded",
+        },
+      };
+      vi.mocked(redis.get).mockResolvedValueOnce(null);
+      vi.mocked(redis.set).mockRejectedValueOnce(
+        new Error("redis unavailable"),
+      );
+
+      await expect(
+        withRateLimitRecording(
+          {
+            emailAccountId: "account-1",
+            provider: "google",
+            source: "test-wrapper",
+            logger,
+          },
+          async () => {
+            throw rateLimitError;
+          },
+        ),
+      ).rejects.toBe(rateLimitError);
+    }));
+
+  it("keeps existing longer retry window even when source differs", () =>
+    asSyncCaller(async () => {
+      const existingRetryAt = new Date(Date.now() + 120_000);
+      vi.mocked(redis.get).mockResolvedValueOnce(
+        JSON.stringify({
           provider: "google",
-          source: "test-wrapper",
-          logger,
-        },
-        async () => {
-          throw rateLimitError;
-        },
-      ),
-    ).rejects.toBe(rateLimitError);
+          retryAt: existingRetryAt.toISOString(),
+          source: "long-window",
+          detectedAt: new Date().toISOString(),
+        }),
+      );
 
-    expect(redis.set).toHaveBeenCalledWith(
-      "email-provider-rate-limit:account-1",
-      expect.any(String),
-      expect.objectContaining({
-        ex: expect.any(Number),
-      }),
-    );
-  });
-
-  it("rethrows original error when recording state fails", async () => {
-    const rateLimitError = {
-      cause: {
-        status: 429,
-        message: "Rate limit exceeded",
-      },
-    };
-    vi.mocked(redis.get).mockResolvedValueOnce(null);
-    vi.mocked(redis.set).mockRejectedValueOnce(new Error("redis unavailable"));
-
-    await expect(
-      withRateLimitRecording(
-        {
-          emailAccountId: "account-1",
-          provider: "google",
-          source: "test-wrapper",
-          logger,
-        },
-        async () => {
-          throw rateLimitError;
-        },
-      ),
-    ).rejects.toBe(rateLimitError);
-  });
-
-  it("keeps existing longer retry window even when source differs", async () => {
-    const existingRetryAt = new Date(Date.now() + 120_000);
-    vi.mocked(redis.get).mockResolvedValueOnce(
-      JSON.stringify({
+      const state = await setEmailProviderRateLimitState({
+        emailAccountId: "account-1",
         provider: "google",
-        retryAt: existingRetryAt.toISOString(),
-        source: "long-window",
-        detectedAt: new Date().toISOString(),
-      }),
-    );
+        retryAt: new Date(Date.now() + 30_000),
+        source: "short-window",
+        logger,
+      });
 
-    const state = await setEmailProviderRateLimitState({
-      emailAccountId: "account-1",
-      provider: "google",
-      retryAt: new Date(Date.now() + 30_000),
-      source: "short-window",
-      logger,
-    });
-
-    expect(state.retryAt.toISOString()).toBe(existingRetryAt.toISOString());
-    expect(state.source).toBe("long-window");
-    expect(redis.set).not.toHaveBeenCalled();
-  });
+      expect(state.retryAt.toISOString()).toBe(existingRetryAt.toISOString());
+      expect(state.source).toBe("long-window");
+      expect(redis.set).not.toHaveBeenCalled();
+    }));
 
   it("records rate-limit mode for microsoft provider errors", async () => {
     vi.mocked(redis.get).mockResolvedValueOnce(null);
@@ -503,3 +511,9 @@ describe("getProviderRateLimitDelayMs", () => {
     ).toBeLessThan(30_000);
   });
 });
+
+// Push and the mail engine read at sync priority; a refused background call
+// never starts account-wide mode.
+function asSyncCaller<T>(operation: () => Promise<T>) {
+  return runWithAuditContext({ source: "google/webhook" }, operation);
+}
