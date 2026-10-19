@@ -12,6 +12,22 @@ import type { Logger } from "@/utils/logger";
 import type { CalendarEvent } from "@/utils/calendar/event-types";
 import { partitionAttendeesForBriefing } from "./attendees";
 import { getUserOwnAddresses } from "@/utils/user/own-addresses";
+import { getPremiumUserFilter } from "@/utils/premium";
+import { chooseBriefedCopy } from "./same-meeting";
+
+// A brief claimed this long ago and still pending is taken to have stalled,
+// so another of the user's calendars may brief the meeting instead.
+const STALLED_BRIEF_MS = 15 * 60_000;
+
+/** Accounts the meeting-brief cron briefs. */
+export function meetingBriefAccountsWhere() {
+  return {
+    meetingBriefingsEnabled: true,
+    ...getPremiumUserFilter(),
+    // Must have a calendar connected
+    calendarConnections: { some: { isConnected: true } },
+  };
+}
 
 export type EmailAccountForBrief = {
   id: string;
@@ -30,13 +46,6 @@ export type EmailAccountForBrief = {
   account: {
     provider: string;
   };
-};
-
-type ClaimedBriefing = {
-  id: string;
-  createdAt: Date;
-  eventTitle: string;
-  eventStartTime: Date;
 };
 
 export async function processMeetingBriefings({
@@ -133,8 +142,30 @@ export async function processMeetingBriefings({
     return;
   }
 
+  const otherAccountsEvents = await fetchOtherAccountsEvents({
+    userId: emailAccount.userId,
+    emailAccountId,
+    minutesBefore,
+    logger,
+  });
+
   // 4. Process each event
   for (const event of eventsToProcess) {
+    const briefedCopy = chooseBriefedCopy(event, emailAccountId, [
+      { emailAccountId, events: allEvents },
+      ...otherAccountsEvents,
+    ]);
+    if (
+      briefedCopy.eventId !== event.id &&
+      !(await shouldBriefInsteadOf({
+        briefedCopy,
+        emailAccountId,
+        event,
+        logger,
+      }))
+    ) {
+      continue;
+    }
     try {
       await runMeetingBrief({
         event,
@@ -189,20 +220,6 @@ export async function runMeetingBrief({
     if (!claimed) {
       eventLog.info("Event already claimed by another process, skipping");
       return { success: false, message: "Already being processed" };
-    }
-
-    if (await isBriefedElsewhere({ claimed, userId: emailAccount.userId })) {
-      eventLog.info("Meeting already briefed from another calendar, skipping");
-      await upsertMeetingBriefingStatus({
-        emailAccountId,
-        calendarEventId: event.id,
-        eventTitle: event.title,
-        eventStartTime: event.startTime,
-        guestCount: externalGuestCount,
-        status: MeetingBriefingStatus.SKIPPED,
-        logger: eventLog,
-      });
-      return { success: false, message: "Already briefed" };
     }
   }
 
@@ -282,6 +299,91 @@ export async function runMeetingBrief({
   }
 }
 
+/**
+ * The same window of the user's other briefed mailboxes' calendars, so a
+ * meeting on several of them is briefed once.
+ */
+async function fetchOtherAccountsEvents({
+  userId,
+  emailAccountId,
+  minutesBefore,
+  logger,
+}: {
+  userId: string;
+  emailAccountId: string;
+  minutesBefore: number;
+  logger: Logger;
+}) {
+  const others = await prisma.emailAccount.findMany({
+    where: {
+      ...meetingBriefAccountsWhere(),
+      userId,
+      id: { not: emailAccountId },
+    },
+    select: { id: true },
+  });
+  return Promise.all(
+    others.map(async (other) => ({
+      emailAccountId: other.id,
+      events: await fetchUpcomingEvents({
+        emailAccountId: other.id,
+        minutesBefore,
+        logger: logger.with({ otherEmailAccountId: other.id }),
+      }).catch(() => []),
+    })),
+  );
+}
+
+/**
+ * Another copy of this meeting is the one to brief. This copy waits while
+ * that one is unclaimed or recently claimed, is put away once that one is
+ * sent, and is briefed itself if that one failed or stalled.
+ */
+async function shouldBriefInsteadOf({
+  briefedCopy,
+  emailAccountId,
+  event,
+  logger,
+}: {
+  briefedCopy: { emailAccountId: string; eventId: string };
+  emailAccountId: string;
+  event: CalendarEvent;
+  logger: Logger;
+}) {
+  // A second copy on this mailbox's own calendars is never briefed.
+  if (briefedCopy.emailAccountId === emailAccountId) return false;
+  const briefing = await prisma.meetingBriefing.findUnique({
+    where: {
+      emailAccountId_calendarEventId: {
+        emailAccountId: briefedCopy.emailAccountId,
+        calendarEventId: briefedCopy.eventId,
+      },
+    },
+    select: { status: true, createdAt: true },
+  });
+  if (briefing?.status === MeetingBriefingStatus.SENT) {
+    logger.info("Meeting briefed from another calendar, skipping");
+    await upsertMeetingBriefingStatus({
+      emailAccountId,
+      calendarEventId: event.id,
+      eventTitle: event.title,
+      eventStartTime: event.startTime,
+      guestCount: 0,
+      status: MeetingBriefingStatus.SKIPPED,
+      logger,
+    });
+    return false;
+  }
+  if (!briefing) return false;
+  if (
+    briefing.status === MeetingBriefingStatus.PENDING &&
+    Date.now() - briefing.createdAt.getTime() < STALLED_BRIEF_MS
+  ) {
+    return false;
+  }
+  return true;
+}
+
 async function claimMeetingBriefing({
   emailAccountId,
   calendarEventId,
@@ -294,9 +396,9 @@ async function claimMeetingBriefing({
   eventTitle: string;
   eventStartTime: Date;
   guestCount: number;
-}): Promise<ClaimedBriefing | null> {
+}): Promise<boolean> {
   try {
-    return await prisma.meetingBriefing.create({
+    await prisma.meetingBriefing.create({
       data: {
         emailAccountId,
         calendarEventId,
@@ -305,53 +407,14 @@ async function claimMeetingBriefing({
         guestCount,
         status: MeetingBriefingStatus.PENDING,
       },
-      select: {
-        id: true,
-        createdAt: true,
-        eventTitle: true,
-        eventStartTime: true,
-      },
     });
+    return true;
   } catch (error) {
     if (isDuplicateError(error)) {
-      return null;
+      return false;
     }
     throw error;
   }
-}
-
-/**
- * One meeting on two of the user's calendars (two mailboxes invited, or two
- * calendars on one mailbox) has a different event id on each, so each is
- * claimed. The two are recognised by title and start, and only the earliest
- * claim is briefed; claims made at the same moment each see the other and
- * agree which one that is.
- */
-async function isBriefedElsewhere({
-  claimed,
-  userId,
-}: {
-  claimed: ClaimedBriefing;
-  userId: string;
-}) {
-  const others = await prisma.meetingBriefing.findMany({
-    where: {
-      id: { not: claimed.id },
-      emailAccount: { userId },
-      eventTitle: claimed.eventTitle,
-      eventStartTime: claimed.eventStartTime,
-      status: {
-        in: [MeetingBriefingStatus.PENDING, MeetingBriefingStatus.SENT],
-      },
-    },
-    select: { id: true, createdAt: true },
-  });
-  return others.some(
-    (other) =>
-      other.createdAt.getTime() < claimed.createdAt.getTime() ||
-      (other.createdAt.getTime() === claimed.createdAt.getTime() &&
-        other.id < claimed.id),
-  );
 }
 
 async function upsertMeetingBriefingStatus({

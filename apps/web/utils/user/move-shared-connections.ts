@@ -66,7 +66,9 @@ export async function getMoveSharedConnectionsOperations({
 
 /**
  * The connections removing a mailbox deletes rather than moves, named for the
- * person deciding whether to remove it.
+ * person deciding whether to remove it. What stays behind as an exact copy of
+ * one the remaining mailbox has (the same calendar account, the same Drive
+ * account, the same app) is not lost, so it isn't named.
  */
 export async function getConnectionsLostOnRemoval({
   userId,
@@ -79,13 +81,7 @@ export async function getConnectionsLostOnRemoval({
 }): Promise<string[]> {
   const stays = await getStayingConnectionFilters(toEmailAccountId);
   const from = { emailAccountId: fromEmailAccountId, emailAccount: { userId } };
-  const [calendars, drives, apps] = await Promise.all([
-    stays.calendar
-      ? prisma.calendarConnection.findMany({
-          where: { ...from, ...stays.calendar },
-          select: { provider: true, email: true },
-        })
-      : [],
+  const [drives, apps] = await Promise.all([
     stays.drive
       ? prisma.driveConnection.findMany({
           where: { ...from, ...stays.drive },
@@ -94,24 +90,30 @@ export async function getConnectionsLostOnRemoval({
       : [],
     prisma.mcpConnection.findMany({
       where: { ...from, ...stays.app },
-      select: { integration: { select: { name: true } } },
+      select: { integrationId: true, integration: { select: { name: true } } },
     }),
   ]);
 
   return [
-    ...calendars.map(
-      ({ provider, email }) =>
-        `${provider === "microsoft" ? "Outlook Calendar" : "Google Calendar"} (${email})`,
-    ),
-    ...drives.map(
-      ({ provider, email }) =>
-        `${provider === "microsoft" ? "OneDrive" : "Google Drive"} (${email})`,
-    ),
-    ...new Set(
-      apps.map(
-        ({ integration }) =>
-          MCP_INTEGRATIONS[integration.name]?.displayName ?? integration.name,
+    ...drives
+      .filter(
+        (drive) =>
+          !stays.remaining.drives.some(
+            (kept) =>
+              kept.provider === drive.provider && kept.email === drive.email,
+          ),
+      )
+      .map(
+        ({ provider, email }) =>
+          `${provider === "microsoft" ? "OneDrive" : "Google Drive"} (${email})`,
       ),
+    ...new Set(
+      apps
+        .filter((app) => !stays.remaining.appIds.includes(app.integrationId))
+        .map(
+          ({ integration }) =>
+            MCP_INTEGRATIONS[integration.name]?.displayName ?? integration.name,
+        ),
     ),
   ];
 }
@@ -129,7 +131,7 @@ async function getStayingConnectionFilters(toEmailAccountId: string) {
     }),
     prisma.driveConnection.findMany({
       where: { emailAccountId: toEmailAccountId },
-      select: { provider: true },
+      select: { provider: true, email: true },
     }),
     prisma.mcpConnection.findMany({
       where: { emailAccountId: toEmailAccountId },
@@ -137,6 +139,10 @@ async function getStayingConnectionFilters(toEmailAccountId: string) {
     }),
   ]);
   return {
+    remaining: {
+      drives,
+      appIds: apps.map(({ integrationId }) => integrationId),
+    },
     calendar: calendars.length
       ? {
           OR: calendars.map(({ provider, email }) => ({ provider, email })),
@@ -160,6 +166,7 @@ async function getStayingConnectionFilters(toEmailAccountId: string) {
       ],
     },
   } satisfies {
+    remaining: unknown;
     calendar: Prisma.CalendarConnectionWhereInput | null;
     drive: Prisma.DriveConnectionWhereInput | null;
     app: Prisma.McpConnectionWhereInput;

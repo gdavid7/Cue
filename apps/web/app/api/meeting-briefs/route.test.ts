@@ -35,6 +35,7 @@ vi.mock("@/utils/premium", () => ({
 }));
 
 vi.mock("@/utils/meeting-briefs/process", () => ({
+  meetingBriefAccountsWhere: () => ({ meetingBriefingsEnabled: true }),
   processMeetingBriefings: (...args: unknown[]) =>
     processMeetingBriefingsMock(...args),
 }));

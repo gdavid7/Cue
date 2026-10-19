@@ -1,16 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
 import { MeetingBriefingStatus } from "@/generated/prisma/enums";
+import type { CalendarEvent } from "@/utils/calendar/event-types";
 import { createScopedLogger } from "@/utils/logger";
-import { runMeetingBrief } from "./process";
+import { processMeetingBriefings } from "./process";
 
 vi.mock("@/utils/prisma");
 vi.mock("server-only", () => ({}));
 
 const mocks = vi.hoisted(() => ({
+  eventsByAccount: {} as Record<string, unknown[]>,
   gatherContextForEvent: vi.fn(),
   aiGenerateMeetingBriefing: vi.fn(),
   sendBriefing: vi.fn(),
+}));
+vi.mock("./fetch-upcoming-events", async (importActual) => ({
+  ...(await importActual<typeof import("./fetch-upcoming-events")>()),
+  fetchUpcomingEvents: async ({ emailAccountId }: { emailAccountId: string }) =>
+    mocks.eventsByAccount[emailAccountId] ?? [],
+}));
+vi.mock("@/utils/user/own-addresses", () => ({
+  getUserOwnAddresses: async () => [],
 }));
 vi.mock("./gather-context", () => ({
   gatherContextForEvent: mocks.gatherContextForEvent,
@@ -22,18 +32,21 @@ vi.mock("./send-briefing", () => ({ sendBriefing: mocks.sendBriefing }));
 
 const logger = createScopedLogger("meeting-briefs-test");
 const startTime = new Date("2026-10-20T15:00:00.000Z");
-const claimedAt = new Date("2026-10-20T14:30:00.000Z");
 
-describe("runMeetingBrief", () => {
+describe("processMeetingBriefings with one meeting on two mailboxes' calendars", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    prisma.emailAccount.findMany.mockResolvedValue([]);
-    prisma.meetingBriefing.create.mockResolvedValue({
-      id: "briefing-b",
-      createdAt: claimedAt,
-      eventTitle: "Quarterly review",
-      eventStartTime: startTime,
-    } as never);
+    // The same meeting, with a different event id on each calendar.
+    mocks.eventsByAccount = {
+      "account-a": [event("event-on-a")],
+      "account-b": [event("event-on-b")],
+    };
+    prisma.emailAccount.findUnique.mockResolvedValue(emailAccount() as never);
+    prisma.emailAccount.findMany.mockResolvedValue([
+      { id: "account-a" },
+    ] as never);
+    prisma.meetingBriefing.findMany.mockResolvedValue([]);
+    prisma.meetingBriefing.create.mockResolvedValue({} as never);
     mocks.gatherContextForEvent.mockResolvedValue({
       externalGuests: [{ email: "guest@other.example" }],
       internalTeamMembers: [],
@@ -42,59 +55,102 @@ describe("runMeetingBrief", () => {
     mocks.sendBriefing.mockResolvedValue(undefined);
   });
 
-  it("briefs a meeting once when it is on two of the user's calendars", async () => {
-    // The same meeting, claimed earlier from the user's other calendar.
-    prisma.meetingBriefing.findMany.mockResolvedValue([
-      { id: "briefing-a", createdAt: new Date(claimedAt.getTime() - 1000) },
-    ] as never);
+  it("puts this copy away once the other mailbox's brief is sent", async () => {
+    winnerBriefing({ status: MeetingBriefingStatus.SENT });
 
-    const result = await runMeetingBrief({
-      event: event(),
-      emailAccount: emailAccount(),
-      emailAccountId: "account-b",
-      isTestSend: false,
-      logger,
-    });
+    await processB();
 
-    expect(result.success).toBe(false);
     expect(mocks.sendBriefing).not.toHaveBeenCalled();
-    expect(prisma.meetingBriefing.findMany).toHaveBeenCalledWith(
+    expect(prisma.meetingBriefing.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({
-          id: { not: "briefing-b" },
-          emailAccount: { userId: "user-1" },
-          eventStartTime: startTime,
-        }),
+        where: {
+          emailAccountId_calendarEventId: {
+            emailAccountId: "account-a",
+            calendarEventId: "event-on-a",
+          },
+        },
       }),
     );
     expect(prisma.meetingBriefing.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        update: { status: MeetingBriefingStatus.SKIPPED },
+        create: expect.objectContaining({
+          emailAccountId: "account-b",
+          calendarEventId: "event-on-b",
+          status: MeetingBriefingStatus.SKIPPED,
+        }),
       }),
     );
   });
 
-  it("briefs the earliest claim when the other calendar claimed it later", async () => {
-    prisma.meetingBriefing.findMany.mockResolvedValue([
-      { id: "briefing-a", createdAt: new Date(claimedAt.getTime() + 1000) },
-    ] as never);
+  it("waits, without claiming, while the other mailbox has yet to brief it", async () => {
+    prisma.meetingBriefing.findUnique.mockResolvedValue(null);
 
-    const result = await runMeetingBrief({
-      event: event(),
-      emailAccount: emailAccount(),
-      emailAccountId: "account-b",
-      isTestSend: false,
-      logger,
+    await processB();
+
+    expect(mocks.sendBriefing).not.toHaveBeenCalled();
+    expect(prisma.meetingBriefing.create).not.toHaveBeenCalled();
+    expect(prisma.meetingBriefing.upsert).not.toHaveBeenCalled();
+  });
+
+  it("waits while the other mailbox's brief is recently pending", async () => {
+    winnerBriefing({
+      status: MeetingBriefingStatus.PENDING,
+      createdAt: new Date(Date.now() - 60_000),
     });
 
-    expect(result.success).toBe(true);
+    await processB();
+
+    expect(mocks.sendBriefing).not.toHaveBeenCalled();
+    expect(prisma.meetingBriefing.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["failed", MeetingBriefingStatus.FAILED, new Date()],
+    [
+      "stalled",
+      MeetingBriefingStatus.PENDING,
+      new Date(Date.now() - 20 * 60_000),
+    ],
+  ])("briefs it itself when the other mailbox's brief %s", async (_case, status, createdAt) => {
+    winnerBriefing({ status, createdAt });
+
+    await processB();
+
+    expect(mocks.sendBriefing).toHaveBeenCalledOnce();
+  });
+
+  it("briefs a meeting only on its own calendars as before", async () => {
+    mocks.eventsByAccount["account-a"] = [];
+
+    await processB();
+
+    expect(prisma.meetingBriefing.findUnique).not.toHaveBeenCalled();
     expect(mocks.sendBriefing).toHaveBeenCalledOnce();
   });
 });
 
-function event() {
+function processB() {
+  return processMeetingBriefings({
+    emailAccountId: "account-b",
+    userEmail: "me@work.example",
+    minutesBefore: 30,
+    logger,
+  });
+}
+
+function winnerBriefing(input: {
+  status: MeetingBriefingStatus;
+  createdAt?: Date;
+}) {
+  prisma.meetingBriefing.findUnique.mockResolvedValue({
+    status: input.status,
+    createdAt: input.createdAt ?? new Date(),
+  } as never);
+}
+
+function event(id: string): CalendarEvent {
   return {
-    id: "event-on-calendar-b",
+    id,
     title: "Quarterly review",
     startTime,
     endTime: new Date(startTime.getTime() + 30 * 60_000),
