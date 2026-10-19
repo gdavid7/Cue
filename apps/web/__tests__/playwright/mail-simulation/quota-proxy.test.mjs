@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   createQuotaLedger,
   createQuotaProxy,
+  gmailCost,
   gmailMethod,
 } from "./quota-proxy.mjs";
 
@@ -56,7 +57,7 @@ test("HTTP batch meters each part, returns partial errors, and counts response b
   try {
     const response = await fetch(`${proxy.url}/batch/gmail/v1`, {
       method: "POST",
-      body: "--batch\nContent-Type: application/http\n\nGET /gmail/v1/users/me/threads/a\n\n--batch\nContent-Type: application/http\n\nGET /gmail/v1/users/me/threads/b\n\n--batch--",
+      body: "--batch\nContent-Type: application/http\n\nGET /gmail/v1/users/me/threads/a?format=metadata\n\n--batch\nContent-Type: application/http\n\nGET /gmail/v1/users/me/threads/b?format=metadata\n\n--batch--",
     });
     const body = await response.text();
     assert.equal(response.status, 200);
@@ -99,6 +100,17 @@ test("classifies settings, attachments and query-bearing batch requests", () => 
     gmailMethod("POST", "/gmail/v1/users/me/messages/batchModify"),
     "messages.batchModify",
   );
+});
+
+test("charges a full read three times a metadata one", () => {
+  const thread = "/gmail/v1/users/me/threads/a";
+  const message = "/gmail/v1/users/me/messages/a";
+  assert.equal(gmailCost("threads.get", thread), 120);
+  assert.equal(gmailCost("threads.get", `${thread}?format=metadata`), 40);
+  assert.equal(gmailCost("messages.get", `${message}?format=full`), 60);
+  assert.equal(gmailCost("messages.get", `${message}?format=raw`), 60);
+  assert.equal(gmailCost("messages.get", `${message}?format=minimal`), 20);
+  assert.equal(gmailCost("messages.list", "/gmail/v1/users/me/messages"), 5);
 });
 
 test("batch request targets cannot escape the local upstream", async () => {
