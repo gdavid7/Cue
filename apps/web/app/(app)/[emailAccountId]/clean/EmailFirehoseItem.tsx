@@ -24,6 +24,7 @@ type Status = "markedDone" | "markingDone" | "keep" | "labelled" | "processing";
 
 export function EmailItem({
   email,
+  details,
   userEmail,
   emailAccountId,
   action,
@@ -32,6 +33,8 @@ export function EmailItem({
   setUndone,
 }: {
   email: CleanThread;
+  /** Looked up by the browser: the feed carries no sender or subject. */
+  details: { subject: string; from: string } | undefined;
   userEmail: string;
   emailAccountId: string;
   action: CleanAction;
@@ -56,7 +59,11 @@ export function EmailItem({
       <div className="min-w-0 flex-1">
         <div className="flex items-center">
           <StatusCircle status={status} />
-          <div className="truncate font-medium">{email.subject}</div>
+          <div className="truncate font-medium">
+            {details?.subject ?? (
+              <span className="text-muted-foreground">Loading…</span>
+            )}
+          </div>
           <Link
             className="ml-2 hover:text-foreground"
             href={getGmailUrl(email.threadId, userEmail)}
@@ -66,7 +73,8 @@ export function EmailItem({
           </Link>
         </div>
         <div className="truncate text-xs text-muted-foreground">
-          From: {email.from} • {formatShortDate(email.date)}
+          {details ? `From: ${details.from} • ` : ""}
+          {formatShortDate(email.date)}
         </div>
       </div>
 

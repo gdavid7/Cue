@@ -4,6 +4,7 @@ import { GmailLabel } from "@/utils/gmail/label";
 import type { ParsedMessage } from "@/utils/types";
 import { CleanAction } from "@/generated/prisma/enums";
 import { createTestLogger, getMockMessage } from "@/__tests__/helpers";
+import { recordingRedis } from "@/__tests__/mocks/recording-redis.mock";
 
 const { cleanerEnv } = vi.hoisted(() => ({
   cleanerEnv: {
@@ -45,9 +46,9 @@ vi.mock("@/utils/user/get", () => ({
   getUserPremium: (...args: unknown[]) => mockGetUserPremium(...args),
 }));
 
-vi.mock("@/utils/redis/clean", () => ({
-  saveThread: vi.fn().mockResolvedValue(undefined),
-  updateThread: vi.fn().mockResolvedValue(undefined),
+vi.mock("@/utils/redis", async () => ({
+  redis: (await import("@/__tests__/mocks/recording-redis.mock")).recordingRedis
+    .client,
 }));
 
 vi.mock("@/utils/qstash", () => ({
@@ -258,6 +259,32 @@ describe("cleanThread", () => {
 
       expect(mockAiClean).toHaveBeenCalled();
     });
+  });
+
+  // RD-3: the Deep Clean feed carries ids and status; the browser looks up
+  // who sent each thread and what it says.
+  it("stores and publishes a thread's progress without its sender or subject", async () => {
+    recordingRedis.reset();
+    mockGetThreadMessages.mockResolvedValue([
+      getMockMessage({
+        id: "msg-1",
+        from: "Store <store@example.com>",
+        to: "user@example.com",
+        subject: "Payment confirmation",
+        labelIds: [],
+      }),
+    ]);
+
+    await cleanThread(getDefaultParams());
+
+    expect(recordingRedis.published.length).toBeGreaterThan(0);
+    expect(JSON.parse(recordingRedis.published[0].message)).toMatchObject({
+      threadId: getDefaultParams().threadId,
+      status: "processing",
+    });
+    const written = recordingRedis.everythingWritten();
+    expect(written).not.toContain("Payment confirmation");
+    expect(written).not.toContain("store@example.com");
   });
 
   it("returns not found when cleaner is disabled on self-hosted", async () => {

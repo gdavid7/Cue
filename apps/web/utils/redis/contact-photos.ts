@@ -2,57 +2,41 @@ import "server-only";
 import type { Logger } from "@/utils/logger";
 import { redis } from "@/utils/redis";
 
-// Contact photos rarely change, and sweeping the address book is expensive
-// against the provider's per-user quota.
-const CONTACT_PHOTOS_TTL_SECONDS = 24 * 60 * 60;
 // Short enough that a newly granted contacts scope takes effect soon.
 const FAILED_SWEEP_TTL_SECONDS = 15 * 60;
 
-export async function getCachedContactPhotos(
+/**
+ * Whether a recent address-book sweep for the account failed. Only that flag
+ * is kept: the photos name the user's contacts, so the browser keeps them
+ * (RD-3).
+ */
+export async function isContactPhotoSweepPaused(
   emailAccountId: string,
   logger: Logger,
 ) {
   try {
-    return await redis.get<Record<string, string>>(
-      getContactPhotosKey(emailAccountId),
-    );
+    return Boolean(await redis.get(getPausedKey(emailAccountId)));
   } catch (error) {
-    logger.warn("Failed to read cached contact photos", { error });
-    return null;
-  }
-}
-
-export async function setCachedContactPhotos(
-  emailAccountId: string,
-  photos: Record<string, string>,
-  logger: Logger,
-) {
-  try {
-    await redis.set(getContactPhotosKey(emailAccountId), photos, {
-      ex: CONTACT_PHOTOS_TTL_SECONDS,
-    });
-  } catch (error) {
-    logger.warn("Failed to cache contact photos", { error });
+    logger.warn("Failed to read the contact photo sweep pause", { error });
+    return false;
   }
 }
 
 // Stops a rate limited or unpermitted account from re-sweeping on every page
-// load. NX keeps a concurrent request's successful map from being replaced.
-export async function setFailedContactPhotoSweep(
+// load.
+export async function pauseContactPhotoSweep(
   emailAccountId: string,
   logger: Logger,
 ) {
   try {
-    await redis.set(
-      getContactPhotosKey(emailAccountId),
-      {},
-      { ex: FAILED_SWEEP_TTL_SECONDS, nx: true },
-    );
+    await redis.set(getPausedKey(emailAccountId), "1", {
+      ex: FAILED_SWEEP_TTL_SECONDS,
+    });
   } catch (error) {
-    logger.warn("Failed to cache failed contact photo sweep", { error });
+    logger.warn("Failed to pause the contact photo sweep", { error });
   }
 }
 
-function getContactPhotosKey(emailAccountId: string) {
-  return `contact-photos:${emailAccountId}`;
+function getPausedKey(emailAccountId: string) {
+  return `contact-photos-paused:${emailAccountId}`;
 }
