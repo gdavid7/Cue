@@ -52,7 +52,9 @@ export async function handleNewMailPush({
   // tab's own notification shares this tag and the browser keeps one. Safari
   // (the only browser on Apple's push service) always gets one.
   const [windows, endpoint] = await Promise.all([
-    findCueWindows(clients, origin),
+    // Safari revokes push for pushes that show nothing, so a failed lookup
+    // must still end in a notification.
+    findCueWindows(clients, origin).catch(() => []),
     getSubscriptionEndpoint().catch(() => null),
   ]);
   if (

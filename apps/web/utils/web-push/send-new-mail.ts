@@ -151,6 +151,9 @@ async function deliver({
       return;
     }
     logger.warn("Web push send failed", { statusCode });
+    // A network error on our side says nothing about the subscription, so only
+    // the push service's own rejections count toward dropping it.
+    if (statusCode === null) return;
     await prisma.webPushSubscription.updateMany({
       where: { id: subscription.id },
       data: { failureCount: { increment: 1 } },

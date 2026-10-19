@@ -248,6 +248,19 @@ describe("sendNewMailWebPush", () => {
     });
   });
 
+  it("does not count a network error on our side against the subscription", async () => {
+    sendNotification.mockRejectedValue(new Error("getaddrinfo ENOTFOUND"));
+
+    await send();
+
+    expect(prisma.webPushSubscription.updateMany).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { failureCount: { increment: 1 } },
+      }),
+    );
+    expect(prisma.webPushSubscription.deleteMany).not.toHaveBeenCalled();
+  });
+
   it("skips mail outside the inbox, old mail and mail without a thread", async () => {
     await send({ message: message({ labelIds: ["SENT"] }) });
     await send({
