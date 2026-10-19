@@ -25,49 +25,57 @@ function getDraftingEmailAccount() {
 }
 
 describe.runIf(isAiTest)("getActionItemsWithAiArgs", () => {
-  test("should return actions unchanged when no AI args needed", async () => {
-    const actions = [getAction({})];
-    const rule = getRule("Test rule", actions);
+  test(
+    "should return actions unchanged when no AI args needed",
+    async () => {
+      const actions = [getAction({})];
+      const rule = getRule("Test rule", actions);
 
-    const result = await getActionItemsWithAiArgs({
-      message: getParsedMessage({
-        subject: "Test subject",
-        content: "Test content",
-      }),
-      emailAccount: getDraftingEmailAccount(),
-      selectedRule: rule,
-      client: {} as any,
-      modelType: "default",
-      logger: logger,
-    });
+      const result = await getActionItemsWithAiArgs({
+        message: getParsedMessage({
+          subject: "Test subject",
+          content: "Test content",
+        }),
+        emailAccount: getDraftingEmailAccount(),
+        selectedRule: rule,
+        client: {} as any,
+        modelType: "default",
+        logger: logger,
+      });
 
-    expect(result).toEqual(actions);
-  });
+      expect(result).toEqual(actions);
+    },
+    TIMEOUT,
+  );
 
-  test("should return actions unchanged when no variables to fill", async () => {
-    const actions = [
-      getAction({
-        type: ActionType.REPLY,
-        content: "You can set a meeting with me here: https://cal.com/alice",
-      }),
-    ];
-    const rule = getRule("Choose this rule for meeting requests", actions);
+  test(
+    "should return actions unchanged when no variables to fill",
+    async () => {
+      const actions = [
+        getAction({
+          type: ActionType.REPLY,
+          content: "You can set a meeting with me here: https://cal.com/alice",
+        }),
+      ];
+      const rule = getRule("Choose this rule for meeting requests", actions);
 
-    const result = await getActionItemsWithAiArgs({
-      message: getParsedMessage({
-        subject: "Quick question",
-        content: "When is the meeting tomorrow?",
-      }),
-      emailAccount: getDraftingEmailAccount(),
-      selectedRule: rule,
-      client: {} as any,
-      modelType: "default",
-      logger: logger,
-    });
+      const result = await getActionItemsWithAiArgs({
+        message: getParsedMessage({
+          subject: "Quick question",
+          content: "When is the meeting tomorrow?",
+        }),
+        emailAccount: getDraftingEmailAccount(),
+        selectedRule: rule,
+        client: {} as any,
+        modelType: "default",
+        logger: logger,
+      });
 
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject(actions[0]);
-  });
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject(actions[0]);
+    },
+    TIMEOUT,
+  );
 
   test(
     "should generate AI content for actions that need it",
@@ -106,83 +114,91 @@ describe.runIf(isAiTest)("getActionItemsWithAiArgs", () => {
     TIMEOUT,
   );
 
-  test("should handle multiple actions with mixed AI needs", async () => {
-    const actions = [
-      getAction({
-        content: "Write a professional response",
-      }),
-      getAction({}),
-    ];
-    const rule = getRule("Test rule", actions);
+  test(
+    "should handle multiple actions with mixed AI needs",
+    async () => {
+      const actions = [
+        getAction({
+          content: "Write a professional response",
+        }),
+        getAction({}),
+      ];
+      const rule = getRule("Test rule", actions);
 
-    const result = await getActionItemsWithAiArgs({
-      message: getParsedMessage({
-        subject: "Project status",
-        content: "Can you update me on the project status?",
-      }),
-      emailAccount: getDraftingEmailAccount(),
-      selectedRule: rule,
-      client: {} as any,
-      modelType: "default",
-      logger: logger,
-    });
+      const result = await getActionItemsWithAiArgs({
+        message: getParsedMessage({
+          subject: "Project status",
+          content: "Can you update me on the project status?",
+        }),
+        emailAccount: getDraftingEmailAccount(),
+        selectedRule: rule,
+        client: {} as any,
+        modelType: "default",
+        logger: logger,
+      });
 
-    expect(result).toHaveLength(2);
-    expect(result[0].content).toBeTruthy();
-    expect(result[1]).toEqual(actions[1]);
-  });
+      expect(result).toHaveLength(2);
+      expect(result[0].content).toBeTruthy();
+      expect(result[1]).toEqual(actions[1]);
+    },
+    TIMEOUT,
+  );
 
-  test("should handle multiple variables with specific formatting", async () => {
-    const actions = [
-      getAction({
-        type: ActionType.LABEL,
-        label: "{{fruit}}",
-      }),
-      getAction({
-        type: ActionType.REPLY,
-        content: `Hey {{name}},
+  test(
+    "should handle multiple variables with specific formatting",
+    async () => {
+      const actions = [
+        getAction({
+          type: ActionType.LABEL,
+          label: "{{fruit}}",
+        }),
+        getAction({
+          type: ActionType.REPLY,
+          content: `Hey {{name}},
 
 {{$10 for apples, $20 for pears}}
 
 Best,
 Matt`,
-      }),
-    ];
-    const rule = getRule(
-      "Use this when someone asks about the price of fruits",
-      actions,
-    );
+        }),
+      ];
+      const rule = getRule(
+        "Use this when someone asks about the price of fruits",
+        actions,
+      );
 
-    const result = await getActionItemsWithAiArgs({
-      message: getParsedMessage({
-        from: "jill@example.com",
-        subject: "fruits",
-        content: "how much do apples cost?",
-      }),
-      emailAccount: getDraftingEmailAccount(),
-      selectedRule: rule,
-      client: {} as any,
-      modelType: "default",
-      logger: logger,
-    });
+      const result = await getActionItemsWithAiArgs({
+        message: getParsedMessage({
+          from: "jill@example.com",
+          subject: "fruits",
+          content: "how much do apples cost?",
+        }),
+        emailAccount: getDraftingEmailAccount(),
+        selectedRule: rule,
+        client: {} as any,
+        modelType: "default",
+        logger: logger,
+      });
 
-    expect(result).toHaveLength(2);
+      expect(result).toHaveLength(2);
 
-    // Check label action
-    expect(result[0].label).toBeTruthy();
-    expect(result[0].label).not.toContain("{{");
-    expect(result[0].label).toMatch(/apple(s)?|fruit(s)?/i); // Accept both specific and generic fruit terms
+      // Check label action
+      expect(result[0].label).toBeTruthy();
+      expect(result[0].label).not.toContain("{{");
+      expect(result[0].label).toMatch(/apple(s)?|fruit(s)?/i); // Accept both specific and generic fruit terms
 
-    // Check reply action
-    expect(result[1].content).toMatch(/^Hey [Jj]ill,/); // Match "Hey Jill," or "Hey jill,"
-    expect(result[1].content).toContain("$10");
-    expect(result[1].content).toContain("Best,\nMatt");
-    expect(result[1].content).not.toContain("{{");
-    expect(result[1].content).not.toContain("}}");
+      // Check reply action
+      expect(result[1].content).toMatch(/^Hey [Jj]ill,/); // Match "Hey Jill," or "Hey jill,"
+      expect(result[1].content).toContain("$10");
+      expect(result[1].content).toContain("Best,\nMatt");
+      expect(result[1].content).not.toContain("{{");
+      expect(result[1].content).not.toContain("}}");
 
-    console.debug("Generated label:\n", result[0].label);
-    console.debug("Generated content:\n", result[1].content);
-  });
+      console.debug("Generated label:\n", result[0].label);
+      console.debug("Generated content:\n", result[1].content);
+    },
+    TIMEOUT,
+  );
 
   test(
     "should handle label with template variable and dynamic action ID",
