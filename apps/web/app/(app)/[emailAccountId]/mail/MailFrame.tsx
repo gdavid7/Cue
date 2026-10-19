@@ -1,11 +1,15 @@
 "use client";
 
-import { markRumAccountSwitch } from "@/utils/analytics/rum-app-open";
+import {
+  clearRumAccountSwitch,
+  markRumAccountSwitch,
+} from "@/utils/analytics/rum-app-open";
 import { MailProductFrame } from "@inboxzero/mail-ui/MailProductFrame";
 import { useRouter } from "next/navigation";
 import {
   type ReactNode,
   useCallback,
+  useEffect,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -41,6 +45,10 @@ export function MailFrame({
     () => false,
   );
   const isToday = activeType === "today";
+  // A switch that landed on Today has no first mail row to time.
+  useEffect(() => {
+    if (isToday) clearRumAccountSwitch();
+  }, [isToday]);
   const allAccountsScope = useAllAccountsScope();
   // Today across accounts keeps the sidebar and switcher All inboxes shows.
   const isAllAccounts = isToday && allAccountsScope;

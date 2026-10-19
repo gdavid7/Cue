@@ -1,11 +1,11 @@
 import { beginRumAction } from "@/utils/analytics/rum-actions";
 import { getPendingAuthProvider } from "@/utils/analytics/auth-funnel";
+import { parseMailPath } from "@/utils/mail-url";
 import { isLocalMailboxMarked } from "@/utils/mail-engine/local-mailbox-cookie";
 
 const ACCOUNT_SWITCH_KEY = "cue-rum-account-switch";
 const ACCOUNT_SWITCH_MAX_AGE_MS = 2 * 60 * 1000;
-// The mail screen mounting later than this came from elsewhere in the app, so
-// the time since the page loaded is not an app open.
+// Only for a browser that cannot say which address the page was loaded at.
 const APP_OPEN_MAX_MOUNT_MS = 60_000;
 
 let started = false;
@@ -16,6 +16,14 @@ export function markRumAccountSwitch() {
     sessionStorage.setItem(ACCOUNT_SWITCH_KEY, String(Date.now()));
   } catch {
     // Without storage the switch is simply not timed.
+  }
+}
+
+export function clearRumAccountSwitch() {
+  try {
+    sessionStorage.removeItem(ACCOUNT_SWITCH_KEY);
+  } catch {
+    // Nothing to clear without storage.
   }
 }
 
@@ -53,14 +61,15 @@ export function classifyAppOpen({
 export function startRumAppOpen(accountId: string) {
   if (started) return;
   started = true;
+  // Read first so the marker never outlives the load it was written for.
   const switchedAt = takeRumAccountSwitch(Date.now());
+  if (!documentLoadedOnMailRoute()) return;
   if (switchedAt !== null) {
     beginRumAction("account_switch_first_row", {
       startedAt: switchedAt - performance.timeOrigin,
     });
     return;
   }
-  if (performance.now() > APP_OPEN_MAX_MOUNT_MS) return;
   beginRumAction(
     classifyAppOpen({
       hasLocalStore: isLocalMailboxMarked(accountId),
@@ -68,6 +77,19 @@ export function startRumAppOpen(accountId: string) {
     }),
     { startedAt: 0 },
   );
+}
+
+// Soft navigations keep the document, so the address it was loaded at tells
+// whether this mount is the first screen of a hard navigation to mail, or a
+// move there from another page, which is not an app open.
+function documentLoadedOnMailRoute() {
+  const entry = performance.getEntriesByType("navigation")[0];
+  if (!entry) return performance.now() <= APP_OPEN_MAX_MOUNT_MS;
+  try {
+    return parseMailPath(new URL(entry.name).pathname) !== null;
+  } catch {
+    return false;
+  }
 }
 
 export function resetRumAppOpenForTesting() {

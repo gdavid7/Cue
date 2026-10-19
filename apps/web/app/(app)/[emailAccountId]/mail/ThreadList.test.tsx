@@ -7,10 +7,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { MailboxThreadList } from "@inboxzero/mail-ui/MailboxSurface";
 import { MailThreadRow } from "@inboxzero/mail-ui/MailThreadRow";
 import { ThreadList } from "./ThreadList";
+import { markRumRowsShown } from "@/utils/analytics/rum-actions";
 import type { ListThread } from "./types";
 
 vi.mock("@/providers/EmailAccountProvider", () => ({
   useAccount: () => ({ emailAccountId: "acc-1" }),
+}));
+vi.mock("@/utils/analytics/rum-actions", () => ({
+  markRumRowsShown: vi.fn(),
 }));
 vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => false }));
 vi.mock("@/hooks/useInboxInsights", () => ({
@@ -24,6 +28,45 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/ThreadRow", () => ({
 }));
 
 type Item = { id: string; day: string };
+
+describe("thread list timing signal", () => {
+  afterEach(cleanup);
+
+  function renderList(threads: ReturnType<typeof threadAt>[]) {
+    return (
+      <ThreadList
+        expandedPreview={false}
+        focusedIndex={-1}
+        isLoadingMore={false}
+        isSelected={() => false}
+        layout="list"
+        listKey="inbox"
+        onLoadMore={vi.fn()}
+        onOpenThread={vi.fn()}
+        onSelectRangeTo={vi.fn()}
+        onToggleSelect={vi.fn()}
+        selectedCount={0}
+        showLoadMore={false}
+        threads={threads}
+        userEmail="me@example.com"
+        userLabels={{}}
+      />
+    );
+  }
+
+  it("ends the first-row timing as empty for a loaded, empty inbox", () => {
+    render(renderList([]));
+
+    expect(markRumRowsShown).toHaveBeenCalledWith("empty");
+  });
+
+  it("ends it as ok once rows show", () => {
+    vi.mocked(markRumRowsShown).mockClear();
+    render(renderList([threadAt("t1", Date.now())]));
+
+    expect(markRumRowsShown).toHaveBeenCalledWith("ok");
+  });
+});
 
 describe("mailbox thread list", () => {
   afterEach(cleanup);

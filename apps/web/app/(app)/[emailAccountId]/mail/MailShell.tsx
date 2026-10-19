@@ -107,13 +107,11 @@ import { useReaderFocusHandoff } from "@/app/(app)/[emailAccountId]/mail/use-rea
 import { useMailPerformanceTelemetry } from "@/app/(app)/[emailAccountId]/mail/use-mail-performance-telemetry";
 import { useRumAppOpen } from "@/app/(app)/[emailAccountId]/mail/use-rum-app-open";
 import {
-  beginRumAction,
-  cancelRumAction,
-  completeRumAction,
-  failRumFirstRow,
-} from "@/utils/analytics/rum-actions";
+  noteRumSearchCommit,
+  useRumSearch,
+} from "@/app/(app)/[emailAccountId]/mail/use-rum-search";
+import { failRumFirstRow } from "@/utils/analytics/rum-actions";
 import { markRumAccountSwitch } from "@/utils/analytics/rum-app-open";
-import { looksLikeNaturalLanguage } from "@/utils/mail-search/natural-language-search";
 import {
   isThreadArchived,
   isThreadImportant,
@@ -553,14 +551,7 @@ export function MailShell() {
       const q = value.trim() || null;
       setSearchDraft(undefined);
       setSettledSearch(q);
-      if (q) {
-        beginRumAction("search_plain");
-        if (hasAiAccess && !isAllAccounts && looksLikeNaturalLanguage(q))
-          beginRumAction("search_cue_found");
-      } else {
-        cancelRumAction("search_plain");
-        cancelRumAction("search_cue_found");
-      }
+      noteRumSearchCommit(q);
       updateLocation((current) => {
         const view = current.view ?? INBOX_VIEW;
         if (q) {
@@ -574,7 +565,7 @@ export function MailShell() {
       });
       return Promise.resolve();
     },
-    [updateLocation, hasAiAccess, isAllAccounts],
+    [updateLocation],
   );
   const onSearchChange = useCallback(
     (value: string) => setSearchDraft({ identity: searchEditIdentity, value }),
@@ -813,27 +804,21 @@ export function MailShell() {
     [cueSearch.threads, threads],
   );
 
-  useEffect(() => {
-    if (searchCommitted) {
-      if (error) completeRumAction("search_plain", { outcome: "error" });
-      else if (threads.length && !isLoading) completeRumAction("search_plain");
-      else if (searchFoundNothing)
-        completeRumAction("search_plain", { outcome: "empty" });
-    }
-    if (!cueSearch.natural) return;
-    if (cueSearch.threads.length) completeRumAction("search_cue_found");
-    else if (cueSearch.foundNothing)
-      completeRumAction("search_cue_found", { outcome: "empty" });
-  }, [
-    searchCommitted,
-    error,
-    threads.length,
-    isLoading,
-    searchFoundNothing,
-    cueSearch.natural,
-    cueSearch.threads.length,
-    cueSearch.foundNothing,
-  ]);
+  useRumSearch({
+    committedQuery: searchCommitted ? (searchParam?.trim() ?? null) : null,
+    // The committed search's own window has answered, so these rows are not
+    // left over from the typed search before it.
+    plain: {
+      hasRows: threads.length > 0 && !isLoading && hasProviderResponse,
+      empty: searchFoundNothing,
+    },
+    plainError: Boolean(error),
+    cue: {
+      active: cueSearch.natural && cueSearch.stage !== "off",
+      hasRows: cueSearch.threads.length > 0,
+      empty: cueSearch.foundNothing,
+    },
+  });
   useEffect(() => {
     if (error && !threads.length) failRumFirstRow();
   }, [error, threads.length]);

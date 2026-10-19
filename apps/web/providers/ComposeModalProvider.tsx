@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -101,6 +102,11 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
       ? accountsData.emailAccounts
       : undefined;
   const isOpen = isModalOpen && (!poppedOutReply || Boolean(reply));
+  // However the composer closes, a timing it never finished is dropped.
+  useEffect(() => {
+    if (!isOpen) return;
+    return () => cancelRumAction("compose_open");
+  }, [isOpen]);
   const returnOpenReply = useCallback(() => {
     if (isOpen) reply?.onReturn?.();
   }, [isOpen, reply]);
@@ -117,9 +123,10 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
     returnOpenReply();
     setIsExpanded(false);
     setPoppedOutReply(undefined);
-    beginRumAction("compose_open");
+    // A composer that is already open stays as it is, and reports no ready.
+    if (!isOpen || poppedOutReply) beginRumAction("compose_open");
     openModal();
-  }, [openModal, returnOpenReply, rememberOpener]);
+  }, [openModal, returnOpenReply, rememberOpener, isOpen, poppedOutReply]);
   const popOutReply = useCallback(
     (nextReply: PoppedOutReply) => {
       rememberOpener();
@@ -132,7 +139,6 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
   );
   // Keeps the popped-out reply so undo send can reopen it.
   const closeCompose = useCallback(() => {
-    cancelRumAction("compose_open");
     setIsExpanded(false);
     closeModal();
   }, [closeModal]);

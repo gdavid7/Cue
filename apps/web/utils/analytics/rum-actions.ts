@@ -133,17 +133,19 @@ export function beginRumAction(
   name: RumActionName,
   options: { key?: string; startedAt?: number } = {},
 ) {
-  clearPending(name);
-  const startedAt = options.startedAt ?? performance.now();
-  const timeoutMs = TIMEOUT_MS[name] ?? DEFAULT_TIMEOUT_MS;
-  const timer = setTimeout(
-    () => {
-      pending.delete(name);
-      emit(name, performance.now() - startedAt, "timeout");
-    },
-    Math.max(0, timeoutMs - (performance.now() - startedAt)),
-  );
-  pending.set(name, { startedAt, key: options.key, timer });
+  safely(() => {
+    clearPending(name);
+    const startedAt = options.startedAt ?? performance.now();
+    const timeoutMs = TIMEOUT_MS[name] ?? DEFAULT_TIMEOUT_MS;
+    const timer = setTimeout(
+      () => {
+        pending.delete(name);
+        emit(name, performance.now() - startedAt, "timeout");
+      },
+      Math.max(0, timeoutMs - (performance.now() - startedAt)),
+    );
+    pending.set(name, { startedAt, key: options.key, timer });
+  }, undefined);
 }
 
 /**
@@ -155,25 +157,29 @@ export function completeRumAction(
   name: RumActionName,
   options: { key?: string; outcome?: RumOutcome } = {},
 ) {
-  const action = pending.get(name);
-  if (!action) return false;
-  if (options.key !== undefined && action.key !== options.key) return false;
-  clearPending(name);
-  const outcome = options.outcome ?? "ok";
-  if (outcome === "error" || outcome === "timeout") {
-    emit(name, performance.now() - action.startedAt, outcome);
-  } else {
-    afterNextPaint(() =>
-      emit(name, performance.now() - action.startedAt, outcome),
-    );
-  }
-  return true;
+  return safely(() => {
+    const action = pending.get(name);
+    if (!action) return false;
+    if (options.key !== undefined && action.key !== options.key) return false;
+    clearPending(name);
+    const outcome = options.outcome ?? "ok";
+    if (outcome === "error" || outcome === "timeout") {
+      emit(name, performance.now() - action.startedAt, outcome);
+    } else {
+      afterNextPaint(() =>
+        emit(name, performance.now() - action.startedAt, outcome),
+      );
+    }
+    return true;
+  }, false);
 }
 
 export function cancelRumAction(name: RumActionName, key?: string) {
-  const action = pending.get(name);
-  if (!action || (key !== undefined && action.key !== key)) return;
-  clearPending(name);
+  safely(() => {
+    const action = pending.get(name);
+    if (!action || (key !== undefined && action.key !== key)) return;
+    clearPending(name);
+  }, undefined);
 }
 
 /** Times something that is not on screen, such as a refused command. */
@@ -182,7 +188,7 @@ export function recordRumAction(
   startedAt: number,
   outcome: RumOutcome = "ok",
 ) {
-  emit(name, performance.now() - startedAt, outcome);
+  safely(() => emit(name, performance.now() - startedAt, outcome), undefined);
 }
 
 /** Times something already on screen, such as an optimistic row change. */
@@ -191,16 +197,25 @@ export function recordRumAfterPaint(
   startedAt: number,
   outcome: RumOutcome = "ok",
 ) {
-  afterNextPaint(() => emit(name, performance.now() - startedAt, outcome));
+  safely(
+    () =>
+      afterNextPaint(() => emit(name, performance.now() - startedAt, outcome)),
+    undefined,
+  );
 }
 
-/** The first rows are painted, which ends an app open or account switch. */
-export function markRumRowsShown() {
-  let completed = false;
-  for (const name of FIRST_ROW_ACTIONS) {
-    completed = completeRumAction(name) || completed;
-  }
-  if (completed) stampLastSync();
+/**
+ * The list has loaded, which ends an app open or account switch: "ok" once
+ * the first rows are painted, "empty" for a mailbox with nothing in the view.
+ */
+export function markRumRowsShown(outcome: "ok" | "empty" = "ok") {
+  safely(() => {
+    let completed = false;
+    for (const name of FIRST_ROW_ACTIONS) {
+      completed = completeRumAction(name, { outcome }) || completed;
+    }
+    if (completed) stampLastSync();
+  }, undefined);
 }
 
 export function failRumFirstRow() {
@@ -211,8 +226,10 @@ export function failRumFirstRow() {
 
 /**
  * Times a queued change to the engine's word that the server has it. Only
- * ends in a measurement when the operation succeeds or fails; an undo or a
- * newer change replacing it says nothing about the server.
+ * ends in a measurement when the operation succeeds or fails; an undo, a newer
+ * change replacing it, or an operation the engine no longer knows says nothing
+ * about the server. Whatever goes wrong here is dropped: it must never reach
+ * the change being timed.
  */
 export function observeRumConfirmation(input: {
   client: MailClient;
@@ -222,41 +239,51 @@ export function observeRumConfirmation(input: {
   startedAt: number;
 }) {
   const { client, name, startedAt } = input;
-  let handle: ReturnType<MailClient["observeOperation"]>;
+  let handle: ReturnType<MailClient["observeOperation"]> | undefined;
+  let unsubscribe: (() => void) | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let settled = false;
+  const release = () => {
+    settled = true;
+    safely(() => timer && clearTimeout(timer), undefined);
+    safely(() => unsubscribe?.(), undefined);
+    safely(() => handle?.close(), undefined);
+  };
+  const settle = (outcome: RumOutcome | null) => {
+    if (settled) return;
+    release();
+    if (outcome) emit(name, performance.now() - startedAt, outcome);
+  };
+  const check = () => {
+    if (settled) return;
+    try {
+      const operation = handle?.getSnapshot().data;
+      const status = operation?.status;
+      if (!status || !TERMINAL_OPERATION_STATUSES.has(status)) return;
+      if (status === "succeeded") settle("ok");
+      else if (status === "failed" && operation?.error?.code === "not_found")
+        settle(null);
+      else if (status === "failed" || status === "needs_attention")
+        settle("error");
+      else settle(null);
+    } catch {
+      release();
+    }
+  };
   try {
     handle = client.observeOperation({
       accountId: input.accountId,
       operationId: input.operationId,
     });
+    unsubscribe = handle.subscribe(check);
+    timer = setTimeout(
+      () => settle("timeout"),
+      Math.max(0, DEFAULT_TIMEOUT_MS - (performance.now() - startedAt)),
+    );
+    check();
   } catch {
-    // Timing must never get in the way of the change it times.
-    return;
+    release();
   }
-  let unsubscribe: (() => void) | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let settled = false;
-  const settle = (outcome: RumOutcome | null) => {
-    if (settled) return;
-    settled = true;
-    if (timer) clearTimeout(timer);
-    unsubscribe?.();
-    handle.close();
-    if (outcome) emit(name, performance.now() - startedAt, outcome);
-  };
-  const check = () => {
-    const status = handle.getSnapshot().data?.status;
-    if (!status || !TERMINAL_OPERATION_STATUSES.has(status)) return;
-    if (status === "succeeded") settle("ok");
-    else if (status === "failed" || status === "needs_attention")
-      settle("error");
-    else settle(null);
-  };
-  unsubscribe = handle.subscribe(check);
-  timer = setTimeout(
-    () => settle("timeout"),
-    Math.max(0, DEFAULT_TIMEOUT_MS - (performance.now() - startedAt)),
-  );
-  check();
 }
 
 export function rumSampleRate(name: RumActionName, outcome: RumOutcome) {
@@ -326,6 +353,15 @@ function emit(name: RumActionName, ms: number, outcome: RumOutcome) {
     if (sampleRate === 1) logger.flush().catch(() => {});
   } catch {
     // A logging failure must not surface in the interaction it measured.
+  }
+}
+
+function safely<T>(run: () => T, fallback: T): T {
+  try {
+    return run();
+  } catch {
+    // Timing must never get in the way of the interaction it times.
+    return fallback;
   }
 }
 

@@ -92,8 +92,10 @@ export const ThreadList = memo(function ThreadList({
   const isMobile = useIsMobile();
   const dayStart = useDayStart();
   const hasRows = threads.length > 0;
+  // The list only renders empty once it has loaded; until then the screen
+  // shows its loading state instead.
   useEffect(() => {
-    if (hasRows) markRumRowsShown();
+    markRumRowsShown(hasRows ? "ok" : "empty");
   }, [hasRows]);
   const sentThreadIds = useMemo(
     () =>

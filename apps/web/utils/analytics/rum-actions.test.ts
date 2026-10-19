@@ -268,6 +268,18 @@ describe("sending events", () => {
     });
   });
 
+  it("ends an app open on an empty inbox as empty, never as a timeout", async () => {
+    beginRumAction("app_open_returning", { startedAt: 0 });
+
+    markRumRowsShown("empty");
+    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+
+    expect(
+      sent().map((event) => (event as { outcome: string }).outcome),
+    ).toEqual(["empty"]);
+  });
+
   it("reads hours since the last sync from before this session", () => {
     localStorage.setItem(
       "cue-rum-last-sync:acct_2",
@@ -299,11 +311,12 @@ describe("observeRumConfirmation", () => {
 
   function fakeClient() {
     let status = "queued";
+    let error: unknown = null;
     const listeners = new Set<() => void>();
     const close = vi.fn();
     const client = {
       observeOperation: () => ({
-        getSnapshot: () => ({ data: { status } }),
+        getSnapshot: () => ({ data: { status, error } }),
         subscribe: (listener: () => void) => {
           listeners.add(listener);
           return () => listeners.delete(listener);
@@ -314,8 +327,9 @@ describe("observeRumConfirmation", () => {
     return {
       client: client as never,
       close,
-      settle(next: string) {
+      settle(next: string, nextError: unknown = null) {
         status = next;
+        error = nextError;
         for (const listener of listeners) listener();
       },
     };
@@ -359,6 +373,62 @@ describe("observeRumConfirmation", () => {
     expect(vi.mocked(log.info).mock.calls[0][1]).toMatchObject({
       outcome: "error",
     });
+  });
+
+  it("ignores an operation the engine does not know", () => {
+    const fake = fakeClient();
+    observeRumConfirmation({
+      ...input,
+      client: fake.client,
+      name: "archive_confirmed",
+      startedAt: performance.now(),
+    });
+
+    fake.settle("failed", { code: "not_found", retryable: false });
+
+    expect(vi.mocked(log.info)).not.toHaveBeenCalled();
+    expect(fake.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("never throws into the change it times, and lets the handle go", () => {
+    const close = vi.fn();
+    const subscribeFails = {
+      observeOperation: () => ({
+        getSnapshot: () => ({ data: null }),
+        subscribe: () => {
+          throw new Error("subscribe failed");
+        },
+        close,
+      }),
+    };
+    const snapshotFails = {
+      observeOperation: () => ({
+        getSnapshot: () => {
+          throw new Error("snapshot failed");
+        },
+        subscribe: () => () => {},
+        close,
+      }),
+    };
+    const observeFails = {
+      observeOperation: () => {
+        throw new Error("observe failed");
+      },
+    };
+
+    for (const client of [subscribeFails, snapshotFails, observeFails]) {
+      expect(() =>
+        observeRumConfirmation({
+          ...input,
+          client: client as never,
+          name: "archive_confirmed",
+          startedAt: performance.now(),
+        }),
+      ).not.toThrow();
+    }
+
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("says nothing when an undo cancels the operation", () => {

@@ -146,16 +146,17 @@ export function useThreadActions({
         const commandIds = new Map(
           result.accepted.map((item) => [item.conversationId, item.commandId]),
         );
-        if (rumAction) {
-          for (const operationId of new Set(commandIds.values())) {
-            observeRumConfirmation({
-              client,
-              accountId,
-              operationId,
-              name: `${rumAction}_confirmed`,
-              startedAt,
-            });
-          }
+        // A bulk change is one batch: the account's last command ending is
+        // when the server has all of it, so one observation covers it.
+        const lastCommandId = result.accepted.at(-1)?.commandId;
+        if (rumAction && lastCommandId) {
+          observeRumConfirmation({
+            client,
+            accountId,
+            operationId: lastCommandId,
+            name: `${rumAction}_confirmed`,
+            startedAt,
+          });
         }
         for (const target of accountTargets) {
           const mutationId = commandIds.get(target.threadId);

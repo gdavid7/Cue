@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { beginRumAction } from "@/utils/analytics/rum-actions";
 import {
   classifyAppOpen,
@@ -82,5 +82,47 @@ describe("startRumAppOpen", () => {
     expect(beginRumAction).toHaveBeenCalledWith("account_switch_first_row", {
       startedAt: expect.any(Number),
     });
+  });
+});
+
+describe("startRumAppOpen after a soft navigation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionStorage.clear();
+    resetRumAppOpenForTesting();
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  function loadedAt(url: string) {
+    vi.spyOn(performance, "getEntriesByType").mockReturnValue([
+      { name: url } as PerformanceEntry,
+    ]);
+  }
+
+  it("counts the first mount of a page loaded on a mail route", () => {
+    loadedAt("https://app.example.com/mail/u/0");
+
+    startRumAppOpen("acct_1");
+
+    expect(beginRumAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not count a mail screen reached from another page", () => {
+    loadedAt("https://app.example.com/settings");
+
+    startRumAppOpen("acct_1");
+
+    expect(beginRumAction).not.toHaveBeenCalled();
+  });
+
+  it("clears the account-switch marker when the load is not a mail page", () => {
+    markRumAccountSwitch();
+    loadedAt("https://app.example.com/settings");
+
+    startRumAppOpen("acct_1");
+
+    expect(beginRumAction).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem("cue-rum-account-switch")).toBeNull();
   });
 });
