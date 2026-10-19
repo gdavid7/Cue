@@ -161,6 +161,37 @@ describe("searchContext", () => {
     );
   });
 
+  it("finds mail with the searches Cue made of a question, not its words", async () => {
+    const itinerary = thread("itinerary", {
+      from: "United <receipts@united.com>",
+      subject: "Your trip confirmation",
+      snippet: "Departing Wednesday, November 25",
+    });
+    const searchThreads = vi.fn(async ({ query }: { query: string }) => ({
+      threads: query.startsWith("flight") ? [itinerary] : [],
+    }));
+    const provider = {
+      searchThreads,
+      getThreadsWithParticipant: vi.fn(async () => []),
+    } as unknown as EmailProvider;
+
+    const { results } = await searchContext({
+      emailAccountId: "account-1",
+      userEmail: USER,
+      query: "when is my flight?",
+      searches: ["flight OR itinerary newer_than:3m", "subject:confirmation"],
+      emailProvider: provider,
+      logger: createTestLogger(),
+      now: NOW,
+    });
+
+    expect(searchThreads.mock.calls.map(([options]) => options.query)).toEqual([
+      "flight OR itinerary newer_than:3m",
+      "subject:confirmation",
+    ]);
+    expect(results.map((r) => r.id)).toContain("itinerary");
+  });
+
   it("searches once when threads with every word fill the page", async () => {
     const full = Array.from({ length: 15 }, (_, i) =>
       thread(`t${i}`, {

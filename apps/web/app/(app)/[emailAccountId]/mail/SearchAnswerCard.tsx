@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import useSWR from "swr";
+import type { SearchAnswerRequest } from "@/app/(app)/[emailAccountId]/mail/cue-search";
 import type { GetSearchAnswerResponse } from "@/app/api/user/search-answer/route";
 import { Button } from "@/components/ui/button";
 import { useMailHref } from "@/hooks/useMailHref";
@@ -19,6 +20,7 @@ export function SearchAnswerCard({
   accountEmail,
   emailAccountId,
   query,
+  request,
   noResults,
   onContinueInChat,
 }: {
@@ -30,11 +32,13 @@ export function SearchAnswerCard({
   emailAccountId: string;
   /** The search as committed with Enter, never the text being typed. */
   query: string;
+  /** What to answer, from getSearchAnswerRequest; null asks nothing. */
+  request: SearchAnswerRequest | null;
   /** The search found no mail. */
   noResults: boolean;
   onContinueInChat: (question: string) => void;
 }) {
-  const { data, isLoading, error } = useSearchAnswer(emailAccountId, query);
+  const { data, isLoading, error } = useSearchAnswer(emailAccountId, request);
   const mailHref = useMailHref();
 
   // "Nothing matched" is known at once; the answer may take seconds, so it
@@ -118,14 +122,20 @@ export function SearchAnswerCard({
 }
 
 /** The answer to a committed search, shared by the card and the list under it. */
-export function useSearchAnswer(emailAccountId: string, query: string | null) {
+export function useSearchAnswer(
+  emailAccountId: string,
+  request: SearchAnswerRequest | null,
+) {
   return useSWR<GetSearchAnswerResponse>(
-    SEARCH_ANSWERS && query
-      ? getAccountScopedKey(
-          `/api/user/search-answer?q=${encodeURIComponent(query)}`,
-          emailAccountId,
-        )
+    SEARCH_ANSWERS && request
+      ? getAccountScopedKey(searchAnswerUrl(request), emailAccountId)
       : null,
     { revalidateOnFocus: false },
   );
+}
+
+function searchAnswerUrl({ query, searches = [] }: SearchAnswerRequest) {
+  const params = new URLSearchParams({ q: query });
+  for (const search of searches) params.append("s", search);
+  return `/api/user/search-answer?${params}`;
 }

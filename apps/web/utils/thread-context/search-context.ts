@@ -12,6 +12,10 @@ import { describeProviderRateLimitError } from "@/utils/email/rate-limit";
 import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
 import {
+  parseSearchQuery,
+  type SearchNode,
+} from "@/utils/mail-search/parse-search-query";
+import {
   eventToCandidate,
   threadSignals,
   threadToCandidate,
@@ -55,6 +59,7 @@ export async function searchContext({
   emailAccountId,
   userEmail,
   query,
+  searches,
   threadId,
   emailProvider,
   logger,
@@ -64,6 +69,11 @@ export async function searchContext({
   userEmail: string;
   query: string;
   /**
+   * Searches Cue made of the query when it read as a sentence, in the
+   * provider's syntax. They find the mail instead of the query's words.
+   */
+  searches?: string[];
+  /**
    * The thread the question is about: what it links to and its sender's
    * record in connected apps count too, as in its Relevant context.
    */
@@ -72,7 +82,12 @@ export async function searchContext({
   logger: Logger;
   now?: Date;
 }): Promise<{ results: ContextSearchResult[] }> {
-  const terms = queryTerms(query);
+  // A question's own words ("when", "my") say little about its mail; the
+  // searches' words find and rank it.
+  const focusText = searches?.length
+    ? searches.flatMap(searchWords).join(" ")
+    : query;
+  const terms = queryTerms(focusText);
   if (!terms.length) return { results: [] };
 
   const thread = threadId
@@ -99,7 +114,10 @@ export async function searchContext({
   let emailFailed = false;
   let calendarFailed = false;
   const [hits, events, connectors] = await Promise.all([
-    searchEmailThreads(emailProvider, terms)
+    (searches?.length
+      ? searchEachQuery(emailProvider, searches)
+      : searchEmailThreads(emailProvider, terms)
+    )
       .catch((error) => {
         // Empty results would read as "nothing about this"; a limited mailbox
         // has to be reported so the assistant can say to try again.
@@ -166,8 +184,8 @@ export async function searchContext({
   const ranked = rankContext({
     focus: {
       id: "search",
-      subject: query,
-      text: query,
+      subject: focusText,
+      text: focusText,
       at: now.toISOString(),
       // The thread's sender is who the question is about, which is what
       // links their record in a connected app.
@@ -283,6 +301,46 @@ async function searchEmailThreads(
     0,
     SEARCH_THREADS,
   );
+}
+
+/** The newest matches of each search, the first search's first. */
+async function searchEachQuery(
+  emailProvider: EmailProvider,
+  searches: string[],
+): Promise<EmailThread[]> {
+  const pages = await Promise.all(
+    searches.map((query) =>
+      emailProvider
+        .searchThreads({
+          query,
+          maxResults: SEARCH_THREADS,
+          messageFormat: "metadata",
+        })
+        .then((r) => r.threads),
+    ),
+  );
+  const threads = new Map(pages.flat().map((t) => [t.id, t]));
+  return [...threads.values()].slice(0, SEARCH_THREADS);
+}
+
+/** The words and names a search looks for, which name people and topics. */
+function searchWords(search: string): string[] {
+  const collect = (node: SearchNode): string[] => {
+    switch (node.kind) {
+      case "text":
+        return [node.value];
+      case "operator":
+        return ["from", "to", "subject"].includes(node.name)
+          ? [node.value]
+          : [];
+      case "and":
+      case "or":
+        return node.children.flatMap(collect);
+      default:
+        return [];
+    }
+  };
+  return collect(parseSearchQuery(search));
 }
 
 function words(text: string) {

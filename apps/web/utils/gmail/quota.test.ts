@@ -1039,6 +1039,7 @@ describe("Gmail quota gate", () => {
       "user/senders/unsubscribe",
       "user/senders/status",
       "user/search-answer",
+      "user/search-intent",
       "user/signature",
       "user/drafts/update",
       "user/scheduled-emails/retry",

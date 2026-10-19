@@ -41,6 +41,7 @@ export async function answerSearch({
   emailAccountId,
   userEmail,
   query,
+  searches,
   emailProvider,
   logger,
   now = new Date(),
@@ -48,6 +49,8 @@ export async function answerSearch({
   emailAccountId: string;
   userEmail: string;
   query: string;
+  /** Searches Cue made of a question typed as a sentence, to find its mail. */
+  searches?: string[];
   emailProvider: EmailProvider;
   logger: Logger;
   now?: Date;
@@ -56,6 +59,7 @@ export async function answerSearch({
     emailAccountId,
     userEmail,
     query,
+    searches,
     emailProvider,
     logger,
     now,
