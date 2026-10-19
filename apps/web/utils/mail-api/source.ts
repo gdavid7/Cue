@@ -63,9 +63,7 @@ const GMAIL_HISTORY_SCOPE_ID = "history";
 const GMAIL_HISTORY_OVERLAP_MS = DAY_MS;
 const GMAIL_THREAD_COST = 40;
 // The first page of a scan is what the inbox shows first; a smaller one fills
-// it sooner and spends less of the minute's Gmail quota before it does. The
-// quota gate prices a metadata read like a whole one for now; once it prices
-// by format, a first sync's metadata page can grow to 50.
+// it sooner and spends less of the minute's Gmail quota before it does.
 const GMAIL_FIRST_PAGE_SIZE = 25;
 
 const SUPPORTED_CHANGES = [
@@ -199,8 +197,6 @@ export function createEmailProviderMailboxSource(input: {
         isBackfill = isGmail && token.scopeId === GMAIL_HISTORY_SCOPE_ID;
         const isPrimaryGmailScan = isGmail && !isBackfill;
         if (isPrimaryGmailScan) await setGmailInitialSync(accountId, true);
-        const isFirstSyncFirstPage =
-          isPrimaryGmailScan && token.initial === true && !token.pageToken;
         const maxResults = Math.min(
           pageSize,
           maxPageSize,
@@ -212,11 +208,6 @@ export function createEmailProviderMailboxSource(input: {
             folderId: token.folderId ?? undefined,
             pageToken: token.pageToken,
             includeDrafts: true,
-            // After a sign-in the first page is read as metadata: senders,
-            // subjects and previews without bodies, a tenth of the bytes, so
-            // the list shows and works sooner. Its bodies follow as required
-            // hydration, in the background.
-            ...(isFirstSyncFirstPage && { format: "metadata" as const }),
             ...(token.receivedAfterMs != null && {
               after: new Date(token.receivedAfterMs),
             }),
@@ -229,7 +220,7 @@ export function createEmailProviderMailboxSource(input: {
         // after a sign-in the screen waits on its very first page.
         let priority: GmailQuotaPriority = "sync";
         if (isBackfill) priority = "background";
-        else if (isFirstSyncFirstPage) priority = "interactive";
+        else if (token.initial && !token.pageToken) priority = "interactive";
         const syncPage = isGmail
           ? await runWithGmailQuota({ priority }, () =>
               withGmailSyncBudget(
@@ -245,9 +236,7 @@ export function createEmailProviderMailboxSource(input: {
         if (isPrimaryGmailScan && !syncPage.nextPageToken)
           await setGmailInitialSync(accountId, false);
         const changes = syncPage.messages.map((message) =>
-          parsedMessagePatch(accountId, provider.name, message, {
-            format: isFirstSyncFirstPage ? "metadata" : undefined,
-          }),
+          parsedMessagePatch(accountId, provider.name, message),
         );
         const { requiredHydration, bodies } = parsedMessageBodies(
           accountId,
