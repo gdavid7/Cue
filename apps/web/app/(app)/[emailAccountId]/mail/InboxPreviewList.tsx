@@ -136,7 +136,8 @@ export function useFetchOpenedPreviewThreads() {
  * Hands the messages behind the server's rows to the mail engine as soon as
  * it runs, so the inbox shows them from the engine, where they open and
  * triage like any other row, rather than after its first sync reads them
- * again. The engine keeps any newer copy it already has.
+ * again. The engine only adds messages it doesn't have, and nothing is
+ * handed over once the engine has shown this account's mail.
  */
 export function useIngestInboxPreview() {
   const { emailAccountId } = useAccount();
@@ -151,19 +152,26 @@ export function useIngestInboxPreview() {
       ingestedPreviews.has(seed.preview)
     )
       return;
-    ingestedPreviews.add(seed.preview);
+    // The rows can arrive seconds later, after the engine has shown mail;
+    // retiring them, or any other change here, ends this wait.
+    let waiting = true;
     // A promise streamed from the server is a thenable whose then() returns
     // nothing, so it is wrapped before chaining.
     Promise.resolve(seed.preview)
       .then((preview) => {
+        if (!waiting || ingestedPreviews.has(seed.preview)) return;
         const changes = previewChangesSchema.safeParse(preview?.changes);
         if (!changes.success || !changes.data.length) return;
+        ingestedPreviews.add(seed.preview);
         return client.ingestMessages?.({
           accountId: seed.emailAccountId,
           changes: changes.data,
         });
       })
       .catch(IGNORE);
+    return () => {
+      waiting = false;
+    };
   }, [client, seed, retired, emailAccountId]);
 }
 

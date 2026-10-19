@@ -4,6 +4,7 @@ import {
   createMailEngine,
 } from "@inboxzero/mail-core/engine";
 import type { MailboxSource } from "@inboxzero/mail-core/ports/mailbox-source";
+import type { OperationExecutor } from "@inboxzero/mail-core/ports/operation-executor";
 import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import { createNodeSqliteDriver } from "./node-sqlite";
 import { createSqliteMailStore } from "./store";
@@ -28,6 +29,57 @@ describe("engine ingesting messages the host already read", () => {
         expect.arrayContaining(["c1", "c2"]),
       ),
     );
+    inbox.close();
+    await engine.close();
+  });
+
+  it("keeps an archive it confirmed over a late copy at the same version", async () => {
+    const { engine, store } = await startEngine({
+      // Gmail confirms the archive without returning the message.
+      async execute({ operation }) {
+        return {
+          status: "confirmed",
+          receiptId: "r1",
+          observations: [],
+          targets: operation.intent.targets.map((key) => ({
+            key,
+            outcome: "applied" as const,
+            code: null,
+          })),
+        };
+      },
+    });
+    const inbox = observeInbox(engine);
+    const preview = messagePatch({
+      messageId: "m1",
+      conversationId: "c1",
+      version: "5",
+    });
+    await engine.ingestMessages?.({ accountId: "acc-1", changes: [preview] });
+    await vi.waitFor(() => expect(conversationIds(inbox)).toEqual(["c1"]));
+
+    await engine.submitMetadata({
+      accountId: "acc-1",
+      commandId: "op-archive",
+      targets: [{ accountId: "acc-1", messageId: "m1" }],
+      change: { kind: "archive" },
+    });
+    await engine.runUntil(Date.now() + 1000);
+    expect((await store.getDiagnostics("acc-1")).commands).toEqual([
+      expect.objectContaining({ status: "succeeded" }),
+    ]);
+
+    // The server's preview, read before the archive, resolves late.
+    await engine.ingestMessages?.({ accountId: "acc-1", changes: [preview] });
+
+    const view = await store.readMailboxView({
+      accountIds: ["acc-1"],
+      predicate: { kind: "role", role: "inbox" },
+      order: "newest_first",
+      pageSize: 25,
+      after: null,
+    });
+    expect(view.view.counts.matchingConversations).toBe(0);
     inbox.close();
     await engine.close();
   });
@@ -82,7 +134,13 @@ describe("engine ingesting messages the host already read", () => {
   });
 });
 
-async function startEngine() {
+async function startEngine(
+  executor: Pick<OperationExecutor, "execute"> = {
+    async execute() {
+      return { status: "uncertain", receiptId: null };
+    },
+  },
+) {
   const store = await createSqliteMailStore(createNodeSqliteDriver());
   await store.ensureAccount({
     accountId: "acc-1",
@@ -91,19 +149,55 @@ async function startEngine() {
   });
   const engine = createMailEngine({
     store,
-    source: {} as MailboxSource,
+    source: unavailableSource,
     executor: {
-      async execute() {
-        return { status: "uncertain", receiptId: null };
-      },
-      async inspect() {
-        return { status: "uncertain", receiptId: null };
+      ...executor,
+      async inspect(input) {
+        return executor.execute({ ...input, attemptId: "inspect" });
       },
     },
-    runtime: createHostRuntime({ nowMs: () => 1000 }),
+    runtime: createHostRuntime(),
   });
-  return { engine };
+  return { engine, store };
 }
+
+// Nothing syncs here: these cases are about what the host hands in.
+const unavailable = {
+  status: "paused",
+  retryAfterMs: 60_000,
+  reason: "unavailable",
+} as const;
+const unavailableSource: MailboxSource = {
+  async describe() {
+    return {
+      status: "ok",
+      value: {
+        strategy: "account_history",
+        supportedChanges: ["archive"],
+        maxPageSize: 50,
+        maxHydrationBatch: 20,
+      },
+    };
+  },
+  async discoverScopes() {
+    return { status: "ok", value: { scopes: [], nextPage: null } };
+  },
+  async beginBootstrap() {
+    return unavailable;
+  },
+  async enumerate() {
+    return unavailable;
+  },
+  async readChanges() {
+    return unavailable;
+  },
+  async hydrate() {
+    return unavailable;
+  },
+  async readConversationMembership() {
+    return unavailable;
+  },
+} as unknown as MailboxSource;
 
 function observeInbox(engine: ReturnType<typeof createMailEngine>) {
   return engine.observeMailbox({

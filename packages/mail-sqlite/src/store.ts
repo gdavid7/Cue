@@ -780,6 +780,13 @@ export async function createSqliteMailStore(
         let applied = 0;
         for (const change of input.changes) {
           if (
+            input.onlyMissing &&
+            (change.kind !== "message_patch" ||
+              (await loadConfirmed(tx, change.key)))
+          ) {
+            continue;
+          }
+          if (
             change.kind === "message_patch" &&
             (await isStaleMessagePatch(tx, change))
           ) {

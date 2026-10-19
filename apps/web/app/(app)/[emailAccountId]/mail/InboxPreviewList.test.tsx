@@ -231,6 +231,40 @@ describe("InboxPreviewList", () => {
     ]);
   });
 
+  it("hands the engine nothing when it shows mail while the rows are still on their way", async () => {
+    let arrive: (preview: InboxPreview) => void = () => undefined;
+    const pending = new Promise<InboxPreview>((resolve) => {
+      arrive = resolve;
+    });
+    engine.client = mailClient;
+    mounts = 0;
+    await act(async () => {
+      render(seeded(pending));
+    });
+
+    fireEvent.click(screen.getByText("engine has mail"));
+    await act(async () => {
+      arrive(await previewOf("t1"));
+      await pending;
+    });
+
+    expect(mailClient.ingestMessages).not.toHaveBeenCalled();
+  });
+
+  it("keeps the mail screen and hands nothing over when the rows fail", async () => {
+    const failed = {
+      // biome-ignore lint/suspicious/noThenProperty: a streamed promise has a then
+      then(_resolve: unknown, reject: (error: Error) => void) {
+        reject(new Error("preview failed"));
+      },
+    } as unknown as Promise<InboxPreview>;
+    engine.client = mailClient;
+    await renderSeeded(failed);
+
+    expect(screen.getByTestId("screen")).toBeTruthy();
+    expect(mailClient.ingestMessages).not.toHaveBeenCalled();
+  });
+
   it("hands the engine nothing once it has shown this account's mail", async () => {
     const view = await renderSeeded(previewOf("t1"));
     fireEvent.click(screen.getByText("engine has mail"));

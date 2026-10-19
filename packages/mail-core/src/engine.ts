@@ -196,10 +196,11 @@ export type MailClient = {
     messageIds: string[];
   }): Promise<void>;
   /**
-   * Merges messages the host already read from the provider, such as the
-   * inbox rows a server sent with the page, so they show and can be acted on
-   * before the first sync reaches them. A newer local copy of a message is
-   * kept. Hosts that never have such reads leave it out.
+   * Adds messages the host already read from the provider, such as the inbox
+   * rows a server sent with the page, so they show and can be acted on before
+   * the first sync reaches them. A message the store already has is left as
+   * it is, whatever its version. Hosts that never have such reads leave it
+   * out.
    */
   ingestMessages?(input: {
     accountId: string;
@@ -513,6 +514,9 @@ export function createMailEngine(input: {
         requestId: runtime.randomId(),
         changes,
         bodies: [],
+        // The host read these before anything here may have archived or
+        // read them, at the same provider version, so they only fill gaps.
+        onlyMissing: true,
       });
       if (applied.status === "committed") await refreshViews();
     },

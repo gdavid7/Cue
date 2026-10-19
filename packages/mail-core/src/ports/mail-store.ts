@@ -247,6 +247,12 @@ export interface MailStore {
     attemptId?: string;
     changes: ProviderChange[];
     bodies: BodyObservation[];
+    /**
+     * Adds only messages the store has no copy of. For reads made outside
+     * the store's own sync, which may predate a change it has since made or
+     * confirmed at the same provider version.
+     */
+    onlyMissing?: boolean;
   }): Promise<
     { status: "committed"; revision: LocalRevision } | { status: "stale" }
   >;
