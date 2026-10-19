@@ -4,8 +4,11 @@ import { actionClient } from "@/utils/actions/safe-action";
 import {
   bulkArchiveThreadsActionSchema,
   bulkSenderActionSchema,
+  deleteMessagesForeverSchema,
 } from "@/utils/actions/mail-bulk-action.validation";
 import { createEmailProvider } from "@/utils/email/provider";
+import { SafeError } from "@/utils/error";
+import { GmailLabel } from "@/utils/gmail/label";
 
 export const bulkArchiveThreadsAction = actionClient
   .metadata({ name: "bulkArchiveThreads", gmailPriority: "sync" })
@@ -81,5 +84,40 @@ export const bulkTrashAction = actionClient
         emailAccount.email,
         emailAccountId,
       );
+    },
+  );
+
+export const deleteMessagesForeverAction = actionClient
+  .metadata({ name: "deleteMessagesForever" })
+  .inputSchema(deleteMessagesForeverSchema)
+  .action(
+    async ({
+      ctx: { emailAccountId, provider, logger },
+      parsedInput: { messageIds },
+    }) => {
+      const emailProvider = await createEmailProvider({
+        emailAccountId,
+        provider,
+        logger,
+      });
+      if (!emailProvider.deleteMessagesForever)
+        throw new SafeError(
+          "This account's mail can't be deleted forever from Cue",
+        );
+
+      // Only mail already in the trash goes for good, so a conversation's
+      // other messages, such as a sent reply, stay where they are.
+      const messages = await emailProvider.getMessagesBatch(messageIds);
+      const trashedIds = messages
+        .filter((message) => message.labelIds?.includes(GmailLabel.TRASH))
+        .map((message) => message.id);
+      if (trashedIds.length)
+        await emailProvider.deleteMessagesForever(trashedIds);
+
+      logger.info("Deleted messages forever", {
+        requestedCount: messageIds.length,
+        deletedCount: trashedIds.length,
+      });
+      return { deletedCount: trashedIds.length };
     },
   );

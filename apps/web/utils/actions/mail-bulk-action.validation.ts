@@ -5,6 +5,10 @@ export const bulkSenderActionSchema = z.object({
   froms: z.array(z.string().trim().min(1)).min(1),
 });
 
+export const deleteMessagesForeverSchema = z.object({
+  messageIds: z.array(z.string().min(1)).min(1).max(1000),
+});
+
 export const bulkArchiveThreadsActionSchema = z.object({
   threads: z
     .array(
