@@ -19,10 +19,12 @@ import {
 } from "@/utils/gmail/oauth";
 import {
   admitGmailCall,
+  currentGmailQuotaContext,
   gmailRequestCost,
   meterGmailCall,
   rememberGmailAccessToken,
 } from "@/utils/gmail/quota";
+import { withGmailInflightSlot } from "@/utils/gmail/inflight";
 import { extractErrorInfo } from "@/utils/gmail/retry";
 
 type AuthOptions = {
@@ -220,7 +222,8 @@ export const getAccessTokenFromClient = (client: gmail_v1.Gmail): string => {
 const meteredAccounts = new WeakMap<object, string>();
 
 // Every REST call the Gmail client makes passes through the auth client's
-// `request`, so this is where each call is charged to the account's budget.
+// `request`, so this is where each call is charged to the account's budget
+// and holds one of its in-flight slots while it is sent.
 // Gmail charges every request it receives, so each retry Gaxios sends after
 // a server error or timeout is admitted and charged as well. Token refreshes
 // use the transporter directly and are not charged.
@@ -241,9 +244,14 @@ function meterGmailRequests(
     ) => {
       // meterGmailCall admitted the first attempt.
       if (attempts++ > 0) await admitGmailCall({ emailAccountId, cost });
-      return options.adapter
-        ? options.adapter(prepared, defaultAdapter)
-        : defaultAdapter(prepared);
+      // Held for the round trip only, not Gaxios's sleep between attempts.
+      return withGmailInflightSlot(
+        { emailAccountId, priority: currentGmailQuotaContext().priority },
+        () =>
+          options.adapter
+            ? options.adapter(prepared, defaultAdapter)
+            : defaultAdapter(prepared),
+      );
     };
     return meterGmailCall({ emailAccountId, cost }, () =>
       request({ ...options, adapter }),

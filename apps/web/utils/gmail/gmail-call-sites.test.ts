@@ -49,6 +49,22 @@ describe("Gmail call sites", () => {
 
     expect(unmetered).toEqual([]);
   });
+
+  // Gmail also refuses a user's requests past how many it has in flight, so
+  // each place that sends holds the account's in-flight slots while it does.
+  it("send only while holding the account's in-flight slots", () => {
+    const senders = Object.keys(ALLOWED).filter(
+      (path) => path !== "utils/gmail/oauth.ts",
+    );
+    const uncapped = senders.filter(
+      (path) =>
+        !readFileSync(join(APP_ROOT, path), "utf8").includes(
+          "withGmailInflightSlot(",
+        ),
+    );
+
+    expect(uncapped).toEqual([]);
+  });
 });
 
 function sourceFiles(dir: string): string[] {

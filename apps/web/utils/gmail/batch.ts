@@ -7,6 +7,7 @@ import {
   gmailRequestCost,
   noteGmailQuotaRefusal,
 } from "@/utils/gmail/quota";
+import { withGmailInflightSlot } from "@/utils/gmail/inflight";
 import { isRetryableError } from "@/utils/gmail/retry";
 
 const logger = createScopedLogger("gmail/batch");
@@ -35,25 +36,38 @@ export async function getBatch(
   }
   batchRequestBody += "--batch_boundary--";
 
-  // Gmail charges every request inside a batch at its own method's cost.
+  const emailAccountId = gmailAccountForAccessToken(accessToken);
+  // Gmail charges every request inside a batch at its own method's cost, and
+  // counts each one toward the user's requests in flight.
   const ticket = await admitGmailCall({
-    emailAccountId: gmailAccountForAccessToken(accessToken),
+    emailAccountId,
     cost: ids.length * gmailRequestCost("GET", `${endpoint}/id`),
   });
-  const res = await fetch(getGoogleGmailBatchUrl(), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "multipart/mixed; boundary=batch_boundary",
-      "Accept-Encoding": "gzip",
-      "User-Agent": "Cue (gzip)",
+  const { textRes, contentType } = await withGmailInflightSlot(
+    {
+      emailAccountId,
+      priority: ticket.priority,
+      weight: ids.length,
     },
-    body: batchRequestBody,
-  });
+    async () => {
+      const res = await fetch(getGoogleGmailBatchUrl(), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "multipart/mixed; boundary=batch_boundary",
+          "Accept-Encoding": "gzip",
+          "User-Agent": "Cue (gzip)",
+        },
+        body: batchRequestBody,
+      });
+      return {
+        textRes: await res.text(),
+        contentType: res.headers.get("Content-Type"),
+      };
+    },
+  );
 
-  const textRes = await res.text();
-
-  const batch = parseBatchResponse(textRes, res.headers.get("Content-Type"));
+  const batch = parseBatchResponse(textRes, contentType);
   // The refusal's own error says whether it was for volume, which decides
   // whether the account's budget is cut and a person's reads held.
   const refusal = batch.find(isQuotaRefusal);
