@@ -23,6 +23,14 @@ export default defineConfig({
   outputDir:
     process.env.PLAYWRIGHT_OUTPUT_DIR ?? path.resolve(".tmp/perf/test-results"),
   testDir: path.resolve("__tests__/playwright"),
+  // Tracing snapshots the page's DOM around every action, inside the page's
+  // own main thread, and recording video costs frames: both land in the
+  // timings, roughly doubling an input's measured time on a phone profile.
+  use: {
+    ...baseConfig.use,
+    trace: "off",
+    video: "off",
+  },
   projects: [
     baseConfig.projects[0],
     {

@@ -221,7 +221,7 @@ function PreviewRows({
   return (
     <div
       aria-busy="true"
-      className="flex min-h-0 flex-1 flex-col overflow-hidden"
+      className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
       data-mail-inbox-preview
     >
       {withChrome ? <PlaceholderChrome /> : null}

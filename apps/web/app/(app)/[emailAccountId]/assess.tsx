@@ -9,6 +9,7 @@ import {
 } from "@/utils/actions/assess";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useOrgAccess } from "@/hooks/useOrgAccess";
+import { afterFirstMailList } from "@/utils/mail-engine/first-mail-list";
 
 export function AssessUser() {
   const { emailAccountId, provider } = useAccount();
@@ -36,8 +37,12 @@ export function AssessUser() {
       }
     }
 
-    assess();
-    executeAnalyzeWritingStyle();
+    // Both read Gmail and queue ahead of navigations; they wait for the mail
+    // list so the first load and the first sync go first.
+    return afterFirstMailList(() => {
+      assess();
+      executeAnalyzeWritingStyle();
+    });
   }, [emailAccountId, isAccountOwner]);
 
   return null;

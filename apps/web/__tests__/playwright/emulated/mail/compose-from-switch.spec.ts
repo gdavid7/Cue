@@ -279,6 +279,8 @@ test("keeps text typed while the message moves to another From", async ({
       .toEqual([[]]);
 
     // Hold the next mailbox save, so the move waits on it while typing goes on.
+    // Only this draft's save: the page's deferred checks are server actions
+    // too, and holding one of those leaves no save for the move to wait on.
     let releaseSave = () => {};
     const saveHeld = new Promise<void>((resolve) => {
       releaseSave = resolve;
@@ -288,7 +290,8 @@ test("keeps text typed while the message moves to another From", async ({
       const request = route.request();
       if (
         request.method() !== "POST" ||
-        !(await request.headerValue("next-action"))
+        !(await request.headerValue("next-action")) ||
+        !request.postData()?.includes(subject)
       )
         return route.fallback();
       saveStarted = true;

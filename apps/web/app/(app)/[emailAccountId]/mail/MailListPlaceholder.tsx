@@ -24,7 +24,7 @@ export function MailListPlaceholder({
 }) {
   return (
     <div
-      className="flex min-h-0 flex-1 flex-col overflow-hidden"
+      className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
       data-mail-list-placeholder
     >
       {withChrome ? <PlaceholderChrome /> : null}
@@ -38,16 +38,26 @@ export function MailListPlaceholder({
   );
 }
 
-/** Says which mail is still arriving, above a list that may already show some. */
+/**
+ * Says which mail is still arriving, over a list that may already show some.
+ * It floats at the foot of the nearest positioned container rather than
+ * taking a line above the rows, so the rows stay put as it comes and goes:
+ * from the server's rows to the engine's, and when the first sync ends.
+ */
 export function MailLoadingNote({ message }: { message: string }) {
   return (
-    <p
-      role="status"
-      className="flex items-center gap-2 px-5 pt-4 pb-2 text-muted-foreground text-sm"
-    >
-      <Loader2Icon className="size-4 animate-spin" aria-hidden />
-      {message}
-    </p>
+    <div className="pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center px-4">
+      <p
+        role="status"
+        className="flex max-w-full items-center gap-2 rounded-full border border-border bg-background/95 px-3 py-1.5 text-muted-foreground text-xs shadow-sm"
+      >
+        <Loader2Icon
+          className="size-3.5 shrink-0 animate-spin motion-reduce:animate-none"
+          aria-hidden
+        />
+        <span className="truncate">{message}</span>
+      </p>
+    </div>
   );
 }
 

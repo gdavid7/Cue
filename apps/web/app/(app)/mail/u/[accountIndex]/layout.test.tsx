@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   getOrderedEmailAccounts: vi.fn(),
   loadInboxPreview: vi.fn(),
   mailPath: "/mail/u/1/inbox" as string | null,
+  requestHeaders: {} as Record<string, string>,
   localMailCookie: undefined as string | undefined,
   lastAccountCookie: undefined as string | undefined,
   splits: [] as { id: string; filters: { kind: string; value: string }[] }[],
@@ -27,7 +28,10 @@ vi.mock("@/utils/split-inbox/settings.server", () => ({
 }));
 vi.mock("next/headers", () => ({
   headers: async () =>
-    new Headers(mocks.mailPath ? { "x-cue-mail-path": mocks.mailPath } : {}),
+    new Headers({
+      ...mocks.requestHeaders,
+      ...(mocks.mailPath ? { "x-cue-mail-path": mocks.mailPath } : {}),
+    }),
   cookies: async () => ({
     get: (name: string) =>
       name === "cue-local-mail" && mocks.localMailCookie !== undefined
@@ -77,6 +81,7 @@ describe("MailRouteLayout", () => {
     ]);
     mocks.loadInboxPreview.mockReturnValue(new Promise(() => {}));
     mocks.mailPath = "/mail/u/1/inbox";
+    mocks.requestHeaders = {};
     mocks.localMailCookie = undefined;
     mocks.lastAccountCookie = undefined;
     mocks.splits = [{ id: "all", filters: [] }];
@@ -102,6 +107,20 @@ describe("MailRouteLayout", () => {
         provider: "microsoft",
       }),
     );
+  });
+
+  it("does not fetch the inbox again to answer a server action", async () => {
+    mocks.requestHeaders = { "next-action": "abc123" };
+
+    expect(screenOf(await renderAt("1")).props.preview).toBeNull();
+    expect(mocks.loadInboxPreview).not.toHaveBeenCalled();
+  });
+
+  it("does not fetch the inbox for the service worker's offline copy", async () => {
+    mocks.requestHeaders = { "x-cue-offline-save": "1" };
+
+    expect(screenOf(await renderAt("1")).props.preview).toBeNull();
+    expect(mocks.loadInboxPreview).not.toHaveBeenCalled();
   });
 
   it("leaves a mailbox this browser has synced to the local engine", async () => {
