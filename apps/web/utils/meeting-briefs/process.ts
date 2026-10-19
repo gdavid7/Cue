@@ -11,6 +11,7 @@ import { sendBriefing } from "./send-briefing";
 import type { Logger } from "@/utils/logger";
 import type { CalendarEvent } from "@/utils/calendar/event-types";
 import { partitionAttendeesForBriefing } from "./attendees";
+import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 
 export type EmailAccountForBrief = {
   id: string;
@@ -53,41 +54,8 @@ export async function processMeetingBriefings({
 
   logger.info("Fetched upcoming events", { count: allEvents.length });
 
-  // 2. Filter to events with external guests
-  const eventsWithExternalGuests =
-    allEvents.length > 0
-      ? filterEventsWithExternalGuests(
-          allEvents,
-          userEmail,
-          await getOwnAddresses(emailAccountId),
-        )
-      : [];
-
-  if (eventsWithExternalGuests.length === 0) {
+  if (allEvents.length === 0) {
     logger.info("No events with external guests, skipping");
-    return;
-  }
-
-  // 3. Check which events haven't been briefed yet
-  const existingBriefings = await prisma.meetingBriefing.findMany({
-    where: {
-      emailAccountId,
-      calendarEventId: {
-        in: eventsWithExternalGuests.map((e) => e.id),
-      },
-    },
-    select: { calendarEventId: true },
-  });
-
-  const briefedEventIds = new Set(
-    existingBriefings.map((b) => b.calendarEventId),
-  );
-  const eventsToProcess = eventsWithExternalGuests.filter(
-    (event) => !briefedEventIds.has(event.id),
-  );
-
-  if (eventsToProcess.length === 0) {
-    logger.info("All events already briefed, skipping");
     return;
   }
 
@@ -120,6 +88,41 @@ export async function processMeetingBriefings({
 
   if (!emailAccount) {
     logger.error("Email account not found");
+    return;
+  }
+
+  // 2. Filter to events with external guests
+  const eventsWithExternalGuests = filterEventsWithExternalGuests(
+    allEvents,
+    userEmail,
+    await getUserOwnAddresses(emailAccount.userId),
+  );
+
+  if (eventsWithExternalGuests.length === 0) {
+    logger.info("No events with external guests, skipping");
+    return;
+  }
+
+  // 3. Check which events haven't been briefed yet
+  const existingBriefings = await prisma.meetingBriefing.findMany({
+    where: {
+      emailAccountId,
+      calendarEventId: {
+        in: eventsWithExternalGuests.map((e) => e.id),
+      },
+    },
+    select: { calendarEventId: true },
+  });
+
+  const briefedEventIds = new Set(
+    existingBriefings.map((b) => b.calendarEventId),
+  );
+  const eventsToProcess = eventsWithExternalGuests.filter(
+    (event) => !briefedEventIds.has(event.id),
+  );
+
+  if (eventsToProcess.length === 0) {
+    logger.info("All events already briefed, skipping");
     return;
   }
 
@@ -163,7 +166,7 @@ export async function runMeetingBrief({
     partitionAttendeesForBriefing(
       event,
       userEmail,
-      await getOwnAddresses(emailAccountId),
+      await getUserOwnAddresses(emailAccount.userId),
     );
   const externalGuestCount = externalAttendees.length;
 
@@ -329,13 +332,4 @@ async function upsertMeetingBriefingStatus({
   } catch (error) {
     logger.error("Failed to upsert meeting briefing status", { error, status });
   }
-}
-
-// Read from the database, so briefs add no email addresses to Redis.
-async function getOwnAddresses(emailAccountId: string) {
-  const mailboxes = await prisma.emailAccount.findMany({
-    where: { user: { emailAccounts: { some: { id: emailAccountId } } } },
-    select: { email: true },
-  });
-  return mailboxes.map((mailbox) => mailbox.email);
 }
