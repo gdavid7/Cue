@@ -622,6 +622,29 @@ describe("EmailMessage pop out", () => {
 
     expect(screen.queryByTestId("composer")).toBeNull();
   });
+
+  // Cue's reply to someone else is its own draft: popped out, it is written
+  // only in its window, before and after it autosaves to the mailbox.
+  it.each([
+    ["once it is a mailbox draft", "draft-1", true],
+    ["before it is saved", "message-1", false],
+  ])("keeps Cue's popped-out reply out of the thread %s", (_label, sessionMessageId, saved) => {
+    mocks.poppedOutDraftSessionId = `${sessionMessageId}:reply:cue`;
+    render(
+      <EmailMessage
+        // Saved, the thread shows the draft; unsaved, Cue's reply composer.
+        defaultComposeMode={saved ? undefined : "reply"}
+        draftMessages={saved ? [createMessage("draft-1")] : undefined}
+        expanded
+        message={createMessage("message-1")}
+        onSendSuccess={vi.fn()}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+
+    expect(screen.queryByTestId("composer")).toBeNull();
+  });
 });
 
 describe("EmailMessage forward", () => {

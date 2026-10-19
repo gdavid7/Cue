@@ -8,7 +8,10 @@ import {
   useRef,
   useEffect,
 } from "react";
-import { ReplyAssistContext } from "@/components/email-list/reply-assist";
+import {
+  isUnwrittenReply,
+  ReplyAssistContext,
+} from "@/components/email-list/reply-assist";
 import { useAction } from "next-safe-action/hooks";
 import { useTheme } from "next-themes";
 import { isDesignedHtmlEmail } from "@inboxzero/mail-ui/MailBody";
@@ -74,8 +77,11 @@ import { LoadingMiniSpinner } from "@/components/Loading";
 import { getActionErrorMessage } from "@/utils/error";
 import {
   getDraftSessionMessageId,
+  createReplyDraftWriter,
   getCueReplyDraftSessionId,
+  getReplyDraft,
   getReplyDraftSessionId,
+  getReplyDraftSessionIds,
   type ReplyDraftMode,
 } from "@/utils/mail-engine/reply-drafts";
 import {
@@ -239,13 +245,11 @@ export function EmailMessage({
     composeOverride,
     defaultComposeMode,
     (mode) =>
-      Boolean(poppedOutDraftSessionId) &&
-      (poppedOutDraftSessionId ===
-        getReplyDraftSessionId(composerSessionMessageId ?? message.id, mode) ||
-        // Cue's reply to someone else pops out as its own draft.
-        (mode === "reply" &&
-          poppedOutDraftSessionId ===
-            getCueReplyDraftSessionId(composerSessionMessageId ?? message.id))),
+      isPoppedOut(
+        poppedOutDraftSessionId,
+        composerSessionMessageId ?? message.id,
+        mode,
+      ),
   );
   const composeMode = composerOpen ? requestedComposeMode : undefined;
   const serverDrafts = (draftMessages ?? []).map((draft) => ({
@@ -272,8 +276,7 @@ export function EmailMessage({
   const visibleDrafts = serverDrafts.filter(
     (draft) =>
       !dismissedDraftIds.has(draft.sessionMessageId) &&
-      getReplyDraftSessionId(draft.sessionMessageId, "reply") !==
-        poppedOutDraftSessionId,
+      !isPoppedOut(poppedOutDraftSessionId, draft.sessionMessageId, "reply"),
   );
   const composingMailboxReply =
     composeMode === "reply" && visibleDrafts.length > 0;
@@ -1277,6 +1280,15 @@ function ReplyPanel({
         onClose={() => {
           onCloseCompose();
           onSent?.();
+          if (offeredAssist?.toSomeoneElse)
+            dropOtherReplyIfUnwritten({
+              emailAccountId,
+              threadId: replyingToEmail.threadId ?? message.threadId,
+              sentSessionId: draftSessionId,
+              sessionMessageId,
+            }).catch(() => {
+              // The other reply stays on this device; nothing is lost.
+            });
         }}
         onRestore={onRestore}
         onDiscard={onDiscard}
@@ -1303,6 +1315,47 @@ function ReplyPanel({
       />
     </div>
   );
+}
+
+/**
+ * Once one of a message's two replies (the user's, or Cue's to someone else)
+ * is sent, the other goes too, but only when nothing in it was written.
+ */
+async function dropOtherReplyIfUnwritten({
+  emailAccountId,
+  threadId,
+  sentSessionId,
+  sessionMessageId,
+}: {
+  emailAccountId: string;
+  threadId: string;
+  sentSessionId: string;
+  sessionMessageId: string;
+}) {
+  const other = getReplyDraftSessionIds(sessionMessageId).find(
+    (sessionId) => sessionId !== sentSessionId,
+  );
+  if (!other) return;
+  const identity = { emailAccountId, threadId, messageId: other };
+  const draft = await getReplyDraft(identity);
+  const content = draft?.content;
+  if (!draft || !content || content.providerDraftId) return;
+  if (!isUnwrittenReply(content)) return;
+  await createReplyDraftWriter(identity, draft.revision).clear();
+}
+
+/** A reply popped out is written in its own window; Cue's has its own draft. */
+function isPoppedOut(
+  poppedOutDraftSessionId: string | undefined,
+  sessionMessageId: string,
+  mode: ReplyDraftMode,
+) {
+  if (!poppedOutDraftSessionId) return false;
+  const sessionIds =
+    mode === "reply"
+      ? getReplyDraftSessionIds(sessionMessageId)
+      : [getReplyDraftSessionId(sessionMessageId, mode)];
+  return sessionIds.includes(poppedOutDraftSessionId);
 }
 
 function resolveComposeMode(

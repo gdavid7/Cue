@@ -845,6 +845,39 @@ describe("trackSentDraftStatus for reply suggestions", () => {
     ).toHaveBeenCalledWith({ executedRuleId: "executed-rule-1", logger });
   });
 
+  // The draft funnel counts a suggestion sent once: only the send that
+  // settled it logs the stage.
+  it.each([
+    [1, 1],
+    [0, 0],
+  ])("logs the funnel's sent stage when it settled %s suggestion(s)", async (count, lines) => {
+    vi.mocked(prisma.$transaction).mockResolvedValue([
+      { id: "draft-send-log-1" },
+      { count },
+    ] as any);
+    vi.mocked(calculateSimilarity).mockReturnValue(1);
+    vi.mocked(isMeaningfulDraftEdit).mockReturnValue(false);
+    const info = vi.spyOn(logger, "info");
+
+    await trackSentDraftStatus({
+      emailAccountId: "account-1",
+      message: createSentMessage(),
+      provider: {
+        getDraft: vi.fn(),
+        getMessage: vi.fn().mockResolvedValue(createSourceMessage()),
+      } as any,
+      logger,
+    });
+
+    const sentLines = info.mock.calls.filter(
+      ([message, fields]) =>
+        message === "Reply suggestion funnel" &&
+        (fields as { stage?: string })?.stage === "sent",
+    );
+    expect(sentLines).toHaveLength(lines);
+    info.mockRestore();
+  });
+
   // No draft vanished, so a reply to the sender alone doesn't make it used.
   it("treats a different reply as written without the suggestion, and learns from it", async () => {
     vi.mocked(calculateSimilarity).mockReturnValue(0.2);

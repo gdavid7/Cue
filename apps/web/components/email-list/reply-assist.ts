@@ -37,14 +37,45 @@ export const ReplyAssistContext = createContext<ReplyAssist | null>(null);
  * differ between the composer and the mailbox's copy; the words don't.
  */
 export function isUneditedSuggestion(bodyHtml: string, reply: string) {
+  const words = withoutSpace(bodyText(bodyHtml));
+  return words.length > 0 && words === withoutSpace(reply);
+}
+
+/**
+ * Whether a reply holds nothing the user wrote: no words, or exactly Cue's
+ * suggestion with the recipients it came with, and no files.
+ */
+export function isUnwrittenReply(content: {
+  draft: { editableHtml: string };
+  values: { to?: string; cc?: string; bcc?: string; subject?: string };
+  attachments: unknown[];
+  startedFrom?: {
+    reply: string;
+    values?: { to?: string; cc?: string; bcc?: string; subject?: string };
+  };
+}) {
+  if (content.attachments.length) return false;
+  const html = content.draft.editableHtml;
+  if (!withoutSpace(bodyText(html))) return true;
+  const origin = content.startedFrom;
+  return Boolean(
+    origin &&
+      isUneditedSuggestion(html, origin.reply) &&
+      (["to", "cc", "bcc", "subject"] as const).every(
+        (field) =>
+          (content.values[field] ?? "") === (origin.values?.[field] ?? ""),
+      ),
+  );
+}
+
+function bodyText(bodyHtml: string) {
   const doc = new DOMParser().parseFromString(bodyHtml, "text/html");
   for (const signature of doc.body.querySelectorAll(
     '[data-smartmail="gmail_signature"]',
   )) {
     signature.remove();
   }
-  const words = withoutSpace(doc.body.textContent ?? "");
-  return words.length > 0 && words === withoutSpace(reply);
+  return doc.body.textContent ?? "";
 }
 
 function withoutSpace(text: string) {

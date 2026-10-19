@@ -99,6 +99,14 @@ export function getCueReplyDraftSessionId(messageId: string) {
   return `${getReplyDraftSessionId(messageId, "reply")}:cue`;
 }
 
+/** Both reply drafts a message can have: the user's, and Cue's to someone else. */
+export function getReplyDraftSessionIds(messageId: string) {
+  return [
+    getReplyDraftSessionId(messageId, "reply"),
+    getCueReplyDraftSessionId(messageId),
+  ];
+}
+
 export function rememberReplacedDraftMessage(
   emailAccountId: string,
   previousMessageId: string,
