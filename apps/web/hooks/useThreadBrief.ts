@@ -39,6 +39,7 @@ export function useThreadBrief({
   const result = useSWR<GetThreadBriefResponse>(kept ? null : key, {
     revalidateOnFocus: false,
     revalidateOnReconnect: false,
+    errorRetryCount: 2,
     onSuccess: (data) => {
       // Only a written brief is worth keeping: the extract costs no model call.
       if (data.brief?.source === "ai" && emailAccountId)

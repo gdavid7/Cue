@@ -8,7 +8,10 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useReaderReplySuggestion } from "@/app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion";
+import {
+  REPLY_WAIT_LIMIT_MS,
+  useReaderReplySuggestion,
+} from "@/app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion";
 import type { ThreadMessage } from "@/components/email-list/types";
 import type { EmailLabels } from "@/providers/email-label-types";
 import type { ThreadInsightData } from "@/utils/inbox-insights/get-inbox-insights";
@@ -204,6 +207,93 @@ describe("useReaderReplySuggestion", () => {
     rerender();
 
     expect(lastEnabled()).toBe(true);
+  });
+
+  describe("when a reply takes too long", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("stops spinning and offers to try again once the wait limit passes", () => {
+      const retry = vi.fn();
+      mocks.useReplySuggestion.mockImplementation(({ enabled }) => ({
+        phase: enabled ? "checking-mail" : "idle",
+        suggestion: undefined,
+        retry,
+      }));
+      const { result } = renderSuggestion([
+        incoming("ask", ["INBOX", "Label_to_reply"]),
+      ]);
+      expect(result.current.reply.pending).toBe(true);
+
+      act(() => {
+        vi.advanceTimersByTime(REPLY_WAIT_LIMIT_MS - 1);
+      });
+      expect(result.current.reply.pending).toBe(true);
+      expect(result.current.reply.failed).toBe(false);
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(result.current.reply.pending).toBe(false);
+      expect(result.current.reply.failed).toBe(true);
+      render(<div>{result.current.replyStatus}</div>);
+      expect(screen.getByRole("status").textContent).toContain(
+        "Couldn't draft a reply right now.",
+      );
+
+      act(() => {
+        screen.getByRole("button", { name: "Try again" }).click();
+      });
+      expect(retry).toHaveBeenCalledTimes(1);
+      // A new try gets the full wait again.
+      expect(result.current.reply.pending).toBe(true);
+      expect(result.current.reply.failed).toBe(false);
+    });
+
+    it("gives up on a reply whose requests keep failing between retries", () => {
+      mocks.useReplySuggestion.mockImplementation(({ enabled }) => ({
+        phase: enabled ? "done" : "idle",
+        suggestion: undefined,
+        error: enabled
+          ? Object.assign(new Error("busy"), { status: 503 })
+          : undefined,
+        retry: vi.fn(),
+      }));
+      const { result } = renderSuggestion([
+        incoming("ask", ["INBOX", "Label_to_reply"]),
+      ]);
+      expect(result.current.reply.failed).toBe(false);
+
+      act(() => {
+        vi.advanceTimersByTime(REPLY_WAIT_LIMIT_MS);
+      });
+
+      expect(result.current.reply.failed).toBe(true);
+    });
+
+    it("never shows the failure once the reply arrives", () => {
+      mocks.useReplySuggestion.mockImplementation(({ enabled }) => ({
+        phase: enabled ? "done" : "idle",
+        suggestion: enabled
+          ? { status: "suggested", reply: "Thursday works.", citations: [] }
+          : undefined,
+        retry: vi.fn(),
+      }));
+      const { result } = renderSuggestion([
+        incoming("ask", ["INBOX", "Label_to_reply"]),
+      ]);
+
+      act(() => {
+        vi.advanceTimersByTime(REPLY_WAIT_LIMIT_MS * 2);
+      });
+
+      expect(result.current.reply.failed).toBe(false);
+      expect(result.current.assist?.reply).toBe("Thursday works.");
+    });
   });
 
   describe("asked for from the Cue strip", () => {

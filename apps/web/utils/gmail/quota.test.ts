@@ -6,14 +6,17 @@ import {
 } from "@/utils/email/rate-limit";
 import { createScopedLogger } from "@/utils/logger";
 import {
+  currentGmailQuotaContext,
   GmailCallDeferredError,
   GMAIL_USER_UNITS_PER_MINUTE,
   gmailRequestCost,
   holdGmailInteractiveDemand,
   logGmailQuotaUsage,
   meterGmailCall,
+  OPEN_THREAD_GMAIL_WAIT_MS,
   resetGmailQuotaInstanceState,
   runWithGmailQuota,
+  runWithGmailWaitBudget,
   setGmailInitialSync,
 } from "@/utils/gmail/quota";
 import { gmailQuotaStore } from "@/utils/gmail/quota-store";
@@ -1043,6 +1046,43 @@ describe("Gmail quota gate", () => {
     // It went alone, so the second still stayed within the total cap.
     expect(admissions.at(-1)?.at).toBeGreaterThanOrEqual(
       (admissions[0]?.at ?? 0) + 1000,
+    );
+  });
+
+  it("answers the open thread's AI within its wait budget at interactive priority, not after a wait per call", async () => {
+    const account = "account-open-thread-ai";
+    const read = (cost: number) =>
+      meterGmailCall({ emailAccountId: account, cost }, async () => undefined);
+    // Someone else spent the bucket a moment ago.
+    await runWithGmailQuota(
+      { caller: "test/other", priority: "interactive" },
+      () => read(2000),
+    );
+    const startedAt = Date.now();
+    let priority: string | undefined;
+    let deferredAt = Number.POSITIVE_INFINITY;
+    const outcome = runWithAuditContext(
+      { source: "user/suggested-reply" },
+      () =>
+        runWithGmailWaitBudget(OPEN_THREAD_GMAIL_WAIT_MS, async () => {
+          priority = currentGmailQuotaContext().priority;
+          // Each read alone would wait about three seconds for the refill.
+          await read(600);
+          await read(600);
+          await read(600);
+        }),
+    ).catch((error: unknown) => {
+      deferredAt = Date.now();
+      return error;
+    });
+    await vi.advanceTimersByTimeAsync(20_000);
+    const error = await outcome;
+    expect(priority).toBe("interactive");
+    expect(error).toBeInstanceOf(GmailCallDeferredError);
+    expect((error as GmailCallDeferredError).retryAfterMs).toBeGreaterThan(0);
+    // Deferred once its budget ran out, not after each call's own wait.
+    expect(deferredAt - startedAt).toBeLessThanOrEqual(
+      OPEN_THREAD_GMAIL_WAIT_MS,
     );
   });
 

@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isExaSearchEnabled } from "@/utils/exa/search";
+import {
+  OPEN_THREAD_GMAIL_WAIT_MS,
+  runWithGmailWaitBudget,
+} from "@/utils/gmail/quota";
 import { withEmailProvider } from "@/utils/middleware";
 import { assertWithinUserRateLimit } from "@/utils/rate-limit";
 import { CONTEXT_TEXT_LIMIT } from "@/utils/thread-context/get-thread-context";
@@ -122,17 +126,21 @@ export const POST = withEmailProvider(
     );
     // Every request works a suggestion out: the browser keeps the ones it
     // was given, and the server keeps none (RD-3).
-    const suggestion = await suggestReply({
-      emailAccountId: request.auth.emailAccountId,
-      userEmail: request.auth.email,
-      threadId,
-      emailProvider: request.emailProvider,
-      logger: request.logger,
-      searchWeb: web === "1",
-      webQuery: webQuery ?? undefined,
-      context,
-      settings,
-    });
+    const suggestion = await runWithGmailWaitBudget(
+      OPEN_THREAD_GMAIL_WAIT_MS,
+      () =>
+        suggestReply({
+          emailAccountId: request.auth.emailAccountId,
+          userEmail: request.auth.email,
+          threadId,
+          emailProvider: request.emailProvider,
+          logger: request.logger,
+          searchWeb: web === "1",
+          webQuery: webQuery ?? undefined,
+          context,
+          settings,
+        }),
+    );
     return NextResponse.json({
       suggestion,
       canSearchWeb: isExaSearchEnabled() && settings.webLookupEnabled,

@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getThreadBrief } from "@/utils/home/get-thread-brief";
+import {
+  OPEN_THREAD_GMAIL_WAIT_MS,
+  runWithGmailWaitBudget,
+} from "@/utils/gmail/quota";
 import { withEmailProvider } from "@/utils/middleware";
 import { assertWithinUserRateLimit } from "@/utils/rate-limit";
 
@@ -31,11 +35,13 @@ export const GET = withEmailProvider("user/thread-brief", async (request) => {
     logger: request.logger,
   });
 
-  const brief = await getThreadBrief({
-    emailAccountId,
-    threadId,
-    emailProvider: request.emailProvider,
-    logger: request.logger,
-  });
+  const brief = await runWithGmailWaitBudget(OPEN_THREAD_GMAIL_WAIT_MS, () =>
+    getThreadBrief({
+      emailAccountId,
+      threadId,
+      emailProvider: request.emailProvider,
+      logger: request.logger,
+    }),
+  );
   return NextResponse.json({ brief } satisfies GetThreadBriefResponse);
 });

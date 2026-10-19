@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useDraftReplies } from "@/app/(app)/[emailAccountId]/assistant/settings/DraftReplies";
 import type { ThreadMessage } from "@/components/email-list/types";
 import type { ReplyAssist } from "@/components/email-list/reply-assist";
@@ -21,6 +21,9 @@ import { GmailLabel } from "@/utils/gmail/label";
 import { getRuleLabel } from "@/utils/rule/consts";
 
 const TO_REPLY_LABEL = getRuleLabel(SystemType.TO_REPLY);
+// How long the reader waits on a reply before it says it couldn't write one
+// and offers to try again, rather than spinning for as long as Gmail is busy.
+export const REPLY_WAIT_LIMIT_MS = 15_000;
 
 /**
  * Cue's suggested reply for the open conversation, delivered where the user
@@ -103,13 +106,20 @@ export function useReaderReplySuggestion({
   }
 
   const run = Boolean(current?.run);
+  // Each try has its own clock, so "Try again" waits the full limit again.
+  const [attempt, setAttempt] = useState(0);
+  const [gaveUpOn, setGaveUpOn] = useState<string>();
   // Asked for by the user, so it runs for any message someone else sent,
   // whether or not Cue thinks it needs a reply. "Auto draft replies" off
   // still means no AI-written reply at all; the server enforces it too.
   const canRequestReply = Boolean(latest) && !latestIsFromUser && !hasDraft;
   const writesReplies = draftReplies.enabled || draftReplies.loading;
   const requestReply = () => {
-    if (!latest || !canRequestReply || !writesReplies || run) return;
+    if (!latest || !canRequestReply || !writesReplies) return;
+    if (run) {
+      if (failed) retry();
+      return;
+    }
     setDecision({ id: latest.id, eligible: true, run: true });
   };
   // The same context the reader shows, handed to the suggestion so the server
@@ -130,6 +140,28 @@ export function useReaderReplySuggestion({
   // Gathering the context is the first part of checking the user's mail.
   const phase =
     enabled && run && !contextSettled ? "checking-mail" : replySuggestion.phase;
+  const checking = phase === "checking-mail" || phase === "checking-web";
+  // Still checking, or between the bounded retries of a failed check.
+  const waiting =
+    enabled &&
+    run &&
+    !suggestion &&
+    (checking || Boolean(replySuggestion.error));
+  const attemptKey = latestId ? `${latestId}:${attempt}` : undefined;
+  useEffect(() => {
+    if (!waiting || !attemptKey) return;
+    const timer = setTimeout(
+      () => setGaveUpOn(attemptKey),
+      REPLY_WAIT_LIMIT_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [waiting, attemptKey]);
+  const failed = waiting && gaveUpOn === attemptKey;
+  const retry = () => {
+    setAttempt((value) => value + 1);
+    if (!context.data) context.mutate?.();
+    replySuggestion.retry();
+  };
 
   // Reopened with a draft: the suggestion this browser kept for this message,
   // if any, so a draft that is still Cue's text keeps saying so.
@@ -160,7 +192,20 @@ export function useReaderReplySuggestion({
       : null;
 
   let replyStatus: React.ReactNode = null;
-  if (latest && (phase === "checking-mail" || phase === "checking-web")) {
+  if (latest && failed) {
+    replyStatus = (
+      <p className="text-muted-foreground text-xs" role="status">
+        Couldn't draft a reply right now.{" "}
+        <button
+          className="rounded-sm font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={retry}
+          type="button"
+        >
+          Try again
+        </button>
+      </p>
+    );
+  } else if (latest && checking) {
     replyStatus = (
       <p className="text-muted-foreground text-xs" role="status">
         {suggestionPhaseLabel(phase)}
@@ -183,7 +228,9 @@ export function useReaderReplySuggestion({
       drafts: writesReplies,
       request: requestReply,
       /** Whether Cue is still working out the reply. */
-      pending: phase === "checking-mail" || phase === "checking-web",
+      pending: checking && !failed,
+      /** Cue gave up waiting on this reply; `request` tries again. */
+      failed,
       /**
        * The newest message once there's nothing to wait for: its suggestion
        * settled either way, or Cue doesn't write replies for this account.

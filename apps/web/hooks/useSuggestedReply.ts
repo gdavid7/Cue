@@ -67,6 +67,9 @@ export function useSuggestedReply({
       }) as Promise<GetSuggestedReplyResponse>,
     {
       revalidateOnFocus: false,
+      // Each retry waits out the server's Retry-After; past two the reader
+      // says it couldn't and offers to try again.
+      errorRetryCount: 2,
       onSuccess: (data) => {
         const status = data.suggestion?.status;
         if (
@@ -79,5 +82,5 @@ export function useSuggestedReply({
     },
   );
   if (!kept) return result;
-  return { data: kept, error: undefined, isLoading: false };
+  return { data: kept, error: undefined, isLoading: false, mutate: undefined };
 }

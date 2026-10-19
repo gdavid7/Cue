@@ -443,6 +443,12 @@ export function runWithGmailQuota<T>(
   );
 }
 
+// What the open thread's summary, context and reply suggestion wait at the
+// gate in all before they answer 503 with a retry time: the reader shows
+// what it has, and the browser asks again once, rather than a request
+// holding on for most of a minute.
+export const OPEN_THREAD_GMAIL_WAIT_MS = 4000;
+
 /**
  * Caps how long all of `operation`'s Gmail calls wait at the gate together,
  * at the current priority, so a request someone is waiting on answers or
