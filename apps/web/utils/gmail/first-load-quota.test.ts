@@ -129,12 +129,12 @@ const ACCOUNT = "account-1";
 const logger = createScopedLogger("first-load-quota-test");
 const END_MS = 240_000;
 const STEADY_MS = 180_000;
-// The gate refills at the account's budget, 10,000 units a minute to start;
-// a thread open reads it in full, 120 units, so one every 0.84 s spends 86%
+// The gate refills at the account's budget, 12,000 units a minute to start;
+// a thread open reads it in full, 120 units, so one every 0.7 s spends 86%
 // of that.
-const BUCKET_UNITS_PER_SECOND = (GMAIL_USER_UNITS_PER_MINUTE * 0.8 - 2000) / 60;
+const BUCKET_UNITS_PER_SECOND = (GMAIL_USER_UNITS_PER_MINUTE * 0.8) / 60;
 const THREAD_OPEN_UNITS = 120;
-const OPEN_EVERY_MS = 840;
+const OPEN_EVERY_MS = 700;
 // Gmail's limit is a moving average that allows short bursts. Google
 // publishes no burst size, so the fake refuses any second past four times
 // the minute spread evenly, and the gate keeps under that.
@@ -316,10 +316,11 @@ describe("Gmail quota on a first load", () => {
 
     expect(gmail.limitedCalls()).toEqual([]);
     expect(rateLimitModes).toEqual([]);
-    // 80% of Gmail's limit leaves room for estimation error and for clients
-    // of the same Google project outside this account's budget.
+    // Any minute carries at most the account's budget, 80% of Gmail's limit,
+    // and the bucket's 2,000 units saved before it, which leaves the rest of
+    // the limit for estimation error and for the project's other clients.
     expect(gmail.peakMinuteUnits()).toBeLessThanOrEqual(
-      GMAIL_USER_UNITS_PER_MINUTE * 0.8,
+      GMAIL_USER_UNITS_PER_MINUTE * 0.8 + 2000,
     );
     // Opening a thread never waits on sync or analysis: each read is served
     // within the fake's single round trip.

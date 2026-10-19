@@ -57,9 +57,8 @@ const SENDING_ACCOUNT = "account-sending";
 const HUNG_ACCOUNT = "account-hung";
 const HOLD_ACCOUNT = "account-hold";
 const CONCURRENCY_ACCOUNT = "account-concurrency";
-// The gate starts each account where a full bucket of 2,000 units and a
-// minute of refill stay within 80% of the per-user limit.
-const STARTING_BUDGET = GMAIL_USER_UNITS_PER_MINUTE * 0.8 - 2000;
+// The gate starts each account at 80% of the per-user limit.
+const STARTING_BUDGET = GMAIL_USER_UNITS_PER_MINUTE * 0.8;
 const NO_DEADLINE_ACCOUNT = "account-no-deadline";
 const STORE_WARN_ACCOUNT = "account-store-warn";
 const STORE_ERROR_ACCOUNT = "account-store-error";
@@ -150,8 +149,8 @@ describe("Gmail quota gate", () => {
     })();
     await vi.advanceTimersByTimeAsync(30_000);
     // The scan has spent the bucket down to its floor and now runs at the
-    // bucket's refill rate: 2,000 - 800 + 30 s of a 10,000-unit budget.
-    expect(pages).toBeLessThanOrEqual(62);
+    // bucket's refill rate: 2,000 - 800 + 30 s of a 12,000-unit budget.
+    expect(pages).toBeLessThanOrEqual(72);
 
     let read = false;
     runWithGmailQuota(

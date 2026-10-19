@@ -19,16 +19,16 @@ export const GMAIL_USER_UNITS_PER_MINUTE = 15_000;
 
 // What Google refuses follows an account's own units over the last minute or
 // two rather than its busiest second. So each account has its own per-minute
-// budget, which the bucket refills at. It starts where a full bucket and a
-// minute of refill together stay within 80% of the limit; a refusal for
-// volume cuts it to 85% of what the gate let through in the minute before,
-// never below `floor`; each ten minutes without one raise it a tenth, up to
-// 80% of the limit. (It once started at a third: the gate priced every read
-// at 20 units while Gmail charged a full one 60, so what Gmail counted ran
-// up to three times what the gate did.)
+// budget, which the bucket refills at. It starts at 80% of the limit, about
+// what Gmail counted when the gate started at a third: the gate then priced
+// every read at 20 units while Gmail charged a full one 60. A full bucket and
+// a minute of refill stay under the limit. A refusal for volume cuts it to
+// 85% of what the gate let through in the minute before, never below
+// `floor`; each ten minutes without one raise it a tenth, up to 80% of the
+// limit again.
 const BUCKET_CAPACITY = 2000;
 const BUDGET = {
-  start: GMAIL_USER_UNITS_PER_MINUTE * 0.8 - BUCKET_CAPACITY,
+  start: GMAIL_USER_UNITS_PER_MINUTE * 0.8,
   max: GMAIL_USER_UNITS_PER_MINUTE * 0.8,
   floor: 1200,
   cutFraction: 0.85,
