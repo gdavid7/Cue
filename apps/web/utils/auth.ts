@@ -17,7 +17,6 @@ import { renameGoogleEmail } from "@/utils/auth/rename-email";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
 import { cookies, headers } from "next/headers";
-import { after } from "next/server";
 import { env } from "@/env";
 import { assertSignUpAllowed } from "@/utils/access/policy";
 import {
@@ -59,6 +58,11 @@ import { getEnabledLoginProviders } from "@/utils/oauth/login-providers";
 import { getAppleClientSecret } from "@/utils/auth/apple-client-secret";
 import { reconcileMicrosoftAccountSubject } from "@/utils/auth/microsoft-account-subject";
 import { getScimOptions, assertScimUserActive } from "@/utils/auth/scim";
+import {
+  deferCallbackStep,
+  markCallbackStep,
+  timeCallbackStep,
+} from "@/utils/oauth/callback-timings";
 import prisma from "@/utils/prisma";
 import {
   getAuthProviderFromContext,
@@ -119,7 +123,10 @@ const googleSocialProvider =
         // Google is authoritative for it.
         mapProfileToUser: async (
           profile: Parameters<typeof getGoogleUserFields>[0],
-        ) => getGoogleUserFields(profile),
+        ) => {
+          markCallbackStep("providerExchange");
+          return getGoogleUserFields(profile);
+        },
         // For preview deployments, redirect through staging (which proxies back to preview URL)
         ...(env.OAUTH_PROXY_URL && {
           redirectURI: `${env.OAUTH_PROXY_URL}/api/auth/callback/google`,
@@ -139,10 +146,13 @@ const microsoftSocialProvider =
         // The only hook that sees the decoded id_token before better-auth looks
         // the account up, so the only place both account keys are known.
         mapProfileToUser: async (profile: MicrosoftProfile) => {
-          await reconcileMicrosoftAccountSubject({
-            oid: typeof profile.oid === "string" ? profile.oid : null,
-            sub: typeof profile.sub === "string" ? profile.sub : null,
-          });
+          markCallbackStep("providerExchange");
+          await timeCallbackStep("microsoftSubject", () =>
+            reconcileMicrosoftAccountSubject({
+              oid: typeof profile.oid === "string" ? profile.oid : null,
+              sub: typeof profile.sub === "string" ? profile.sub : null,
+            }),
+          );
           return getMicrosoftUserFields();
         },
         ...(env.OAUTH_PROXY_URL && {
@@ -347,22 +357,25 @@ export const betterAuthConfig = betterAuth({
   databaseHooks: {
     session: {
       create: {
-        before: async (session, context) => {
-          await assertScimUserActive(session.userId);
-          return emailOtpSessionCreationHook(session, context);
-        },
+        before: async (session, context) =>
+          timeCallbackStep("sessionChecks", async () => {
+            await assertScimUserActive(session.userId);
+            return emailOtpSessionCreationHook(session, context);
+          }),
       },
     },
     user: {
       create: {
         before: async (user, context) => {
           try {
-            await assertSignUpAllowed({
-              email: user.email,
-              name: user.name,
-              provider: getAuthProviderFromContext(context),
-              emailVerified: user.emailVerified,
-            });
+            await timeCallbackStep("signUpPolicy", () =>
+              assertSignUpAllowed({
+                email: user.email,
+                name: user.name,
+                provider: getAuthProviderFromContext(context),
+                emailVerified: user.emailVerified,
+              }),
+            );
           } catch (error) {
             if (error instanceof APIError) {
               logger.warn("Blocked sign-up of an unapproved email", {
@@ -376,15 +389,27 @@ export const betterAuthConfig = betterAuth({
         },
         after: async (user, context) => {
           markAuthContextAsNewUser(context?.context);
-          await postSignUp({
-            id: user.id,
-            email: user.email,
-            name: user.name,
-            image: user.image,
-          }).catch((error) => {
-            logger.error("Error posting sign up", { error, userId: user.id });
-            captureException(error, { userId: user.id });
-          });
+          // The app layout reads premium, so it's settled before the redirect.
+          await timeCallbackStep("pendingPremium", () =>
+            applyPendingPremium({ userId: user.id, email: user.email }),
+          );
+          deferCallbackStep(
+            "signUpContacts",
+            () =>
+              createSignUpContacts({
+                id: user.id,
+                email: user.email,
+                name: user.name,
+                image: user.image,
+              }),
+            logger,
+          );
+          deferCallbackStep(
+            "referral",
+            () =>
+              handleReferralOnSignUp({ userId: user.id, email: user.email }),
+            logger,
+          );
         },
       },
       update: {
@@ -394,8 +419,12 @@ export const betterAuthConfig = betterAuth({
     account: {
       create: {
         after: async (account: Account) => {
-          await recordGoogleConsent(account);
-          await handleLinkAccount(account);
+          await timeCallbackStep("googleConsent", () =>
+            recordGoogleConsent(account),
+          );
+          await timeCallbackStep("linkAccount", () =>
+            handleLinkAccount(account),
+          );
         },
       },
       update: {
@@ -407,10 +436,12 @@ export const betterAuthConfig = betterAuth({
             ) && getAuthProviderFromContext(context) === "google";
           // Token refreshes also fire this hook with the stored refresh token,
           // which isn't a new consent.
-          if (isGoogleCallback) await recordGoogleConsent(account);
-          const renamedUser = await handleLinkAccount(
-            account,
-            isGoogleCallback,
+          if (isGoogleCallback)
+            await timeCallbackStep("googleConsent", () =>
+              recordGoogleConsent(account),
+            );
+          const renamedUser = await timeCallbackStep("linkAccount", () =>
+            handleLinkAccount(account, isGoogleCallback),
           );
           if (renamedUser && context?.context)
             renamedAuthUsers.set(context.context, renamedUser);
@@ -421,15 +452,17 @@ export const betterAuthConfig = betterAuth({
   hooks: {
     before: emailOtpBeforeHook,
     after: createAuthMiddleware(async (context) => {
-      const renamedUser = renamedAuthUsers.get(context.context);
-      const newSession = context.context.newSession;
-      if (renamedUser && newSession?.user.id === renamedUser.userId) {
-        newSession.user.email = renamedUser.email;
-        newSession.user.emailVerified = true;
-        await setSessionCookie(context, newSession);
-      }
-      await emailOtpAfterHook(context);
-      await mobileAuthProviderCompletion(context);
+      await timeCallbackStep("afterHooks", async () => {
+        const renamedUser = renamedAuthUsers.get(context.context);
+        const newSession = context.context.newSession;
+        if (renamedUser && newSession?.user.id === renamedUser.userId) {
+          newSession.user.email = renamedUser.email;
+          newSession.user.emailVerified = true;
+          await setSessionCookie(context, newSession);
+        }
+        await emailOtpAfterHook(context);
+        await mobileAuthProviderCompletion(context);
+      });
       try {
         const authenticatedSession = context.context.newSession;
         if (!authenticatedSession) return;
@@ -440,8 +473,10 @@ export const betterAuthConfig = betterAuth({
         const email = authenticatedSession.user.email;
         const isNewUser = isNewUserAuthContext(context.context);
 
-        after(() =>
-          trackAuthenticationCompleted({ email, provider, isNewUser }),
+        deferCallbackStep(
+          "authAnalytics",
+          () => trackAuthenticationCompleted({ email, provider, isNewUser }),
+          logger,
         );
       } catch (error) {
         logger.error("Failed to schedule authentication analytics", { error });
@@ -457,7 +492,7 @@ export const betterAuthConfig = betterAuth({
   },
 });
 
-async function postSignUp({
+async function createSignUpContacts({
   id: userId,
   email,
   name,
@@ -517,19 +552,22 @@ async function postSignUp({
     },
   );
 
-  await Promise.all([
-    loops(),
-    resend,
-    dub,
-    // Sequential so the admin grant lands on whichever premium the invite assigns.
-    handlePendingPremiumInvite({ email }).then(() =>
-      applyPendingPremiumGrant({ userId, email }).catch((error) => {
-        logger.error("Error applying pending premium grant", { email, error });
-        captureException(error, { userEmail: email });
-      }),
-    ),
-    handleReferralOnSignUp({ userId, email }),
-  ]);
+  await Promise.all([loops(), resend, dub]);
+}
+
+// Sequential so the admin grant lands on whichever premium the invite assigns.
+async function applyPendingPremium({
+  userId,
+  email,
+}: {
+  userId: string;
+  email: string;
+}) {
+  await handlePendingPremiumInvite({ email });
+  await applyPendingPremiumGrant({ userId, email }).catch((error) => {
+    logger.error("Error applying pending premium grant", { userId, error });
+    captureException(error, { userEmail: email });
+  });
 }
 
 async function handlePendingPremiumInvite({ email }: { email: string }) {
@@ -706,9 +744,9 @@ export async function handleLinkAccount(
       );
       throw new Error("Missing access token during account linking.");
     }
-    const profileData = await getProfileData(
-      account.providerId,
-      account.accessToken,
+    const { accessToken } = account;
+    const profileData = await timeCallbackStep("linkAccount.profile", () =>
+      getProfileData(account.providerId, accessToken),
     );
 
     if (!profileData?.email) {
@@ -889,11 +927,17 @@ export async function handleLinkAccount(
 
     // No mailbox matched by account or address, so the upsert created one.
     if (!existingEmailAccount && !renamedMailbox) {
-      await recordFirstSignIn(upsertedEmailAccount.id);
+      deferCallbackStep(
+        "firstSignInEvent",
+        () => recordFirstSignIn(upsertedEmailAccount.id),
+        logger,
+      );
     }
 
     if (env.AUTO_JOIN_ORGANIZATION_ENABLED) {
-      await autoJoinOrganization(upsertedEmailAccount.id).catch((error) => {
+      await timeCallbackStep("linkAccount.autoJoinOrganization", () =>
+        autoJoinOrganization(upsertedEmailAccount.id),
+      ).catch((error) => {
         logger.error("[linkAccount] Error auto-joining organization", {
           error,
         });
@@ -901,27 +945,26 @@ export async function handleLinkAccount(
       });
     }
 
-    // Handle premium account seats
-    await updateAccountSeats({ userId: account.userId }).catch((error) => {
-      logger.error("[linkAccount] Error updating premium account seats:", {
-        userId: account.userId,
-        error,
-      });
-      captureException(error, { extra: { userId: account.userId } });
-    });
-
-    await connectCalendarAtSignIn({ accountId: account.id, logger });
-
+    // The first page needs none of these, so the person doesn't wait on
+    // billing, calendar sync or messaging. Today shows a calendar that's still
+    // being connected as unknown rather than missing.
+    deferCallbackStep(
+      "accountSeats",
+      () => updateAccountSeats({ userId: account.userId }),
+      logger,
+    );
+    deferCallbackStep(
+      "calendarConnect",
+      () => connectCalendarAtSignIn({ accountId: account.id, logger }),
+      logger,
+    );
     // A newly linked mailbox gets the person's Slack, Teams and Telegram.
     if (!linkedEmailAccount) {
-      await shareChannelsAcrossMailboxes({
-        userId: account.userId,
+      deferCallbackStep(
+        "shareChannels",
+        () => shareChannelsAcrossMailboxes({ userId: account.userId, logger }),
         logger,
-      }).catch((error) => {
-        logger.error("[linkAccount] Error sharing messaging channels", {
-          error,
-        });
-      });
+      );
     }
 
     scheduleEmailWatchesAfterLink(account.userId);
@@ -996,19 +1039,10 @@ async function autoJoinOrganization(emailAccountId: string) {
 }
 
 function scheduleEmailWatchesAfterLink(userId: string) {
-  after(() =>
-    ensureEmailAccountsWatched({
-      userIds: [userId],
-      logger,
-    }).catch((error) => {
-      logger.error("[linkAccount] Error re-registering email watches", {
-        userId,
-        error,
-      });
-      captureException(error, {
-        extra: { userId, location: "linkAccountWatch" },
-      });
-    }),
+  deferCallbackStep(
+    "emailWatch",
+    () => ensureEmailAccountsWatched({ userIds: [userId], logger }),
+    logger,
   );
 }
 

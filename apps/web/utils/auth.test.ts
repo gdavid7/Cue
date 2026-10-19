@@ -20,6 +20,11 @@ import { ACCOUNT_LINKING } from "@/utils/auth/account-linking";
 import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
 import { expectReplyTrackingOn } from "@/__tests__/helpers";
 import { recordFirstSignIn } from "@/utils/analytics/activation";
+import { updateAccountSeats } from "@/utils/premium/seats";
+import { shareChannelsAcrossMailboxes } from "@/utils/messaging/shared-channels";
+import { createContact as createLoopsContact } from "@inboxzero/loops";
+import { createContact as createResendContact } from "@inboxzero/transactional-email";
+import { trackDubSignUp } from "@/utils/dub";
 
 const { mockAfter, mockAssertSignUpAllowed } = vi.hoisted(() => ({
   mockAfter: vi.fn(),
@@ -94,6 +99,12 @@ vi.mock("@/utils/email/watch-manager", () => ({
 vi.mock("@/utils/calendar/connect-sign-in-calendar", () => ({
   connectCalendarAtSignIn: vi.fn(),
 }));
+vi.mock("@/utils/messaging/shared-channels", () => ({
+  shareChannelsAcrossMailboxes: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@inboxzero/loops", () => ({ createContact: vi.fn() }));
+vi.mock("@inboxzero/transactional-email", () => ({ createContact: vi.fn() }));
+vi.mock("@/utils/dub", () => ({ trackDubSignUp: vi.fn() }));
 vi.mock("@/utils/premium/seats", () => ({
   claimPendingPremiumInvite: vi.fn(),
   updateAccountSeats: vi.fn().mockResolvedValue(undefined),
@@ -666,8 +677,10 @@ describe("handleLinkAccount", () => {
     expect(update?.data).not.toHaveProperty("userId");
     expect(update?.data).not.toHaveProperty("mailSplits");
     expect(clearAccountDisconnectedErrorIfResolved).toHaveBeenCalled();
+    await runScheduledAfterCallbacks();
     expect(recordFirstSignIn).not.toHaveBeenCalled();
-    expect(mockAfter).toHaveBeenCalledOnce();
+    // An existing mailbox already has the person's channels.
+    expect(shareChannelsAcrossMailboxes).not.toHaveBeenCalled();
   });
 
   it("rejects a provider account linked to another user despite a changed email", async () => {
@@ -735,12 +748,11 @@ describe("handleLinkAccount", () => {
     expect(upsert?.update).not.toHaveProperty("mailSplits");
     expectReplyTrackingOn(upsert?.create.rules);
     expect(upsert?.update).not.toHaveProperty("rules");
-    expect(recordFirstSignIn).toHaveBeenCalledWith("email_account_1");
-    expect(mockAfter).toHaveBeenCalledOnce();
     expect(ensureEmailAccountsWatched).not.toHaveBeenCalled();
 
-    await runScheduledAfterCallback();
+    await runScheduledAfterCallbacks();
 
+    expect(recordFirstSignIn).toHaveBeenCalledWith("email_account_1");
     expect(ensureEmailAccountsWatched).toHaveBeenCalledWith({
       userIds: ["user_1"],
       logger: expect.anything(),
@@ -761,6 +773,7 @@ describe("handleLinkAccount", () => {
     ] as never);
 
     await handleLinkAccount(getGoogleAccount());
+    await runScheduledAfterCallbacks();
 
     expect(connectCalendarAtSignIn).toHaveBeenCalledWith({
       accountId: "account_1",
@@ -793,11 +806,102 @@ describe("handleLinkAccount", () => {
 
     expect(mockAfter).toHaveBeenCalledOnce();
 
-    await runScheduledAfterCallback();
+    await runScheduledAfterCallbacks();
 
     expect(ensureEmailAccountsWatched).toHaveBeenCalledWith({
       userIds: ["user_1"],
       logger: expect.anything(),
+    });
+  });
+});
+
+// The founder's first sign-in waited on all of this before it redirected.
+describe("sign-in callback critical path", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("redirects without waiting on calendar sync, seat sync, channel sharing or watches", async () => {
+    mockNewGoogleMailbox();
+    vi.mocked(connectCalendarAtSignIn).mockImplementationOnce(never);
+    vi.mocked(updateAccountSeats).mockImplementationOnce(never);
+    vi.mocked(shareChannelsAcrossMailboxes).mockImplementationOnce(never);
+    vi.mocked(ensureEmailAccountsWatched).mockImplementationOnce(never);
+    vi.mocked(recordFirstSignIn).mockImplementationOnce(never);
+
+    await (betterAuthConfig as any).options.databaseHooks.account.create.after({
+      ...getGoogleAccount(),
+      refreshToken: "refresh_token",
+    });
+
+    // What the first page reads is written before the redirect.
+    expect(prisma.$transaction).toHaveBeenCalled();
+    expect(prisma.account.update).toHaveBeenCalledWith({
+      where: { id: "account_1" },
+      data: { refreshTokenIssuedAt: expect.any(Date) },
+    });
+    expect(connectCalendarAtSignIn).not.toHaveBeenCalled();
+    expect(updateAccountSeats).not.toHaveBeenCalled();
+    expect(shareChannelsAcrossMailboxes).not.toHaveBeenCalled();
+
+    startScheduledAfterCallbacks();
+
+    expect(connectCalendarAtSignIn).toHaveBeenCalledWith({
+      accountId: "account_1",
+      logger: expect.anything(),
+    });
+    expect(updateAccountSeats).toHaveBeenCalledWith({ userId: "user_1" });
+    expect(shareChannelsAcrossMailboxes).toHaveBeenCalledWith({
+      userId: "user_1",
+      logger: expect.anything(),
+    });
+    expect(ensureEmailAccountsWatched).toHaveBeenCalled();
+    expect(recordFirstSignIn).toHaveBeenCalledWith("email_account_1");
+  });
+
+  it("creates the user without waiting on marketing contacts or the referral", async () => {
+    vi.mocked(createLoopsContact).mockImplementationOnce(never);
+    vi.mocked(createResendContact).mockImplementationOnce(never);
+    vi.mocked(trackDubSignUp).mockImplementationOnce(never);
+    vi.mocked(cookies).mockImplementationOnce(never);
+    prisma.premium.findFirst.mockResolvedValue(null);
+    prisma.account.findFirst.mockResolvedValue(null);
+    prisma.pendingPremiumGrant.findUnique.mockResolvedValue(null);
+
+    await (betterAuthConfig as any).options.databaseHooks.user.create.after(
+      { id: "user_1", email: "user@example.com", name: "Test User" },
+      { context: {} },
+    );
+
+    // The app layout reads premium, so a pending invite or grant is claimed
+    // before the redirect.
+    expect(prisma.premium.findFirst).toHaveBeenCalled();
+    expect(prisma.pendingPremiumGrant.findUnique).toHaveBeenCalled();
+    expect(createLoopsContact).not.toHaveBeenCalled();
+    expect(createResendContact).not.toHaveBeenCalled();
+    expect(trackDubSignUp).not.toHaveBeenCalled();
+    expect(cookies).not.toHaveBeenCalled();
+
+    startScheduledAfterCallbacks();
+    await vi.waitFor(() => expect(createLoopsContact).toHaveBeenCalled());
+
+    expect(createResendContact).toHaveBeenCalled();
+    expect(trackDubSignUp).toHaveBeenCalled();
+    expect(cookies).toHaveBeenCalled();
+  });
+
+  it("logs a deferred step that fails without failing the sign-in", async () => {
+    mockNewGoogleMailbox();
+    const error = new Error("calendar down");
+    vi.mocked(connectCalendarAtSignIn).mockRejectedValueOnce(error);
+
+    await expect(
+      handleLinkAccount(getGoogleAccount()),
+    ).resolves.toBeUndefined();
+    await runScheduledAfterCallbacks();
+
+    expect(captureException).toHaveBeenCalledWith(error, {
+      extra: { step: "calendarConnect" },
     });
   });
 });
@@ -824,8 +928,31 @@ function getGoogleAccount(): Account {
   };
 }
 
-async function runScheduledAfterCallback() {
-  const callback = mockAfter.mock.calls.at(-1)?.[0];
-  expect(callback).toBeTypeOf("function");
-  await callback();
+async function runScheduledAfterCallbacks() {
+  expect(mockAfter).toHaveBeenCalled();
+  for (const [callback] of mockAfter.mock.calls) await callback();
+}
+
+// Starts the deferred work without waiting for it, as `after()` does once the
+// response is sent.
+function startScheduledAfterCallbacks() {
+  for (const [callback] of mockAfter.mock.calls) callback();
+}
+
+function never() {
+  return new Promise<never>(() => {});
+}
+
+function mockNewGoogleMailbox() {
+  mockGoogleProfile();
+  prisma.emailAccount.findUnique.mockResolvedValue(null);
+  prisma.user.findUnique.mockResolvedValue({
+    email: "user@example.com",
+    name: "Test User",
+    image: null,
+  } as Awaited<ReturnType<typeof prisma.user.findUnique>>);
+  prisma.$transaction.mockResolvedValue([
+    { id: "email_account_1" },
+    { id: "account_1" },
+  ] as never);
 }
