@@ -403,6 +403,8 @@ function createMessagingChatSdkBot(): MessagingChatSdkContext {
     state: createChatStateAdapter(),
     dedupeTtlMs: 10 * 60 * 1000,
     logger: "warn",
+    // No `concurrency`: the default "drop" never queues a message in Redis,
+    // which withoutMessageContent relies on (RD-3).
   });
 
   registerMessagingHandlers({ bot, adapters: typedAdapters });
