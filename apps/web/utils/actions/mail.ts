@@ -533,7 +533,7 @@ export const saveComposeDraftAction = actionClient
         provider: providerName,
         logger,
       },
-      parsedInput: { ruleSuggestionId, ...parsedInput },
+      parsedInput: { ruleSuggestionId, ruleSuggestionFiles, ...parsedInput },
     }) => {
       const provider = await createEmailProvider({
         emailAccountId,
@@ -549,6 +549,7 @@ export const saveComposeDraftAction = actionClient
         provider,
         draftId: saved.draftId,
         executedActionId: ruleSuggestionId,
+        filenames: ruleSuggestionFiles,
         emailAccount: { id: emailAccountId, userId, email: emailAccount.email },
         logger,
       });

@@ -156,7 +156,11 @@ describe("useReaderReplySuggestion", () => {
     mocks.plans = [
       ruleSuggestionPlan("ask", {
         subject: "Re: Lease",
-        staticAttachments: [{ name: "lease.pdf" }],
+        staticAttachments: [
+          { type: "FILE", name: "lease.pdf" },
+          // A folder the rule draws from is never named as an attachment.
+          { type: "FOLDER", name: "Contracts" },
+        ],
         selectedAttachments: [
           { filename: "floorplan.pdf" },
           { filename: "lease.pdf" },

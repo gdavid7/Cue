@@ -15,6 +15,7 @@ import {
 import { toastError } from "@/components/Toast";
 import {
   ActionType,
+  AttachmentSourceType,
   DraftEmailStatus,
   SystemType,
 } from "@/generated/prisma/enums";
@@ -347,19 +348,24 @@ function attachmentNames(action: {
   selectedAttachments: unknown;
 }) {
   const names = [
-    ...namesFrom(action.staticAttachments, "name"),
+    // A rule's sources can be folders too; only its files are attached.
+    ...namesFrom(action.staticAttachments, "name", AttachmentSourceType.FILE),
     ...namesFrom(action.selectedAttachments, "filename"),
   ];
   return [...new Set(names)];
 }
 
-function namesFrom(raw: unknown, key: "name" | "filename") {
+function namesFrom(
+  raw: unknown,
+  key: "name" | "filename",
+  type?: AttachmentSourceType,
+) {
   if (!Array.isArray(raw)) return [];
   return raw.flatMap((item) => {
-    const name =
-      item && typeof item === "object"
-        ? (item as Record<string, unknown>)[key]
-        : null;
+    if (!item || typeof item !== "object") return [];
+    const record = item as Record<string, unknown>;
+    if (type && record.type !== type) return [];
+    const name = record[key];
     return typeof name === "string" && name.trim() ? [name.trim()] : [];
   });
 }

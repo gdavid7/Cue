@@ -181,7 +181,20 @@ export async function selectDraftAttachmentsForRule({
   };
 }
 
-export async function resolveDraftAttachments({
+export async function resolveDraftAttachments(options: {
+  emailAccountId: string;
+  userId: string;
+  selectedAttachments: SelectedAttachment[];
+  logger: Logger;
+}): Promise<MailAttachment[]> {
+  return (await resolveDraftAttachmentsWithFailures(options)).attachments;
+}
+
+/**
+ * `resolveDraftAttachments`, also naming the files it couldn't fetch, for a
+ * caller that told the user they'd be attached.
+ */
+export async function resolveDraftAttachmentsWithFailures({
   emailAccountId,
   userId,
   selectedAttachments,
@@ -191,11 +204,11 @@ export async function resolveDraftAttachments({
   userId: string;
   selectedAttachments: SelectedAttachment[];
   logger: Logger;
-}): Promise<MailAttachment[]> {
-  if (!selectedAttachments.length) return [];
+}): Promise<{ attachments: MailAttachment[]; failed: SelectedAttachment[] }> {
+  if (!selectedAttachments.length) return { attachments: [], failed: [] };
 
   const hasAccess = await hasDraftAttachmentAccess(userId);
-  if (!hasAccess) return [];
+  if (!hasAccess) return { attachments: [], failed: selectedAttachments };
 
   const driveConnections = await prisma.driveConnection.findMany({
     where: {
@@ -223,23 +236,33 @@ export async function resolveDraftAttachments({
   );
   const providers = new Map<string, DriveProvider>();
   const resolvedAttachments: MailAttachment[] = [];
+  const failed: SelectedAttachment[] = [];
 
   for (const selectedAttachment of selectedAttachments) {
     const driveConnection = connectionMap.get(
       selectedAttachment.driveConnectionId,
     );
-    if (!driveConnection) continue;
+    if (!driveConnection) {
+      failed.push(selectedAttachment);
+      continue;
+    }
 
     const provider = await getDriveProvider({
       driveConnection,
       providers,
       logger,
     });
-    if (!provider) continue;
+    if (!provider) {
+      failed.push(selectedAttachment);
+      continue;
+    }
 
     try {
       const downloaded = await provider.downloadFile(selectedAttachment.fileId);
-      if (!downloaded || downloaded.file.mimeType !== PDF_MIME_TYPE) continue;
+      if (!downloaded || downloaded.file.mimeType !== PDF_MIME_TYPE) {
+        failed.push(selectedAttachment);
+        continue;
+      }
 
       resolvedAttachments.push({
         filename: downloaded.file.name,
@@ -247,6 +270,7 @@ export async function resolveDraftAttachments({
         contentType: downloaded.file.mimeType,
       });
     } catch (error) {
+      failed.push(selectedAttachment);
       logger.warn("Failed to download draft attachment", {
         driveConnectionId: selectedAttachment.driveConnectionId,
         fileId: selectedAttachment.fileId,
@@ -255,7 +279,7 @@ export async function resolveDraftAttachments({
     }
   }
 
-  return resolvedAttachments;
+  return { attachments: resolvedAttachments, failed };
 }
 
 async function syncAttachmentSource({

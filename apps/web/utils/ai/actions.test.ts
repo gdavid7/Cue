@@ -49,13 +49,20 @@ vi.mock("@/utils/integration-action.server", () => ({
   isIntegrationActionEnabledForUserId: mockIsIntegrationActionEnabledForUserId,
 }));
 
-vi.mock("@/utils/attachments/draft-attachments", () => ({
-  resolveDraftAttachments: vi.fn().mockResolvedValue([]),
-  selectDraftAttachmentsForRule: vi.fn().mockResolvedValue({
-    selectedAttachments: [],
-    attachmentContext: null,
-  }),
-}));
+vi.mock("@/utils/attachments/draft-attachments", () => {
+  const resolveDraftAttachments = vi.fn().mockResolvedValue([]);
+  return {
+    resolveDraftAttachments,
+    resolveDraftAttachmentsWithFailures: async (options: unknown) => ({
+      attachments: (await resolveDraftAttachments(options)) ?? [],
+      failed: [],
+    }),
+    selectDraftAttachmentsForRule: vi.fn().mockResolvedValue({
+      selectedAttachments: [],
+      attachmentContext: null,
+    }),
+  };
+});
 
 vi.mock("@/utils/messaging/rule-notifications", () => ({
   getMessagingRuleNotificationResult: vi.fn().mockResolvedValue({

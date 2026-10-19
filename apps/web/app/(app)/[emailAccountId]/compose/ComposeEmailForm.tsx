@@ -825,10 +825,14 @@ function ComposeEmailFormContent({
           ...content,
           replyToEmail: getReplyToEmailPayload(getValues("replyToEmail")),
         },
-        ruleSuggestionId: startedFrom.current?.files?.length
-          ? startedFrom.current.executedActionId
-          : undefined,
+        ...(ruleFiles.length && startedFrom.current?.executedActionId
+          ? {
+              ruleSuggestionId: startedFrom.current.executedActionId,
+              ruleSuggestionFiles: ruleFiles,
+            }
+          : {}),
       });
+      if (created?.serverError) throw new Error(created.serverError);
       if (!created?.data)
         throw new Error(
           "Mailbox draft creation could not be confirmed. Check Drafts in Gmail or Outlook; your message is still saved on this device.",
@@ -932,7 +936,20 @@ function ComposeEmailFormContent({
   // Cue's suggestion stays in Cue until the user changes it: only then does
   // the reply become a mailbox draft. Sending it as it is needs no draft.
   // Until the reply is a mailbox draft, the rule's files are only named.
-  const [ruleFiles] = useState(() => startedFrom.current?.files);
+  const [ruleFiles, setRuleFiles] = useState<string[]>(
+    () => startedFrom.current?.files ?? [],
+  );
+  // A rule's file the user doesn't want goes before the draft holds it.
+  const removeRuleFile = (name: string) => {
+    const next = ruleFiles.filter((file) => file !== name);
+    setRuleFiles(next);
+    if (startedFrom.current)
+      startedFrom.current = {
+        ...startedFrom.current,
+        files: next.length ? next : undefined,
+      };
+    captureLocalDraft();
+  };
   // A reply already in the mailbox keeps saving, even typed back to Cue's text.
   const isUntouchedSuggestion = useCallback(() => {
     const origin = startedFrom.current;
@@ -1347,9 +1364,19 @@ function ComposeEmailFormContent({
       await stopProviderAutosave();
       let deliveryAccepted = false;
       try {
-        // The rule's files are sent from the draft that carries them.
-        if (startedFrom.current?.files?.length && !providerDraftId.current)
-          await ensureProviderDraft();
+        // The rule's files are sent from the draft that carries them. One
+        // that can't be attached stops the send: the user was told it goes.
+        if (ruleFiles.length && !providerDraftId.current) {
+          try {
+            await ensureProviderDraft();
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : SEND_UNCONFIRMED_MESSAGE;
+            setSubmissionError(message);
+            toastError({ description: message });
+            return;
+          }
+        }
         // Autosave can replace a draft's message ID; its provider draft ID survives.
         enrichedData.providerDraftId = await resolveSendDraftId(
           providerDraftId.current,
@@ -1612,6 +1639,7 @@ function ComposeEmailFormContent({
     },
     [
       assistIsOpen,
+      ruleFiles,
       focusAssist,
       stopProviderAutosave,
       resumeProviderAutosave,
@@ -2398,10 +2426,26 @@ function ComposeEmailFormContent({
         </div>
       </div>
       {(isCueSuggestion || editedSuggestion) && suggestion?.evidence}
-      {ruleFiles?.length && !savedToMailbox ? (
-        <p className="mt-2 text-muted-foreground text-xs">
-          Attaches {ruleFiles.join(", ")}
-        </p>
+      {ruleFiles.length && !savedToMailbox ? (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-muted-foreground text-xs">
+          <span>Attaches</span>
+          {ruleFiles.map((name) => (
+            <span
+              key={name}
+              className="inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5"
+            >
+              {name}
+              <button
+                type="button"
+                aria-label={`Remove ${name}`}
+                className="rounded-sm hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => removeRuleFile(name)}
+              >
+                <XIcon aria-hidden className="size-3" />
+              </button>
+            </span>
+          ))}
+        </div>
       ) : null}
       {/* Inline replies say "Draft" in their header instead. */}
       {isComposeWindow && isMailboxDraft && !providerAutosave.error && (

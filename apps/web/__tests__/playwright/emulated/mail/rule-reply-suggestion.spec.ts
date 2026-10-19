@@ -165,11 +165,35 @@ test("opens a rule's reply to someone else addressed and labelled as theirs", as
     reader.getByText("Cue's draft to finance@partner.example"),
   ).toBeVisible();
   await expect(reader.getByText("Suggested by Cue")).toHaveCount(0);
-  await expect(
-    reader.getByText("finance@partner.example").first(),
-  ).toBeVisible();
+  // Addressed to finance alone: the sender isn't on it.
+  const recipients = reader.locator("button[aria-expanded]", {
+    hasText: /^(for|to) /,
+  });
+  await expect(recipients).toContainText("finance");
+  await expect(recipients).not.toContainText(/jonas/i);
   await capturePlaywrightCheckpoint(page, testInfo, "rule-suggestion-to-other");
   await page.waitForTimeout(AUTOSAVE_WINDOW_MS);
+  expect(await countDrafts(page, threadId)).toBe(0);
+
+  // Sent as it is, it goes to finance only.
+  await reader.getByRole("button", { name: "Send", exact: true }).click();
+  await expect
+    .poll(
+      () =>
+        readLatestMailMutation(page, {
+          emailAccountId,
+          kind: "reply",
+          threadId,
+        }),
+      { timeout: UNDO_WINDOW_SEND_TIMEOUT_MS },
+    )
+    .toMatchObject({ status: "succeeded" });
+  await expect
+    .poll(async () => (await sentReplyRecipients(page, threadId))?.to, {
+      timeout: 30_000,
+    })
+    .toMatch(/^<?finance@partner\.example>?$/);
+  expect((await sentReplyRecipients(page, threadId))?.cc).toBe("");
   expect(await countDrafts(page, threadId)).toBe(0);
 });
 
@@ -386,6 +410,28 @@ async function sentReplyText(page: Page, threadId: string) {
     .filter((message) => message.labelIds?.includes("SENT"))
     .map((message) => message.snippet ?? "")
     .join("\n");
+}
+
+/** Who the thread's sent reply went to, once the mailbox has it. */
+async function sentReplyRecipients(page: Page, threadId: string) {
+  const response = await page.request.get(
+    `${gmailBaseUrl()}/gmail/v1/users/me/threads/${threadId}`,
+    { headers: await gmailHeaders(), params: { format: "metadata" } },
+  );
+  if (!response.ok()) return null;
+  const { messages } = (await response.json()) as {
+    messages?: {
+      labelIds?: string[];
+      payload?: { headers?: { name: string; value: string }[] };
+    }[];
+  };
+  const sent = messages?.find((message) => message.labelIds?.includes("SENT"));
+  if (!sent) return null;
+  const header = (name: string) =>
+    sent.payload?.headers
+      ?.find((item) => item.name.toLowerCase() === name)
+      ?.value.trim() ?? "";
+  return { to: header("to"), cc: header("cc") };
 }
 
 async function gmailHeaders() {
