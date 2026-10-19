@@ -347,6 +347,54 @@ describe("ChatProvider", () => {
     expect(queryState.set.chatAccountId).toBe("account-b");
   });
 
+  describe("asking about an email in another account", () => {
+    function renderConsumer() {
+      const latest: { current?: ReturnType<typeof useChat> } = {};
+      function Consumer() {
+        latest.current = useChat();
+        return null;
+      }
+      renderWithProvider(<Consumer />);
+      return latest;
+    }
+
+    it("takes an empty, idle chat to the email's account", async () => {
+      queryState.initialChatId = null;
+      const latest = renderConsumer();
+
+      act(() => latest.current?.followEmailAccount("account-b"));
+
+      await waitFor(() => {
+        expect(latest.current?.chatAccount?.id).toBe("account-b");
+      });
+    });
+
+    it("leaves a conversation under way where it is, and offers the switch", () => {
+      queryState.initialChatId = "chat-from-account-a";
+      const latest = renderConsumer();
+      mockSetMessages.mockClear();
+
+      act(() => latest.current?.followEmailAccount("account-b"));
+
+      expect(latest.current?.chatAccount?.id).toBe("account-a");
+      expect(latest.current?.chatId).toBe("chat-from-account-a");
+      expect(mockSetMessages).not.toHaveBeenCalled();
+      expect(queryState.set.chatAccountId).toBeUndefined();
+    });
+
+    it("leaves a running reply where it is", () => {
+      queryState.initialChatId = null;
+      chatState.status = "streaming";
+      const latest = renderConsumer();
+      mockSetMessages.mockClear();
+
+      act(() => latest.current?.followEmailAccount("account-b"));
+
+      expect(latest.current?.chatAccount?.id).toBe("account-a");
+      expect(mockSetMessages).not.toHaveBeenCalled();
+    });
+  });
+
   it("restores consumed fix context when sending fails", async () => {
     const fixContext = buildFixRuleContext("failed-thread");
     mockSendMessage.mockRejectedValueOnce(new Error("Network request failed"));

@@ -83,6 +83,11 @@ type ChatContextType = {
   openThreadAccountId: string | null;
   /** Starts a new conversation in another of the user's accounts. */
   switchChatAccount: (emailAccountId: string) => void;
+  /**
+   * Takes the chat to an email's account when it is empty and idle. A
+   * conversation or reply under way stays, and the chat offers the switch.
+   */
+  followEmailAccount: (emailAccountId: string) => void;
   /** Opens a saved chat in the account it belongs to. */
   openChat: (chat: { id: string; emailAccountId: string }) => void;
   input: string;
@@ -498,6 +503,22 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   // retried, and the saved chat must survive it.
   const conversationUnknown =
     Boolean(chatId) && data === undefined && !isChatUnavailable(messagesError);
+  const followEmailAccount = useCallback(
+    (accountId: string) => {
+      if (accountId === emailAccountId) return;
+      if (!accountIds.includes(accountId)) return;
+      if (isRunActive || hasConversation || conversationUnknown) return;
+      moveChatToAccount(accountId, null);
+    },
+    [
+      accountIds,
+      conversationUnknown,
+      emailAccountId,
+      hasConversation,
+      isRunActive,
+      moveChatToAccount,
+    ],
+  );
   useEffect(() => {
     const threadKey = openThread
       ? `${openThread.emailAccountId}:${openThread.threadId}`
@@ -505,19 +526,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     if (followedThreadRef.current === threadKey) return;
     if (conversationUnknown) return;
     followedThreadRef.current = threadKey;
-    if (!openThread || openThread.emailAccountId === emailAccountId) return;
-    if (!accountIds.includes(openThread.emailAccountId)) return;
-    if (isRunActive || hasConversation) return;
-    moveChatToAccount(openThread.emailAccountId, null);
-  }, [
-    accountIds,
-    conversationUnknown,
-    emailAccountId,
-    hasConversation,
-    isRunActive,
-    moveChatToAccount,
-    openThread,
-  ]);
+    if (openThread) followEmailAccount(openThread.emailAccountId);
+  }, [conversationUnknown, followEmailAccount, openThread]);
 
   useEffect(() => {
     if (!routeAccountId) return;
@@ -746,6 +756,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             ? openThread.emailAccountId
             : null,
         switchChatAccount,
+        followEmailAccount,
         openChat,
         chatId,
         input,
