@@ -18,6 +18,7 @@ import { gmailQuotaStore } from "@/utils/gmail/quota-store";
 import {
   createGmailQuotaStats,
   GMAIL_USER_UNITS_PER_MINUTE,
+  resetGmailQuotaInstanceState,
   runWithGmailQuota,
 } from "@/utils/gmail/quota";
 import { CHAT_TOOL_GMAIL_WAIT_BUDGET_MS } from "@/utils/ai/assistant/chat-tool-runtime";
@@ -151,6 +152,7 @@ describe("Gmail quota on a first load", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    resetGmailQuotaInstanceState();
     start = Date.now();
     memory.values.clear();
     (gmailQuotaStore as unknown as { reset(): void }).reset();

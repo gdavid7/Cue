@@ -5,23 +5,37 @@ import { NewsletterStatus } from "@/generated/prisma/enums";
 import { GmailLabel } from "@/utils/gmail/label";
 import { getGmailCallDeferredError } from "@/utils/gmail/quota";
 import type { Logger } from "@/utils/logger";
+import {
+  isGmailInsufficientPermissionsError,
+  isGmailQuotaExceededError,
+  isGmailRateLimitExceededError,
+  isInvalidGrantError,
+  isOutlookAccessDeniedError,
+  isOutlookThrottlingError,
+} from "@/utils/error";
 
 export async function getAutoArchiveFilters(
   emailProvider: EmailProvider,
   logger: Logger,
 ) {
-  const filters = await getEmailFilters(emailProvider, logger);
+  const { filters } = await getEmailFilters(emailProvider, logger);
   return filters.filter((filter) => isAutoArchiveFilter(filter, emailProvider));
 }
 
+/**
+ * Never throws, so newsletter stats still work. `available: false` means the
+ * filters could not be read, which is not the same as the account having none.
+ */
 export async function getEmailFilters(
   emailProvider: EmailProvider,
   logger: Logger,
-) {
+): Promise<
+  | { filters: EmailFilter[]; available: true }
+  | { filters: EmailFilter[]; available: false; permanent: boolean }
+> {
   try {
-    return await emailProvider.getFiltersList();
+    return { filters: await emailProvider.getFiltersList(), available: true };
   } catch (error) {
-    // Return empty array instead of throwing, so the newsletter stats still work
     const deferred = getGmailCallDeferredError(error);
     if (deferred) {
       // Background stats yield to the account's per-minute Gmail budget.
@@ -29,11 +43,38 @@ export async function getEmailFilters(
         priority: deferred.priority,
         retryAfterMs: deferred.retryAfterMs,
       });
-      return [];
+    } else if (isExpectedFiltersError(error)) {
+      logger.warn("Skipped email filters: provider unavailable", { error });
+    } else {
+      logger.error("Error getting email filters", { error });
     }
-    logger.error("Error getting email filters", { error });
-    return [];
+    return {
+      filters: [],
+      available: false,
+      permanent: isPermanentFiltersError(error),
+    };
   }
+}
+
+// A revoked grant or missing scope needs the user to act; rate limits and
+// backend errors pass on their own.
+function isPermanentFiltersError(error: unknown) {
+  return (
+    isGmailInsufficientPermissionsError(error) ||
+    isInvalidGrantError(error) ||
+    isOutlookAccessDeniedError(error)
+  );
+}
+
+function isExpectedFiltersError(error: unknown) {
+  return (
+    isGmailRateLimitExceededError(error) ||
+    isGmailQuotaExceededError(error) ||
+    isGmailInsufficientPermissionsError(error) ||
+    isInvalidGrantError(error) ||
+    isOutlookThrottlingError(error) ||
+    isOutlookAccessDeniedError(error)
+  );
 }
 
 export function findSenderLabelFilters(

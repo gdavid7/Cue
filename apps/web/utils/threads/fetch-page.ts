@@ -1,5 +1,5 @@
 import type { EmailProvider, EmailThread } from "@/utils/email/types";
-import { queryIncludesSpamOrTrash } from "@/utils/gmail/thread";
+import { searchReachesSpamOrTrash } from "@/utils/mail-search/search-query-predicate";
 import { GmailLabel } from "@/utils/gmail/label";
 import { mergePaginatedSources } from "@/utils/threads/merge-paginated-sources";
 import { createPageBuffer } from "@/utils/redis/thread-page-buffer";
@@ -76,7 +76,7 @@ export async function fetchThreadsPage({
   if (query.q) {
     const folder = spamTrashFolder(query);
     const includeSpamTrash =
-      Boolean(folder) || queryIncludesSpamOrTrash(query.q);
+      Boolean(folder) || searchReachesSpamOrTrash(query.q, emailProvider.name);
     return emailProvider.searchThreads({
       query: query.q,
       maxResults,

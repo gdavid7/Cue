@@ -16,6 +16,10 @@ import {
   matchesMailEngineStaticRequest,
   clearsOfflineMailOnGet,
 } from "../utils/offline/mail-cache";
+import {
+  handleNewMailNotificationClick,
+  handleNewMailPush,
+} from "../utils/web-push/service-worker";
 
 // This declares the value of `injectionPoint` to TypeScript.
 // `injectionPoint` is the string that will be replaced by the
@@ -88,6 +92,31 @@ self.addEventListener("message", (event) => {
   );
 });
 
+self.addEventListener("push", (event) => {
+  event.waitUntil(
+    handleNewMailPush({
+      data: readPushData(event.data),
+      origin: self.location.origin,
+      clients: self.clients,
+      getSubscriptionEndpoint: async () =>
+        (await self.registration.pushManager.getSubscription())?.endpoint ??
+        null,
+      showNotification: (title, options) =>
+        self.registration.showNotification(title, options),
+    }).catch(() => {}),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.waitUntil(
+    handleNewMailNotificationClick({
+      notification: event.notification,
+      origin: self.location.origin,
+      clients: self.clients,
+    }).catch(() => {}),
+  );
+});
+
 const serwist = new Serwist({
   precacheEntries: manifest,
   precacheOptions: {
@@ -155,3 +184,11 @@ const serwist = new Serwist({
 });
 
 serwist.addEventListeners();
+
+function readPushData(data: PushMessageData | null): unknown {
+  try {
+    return data?.json() ?? null;
+  } catch {
+    return null;
+  }
+}

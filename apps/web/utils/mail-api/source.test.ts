@@ -10,6 +10,7 @@ import {
 import { ProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
 import { syncPageSchema } from "@inboxzero/mail-core/sync";
 import { createEmailProviderMailboxSource } from "./source";
+import { searchQueryToPredicate } from "@/utils/mail-search/search-query-predicate";
 import { currentGmailQuotaContext } from "@/utils/gmail/quota";
 import type { EmailProvider } from "@/utils/email/types";
 import type { ParsedMessage } from "@/utils/types";
@@ -2871,3 +2872,226 @@ async function readMembershipKeys(
   }
   return result.value.page.keys.map((key) => key.messageId);
 }
+
+describe("typed search", () => {
+  const NOW = new Date("2026-10-15T15:00:00Z");
+
+  function typedSearchInput(query: string) {
+    const predicate = searchQueryToPredicate(query, { now: NOW });
+    if (predicate?.kind !== "all") throw new Error("Expected a scoped search");
+    const [search] = predicate.predicates;
+    return {
+      session: { accountId: "a", generation: "1" },
+      requestId: "search",
+      signal: new AbortController().signal,
+      page: null,
+      pageSize: 20,
+      predicate: search,
+    };
+  }
+
+  it("goes through Gmail's quota gate as interactive and waits when it is held back", async () => {
+    const priorities: string[] = [];
+    const searchMessages = vi.fn(async () => {
+      priorities.push(currentGmailQuotaContext().priority);
+      throw new GmailCallDeferredError(7000, "interactive");
+    });
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "a",
+      provider: { name: "google", searchMessages } as unknown as EmailProvider,
+    });
+    await expect(source.search(typedSearchInput("larger:5M"))).resolves.toEqual(
+      {
+        status: "paused",
+        retryAfterMs: 7000,
+        reason: "throttled",
+      },
+    );
+    expect(priorities).toEqual(["interactive"]);
+  });
+
+  it.each([
+    "from:amy@example.com",
+    "to:bob@example.com",
+    "larger:10M older_than:2y",
+    "dinner OR movie -in:chats",
+  ])("sends %s to Gmail as typed and keeps every match it returns", async (query) => {
+    const searchMessages = vi.fn(async () => ({
+      messages: [
+        // Neither carries what the query asked for, so only Gmail's answer
+        // can vouch for them.
+        { ...searchMessage("old-1"), internalDate: "946684800000" },
+        { ...searchMessage("old-2"), textPlain: "body" },
+      ],
+      nextPageToken: "next",
+    }));
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "a",
+      provider: { name: "google", searchMessages } as unknown as EmailProvider,
+    });
+    const result = await source.search(typedSearchInput(query));
+    expect(searchMessages).toHaveBeenCalledWith({
+      query,
+      maxResults: 20,
+      pageToken: undefined,
+    });
+    expect(result).toMatchObject({
+      status: "ok",
+      value: {
+        matches: [{ messageId: "old-1" }, { messageId: "old-2" }],
+        nextPage: "next",
+        semantics: "exact",
+      },
+    });
+    if (result.status !== "ok") throw new Error(result.status);
+    expect(result.value.changes).toHaveLength(2);
+    expect(result.value.bodies).toEqual([
+      expect.objectContaining({ key: { accountId: "a", messageId: "old-2" } }),
+    ]);
+  });
+
+  it("asks Outlook for the sender and checks the rest of the query itself", async () => {
+    const searchMessages = vi.fn(async () => ({
+      messages: [
+        {
+          ...searchMessage("unread-from-amy", ["UNREAD"]),
+          headers: { from: "amy@example.com", to: "user@example.com" },
+        },
+        {
+          ...searchMessage("read-from-amy"),
+          headers: { from: "amy@example.com", to: "user@example.com" },
+        },
+      ],
+    }));
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "a",
+      provider: {
+        name: "microsoft",
+        searchMessages,
+      } as unknown as EmailProvider,
+    });
+    const result = await source.search(
+      typedSearchInput("from:amy@example.com is:unread"),
+    );
+    expect(searchMessages).toHaveBeenCalledWith({
+      query: "",
+      mailboxSearch: {
+        mailbox: "all",
+        addresses: [{ field: "from", value: "amy@example.com" }],
+        read: false,
+      },
+      maxResults: 20,
+      pageToken: undefined,
+    });
+    expect(result).toMatchObject({
+      status: "ok",
+      value: {
+        matches: [{ messageId: "unread-from-amy" }],
+        semantics: "candidates_require_local_filter",
+      },
+    });
+  });
+
+  it.each([
+    "is:unread",
+    // Outlook's answer couldn't be checked for a size, so it isn't asked.
+    "from:amy@example.com size>1MB",
+  ])("leaves the typed Outlook search %s to the store", async (query) => {
+    const searchMessages = vi.fn();
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "a",
+      provider: {
+        name: "microsoft",
+        searchMessages,
+      } as unknown as EmailProvider,
+    });
+    await expect(source.search(typedSearchInput(query))).resolves.toEqual({
+      status: "unsupported",
+    });
+    expect(searchMessages).not.toHaveBeenCalled();
+  });
+
+  it("shows a sender's mail the store doesn't hold yet, and what only Gmail can match", async () => {
+    const mailbox = new Map<string, ParsedMessage>([
+      [
+        "from-amy",
+        {
+          ...gmailMessage("from-amy", Date.parse("2019-05-01T00:00:00Z")),
+          headers: {
+            from: "Amy <amy@example.com>",
+            to: "user@example.com",
+            date: "2019-05-01",
+          },
+        } as ParsedMessage,
+      ],
+      ["big-attachment", gmailMessage("big-attachment", NOW.getTime())],
+    ]);
+    const searchMessages = vi.fn(async ({ query }: { query: string }) => ({
+      messages: [
+        query.startsWith("from:amy")
+          ? mailbox.get("from-amy")
+          : mailbox.get("big-attachment"),
+      ],
+    }));
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "a",
+      provider: "google",
+      generation: "g1",
+    });
+    const engine = createMailEngine({
+      store,
+      source: createEmailProviderMailboxSource({
+        logger,
+        accountId: "a",
+        provider: {
+          name: "google",
+          searchMessages,
+        } as unknown as EmailProvider,
+      }),
+      executor: {
+        async execute() {
+          return { status: "uncertain", receiptId: null };
+        },
+        async inspect() {
+          return { status: "uncertain", receiptId: null };
+        },
+      },
+      runtime: createHostRuntime(),
+    });
+    async function searchView(query: string) {
+      const predicate = searchQueryToPredicate(query, { now: NOW });
+      if (!predicate) throw new Error("No predicate");
+      const view = engine.observeMailbox({
+        accountIds: ["a"],
+        predicate,
+        order: "newest_first",
+        pageSize: 25,
+        after: null,
+      });
+      for (let round = 0; round < 10; round++) {
+        await engine.runUntil(Date.now() + 50);
+        if (view.getSnapshot().data?.conversations.length) break;
+      }
+      const ids = view
+        .getSnapshot()
+        .data?.conversations.map((row) => row.key.conversationId);
+      view.close();
+      return ids;
+    }
+    try {
+      expect(await searchView("from:amy@example.com")).toEqual(["t-from-amy"]);
+      expect(await searchView("larger:10M")).toEqual(["t-big-attachment"]);
+      expect(searchMessages.mock.calls.map(([call]) => call.query)).toEqual([
+        "from:amy@example.com",
+        "larger:10M",
+      ]);
+    } finally {
+      await engine.close();
+    }
+  });
+});

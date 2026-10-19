@@ -364,7 +364,7 @@ describe("POST /api/messages/send", () => {
     ]);
 
     await expect(postMultipart(input, [])).rejects.toThrow(
-      "Attachments must total 15 MB or less.",
+      "Attachments can total up to 25 MB. These add up to 25.1 MB.",
     );
     expect(executeDurableEmailSend).not.toHaveBeenCalled();
   });
@@ -379,7 +379,7 @@ describe("POST /api/messages/send", () => {
     ]);
 
     await expect(postMultipart(input, [])).rejects.toThrow(
-      DURABLE_MULTIPART_ATTACHMENT_LIMIT_MESSAGE,
+      "Attachments sent this way can total up to 3 MB. Add larger files to the draft, then send it.",
     );
     expect(findEmailAccount).not.toHaveBeenCalled();
     expect(createEmailProvider).not.toHaveBeenCalled();
@@ -399,18 +399,6 @@ describe("POST /api/messages/send", () => {
     ).rejects.toThrow(DURABLE_MULTIPART_ATTACHMENT_LIMIT_MESSAGE);
     expect(findEmailAccount).not.toHaveBeenCalled();
     expect(createEmailProvider).not.toHaveBeenCalled();
-    expect(executeDurableEmailSend).not.toHaveBeenCalled();
-  });
-
-  it("rejects an oversized multipart file before sending", async () => {
-    const size = EMAIL_ATTACHMENT_LIMITS.maxFileBytes + 1;
-    const input = durableInput([attachmentMetadata({ size })]);
-
-    await expect(
-      postMultipart(input, [
-        new File([new Uint8Array(size)], "notes.txt", { type: "text/plain" }),
-      ]),
-    ).rejects.toThrow("Attachments must be 10 MB or smaller.");
     expect(executeDurableEmailSend).not.toHaveBeenCalled();
   });
 

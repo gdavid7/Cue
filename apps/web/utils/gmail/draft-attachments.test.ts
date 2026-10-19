@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type DraftMessageUploadPart,
   encodeMimeBase64,
+  GMAIL_MAX_MESSAGE_UPLOAD_BYTES,
 } from "@/utils/email/draft-attachment-upload";
 import {
   buildGmailDraftUploadTemplate,
@@ -76,6 +77,66 @@ describe("buildGmailDraftUploadTemplate", () => {
     expect(raw).toMatch(/X-Attachment-Id: existing-1/i);
     expect(raw).toMatch(/X-Attachment-Id: new-image/i);
     expect(raw).toMatch(/^X-Mailer: Cue\r$/m);
+  });
+});
+
+describe("buildGmailDraftUploadTemplate size limits", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const largeFile = (size: number) => ({
+    id: "video",
+    filename: "walkthrough.mp4",
+    mimeType: "video/mp4",
+    size,
+    disposition: "attachment" as const,
+  });
+
+  it("prepares a draft with files up to Gmail's 25 MB within its upload limit", async () => {
+    getDraft.mockResolvedValue(draftWithReport(1_000_000));
+
+    const template = await buildGmailDraftUploadTemplate({
+      gmail: new gmail_v1.Gmail({}),
+      draftId: "r-1",
+      attachment: largeFile(24_000_000),
+    });
+
+    expect(template.totalBytes).toBeGreaterThan(25_000_000 * (4 / 3));
+    expect(template.totalBytes).toBeLessThanOrEqual(
+      GMAIL_MAX_MESSAGE_UPLOAD_BYTES,
+    );
+  });
+
+  it("counts the files already on the draft toward the limit", async () => {
+    getDraft.mockResolvedValue(draftWithReport(2_000_000));
+
+    await expect(
+      buildGmailDraftUploadTemplate({
+        gmail: new gmail_v1.Gmail({}),
+        draftId: "r-1",
+        attachment: largeFile(24_000_000),
+      }),
+    ).rejects.toThrow(
+      "Attachments can total up to 25 MB. These add up to 26 MB.",
+    );
+  });
+
+  it("refuses a message Gmail can't store once its body is added", async () => {
+    getDraft.mockResolvedValue({
+      ...draftWithReport(1_000_000),
+      textHtml: `<p>${"word ".repeat(400_000)}</p>`,
+    });
+
+    await expect(
+      buildGmailDraftUploadTemplate({
+        gmail: new gmail_v1.Gmail({}),
+        draftId: "r-1",
+        attachment: largeFile(24_000_000),
+      }),
+    ).rejects.toThrow(
+      "This message is too large for Gmail. Remove an attachment or shorten the message.",
+    );
   });
 });
 
@@ -233,7 +294,7 @@ describe("rewriteGmailDraft", () => {
   });
 });
 
-function draftWithReport() {
+function draftWithReport(reportSize = EXISTING_BYTES.length) {
   const payload: gmail_v1.Schema$MessagePart & {
     parts: gmail_v1.Schema$MessagePart[];
   } = {
@@ -254,7 +315,7 @@ function draftWithReport() {
           { name: "Content-Disposition", value: "attachment" },
           { name: "X-Attachment-Id", value: "existing-1" },
         ],
-        body: { attachmentId: "gmail-att-1", size: EXISTING_BYTES.length },
+        body: { attachmentId: "gmail-att-1", size: reportSize },
       },
     ],
   };

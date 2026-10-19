@@ -17,6 +17,10 @@ import {
 const logger = createScopedLogger("llms/model-usage-guard");
 const TRIAL_AI_LIMIT_NOTIFICATION_TTL_SECONDS = 60 * 24 * 60 * 60;
 const SPEND_BUCKET_WARNING_TTL_SECONDS = 8 * 24 * 60 * 60;
+const SPEND_UNREADABLE_WARNING_INTERVAL_MS = 60_000;
+// While the store refuses, every AI call would wait on it again only to fail;
+// for this long each instance takes the failure as the answer.
+const SPEND_UNREADABLE_RETRY_MS = 30_000;
 
 // Both guards run before every AI call, and a chat turn or a processed email
 // makes several in a row. The limits are weekly budgets, so each instance
@@ -32,6 +36,11 @@ const weeklySpendByBucket = createMemoCache<
 const spendBucketWarnings = createMemoCache<boolean>({
   ttlMs: 60 * 60_000,
   maxEntries: 5000,
+});
+const spendUnreadable = createMemoCache<{ error: unknown } | null>({
+  ttlMs: SPEND_UNREADABLE_RETRY_MS,
+  maxEntries: 5000,
+  keep: (failure) => failure !== null,
 });
 
 export const TRIAL_AI_LIMIT_REACHED_MESSAGE =
@@ -184,6 +193,8 @@ export async function shouldForceNanoModel(options: {
   emailAccountId?: string;
 }): Promise<{
   shouldForce: boolean;
+  /** Why the nano model is forced, when it is. */
+  reason?: "over_limit" | "spend_unreadable";
   spendBucket: AiSpendBucket;
   weeklySpendUsd: number | null;
   weeklyLimitUsd: number | null;
@@ -239,14 +250,23 @@ export async function shouldForceNanoModel(options: {
     const spend = await getWeeklySpendByBucket(userId, [options.userEmail]);
     weeklySpendUsd = spend[spendBucket];
   } catch (error) {
-    logRedisFailureOnce(logger, "Failed to evaluate nano model guard", {
-      label: options.label,
-      userId: options.userId,
-      emailAccountId: options.emailAccountId,
-      error,
-    });
+    // Fails closed to the cheap tier: spend that can't be read can't be
+    // capped, and an outage (or the store's own command limit) would
+    // otherwise leave every user on full-price models, uncounted.
+    logRedisFailureOnce(
+      logger,
+      "Failed to evaluate nano model guard",
+      {
+        label: options.label,
+        userId: options.userId,
+        emailAccountId: options.emailAccountId,
+        error,
+      },
+      { quietPeriodMs: SPEND_UNREADABLE_WARNING_INTERVAL_MS },
+    );
     return {
-      shouldForce: false,
+      shouldForce: true,
+      reason: "spend_unreadable",
       spendBucket,
       weeklySpendUsd: null,
       weeklyLimitUsd,
@@ -263,7 +283,13 @@ export async function shouldForceNanoModel(options: {
     });
   }
 
-  return { shouldForce, spendBucket, weeklySpendUsd, weeklyLimitUsd };
+  return {
+    shouldForce,
+    reason: shouldForce ? "over_limit" : undefined,
+    spendBucket,
+    weeklySpendUsd,
+    weeklyLimitUsd,
+  };
 }
 
 // Fire-and-forget: the warning must never delay or fail the AI call.
@@ -354,11 +380,16 @@ async function getWeeklySpend(userId: string, legacyEmails: string[]) {
   return total;
 }
 
-function getWeeklySpendByBucket(userId: string, legacyEmails: string[]) {
+async function getWeeklySpendByBucket(userId: string, legacyEmails: string[]) {
   const key = `${userId}:${[...new Set(legacyEmails)].sort().join(",")}`;
-  return weeklySpendByBucket.get(key, () =>
-    getWeeklyUsageCostByBucket({ userId, legacyEmails }),
-  );
+  const failed = await spendUnreadable.get(key, async () => null);
+  if (failed) throw failed.error;
+  return weeklySpendByBucket
+    .get(key, () => getWeeklyUsageCostByBucket({ userId, legacyEmails }))
+    .catch((error) => {
+      spendUnreadable.set(key, { error });
+      throw error;
+    });
 }
 
 // Monday of the current UTC week.

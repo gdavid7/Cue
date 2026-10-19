@@ -5,10 +5,12 @@ import {
   useCallback,
   useLayoutEffect,
   useMemo,
+  useContext,
   useRef,
   useState,
 } from "react";
 import { type HotkeyCallback, useHotkeys } from "react-hotkeys-hook";
+import { SequenceTrackerContext } from "@/lib/shortcuts/ShortcutsProvider";
 import {
   createSequencePrefixTracker,
   isTypingTarget,
@@ -76,7 +78,8 @@ export function useShortcuts(
     handlersRef.current = handlers;
   }, [handlers]);
 
-  const [sequence] = useState(createSequencePrefixTracker);
+  const [ownSequence] = useState(createSequencePrefixTracker);
+  const sequence = useContext(SequenceTrackerContext) ?? ownSequence;
 
   const signature = activeShortcutIds(handlers, isDesktopApp).join(",");
   const buckets = useMemo(() => buildBuckets(signature), [signature]);
@@ -84,15 +87,68 @@ export function useShortcuts(
     () => new Set(buckets.flatMap((bucket) => [...bucket.sequences.keys()])),
     [buckets],
   );
+  const ownPrefixes = useMemo(
+    () =>
+      new Set([...allSequences].map((key) => key.split(SEQUENCE_SPLIT_KEY)[0])),
+    [allSequences],
+  );
 
-  useShortcutBucket(buckets[0], handlersRef, sequence, allSequences);
-  useShortcutBucket(buckets[1], handlersRef, sequence, allSequences);
-  useShortcutBucket(buckets[2], handlersRef, sequence, allSequences);
-  useShortcutBucket(buckets[3], handlersRef, sequence, allSequences);
-  useShortcutBucket(buckets[4], handlersRef, sequence, allSequences);
-  useShortcutBucket(buckets[5], handlersRef, sequence, allSequences);
-  useShortcutBucket(buckets[6], handlersRef, sequence, allSequences);
-  useShortcutBucket(buckets[7], handlersRef, sequence, allSequences);
+  useShortcutBucket(
+    buckets[0],
+    handlersRef,
+    sequence,
+    allSequences,
+    ownPrefixes,
+  );
+  useShortcutBucket(
+    buckets[1],
+    handlersRef,
+    sequence,
+    allSequences,
+    ownPrefixes,
+  );
+  useShortcutBucket(
+    buckets[2],
+    handlersRef,
+    sequence,
+    allSequences,
+    ownPrefixes,
+  );
+  useShortcutBucket(
+    buckets[3],
+    handlersRef,
+    sequence,
+    allSequences,
+    ownPrefixes,
+  );
+  useShortcutBucket(
+    buckets[4],
+    handlersRef,
+    sequence,
+    allSequences,
+    ownPrefixes,
+  );
+  useShortcutBucket(
+    buckets[5],
+    handlersRef,
+    sequence,
+    allSequences,
+    ownPrefixes,
+  );
+  useShortcutBucket(
+    buckets[6],
+    handlersRef,
+    sequence,
+    allSequences,
+    ownPrefixes,
+  );
+  useShortcutBucket(
+    buckets[7],
+    handlersRef,
+    sequence,
+    allSequences,
+    ownPrefixes,
+  );
 }
 
 function useShortcutBucket(
@@ -101,6 +157,8 @@ function useShortcutBucket(
   sequence: SequenceTracker,
   /** Every bucket's sequences: the one completing a press may be another's. */
   allSequences: Set<string>,
+  /** Prefixes this hook starts; any other pending prefix belongs to another hook. */
+  ownPrefixes: Set<string>,
 ) {
   const onHotkey = useCallback<HotkeyCallback>(
     (event, hotkeysEvent) => {
@@ -113,6 +171,9 @@ function useShortcutBucket(
       if (sequence.wasResolvedBy(event)) return;
 
       const pendingPrefix = sequence.pendingPrefix();
+      // A prefix another hook started is its to complete or abandon; acting
+      // on the key here would fire a plain binding mid-sequence.
+      if (pendingPrefix && !ownPrefixes.has(pendingPrefix)) return;
       if (pendingPrefix) {
         const sequenceKey = `${pendingPrefix}${SEQUENCE_SPLIT_KEY}${key}`;
         const sequenceEntry = bucket.sequences.get(sequenceKey);
@@ -137,7 +198,7 @@ function useShortcutBucket(
 
       runEntry(handlersRef, target.entry, event, key);
     },
-    [allSequences, bucket, handlersRef, sequence],
+    [allSequences, bucket, handlersRef, ownPrefixes, sequence],
   );
 
   const preventDefault = useCallback(
@@ -147,6 +208,8 @@ function useShortcutBucket(
       // A press that completes a sequence is left for the sequence's own
       // bucket, which skips events another listener has already claimed.
       const pendingPrefix = sequence.pendingPrefix();
+      // A foreign prefix means the press is that hook's to complete.
+      if (pendingPrefix && !ownPrefixes.has(pendingPrefix)) return false;
       return !(
         pendingPrefix &&
         allSequences.has(
@@ -154,7 +217,7 @@ function useShortcutBucket(
         )
       );
     },
-    [allSequences, bucket, sequence],
+    [allSequences, bucket, ownPrefixes, sequence],
   );
 
   useHotkeys(bucket.keys, onHotkey, {

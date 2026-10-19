@@ -509,27 +509,68 @@ export function createEmailProviderMailboxSource(input: {
       }
     },
     async search({ predicate, page, pageSize }) {
+      async function searchProvider(
+        options: Pick<
+          Parameters<EmailProvider["searchMessages"]>[0],
+          "query" | "mailboxSearch"
+        >,
+      ) {
+        const debited = debitForegroundUsage(
+          gmailPageCost(Math.min(pageSize, maxPageSize)),
+        );
+        try {
+          return await provider.searchMessages({
+            ...options,
+            maxResults: Math.min(pageSize, maxPageSize),
+            pageToken: page ?? undefined,
+          });
+        } catch (error) {
+          // A rejected query fails the same way every time, so the client
+          // must drop it rather than retry it.
+          if (isRejectedProviderRequest(error))
+            return { status: "unsupported" as const };
+          return mapProviderError(error);
+        } finally {
+          await debited;
+        }
+      }
+
+      // Gmail understands its own syntax, so a typed search reaches it as
+      // typed, and what it matches is the answer: operators the store can't
+      // evaluate, and mail older than what it holds, come from here.
+      if (isGmail && predicate.kind === "search") {
+        // Someone is waiting on it, so it goes through the gate as
+        // interactive and waits out an interactive pause like the rest.
+        const query = predicate.query;
+        const result = await runWithGmailQuota(
+          { priority: "interactive" },
+          () => searchProvider({ query }),
+        );
+        if ("status" in result) return result;
+        return {
+          status: "ok",
+          value: {
+            matches: result.messages.map((message) => ({
+              accountId,
+              messageId: message.id,
+            })),
+            changes: result.messages.map((message) =>
+              parsedMessagePatch(accountId, provider.name, message),
+            ),
+            bodies: parsedMessageBodies(accountId, result.messages).bodies,
+            nextPage: result.nextPageToken ?? null,
+            semantics: "exact" as const,
+          },
+        };
+      }
+
       const compiled = compileMailboxSearch(predicate);
       if (!compiled) return { status: "unsupported" };
-      let result: Awaited<ReturnType<EmailProvider["searchMessages"]>>;
-      const debited = debitForegroundUsage(
-        gmailPageCost(Math.min(pageSize, maxPageSize)),
-      );
-      try {
-        result = await provider.searchMessages({
-          query: "",
-          mailboxSearch: compiled.search,
-          maxResults: Math.min(pageSize, maxPageSize),
-          pageToken: page ?? undefined,
-        });
-      } catch (error) {
-        // A rejected query fails the same way every time, so the client
-        // must drop it rather than retry it.
-        if (isRejectedProviderRequest(error)) return { status: "unsupported" };
-        return mapProviderError(error);
-      } finally {
-        await debited;
-      }
+      const result = await searchProvider({
+        query: "",
+        mailboxSearch: compiled.search,
+      });
+      if ("status" in result) return result;
       const candidates = await mapWithConcurrency(
         result.messages,
         5,
@@ -905,18 +946,32 @@ async function batchedMessages(provider: EmailProvider, keys: MessageKey[]) {
 
 type HydrationUnresolved = { key: MessageKey; reason: "not_found" };
 
+// A typed search reaches the provider as what it can search for of the
+// store's part of the query, every condition it can't is checked here
+// instead; nothing else it can't search for may be left out.
 function compileMailboxSearch(
   predicate: MailPredicate,
 ): { search: ProviderMailboxSearch; filter: MailPredicate } | null {
+  const typed = predicate.kind === "search";
   const compiled: ProviderMailboxSearch = { mailbox: "all" };
   const children: MailPredicate[] = [];
   function flatten(part: MailPredicate) {
     if (part.kind === "all") part.predicates.forEach(flatten);
+    else if (part.kind === "search") flatten(part.local);
     else children.push(part);
   }
   flatten(predicate);
+  const unsearched: MailPredicate[] = [];
   let scoped = false;
   for (const child of children) {
+    if (typed && !addToMailboxSearch(compiled, child, scoped)) {
+      unsearched.push(child);
+      continue;
+    }
+    if (typed) {
+      if (child.kind === "mailbox" || child.kind === "role") scoped = true;
+      continue;
+    }
     switch (child.kind) {
       case "text":
         if (compiled.text || child.field === "body") return null;
@@ -964,10 +1019,76 @@ function compileMailboxSearch(
         return null;
     }
   }
-  const filters = children.filter((child) => child.kind !== "text");
+  // Without words or a sender to look for, the search would list the
+  // whole mailbox.
+  if (typed && !compiled.text && !compiled.addresses?.length) return null;
+  const filters = children.filter(
+    (child) => child.kind !== "text" || unsearched.includes(child),
+  );
   if (compiled.mailbox !== "spam" && compiled.mailbox !== "trash")
     filters.push({ kind: "mailbox", mailbox: "all" });
   return { search: compiled, filter: { kind: "all", predicates: filters } };
+}
+
+// Adds one condition of a typed search to what the provider searches for,
+// or says it can't.
+function addToMailboxSearch(
+  compiled: ProviderMailboxSearch,
+  child: MailPredicate,
+  scoped: boolean,
+): boolean {
+  switch (child.kind) {
+    case "text":
+      if (compiled.text) return false;
+      compiled.text = child;
+      return true;
+    case "address":
+      compiled.addresses ??= [];
+      compiled.addresses.push({ field: child.field, value: child.value });
+      return true;
+    case "any": {
+      // Gmail-style to:, which also matches Cc and Bcc: the provider is
+      // asked for To, and Cc and Bcc matches come from the store.
+      const [first] = child.predicates;
+      if (
+        first?.kind !== "address" ||
+        first.field !== "to" ||
+        !child.predicates.every(
+          (part) => part.kind === "address" && part.value === first.value,
+        )
+      )
+        return false;
+      compiled.addresses ??= [];
+      compiled.addresses.push({ field: "to", value: first.value });
+      return true;
+    }
+    case "mailbox":
+    case "role": {
+      const mailbox =
+        child.kind === "mailbox"
+          ? child.mailbox
+          : child.role === "draft"
+            ? "drafts"
+            : child.role;
+      if (mailbox === "snoozed" || scoped) return false;
+      compiled.mailbox = mailbox;
+      return true;
+    }
+    case "read":
+      if (compiled.read !== undefined) return false;
+      compiled.read = child.value;
+      return true;
+    case "starred":
+      if (compiled.starred !== undefined) return false;
+      compiled.starred = child.value;
+      return true;
+    case "has_attachment":
+      if (compiled.hasAttachment !== undefined) return false;
+      compiled.hasAttachment = child.value;
+      return true;
+    default:
+      return false;
+  }
 }
 
 async function* streamToIterable(stream: ReadableStream<Uint8Array>) {

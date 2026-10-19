@@ -1319,21 +1319,26 @@ function resolveFolderId(
 }
 
 function outlookMailboxText(search: ProviderMailboxSearch): string {
-  if (!search.text) return "";
-  const terms =
-    search.text.match === "phrase"
+  const terms = !search.text
+    ? []
+    : search.text.match === "phrase"
       ? [search.text.value]
       : search.text.value.trim().split(/\s+/).filter(Boolean);
-  if (!terms.some((term) => term.trim())) return "";
-  const expression = terms
-    .map((term) => {
-      const literal = `"${escapeSearchValue(term)}"`;
-      return search.text?.field === "any"
-        ? literal
-        : `${search.text?.field}:${literal}`;
-    })
-    .join(" AND ");
-  return JSON.stringify(expression);
+  const restrictions = [
+    ...terms
+      .filter((term) => term.trim())
+      .map((term) => {
+        const literal = `"${escapeSearchValue(term)}"`;
+        return search.text?.field === "any"
+          ? literal
+          : `${search.text?.field}:${literal}`;
+      }),
+    ...(search.addresses ?? []).map(
+      (address) => `${address.field}:"${escapeSearchValue(address.value)}"`,
+    ),
+  ];
+  if (!restrictions.length) return "";
+  return JSON.stringify(restrictions.join(" AND "));
 }
 
 async function normalizeOutlookSearchIds(

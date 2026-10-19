@@ -225,6 +225,7 @@
     "use-stick-to-bottom": "1.1.6",
     "usehooks-ts": "3.1.1",
     "utif2": "4.1.0",
+    "web-push": "3.6.7",
     "zod": "4.2.1"
   },
   "devDependencies": {
@@ -246,6 +247,7 @@
     "@types/react-dom": "19.2.4",
     "@types/react-syntax-highlighter": "15.5.13",
     "@types/string-similarity": "4.0.2",
+    "@types/web-push": "3.6.4",
     "@vitest/coverage-v8": "4.1.10",
     "@vitest/ui": "4.1.10",
     "autoprefixer": "10.4.24",

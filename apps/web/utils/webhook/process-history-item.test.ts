@@ -24,6 +24,7 @@ import { sendOtpPushNotification } from "@/utils/otp-push";
 import { runRules } from "@/utils/ai/choose-rule/run-rules";
 import { sendMobilePushNotification } from "@/utils/mobile-push";
 import { SafeError } from "@/utils/error";
+import { sendNewMailWebPush } from "@/utils/web-push/send-new-mail";
 
 vi.mock("@/utils/prisma", () => ({
   default: {
@@ -63,6 +64,9 @@ vi.mock("@/utils/otp-push", () => ({
 
 vi.mock("@/utils/mobile-push", () => ({
   sendMobilePushNotification: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@/utils/web-push/send-new-mail", () => ({
+  sendNewMailWebPush: vi.fn().mockResolvedValue(undefined),
 }));
 
 const logger = createTestLogger();
@@ -219,6 +223,84 @@ describe("Provider Edge Cases", () => {
       );
       await expect(processArrival()).resolves.toBeUndefined();
       expect(sendMobilePushNotification).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("Browser push for new mail", () => {
+    const message = getMockParsedMessage({
+      id: "new-message",
+      threadId: "new-thread",
+      headers: {
+        from: "Alex Example <alex@example.com>",
+        to: baseOptions.emailAccount.email,
+        subject: "Lunch?",
+        date: new Date().toISOString(),
+      },
+    });
+
+    function process({
+      isNewMessage = true,
+      outbound = false,
+      hasAiAccess = true,
+    } = {}) {
+      return processHistoryItem(
+        { messageId: message.id, message },
+        {
+          ...baseOptions,
+          provider: createMockEmailProvider({
+            isSentMessage: vi.fn().mockReturnValue(outbound),
+          }),
+          hasAutomationRules: true,
+          hasAiAccess,
+          isNewMessage,
+        },
+      );
+    }
+
+    beforeEach(() => {
+      vi.mocked(prisma.executedRule.findFirst).mockResolvedValue(null);
+      vi.mocked(runRules).mockResolvedValue([]);
+    });
+
+    it("pushes a new inbound message once its rules have run", async () => {
+      vi.mocked(runRules).mockImplementation(async () => {
+        expect(sendNewMailWebPush).not.toHaveBeenCalled();
+        return [];
+      });
+
+      await process();
+
+      expect(runRules).toHaveBeenCalled();
+      expect(sendNewMailWebPush).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          emailAccountId: baseOptions.emailAccount.id,
+          userId: baseOptions.emailAccount.userId,
+          message,
+        }),
+      );
+    });
+
+    it("pushes new mail for accounts without AI triage", async () => {
+      await process({ hasAiAccess: false });
+
+      expect(sendNewMailWebPush).toHaveBeenCalledOnce();
+    });
+
+    it("does not push sent mail or messages that aren't new", async () => {
+      await process({ outbound: true });
+      await process({ isNewMessage: false });
+
+      expect(sendNewMailWebPush).not.toHaveBeenCalled();
+    });
+
+    it("does not push mail from an unsubscribed sender", async () => {
+      vi.mocked(prisma.newsletter.findFirst).mockResolvedValueOnce({
+        id: "newsletter-1",
+      } as never);
+
+      await process();
+
+      expect(sendNewMailWebPush).not.toHaveBeenCalled();
     });
   });
 

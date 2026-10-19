@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { MailPredicate } from "./queries";
+import { type MailPredicate, mailPredicateSchema } from "./queries";
 import {
   conversationMatchesAfterChange,
   conversationMatchesPredicate,
   type EffectiveMessage,
+  resolveSearchPredicates,
 } from "./query-semantics";
 
 describe("mailbox predicates", () => {
@@ -194,6 +195,121 @@ describe("conversationMatchesAfterChange", () => {
     ).toBe(true);
   });
 });
+
+describe("typed searches", () => {
+  const inbox: MailPredicate = { kind: "mailbox", mailbox: "inbox" };
+  const words: MailPredicate = {
+    kind: "text",
+    field: "any",
+    value: "invoice",
+    match: "term",
+  };
+  const search = (
+    local: MailPredicate,
+    possible: MailPredicate = { kind: "all", predicates: [] },
+  ): Extract<MailPredicate, { kind: "search" }> => ({
+    kind: "search",
+    query: "q",
+    local,
+    possible,
+  });
+
+  it("splices a search without provider matches into its parent", () => {
+    expect(
+      resolveSearchPredicates(
+        {
+          kind: "all",
+          predicates: [
+            search({ kind: "all", predicates: [words, inbox] }),
+            { kind: "mailbox", mailbox: "all" },
+          ],
+        },
+        () => [],
+      ),
+    ).toEqual({
+      kind: "all",
+      predicates: [words, inbox, { kind: "mailbox", mailbox: "all" }],
+    });
+  });
+
+  it("lists each account's provider matches apart, under the search's possible part", () => {
+    expect(
+      resolveSearchPredicates(search(words, inbox), () => [
+        { accountId: "a", messageIds: ["m1"] },
+        { accountId: "b", messageIds: [] },
+        { accountId: "c", messageIds: ["m1", "m2"] },
+      ]),
+    ).toEqual({
+      kind: "any",
+      predicates: [
+        words,
+        {
+          kind: "all",
+          predicates: [
+            inbox,
+            {
+              kind: "any",
+              predicates: [
+                { kind: "message", accountId: "a", ids: ["m1"] },
+                { kind: "message", accountId: "c", ids: ["m1", "m2"] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("keeps every account's matches when there are more accounts than an any holds", () => {
+    const accounts = Array.from({ length: 50 }, (_, index) => `acc-${index}`);
+    const resolved = resolveSearchPredicates(search(words), () =>
+      accounts.map((accountId) => ({ accountId, messageIds: ["m"] })),
+    );
+    expect(mailPredicateSchema.safeParse(resolved).success).toBe(true);
+    const listed = JSON.stringify(resolved);
+    for (const accountId of accounts)
+      expect(listed).toContain(`"accountId":"${accountId}"`);
+  });
+
+  it("matches a provider match only in its own account", () => {
+    const resolved = resolveSearchPredicates(search(words), () => [
+      { accountId: "a", messageIds: ["m1"] },
+    ]);
+    expect(
+      conversationMatchesPredicate(
+        [message({ accountId: "a", roles: ["inbox"] })],
+        resolved,
+      ),
+    ).toBe(true);
+    expect(
+      conversationMatchesPredicate(
+        [message({ accountId: "b", roles: ["inbox"] })],
+        resolved,
+      ),
+    ).toBe(false);
+  });
+
+  it("drops a provider match once a change rules out the whole query", () => {
+    // Archiving under in:inbox.
+    expect(
+      conversationMatchesAfterChange(search(FALSE, inbox), { kind: "archive" }),
+    ).toBe(false);
+    // The provider may still match it on what the change leaves alone.
+    expect(
+      conversationMatchesAfterChange(search(FALSE, TRUE), { kind: "archive" }),
+    ).toBe(null);
+    const starred: MailPredicate = { kind: "mailbox", mailbox: "starred" };
+    expect(
+      conversationMatchesAfterChange(search(starred, starred), {
+        kind: "set_starred",
+        starred: true,
+      }),
+    ).toBe(true);
+  });
+});
+
+const FALSE: MailPredicate = { kind: "any", predicates: [] };
+const TRUE: MailPredicate = { kind: "all", predicates: [] };
 
 function message(
   fields: Partial<EffectiveMessage> & { roles: EffectiveMessage["roles"] },

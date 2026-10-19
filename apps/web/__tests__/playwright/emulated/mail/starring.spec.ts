@@ -24,7 +24,7 @@ test("toggles stars with shortcuts, the palette and the list toolbar while prese
     await expectCompletedStarMutation(page, emailAccountId, false);
   }
   await row.getByRole("checkbox", { includeHidden: true }).click();
-  await page.keyboard.press("u");
+  await page.keyboard.press("Shift+U");
   await expect(page.getByText("1 selected", { exact: true })).toBeHidden();
   await page.getByRole("button", { name: "Unread", exact: true }).click();
   await expect(row).toBeVisible();

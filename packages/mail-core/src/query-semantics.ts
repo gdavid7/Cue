@@ -1,7 +1,7 @@
 import type { MetadataChange } from "./commands";
 import { applyMetadataChange } from "./effective-state";
 import type { MessageMetadata } from "./messages";
-import type { MailPredicate } from "./queries";
+import { MAX_MESSAGE_PREDICATE_IDS, type MailPredicate } from "./queries";
 
 export type EffectiveMessage = MessageMetadata & {
   accountId: string;
@@ -72,6 +72,8 @@ export function messageMatchesPredicate(
     case "has_attachment":
       return message.hasAttachments === predicate.value;
     case "message":
+      if (predicate.accountId && predicate.accountId !== message.accountId)
+        return false;
       return predicate.ids.includes(message.messageId);
     case "text":
       return textMatches(
@@ -80,6 +82,15 @@ export function messageMatchesPredicate(
         predicate.value,
         predicate.match,
       );
+    case "search":
+      if (
+        predicate.accountIds &&
+        !predicate.accountIds.includes(message.accountId)
+      )
+        return false;
+      return messageMatchesPredicate(message, predicate.local);
+    case "account":
+      return predicate.ids.includes(message.accountId);
     default: {
       const exhaustive: never = predicate;
       return exhaustive;
@@ -146,6 +157,17 @@ export function conversationMatchesAfterChange(
       );
       return result === null ? null : !result;
     }
+    case "search": {
+      // The provider's own matches keep a conversation the local part drops
+      // unless the change rules out the whole query.
+      const local = conversationMatchesAfterChange(predicate.local, change);
+      if (local === true) return true;
+      const possible = conversationMatchesAfterChange(
+        predicate.possible,
+        change,
+      );
+      return local === false && possible === false ? false : null;
+    }
     case "role":
     case "mailbox":
     case "read":
@@ -170,31 +192,142 @@ export function conversationMatchesAfterChange(
   }
 }
 
-export function extractTextPredicates(
+/**
+ * The parts of a predicate the provider is asked to search for: each typed
+ * search as a whole, and each text condition outside one.
+ */
+export function extractProviderSearches(
   predicate: MailPredicate,
-): Array<Extract<MailPredicate, { kind: "text" }>> {
-  if (predicate.kind === "text") return [predicate];
+): Array<Extract<MailPredicate, { kind: "text" | "search" }>> {
+  if (predicate.kind === "text" || predicate.kind === "search")
+    return [predicate];
   if (predicate.kind === "all" || predicate.kind === "any") {
-    return predicate.predicates.flatMap(extractTextPredicates);
+    return predicate.predicates.flatMap(extractProviderSearches);
   }
   if (predicate.kind === "not") {
-    return extractTextPredicates(predicate.predicate);
+    return extractProviderSearches(predicate.predicate);
   }
   return [];
 }
 
+export type ProviderSearchMatches = Array<{
+  accountId: string;
+  messageIds: string[];
+}>;
+
+/**
+ * Replaces each typed search with its local part, or with its local part or
+ * the messages `providerMatches` says the provider's search returned for it,
+ * each account's apart, that still meet the search's `possible` part. A
+ * search nested in an `all` is spliced into it, so a text condition in it
+ * stays at the top level, where the store drives the query from its index.
+ */
+export function resolveSearchPredicates(
+  predicate: MailPredicate,
+  providerMatches: (
+    search: Extract<MailPredicate, { kind: "search" }>,
+  ) => ProviderSearchMatches,
+): MailPredicate {
+  switch (predicate.kind) {
+    case "search": {
+      const local = resolveSearchPredicates(predicate.local, providerMatches);
+      const messages: MailPredicate[] = providerMatches(predicate).flatMap(
+        ({ accountId, messageIds }) =>
+          messageIds.length
+            ? [
+                {
+                  kind: "message" as const,
+                  accountId,
+                  ids: messageIds.slice(-MAX_MESSAGE_PREDICATE_IDS),
+                },
+              ]
+            : [],
+      );
+      const resolved: MailPredicate = messages.length
+        ? {
+            kind: "any",
+            predicates: [
+              local,
+              isAlwaysTrue(predicate.possible)
+                ? chunkedAny(messages)
+                : {
+                    kind: "all",
+                    predicates: [predicate.possible, chunkedAny(messages)],
+                  },
+            ],
+          }
+        : local;
+      if (!predicate.accountIds) return resolved;
+      const accounts: MailPredicate = {
+        kind: "account",
+        ids: predicate.accountIds,
+      };
+      return {
+        kind: "all",
+        predicates:
+          resolved.kind === "all"
+            ? [accounts, ...resolved.predicates]
+            : [accounts, resolved],
+      };
+    }
+    case "all":
+      return {
+        kind: "all",
+        predicates: predicate.predicates.flatMap((child) => {
+          const resolved = resolveSearchPredicates(child, providerMatches);
+          return child.kind === "search" && resolved.kind === "all"
+            ? resolved.predicates
+            : [resolved];
+        }),
+      };
+    case "any":
+      return {
+        kind: "any",
+        predicates: predicate.predicates.map((child) =>
+          resolveSearchPredicates(child, providerMatches),
+        ),
+      };
+    case "not":
+      return {
+        kind: "not",
+        predicate: resolveSearchPredicates(
+          predicate.predicate,
+          providerMatches,
+        ),
+      };
+    default:
+      return predicate;
+  }
+}
+
+// The schema allows this many children per any.
+const MAX_CHILDREN = 32;
+
+function chunkedAny(predicates: MailPredicate[]): MailPredicate {
+  if (predicates.length === 1) return predicates[0];
+  if (predicates.length <= MAX_CHILDREN) return { kind: "any", predicates };
+  const chunks: MailPredicate[] = [];
+  for (let index = 0; index < predicates.length; index += MAX_CHILDREN)
+    chunks.push(chunkedAny(predicates.slice(index, index + MAX_CHILDREN)));
+  return chunkedAny(chunks);
+}
+
+function isAlwaysTrue(predicate: MailPredicate) {
+  return predicate.kind === "all" && predicate.predicates.length === 0;
+}
+
 function addressMatches(
   message: EffectiveMessage,
-  field: "from" | "to" | "cc",
+  field: "from" | "to" | "cc" | "bcc",
   value: string,
   match: "address" | "domain",
 ): boolean {
-  const candidates =
-    field === "from"
-      ? [message.from]
-      : field === "to"
-        ? message.to
-        : message.cc;
+  const candidates = {
+    from: [message.from],
+    to: message.to,
+    cc: message.cc,
+    bcc: message.bcc ?? [],
+  }[field];
   const needle = value.toLowerCase();
   return candidates.some((candidate) => {
     const email = extractEmail(candidate).toLowerCase();

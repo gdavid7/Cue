@@ -55,7 +55,7 @@ async function getEmailMessages(
   const { emailAccountId, emailProvider, logger } = options;
   const types = getTypeFilters(options.types);
 
-  const [senderStats, emailFilters, newsletterStatuses] = await Promise.all([
+  const [senderStats, filtersResult, newsletterStatuses] = await Promise.all([
     getSenderEmailStats({
       emailAccountId,
       fromDate: options.fromDate,
@@ -73,6 +73,8 @@ async function getEmailMessages(
     getEmailFilters(emailProvider, logger),
     getNewsletterStatuses({ emailAccountId }),
   ]);
+
+  const { filters: emailFilters, available: filtersAvailable } = filtersResult;
 
   const newsletters = senderStats.senders.map((email) => {
     const from = canonicalizeEmailAddress(email.from);
@@ -111,6 +113,9 @@ async function getEmailMessages(
       : newsletters,
     nextCursor: senderStats.nextCursor,
     searchedSenderStatus,
+    // False when the provider filters could not be read, so a missing
+    // autoArchived means unknown rather than off.
+    filtersAvailable,
   };
 }
 
