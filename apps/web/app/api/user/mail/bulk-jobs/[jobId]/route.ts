@@ -3,7 +3,9 @@ import { matchingBulkJobSchema } from "@/utils/actions/mail-bulk-matching.valida
 import { withEmailAccount } from "@/utils/middleware";
 import { mailBulkJobStore } from "@/utils/redis/mail-bulk-job";
 
-export type GetMailBulkJobResponse = Awaited<ReturnType<typeof getData>>;
+export type GetMailBulkJobResponse = NonNullable<
+  Awaited<ReturnType<typeof getData>>
+>;
 
 // Polled by the progress toast of a bulk action on every matching conversation.
 export const GET = withEmailAccount(

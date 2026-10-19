@@ -83,7 +83,7 @@ export function useSelectAllMatching({
       if (!accounts?.length) return;
       setSelected(null);
       const started = await Promise.all(
-        accounts.map(async (account) => {
+        accounts.map(async (account): Promise<RunningJob | null> => {
           const result = await startMatchingBulkActionAction(account.id, {
             scope: account.scope,
             action,
@@ -223,7 +223,7 @@ async function undoJobs({
   onFinished: () => void;
 }) {
   const started = await Promise.all(
-    jobs.map(async (job) => {
+    jobs.map(async (job): Promise<RunningJob | null> => {
       const result = await undoMatchingBulkActionAction(job.accountId, {
         jobId: job.jobId,
       });

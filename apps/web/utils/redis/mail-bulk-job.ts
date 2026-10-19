@@ -88,9 +88,13 @@ export const mailBulkJobStore = {
       listKey,
       ...targets.map((target) => `${target.messageId} ${target.threadId}`),
     );
+    const [firstThreadId, ...threadIds] = targets.map(
+      (target) => target.threadId,
+    );
     const added = await redis.sadd(
       conversationsKey,
-      ...targets.map((target) => target.threadId),
+      firstThreadId,
+      ...threadIds,
     );
     await redis.expire(listKey, MAIL_BULK_JOB_TTL_SECONDS);
     await redis.expire(conversationsKey, MAIL_BULK_JOB_TTL_SECONDS);
