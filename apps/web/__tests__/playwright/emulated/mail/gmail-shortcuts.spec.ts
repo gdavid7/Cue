@@ -48,14 +48,18 @@ test("marks the selected conversation important with = and not important with -"
   await row.getByRole("checkbox", { includeHidden: true }).click();
 
   await page.keyboard.press("=");
-  await expectMutation(page, emailAccountId, "set_important_state", {
-    important: true,
+  await expectMutation(page, emailAccountId, "set_membership", {
+    membership: "label",
+    id: "IMPORTANT",
+    present: true,
   });
 
   await row.getByRole("checkbox", { includeHidden: true }).click();
   await page.keyboard.press("-");
-  await expectMutation(page, emailAccountId, "set_important_state", {
-    important: false,
+  await expectMutation(page, emailAccountId, "set_membership", {
+    membership: "label",
+    id: "IMPORTANT",
+    present: false,
   });
 });
 
