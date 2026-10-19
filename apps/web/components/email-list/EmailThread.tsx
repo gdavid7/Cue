@@ -80,7 +80,7 @@ export function EmailThread({
   autoOpenReplyAll?: boolean;
   /**
    * The message the user's own Reply is for, as opposed to a reply Cue
-   * opened: that reply answers the sender.
+   * opened: that reply answers the sender, not whoever Cue's reply is to.
    */
   ownReplyForMessageId?: string;
   autoOpenForwardForMessageId?: string;
@@ -569,9 +569,11 @@ export function EmailThread({
                 focusComposer={focusOpenComposer}
                 defaultComposeMode={defaultComposeMode}
                 defaultReplyAll={autoOpenMode === "reply" && autoOpenReplyAll}
+                // A reply the user already started here is theirs to return to.
                 ownReplyRequested={
-                  autoOpenMode === "reply" &&
-                  ownReplyForMessageId === message.id
+                  (autoOpenMode === "reply" &&
+                    ownReplyForMessageId === message.id) ||
+                  localDraftModeFor(message) === "reply"
                 }
                 draftMessages={draftMessages}
                 expanded={expanded(

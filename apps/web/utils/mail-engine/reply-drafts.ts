@@ -90,6 +90,15 @@ export function getReplyDraftSessionId(
   return `${messageId}:${mode}`;
 }
 
+/**
+ * Cue's reply to someone other than the sender is a draft of its own, apart
+ * from the user's reply to the same message, so switching between the two
+ * keeps what was written in each.
+ */
+export function getCueReplyDraftSessionId(messageId: string) {
+  return `${getReplyDraftSessionId(messageId, "reply")}:cue`;
+}
+
 export function rememberReplacedDraftMessage(
   emailAccountId: string,
   previousMessageId: string,

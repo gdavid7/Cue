@@ -746,14 +746,20 @@ async function trackSentReplySuggestion({
     ? DraftEmailStatus.LIKELY_SENT
     : DraftEmailStatus.REPLIED_WITHOUT_DRAFT;
 
-  const [draftSendLog] = await withPrismaRetry(
+  const [draftSendLog, settled] = await withPrismaRetry(
     () =>
       prisma.$transaction([
         prisma.draftSendLog.create({
           data: { executedActionId, ...draftSendLogData },
         }),
-        prisma.executedAction.update({
-          where: { id: executedActionId },
+        // Settled once: a suggestion something else settled meanwhile keeps
+        // its status, and isn't counted sent twice.
+        prisma.executedAction.updateMany({
+          where: {
+            id: executedActionId,
+            draftId: null,
+            draftStatus: DraftEmailStatus.PENDING,
+          },
           data: { draftStatus },
         }),
       ]),
@@ -768,13 +774,15 @@ async function trackSentReplySuggestion({
   });
 
   const wasSent = isDraftSentStatus(draftStatus);
-  if (wasSent) {
+  if (wasSent && settled.count) {
     logReplySuggestionStage({
       logger,
       stage: "sent",
       executedActionId,
       similarityScore,
     });
+  }
+  if (wasSent) {
     after(() =>
       trackFirstTimeEvent({
         emailAccountId,

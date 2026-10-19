@@ -781,7 +781,7 @@ describe("trackSentDraftStatus for reply suggestions", () => {
     );
     vi.mocked(prisma.$transaction).mockResolvedValue([
       { id: "draft-send-log-1" },
-      {},
+      { count: 1 },
     ] as any);
   });
 
@@ -831,8 +831,12 @@ describe("trackSentDraftStatus for reply suggestions", () => {
         similarityScore: 1,
       }),
     });
-    expect(prisma.executedAction.update).toHaveBeenCalledWith({
-      where: { id: "action-1" },
+    expect(prisma.executedAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "action-1",
+        draftId: null,
+        draftStatus: DraftEmailStatus.PENDING,
+      },
       data: { draftStatus: DraftEmailStatus.LIKELY_SENT },
     });
     expect(recordFirstSuggestedReplySent).toHaveBeenCalledWith("account-1");
@@ -857,8 +861,12 @@ describe("trackSentDraftStatus for reply suggestions", () => {
       logger,
     });
 
-    expect(prisma.executedAction.update).toHaveBeenCalledWith({
-      where: { id: "action-1" },
+    expect(prisma.executedAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "action-1",
+        draftId: null,
+        draftStatus: DraftEmailStatus.PENDING,
+      },
       data: { draftStatus: DraftEmailStatus.REPLIED_WITHOUT_DRAFT },
     });
     expect(recordFirstSuggestedReplySent).not.toHaveBeenCalled();
@@ -934,8 +942,12 @@ describe("trackSentDraftStatus for reply suggestions", () => {
       logger,
     });
 
-    expect(prisma.executedAction.update).toHaveBeenCalledWith({
-      where: { id: "action-1" },
+    expect(prisma.executedAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "action-1",
+        draftId: null,
+        draftStatus: DraftEmailStatus.PENDING,
+      },
       data: { draftStatus: status },
     });
   });
@@ -959,8 +971,12 @@ describe("trackSentDraftStatus for reply suggestions", () => {
       logger,
     });
 
-    expect(prisma.executedAction.update).toHaveBeenCalledWith({
-      where: { id: "action-1" },
+    expect(prisma.executedAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "action-1",
+        draftId: null,
+        draftStatus: DraftEmailStatus.PENDING,
+      },
       data: { draftStatus: DraftEmailStatus.LIKELY_SENT },
     });
   });
@@ -987,8 +1003,12 @@ describe("trackSentDraftStatus for reply suggestions", () => {
       logger,
     });
 
-    expect(prisma.executedAction.update).toHaveBeenCalledWith({
-      where: { id: "action-1" },
+    expect(prisma.executedAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "action-1",
+        draftId: null,
+        draftStatus: DraftEmailStatus.PENDING,
+      },
       data: { draftStatus: DraftEmailStatus.LIKELY_SENT },
     });
   });

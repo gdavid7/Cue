@@ -253,12 +253,6 @@ type ComposeEmailFormProps = {
    * its own, so keys meant as shortcuts aren't typed into it.
    */
   autoFocus?: boolean;
-  /**
-   * Starts over instead of reopening this reply's local draft: one that is
-   * still Cue's untouched suggestion, or any not yet in the mailbox. A
-   * mailbox draft is always kept.
-   */
-  replaceLocalDraft?: "untouched-suggestion" | "unsaved";
 };
 
 type ComposeFormValues = Omit<SendEmailBody, "attachments" | "messageHtml">;
@@ -323,7 +317,7 @@ function ComposeEmailFormWithEngine(props: ComposeEmailFormProps) {
       }
     : undefined;
 
-  const loadedLocalDraft = useLocalReplyDraft(
+  const localDraft = useLocalReplyDraft(
     localDraftIdentity,
     !props.providerDraftMessageId &&
       props.draftKeyMessageId &&
@@ -336,12 +330,6 @@ function ComposeEmailFormWithEngine(props: ComposeEmailFormProps) {
       : undefined,
     props.draftMode,
   );
-  const localDraft = {
-    ...loadedLocalDraft,
-    draft: isReplacedLocalDraft(loadedLocalDraft.draft, props.replaceLocalDraft)
-      ? undefined
-      : loadedLocalDraft.draft,
-  };
   const composeSessionKey = `${selectedEmailAccountId}:${props.replyingToEmail?.threadId ?? ""}:${props.draftSessionId ?? ""}`;
   const draftAttachments = useComposeDraftAttachments({
     emailAccountId: selectedEmailAccountId,
@@ -2694,20 +2682,4 @@ function ReplyStatus({
   if (isMailboxDraft)
     return <span className="text-red-600 dark:text-red-400">Draft</span>;
   return <span>Reply</span>;
-}
-
-function isReplacedLocalDraft(
-  draft: StoredReplyDraft | undefined,
-  replace: ComposeEmailFormProps["replaceLocalDraft"],
-) {
-  const content = draft?.content;
-  if (!replace || !content || content.providerDraftId) return false;
-  if (replace === "unsaved") return true;
-  return Boolean(
-    content.startedFrom &&
-      isUneditedSuggestion(
-        content.draft.editableHtml,
-        content.startedFrom.reply,
-      ),
-  );
 }

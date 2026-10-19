@@ -74,6 +74,7 @@ import { LoadingMiniSpinner } from "@/components/Loading";
 import { getActionErrorMessage } from "@/utils/error";
 import {
   getDraftSessionMessageId,
+  getCueReplyDraftSessionId,
   getReplyDraftSessionId,
   type ReplyDraftMode,
 } from "@/utils/mail-engine/reply-drafts";
@@ -238,8 +239,13 @@ export function EmailMessage({
     composeOverride,
     defaultComposeMode,
     (mode) =>
-      getReplyDraftSessionId(composerSessionMessageId ?? message.id, mode) ===
-      poppedOutDraftSessionId,
+      Boolean(poppedOutDraftSessionId) &&
+      (poppedOutDraftSessionId ===
+        getReplyDraftSessionId(composerSessionMessageId ?? message.id, mode) ||
+        // Cue's reply to someone else pops out as its own draft.
+        (mode === "reply" &&
+          poppedOutDraftSessionId ===
+            getCueReplyDraftSessionId(composerSessionMessageId ?? message.id))),
   );
   const composeMode = composerOpen ? requestedComposeMode : undefined;
   const serverDrafts = (draftMessages ?? []).map((draft) => ({
@@ -295,7 +301,9 @@ export function EmailMessage({
   const composeSessionRef = useRef(0);
   const messageRef = useRef<HTMLLIElement>(null);
 
+  const [ownReplyRequests, setOwnReplyRequests] = useState(0);
   const startReply = useCallback(() => {
+    setOwnReplyRequests((count) => count + 1);
     onStartCompose?.();
     composeSessionRef.current += 1;
     const savedDraft = serverDrafts.at(-1);
@@ -633,6 +641,7 @@ export function EmailMessage({
                 autoFocus={takeFocus}
                 replyAll={replyAll}
                 ownReply={ownReplyRequested || composeOverride === "reply"}
+                ownReplyRequest={ownReplyRequests}
                 autoScroll
                 bodyAvailable={bodyAvailable}
                 draftSessionMessageId={composerSessionMessageId}
@@ -989,6 +998,7 @@ function ReplyPanel({
   replyAnchor,
   replyAll = false,
   ownReply = false,
+  ownReplyRequest = 0,
 }: {
   message: ParsedMessage;
   refetch: () => void;
@@ -1011,6 +1021,8 @@ function ReplyPanel({
   replyAll?: boolean;
   /** The user's own Reply opened this composer, not Cue. */
   ownReply?: boolean;
+  /** Counts the user's presses of Reply, each of which brings back their reply. */
+  ownReplyRequest?: number;
 }) {
   const { emailAccountId } = useAccount();
   const ownEmails = useOwnEmailAddresses();
@@ -1026,20 +1038,29 @@ function ReplyPanel({
   // The user's own Reply answers the sender. Cue's reply to someone else
   // waits for "Use Cue's draft", which brings its recipients with it.
   const [choseCueReply, setChoseCueReply] = useState(false);
+  // Each press of Reply goes back to the user's own reply.
+  const [seenOwnReplyRequest, setSeenOwnReplyRequest] =
+    useState(ownReplyRequest);
+  if (seenOwnReplyRequest !== ownReplyRequest) {
+    setSeenOwnReplyRequest(ownReplyRequest);
+    setChoseCueReply(false);
+  }
   const setAsideCueReply = Boolean(
     offeredAssist?.toSomeoneElse && ownReply && !choseCueReply && !draftMessage,
   );
   const assist = setAsideCueReply ? undefined : offeredAssist;
-  // Taken as the composer opens: a suggestion that lands after the user
-  // started their own reply must not fill it, and a saved draft keeps its text.
-  // Switching between the user's reply and Cue's starts the composer over.
-  const takeOpening = (switched: boolean) => ({
+  // What the composer opens with is taken once, as it opens: a suggestion
+  // that lands after the user started their own reply must not fill it, and a
+  // saved draft keeps its text. Switching between the user's reply and Cue's
+  // reply to someone else is the one time it is taken again. The two are
+  // separate local drafts (see draftSessionId), so the composer remounts on
+  // the other one's draft and each keeps what was typed in it.
+  const takeOpening = () => ({
     setAside: setAsideCueReply,
-    switched,
     assist: assist && !draftMessage ? assist : undefined,
   });
-  const [opening, setOpening] = useState(() => takeOpening(false));
-  if (opening.setAside !== setAsideCueReply) setOpening(takeOpening(true));
+  const [opening, setOpening] = useState(takeOpening);
+  if (opening.setAside !== setAsideCueReply) setOpening(takeOpening());
   const suggestedBodyHtml = useMemo(
     () =>
       opening.assist ? textToHtmlParagraphs(opening.assist.reply) : undefined,
@@ -1047,15 +1068,10 @@ function ReplyPanel({
   );
   // A rule's reply can go to other people, or under its own subject.
   const suggestedRecipients = opening.assist?.recipients;
-  // A reply that is still Cue's untouched reply to someone else isn't the
-  // user's own. Choosing Cue's reply replaces what the user hadn't saved.
-  let replaceLocalDraft: "untouched-suggestion" | "unsaved" | undefined;
-  if (opening.setAside) replaceLocalDraft = "untouched-suggestion";
-  else if (opening.switched) replaceLocalDraft = "unsaved";
-  const draftSessionId = getReplyDraftSessionId(
-    draftSessionMessageId ?? message.id,
-    composeMode,
-  );
+  const sessionMessageId = draftSessionMessageId ?? message.id;
+  const draftSessionId = opening.assist?.toSomeoneElse
+    ? getCueReplyDraftSessionId(sessionMessageId)
+    : getReplyDraftSessionId(sessionMessageId, composeMode);
 
   const replyRef = useRef<HTMLDivElement | null>(null);
   const visualViewportBoxRef = useVisualViewportBox(useIsCoarsePointer());
@@ -1247,9 +1263,8 @@ function ReplyPanel({
         </div>
       )}
       <ComposeEmailFormLazy
-        // Remounts when the reply switches between the user's and Cue's.
-        key={opening.setAside ? "own-reply" : "cue-reply"}
-        replaceLocalDraft={replaceLocalDraft}
+        // Remounts on the other reply's draft when the user switches.
+        key={draftSessionId}
         autoFocus={autoFocus}
         initialBodyHtml={suggestedBodyHtml}
         suggestion={assist}

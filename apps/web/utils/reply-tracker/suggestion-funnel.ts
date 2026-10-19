@@ -89,6 +89,7 @@ export async function getReplySuggestionFunnel(now = new Date()) {
         select: { draftSendLog: { select: { similarityScore: true } } },
       },
     },
+    orderBy: { createdAt: "desc" },
     take: MAX_FUNNEL_ROWS,
   });
   return {

@@ -86,6 +86,8 @@ describe("getReplySuggestionFunnel", () => {
       draftStatus: { not: null },
       createdAt: { gte: daysAgo(30) },
     });
+    // The cap keeps the newest suggestions.
+    expect(query?.orderBy).toEqual({ createdAt: "desc" });
     for (const field of ["content", "to", "cc", "bcc", "subject"])
       expect(query?.select).not.toHaveProperty(field);
   });

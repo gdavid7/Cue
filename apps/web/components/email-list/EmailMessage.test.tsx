@@ -22,6 +22,9 @@ const mocks = vi.hoisted(() => ({
   poppedOutDraftSessionId: undefined as string | undefined,
   connectedEmails: [] as string[],
   forgetDeletedDrafts: vi.fn(async () => {}),
+  // What each reply's local draft holds, by its draft session, as the
+  // composer keeps it on this device.
+  localDrafts: new Map<string, string>(),
 }));
 
 vi.mock("next-safe-action/hooks", () => ({
@@ -81,10 +84,12 @@ vi.mock("@/app/(app)/[emailAccountId]/compose/ComposeEmailFormLazy", () => ({
     onPopOut,
     replyingToEmail,
     initialBodyHtml,
+    draftSessionId,
   }: {
     onDiscard: () => void;
     onPopOut?: () => void;
     initialBodyHtml?: string;
+    draftSessionId?: string;
     replyingToEmail?: {
       to?: string;
       cc?: string;
@@ -106,7 +111,16 @@ vi.mock("@/app/(app)/[emailAccountId]/compose/ComposeEmailFormLazy", () => ({
         .join(",")}
     >
       <span>{replyingToEmail?.to ? "reply" : "forward"}</span>
-      <textarea aria-label="Email message" />
+      <textarea
+        aria-label="Email message"
+        defaultValue={
+          draftSessionId ? mocks.localDrafts.get(draftSessionId) : undefined
+        }
+        onChange={(event) => {
+          if (draftSessionId)
+            mocks.localDrafts.set(draftSessionId, event.target.value);
+        }}
+      />
       <button onClick={onDiscard} type="button">
         Discard draft
       </button>
@@ -361,6 +375,7 @@ describe("EmailMessage with a rule's reply to someone else", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.localDrafts.clear();
   });
 
   const toFinance: ReplyAssist = {
@@ -419,6 +434,34 @@ describe("EmailMessage with a rule's reply to someone else", () => {
     ).toBeNull();
   });
 
+  // Switching never drops what the user typed: each reply is its own draft.
+  it("keeps the user's own reply through Use Cue's draft and back", () => {
+    renderWithAssist(toFinance);
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    fireEvent.change(editor(), { target: { value: "My own words" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Use Cue's draft" }));
+    expect(composer().dataset.to).toBe("finance@example.com");
+    expect(editor().value).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    expect(composer().dataset.to).toBe("sender@example.com");
+    expect(editor().value).toBe("My own words");
+  });
+
+  it("keeps the user's edits to Cue's reply through Reply and back", () => {
+    renderWithAssist(toFinance, { defaultComposeMode: "reply" });
+    fireEvent.change(editor(), { target: { value: "Cue's text, edited" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    expect(composer().dataset.to).toBe("sender@example.com");
+    expect(editor().value).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Use Cue's draft" }));
+    expect(composer().dataset.to).toBe("finance@example.com");
+    expect(editor().value).toBe("Cue's text, edited");
+  });
+
   it("keeps Cue's reply to the sender in the user's own Reply", () => {
     renderWithAssist({
       ...toFinance,
@@ -459,6 +502,12 @@ describe("EmailMessage with a rule's reply to someone else", () => {
 
   function composer() {
     return screen.getByTestId("composer");
+  }
+
+  function editor() {
+    return screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Email message",
+    });
   }
 });
 

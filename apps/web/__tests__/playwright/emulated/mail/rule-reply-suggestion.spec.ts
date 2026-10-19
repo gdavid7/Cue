@@ -227,20 +227,29 @@ test("replies to the sender on Reply, and to the rule's recipient on Use Cue's d
     .click();
   await expect(recipients).toContainText(/jonas/i);
   await expect(recipients).not.toContainText("finance");
-  await expect(reader.locator("[data-email-editor-content]")).not.toContainText(
-    SUGGESTION,
-  );
+  const editor = reader.locator("[data-email-editor-content]");
+  await expect(editor).not.toContainText(SUGGESTION);
+  // What the user types in their own reply survives switching to Cue's.
+  await editor.click();
+  await page.keyboard.type("Paid last week, receipt attached.");
   await capturePlaywrightCheckpoint(page, testInfo, "own-reply-to-sender");
 
   await reader.getByRole("button", { name: "Use Cue's draft" }).click();
-  await expect(reader.locator("[data-email-editor-content]")).toContainText(
-    SUGGESTION,
-  );
+  await expect(editor).toContainText(SUGGESTION);
+  await expect(editor).not.toContainText("Paid last week");
   await expect(recipients).toContainText("finance");
   await expect(recipients).not.toContainText(/jonas/i);
   await capturePlaywrightCheckpoint(page, testInfo, "use-cue-draft");
-  await page.waitForTimeout(AUTOSAVE_WINDOW_MS);
-  expect(await countDrafts(page, threadId)).toBe(0);
+
+  // Reply goes back to the user's own reply, as they left it.
+  await reader
+    .getByRole("button", { name: "Reply", exact: true })
+    .first()
+    .click();
+  await expect(editor).toContainText("Paid last week, receipt attached.");
+  await expect(recipients).toContainText(/jonas/i);
+  await expect(recipients).not.toContainText("finance");
+  await capturePlaywrightCheckpoint(page, testInfo, "own-reply-restored");
 });
 
 test("dismisses the rule's suggestion when its reply is discarded", async ({
