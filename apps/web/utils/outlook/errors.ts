@@ -1,4 +1,5 @@
 // Helper functions for checking Microsoft Graph API errors
+import { extractErrorInfo } from "@/utils/outlook/retry";
 
 /**
  * Check if an error indicates that a resource already exists
@@ -43,5 +44,18 @@ export function isPreconditionFailedError(error: unknown): boolean {
     typeof error === "object" &&
     "statusCode" in error &&
     (error as { statusCode: unknown }).statusCode === 412
+  );
+}
+
+const MESSAGE_TOO_LARGE_CODES = new Set([
+  "ErrorMessageSizeExceeded",
+  "ErrorAttachmentSizeLimitExceeded",
+]);
+
+/** Graph refuses a message over the mailbox or tenant size limit before sending it. */
+export function isMessageTooLargeError(error: unknown): boolean {
+  const { status, code } = extractErrorInfo(error);
+  return (
+    status === 413 || (code !== undefined && MESSAGE_TOO_LARGE_CODES.has(code))
   );
 }
