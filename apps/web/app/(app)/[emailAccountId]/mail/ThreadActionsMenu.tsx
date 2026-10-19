@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { useAction } from "next-safe-action/hooks";
 import { type ReactNode, useRef } from "react";
+import { UnsubscribeConfirmDialog } from "@/app/(app)/[emailAccountId]/mail/use-unsubscribe-sender";
 import { useSenderCommands } from "@/app/(app)/[emailAccountId]/mail/use-sender-commands";
 import { getEmailMessageCellActions } from "@/components/EmailMessageCellActions";
 import { Kbd } from "@/components/Kbd";
@@ -118,6 +119,7 @@ export function ThreadActionsMenu({
     onToggleAutoArchive,
     onUnsubscribe,
     PremiumModal,
+    unsubscribeConfirm,
   } = useSenderCommands(message);
   // The team comment box takes focus, so it opens once the menu has closed:
   // while open, the menu keeps focus inside itself, and on closing it hands
@@ -317,6 +319,7 @@ export function ThreadActionsMenu({
       </DropdownMenu>
 
       <PremiumModal />
+      <UnsubscribeConfirmDialog {...unsubscribeConfirm} />
     </>
   );
 }

@@ -9,6 +9,7 @@ import {
 import type { EmailProvider } from "@/utils/email/types";
 import { MAIL_MUTATION_RETRY_WINDOW_MS } from "@/utils/email/send-operation-policy";
 import { SafeError } from "@/utils/error";
+import { isMessageTooLargeError } from "@/utils/outlook/errors";
 import prisma from "@/utils/prisma";
 import type { Logger } from "@/utils/logger";
 import { isDuplicateError } from "@/utils/prisma-helpers";
@@ -16,6 +17,8 @@ import { sendHtmlEmailWithOpenTracking } from "@/utils/email/sent-message-open/s
 import type { DurableEmailSendBody } from "./durable-email-send.validation";
 
 const PROCESSING_LEASE_MS = 2 * 60 * 1000;
+const MESSAGE_TOO_LARGE_FOR_OUTLOOK =
+  "This message is too large for Outlook. Remove an attachment and try again.";
 
 export async function executeDurableEmailSend({
   emailAccountId,
@@ -127,6 +130,20 @@ export async function executeDurableEmailSend({
         where: { id: existing.id },
       });
       return { status: "blocked_auth" as const };
+    }
+    // Graph refuses an oversized message before sending it, so nothing went out.
+    if (
+      stage === "send" &&
+      provider === "microsoft" &&
+      isMessageTooLargeError(error)
+    ) {
+      await prisma.emailSendOperation.deleteMany({
+        where: { id: existing.id },
+      });
+      return {
+        status: "rejected" as const,
+        error: MESSAGE_TOO_LARGE_FOR_OUTLOOK,
+      };
     }
     // Providers throw SafeError for checks that run before anything is sent,
     // so the outcome is known and the operation can be retried later.

@@ -31,6 +31,16 @@ export default async function ConnectMailboxPage(props: {
 
   if (emailAccount) redirect(nextPath);
 
+  const enabledProviders = getEnabledMailboxProviders();
+  const hasOutlook = enabledProviders.includes("microsoft");
+  const hasGmail = enabledProviders.includes("google");
+  const providerNames = [hasGmail && "Gmail", hasOutlook && "Outlook"]
+    .filter(Boolean)
+    .join(" or ");
+  const dataProviders = [hasGmail && "Google", hasOutlook && "Microsoft"]
+    .filter(Boolean)
+    .join(" and ");
+
   return (
     <div className="flex min-h-screen flex-col justify-center text-foreground">
       <div className="mx-auto flex w-full max-w-md flex-col gap-6 px-4">
@@ -39,18 +49,19 @@ export default async function ConnectMailboxPage(props: {
             Connect your mailbox
           </h1>
           <p className="mt-4 text-muted-foreground">
-            Connect Gmail or Outlook to start using {BRAND_NAME}.
+            Connect {providerNames || "your mailbox"} to start using{" "}
+            {BRAND_NAME}.
           </p>
         </div>
 
-        <MailboxProvidersProvider
-          enabledProviders={getEnabledMailboxProviders()}
-        >
+        <MailboxProvidersProvider enabledProviders={enabledProviders}>
           <AddAccount helperText="You can add more mailboxes later from Accounts." />
         </MailboxProvidersProvider>
 
         <MutedText className="text-center">
-          Google and Microsoft are used here only to connect your inbox data.
+          {dataProviders || "Your provider"}{" "}
+          {dataProviders.includes(" and ") ? "are" : "is"} used here only to
+          connect your inbox data.
         </MutedText>
       </div>
     </div>

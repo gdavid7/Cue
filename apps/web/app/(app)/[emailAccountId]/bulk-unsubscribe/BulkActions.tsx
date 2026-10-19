@@ -117,6 +117,7 @@ export function BulkActions({
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
   const [autoArchiveDialogOpen, setAutoArchiveDialogOpen] = useState(false);
+  const [unsubscribeDialogOpen, setUnsubscribeDialogOpen] = useState(false);
   const [celebration, setCelebration] = useState<UnsubscribeCelebration | null>(
     null,
   );
@@ -207,6 +208,10 @@ export function BulkActions({
     getHttpUnsubscribeLink({ unsubscribeLink: n.unsubscribeLink }),
   );
 
+  const unsubscribeCount = selectedNewsletters.filter((n) =>
+    getHttpUnsubscribeLink({ unsubscribeLink: n.unsubscribeLink }),
+  ).length;
+
   const hasBlockableLinks = selectedNewsletters.some(
     (n) => !getHttpUnsubscribeLink({ unsubscribeLink: n.unsubscribeLink }),
   );
@@ -255,7 +260,14 @@ export function BulkActions({
                     label={unsubscribeLabel}
                     primary
                     showLabelOnMobile
-                    onClick={() => onBulkUnsubscribe(selectedNewsletters)}
+                    onClick={() => {
+                      // Blocking can be reversed; a sent unsubscribe can't.
+                      if (hasUnsubscribeLinks) {
+                        setUnsubscribeDialogOpen(true);
+                        return;
+                      }
+                      onBulkUnsubscribe(selectedNewsletters);
+                    }}
                   />
                 )}
                 <ActionButton
@@ -426,6 +438,42 @@ export function BulkActions({
               }}
             >
               Archive
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={unsubscribeDialogOpen}
+        onOpenChange={setUnsubscribeDialogOpen}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Unsubscribe from {unsubscribeCount}{" "}
+              {unsubscribeCount === 1 ? "sender" : "senders"}?
+            </DialogTitle>
+            <DialogDescription>
+              This can't be undone from Cue.
+              {hasBlockableLinks
+                ? " Senders without an unsubscribe link will be blocked instead."
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setUnsubscribeDialogOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                onBulkUnsubscribe(selectedNewsletters);
+                setUnsubscribeDialogOpen(false);
+              }}
+            >
+              Unsubscribe
             </Button>
           </DialogFooter>
         </DialogContent>
