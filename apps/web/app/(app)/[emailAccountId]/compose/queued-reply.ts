@@ -8,6 +8,7 @@ import type { SendEmailBody } from "@/utils/types/mail";
 import { sendEmailToDraftContent } from "@/utils/mail-engine/draft-content";
 import type { ComposeAttachmentReference } from "@/utils/mail-engine/reply-drafts";
 import { admissionRejectionCopy } from "@/utils/mail-engine/admission-notice";
+import { observeOperationOnActiveEngine } from "@/utils/mail-engine/active-client";
 import { getUndoSendHoldUntil } from "./undo-send";
 
 export const READER_EMAIL_SETTLEMENT_TIMEOUT_MS = 15_000;
@@ -254,7 +255,7 @@ async function waitForSettlement({
   settlementTimeoutMs: number;
   threadId: string;
 }): Promise<ReaderEmailOutcome> {
-  const handle = client.observeOperation({
+  const handle = observeOperationOnActiveEngine(client, {
     accountId,
     operationId,
   });
