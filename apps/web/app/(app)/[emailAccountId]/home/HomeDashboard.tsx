@@ -33,7 +33,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeading } from "@/components/Typography";
 import { useIsLargeScreen } from "@/hooks/use-mobile";
 import { useHome } from "@/hooks/useHome";
-import { ALSO_IN_INBOX_LIMIT } from "@/utils/home/today-cache";
+import {
+  ALSO_IN_INBOX_LIMIT,
+  removeFromCachedToday,
+} from "@/utils/home/today-cache";
 import { useMailHref } from "@/hooks/useMailHref";
 import { useShortcuts } from "@/lib/shortcuts/useShortcuts";
 import { useAccount } from "@/providers/EmailAccountProvider";
@@ -89,6 +92,12 @@ export function HomeDashboard() {
   const isLoading = merged ? merged.isLoading : single.isLoading;
   const error = merged ? merged.error : single.error;
   const gaveUp = merged ? false : single.gaveUp;
+  // A refresh that didn't land: what shows is what Today had earlier.
+  const refreshFailed = merged
+    ? merged.failedAccountIds.length > 0
+    : gaveUp || (Boolean(data) && single.error !== undefined);
+  // A copy from an earlier day: its conversations show, its day doesn't.
+  const earlierDay = Boolean(data?.earlierDay);
   const accountColorIndexById = useMemo(
     () =>
       Object.fromEntries(
@@ -139,7 +148,7 @@ export function HomeDashboard() {
     };
   }, [data, hidden]);
   const notice =
-    data && lanes
+    data && lanes && !earlierDay
       ? cueNotice(data.cue, emailAccountId, {
           hasTrackedThreads:
             lanes.needsYou.length > 0 || lanes.waiting.length > 0,
@@ -153,7 +162,16 @@ export function HomeDashboard() {
   const needsYouLoaded = !pending.has("needsYou") && !failed.has("needsYou");
   // Nothing needs a reply: who you're waiting on folds into the All clear.
   const allClear = Boolean(
-    lanes && !notice && needsYouLoaded && lanes.needsYou.length === 0,
+    lanes &&
+      !earlierDay &&
+      !notice &&
+      needsYouLoaded &&
+      lanes.needsYou.length === 0,
+  );
+  // Rows kept from an earlier answer that the last refresh couldn't replace.
+  const outdated = useMemo(
+    () => (refreshFailed ? new Set(data?.stale) : NO_LANES),
+    [data, refreshFailed],
   );
   // Keyboard order, top to bottom, as the lanes render.
   const rows = useMemo(
@@ -267,7 +285,13 @@ export function HomeDashboard() {
       setHidden((current) => new Set(current).add(key));
       focusRow(neighbour ? rowKey(neighbour) : null);
       const done = await run([key]);
-      if (!done.length) showThreads([key]);
+      if (!done.length) return showThreads([key]);
+      // So it doesn't come back on the next visit before Today refreshes.
+      const thread = rowByKey.get(key);
+      if (thread)
+        removeFromCachedToday(thread.account?.id ?? emailAccountId, [
+          thread.threadId,
+        ]);
     },
   );
 
@@ -457,7 +481,13 @@ export function HomeDashboard() {
           {greetingText}
           {firstName ? `, ${firstName}` : ""}
         </PageHeading>
-        {data && lanes && !notice && !allClear && needsYouLoaded ? (
+        {earlierDay ? (
+          <p className="mt-1 text-muted-foreground text-sm" role="status">
+            {refreshFailed
+              ? "Couldn't refresh. Showing what Today had earlier."
+              : "Updating…"}
+          </p>
+        ) : data && lanes && !notice && !allClear && needsYouLoaded ? (
           <p className="mt-1 text-muted-foreground text-sm" role="status">
             {busySummary(data, lanes.needsYou.length)}
           </p>
@@ -490,6 +520,7 @@ export function HomeDashboard() {
             onCorrect={correct}
             // Past the last refresh a pending lane would load forever.
             pending={gaveUp ? NO_LANES : pending}
+            outdated={outdated}
             threadHref={threadHref}
           />
         ) : null}
@@ -535,6 +566,7 @@ function HomeLanes({
   threadHref,
   onCorrect,
   pending,
+  outdated,
 }: {
   data: TodayData;
   lanes: {
@@ -559,6 +591,8 @@ function HomeLanes({
   threadHref: (thread: { threadId: string; account?: TodayAccount }) => string;
   onCorrect: (thread: TodayThread, needsReply: boolean) => Promise<void>;
   pending: ReadonlySet<HomeLane>;
+  /** Lanes showing rows from an earlier answer that a refresh couldn't replace. */
+  outdated: ReadonlySet<HomeLane>;
 }) {
   const { cue, stats } = data;
   const mailHref = useMailHref();
@@ -627,6 +661,7 @@ function HomeLanes({
         <Section
           title="Needs reply"
           count={formatCount(lanes.needsYou.length, stats.needsYouCapped)}
+          outdated={outdated.has("needsYou")}
         >
           <ThreadList
             hasFocusedRow={hasFocus(lanes.needsYou)}
@@ -692,6 +727,7 @@ function HomeLanes({
         <Section
           title="Waiting on"
           count={formatCount(lanes.waiting.length, stats.waitingCapped)}
+          outdated={outdated.has("waiting")}
         >
           <ThreadList
             hasFocusedRow={hasFocus(lanes.waiting)}
@@ -702,7 +738,7 @@ function HomeLanes({
         </Section>
       ) : null}
 
-      {!allClear && !notice && data.today.checked > 0 ? (
+      {!allClear && !notice && !data.earlierDay && data.today.checked > 0 ? (
         <p className="text-muted-foreground text-sm">
           <CueChecked today={data.today} />
         </p>
@@ -712,6 +748,7 @@ function HomeLanes({
       {lanes.alsoInInbox.length > 0 ? (
         <Section
           title="Also in your inbox"
+          outdated={outdated.has("alsoInInbox")}
           action={
             <Link
               className="font-sans text-muted-foreground text-sm underline-offset-2 hover:text-foreground hover:underline"
@@ -783,11 +820,14 @@ function cueNotice(
 function Section({
   title,
   count,
+  outdated,
   action,
   children,
 }: {
   title: string;
   count?: string;
+  /** Its rows are from an earlier answer that a refresh couldn't replace. */
+  outdated?: boolean;
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {
@@ -799,6 +839,11 @@ function Section({
         {count ? (
           <span className="rounded-full bg-muted px-2 py-0.5 font-sans text-muted-foreground text-xs">
             {count}
+          </span>
+        ) : null}
+        {outdated ? (
+          <span className="font-sans text-muted-foreground text-xs">
+            May be out of date
           </span>
         ) : null}
         {action ? <span className="ml-auto">{action}</span> : null}

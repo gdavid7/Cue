@@ -63,7 +63,11 @@ export function useHome(emailAccountId?: string | null) {
 
   useEffect(() => {
     if (!home.data || seededCopies.has(home.data) || !emailAccountId) return;
-    writeCachedToday({ emailAccountId, data: home.data });
+    writeCachedToday({
+      emailAccountId,
+      timeZone: browserTimeZone(),
+      data: home.data,
+    });
   }, [home.data, emailAccountId]);
 
   // Cue sorted new mail or the user's reply changed a lane: show it now
@@ -153,7 +157,11 @@ function useSavedHomeSeed(emailAccountId: string | null | undefined) {
   useLayoutEffect(() => {
     if (!serializedKey || !emailAccountId) return;
     if (cache.get(serializedKey)?.data !== undefined) return;
-    const saved = readCachedToday({ emailAccountId });
+    // The zone the server is asked to count "today" in, as homeKey sends it.
+    const saved = readCachedToday({
+      emailAccountId,
+      timeZone: browserTimeZone(),
+    });
     if (!saved) return;
     seededCopies.add(saved);
     mutate(serializedKey, saved, { revalidate: false });

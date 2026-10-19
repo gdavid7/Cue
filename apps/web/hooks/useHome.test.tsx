@@ -13,6 +13,9 @@ import {
 import { readCachedToday, writeCachedToday } from "@/utils/home/today-cache";
 import { useHome, useWarmHome } from "./useHome";
 
+// The zone useHome asks the server to count "today" in.
+const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
 vi.mock("@/utils/swr", () => ({
   getAccountScopedKey: (path: string, emailAccountId: string) => [
     path,
@@ -126,6 +129,7 @@ describe("useHome with a cached Today", () => {
   it("opens on what Today last showed, then replaces it with one fresh load", async () => {
     writeCachedToday({
       emailAccountId: "account",
+      timeZone: ZONE,
       data: todayData("cached"),
       now: Date.now(),
     });
@@ -148,6 +152,7 @@ describe("useHome with a cached Today", () => {
     expect(
       readCachedToday({
         emailAccountId: "account",
+        timeZone: ZONE,
         now: Date.now(),
       }),
     ).toEqual(todayData("fresh"));
@@ -156,6 +161,7 @@ describe("useHome with a cached Today", () => {
   it("shows an action on a cached row, and the fresh load still lands", async () => {
     writeCachedToday({
       emailAccountId: "account",
+      timeZone: ZONE,
       data: todayData("cached"),
       now: Date.now(),
     });
@@ -210,6 +216,7 @@ describe("useHome with a cached Today", () => {
   it("keeps the cached rows of a lane Gmail is slow to serve, and asks again", async () => {
     writeCachedToday({
       emailAccountId: "account",
+      timeZone: ZONE,
       data: todayData("cached"),
       now: Date.now(),
     });
@@ -241,6 +248,7 @@ describe("useHome with a cached Today", () => {
   it("shows another user's Today to nobody", () => {
     writeCachedToday({
       emailAccountId: "account",
+      timeZone: ZONE,
       data: todayData("theirs"),
       now: Date.now(),
     });
@@ -298,6 +306,7 @@ describe("useWarmHome", () => {
     resetBrowserCacheForTesting("user");
     writeCachedToday({
       emailAccountId: "account",
+      timeZone: ZONE,
       data: todayData("cached"),
       now: Date.now(),
     });
@@ -365,6 +374,11 @@ function todayData(subject: string) {
     alsoInInbox: [],
     pending: [],
     failed: [],
+    agentTasks: [],
+    cue: { aiAccess: true, replyTracking: true, hasReadMail: true },
+    today: { checked: 0, filed: 0, filedLabel: null },
+    calendar: { connected: true, next: null },
+    nextUp: [],
     stats: { needsYou: 1, estimatedMinutes: 3, needsYouCapped: false },
   } as unknown as GetHomeResponse;
 }
