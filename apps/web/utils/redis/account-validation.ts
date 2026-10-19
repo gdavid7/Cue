@@ -26,22 +26,6 @@ export async function getEmailAccount({
   return emailAccount?.email ?? null;
 }
 
-/** Whether the account is the user's, from Redis when it has said so lately. */
-export async function isAccountOwner({
-  userId,
-  emailAccountId,
-}: {
-  userId: string;
-  emailAccountId: string;
-}): Promise<boolean> {
-  if (!userId || !emailAccountId) return false;
-  const cached = await redis
-    .get(getOwnerKey({ userId, emailAccountId }))
-    .catch(() => null);
-  if (cached != null) return true;
-  return confirmOwnership({ userId, emailAccountId });
-}
-
 /**
  * Reads one key per account for the accounts the user owns, in the same
  * command as the ownership check, so a frequent poll costs one Redis read.

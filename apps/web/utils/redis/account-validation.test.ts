@@ -4,7 +4,6 @@ import prisma from "@/utils/__mocks__/prisma";
 import {
   getEmailAccount,
   invalidateAccountOwnership,
-  isAccountOwner,
   readKeyForOwnedAccounts,
 } from "./account-validation";
 
@@ -69,10 +68,10 @@ describe("account ownership in Redis", () => {
     prisma.emailAccount.findUnique.mockResolvedValue({
       id: "account-1",
     } as never);
-    const key = { userId: "user-1", emailAccountId: "account-1" };
+    recordingRedis.store.set("version:account-1", "v1");
 
-    expect(await isAccountOwner(key)).toBe(true);
-    expect(await isAccountOwner(key)).toBe(true);
+    expect(Object.fromEntries(await read())).toEqual({ "account-1": "v1" });
+    expect(Object.fromEntries(await read())).toEqual({ "account-1": "v1" });
 
     expect(prisma.emailAccount.findUnique).toHaveBeenCalledTimes(1);
     expect(recordingRedis.writes).toEqual([
@@ -84,13 +83,16 @@ describe("account ownership in Redis", () => {
     prisma.emailAccount.findUnique.mockResolvedValueOnce({
       id: "account-1",
     } as never);
-    const key = { userId: "user-1", emailAccountId: "account-1" };
-    await isAccountOwner(key);
+    recordingRedis.store.set("version:account-1", "v1");
+    await read();
 
-    await invalidateAccountOwnership(key);
+    await invalidateAccountOwnership({
+      userId: "user-1",
+      emailAccountId: "account-1",
+    });
     prisma.emailAccount.findUnique.mockResolvedValueOnce(null);
 
-    expect(await isAccountOwner(key)).toBe(false);
+    expect(Object.fromEntries(await read())).toEqual({});
   });
 
   it("reads each owned account's key and leaves out the rest", async () => {
@@ -108,3 +110,11 @@ describe("account ownership in Redis", () => {
     expect(Object.fromEntries(owned)).toEqual({ "account-1": "v1" });
   });
 });
+
+function read() {
+  return readKeyForOwnedAccounts({
+    userId: "user-1",
+    emailAccountIds: ["account-1"],
+    keyFor: (id) => `version:${id}`,
+  });
+}
