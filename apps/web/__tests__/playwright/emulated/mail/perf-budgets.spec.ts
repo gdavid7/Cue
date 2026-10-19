@@ -491,11 +491,18 @@ test("first compose, mail that arrived while closed, and list input are quick", 
           await timeSinceInput(page, rowWithSubjectGone, target),
         );
         await page.keyboard.press("z");
-        await page.waitForFunction(
-          rowWithSubjectMatches,
-          { subject: target, text: "", present: true },
-          { timeout: 20_000 },
-        );
+        await page
+          .waitForFunction(
+            rowWithSubjectMatches,
+            { subject: target, text: "", present: true },
+            { timeout: 20_000 },
+          )
+          .catch(async (error: unknown) => {
+            console.log(
+              `PERF-UNDO-FAILED ${JSON.stringify(await describeUndoState(page, target))}`,
+            );
+            throw error;
+          });
       }
       const vitals = await readVitals(page);
       recorder.add("list-inp", vitals.inp);
@@ -513,6 +520,38 @@ test("first compose, mail that arrived while closed, and list input are quick", 
     await recorder.attach(testInfo, "arrivals");
   }
 });
+
+// What the screen and the mail engine show when an undo does not bring the
+// archived conversation back, so a failure says which side lost it.
+async function describeUndoState(page: Page, subject: string) {
+  return page.evaluate(async (subject) => {
+    const subjects = Array.from(
+      document.querySelectorAll("[data-mail-thread-subject]"),
+      (element) => element.textContent ?? "",
+    );
+    const inspect = (await window.__inboxZeroMailInspect
+      ?.read()
+      .catch(() => null)) as Record<string, unknown> | null;
+    return {
+      rowsShown: subjects.length,
+      targetShown: subjects.includes(subject),
+      inPreview: Boolean(document.querySelector("[data-mail-inbox-preview]")),
+      toasts: Array.from(
+        document.querySelectorAll("[data-sonner-toast]"),
+        (toast) => (toast.textContent ?? "").slice(0, 80),
+      ),
+      focused: document.activeElement?.tagName,
+      inspectKeys: inspect ? Object.keys(inspect) : null,
+      pending: inspect
+        ? JSON.stringify(
+            (inspect as { commands?: unknown; outbox?: unknown }).commands ??
+              (inspect as { outbox?: unknown }).outbox ??
+              null,
+          ).slice(0, 600)
+        : null,
+    };
+  }, subject);
+}
 
 async function resetSignature() {
   await withClient((client) =>
