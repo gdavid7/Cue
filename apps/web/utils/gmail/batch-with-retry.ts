@@ -18,8 +18,9 @@ import {
 
 // Gmail charges every request in a batch at once, so a batch is one burst.
 // Each is sized to fit the gate's per-second pace at the caller's priority
-// (5 messages interactive, 4 sync, 2 background) rather than 25 at a time,
-// which Gmail answered by refusing the tail of each batch.
+// and the format it reads (17 metadata reads or 5 full ones interactive, 12
+// or 4 sync, 6 or 2 background) rather than 25 full reads at a time, which
+// Gmail answered by refusing the tail of each batch.
 const MAX_BATCH_RETRIES = 3;
 const MAX_RETRY_JITTER_MS = 1000;
 
@@ -79,18 +80,20 @@ export async function getBatchWithRetry<TRaw, TParsed>({
       RETRY_POLICY[currentGmailQuotaContext().priority].sleepBudgetMs,
   };
 
-  return getChunksWithRetry(chunk(ids, batchSizeFor(endpoint)), (idsChunk) =>
-    getBatchChunkWithRetry<TRaw, TParsed>({
-      ids: idsChunk,
-      endpoint,
-      accessToken,
-      parse,
-      logger,
-      queryString,
-      retryCount,
-      retryError,
-      sleepBudget,
-    }),
+  return getChunksWithRetry(
+    chunk(ids, batchSizeFor(endpoint, queryString)),
+    (idsChunk) =>
+      getBatchChunkWithRetry<TRaw, TParsed>({
+        ids: idsChunk,
+        endpoint,
+        accessToken,
+        parse,
+        logger,
+        queryString,
+        retryCount,
+        retryError,
+        sleepBudget,
+      }),
   );
 }
 
@@ -256,7 +259,10 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
     await sleep(delayMs);
     const retryChunks = chunk(
       remainingIds,
-      Math.max(1, Math.floor(batchSizeFor(endpoint) / 2 ** nextRetryCount)),
+      Math.max(
+        1,
+        Math.floor(batchSizeFor(endpoint, queryString) / 2 ** nextRetryCount),
+      ),
     );
     const refetched = await getChunksWithRetry(retryChunks, (idsChunk) =>
       getBatchChunkWithRetry<TRaw, TParsed>({
@@ -295,11 +301,12 @@ async function getChunksWithRetry<TParsed>(
   return { items, unloadedIds: [] };
 }
 
-function batchSizeFor(endpoint: string) {
+function batchSizeFor(endpoint: string, queryString: string | undefined) {
   const maxUnits = gmailRequestUnitsFor(currentGmailQuotaContext().priority);
+  const query = queryString ? `?${queryString}` : "";
   return Math.max(
     1,
-    Math.floor(maxUnits / gmailRequestCost("GET", `${endpoint}/id`)),
+    Math.floor(maxUnits / gmailRequestCost("GET", `${endpoint}/id${query}`)),
   );
 }
 

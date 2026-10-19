@@ -235,7 +235,12 @@ function meterGmailRequests(
     options: GaxiosOptions,
   ) => Promise<unknown>;
   const send = (options: GaxiosOptions) => {
-    const cost = gmailRequestCost(options.method ?? "GET", String(options.url));
+    // The client sends query parameters apart from the URL, and a read's
+    // cost depends on its format.
+    const url = new URL(String(options.url), "https://x");
+    const format = options.params?.format;
+    if (typeof format === "string") url.searchParams.set("format", format);
+    const cost = gmailRequestCost(options.method ?? "GET", url);
     let attempts = 0;
     // Gaxios calls the adapter for every attempt it sends.
     const adapter = async <T>(

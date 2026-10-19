@@ -129,16 +129,17 @@ const ACCOUNT = "account-1";
 const logger = createScopedLogger("first-load-quota-test");
 const END_MS = 240_000;
 const STEADY_MS = 180_000;
-// The gate refills at the account's budget, 4,000 units a minute to start;
-// a thread open costs 40 units, so one every 0.7 s spends 86% of that.
-const BUCKET_UNITS_PER_SECOND =
-  Math.round((GMAIL_USER_UNITS_PER_MINUTE * 0.8) / 3) / 60;
-const OPEN_EVERY_MS = 700;
-// Gmail refuses short bursts well under its minute's limit, so the fake
-// refuses any second past the minute spread evenly, and the gate keeps a
-// fifth under that.
-const GMAIL_UNITS_PER_SECOND = GMAIL_USER_UNITS_PER_MINUTE / 60;
-const GATE_UNITS_PER_SECOND = GMAIL_UNITS_PER_SECOND * 0.8;
+// The gate refills at the account's budget, 10,000 units a minute to start;
+// a thread open reads it in full, 120 units, so one every 0.84 s spends 86%
+// of that.
+const BUCKET_UNITS_PER_SECOND = (GMAIL_USER_UNITS_PER_MINUTE * 0.8 - 2000) / 60;
+const THREAD_OPEN_UNITS = 120;
+const OPEN_EVERY_MS = 840;
+// Gmail's limit is a moving average that allows short bursts. Google
+// publishes no burst size, so the fake refuses any second past four times
+// the minute spread evenly, and the gate keeps under that.
+const GMAIL_UNITS_PER_SECOND = (GMAIL_USER_UNITS_PER_MINUTE / 60) * 4;
+const GATE_UNITS_PER_SECOND = 700;
 const HOME_BUDGET_MS = 10_000;
 
 // Replays what opening Cue fires at Gmail: two tabs each scanning the recent
@@ -393,8 +394,8 @@ describe("Gmail quota on a first load", () => {
     ).toBeGreaterThan(2000);
   }, 60_000);
 
-  // The inbox's first page is one interactive request for 25 messages:
-  // about 505 units, two and a half seconds of the per-second cap.
+  // The inbox's first page is one interactive request for 25 messages'
+  // metadata: about 505 units, which the bucket's floor under sync covers.
   it("serves a first inbox page within the per-second cap's time while a first sync runs", async () => {
     const { gmail, provider, route, engineScope, sleep, rateLimitModes } =
       await startReplay(STEADY_MS, { unitsPerSecond: GMAIL_UNITS_PER_SECOND });
@@ -407,7 +408,10 @@ describe("Gmail quota on a first load", () => {
         const askedAt = Date.now();
         const result = await route("threads", () =>
           runWithGmailQuota({ priority: "interactive" }, () =>
-            provider.getMessagesWithPagination({ maxResults: 25 }),
+            provider.getMessagesWithPagination({
+              maxResults: 25,
+              format: "metadata",
+            }),
           ),
         );
         firstPage = {
@@ -487,9 +491,9 @@ describe("Gmail quota on a first load", () => {
     expect(home).toMatchObject({ ok: true });
     expect(home!.ms).toBeLessThanOrEqual(HOME_BUDGET_MS);
     // Today's reads go ahead of the sync. Its thirty thread reads (about
-    // 1,200 units) are more than the half bucket sync leaves plus ten
-    // seconds of a 4,000-unit budget, so the first lanes land and the rest
-    // come back pending, never empty.
+    // 1,200 units) may outrun what sync leaves of the bucket while two tabs
+    // sync, so the first lanes land and any rest come back pending, never
+    // empty.
     expect(home!.value).toMatchObject({
       needsYou: expect.arrayContaining([expect.anything()]),
     });
@@ -504,7 +508,7 @@ describe("Gmail quota on a first load", () => {
   // showed a reply thread without its original, still on page two).
   it("keeps the first sync filling the inbox while someone opens threads", async () => {
     // A small mailbox, as in the emulated QA account: the recent window is
-    // two pages, about 810 units, which the minute's bucket covers at once.
+    // two pages read in full, about 2,410 units.
     const { gmail, provider, route, retried, engineScope, sleep } =
       await startReplay(STEADY_MS, {
         unitsPerSecond: GMAIL_UNITS_PER_SECOND,
@@ -553,10 +557,10 @@ describe("Gmail quota on a first load", () => {
     expect(gmail.limitedCalls()).toEqual([]);
     expect(gmail.peakSecondUnits()).toBeLessThanOrEqual(GATE_UNITS_PER_SECOND);
     expect(opens).toHaveLength(3);
-    // About 810 units: the half bucket sync may spend, then the rest at a
-    // 4,000-unit budget's refill, around the thread's reads and the insights.
+    // About 2,410 units: what sync may spend of the bucket, then the rest at
+    // a 10,000-unit budget's refill, around the thread's reads.
     expect(recentWindowMs).not.toBeNull();
-    expect(recentWindowMs).toBeLessThanOrEqual(10_000);
+    expect(recentWindowMs).toBeLessThanOrEqual(12_000);
   }, 60_000);
 
   it("keeps the backfill moving while someone opens threads at nearly the bucket's refill rate", async () => {
@@ -600,7 +604,7 @@ describe("Gmail quota on a first load", () => {
     // least half of the little the reader leaves. A backfill batch that
     // needs a nearly full bucket got a tenth of it.
     const spareUnitsPerSecond =
-      BUCKET_UNITS_PER_SECOND - 40_000 / OPEN_EVERY_MS;
+      BUCKET_UNITS_PER_SECOND - (THREAD_OPEN_UNITS * 1000) / OPEN_EVERY_MS;
     const backfill =
       gmail.unitsByCaller(start + 60_000, start + STEADY_MS)[
         "mail/v1/enumeration"
