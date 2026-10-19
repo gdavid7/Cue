@@ -131,6 +131,48 @@ describe("mail engine idle catch-up scheduling", () => {
     await harness.engine.close();
   });
 
+  it("reads changes on a stretched clock when the host asks for syncs itself", async () => {
+    const harness = idleCatchUpHarness({
+      streamIds: ["inbox"],
+      changesCatchUpIntervalMs: 5 * 60_000,
+    });
+    await harness.engine.runUntil(10_000);
+    harness.advance(60_000);
+    await harness.engine.runUntil(harness.nowMs + 1000);
+    expect(harness.readChangeStreams).toEqual(["inbox"]);
+
+    // A pushed change is read at once, whatever the clock says.
+    await harness.engine.requestSync(["acc-1"]);
+    await harness.engine.runUntil(harness.nowMs + 1000);
+    expect(harness.readChangeStreams).toEqual(["inbox", "inbox"]);
+
+    harness.advance(5 * 60_000);
+    await harness.engine.runUntil(harness.nowMs + 1000);
+    expect(harness.readChangeStreams).toEqual(["inbox", "inbox", "inbox"]);
+    await harness.engine.close();
+  });
+
+  it("retries a failed change read on the idle clock, not the stretched one", async () => {
+    const harness = idleCatchUpHarness({
+      streamIds: ["inbox"],
+      changesCatchUpIntervalMs: 5 * 60_000,
+    });
+    const readChanges = harness.source.readChanges;
+    let failNext = true;
+    harness.source.readChanges = async (request) => {
+      if (!failNext) return readChanges(request);
+      failNext = false;
+      harness.readChangeStreams.push(request.position.streamId);
+      return { status: "paused", reason: "unavailable", retryAfterMs: 1000 };
+    };
+    await harness.engine.runUntil(10_000);
+    harness.advance(60_000);
+    await harness.engine.runUntil(harness.nowMs + 1000);
+
+    expect(harness.readChangeStreams).toEqual(["inbox", "inbox"]);
+    await harness.engine.close();
+  });
+
   it("lets host work run between streams in one idle catch-up", async () => {
     const harness = idleCatchUpHarness({ streamIds: ["inbox", "archive"] });
     harness.onReadChanges = (streamId) => {
@@ -685,6 +727,7 @@ function idleCatchUpHarness(input: {
   partialPagesBeforeComplete?: number;
   assistant?: AssistantStateSource;
   onSyncPageCommitted?: (page: import("./sync").SyncPage) => void;
+  changesCatchUpIntervalMs?: number;
 }) {
   let nowMs = 0;
   let nextId = 0;
@@ -769,6 +812,7 @@ function idleCatchUpHarness(input: {
     executor: idleExecutor(),
     assistant: input.assistant,
     onSyncPageCommitted: input.onSyncPageCommitted,
+    changesCatchUpIntervalMs: input.changesCatchUpIntervalMs,
     runtime: createHostRuntime({
       nowMs: () => nowMs,
       randomId: () => {
