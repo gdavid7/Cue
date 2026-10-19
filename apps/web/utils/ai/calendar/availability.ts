@@ -11,6 +11,7 @@ import type { EmailAccountWithAI } from "@/utils/llms/types";
 import type { EmailForLLM } from "@/utils/types";
 import prisma from "@/utils/prisma";
 import { getTodayForLLM, getUserInfoPrompt } from "@/utils/ai/helpers";
+import { calendarConnectionsWhere } from "@/utils/calendar/connections";
 
 const timeSlotSchema = z.object({
   start: z.string().describe("Start time in format YYYY-MM-DD HH:MM"),
@@ -77,7 +78,7 @@ export async function aiGetCalendarAvailability({
   const [calendarConnections, defaultAvailabilitySchedule] = await Promise.all([
     prisma.calendarConnection.findMany({
       where: {
-        emailAccountId: emailAccount.id,
+        ...calendarConnectionsWhere(emailAccount.id),
         isConnected: true,
       },
       include: {

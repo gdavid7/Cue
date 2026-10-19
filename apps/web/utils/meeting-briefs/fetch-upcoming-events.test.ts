@@ -20,7 +20,9 @@ const logger = createTestLogger();
 describe("fetchUpcomingEvents", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    prisma.calendarConnection.count.mockResolvedValue(1);
+    prisma.calendarConnection.findMany.mockResolvedValue([
+      { id: "connection-1", provider: "google", email: "me@example.com" },
+    ] as never);
   });
 
   it("skips cancelled event placeholder titles", async () => {
@@ -56,6 +58,13 @@ describe("fetchUpcomingEvents", () => {
     });
 
     expect(events.map((event) => event.id)).toEqual(["keep-1", "keep-2"]);
+    // Briefs read only the account's own calendars, so a person with two
+    // mailboxes sharing a calendar is not briefed twice for one meeting.
+    expect(createCalendarEventProviders).toHaveBeenCalledWith(
+      "email-account-id",
+      expect.anything(),
+      { ownConnectionsOnly: true },
+    );
   });
 
   it("keeps events sorted by start time after filtering", async () => {

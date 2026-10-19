@@ -144,6 +144,8 @@ export const setMeetingJoinOverrideAction = actionClient
         timeMin,
         timeMax: addHours(timeMin, MEETING_LOOKAHEAD_HOURS),
         maxResultsPerProvider: MAX_EVENTS_PER_PROVIDER,
+        // Same calendars the recorder cron reconciles for this account.
+        ownConnectionsOnly: true,
         logger,
       });
 

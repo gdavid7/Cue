@@ -47,6 +47,7 @@ import {
 import { useCurrentOrganization } from "@/hooks/useCurrentOrganization";
 import { useMessagingChannels } from "@/hooks/useMessagingChannels";
 import { useMailHref } from "@/hooks/useMailHref";
+import { useAllAccountsScope, useTodayHref } from "@/hooks/useTodayHref";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { prefixPath } from "@/utils/path";
 import { isGoogleProvider } from "@/utils/email/provider-types";
@@ -66,6 +67,11 @@ export type NavItem = {
   active?: boolean;
   beta?: boolean;
   new?: boolean;
+  /**
+   * The account an account's own page opens, named while the user looks at
+   * all their accounts together.
+   */
+  account?: string;
 };
 
 /**
@@ -79,7 +85,13 @@ export const useNavigation = () => {
   const showMeetingRecorder = useMeetingRecorderEnabled();
   const { emailAccount, emailAccountId, provider } = useAccount();
   const currentEmailAccountId = emailAccount?.id || emailAccountId;
-  const inboxHref = useMailHref()({ accountId: currentEmailAccountId });
+  const allAccounts = useAllAccountsScope();
+  const mailHref = useMailHref();
+  const inboxHref = allAccounts
+    ? mailHref({ allInboxes: true })
+    : mailHref({ accountId: currentEmailAccountId });
+  const todayHref = useTodayHref();
+  const account = allAccounts ? emailAccount?.email : undefined;
   const { data: channelsData } = useMessagingChannels(
     currentEmailAccountId || null,
   );
@@ -98,19 +110,21 @@ export const useNavigation = () => {
       },
       {
         name: "Today",
-        href: prefixPath(currentEmailAccountId, "/home"),
+        href: todayHref,
         icon: SunIcon,
         keywords: ["home", "briefing", "dashboard"],
       },
       {
         name: "Chat",
         href: prefixPath(currentEmailAccountId, "/assistant"),
+        account,
         icon: MessageSquareIcon,
         keywords: ["ask", "cue", "assistant", "ai"],
       },
       {
         name: "Rules",
         href: prefixPath(currentEmailAccountId, "/automation"),
+        account,
         icon: SparklesIcon,
         keywords: ["ai", "automation", "auto"],
       },
@@ -119,13 +133,14 @@ export const useNavigation = () => {
             {
               name: "Meetings",
               href: prefixPath(currentEmailAccountId, "/meetings"),
+              account,
               icon: MicIcon,
               keywords: ["recorder", "notes"],
             },
           ]
         : []),
     ],
-    [currentEmailAccountId, inboxHref, showMeetingRecorder],
+    [account, currentEmailAccountId, inboxHref, showMeetingRecorder, todayHref],
   );
 
   // Mailbox tools sit under Tools: Cue never archives in bulk on its own, so
@@ -135,6 +150,7 @@ export const useNavigation = () => {
       {
         name: "Calendars",
         href: prefixPath(currentEmailAccountId, "/calendars"),
+        account,
         icon: CalendarIcon,
         keywords: ["calendar", "scheduling"],
       },
@@ -143,6 +159,7 @@ export const useNavigation = () => {
             {
               name: "Meeting Briefs",
               href: prefixPath(currentEmailAccountId, "/briefs"),
+              account,
               icon: FileTextIcon,
               keywords: ["briefs", "summaries"],
             },
@@ -154,6 +171,7 @@ export const useNavigation = () => {
             {
               name: "Attachments",
               href: prefixPath(currentEmailAccountId, "/drive"),
+              account,
               icon: HardDriveIcon,
               keywords: ["drive", "files", "filing"],
               new: false,
@@ -162,6 +180,7 @@ export const useNavigation = () => {
       {
         name: "Integrations",
         href: prefixPath(currentEmailAccountId, "/integrations"),
+        account,
         icon: ZapIcon,
         keywords: ["connectors", "apps", "connect"],
       },
@@ -170,6 +189,7 @@ export const useNavigation = () => {
             {
               name: "Slack & Teams",
               href: prefixPath(currentEmailAccountId, "/channels"),
+              account,
               icon: HashIcon,
               keywords: ["slack", "teams", "channels", "notifications"],
             },
@@ -188,12 +208,14 @@ export const useNavigation = () => {
       {
         name: "Unsubscribe",
         href: prefixPath(currentEmailAccountId, "/bulk-unsubscribe"),
+        account,
         icon: MailsIcon,
         keywords: ["bulk", "newsletters", "spam"],
       },
       {
         name: "Analytics",
         href: prefixPath(currentEmailAccountId, "/stats"),
+        account,
         icon: BarChartBigIcon,
         keywords: ["statistics", "charts", "stats"],
       },
@@ -202,6 +224,7 @@ export const useNavigation = () => {
             {
               name: "Deep Clean",
               href: prefixPath(currentEmailAccountId, "/clean"),
+              account,
               icon: BrushIcon,
               keywords: ["clean", "organize", "tidy"],
               beta: true,
@@ -210,6 +233,7 @@ export const useNavigation = () => {
         : []),
     ],
     [
+      account,
       currentEmailAccountId,
       isOrganizationMember,
       provider,
@@ -226,10 +250,7 @@ export const useNavigation = () => {
   };
 };
 
-export function SideNav({
-  feedbackEnabled,
-  ...props
-}: React.ComponentProps<typeof Sidebar> & { feedbackEnabled: boolean }) {
+export function SideNav({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const navigation = useNavigation();
   const { emailAccount, emailAccountId } = useAccount();
   const currentEmailAccountId = emailAccount?.id || emailAccountId;
@@ -304,13 +325,11 @@ export function SideNav({
       <PremiumCard isCollapsed={!isExpanded} />
 
       <SidebarFooter className="pb-4">
-        {feedbackEnabled && (
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <FeedbackSidebarButton />
-            </SidebarMenuItem>
-          </SidebarMenu>
-        )}
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <FeedbackSidebarButton />
+          </SidebarMenuItem>
+        </SidebarMenu>
 
         <NavUser />
       </SidebarFooter>

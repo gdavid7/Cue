@@ -259,6 +259,14 @@ export function calculateRetryDelay(
   return Math.min(1000 * 2 ** (attemptNumber - 1), 16_000);
 }
 
+/** Milliseconds until the "Retry after <time>" Gmail names, if it is still ahead. */
+export function getRetryTimeDelayMs(errorMessage: string): number | undefined {
+  const retryTime = parseRetryTime(errorMessage);
+  if (!retryTime) return;
+  const delayMs = retryTime.getTime() - Date.now();
+  return delayMs > 0 ? delayMs : undefined;
+}
+
 /**
  * Parses the retry time from Gmail rate limit error messages
  * Example: "User-rate limit exceeded. Retry after 2025-08-22T18:22:38.763Z"

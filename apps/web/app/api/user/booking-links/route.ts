@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { withEmailAccount } from "@/utils/middleware";
 import prisma from "@/utils/prisma";
 import { SafeError } from "@/utils/error";
+import { calendarConnectionsWhere } from "@/utils/calendar/connections";
+import { onePerExternalAccount } from "@/utils/user/owned-by-same-user";
 
 export type GetBookingLinksResponse = Awaited<ReturnType<typeof getData>>;
 
@@ -54,29 +56,30 @@ async function getData({ emailAccountId }: { emailAccountId: string }) {
           },
         },
       },
-      calendarConnections: {
-        where: { isConnected: true },
-        orderBy: { createdAt: "desc" },
-        select: {
-          id: true,
-          provider: true,
-          email: true,
-          calendars: {
-            orderBy: [{ primary: "desc" }, { name: "asc" }],
-            select: {
-              id: true,
-              name: true,
-              primary: true,
-              timezone: true,
-              isEnabled: true,
-            },
-          },
-        },
-      },
     },
   });
 
   if (!emailAccount) throw new SafeError("User not found", 404);
+
+  const calendarConnections = await prisma.calendarConnection.findMany({
+    where: { ...calendarConnectionsWhere(emailAccountId), isConnected: true },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      provider: true,
+      email: true,
+      calendars: {
+        orderBy: [{ primary: "desc" }, { name: "asc" }],
+        select: {
+          id: true,
+          name: true,
+          primary: true,
+          timezone: true,
+          isEnabled: true,
+        },
+      },
+    },
+  });
 
   return {
     timezone: emailAccount.timezone,
@@ -86,6 +89,6 @@ async function getData({ emailAccountId }: { emailAccountId: string }) {
         windows: availabilitySchedule.windows,
       }),
     ),
-    calendarConnections: emailAccount.calendarConnections,
+    calendarConnections: onePerExternalAccount(calendarConnections),
   };
 }

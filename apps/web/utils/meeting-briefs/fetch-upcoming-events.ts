@@ -25,12 +25,14 @@ export async function fetchUpcomingEvents({
   const timeMin = new Date();
 
   // Briefings only ever act on the events they can see, so a partial fetch is
-  // harmless here.
+  // harmless here. Each calendar is briefed by the account that connected it,
+  // so a person with two mailboxes is not briefed twice for one meeting.
   const { events } = await fetchCalendarEventsInWindow({
     emailAccountId,
     timeMin,
     timeMax: addMinutes(timeMin, minutesBefore + CRON_INTERVAL_MINUTES),
     maxResultsPerProvider: MAX_EVENTS_PER_PROVIDER,
+    ownConnectionsOnly: true,
     logger,
   });
 

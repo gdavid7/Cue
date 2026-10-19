@@ -53,6 +53,7 @@ import { scheduleWatchAfterLinking } from "@/utils/email/watch-after-linking";
 import { INITIAL_REPLY_TRACKING_RULES } from "@/utils/reply-tracker/initial-rules";
 import { recordFirstSignIn } from "@/utils/analytics/activation";
 import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
+import { shareChannelsAcrossMailboxes } from "@/utils/messaging/shared-channels";
 
 export const GET = withError("outlook/linking/callback", async (request) => {
   const actorSession = await auth(request.headers);
@@ -582,6 +583,13 @@ async function completeMicrosoftAccountLinking({
   targetUserId: string;
 }) {
   await connectCalendarAtSignIn({ accountId, logger });
+  await shareChannelsAcrossMailboxes({ userId: targetUserId, logger }).catch(
+    (error) => {
+      logger.error("Failed to share messaging channels with mailbox", {
+        error,
+      });
+    },
+  );
   await invalidateUserOwnAddresses(targetUserId);
   await setOAuthCodeResult(code, { success });
 

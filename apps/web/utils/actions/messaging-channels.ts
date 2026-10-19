@@ -14,7 +14,6 @@ import {
 import prisma from "@/utils/prisma";
 import { SafeError } from "@/utils/error";
 import { RULE_MANAGED_BY_ORGANIZATION_ERROR } from "@/utils/organizations/rules";
-import { isNotFoundError } from "@/utils/prisma-helpers";
 import {
   ActionType,
   MessagingProvider,
@@ -45,6 +44,10 @@ import { callTelegramBotApi } from "@/utils/messaging/providers/telegram/api";
 import { isTeamsBotConfigured } from "@/utils/messaging/chat-sdk/teams-config";
 import { assertCanUseDigests } from "@/utils/premium/server";
 import { BRAND_NAME } from "@/utils/branding";
+import {
+  findSharedChannelIds,
+  shareConnectedChannel,
+} from "@/utils/messaging/shared-channels";
 
 export const updateSlackRouteAction = actionClient
   .metadata({ name: "updateSlackRoute" })
@@ -179,26 +182,22 @@ export const disconnectChannelAction = actionClient
   .metadata({ name: "disconnectChannel" })
   .inputSchema(disconnectChannelBody)
   .action(async ({ ctx: { emailAccountId }, parsedInput: { channelId } }) => {
-    try {
-      await prisma.messagingChannel.update({
-        where: {
-          id_emailAccountId: {
-            id: channelId,
-            emailAccountId,
-          },
-        },
-        data: {
-          isConnected: false,
-          routes: {
-            deleteMany: {},
-          },
-        },
-      });
-    } catch (error) {
-      if (isNotFoundError(error))
-        throw new SafeError("Messaging channel not found");
-      throw error;
-    }
+    // Connected once for every mailbox, so disconnected from every mailbox.
+    const channelIds = await findSharedChannelIds({
+      channelId,
+      emailAccountId,
+    });
+    if (!channelIds) throw new SafeError("Messaging channel not found");
+
+    await prisma.$transaction([
+      prisma.messagingRoute.deleteMany({
+        where: { messagingChannelId: { in: channelIds } },
+      }),
+      prisma.messagingChannel.updateMany({
+        where: { id: { in: channelIds } },
+        data: { isConnected: false },
+      }),
+    ]);
   });
 
 export const linkSlackWorkspaceAction = actionClient
@@ -264,7 +263,7 @@ export const linkSlackWorkspaceAction = actionClient
         );
       }
 
-      await prisma.messagingChannel.upsert({
+      const channel = await prisma.messagingChannel.upsert({
         where: {
           emailAccountId_provider_teamId: {
             emailAccountId,
@@ -290,6 +289,14 @@ export const linkSlackWorkspaceAction = actionClient
           isConnected: true,
         },
       });
+
+      await shareConnectedChannel({ channelId: channel.id, logger }).catch(
+        (error) => {
+          logger.error("Failed to share Slack with other mailboxes", {
+            error,
+          });
+        },
+      );
 
       await sendSlackOnboardingDirectMessageWithLogging({
         accessToken: orgMateChannel.accessToken,

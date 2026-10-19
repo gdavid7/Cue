@@ -1,22 +1,44 @@
 import chunk from "lodash/chunk";
 import { type BatchError, isBatchError, isDefined } from "@/utils/types";
 import { getBatch } from "@/utils/gmail/batch";
-import { isGmailNotFound, isRetryableError } from "@/utils/gmail/retry";
+import {
+  getRetryTimeDelayMs,
+  isGmailNotFound,
+  isRetryableError,
+  MAX_GMAIL_BLOCKING_RETRY_DELAY_MS,
+} from "@/utils/gmail/retry";
 import { sleep } from "@/utils/sleep";
 import type { Logger } from "@/utils/logger";
 import {
   currentGmailQuotaContext,
   gmailRequestCost,
   gmailRequestUnitsFor,
+  type GmailQuotaPriority,
 } from "@/utils/gmail/quota";
 
 // Gmail charges every request in a batch at once, so a batch is one burst.
 // Each is sized to fit the gate's per-second pace at the caller's priority
 // (5 messages interactive, 4 sync, 2 background) rather than 25 at a time,
 // which Gmail answered by refusing the tail of each batch.
-const RATE_LIMIT_RETRY_BATCH_SIZE = 10;
 const MAX_BATCH_RETRIES = 3;
 const MAX_RETRY_JITTER_MS = 1000;
+
+// Someone is waiting on an interactive read, so it gives up on a distant
+// Retry-after rather than holding the request; background work can wait it out.
+// The budget is the most one call sleeps in all, across chunks and rounds.
+const RETRY_POLICY: Record<
+  GmailQuotaPriority,
+  { maxHintMs: number; sleepBudgetMs: number }
+> = {
+  interactive: { maxHintMs: 2500, sleepBudgetMs: 15_000 },
+  sync: { maxHintMs: MAX_GMAIL_BLOCKING_RETRY_DELAY_MS, sleepBudgetMs: 60_000 },
+  background: {
+    maxHintMs: MAX_GMAIL_BLOCKING_RETRY_DELAY_MS,
+    sleepBudgetMs: 120_000,
+  },
+};
+
+type SleepBudget = { remainingMs: number };
 
 export type BatchWithRetryResult<TParsed> = {
   items: TParsed[];
@@ -26,7 +48,8 @@ export type BatchWithRetryResult<TParsed> = {
 };
 
 // Gmail counts each subrequest toward per-user concurrency. Leave headroom for
-// other account activity, then reduce rate-limited retries even further.
+// other account activity, and halve the batch on each retry so a refused tail
+// meets less concurrency the next time.
 // Returns what loaded: once a batch runs out of retries the rest are left
 // unloaded rather than retried, since they would meet the same limit. Callers
 // that need every item use `requireCompleteBatch`.
@@ -51,6 +74,11 @@ export async function getBatchWithRetry<TRaw, TParsed>({
 }): Promise<BatchWithRetryResult<TParsed>> {
   if (!accessToken) throw new Error("No access token");
 
+  const sleepBudget: SleepBudget = {
+    remainingMs:
+      RETRY_POLICY[currentGmailQuotaContext().priority].sleepBudgetMs,
+  };
+
   return getChunksWithRetry(chunk(ids, batchSizeFor(endpoint)), (idsChunk) =>
     getBatchChunkWithRetry<TRaw, TParsed>({
       ids: idsChunk,
@@ -61,6 +89,7 @@ export async function getBatchWithRetry<TRaw, TParsed>({
       queryString,
       retryCount,
       retryError,
+      sleepBudget,
     }),
   );
 }
@@ -87,6 +116,7 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
   queryString,
   retryCount,
   retryError,
+  sleepBudget,
 }: {
   ids: string[];
   endpoint: string;
@@ -96,6 +126,7 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
   queryString?: string;
   retryCount: number;
   retryError?: BatchError["error"];
+  sleepBudget: SleepBudget;
 }): Promise<BatchWithRetryResult<TParsed>> {
   if (retryCount > MAX_BATCH_RETRIES)
     return retryLimitReached({
@@ -118,10 +149,11 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
   }
 
   const missingIds = new Set<string>();
-  const rateLimitedIds = new Set<string>();
   let lastRetryableError = retryError;
   let retryableItemCount = 0;
   let rateLimitedItemCount = 0;
+  let serverHintDelayMs = 0;
+  let firstError: BatchError["error"] | undefined;
 
   const parsed = batch
     .map((item, i) => {
@@ -152,10 +184,14 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
         }
 
         retryableItemCount++;
+        firstError ??= item.error;
         if (isRateLimit) {
           rateLimitedItemCount++;
-          rateLimitedIds.add(ids[i]);
         }
+        serverHintDelayMs = Math.max(
+          serverHintDelayMs,
+          getRetryTimeDelayMs(errorMessage) ?? 0,
+        );
         if (isRateLimit || !lastRetryableError) {
           lastRetryableError = item.error;
         }
@@ -182,28 +218,46 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
         items: parsed,
       };
 
+    const priority = currentGmailQuotaContext().priority;
+    const { maxHintMs } = RETRY_POLICY[priority];
+    const exponentialDelayMs = Math.min(
+      1000 * 2 ** (nextRetryCount - 1),
+      MAX_GMAIL_BLOCKING_RETRY_DELAY_MS,
+    );
+    const jitterMs = Math.floor(Math.random() * (MAX_RETRY_JITTER_MS + 1));
+    // A time Gmail names is a floor, not a suggestion; retrying before it
+    // only earns another refusal, so a read that cannot wait gives up instead.
+    const delayMs =
+      Math.max(exponentialDelayMs, Math.min(serverHintDelayMs, maxHintMs)) +
+      jitterMs;
+    if (
+      (priority === "interactive" && serverHintDelayMs > maxHintMs) ||
+      delayMs > sleepBudget.remainingMs
+    )
+      return {
+        ...retryLimitReached({
+          ids: remainingIds,
+          retryCount: nextRetryCount,
+          retryError: lastRetryableError,
+          logger,
+        }),
+        items: parsed,
+      };
+
     logger.warn("Retrying Gmail batch items", {
       batchSize: ids.length,
       retryableItemCount,
       rateLimitedItemCount,
       retryCount: nextRetryCount,
+      firstCode: firstError?.code,
+      firstReason: firstError?.errors?.[0]?.reason,
     });
-    const exponentialDelayMs = Math.min(
-      1000 * 2 ** (nextRetryCount - 1),
-      10_000,
+    sleepBudget.remainingMs -= delayMs;
+    await sleep(delayMs);
+    const retryChunks = chunk(
+      remainingIds,
+      Math.max(1, Math.floor(batchSizeFor(endpoint) / 2 ** nextRetryCount)),
     );
-    const jitterMs = Math.floor(Math.random() * (MAX_RETRY_JITTER_MS + 1));
-    await sleep(exponentialDelayMs + jitterMs);
-    const nonRateLimitedIds = remainingIds.filter(
-      (id) => !rateLimitedIds.has(id),
-    );
-    const retryChunks = [
-      ...chunk(nonRateLimitedIds, batchSizeFor(endpoint)),
-      ...chunk(
-        Array.from(rateLimitedIds),
-        Math.min(RATE_LIMIT_RETRY_BATCH_SIZE, batchSizeFor(endpoint)),
-      ),
-    ];
     const refetched = await getChunksWithRetry(retryChunks, (idsChunk) =>
       getBatchChunkWithRetry<TRaw, TParsed>({
         ids: idsChunk,
@@ -214,6 +268,7 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
         retryError: lastRetryableError,
         logger,
         queryString,
+        sleepBudget,
       }),
     );
     return { ...refetched, items: [...parsed, ...refetched.items] };

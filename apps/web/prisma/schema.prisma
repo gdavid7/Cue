@@ -111,6 +111,7 @@ model User {
   apiKeys ApiKey[]
 
   emailAccounts EmailAccount[]
+  feedback      Feedback[]
 
   // Referral relationships
   referralsMade    Referral[]        @relation("ReferrerUser")
@@ -216,6 +217,7 @@ model EmailAccount {
   account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   labels               Label[]
+  feedback             Feedback[]
   rules                Rule[]
   executedRules        ExecutedRule[]
   newsletters          Newsletter[]
@@ -2938,4 +2940,28 @@ model AccessRequest {
   notifiedAt DateTime?
 
   @@index([status, createdAt])
+}
+
+enum FeedbackStatus {
+  NEW
+  SEEN
+  DONE
+}
+
+// In-app feedback from beta testers, read at /admin/feedback.
+model Feedback {
+  id             String         @id @default(cuid())
+  createdAt      DateTime       @default(now())
+  userId         String
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailAccountId String?
+  emailAccount   EmailAccount?  @relation(fields: [emailAccountId], references: [id], onDelete: SetNull)
+  message        String         @db.Text
+  page           String?
+  userAgent      String?
+  status         FeedbackStatus @default(NEW)
+
+  @@index([createdAt])
+  @@index([userId])
+  @@index([emailAccountId])
 }

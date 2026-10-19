@@ -53,6 +53,7 @@ describe("getHomeData", () => {
     mocks.fetchEvents.mockResolvedValue({ events: [], complete: true });
     checkedMessages.mockResolvedValue([]);
     prisma.mcpConnection.findMany.mockResolvedValue([]);
+    prisma.calendarConnection.findMany.mockResolvedValue([]);
     prisma.emailMessage.findMany.mockResolvedValue([]);
     prisma.executedAction.findMany.mockResolvedValue([]);
     prisma.scheduledAction.findMany.mockResolvedValue([]);
@@ -515,6 +516,7 @@ describe("getHomeData: what's next", () => {
       rules: [],
     } as never);
     prisma.mcpConnection.findMany.mockResolvedValue([]);
+    prisma.calendarConnection.findMany.mockResolvedValue([]);
     prisma.emailMessage.findMany.mockResolvedValue([]);
     mocks.fetchEvents.mockResolvedValue({ events: [], complete: true });
   });
@@ -544,6 +546,55 @@ describe("getHomeData: what's next", () => {
         tomorrow: false,
       },
     });
+  });
+
+  it("skips a meeting the user declined from another of their addresses", async () => {
+    const other = "me@work.example.com";
+    mocks.fetchEvents.mockResolvedValue({
+      complete: true,
+      events: [
+        {
+          ...event("pitch", "Vendor pitch", "2026-10-13T17:00:00Z"),
+          attendees: [{ email: USER }, { email: other, declined: true }],
+        },
+        event("review", "Design review", "2026-10-13T21:00:00Z"),
+      ],
+    });
+
+    const home = await getHomeData({
+      emailAccountId: "account-1",
+      userEmail: USER,
+      ownAddresses: [USER, other],
+      emailProvider: mockProvider({}),
+      logger: createTestLogger(),
+      timeZone: TIME_ZONE,
+      now: NOW,
+    });
+
+    expect(home.calendar.next?.title).toBe("Design review");
+    expect(home.nextUp.map((item) => item.title)).toEqual(["Design review"]);
+  });
+
+  it("skips a meeting declined from another of the person's calendars", async () => {
+    // Events come from every calendar the person connected, so the work
+    // calendar's own address declining counts too.
+    prisma.calendarConnection.findMany.mockResolvedValue([
+      { email: "david@work.example.com" },
+    ] as never);
+    mocks.fetchEvents.mockResolvedValue({
+      complete: true,
+      events: [
+        {
+          ...event("pitch", "Vendor pitch", "2026-10-13T17:00:00Z"),
+          attendees: [{ email: "David@work.example.com", declined: true }],
+        },
+        event("review", "Design review", "2026-10-13T21:00:00Z"),
+      ],
+    });
+
+    const home = await run(mockProvider({}));
+
+    expect(home.calendar.next?.title).toBe("Design review");
   });
 
   it("after 5 pm, names how tomorrow starts instead of what's left tonight", async () => {

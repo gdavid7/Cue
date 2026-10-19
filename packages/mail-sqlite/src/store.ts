@@ -83,6 +83,7 @@ import { migrateCompressedMessageBodies } from "./message-body-migration";
 import {
   connectionStatus,
   metadataFromEffective,
+  coversWholeMailbox,
   readCoverage,
   readRevision,
 } from "./store-read-utils";
@@ -1422,9 +1423,7 @@ export async function createSqliteMailStore(
     async readConversationMembershipState(key, nowMs) {
       return driver.read(async (tx) => {
         const coverage = await readCoverage(tx, [key.accountId]);
-        if (coverage.every((scope) => scope.metadata === "complete")) {
-          return "complete" as const;
-        }
+        if (coversWholeMailbox(coverage)) return "complete" as const;
         const flag = await tx.query(
           "SELECT complete FROM conversation_completeness WHERE account_id = ? AND conversation_id = ?",
           [key.accountId, key.conversationId],
@@ -1857,13 +1856,21 @@ export async function createSqliteMailStore(
               input.scopeId,
             );
           }
+          // Each full scan says how far back it reached; catch-up rounds
+          // keep that, since they only follow changes from here on.
           await tx.execute(
-            `INSERT INTO coverage(account_id, scope_id, metadata, content, indexed_content, last_completed_sync_at_ms)
-             VALUES (?, ?, 'complete', 'partial', 'partial', ?)
+            `INSERT INTO coverage(account_id, scope_id, metadata, content, indexed_content, last_completed_sync_at_ms, window_start_ms)
+             VALUES (?, ?, 'complete', 'partial', 'partial', ?, ?)
              ON CONFLICT(account_id, scope_id) DO UPDATE SET
                metadata = 'complete',
-               last_completed_sync_at_ms = excluded.last_completed_sync_at_ms`,
-            [input.session.accountId, nextStream.streamId, Date.now()],
+               last_completed_sync_at_ms = excluded.last_completed_sync_at_ms,
+               window_start_ms = excluded.window_start_ms`,
+            [
+              input.session.accountId,
+              nextStream.streamId,
+              Date.now(),
+              input.windowStartMs ?? null,
+            ],
           );
           await tx.execute(
             "DELETE FROM bootstrap_scans WHERE account_id = ? AND scope_id = ?",

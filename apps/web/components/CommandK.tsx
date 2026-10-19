@@ -76,16 +76,16 @@ const ALWAYS_VISIBLE_SHORTCUT_COMMANDS = new Set(["compose", "help"]);
 // route's own bindings: these handlers are only defined when the side panel has a
 // thread (`side-panel-thread-id`), which the mail list never sets — and the mail
 // screen in turn stands down while the side panel is open.
-export function CommandK({ feedbackEnabled }: { feedbackEnabled: boolean }) {
+export function CommandK() {
   return (
     <ShortcutsProvider scopes={MAIL_SHORTCUT_SCOPES}>
-      <CommandPalette feedbackEnabled={feedbackEnabled} />
+      <CommandPalette />
       <ShortcutsDialog />
     </ShortcutsProvider>
   );
 }
 
-function CommandPalette({ feedbackEnabled }: { feedbackEnabled: boolean }) {
+function CommandPalette() {
   const mailCommandContext = useAtomValue(mailCommandContextAtom);
   const senderCommandContext = useAtomValue(senderCommandContextAtom);
   const displayedEmail = useDisplayedEmail();
@@ -100,7 +100,6 @@ function CommandPalette({ feedbackEnabled }: { feedbackEnabled: boolean }) {
 
   return (
     <CommandPaletteContent
-      feedbackEnabled={feedbackEnabled}
       displayedEmail={displayedEmail}
       mailCommandContext={activeMailContext}
       senderCommandContext={
@@ -111,12 +110,10 @@ function CommandPalette({ feedbackEnabled }: { feedbackEnabled: boolean }) {
 }
 
 function CommandPaletteContent({
-  feedbackEnabled,
   displayedEmail,
   mailCommandContext,
   senderCommandContext,
 }: {
-  feedbackEnabled: boolean;
   displayedEmail: ReturnType<typeof useDisplayedEmail>;
   mailCommandContext: MailCommandContext | null;
   senderCommandContext: SenderCommandContext | null;
@@ -335,16 +332,14 @@ function CommandPaletteContent({
       ...commands,
       ...themeCommands,
     ];
-    if (feedbackEnabled) {
-      allCommands.push({
-        id: "send-feedback",
-        label: "Send feedback",
-        icon: MessageSquarePlusIcon,
-        section: "settings",
-        keywords: ["feedback", "bug", "report", "suggestion", "idea"],
-        action: () => setFeedbackOpen(true),
-      });
-    }
+    allCommands.push({
+      id: "send-feedback",
+      label: "Send feedback",
+      icon: MessageSquarePlusIcon,
+      section: "settings",
+      keywords: ["feedback", "bug", "report", "suggestion", "idea"],
+      action: () => setFeedbackOpen(true),
+    });
   }
 
   const filteredCommands =

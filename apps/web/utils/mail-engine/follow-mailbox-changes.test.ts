@@ -3,7 +3,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { followMailboxChanges } from "./follow-mailbox-changes";
+import {
+  followMailboxChanges,
+  getFollowedAccountIds,
+} from "./follow-mailbox-changes";
 
 const visibilityDescriptor = Object.getOwnPropertyDescriptor(
   document,
@@ -206,3 +209,29 @@ function setVisibility(state: DocumentVisibilityState) {
   });
   document.dispatchEvent(new Event("visibilitychange"));
 }
+
+describe("getFollowedAccountIds", () => {
+  it("across accounts, follows every account in All inboxes, the open one first", () => {
+    expect(getFollowedAccountIds("b", ["a", "b", "c"], true)).toEqual([
+      "b",
+      "a",
+      "c",
+    ]);
+  });
+
+  it("on one account's pages, follows only that account", () => {
+    expect(getFollowedAccountIds("b", ["a", "b", "c"], false)).toEqual(["b"]);
+  });
+
+  it("follows only the open account when All inboxes has one", () => {
+    expect(getFollowedAccountIds("a", ["a"], true)).toEqual(["a"]);
+    // An account left out of All inboxes still gets its own when open.
+    expect(getFollowedAccountIds("x", ["a"], true)).toEqual(["x"]);
+  });
+
+  it("keeps the number of streams bounded", () => {
+    expect(
+      getFollowedAccountIds("a", ["a", "b", "c", "d", "e", "f"], true),
+    ).toHaveLength(4);
+  });
+});

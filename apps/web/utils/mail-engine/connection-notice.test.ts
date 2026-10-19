@@ -6,7 +6,7 @@ describe("mailEngineConnectionCopy", () => {
     expect(mailEngineConnectionCopy("blocked_auth", "google")).toEqual({
       title: "Sign in again to reconnect Gmail",
       description:
-        "Google signed Cue out, so new mail is paused. Your mail and settings are still here.",
+        "Google signed Cue out, so new mail is paused. Your mail and settings are still here. During the beta, Google asks you to sign in again about once a week.",
       action: "Sign in again",
     });
   });

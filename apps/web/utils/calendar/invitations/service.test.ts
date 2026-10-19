@@ -52,7 +52,12 @@ beforeEach(() => {
 describe("responding to calendar invitations", () => {
   it("uses email fallback when the calendar has no refresh token", async () => {
     mocks.connections.mockResolvedValue([
-      { provider: "google", refreshToken: null },
+      {
+        id: "connection-1",
+        email: "calendar-1@example.com",
+        provider: "google",
+        refreshToken: null,
+      },
     ]);
     await expect(respondToCalendarInvitation(params)).resolves.toEqual({
       response: "accepted",
@@ -64,8 +69,18 @@ describe("responding to calendar invitations", () => {
 
   it("skips unusable calendar credentials before checking a usable connection", async () => {
     mocks.connections.mockResolvedValue([
-      { provider: "google", refreshToken: null },
-      { provider: "microsoft", refreshToken: "refresh" },
+      {
+        id: "connection-2",
+        email: "calendar-2@example.com",
+        provider: "google",
+        refreshToken: null,
+      },
+      {
+        id: "connection-3",
+        email: "calendar-3@example.com",
+        provider: "microsoft",
+        refreshToken: "refresh",
+      },
     ]);
     await expect(respondToCalendarInvitation(params)).resolves.toEqual({
       response: "accepted",
@@ -94,7 +109,12 @@ describe("responding to calendar invitations", () => {
 
   it("updates a matched event without sending a duplicate reply email", async () => {
     mocks.connections.mockResolvedValue([
-      { provider: "google", refreshToken: "refresh" },
+      {
+        id: "connection-4",
+        email: "calendar-4@example.com",
+        provider: "google",
+        refreshToken: "refresh",
+      },
     ]);
     await expect(respondToCalendarInvitation(params)).resolves.toEqual({
       response: "accepted",
@@ -106,7 +126,12 @@ describe("responding to calendar invitations", () => {
 
   it("responds through the calendar event the mailbox linked to the invitation", async () => {
     mocks.connections.mockResolvedValue([
-      { provider: "microsoft", refreshToken: "refresh" },
+      {
+        id: "connection-5",
+        email: "calendar-5@example.com",
+        provider: "microsoft",
+        refreshToken: "refresh",
+      },
     ]);
     getMessage.mockResolvedValue({
       ...getEmail(),
@@ -126,7 +151,12 @@ describe("responding to calendar invitations", () => {
 
   it("does not send an email fallback after a calendar write failure", async () => {
     mocks.connections.mockResolvedValue([
-      { provider: "google", refreshToken: "refresh" },
+      {
+        id: "connection-6",
+        email: "calendar-6@example.com",
+        provider: "google",
+        refreshToken: "refresh",
+      },
     ]);
     mocks.respond.mockRejectedValue(new Error("Provider unavailable"));
     await expect(respondToCalendarInvitation(params)).rejects.toThrow(
@@ -354,7 +384,12 @@ describe("loading calendar invitations", () => {
 
   it("returns the current calendar response without exposing raw invitation data", async () => {
     mocks.connections.mockResolvedValue([
-      { provider: "google", refreshToken: "refresh" },
+      {
+        id: "connection-7",
+        email: "calendar-7@example.com",
+        provider: "google",
+        refreshToken: "refresh",
+      },
     ]);
     mocks.findEvent.mockResolvedValue({ id: "event", response: "accepted" });
     expect(await getCalendarInvitation(params)).toEqual({
@@ -373,7 +408,7 @@ describe("loading calendar invitations", () => {
     });
     expect(mocks.connections).toHaveBeenCalledWith({
       where: {
-        emailAccountId: "account",
+        emailAccount: { user: { emailAccounts: { some: { id: "account" } } } },
         isConnected: true,
         email: { equals: "user@example.com", mode: "insensitive" },
       },
@@ -382,8 +417,18 @@ describe("loading calendar invitations", () => {
 
   it("rejects ambiguous calendar matches without sending a response", async () => {
     mocks.connections.mockResolvedValue([
-      { provider: "google", refreshToken: "refresh" },
-      { provider: "microsoft", refreshToken: "refresh" },
+      {
+        id: "connection-8",
+        email: "calendar-8@example.com",
+        provider: "google",
+        refreshToken: "refresh",
+      },
+      {
+        id: "connection-9",
+        email: "calendar-9@example.com",
+        provider: "microsoft",
+        refreshToken: "refresh",
+      },
     ]);
     await expect(respondToCalendarInvitation(params)).rejects.toThrow(
       "multiple calendars",

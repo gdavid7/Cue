@@ -29,6 +29,7 @@ import {
   sendBookingRescheduledEmails,
 } from "@/utils/booking/emails";
 import { secureCompareBuffers } from "@/utils/crypto-compare";
+import { calendarConnectionsWhere } from "@/utils/calendar/connections";
 
 const MAX_AVAILABILITY_RANGE_MS = 32 * 24 * 60 * 60 * 1000;
 const PENDING_BOOKING_TIMEOUT_MS = 15 * 60 * 1000;
@@ -639,16 +640,6 @@ async function loadPublicBookingLink(slug: string) {
         select: {
           name: true,
           timezone: true,
-          calendarConnections: {
-            where: { isConnected: true },
-            select: {
-              id: true,
-              calendars: {
-                where: { isEnabled: true },
-                select: { id: true },
-              },
-            },
-          },
         },
       },
     },
@@ -656,9 +647,22 @@ async function loadPublicBookingLink(slug: string) {
 
   if (!link) throw new SafeError("Booking link not found", 404);
 
-  const enabledCalendarIds = link.emailAccount.calendarConnections.flatMap(
-    (connection) => connection.calendars.map((calendar) => calendar.id),
-  );
+  // The host's calendars from any of their mailboxes can take the booking.
+  const enabledCalendars = await prisma.calendar.findMany({
+    where: {
+      isEnabled: true,
+      connection: {
+        ...calendarConnectionsWhere(link.emailAccountId),
+        isConnected: true,
+      },
+    },
+    select: {
+      id: true,
+      connectionId: true,
+      connection: { select: { emailAccountId: true } },
+    },
+  });
+  const enabledCalendarIds = enabledCalendars.map((calendar) => calendar.id);
   if (enabledCalendarIds.length === 0) {
     throw new SafeError("No enabled calendar is available for this host");
   }
@@ -675,6 +679,14 @@ async function loadPublicBookingLink(slug: string) {
 
   return {
     link,
+    // The calendars a booking may be written to, which availability must be
+    // able to read: the destination, else the host mailbox's own calendars,
+    // else (none of its own) any of the host's.
+    writableCalendar: getWritableCalendarScope({
+      destinationCalendarId: link.destinationCalendarId,
+      hostEmailAccountId: link.emailAccountId,
+      enabledCalendars,
+    }),
     timezone: getAccountTimezone(link.emailAccount.timezone),
     windows: link.availabilitySchedule.windows.map((window) => ({
       weekday: window.weekday,
@@ -751,7 +763,11 @@ async function getBusyPeriods({
       endDate: end,
       timezone: config.timezone,
       logger,
-      failClosed: true,
+      // Only the calendar the booking is written to must be readable: the
+      // destination, or without one the host mailbox's own calendars. A
+      // sibling mailbox's calendar that is down is skipped and logged, so
+      // an expired personal token cannot take a work booking link down.
+      failClosed: config.writableCalendar,
       excludeGoogleVirtualCalendars: true,
     }).catch((error) => {
       logger.error("Failed to load provider availability for public booking", {
@@ -1060,4 +1076,30 @@ function getRescheduleUrl({ id, token }: { id: string; token: string }) {
   return `${env.NEXT_PUBLIC_BASE_URL}/book/reschedule/${id}?token=${encodeURIComponent(
     token,
   )}`;
+}
+
+function getWritableCalendarScope({
+  destinationCalendarId,
+  hostEmailAccountId,
+  enabledCalendars,
+}: {
+  destinationCalendarId: string | null;
+  hostEmailAccountId: string;
+  enabledCalendars: Array<{
+    id: string;
+    connectionId: string;
+    connection: { emailAccountId: string };
+  }>;
+}): (connection: { id: string; emailAccountId: string }) => boolean {
+  if (destinationCalendarId) {
+    const destination = enabledCalendars.find(
+      (calendar) => calendar.id === destinationCalendarId,
+    );
+    return (connection) => connection.id === destination?.connectionId;
+  }
+  const hostHasOwnCalendar = enabledCalendars.some(
+    (calendar) => calendar.connection.emailAccountId === hostEmailAccountId,
+  );
+  if (!hostHasOwnCalendar) return () => true;
+  return (connection) => connection.emailAccountId === hostEmailAccountId;
 }

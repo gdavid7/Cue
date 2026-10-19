@@ -25,7 +25,6 @@ import { AnnouncementDialog } from "@/components/feature-announcements/Announcem
 import { captureException } from "@/utils/error";
 import prisma from "@/utils/prisma";
 import { createScopedLogger } from "@/utils/logger";
-import { booleanString } from "@/utils/zod";
 import { getEnabledMailboxProviders } from "@/utils/oauth/provider-config";
 import { getOrderedEmailAccounts } from "@/utils/mail-url.server";
 import { THEME_COLOR } from "@/components/theme-options";
@@ -77,10 +76,6 @@ export default async function AppLayout({
     getUserAiAccess(session.user.id),
   ]);
   const isClosed = cookieStore.get("left-sidebar:state")?.value === "false";
-  const bypassPremiumChecks =
-    booleanString.parse(process.env.NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS) ?? false;
-  const feedbackEnabled =
-    !bypassPremiumChecks || Boolean(process.env.FEEDBACK_WEBHOOK_URL);
 
   after(async () => {
     const email = session.user.email;
@@ -104,10 +99,7 @@ export default async function AppLayout({
           enabledMailboxProviders={getEnabledMailboxProviders()}
         >
           <MailEngineRuntime>
-            <SideNavWithTopNav
-              defaultOpen={!isClosed}
-              feedbackEnabled={feedbackEnabled}
-            >
+            <SideNavWithTopNav defaultOpen={!isClosed}>
               <DesktopMailIndicators />
               <AiAutomationStatusBanner
                 aiAccess={aiAccess}
@@ -122,11 +114,11 @@ export default async function AppLayout({
             <EmailViewer />
             <SettingsDialog />
             <AnnouncementDialog />
-            {feedbackEnabled && <FeedbackDialog />}
+            <FeedbackDialog />
             <ErrorBoundary extra={{ component: "AppLayout" }}>
               <PostHogIdentify />
 
-              <CommandK feedbackEnabled={feedbackEnabled} />
+              <CommandK />
               <AssessUser />
               <SentryIdentify email={session.user.email} />
             </ErrorBoundary>

@@ -928,7 +928,7 @@ export function MessagePart({
         return (
           <ToolResultWithLink
             key={toolCallId}
-            text={`Added to calendar: ${output.title}, ${formatCalendarItemTime(output)}`}
+            text={`Added to ${output.calendar ? `${output.calendar} calendar` : "calendar"}: ${output.title}, ${formatCalendarItemTime(output)}`}
             href={output.eventUrl}
             linkText="Open event"
           />

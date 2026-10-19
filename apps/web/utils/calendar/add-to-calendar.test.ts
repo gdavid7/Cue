@@ -71,6 +71,7 @@ describe("addToCalendar", () => {
       eventUrl: "https://calendar.google.com/event?eid=1",
       provider: "google",
       providerConnectionId: "connection-1",
+      calendarAccountEmail: "me@work.example.com",
     });
   });
 
@@ -102,6 +103,9 @@ describe("addToCalendar", () => {
       start: "2026-10-20",
       end: "2026-10-20",
       eventUrl: "https://calendar.google.com/event?eid=1",
+      // Which of the person's calendars took it, since it may be one
+      // connected from another of their mailboxes.
+      calendar: "me@work.example.com",
     });
   });
 });

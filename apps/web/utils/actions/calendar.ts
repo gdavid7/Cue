@@ -11,6 +11,7 @@ import {
 import prisma from "@/utils/prisma";
 import { SafeError } from "@/utils/error";
 import { addToCalendar } from "@/utils/calendar/add-to-calendar";
+import { calendarConnectionsWhere } from "@/utils/calendar/connections";
 
 export const disconnectCalendarAction = actionClient
   .metadata({ name: "disconnectCalendar" })
@@ -20,16 +21,25 @@ export const disconnectCalendarAction = actionClient
       const connection = await prisma.calendarConnection.findFirst({
         where: {
           id: connectionId,
-          emailAccountId,
+          ...calendarConnectionsWhere(emailAccountId),
         },
+        select: { provider: true, email: true },
       });
 
       if (!connection) {
         throw new SafeError("Calendar connection not found");
       }
 
-      await prisma.calendarConnection.delete({
-        where: { id: connectionId },
+      // Removes the row shown and this mailbox's own copy of that calendar.
+      // Another mailbox's own copy stays, because that mailbox's briefs and
+      // recorder read only its own calendars.
+      await prisma.calendarConnection.deleteMany({
+        where: {
+          ...calendarConnectionsWhere(emailAccountId),
+          provider: connection.provider,
+          email: { equals: connection.email, mode: "insensitive" },
+          OR: [{ id: connectionId }, { emailAccountId }],
+        },
       });
 
       return { success: true };
@@ -47,9 +57,7 @@ export const toggleCalendarAction = actionClient
       const updatedCalendar = await prisma.calendar.updateMany({
         where: {
           id: calendarId,
-          connection: {
-            emailAccountId,
-          },
+          connection: calendarConnectionsWhere(emailAccountId),
         },
         data: { isEnabled },
       });

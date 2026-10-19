@@ -9,6 +9,12 @@ import type {
   SnoozedThreadsResponse,
   UnsnoozeThreadsResponse,
 } from "@/app/api/user/snoozed-threads/route";
+import { AllInboxesFailedNotice } from "@/app/(app)/[emailAccountId]/mail/AllInboxesFailedNotice";
+import {
+  AccountRowMarker,
+  useAllAccountsList,
+} from "@/app/(app)/[emailAccountId]/mail/all-accounts-list";
+import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { formatSnoozeTime } from "@/app/(app)/[emailAccountId]/mail/snooze-command-palette";
 import { InlineActionButton } from "@/components/InlineActionButton";
 import { LoadingContent } from "@/components/LoadingContent";
@@ -18,29 +24,58 @@ import { fetchWithAccount } from "@/utils/fetch";
 import { decodeSnippet } from "@/utils/gmail/decode";
 import { getAccountScopedKey } from "@/utils/swr";
 
+const SNOOZED_PATH = "/api/user/snoozed-threads";
+
+type SnoozedRow = SnoozedThreadsResponse["threads"][number] & {
+  accountId: string;
+};
+
 /**
  * Snoozes live in our database, not the mailbox, so this view lists them from
- * there, with when each conversation comes back.
+ * there, with when each conversation comes back. In All inboxes it lists
+ * every account's, soonest back first, each naming its account.
  */
 export function SnoozedThreadList({
+  accounts,
   onOpenThread,
 }: {
-  onOpenThread: (threadId: string) => void;
+  /** All inboxes: the accounts to list snoozes from. */
+  accounts?: AllInboxesAccount[];
+  onOpenThread: (threadId: string, emailAccountId: string) => void;
 }) {
   const { emailAccountId } = useAccount();
   const client = useOptionalMailClient();
   const [busyThreadId, setBusyThreadId] = useState<string | null>(null);
-  const { data, isLoading, error, mutate } = useSWR<SnoozedThreadsResponse>(
-    getAccountScopedKey("/api/user/snoozed-threads", emailAccountId),
+  const one = useSWR<SnoozedThreadsResponse>(
+    accounts ? null : getAccountScopedKey(SNOOZED_PATH, emailAccountId),
   );
-  const rows = data?.threads ?? [];
+  const all = useAllAccountsList<SnoozedThreadsResponse>(
+    SNOOZED_PATH,
+    accounts,
+  );
+  const { isLoading, error, mutate } = accounts ? all : one;
+  const rows: SnoozedRow[] = accounts
+    ? (all.data?.byAccount ?? [])
+        .flatMap(({ accountId, data }) =>
+          data.threads.map((row) => ({ ...row, accountId })),
+        )
+        .sort(
+          (a, b) =>
+            new Date(a.scheduledFor).getTime() -
+            new Date(b.scheduledFor).getTime(),
+        )
+    : (one.data?.threads ?? []).map((row) => ({
+        ...row,
+        accountId: emailAccountId,
+      }));
 
-  const unsnooze = async (threadId: string) => {
+  const unsnooze = async (row: SnoozedRow) => {
+    const { threadId, accountId } = row;
     setBusyThreadId(threadId);
     try {
       const response = await fetchWithAccount({
-        url: "/api/user/snoozed-threads",
-        emailAccountId,
+        url: SNOOZED_PATH,
+        emailAccountId: accountId,
         init: {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
@@ -55,7 +90,7 @@ export function SnoozedThreadList({
         return;
       }
       toast.success("Moved to inbox");
-      client?.requestSync([emailAccountId]).catch(() => undefined);
+      client?.requestSync([accountId]).catch(() => undefined);
       await mutate().catch(() => undefined);
     } catch {
       toast.error("Couldn't unsnooze this conversation");
@@ -66,6 +101,13 @@ export function SnoozedThreadList({
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+      {accounts ? (
+        <AllInboxesFailedNotice
+          accounts={accounts}
+          failedAccountIds={all.data?.failedAccountIds ?? []}
+          onRetry={() => mutate()}
+        />
+      ) : null}
       <LoadingContent loading={isLoading} error={error}>
         {rows.length === 0 ? (
           <div className="px-6 py-12 text-center text-muted-foreground text-sm">
@@ -77,11 +119,15 @@ export function SnoozedThreadList({
             {rows.map((row) => (
               <li
                 className="flex items-center gap-3 border-border border-b px-4 py-3"
-                key={row.id}
+                key={`${row.accountId}:${row.id}`}
               >
+                <AccountRowMarker
+                  accountId={row.accountId}
+                  accounts={accounts}
+                />
                 <button
                   className="min-w-0 flex-1 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  onClick={() => onOpenThread(row.threadId)}
+                  onClick={() => onOpenThread(row.threadId, row.accountId)}
                   type="button"
                 >
                   <p className="truncate font-medium text-foreground text-sm">
@@ -104,7 +150,7 @@ export function SnoozedThreadList({
                 </p>
                 <InlineActionButton
                   disabled={busyThreadId !== null}
-                  onClick={() => unsnooze(row.threadId)}
+                  onClick={() => unsnooze(row)}
                 >
                   Unsnooze
                 </InlineActionButton>

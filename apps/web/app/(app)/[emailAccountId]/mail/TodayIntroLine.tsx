@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useUser } from "@/hooks/useUser";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { dismissHintAction } from "@/utils/actions/hints";
-import { prefixPath } from "@/utils/path";
+import { useTodayHref } from "@/hooks/useTodayHref";
 import { getInboxStyleHintId } from "@/utils/split-inbox/inbox-styles";
 
 export function getTodayIntroHintId(emailAccountId: string) {
@@ -21,6 +21,7 @@ export function TodayIntroLine({ ready }: { ready: boolean }) {
   const { emailAccountId } = useAccount();
   const { data: user, mutate } = useUser();
   const hintId = getTodayIntroHintId(emailAccountId);
+  const todayHref = useTodayHref();
 
   if (!ready || !user) return null;
   const setupDone = user.dismissedHints.includes(
@@ -42,7 +43,7 @@ export function TodayIntroLine({ ready }: { ready: boolean }) {
       <p className="min-w-0 flex-1">
         Your day, prepared:{" "}
         <Link
-          href={prefixPath(emailAccountId, "/home")}
+          href={todayHref}
           onClick={dismiss}
           className="font-medium underline underline-offset-4"
         >

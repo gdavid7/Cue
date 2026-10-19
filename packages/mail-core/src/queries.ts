@@ -124,6 +124,11 @@ export const coverageSchema = z.object({
   content: z.enum(["partial", "complete", "not_requested"]),
   indexedContent: z.enum(["partial", "complete", "not_requested"]),
   lastCompletedSyncAtMs: z.number().int().nullable(),
+  /**
+   * The scope's last full scan only reached back to this time, so older mail
+   * may exist that the store has never seen. Omitted when it covers it all.
+   */
+  windowStartMs: z.number().int().optional(),
 });
 export type Coverage = z.infer<typeof coverageSchema>;
 

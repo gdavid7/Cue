@@ -34,7 +34,13 @@ import {
   shouldStartMailEngine,
 } from "@/utils/mail-engine/runtime-mode";
 import { fetchEmailAccounts } from "@/utils/fetch-email-accounts";
-import { followMailboxChanges } from "@/utils/mail-engine/follow-mailbox-changes";
+import {
+  followMailboxChanges,
+  getFollowedAccountIds,
+} from "@/utils/mail-engine/follow-mailbox-changes";
+import { getAllInboxesAccounts } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
+import { useAccounts } from "@/hooks/useAccounts";
+import { useAllAccountsScope } from "@/hooks/useTodayHref";
 import { announceTodayChanged } from "@/utils/home/today-changes";
 import { browserMailEngineCapabilities } from "@/utils/mail-engine/worker-protocol";
 import {
@@ -388,17 +394,34 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
     };
   }, [client, emailAccountId]);
 
+  const { data: accountsData } = useAccounts();
+  const allAccounts = useAllAccountsScope();
+  // A string, so a refetched account list that changed nothing keeps the streams.
+  const followedAccountIds = emailAccountId
+    ? getFollowedAccountIds(
+        emailAccountId,
+        getAllInboxesAccounts(accountsData?.emailAccounts ?? []).map(
+          (account) => account.id,
+        ),
+        allAccounts,
+      ).join(",")
+    : "";
   useEffect(() => {
     // The desktop engine follows mailbox changes itself.
-    if (!client || !emailAccountId || hasDesktopMailEngineIpc()) return;
-    return followMailboxChanges({
-      accountId: emailAccountId,
-      onChange: () => {
-        client.requestSync([emailAccountId]).catch(() => undefined);
-      },
-      onTrackersChange: announceTodayChanged,
-    });
-  }, [client, emailAccountId]);
+    if (!client || !followedAccountIds || hasDesktopMailEngineIpc()) return;
+    const stops = followedAccountIds.split(",").map((accountId) =>
+      followMailboxChanges({
+        accountId,
+        onChange: () => {
+          client.requestSync([accountId]).catch(() => undefined);
+        },
+        onTrackersChange: () => announceTodayChanged(accountId),
+      }),
+    );
+    return () => {
+      for (const stop of stops) stop();
+    };
+  }, [client, followedAccountIds]);
 
   useEffect(() => {
     if (!client || !emailAccountId) return;

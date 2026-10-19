@@ -101,6 +101,9 @@ export const bootstrapRequestSchema = z.object({
   afterMs: z.number().int().nullable(),
   // Absent from older clients, which are then never treated as initial.
   initial: z.boolean().optional(),
+  // Absent from older clients, which drop a scan's window and would record
+  // it as the whole mailbox, so they always get a full scan.
+  windowedBackfill: z.boolean().optional(),
 });
 
 export const bootstrapResultSchema = z.object({
@@ -130,6 +133,7 @@ export const enumerationResultSchema = z.object({
   bodies: z.array(bodyObservationSchema).max(1000).optional(),
   nextPage: z.string().max(16_384).nullable(),
   catchUpFrom: syncPositionSchema.nullable(),
+  windowStartMs: z.number().int().optional(),
 });
 
 export const changesRequestSchema = z.object({

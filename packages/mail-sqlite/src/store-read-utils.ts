@@ -49,10 +49,21 @@ export async function readCoverage(
           row.last_completed_sync_at_ms == null
             ? null
             : Number(row.last_completed_sync_at_ms),
+        ...(row.window_start_ms != null && {
+          windowStartMs: Number(row.window_start_ms),
+        }),
       }),
     ),
     ...missingAccounts,
   ];
+}
+
+/** Every scope finished a scan of all its mail, not just a recent window. */
+export function coversWholeMailbox(coverage: Coverage[]) {
+  return coverage.every(
+    (scope) =>
+      scope.metadata === "complete" && scope.windowStartMs === undefined,
+  );
 }
 
 export function connectionStatus(value: unknown): ConnectionStatus {

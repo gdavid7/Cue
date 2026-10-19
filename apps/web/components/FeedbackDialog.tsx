@@ -1,6 +1,7 @@
 "use client";
 
 import { useAtom, useSetAtom } from "jotai";
+import { usePathname } from "next/navigation";
 import { type SubmitHandler, useForm } from "react-hook-form";
 import { useAction } from "next-safe-action/hooks";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -24,6 +25,7 @@ import {
 } from "@/utils/actions/feedback.validation";
 import { getActionErrorMessage } from "@/utils/error";
 import { feedbackDialogOpenAtom } from "@/store/command-palette";
+import { useAccount } from "@/providers/EmailAccountProvider";
 
 export function FeedbackSidebarButton() {
   const setOpen = useSetAtom(feedbackDialogOpenAtom);
@@ -44,6 +46,8 @@ export function FeedbackSidebarButton() {
 
 export function FeedbackDialog() {
   const [open, setOpen] = useAtom(feedbackDialogOpenAtom);
+  const pathname = usePathname();
+  const { emailAccountId } = useAccount();
 
   const {
     register,
@@ -71,7 +75,11 @@ export function FeedbackDialog() {
   });
 
   const onSubmit: SubmitHandler<SubmitFeedbackBody> = (data) => {
-    execute(data);
+    execute({
+      ...data,
+      page: pathname,
+      emailAccountId: emailAccountId || undefined,
+    });
   };
 
   const handleOpenChange = (nextOpen: boolean) => {

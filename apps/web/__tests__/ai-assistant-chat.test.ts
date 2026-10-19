@@ -11,6 +11,7 @@ import {
   GroupItemType,
 } from "@/generated/prisma/enums";
 import { aiProcessAssistantChat as processAssistantChat } from "@/utils/ai/assistant/chat";
+import { calendarConnectionsWhere } from "@/utils/calendar/connections";
 
 const {
   envState,
@@ -419,7 +420,7 @@ describe("aiProcessAssistantChat", () => {
     expect(mockPrisma.calendarConnection.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
-          emailAccountId: "email-account-id",
+          ...calendarConnectionsWhere("email-account-id"),
           isConnected: true,
         },
       }),

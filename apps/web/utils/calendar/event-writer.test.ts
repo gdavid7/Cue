@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import { createTestLogger } from "@/__tests__/helpers";
 import {
   cancelCalendarEvent,
@@ -51,6 +52,7 @@ describe("createCalendarEvent", () => {
       calendarId: "primary",
       connection: {
         id: "connection-id",
+        emailAccountId: "email-account-id",
         provider: "google",
         accessToken: "access-token",
         refreshToken: "refresh-token",
@@ -93,6 +95,53 @@ describe("createCalendarEvent", () => {
     });
   });
 
+  it("writes through a calendar connected from another of the person's mailboxes with that mailbox's credentials", async () => {
+    prisma.calendar.findFirst.mockResolvedValue({
+      calendarId: "primary",
+      connection: {
+        id: "work-connection-id",
+        emailAccountId: "work-account-id",
+        email: "me@work.example.com",
+        provider: "google",
+        accessToken: "access-token",
+        refreshToken: "refresh-token",
+        expiresAt: null,
+      },
+    });
+
+    const result = await createCalendarEvent({
+      attendees: [],
+      destinationCalendarId: "work-calendar-row-id",
+      emailAccountId: "personal-account-id",
+      endTime: new Date("2026-05-04T09:30:00.000Z"),
+      locationType: "CUSTOM",
+      logger: createTestLogger(),
+      startTime: new Date("2026-05-04T09:00:00.000Z"),
+      timezone: "UTC",
+      title: "Intro call",
+    });
+
+    expect(prisma.calendar.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: "work-calendar-row-id",
+          connection: {
+            ...ownedBySameUser("personal-account-id"),
+            isConnected: true,
+          },
+        }),
+      }),
+    );
+    expect(result.calendarAccountEmail).toBe("me@work.example.com");
+    // Refreshed tokens are saved against the connection's own mailbox.
+    expect(providerMocks.googleConstructor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: "work-connection-id",
+        emailAccountId: "work-account-id",
+      }),
+    );
+  });
+
   it("falls back to any enabled calendar when no destination is set and no primary exists", async () => {
     // Microsoft accounts synced before primary tracking have no primary
     // calendar row; booking links without an explicit destination must still
@@ -101,6 +150,7 @@ describe("createCalendarEvent", () => {
       calendarId: "microsoft-calendar",
       connection: {
         id: "connection-id",
+        emailAccountId: "email-account-id",
         provider: "microsoft",
         accessToken: "access-token",
         refreshToken: "refresh-token",
@@ -147,6 +197,7 @@ describe("createCalendarEvent", () => {
     // whichever one Prisma returns first.
     prisma.calendarConnection.findFirst.mockResolvedValue({
       id: "connection-id",
+      emailAccountId: "email-account-id",
       provider: "google",
       accessToken: "access-token",
       refreshToken: "refresh-token",
@@ -166,7 +217,7 @@ describe("createCalendarEvent", () => {
       expect.objectContaining({
         where: expect.objectContaining({
           id: "connection-id",
-          emailAccountId: "email-account-id",
+          ...ownedBySameUser("email-account-id"),
           isConnected: true,
         }),
         select: expect.objectContaining({
@@ -192,6 +243,7 @@ describe("createCalendarEvent", () => {
   it("rejects cancellation when the calendar does not belong to the connection", async () => {
     prisma.calendarConnection.findFirst.mockResolvedValue({
       id: "connection-id",
+      emailAccountId: "email-account-id",
       provider: "google",
       accessToken: "access-token",
       refreshToken: "refresh-token",
@@ -217,6 +269,7 @@ describe("createCalendarEvent", () => {
       calendarId: "microsoft-calendar",
       connection: {
         id: "connection-id",
+        emailAccountId: "email-account-id",
         provider: "microsoft",
         accessToken: "access-token",
         refreshToken: "refresh-token",
@@ -257,6 +310,7 @@ describe("createCalendarEvent", () => {
       calendarId: "microsoft-calendar",
       connection: {
         id: "connection-id",
+        emailAccountId: "email-account-id",
         provider: "microsoft",
         accessToken: "access-token",
         refreshToken: "refresh-token",
@@ -289,6 +343,7 @@ describe("createCalendarEvent", () => {
       calendarId: "calendar-id",
       connection: {
         id: "connection-id",
+        emailAccountId: "email-account-id",
         provider: "unsupported",
         accessToken: "access-token",
         refreshToken: "refresh-token",

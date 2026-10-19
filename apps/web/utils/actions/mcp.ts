@@ -35,10 +35,8 @@ import {
 } from "@/utils/mcp/providers/types";
 import { syncMcpTools } from "@/utils/mcp/sync-tools";
 import { getCustomMcpServerUrlError } from "@/utils/mcp/safe-fetch";
-import {
-  findConnectionAccountId,
-  ownedBySameUser,
-} from "@/utils/mcp/user-connections";
+import { findConnectionAccountId } from "@/utils/mcp/user-connections";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import prisma from "@/utils/prisma";
 
 const MAX_CUSTOM_SERVERS_PER_USER = 10;

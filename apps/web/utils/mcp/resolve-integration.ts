@@ -2,7 +2,7 @@ import type { McpAuthType } from "@/generated/prisma/enums";
 import prisma from "@/utils/prisma";
 import { findIntegration } from "@/utils/mcp/integrations";
 import type { IntegrationProviderId } from "@/utils/mcp/providers/types";
-import { ownedBySameUser } from "@/utils/mcp/user-connections";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 
 export const CUSTOM_INTEGRATION_PREFIX = "custom_";
 

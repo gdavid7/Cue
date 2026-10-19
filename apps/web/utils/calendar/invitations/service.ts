@@ -4,6 +4,8 @@ import {
 } from "@/utils/calendar/invitations/content";
 import prisma from "@/utils/prisma";
 import { createCalendarEventProvider } from "@/utils/calendar/event-provider";
+import { calendarConnectionsWhere } from "@/utils/calendar/connections";
+import { onePerExternalAccount } from "@/utils/user/owned-by-same-user";
 import { CALENDAR_INVITATION_LIMITS } from "@/utils/calendar/invitations/constants";
 import {
   parseCalendarInvitation,
@@ -172,13 +174,17 @@ async function findInvitationEvent({
   calendarEventId?: string;
   logger: Logger;
 }) {
-  const connections = await prisma.calendarConnection.findMany({
-    where: {
-      emailAccountId,
-      isConnected: true,
-      email: { equals: invitation.attendee, mode: "insensitive" },
-    },
-  });
+  // The invited calendar may have been connected from another of the
+  // person's mailboxes.
+  const connections = onePerExternalAccount(
+    await prisma.calendarConnection.findMany({
+      where: {
+        ...calendarConnectionsWhere(emailAccountId),
+        isConnected: true,
+        email: { equals: invitation.attendee, mode: "insensitive" },
+      },
+    }),
+  );
   const matches = [];
   for (const connection of connections) {
     if (!connection.refreshToken) continue;
@@ -189,7 +195,7 @@ async function findInvitationEvent({
       continue;
     const provider = createCalendarEventProvider({
       connection,
-      emailAccountId,
+      emailAccountId: connection.emailAccountId,
       logger,
     });
     const event = await provider.findInvitationEvent(

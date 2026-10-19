@@ -1,16 +1,14 @@
 import Link from "next/link";
 import { Logo } from "@/components/Logo";
-import { BRAND_NAME } from "@/utils/branding";
 
-/**
- * Shell for /privacy and /terms. Their text is a placeholder until the
- * founder replaces it, and the banner says so on the page itself.
- */
+/** Shell for /privacy and /terms. */
 export function LegalPage({
   title,
+  effectiveDate,
   sections,
 }: {
   title: string;
+  effectiveDate: string;
   sections: { heading: string; body: React.ReactNode }[];
 }) {
   return (
@@ -22,13 +20,8 @@ export function LegalPage({
         <h1 className="mt-10 font-title text-3xl tracking-tight sm:text-4xl">
           {title}
         </h1>
-        <p
-          role="note"
-          className="mt-6 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950 text-sm dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
-        >
-          <strong className="font-semibold">Placeholder text.</strong> This page
-          is a draft that will be replaced before {BRAND_NAME} opens more
-          widely. It is not yet a binding agreement.
+        <p className="mt-3 text-muted-foreground text-sm">
+          Effective date: {effectiveDate}
         </p>
         <div className="mt-8 space-y-8">
           {sections.map((section) => (

@@ -49,8 +49,9 @@ test("a Google user links an Outlook mailbox and reads its mail", async ({
       exact: true,
     });
     await expect(outlookAccount).toBeVisible();
+    // Across accounts, the sidebar's Chat, Rules and Meetings rows repeat the email.
     await expect(
-      page.getByText(PLAYWRIGHT_TEST_EMAIL, { exact: true }),
+      page.getByText(PLAYWRIGHT_TEST_EMAIL, { exact: true }).first(),
     ).toBeVisible();
     await capturePlaywrightCheckpoint(page, testInfo, "outlook-linked");
 

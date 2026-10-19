@@ -73,7 +73,9 @@ export function useHome(emailAccountId?: string | null, userId?: string) {
         if (changedSinceLoad) load();
       }, CHANGE_REFRESH_MIN_MS);
     };
-    const stop = onTodayChanged(() => {
+    const stop = onTodayChanged((changedAccountId) => {
+      // Each load spends the account's quota; another account's change is its own.
+      if (changedAccountId && changedAccountId !== emailAccountId) return;
       if (timer) changedSinceLoad = true;
       else load();
     });
@@ -81,7 +83,7 @@ export function useHome(emailAccountId?: string | null, userId?: string) {
       stop();
       clearTimeout(timer);
     };
-  }, [mutate]);
+  }, [emailAccountId, mutate]);
 
   return {
     data: home.data,

@@ -224,6 +224,8 @@ export interface MailStore {
     requiredHydration: MessageKey[];
     bodies: BodyObservation[];
     ownerId: string;
+    /** On the last page: the scan covered only mail from this time on. */
+    windowStartMs?: number;
   }): Promise<
     { status: "committed"; revision: LocalRevision } | { status: "stale" }
   >;

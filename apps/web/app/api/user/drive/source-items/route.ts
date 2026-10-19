@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import prisma from "@/utils/prisma";
+import {
+  onePerExternalAccount,
+  ownedBySameUser,
+} from "@/utils/user/owned-by-same-user";
 import { withEmailAccount } from "@/utils/middleware";
 import { createDriveProviderWithRefresh } from "@/utils/drive/provider";
 import { SafeError } from "@/utils/error";
@@ -30,19 +34,21 @@ async function getData({
   emailAccountId: string;
   logger: Logger;
 }) {
-  const driveConnections = await prisma.driveConnection.findMany({
+  const connectedDrives = await prisma.driveConnection.findMany({
     where: {
-      emailAccountId,
+      ...ownedBySameUser(emailAccountId),
       isConnected: true,
     },
     select: {
       id: true,
+      email: true,
       provider: true,
       accessToken: true,
       refreshToken: true,
       expiresAt: true,
     },
   });
+  const driveConnections = onePerExternalAccount(connectedDrives);
 
   const items: DriveSourceItem[] = [];
 

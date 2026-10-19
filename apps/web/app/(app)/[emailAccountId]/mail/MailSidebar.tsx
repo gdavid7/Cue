@@ -62,6 +62,7 @@ import type { OutlookFolder } from "@/utils/outlook/folders";
 import { OUTLOOK_INBOX_SECTIONS } from "@/utils/outlook/inbox-sections";
 import { getLabelTree, type SidebarLabel } from "./label-tree";
 import { showMailView } from "./show-mail-view";
+import type { MailAppLink } from "./use-mail-app-links";
 import {
   isSidebarRowActive,
   type PendingNavigation,
@@ -126,9 +127,9 @@ export type MailSidebarProps = {
   /** The pointer or focus left the Today row. */
   onTodayIntentEnd?: () => void;
   /** The app's other places, such as Chat and Rules, above the footer. */
-  appLinks?: { name: string; href: string; icon: ReactNode }[];
+  appLinks?: MailAppLink[];
   /** The app's rarer tools, such as Unsubscribe, behind a Tools toggle. */
-  toolLinks?: { name: string; href: string; icon: ReactNode }[];
+  toolLinks?: MailAppLink[];
   /** False where something else opens and closes the sidebar, like a sheet. */
   showSidebarToggle?: boolean;
   /** Each account's own labels and folders, shown in their place in All inboxes. */
@@ -148,6 +149,7 @@ type SystemItem = {
 
 export const MAIL_SCHEDULED_TYPE = "scheduled";
 export const MAIL_SNOOZED_TYPE = "snoozed";
+const UNIFIED_VIEW_TYPES = new Set([MAIL_SNOOZED_TYPE, MAIL_SCHEDULED_TYPE]);
 
 /** Visited often enough to sit beside the inbox. */
 const PRIMARY_MAILBOX_ITEMS: SystemItem[] = [
@@ -276,6 +278,16 @@ function MailSidebarContent({
   accountSections,
   className,
 }: MailSidebarProps) {
+  // Views All inboxes merges beyond its inbox, kept in Cue's own database.
+  const unifiedViews = unified
+    ? MORE_MAILBOX_ITEMS.filter((item) => UNIFIED_VIEW_TYPES.has(item.type))
+    : [];
+  // Today across accounts, and those views, show the unified sidebar with
+  // All inboxes a link.
+  const unifiedMail =
+    unified &&
+    activeType !== "today" &&
+    !unifiedViews.some((item) => item.type === activeType);
   const isCategoryActive =
     !activeLabelId &&
     !activeFolderId &&
@@ -364,8 +376,8 @@ function MailSidebarContent({
         <div className="flex flex-col gap-px">
           {unified || allInboxesHref ? (
             <NavRow
-              href={unified ? undefined : allInboxesHref}
-              active={unified}
+              href={unifiedMail ? undefined : allInboxesHref}
+              active={unifiedMail}
               icon={<LayersIcon className="size-4 shrink-0" />}
               name="All inboxes"
               count={null}
@@ -401,6 +413,17 @@ function MailSidebarContent({
               onIntentEnd={onTodayIntentEnd}
             />
           ) : null}
+          {unifiedViews.map(({ name, type, Icon }) => (
+            <NavRow
+              key={type}
+              href={hrefFor({ kind: "type", type })}
+              active={isTypeActive(type)}
+              icon={<Icon className="size-4 shrink-0" />}
+              name={name}
+              count={null}
+              collapsed={collapsed}
+            />
+          ))}
           {unified
             ? null
             : PRIMARY_MAILBOX_ITEMS.map(({ name, type, countId, Icon }) => (
@@ -543,6 +566,7 @@ function MailSidebarContent({
                     active={false}
                     icon={link.icon}
                     name={link.name}
+                    detail={link.account}
                     count={null}
                   />
                 ))}
@@ -565,6 +589,7 @@ function MailSidebarContent({
               active={false}
               icon={link.icon}
               name={link.name}
+              detail={link.account}
               count={null}
               collapsed={collapsed}
             />
@@ -1010,6 +1035,7 @@ function NavRow({
   active,
   icon,
   name,
+  detail,
   count,
   emphasizeCount,
   nested,
@@ -1028,6 +1054,7 @@ function NavRow({
   active: boolean;
   icon: ReactNode;
   name: string;
+  detail?: string;
   count: number | null;
   emphasizeCount?: boolean;
   nested?: boolean;
@@ -1051,7 +1078,19 @@ function NavRow({
     collapsed,
   });
   const className = cn(presentation.className);
-  const content = presentation.content;
+  // The account a page opens follows its name, quieter, where there's room.
+  const content =
+    detail && !collapsed ? (
+      <>
+        {icon}
+        <span className="shrink-0">{name}</span>
+        <span className="min-w-0 flex-1 truncate text-sidebar-muted-foreground text-xs">
+          {detail}
+        </span>
+      </>
+    ) : (
+      presentation.content
+    );
 
   const row = href ? (
     reloadDocument ? (
