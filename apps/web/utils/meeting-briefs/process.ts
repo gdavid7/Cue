@@ -16,6 +16,12 @@ import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 import { canonicalizeEmailAddress } from "@/utils/email";
 import { mapWithConcurrency } from "@/utils/async";
 import uniqBy from "lodash/uniqBy";
+import {
+  extractLLMErrorInfo,
+  isTransientNetworkError,
+  withRetry,
+} from "@/utils/llms/retry";
+import { isAutomatedAiCallTimeoutError } from "@/utils/llms/automated-call-bound";
 
 export type EmailAccountForBrief = {
   id: string;
@@ -42,8 +48,12 @@ const STALLED_PENDING_MS = (300 + 60) * 1000;
 // A copy only waits while at least two more ticks are due before the
 // meeting, so one late or missed tick cannot leave it unbriefed.
 const MIN_WAIT_LEAD_MS = 2 * CRON_INTERVAL_MINUTES * 60_000;
+// A meeting this close has no later tick, so it starts even past the deadline;
+// maxDuration still bounds it.
+const LAST_TICK_LEAD_MS = CRON_INTERVAL_MINUTES * 60_000;
 const CALENDAR_FETCH_CONCURRENCY = 3;
-const MEETING_CONCURRENCY = 3;
+const MEETING_CONCURRENCY = 2;
+const BRIEF_RETRY_DELAY_MS = 2000;
 
 type BriefAccount = {
   id: string;
@@ -63,9 +73,9 @@ type MeetingCopy = {
  * Every rule errs toward a duplicate brief, never toward none.
  *
  * Different meetings run in parallel; the copies of one meeting run in order,
- * so a copy decides only after every earlier copy has had its turn. No brief
- * is started after `deadline`, leaving it unclaimed for the next tick rather
- * than cut off mid-way.
+ * so a copy decides only after every earlier copy has had its turn. After
+ * `deadline` only meetings with no later tick are started; the rest stay
+ * unclaimed for the next tick rather than being cut off mid-way.
  */
 export async function processUserMeetingBriefings({
   userId,
@@ -138,33 +148,38 @@ export async function processUserMeetingBriefings({
     return account;
   };
 
-  await mapWithConcurrency(
-    groupSameMeetings(copies),
-    MEETING_CONCURRENCY,
-    async (meeting) => {
-      for (const copy of meeting) {
-        if (claimed.has(copyKey(copy))) continue;
-        const copyLog = accountLogger(logger, copy.account).with({
-          eventId: copy.event.id,
-        });
-        if (Date.now() >= deadline.getTime()) {
-          copyLog.info("Out of time this run, leaving brief for next tick");
-          return;
-        }
-        try {
-          await processMeetingCopy({
-            userId,
-            copy,
-            meeting,
-            loadAccount,
-            logger: copyLog,
-          });
-        } catch (error) {
-          errors.set(copy.account.id, error);
-        }
-      }
-    },
+  // Soonest first, so the deadline only ever holds back later meetings.
+  const meetings = groupSameMeetings(copies).sort(
+    (a, b) => a[0].event.startTime.getTime() - b[0].event.startTime.getTime(),
   );
+
+  await mapWithConcurrency(meetings, MEETING_CONCURRENCY, async (meeting) => {
+    for (const copy of meeting) {
+      if (claimed.has(copyKey(copy))) continue;
+      const copyLog = accountLogger(logger, copy.account).with({
+        eventId: copy.event.id,
+      });
+      const now = Date.now();
+      if (
+        now >= deadline.getTime() &&
+        copy.event.startTime.getTime() - now > LAST_TICK_LEAD_MS
+      ) {
+        copyLog.info("Out of time this run, leaving brief for next tick");
+        return;
+      }
+      try {
+        await processMeetingCopy({
+          userId,
+          copy,
+          meeting,
+          loadAccount,
+          logger: copyLog,
+        });
+      } catch (error) {
+        errors.set(copy.account.id, error);
+      }
+    }
+  });
 
   return emailAccounts.map((account) => ({
     emailAccountId: account.id,
@@ -349,11 +364,21 @@ export async function runMeetingBrief({
       return { success: false, message: "No external guests found" };
     }
 
-    const briefingContent = await aiGenerateMeetingBriefing({
-      briefingData,
-      emailAccount,
-      logger: eventLog,
-    });
+    // A failed brief is not retried by its own copy, so a rate limit or
+    // timeout gets one more try before the brief is marked FAILED.
+    const briefingContent = await withRetry(
+      () =>
+        aiGenerateMeetingBriefing({
+          briefingData,
+          emailAccount,
+          logger: eventLog,
+        }),
+      {
+        retryIf: isRetryableBriefError,
+        maxRetries: 1,
+        delayMs: BRIEF_RETRY_DELAY_MS,
+      },
+    );
 
     await sendBriefing({
       event,
@@ -503,6 +528,15 @@ function loadEmailAccountForBrief(
       },
     },
   });
+}
+
+/** A rate limit, server error or timeout, which a moment later may not repeat. */
+function isRetryableBriefError(error: unknown) {
+  return (
+    extractLLMErrorInfo(error).retryable ||
+    isTransientNetworkError(error) ||
+    isAutomatedAiCallTimeoutError(error)
+  );
 }
 
 function accountLogger(logger: Logger, account: BriefAccount) {

@@ -67,6 +67,7 @@ describe("processUserMeetingBriefings", () => {
         return eventsByAccount[emailAccountId] ?? [];
       },
     );
+    vi.mocked(gatherContextForEvent).mockReset();
     vi.mocked(gatherContextForEvent).mockResolvedValue({
       externalGuests: [{ email: "guest@client.test" }],
       internalTeamMembers: [],
@@ -366,6 +367,60 @@ describe("processUserMeetingBriefings", () => {
     );
     expect(unclaimed.length).toBeGreaterThan(0);
     expect(unclaimed.length + briefedCopies().length).toBe(accounts.length);
+  });
+
+  it("still briefs a meeting with no later tick after the deadline has passed", async () => {
+    eventsByAccount = {
+      [ACCOUNT_A.id]: [meeting("a-later", { title: "Later", startsIn: 40 })],
+      [ACCOUNT_B.id]: [meeting("b-soon", { title: "Soon", startsIn: 10 })],
+    };
+
+    await runTick([ACCOUNT_A, ACCOUNT_B], new Date(NOW.getTime() - 1000));
+
+    expect(briefedCopies()).toEqual([["acc-b", "b-soon"]]);
+    expect(statusOf("acc-a", "a-later")).toBeUndefined();
+  });
+
+  it("starts the soonest meetings first", async () => {
+    eventsByAccount = {
+      [ACCOUNT_A.id]: [meeting("a-1", { title: "First", startsIn: 40 })],
+      [ACCOUNT_B.id]: [meeting("b-1", { title: "Second", startsIn: 35 })],
+      [ACCOUNT_C.id]: [meeting("c-1", { title: "Third", startsIn: 5 })],
+    };
+
+    await runTick([ACCOUNT_A, ACCOUNT_B, ACCOUNT_C]);
+
+    const gathered = vi
+      .mocked(gatherContextForEvent)
+      .mock.calls.map(([args]) => args.event.id);
+    expect(gathered[0]).toBe("c-1");
+  });
+
+  it("retries a rate-limited brief once before marking it failed", async () => {
+    eventsByAccount = { [ACCOUNT_A.id]: [meeting("a-1")] };
+    vi.mocked(aiGenerateMeetingBriefing).mockRejectedValueOnce(
+      Object.assign(new Error("Too many requests"), { status: 429 }),
+    );
+
+    const tick = runTick([ACCOUNT_A]);
+    await vi.advanceTimersByTimeAsync(5000);
+    await tick;
+
+    expect(aiGenerateMeetingBriefing).toHaveBeenCalledTimes(2);
+    expect(briefedCopies()).toEqual([["acc-a", "a-1"]]);
+    expect(statusOf("acc-a", "a-1")).toBe(MeetingBriefingStatus.SENT);
+  });
+
+  it("does not retry a brief that failed for a lasting reason", async () => {
+    eventsByAccount = { [ACCOUNT_A.id]: [meeting("a-1")] };
+    vi.mocked(aiGenerateMeetingBriefing).mockRejectedValue(
+      Object.assign(new Error("Invalid API key"), { status: 401 }),
+    );
+
+    await runTick([ACCOUNT_A]);
+
+    expect(aiGenerateMeetingBriefing).toHaveBeenCalledTimes(1);
+    expect(statusOf("acc-a", "a-1")).toBe(MeetingBriefingStatus.FAILED);
   });
 
   it("only reads briefing state from the user's own mailboxes", async () => {
