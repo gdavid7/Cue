@@ -154,6 +154,44 @@ describe("useInboxInsights and what this browser keeps", () => {
     expect(fetcher.mock.calls.at(-1)?.[0][0]).toContain("known=t1-latest");
   });
 
+  // Without AI access there is no insight, only who is on the email. Not
+  // keeping that made every render read each message from the provider again.
+  it("keeps an email read without AI for a day, then asks again", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const fetcher = vi.fn(async ([url]: [string, string]) =>
+        url.includes("known=")
+          ? fromServer({})
+          : fromServer({
+              t1: { ...extraction("t1"), insight: null, withAi: false },
+            }),
+      );
+      const items = [item({ emailAccountId: "work", threadId: "t1" })];
+
+      const first = renderHook(() => useInboxInsights(items), {
+        wrapper: wrapperFor(fetcher),
+      });
+      await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+      first.unmount();
+
+      const second = renderHook(() => useInboxInsights(items), {
+        wrapper: wrapperFor(fetcher),
+      });
+      await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+      expect(fetcher.mock.calls[1]?.[0][0]).toContain("known=t1-latest");
+      second.unmount();
+
+      vi.advanceTimersByTime(25 * 60 * 60 * 1000);
+      renderHook(() => useInboxInsights(items), {
+        wrapper: wrapperFor(fetcher),
+      });
+      await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
+      expect(fetcher.mock.calls[2]?.[0][0]).not.toContain("known=");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("matches the meeting with someone on the email in this browser", async () => {
     const fetcher = vi.fn(async () => ({
       ...fromServer({
@@ -349,6 +387,14 @@ function extraction(threadId: string) {
   };
 }
 
-function fromServer(insights: Record<string, ReturnType<typeof extraction>>) {
+function fromServer(
+  insights: Record<
+    string,
+    Omit<ReturnType<typeof extraction>, "insight" | "withAi"> & {
+      insight: typeof INSIGHT | null;
+      withAi: boolean;
+    }
+  >,
+) {
   return { insights, events: [], draftRepliesEnabled: true };
 }

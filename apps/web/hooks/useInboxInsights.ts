@@ -24,6 +24,14 @@ const extractions = createBrowserCache<InboxInsightExtraction>({
   ttlMs: 30 * 24 * 60 * 60 * 1000,
   maxEntries: 500,
 });
+// Read without AI access: only who is on the email. Kept a day, like the
+// server once did, so each render doesn't read every message from the
+// provider again; once the account has AI, the next day asks again.
+const extractionsWithoutAi = createBrowserCache<InboxInsightExtraction>({
+  name: "inbox-insight-no-ai",
+  ttlMs: 24 * 60 * 60 * 1000,
+  maxEntries: 500,
+});
 
 type InboxInsightItem = {
   /** Where the caller looks the insight up; unique across accounts. */
@@ -90,7 +98,9 @@ export function useInboxInsights(
           const { emailAccountId } = request;
           const kept = new Map(
             request.items.flatMap((item) => {
-              const entry = extractions.get(emailAccountId, item.messageId);
+              const entry =
+                extractions.get(emailAccountId, item.messageId) ??
+                extractionsWithoutAi.get(emailAccountId, item.messageId);
               return entry ? [[item.messageId, entry] as const] : [];
             }),
           );
@@ -104,8 +114,12 @@ export function useInboxInsights(
           ]);
           return request.items.flatMap((item) => {
             const fresh = response.insights[item.threadId];
-            if (fresh?.withAi && fresh.messageId === item.messageId)
-              extractions.set(emailAccountId, item.messageId, fresh);
+            if (fresh?.messageId === item.messageId)
+              (fresh.withAi ? extractions : extractionsWithoutAi).set(
+                emailAccountId,
+                item.messageId,
+                fresh,
+              );
             const entry = fresh ?? kept.get(item.messageId);
             if (!entry) return [];
             return [
