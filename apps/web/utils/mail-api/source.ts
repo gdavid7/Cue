@@ -63,7 +63,9 @@ const GMAIL_HISTORY_SCOPE_ID = "history";
 const GMAIL_HISTORY_OVERLAP_MS = DAY_MS;
 const GMAIL_THREAD_COST = 40;
 // The first page of a scan is what the inbox shows first; a smaller one fills
-// it sooner and spends less of the minute's Gmail quota before it does.
+// it sooner and spends less of the minute's Gmail quota before it does. The
+// quota gate prices a metadata read like a whole one for now; once it prices
+// by format, a first sync's metadata page can grow to 50.
 const GMAIL_FIRST_PAGE_SIZE = 25;
 
 const SUPPORTED_CHANGES = [
