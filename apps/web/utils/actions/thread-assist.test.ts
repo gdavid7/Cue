@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getMockEmailAccountWithAccount } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
-import { saveSuggestedReplyAction } from "@/utils/actions/thread-assist";
+import {
+  dismissReplySuggestionAction,
+  recordSuggestedReplyDraftAction,
+  saveSuggestedReplyAction,
+} from "@/utils/actions/thread-assist";
 import type { ParsedMessage } from "@/utils/types";
 
 vi.mock("@/utils/prisma");
@@ -106,6 +110,119 @@ describe("saveSuggestedReplyAction", () => {
 
     expect(result?.data?.draftId).toBe("draft-1");
     expect(prisma.suggestedReplyDraft.upsert).not.toHaveBeenCalled();
+  });
+});
+
+// The reader's first edit of a suggestion made it a mailbox draft.
+describe("recordSuggestedReplyDraftAction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    prisma.emailAccount.findUnique.mockResolvedValue(
+      getMockEmailAccountWithAccount({
+        email: "user@example.com",
+        userId: "user-1",
+      }),
+    );
+  });
+
+  // The rule's text comes from the database, so the browser can't pass off
+  // other text as Cue's.
+  it("remembers a rule's suggestion by its stored text and links it", async () => {
+    prisma.executedAction.findFirst.mockResolvedValue({
+      id: "suggestion-1",
+      content: "Thursday works for me.",
+    } as never);
+
+    await recordSuggestedReplyDraftAction(EMAIL_ACCOUNT_ID, {
+      threadId: "thread-1",
+      messageId: "m1",
+      draftId: "draft-9",
+      executedActionId: "suggestion-1",
+      suggested: "Something else entirely.",
+    });
+
+    expect(prisma.executedAction.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: "suggestion-1",
+        type: "DRAFT_EMAIL",
+        draftId: null,
+        executedRule: {
+          emailAccountId: EMAIL_ACCOUNT_ID,
+          threadId: "thread-1",
+        },
+      },
+      select: { id: true, content: true },
+    });
+    expect(prisma.suggestedReplyDraft.upsert).toHaveBeenCalledWith({
+      where: {
+        emailAccountId_draftId: {
+          emailAccountId: EMAIL_ACCOUNT_ID,
+          draftId: "draft-9",
+        },
+      },
+      create: {
+        emailAccountId: EMAIL_ACCOUNT_ID,
+        threadId: "thread-1",
+        messageId: "m1",
+        draftId: "draft-9",
+        content: "Thursday works for me.",
+        executedActionId: "suggestion-1",
+      },
+      update: {
+        messageId: "m1",
+        content: "Thursday works for me.",
+        executedActionId: "suggestion-1",
+      },
+    });
+  });
+
+  it("remembers a suggestion this browser kept by its text", async () => {
+    await recordSuggestedReplyDraftAction(EMAIL_ACCOUNT_ID, {
+      threadId: "thread-1",
+      messageId: "m1",
+      draftId: "draft-9",
+      suggested: "Wednesday works.",
+    });
+
+    expect(prisma.executedAction.findFirst).not.toHaveBeenCalled();
+    expect(prisma.suggestedReplyDraft.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          content: "Wednesday works.",
+          executedActionId: undefined,
+        }),
+      }),
+    );
+  });
+});
+
+describe("dismissReplySuggestionAction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    prisma.emailAccount.findUnique.mockResolvedValue(
+      getMockEmailAccountWithAccount({
+        email: "user@example.com",
+        userId: "user-1",
+      }),
+    );
+  });
+
+  it("dismisses only this account's waiting suggestion", async () => {
+    await dismissReplySuggestionAction(EMAIL_ACCOUNT_ID, {
+      executedActionId: "suggestion-1",
+    });
+
+    expect(prisma.executedAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "suggestion-1",
+        type: "DRAFT_EMAIL",
+        draftId: null,
+        draftStatus: "PENDING",
+        executedRule: { emailAccountId: EMAIL_ACCOUNT_ID },
+      },
+      data: { draftStatus: "DISMISSED" },
+    });
+    expect(mocks.createEmailProvider).not.toHaveBeenCalled();
   });
 });
 

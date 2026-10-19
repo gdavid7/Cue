@@ -43,7 +43,7 @@ vi.mock("@/utils/actions/hints", () => ({
 }));
 vi.mock("@/components/Toast", () => ({ toastError: mocks.toastError }));
 
-const TITLE = "Cue can draft replies for mail that needs one";
+const TITLE = "Cue can suggest replies for mail that needs one";
 
 describe("DraftRepliesCard", () => {
   beforeEach(() => {

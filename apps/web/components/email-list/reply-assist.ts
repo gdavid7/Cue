@@ -9,6 +9,13 @@ export type ReplyAssist = {
   /** Plain text, paragraphs separated by blank lines. */
   reply: string;
   evidence: ReactNode;
+  /**
+   * Set for a rule's suggestion, which waits in Cue until the user edits it.
+   * The draft its first edit becomes is remembered against it.
+   */
+  executedActionId?: string;
+  /** Turns the rule's suggestion down, as discarding its reply does. */
+  dismiss?: () => void;
 };
 
 export const ReplyAssistContext = createContext<ReplyAssist | null>(null);

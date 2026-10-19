@@ -1090,7 +1090,10 @@ function ReplyPanel({
 
   const onDiscard = useCallback(
     async (draftId?: string) => {
+      // Discarding the rule's suggestion turns it down, so it isn't offered
+      // again for this message.
       if (composeMode === "forward" || !draftMessage) {
+        assist?.dismiss?.();
         onCloseCompose();
         return true;
       }
@@ -1132,10 +1135,12 @@ function ReplyPanel({
       } finally {
         refetch();
       }
+      assist?.dismiss?.();
       onDraftDiscarded?.();
       return true;
     },
     [
+      assist,
       composeMode,
       draftMessage,
       discardDraft,

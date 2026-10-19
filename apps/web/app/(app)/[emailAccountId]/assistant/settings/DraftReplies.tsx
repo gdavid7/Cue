@@ -33,7 +33,7 @@ export function DraftReplies() {
   return (
     <SettingCard
       title="Auto draft replies"
-      description="Cue drafts a reply in your tone for mail that needs one, and pre-fills it when you open the email. Turn this off and Cue leaves every reply to you."
+      description="Cue suggests a reply in your tone for mail that needs one, ready when you open the email. Suggestions stay in Cue until you edit them, and Cue never sends anything itself. Turn this off and Cue leaves every reply to you."
       right={
         <LoadingContent
           loading={loading}

@@ -19,7 +19,10 @@ const mocks = vi.hoisted(() => ({
   useThreadContext: vi.fn(),
   insights: undefined as Record<string, ThreadInsightData> | undefined,
   draftReplies: drafting("on"),
-  plans: [] as { status: string; rule: { systemType: string | null } }[],
+  plans: [] as Record<string, unknown>[],
+  mutatePlans: vi.fn(),
+  dismiss: vi.fn(),
+  toastError: vi.fn(),
 }));
 
 vi.mock("@/hooks/useReplySuggestion", () => ({
@@ -38,6 +41,7 @@ vi.mock("@/app/(app)/[emailAccountId]/assistant/settings/DraftReplies", () => ({
 vi.mock("@/hooks/useThreadPlans", () => ({
   useThreadPlans: ({ threadId }: { threadId: string | null }) => ({
     data: threadId ? { plans: mocks.plans } : undefined,
+    mutate: mocks.mutatePlans,
   }),
 }));
 vi.mock("@/hooks/useInboxInsights", async (importOriginal) => ({
@@ -50,7 +54,9 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
 vi.mock("@/env", () => ({ env: {} }));
 vi.mock("@/utils/actions/thread-assist", () => ({
   saveSuggestedReplyAction: vi.fn(),
+  dismissReplySuggestionAction: mocks.dismiss,
 }));
+vi.mock("@/components/Toast", () => ({ toastError: mocks.toastError }));
 
 const LABELS: EmailLabels = {
   Label_to_reply: { id: "Label_to_reply", name: "To Reply" },
@@ -68,8 +74,94 @@ describe("useReaderReplySuggestion", () => {
     mocks.insights = undefined;
     mocks.draftReplies = drafting("on");
     mocks.plans = [];
+    mocks.mutatePlans.mockReset();
+    mocks.dismiss.mockReset().mockResolvedValue({});
+    mocks.toastError.mockReset();
   });
   afterEach(cleanup);
+
+  // A rule already wrote the reply: it shows at once as Cue's reply, and Cue
+  // doesn't work out another one.
+  it("offers the reply a rule wrote, without working out its own", () => {
+    mocks.plans = [ruleSuggestionPlan("ask")];
+
+    const { result } = renderSuggestion([
+      incoming("ask", ["INBOX", "Label_to_reply"]),
+    ]);
+
+    expect(result.current.assist).toMatchObject({
+      messageId: "ask",
+      reply: "Thursday works for me.",
+      executedActionId: "suggestion-1",
+    });
+    expect(lastEnabled()).toBe(false);
+    expect(result.current.reply.offer).toBe(false);
+  });
+
+  it.each([
+    ["used", "LIKELY_SENT", "ask"],
+    ["dismissed", "DISMISSED", "ask"],
+    ["for an earlier message", "PENDING", "older"],
+  ])("ignores a rule's reply that was %s", (_, draftStatus, messageId) => {
+    mocks.plans = [ruleSuggestionPlan(messageId, { draftStatus })];
+
+    const { result } = renderSuggestion([
+      incoming("ask", ["INBOX", "Label_to_reply"]),
+    ]);
+
+    expect(result.current.assist).toBeNull();
+    expect(lastEnabled()).toBe(true);
+  });
+
+  // A draft from before replies became suggestions is the mailbox's, not Cue's.
+  it("ignores a rule's reply that is already a mailbox draft", () => {
+    mocks.plans = [ruleSuggestionPlan("ask", { draftId: "draft-1" })];
+
+    const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
+
+    expect(result.current.assist).toBeNull();
+  });
+
+  it("keeps the rule's reply to itself while drafting is off", () => {
+    mocks.draftReplies = drafting("off");
+    mocks.plans = [ruleSuggestionPlan("ask")];
+
+    const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
+
+    expect(result.current.assist).toBeNull();
+  });
+
+  it("dismisses the rule's reply at once, and for good", async () => {
+    mocks.plans = [ruleSuggestionPlan("ask")];
+    const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
+
+    await act(async () => {
+      result.current.assist?.dismiss?.();
+    });
+
+    expect(mocks.dismiss).toHaveBeenCalledWith("account-1", {
+      executedActionId: "suggestion-1",
+    });
+    const [update, options] = mocks.mutatePlans.mock.calls[0];
+    expect(options).toEqual({ revalidate: false });
+    expect(
+      update({ plans: mocks.plans }).plans[0].actionItems[0].draftStatus,
+    ).toBe("DISMISSED");
+    expect(mocks.toastError).not.toHaveBeenCalled();
+  });
+
+  it("brings the rule's reply back when dismissing fails", async () => {
+    mocks.dismiss.mockResolvedValue({ serverError: "Nope" });
+    mocks.plans = [ruleSuggestionPlan("ask")];
+    const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
+
+    await act(async () => {
+      result.current.assist?.dismiss?.();
+    });
+
+    expect(mocks.mutatePlans).toHaveBeenLastCalledWith();
+    expect(mocks.toastError).toHaveBeenCalled();
+  });
 
   it("doesn't write a reply to mail that doesn't need one", () => {
     renderSuggestion([incoming("promo", ["INBOX", "Label_marketing"])]);
@@ -331,4 +423,24 @@ function incoming(id: string, labelIds: string[]) {
       date: new Date(0).toISOString(),
     },
   } as unknown as ThreadMessage;
+}
+
+function ruleSuggestionPlan(
+  messageId: string,
+  action: { draftStatus?: string; draftId?: string | null } = {},
+) {
+  return {
+    messageId,
+    status: "APPLIED",
+    rule: { systemType: "TO_REPLY" },
+    actionItems: [
+      {
+        id: "suggestion-1",
+        type: "DRAFT_EMAIL",
+        content: "Thursday works for me.",
+        draftId: action.draftId ?? null,
+        draftStatus: action.draftStatus ?? "PENDING",
+      },
+    ],
+  };
 }

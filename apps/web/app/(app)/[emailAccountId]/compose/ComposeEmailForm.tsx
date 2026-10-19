@@ -98,6 +98,7 @@ import {
   discardComposeDraftAction,
 } from "@/utils/actions/mail";
 import { scheduleEmailAction } from "@/utils/actions/scheduled-email";
+import { recordSuggestedReplyDraftAction } from "@/utils/actions/thread-assist";
 import { formatRecipientNames, splitRecipientList } from "@/utils/email";
 import type { StoredReplyDraft } from "@/utils/mail-engine/reply-drafts";
 import {
@@ -222,7 +223,8 @@ type ComposeEmailFormProps = {
   onPopOut?: () => void;
   /**
    * Text to start from when there is no saved draft, such as a reply Cue
-   * suggested. It is saved as a draft right away, like anything typed.
+   * suggested. It is saved as a draft right away, like anything typed, except
+   * Cue's suggestion: that stays in Cue until the user changes it.
    */
   initialBodyHtml?: string;
   /**
@@ -230,7 +232,12 @@ type ComposeEmailFormProps = {
    * While the body is still exactly that text, the reply reads as ready and
    * credits Cue, with what backs it.
    */
-  suggestion?: { reply: string; evidence?: ReactNode };
+  suggestion?: {
+    reply: string;
+    evidence?: ReactNode;
+    /** Set when the suggestion is a rule's, waiting in Cue. */
+    executedActionId?: string;
+  };
   /**
    * Whether the composer takes focus when it opens. Off for one that opens on
    * its own, so keys meant as shortcuts aren't typed into it.
@@ -802,7 +809,32 @@ function ComposeEmailFormContent({
     providerDraftId.current = draftId;
     await updateReplyDraftProviderState(localDraftIdentity, requestId, draftId);
     if (createdMessageId) await followDraftMessage(createdMessageId);
+    if (createdMessageId) rememberSuggestionDraft(draftId);
     return draftId;
+  };
+  // The draft an edited suggestion became, so sending it teaches reply
+  // memories what the user changed. Only the first save, and only once.
+  const suggestionToRemember = useRef(
+    suggestion && initialBodyHtml && !storedDraft && replyingToEmail?.threadId
+      ? suggestion
+      : undefined,
+  );
+  const rememberSuggestionDraft = (draftId: string) => {
+    const startedFrom = suggestionToRemember.current;
+    const threadId = replyingToEmail?.threadId;
+    const messageId = draftKeyMessageId ?? replyingToEmail?.messageId;
+    suggestionToRemember.current = undefined;
+    if (!startedFrom || !threadId || !messageId) return;
+    recordSuggestedReplyDraftAction(selectedEmailAccountId, {
+      threadId,
+      messageId,
+      draftId,
+      ...(startedFrom.executedActionId
+        ? { executedActionId: startedFrom.executedActionId }
+        : { suggested: startedFrom.reply }),
+    }).catch(() => {
+      // The draft is saved; only learning from its edits is lost.
+    });
   };
 
   // A moved draft whose old copy couldn't go yet, because the new mailbox
@@ -866,12 +898,22 @@ function ComposeEmailFormContent({
   });
   const { stop: stopProviderAutosave, resume: resumeProviderAutosave } =
     providerAutosave;
+  // Cue's suggestion stays in Cue until the user changes it: only then does
+  // the reply become a mailbox draft. Sending it as it is needs no draft.
+  const isUntouchedSuggestion = useCallback(() => {
+    if (suggestedReply === undefined || providerDraftId.current) return false;
+    if (attachmentsRef.current.length) return false;
+    const bodyHtml =
+      editorRef.current?.getValue().editableHtml ?? initialBodyHtml ?? "";
+    return isUneditedSuggestion(bodyHtml, suggestedReply);
+  }, [suggestedReply, initialBodyHtml]);
   const captureDraft = useCallback(
     (options?: { sendAt?: string; remindAt?: string }) => {
       captureLocalDraft(options);
+      if (!options && isUntouchedSuggestion()) return;
       providerAutosave.capture();
     },
-    [captureLocalDraft, providerAutosave.capture],
+    [captureLocalDraft, providerAutosave.capture, isUntouchedSuggestion],
   );
   useEffect(() => {
     if (storedDraft?.content) captureDraft();

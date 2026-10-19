@@ -1,9 +1,15 @@
 "use server";
 
-import { SystemType } from "@/generated/prisma/enums";
+import {
+  ActionType,
+  DraftEmailStatus,
+  SystemType,
+} from "@/generated/prisma/enums";
 import { actionClient } from "@/utils/actions/safe-action";
 import {
+  dismissReplySuggestionBody,
   markNeedsReplyBody,
+  recordSuggestedReplyDraftBody,
   saveSuggestedReplyBody,
 } from "@/utils/actions/thread-assist.validation";
 import { isSameEmailAddress } from "@/utils/email";
@@ -167,5 +173,88 @@ export const saveSuggestedReplyAction = actionClient
       }
 
       return { draftId };
+    },
+  );
+
+/**
+ * Remembers which suggestion a reply draft started from, once the user's
+ * first edit made it a mailbox draft, so the sent reply's edits teach reply
+ * memories. A rule's suggestion is read here rather than taken from the
+ * browser, and settles with the draft when it is sent.
+ */
+export const recordSuggestedReplyDraftAction = actionClient
+  .metadata({ name: "recordSuggestedReplyDraft" })
+  .inputSchema(recordSuggestedReplyDraftBody)
+  .action(
+    async ({
+      ctx: { emailAccountId, logger },
+      parsedInput: {
+        threadId,
+        messageId,
+        draftId,
+        executedActionId,
+        suggested,
+      },
+    }) => {
+      const settings = await getSuggestedReplySettings(emailAccountId);
+      if (!canWriteRequestedReplies(settings.draftReplies)) return;
+
+      const ruleSuggestion = executedActionId
+        ? await prisma.executedAction.findFirst({
+            where: {
+              id: executedActionId,
+              type: ActionType.DRAFT_EMAIL,
+              draftId: null,
+              executedRule: { emailAccountId, threadId },
+            },
+            select: { id: true, content: true },
+          })
+        : null;
+      const content = ruleSuggestion?.content ?? suggested;
+      if (!content) return;
+
+      try {
+        await prisma.suggestedReplyDraft.upsert({
+          where: { emailAccountId_draftId: { emailAccountId, draftId } },
+          create: {
+            emailAccountId,
+            threadId,
+            messageId,
+            draftId,
+            content,
+            executedActionId: ruleSuggestion?.id,
+          },
+          update: {
+            messageId,
+            content,
+            executedActionId: ruleSuggestion?.id,
+          },
+        });
+      } catch (error) {
+        // The draft is saved; only learning from its edits is lost.
+        logger.error("Failed to record suggested reply draft", { error });
+      }
+    },
+  );
+
+/**
+ * The user turned down the rule's suggestion in the reader. Nothing was in
+ * the mailbox, so nothing there changes.
+ */
+export const dismissReplySuggestionAction = actionClient
+  .metadata({ name: "dismissReplySuggestion" })
+  .inputSchema(dismissReplySuggestionBody)
+  .action(
+    async ({ ctx: { emailAccountId }, parsedInput: { executedActionId } }) => {
+      await prisma.executedAction.updateMany({
+        where: {
+          id: executedActionId,
+          type: ActionType.DRAFT_EMAIL,
+          draftId: null,
+          draftStatus: DraftEmailStatus.PENDING,
+          executedRule: { emailAccountId },
+        },
+        data: { draftStatus: DraftEmailStatus.DISMISSED },
+      });
     },
   );

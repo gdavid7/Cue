@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import type { GetThreadPlansResponse } from "@/app/api/user/thread-plans/route";
 import { useDraftReplies } from "@/app/(app)/[emailAccountId]/assistant/settings/DraftReplies";
 import { getThreadCategories } from "@/app/(app)/[emailAccountId]/mail/cue-strip";
 import { getReaderReplyGate } from "@/app/(app)/[emailAccountId]/mail/reader-reply-gate";
@@ -11,7 +12,12 @@ import {
   CheckedAgainst,
   suggestionPhaseLabel,
 } from "@/components/thread-context/SuggestedReply";
-import { SystemType } from "@/generated/prisma/enums";
+import { toastError } from "@/components/Toast";
+import {
+  ActionType,
+  DraftEmailStatus,
+  SystemType,
+} from "@/generated/prisma/enums";
 import { threadInsightItem, useInboxInsights } from "@/hooks/useInboxInsights";
 import { useReplySuggestion } from "@/hooks/useReplySuggestion";
 import { useSuggestedReply } from "@/hooks/useSuggestedReply";
@@ -21,6 +27,7 @@ import { useAccount } from "@/providers/EmailAccountProvider";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { extractEmailAddress, isSameEmailAddress } from "@/utils/email";
 import { GmailLabel } from "@/utils/gmail/label";
+import { dismissReplySuggestionAction } from "@/utils/actions/thread-assist";
 
 const NO_PLANS: never[] = [];
 
@@ -30,10 +37,13 @@ const NO_PLANS: never[] = [];
  * in it is backed. Otherwise `replyStatus` says in one line, under the usual
  * reply actions, what Cue is doing or why it left the reply to the user.
  *
- * It writes one as soon as a conversation that needs one opens: its newest
- * message isn't from the user, it has no draft, it is waiting on a reply, and
- * the user has "Auto draft replies" on. Otherwise `reply.offer` says to show
- * a "Draft a reply" button, unless the user turned drafting off.
+ * A reply the user's rules already wrote comes first: it is ready at once,
+ * waiting in Cue rather than in the mailbox, and becomes a mailbox draft only
+ * once the user edits it. Without one, Cue writes one as soon as a
+ * conversation that needs one opens: its newest message isn't from the user,
+ * it has no draft, it is waiting on a reply, and the user has "Auto draft
+ * replies" on. Otherwise `reply.offer` says to show a "Draft a reply" button,
+ * unless the user turned drafting off.
  */
 export function useReaderReplySuggestion({
   emailAccountId,
@@ -88,8 +98,14 @@ export function useReaderReplySuggestion({
   // Cue's read of the newest message says the sender is waiting, or Cue has
   // already tried a reply to it. Cue files To Reply in its own database, not
   // as a mailbox label, so the rule's runs count as well as a legacy label.
-  const { data: planData, error: plansError } = useThreadPlans({
-    threadId: enabled && current?.eligible ? threadId : null,
+  // The rule runs also hold the reply a rule already wrote, so they're read
+  // for any message someone else sent, not only the ones Cue may answer.
+  const {
+    data: planData,
+    error: plansError,
+    mutate: mutatePlans,
+  } = useThreadPlans({
+    threadId: enabled && !latestIsFromUser ? threadId : null,
     emailAccountId,
   });
   const filedToReply = getThreadCategories({
@@ -121,9 +137,36 @@ export function useReaderReplySuggestion({
     filedToReply ||
     insight?.insight?.action === "reply" ||
     Boolean(insight?.reply);
-  if (current?.eligible && !current.run && needsReply) {
+  // Kept once its edit made a draft, so the reply still credits Cue.
+  const ruleSuggestion =
+    latest && !latestIsFromUser && gate.writesReplies
+      ? findRuleSuggestion(planData?.plans, latest.id)
+      : undefined;
+  // The rule's reply stands in for the one Cue would work out here.
+  if (
+    current?.eligible &&
+    !current.run &&
+    needsReply &&
+    plansSettled &&
+    !ruleSuggestion
+  ) {
     setDecision({ ...current, run: true });
   }
+  const dismissRuleSuggestion = (executedActionId: string) => {
+    mutatePlans(
+      (data) =>
+        data && { plans: withoutSuggestion(data.plans, executedActionId) },
+      { revalidate: false },
+    );
+    dismissReplySuggestionAction(emailAccountId, { executedActionId })
+      .then((result) => {
+        if (result?.serverError) throw new Error(result.serverError);
+      })
+      .catch(() => {
+        mutatePlans();
+        toastError({ description: "Couldn’t dismiss Cue’s reply. Try again." });
+      });
+  };
 
   const run = Boolean(current?.run);
   // Asked for by the user, so it runs for any message someone else sent,
@@ -167,7 +210,7 @@ export function useReaderReplySuggestion({
   const verified =
     latestSuggestion?.status === "suggested" ? latestSuggestion : undefined;
 
-  const assist: ReplyAssist | null =
+  let assist: ReplyAssist | null =
     latest && verified
       ? {
           messageId: latest.id,
@@ -180,6 +223,18 @@ export function useReaderReplySuggestion({
           ),
         }
       : null;
+
+  // Asked-for help wins; otherwise the rule's reply, ready at once.
+  if (!assist && latest && ruleSuggestion) {
+    const { executedActionId } = ruleSuggestion;
+    assist = {
+      messageId: latest.id,
+      reply: ruleSuggestion.reply,
+      evidence: null,
+      executedActionId,
+      dismiss: () => dismissRuleSuggestion(executedActionId),
+    };
+  }
 
   let replyStatus: React.ReactNode = null;
   if (latest && (phase === "checking-mail" || phase === "checking-web")) {
@@ -211,6 +266,7 @@ export function useReaderReplySuggestion({
         canRequestReply &&
         writesReplies &&
         !run &&
+        !ruleSuggestion &&
         !(current?.eligible && (!plansSettled || insightLoading)),
       request: requestReply,
       /**
@@ -218,7 +274,45 @@ export function useReaderReplySuggestion({
        * settled either way, or Cue doesn't write replies for this account.
        */
       settledFor:
-        (run && phase === "done") || !writesReplies ? latest?.id : undefined,
+        (run && phase === "done") || !writesReplies || ruleSuggestion
+          ? latest?.id
+          : undefined,
     },
   };
+}
+
+type ThreadPlan = GetThreadPlansResponse["plans"][number];
+
+/**
+ * The reply a rule wrote for the message, waiting in Cue: drafted, not yet
+ * used, dismissed or superseded, and never put in the mailbox.
+ */
+function findRuleSuggestion(
+  plans: ThreadPlan[] | undefined,
+  messageId: string,
+): { executedActionId: string; reply: string } | undefined {
+  for (const plan of plans ?? []) {
+    if (plan.messageId !== messageId) continue;
+    const action = plan.actionItems.find(
+      (item) =>
+        item.type === ActionType.DRAFT_EMAIL &&
+        !item.draftId &&
+        item.draftStatus === DraftEmailStatus.PENDING &&
+        item.content?.trim(),
+    );
+    if (action?.content)
+      return { executedActionId: action.id, reply: action.content.trim() };
+  }
+  return;
+}
+
+function withoutSuggestion(plans: ThreadPlan[], executedActionId: string) {
+  return plans.map((plan) => ({
+    ...plan,
+    actionItems: plan.actionItems.map((item) =>
+      item.id === executedActionId
+        ? { ...item, draftStatus: DraftEmailStatus.DISMISSED }
+        : item,
+    ),
+  }));
 }
