@@ -163,6 +163,95 @@ describe("followMailboxChanges", () => {
     expect(sources).toHaveLength(0);
   });
 
+  it("lets the stream go once nobody has used a visible tab for a while, and reconnects on the next input", () => {
+    vi.useFakeTimers();
+    const { onChange } = follow();
+    sources[0].emit("ready");
+    onChange.mockClear();
+
+    vi.advanceTimersByTime(4 * 60_000);
+    window.dispatchEvent(new Event("pointermove"));
+    vi.advanceTimersByTime(4 * 60_000);
+    expect(sources[0].closed).toBe(false);
+
+    vi.advanceTimersByTime(60_000 + 15_000);
+    expect(sources[0].closed).toBe(true);
+    // An idle tab neither streams nor polls; the version poll covers it.
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(sources).toHaveLength(1);
+    expect(onChange).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new Event("keydown"));
+    expect(sources).toHaveLength(2);
+    expect(sources[1].closed).toBe(false);
+    // Catches up at once, without waiting for the new stream to connect.
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("streams each account from one tab per browser, handing over when that tab is hidden", async () => {
+    const locks = new FakeLocks();
+    const first = followTab(locks);
+    const second = followTab(locks);
+    await flush();
+
+    expect(sources).toHaveLength(1);
+    expect(first.sources).toHaveLength(1);
+    expect(second.sources).toHaveLength(0);
+
+    // Hiding the document hides both fake tabs; the leader steps down and the
+    // other, still waiting, gives up its claim too.
+    setVisibility("hidden");
+    await flush();
+    expect(first.sources[0].closed).toBe(true);
+    expect(locks.held()).toEqual([]);
+
+    setVisibility("visible");
+    await flush();
+    expect(sources.filter((source) => !source.closed)).toHaveLength(1);
+
+    // When the leading tab closes, the waiting one takes over.
+    const leader = first.sources.some((source) => !source.closed)
+      ? first
+      : second;
+    const follower = leader === first ? second : first;
+    leader.stop();
+    await flush();
+    expect(follower.sources.filter((source) => !source.closed)).toHaveLength(1);
+    expect(locks.held()).toEqual(["cue:mail-stream:acc/1"]);
+  });
+
+  it("does not poll from a tab that leaves the stream to another", async () => {
+    vi.useFakeTimers();
+    const locks = new FakeLocks();
+    const first = followTab(locks);
+    const second = followTab(locks);
+    await flush();
+    first.sources[0].readyState = 2;
+    first.sources[0].emit("error");
+
+    vi.advanceTimersByTime(15_000);
+
+    expect(first.onChange).toHaveBeenCalledTimes(1);
+    expect(second.onChange).not.toHaveBeenCalled();
+  });
+
+  function followTab(locks: FakeLocks) {
+    const tab = { sources: [] as FakeEventSource[], onChange: vi.fn() };
+    const stop = followMailboxChanges({
+      accountId: "acc/1",
+      onChange: tab.onChange,
+      locks: locks as unknown as LockManager,
+      createEventSource: (url) => {
+        const source = new FakeEventSource(url);
+        sources.push(source);
+        tab.sources.push(source);
+        return source as unknown as EventSource;
+      },
+    });
+    stops.push(stop);
+    return { ...tab, stop };
+  }
+
   it("closes the connection when stopped", () => {
     const { stop } = follow();
 
@@ -174,6 +263,59 @@ describe("followMailboxChanges", () => {
     expect(sources[0].closed).toBe(true);
   });
 });
+
+// The Web Locks behaviour the stream relies on: one holder per name, a FIFO
+// queue, and an aborted request leaving the queue.
+class FakeLocks {
+  private readonly holders = new Map<string, symbol>();
+  private readonly queues = new Map<string, (() => void)[]>();
+
+  held() {
+    return [...this.holders.keys()];
+  }
+
+  query() {
+    return Promise.resolve({
+      held: this.held().map((name) => ({ name })),
+      pending: [],
+    });
+  }
+
+  request(
+    name: string,
+    options: { signal?: AbortSignal },
+    callback: () => Promise<void> | undefined,
+  ) {
+    return new Promise<void>((resolve, reject) => {
+      const grant = () => {
+        const token = Symbol(name);
+        this.holders.set(name, token);
+        Promise.resolve(callback()).finally(() => {
+          this.holders.delete(name);
+          this.queues.get(name)?.shift()?.();
+          resolve();
+        });
+      };
+      if (!this.holders.has(name)) {
+        grant();
+        return;
+      }
+      const queue = this.queues.get(name) ?? [];
+      queue.push(grant);
+      this.queues.set(name, queue);
+      options.signal?.addEventListener("abort", () => {
+        const index = queue.indexOf(grant);
+        if (index < 0) return;
+        queue.splice(index, 1);
+        reject(new DOMException("Aborted", "AbortError"));
+      });
+    });
+  }
+}
+
+async function flush() {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+}
 
 class FakeEventSource {
   closed = false;

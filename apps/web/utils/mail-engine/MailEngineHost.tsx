@@ -38,6 +38,7 @@ import {
   followMailboxChanges,
   getFollowedAccountIds,
 } from "@/utils/mail-engine/follow-mailbox-changes";
+import { pollMailVersions } from "@/utils/mail-engine/poll-mail-versions";
 import { getAllInboxesAccounts } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useAllAccountsScope } from "@/hooks/useTodayHref";
@@ -422,6 +423,26 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
       for (const stop of stops) stop();
     };
   }, [client, followedAccountIds]);
+
+  // Every account the engine keeps, so new mail reaches it (and its
+  // notifications) while no tab streams that account.
+  const polledAccountIds = emailAccountId
+    ? [
+        ...new Set([
+          emailAccountId,
+          ...(accountsData?.emailAccounts ?? []).map((account) => account.id),
+        ]),
+      ].join(",")
+    : "";
+  useEffect(() => {
+    if (!client || !polledAccountIds || hasDesktopMailEngineIpc()) return;
+    return pollMailVersions({
+      accountIds: polledAccountIds.split(","),
+      onChanged: (accountIds) => {
+        client.requestSync(accountIds).catch(() => undefined);
+      },
+    });
+  }, [client, polledAccountIds]);
 
   useEffect(() => {
     if (!client || !emailAccountId) return;

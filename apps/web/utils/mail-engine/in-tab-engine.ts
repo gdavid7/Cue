@@ -19,6 +19,7 @@ import {
   shouldReleaseDeferredOnStart,
   type BrowserEngineStart,
 } from "@/utils/mail-engine/worker-protocol";
+import { PUSHED_CHANGES_CATCH_UP_INTERVAL_MS } from "@/utils/mail-engine/follow-mailbox-changes";
 
 /** The engine on the page itself, for browsers whose dedicated workers fail. */
 export async function createInTabEngine(
@@ -54,6 +55,7 @@ export async function createInTabEngine(
     assistant: ports.assistant,
     runtime,
     ownerId: "browser-owner",
+    changesCatchUpIntervalMs: PUSHED_CHANGES_CATCH_UP_INTERVAL_MS,
   });
   if (shouldReleaseDeferredOnStart(input.online)) {
     await engine.requestSync([input.accountId]);
