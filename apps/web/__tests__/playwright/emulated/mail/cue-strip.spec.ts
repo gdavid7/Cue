@@ -195,21 +195,27 @@ test("the conversation doesn't move when the strip settles", async ({
   page,
 }, testInfo) => {
   const emailAccountId = await getEmailAccountId(page);
-  // Cue's note on the email is what decides the strip here. It's worked out
-  // on the server ahead of time, as the inbox would have, so this checks the
-  // reader, not how fast the emulated provider answers under load.
+  // Cue's note on the email is what decides the strip here. The inbox works
+  // it out ahead of time, as it would before the user opens the email, so
+  // this checks the reader, not how fast the emulated provider answers under
+  // load. The server keeps no notes (RD-3) and this browser does, so the
+  // inbox is opened in this same browser and the note is waited for there.
+  // Opening the email itself first would also start its suggested reply.
+  await page.goto(`/${emailAccountId}/mail`, { waitUntil: "domcontentloaded" });
   await expect
     .poll(
-      async () => {
-        const response = await page.request.get(
-          `/api/user/inbox-insights?items=${threads.unsorted}:${threads.unsortedMessage}`,
-          { headers: { "X-Email-Account-ID": emailAccountId } },
-        );
-        if (!response.ok()) return null;
-        const { insights } = await response.json();
-        return insights[threads.unsorted]?.insight?.action ?? null;
-      },
-      { timeout: 60_000 },
+      () =>
+        page.evaluate((messageId) => {
+          for (let i = 0; i < window.localStorage.length; i++) {
+            const key = window.localStorage.key(i);
+            if (!key?.includes(":inbox-insight:")) continue;
+            const kept = JSON.parse(window.localStorage.getItem(key) ?? "{}");
+            const action = kept[messageId]?.value?.insight?.action;
+            if (action) return action;
+          }
+          return null;
+        }, threads.unsortedMessage),
+      { timeout: 90_000 },
     )
     .toBe("reply");
 
@@ -228,8 +234,12 @@ test("the conversation doesn't move when the strip settles", async ({
           message.getBoundingClientRect().top -
             subject.getBoundingClientRect().top,
         );
-        // The strip's state and height ride along, to explain any change.
-        const entry = `${offset}:${strip?.getAttribute("data-cue-strip-state") ?? "none"}:${Math.round(strip?.getBoundingClientRect().height ?? 0)}`;
+        // The strip's state, height and busy flag ride along, to tell its
+        // changes from the reader's; the subject's height explains a wrap.
+        const busy =
+          strip?.querySelector("[aria-busy]")?.getAttribute("aria-busy") ??
+          "none";
+        const entry = `${offset}:${strip?.getAttribute("data-cue-strip-state") ?? "none"}:${Math.round(strip?.getBoundingClientRect().height ?? 0)}:${busy}:${Math.round(subject.getBoundingClientRect().height)}`;
         if (tops.at(-1) !== entry) tops.push(entry);
       }
       requestAnimationFrame(sample);
@@ -248,18 +258,31 @@ test("the conversation doesn't move when the strip settles", async ({
     () => (window as unknown as { __messageTops: string[] }).__messageTops,
   );
   // The strip is held from its first frame at the height it settles at, and
-  // settling doesn't move the message: the offset just before it settles is
-  // the offset after. (The reader's own first layout may move things before
-  // that; that isn't the strip's doing.)
+  // none of its own changes (deciding, showing, its summary landing) moves
+  // the message: wherever the strip changes, the offset before is the offset
+  // after. The reader's own first layout may move things on frames where the
+  // strip is unchanged; that isn't the strip's doing. With Cue's note kept in
+  // this browser, the strip shows from the first frame, so that first layout
+  // now falls after it shows.
   const parsed = samples.map((sample) => {
-    const [offset, state, height] = sample.split(":");
-    return { offset, state, height };
+    const [offset, state, height, busy] = sample.split(":");
+    return { offset, state, height, busy };
   });
   const trail = samples.join(" → ");
   const firstShown = parsed.findIndex((sample) => sample.state === "show");
   expect(firstShown, trail).toBeGreaterThanOrEqual(0);
-  const settled = parsed.slice(Math.max(firstShown - 1, 0));
-  expect(new Set(settled.map((sample) => sample.offset)).size, trail).toBe(1);
+  const stripMoves = parsed.flatMap((sample, index) => {
+    const before = parsed[index - 1];
+    const stripChanged =
+      before &&
+      (before.state !== sample.state ||
+        before.height !== sample.height ||
+        before.busy !== sample.busy);
+    return stripChanged && before.offset !== sample.offset
+      ? [`${samples[index - 1]} → ${samples[index]}`]
+      : [];
+  });
+  expect(stripMoves, trail).toEqual([]);
   const held = parsed.filter((sample) => sample.state !== "none");
   expect(new Set(held.map((sample) => sample.height)).size, trail).toBe(1);
   await capturePlaywrightCheckpoint(page, testInfo, "cue-strip-settled-late");
