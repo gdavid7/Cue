@@ -63,6 +63,8 @@ export function useCueSearch({
   } | null>(null);
   useEffect(() => {
     if (!natural || !query) return;
+    // Coming back to a search starts its budget again.
+    setBudget(null);
     const timeout = setTimeout(
       () => setBudget({ query, readingLate: !answeredRef.current }),
       CUE_SEARCH_BUDGET_MS,

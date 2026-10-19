@@ -110,7 +110,8 @@ export function CueFoundSection({
           </ul>
         </div>
       ) : null}
-      <div className="flex flex-col">
+      {/* Rows are options, which need a listbox around them. */}
+      <div aria-label="Mail Cue found" className="flex flex-col" role="listbox">
         {visible.map((thread, index) => (
           <ThreadRow
             compact={isMobile}
