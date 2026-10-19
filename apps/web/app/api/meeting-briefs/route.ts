@@ -5,11 +5,15 @@ import { hasCronSecret, hasPostCronSecret } from "@/utils/cron";
 import { captureException } from "@/utils/error";
 import type { Logger } from "@/utils/logger";
 import { getPremiumUserFilter } from "@/utils/premium";
-import { processMeetingBriefings } from "@/utils/meeting-briefs/process";
-import { runWithBoundedConcurrency } from "@/utils/async";
+import { processUserMeetingBriefings } from "@/utils/meeting-briefs/process";
+import { mapWithConcurrency } from "@/utils/async";
+import groupBy from "lodash/groupBy";
 
+// STALLED_PENDING_MS in utils/meeting-briefs/process.ts is derived from this.
 export const maxDuration = 300;
-const MEETING_BRIEFING_ACCOUNT_CONCURRENCY = 5;
+const MEETING_BRIEFING_USER_CONCURRENCY = 5;
+// No brief starts after this, so none is cut off by maxDuration.
+const BRIEF_START_BUDGET_MS = 240_000;
 
 export const GET = withError("meeting-briefs", async (request) => {
   if (!hasCronSecret(request)) {
@@ -37,6 +41,7 @@ export const POST = withError("meeting-briefs", async (request) => {
 
 async function processAllMeetingBriefings(logger: Logger) {
   logger.info("Processing meeting briefings for all users");
+  const deadline = new Date(Date.now() + BRIEF_START_BUDGET_MS);
 
   // Get all email accounts with meeting briefings enabled
   const emailAccounts = await prisma.emailAccount.findMany({
@@ -52,52 +57,62 @@ async function processAllMeetingBriefings(logger: Logger) {
     },
     select: {
       id: true,
+      userId: true,
       email: true,
       meetingBriefingsMinutesBefore: true,
-      account: {
-        select: {
-          provider: true,
-        },
-      },
     },
   });
 
   logger.info("Found eligible accounts", { count: emailAccounts.length });
 
-  const results = await runWithBoundedConcurrency({
-    items: emailAccounts,
-    concurrency: MEETING_BRIEFING_ACCOUNT_CONCURRENCY,
-    run: (emailAccount) =>
-      processMeetingBriefings({
-        emailAccountId: emailAccount.id,
-        userEmail: emailAccount.email,
-        minutesBefore: emailAccount.meetingBriefingsMinutesBefore,
-        logger: logger.with({
-          emailAccountId: emailAccount.id,
-          email: emailAccount.email,
-        }),
-      }),
-  });
+  // A person's mailboxes are briefed together, so a meeting on several of
+  // their calendars is briefed once.
+  const users = Object.entries(groupBy(emailAccounts, (a) => a.userId));
+
+  // A pool, not lock-step batches, so one heavy user holds up no one else.
+  const results = await mapWithConcurrency(
+    users,
+    MEETING_BRIEFING_USER_CONCURRENCY,
+    async ([userId, userAccounts]) => {
+      try {
+        return {
+          userAccounts,
+          accountResults: await processUserMeetingBriefings({
+            userId,
+            emailAccounts: userAccounts,
+            deadline,
+            logger,
+          }),
+        };
+      } catch (error) {
+        return {
+          userAccounts,
+          accountResults: userAccounts.map((a) => ({
+            emailAccountId: a.id,
+            error,
+          })),
+        };
+      }
+    },
+  );
 
   let successCount = 0;
   let errorCount = 0;
 
-  for (const { item: emailAccount, result } of results) {
-    if (result.status === "fulfilled") {
-      successCount++;
-      continue;
+  for (const { userAccounts, accountResults } of results) {
+    for (const { emailAccountId, error } of accountResults) {
+      if (!error) {
+        successCount++;
+        continue;
+      }
+
+      const emailAccount = userAccounts.find((a) => a.id === emailAccountId);
+      logger
+        .with({ emailAccountId, email: emailAccount?.email })
+        .error("Failed to process meeting briefings for user", { error });
+      captureException(error);
+      errorCount++;
     }
-
-    const log = logger.with({
-      emailAccountId: emailAccount.id,
-      email: emailAccount.email,
-    });
-
-    log.error("Failed to process meeting briefings for user", {
-      error: result.reason,
-    });
-    captureException(result.reason);
-    errorCount++;
   }
 
   logger.info("Completed processing meeting briefings", {

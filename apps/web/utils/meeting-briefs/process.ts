@@ -2,6 +2,7 @@ import prisma from "@/utils/prisma";
 import { isDuplicateError } from "@/utils/prisma-helpers";
 import { MeetingBriefingStatus } from "@/generated/prisma/enums";
 import {
+  CRON_INTERVAL_MINUTES,
   fetchUpcomingEvents,
   filterEventsWithExternalGuests,
 } from "./fetch-upcoming-events";
@@ -12,6 +13,15 @@ import type { Logger } from "@/utils/logger";
 import type { CalendarEvent } from "@/utils/calendar/event-types";
 import { partitionAttendeesForBriefing } from "./attendees";
 import { getUserOwnAddresses } from "@/utils/user/own-addresses";
+import { canonicalizeEmailAddress } from "@/utils/email";
+import { mapWithConcurrency } from "@/utils/async";
+import uniqBy from "lodash/uniqBy";
+import {
+  extractLLMErrorInfo,
+  isTransientNetworkError,
+  withRetry,
+} from "@/utils/llms/retry";
+import { isAutomatedAiCallTimeoutError } from "@/utils/llms/automated-call-bound";
 
 export type EmailAccountForBrief = {
   id: string;
@@ -32,116 +42,256 @@ export type EmailAccountForBrief = {
   };
 };
 
-export async function processMeetingBriefings({
-  emailAccountId,
-  userEmail,
-  minutesBefore,
+// A claim still pending this long belongs to a run that died: the cron's
+// maxDuration (300s, app/api/meeting-briefs/route.ts) plus a minute.
+const STALLED_PENDING_MS = (300 + 60) * 1000;
+// A copy only waits while at least two more ticks are due before the
+// meeting, so one late or missed tick cannot leave it unbriefed.
+const MIN_WAIT_LEAD_MS = 2 * CRON_INTERVAL_MINUTES * 60_000;
+// A meeting this close has no later tick, so it starts even past the deadline;
+// maxDuration still bounds it.
+const LAST_TICK_LEAD_MS = CRON_INTERVAL_MINUTES * 60_000;
+const CALENDAR_FETCH_CONCURRENCY = 3;
+const MEETING_CONCURRENCY = 2;
+const BRIEF_RETRY_DELAY_MS = 2000;
+
+type BriefAccount = {
+  id: string;
+  email: string;
+  meetingBriefingsMinutesBefore: number;
+};
+
+type MeetingCopy = {
+  account: BriefAccount;
+  event: CalendarEvent;
+  externalGuests: Set<string>;
+};
+
+/**
+ * Briefs one person's mailboxes together. A meeting on several of their
+ * calendars has a different event id on each and is briefed from one copy.
+ * Every rule errs toward a duplicate brief, never toward none.
+ *
+ * Different meetings run in parallel; the copies of one meeting run in order,
+ * so a copy decides only after every earlier copy has had its turn. After
+ * `deadline` only meetings with no later tick are started; the rest stay
+ * unclaimed for the next tick rather than being cut off mid-way.
+ */
+export async function processUserMeetingBriefings({
+  userId,
+  emailAccounts,
+  deadline,
   logger,
 }: {
-  emailAccountId: string;
-  userEmail: string;
-  minutesBefore: number;
+  userId: string;
+  emailAccounts: BriefAccount[];
+  deadline: Date;
   logger: Logger;
-}): Promise<void> {
-  logger.info("Processing meeting briefings", { minutesBefore });
+}): Promise<{ emailAccountId: string; error?: unknown }[]> {
+  const errors = new Map<string, unknown>();
+  const ownAddresses = await getUserOwnAddresses(userId);
 
-  // 1. Fetch upcoming events
-  const allEvents = await fetchUpcomingEvents({
-    emailAccountId,
-    minutesBefore,
-    logger,
+  const fetched = await mapWithConcurrency(
+    emailAccounts,
+    CALENDAR_FETCH_CONCURRENCY,
+    async (account) => {
+      try {
+        const events = await fetchUpcomingEvents({
+          emailAccountId: account.id,
+          minutesBefore: account.meetingBriefingsMinutesBefore,
+          logger: accountLogger(logger, account),
+        });
+        // Only a copy its own mailbox would brief can be chosen, so a
+        // placeholder without guests never holds the meeting back.
+        return filterEventsWithExternalGuests(
+          events,
+          account.email,
+          ownAddresses,
+        ).map((event) => ({
+          account,
+          event,
+          externalGuests: new Set(
+            partitionAttendeesForBriefing(
+              event,
+              account.email,
+              ownAddresses,
+            ).external.map((guest) => canonicalizeEmailAddress(guest.email)),
+          ),
+        }));
+      } catch (error) {
+        errors.set(account.id, error);
+        return [];
+      }
+    },
+  );
+
+  const copies = uniqBy(fetched.flat(), copyKey);
+
+  const existing =
+    copies.length > 0
+      ? await prisma.meetingBriefing.findMany({
+          where: { emailAccount: { userId }, OR: copies.map(copyWhere) },
+          select: { emailAccountId: true, calendarEventId: true },
+        })
+      : [];
+  const claimed = new Set(
+    existing.map((b) => `${b.emailAccountId}:${b.calendarEventId}`),
+  );
+
+  const accounts = new Map<string, Promise<EmailAccountForBrief | null>>();
+  const loadAccount = (id: string) => {
+    let account = accounts.get(id);
+    if (!account) {
+      account = loadEmailAccountForBrief(id, userId);
+      accounts.set(id, account);
+    }
+    return account;
+  };
+
+  // Soonest first, so the deadline only ever holds back later meetings.
+  const meetings = groupSameMeetings(copies).sort(
+    (a, b) => a[0].event.startTime.getTime() - b[0].event.startTime.getTime(),
+  );
+
+  await mapWithConcurrency(meetings, MEETING_CONCURRENCY, async (meeting) => {
+    for (const copy of meeting) {
+      if (claimed.has(copyKey(copy))) continue;
+      const copyLog = accountLogger(logger, copy.account).with({
+        eventId: copy.event.id,
+      });
+      const now = Date.now();
+      if (
+        now >= deadline.getTime() &&
+        copy.event.startTime.getTime() - now > LAST_TICK_LEAD_MS
+      ) {
+        copyLog.info("Out of time this run, leaving brief for next tick");
+        return;
+      }
+      try {
+        await processMeetingCopy({
+          userId,
+          copy,
+          meeting,
+          loadAccount,
+          logger: copyLog,
+        });
+      } catch (error) {
+        errors.set(copy.account.id, error);
+      }
+    }
   });
 
-  logger.info("Fetched upcoming events", { count: allEvents.length });
+  return emailAccounts.map((account) => ({
+    emailAccountId: account.id,
+    error: errors.get(account.id),
+  }));
+}
 
-  if (allEvents.length === 0) {
-    logger.info("No events with external guests, skipping");
+async function processMeetingCopy({
+  userId,
+  copy,
+  meeting,
+  loadAccount,
+  logger,
+}: {
+  userId: string;
+  copy: MeetingCopy;
+  meeting: MeetingCopy[];
+  loadAccount: (id: string) => Promise<EmailAccountForBrief | null>;
+  logger: Logger;
+}) {
+  const decision = await decideMeetingCopy({ userId, copy, meeting });
+
+  if (decision === "wait") {
+    logger.info("Another copy of this meeting is being briefed, waiting");
     return;
   }
 
-  // Get full email account for AI generation
-  const emailAccount = await prisma.emailAccount.findUnique({
-    where: { id: emailAccountId },
-    select: {
-      id: true,
-      userId: true,
-      email: true,
-      about: true,
-      multiRuleSelectionEnabled: true,
-      sensitiveDataPolicy: true,
-      timezone: true,
-      calendarBookingLink: true,
-      user: {
-        select: {
-          aiProvider: true,
-          aiModel: true,
-          aiApiKey: true,
-        },
-      },
-      account: {
-        select: {
-          provider: true,
-        },
-      },
-    },
-  });
+  if (decision === "skip") {
+    logger.info("Meeting already briefed from another copy, skipping");
+    await upsertMeetingBriefingStatus({
+      emailAccountId: copy.account.id,
+      calendarEventId: copy.event.id,
+      eventTitle: copy.event.title,
+      eventStartTime: copy.event.startTime,
+      guestCount: copy.externalGuests.size,
+      status: MeetingBriefingStatus.SKIPPED,
+      logger,
+    });
+    return;
+  }
 
+  const emailAccount = await loadAccount(copy.account.id);
   if (!emailAccount) {
     logger.error("Email account not found");
     return;
   }
 
-  // 2. Filter to events with external guests
-  const eventsWithExternalGuests = filterEventsWithExternalGuests(
-    allEvents,
-    userEmail,
-    await getUserOwnAddresses(emailAccount.userId),
-  );
-
-  if (eventsWithExternalGuests.length === 0) {
-    logger.info("No events with external guests, skipping");
-    return;
+  try {
+    await runMeetingBrief({
+      event: copy.event,
+      emailAccount,
+      emailAccountId: copy.account.id,
+      isTestSend: false,
+      logger,
+    });
+  } catch {
+    // Error already logged and saved by runMeetingBrief
   }
+}
 
-  // 3. Check which events haven't been briefed yet
-  const existingBriefings = await prisma.meetingBriefing.findMany({
-    where: {
-      emailAccountId,
-      calendarEventId: {
-        in: eventsWithExternalGuests.map((e) => e.id),
-      },
+/**
+ * Copies of one meeting are ordered the same way by every mailbox: lowest
+ * mailbox id, then lowest event id, and run in that order. The first copy
+ * that can still be briefed briefs the meeting, so when one fails only the
+ * next takes over. An earlier copy that is unclaimed, failed or stalled has
+ * already had its turn and is passed over. One claimed by another run moments
+ * ago is waited on only while two more ticks are due before the meeting.
+ * Copies are skipped only once some copy has been sent.
+ */
+async function decideMeetingCopy({
+  userId,
+  copy,
+  meeting,
+}: {
+  userId: string;
+  copy: MeetingCopy;
+  meeting: MeetingCopy[];
+}): Promise<"brief" | "wait" | "skip"> {
+  const others = meeting.filter(
+    (other) => copyKey(other) !== copyKey(copy) && isSameMeeting(copy, other),
+  );
+  if (others.length === 0) return "brief";
+
+  const briefings = await prisma.meetingBriefing.findMany({
+    where: { emailAccount: { userId }, OR: others.map(copyWhere) },
+    select: {
+      emailAccountId: true,
+      calendarEventId: true,
+      status: true,
+      createdAt: true,
     },
-    select: { calendarEventId: true },
   });
 
-  const briefedEventIds = new Set(
-    existingBriefings.map((b) => b.calendarEventId),
-  );
-  const eventsToProcess = eventsWithExternalGuests.filter(
-    (event) => !briefedEventIds.has(event.id),
-  );
-
-  if (eventsToProcess.length === 0) {
-    logger.info("All events already briefed, skipping");
-    return;
+  if (briefings.some((b) => b.status === MeetingBriefingStatus.SENT)) {
+    return "skip";
   }
 
-  // 4. Process each event
-  for (const event of eventsToProcess) {
-    try {
-      await runMeetingBrief({
-        event,
-        emailAccount,
-        emailAccountId,
-        isTestSend: false,
-        logger,
-      });
-    } catch {
-      // Error already logged and saved by runMeetingBrief
-    }
-  }
+  const now = Date.now();
+  if (copy.event.startTime.getTime() - now <= MIN_WAIT_LEAD_MS) return "brief";
 
-  logger.info("Finished processing meeting briefings");
+  const earlierInFlight = briefings.some(
+    (b) =>
+      b.status === MeetingBriefingStatus.PENDING &&
+      now - b.createdAt.getTime() < STALLED_PENDING_MS &&
+      others.some(
+        (other) =>
+          other.account.id === b.emailAccountId &&
+          other.event.id === b.calendarEventId &&
+          compareCopies(other, copy) < 0,
+      ),
+  );
+  return earlierInFlight ? "wait" : "brief";
 }
 
 export async function runMeetingBrief({
@@ -162,30 +312,33 @@ export async function runMeetingBrief({
 
   const eventLog = logger.with({ eventId: event.id });
 
-  const { external: externalAttendees, internal: internalAttendees } =
-    partitionAttendeesForBriefing(
-      event,
-      userEmail,
-      await getUserOwnAddresses(emailAccount.userId),
-    );
-  const externalGuestCount = externalAttendees.length;
-
-  if (!isTestSend) {
-    const claimed = await claimMeetingBriefing({
-      emailAccountId,
-      calendarEventId: event.id,
-      eventTitle: event.title,
-      eventStartTime: event.startTime,
-      guestCount: externalGuestCount,
-    });
-
-    if (!claimed) {
-      eventLog.info("Event already claimed by another process, skipping");
-      return { success: false, message: "Already being processed" };
-    }
-  }
+  let externalGuestCount = 0;
+  let claimed = false;
 
   try {
+    const { external: externalAttendees, internal: internalAttendees } =
+      partitionAttendeesForBriefing(
+        event,
+        userEmail,
+        await getUserOwnAddresses(emailAccount.userId),
+      );
+    externalGuestCount = externalAttendees.length;
+
+    if (!isTestSend) {
+      claimed = await claimMeetingBriefing({
+        emailAccountId,
+        calendarEventId: event.id,
+        eventTitle: event.title,
+        eventStartTime: event.startTime,
+        guestCount: externalGuestCount,
+      });
+
+      if (!claimed) {
+        eventLog.info("Event already claimed by another process, skipping");
+        return { success: false, message: "Already being processed" };
+      }
+    }
+
     const briefingData = await gatherContextForEvent({
       event,
       emailAccountId,
@@ -211,11 +364,21 @@ export async function runMeetingBrief({
       return { success: false, message: "No external guests found" };
     }
 
-    const briefingContent = await aiGenerateMeetingBriefing({
-      briefingData,
-      emailAccount,
-      logger: eventLog,
-    });
+    // A failed brief is not retried by its own copy, so a rate limit or
+    // timeout gets one more try before the brief is marked FAILED.
+    const briefingContent = await withRetry(
+      () =>
+        aiGenerateMeetingBriefing({
+          briefingData,
+          emailAccount,
+          logger: eventLog,
+        }),
+      {
+        retryIf: isRetryableBriefError,
+        maxRetries: 1,
+        delayMs: BRIEF_RETRY_DELAY_MS,
+      },
+    );
 
     await sendBriefing({
       event,
@@ -245,7 +408,9 @@ export async function runMeetingBrief({
   } catch (error) {
     eventLog.error("Failed to process meeting briefing", { error });
 
-    if (!isTestSend) {
+    // Unclaimed, the event stays open: this copy retries next tick and later
+    // copies pass it over now.
+    if (claimed) {
       await upsertMeetingBriefingStatus({
         emailAccountId,
         calendarEventId: event.id,
@@ -332,4 +497,100 @@ async function upsertMeetingBriefingStatus({
   } catch (error) {
     logger.error("Failed to upsert meeting briefing status", { error, status });
   }
+}
+
+function loadEmailAccountForBrief(
+  emailAccountId: string,
+  userId: string,
+): Promise<EmailAccountForBrief | null> {
+  return prisma.emailAccount.findUnique({
+    where: { id: emailAccountId, userId },
+    select: {
+      id: true,
+      userId: true,
+      email: true,
+      about: true,
+      multiRuleSelectionEnabled: true,
+      sensitiveDataPolicy: true,
+      timezone: true,
+      calendarBookingLink: true,
+      user: {
+        select: {
+          aiProvider: true,
+          aiModel: true,
+          aiApiKey: true,
+        },
+      },
+      account: {
+        select: {
+          provider: true,
+        },
+      },
+    },
+  });
+}
+
+/** A rate limit, server error or timeout, which a moment later may not repeat. */
+function isRetryableBriefError(error: unknown) {
+  return (
+    extractLLMErrorInfo(error).retryable ||
+    isTransientNetworkError(error) ||
+    isAutomatedAiCallTimeoutError(error)
+  );
+}
+
+function accountLogger(logger: Logger, account: BriefAccount) {
+  return logger.with({ emailAccountId: account.id, email: account.email });
+}
+
+/** Copies that are the same meeting, each group in copy order. */
+function groupSameMeetings(copies: MeetingCopy[]) {
+  let groups: MeetingCopy[][] = [];
+  for (const copy of copies) {
+    const joined = groups.filter((group) =>
+      group.some((other) => isSameMeeting(copy, other)),
+    );
+    groups = groups.filter((group) => !joined.includes(group));
+    groups.push([copy, ...joined.flat()].sort(compareCopies));
+  }
+  return groups;
+}
+
+/**
+ * Two copies are one meeting when title, start and end match and they share
+ * an external guest. Every copy has one, since only copies that would be
+ * briefed are compared. A shared colleague or the user's own address is not
+ * enough: back-to-back interview slots with one interviewer stay apart.
+ */
+function isSameMeeting(a: MeetingCopy, b: MeetingCopy) {
+  if (
+    a.event.title.trim() !== b.event.title.trim() ||
+    a.event.startTime.getTime() !== b.event.startTime.getTime() ||
+    a.event.endTime.getTime() !== b.event.endTime.getTime()
+  ) {
+    return false;
+  }
+  for (const guest of a.externalGuests) {
+    if (b.externalGuests.has(guest)) return true;
+  }
+  return false;
+}
+
+function compareCopies(a: MeetingCopy, b: MeetingCopy) {
+  return (
+    compareIds(a.account.id, b.account.id) || compareIds(a.event.id, b.event.id)
+  );
+}
+
+function compareIds(a: string, b: string) {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
+function copyKey(copy: MeetingCopy) {
+  return `${copy.account.id}:${copy.event.id}`;
+}
+
+function copyWhere(copy: MeetingCopy) {
+  return { emailAccountId: copy.account.id, calendarEventId: copy.event.id };
 }
