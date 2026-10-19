@@ -24,6 +24,7 @@ import { useSidebar } from "@/components/ui/sidebar";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useChat } from "@/providers/ChatProvider";
+import { useAccount } from "@/providers/EmailAccountProvider";
 import {
   NEW_RULE_ID as CONST_NEW_RULE_ID,
   NONE_RULE_ID as CONST_NONE_RULE_ID,
@@ -55,6 +56,8 @@ export function FixWithChat({
 
   const { setOpen } = useSidebar();
   const { setContext } = useChat();
+  // The reader's account, which in All inboxes may not be the chat's.
+  const { emailAccountId } = useAccount();
 
   const selectedRuleName = useMemo(() => {
     if (!data) return null;
@@ -124,7 +127,8 @@ export function FixWithChat({
                 name: selectedRuleName || "Unknown",
               },
     };
-    setContext(context);
+    // The fix is to this account's rules, so the chat works in it.
+    setContext(context, { accountId: emailAccountId });
 
     setInput(input);
     setOpen((arr) => [...arr, "chat-sidebar"]);

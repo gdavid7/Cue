@@ -60,8 +60,8 @@ describe("before the first sync completes", () => {
   it("records nothing, so the mail that sync brings in isn't announced", () => {
     const { notifier, notified } = setup();
 
-    notifier.handle([conversation("cached")], false);
-    notifier.handle([conversation("cached"), conversation("backfill")], true);
+    notifier.handle([conversation("cached")], new Set(["acc-1"]));
+    notifier.handle([conversation("cached"), conversation("backfill")]);
     vi.advanceTimersByTime(20_000);
 
     expect(notified).toEqual([]);
@@ -70,10 +70,36 @@ describe("before the first sync completes", () => {
   it("announces mail that arrives after the seeding snapshot", async () => {
     const { notifier, notified } = setup();
 
-    notifier.handle([conversation("cached")], true);
-    notifier.handle([conversation("fresh"), conversation("cached")], true);
+    notifier.handle([conversation("cached")]);
+    notifier.handle([conversation("fresh"), conversation("cached")]);
     await vi.advanceTimersByTimeAsync(15_000);
 
     expect(notified.flat().map((item) => item.id)).toEqual(["fresh"]);
+  });
+
+  it("announces a synced account's mail while another account has never synced", async () => {
+    const { notifier, notified } = setup();
+    const unsynced = new Set(["acc-2"]);
+
+    notifier.handle([conversation("cached")], unsynced);
+    notifier.handle([conversation("fresh"), conversation("cached")], unsynced);
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(notified.flat().map((item) => item.id)).toEqual(["fresh"]);
+  });
+
+  it("does not announce what a late account's first sync brings in", async () => {
+    const { notifier, notified } = setup();
+
+    notifier.handle([conversation("a")], new Set(["acc-2"]));
+    notifier.handle([conversation("backfill", "acc-2"), conversation("a")]);
+    notifier.handle([
+      conversation("new", "acc-2"),
+      conversation("backfill", "acc-2"),
+      conversation("a"),
+    ]);
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(notified.flat().map((item) => item.id)).toEqual(["new"]);
   });
 });

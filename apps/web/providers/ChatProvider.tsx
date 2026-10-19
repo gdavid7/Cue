@@ -83,6 +83,11 @@ type ChatContextType = {
   openThreadAccountId: string | null;
   /** Starts a new conversation in another of the user's accounts. */
   switchChatAccount: (emailAccountId: string) => void;
+  /**
+   * Takes the chat to an email's account when it is empty and idle. A
+   * conversation or reply under way stays, and the chat offers the switch.
+   */
+  followEmailAccount: (emailAccountId: string) => void;
   /** Opens a saved chat in the account it belongs to. */
   openChat: (chat: { id: string; emailAccountId: string }) => void;
   input: string;
@@ -100,7 +105,14 @@ type ChatContextType = {
    */
   replyFinishing: boolean;
   context: MessageContext | null;
-  setContext: (context: MessageContext | null) => void;
+  /**
+   * Attaches context to the next message. Context about an email names the
+   * email's account, and the chat moves there if it is in another one.
+   */
+  setContext: (
+    context: MessageContext | null,
+    options?: { accountId: string },
+  ) => void;
   attachments: Attachment[];
   setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>;
   /**
@@ -491,6 +503,22 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   // retried, and the saved chat must survive it.
   const conversationUnknown =
     Boolean(chatId) && data === undefined && !isChatUnavailable(messagesError);
+  const followEmailAccount = useCallback(
+    (accountId: string) => {
+      if (accountId === emailAccountId) return;
+      if (!accountIds.includes(accountId)) return;
+      if (isRunActive || hasConversation || conversationUnknown) return;
+      moveChatToAccount(accountId, null);
+    },
+    [
+      accountIds,
+      conversationUnknown,
+      emailAccountId,
+      hasConversation,
+      isRunActive,
+      moveChatToAccount,
+    ],
+  );
   useEffect(() => {
     const threadKey = openThread
       ? `${openThread.emailAccountId}:${openThread.threadId}`
@@ -498,19 +526,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     if (followedThreadRef.current === threadKey) return;
     if (conversationUnknown) return;
     followedThreadRef.current = threadKey;
-    if (!openThread || openThread.emailAccountId === emailAccountId) return;
-    if (!accountIds.includes(openThread.emailAccountId)) return;
-    if (isRunActive || hasConversation) return;
-    moveChatToAccount(openThread.emailAccountId, null);
-  }, [
-    accountIds,
-    conversationUnknown,
-    emailAccountId,
-    hasConversation,
-    isRunActive,
-    moveChatToAccount,
-    openThread,
-  ]);
+    if (openThread) followEmailAccount(openThread.emailAccountId);
+  }, [conversationUnknown, followEmailAccount, openThread]);
 
   useEffect(() => {
     if (!routeAccountId) return;
@@ -542,14 +559,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     chat.setMessages([]);
   }, [chat.setMessages, chatAccountMissing, setChatAccountIdParam, setChatId]);
 
-  // Fix context comes from the page's account (its rules and mail).
-  const setContextForPage = useCallback(
-    (nextContext: MessageContext | null) => {
-      if (nextContext && emailAccountId !== routeAccountId)
-        moveChatToAccount(routeAccountId, null);
+  // Fix context is about one account's rules and mail, which in All inboxes
+  // need not be the page's.
+  const setContextForAccount = useCallback(
+    (nextContext: MessageContext | null, options?: { accountId: string }) => {
+      if (nextContext && options && options.accountId !== emailAccountId)
+        moveChatToAccount(options.accountId, null);
       setContext(nextContext);
     },
-    [emailAccountId, moveChatToAccount, routeAccountId],
+    [emailAccountId, moveChatToAccount],
   );
 
   const sendMessageParts = useCallback(
@@ -738,6 +756,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             ? openThread.emailAccountId
             : null,
         switchChatAccount,
+        followEmailAccount,
         openChat,
         chatId,
         input,
@@ -750,7 +769,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         stop,
         replyFinishing,
         context,
-        setContext: setContextForPage,
+        setContext: setContextForAccount,
         attachments,
         setAttachments,
         inputFocusRequested,

@@ -13,3 +13,7 @@ export const scheduleEmailBody = z.object({
 });
 
 export const scheduledEmailIdBody = z.object({ id: z.string().min(1) });
+
+export const cancelHeldSendBody = z.object({
+  operationId: z.string().min(1).max(512),
+});
