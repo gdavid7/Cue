@@ -640,6 +640,67 @@ describe("chat route rule freshness persistence", () => {
     );
   });
 
+  describe("compaction boundary", () => {
+    const at = (minute: number) =>
+      new Date(`2026-03-27T10:${String(minute).padStart(2, "0")}:00.000Z`);
+    // The second turn's reply was stored as two assistant messages.
+    const storedMessages = [
+      { id: "u1", role: "user", parts: [], createdAt: at(1) },
+      { id: "a1", role: "assistant", parts: [], createdAt: at(2) },
+      { id: "u2", role: "user", parts: [], createdAt: at(3) },
+      { id: "a2a", role: "assistant", parts: [], createdAt: at(4) },
+      { id: "a2b", role: "assistant", parts: [], createdAt: at(5) },
+      { id: "u3", role: "user", parts: [], createdAt: at(6) },
+      { id: "a3", role: "assistant", parts: [], createdAt: at(7) },
+    ];
+
+    async function compactKeeping(
+      keptUserMessageCount: number,
+      body: Record<string, unknown> = {},
+    ) {
+      prisma.chat.findUnique.mockResolvedValueOnce({
+        id: "chat-1",
+        emailAccountId: "email-account-id",
+        lastSeenRulesRevision: null,
+        messages: storedMessages,
+        compactions: [],
+      });
+      prisma.chatMessage.create.mockResolvedValueOnce({
+        id: "user-message-1",
+        createdAt: at(8),
+      });
+      mockShouldCompact.mockReturnValueOnce(true);
+      mockCompactMessages.mockResolvedValueOnce({
+        compactedMessages: [{ role: "user", content: "Update my rules" }],
+        summary: "Compacted summary",
+        compactedCount: 3,
+        keptUserMessageCount,
+      });
+
+      await POST(createRequest("Update my rules", body));
+
+      return prisma.chatCompaction.create.mock.calls.at(-1)?.[0].data
+        .compactedBeforeCreatedAt;
+    }
+
+    it("starts the stored history at the first user message the model kept", async () => {
+      // The model kept the turns from u2 on, plus the new message.
+      expect(await compactKeeping(3)).toEqual(at(3));
+    });
+
+    it("places the boundary the same way when a hidden inline-action message is sent", async () => {
+      expect(
+        await compactKeeping(3, {
+          inlineActions: [{ type: "archive_threads", threadIds: ["thread-1"] }],
+        }),
+      ).toEqual(at(3));
+    });
+
+    it("keeps the new message when the model kept only the latest turn", async () => {
+      expect(await compactKeeping(1)).toEqual(at(8));
+    });
+  });
+
   it("extracts and persists memories from the pre-compaction conversation stream", async () => {
     const compactedBeforeCreatedAt = new Date("2026-03-27T09:00:00.000Z");
     const recentMessageCreatedAt = new Date("2026-03-27T10:00:00.000Z");
