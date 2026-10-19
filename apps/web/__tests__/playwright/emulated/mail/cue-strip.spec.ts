@@ -190,21 +190,27 @@ test("the conversation doesn't move when the strip settles", async ({
   page,
 }, testInfo) => {
   const emailAccountId = await getEmailAccountId(page);
-  // Cue's note on the email is what decides the strip here. It's worked out
-  // on the server ahead of time, as the inbox would have, so this checks the
-  // reader, not how fast the emulated provider answers under load.
+  // Cue's note on the email is what decides the strip here. The inbox works
+  // it out ahead of time, as it would before the user opens the email, so
+  // this checks the reader, not how fast the emulated provider answers under
+  // load. The server keeps no notes (RD-3) and this browser does, so the
+  // inbox is opened in this same browser and the note is waited for there.
+  // Opening the email itself first would also start its suggested reply.
+  await page.goto(`/${emailAccountId}/mail`, { waitUntil: "domcontentloaded" });
   await expect
     .poll(
-      async () => {
-        const response = await page.request.get(
-          `/api/user/inbox-insights?items=${threads.unsorted}:${threads.unsortedMessage}`,
-          { headers: { "X-Email-Account-ID": emailAccountId } },
-        );
-        if (!response.ok()) return null;
-        const { insights } = await response.json();
-        return insights[threads.unsorted]?.insight?.action ?? null;
-      },
-      { timeout: 60_000 },
+      () =>
+        page.evaluate((messageId) => {
+          for (let i = 0; i < window.localStorage.length; i++) {
+            const key = window.localStorage.key(i);
+            if (!key?.includes(":inbox-insight:")) continue;
+            const kept = JSON.parse(window.localStorage.getItem(key) ?? "{}");
+            const action = kept[messageId]?.value?.insight?.action;
+            if (action) return action;
+          }
+          return null;
+        }, threads.unsortedMessage),
+      { timeout: 90_000 },
     )
     .toBe("reply");
 
