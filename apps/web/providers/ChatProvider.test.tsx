@@ -51,6 +51,7 @@ const {
     accountsLoading: false,
     accountsError: undefined as Error | undefined,
     accountsWithoutB: false,
+    withAccountC: false,
     keepDataOnError: false,
   },
   chatState: {
@@ -150,7 +151,9 @@ vi.mock("@/hooks/useChatMessages", () => ({
 vi.mock("@/providers/EmailAccountProvider", () => ({
   useAccount: () => ({
     emailAccountId: accountState.emailAccountId,
-    accountIds: ["account-a", "account-b"],
+    accountIds: accountState.withAccountC
+      ? ["account-a", "account-b", "account-c"]
+      : ["account-a", "account-b"],
   }),
 }));
 
@@ -177,6 +180,15 @@ vi.mock("@/hooks/useAccounts", () => ({
                       account: { disconnectedAt: accountState.disconnectedB },
                     },
                   ]),
+              ...(accountState.withAccountC
+                ? [
+                    {
+                      id: "account-c",
+                      email: "c@example.com",
+                      account: { disconnectedAt: null },
+                    },
+                  ]
+                : []),
             ],
           },
   }),
@@ -204,6 +216,7 @@ vi.mock("@/utils/logger-client", () => ({
 
 afterEach(() => {
   cleanup();
+  accountState.withAccountC = false;
 });
 
 describe("ChatProvider", () => {
@@ -285,6 +298,101 @@ describe("ChatProvider", () => {
     });
 
     expect(mockSendMessage.mock.calls[1]?.[1]).toBeUndefined();
+  });
+
+  it("keeps a chat already in the fixed email's account there, with the fix attached", async () => {
+    // All inboxes on account A; the chat followed B's open thread.
+    queryState.initialChatId = null;
+    queryState.initial = { chatAccountId: "account-b" };
+    const fixContext = buildFixRuleContext("b-thread");
+    let latestContext: ReturnType<typeof useChat> | undefined;
+    function Consumer() {
+      latestContext = useChat();
+      return null;
+    }
+    renderWithProvider(<Consumer />);
+
+    act(() => {
+      latestContext?.setContext(fixContext, { accountId: "account-b" });
+    });
+
+    await waitFor(() => {
+      expect(latestContext?.context).toEqual(fixContext);
+    });
+    expect(latestContext?.chatAccount?.id).toBe("account-b");
+    expect(queryState.set.chatAccountId).toBeUndefined();
+  });
+
+  it("moves a chat in a third account to the fixed email's account", async () => {
+    accountState.withAccountC = true;
+    queryState.initialChatId = null;
+    queryState.initial = { chatAccountId: "account-c" };
+    const fixContext = buildFixRuleContext("b-thread");
+    let latestContext: ReturnType<typeof useChat> | undefined;
+    function Consumer() {
+      latestContext = useChat();
+      return null;
+    }
+    renderWithProvider(<Consumer />);
+    expect(latestContext?.chatAccount?.id).toBe("account-c");
+
+    act(() => {
+      latestContext?.setContext(fixContext, { accountId: "account-b" });
+    });
+
+    await waitFor(() => {
+      expect(latestContext?.chatAccount?.id).toBe("account-b");
+    });
+    expect(latestContext?.context).toEqual(fixContext);
+    expect(queryState.set.chatAccountId).toBe("account-b");
+  });
+
+  describe("asking about an email in another account", () => {
+    function renderConsumer() {
+      const latest: { current?: ReturnType<typeof useChat> } = {};
+      function Consumer() {
+        latest.current = useChat();
+        return null;
+      }
+      renderWithProvider(<Consumer />);
+      return latest;
+    }
+
+    it("takes an empty, idle chat to the email's account", async () => {
+      queryState.initialChatId = null;
+      const latest = renderConsumer();
+
+      act(() => latest.current?.followEmailAccount("account-b"));
+
+      await waitFor(() => {
+        expect(latest.current?.chatAccount?.id).toBe("account-b");
+      });
+    });
+
+    it("leaves a conversation under way where it is, and offers the switch", () => {
+      queryState.initialChatId = "chat-from-account-a";
+      const latest = renderConsumer();
+      mockSetMessages.mockClear();
+
+      act(() => latest.current?.followEmailAccount("account-b"));
+
+      expect(latest.current?.chatAccount?.id).toBe("account-a");
+      expect(latest.current?.chatId).toBe("chat-from-account-a");
+      expect(mockSetMessages).not.toHaveBeenCalled();
+      expect(queryState.set.chatAccountId).toBeUndefined();
+    });
+
+    it("leaves a running reply where it is", () => {
+      queryState.initialChatId = null;
+      chatState.status = "streaming";
+      const latest = renderConsumer();
+      mockSetMessages.mockClear();
+
+      act(() => latest.current?.followEmailAccount("account-b"));
+
+      expect(latest.current?.chatAccount?.id).toBe("account-a");
+      expect(mockSetMessages).not.toHaveBeenCalled();
+    });
   });
 
   it("restores consumed fix context when sending fails", async () => {

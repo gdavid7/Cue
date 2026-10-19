@@ -1,3 +1,4 @@
+import { toastError } from "@/components/Toast";
 import { captureException } from "@/utils/error";
 import {
   EMAIL_ACCOUNT_HEADER,
@@ -16,11 +17,21 @@ import {
   SESSION_EXPIRED_MESSAGE,
 } from "@/utils/session-expired";
 
+// Accounts already offered a reconnect on this page.
+const reconnectOffered = new Set<string>();
+
 // https://swr.vercel.app/docs/error-handling#status-code-and-error-object
 export const swrFetcher = async (
   url: string,
   init?: RequestInit | undefined,
   emailAccountId?: string | null,
+  options?: {
+    /**
+     * The account on screen. An expired grant on it opens its reconnect page;
+     * on any other account (All inboxes reads them all) the page stays.
+     */
+    viewedEmailAccountId?: string | null;
+  },
 ) => {
   const headers = new Headers(init?.headers);
 
@@ -69,12 +80,15 @@ export const swrFetcher = async (
           },
         });
 
-        console.log(`${errorMessage}, redirecting to consent page...`);
         const redirectUrl = getPermissionsConsentPath(emailAccountId, {
           expired: true,
         });
-        redirectToSafeUrl(redirectUrl);
-        return;
+        if (emailAccountId === options?.viewedEmailAccountId) {
+          console.log(`${errorMessage}, redirecting to consent page...`);
+          redirectToSafeUrl(redirectUrl);
+          return;
+        }
+        offerReconnect(emailAccountId, redirectUrl);
       }
     }
 
@@ -114,6 +128,22 @@ export const swrFetcher = async (
 
   return res.json();
 };
+
+function offerReconnect(emailAccountId: string, reconnectUrl: string) {
+  if (reconnectOffered.has(emailAccountId)) return;
+  reconnectOffered.add(emailAccountId);
+  toastError({
+    id: `reconnect-${emailAccountId}`,
+    title: "One of your inboxes needs reconnecting",
+    description:
+      "Cue lost access to it, so its mail may be missing. Your other inboxes still work.",
+    duration: 30_000,
+    action: {
+      label: "Reconnect",
+      onClick: () => redirectToSafeUrl(reconnectUrl),
+    },
+  });
+}
 
 // Retry-After is either whole seconds or an HTTP date; anything else (a
 // negative number, garbage) is no hint at all. The retry bounds the result.

@@ -25,6 +25,8 @@ export function createNewMailNotifier(deps: {
   triageSettleMs: number;
 }) {
   const tracker = createNewMailTracker({ startedAtMs: deps.startedAtMs });
+  // Accounts watched before this browser finished their first sync.
+  let awaitingSync = new Set<string>();
   const pending: TrackedConversation[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
@@ -56,13 +58,21 @@ export function createNewMailNotifier(deps: {
 
   return {
     /**
-     * `synced` is false until every watched account finished its first sync;
-     * before then the list is a stale cache or a partial backfill, so nothing
-     * is recorded or notified.
+     * Until an account finishes its first sync its list is a stale cache or a
+     * partial backfill, so its mail is ignored, and the snapshot where it
+     * becomes synced only seeds it. Other accounts notify meanwhile.
      */
-    handle(conversations: TrackedConversation[], synced = true) {
-      if (!synced) return;
-      const fresh = tracker.take(conversations);
+    handle(
+      conversations: TrackedConversation[],
+      unsyncedAccountIds: ReadonlySet<string> = new Set(),
+    ) {
+      const nowSynced = new Set(
+        [...awaitingSync].filter((id) => !unsyncedAccountIds.has(id)),
+      );
+      awaitingSync = new Set(unsyncedAccountIds);
+      const fresh = tracker
+        .take(conversations.filter((c) => !unsyncedAccountIds.has(c.accountId)))
+        .filter((c) => !nowSynced.has(c.accountId));
       if (fresh.length === 0 || !canNotify()) return;
 
       if (deps.getMode() === "all") {

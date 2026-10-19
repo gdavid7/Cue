@@ -4,6 +4,7 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ListThread } from "./types";
 import { useThreadActions } from "./use-thread-actions";
+import { toastUndo } from "@/components/Toast";
 import { admissionRejectionCopy } from "@/utils/mail-engine/admission-notice";
 
 const notifications = vi.hoisted(() => ({
@@ -280,6 +281,78 @@ describe("useThreadActions", () => {
 
   // Today lists conversations from the server, not the engine's views, so it
   // needs to hear which rows an undo brought back.
+  it("still undoes an archive after switching account, on the engine now running", async () => {
+    const closedClient = mail.client;
+    const { result, rerender } = renderHook(
+      ({ emailAccountId, threads }) =>
+        useThreadActions({ emailAccountId, threads }),
+      {
+        initialProps: {
+          emailAccountId: "account-a",
+          threads: [createThread(["INBOX"], "thread")],
+        },
+      },
+    );
+    await act(() => result.current.archive(["thread"]));
+
+    // Switching account replaces the engine the archive was queued on.
+    const nextClient = {
+      cancelOperation: vi.fn().mockResolvedValue({ status: "cancelled" }),
+      getDiagnostics: vi.fn(),
+      submitConversations: vi.fn(),
+    };
+    mail.client = nextClient;
+    try {
+      rerender({ emailAccountId: "account-b", threads: [] });
+
+      let restored: string[] = [];
+      await act(async () => {
+        restored = await result.current.undo();
+      });
+      expect(restored).toEqual(["thread"]);
+      expect(nextClient.cancelOperation).toHaveBeenCalledWith({
+        accountId: "account-a",
+        operationId: expect.any(String),
+      });
+      expect(closedClient.cancelOperation).not.toHaveBeenCalled();
+    } finally {
+      mail.client = closedClient;
+    }
+  });
+
+  it("lets the toast from before an account switch undo on the engine now running", async () => {
+    const closedClient = mail.client;
+    const { result, rerender } = renderHook(
+      ({ emailAccountId, threads }) =>
+        useThreadActions({ emailAccountId, threads }),
+      {
+        initialProps: {
+          emailAccountId: "account-a",
+          threads: [createThread(["INBOX"], "thread")],
+        },
+      },
+    );
+    await act(() => result.current.archive(["thread"]));
+    const onUndo = vi.mocked(toastUndo).mock.calls[0]?.[0].onUndo;
+    const nextClient = {
+      cancelOperation: vi.fn().mockResolvedValue({ status: "cancelled" }),
+      getDiagnostics: vi.fn(),
+      submitConversations: vi.fn(),
+    };
+    mail.client = nextClient;
+    try {
+      rerender({ emailAccountId: "account-b", threads: [] });
+
+      await act(async () => {
+        await onUndo?.();
+      });
+      expect(nextClient.cancelOperation).toHaveBeenCalledOnce();
+      expect(closedClient.cancelOperation).not.toHaveBeenCalled();
+    } finally {
+      mail.client = closedClient;
+    }
+  });
+
   it("acts on a conversation listed outside the mailbox and reports what undo restored", async () => {
     const onRestored = vi.fn();
     const { result } = renderHook(() =>

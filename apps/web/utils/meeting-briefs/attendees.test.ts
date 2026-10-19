@@ -43,6 +43,25 @@ describe("partitionAttendeesForBriefing", () => {
     ]);
   });
 
+  it("leaves out the user's other mailboxes, so they are not briefed as guests", () => {
+    const event = createEvent({
+      attendees: [
+        { email: "me@work.example" },
+        { email: "Me.Personal@gmail.com" },
+        { email: "teammate@work.example" },
+      ],
+    });
+
+    const { external, internal } = partitionAttendeesForBriefing(
+      event,
+      "me@work.example",
+      ["me@work.example", "me.personal@gmail.com"],
+    );
+
+    expect(external).toEqual([]);
+    expect(internal).toEqual([{ email: "teammate@work.example" }]);
+  });
+
   it("excludes the user from both partitions", () => {
     const event = createEvent({
       attendees: [

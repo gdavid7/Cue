@@ -1,6 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MailClient } from "@inboxzero/mail-core/engine";
 import type { OperationState } from "@inboxzero/mail-core/operations";
 import type { QueryHandle } from "@inboxzero/mail-core/queries";
+import { setActiveMailClient } from "@/utils/mail-engine/active-client";
 import {
   beginUndoSend,
   getUndoSendHoldUntil,
@@ -25,10 +27,113 @@ vi.mock("@/lib/shortcuts/registry", () => ({
   getShortcutHint: () => "z",
 }));
 
+const server = vi.hoisted(() => ({
+  cancelHeldSendAction: vi.fn(),
+}));
+vi.mock("@/utils/actions/scheduled-email", () => server);
+
 describe("undo send", () => {
   beforeEach(async () => {
     await undoPendingSend();
     vi.clearAllMocks();
+    server.cancelHeldSendAction.mockResolvedValue({
+      data: { status: "cancelled" },
+    });
+  });
+
+  afterEach(() => {
+    setActiveMailClient(null);
+    vi.useRealTimers();
+  });
+
+  it("cancels on the server when an account switch closed the engine", async () => {
+    const restoreComposer = vi.fn();
+    const closed = createClient();
+    const next = createClient();
+    beginUndoSend({
+      client: closed.client,
+      operationId: "mutation",
+      emailAccountId: "account-a",
+      holdUntil: Date.now() + UNDO_SEND_DELAY_MS,
+      restoreComposer,
+    });
+    // Switching to account B replaces the engine the send was queued on.
+    setActiveMailClient(next.client);
+
+    await expect(undoPendingSend()).resolves.toBe(true);
+    expect(server.cancelHeldSendAction).toHaveBeenCalledWith("account-a", {
+      operationId: "mutation",
+    });
+    expect(closed.cancel).not.toHaveBeenCalled();
+    // The engine that now owns the queued send records the cancellation too.
+    expect(next.cancel).toHaveBeenCalledWith({
+      accountId: "account-a",
+      operationId: "mutation",
+    });
+    expect(restoreComposer).toHaveBeenCalledOnce();
+    expect(notifications.toastSendUndone).toHaveBeenCalledWith(
+      "undo-send:mutation",
+    );
+  });
+
+  it("cancels on the server when no engine is running after a switch", async () => {
+    const restoreComposer = vi.fn();
+    const closed = createClient();
+    beginUndoSend({
+      client: closed.client,
+      operationId: "mutation",
+      emailAccountId: "account-a",
+      holdUntil: Date.now() + UNDO_SEND_DELAY_MS,
+      restoreComposer,
+    });
+    setActiveMailClient(null);
+
+    await expect(undoPendingSend()).resolves.toBe(true);
+    expect(server.cancelHeldSendAction).toHaveBeenCalledOnce();
+    expect(closed.cancel).not.toHaveBeenCalled();
+    expect(restoreComposer).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to the server when the engine never answers", async () => {
+    vi.useFakeTimers();
+    const restoreComposer = vi.fn();
+    const hung = createClient();
+    hung.cancel.mockReturnValue(new Promise(() => {}));
+    setActiveMailClient(hung.client);
+    beginUndoSend({
+      client: hung.client,
+      operationId: "mutation",
+      emailAccountId: "account-a",
+      holdUntil: Date.now() + UNDO_SEND_DELAY_MS,
+      restoreComposer,
+    });
+
+    const undone = undoPendingSend();
+    await vi.advanceTimersByTimeAsync(UNDO_SEND_DELAY_MS);
+
+    await expect(undone).resolves.toBe(true);
+    expect(server.cancelHeldSendAction).toHaveBeenCalledWith("account-a", {
+      operationId: "mutation",
+    });
+    expect(restoreComposer).toHaveBeenCalledOnce();
+  });
+
+  it("reports a failed server undo instead of leaving it pending", async () => {
+    const restoreComposer = vi.fn();
+    beginUndoSend({
+      client: createClient().client,
+      operationId: "mutation",
+      emailAccountId: "account-a",
+      holdUntil: Date.now() + UNDO_SEND_DELAY_MS,
+      restoreComposer,
+    });
+    server.cancelHeldSendAction.mockRejectedValue(new Error("offline"));
+
+    await expect(undoPendingSend()).resolves.toBe(false);
+    expect(restoreComposer).not.toHaveBeenCalled();
+    expect(notifications.toastError).toHaveBeenCalledWith({
+      description: "Couldn't reach the server to undo. Try again.",
+    });
   });
 
   it("holds online sends for 10 seconds and skips the delay when offline", () => {
@@ -38,7 +143,7 @@ describe("undo send", () => {
 
   it("restores the composer when undo cancels a held send", async () => {
     const restoreComposer = vi.fn();
-    const { client, handle } = createClient();
+    const { client, handle } = activeClient();
     const holdUntil = Date.now() + UNDO_SEND_DELAY_MS;
     beginUndoSend({
       client,
@@ -86,7 +191,7 @@ describe("undo send", () => {
 
   it("keeps undo open while the server holds the send", async () => {
     const restoreComposer = vi.fn();
-    const { client, handle } = createClient();
+    const { client, handle } = activeClient();
     beginUndoSend({
       client,
       operationId: "mutation",
@@ -106,7 +211,7 @@ describe("undo send", () => {
 
   it("reports the send once it has gone out", async () => {
     const restoreComposer = vi.fn();
-    const { client, handle } = createClient();
+    const { client, handle } = activeClient();
     beginUndoSend({
       client,
       operationId: "mutation",
@@ -128,7 +233,7 @@ describe("undo send", () => {
 
   it("keeps a failed send open with a way back to the draft", () => {
     const restoreComposer = vi.fn();
-    const { client, handle } = createClient();
+    const { client, handle } = activeClient();
     beginUndoSend({
       client,
       operationId: "mutation",
@@ -151,7 +256,7 @@ describe("undo send", () => {
     vi.useFakeTimers();
     const now = 1_000_000;
     vi.setSystemTime(now);
-    const { client, handle } = createClient();
+    const { client, handle } = activeClient();
     beginUndoSend({
       client,
       operationId: "mutation",
@@ -178,8 +283,8 @@ describe("undo send", () => {
     vi.useFakeTimers();
     const now = 1_000_000;
     vi.setSystemTime(now);
-    const first = createClient();
-    const second = createClient();
+    const first = activeClient();
+    const second = activeClient();
     beginUndoSend({
       client: first.client,
       operationId: "first",
@@ -221,7 +326,7 @@ describe("undo send", () => {
 
   it("does not restore when the send has already started", async () => {
     const restoreComposer = vi.fn();
-    const { client } = createClient({ cancelStatus: "too_late" });
+    const { client } = activeClient({ cancelStatus: "too_late" });
     beginUndoSend({
       client,
       operationId: "mutation",
@@ -240,7 +345,8 @@ describe("undo send", () => {
 
   it("lets the user retry undo when the server can't be reached", async () => {
     const restoreComposer = vi.fn();
-    const { client } = createClient({ cancelStatus: "unavailable" });
+    const { client, cancel } = activeClient({ cancelStatus: "unavailable" });
+    server.cancelHeldSendAction.mockRejectedValue(new Error("offline"));
     beginUndoSend({
       client,
       operationId: "mutation",
@@ -255,9 +361,7 @@ describe("undo send", () => {
     expect(notifications.dismiss).not.toHaveBeenCalled();
     expect(restoreComposer).not.toHaveBeenCalled();
 
-    vi.mocked(
-      (client as { cancelOperation: ReturnType<typeof vi.fn> }).cancelOperation,
-    ).mockResolvedValue({ status: "cancelled" });
+    cancel.mockResolvedValue({ status: "cancelled" });
     await expect(undoPendingSend()).resolves.toBe(true);
     expect(restoreComposer).toHaveBeenCalledOnce();
   });
@@ -267,13 +371,20 @@ function createClient(options?: {
   cancelStatus?: "cancelled" | "too_late" | "unavailable";
 }) {
   const handle = createHandle();
+  const cancel = vi
+    .fn()
+    .mockResolvedValue({ status: options?.cancelStatus ?? "cancelled" });
   const client = {
-    cancelOperation: vi
-      .fn()
-      .mockResolvedValue({ status: options?.cancelStatus ?? "cancelled" }),
+    cancelOperation: cancel,
     observeOperation: vi.fn(() => handle),
-  };
-  return { client: client as never, handle };
+  } as unknown as MailClient;
+  return { client, handle, cancel };
+}
+
+function activeClient(options?: Parameters<typeof createClient>[0]) {
+  const created = createClient(options);
+  setActiveMailClient(created.client);
+  return created;
 }
 
 function createHandle() {

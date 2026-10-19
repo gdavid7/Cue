@@ -11,6 +11,7 @@ import { clearLastEmailAccountCookie } from "@/utils/cookies.server";
 import { LAST_EMAIL_ACCOUNT_COOKIE } from "@/utils/cookies";
 import { publishConversationChange } from "@/utils/team-comments/events";
 import { deleteTinybirdEmailData } from "@inboxzero/tinybird";
+import { shareChannelsAcrossMailboxes } from "@/utils/messaging/shared-channels";
 import { deleteAccountAction, deleteEmailAccountAction } from "./user";
 
 vi.mock("@/utils/prisma");
@@ -57,6 +58,9 @@ vi.mock("@/utils/premium/seats", () => ({
 vi.mock("@/utils/redis/account-validation", () => ({
   invalidateAccountOwnership: vi.fn(async () => {}),
 }));
+vi.mock("@/utils/messaging/shared-channels", () => ({
+  shareChannelsAcrossMailboxes: vi.fn(() => Promise.resolve()),
+}));
 vi.mock("@/utils/ai/draft-cleanup", () => ({
   cleanupAIDraftsForAccount: vi.fn(),
   getConfiguredDraftCleanupDays: vi.fn(),
@@ -77,6 +81,9 @@ describe("deleteEmailAccountAction", () => {
     );
     prisma.member.findMany.mockResolvedValue([]);
     prisma.conversation.findMany.mockResolvedValue([]);
+    prisma.calendarConnection.findMany.mockResolvedValue([]);
+    prisma.driveConnection.findMany.mockResolvedValue([]);
+    prisma.mcpConnection.findMany.mockResolvedValue([]);
     prisma.emailAccount.findUnique.mockResolvedValue({
       email: "primary@example.com",
       accountId: "account-1",
@@ -89,14 +96,12 @@ describe("deleteEmailAccountAction", () => {
     prisma.conversation.findMany.mockResolvedValue([
       { id: "shared-1" },
     ] as Awaited<ReturnType<typeof prisma.conversation.findMany>>);
-    prisma.emailAccount.findMany.mockResolvedValue([
-      {
-        id: "alternate-email-account",
-        email: "alternate@example.com",
-        name: "Alternate",
-        image: "https://example.com/avatar.png",
-      },
-    ] as Awaited<ReturnType<typeof prisma.emailAccount.findMany>>);
+    prisma.emailAccount.findFirst.mockResolvedValue({
+      id: "alternate-email-account",
+      email: "alternate@example.com",
+      name: "Alternate",
+      image: "https://example.com/avatar.png",
+    } as Awaited<ReturnType<typeof prisma.emailAccount.findFirst>>);
 
     const result = await deleteEmailAccountAction({
       emailAccountId: "primary-email-account",
@@ -145,14 +150,12 @@ describe("deleteEmailAccountAction", () => {
   });
 
   it("does not delete the primary account when promotion loses a concurrent update", async () => {
-    prisma.emailAccount.findMany.mockResolvedValue([
-      {
-        id: "alternate-email-account",
-        email: "alternate@example.com",
-        name: "Alternate",
-        image: null,
-      },
-    ] as Awaited<ReturnType<typeof prisma.emailAccount.findMany>>);
+    prisma.emailAccount.findFirst.mockResolvedValue({
+      id: "alternate-email-account",
+      email: "alternate@example.com",
+      name: "Alternate",
+      image: null,
+    } as Awaited<ReturnType<typeof prisma.emailAccount.findFirst>>);
     prisma.$transaction.mockRejectedValue(newPrismaNotFoundError());
 
     const result = await deleteEmailAccountAction({
@@ -187,6 +190,50 @@ describe("deleteEmailAccountAction", () => {
       },
     });
     expect(updateAccountSeats).not.toHaveBeenCalled();
+  });
+
+  it("moves shared connections to a remaining mailbox in the same transaction as the delete", async () => {
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      email: "secondary@example.com",
+      accountId: "account-2",
+      account: { provider: "google" },
+      user: { email: "primary@example.com" },
+    } as Awaited<ReturnType<typeof prisma.emailAccount.findUnique>>);
+    prisma.emailAccount.findFirst.mockResolvedValue({
+      id: "primary-email-account",
+    } as Awaited<ReturnType<typeof prisma.emailAccount.findFirst>>);
+    const moveCalendars = { operation: "move calendars" };
+    prisma.calendarConnection.updateMany.mockReturnValue(
+      moveCalendars as never,
+    );
+
+    const result = await deleteEmailAccountAction({
+      emailAccountId: "secondary-account",
+    });
+
+    expect(result?.serverError).toBeUndefined();
+    expect(prisma.emailAccount.findFirst).toHaveBeenCalledWith({
+      where: { userId: "user-1", id: { not: "secondary-account" } },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, email: true, name: true, image: true },
+    });
+    expect(prisma.calendarConnection.updateMany).toHaveBeenCalledWith({
+      where: {
+        emailAccountId: "secondary-account",
+        emailAccount: { userId: "user-1" },
+      },
+      data: { emailAccountId: "primary-email-account" },
+    });
+    const operations = prisma.$transaction.mock.calls[0]?.[0] as unknown[];
+    const deleteMailbox = prisma.emailAccount.delete.mock.results[0]?.value;
+    expect(operations.indexOf(moveCalendars)).toBeGreaterThan(-1);
+    expect(operations.indexOf(moveCalendars)).toBeLessThan(
+      operations.indexOf(deleteMailbox),
+    );
+    expect(shareChannelsAcrossMailboxes).toHaveBeenCalledWith({
+      userId: "user-1",
+      logger: expect.anything(),
+    });
   });
 
   it("stops watching a removed mailbox before deleting it", async () => {
@@ -226,7 +273,7 @@ describe("deleteEmailAccountAction", () => {
   });
 
   it("keeps watching the only mailbox when its removal is refused", async () => {
-    prisma.emailAccount.findMany.mockResolvedValue([]);
+    prisma.emailAccount.findFirst.mockResolvedValue(null);
 
     const result = await deleteEmailAccountAction({
       emailAccountId: "primary-email-account",
@@ -374,14 +421,12 @@ describe("deleteEmailAccountAction", () => {
   });
 
   it("shows a specific error when the remaining email is already in use", async () => {
-    prisma.emailAccount.findMany.mockResolvedValue([
-      {
-        id: "alternate-email-account",
-        email: "alternate@example.com",
-        name: "Alternate",
-        image: null,
-      },
-    ] as Awaited<ReturnType<typeof prisma.emailAccount.findMany>>);
+    prisma.emailAccount.findFirst.mockResolvedValue({
+      id: "alternate-email-account",
+      email: "alternate@example.com",
+      name: "Alternate",
+      image: null,
+    } as Awaited<ReturnType<typeof prisma.emailAccount.findFirst>>);
     prisma.$transaction.mockRejectedValue(
       newPrismaKnownError("Unique constraint failed", "P2002", {
         target: ["email"],
@@ -399,14 +444,12 @@ describe("deleteEmailAccountAction", () => {
   });
 
   it("shows a specific error when linked data blocks account deletion", async () => {
-    prisma.emailAccount.findMany.mockResolvedValue([
-      {
-        id: "alternate-email-account",
-        email: "alternate@example.com",
-        name: "Alternate",
-        image: null,
-      },
-    ] as Awaited<ReturnType<typeof prisma.emailAccount.findMany>>);
+    prisma.emailAccount.findFirst.mockResolvedValue({
+      id: "alternate-email-account",
+      email: "alternate@example.com",
+      name: "Alternate",
+      image: null,
+    } as Awaited<ReturnType<typeof prisma.emailAccount.findFirst>>);
     prisma.$transaction.mockRejectedValue(
       newPrismaKnownError("Foreign key constraint failed", "P2003"),
     );
@@ -422,14 +465,12 @@ describe("deleteEmailAccountAction", () => {
   });
 
   it("shows the ownership transfer message when membership blocks account deletion", async () => {
-    prisma.emailAccount.findMany.mockResolvedValue([
-      {
-        id: "alternate-email-account",
-        email: "alternate@example.com",
-        name: "Alternate",
-        image: null,
-      },
-    ] as Awaited<ReturnType<typeof prisma.emailAccount.findMany>>);
+    prisma.emailAccount.findFirst.mockResolvedValue({
+      id: "alternate-email-account",
+      email: "alternate@example.com",
+      name: "Alternate",
+      image: null,
+    } as Awaited<ReturnType<typeof prisma.emailAccount.findFirst>>);
     prisma.$transaction.mockRejectedValue(
       newPrismaKnownError("Foreign key constraint failed", "P2003", {
         field_name: "Member_emailAccountId_fkey",
@@ -447,14 +488,12 @@ describe("deleteEmailAccountAction", () => {
   });
 
   it("shows an action-specific fallback for unexpected delete failures", async () => {
-    prisma.emailAccount.findMany.mockResolvedValue([
-      {
-        id: "alternate-email-account",
-        email: "alternate@example.com",
-        name: "Alternate",
-        image: null,
-      },
-    ] as Awaited<ReturnType<typeof prisma.emailAccount.findMany>>);
+    prisma.emailAccount.findFirst.mockResolvedValue({
+      id: "alternate-email-account",
+      email: "alternate@example.com",
+      name: "Alternate",
+      image: null,
+    } as Awaited<ReturnType<typeof prisma.emailAccount.findFirst>>);
     prisma.$transaction.mockRejectedValue(new Error("database unavailable"));
 
     const result = await deleteEmailAccountAction({
@@ -544,14 +583,12 @@ describe("deleteEmailAccountAction", () => {
   });
 
   it("deletes a solo organization before deleting its only email account", async () => {
-    prisma.emailAccount.findMany.mockResolvedValue([
-      {
-        id: "alternate-email-account",
-        email: "alternate@example.com",
-        name: "Alternate",
-        image: null,
-      },
-    ] as Awaited<ReturnType<typeof prisma.emailAccount.findMany>>);
+    prisma.emailAccount.findFirst.mockResolvedValue({
+      id: "alternate-email-account",
+      email: "alternate@example.com",
+      name: "Alternate",
+      image: null,
+    } as Awaited<ReturnType<typeof prisma.emailAccount.findFirst>>);
     prisma.member.findMany.mockResolvedValue([
       { organizationId: "org-1" },
     ] as Awaited<ReturnType<typeof prisma.member.findMany>>);
@@ -582,14 +619,12 @@ describe("deleteEmailAccountAction", () => {
   });
 
   it("shows the ownership transfer message when the database rejects a raced owner deletion", async () => {
-    prisma.emailAccount.findMany.mockResolvedValue([
-      {
-        id: "alternate-email-account",
-        email: "alternate@example.com",
-        name: "Alternate",
-        image: null,
-      },
-    ] as Awaited<ReturnType<typeof prisma.emailAccount.findMany>>);
+    prisma.emailAccount.findFirst.mockResolvedValue({
+      id: "alternate-email-account",
+      email: "alternate@example.com",
+      name: "Alternate",
+      image: null,
+    } as Awaited<ReturnType<typeof prisma.emailAccount.findFirst>>);
     prisma.$transaction.mockRejectedValue(
       new Error("organization_must_have_owner"),
     );
