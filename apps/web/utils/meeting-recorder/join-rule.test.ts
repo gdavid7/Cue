@@ -12,6 +12,7 @@ describe("shouldAutoJoin", () => {
         event: event({ attendees: [{ email: USER_EMAIL }] }),
         rule: MeetingJoinRule.ALL,
         userEmail: USER_EMAIL,
+        ownAddresses: [],
       }),
     ).toBe(true);
   });
@@ -29,6 +30,7 @@ describe("shouldAutoJoin", () => {
         event: internalOnly,
         rule: MeetingJoinRule.EXTERNAL_ONLY,
         userEmail: USER_EMAIL,
+        ownAddresses: [],
       }),
     ).toBe(false);
     expect(
@@ -36,6 +38,49 @@ describe("shouldAutoJoin", () => {
         event: withExternal,
         rule: MeetingJoinRule.EXTERNAL_ONLY,
         userEmail: USER_EMAIL,
+        ownAddresses: [],
+      }),
+    ).toBe(true);
+  });
+
+  it("counts the user's other connected mailboxes as internal under EXTERNAL_ONLY", () => {
+    const withOwnMailbox = event({
+      attendees: [{ email: USER_EMAIL }, { email: "Me@Personal.example" }],
+    });
+
+    expect(
+      shouldAutoJoin({
+        event: withOwnMailbox,
+        rule: MeetingJoinRule.EXTERNAL_ONLY,
+        userEmail: USER_EMAIL,
+        ownAddresses: ["me@personal.example"],
+      }),
+    ).toBe(false);
+    expect(
+      shouldAutoJoin({
+        event: event({
+          attendees: [
+            { email: "me@personal.example" },
+            { email: "guest@other.com" },
+          ],
+        }),
+        rule: MeetingJoinRule.EXTERNAL_ONLY,
+        userEmail: USER_EMAIL,
+        ownAddresses: ["me@personal.example"],
+      }),
+    ).toBe(true);
+  });
+
+  it("treats a meeting organized from another of the user's mailboxes as hosted under HOST_ONLY", () => {
+    expect(
+      shouldAutoJoin({
+        event: event({
+          isOrganizer: false,
+          organizerEmail: "me@personal.example",
+        }),
+        rule: MeetingJoinRule.HOST_ONLY,
+        userEmail: USER_EMAIL,
+        ownAddresses: ["me@personal.example"],
       }),
     ).toBe(true);
   });
@@ -46,6 +91,7 @@ describe("shouldAutoJoin", () => {
         event: event({ isOrganizer: true }),
         rule: MeetingJoinRule.HOST_ONLY,
         userEmail: USER_EMAIL,
+        ownAddresses: [],
       }),
     ).toBe(true);
 
@@ -56,6 +102,7 @@ describe("shouldAutoJoin", () => {
         event: event({ isOrganizer: false, organizerEmail: "User@Acme.com" }),
         rule: MeetingJoinRule.HOST_ONLY,
         userEmail: USER_EMAIL,
+        ownAddresses: [],
       }),
     ).toBe(true);
 
@@ -67,6 +114,7 @@ describe("shouldAutoJoin", () => {
         }),
         rule: MeetingJoinRule.HOST_ONLY,
         userEmail: USER_EMAIL,
+        ownAddresses: [],
       }),
     ).toBe(false);
   });
@@ -77,6 +125,7 @@ describe("shouldAutoJoin", () => {
         event: event({ attendees: [{ email: "guest@other.com" }] }),
         rule: MeetingJoinRule.OFF,
         userEmail: USER_EMAIL,
+        ownAddresses: [],
       }),
     ).toBe(false);
   });
@@ -87,6 +136,7 @@ describe("shouldAutoJoin", () => {
         event: event({ attendees: [{ email: "guest@other.com" }] }),
         rule: MeetingJoinRule.EXTERNAL_ONLY,
         userEmail: USER_EMAIL,
+        ownAddresses: [],
         joinOverride: false,
       }),
     ).toBe(false);
@@ -96,6 +146,7 @@ describe("shouldAutoJoin", () => {
         event: event(),
         rule: MeetingJoinRule.OFF,
         userEmail: USER_EMAIL,
+        ownAddresses: [],
         joinOverride: true,
       }),
     ).toBe(true);
@@ -107,6 +158,7 @@ describe("shouldAutoJoin", () => {
         event: event({ videoConferenceLink: undefined }),
         rule: MeetingJoinRule.ALL,
         userEmail: USER_EMAIL,
+        ownAddresses: [],
       }),
     ).toBe(false);
   });
