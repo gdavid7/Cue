@@ -943,9 +943,8 @@ describe("createEmailProviderMailboxSource", () => {
       page: "{}",
       pageSize: 50,
     });
-    // A scan's first Gmail page is smaller so the inbox fills sooner.
     expect(getMessagesWithPagination).toHaveBeenCalledWith({
-      maxResults: 25,
+      maxResults: 50,
       pageToken: undefined,
       includeDrafts: true,
     });
@@ -1558,7 +1557,7 @@ describe("createEmailProviderMailboxSource", () => {
 
     const first = await enumerate({ scopeId: "primary", initial: true });
     expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
-      maxResults: 25,
+      maxResults: 50,
       pageToken: undefined,
       includeDrafts: true,
       format: "metadata",
@@ -1582,7 +1581,7 @@ describe("createEmailProviderMailboxSource", () => {
     });
     await enumerate({ scopeId: "primary" });
     expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
-      maxResults: 25,
+      maxResults: 50,
       pageToken: undefined,
       includeDrafts: true,
     });

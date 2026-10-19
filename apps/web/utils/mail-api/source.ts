@@ -71,11 +71,6 @@ const GMAIL_FIRST_BACKFILL_WINDOW_MS = 30 * DAY_MS;
 // recent window to leave no gap at the boundary between them.
 const GMAIL_HISTORY_OVERLAP_MS = DAY_MS;
 const GMAIL_THREAD_COST = 40;
-// The first page of a scan is what the inbox shows first; a smaller one fills
-// it sooner and spends less of the minute's Gmail quota before it does. The
-// quota gate prices a metadata read like a whole one for now; once it prices
-// by format, a first sync's metadata page can grow to 50.
-const GMAIL_FIRST_PAGE_SIZE = 25;
 
 const SUPPORTED_CHANGES = [
   "archive",
@@ -223,11 +218,7 @@ export function createEmailProviderMailboxSource(input: {
         if (isPrimaryGmailScan) await setGmailInitialSync(accountId, true);
         const isFirstSyncFirstPage =
           isPrimaryGmailScan && token.initial === true && !token.pageToken;
-        const maxResults = Math.min(
-          pageSize,
-          maxPageSize,
-          isGmail && !token.pageToken ? GMAIL_FIRST_PAGE_SIZE : maxPageSize,
-        );
+        const maxResults = Math.min(pageSize, maxPageSize);
         const listPage = () =>
           provider.getMessagesWithPagination({
             ...(token.windowStartMs != null && {
