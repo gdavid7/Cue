@@ -38,9 +38,11 @@ export function AssessUser() {
     }
 
     // Both read Gmail and queue ahead of navigations; they wait for the mail
-    // list so the first load and the first sync go first.
+    // list so the first load and the first sync go first. By then the user
+    // may be offline or acting; a failed check isn't theirs to see, and the
+    // next visit runs it again.
     return afterFirstMailList(() => {
-      assess();
+      assess().catch(() => {});
       executeAnalyzeWritingStyle();
     });
   }, [emailAccountId, isAccountOwner]);

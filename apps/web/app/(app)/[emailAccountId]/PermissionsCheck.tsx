@@ -29,14 +29,19 @@ export function PermissionsCheck() {
       () => {
         if (permissionsChecked[emailAccountId]) return;
         permissionsChecked[emailAccountId] = true;
-        checkPermissionsAction(emailAccountId).then((result) => {
-          const expired = result?.data?.hasRefreshToken === false;
-          if (expired || result?.data?.hasAllPermissions === false) {
-            router.replace(
-              getPermissionsConsentPath(emailAccountId, { expired }),
-            );
-          }
-        });
+        checkPermissionsAction(emailAccountId)
+          .then((result) => {
+            const expired = result?.data?.hasRefreshToken === false;
+            if (expired || result?.data?.hasAllPermissions === false) {
+              router.replace(
+                getPermissionsConsentPath(emailAccountId, { expired }),
+              );
+            }
+          })
+          // Unreachable (offline, or the request was cut): check next visit.
+          .catch(() => {
+            permissionsChecked[emailAccountId] = false;
+          });
       },
       { fallbackMs: 2000, settleMs: 0, capMs: 3000 },
     );
