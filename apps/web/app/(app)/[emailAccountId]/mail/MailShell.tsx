@@ -31,6 +31,7 @@ import { getEmailTerminology } from "@/utils/terminology";
 import { MailShellSidebar } from "@/app/(app)/[emailAccountId]/mail/MailShellSidebar";
 import { MailSplitTabs } from "@/app/(app)/[emailAccountId]/mail/MailSplitTabs";
 import { SelectAllCheckbox } from "@/app/(app)/[emailAccountId]/mail/SelectAllCheckbox";
+import chunk from "lodash/chunk";
 import { SelectAllMatchingBanner } from "@/app/(app)/[emailAccountId]/mail/SelectAllMatchingBanner";
 import { MatchingConfirmDialog } from "@/app/(app)/[emailAccountId]/mail/MatchingConfirmDialog";
 import { TrashNotice } from "@/app/(app)/[emailAccountId]/mail/TrashNotice";
@@ -1358,9 +1359,10 @@ export function MailShell() {
     return runOn(trash, true, true);
   });
   const deleteSelectionForever = useStableCallback(async () => {
-    const keys = actionTargets.map((target) => target.key);
+    const targets = actionTargets;
+    const keys = targets.map((target) => target.key);
     // Only what is in the trash goes for good; the server checks again.
-    const messageIds = actionTargets.flatMap((target) =>
+    const messageIds = targets.flatMap((target) =>
       target.messages
         .filter((message) => message.labelIds?.includes(GmailLabel.TRASH))
         .map((message) => message.id),
@@ -1368,14 +1370,25 @@ export function MailShell() {
     selection.clear();
     if (openThreadKey && keys.includes(openThreadKey)) setOpenThread(null);
     if (!messageIds.length) return;
-    const result = await deleteMessagesForeverAction(emailAccountId, {
-      messageIds: messageIds.slice(0, 1000),
-    });
-    if (!result?.data) {
-      toast.error(getActionErrorMessage(result ?? {}));
-      return;
+    const deleted = new Set<string>();
+    for (const ids of chunk(messageIds, 1000)) {
+      const result = await deleteMessagesForeverAction(emailAccountId, {
+        messageIds: ids,
+      });
+      if (!result?.data) {
+        toast.error(getActionErrorMessage(result ?? {}));
+        break;
+      }
+      for (const id of result.data.deletedIds) deleted.add(id);
     }
-    toast.success(getMatchingResultCopy("delete_forever", keys.length));
+    // Counts the conversations that actually lost mail, not those asked for.
+    const deletedConversations = targets.filter((target) =>
+      target.messages.some((message) => deleted.has(message.id)),
+    ).length;
+    if (deletedConversations)
+      toast.success(
+        getMatchingResultCopy("delete_forever", deletedConversations),
+      );
     refreshAfterMatching();
   });
   const confirmBulkAction = useStableCallback(() => {

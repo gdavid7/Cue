@@ -8,7 +8,6 @@ import {
 } from "@/utils/actions/mail-bulk-action.validation";
 import { createEmailProvider } from "@/utils/email/provider";
 import { SafeError } from "@/utils/error";
-import { GmailLabel } from "@/utils/gmail/label";
 
 export const bulkArchiveThreadsAction = actionClient
   .metadata({ name: "bulkArchiveThreads", gmailPriority: "sync" })
@@ -105,19 +104,14 @@ export const deleteMessagesForeverAction = actionClient
           "This account's mail can't be deleted forever from Cue",
         );
 
-      // Only mail already in the trash goes for good, so a conversation's
-      // other messages, such as a sent reply, stay where they are.
-      const messages = await emailProvider.getMessagesBatch(messageIds);
-      const trashedIds = messages
-        .filter((message) => message.labelIds?.includes(GmailLabel.TRASH))
-        .map((message) => message.id);
-      if (trashedIds.length)
-        await emailProvider.deleteMessagesForever(trashedIds);
+      // The provider deletes only what is in the trash as it goes, so a
+      // conversation's other messages, such as a sent reply, stay put.
+      const deletedIds = await emailProvider.deleteMessagesForever(messageIds);
 
       logger.info("Deleted messages forever", {
         requestedCount: messageIds.length,
-        deletedCount: trashedIds.length,
+        deletedCount: deletedIds.length,
       });
-      return { deletedCount: trashedIds.length };
+      return { deletedIds };
     },
   );

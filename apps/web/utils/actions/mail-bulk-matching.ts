@@ -10,6 +10,7 @@ import { createEmailProvider } from "@/utils/email/provider";
 import { SafeError } from "@/utils/error";
 import { enqueueMailBulkJob } from "@/utils/mail-bulk/run-matching-job";
 import {
+  ACTIVE_MAIL_BULK_JOB_STATUSES,
   type MailBulkJobAction,
   mailBulkJobStore,
 } from "@/utils/redis/mail-bulk-job";
@@ -26,12 +27,13 @@ export const startMatchingBulkActionAction = actionClient
   .action(
     async ({
       ctx: { emailAccountId, provider, logger },
-      parsedInput: { scope, action, labelId },
+      parsedInput: { scope: requestedScope, action, labelId },
     }) => {
+      let scope = requestedScope;
       if (action === "delete_forever") {
-        // Deleting for good is only offered from the trash.
-        if (scope.type !== "trash" || scope.q)
-          throw new SafeError("Only mail in the trash can be deleted forever");
+        // Deleting for good only ever lists the trash itself, whatever else
+        // the request names, so no folder, label or search can widen it.
+        scope = { type: "trash" };
         const emailProvider = await createEmailProvider({
           emailAccountId,
           provider,
@@ -54,6 +56,7 @@ export const startMatchingBulkActionAction = actionClient
         applied: 0,
         failed: 0,
         capped: false,
+        updatedAt: Date.now(),
       });
       await enqueueMailBulkJob({ jobId, emailAccountId, scope, deferrals: 0 });
       logger.info("Started bulk action on matching mail", { action, jobId });
@@ -73,9 +76,13 @@ export const undoMatchingBulkActionAction = actionClient
       if (!action || source.sourceJobId)
         throw new SafeError("That action can't be undone");
 
-      // Stops the source where it is; the undo restores what it got through.
-      if (source.status === "listing" || source.status === "applying")
-        await mailBulkJobStore.update(jobId, { status: "cancelled" });
+      // Stops the source where it is. The undo job waits for it to finish
+      // its last chunk, then restores everything it got through.
+      await mailBulkJobStore.transition(
+        jobId,
+        ACTIVE_MAIL_BULK_JOB_STATUSES,
+        "cancelled",
+      );
 
       const undoJobId = randomUUID();
       await mailBulkJobStore.create(undoJobId, {
@@ -88,6 +95,7 @@ export const undoMatchingBulkActionAction = actionClient
         applied: 0,
         failed: 0,
         capped: false,
+        updatedAt: Date.now(),
       });
       await enqueueMailBulkJob({
         jobId: undoJobId,
@@ -109,6 +117,9 @@ export const cancelMatchingBulkActionAction = actionClient
     const job = await mailBulkJobStore.get(jobId);
     if (!job || job.emailAccountId !== emailAccountId)
       throw new SafeError("That action has already finished");
-    if (job.status === "listing" || job.status === "applying")
-      await mailBulkJobStore.update(jobId, { status: "cancelled" });
+    await mailBulkJobStore.transition(
+      jobId,
+      ACTIVE_MAIL_BULK_JOB_STATUSES,
+      "cancelled",
+    );
   });

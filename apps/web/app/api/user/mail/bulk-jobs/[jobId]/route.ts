@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { matchingBulkJobSchema } from "@/utils/actions/mail-bulk-matching.validation";
 import { withEmailAccount } from "@/utils/middleware";
-import { mailBulkJobStore } from "@/utils/redis/mail-bulk-job";
+import {
+  ACTIVE_MAIL_BULK_JOB_STATUSES,
+  isStaleMailBulkJob,
+  mailBulkJobStore,
+} from "@/utils/redis/mail-bulk-job";
 
 export type GetMailBulkJobResponse = NonNullable<
   Awaited<ReturnType<typeof getData>>
@@ -31,9 +35,21 @@ async function getData({
 }) {
   const job = await mailBulkJobStore.get(jobId);
   if (!job || job.emailAccountId !== emailAccountId) return null;
+  // A job that stopped writing lost its delivery; saying so ends the
+  // progress toast instead of leaving it spinning.
+  let status = job.status;
+  if (
+    isStaleMailBulkJob(job) &&
+    (await mailBulkJobStore.transition(
+      jobId,
+      ACTIVE_MAIL_BULK_JOB_STATUSES,
+      "failed",
+    ))
+  )
+    status = "failed";
   return {
     action: job.action,
-    status: job.status,
+    status,
     total: job.total,
     conversations: job.conversations,
     applied: job.applied,

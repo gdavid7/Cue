@@ -140,29 +140,25 @@ describe("deleteMessagesForeverAction", () => {
     );
   });
 
-  it("deletes for good only the messages already in the trash", async () => {
-    const deleteMessagesForever = vi.fn();
-    mockCreateEmailProvider.mockResolvedValue({
-      deleteMessagesForever,
-      getMessagesBatch: vi.fn().mockResolvedValue([
-        { id: "trashed", labelIds: ["TRASH"] },
-        { id: "sent-reply", labelIds: ["SENT"] },
-      ]),
-    });
+  it("reports the messages the provider found in the trash and deleted", async () => {
+    // The provider skips anything outside the trash, such as a sent reply.
+    const deleteMessagesForever = vi.fn().mockResolvedValue(["trashed"]);
+    mockCreateEmailProvider.mockResolvedValue({ deleteMessagesForever });
 
     const result = await deleteMessagesForeverAction("account-1", {
       messageIds: ["trashed", "sent-reply"],
     });
 
     expect(result?.serverError).toBeUndefined();
-    expect(deleteMessagesForever).toHaveBeenCalledWith(["trashed"]);
-    expect(result?.data).toEqual({ deletedCount: 1 });
+    expect(deleteMessagesForever).toHaveBeenCalledWith([
+      "trashed",
+      "sent-reply",
+    ]);
+    expect(result?.data).toEqual({ deletedIds: ["trashed"] });
   });
 
   it("refuses where the provider's access can't delete for good", async () => {
-    mockCreateEmailProvider.mockResolvedValue({
-      getMessagesBatch: vi.fn(),
-    });
+    mockCreateEmailProvider.mockResolvedValue({});
 
     const result = await deleteMessagesForeverAction("account-1", {
       messageIds: ["trashed"],

@@ -155,6 +155,7 @@ import { searchContacts } from "@/utils/outlook/contact";
 import { mapWithConcurrency } from "@/utils/async";
 import { SafeError } from "@/utils/error";
 import {
+  deleteTrashedOutlookMessagesForever,
   keepMatchingOutlookMessage,
   outlookMatchingRequest,
 } from "@/utils/outlook/matching";
@@ -262,23 +263,21 @@ export class OutlookProvider implements EmailProvider {
     };
   }
 
-  async deleteMessagesForever(messageIds: string[]): Promise<void> {
-    await mapWithConcurrency([...new Set(messageIds)], 4, async (messageId) => {
-      try {
-        await withMicrosoftGraphWriteRetry(
-          () =>
-            this.client
-              .getClient()
-              .api(
-                `/me/messages/${encodeURIComponent(messageId)}/permanentDelete`,
-              )
-              .post({}),
-          this.logger,
-        );
-      } catch (error) {
-        if (extractErrorInfo(error).status !== 404) throw error;
-      }
+  async deleteMessagesForever(messageIds: string[]): Promise<string[]> {
+    const { deleteditems } = await getFolderIds(this.client, this.logger);
+    if (!deleteditems) throw new Error("Outlook did not return Deleted Items");
+    return deleteTrashedOutlookMessagesForever({
+      client: this.client.getClient(),
+      messageIds,
+      deletedItemsFolderId: deleteditems,
+      logger: this.logger,
     });
+  }
+
+  async labelMessages(messageIds: string[], labelId: string): Promise<void> {
+    await mapWithConcurrency([...new Set(messageIds)], 4, (messageId) =>
+      this.labelMessage({ messageId, labelId, labelName: null }),
+    );
   }
 
   async countMessages({

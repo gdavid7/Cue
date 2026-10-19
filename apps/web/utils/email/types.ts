@@ -266,10 +266,12 @@ export interface EmailProvider {
   deleteFolder(folderId: string): Promise<void>;
   deleteLabel(labelId: string): Promise<void>;
   /**
-   * Deletes messages for good, past the trash. Only providers whose granted
-   * access allows it implement this: Gmail needs a scope Cue doesn't ask for.
+   * Deletes for good the given messages that are in the trash right now,
+   * skipping any moved out of it, and resolves the ids it deleted. Only
+   * providers whose granted access allows it implement this: Gmail needs a
+   * scope Cue doesn't ask for.
    */
-  deleteMessagesForever?(messageIds: string[]): Promise<void>;
+  deleteMessagesForever?(messageIds: string[]): Promise<string[]>;
   draftEmail(
     email: ParsedMessage,
     args: {
@@ -446,6 +448,8 @@ export interface EmailProvider {
     labelId: string;
     labelName: string | null;
   }): Promise<{ usedFallback?: boolean; actualLabelId?: string }>;
+  /** Adds one label (Outlook: category) to many messages. */
+  labelMessages(messageIds: string[], labelId: string): Promise<void>;
   /**
    * One page of the ids of every message a view or search holds, narrowed by
    * `only` to the ones an action would change.

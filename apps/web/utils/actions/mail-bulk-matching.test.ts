@@ -28,14 +28,21 @@ vi.mock("@/utils/mail-bulk/run-matching-job", () => ({
   enqueueMailBulkJob: (...args: unknown[]) => mockEnqueue(...args),
 }));
 vi.mock("@/utils/redis/mail-bulk-job", () => ({
+  ACTIVE_MAIL_BULK_JOB_STATUSES: ["listing", "applying"],
   mailBulkJobStore: {
     create: async (jobId: string, state: MailBulkJobState) => {
       jobs.set(jobId, state);
     },
     get: async (jobId: string) => jobs.get(jobId) ?? null,
-    update: async (jobId: string, fields: Partial<MailBulkJobState>) => {
+    transition: async (
+      jobId: string,
+      from: MailBulkJobState["status"][],
+      to: MailBulkJobState["status"],
+    ) => {
       const job = jobs.get(jobId);
-      if (job) jobs.set(jobId, { ...job, ...fields });
+      if (!job || !from.includes(job.status)) return false;
+      jobs.set(jobId, { ...job, status: to });
+      return true;
     },
   },
 }));
@@ -88,18 +95,25 @@ describe("mail bulk matching actions", () => {
     expect(mockEnqueue).not.toHaveBeenCalled();
   });
 
-  it("only deletes forever from the trash", async () => {
+  it.each([
+    { type: "trash", folderId: "inbox" },
+    { type: "trash", labelIds: ["INBOX"] },
+    { type: "trash", q: "in:inbox" },
+    { type: "inbox" },
+  ])("lists only the trash to delete forever, whatever the scope says (%o)", async (scope) => {
     mockCreateEmailProvider.mockResolvedValue({
       deleteMessagesForever: vi.fn(),
     });
 
     const result = await startMatchingBulkActionAction("account-1", {
-      scope: { type: "inbox" },
+      scope,
       action: "delete_forever",
     });
 
-    expect(result?.serverError).toMatch(/trash/);
-    expect(mockEnqueue).not.toHaveBeenCalled();
+    expect(result?.serverError).toBeUndefined();
+    expect(mockEnqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: { type: "trash" } }),
+    );
   });
 
   it("undoes an archive by stopping it and restoring what it moved", async () => {
@@ -152,6 +166,7 @@ function sourceJob(overrides: Partial<MailBulkJobState>): MailBulkJobState {
     applied: 10,
     failed: 0,
     capped: false,
+    updatedAt: 0,
     ...overrides,
   };
 }

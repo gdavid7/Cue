@@ -641,6 +641,16 @@ export class GmailProvider implements EmailProvider {
     }
   }
 
+  async labelMessages(messageIds: string[], labelId: string): Promise<void> {
+    for (const ids of chunk([...new Set(messageIds)], 1000)) {
+      if (!ids.length) continue;
+      await this.client.users.messages.batchModify({
+        userId: "me",
+        requestBody: { ids, addLabelIds: [labelId] },
+      });
+    }
+  }
+
   async markMessagesReadState(
     messageIds: string[],
     read: boolean,

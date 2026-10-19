@@ -173,6 +173,7 @@ export const createMockEmailProvider = (
   countMessages: vi.fn().mockResolvedValue(0),
   countMatchingConversations: vi.fn().mockResolvedValue(null),
   listMatchingMessages: vi.fn().mockResolvedValue({ messages: [] }),
+  labelMessages: vi.fn().mockResolvedValue(undefined),
   getAttachment: vi.fn().mockResolvedValue({ data: "", size: 0 }),
   getAttachmentStream: vi.fn(),
   getContactPhotos: vi.fn().mockResolvedValue({}),

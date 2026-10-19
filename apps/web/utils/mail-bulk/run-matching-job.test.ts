@@ -22,6 +22,7 @@ vi.mock("@/utils/redis", () => ({ redis: {} }));
 vi.mock("@/utils/upstash", () => ({
   publishToQstash: vi.fn().mockResolvedValue(undefined),
   publishToQstashAt: vi.fn().mockResolvedValue(true),
+  hasDurableQstash: vi.fn(() => true),
 }));
 
 const logger = createScopedLogger("run-matching-job-test");
@@ -267,6 +268,130 @@ describe("runMailBulkJobStep", () => {
     expect(provider.listMatchingMessages).not.toHaveBeenCalled();
   });
 
+  it("keeps a Stop that lands while the job is still listing", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const provider = createProvider({ pages: [[message("m1", "t1")]] });
+    vi.mocked(provider.listMatchingMessages).mockImplementationOnce(
+      async () => {
+        await store.transition(JOB_ID, ["listing"], "cancelled");
+        return { messages: [message("m1", "t1")] };
+      },
+    );
+
+    const result = await runStep({ store, provider });
+
+    expect(result).toBe("cancelled");
+    expect(provider.archiveMessages).not.toHaveBeenCalled();
+    await expect(store.get(JOB_ID)).resolves.toMatchObject({
+      status: "cancelled",
+    });
+  });
+
+  it("labels each chunk with one batch call", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "label", labelId: "L1" }));
+    const provider = createProvider({
+      pages: [[message("m1", "t1"), message("m2", "t2")]],
+    });
+
+    await runStep({ store, provider });
+
+    expect(provider.labelMessages).toHaveBeenCalledTimes(1);
+    expect(provider.labelMessages).toHaveBeenCalledWith(["m1", "m2"], "L1");
+  });
+
+  it("without a durable scheduler, waits out a quota deferral in the same delivery", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const provider = createProvider({ pages: [[message("m1", "t1")]] });
+    vi.mocked(provider.archiveMessages).mockRejectedValueOnce(
+      new GmailCallDeferredError(5000, "background"),
+    );
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    const result = await runStep({ store, provider, durable: false, wait });
+
+    expect(result).toBe("done");
+    expect(wait).toHaveBeenCalledWith(5000);
+    expect(publishToQstashAt).not.toHaveBeenCalled();
+    expect(provider.archiveMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it("without a durable scheduler, fails rather than hang when a deferral outlasts the delivery", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const provider = createProvider({ pages: [[message("m1", "t1")]] });
+    vi.mocked(provider.archiveMessages).mockRejectedValue(
+      new GmailCallDeferredError(60_000, "background"),
+    );
+
+    const result = await runStep({
+      store,
+      provider,
+      durable: false,
+      budgetMs: 10_000,
+    });
+
+    expect(result).toBe("failed");
+    await expect(store.get(JOB_ID)).resolves.toMatchObject({
+      status: "failed",
+    });
+  });
+
+  it("without a durable scheduler, caps the job to what one delivery can do", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "trash" }));
+    const page = Array.from({ length: 1500 }, (_, index) =>
+      message(`m${index}`, `t${index}`),
+    );
+    const provider = createProvider({ pages: [page, [message("x", "y")]] });
+
+    await runStep({ store, provider, durable: false });
+
+    await expect(store.get(JOB_ID)).resolves.toMatchObject({
+      status: "done",
+      total: 1000,
+      capped: true,
+    });
+  });
+
+  it("starts an undo only once the job it reverses has stopped", async () => {
+    const store = createStore();
+    await store.create(
+      JOB_ID,
+      newJob({ action: "archive", status: "applying" }),
+    );
+    await store.appendTargets(JOB_ID, [
+      { messageId: "m1", threadId: "t1" },
+      { messageId: "m2", threadId: "t2" },
+    ]);
+    await store.create(
+      UNDO_JOB_ID,
+      newJob({ action: "unarchive", status: "applying", sourceJobId: JOB_ID }),
+    );
+    const provider = createProvider({ pages: [] });
+    // The source finishes its last chunk while the undo waits.
+    const wait = vi.fn(async () => {
+      await store.increment(JOB_ID, "applied", 2);
+      await store.transition(JOB_ID, ["applying"], "cancelled");
+    });
+
+    const result = await runMailBulkJobStep({
+      body: { jobId: UNDO_JOB_ID, emailAccountId: ACCOUNT_ID, deferrals: 0 },
+      provider,
+      ownerEmail: "owner@example.com",
+      logger,
+      store,
+      durable: true,
+      wait,
+    });
+
+    expect(result).toBe("done");
+    expect(wait).toHaveBeenCalled();
+    expect(provider.unarchiveMessages).toHaveBeenCalledWith(["m1", "m2"]);
+  });
+
   it("ignores a delivery for another account's job", async () => {
     const store = createStore();
     await store.create(JOB_ID, newJob({ action: "archive" }));
@@ -288,10 +413,11 @@ describe("runMailBulkJobStep", () => {
 function runStep({
   store,
   provider,
+  ...options
 }: {
   store: ReturnType<typeof createStore>;
   provider: EmailProvider;
-}) {
+} & Partial<Parameters<typeof runMailBulkJobStep>[0]>) {
   return runMailBulkJobStep({
     body: {
       jobId: JOB_ID,
@@ -303,6 +429,8 @@ function runStep({
     ownerEmail: "owner@example.com",
     logger,
     store,
+    durable: true,
+    ...options,
   });
 }
 
@@ -320,6 +448,7 @@ function newJob(overrides: Partial<MailBulkJobState>): MailBulkJobState {
     applied: 0,
     failed: 0,
     capped: false,
+    updatedAt: Date.now(),
     ...overrides,
   };
 }
@@ -345,7 +474,7 @@ function createProvider({
     archiveMessages: vi.fn().mockResolvedValue(undefined),
     unarchiveMessages: vi.fn().mockResolvedValue(undefined),
     markMessagesReadState: vi.fn().mockResolvedValue(undefined),
-    labelMessage: vi.fn().mockResolvedValue({}),
+    labelMessages: vi.fn().mockResolvedValue(undefined),
     trashThread: vi.fn().mockResolvedValue(undefined),
     markSpam: vi.fn().mockResolvedValue(undefined),
   } as unknown as EmailProvider;
@@ -363,9 +492,15 @@ function createStore(): typeof mailBulkJobStore {
       const job = jobs.get(jobId);
       return job ? { ...job } : null;
     },
-    async update(jobId, fields) {
+    async setCapped(jobId) {
       const job = jobs.get(jobId);
-      if (job) jobs.set(jobId, { ...job, ...fields });
+      if (job) jobs.set(jobId, { ...job, capped: true });
+    },
+    async transition(jobId, from, to) {
+      const job = jobs.get(jobId);
+      if (!job || !from.includes(job.status)) return false;
+      jobs.set(jobId, { ...job, status: to });
+      return true;
     },
     async increment(jobId, field, by) {
       const job = jobs.get(jobId);

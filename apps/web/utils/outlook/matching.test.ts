@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { createScopedLogger } from "@/utils/logger";
 import {
+  deleteTrashedOutlookMessagesForever,
   keepMatchingOutlookMessage,
   outlookMatchingRequest,
 } from "@/utils/outlook/matching";
@@ -56,6 +58,44 @@ describe("outlookMatchingRequest", () => {
     expect(outlookMatchingRequest({ labelId: "Blue" }, {})).toEqual({
       kind: "unsupported",
     });
+  });
+});
+
+describe("deleteTrashedOutlookMessagesForever", () => {
+  it("deletes only what is still in Deleted Items", async () => {
+    const folders: Record<string, string> = {
+      "still-trashed": "deleted-items-id",
+      "restored-mid-job": "inbox-id",
+    };
+    const deleted: string[] = [];
+    const client = {
+      api: (path: string) => {
+        const [, , , id, verb] = path.split("/");
+        const messageId = decodeURIComponent(id ?? "");
+        return {
+          select: () => ({
+            get: async () => {
+              if (!(messageId in folders))
+                throw Object.assign(new Error("gone"), { statusCode: 404 });
+              return { parentFolderId: folders[messageId] };
+            },
+          }),
+          post: async () => {
+            if (verb === "permanentDelete") deleted.push(messageId);
+          },
+        };
+      },
+    };
+
+    const result = await deleteTrashedOutlookMessagesForever({
+      client: client as never,
+      messageIds: ["still-trashed", "restored-mid-job", "already-gone"],
+      deletedItemsFolderId: "deleted-items-id",
+      logger: createScopedLogger("outlook-matching-test"),
+    });
+
+    expect(result).toEqual(["still-trashed"]);
+    expect(deleted).toEqual(["still-trashed"]);
   });
 });
 

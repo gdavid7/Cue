@@ -2,6 +2,14 @@ import type {
   MatchingFilter,
   MatchingScope,
 } from "@/utils/actions/mail-bulk-matching.validation";
+import { mapWithConcurrency } from "@/utils/async";
+import type { Logger } from "@/utils/logger";
+import type { OutlookClient } from "@/utils/outlook/client";
+import {
+  extractErrorInfo,
+  withMicrosoftGraphRetry,
+  withMicrosoftGraphWriteRetry,
+} from "@/utils/outlook/retry";
 import type { OutlookWellKnownFolder } from "@/utils/outlook/thread-search-query";
 
 const FOLDER_BY_VIEW_TYPE: Record<string, OutlookWellKnownFolder> = {
@@ -59,6 +67,45 @@ export function outlookMatchingRequest(
     endpoint,
     filter: filters.length ? filters.join(" and ") : undefined,
   };
+}
+
+/**
+ * Deletes for good each message that is in Deleted Items when its turn
+ * comes, and resolves the ids it deleted. Each message's folder is read right
+ * before its delete, so mail restored from Trash after a job listed it, or a
+ * selection that reaches past Trash, is left alone.
+ */
+export async function deleteTrashedOutlookMessagesForever({
+  client,
+  messageIds,
+  deletedItemsFolderId,
+  logger,
+}: {
+  client: ReturnType<OutlookClient["getClient"]>;
+  messageIds: string[];
+  deletedItemsFolderId: string;
+  logger: Logger;
+}): Promise<string[]> {
+  const deleted: string[] = [];
+  await mapWithConcurrency([...new Set(messageIds)], 4, async (messageId) => {
+    const path = `/me/messages/${encodeURIComponent(messageId)}`;
+    try {
+      const message: { parentFolderId?: string | null } =
+        await withMicrosoftGraphRetry(
+          () => client.api(path).select("parentFolderId").get(),
+          logger,
+        );
+      if (message.parentFolderId !== deletedItemsFolderId) return;
+      await withMicrosoftGraphWriteRetry(
+        () => client.api(`${path}/permanentDelete`).post({}),
+        logger,
+      );
+      deleted.push(messageId);
+    } catch (error) {
+      if (extractErrorInfo(error).status !== 404) throw error;
+    }
+  });
+  return deleted;
 }
 
 /** Whether a listed message belongs in the set an action changes. */

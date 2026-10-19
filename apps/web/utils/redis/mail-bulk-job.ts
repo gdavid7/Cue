@@ -5,6 +5,23 @@ import { redis } from "@/utils/redis";
 // Long enough to show the result and offer its undo the next day; the job's
 // targets go with it.
 const MAIL_BULK_JOB_TTL_SECONDS = 24 * 60 * 60;
+// A running job writes after every page and chunk; one silent this long has
+// lost its delivery.
+const MAIL_BULK_JOB_STALE_MS = 10 * 60 * 1000;
+
+// Moves the status only from one of the expected ones, so a Stop that lands
+// while a delivery runs is never overwritten by it.
+const TRANSITION_SCRIPT = `
+local status = redis.call("HGET", KEYS[1], "status")
+if not status then return 0 end
+for i = 3, #ARGV do
+  if status == ARGV[i] then
+    redis.call("HSET", KEYS[1], "status", ARGV[1], "updatedAt", ARGV[2])
+    return 1
+  end
+end
+return 0
+`.trim();
 
 export const MAIL_BULK_JOB_ACTIONS = [
   ...MATCHING_BULK_ACTIONS,
@@ -40,11 +57,31 @@ const mailBulkJobStateSchema = z.object({
       value === true || value === "true" || value === 1 || value === "1",
     z.boolean(),
   ),
+  /** When the job last wrote, in epoch ms. */
+  updatedAt: z.coerce.number().int().nonnegative(),
 });
 export type MailBulkJobState = z.infer<typeof mailBulkJobStateSchema>;
 export type MailBulkJobAction = MailBulkJobState["action"];
 
 export type MailBulkTarget = { messageId: string; threadId: string };
+type MailBulkJobStatus = MailBulkJobState["status"];
+
+export const ACTIVE_MAIL_BULK_JOB_STATUSES: MailBulkJobStatus[] = [
+  "listing",
+  "applying",
+];
+
+export function isActiveMailBulkJob(status: MailBulkJobStatus) {
+  return ACTIVE_MAIL_BULK_JOB_STATUSES.includes(status);
+}
+
+/** A job still marked running that has stopped writing. */
+export function isStaleMailBulkJob(job: MailBulkJobState, now = Date.now()) {
+  return (
+    isActiveMailBulkJob(job.status) &&
+    now - job.updatedAt > MAIL_BULK_JOB_STALE_MS
+  );
+}
 
 export const mailBulkJobStore = {
   async create(jobId: string, state: MailBulkJobState) {
@@ -60,11 +97,22 @@ export const mailBulkJobStore = {
     return parsed.success ? parsed.data : null;
   },
 
-  async update(
+  async setCapped(jobId: string) {
+    await redis.hset(jobKey(jobId), { capped: true, updatedAt: Date.now() });
+  },
+
+  /** Resolves whether the status moved, which it only does from `from`. */
+  async transition(
     jobId: string,
-    fields: Partial<Pick<MailBulkJobState, "status" | "capped">>,
-  ) {
-    await redis.hset(jobKey(jobId), stripUndefined(fields));
+    from: MailBulkJobStatus[],
+    to: MailBulkJobStatus,
+  ): Promise<boolean> {
+    const moved = await redis.eval<string[], number>(
+      TRANSITION_SCRIPT,
+      [jobKey(jobId)],
+      [to, String(Date.now()), ...from],
+    );
+    return Number(moved) === 1;
   },
 
   async increment(
@@ -74,6 +122,7 @@ export const mailBulkJobStore = {
   ) {
     if (!by) return;
     await redis.hincrby(jobKey(jobId), field, by);
+    await redis.hset(jobKey(jobId), { updatedAt: Date.now() });
   },
 
   /**
