@@ -31,6 +31,169 @@ describe("engine new mail", () => {
   });
 });
 
+// GP-8l: a first sync's scan, or a resync's after time away, can take
+// minutes under Gmail's quota, one page alone tens of seconds. New mail is
+// read alongside it rather than after it.
+describe("engine new mail during a scan", () => {
+  it("shows mail that arrives while the primary scan's page is in flight", async () => {
+    const gmail = gmailWithSlowScan();
+    const { engine, inbox } = await openMailbox(gmail.source);
+    await engine.runUntil(Date.now() + 300);
+    await vi.waitFor(() => expect(gmail.scanPagesStarted()).toBe(2));
+    expect(inboxMessageIds(inbox)).toContain("m-scan-1");
+
+    gmail.deliver("m-new");
+    await engine.requestSync(["acc-1"]);
+    await engine.runUntil(Date.now() + 300);
+
+    expect(inboxMessageIds(inbox)).toContain("m-new");
+    expect(gmail.changeReadsFrom()).toContain("primary-start");
+
+    // The scan hands its stream the position catch-up reached, so the
+    // changes it already applied aren't read again.
+    gmail.releaseScan();
+    await vi.waitFor(async () => {
+      await engine.runUntil(Date.now() + 100);
+      expect(inboxMessageIds(inbox)).toContain("m-scan-2");
+    });
+    gmail.deliver("m-later");
+    await engine.requestSync(["acc-1"]);
+    await vi.waitFor(async () => {
+      await engine.runUntil(Date.now() + 100);
+      expect(inboxMessageIds(inbox)).toContain("m-later");
+    });
+    const reads = gmail.changeReadsFrom();
+    expect(reads.filter((from) => from === "primary-start")).toHaveLength(1);
+    expect(reads.at(-1)).not.toBe("primary-start");
+    expect(inboxMessageIds(inbox)).toContain("m-new");
+    inbox.close();
+    await engine.close();
+  });
+});
+
+// The primary scan's first page lands at once; its second is held until
+// released. History has no backfill scope here.
+function gmailWithSlowScan() {
+  const arrived: string[] = [];
+  const reads: string[] = [];
+  let scanPages = 0;
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let checkpoint = 0;
+  const source: MailboxSource = {
+    async describe() {
+      return {
+        status: "ok",
+        value: {
+          strategy: "account_history",
+          supportedChanges: ["archive"],
+          maxPageSize: 50,
+          maxHydrationBatch: 20,
+        },
+      };
+    },
+    async discoverScopes() {
+      return {
+        status: "ok",
+        value: {
+          scopes: [{ id: "primary", kind: "account", folderId: null }],
+          nextPage: null,
+        },
+      };
+    },
+    async beginBootstrap({ scope, session }) {
+      return {
+        status: "ok",
+        value: {
+          bootstrapId: "mailbox",
+          enumerationToken: "primary-1",
+          catchUpFrom: {
+            streamId: scope.id,
+            generation: session.generation,
+            checkpoint: "primary-start",
+          },
+        },
+      };
+    },
+    async enumerate({ page, session }) {
+      scanPages += 1;
+      if (page === "primary-1") {
+        return {
+          status: "ok",
+          value: {
+            bootstrapId: "mailbox",
+            scopeId: "primary",
+            changes: [messagePatch("m-scan-1")],
+            requiredHydration: [],
+            bodies: [],
+            nextPage: "primary-2",
+            catchUpFrom: null,
+          },
+        };
+      }
+      await held;
+      return {
+        status: "ok",
+        value: {
+          bootstrapId: "mailbox",
+          scopeId: "primary",
+          changes: [messagePatch("m-scan-2")],
+          requiredHydration: [],
+          bodies: [],
+          nextPage: null,
+          // As Gmail's last page does: where the scan began.
+          catchUpFrom: {
+            streamId: "primary",
+            generation: session.generation,
+            checkpoint: "primary-start",
+          },
+        },
+      };
+    },
+    async readChanges({ position, session, requestId }) {
+      reads.push(position.checkpoint ?? "none");
+      checkpoint += 1;
+      const changes = arrived.splice(0).map(messagePatch);
+      return {
+        status: "page",
+        page: {
+          session,
+          requestId,
+          from: position,
+          to: { ...position, checkpoint: `primary-${checkpoint}-seen` },
+          changes,
+          requiredHydration: [],
+          roundComplete: true,
+        },
+      };
+    },
+    async hydrate() {
+      return {
+        status: "ok",
+        value: { changes: [], bodies: [], unresolved: [] },
+      };
+    },
+    async readConversationMembership() {
+      return { status: "paused", retryAfterMs: 1000, reason: "unavailable" };
+    },
+    async search() {
+      return { status: "unsupported" };
+    },
+    async readAttachment() {
+      return { status: "paused", retryAfterMs: 1000, reason: "unavailable" };
+    },
+  };
+  return {
+    source,
+    deliver: (messageId: string) => arrived.push(messageId),
+    scanPagesStarted: () => scanPages,
+    changeReadsFrom: () => reads,
+    releaseScan: () => release(),
+  };
+}
+
 async function openMailbox(source: MailboxSource) {
   const store = await createSqliteMailStore(createNodeSqliteDriver());
   await store.ensureAccount({

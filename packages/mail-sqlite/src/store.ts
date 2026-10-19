@@ -1929,6 +1929,79 @@ export async function createSqliteMailStore(
         return { status: "committed" as const, revision };
       });
     },
+    async applyScanCatchUpPage(input) {
+      return driver.write(async (tx) => {
+        const { page } = input;
+        if (
+          !(await accountGenerationMatches(tx, page.session)) ||
+          page.from.generation !== page.session.generation ||
+          page.to.streamId !== page.from.streamId
+        ) {
+          return { status: "stale" as const };
+        }
+        const scan = await tx.query(
+          `SELECT * FROM bootstrap_scans
+           WHERE account_id = ? AND scope_id = ?`,
+          [page.session.accountId, input.scopeId],
+        );
+        const current = scan[0];
+        if (
+          !current ||
+          String(current.bootstrap_id) !== input.bootstrapId ||
+          current.page == null ||
+          nullableString(current.catch_stream_id) !== page.from.streamId ||
+          nullableString(current.catch_generation) !== page.from.generation ||
+          nullableString(current.catch_checkpoint) !== page.from.checkpoint
+        ) {
+          return { status: "stale" as const };
+        }
+        const bodies = page.bodies ?? [];
+        if (
+          !pageFactsBelongToAccount(
+            page.session.accountId,
+            page.changes,
+            page.requiredHydration,
+            bodies,
+          )
+        ) {
+          return { status: "stale" as const };
+        }
+        // What catch-up added is mail the scan has seen, so finishing it
+        // never takes these for messages gone from the mailbox.
+        for (const change of page.changes) {
+          if (change.kind === "message_patch") {
+            await tx.execute(
+              `INSERT OR IGNORE INTO bootstrap_seen_messages(account_id, scope_id, message_id)
+               VALUES (?, ?, ?)`,
+              [page.session.accountId, input.scopeId, change.key.messageId],
+            );
+          }
+        }
+        await applyPageFacts(tx, {
+          accountId: page.session.accountId,
+          requestId: page.requestId,
+          changes: page.changes,
+          requiredHydration: page.requiredHydration,
+          bodies,
+          digest,
+          bodyCodec,
+        });
+        await tx.execute(
+          `UPDATE bootstrap_scans
+           SET catch_checkpoint = ?, updated_at_ms = ?
+           WHERE account_id = ? AND scope_id = ? AND bootstrap_id = ?`,
+          [
+            page.to.checkpoint,
+            Date.now(),
+            page.session.accountId,
+            input.scopeId,
+            input.bootstrapId,
+          ],
+        );
+        const revision = await bumpRevision(tx);
+        return { status: "committed" as const, revision };
+      });
+    },
     async deferBootstrapScan(input) {
       return driver.write(async (tx) => {
         if (!(await accountGenerationMatches(tx, input.session))) {

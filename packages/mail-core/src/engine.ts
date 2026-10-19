@@ -254,6 +254,11 @@ export function createMailEngine(input: {
   // slow the retry of every other command.
   const commandRequestFailures = new Map<string, number>();
   const idleCatchUpGates = new Map<string, IdleCatchUpGate>();
+  // Where catch-up alongside a running scan has applied changes up to, by
+  // scanCatchUpKey. The scan's own pages name where it began, so it hands
+  // its stream this instead. An engine restart forgets it, and catch-up then
+  // reads those changes again, which the store applies harmlessly.
+  const scanCatchUpPositions = new Map<string, SyncStreamPosition>();
   const syncLanes = new Map<string, SyncLane>();
   const syncLaneRetries = new Map<
     string,
@@ -1387,8 +1392,15 @@ export function createMailEngine(input: {
         await noteConnection(input.session.accountId, enumerated);
         break;
       }
+      // The scan's last page names where it began; catch-up alongside the
+      // scan has already applied the changes since, from where it reached.
+      const positionKey = scanCatchUpKey(input.session.accountId, scan.scopeId);
       const catchUpFrom: SyncStreamPosition | null =
-        enumerated.value.catchUpFrom ?? scan.catchUpFrom;
+        scanCatchUpPositions.get(positionKey) ??
+        enumerated.value.catchUpFrom ??
+        scan.catchUpFrom;
+      if (enumerated.value.nextPage === null)
+        scanCatchUpPositions.delete(positionKey);
       const repeatedCursor = enumerated.value.nextPage === scan.page;
       const applied = await store.applyBootstrapPage({
         session: input.session,
@@ -1444,6 +1456,9 @@ export function createMailEngine(input: {
     const accounts = await store.readAccountSyncStates();
     for (const account of accounts) {
       startLane(account.accountId, (signal) => catchUpAccount(account, signal));
+      startLane(scanCatchUpLaneKey(account.accountId), (signal) =>
+        catchUpRunningScans(account, signal),
+      );
     }
   }
 
@@ -1523,7 +1538,11 @@ export function createMailEngine(input: {
 
   // Stopping an account's lane also stops its backfill.
   function stopSyncLane(laneKey: string) {
-    for (const key of [laneKey, backfillLaneKey(laneKey)]) {
+    for (const key of [
+      laneKey,
+      backfillLaneKey(laneKey),
+      scanCatchUpLaneKey(laneKey),
+    ]) {
       syncLanes.get(key)?.abort.abort();
       syncLanes.delete(key);
       syncLaneRetries.delete(key);
@@ -1818,6 +1837,107 @@ export function createMailEngine(input: {
     }
   }
 
+  // A scan leaves its stream without a checkpoint (a first sync) or on the
+  // old one (a resync) until it finishes, which for a large mailbox under
+  // Gmail's quota can take minutes. So new mail doesn't wait for it (GP-8l),
+  // changes are read alongside it from the position it will hand the
+  // stream, and that position moves on with them; mail the scan reads again
+  // later is an older or equal version, which the store skips.
+  // In a lane of its own: one page of a scan can wait tens of seconds for
+  // quota while the account's lane waits on it, and new mail must not.
+  async function catchUpRunningScans(
+    account: AccountSyncState,
+    signal: AbortSignal,
+  ) {
+    const session = {
+      accountId: account.accountId,
+      generation: account.generation,
+    };
+    const idleGate = idleCatchUpGateFor(account.accountId, account.generation);
+    const streamIds = new Set([
+      ...account.streams.map((stream) => stream.streamId),
+      ...idleGate.activeBootstrapScopes.keys(),
+    ]);
+    for (const streamId of streamIds) {
+      // Backfill scopes only fill in older mail.
+      if (idleGate.lowPriorityStreams.has(streamId)) continue;
+      if (signal.aborted) return;
+      const due =
+        idleGateDue(
+          idleGate.nextScanCatchUpAtMs.get(streamId) ?? 0,
+          runtime.nowMs(),
+          changesCatchUpIntervalMs,
+        ) || requestedSince(idleGate, idleGate.scanCheckedAt.get(streamId), 0);
+      if (!due) continue;
+      await catchUpDuringScan({ session, idleGate, streamId, signal });
+    }
+  }
+
+  async function catchUpDuringScan({
+    session,
+    idleGate,
+    streamId,
+    signal,
+  }: {
+    session: { accountId: string; generation: string };
+    idleGate: IdleCatchUpGate;
+    streamId: string;
+    signal: AbortSignal;
+  }) {
+    const scan = await store.readBootstrapScan({ session, scopeId: streamId });
+    const from = scan?.catchUpFrom;
+    if (!scan?.page || !from?.checkpoint || signal.aborted) return;
+    idleGate.scanCheckedAt.set(streamId, checkStamp(idleGate));
+    const changes = await source.readChanges({
+      session,
+      requestId: runtime.randomId(),
+      position: from,
+      pageSize: 50,
+      signal,
+    });
+    if (signal.aborted) return;
+    if (changes.status !== "page") {
+      // A reset or failure leaves catch-up to the scan; a throttled read
+      // comes back once the quota allows.
+      const retryMs =
+        changes.status === "paused" && changes.reason === "throttled"
+          ? Math.max(SYNC_LANE_RETRY_MIN_MS, changes.retryAfterMs)
+          : changesCatchUpIntervalMs;
+      idleGate.nextScanCatchUpAtMs.set(
+        streamId,
+        runtime.nowMs() + Math.min(retryMs, idleCatchUpIntervalMs),
+      );
+      if (changes.status !== "reset_required")
+        await noteConnection(session.accountId, changes);
+      return;
+    }
+    const applied = await store.applyScanCatchUpPage({
+      scopeId: streamId,
+      bootstrapId: scan.bootstrapId,
+      page: changes.page,
+    });
+    if (applied.status !== "committed") return;
+    scanCatchUpPositions.set(
+      scanCatchUpKey(session.accountId, streamId),
+      changes.page.to,
+    );
+    if (changes.page.roundComplete) {
+      idleGate.nextScanCatchUpAtMs.set(
+        streamId,
+        runtime.nowMs() + changesCatchUpIntervalMs,
+      );
+    } else {
+      idleGate.nextScanCatchUpAtMs.delete(streamId);
+    }
+    await refreshViews();
+    await noteConnection(session.accountId, "ok");
+    notifySyncPageCommitted(changes.page);
+  }
+
+  function scanCatchUpKey(accountId: string, scopeId: string) {
+    return `${accountId}:${scopeId}`;
+  }
+
   function idleCatchUpGateFor(accountId: string, generation: string) {
     const existing = idleCatchUpGates.get(accountId);
     if (existing?.generation === generation) return existing;
@@ -1828,7 +1948,9 @@ export function createMailEngine(input: {
       nextAssistantCatchUpAtMs: 0,
       nextScopeDiscoveryAtMs: 0,
       nextStreamCatchUpAtMs: new Map(),
+      nextScanCatchUpAtMs: new Map(),
       requestCount: 0,
+      scanCheckedAt: new Map(),
       scopesDiscoveredAt: null,
       streamCheckedAt: new Map(),
     };
@@ -2155,7 +2277,10 @@ type IdleCatchUpGate = {
   nextAssistantCatchUpAtMs: number;
   nextScopeDiscoveryAtMs: number;
   nextStreamCatchUpAtMs: Map<string, number>;
+  /** Catch-up alongside a running scan keeps its own clock. */
+  nextScanCatchUpAtMs: Map<string, number>;
   requestCount: number;
+  scanCheckedAt: Map<string, CheckStamp>;
   scopesDiscoveredAt: CheckStamp | null;
   streamCheckedAt: Map<string, CheckStamp>;
 };
@@ -2164,6 +2289,10 @@ type CheckStamp = { atMs: number; requestCount: number };
 
 function backfillLaneKey(accountId: string) {
   return `${accountId}\u0000backfill`;
+}
+
+function scanCatchUpLaneKey(accountId: string) {
+  return `${accountId}\u0000scan-catch-up`;
 }
 
 function idleGateDue(nextAtMs: number, nowMs: number, intervalMs: number) {
