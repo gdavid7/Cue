@@ -2,7 +2,7 @@ import type { JSONValue, ModelMessage, ToolResultPart } from "ai";
 import {
   getToolOutputText,
   truncatePromptContent,
-} from "@/utils/ai/assistant/compact";
+} from "@/utils/ai/assistant/prompt-size";
 import { toSearchInboxModelValue } from "@/utils/ai/assistant/search-inbox-model-output";
 
 export const RECENT_TOOL_RESULTS_TO_KEEP = 10;
@@ -100,7 +100,10 @@ function isTrimmable(part: ToolResultPart) {
     output.type === "error-text" ||
     (output.type === "json" &&
       isJsonObject(output.value) &&
-      !("trimmedForContext" in output.value));
+      !("trimmedForContext" in output.value) &&
+      // A change still waiting for the user's yes stays whole, so it is
+      // never reported from a partial copy.
+      output.value.requiresConfirmation !== true);
 
   return (
     canShorten && getToolOutputText(output).length >= MIN_TRIMMABLE_RESULT_CHARS

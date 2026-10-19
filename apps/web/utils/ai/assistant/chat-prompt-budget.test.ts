@@ -4,11 +4,13 @@ import { createTestLogger, getEmailAccount } from "@/__tests__/helpers";
 import { aiProcessAssistantChat } from "@/utils/ai/assistant/chat";
 import {
   CHAT_PROMPT_TOKEN_LIMIT,
-  estimateMessageTokens,
-  estimateTextTokens,
   fitPromptToBudget,
   OMITTED_HISTORY_NOTE,
 } from "@/utils/ai/assistant/chat-prompt-budget";
+import {
+  estimateMessageTokens,
+  estimateTextTokens,
+} from "@/utils/ai/assistant/prompt-size";
 import { toolCallAgentStream } from "@/utils/llms";
 
 vi.mock("server-only", () => ({}));

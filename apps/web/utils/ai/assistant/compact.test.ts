@@ -24,12 +24,14 @@ vi.mock("@/utils/llms", () => ({
 }));
 
 import {
-  estimateTokens,
   compactMessages,
   extractMemories,
   shouldCompact,
-  truncatePromptContent,
 } from "@/utils/ai/assistant/compact";
+import {
+  estimateMessageTokens,
+  truncatePromptContent,
+} from "@/utils/ai/assistant/prompt-size";
 
 describe("chat compaction", () => {
   it("replays generated summaries as delimited historical context without system authority", async () => {
@@ -69,46 +71,6 @@ describe("chat compaction", () => {
     expect(
       result.compactedMessages.filter((message) => message.role === "system"),
     ).toEqual([originalSystemMessage]);
-  });
-
-  it("estimates tokens across text, tool input, and tool result", () => {
-    const toolOutput = { messages: [{ id: "thread-1", snippet: "Hello" }] };
-    const messages: ModelMessage[] = [
-      { role: "user", content: "abcd" },
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "1234" },
-          {
-            type: "tool-call",
-            toolCallId: "call-1",
-            toolName: "searchInbox",
-            input: { query: "status" },
-          },
-        ],
-      },
-      {
-        role: "tool",
-        content: [
-          {
-            type: "tool-result",
-            toolCallId: "call-1",
-            toolName: "searchInbox",
-            output: { type: "json", value: toolOutput },
-          },
-        ],
-      },
-    ];
-
-    expect(estimateTokens(messages)).toBe(
-      Math.ceil(
-        ("abcd".length +
-          "1234".length +
-          JSON.stringify({ query: "status" }).length +
-          JSON.stringify(toolOutput).length) /
-          4,
-      ),
-    );
   });
 
   it("compacts chats whose size comes from tool results", () => {
@@ -161,27 +123,135 @@ describe("chat compaction", () => {
     });
 
     const prompt: string = mockGenerateText.mock.calls.at(-1)?.[0].prompt;
-    expect(prompt).toContain("[Tool result: found-thread-1");
+    expect(prompt).toContain("[Tool result (searchInbox): found-thread-1");
     expect(prompt.length).toBeLessThan(hugeResult.length);
   });
 
-  it("uses a single threshold for all providers", () => {
-    const exactlyThreshold: ModelMessage[] = [
-      {
-        role: "user",
-        content: "a".repeat(120_000),
-      },
+  it("compacts once the history passes the threshold", () => {
+    const history = (chars: number): ModelMessage[] => [
+      { role: "user", content: "a".repeat(chars) },
     ];
 
-    const overThreshold: ModelMessage[] = [
-      {
-        role: "user",
-        content: "a".repeat(120_004),
-      },
+    expect(estimateMessageTokens(history(100_000))).toBeLessThan(40_000);
+    expect(shouldCompact(history(100_000))).toBe(false);
+    expect(shouldCompact(history(120_000))).toBe(true);
+  });
+
+  it("counts non-Latin text toward the threshold at its higher token cost", () => {
+    const japanese: ModelMessage[] = [
+      { role: "user", content: "受信トレイ".repeat(9000) },
     ];
 
-    expect(shouldCompact(exactlyThreshold)).toBe(false);
-    expect(shouldCompact(overThreshold)).toBe(true);
+    expect(shouldCompact(japanese)).toBe(true);
+  });
+
+  it("keeps whole turns, so no kept tool result loses its tool call", async () => {
+    mockGenerateText.mockResolvedValue({ text: "Summary" });
+    mockCreateGenerateText.mockReturnValue(mockGenerateText);
+    mockGetModel.mockReturnValue({ model: {}, providerOptions: undefined });
+
+    const messages: ModelMessage[] = [
+      { role: "system", content: "policy" },
+      { role: "user", content: "first question" },
+      { role: "assistant", content: "first answer" },
+      { role: "user", content: "clean up my newsletters" },
+      ...toolRound("call-1", "searchInbox"),
+      ...toolRound("call-2", "manageInbox"),
+      ...toolRound("call-3", "searchInbox"),
+      { role: "assistant", content: "Archived 12 newsletters." },
+      { role: "user", content: "thanks" },
+    ];
+
+    const result = await compactMessages({
+      messages,
+      user: getEmailAccount(),
+      logger: createTestLogger(),
+    });
+
+    const kept = result.compactedMessages.slice(2);
+    expect(kept[0]).toEqual({
+      role: "user",
+      content: "clean up my newsletters",
+    });
+    const callIds = kept.flatMap((message) =>
+      message.role === "assistant" && Array.isArray(message.content)
+        ? message.content.flatMap((part) =>
+            part.type === "tool-call" ? [part.toolCallId] : [],
+          )
+        : [],
+    );
+    const resultIds = kept.flatMap((message) =>
+      message.role === "tool"
+        ? message.content.map((part) =>
+            part.type === "tool-result" ? part.toolCallId : "",
+          )
+        : [],
+    );
+    expect(resultIds).toEqual(callIds);
+    expect(result.compactedCount).toBe(2);
+  });
+
+  it("skips compaction when the only cut would split the first turn", async () => {
+    const messages: ModelMessage[] = [
+      { role: "user", content: "clean up my newsletters" },
+      ...toolRound("call-1", "searchInbox"),
+      ...toolRound("call-2", "manageInbox"),
+      ...toolRound("call-3", "searchInbox"),
+      { role: "assistant", content: "Done." },
+    ];
+
+    const result = await compactMessages({
+      messages,
+      user: getEmailAccount(),
+      logger: createTestLogger(),
+    });
+
+    expect(result.compactedCount).toBe(0);
+    expect(result.compactedMessages).toBe(messages);
+  });
+
+  it("gives the summary pending confirmations whole and every listed email's ids", async () => {
+    mockGenerateText.mockResolvedValue({ text: "Summary" });
+    mockCreateGenerateText.mockReturnValue(mockGenerateText);
+    mockGetModel.mockReturnValue({ model: {}, providerOptions: undefined });
+
+    const listed = Array.from({ length: 20 }, (_, index) => ({
+      messageId: `message-${index}`,
+      threadId: `thread-${index}`,
+      subject: `Subject ${index}`,
+      from: `sender${index}@example.com`,
+      snippet: "s".repeat(400),
+    }));
+    const pending = {
+      success: true,
+      actionType: "create_rule",
+      requiresConfirmation: true,
+      confirmationState: "pending",
+      riskMessages: ["r".repeat(5000)],
+    };
+    const messages: ModelMessage[] = [
+      { role: "user", content: "what's new and make a forwarding rule" },
+      ...toolRound("call-1", "searchInbox", { messages: listed }),
+      ...toolRound("call-2", "createRule", pending),
+      {
+        role: "assistant",
+        content: "The rule is waiting for your confirmation.",
+      },
+      ...Array.from({ length: 6 }, (_, index) => ({
+        role: "user" as const,
+        content: `follow-up ${index}`,
+      })),
+    ];
+
+    await compactMessages({
+      messages,
+      user: getEmailAccount(),
+      logger: createTestLogger(),
+    });
+
+    const prompt: string = mockGenerateText.mock.calls.at(-1)?.[0].prompt;
+    expect(prompt).toContain(JSON.stringify(pending));
+    for (const email of listed) expect(prompt).toContain(email.threadId);
   });
 
   it("only keeps extracted memories that are directly supported by user messages", async () => {
@@ -280,3 +350,27 @@ describe("chat compaction", () => {
     expect(truncatePromptContent("abcdefghij", 5)).toBe("abcde");
   });
 });
+
+function toolRound(
+  toolCallId: string,
+  toolName: string,
+  value: Record<string, unknown> = { ok: true },
+): ModelMessage[] {
+  return [
+    {
+      role: "assistant",
+      content: [{ type: "tool-call", toolCallId, toolName, input: {} }],
+    },
+    {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId,
+          toolName,
+          output: { type: "json", value: value as never },
+        },
+      ],
+    },
+  ];
+}

@@ -61,10 +61,8 @@ import {
   trimStaleToolResults,
 } from "@/utils/ai/assistant/trim-stale-tool-results";
 import { withChatToolRuntime } from "@/utils/ai/assistant/chat-tool-runtime";
-import {
-  estimateTextTokens,
-  fitPromptToBudget,
-} from "@/utils/ai/assistant/chat-prompt-budget";
+import { fitPromptToBudget } from "@/utils/ai/assistant/chat-prompt-budget";
+import { estimateTextTokens } from "@/utils/ai/assistant/prompt-size";
 import { withChatAccountScope } from "@/utils/ai/assistant/chat-other-accounts";
 import { getLowThinkingStepOptions } from "@/utils/llms/model";
 import { holdGmailInteractiveDemand } from "@/utils/gmail/quota";

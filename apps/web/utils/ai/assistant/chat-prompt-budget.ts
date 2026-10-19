@@ -1,18 +1,13 @@
 import type { ModelMessage, ToolResultPart } from "ai";
-import { getToolOutputText } from "@/utils/ai/assistant/compact";
+import { estimateMessageTokens } from "@/utils/ai/assistant/prompt-size";
 import { shortenToolResult } from "@/utils/ai/assistant/trim-stale-tool-results";
 
 // Every chat step re-sends the whole prompt, and some models bill a request
 // at a higher rate once its prompt passes 100K tokens, so a chat step stays
 // under that however long the conversation or the tool loop gets.
 export const CHAT_PROMPT_TOKEN_LIMIT = 100_000;
-// Newer Claude tokenizers count JSON-heavy prompts at close to three
-// characters per token, so estimating a little under that and aiming below
-// the limit keeps the real count under it.
-const CHARS_PER_TOKEN = 2.75;
+// Aiming below the limit leaves room for the estimate's error.
 const PROMPT_TOKEN_BUDGET = 92_000;
-const IMAGE_TOKEN_ESTIMATE = 1600;
-const MESSAGE_OVERHEAD_CHARS = 12;
 
 export const OMITTED_HISTORY_NOTE =
   "[Automated context — not a message from the user] Earlier messages in this chat were left out to stay within the context limit.";
@@ -113,17 +108,6 @@ export function fitPromptToBudget({
   return result(current, endIndex, "over_budget");
 }
 
-export function estimateMessageTokens(messages: ModelMessage[]) {
-  return Math.ceil(
-    messages.reduce((total, message) => total + messageChars(message), 0) /
-      CHARS_PER_TOKEN,
-  );
-}
-
-export function estimateTextTokens(text: string) {
-  return Math.ceil(text.length / CHARS_PER_TOKEN);
-}
-
 // Drops whole turns, oldest first, so a tool call never loses its result.
 // The dropped turns are replaced by one note, kept across later steps.
 function* dropOldestTurns(messages: ModelMessage[], historyEndIndex: number) {
@@ -174,33 +158,4 @@ function mapToolResults(
 
 function removeResult(part: ToolResultPart): ToolResultPart {
   return { ...part, output: { type: "text", value: REMOVED_RESULT_NOTE } };
-}
-
-function messageChars(message: ModelMessage): number {
-  if (typeof message.content === "string") {
-    return message.content.length + MESSAGE_OVERHEAD_CHARS;
-  }
-
-  let chars = MESSAGE_OVERHEAD_CHARS;
-  for (const part of message.content) {
-    switch (part.type) {
-      case "text":
-      case "reasoning":
-        chars += part.text.length;
-        break;
-      case "tool-call":
-        chars += part.toolName.length + JSON.stringify(part.input ?? {}).length;
-        break;
-      case "tool-result":
-        chars += part.toolName.length + getToolOutputText(part.output).length;
-        break;
-      case "image":
-      case "file":
-        chars += IMAGE_TOKEN_ESTIMATE * CHARS_PER_TOKEN;
-        break;
-      default:
-        chars += JSON.stringify(part).length;
-    }
-  }
-  return chars;
 }
