@@ -176,9 +176,14 @@ async function sendEmail({
 
   if (!filtersResult.available) {
     // Suggesting senders to auto archive without knowing which already are
-    // would be wrong; try again next window.
-    logger.info("Skipping inbox health email: filters unavailable");
-    await startNextInboxHealthWindow(emailAccountId);
+    // would be wrong. Only a cause the user must fix burns the window; a
+    // transient failure retries on the next run.
+    logger.info("Skipping inbox health email: filters unavailable", {
+      permanent: filtersResult.permanent,
+    });
+    if (filtersResult.permanent) {
+      await startNextInboxHealthWindow(emailAccountId);
+    }
     return { success: true, skipped: "filters unavailable" };
   }
   const emailFilters = filtersResult.filters;

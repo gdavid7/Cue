@@ -29,7 +29,10 @@ export async function getAutoArchiveFilters(
 export async function getEmailFilters(
   emailProvider: EmailProvider,
   logger: Logger,
-): Promise<{ filters: EmailFilter[]; available: boolean }> {
+): Promise<
+  | { filters: EmailFilter[]; available: true }
+  | { filters: EmailFilter[]; available: false; permanent: boolean }
+> {
   try {
     return { filters: await emailProvider.getFiltersList(), available: true };
   } catch (error) {
@@ -45,8 +48,22 @@ export async function getEmailFilters(
     } else {
       logger.error("Error getting email filters", { error });
     }
-    return { filters: [], available: false };
+    return {
+      filters: [],
+      available: false,
+      permanent: isPermanentFiltersError(error),
+    };
   }
+}
+
+// A revoked grant or missing scope needs the user to act; rate limits and
+// backend errors pass on their own.
+function isPermanentFiltersError(error: unknown) {
+  return (
+    isGmailInsufficientPermissionsError(error) ||
+    isInvalidGrantError(error) ||
+    isOutlookAccessDeniedError(error)
+  );
 }
 
 function isExpectedFiltersError(error: unknown) {

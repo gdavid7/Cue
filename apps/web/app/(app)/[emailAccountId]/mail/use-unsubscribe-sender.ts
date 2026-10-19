@@ -102,9 +102,12 @@ export function useUnsubscribeSender(
   const isFilterStatusUnknown =
     senderStats?.filtersAvailable === false && !isAutoArchivedInDb;
   const isAutoArchiveStatusLoading = Boolean(
+    senderEmail && !senderStats && updatedAutoArchiveEnabled === undefined,
+  );
+  const isAutoArchiveStatusUnknown = Boolean(
     senderEmail &&
-      updatedAutoArchiveEnabled === undefined &&
-      (!senderStats || isFilterStatusUnknown),
+      isFilterStatusUnknown &&
+      updatedAutoArchiveEnabled === undefined,
   );
 
   const onToggleAutoArchive = useCallback(async () => {
@@ -270,6 +273,7 @@ export function useUnsubscribeSender(
     canManageAutoArchive: Boolean(senderEmail),
     isAutoArchived,
     isAutoArchiveStatusLoading,
+    isAutoArchiveStatusUnknown,
     isUpdatingAutoArchive,
     onToggleAutoArchive,
     onUnsubscribe,

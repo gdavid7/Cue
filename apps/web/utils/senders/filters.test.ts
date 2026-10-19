@@ -25,7 +25,7 @@ describe("getEmailFilters", () => {
         ),
     } as unknown as EmailProvider;
 
-    await expect(getEmailFilters(provider, logger)).resolves.toEqual({
+    await expect(getEmailFilters(provider, logger)).resolves.toMatchObject({
       filters: [],
       available: false,
     });
@@ -49,19 +49,22 @@ describe("getEmailFilters", () => {
     [
       "a Gmail rate limit",
       Object.assign(new Error("User-rate limit exceeded"), { code: 429 }),
+      false,
     ],
     [
       "missing Gmail scope",
       Object.assign(new Error("Insufficient Permission"), {
         cause: { errors: [{ reason: "insufficientPermissions" }] },
       }),
+      true,
     ],
-    ["a revoked grant", new Error("invalid_grant")],
+    ["a revoked grant", new Error("invalid_grant"), true],
     [
       "Outlook throttling",
       Object.assign(new Error("slow down"), { statusCode: 429 }),
+      false,
     ],
-  ])("logs %s as a warning, not an error, and reports unavailable", async (_name, failure) => {
+  ])("logs %s as a warning, not an error, and reports unavailable", async (_name, failure, permanent) => {
     const logger = createScopedLogger("test");
     const errorSpy = vi.spyOn(logger, "error");
     const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
@@ -69,9 +72,10 @@ describe("getEmailFilters", () => {
       getFiltersList: vi.fn().mockRejectedValue(failure),
     } as unknown as EmailProvider;
 
-    await expect(getEmailFilters(provider, logger)).resolves.toEqual({
+    await expect(getEmailFilters(provider, logger)).resolves.toMatchObject({
       filters: [],
       available: false,
+      permanent,
     });
     expect(errorSpy).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalled();
@@ -85,7 +89,7 @@ describe("getEmailFilters", () => {
       getFiltersList: vi.fn().mockRejectedValue(new Error("Backend Error")),
     } as unknown as EmailProvider;
 
-    await expect(getEmailFilters(provider, logger)).resolves.toEqual({
+    await expect(getEmailFilters(provider, logger)).resolves.toMatchObject({
       filters: [],
       available: false,
     });

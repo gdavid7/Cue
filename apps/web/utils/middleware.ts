@@ -59,6 +59,23 @@ const SLOW_REQUEST_MS = 1000;
 // Share of fast, successful requests logged so latency percentiles can be
 // computed from Axiom. Lines carry sampleRate so counts can be re-weighted.
 const FAST_REQUEST_SAMPLE_RATE = 0.08;
+// Background polls and streams fire constantly per open tab, so they sample
+// lower to keep their share of the volume small.
+const POLLING_REQUEST_SAMPLE_RATE = 0.015;
+const POLLING_SCOPES = new Set([
+  "mail-stream",
+  "email-stream",
+  "team-comments/stream",
+  "health",
+  "voice/status",
+  "user/digest-status",
+  "user/ai-automation-status",
+  "mobile-review/status",
+  "mail/v1/enumeration",
+  "user/sent-message-opens",
+  "user/mail-splits/cue-membership",
+  "user/scheduled-emails",
+]);
 const UUID_V4_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -112,6 +129,8 @@ function withMiddleware<T extends NextRequest>(
 ): NextHandler {
   return async (req, context) => {
     const requestId = getRequestId(req.headers.get("x-request-id"));
+    // x-request-id is client-controlled, so sampling hashes its own id.
+    const samplingId = randomUUID();
     const baseLogger = createScopedLogger(scope || "api").with({
       requestId,
       url: getRequestPath(req),
@@ -358,7 +377,7 @@ function withMiddleware<T extends NextRequest>(
       },
     ).then(
       (response) => {
-        logRequestCompleted(getLogger(requestForError), requestId, {
+        logRequestCompleted(getLogger(requestForError), samplingId, scope, {
           method: req.method,
           status: response.status,
           durationMs: Date.now() - startedAt,
@@ -366,7 +385,7 @@ function withMiddleware<T extends NextRequest>(
         return response;
       },
       (error: unknown) => {
-        logRequestCompleted(getLogger(requestForError), requestId, {
+        logRequestCompleted(getLogger(requestForError), samplingId, scope, {
           method: req.method,
           // Only a redirect is rethrown on purpose; Next answers anything else
           // with a 500.
@@ -887,27 +906,28 @@ async function runTimedMiddlewareStep<T>({
 // is on. The logger's scope and url name the route.
 function logRequestCompleted(
   logger: Logger,
-  requestId: string,
+  samplingId: string,
+  scope: string | undefined,
   fields: { method: string; status: number; durationMs: number },
 ) {
+  const sampleRate = getFastRequestSampleRate(scope);
   if (fields.durationMs >= SLOW_REQUEST_MS || fields.status >= 500) {
     logger.info("Request completed", fields);
-  } else if (isFastRequestSampled(requestId)) {
-    logger.info("Request completed", {
-      ...fields,
-      sampled: true,
-      sampleRate: FAST_REQUEST_SAMPLE_RATE,
-    });
+  } else if (isFastRequestSampled(samplingId, sampleRate)) {
+    logger.info("Request completed", { ...fields, sampled: true, sampleRate });
   } else {
     logger.trace("Request completed", fields);
   }
 }
 
-export function isFastRequestSampled(
-  requestId: string,
-  rate = FAST_REQUEST_SAMPLE_RATE,
-) {
-  const hash = createHash("sha256").update(requestId).digest().readUInt32BE(0);
+export function getFastRequestSampleRate(scope: string | undefined) {
+  return scope && POLLING_SCOPES.has(scope)
+    ? POLLING_REQUEST_SAMPLE_RATE
+    : FAST_REQUEST_SAMPLE_RATE;
+}
+
+export function isFastRequestSampled(samplingId: string, rate: number) {
+  const hash = createHash("sha256").update(samplingId).digest().readUInt32BE(0);
   return hash / 2 ** 32 < rate;
 }
 

@@ -1,7 +1,6 @@
-import { log } from "next-axiom";
 import { MAIL_ANALYTICS_EVENTS } from "@/utils/analytics/product";
 import { scheduleSummaryFlush } from "@/utils/analytics/summary-flush";
-import { capLogFields } from "@/utils/log-fields";
+import { createClientLogger } from "@/utils/logger-client";
 
 export const MAIL_PERFORMANCE_SAMPLE_RATE = 0.05;
 
@@ -105,11 +104,9 @@ function startCollecting() {
     };
     capture(MAIL_ANALYTICS_EVENTS.performanceSummary, properties);
     // Numbers only, no PII. Axiom is where this is read while PostHog is off.
-    log.info(
-      "Mail performance summary",
-      capLogFields({ scope: "mail-performance", ...properties }),
-    );
-    log.flush().catch(() => {});
+    const logger = createClientLogger("mail-performance");
+    logger.info("Mail performance summary", properties);
+    logger.flush().catch(() => {});
   });
 }
 

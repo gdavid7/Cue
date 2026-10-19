@@ -100,6 +100,10 @@ describe("GET /api/user/stats/newsletters", () => {
       new NextRequest("http://localhost/api/user/stats/newsletters"),
       {} as never,
     );
+
+    expect(consoleErrorSpy.mock.calls.flat().join(" ")).toContain(
+      "Error getting email filters",
+    );
     consoleErrorSpy.mockRestore();
 
     expect(response.status).toBe(200);
