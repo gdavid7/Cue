@@ -4,10 +4,8 @@ import { withError } from "@/utils/middleware";
 import { hasCronSecret, hasPostCronSecret } from "@/utils/cron";
 import { captureException } from "@/utils/error";
 import type { Logger } from "@/utils/logger";
-import {
-  meetingBriefAccountsWhere,
-  processMeetingBriefings,
-} from "@/utils/meeting-briefs/process";
+import { getPremiumUserFilter } from "@/utils/premium";
+import { processMeetingBriefings } from "@/utils/meeting-briefs/process";
 import { runWithBoundedConcurrency } from "@/utils/async";
 
 export const maxDuration = 300;
@@ -42,7 +40,16 @@ async function processAllMeetingBriefings(logger: Logger) {
 
   // Get all email accounts with meeting briefings enabled
   const emailAccounts = await prisma.emailAccount.findMany({
-    where: meetingBriefAccountsWhere(),
+    where: {
+      meetingBriefingsEnabled: true,
+      ...getPremiumUserFilter(),
+      // Must have a calendar connected
+      calendarConnections: {
+        some: {
+          isConnected: true,
+        },
+      },
+    },
     select: {
       id: true,
       email: true,
