@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   useSuggestedReply: vi.fn(),
   useThreadContext: vi.fn(),
   insights: undefined as Record<string, ThreadInsightData> | undefined,
+  insightError: undefined as unknown,
   draftReplies: { enabled: true, loading: false },
 }));
 
@@ -39,7 +40,10 @@ vi.mock("@/app/(app)/[emailAccountId]/assistant/settings/DraftReplies", () => ({
 }));
 vi.mock("@/hooks/useInboxInsights", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/useInboxInsights")>()),
-  useInboxInsights: () => ({ data: mocks.insights }),
+  useInboxInsights: () => ({
+    data: mocks.insights,
+    error: mocks.insightError,
+  }),
 }));
 vi.mock("@/providers/EmailAccountProvider", () => ({
   useAccount: () => ({ userEmail: "user@example.com" }),
@@ -63,6 +67,7 @@ describe("useReaderReplySuggestion", () => {
     mocks.useSuggestedReply.mockReturnValue({ data: undefined });
     mocks.useThreadContext.mockReturnValue({ data: { items: [] } });
     mocks.insights = undefined;
+    mocks.insightError = undefined;
     mocks.draftReplies = { enabled: true, loading: false };
   });
   afterEach(cleanup);
@@ -98,6 +103,25 @@ describe("useReaderReplySuggestion", () => {
     renderSuggestion([incoming("ask", ["INBOX"])]);
 
     expect(lastEnabled()).toBe(true);
+  });
+
+  // DR-4: the note decides whether a reply is written unasked; when Gmail
+  // defers reading it, a person's email still gets one.
+  it("writes a reply to a person's email when Cue's note on it can't be read", () => {
+    mocks.insightError = Object.assign(new Error("Gmail is busy"), {
+      status: 503,
+      retryAfterMs: 5000,
+    });
+
+    renderSuggestion([incoming("ask", ["INBOX"])]);
+
+    expect(lastEnabled()).toBe(true);
+  });
+
+  it("waits for Cue's note rather than guessing while it is still coming", () => {
+    renderSuggestion([incoming("ask", ["INBOX"])]);
+
+    expect(lastEnabled()).toBe(false);
   });
 
   // The draft Cue saved keeps its credit when the conversation is reopened.

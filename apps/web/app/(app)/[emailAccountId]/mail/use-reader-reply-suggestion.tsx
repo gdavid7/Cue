@@ -9,6 +9,7 @@ import {
   CheckedAgainst,
   suggestionPhaseLabel,
 } from "@/components/thread-context/SuggestedReply";
+import { isFromPerson } from "@/app/(app)/[emailAccountId]/mail/cue-strip";
 import { SystemType } from "@/generated/prisma/enums";
 import { threadInsightItem, useInboxInsights } from "@/hooks/useInboxInsights";
 import { useReplySuggestion } from "@/hooks/useReplySuggestion";
@@ -95,12 +96,19 @@ export function useReaderReplySuggestion({
         : [],
     [current?.eligible, hasToReplyLabel, threadId, latestId, emailAccountId],
   );
-  const { data: insights } = useInboxInsights(insightItems);
+  const { data: insights, error: insightError } =
+    useInboxInsights(insightItems);
   const insight = threadId ? insights?.[threadId] : undefined;
+  // Cue's note on the email couldn't be read, as when Gmail keeps deferring
+  // it: a person writing to the user is taken to be waiting, so the reply
+  // never hangs on that read (DR-4).
+  const insightFailed =
+    insightItems.length > 0 && !insight && Boolean(insightError);
   const needsReply =
     hasToReplyLabel ||
     insight?.insight?.action === "reply" ||
-    Boolean(insight?.reply);
+    Boolean(insight?.reply) ||
+    (insightFailed && Boolean(latest) && isFromPerson(latest!.headers));
   if (current?.eligible && !current.run && needsReply) {
     setDecision({ ...current, run: true });
   }

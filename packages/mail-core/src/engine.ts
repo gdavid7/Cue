@@ -1854,6 +1854,9 @@ export function createMailEngine(input: {
       generation: account.generation,
     };
     const idleGate = idleCatchUpGateFor(account.accountId, account.generation);
+    // Which scopes only backfill is known once the account's lane has
+    // discovered them.
+    if (idleGate.nextScopeDiscoveryAtMs === 0) return;
     const streamIds = new Set([
       ...account.streams.map((stream) => stream.streamId),
       ...idleGate.activeBootstrapScopes.keys(),
