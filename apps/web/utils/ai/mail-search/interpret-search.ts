@@ -1,8 +1,8 @@
+import type { LanguageModelUsage } from "ai";
 import he from "he";
 import { createGenerateObject } from "@/utils/llms";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
-import type { LanguageModelUsage } from "ai";
 import type { Logger } from "@/utils/logger";
 import {
   buildGeneratedSearch,

@@ -5,8 +5,8 @@ import { MAX_SEARCH_QUERY_LENGTH } from "@/utils/mail-search/natural-language-se
 import { withEmailProvider } from "@/utils/middleware";
 import { assertWithinUserRateLimit } from "@/utils/rate-limit";
 
-const MAX_LABEL_NAME_LENGTH = 500;
-const MAX_LABELS = 2000;
+const MAX_LABEL_NAME_LENGTH = 200;
+const MAX_LABELS = 300;
 
 const searchIntentBody = z.object({
   q: z.string().trim().min(1).max(MAX_SEARCH_QUERY_LENGTH),

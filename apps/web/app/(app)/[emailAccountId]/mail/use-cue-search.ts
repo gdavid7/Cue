@@ -63,6 +63,7 @@ export function useCueSearch({
   // than the route asking the provider for them on every search. They stay
   // out of the key: a label added later doesn't read the search again.
   const { userLabels, isLoading: labelsLoading } = useLabels();
+  // A ref, not part of the key, on purpose: a new label mustn't re-read the search.
   const labelNamesRef = useRef<string[]>([]);
   labelNamesRef.current = userLabels.map((label) => label.name);
   const { data, error } = useSWR<GetSearchIntentResponse>(
