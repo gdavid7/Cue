@@ -380,7 +380,9 @@ function gmailWithBackfill() {
     },
     async readChanges({ position, session, requestId }) {
       checkpoint += 1;
-      const changes = arrived.splice(0).map(messagePatch);
+      const changes = arrived
+        .splice(0)
+        .map((messageId) => messagePatch(messageId));
       return {
         status: "page",
         page: {
