@@ -98,6 +98,16 @@ describe("composeInsight", () => {
     });
   });
 
+  it("says Cue drafted a reply in place of Needs reply", () => {
+    expect(
+      compose({
+        from: "Sarah Chen <sarah@acme.com>",
+        labels: ["Label_To Reply"],
+        data: { insight: null, meeting: null, reply: "drafted" },
+      }),
+    ).toEqual({ tone: "ready", parts: ["Cue drafted a reply"] });
+  });
+
   it("says a reply is blocked on missing information, ahead of the task", () => {
     expect(
       compose({

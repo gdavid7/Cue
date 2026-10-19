@@ -244,6 +244,24 @@ describe("useInboxInsights and what this browser keeps", () => {
       expect(result.current.data?.["work:t1"]?.reply).toBe("ready"),
     );
   });
+
+  it("says Cue drafted a reply it wrote ahead of time, even before it read the email", async () => {
+    const fetcher = vi.fn(async () => fromServer({}, ["t1-latest"]));
+
+    const { result } = renderHook(
+      () =>
+        useInboxInsights([item({ emailAccountId: "work", threadId: "t1" })]),
+      { wrapper: wrapperFor(fetcher) },
+    );
+
+    await waitFor(() =>
+      expect(result.current.data?.["work:t1"]).toEqual({
+        insight: null,
+        meeting: null,
+        reply: "drafted",
+      }),
+    );
+  });
 });
 
 describe("useInboxInsights with one account busy in All inboxes", () => {
@@ -395,6 +413,7 @@ function fromServer(
       withAi: boolean;
     }
   >,
+  draftedMessageIds: string[] = [],
 ) {
-  return { insights, events: [], draftRepliesEnabled: true };
+  return { insights, events: [], draftRepliesEnabled: true, draftedMessageIds };
 }

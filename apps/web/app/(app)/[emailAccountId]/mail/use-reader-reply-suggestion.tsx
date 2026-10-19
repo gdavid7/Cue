@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSWRConfig } from "swr";
 import type { GetThreadPlansResponse } from "@/app/api/user/thread-plans/route";
 import { useDraftReplies } from "@/app/(app)/[emailAccountId]/assistant/settings/DraftReplies";
 import { getThreadCategories } from "@/app/(app)/[emailAccountId]/mail/cue-strip";
@@ -19,7 +20,11 @@ import {
   DraftEmailStatus,
   SystemType,
 } from "@/generated/prisma/enums";
-import { threadInsightItem, useInboxInsights } from "@/hooks/useInboxInsights";
+import {
+  INBOX_INSIGHTS_KEY,
+  threadInsightItem,
+  useInboxInsights,
+} from "@/hooks/useInboxInsights";
 import { useReplySuggestion } from "@/hooks/useReplySuggestion";
 import { useSuggestedReply } from "@/hooks/useSuggestedReply";
 import { useThreadPlans } from "@/hooks/useThreadPlans";
@@ -72,6 +77,7 @@ export function useReaderReplySuggestion({
   onOpenThread: (threadId: string) => void;
 }) {
   const { userEmail } = useAccount();
+  const { mutate: mutateGlobal } = useSWRConfig();
   const draftReplies = useDraftReplies();
   const latest = messages.findLast(
     (message) => !message.labelIds?.includes(GmailLabel.DRAFT),
@@ -170,6 +176,10 @@ export function useReaderReplySuggestion({
     dismissReplySuggestionAction(emailAccountId, { executedActionId })
       .then((result) => {
         if (result?.serverError) throw new Error(result.serverError);
+        // The inbox row stops saying "Cue drafted a reply".
+        mutateGlobal(
+          (key) => Array.isArray(key) && key[0] === INBOX_INSIGHTS_KEY,
+        );
       })
       .catch(() => {
         mutatePlans();
@@ -326,8 +336,9 @@ export function useReaderReplySuggestion({
 type ThreadPlan = GetThreadPlansResponse["plans"][number];
 
 /**
- * The reply a rule wrote for the message, waiting in Cue: drafted, not yet
- * used, dismissed or superseded, and never put in the mailbox.
+ * The reply a rule wrote for the message, or Cue pre-drafted for it, waiting
+ * in Cue: drafted, not yet used, dismissed or superseded, and never put in
+ * the mailbox.
  */
 function findRuleSuggestion(
   plans: ThreadPlan[] | undefined,

@@ -11,6 +11,8 @@ import { nextMeetingWith } from "@/utils/inbox-insights/meeting-match";
 import { getRetryHint } from "@/utils/swr";
 import { keptSuggestionFor } from "@/utils/thread-context/suggested-reply-store";
 
+/** The first part of every insights request's SWR key, to revalidate them all. */
+export const INBOX_INSIGHTS_KEY = "inbox-insights";
 const CHUNK_SIZE = 50;
 // A page where only some accounts answered asks the rest again this many
 // times; an account that keeps failing then waits for the next change.
@@ -58,7 +60,7 @@ export function useInboxInsights(
   const key =
     enabled && requests.length
       ? ([
-          "inbox-insights",
+          INBOX_INSIGHTS_KEY,
           requests
             .map(
               (request) =>
@@ -121,7 +123,8 @@ export function useInboxInsights(
                 fresh,
               );
             const entry = fresh ?? kept.get(item.messageId);
-            if (!entry) return [];
+            if (!entry && !response.draftedMessageIds.includes(item.messageId))
+              return [];
             return [
               [
                 item.key,
@@ -235,17 +238,24 @@ export function getInboxInsightRequests(items: InboxInsightItem[]) {
     });
 }
 
-/** One row's insight: what the email asks, the meeting with its people, and the reply this browser kept. */
+/**
+ * One row's insight: what the email asks, the meeting with its people, and
+ * its reply: the one Cue wrote ahead of time, which the reader opens first,
+ * or else the one this browser kept.
+ */
 function toThreadInsight({
   entry,
   item,
   emailAccountId,
   response,
 }: {
-  entry: InboxInsightExtraction;
+  entry: InboxInsightExtraction | undefined;
   item: { threadId: string; messageId: string };
   emailAccountId: string;
-  response: GetInboxInsightsResponse;
+  response: Pick<
+    GetInboxInsightsResponse,
+    "draftRepliesEnabled" | "draftedMessageIds" | "events"
+  >;
 }): ThreadInsightData {
   const suggestion = response.draftRepliesEnabled
     ? keptSuggestionFor({
@@ -255,11 +265,12 @@ function toThreadInsight({
       })
     : null;
   let reply: ThreadInsightData["reply"] = null;
-  if (suggestion?.status === "suggested") reply = "ready";
+  if (response.draftedMessageIds.includes(item.messageId)) reply = "drafted";
+  else if (suggestion?.status === "suggested") reply = "ready";
   else if (suggestion?.status === "insufficient") reply = "needs-info";
   return {
-    insight: entry.insight,
-    meeting: nextMeetingWith(entry.people, response.events),
+    insight: entry?.insight ?? null,
+    meeting: entry ? nextMeetingWith(entry.people, response.events) : null,
     reply,
   };
 }

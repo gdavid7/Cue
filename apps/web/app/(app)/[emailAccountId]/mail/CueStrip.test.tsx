@@ -479,7 +479,12 @@ async function fetcher(key: string | [string, string]) {
         status: 503,
         retryAfterMs: 60_000,
       });
-    return { insights: {}, events: [], draftRepliesEnabled: true };
+    return {
+      insights: {},
+      events: [],
+      draftRepliesEnabled: true,
+      draftedMessageIds: [],
+    };
   }
   if (url.startsWith("/api/user/inbox-insights") && mocks.insightFailures > 0) {
     mocks.insightFailures -= 1;
@@ -503,6 +508,7 @@ async function fetcher(key: string | [string, string]) {
         : {},
       events: [],
       draftRepliesEnabled: true,
+      draftedMessageIds: [],
     };
   }
   if (url.startsWith("/api/user/save-destinations")) return { calendar: false };

@@ -345,6 +345,18 @@ describe("HomeDashboard states", () => {
     expect(screen.queryByText("All clear.")).toBeNull();
   });
 
+  it("says Cue drafted a reply on a row with one waiting", () => {
+    mocks.home.data = homeData([
+      { ...thread("a", "Quarterly numbers"), cueDrafted: true },
+      thread("b", "Dentist"),
+    ]);
+
+    renderToday();
+
+    expect(optionFor("a").textContent).toContain("Cue drafted a reply");
+    expect(optionFor("b").textContent).not.toContain("Cue drafted a reply");
+  });
+
   it("light: one email that needs a reply, and no empty lanes", () => {
     mocks.home.data = homeData([thread("a", "Quarterly numbers")]);
 

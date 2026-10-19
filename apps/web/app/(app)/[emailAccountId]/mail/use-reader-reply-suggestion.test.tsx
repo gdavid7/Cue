@@ -101,6 +101,28 @@ describe("useReaderReplySuggestion", () => {
     expect(result.current.reply.offer).toBe(false);
   });
 
+  // Written ahead of time for mail filed To Reply: the row said so, and the
+  // reader opens that reply at once, gathering nothing to write another.
+  it("opens the reply Cue pre-drafted as it was stored", () => {
+    mocks.plans = [ruleSuggestionPlan("ask", { predrafted: true })];
+
+    const { result } = renderSuggestion([
+      incoming("ask", ["INBOX", "Label_to_reply"]),
+    ]);
+
+    expect(result.current.assist).toMatchObject({
+      messageId: "ask",
+      reply: "Thursday works for me.",
+      executedActionId: "suggestion-1",
+      toSomeoneElse: false,
+    });
+    expect(lastEnabled()).toBe(false);
+    expect(mocks.useThreadContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({ threadId: null }),
+    );
+    expect(result.current.reply.settledFor).toBe("ask");
+  });
+
   it.each([
     ["used", "LIKELY_SENT", "ask"],
     ["dismissed", "DISMISSED", "ask"],
@@ -528,6 +550,7 @@ function ruleSuggestionPlan(
     subject?: string | null;
     staticAttachments?: unknown;
     selectedAttachments?: unknown;
+    predrafted?: boolean;
   } = {},
 ) {
   return {
@@ -548,6 +571,7 @@ function ruleSuggestionPlan(
         subject: action.subject ?? null,
         staticAttachments: action.staticAttachments ?? null,
         selectedAttachments: action.selectedAttachments ?? null,
+        replySuggestionPredrafted: action.predrafted ?? false,
       },
     ],
   };
