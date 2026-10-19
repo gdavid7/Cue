@@ -41,7 +41,10 @@ describe("engine ingesting messages the host already read", () => {
           status: "confirmed",
           receiptId: "r1",
           observations: [],
-          targets: operation.intent.targets.map((key) => ({
+          targets: ("targets" in operation.intent
+            ? operation.intent.targets
+            : []
+          ).map((key) => ({
             key,
             outcome: "applied" as const,
             code: null,
