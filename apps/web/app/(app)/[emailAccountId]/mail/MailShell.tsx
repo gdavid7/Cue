@@ -162,6 +162,10 @@ import { LoadingContent } from "@/components/LoadingContent";
 import { useTeamCommentsAvailable } from "@/components/team-comments/use-team-comments-available";
 import { getEmailMessageCellActions } from "@/components/EmailMessageCellActions";
 import type { ThreadsQuery } from "@/utils/threads/validation";
+import {
+  SearchProviderNotice,
+  searchOnEnterHint,
+} from "@/app/(app)/[emailAccountId]/mail/SearchProviderNotice";
 
 // Module-level so an "empty" reader doesn't hand children a new array each render.
 const NO_MESSAGES: ThreadMessage[] = [];
@@ -614,9 +618,15 @@ export function MailShell() {
       : { type: "inbox" };
   }, [searchQuery, scopeQuery, activeSplit, splits]);
 
+  // Typing searches local mail as you go; the provider is only asked once
+  // the search is committed (Enter, or a search address), so a pause
+  // mid-word never spends a provider search on half a query.
+  const searchCommitted = !!searchParam && searchQuery === searchParam.trim();
+  const providerSearch = !searchQuery || searchCommitted;
   const accountThreadState = useMailThreads({
     emailAccountId,
     query,
+    providerSearch,
     enabled:
       !isAllAccounts &&
       searchSettled &&
@@ -637,6 +647,7 @@ export function MailShell() {
       ),
     labelNames: searchQuery ? undefined : activeCombinedLabelNames,
     searchQuery: searchQuery ?? undefined,
+    providerSearch,
   });
   const { labelsByAccount } = combinedThreadState;
   const splitCountAccountIds = useMemo(
@@ -715,12 +726,19 @@ export function MailShell() {
   }, [orderedIds, focusedIndex, searchQuery, searchViewIdentity]);
   const { data: searchAnswer } = useSearchAnswer(emailAccountId, searchParam);
   const searchFoundNothing = Boolean(
-    searchQuery && hasProviderResponse && !threads.length,
+    searchQuery &&
+      hasProviderResponse &&
+      !threads.length &&
+      // A committed search the provider is still running hasn't found
+      // nothing yet.
+      !providerState.providerSearchPending,
   );
-  const isSearchCommitted = !!searchParam && searchQuery === searchParam.trim();
+  const isSearchCommitted = searchCommitted;
   let emptySearchMessage: string | undefined;
   if (searchFoundNothing)
-    emptySearchMessage = `No emails match “${searchQuery}”.`;
+    emptySearchMessage = searchCommitted
+      ? `No emails match “${searchQuery}”.`
+      : searchOnEnterHint(isAllAccounts ? null : provider);
   // A committed search's card above speaks for it: the answer leads to the
   // mail, and with no answer it offers to ask in chat instead.
   if ((searchAnswer || searchFoundNothing) && isSearchCommitted)
@@ -2095,6 +2113,20 @@ export function MailShell() {
                   onRetry={() => {
                     combinedThreadState.refetch().catch(() => undefined);
                   }}
+                />
+              ) : null}
+              {searchQuery && providerState.providerSearchNotice ? (
+                <SearchProviderNotice
+                  notice={providerState.providerSearchNotice}
+                  provider={
+                    isAllAccounts
+                      ? combinedAccounts.find(
+                          (account) =>
+                            account.id ===
+                            providerState.providerSearchNotice?.accountId,
+                        )?.provider
+                      : provider
+                  }
                 />
               ) : null}
               {!isAllAccounts && accountThreadState.cueSortingUnavailable ? (

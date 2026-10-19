@@ -201,6 +201,62 @@ describe("local text search", () => {
     expect(await search(store, text("any", "attached"))).toEqual([]);
     await close();
   });
+
+  it("lists a typed search's index hits next to the messages the provider matched", async () => {
+    const { store, close } = await searchableMailbox();
+    // The shape resolveSearchPredicates gives a search with matches.
+    const providerMatched = (
+      rest: MailPredicate[],
+      matchedIn = "acc-1",
+    ): MailPredicate => ({
+      kind: "all",
+      predicates: [
+        {
+          kind: "any",
+          predicates: [
+            {
+              kind: "all",
+              predicates: [text("any", "quarterly"), ...rest],
+            },
+            {
+              kind: "all",
+              predicates: [
+                { kind: "not", predicate: { kind: "role", role: "trash" } },
+                {
+                  kind: "any",
+                  predicates: [
+                    { kind: "message", accountId: matchedIn, ids: ["bare"] },
+                    { kind: "message", accountId: "other", ids: ["lunch"] },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        { kind: "not", predicate: { kind: "role", role: "spam" } },
+      ],
+    });
+
+    expect(await search(store, providerMatched([]))).toEqual([
+      "bare",
+      "html",
+      "text",
+    ]);
+    // A hit must still pass the rest of the local search; a provider match
+    // needn't.
+    expect(
+      await search(store, providerMatched([{ kind: "read", value: false }])),
+    ).toEqual(["bare", "html"]);
+    expect(
+      await store.readMailboxView(query(providerMatched([]))),
+    ).toMatchObject({ view: { counts: { matchingConversations: 3 } } });
+    // Another account's match with the same id isn't this account's mail.
+    expect(await search(store, providerMatched([], "other"))).toEqual([
+      "html",
+      "text",
+    ]);
+    await close();
+  });
 });
 
 function text(field: "any" | "subject" | "body", value: string): MailPredicate {
