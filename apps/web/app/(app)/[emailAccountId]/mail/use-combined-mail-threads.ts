@@ -57,14 +57,25 @@ export function useCombinedMailThreads({
         : undefined,
     [accountIds, labelNames, labelsByAccount],
   );
-  // Each account reads the search in its own provider's syntax.
+  // Each account reads the search in its own provider's syntax, and
+  // `label:Name` by its own labels.
   const searchPredicate = useMemo(
     () =>
       searchQuery
-        ? (searchQueryForAccounts(searchQuery, { now: new Date() }, accounts) ??
-          undefined)
+        ? (searchQueryForAccounts(
+            searchQuery,
+            { now: new Date() },
+            accounts.map((account) => {
+              const labels = labelsByAccount[account.id];
+              return {
+                id: account.id,
+                provider: account.provider,
+                labels: labels && Object.values(labels),
+              };
+            }),
+          ) ?? undefined)
         : undefined,
-    [searchQuery, accounts],
+    [searchQuery, accounts, labelsByAccount],
   );
   const query = useMemo<ThreadsQuery>(() => {
     if (searchQuery) return { q: searchQuery };

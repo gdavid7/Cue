@@ -445,6 +445,125 @@ describe("searching across a Gmail and an Outlook account", () => {
   });
 });
 
+describe("label:Name across accounts", () => {
+  // Each account names its labels with its own ids; one id even means a
+  // different label in another account.
+  const ACCOUNTS = [
+    {
+      id: "gmail-a",
+      provider: "google",
+      labels: [
+        { id: "Label_1", name: "Work" },
+        { id: "Label_2", name: "Parent/Child" },
+      ],
+    },
+    {
+      id: "gmail-b",
+      provider: "google",
+      labels: [
+        { id: "Label_9", name: "work" },
+        { id: "Label_1", name: "Personal" },
+      ],
+    },
+    {
+      id: "outlook",
+      provider: "microsoft",
+      labels: [{ id: "category-work", name: "WORK" }],
+    },
+  ];
+  const MAIL: Record<string, Array<[string, string[]]>> = {
+    "gmail-a": [
+      ["a-work", ["Label_1"]],
+      ["a-nested", ["Label_2"]],
+      ["a-plain", []],
+    ],
+    "gmail-b": [
+      ["b-work", ["Label_9"]],
+      ["b-personal", ["Label_1"]],
+    ],
+    outlook: [
+      ["o-work", ["category-work"]],
+      ["o-plain", []],
+    ],
+  };
+  let labelled: Awaited<ReturnType<typeof createSqliteMailStore>>;
+
+  beforeAll(async () => {
+    labelled = await createSqliteMailStore(createNodeSqliteDriver());
+    for (const account of ACCOUNTS) {
+      await labelled.ensureAccount({
+        accountId: account.id,
+        provider: account.provider as "google" | "microsoft",
+        generation: "g1",
+      });
+      await labelled.applySyncPage({
+        ownerId: "owner",
+        page: {
+          session: { accountId: account.id, generation: "g1" },
+          requestId: "seed",
+          from: { streamId: "primary", generation: "g1", checkpoint: null },
+          to: { streamId: "primary", generation: "g1", checkpoint: "1" },
+          changes: MAIL[account.id].map(([id, labelIds]) => ({
+            ...messagePatch({ id, labelIds, roles: ["inbox"] }),
+            key: { accountId: account.id, messageId: id },
+          })),
+          requiredHydration: [],
+          roundComplete: true,
+        },
+      });
+    }
+  });
+
+  afterAll(async () => {
+    await labelled.close();
+  });
+
+  async function labelledMatches(
+    query: string,
+    accounts: Array<{
+      id: string;
+      provider: string;
+      labels?: Array<{ id: string; name: string }>;
+    }> = ACCOUNTS,
+  ) {
+    const predicate = searchQueryForAccounts(query, { now: NOW }, accounts);
+    if (!predicate) throw new Error("No predicate");
+    const { view } = await labelled.readMailboxView({
+      accountIds: accounts.map((account) => account.id),
+      predicate: resolveSearchPredicates(predicate, () => []),
+      order: "newest_first",
+      pageSize: 50,
+      after: null,
+    });
+    return view.conversations.map((row) => row.key.conversationId).sort();
+  }
+
+  it.each<[string, string[]]>([
+    // Matched by name in every account, whatever its case or provider.
+    ["label:Work", ["a-work", "b-work", "o-work"]],
+    ["label:work", ["a-work", "b-work", "o-work"]],
+    // A label only one account has.
+    ["label:Personal", ["b-personal"]],
+    ["label:Parent/Child", ["a-nested"]],
+    ["label:parent-child", ["a-nested"]],
+    ["-label:Work", ["a-nested", "a-plain", "b-personal", "o-plain"]],
+  ])("%s", async (query, expected) => {
+    expect(await labelledMatches(query)).toEqual(expected);
+  });
+
+  it("reads one provider's accounts by each account's own labels", async () => {
+    expect(await labelledMatches("label:Work", ACCOUNTS.slice(0, 2))).toEqual([
+      "a-work",
+      "b-work",
+    ]);
+  });
+
+  it("leaves a label to the providers while labels load", async () => {
+    const loading = ACCOUNTS.map(({ id, provider }) => ({ id, provider }));
+    expect(await labelledMatches("label:Work", loading)).toEqual([]);
+  });
+});
+
 describe("syntax per provider", () => {
   it("reads Outlook's KQL as words for a Gmail account, as Gmail does", async () => {
     expect(await localMatches("hasattachments:true", "google")).toEqual([]);

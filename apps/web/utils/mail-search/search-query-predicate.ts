@@ -8,7 +8,19 @@ import {
 } from "@/utils/mail-search/parse-search-query";
 import { parseBooleanSearchValue } from "@/utils/tokenize-search-query";
 
-export type SearchLabel = { id: string; name: string };
+export type SearchLabel = {
+  id: string;
+  name: string;
+  /** The account the label belongs to, in a search across accounts. */
+  accountId?: string;
+};
+
+type SearchAccount = {
+  id: string;
+  provider: string;
+  /** The account's own labels; left out while they load. */
+  labels?: SearchLabel[];
+};
 
 export type SearchQueryContext = {
   now: Date;
@@ -86,26 +98,32 @@ export function searchQueryToPredicate(
  * account never filters by Outlook's KQL, and each provider's own spam and
  * trash tokens widen only its accounts. Accounts sharing a provider share one
  * search, so a view of one provider's accounts reads like a single account.
+ * `label:Name` matches, in each account, that account's own label of that
+ * name, since every account has its own label ids.
  */
 export function searchQueryForAccounts(
   query: string,
   context: Omit<SearchQueryContext, "provider" | "labels">,
-  accounts: Array<{ id: string; provider: string }>,
+  accounts: SearchAccount[],
 ): MailPredicate | null {
-  const groups = new Map<SearchQueryContext["provider"], string[]>();
+  const groups = new Map<SearchQueryContext["provider"], SearchAccount[]>();
   for (const account of accounts) {
     const provider = searchProvider(account.provider);
-    groups.set(provider, [...(groups.get(provider) ?? []), account.id]);
+    groups.set(provider, [...(groups.get(provider) ?? []), account]);
   }
   if (groups.size <= 1) {
-    const [provider] = groups.keys();
-    return searchQueryToPredicate(query, { ...context, provider });
+    const [[provider, group] = [undefined, []]] = groups;
+    return searchQueryToPredicate(query, {
+      ...context,
+      provider,
+      labels: accountLabels(group),
+    });
   }
-  const predicates = [...groups].flatMap(([provider, accountIds]) => {
+  const predicates = [...groups].flatMap(([provider, group]) => {
     const predicate = searchQueryToPredicate(
       query,
-      { ...context, provider },
-      accountIds,
+      { ...context, provider, labels: accountLabels(group) },
+      group.map((account) => account.id),
     );
     return predicate ? [predicate] : [];
   });
@@ -444,13 +462,34 @@ function labelPredicate(
   if (!labels) return null;
   // Gmail writes a label's spaces and slashes as hyphens in a query.
   const wanted = labelQueryName(value);
-  const ids = labels.flatMap((label) =>
-    label.id === value || labelQueryName(label.name) === wanted
-      ? [label.id]
+  const matches = labels.flatMap(({ id, accountId, name }): MailPredicate[] =>
+    id === value || labelQueryName(name) === wanted
+      ? [
+          {
+            kind: "membership",
+            membership: "label",
+            id,
+            ...(accountId ? { accountId } : {}),
+          },
+        ]
       : [],
   );
-  if (!ids.length) return null;
-  return anyOf(ids.map(gmailTokenToPredicate));
+  if (!matches.length) return null;
+  return anyOf(matches);
+}
+
+// Labels are known only once every account's have loaded; until then the
+// providers alone answer `label:Name`.
+function accountLabels(accounts: SearchAccount[]): SearchLabel[] | undefined {
+  if (!accounts.length) return;
+  const labels: SearchLabel[] = [];
+  for (const account of accounts) {
+    if (!account.labels) return;
+    for (const label of account.labels) {
+      labels.push({ ...label, accountId: account.id });
+    }
+  }
+  return labels;
 }
 
 function labelQueryName(name: string) {
