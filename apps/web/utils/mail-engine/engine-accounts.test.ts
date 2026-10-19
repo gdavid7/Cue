@@ -5,6 +5,7 @@ import {
   getConnectedEngineAccounts,
   markEngineAccountRegistered,
   registerEngineAccounts,
+  registerEngineAccountsInTurn,
 } from "./engine-accounts";
 
 describe("getConnectedEngineAccounts", () => {
@@ -77,6 +78,117 @@ describe("registerEngineAccounts", () => {
     expect(client.requestSync).toHaveBeenLastCalledWith(["a"]);
   });
 });
+
+describe("registerEngineAccountsInTurn", () => {
+  const accounts = ["a", "b", "c"].map((accountId) => ({
+    accountId,
+    provider: "google" as const,
+  }));
+
+  it("never runs two background accounts' first syncs at once", async () => {
+    const engine = createSyncingEngine();
+
+    const done = registerEngineAccountsInTurn(
+      engine.client,
+      accounts,
+      new AbortController().signal,
+    );
+    for (const accountId of ["a", "b", "c"]) {
+      await vi.waitFor(() => expect(engine.syncing).toEqual([accountId]));
+      engine.finishFirstSync(accountId);
+    }
+    await done;
+
+    expect(engine.mostAtOnce).toBe(1);
+    expect(engine.started).toEqual(["a", "b", "c"]);
+  });
+
+  it("moves on from an account whose first sync runs too long", async () => {
+    vi.useFakeTimers();
+    const engine = createSyncingEngine();
+
+    const done = registerEngineAccountsInTurn(
+      engine.client,
+      accounts.slice(0, 2),
+      new AbortController().signal,
+      { firstSyncWaitMs: 1000 },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(engine.started).toEqual(["a"]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(engine.started).toEqual(["a", "b"]);
+    engine.finishFirstSync("b");
+    await done;
+    vi.useRealTimers();
+  });
+
+  it("stops registering once the engine goes", async () => {
+    const engine = createSyncingEngine();
+    const abort = new AbortController();
+
+    const done = registerEngineAccountsInTurn(
+      engine.client,
+      accounts,
+      abort.signal,
+    );
+    await vi.waitFor(() => expect(engine.started).toEqual(["a"]));
+    abort.abort();
+    await done;
+
+    expect(engine.started).toEqual(["a"]);
+  });
+});
+
+// An engine whose registered accounts sync on their own, as the real one's
+// lanes do, until the test finishes each account's first sync.
+function createSyncingEngine() {
+  const syncing: string[] = [];
+  const started: string[] = [];
+  const synced = new Set<string>();
+  const listeners = new Set<() => void>();
+  let mostAtOnce = 0;
+  const client = {
+    ensureAccount: vi.fn(async () => undefined),
+    requestSync: vi.fn(async (accountIds: string[]) => {
+      for (const accountId of accountIds) {
+        if (synced.has(accountId) || syncing.includes(accountId)) continue;
+        syncing.push(accountId);
+        started.push(accountId);
+        mostAtOnce = Math.max(mostAtOnce, syncing.length);
+      }
+      return { status: "scheduled" };
+    }),
+    observeMailbox: vi.fn(({ accountIds }: { accountIds: string[] }) => ({
+      getSnapshot: () => ({
+        status: "ready",
+        data: {
+          coverage: accountIds.map((accountId) => ({
+            accountId,
+            lastCompletedSyncAtMs: synced.has(accountId) ? 1 : null,
+          })),
+        },
+      }),
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      close: () => undefined,
+    })),
+  } as unknown as MailClient;
+  return {
+    client,
+    syncing,
+    started,
+    get mostAtOnce() {
+      return mostAtOnce;
+    },
+    finishFirstSync(accountId: string) {
+      syncing.splice(syncing.indexOf(accountId), 1);
+      synced.add(accountId);
+      for (const listener of [...listeners]) listener();
+    },
+  };
+}
 
 function createClient() {
   return {

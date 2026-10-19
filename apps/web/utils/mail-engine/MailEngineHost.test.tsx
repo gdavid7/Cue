@@ -58,6 +58,20 @@ vi.mock("@/utils/mail-engine/create-browser-engine", () => ({
       ensureAccount: vi.fn(async () => undefined),
       requestSync: vi.fn(async () => ({ status: "scheduled" })),
       retainAccounts: vi.fn(async () => undefined),
+      // Every account reads as synced, so background registration moves on.
+      observeMailbox: ({ accountIds }: { accountIds: string[] }) => ({
+        getSnapshot: () => ({
+          status: "ready",
+          data: {
+            coverage: accountIds.map((accountId) => ({
+              accountId,
+              lastCompletedSyncAtMs: 1,
+            })),
+          },
+        }),
+        subscribe: () => () => undefined,
+        close: () => undefined,
+      }),
       close: vi.fn(async () => undefined),
     };
     runtime.engines.push(engine);
@@ -119,7 +133,7 @@ describe("MailEngineRuntime", () => {
     expect(seen.at(-1)).toBe(engine);
   });
 
-  it("registers every other connected account after the first mail list, one at a time", async () => {
+  it("registers every other connected account only after the first mail list", async () => {
     runtime.emailAccounts = [
       connectedAccount("account-a", "google"),
       connectedAccount("account-b", "microsoft", {
@@ -136,31 +150,19 @@ describe("MailEngineRuntime", () => {
     expect(engine?.ensureAccount).not.toHaveBeenCalled();
     expect(engine?.requestSync).not.toHaveBeenCalled();
 
-    let finishFirst = () => {};
-    engine?.ensureAccount.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          finishFirst = resolve;
-        }),
-    );
     await act(async () => {
       for (const callback of runtime.firstMailList) callback();
     });
-    await vi.waitFor(() =>
-      expect(engine?.ensureAccount).toHaveBeenCalledWith({
-        accountId: "account-b",
-        provider: "microsoft",
-      }),
-    );
-    // The next account waits for the one before it.
-    expect(engine?.ensureAccount).toHaveBeenCalledOnce();
-    await act(async () => finishFirst());
     await vi.waitFor(() =>
       expect(engine?.ensureAccount).toHaveBeenCalledWith({
         accountId: "account-c",
         provider: "google",
       }),
     );
+    expect(engine?.ensureAccount).toHaveBeenCalledWith({
+      accountId: "account-b",
+      provider: "microsoft",
+    });
     // The account it started on was registered by the start itself.
     expect(engine?.ensureAccount).not.toHaveBeenCalledWith(
       expect.objectContaining({ accountId: "account-a" }),
