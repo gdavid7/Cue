@@ -1,14 +1,14 @@
 import he from "he";
-import { z } from "zod";
 import type { EmailProvider } from "@/utils/email/types";
 import { createGenerateObject } from "@/utils/llms";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
 import type { Logger } from "@/utils/logger";
 import {
-  cleanGeneratedSearch,
-  MAX_GENERATED_SEARCHES,
-} from "@/utils/mail-search/natural-language-search";
+  buildGeneratedSearch,
+  type SearchIntentParts,
+  searchIntentSchema,
+} from "@/utils/mail-search/generated-search";
 import { assertHasAiAccess } from "@/utils/premium/limits";
 import { getEmailAccountWithAi } from "@/utils/user/get";
 
@@ -18,33 +18,15 @@ import { getEmailAccountWithAi } from "@/utils/user/get";
  */
 export const INTERPRET_SEARCH_TIMEOUT_MS = 3000;
 
-const searchIntentSchema = z.object({
-  searches: z
-    .array(z.string())
-    .describe(
-      "1 to 3 mailbox searches, most likely first, in Gmail search syntax: from:, to:, subject:, label:, has:attachment, is:unread, is:starred, in:sent, after:YYYY/MM/DD, before:YYYY/MM/DD (exclusive) and plain words. Every word must match, so join alternatives and synonyms with OR (lease OR contract). Put a person's name in from: or to: as written (from:sarah). Resolve relative dates against today.",
-    ),
-  explanation: z
-    .string()
-    .describe(
-      'How you read the search, as one short line in the language of the search, e.g. "Mail from Sarah with attachments in September mentioning lease or contract".',
-    ),
-  isQuestion: z
-    .boolean()
-    .describe(
-      "True when the search asks something the mail could answer (when is my flight?), false when it only looks for mail.",
-    ),
-});
-
 export type SearchIntent = {
-  /** Cleaned searches in the account provider's syntax; may be empty. */
+  /** Searches in the account provider's syntax; may be empty. */
   searches: string[];
   explanation: string;
   isQuestion: boolean;
 };
 
 /**
- * Reads a search typed as a sentence and turns it into searches Cue runs on
+ * Reads a search typed as a sentence and turns it into a search Cue runs on
  * the local mail first, with the provider as fallback. One model call, on the
  * typed text alone: no mail is sent to the model. Null means show the plain
  * results only.
@@ -78,7 +60,7 @@ export async function interpretSearch({
     INTERPRET_SEARCH_TIMEOUT_MS,
   );
   // Both settle at the deadline even if a call ignores the abort.
-  const [intent, labelNames] = await Promise.all([
+  const [parts, labelNames] = await Promise.all([
     Promise.race([
       aiInterpretSearch({
         emailAccount,
@@ -88,10 +70,12 @@ export async function interpretSearch({
       }),
       rejectOnAbort(timeout.signal),
     ]).catch((error) => {
+      // A parse or validation error's message can quote the model's output.
       logger.warn("Search interpretation failed", {
-        error,
         timedOut: timeout.signal.aborted,
+        errorName: errorName(error),
       });
+      logger.trace("Search interpretation error", { error });
       return null;
     }),
     // A label the account doesn't have would make a search find nothing.
@@ -102,22 +86,21 @@ export async function interpretSearch({
       rejectOnAbort(timeout.signal),
     ]).catch((error) => {
       logger.warn("Failed to load labels for search interpretation", {
-        error,
+        timedOut: timeout.signal.aborted,
+        errorName: errorName(error),
       });
+      logger.trace("Label load error", { error });
       return [] as string[];
     }),
   ]).finally(() => clearTimeout(timer));
-  if (!intent) return null;
+  if (!parts) return null;
 
-  return {
-    searches: cleanGeneratedSearches(intent.searches, {
-      now,
-      provider: emailProvider.name,
-      labelNames,
-    }),
-    explanation: intent.explanation.trim(),
-    isQuestion: intent.isQuestion,
-  };
+  return toSearchIntent(parts, {
+    now,
+    timeZone: accountTimeZone(emailAccount.timezone),
+    provider: emailProvider.name,
+    labelNames,
+  });
 }
 
 export async function aiInterpretSearch({
@@ -130,7 +113,7 @@ export async function aiInterpretSearch({
   query: string;
   now: Date;
   abortSignal?: AbortSignal;
-}) {
+}): Promise<SearchIntentParts> {
   const modelOptions = getModelForUseCase(
     emailAccount.user,
     LlmUseCase.SearchIntent,
@@ -148,48 +131,64 @@ export async function aiInterpretSearch({
     prompt: buildSearchIntentPrompt({
       query,
       now,
-      timezone: emailAccount.timezone,
+      timeZone: accountTimeZone(emailAccount.timezone),
     }),
     schema: searchIntentSchema,
   });
   return result.object;
 }
 
-export const SEARCH_INTENT_INSTRUCTIONS = `You turn what the user typed into their mailbox search bar into searches that find the mail they mean.
-Put people, dates, attachments and labels into operators, and keep only the words the mail itself would contain, with close synonyms.
-Use label: only for a label the user names. Never add a sender, date or detail the search doesn't state.`;
+export const SEARCH_INTENT_INSTRUCTIONS = `You read what the user typed into their mailbox search bar and name the parts of the mail they mean, which Cue turns into a search.
+Fill only what the user states or clearly implies, and leave everything else empty: an added sender, date or condition hides the mail they want.
+Write the explanation in the language the user typed in.`;
 
 export function buildSearchIntentPrompt({
   query,
   now,
-  timezone,
+  timeZone,
 }: {
   query: string;
   now: Date;
-  timezone: string | null;
+  timeZone: string;
 }) {
   const today = now.toLocaleDateString("en-CA", {
     weekday: "long",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-    timeZone: timezone || "UTC",
+    timeZone,
   });
   return `Today is ${today}.
 
 <search>${he.escape(query)}</search>`;
 }
 
-/** Cleans each generated search and drops repeats and the unusable. */
-export function cleanGeneratedSearches(
-  searches: string[],
-  context: Parameters<typeof cleanGeneratedSearch>[1],
-): string[] {
-  const cleaned = searches.flatMap((search) => {
-    const result = cleanGeneratedSearch(search, context);
-    return result ? [result] : [];
-  });
-  return [...new Set(cleaned)].slice(0, MAX_GENERATED_SEARCHES);
+/** The search Cue runs for a model's reading, and how to show it. */
+export function toSearchIntent(
+  parts: SearchIntentParts,
+  context: Parameters<typeof buildGeneratedSearch>[1],
+): SearchIntent {
+  const search = buildGeneratedSearch(parts, context);
+  return {
+    searches: search ? [search] : [],
+    explanation: parts.explanation.trim(),
+    isQuestion: parts.isQuestion,
+  };
+}
+
+/** The account's time zone when it names a real one, else UTC. */
+export function accountTimeZone(timeZone: string | null | undefined) {
+  if (!timeZone) return "UTC";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone });
+    return timeZone;
+  } catch {
+    return "UTC";
+  }
+}
+
+function errorName(error: unknown) {
+  return error instanceof Error ? error.name : typeof error;
 }
 
 function rejectOnAbort(signal: AbortSignal) {

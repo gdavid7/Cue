@@ -8,10 +8,11 @@ import {
   formatSemanticJudgeActual,
   judgeEvalOutput,
 } from "@/__tests__/eval/semantic-judge";
+import { TZDate } from "@date-fns/tz";
 import {
   aiInterpretSearch,
   buildSearchIntentPrompt,
-  cleanGeneratedSearches,
+  toSearchIntent,
 } from "@/utils/ai/mail-search/interpret-search";
 import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
 
@@ -29,10 +30,10 @@ const TIMEZONE = "America/Los_Angeles";
 const LABELS = ["Receipts", "Travel", "Work/Clients"];
 
 const CRITERION = {
-  name: "Searches find the mail the user means",
-  description: `The output holds the Gmail-syntax searches Cue made of what the user typed into the search bar, after Cue dropped operators it can't run. In this syntax every term must match, and OR binds tighter than the implicit AND: "from:sarah lease OR contract" means from Sarah AND (lease or contract). before: is exclusive.
-Judge meaning, not exact strings. PASS when the first search (the others are alternatives) would find the mail the user describes: people they name are in from: or to: (as written, or an obvious form of it); each date phrase is resolved correctly against today's date (a calendar period or an equivalent rolling window are both fine); attachments are required only when a file is implied; the words are ones that mail would contain, with alternatives joined by OR, in a language that mail is likely written in; a label is used only when the user names one that exists.
-FAIL when a search adds a sender, date, label or other restriction the user didn't imply, leaves out one they stated, gets a date range wrong, or requires incidental words (the user's filler, the question words) so the obvious matching email would be missed. Also FAIL when the explanation misdescribes the searches or isn't in the language of the query.`,
+  name: "The search finds the mail the user means",
+  description: `The output holds the Gmail-syntax search Cue built from the model's reading of what the user typed into the search bar. Every term and bracketed group must match; words inside a group are alternatives. Dates are shown in the account's time zone; before: is exclusive.
+Judge meaning, not exact strings. PASS when the search would find the mail the user describes: people they name are in from: or to: (as written, or an obvious form of it); each date phrase is resolved correctly against today's date (a calendar period or an equivalent rolling window are both fine); attachments are required only when a file is implied; the words are ones that mail would contain, with alternatives grouped, in a language that mail is likely written in; a label is used only when the user names one that exists.
+FAIL when the search adds a sender, date, label or other restriction the user didn't imply (a role such as "my landlord" is not a sender name), leaves out one they stated, gets a date range wrong, treats the date of an event the mail is about as the date the mail arrived, or requires incidental words (the user's filler, the question words) so the obvious matching email would be missed. Also FAIL when the explanation misdescribes the search or isn't in the language of the query.`,
 };
 
 const CASES: {
@@ -66,7 +67,7 @@ const CASES: {
     name: "photos from family over the summer",
     query: "photos my mom sent over the summer",
     expected:
-      "from mom (as written), has:attachment or photo words, summer 2026 (roughly June to August)",
+      "has:attachment or photo words, summer 2026 (roughly June to August); a sender restriction isn't needed for 'mom', who can't be looked up by name",
     isQuestion: false,
   },
   {
@@ -79,7 +80,7 @@ const CASES: {
     name: "unread mail from a landlord",
     query: "unread emails from my landlord",
     expected:
-      "is:unread with landlord, rent or lease words, or from:landlord; no invented address",
+      "is:unread with landlord, rent or lease words; no from: guess at the landlord's address",
     isQuestion: false,
   },
   {
@@ -92,7 +93,7 @@ const CASES: {
     name: "mail the user sent",
     query: "emails I sent to Tom last week",
     expected:
-      "in:sent or from:me, to:tom, a date range covering last week (Oct 12 to Oct 19, 2026, or the previous calendar week)",
+      "in:sent or from:me, to:tom, last week: Monday Oct 12 up to Monday Oct 19, 2026 (or the past 7 days)",
     isQuestion: false,
   },
   {
@@ -132,7 +133,7 @@ const CASES: {
     name: "Japanese: a quote from last week",
     query: "先週田中さんから届いた見積書",
     expected:
-      "from Tanaka (田中 or tanaka), 見積書 or estimate/quote words, last week's dates; explanation in Japanese",
+      "from Tanaka (田中 or tanaka), 見積書 or estimate/quote words, last week (Oct 12 up to Oct 19, 2026, or the past 7 days); explanation in Japanese",
     isQuestion: false,
   },
   {
@@ -160,14 +161,14 @@ const CASES: {
     name: "unread newsletters this week",
     query: "newsletters I haven't read this week",
     expected:
-      "is:unread, a date from this week (after the start of the week of Oct 19, 2026, or the past 7 days), newsletter words or unsubscribe",
+      "is:unread, this week (since Monday Oct 19, 2026, or the past 7 days), newsletter words or unsubscribe",
     isQuestion: false,
   },
   {
     name: "a yes-or-no question about a mortgage",
     query: "did the bank approve my mortgage?",
     expected:
-      "mortgage with approval or loan words; no invented bank name or address",
+      "mortgage with approval or loan words; no from: guess at the bank",
     isQuestion: true,
   },
   {
@@ -205,25 +206,28 @@ describe.runIf(shouldRunEval)("search-intent eval", () => {
             getModelForUseCase(emailAccount.user, LlmUseCase.SearchIntent)
               .modelName,
           ).toBe(model.model);
-          const raw = await aiInterpretSearch({
+          const parts = await aiInterpretSearch({
             emailAccount: { ...emailAccount, timezone: TIMEZONE },
             query: testCase.query,
             now: NOW,
           });
+          const intent = toSearchIntent(parts, {
+            now: NOW,
+            timeZone: TIMEZONE,
+            provider: "google",
+            labelNames: LABELS,
+          });
           const output = {
-            searches: cleanGeneratedSearches(raw.searches, {
-              now: NOW,
-              provider: "google",
-              labelNames: LABELS,
-            }),
-            explanation: raw.explanation,
-            isQuestion: raw.isQuestion,
+            // Epoch seconds, as Gmail gets them, written out for the judge.
+            search: readableDates(intent.searches[0] ?? ""),
+            explanation: intent.explanation,
+            isQuestion: intent.isQuestion,
           };
 
           const judgeResult = await judgeEvalOutput({
             criterion: CRITERION,
             expected: testCase.expected,
-            input: `${buildSearchIntentPrompt({ query: testCase.query, now: NOW, timezone: TIMEZONE })}
+            input: `${buildSearchIntentPrompt({ query: testCase.query, now: NOW, timeZone: TIMEZONE })}
 
 The account's labels: ${LABELS.join(", ")}`,
             output: JSON.stringify(output, null, 2),
@@ -232,7 +236,7 @@ The account's labels: ${LABELS.join(", ")}`,
             testCase.isQuestion === undefined ||
             output.isQuestion === testCase.isQuestion;
           const pass =
-            judgeResult.pass && questionCorrect && output.searches.length > 0;
+            judgeResult.pass && questionCorrect && intent.searches.length > 0;
 
           evalReporter.record({
             testName: testCase.name,
@@ -245,7 +249,7 @@ The account's labels: ${LABELS.join(", ")}`,
             ),
           });
 
-          expect(output.searches.length).toBeGreaterThan(0);
+          expect(intent.searches.length).toBeGreaterThan(0);
           expect(questionCorrect, "isQuestion").toBe(true);
           expect(judgeResult.pass, judgeResult.reasoning).toBe(true);
         },
@@ -258,3 +262,14 @@ The account's labels: ${LABELS.join(", ")}`,
     evalReporter.printReport();
   });
 });
+
+function readableDates(search: string) {
+  return search.replace(
+    /\b(after|before):(\d{9,11})\b/g,
+    (_, name: string, seconds: string) => {
+      const local = new TZDate(Number(seconds) * 1000, TIMEZONE);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return `${name}:${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())}T${pad(local.getHours())}:${pad(local.getMinutes())}`;
+    },
+  );
+}

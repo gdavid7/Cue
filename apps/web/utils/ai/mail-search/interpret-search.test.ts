@@ -36,6 +36,27 @@ import {
 
 const logger = createScopedLogger("interpret-search-test");
 const NOW = new Date("2026-10-19T16:00:00Z");
+const epoch = (iso: string) => String(Date.parse(iso) / 1000);
+
+function reading(overrides: Record<string, unknown> = {}) {
+  return {
+    senders: ["sarah"],
+    recipients: [],
+    sentByUser: false,
+    keywordGroups: [["lease", "contract"]],
+    hasAttachment: true,
+    unread: false,
+    starred: false,
+    label: "receipts",
+    dateRange: "last_month",
+    lastNDays: 0,
+    fromDate: "",
+    toDate: "",
+    explanation: " Mail from Sarah with attachments last month ",
+    isQuestion: false,
+    ...overrides,
+  };
+}
 
 function provider(
   name: "google" | "microsoft",
@@ -72,55 +93,30 @@ describe("interpretSearch", () => {
     expect(mocks.generateObject).not.toHaveBeenCalled();
   });
 
-  it("returns only searches Cue can run, at most three, without repeats", async () => {
-    mocks.generateObject.mockResolvedValue({
-      object: {
-        searches: [
-          "from:sarah has:attachment after:2026/09/01 before:2026/10/01 lease OR contract",
-          "from:sarah has:attachment after:2026/09/01 before:2026/10/01 lease OR contract",
-          "in:trash larger:10M",
-          "label:receipts label:invented lease",
-          "from:sarah lease",
-          "from:sarah contract",
-        ],
-        explanation: " Mail from Sarah with attachments in September ",
-        isQuestion: false,
-      },
-    });
+  it("builds the search from the model's reading, dates in the account's time zone", async () => {
+    mocks.generateObject.mockResolvedValue({ object: reading() });
 
     await expect(interpret()).resolves.toEqual({
       searches: [
-        "from:sarah has:attachment after:2026/09/01 before:2026/10/01 lease OR contract",
-        "label:Receipts lease",
-        "from:sarah lease",
+        `from:sarah (lease OR contract) has:attachment label:Receipts after:${epoch("2026-09-01T07:00:00Z")} before:${epoch("2026-10-01T07:00:00Z")}`,
       ],
-      explanation: "Mail from Sarah with attachments in September",
+      explanation: "Mail from Sarah with attachments last month",
       isQuestion: false,
     });
   });
 
-  it("writes searches in Outlook's syntax for an Outlook account", async () => {
-    mocks.generateObject.mockResolvedValue({
-      object: {
-        searches: ["from:sarah has:attachment after:2026/09/01 lease"],
-        explanation: "Mail from Sarah",
-        isQuestion: false,
-      },
-    });
+  it("writes the search in Outlook's syntax for an Outlook account", async () => {
+    mocks.generateObject.mockResolvedValue({ object: reading() });
 
     const intent = await interpret(provider("microsoft"));
     expect(intent?.searches).toEqual([
-      "from:sarah hasattachments:true received>=2026-09-01 lease",
+      "from:sarah (lease OR contract) hasattachments:true category:Receipts received>=2026-09-01 received<2026-10-01",
     ]);
   });
 
-  it("keeps the search but drops labels when they can't be loaded", async () => {
+  it("keeps the search but drops the label when labels can't be loaded", async () => {
     mocks.generateObject.mockResolvedValue({
-      object: {
-        searches: ["label:receipts amazon"],
-        explanation: "Amazon receipts",
-        isQuestion: false,
-      },
+      object: reading({ dateRange: "none" }),
     });
 
     const intent = await interpret(
@@ -128,7 +124,23 @@ describe("interpretSearch", () => {
         throw new Error("Labels unavailable");
       }),
     );
-    expect(intent?.searches).toEqual(["amazon"]);
+    expect(intent?.searches).toEqual([
+      "from:sarah (lease OR contract) has:attachment",
+    ]);
+  });
+
+  it("logs a failed reading without the model's output", async () => {
+    const warn = vi.spyOn(logger, "warn");
+    const error = new Error('Type validation failed: {"senders":["secret"]}');
+    error.name = "AI_TypeValidationError";
+    mocks.generateObject.mockRejectedValue(error);
+
+    await expect(interpret()).resolves.toBeNull();
+    expect(warn).toHaveBeenCalledWith("Search interpretation failed", {
+      timedOut: false,
+      errorName: "AI_TypeValidationError",
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("secret");
   });
 
   it("gives up at the time budget when the model doesn't answer", async () => {
