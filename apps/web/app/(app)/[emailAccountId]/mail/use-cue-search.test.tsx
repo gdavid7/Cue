@@ -2,27 +2,37 @@
 
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TZDate } from "@date-fns/tz";
 import { CUE_SEARCH_BUDGET_MS } from "@/app/(app)/[emailAccountId]/mail/cue-search";
 
 const state = vi.hoisted(() => ({
-  swrKeys: [] as (string | null)[],
+  swrKeys: [] as unknown[],
+  fetcher: undefined as undefined | ((key: unknown) => Promise<unknown>),
+  labels: [] as { name: string }[],
+  labelsLoading: false,
   intent: undefined as unknown,
   /** Results by the joined searches each window runs. */
   results: new Map<string, { settled: boolean; ids: string[] }>(),
   enabledWindows: [] as string[],
   enabledPredicates: [] as unknown[],
+  provider: "google",
 }));
 
 vi.mock("swr", () => ({
-  default: (key: string | null) => {
+  default: (key: unknown, fetcher: (key: unknown) => Promise<unknown>) => {
     state.swrKeys.push(key);
+    state.fetcher = fetcher;
     return { data: key ? state.intent : undefined, error: undefined };
   },
 }));
-vi.mock("@/utils/swr", () => ({ getAccountScopedKey: (key: string) => key }));
-vi.mock("@/hooks/useLabels", () => ({ useLabels: () => ({ userLabels: [] }) }));
+vi.mock("@/hooks/useLabels", () => ({
+  useLabels: () => ({
+    userLabels: state.labels,
+    isLoading: state.labelsLoading,
+  }),
+}));
 vi.mock("@/providers/EmailAccountProvider", () => ({
-  useAccount: () => ({ provider: "google" }),
+  useAccount: () => ({ provider: state.provider }),
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads", () => ({
   useEngineMailThreads: ({
@@ -71,6 +81,9 @@ beforeEach(() => {
   state.results = new Map();
   state.enabledWindows = [];
   state.enabledPredicates = [];
+  state.provider = "google";
+  state.labels = [];
+  state.labelsLoading = false;
 });
 
 afterEach(() => {
@@ -86,6 +99,38 @@ describe("useCueSearch", () => {
     const withoutAi = render(SENTENCE, false);
     expect(withoutAi.result.current.stage).toBe("off");
     expect(state.swrKeys.every((key) => key === null)).toBe(true);
+  });
+
+  it("sends the account's labels with the search, not in its address", async () => {
+    state.labels = [{ name: "Receipts" }, { name: "Trips 2026" }];
+    const fetchMock = vi.fn(async () => Response.json({ searches: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(SENTENCE);
+
+    await state.fetcher?.(state.swrKeys.at(-1));
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    expect(url).not.toContain("Receipts");
+    expect(url).not.toContain("lease");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      q: SENTENCE,
+      labels: ["Receipts", "Trips 2026"],
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("waits for the account's labels before reading the search", () => {
+    state.labelsLoading = true;
+    const { rerender } = render(SENTENCE);
+    expect(state.swrKeys.every((key) => key === null)).toBe(true);
+
+    state.labelsLoading = false;
+    rerender({ q: SENTENCE });
+    expect(state.swrKeys.at(-1)).not.toBeNull();
   });
 
   it("shows what the searches found", () => {
@@ -209,6 +254,24 @@ describe("useCueSearch", () => {
     );
   });
 
+  it("reads an Outlook received day in the account's time zone", () => {
+    state.intent = {
+      searches: ["from:sarah received>=2026-10-03"],
+      editableSearches: ["from:sarah received>=2026-10-03"],
+      unreadOnly: false,
+      explanation: "Mail from Sarah since October 3",
+      isQuestion: false,
+      timeZone: "Pacific/Auckland",
+    };
+    state.provider = "microsoft";
+    render(SENTENCE);
+
+    const received = findPredicate(state.enabledPredicates.at(-1), "received");
+    expect(received).toMatchObject({
+      afterMs: new TZDate(2026, 9, 3, "Pacific/Auckland").getTime(),
+    });
+  });
+
   it("answers a question from Cue's searches", () => {
     state.intent = {
       searches: ["flight OR itinerary"],
@@ -232,4 +295,19 @@ function searchesOf(predicate: unknown): string[] {
   };
   if (node.kind === "search" && node.query) return [node.query];
   return (node.predicates ?? []).flatMap(searchesOf);
+}
+
+function findPredicate(predicate: unknown, kind: string): unknown {
+  if (!predicate || typeof predicate !== "object") return;
+  const node = predicate as {
+    kind: string;
+    predicates?: unknown[];
+    local?: unknown;
+  };
+  if (node.kind === kind) return node;
+  for (const child of [...(node.predicates ?? []), node.local]) {
+    const found = findPredicate(child, kind);
+    if (found) return found;
+  }
+  return;
 }

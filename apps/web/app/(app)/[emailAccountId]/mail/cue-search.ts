@@ -12,8 +12,8 @@ import { widenSearch } from "@/utils/mail-search/natural-language-search";
 export const CUE_SEARCH_BUDGET_MS = 4000;
 /** Fewer matches than this and Cue widens the search, once. */
 export const WIDEN_BELOW_RESULTS = 2;
-/** The plain results a Cue found row would repeat on screen. */
-export const PLAIN_ROWS_IN_VIEW = 5;
+/** The Cue found rows shown before "Show all". */
+export const CUE_FOUND_VISIBLE_ROWS = 3;
 
 export type CueSearchIntent = NonNullable<GetSearchIntentResponse>;
 
@@ -140,8 +140,6 @@ export function withoutPlainDuplicates<T extends ActionableThread>(
   cueThreads: T[],
   plainThreads: ActionableThread[],
 ): T[] {
-  const shown = new Set(
-    plainThreads.slice(0, PLAIN_ROWS_IN_VIEW).map(getListThreadKey),
-  );
+  const shown = new Set(plainThreads.map(getListThreadKey));
   return cueThreads.filter((thread) => !shown.has(getListThreadKey(thread)));
 }

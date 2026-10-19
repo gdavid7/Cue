@@ -2,9 +2,10 @@
 
 import { SparklesIcon } from "lucide-react";
 import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
-import type {
-  CueSearchIntent,
-  CueSearchStage,
+import {
+  CUE_FOUND_VISIBLE_ROWS,
+  type CueSearchIntent,
+  type CueSearchStage,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
 import { PlaceholderRow } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { ThreadRow } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
@@ -13,41 +14,54 @@ import {
   type ListThread,
   type MailLayoutMode,
 } from "@/app/(app)/[emailAccountId]/mail/types";
-import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
 import { Button } from "@/components/ui/button";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { EmailLabels } from "@/providers/email-label-types";
+import { describeSearch } from "@/utils/mail-search/describe-search";
+import { readableSearch } from "@/utils/mail-search/generated-search";
 
-const VISIBLE_ROWS = 3;
 const PLACEHOLDER_WIDTHS = ["w-3/4", "w-2/3", "w-5/6"];
-const NOOP = () => undefined;
 
 /**
  * What Cue found for a search typed as a sentence, above the plain results.
  * It holds its rows' space while it reads the search, and when it ends up
  * smaller, or with nothing to show, it eases to its new height rather than
  * jumping. The line saying how Cue read the search opens the searches it
- * ran, each of which can be edited in the search box.
+ * ran, each of which can be edited in the search box. Its rows are the first
+ * in the mail screen's keyboard order, so `focusedIndex` and the indexes
+ * its handlers get count from the first row here.
  */
 export function CueFoundSection({
   stage,
   intent,
   widerSearches,
   threads,
+  totalCount,
+  showAll,
   foundNothing,
   allInPlainResults,
   layout,
   expandedPreview,
   userEmail,
   userLabels,
-  onOpenThread,
+  focusedIndex,
+  hasAnySelection,
+  isSelected,
+  onOpen,
+  onToggleSelect,
+  onSelectRangeTo,
+  onToggleShowAll,
   onEditSearch,
 }: {
   /** "off" closes the section: Cue gave nothing to search. */
   stage: CueSearchStage;
   intent: CueSearchIntent | null;
   widerSearches: string[];
+  /** The rows to show; all of them, or the first few. */
   threads: ListThread[];
+  /** All the rows Cue found, shown or not. */
+  totalCount: number;
+  showAll: boolean;
   /** Cue's searches have all answered with no mail. */
   foundNothing: boolean;
   /** Cue found mail, all of it already among the first plain results. */
@@ -56,22 +70,34 @@ export function CueFoundSection({
   expandedPreview: boolean;
   userEmail: string;
   userLabels: EmailLabels;
-  onOpenThread: (thread: ListThread) => void;
+  /** The mail screen's cursor; a row here when it is below `threads.length`. */
+  focusedIndex: number;
+  hasAnySelection: boolean;
+  isSelected: (key: string) => boolean;
+  onOpen: (index: number) => void;
+  onToggleSelect: (index: number) => void;
+  onSelectRangeTo: (index: number) => void;
+  onToggleShowAll: () => void;
   onEditSearch: (search: string) => void;
 }) {
   const isMobile = useIsMobile();
-  const [showAll, setShowAll] = useState(false);
   const [showSearches, setShowSearches] = useState(false);
   const pending = stage !== "done";
-  const visible = showAll ? threads : threads.slice(0, VISIBLE_ROWS);
   const placeholders = pending
-    ? PLACEHOLDER_WIDTHS.slice(0, Math.max(0, VISIBLE_ROWS - visible.length))
+    ? PLACEHOLDER_WIDTHS.slice(
+        0,
+        Math.max(0, CUE_FOUND_VISIBLE_ROWS - threads.length),
+      )
     : [];
-  const openAt = useStableCallback((index: number) => {
-    const thread = visible[index];
-    if (thread) onOpenThread(thread);
-  });
-  const searches = intent ? [...intent.editableSearches, ...widerSearches] : [];
+  const searches = intent
+    ? [...intent.searches, ...widerSearches].map((search, index) => ({
+        // What the search box takes back, with days it can read.
+        edit:
+          intent.editableSearches[index] ??
+          readableSearch(search, intent.timeZone),
+        label: describeSearch(search, { timeZone: intent.timeZone }),
+      }))
+    : [];
 
   return (
     <EaseHeight>
@@ -108,14 +134,14 @@ export function CueFoundSection({
                 Cue ran these searches. Pick one to edit it.
               </p>
               <ul className="mt-1 flex flex-col items-start gap-0.5">
-                {searches.map((search) => (
-                  <li className="max-w-full" key={search}>
+                {searches.map(({ edit, label }) => (
+                  <li className="max-w-full" key={edit}>
                     <button
                       className="max-w-full truncate rounded px-1 py-0.5 text-left font-mono text-foreground text-xs hover:bg-muted"
-                      onClick={() => onEditSearch(search)}
+                      onClick={() => onEditSearch(edit)}
                       type="button"
                     >
-                      {search}
+                      {label}
                     </button>
                   </li>
                 ))}
@@ -128,20 +154,19 @@ export function CueFoundSection({
             className="flex flex-col"
             role="listbox"
           >
-            {visible.map((thread, index) => (
+            {threads.map((thread, index) => (
               <ThreadRow
                 compact={isMobile}
                 expandedPreview={expandedPreview}
-                hasAnySelection={false}
+                hasAnySelection={hasAnySelection}
                 index={index}
-                isFocused={false}
-                isSelected={false}
+                isFocused={index === focusedIndex}
+                isSelected={isSelected(getListThreadKey(thread))}
                 key={getListThreadKey(thread)}
                 layout={layout}
-                onOpen={openAt}
-                onSelectRangeTo={NOOP}
-                onToggleSelect={NOOP}
-                selectionEnabled={false}
+                onOpen={onOpen}
+                onSelectRangeTo={onSelectRangeTo}
+                onToggleSelect={onToggleSelect}
                 thread={thread}
                 userEmail={userEmail}
                 userLabels={userLabels}
@@ -165,15 +190,15 @@ export function CueFoundSection({
               Cue&apos;s matches are in the results below.
             </p>
           ) : null}
-          {threads.length > VISIBLE_ROWS ? (
+          {totalCount > CUE_FOUND_VISIBLE_ROWS ? (
             <Button
               className="mx-2 my-1"
-              onClick={() => setShowAll((all) => !all)}
+              onClick={onToggleShowAll}
               size="xs-2"
               type="button"
               variant="ghostMuted"
             >
-              {showAll ? "Show fewer" : `Show all ${threads.length}`}
+              {showAll ? "Show fewer" : `Show all ${totalCount}`}
             </Button>
           ) : null}
         </section>
