@@ -124,6 +124,34 @@ describe("offline mail cache", () => {
     expect(await (await response).text()).toBe("Saved mailbox");
   });
 
+  it("hands the page a streaming document as soon as it starts, and saves all of it", async () => {
+    const cache = makeCache();
+    const encoder = new TextEncoder();
+    let finish!: () => void;
+    network.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode("Shell "));
+            finish = () => {
+              controller.enqueue(encoder.encode("and first rows"));
+              controller.close();
+            };
+          },
+        }),
+        { headers: { "content-type": "text/html" } },
+      ),
+    );
+    const response = await cache.handle(documentRequest(), waitUntil);
+    expect(await storage.match(mailKey)).toBeUndefined();
+    finish();
+    expect(await response.text()).toBe("Shell and first rows");
+    await Promise.all(pending);
+    expect(await (await storage.match(mailKey))?.text()).toBe(
+      "Shell and first rows",
+    );
+  });
+
   it("does not return saved mail if logout starts during the cache lookup", async () => {
     const cache = makeCache();
     const lookupStarted = Promise.withResolvers<void>();
