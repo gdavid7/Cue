@@ -1,3 +1,5 @@
+import { asSchema, jsonSchema } from "ai";
+import type { JSONSchema7 } from "@ai-sdk/provider";
 import { z } from "zod";
 import { createGenerateObject } from "@/utils/llms";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
@@ -44,18 +46,21 @@ ${cleanedPromptFile}
     emailAccount.userId,
   );
 
+  const ruleSchema = createRuleSchema(
+    emailAccount.account.provider,
+    integrationActionsEnabled,
+  );
+  // The model is shown the rule schema, but each rule is checked here rather
+  // than by generateObject: a schema failure there fails every rule at once
+  // and is retried with the same prompt, which fails the same way.
   const aiResponse = await generateObject({
     ...modelOptions,
     prompt,
     instructions: system,
-    schema: z.object({
-      rules: z.array(
-        createRuleSchema(
-          emailAccount.account.provider,
-          integrationActionsEnabled,
-        ),
-      ),
-    }),
+    schema: jsonSchema<{ rules?: unknown }>(
+      asSchema(z.object({ rules: z.array(ruleSchema) }))
+        .jsonSchema as JSONSchema7,
+    ),
   });
 
   if (!aiResponse.object) {
@@ -67,7 +72,26 @@ ${cleanedPromptFile}
     throw new Error("No rules found in AI response");
   }
 
-  const rules = aiResponse.object.rules;
+  const generated = Array.isArray(aiResponse.object.rules)
+    ? aiResponse.object.rules
+    : [];
+  const parsed = generated.map((rule) => ruleSchema.safeParse(rule));
+  const rules = parsed.flatMap((result) =>
+    result.success ? [result.data] : [],
+  );
+  const firstError = parsed.find((result) => !result.success)?.error;
+
+  if (firstError) {
+    logger.warn("Dropped invalid rules from AI response", {
+      invalidCount: generated.length - rules.length,
+      generatedCount: generated.length,
+    });
+    if (rules.length === 0) {
+      throw new Error(
+        `The generated rule was invalid: ${firstError.issues[0]?.message}`,
+      );
+    }
+  }
 
   return rules;
 }
