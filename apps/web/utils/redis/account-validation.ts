@@ -111,6 +111,45 @@ export async function getEmailAccount({
   );
 }
 
+/**
+ * Reads one key per account for the accounts the user owns, in the same
+ * command as the ownership check, so a frequent poll costs one Redis read.
+ * Unowned accounts are left out. Ownership not cached yet falls back to
+ * `getEmailAccount`.
+ */
+export async function readKeyForOwnedAccounts({
+  userId,
+  emailAccountIds,
+  keyFor,
+}: {
+  userId: string;
+  emailAccountIds: string[];
+  keyFor: (emailAccountId: string) => string;
+}): Promise<Map<string, unknown>> {
+  const values = await redis.mget<unknown[]>(
+    ...emailAccountIds.map((emailAccountId) =>
+      getValidationKey({ userId, emailAccountId }),
+    ),
+    ...emailAccountIds.map(keyFor),
+  );
+  const owned = await Promise.all(
+    emailAccountIds.map(
+      async (emailAccountId, index) =>
+        values[index] != null ||
+        (await getEmailAccount({ userId, emailAccountId })) !== null,
+    ),
+  );
+  const result = new Map<string, unknown>();
+  emailAccountIds.forEach((emailAccountId, index) => {
+    if (owned[index])
+      result.set(
+        emailAccountId,
+        values[emailAccountIds.length + index] ?? null,
+      );
+  });
+  return result;
+}
+
 async function lookUpEmailAccount(
   key: string,
   emailAccountId: string,
