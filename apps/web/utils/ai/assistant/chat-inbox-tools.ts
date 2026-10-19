@@ -530,7 +530,7 @@ const gmailSearchInboxInputSchema = z.object({
     .min(1)
     .max(500)
     .describe(
-      "Gmail search query. Gmail search syntax is supported. Use from:person@example.com for an exact sender search.",
+      "Gmail search query. Gmail search syntax is supported. Use from:person@example.com for an exact sender search. Dates: after:YYYY/MM/DD, before:YYYY/MM/DD; relative: newer_than:2d, older_than:1y.",
     ),
   ...searchInboxBaseFields,
 });

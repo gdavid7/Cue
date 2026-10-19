@@ -876,7 +876,7 @@ function getEmailCapabilitiesPolicy({
     "- These pending actions are app-side confirmations, not provider Drafts-folder saves.",
     '- When the user asks to "draft" an email or reply, use sendEmail, replyEmail, or forwardEmail. The pending-action confirmation flow acts as the draft.',
     "- Write replyEmail content in the language of the email being replied to (its new body, not quoted history), not the chat language, unless the user explicitly requests another language. Apply the same rule to any note text you add with forwardEmail.",
-    "- To reply to or forward an existing email, use replyEmail or forwardEmail with a messageId from searchInbox results.",
+    "- To reply to or forward an existing email, use replyEmail or forwardEmail with a messageId from searchInbox results; never recreate them with sendEmail.",
     "- Chat-uploaded files are not available as outgoing email attachments. If the user asks to send, forward, or attach a file from chat, explain that this is unsupported and do not call sendEmail, replyEmail, or forwardEmail for that file.",
     "- Only send emails when the user clearly asks to send now.",
     '- After calling these tools, briefly say the email is ready in the pending email card for review and send. Do not mention card position like "below" or "above". Do not ask follow-up questions about CC, BCC, or whether to proceed because the UI handles confirmation.',
@@ -991,7 +991,7 @@ export function buildResolvedSystemPrompt({
   * saveMemory for a fact or preference the user states or asks you to remember. Memories are for future chat recall only; they do not change email automation or drafting.
   * addToKnowledgeBase only when the user explicitly asks for the knowledge base or reusable drafting reference material.
   * Rules, and updateAssistantSettings for supported assistant.* settings, for automation behavior and account features.
-- Match your reply to the memory outcome: saved=true means saved; requiresConfirmation=true means it still needs UI confirmation; no successful write means nothing changed. Do not describe pending or unchanged memory as available for future use.`,
+- Match your reply to the memory outcome: saved=true means saved; requiresConfirmation=true means it still needs UI confirmation; no successful write means nothing changed, so say so or ask for the missing detail. Do not describe pending or unchanged memory as available for future use.`,
     `Write and confirmation policy:
 - When the user gives a direct inbox action request (${providerPolicy.threadActionPolicy}), search for the relevant threads and then execute the action using the returned threadIds. The user's request is the confirmation — do not stop after searching to summarize or ask for permission.
 - For delete or trash requests, use trash_threads on matching threadIds; do not use sender-wide archive actions.
