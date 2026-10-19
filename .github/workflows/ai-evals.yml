@@ -54,11 +54,17 @@ jobs:
         env:
           TEST_FILTER: ${{ github.event.inputs.test_filter || '' }}
           RUN_AI_TESTS: "true"
-          EVAL_MODELS: ${{ github.event.inputs.eval_models || '' }}
+          # An empty value falls back to the catalog's OpenRouter default, which needs OPENROUTER_API_KEY
+          EVAL_MODELS: ${{ github.event.inputs.eval_models || 'claude-sonnet-5.5-anthropic' }}
           EVAL_REPORT_PATH: "eval-results/report.md"
-          # LLM Configuration - using OpenRouter
-          DEFAULT_LLMS: openrouter:anthropic/claude-sonnet-4.5
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # LLM Configuration - Anthropic API directly, matching production's models
+          DEFAULT_LLMS: anthropic:claude-sonnet-5-5
+          CHAT_LLMS: anthropic:claude-sonnet-5-5
+          ECONOMY_LLMS: anthropic:claude-haiku-5-5
+          NANO_LLMS: anthropic:claude-haiku-5-5
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVAL_JUDGE_PROVIDER: anthropic
+          EVAL_JUDGE_MODEL: claude-sonnet-5-5
           # Minimal env vars required for test harness
           DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/postgres"
           AUTH_SECRET: "test-secret"
