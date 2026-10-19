@@ -31,6 +31,8 @@ export type SearchIntent = {
   unreadOnly: boolean;
   explanation: string;
   isQuestion: boolean;
+  /** The account's time zone, which dates in the searches are read in. */
+  timeZone: string;
 };
 
 /**
@@ -184,6 +186,7 @@ export function toSearchIntent(
     unreadOnly: parts.unread && context.provider === "microsoft",
     explanation: parts.explanation.trim(),
     isQuestion: parts.isQuestion,
+    timeZone: context.timeZone,
   };
 }
 

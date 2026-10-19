@@ -17,6 +17,8 @@ import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-
 import { Button } from "@/components/ui/button";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { EmailLabels } from "@/providers/email-label-types";
+import { describeSearch } from "@/utils/mail-search/describe-search";
+import { readableSearch } from "@/utils/mail-search/generated-search";
 
 const VISIBLE_ROWS = 3;
 const PLACEHOLDER_WIDTHS = ["w-3/4", "w-2/3", "w-5/6"];
@@ -71,7 +73,15 @@ export function CueFoundSection({
     const thread = visible[index];
     if (thread) onOpenThread(thread);
   });
-  const searches = intent ? [...intent.editableSearches, ...widerSearches] : [];
+  const searches = intent
+    ? [...intent.searches, ...widerSearches].map((search, index) => ({
+        // What the search box takes back, with days it can read.
+        edit:
+          intent.editableSearches[index] ??
+          readableSearch(search, intent.timeZone),
+        label: describeSearch(search, { timeZone: intent.timeZone }),
+      }))
+    : [];
 
   return (
     <EaseHeight>
@@ -108,14 +118,14 @@ export function CueFoundSection({
                 Cue ran these searches. Pick one to edit it.
               </p>
               <ul className="mt-1 flex flex-col items-start gap-0.5">
-                {searches.map((search) => (
-                  <li className="max-w-full" key={search}>
+                {searches.map(({ edit, label }) => (
+                  <li className="max-w-full" key={edit}>
                     <button
                       className="max-w-full truncate rounded px-1 py-0.5 text-left font-mono text-foreground text-xs hover:bg-muted"
-                      onClick={() => onEditSearch(search)}
+                      onClick={() => onEditSearch(edit)}
                       type="button"
                     >
-                      {search}
+                      {label}
                     </button>
                   </li>
                 ))}

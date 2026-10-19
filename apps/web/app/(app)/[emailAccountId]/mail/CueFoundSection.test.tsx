@@ -8,13 +8,14 @@ import { CueFoundSection } from "./CueFoundSection";
 vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => false }));
 
 const INTENT = {
-  searches: ["from:sarah has:attachment after:1756710000 (lease OR contract)"],
+  searches: ["from:sarah has:attachment after:1788393600 (lease OR contract)"],
   editableSearches: [
-    "from:sarah has:attachment after:2026/09/01 (lease OR contract)",
+    "from:sarah has:attachment after:2026/09/03 (lease OR contract)",
   ],
   unreadOnly: false,
   explanation: "Mail from Sarah with attachments in September",
   isQuestion: false,
+  timeZone: "UTC",
 };
 
 afterEach(cleanup);
@@ -50,7 +51,7 @@ describe("CueFoundSection", () => {
   it("opens the searches Cue ran from its reading, to edit one", () => {
     const { onEditSearch } = renderSection({
       stage: "done",
-      widerSearches: ["from:sarah lease OR contract"],
+      widerSearches: ["from:sarah lease OR contract after:1788393600"],
     });
 
     const reading = screen.getByRole("button", {
@@ -59,14 +60,22 @@ describe("CueFoundSection", () => {
     expect(reading.textContent).toContain("searched more widely");
     fireEvent.click(reading);
     fireEvent.click(
-      screen.getByRole("button", { name: "from:sarah lease OR contract" }),
+      screen.getByRole("button", {
+        name: "from:sarah lease OR contract after Sep 3, 2026",
+      }),
     );
 
-    expect(onEditSearch).toHaveBeenCalledWith("from:sarah lease OR contract");
-    // Dates read as days to edit, not the epoch seconds Gmail is sent.
-    expect(
-      screen.getByRole("button", { name: INTENT.editableSearches[0] }),
-    ).toBeTruthy();
+    expect(onEditSearch).toHaveBeenCalledWith(
+      "from:sarah lease OR contract after:2026/09/03",
+    );
+    // Dates read as days in the user's locale, not the epoch seconds Gmail
+    // is sent, while editing hands back a search the box can read.
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "from:sarah has:attachment after Sep 3, 2026 (lease OR contract)",
+      }),
+    );
+    expect(onEditSearch).toHaveBeenLastCalledWith(INTENT.editableSearches[0]);
   });
 
   it("says its searches found nothing only when told they all answered", () => {

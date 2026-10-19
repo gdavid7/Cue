@@ -16,6 +16,7 @@ const INTENT: CueSearchIntent = {
   unreadOnly: false,
   explanation: "Mail from Sarah with attachments mentioning lease or contract",
   isQuestion: false,
+  timeZone: "UTC",
 };
 const IDLE = { settled: false, count: 0 };
 const EMPTY = { settled: true, count: 0 };

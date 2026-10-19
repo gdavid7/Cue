@@ -115,6 +115,7 @@ export function useCueSearch({
   const primary = useCueFoundThreads({
     emailAccountId,
     searches,
+    timeZone: intent?.timeZone,
     unreadOnly: Boolean(intent?.unreadOnly),
     enabled: natural && searches.length > 0,
   });
@@ -125,6 +126,7 @@ export function useCueSearch({
   const wider = useCueFoundThreads({
     emailAccountId,
     searches: widerSearches,
+    timeZone: intent?.timeZone,
     unreadOnly: false,
     enabled: widening,
   });
@@ -186,11 +188,14 @@ export function useCueSearch({
 function useCueFoundThreads({
   emailAccountId,
   searches,
+  timeZone,
   unreadOnly,
   enabled,
 }: {
   emailAccountId: string;
   searches: string[];
+  /** The account's, which Outlook's received dates are read in. */
+  timeZone: string | undefined;
   /** Keeps only unread mail, for a provider whose search can't. */
   unreadOnly: boolean;
   enabled: boolean;
@@ -201,6 +206,7 @@ function useCueFoundThreads({
     const context = {
       labels: userLabels,
       provider: searchProvider(provider),
+      timeZone,
     };
     const predicates = searches.map((q) =>
       threadsQueryToPredicate({ q }, undefined, context),
@@ -213,7 +219,7 @@ function useCueFoundThreads({
       kind: "all",
       predicates: [matching, { kind: "read", value: false }],
     };
-  }, [searches, unreadOnly, userLabels, provider]);
+  }, [searches, timeZone, unreadOnly, userLabels, provider]);
   const state = useEngineMailThreads({
     emailAccountId,
     query: PREDICATE_ONLY_QUERY,
