@@ -113,6 +113,7 @@ export function ThreadActionsMenu({
     unsubscribeLabel,
     isAutoArchived,
     isAutoArchiveStatusLoading,
+    isAutoArchiveStatusUnknown,
     isUpdatingAutoArchive,
     onToggleAutoArchive,
     onUnsubscribe,
@@ -276,22 +277,30 @@ export function ThreadActionsMenu({
           )}
 
           {canManageAutoArchive ? (
-            <DropdownMenuItem
-              disabled={senderStatusLoading}
-              onSelect={onToggleAutoArchive}
+            <Tooltip
+              content="Couldn't check Gmail filters right now"
+              hide={!isAutoArchiveStatusUnknown}
+              side="left"
             >
-              <MenuItemIcon loading={senderStatusLoading}>
-                {isAutoArchived ? (
-                  <ArchiveRestoreIcon className="mr-2 size-4" />
-                ) : (
-                  <ArchiveIcon className="mr-2 size-4" />
-                )}
-              </MenuItemIcon>
-              {isAutoArchived
-                ? "Show this sender in inbox again"
-                : "Skip inbox for this sender"}
-              <MenuShortcut id="toggleAutoArchive" />
-            </DropdownMenuItem>
+              <span className="block">
+                <DropdownMenuItem
+                  disabled={senderStatusLoading || isAutoArchiveStatusUnknown}
+                  onSelect={onToggleAutoArchive}
+                >
+                  <MenuItemIcon loading={senderStatusLoading}>
+                    {isAutoArchived ? (
+                      <ArchiveRestoreIcon className="mr-2 size-4" />
+                    ) : (
+                      <ArchiveIcon className="mr-2 size-4" />
+                    )}
+                  </MenuItemIcon>
+                  {isAutoArchived
+                    ? "Show this sender in inbox again"
+                    : "Skip inbox for this sender"}
+                  <MenuShortcut id="toggleAutoArchive" />
+                </DropdownMenuItem>
+              </span>
+            </Tooltip>
           ) : null}
 
           {openUrl ? <DropdownMenuSeparator /> : null}
