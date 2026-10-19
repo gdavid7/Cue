@@ -37,6 +37,9 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
     userEmail: "user@example.com",
   }),
 }));
+vi.mock("@/app/(app)/[emailAccountId]/mail/use-unsubscribe-sender", () => ({
+  UnsubscribeConfirmDialog: () => null,
+}));
 vi.mock("@/app/(app)/[emailAccountId]/mail/use-sender-commands", () => ({
   useSenderCommands: () => ({
     canManageAutoArchive: false,
@@ -48,6 +51,7 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/use-sender-commands", () => ({
     onToggleAutoArchive: vi.fn(),
     onUnsubscribe: vi.fn(),
     PremiumModal: () => null,
+    unsubscribeConfirm: {},
   }),
 }));
 
