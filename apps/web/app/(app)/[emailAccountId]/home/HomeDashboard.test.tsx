@@ -214,6 +214,57 @@ describe("HomeDashboard row actions", () => {
     expect(mocks.toastUndo).not.toHaveBeenCalled();
   });
 
+  it.each([
+    "Archive conversation",
+    "Delete conversation",
+  ])("%s takes the row out of the saved copy too", async (action) => {
+    window.localStorage.clear();
+    resetBrowserCacheForTesting("user");
+    const timeZone = "UTC";
+    writeCachedToday({
+      emailAccountId: "account",
+      timeZone,
+      data: mocks.home.data as GetHomeResponse,
+    });
+    renderToday();
+
+    await act(async () => {
+      fireEvent.click(
+        within(rowFor("first")).getAllByRole("button", { name: action })[0],
+      );
+    });
+
+    const saved = readCachedToday({ emailAccountId: "account", timeZone });
+    expect(saved?.needsYou.map((row) => row.threadId)).toEqual(["second"]);
+  });
+
+  it("keeps a row the engine refused in the saved copy", async () => {
+    mocks.client.submitConversations.mockResolvedValue({
+      status: "rejected",
+      code: "queue_full",
+    });
+    window.localStorage.clear();
+    resetBrowserCacheForTesting("user");
+    const timeZone = "UTC";
+    writeCachedToday({
+      emailAccountId: "account",
+      timeZone,
+      data: mocks.home.data as GetHomeResponse,
+    });
+    renderToday();
+
+    await act(async () => {
+      fireEvent.click(
+        within(rowFor("first")).getAllByRole("button", {
+          name: "Archive conversation",
+        })[0],
+      );
+    });
+
+    const saved = readCachedToday({ emailAccountId: "account", timeZone });
+    expect(saved?.needsYou).toHaveLength(2);
+  });
+
   it("opens the conversation with a reply started, returning to Today", () => {
     renderToday();
 

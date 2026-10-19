@@ -1,7 +1,7 @@
 import "../../styles/globals.css";
 import type { Metadata } from "next";
 import type React from "react";
-import { cookies, headers } from "next/headers";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { Inter } from "next/font/google";
@@ -27,6 +27,7 @@ import { SettingsDialog } from "@/app/(app)/settings/SettingsDialog";
 import { AnnouncementDialog } from "@/components/feature-announcements/AnnouncementDialog";
 import { captureException } from "@/utils/error";
 import prisma from "@/utils/prisma";
+import { recordLastLogin } from "@/utils/user/last-login";
 import { createScopedLogger } from "@/utils/logger";
 import { getEnabledMailboxProviders } from "@/utils/oauth/provider-config";
 import { getOrderedEmailAccounts } from "@/utils/mail-url.server";
@@ -73,25 +74,17 @@ export default async function AppLayout({
 
   if (!session?.user.email) redirect("/login");
 
-  const [cookieStore, headerStore, accounts, aiAccess] = await Promise.all([
+  const [cookieStore, accounts, aiAccess] = await Promise.all([
     cookies(),
-    headers(),
     getOrderedEmailAccounts(session.user.id),
     getUserAiAccess(session.user.id),
   ]);
   const isClosed = cookieStore.get("left-sidebar:state")?.value === "false";
 
-  // Fetching a page ahead isn't the user showing up.
-  const isPrefetch = headerStore.has("next-router-prefetch");
-
   after(async () => {
-    if (isPrefetch) return;
     const email = session.user.email;
     try {
-      await prisma.user.update({
-        where: { email },
-        data: { lastLogin: new Date() },
-      });
+      await recordLastLogin(email);
     } catch (error) {
       logger.error("Failed to update last login", { email, error });
       captureException(error, { userEmail: email });
