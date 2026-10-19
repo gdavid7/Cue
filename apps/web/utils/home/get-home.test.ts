@@ -389,7 +389,7 @@ describe("getHomeData", () => {
         id: "a1",
         kind: "draft",
         threadId: "sarah",
-        title: "Reply draft: Renewal",
+        title: "Suggested reply: Renewal",
       }),
     ]);
     expect(prisma.executedAction.findMany).toHaveBeenCalledWith(

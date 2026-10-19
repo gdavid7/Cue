@@ -58,8 +58,13 @@ export async function trackSentDraftStatus({
           threadId: threadId,
         },
         type: ActionType.DRAFT_EMAIL,
-        draftId: { not: null },
         draftSendLog: null,
+        // A mailbox draft from before replies became suggestions, or a
+        // suggestion still waiting in Cue (sent as it was, or not used).
+        OR: [
+          { draftId: { not: null } },
+          { draftStatus: DraftEmailStatus.PENDING, content: { not: null } },
+        ],
       },
       orderBy: {
         createdAt: "desc",
@@ -91,16 +96,18 @@ export async function trackSentDraftStatus({
         draftId: true,
         messageId: true,
         content: true,
+        executedActionId: true,
         emailAccount: { select: { signature: true } },
       },
     }),
   ]);
 
   // Saving a suggested reply rewrites the thread's existing draft, rule draft
-  // included, so whichever was written last is what the user started from.
+  // included, and editing the rule's suggestion makes one, so whichever was
+  // written last is what the user started from.
   if (
     suggestedReplyDraft &&
-    (!executedAction?.draftId ||
+    (!executedAction ||
       suggestedReplyDraft.updatedAt > executedAction.createdAt)
   ) {
     await trackSentSuggestedReplyDraft({
@@ -114,12 +121,24 @@ export async function trackSentDraftStatus({
     return;
   }
 
-  if (!executedAction?.draftId) {
-    logger.info("No corresponding AI draft action with draftId found");
+  if (!executedAction) {
+    logger.info("No corresponding AI draft or reply suggestion found");
     return;
   }
 
   const executedActionId = executedAction.id;
+
+  if (!executedAction.draftId) {
+    await trackSentReplySuggestion({
+      emailAccountId,
+      sentMessageId,
+      executedAction,
+      message,
+      provider,
+      logger,
+    });
+    return;
+  }
 
   const {
     draftExists,
@@ -288,6 +307,22 @@ export async function cleanupThreadAIDrafts({
   logger.info("Starting cleanup of old AI drafts for thread");
 
   try {
+    // Suggestions for earlier messages were never used: nothing in the
+    // mailbox to delete, only their state to settle.
+    await prisma.executedAction.updateMany({
+      where: {
+        executedRule: {
+          emailAccountId,
+          threadId,
+          messageId: { not: excludeMessageId },
+        },
+        type: ActionType.DRAFT_EMAIL,
+        draftId: null,
+        draftStatus: DraftEmailStatus.PENDING,
+      },
+      data: { draftStatus: DraftEmailStatus.CLEANED_UP_UNUSED },
+    });
+
     // Find draft actions that are still pending, or where the user replied
     // without using the draft and the old draft may still need cleanup.
     // Excludes drafts for the current message to avoid deleting a draft that was just created
@@ -553,6 +588,7 @@ async function trackSentSuggestedReplyDraft({
     draftId: string;
     messageId: string;
     content: string;
+    executedActionId: string | null;
     emailAccount: { signature: string | null };
   };
   message: ParsedMessage;
@@ -593,13 +629,28 @@ async function trackSentSuggestedReplyDraft({
   });
 
   // A draft still in the mailbox means this send was some other message.
-  if (
-    !draftExists &&
-    isDraftSentStatus(
-      getSentDraftStatus({ similarityScore, sentMessageRepliesToSource }),
-    )
-  ) {
+  const draftStatus =
+    draftExists || sentMessageRepliesToSource === false
+      ? DraftEmailStatus.REPLIED_WITHOUT_DRAFT
+      : getSentDraftStatus({ similarityScore, sentMessageRepliesToSource });
+  if (isDraftSentStatus(draftStatus)) {
     await recordFirstSuggestedReplySent(emailAccountId);
+  }
+  // The rule's suggestion this draft began as was used, or not, with it.
+  if (suggestedReplyDraft.executedActionId) {
+    const executedActionId = suggestedReplyDraft.executedActionId;
+    await withPrismaRetry(
+      () =>
+        prisma.executedAction.updateMany({
+          where: {
+            id: executedActionId,
+            draftId: null,
+            draftStatus: DraftEmailStatus.PENDING,
+          },
+          data: { draftStatus },
+        }),
+      { logger },
+    );
   }
 
   if (sentMessageRepliesToSource === false) return;
@@ -608,6 +659,110 @@ async function trackSentSuggestedReplyDraft({
     emailAccountId,
     draftSendLogId: draftSendLog.id,
     draftText: suggestedReplyDraft.content,
+    sentText,
+    similarityScore,
+    provider,
+    logger,
+  });
+}
+
+/**
+ * A reply sent while the rule's suggestion waited in Cue: sent as suggested
+ * (from the reader, without an edit), or written some other way. There is no
+ * mailbox draft to have disappeared, so only how close the sent text is to the
+ * suggestion says it was used. Either way the comparison teaches reply
+ * memories, as a draft's does.
+ */
+async function trackSentReplySuggestion({
+  emailAccountId,
+  sentMessageId,
+  executedAction,
+  message,
+  provider,
+  logger,
+}: {
+  emailAccountId: string;
+  sentMessageId: string;
+  executedAction: {
+    id: string;
+    content: string | null;
+    executedRuleId: string;
+    executedRule: {
+      messageId: string;
+      emailAccount: { signature: string | null } | null;
+    };
+  };
+  message: ParsedMessage;
+  provider: EmailProvider;
+  logger: Logger;
+}) {
+  const executedActionId = executedAction.id;
+  const {
+    sentMessageRepliesToSource,
+    similarityScore,
+    sentText,
+    draftSendLogData,
+  } = await compareSentReplyWithDraft({
+    draftId: null,
+    draftText: executedAction.content,
+    sourceMessageId: executedAction.executedRule.messageId,
+    accountSignature: executedAction.executedRule.emailAccount?.signature,
+    sentMessageId,
+    message,
+    provider,
+    logger,
+  });
+
+  const draftStatus =
+    sentMessageRepliesToSource !== false &&
+    similarityScore >= DRAFT_SENT_SIMILARITY_THRESHOLD
+      ? DraftEmailStatus.LIKELY_SENT
+      : DraftEmailStatus.REPLIED_WITHOUT_DRAFT;
+
+  const [draftSendLog] = await withPrismaRetry(
+    () =>
+      prisma.$transaction([
+        prisma.draftSendLog.create({
+          data: { executedActionId, ...draftSendLogData },
+        }),
+        prisma.executedAction.update({
+          where: { id: executedActionId },
+          data: { draftStatus },
+        }),
+      ]),
+    { logger },
+  );
+
+  logger.info("Created draft send log for reply suggestion", {
+    executedActionId,
+    similarityScore,
+    draftStatus,
+    sentMessageRepliesToSource,
+  });
+
+  const wasSent = isDraftSentStatus(draftStatus);
+  if (wasSent) {
+    after(() =>
+      trackFirstTimeEvent({
+        emailAccountId,
+        event: FIRST_TIME_EVENTS.FIRST_DRAFT_SENT,
+      }),
+    );
+    await recordFirstSuggestedReplySent(emailAccountId);
+  }
+  await (wasSent
+    ? replaceMessagingDraftNotificationsWithDraftSentState
+    : replaceMessagingDraftNotificationsWithHandledOnWebState)({
+    executedRuleId: executedAction.executedRuleId,
+    logger,
+  });
+
+  if (sentMessageRepliesToSource === false) return;
+
+  queueReplyMemoryLearning({
+    emailAccountId,
+    draftSendLogId: draftSendLog.id,
+    draftText: executedAction.content,
     sentText,
     similarityScore,
     provider,
@@ -625,7 +780,8 @@ async function compareSentReplyWithDraft({
   provider,
   logger,
 }: {
-  draftId: string;
+  /** Null for a suggestion that never became a mailbox draft. */
+  draftId: string | null;
   draftText: string | null;
   sourceMessageId: string;
   accountSignature: string | null | undefined;
@@ -635,7 +791,7 @@ async function compareSentReplyWithDraft({
   logger: Logger;
 }) {
   const [draft, sourceMessage] = await Promise.all([
-    provider.getDraft(draftId),
+    draftId ? provider.getDraft(draftId) : null,
     provider.getMessage(sourceMessageId).catch((error) => {
       logger.warn("Failed to load source message for sent draft tracking", {
         error,

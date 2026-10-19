@@ -407,8 +407,8 @@ async function getAgentTasks({
     prisma.executedAction.findMany({
       where: {
         type: ActionType.DRAFT_EMAIL,
+        // A mailbox draft from before, or a suggestion waiting in Cue.
         draftStatus: DraftEmailStatus.PENDING,
-        draftId: { not: null },
         // Scoped through the rule, whose [emailAccountId, createdAt] index this uses.
         executedRule: {
           emailAccountId,
@@ -469,8 +469,8 @@ async function getAgentTasks({
       id: d.id,
       kind: "draft" as const,
       threadId: d.executedRule.threadId,
-      title: d.subject ? `Reply draft: ${d.subject}` : "Reply draft",
-      detail: "Draft ready for your review",
+      title: d.subject ? `Suggested reply: ${d.subject}` : "Suggested reply",
+      detail: "Ready for your review",
       at: d.createdAt.toISOString(),
     })),
     ...scheduled.map((s) => ({

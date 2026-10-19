@@ -7,15 +7,11 @@ import {
 } from "@/generated/prisma/enums";
 import { createMockEmailProvider } from "@/utils/__mocks__/email-provider";
 import { runActionFunction } from "@/utils/ai/actions";
-import {
-  resolveDraftAttachments,
-  selectDraftAttachmentsForRule,
-} from "@/utils/attachments/draft-attachments";
+import { resolveDraftAttachments } from "@/utils/attachments/draft-attachments";
 import {
   getMessagingRuleNotificationResult,
   sendMessagingRuleNotification,
 } from "@/utils/messaging/rule-notifications";
-import { handlePreviousDraftDeletion } from "@/utils/ai/choose-rule/draft-management";
 import { sendColdEmailNotification } from "@/utils/cold-email/send-notification";
 import type { ParsedMessage } from "@/utils/types";
 import prisma from "@/utils/prisma";
@@ -67,12 +63,6 @@ vi.mock("@/utils/messaging/rule-notifications", () => ({
     kind: "interactive",
   }),
   sendMessagingRuleNotification: vi.fn().mockResolvedValue(true),
-}));
-
-vi.mock("@/utils/ai/choose-rule/draft-management", () => ({
-  handlePreviousDraftDeletion: vi.fn().mockResolvedValue({
-    shouldCreateDraft: true,
-  }),
 }));
 
 vi.mock("@/utils/cold-email/send-notification", () => ({
@@ -129,119 +119,12 @@ describe("runActionFunction", () => {
       kind: "interactive",
     });
     vi.mocked(sendMessagingRuleNotification).mockResolvedValue(true);
-    vi.mocked(handlePreviousDraftDeletion).mockResolvedValue({
-      shouldCreateDraft: true,
-    });
   });
 
-  it("passes resolved drive attachments into draft creation", async () => {
+  // The founder's call: a rule's reply is a suggestion kept in Cue. Nothing
+  // reaches the mailbox until the user edits it.
+  it("keeps a rule's reply as a suggestion without writing a mailbox draft", async () => {
     const client = createMockEmailProvider();
-
-    vi.mocked(resolveDraftAttachments).mockResolvedValue([
-      {
-        filename: "lease.pdf",
-        content: Buffer.from("pdf"),
-        contentType: "application/pdf",
-      },
-    ]);
-
-    await runActionFunction({
-      client,
-      email,
-      action: {
-        id: "action-1",
-        type: ActionType.DRAFT_EMAIL,
-        content: "Attached the requested PDF.",
-        selectedAttachments: [
-          {
-            driveConnectionId: "drive-1",
-            fileId: "file-1",
-            filename: "lease.pdf",
-            mimeType: "application/pdf",
-            reason: "Matched the requested property",
-          },
-        ],
-      },
-      emailAccount,
-      executedRule: {
-        id: "executed-rule-1",
-        threadId: "thread-1",
-        emailAccountId: "account-1",
-        ruleId: "rule-1",
-      } as any,
-      logger,
-    });
-
-    expect(resolveDraftAttachments).toHaveBeenCalledWith({
-      emailAccountId: "account-1",
-      userId: "user-1",
-      selectedAttachments: [
-        {
-          driveConnectionId: "drive-1",
-          fileId: "file-1",
-          filename: "lease.pdf",
-          mimeType: "application/pdf",
-          reason: "Matched the requested property",
-        },
-      ],
-      logger: expect.anything(),
-    });
-
-    expect(client.draftEmail).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        content: "Attached the requested PDF.",
-        attachments: [
-          expect.objectContaining({
-            filename: "lease.pdf",
-            contentType: "application/pdf",
-          }),
-        ],
-      }),
-      ["user@example.com", "me.elsewhere@gmail.com"],
-    );
-  });
-
-  it("skips draft attachments when no selected attachments were persisted", async () => {
-    const client = createMockEmailProvider();
-
-    await runActionFunction({
-      client,
-      email,
-      action: {
-        id: "action-1",
-        type: ActionType.DRAFT_EMAIL,
-        content: "Attached the requested PDF.",
-      },
-      emailAccount,
-      executedRule: {
-        id: "executed-rule-1",
-        threadId: "thread-1",
-        emailAccountId: "account-1",
-        ruleId: "rule-1",
-      } as any,
-      logger,
-    });
-
-    expect(selectDraftAttachmentsForRule).not.toHaveBeenCalled();
-    expect(resolveDraftAttachments).not.toHaveBeenCalled();
-    expect(client.draftEmail).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        content: "Attached the requested PDF.",
-        attachments: [],
-      }),
-      ["user@example.com", "me.elsewhere@gmail.com"],
-    );
-  });
-
-  it("skips mailbox draft creation when preserving an existing edited draft", async () => {
-    const client = createMockEmailProvider();
-    vi.mocked(handlePreviousDraftDeletion).mockResolvedValueOnce({
-      shouldCreateDraft: false,
-      existingDraftId: "draft-1",
-      reason: "modified",
-    });
 
     const result = await runActionFunction({
       client,
@@ -249,7 +132,7 @@ describe("runActionFunction", () => {
       action: {
         id: "action-1",
         type: ActionType.DRAFT_EMAIL,
-        content: "Replacement draft.",
+        content: "Thursday works for me.",
       },
       emailAccount,
       executedRule: {
@@ -261,8 +144,42 @@ describe("runActionFunction", () => {
       logger,
     });
 
-    expect(result).toEqual({ draftId: "" });
+    expect(result).toBeUndefined();
+    expect(client.draftEmail).not.toHaveBeenCalled();
+    expect(client.deleteDraft).not.toHaveBeenCalled();
     expect(resolveDraftAttachments).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { delivered: false, kind: "none" },
+    { delivered: true, kind: "view_only" },
+  ] as const)("never falls back to a mailbox draft for a legacy chat draft ($kind)", async (notificationResult) => {
+    const client = createMockEmailProvider();
+    vi.mocked(getMessagingRuleNotificationResult).mockResolvedValueOnce(
+      notificationResult,
+    );
+
+    await runActionFunction({
+      client,
+      email,
+      action: {
+        id: "action-1",
+        type: ActionType.DRAFT_EMAIL,
+        messagingChannelId: "channel-1",
+        content: "Draft in chat",
+      },
+      emailAccount,
+      executedRule: {
+        id: "executed-rule-1",
+        threadId: "thread-1",
+        emailAccountId: "account-1",
+        ruleId: "rule-1",
+        actionItems: [{ type: ActionType.DRAFT_EMAIL }],
+      } as any,
+      logger,
+    });
+
+    expect(getMessagingRuleNotificationResult).toHaveBeenCalled();
     expect(client.draftEmail).not.toHaveBeenCalled();
   });
 
@@ -321,66 +238,6 @@ describe("runActionFunction", () => {
     });
 
     expect(client.draftEmail).not.toHaveBeenCalled();
-  });
-
-  it("falls back to mailbox drafts when legacy chat delivery is unavailable", async () => {
-    const client = createMockEmailProvider();
-    vi.mocked(getMessagingRuleNotificationResult).mockResolvedValueOnce({
-      delivered: false,
-      kind: "none",
-    });
-
-    await runActionFunction({
-      client,
-      email,
-      action: {
-        id: "action-1",
-        type: ActionType.DRAFT_EMAIL,
-        messagingChannelId: "channel-1",
-        content: "Draft in chat",
-      },
-      emailAccount,
-      executedRule: {
-        id: "executed-rule-1",
-        threadId: "thread-1",
-        emailAccountId: "account-1",
-        ruleId: "rule-1",
-        actionItems: [{ type: ActionType.DRAFT_EMAIL }],
-      } as any,
-      logger,
-    });
-
-    expect(client.draftEmail).toHaveBeenCalled();
-  });
-
-  it("still creates mailbox drafts when linked providers only send a view-only message", async () => {
-    const client = createMockEmailProvider();
-    vi.mocked(getMessagingRuleNotificationResult).mockResolvedValueOnce({
-      delivered: true,
-      kind: "view_only",
-    });
-
-    await runActionFunction({
-      client,
-      email,
-      action: {
-        id: "action-1",
-        type: ActionType.DRAFT_EMAIL,
-        messagingChannelId: "channel-1",
-        content: "Draft in chat",
-      },
-      emailAccount,
-      executedRule: {
-        id: "executed-rule-1",
-        threadId: "thread-1",
-        emailAccountId: "account-1",
-        ruleId: "rule-1",
-        actionItems: [{ type: ActionType.DRAFT_EMAIL }],
-      } as any,
-      logger,
-    });
-
-    expect(client.draftEmail).toHaveBeenCalled();
   });
 
   it("marks chat draft actions failed when delivery cannot be completed", async () => {
@@ -812,31 +669,6 @@ describe("runActionFunction", () => {
 
       expect(client.forwardEmail).toHaveBeenCalledOnce();
     });
-  });
-
-  it("does not try to resolve attachments when drafts have no selected attachments", async () => {
-    const client = createMockEmailProvider();
-
-    await runActionFunction({
-      client,
-      email,
-      action: {
-        id: "action-1",
-        type: ActionType.DRAFT_EMAIL,
-        content: "No attachments.",
-      },
-      emailAccount,
-      executedRule: {
-        id: "executed-rule-1",
-        threadId: "thread-1",
-        emailAccountId: "account-1",
-        ruleId: "rule-1",
-      } as any,
-      logger,
-    });
-
-    expect(resolveDraftAttachments).not.toHaveBeenCalled();
-    expect(client.draftEmail).toHaveBeenCalled();
   });
 
   it("trashes the thread when delete action is enabled", async () => {
