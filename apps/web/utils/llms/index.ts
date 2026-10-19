@@ -22,7 +22,7 @@ import {
   NoObjectGeneratedError,
   TypeValidationError,
 } from "ai";
-import { JSONParseError, type LanguageModelV4 } from "@ai-sdk/provider";
+import type { LanguageModelV4 } from "@ai-sdk/provider";
 import { captureAiGeneration } from "@posthog/ai";
 import { jsonrepair } from "jsonrepair";
 import { type ModelFallbackRecord, saveAiUsage } from "@/utils/usage";
@@ -72,6 +72,7 @@ import {
   OLLAMA_STRUCTURED_OUTPUT_GUIDANCE,
 } from "@/utils/llms/ollama-guidance";
 import { createScopedLogger, toLogJson } from "@/utils/logger";
+import { logLlmError } from "@/utils/llms/log-llm-error";
 import { getPosthogLlmClient, isPosthogLlmEvalApproved } from "@/utils/posthog";
 import {
   applyPromptHardeningToMessages,
@@ -955,11 +956,13 @@ export async function chatCompletionStream(
           }
         },
         onError: (error) => {
-          logger.error("Error in chat completion stream", {
-            label,
-            userEmail,
+          logLlmError(
+            logger,
+            "error",
+            "Error in chat completion stream",
+            { label, userEmail },
             error,
-          });
+          );
           captureException(error, {
             userEmail,
             extra: { label },
@@ -982,11 +985,13 @@ export async function chatCompletionStream(
         continue;
       }
 
-      logger.error("Error in chat completion stream", {
-        label,
-        userEmail,
+      logLlmError(
+        logger,
+        "error",
+        "Error in chat completion stream",
+        { label, userEmail },
         error,
-      });
+      );
       captureException(error, {
         userEmail,
         extra: { label },
@@ -1090,14 +1095,19 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
           shouldFallback: shouldFallbackToNextModel,
           getRetryDelayMs: getQuickRetryDelayMs,
           onRetry: ({ candidate, error, delayMs }) => {
-            logger.warn("Tool-call stream failed, retrying primary model", {
-              label,
-              provider: candidate.provider,
-              model: candidate.modelName,
-              delayMs,
-              failureCategory: getLlmFallbackFailureCategory(error),
+            logLlmError(
+              logger,
+              "warn",
+              "Tool-call stream failed, retrying primary model",
+              {
+                label,
+                provider: candidate.provider,
+                model: candidate.modelName,
+                delayMs,
+                failureCategory: getLlmFallbackFailureCategory(error),
+              },
               error,
-            });
+            );
           },
           onFallback: ({ from, to, error }) => {
             modelFallbacks.push({
@@ -1126,12 +1136,17 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
           },
           onInterrupted: ({ candidate, error }) => {
             usageIncomplete = true;
-            logger.error("Tool-call stream interrupted after output", {
-              label,
-              provider: candidate.provider,
-              model: candidate.modelName,
+            logLlmError(
+              logger,
+              "error",
+              "Tool-call stream interrupted after output",
+              {
+                label,
+                provider: candidate.provider,
+                model: candidate.modelName,
+              },
               error,
-            });
+            );
             captureException(error, { userEmail, extra: { label } });
           },
         })
@@ -1219,11 +1234,13 @@ export async function toolCallAgentStream(options: ToolCallAgentStreamOptions) {
       abortSignal,
     });
   } catch (error) {
-    logger.error("Error in chat completion stream", {
-      label,
-      userEmail,
+    logLlmError(
+      logger,
+      "error",
+      "Error in chat completion stream",
+      { label, userEmail },
       error,
-    });
+    );
     captureException(error, {
       userEmail,
       extra: { label },
@@ -1390,22 +1407,13 @@ async function handleError(
       modelName,
     });
   } else {
-    const fields = { userId, userEmail, emailAccountId, label, modelName };
-    const log = timedOut ? logger.warn : logger.error;
-    const modelOutputError = findModelOutputError(error);
-    if (modelOutputError) {
-      // These errors carry the model's raw output, which can echo email content.
-      log("Error in LLM call", {
-        ...fields,
-        errorName: modelOutputError.name,
-        finishReason: NoObjectGeneratedError.isInstance(modelOutputError)
-          ? modelOutputError.finishReason
-          : undefined,
-      });
-      logger.trace("Error in LLM call (full error)", { ...fields, error });
-    } else {
-      log("Error in LLM call", { ...fields, error });
-    }
+    logLlmError(
+      logger,
+      timedOut ? "warn" : "error",
+      "Error in LLM call",
+      { userId, userEmail, emailAccountId, label, modelName },
+      error,
+    );
   }
 
   const notifyUser = async (
@@ -1471,22 +1479,6 @@ async function handleError(
         "Your AI provider has rejected requests due to rate limits or quota. Please check your provider account if this persists.",
       logger,
     });
-  }
-}
-
-function findModelOutputError(error: unknown, depth = 0): Error | undefined {
-  if (depth > 5 || !error || typeof error !== "object") return;
-  if (
-    JSONParseError.isInstance(error) ||
-    TypeValidationError.isInstance(error) ||
-    NoObjectGeneratedError.isInstance(error)
-  ) {
-    return error;
-  }
-  const { cause, lastError, error: inner } = error as Record<string, unknown>;
-  for (const nested of [cause, lastError, inner]) {
-    const found = findModelOutputError(nested, depth + 1);
-    if (found) return found;
   }
 }
 
@@ -1666,8 +1658,13 @@ function logModelFallback(
   fields: Record<string, unknown>,
 ) {
   const failureCategory = getLlmFallbackFailureCategory(error);
-  const log = failureCategory === "billing_limit" ? logger.error : logger.warn;
-  log(message, { ...fields, failureCategory, error });
+  logLlmError(
+    logger,
+    failureCategory === "billing_limit" ? "error" : "warn",
+    message,
+    { ...fields, failureCategory },
+    error,
+  );
 }
 
 function getQuickRetryDelayMs(error: unknown): number | undefined {
@@ -1893,14 +1890,19 @@ function repairObjectText(text: string, label: string) {
     }
   }
 
-  logger.warn("Failed to repair invalid JSON response", {
-    label,
-    length: text.length,
-    startsWithQuote: /^[\s]*['"`]/.test(text),
-    startsWithBrace: /^[\s]*\{/.test(text),
-    startsWithBracket: /^[\s]*\[/.test(text),
-    error: lastError,
-  });
+  logLlmError(
+    logger,
+    "warn",
+    "Failed to repair invalid JSON response",
+    {
+      label,
+      length: text.length,
+      startsWithQuote: /^[\s]*['"`]/.test(text),
+      startsWithBrace: /^[\s]*\{/.test(text),
+      startsWithBracket: /^[\s]*\[/.test(text),
+    },
+    lastError,
+  );
 
   return { text, attempt };
 }
@@ -2446,16 +2448,14 @@ function timedOut(
     isToolLoop: boolean;
   },
 ) {
-  logger.warn(
+  logLlmError(
+    logger,
+    "warn",
     isToolLoop
       ? "Automated AI tool loop ran out of time"
       : "Automated AI call ran out of time",
-    {
-      label,
-      provider: candidate.provider,
-      model: candidate.modelName,
-      error,
-    },
+    { label, provider: candidate.provider, model: candidate.modelName },
+    error,
   );
   return new AutomatedAiCallTimeoutError(label, error);
 }
