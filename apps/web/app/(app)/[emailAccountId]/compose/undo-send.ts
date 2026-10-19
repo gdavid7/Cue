@@ -7,6 +7,8 @@ import {
   toastSent,
 } from "@/components/Toast";
 import { getShortcutHint } from "@/lib/shortcuts/registry";
+import { cancelHeldSendAction } from "@/utils/actions/scheduled-email";
+import { getActiveMailClient } from "@/utils/mail-engine/active-client";
 import type { MailClient } from "@inboxzero/mail-core/engine";
 import type { OperationStatus } from "@inboxzero/mail-core/operations";
 
@@ -15,6 +17,9 @@ const UNDO_SEND_TOAST_ID = "undo-send";
 // How long "Sending…" waits after the hold for the send to settle before the
 // toast steps aside; the thread's delivery status carries on from there.
 const SEND_SETTLE_TIMEOUT_MS = 60_000;
+// A closed worker never answers, so undo stops waiting on the engine well
+// inside the hold and asks the server directly.
+const ENGINE_CANCEL_TIMEOUT_MS = 3000;
 // The server holds the send while it is executing or verifying, so undo stays
 // open until the send leaves it or the window ends.
 const UNDOABLE_STATUSES = new Set<OperationStatus>([
@@ -126,10 +131,7 @@ export async function undoPendingSend() {
   const current = tracked;
   if (!current?.holding || current.undoing) return false;
   current.undoing = true;
-  const result = await current.client.cancelOperation({
-    accountId: current.emailAccountId,
-    operationId: current.operationId,
-  });
+  const result = { status: await cancelSend(current) };
   current.undoing = false;
   if (result.status === "unavailable") {
     // The send is still held, so the user can try again within the window.
@@ -158,6 +160,55 @@ export async function undoPendingSend() {
         : "Couldn't undo send",
   });
   return false;
+}
+
+/**
+ * The engine cancels a send it has not dispatched yet, so it is asked first
+ * while it is still the one the send was queued on. Once an account switch has
+ * replaced or closed that engine, or it stops answering, the server's hold is
+ * cancelled directly; the server also refuses the send if it arrives later.
+ */
+async function cancelSend(current: TrackedSend) {
+  const key = {
+    accountId: current.emailAccountId,
+    operationId: current.operationId,
+  };
+  const active = getActiveMailClient();
+  if (active === current.client) {
+    const local = await withTimeout(
+      active.cancelOperation(key),
+      ENGINE_CANCEL_TIMEOUT_MS,
+    ).catch(() => null);
+    if (local && local.status !== "unavailable") return local.status;
+  }
+  const status = await cancelOnServer(current);
+  if (status === "cancelled" && active && active !== current.client) {
+    // The engine now running owns the queued copy; without this it would
+    // dispatch it and record the server's refusal as a failed send.
+    active.cancelOperation(key).catch(() => undefined);
+  }
+  return status;
+}
+
+async function cancelOnServer(current: TrackedSend) {
+  try {
+    const result = await cancelHeldSendAction(current.emailAccountId, {
+      operationId: current.operationId,
+    });
+    return result?.data?.status ?? "unavailable";
+  } catch {
+    return "unavailable";
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("timed out")), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 function stopTracking({ dismiss }: { dismiss: boolean }) {
