@@ -38,7 +38,10 @@ import {
   isLocalPageToken,
   SEARCH_INBOX_MAX_RESULTS,
 } from "@/utils/actions/assistant-local-search.validation";
-import type { LocalMailSearch } from "@/utils/ai/assistant/local-mail-search";
+import type {
+  LocalMailSearch,
+  LocalMailSearchAnswer,
+} from "@/utils/ai/assistant/local-mail-search";
 import { archiveCategory } from "@/utils/categorize/senders/archive-category";
 import { getCategoryOverview } from "@/utils/categorize/senders/get-category-overview";
 import { startBulkCategorization } from "@/utils/categorize/senders/start-bulk-categorization";
@@ -1541,6 +1544,26 @@ function localPageUnavailable(query: string) {
   };
 }
 
+/**
+ * The messages the browser's local store matched, read from the provider in
+ * its order: only their ids came back through Redis (RD-3).
+ */
+async function readLocalMatches(
+  emailProvider: EmailProvider,
+  local: LocalMailSearchAnswer,
+) {
+  if (!local.messages.length) return [];
+  const byId = new Map(
+    (await emailProvider.getMessagesBatch(local.messages.map((m) => m.id))).map(
+      (message) => [message.id, message],
+    ),
+  );
+  return local.messages.flatMap(({ id }) => {
+    const message = byId.get(id);
+    return message ? [searchSourceFromMessage(message)] : [];
+  });
+}
+
 function searchSourceFromMessage(message: ParsedMessage): SearchResultSource {
   return {
     id: message.id,
@@ -1702,7 +1725,7 @@ async function searchGmailChatAccount({
     });
     const searchResult = local
       ? {
-          messages: local.messages,
+          messages: await readLocalMatches(emailProvider, local),
           nextPageToken: local.nextPageToken,
         }
       : await emailProvider
@@ -1800,7 +1823,7 @@ async function searchOutlookChatAccount({
     if (local && localSearch)
       return formatSearchInboxResult({
         searchResult: {
-          messages: local.messages,
+          messages: await readLocalMatches(emailProvider, local),
           nextPageToken: local.nextPageToken,
         },
         queryUsed: localSearch.queryUsed,

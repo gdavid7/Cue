@@ -1,7 +1,8 @@
 import type { UIMessageStreamWriter } from "ai";
+import { z } from "zod";
 import {
+  LOCAL_SEARCH_LIMITS,
   type LocalMailSearchResult,
-  localMailSearchResultSchema,
 } from "@/utils/actions/assistant-local-search.validation";
 import type { Logger } from "@/utils/logger";
 import type { AssistantSearchSyntax } from "@/utils/mail-engine/assistant-search";
@@ -36,16 +37,34 @@ if value and value ~= ARGV[1] then redis.call('DEL', KEYS[1]) end
 return value
 `;
 
+// Only which messages matched crosses Redis: their senders, subjects and
+// snippets are read from the provider by the run that asked (RD-3).
+const storedAnswerSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("ok"),
+    messages: z
+      .array(
+        z.object({
+          id: z.string().min(1).max(LOCAL_SEARCH_LIMITS.id),
+          threadId: z.string().min(1).max(LOCAL_SEARCH_LIMITS.id),
+        }),
+      )
+      .max(LOCAL_SEARCH_LIMITS.messages),
+    nextPageToken: z.string().max(LOCAL_SEARCH_LIMITS.pageToken).optional(),
+  }),
+  z.object({ status: z.literal("unavailable"), reason: z.string() }),
+]);
+
 export type LocalMailSearchAnswer = Extract<
-  LocalMailSearchResult,
+  z.infer<typeof storedAnswerSchema>,
   { status: "ok" }
 >;
 
 export type LocalMailSearch = {
   /**
    * Asks the browser running this chat to answer an inbox search from its
-   * local mail store. Resolves with its answer, or null when it can't answer
-   * (or doesn't in time) and the caller should search the provider.
+   * local mail store. Resolves with the ids it matched, or null when it can't
+   * answer (or doesn't in time) and the caller should search the provider.
    */
   search(
     input: {
@@ -127,9 +146,7 @@ export function createLocalMailSearch({
           return null;
         }
         if (!stored || stored === PENDING) continue;
-        const parsed = localMailSearchResultSchema.safeParse(
-          parseStored(stored),
-        );
+        const parsed = storedAnswerSchema.safeParse(parseStored(stored));
         const durationMs = Date.now() - startedAt;
         if (!parsed.success) {
           logger.warn("Local mail search answer was malformed", { durationMs });
@@ -184,7 +201,10 @@ export async function acceptLocalMailSearchResult({
   return saveLocalMailSearchResult({ emailAccountId, requestId, result });
 }
 
-/** Stores the browser's answer if its request is still open; false if not. */
+/**
+ * Stores which messages the browser matched, if its request is still open;
+ * false if not. Ids only: nothing the messages say reaches Redis.
+ */
 export async function saveLocalMailSearchResult({
   emailAccountId,
   requestId,
@@ -197,7 +217,7 @@ export async function saveLocalMailSearchResult({
   const stored = await redis.eval<string[], number>(
     answerScript,
     [resultKey(emailAccountId, requestId)],
-    [PENDING, JSON.stringify(result)],
+    [PENDING, JSON.stringify(idsOnly(result))],
   );
   return Number(stored) === 1;
 }
@@ -229,4 +249,13 @@ function parseStored(stored: unknown): unknown {
 // can't be answered for another account or run.
 function resultKey(emailAccountId: string, requestId: string) {
   return `assistant-local-search:${emailAccountId}:${requestId}`;
+}
+
+function idsOnly(result: LocalMailSearchResult) {
+  if (result.status !== "ok") return result;
+  return {
+    status: result.status,
+    messages: result.messages.map(({ id, threadId }) => ({ id, threadId })),
+    ...(result.nextPageToken ? { nextPageToken: result.nextPageToken } : {}),
+  };
 }

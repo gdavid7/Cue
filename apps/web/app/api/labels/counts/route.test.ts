@@ -117,15 +117,19 @@ describe("GET /api/labels/counts", () => {
     const first = await GET(request());
     const firstBody = await first.json();
 
-    expect(mockRedisSet).toHaveBeenCalledWith(
+    const [key, stored, options] = mockRedisSet.mock.calls[0];
+    expect([key, options]).toEqual([
       "label-counts:email-account-id",
-      firstBody,
       { ex: 60 },
-    );
+    ]);
+    // RD-3: label names are the user's words, often people's names; the
+    // cache keeps ids and numbers and names come back from Gmail.
+    expect(JSON.stringify(stored)).not.toContain("Work");
+    expect(JSON.stringify(stored)).not.toContain("Inbox");
 
     mockGetLabelById.mockClear();
     mockGetLabels.mockClear();
-    mockRedisGet.mockResolvedValue(firstBody);
+    mockRedisGet.mockResolvedValue(stored);
     mockGetLabelById.mockResolvedValue({
       id: "INBOX",
       name: "Inbox",
@@ -143,9 +147,22 @@ describe("GET /api/labels/counts", () => {
       total: 8,
       unread: 1,
     });
-    expect(mockGetLabels).not.toHaveBeenCalled();
+    expect(secondBody.counts.at(-1)).toEqual(firstBody.counts.at(-1));
+    expect(mockGetLabels).toHaveBeenCalledOnce();
     expect(mockGetLabelById).toHaveBeenCalledOnce();
     expect(mockGetLabelById).toHaveBeenCalledWith("INBOX");
+  });
+
+  it("counts afresh when a cached label no longer exists", async () => {
+    mockRedisGet.mockResolvedValue({
+      counts: [{ id: "Label_gone", kind: "label", total: 1, unread: 1 }],
+      partial: false,
+    });
+
+    const body = await (await GET(request())).json();
+
+    expect(counts(body)).toContain("Label_1");
+    expect(counts(body)).not.toContain("Label_gone");
   });
 
   it("keeps the other counts when a single label lookup fails", async () => {
