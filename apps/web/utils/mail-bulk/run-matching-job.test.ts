@@ -8,6 +8,7 @@ import {
 import { createScopedLogger } from "@/utils/logger";
 import {
   ACTIVE_MAIL_BULK_JOB_STATUSES,
+  isStaleMailBulkJob,
   type MailBulkJobState,
   type MailBulkTarget,
   type mailBulkJobStore,
@@ -464,6 +465,54 @@ describe("runMailBulkJobStep", () => {
     await expect(store.get(JOB_ID)).resolves.toMatchObject({ applied: 2 });
   });
 
+  it("keeps an undo alive while its source is slow to stop", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const store = createStore();
+      await store.create(
+        JOB_ID,
+        newJob({ action: "archive", status: "stopping", applied: 1 }),
+      );
+      await store.appendTargets(JOB_ID, [{ messageId: "m1", threadId: "t1" }]);
+      await store.create(
+        UNDO_JOB_ID,
+        newJob({
+          action: "unarchive",
+          status: "applying",
+          sourceJobId: JOB_ID,
+        }),
+      );
+      const provider = createProvider({ pages: [] });
+      // The source never settles: a minute passes per wait until, past ten
+      // minutes, it reads as stale. Each minute the toast's status poll
+      // checks whether the undo itself has gone stale.
+      const undoStaleAtPoll: boolean[] = [];
+      const wait = vi.fn(async () => {
+        vi.setSystemTime(Date.now() + 60_000);
+        const undo = await store.get(UNDO_JOB_ID);
+        undoStaleAtPoll.push(Boolean(undo && isStaleMailBulkJob(undo)));
+      });
+
+      const result = await runMailBulkJobStep({
+        body: { jobId: UNDO_JOB_ID, emailAccountId: ACCOUNT_ID, deferrals: 0 },
+        provider,
+        ownerEmail: "owner@example.com",
+        logger,
+        store,
+        durable: true,
+        budgetMs: 60 * 60_000,
+        wait,
+      });
+
+      expect(result).toBe("done");
+      expect(provider.unarchiveMessages).toHaveBeenCalledWith(["m1"]);
+      expect(undoStaleAtPoll.length).toBeGreaterThan(10);
+      expect(undoStaleAtPoll).not.toContain(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("ignores a delivery for another account's job", async () => {
     const store = createStore();
     await store.create(JOB_ID, newJob({ action: "archive" }));
@@ -568,6 +617,10 @@ function createStore(): typeof mailBulkJobStore {
     async get(jobId) {
       const job = jobs.get(jobId);
       return job ? { ...job } : null;
+    },
+    async touch(jobId) {
+      const job = jobs.get(jobId);
+      if (job) jobs.set(jobId, { ...job, updatedAt: Date.now() });
     },
     async setCapped(jobId) {
       const job = jobs.get(jobId);

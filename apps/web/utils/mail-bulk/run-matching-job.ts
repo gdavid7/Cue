@@ -328,6 +328,9 @@ async function applyTargets({
         await continueLater();
         return "continued";
       }
+      // Waiting is progress too: without this, a source slow to stop could
+      // make the undo itself read as stale and be failed before it restores.
+      await store.touch(jobId);
       await wait(SOURCE_WAIT_MS);
     }
   }

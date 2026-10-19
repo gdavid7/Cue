@@ -130,6 +130,12 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       const stored = await mailBulkJobStore.get(JOB_ID);
       expect(stored?.applied).toBe(5);
       expect(stored?.updatedAt).toBeGreaterThan(1);
+
+      await redis!.hset(`mail-bulk-job:${JOB_ID}`, "updatedAt", "1");
+      await mailBulkJobStore.touch(JOB_ID);
+      expect((await mailBulkJobStore.get(JOB_ID))?.updatedAt).toBeGreaterThan(
+        1,
+      );
     });
 
     it("fails a stale job, but never one that already finished", async () => {

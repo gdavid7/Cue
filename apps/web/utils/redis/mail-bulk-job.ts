@@ -119,6 +119,11 @@ export const mailBulkJobStore = {
     return parsed.success ? parsed.data : null;
   },
 
+  /** Records that the job is still alive while it waits on something. */
+  async touch(jobId: string) {
+    await redis.hset(jobKey(jobId), { updatedAt: Date.now() });
+  },
+
   async setCapped(jobId: string) {
     await redis.hset(jobKey(jobId), { capped: "true", updatedAt: Date.now() });
   },
