@@ -191,6 +191,23 @@ describe("filterEventsWithExternalGuests", () => {
       ),
     ).toEqual(["personal-domain-peer"]);
   });
+
+  it("skips a meeting whose only other guest is the user's other mailbox", () => {
+    const event = createEvent({
+      id: "me-and-me",
+      attendees: [
+        { email: "me@work.example" },
+        { email: "me.personal@gmail.com" },
+      ],
+    });
+
+    expect(
+      filterEventsWithExternalGuests([event], "me@work.example", [
+        "me@work.example",
+        "me.personal@gmail.com",
+      ]),
+    ).toEqual([]);
+  });
 });
 
 function createProvider(events: CalendarEvent[]): CalendarEventProvider {

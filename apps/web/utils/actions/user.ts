@@ -30,6 +30,8 @@ import {
 } from "@/utils/ai/draft-cleanup";
 import { isDuplicateError, isNotFoundError } from "@/utils/prisma-helpers";
 import { type Logger, toLogJson } from "@/utils/logger";
+import { getMoveSharedConnectionsOperations } from "@/utils/user/move-shared-connections";
+import { shareChannelsAcrossMailboxes } from "@/utils/messaging/shared-channels";
 import { prepareMemberRemovalNotifications } from "@/utils/team-comments/member-removal";
 import {
   DELETE_ACCOUNT_REQUIRES_OWNER_TRANSFER_ERROR,
@@ -166,28 +168,30 @@ export const deleteEmailAccountAction = actionClientUser
         },
       });
 
-      if (isPrimaryAccount) {
-        // Check if there are other email accounts
-        const otherEmailAccounts = await prisma.emailAccount.findMany({
-          where: { userId, id: { not: emailAccountId } },
-          orderBy: { createdAt: "asc" },
-          take: 1,
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            image: true,
-          },
-        });
+      // The oldest other mailbox: the next primary, and where shared
+      // connections move.
+      const remainingEmailAccount = await prisma.emailAccount.findFirst({
+        where: { userId, id: { not: emailAccountId } },
+        orderBy: { createdAt: "asc" },
+        select: { id: true, email: true, name: true, image: true },
+      });
 
-        if (otherEmailAccounts.length === 0) {
-          throw new SafeError(
-            "Cannot delete your only email account. Go to the Settings page to delete your entire account.",
-          );
-        }
+      if (isPrimaryAccount && !remainingEmailAccount) {
+        throw new SafeError(
+          "Cannot delete your only email account. Go to the Settings page to delete your entire account.",
+        );
+      }
 
+      const moveSharedConnections = await prepareSharedConnectionsMove({
+        userId,
+        emailAccountId,
+        remainingEmailAccountId: remainingEmailAccount?.id,
+        logger,
+      });
+
+      if (isPrimaryAccount && remainingEmailAccount) {
         // Promote the next email account to primary
-        const newPrimaryAccount = otherEmailAccounts[0];
+        const newPrimaryAccount = remainingEmailAccount;
         const oldEmail = emailAccount.user.email;
 
         await stopWatchingEmailAccount({
@@ -214,6 +218,7 @@ export const deleteEmailAccountAction = actionClientUser
                 image: newPrimaryAccount.image,
               },
             }),
+            ...moveSharedConnections,
             prisma.emailAccount.delete({
               where: {
                 id: emailAccountId,
@@ -248,6 +253,7 @@ export const deleteEmailAccountAction = actionClientUser
           [
             deleteSoloOrganizationsOperation,
             deleteRemainingMembershipsOperation,
+            ...moveSharedConnections,
             prisma.emailAccount.delete({
               where: {
                 id: emailAccountId,
@@ -284,6 +290,32 @@ export const deleteEmailAccountAction = actionClientUser
       });
     },
   );
+
+/**
+ * Calendars, Drive, connected apps and Slack/Teams links serve all of a
+ * person's mailboxes, so removing the one they were connected from must not
+ * take them from the others (MA-7). Messaging links are copied to every
+ * remaining mailbox now; the rest move in the delete's transaction.
+ */
+async function prepareSharedConnectionsMove({
+  userId,
+  emailAccountId,
+  remainingEmailAccountId,
+  logger,
+}: {
+  userId: string;
+  emailAccountId: string;
+  remainingEmailAccountId: string | undefined;
+  logger: Logger;
+}) {
+  if (!remainingEmailAccountId) return [];
+  await shareChannelsAcrossMailboxes({ userId, logger });
+  return getMoveSharedConnectionsOperations({
+    userId,
+    fromEmailAccountId: emailAccountId,
+    toEmailAccountId: remainingEmailAccountId,
+  });
+}
 
 async function runDeleteEmailAccountTransaction(
   userId: string,

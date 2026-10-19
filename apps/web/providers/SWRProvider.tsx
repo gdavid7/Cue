@@ -69,9 +69,13 @@ export const SWRProvider = (props: { children: React.ReactNode }) => {
     async (keyOrUrl: string | [string, string], init?: RequestInit) => {
       if (Array.isArray(keyOrUrl)) {
         const [url, overrideEmailAccountId] = keyOrUrl;
-        return swrFetcher(url, init, overrideEmailAccountId);
+        return swrFetcher(url, init, overrideEmailAccountId, {
+          viewedEmailAccountId: emailAccountId,
+        });
       }
-      return swrFetcher(keyOrUrl, init, emailAccountId);
+      return swrFetcher(keyOrUrl, init, emailAccountId, {
+        viewedEmailAccountId: emailAccountId,
+      });
     },
     [emailAccountId],
   );

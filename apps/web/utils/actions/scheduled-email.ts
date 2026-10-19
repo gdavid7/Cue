@@ -2,9 +2,11 @@
 
 import { actionClient } from "@/utils/actions/safe-action";
 import {
+  cancelHeldSendBody,
   scheduleEmailBody,
   scheduledEmailIdBody,
 } from "@/utils/actions/scheduled-email.validation";
+import { cancelHeldEngineSend } from "@/utils/mail-api/operations";
 import {
   scheduleEmail,
   cancelScheduledEmail,
@@ -41,4 +43,14 @@ export const cancelEmailReminderAction = actionClient
   .inputSchema(scheduledEmailIdBody)
   .action(async ({ ctx: { emailAccountId }, parsedInput: { id } }) => {
     await cancelEmailReminder(emailAccountId, id);
+  });
+
+// Undo for a send the server holds, reached without the mail engine: an
+// account switch closes the engine the send was queued on.
+export const cancelHeldSendAction = actionClient
+  .metadata({ name: "cancelHeldSend" })
+  .inputSchema(cancelHeldSendBody)
+  .action(async ({ ctx: { emailAccountId }, parsedInput: { operationId } }) => {
+    const status = await cancelHeldEngineSend(emailAccountId, operationId);
+    return { status };
   });

@@ -10,6 +10,8 @@ import {
 import { swrFetcher } from "./swr-fetcher";
 
 const assign = vi.fn();
+const toasts = vi.hoisted(() => ({ toastError: vi.fn() }));
+vi.mock("@/components/Toast", () => toasts);
 const stored = new Map<string, string>();
 const sessionStorage = {
   getItem: (key: string) => stored.get(key) ?? null,
@@ -133,6 +135,74 @@ describe("swrFetcher with an expired session", () => {
     await swrFetcher("/api/user/me").catch(() => undefined);
 
     expect(assign).not.toHaveBeenCalled();
+  });
+});
+
+describe("swrFetcher when a mailbox's grant has expired", () => {
+  beforeEach(() => {
+    toasts.toastError.mockReset();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          {
+            error: "Authorization required. Please grant permissions.",
+            errorCode: "NO_REFRESH_TOKEN",
+            isKnownError: true,
+          },
+          { status: 401 },
+        ),
+      ),
+    );
+  });
+
+  it("sends the viewed account to its reconnect page", async () => {
+    const { swrFetcher } = await loadPage();
+
+    await swrFetcher("/api/labels", undefined, "acc-1", {
+      viewedEmailAccountId: "acc-1",
+    });
+
+    expect(assign).toHaveBeenCalledExactlyOnceWith(
+      "/acc-1/permissions/consent?reason=expired",
+    );
+    expect(toasts.toastError).not.toHaveBeenCalled();
+  });
+
+  it("keeps the page when another account fails, and offers to reconnect that one", async () => {
+    const { swrFetcher } = await loadPage();
+
+    const failures = await Promise.allSettled([
+      swrFetcher("/api/labels", undefined, "acc-2", {
+        viewedEmailAccountId: "acc-1",
+      }),
+      swrFetcher("/api/folders", undefined, "acc-2", {
+        viewedEmailAccountId: "acc-1",
+      }),
+    ]);
+
+    expect(failures.map((result) => result.status)).toEqual([
+      "rejected",
+      "rejected",
+    ]);
+    expect(assign).not.toHaveBeenCalled();
+    expect(toasts.toastError).toHaveBeenCalledOnce();
+    const notice = toasts.toastError.mock.calls[0][0];
+    notice.action.onClick();
+    expect(assign).toHaveBeenCalledExactlyOnceWith(
+      "/acc-2/permissions/consent?reason=expired",
+    );
+  });
+
+  it("never leaves the page for an account read without a viewed account", async () => {
+    const { swrFetcher } = await loadPage();
+
+    await swrFetcher("/api/scheduled", undefined, "acc-2").catch(
+      () => undefined,
+    );
+
+    expect(assign).not.toHaveBeenCalled();
+    expect(toasts.toastError).toHaveBeenCalledOnce();
   });
 });
 
