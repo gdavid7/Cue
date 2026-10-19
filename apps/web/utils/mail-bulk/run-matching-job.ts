@@ -118,7 +118,7 @@ export async function runMailBulkJobStep({
               pageToken = undefined;
             }
             if (pageToken && outOfTime()) {
-              await continueLater({ ...body, pageToken, deferrals: 0 });
+              await enqueueMailBulkJob({ ...body, pageToken, deferrals: 0 });
               return "continued";
             }
           } while (pageToken);
@@ -134,7 +134,7 @@ export async function runMailBulkJobStep({
           logger,
           outOfTime,
           continueLater: () =>
-            continueLater({
+            enqueueMailBulkJob({
               jobId: body.jobId,
               emailAccountId: body.emailAccountId,
               deferrals: 0,
@@ -337,7 +337,7 @@ function filterForAction(action: MailBulkJobAction): MatchingFilter {
   }
 }
 
-async function continueLater(body: MailBulkJobBody) {
+export async function enqueueMailBulkJob(body: MailBulkJobBody) {
   // One job per account at a time, so two of them never share its quota.
   await publishToQstash(MAIL_BULK_JOB_PATH, body, {
     key: `mail-bulk-${body.emailAccountId}`,

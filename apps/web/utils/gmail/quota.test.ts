@@ -1037,6 +1037,7 @@ describe("Gmail quota gate", () => {
       "user/senders/unsubscribe",
       "user/senders/status",
       "user/search-answer",
+      "user/mail/matching-count",
       "user/signature",
       "user/drafts/update",
       "user/scheduled-emails/retry",
@@ -1065,6 +1066,8 @@ describe("Gmail quota gate", () => {
       "cron/scheduled-actions",
       "resend/digest",
       "clean/gmail",
+      // A select-all action runs on capacity nobody is using.
+      "mail/bulk-matching",
     ])
       expect([source, priorityOf(source)]).toEqual([source, "background"]);
     for (const source of [
