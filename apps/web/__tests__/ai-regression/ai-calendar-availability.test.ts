@@ -186,49 +186,61 @@ describe.runIf(isAiTest)("aiGetCalendarAvailability", () => {
     TIMEOUT,
   );
 
-  test("returns null for non-scheduling related emails", async () => {
-    const messages = getNonSchedulingMessages();
-    const emailAccount = getEmailAccount();
+  test(
+    "returns null for non-scheduling related emails",
+    async () => {
+      const messages = getNonSchedulingMessages();
+      const emailAccount = getEmailAccount();
 
-    const result = await aiGetCalendarAvailability({
-      emailAccount,
-      messages,
-      logger,
-    });
+      const result = await aiGetCalendarAvailability({
+        emailAccount,
+        messages,
+        logger,
+      });
 
-    // For non-scheduling emails, the AI should not return suggested times
-    expect(result).toBeNull();
-  });
+      // For non-scheduling emails, the AI should not return suggested times
+      expect(result).toBeNull();
+    },
+    TIMEOUT,
+  );
 
-  test("handles empty messages array", async () => {
-    const emailAccount = getEmailAccount();
+  test(
+    "handles empty messages array",
+    async () => {
+      const emailAccount = getEmailAccount();
 
-    const result = await aiGetCalendarAvailability({
-      emailAccount,
-      messages: [],
-      logger,
-    });
+      const result = await aiGetCalendarAvailability({
+        emailAccount,
+        messages: [],
+        logger,
+      });
 
-    expect(result).toBeNull();
-  });
+      expect(result).toBeNull();
+    },
+    TIMEOUT,
+  );
 
-  test("handles messages with no content", async () => {
-    const messages = [
-      getMockEmailForLLM({
-        subject: "",
-        content: "",
-      }),
-    ];
-    const emailAccount = getEmailAccount();
+  test(
+    "handles messages with no content",
+    async () => {
+      const messages = [
+        getMockEmailForLLM({
+          subject: "",
+          content: "",
+        }),
+      ];
+      const emailAccount = getEmailAccount();
 
-    const result = await aiGetCalendarAvailability({
-      emailAccount,
-      messages,
-      logger,
-    });
+      const result = await aiGetCalendarAvailability({
+        emailAccount,
+        messages,
+        logger,
+      });
 
-    expect(result).toBeNull();
-  });
+      expect(result).toBeNull();
+    },
+    TIMEOUT,
+  );
 
   test(
     "works with specific date and time mentions",
@@ -299,28 +311,32 @@ describe.runIf(isAiTest)("aiGetCalendarAvailability", () => {
     TIMEOUT,
   );
 
-  test("handles no calendar connections", async () => {
-    // Mock no calendar connections
-    const prisma = (await import("@/utils/prisma")).default;
-    vi.mocked(prisma.calendarConnection.findMany).mockResolvedValue([]);
+  test(
+    "handles no calendar connections",
+    async () => {
+      // Mock no calendar connections
+      const prisma = (await import("@/utils/prisma")).default;
+      vi.mocked(prisma.calendarConnection.findMany).mockResolvedValue([]);
 
-    const messages = getSchedulingMessages();
-    const emailAccount = getEmailAccount();
+      const messages = getSchedulingMessages();
+      const emailAccount = getEmailAccount();
 
-    const result = await aiGetCalendarAvailability({
-      emailAccount,
-      messages,
-      logger,
-    });
+      const result = await aiGetCalendarAvailability({
+        emailAccount,
+        messages,
+        logger,
+      });
 
-    // Should still work even without calendar connections
-    // The AI can still suggest times based on the email content
-    expect(result).toBeDefined();
-    if (result) {
-      expect(result.suggestedTimes).toBeDefined();
-      console.debug("Suggestions without calendar:", result.suggestedTimes);
-    }
-  });
+      // Should still work even without calendar connections
+      // The AI can still suggest times based on the email content
+      expect(result).toBeDefined();
+      if (result) {
+        expect(result.suggestedTimes).toBeDefined();
+        console.debug("Suggestions without calendar:", result.suggestedTimes);
+      }
+    },
+    TIMEOUT,
+  );
 
   test(
     "works with user context and about information",

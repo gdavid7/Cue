@@ -63,19 +63,23 @@ describe.runIf(isAiTest)("aiExtractFromEmailHistory", () => {
     TIMEOUT,
   );
 
-  test("handles empty historical message array", async () => {
-    const currentMessages = getTestMessages(1);
+  test(
+    "handles empty historical message array",
+    async () => {
+      const currentMessages = getTestMessages(1);
 
-    const result = await aiExtractFromEmailHistory({
-      currentThreadMessages: currentMessages,
-      historicalMessages: [],
-      emailAccount: getEmailAccount(),
-      logger,
-    });
+      const result = await aiExtractFromEmailHistory({
+        currentThreadMessages: currentMessages,
+        historicalMessages: [],
+        emailAccount: getEmailAccount(),
+        logger,
+      });
 
-    expect(result).toBeDefined();
-    expect(result).toBe("No relevant historical context available.");
-  });
+      expect(result).toBeDefined();
+      expect(result).toBe("No relevant historical context available.");
+    },
+    TIMEOUT,
+  );
 
   test(
     "extracts time-sensitive information",

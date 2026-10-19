@@ -198,14 +198,18 @@ describe.runIf(isAiTest)(
       TIMEOUT,
     );
 
-    test("handles empty email list", async () => {
-      const result = await aiAnalyzePersona({
-        emails: [],
-        emailAccount: getEmailAccount(),
-      });
+    test(
+      "handles empty email list",
+      async () => {
+        const result = await aiAnalyzePersona({
+          emails: [],
+          emailAccount: getEmailAccount(),
+        });
 
-      expect(result).toBeNull();
-    });
+        expect(result).toBeNull();
+      },
+      TIMEOUT,
+    );
 
     test(
       "identifies mixed role patterns",
