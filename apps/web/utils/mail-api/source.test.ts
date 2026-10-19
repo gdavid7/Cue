@@ -1515,6 +1515,78 @@ describe("createEmailProviderMailboxSource", () => {
     expect(getMessagesWithPagination).not.toHaveBeenCalled();
   });
 
+  it("reads a first sync's first page as a screen of metadata and leaves its bodies to hydration", async () => {
+    const getMessagesWithPagination = vi.fn(async () => ({
+      messages: [
+        {
+          id: "m1",
+          threadId: "t1",
+          historyId: "7",
+          labelIds: ["INBOX", "UNREAD"],
+          snippet: "Lunch on Friday?",
+          internalDate: "1700000000000",
+          subject: "Lunch",
+          date: "",
+          headers: {
+            from: "ada@example.com",
+            to: "me@example.com",
+            subject: "Lunch",
+            date: "",
+          },
+        },
+      ],
+      nextPageToken: "next",
+    }));
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination,
+      } as unknown as EmailProvider,
+    });
+    const enumerate = (token: object) =>
+      source.enumerate({
+        session: { accountId: "acc-1", generation: "g1" },
+        requestId: "r1",
+        signal: new AbortController().signal,
+        bootstrapId: "mailbox",
+        page: JSON.stringify(token),
+        pageSize: 50,
+      });
+
+    const first = await enumerate({ scopeId: "primary", initial: true });
+    expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
+      maxResults: 50,
+      pageToken: undefined,
+      includeDrafts: true,
+      format: "metadata",
+    });
+    expect(first).toMatchObject({
+      status: "ok",
+      value: {
+        changes: [{ kind: "message_patch", key: { messageId: "m1" } }],
+        requiredHydration: [{ accountId: "acc-1", messageId: "m1" }],
+        bodies: [],
+      },
+    });
+
+    // Later pages, and a resync where nobody waits on an empty inbox, read
+    // whole messages as before.
+    await enumerate({ scopeId: "primary", initial: true, pageToken: "next" });
+    expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
+      maxResults: 50,
+      pageToken: "next",
+      includeDrafts: true,
+    });
+    await enumerate({ scopeId: "primary" });
+    expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
+      maxResults: 25,
+      pageToken: undefined,
+      includeDrafts: true,
+    });
+  });
+
   it("asks Gmail for a first sync's first page at the priority of someone waiting", async () => {
     const priorities: string[] = [];
     const getMessagesWithPagination = vi.fn(async () => {

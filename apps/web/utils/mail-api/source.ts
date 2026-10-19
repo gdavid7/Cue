@@ -65,6 +65,11 @@ const GMAIL_THREAD_COST = 40;
 // The first page of a scan is what the inbox shows first; a smaller one fills
 // it sooner and spends less of the minute's Gmail quota before it does.
 const GMAIL_FIRST_PAGE_SIZE = 25;
+// After a sign-in, the first page is a screen of the inbox read as metadata:
+// senders, subjects and previews without bodies, a fraction of the bytes and
+// the quota of full messages, so the list shows and works in seconds. Its
+// bodies are fetched next as required hydration, in the background.
+const GMAIL_FIRST_SYNC_PAGE_SIZE = 50;
 
 const SUPPORTED_CHANGES = [
   "archive",
@@ -197,17 +202,20 @@ export function createEmailProviderMailboxSource(input: {
         isBackfill = isGmail && token.scopeId === GMAIL_HISTORY_SCOPE_ID;
         const isPrimaryGmailScan = isGmail && !isBackfill;
         if (isPrimaryGmailScan) await setGmailInitialSync(accountId, true);
-        const maxResults = Math.min(
-          pageSize,
-          maxPageSize,
-          isGmail && !token.pageToken ? GMAIL_FIRST_PAGE_SIZE : maxPageSize,
-        );
+        const isFirstSyncFirstPage =
+          isPrimaryGmailScan && token.initial === true && !token.pageToken;
+        let firstPageSize = maxPageSize;
+        if (isFirstSyncFirstPage) firstPageSize = GMAIL_FIRST_SYNC_PAGE_SIZE;
+        else if (isGmail && !token.pageToken)
+          firstPageSize = GMAIL_FIRST_PAGE_SIZE;
+        const maxResults = Math.min(pageSize, maxPageSize, firstPageSize);
         const listPage = () =>
           provider.getMessagesWithPagination({
             maxResults,
             folderId: token.folderId ?? undefined,
             pageToken: token.pageToken,
             includeDrafts: true,
+            ...(isFirstSyncFirstPage && { format: "metadata" as const }),
             ...(token.receivedAfterMs != null && {
               after: new Date(token.receivedAfterMs),
             }),
@@ -220,7 +228,7 @@ export function createEmailProviderMailboxSource(input: {
         // after a sign-in the screen waits on its very first page.
         let priority: GmailQuotaPriority = "sync";
         if (isBackfill) priority = "background";
-        else if (token.initial && !token.pageToken) priority = "interactive";
+        else if (isFirstSyncFirstPage) priority = "interactive";
         const syncPage = isGmail
           ? await runWithGmailQuota({ priority }, () =>
               withGmailSyncBudget(
