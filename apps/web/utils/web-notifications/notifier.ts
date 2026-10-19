@@ -1,5 +1,6 @@
 import {
   createNewMailTracker,
+  newMailNotificationTag,
   senderDisplayName,
   type TrackedConversation,
 } from "@/utils/web-notifications/new-mail";
@@ -108,7 +109,7 @@ export function showNewMailNotifications({
     show({
       title: senderDisplayName(conversation.from),
       body: conversation.subject,
-      tag: `cue-mail-${conversation.accountId}-${conversation.id}`,
+      tag: newMailNotificationTag(conversation.accountId, conversation.id),
       target: conversation,
     });
   }
