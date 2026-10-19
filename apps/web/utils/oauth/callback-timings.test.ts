@@ -83,13 +83,13 @@ describe("deferCallbackStep", () => {
 
   it("reports a deferred step that fails instead of throwing", async () => {
     const logger = createScopedLogger("test");
-    const logError = vi.spyOn(logger, "error");
+    const logWarn = vi.spyOn(logger, "warn");
     const error = new Error("calendar down");
 
     deferCallbackStep("calendarConnect", () => Promise.reject(error), logger);
     await expect(mockAfter.mock.calls[0]?.[0]()).resolves.toBeUndefined();
 
-    expect(logError).toHaveBeenCalledWith(
+    expect(logWarn).toHaveBeenCalledWith(
       "Deferred sign-in step failed",
       expect.objectContaining({ step: "calendarConnect", error }),
     );

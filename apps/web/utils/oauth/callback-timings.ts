@@ -93,12 +93,13 @@ export function deferCallbackStep(
     const startedAt = performance.now();
     try {
       await step();
-      logger.info("Deferred sign-in step finished", {
+      // Token refreshes run these too, so success stays out of info logs.
+      logger.trace("Deferred sign-in step finished", {
         step: name,
         ms: elapsedMs(startedAt),
       });
     } catch (error) {
-      logger.error("Deferred sign-in step failed", {
+      logger.warn("Deferred sign-in step failed", {
         step: name,
         ms: elapsedMs(startedAt),
         error,

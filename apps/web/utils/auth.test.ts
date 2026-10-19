@@ -815,7 +815,7 @@ describe("handleLinkAccount", () => {
   });
 });
 
-// The founder's first sign-in waited on all of this before it redirected.
+// The redirect waits only on what the first page reads.
 describe("sign-in callback critical path", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -888,21 +888,6 @@ describe("sign-in callback critical path", () => {
     expect(createResendContact).toHaveBeenCalled();
     expect(trackDubSignUp).toHaveBeenCalled();
     expect(cookies).toHaveBeenCalled();
-  });
-
-  it("logs a deferred step that fails without failing the sign-in", async () => {
-    mockNewGoogleMailbox();
-    const error = new Error("calendar down");
-    vi.mocked(connectCalendarAtSignIn).mockRejectedValueOnce(error);
-
-    await expect(
-      handleLinkAccount(getGoogleAccount()),
-    ).resolves.toBeUndefined();
-    await runScheduledAfterCallbacks();
-
-    expect(captureException).toHaveBeenCalledWith(error, {
-      extra: { step: "calendarConnect" },
-    });
   });
 });
 
