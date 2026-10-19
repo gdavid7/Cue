@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => ({
   briefRetryAfterMs: 50,
   insightByMessage: {} as Record<string, "reply" | "do" | "none">,
   insightGate: null as Promise<void> | null,
+  /** Gmail defers every read: only a note the browser names as kept answers. */
+  insightDeferredUnlessKept: false,
   aiAccess: true,
 }));
 
@@ -63,6 +65,7 @@ describe("CueStrip", () => {
     mocks.briefRetryAfterMs = 50;
     mocks.insightByMessage = {};
     mocks.insightGate = null;
+    mocks.insightDeferredUnlessKept = false;
     mocks.aiAccess = true;
     window.localStorage.clear();
     resetBrowserCacheForTesting();
@@ -222,6 +225,26 @@ describe("CueStrip", () => {
     await waitForRequest("/api/user/inbox-insights");
     expect(screen.getByRole("region", { name: "Cue summary" })).toBeTruthy();
     expect(await screen.findByText(SUMMARY)).toBeTruthy();
+  });
+
+  // RD-3: the server keeps no notes, so a note the inbox already read is
+  // this browser's. Opening the email names it as kept, and the strip shows
+  // even while the account's Gmail budget defers every new read.
+  it("shows from the note this browser kept while Gmail defers new reads", async () => {
+    mocks.insight = { action: "reply" };
+    renderStrip({ labels: [] });
+    expect(await screen.findByText(SUMMARY)).toBeTruthy();
+    cleanup();
+
+    mocks.insightDeferredUnlessKept = true;
+    renderStrip({ labels: [] });
+
+    expect(await screen.findByText(SUMMARY)).toBeTruthy();
+    expect(
+      mocks.requests
+        .filter((r) => r.url.startsWith("/api/user/inbox-insights"))
+        .at(-1)?.url,
+    ).toContain("known=m1");
   });
 
   it("folds away if Cue can't decide in time, and stays folded", async () => {
@@ -494,6 +517,17 @@ async function fetcher(key: string | [string, string]) {
   }
   if (url.startsWith("/api/user/thread-brief"))
     return { brief: { summary: SUMMARY, keyPoints: [], source: "ai" } };
+  if (
+    url.startsWith("/api/user/inbox-insights") &&
+    mocks.insightDeferredUnlessKept
+  ) {
+    if (!url.includes("known="))
+      throw Object.assign(new Error("Gmail is busy for this account"), {
+        status: 503,
+        retryAfterMs: 60_000,
+      });
+    return { insights: {}, events: [], draftRepliesEnabled: true };
+  }
   if (url.startsWith("/api/user/inbox-insights") && mocks.insightFailures > 0) {
     mocks.insightFailures -= 1;
     throw new Error("Gmail is busy for this account");
