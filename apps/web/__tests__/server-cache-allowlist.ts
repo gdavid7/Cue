@@ -200,7 +200,7 @@ export const SERVER_CACHE_WRITES: Record<
     ],
   },
   "utils/mcp/providers/composio.ts": {
-    writes: 3,
+    writes: 4,
     keys: [
       {
         key: "composio-pending-connection:{connectedAccountId} / by starter",
@@ -357,6 +357,36 @@ export const SERVER_CACHE_WRITES: Record<
       },
     ],
   },
+  "utils/redis/gmail-history-lease.ts": {
+    writes: 1,
+    keys: [
+      {
+        key: "gmail-history-lease:{emailAccountId}",
+        holds: "a random lock token",
+        ttl: "5 min",
+      },
+    ],
+  },
+  "utils/redis/outbound-thread-status.ts": {
+    writes: 2,
+    keys: [
+      {
+        key: "reply-tracker:outbound-thread-status:{emailAccountId}:{threadId}:{messageId}",
+        holds: 'a random lock token or "processed"',
+        ttl: "per call",
+      },
+    ],
+  },
+  "utils/redis/public-contact-context-lock.ts": {
+    writes: 1,
+    keys: [
+      {
+        key: "public-contact-context:v1:lock:{hash(address)}",
+        holds: "a random lock token",
+        ttl: "2 min",
+      },
+    ],
+  },
   "utils/redis/index.ts": {
     writes: 1,
     keys: [
@@ -383,7 +413,7 @@ export const SERVER_CACHE_WRITES: Record<
     ],
   },
   "utils/redis/message-processing.ts": {
-    writes: 3,
+    writes: 8,
     keys: [
       {
         key: "processing-message:{sha256(mailbox address)}:{messageId}",
@@ -538,4 +568,25 @@ export const SERVER_CACHE_WRITES: Record<
       },
     ],
   },
+};
+
+/**
+ * Key templates the guard flags for interpolating something that looks like
+ * an address or a name, reviewed and found safe. `file: template` → why.
+ */
+export const KEY_TEMPLATE_EXCEPTIONS: Record<string, string> = {
+  "utils/messaging/chat-sdk/bot.ts: `reaction:${event.threadId}:${event.messageId}:${event.user.userId}:${event.emoji.name}`":
+    "an id for a reaction event, never a Redis key; the name is the emoji's",
+  "utils/outlook/local-mail-sync.ts: `local-mail-folder-id:${input.emailAccountId}:${name}`":
+    "name is a well-known Outlook folder (drafts, deleteditems, junkemail, …)",
+  "utils/redis/message-processing.ts: `processing-message:${userEmail}:${messageId}`":
+    "the pre-RD-3 key, only read and checked for existence until it expires; never written",
+  "utils/redis/usage.ts: `usage:${email}`":
+    "the pre-RD-3 usage counters, only read to migrate them; never written",
+  "utils/redis/usage.ts: `email:${email}`":
+    "an in-memory label for a legacy spender, never a Redis key",
+  "utils/redis/usage.ts: `usage-migration:${migrationName}:done`":
+    "migration names are built from user and account ids",
+  "utils/redis/usage.ts: `usage-migration:${migrationName}:lock`":
+    "migration names are built from user and account ids",
 };
