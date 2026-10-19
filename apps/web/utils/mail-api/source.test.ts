@@ -944,7 +944,7 @@ describe("createEmailProviderMailboxSource", () => {
       pageSize: 50,
     });
     expect(getMessagesWithPagination).toHaveBeenCalledWith({
-      maxResults: 50,
+      maxResults: 12,
       pageToken: undefined,
       includeDrafts: true,
     });
@@ -1515,26 +1515,9 @@ describe("createEmailProviderMailboxSource", () => {
     expect(getMessagesWithPagination).not.toHaveBeenCalled();
   });
 
-  it("reads a first sync's first page as metadata and leaves its bodies to hydration", async () => {
+  it("reads a scan's first screen whole on its own, then 50 at a time", async () => {
     const getMessagesWithPagination = vi.fn(async () => ({
-      messages: [
-        {
-          id: "m1",
-          threadId: "t1",
-          historyId: "7",
-          labelIds: ["INBOX", "UNREAD"],
-          snippet: "Lunch on Friday?",
-          internalDate: "1700000000000",
-          subject: "Lunch",
-          date: "",
-          headers: {
-            from: "ada@example.com",
-            to: "me@example.com",
-            subject: "Lunch",
-            date: "",
-          },
-        },
-      ],
+      messages: [],
       nextPageToken: "next",
     }));
     const source = createEmailProviderMailboxSource({
@@ -1555,56 +1538,18 @@ describe("createEmailProviderMailboxSource", () => {
         pageSize: 50,
       });
 
-    // A first screen of rows comes back on its own...
-    const first = await enumerate({ scopeId: "primary", initial: true });
+    // Whole messages, so the page leaves no hydration to hold the engine's
+    // commands, and only a screen of them, so the inbox fills sooner.
+    await enumerate({ scopeId: "primary", initial: true });
     expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
       maxResults: 12,
       pageToken: undefined,
-      includeDrafts: true,
-      format: "metadata",
-    });
-    expect(first).toMatchObject({
-      status: "ok",
-      value: {
-        changes: [{ kind: "message_patch", key: { messageId: "m1" } }],
-        requiredHydration: [{ accountId: "acc-1", messageId: "m1" }],
-        bodies: [],
-      },
-    });
-
-    // ...then the rest of the first 50, as metadata too.
-    const firstValue = first.status === "ok" ? first.value : null;
-    const rest = await enumerate(JSON.parse(firstValue?.nextPage ?? "{}"));
-    expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
-      maxResults: 38,
-      pageToken: "next",
-      includeDrafts: true,
-      format: "metadata",
-    });
-    expect(rest).toMatchObject({
-      status: "ok",
-      value: { requiredHydration: [{ messageId: "m1" }], bodies: [] },
-    });
-
-    // Later pages, and a resync where nobody waits on an empty inbox, read
-    // whole messages as before.
-    const restValue = rest.status === "ok" ? rest.value : null;
-    await enumerate(JSON.parse(restValue?.nextPage ?? "{}"));
-    expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
-      maxResults: 50,
-      pageToken: "next",
       includeDrafts: true,
     });
     await enumerate({ scopeId: "primary", initial: true, pageToken: "next" });
     expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
       maxResults: 50,
       pageToken: "next",
-      includeDrafts: true,
-    });
-    await enumerate({ scopeId: "primary" });
-    expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
-      maxResults: 50,
-      pageToken: undefined,
       includeDrafts: true,
     });
   });

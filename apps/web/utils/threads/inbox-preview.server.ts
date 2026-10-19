@@ -92,9 +92,7 @@ export async function loadInboxPreview({
           changes:
             emailProvider.name === "google"
               ? messages.map((message) =>
-                  parsedMessagePatch(emailAccountId, "google", message, {
-                    format: "metadata",
-                  }),
+                  metadataPatch(emailAccountId, message),
                 )
               : [],
         };
@@ -122,6 +120,15 @@ export async function loadInboxPreview({
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// A metadata read has no parts to find attachments in, so its patch leaves
+// the flag to the engine's own reads rather than clearing it.
+function metadataPatch(emailAccountId: string, message: ParsedMessage) {
+  const patch = parsedMessagePatch(emailAccountId, "google", message);
+  if (patch.kind !== "message_patch") return patch;
+  const { hasAttachments: _unknown, ...fields } = patch.fields;
+  return { ...patch, fields };
 }
 
 // Messages arrive newest first; each conversation lists at its newest and

@@ -297,7 +297,17 @@ async function readableCopy(
       next = await reader.read();
       if (next.value) chunks.push(next.value);
     }
-    return new Response(new Blob(chunks as BlobPart[]), {
+    // Plain bytes, not a Blob: Node 24 reads a Blob body back only after a
+    // platform task, unlike every other saved copy, which reads in microtasks.
+    const body = new Uint8Array(
+      chunks.reduce((length, chunk) => length + chunk.byteLength, 0),
+    );
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new Response(body, {
       status: copy.status,
       statusText: copy.statusText,
       headers: copy.headers,

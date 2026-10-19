@@ -71,11 +71,11 @@ const GMAIL_FIRST_BACKFILL_WINDOW_MS = 30 * DAY_MS;
 // recent window to leave no gap at the boundary between them.
 const GMAIL_HISTORY_OVERLAP_MS = DAY_MS;
 const GMAIL_THREAD_COST = 40;
-// After a sign-in the first 50 messages are read as metadata, and the first
-// screen of them comes back on its own, so the engine shows those rows while
-// the rest of the page is read.
-const GMAIL_FIRST_PAGE_SIZE = 50;
-const GMAIL_FIRST_SCREEN_SIZE = 12;
+// The first page of a scan is what the inbox shows first. It reads whole
+// messages, so it creates no hydration that would hold the engine's command
+// loop, and a first screen of them comes back on its own so the inbox fills
+// sooner; later pages read 50.
+const GMAIL_FIRST_PAGE_SIZE = 12;
 
 const SUPPORTED_CHANGES = [
   "archive",
@@ -102,8 +102,6 @@ type BootstrapToken = {
   folderId?: string | null;
   /** The recent scan of a mailbox that has never synced, as after a sign-in. */
   initial?: boolean;
-  /** What is left of a first sync's opening page, read as metadata too. */
-  metadataLeft?: number;
   pageToken?: string;
   receivedAfterMs?: number;
   receivedBeforeMs?: number;
@@ -223,16 +221,11 @@ export function createEmailProviderMailboxSource(input: {
         isBackfill = isGmail && token.scopeId === GMAIL_HISTORY_SCOPE_ID;
         const isPrimaryGmailScan = isGmail && !isBackfill;
         if (isPrimaryGmailScan) await setGmailInitialSync(accountId, true);
-        const isFirstSyncFirstPage =
-          isPrimaryGmailScan && token.initial === true && !token.pageToken;
-        const readsMetadata =
-          isFirstSyncFirstPage ||
-          (isPrimaryGmailScan && token.metadataLeft != null);
-        let maxResults = Math.min(pageSize, maxPageSize);
-        if (isFirstSyncFirstPage)
-          maxResults = Math.min(maxResults, GMAIL_FIRST_SCREEN_SIZE);
-        else if (readsMetadata)
-          maxResults = Math.min(maxResults, token.metadataLeft ?? maxResults);
+        const maxResults = Math.min(
+          pageSize,
+          maxPageSize,
+          isGmail && !token.pageToken ? GMAIL_FIRST_PAGE_SIZE : maxPageSize,
+        );
         const listPage = () =>
           provider.getMessagesWithPagination({
             ...(token.windowStartMs != null && {
@@ -242,11 +235,6 @@ export function createEmailProviderMailboxSource(input: {
             folderId: token.folderId ?? undefined,
             pageToken: token.pageToken,
             includeDrafts: true,
-            // After a sign-in the first page is read as metadata: senders,
-            // subjects and previews without bodies, a tenth of the bytes and
-            // a third of the quota, so the list shows and works sooner. Its
-            // bodies follow as required hydration, in the background.
-            ...(readsMetadata && { format: "metadata" as const }),
             ...(token.receivedAfterMs != null && {
               after: new Date(token.receivedAfterMs),
             }),
@@ -277,9 +265,7 @@ export function createEmailProviderMailboxSource(input: {
         if (isPrimaryGmailScan && !syncPage.nextPageToken)
           await setGmailInitialSync(accountId, false);
         const changes = syncPage.messages.map((message) =>
-          parsedMessagePatch(accountId, provider.name, message, {
-            format: readsMetadata ? "metadata" : undefined,
-          }),
+          parsedMessagePatch(accountId, provider.name, message),
         );
         const { requiredHydration, bodies } = parsedMessageBodies(
           accountId,
@@ -299,9 +285,6 @@ export function createEmailProviderMailboxSource(input: {
                 catchUpFrom: token.catchUpFrom ?? null,
                 folderId: token.folderId ?? null,
                 pageToken: syncPage.nextPageToken,
-                ...(isFirstSyncFirstPage && {
-                  metadataLeft: GMAIL_FIRST_PAGE_SIZE - maxResults,
-                }),
                 receivedAfterMs: token.receivedAfterMs,
                 receivedBeforeMs: token.receivedBeforeMs,
                 scopeId: token.scopeId ?? "primary",

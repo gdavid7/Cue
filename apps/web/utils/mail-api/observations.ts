@@ -3,7 +3,6 @@ import {
   MAX_RECIPIENTS,
   type MessageAttachmentDescriptor,
   type MessageMetadata,
-  type MessageMetadataPatch,
 } from "@inboxzero/mail-core/messages";
 import type { Provider } from "@inboxzero/mail-core/identities";
 import {
@@ -69,13 +68,7 @@ export function parsedMessagePatch(
   accountId: string,
   provider: Provider,
   message: ParsedMessage,
-  { format }: { format?: "metadata" } = {},
 ): ProviderChange {
-  const { hasAttachments, ...metadata } = parsedMessageMetadata(message);
-  // A metadata read has no parts to find attachments in, so it leaves the
-  // stored value alone rather than clearing it until the body arrives.
-  const fields: MessageMetadataPatch =
-    format === "metadata" ? metadata : { ...metadata, hasAttachments };
   return {
     kind: "message_patch",
     key: { accountId, messageId: message.id },
@@ -85,7 +78,7 @@ export function parsedMessagePatch(
       conversationId: message.threadId,
       version: message.historyId || null,
     },
-    fields,
+    fields: parsedMessageMetadata(message),
   };
 }
 
