@@ -127,7 +127,8 @@ async function startInboxPreview(account: { id: string; provider: string }) {
 
 // An inbox that opens on a tab, such as Gmail's Primary, would show its other
 // tabs' mail and then swap to the tab. Checked with the rows, not before the
-// page is sent, so the page never waits on it.
+// page is sent, so the page never waits on it. A mailbox that fell behind
+// only hands the messages to the engine, which files them into its tabs.
 async function loadLandingInboxPreview(
   account: {
     id: string;
@@ -135,6 +136,13 @@ async function loadLandingInboxPreview(
   },
   catchUp: boolean,
 ) {
+  if (catchUp) {
+    return loadInboxPreview({
+      emailAccountId: account.id,
+      provider: account.provider,
+      catchUp,
+    });
+  }
   const settings = await getMailSettings({ emailAccountId: account.id }).catch(
     (error: unknown) => {
       logger.warn("Could not read the inbox's tabs for its preview", {
@@ -149,6 +157,5 @@ async function loadLandingInboxPreview(
   return loadInboxPreview({
     emailAccountId: account.id,
     provider: account.provider,
-    catchUp,
   });
 }

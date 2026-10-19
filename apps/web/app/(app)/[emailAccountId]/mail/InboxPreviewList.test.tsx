@@ -280,6 +280,22 @@ describe("InboxPreviewList", () => {
     expect(screen.queryByRole("listbox")).toBeNull();
   });
 
+  it("never shows a fallen-behind mailbox's rows in place of its own mail", async () => {
+    await act(async () => {
+      render(
+        <InboxPreviewSeed
+          emailAccountId="acc-1"
+          preview={previewOf("t1")}
+          catchUp
+        >
+          <Screen />
+        </InboxPreviewSeed>,
+      );
+    });
+
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
   it("keeps the mail screen and hands nothing over when the rows fail", async () => {
     const failed = {
       // biome-ignore lint/suspicious/noThenProperty: a streamed promise has a then

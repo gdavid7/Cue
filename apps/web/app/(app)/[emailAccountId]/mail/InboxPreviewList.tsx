@@ -216,8 +216,14 @@ export function InboxPreviewList({
       withChrome={withChrome}
     />
   );
-  // Only ever the open account's mail.
-  if (!isInbox || retired || seed?.emailAccountId !== emailAccountId) {
+  // Only ever the open account's mail. A mailbox that fell behind has mail
+  // of its own to show, and the engine shows the newest from there.
+  if (
+    !isInbox ||
+    retired ||
+    seed?.emailAccountId !== emailAccountId ||
+    seed.catchUp
+  ) {
     return placeholder;
   }
   return (

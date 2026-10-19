@@ -2,6 +2,10 @@ import { type BrowserContext, expect, type Page } from "@playwright/test";
 import { getEmailAccountId } from "../account-test-helpers";
 import { test } from "../playwright-test";
 import { buildMailPath } from "@/utils/mail-url";
+import {
+  createSecondEmailAccount,
+  deleteSecondEmailAccount,
+} from "./account-test-helpers";
 import { readProviderAccessToken, withClient } from "./mail-test-helpers";
 import {
   PERF_BUDGETS_MS,
@@ -520,6 +524,254 @@ test("first compose, mail that arrived while closed, and list input are quick", 
     await recorder.attach(testInfo, "arrivals");
   }
 });
+
+// RL-1: a laptop opened again after days away. Meanwhile the mail was
+// triaged elsewhere (Gmail history to replay) and new mail arrived; the
+// newest of it should show within seconds, not after the replay.
+const RETURNING_AGE_MS = 3 * 24 * 60 * 60_000;
+const RETURNING_NEW_MESSAGES = 40;
+const RETURNING_RELABELED = 300;
+const FIRST_SCREEN = 15;
+
+test("a mailbox opened after days away shows its newest mail first", async ({
+  browser,
+}, testInfo) => {
+  test.skip(
+    process.env.PERF_MAILBOX !== "large",
+    "Runs only in the perf harness",
+  );
+  test.setTimeout(1_200_000);
+  const recorder = new PerfRecorder();
+  const context = await newPerfContext(browser);
+  let page = await newPerfPage(context);
+  try {
+    await page.goto(inbox);
+    await page.waitForFunction(firstEngineRowVisible, undefined, {
+      timeout: 180_000,
+    });
+    await waitForEngineIdle(page);
+    await page.close();
+
+    for (let run = 0; run < perfRuns; run++) {
+      const subjects = await arriveWhileAway(`Returning ${run}`, run);
+      await ageLocalMailbox(context);
+      page = await newPerfPage(context);
+      const insights = countRequests(page, "/api/user/inbox-insights");
+      await page.goto(inbox, { waitUntil: "commit" });
+      recorder.add(
+        "returning-newest-row",
+        await timeSinceNavigation(
+          page,
+          rowWithSubjectShown,
+          subjects.at(-1)!,
+          180_000,
+        ),
+      );
+      recorder.add(
+        "returning-first-screen",
+        await timeSinceNavigation(
+          page,
+          rowsWithSubjectsShown,
+          subjects.slice(-FIRST_SCREEN),
+          180_000,
+        ),
+      );
+      recorder.add(
+        "returning-all-new",
+        await timeSinceNavigation(
+          page,
+          rowsWithSubjectsShown,
+          subjects,
+          240_000,
+        ),
+      );
+      await waitSinceNavigation(page, 60_000);
+      recorder.add("returning-insights-requests-60s", insights.count());
+      await page.close();
+    }
+  } finally {
+    await context.close();
+    await recorder.attach(testInfo, "returning");
+  }
+});
+
+test("two accounts opened after days away both show their newest mail", async ({
+  browser,
+}, testInfo) => {
+  test.skip(
+    process.env.PERF_MAILBOX !== "large",
+    "Runs only in the perf harness",
+  );
+  test.setTimeout(1_500_000);
+  const recorder = new PerfRecorder();
+  const context = await newPerfContext(browser);
+  let page = await newPerfPage(context);
+  const primaryId = await withClient(async (client) => {
+    const result = await client.query<{ id: string }>(
+      `SELECT id FROM "EmailAccount" WHERE email = $1`,
+      [process.env.PLAYWRIGHT_TEST_EMAIL],
+    );
+    return result.rows[0]!.id;
+  });
+  const second = await createSecondEmailAccount(primaryId);
+  const secondInbox = buildMailPath({ accountIndex: 1 });
+  try {
+    // Both accounts read the same emulated mailbox; each syncs its own copy.
+    for (const address of [inbox, secondInbox]) {
+      await page.goto(address);
+      await page.waitForFunction(firstEngineRowVisible, undefined, {
+        timeout: 240_000,
+      });
+      await waitForEngineIdle(page);
+    }
+    await page.close();
+
+    for (let run = 0; run < perfRuns; run++) {
+      const subjects = await arriveWhileAway(`Two accounts ${run}`, run);
+      await ageLocalMailbox(context);
+      page = await newPerfPage(context);
+      const insights = countRequests(page, "/api/user/inbox-insights");
+      await page.goto(inbox, { waitUntil: "commit" });
+      recorder.add(
+        "two-accounts-viewed-newest-row",
+        await timeSinceNavigation(
+          page,
+          rowWithSubjectShown,
+          subjects.at(-1)!,
+          180_000,
+        ),
+      );
+      recorder.add(
+        "two-accounts-viewed-first-screen",
+        await timeSinceNavigation(
+          page,
+          rowsWithSubjectsShown,
+          subjects.slice(-FIRST_SCREEN),
+          180_000,
+        ),
+      );
+      // Switching to the other account, which has been catching up too.
+      await page.goto(secondInbox, { waitUntil: "commit" });
+      recorder.add(
+        "two-accounts-other-newest-row",
+        await timeSinceNavigation(
+          page,
+          rowWithSubjectShown,
+          subjects.at(-1)!,
+          180_000,
+        ),
+      );
+      recorder.add(
+        "two-accounts-other-first-screen",
+        await timeSinceNavigation(
+          page,
+          rowsWithSubjectsShown,
+          subjects.slice(-FIRST_SCREEN),
+          180_000,
+        ),
+      );
+      await waitSinceNavigation(page, 30_000);
+      recorder.add("two-accounts-insights-requests", insights.count());
+      await page.close();
+    }
+  } finally {
+    await context.close();
+    await deleteSecondEmailAccount(second.accountId).catch(() => undefined);
+    await recorder.attach(testInfo, "two-accounts");
+  }
+});
+
+// Days away: older mail triaged on another device, then new mail, newest
+// last. Returns the new subjects, oldest first.
+async function arriveWhileAway(prefix: string, run: number) {
+  const token = await readProviderAccessToken();
+  const ids = Array.from(
+    { length: RETURNING_RELABELED },
+    (_, index) => `perf_${100 + index}_0`,
+  );
+  const relabel = await fetch(
+    `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/messages/batchModify`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(
+        run % 2 === 0
+          ? { ids, addLabelIds: ["UNREAD"] }
+          : { ids, removeLabelIds: ["UNREAD"] },
+      ),
+    },
+  );
+  expect(relabel.ok).toBe(true);
+  const stamp = Date.now();
+  const subjects: string[] = [];
+  for (let index = 0; index < RETURNING_NEW_MESSAGES; index++) {
+    const subject = `${prefix} ${stamp} ${String(index).padStart(2, "0")}`;
+    const response = await fetch(
+      `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          from: "Arrivals <arrivals@example.com>",
+          to: process.env.PLAYWRIGHT_TEST_EMAIL,
+          subject,
+          body_text: "Mail that arrived while this laptop was away.",
+          labelIds: ["INBOX", "UNREAD"],
+          internalDate: String(stamp - (RETURNING_NEW_MESSAGES - index) * 1000),
+        }),
+      },
+    );
+    expect(response.ok).toBe(true);
+    subjects.push(subject);
+  }
+  return subjects;
+}
+
+// The browser last caught up days ago, as on a laptop left closed. Builds
+// from before the cookie kept that time are left as they are.
+async function ageLocalMailbox(context: BrowserContext) {
+  const cookie = (await context.cookies()).find(
+    (candidate) => candidate.name === "cue-local-mail",
+  );
+  if (!cookie?.value.includes("~")) return;
+  const at = Math.floor((Date.now() - RETURNING_AGE_MS) / 1000).toString(36);
+  const value = cookie.value
+    .split(".")
+    .map((entry) => `${entry.split("~")[0]}~${at}`)
+    .join(".");
+  await context.addCookies([{ ...cookie, value }]);
+}
+
+function countRequests(page: Page, path: string) {
+  let count = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === path) count += 1;
+  });
+  return { count: () => count };
+}
+
+async function waitSinceNavigation(page: Page, ms: number) {
+  const elapsed = await page.evaluate(() => performance.now());
+  if (elapsed < ms) await page.waitForTimeout(ms - elapsed);
+}
+
+function rowsWithSubjectsShown(subjects: string[]) {
+  const shown = new Set(
+    Array.from(
+      document.querySelectorAll("[data-mail-thread-subject]"),
+      (element) => element.textContent,
+    ),
+  );
+  return subjects.every((subject) => shown.has(subject))
+    ? performance.now()
+    : false;
+}
 
 // What the screen and the mail engine show when an undo does not bring the
 // archived conversation back, so a failure says which side lost it.
