@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { getEmailAccountId } from "../account-test-helpers";
 import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
@@ -166,9 +166,7 @@ test("opens a rule's reply to someone else addressed and labelled as theirs", as
   ).toBeVisible();
   await expect(reader.getByText("Suggested by Cue")).toHaveCount(0);
   // Addressed to finance alone: the sender isn't on it.
-  const recipients = reader.locator("button[aria-expanded]", {
-    hasText: /^(for|to) /,
-  });
+  const recipients = replyRecipients(reader);
   await expect(recipients).toContainText("finance");
   await expect(recipients).not.toContainText(/jonas/i);
   await capturePlaywrightCheckpoint(page, testInfo, "rule-suggestion-to-other");
@@ -217,9 +215,7 @@ test("replies to the sender on Reply, and to the rule's recipient on Use Cue's d
   await expect(
     reader.getByText("Cue's draft to finance@partner.example"),
   ).toBeVisible({ timeout: 60_000 });
-  const recipients = reader.locator("button[aria-expanded]", {
-    hasText: /^(for|to) /,
-  });
+  const recipients = replyRecipients(reader);
 
   await reader
     .getByRole("button", { name: "Reply", exact: true })
@@ -281,6 +277,17 @@ test("dismisses the rule's suggestion when its reply is discarded", async ({
   await page.waitForTimeout(2000);
   await expect(editor).toHaveCount(0);
 });
+
+/**
+ * The open reply's summary of who it goes to ("Draft ready for …", "Reply to
+ * …"). It is looked for inside the reply form: the message header's details
+ * button above it ("to me") also starts with "to".
+ */
+function replyRecipients(reader: Locator) {
+  return reader.locator("form[data-inline-reply] button[aria-expanded]", {
+    hasText: /(for|to) /,
+  });
+}
 
 async function openThread(
   page: Page,
