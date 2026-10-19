@@ -6,7 +6,7 @@ const base = {
   isFirstSync: false,
   isLoading: false,
   threadCount: 0,
-  userLoaded: true,
+  hasError: false,
   dismissed: false,
 };
 
@@ -25,9 +25,12 @@ describe("shouldShowSampleThread", () => {
     expect(shouldShowSampleThread({ ...base, isLoading: true })).toBe(false);
   });
 
-  it("stays hidden until the dismissal setting has loaded, and once dismissed", () => {
-    expect(shouldShowSampleThread({ ...base, userLoaded: false })).toBe(false);
+  it("stays hidden once dismissed", () => {
     expect(shouldShowSampleThread({ ...base, dismissed: true })).toBe(false);
+  });
+
+  it("stays hidden while the list or route is failing", () => {
+    expect(shouldShowSampleThread({ ...base, hasError: true })).toBe(false);
   });
 
   it("only appears in the plain inbox, not in search, labels, or splits", () => {

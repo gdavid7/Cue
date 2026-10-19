@@ -3,6 +3,8 @@
 import { SparklesIcon, XIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { toastError } from "@/components/Toast";
+import { getActionErrorMessage } from "@/utils/error";
 import { useUser } from "@/hooks/useUser";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { dismissHintAction } from "@/utils/actions/hints";
@@ -21,11 +23,13 @@ export function SampleThread({
   isPlainInbox,
   isFirstSync,
   isLoading,
+  hasError,
   threadCount,
 }: {
   isPlainInbox: boolean;
   isFirstSync: boolean;
   isLoading: boolean;
+  hasError: boolean;
   threadCount: number;
 }) {
   const { emailAccountId } = useAccount();
@@ -38,8 +42,8 @@ export function SampleThread({
       isPlainInbox,
       isFirstSync,
       isLoading,
+      hasError,
       threadCount,
-      userLoaded: true,
       dismissed: user.dismissedHints.includes(hintId),
     })
   ) {
@@ -51,7 +55,12 @@ export function SampleThread({
       { ...user, dismissedHints: [...user.dismissedHints, hintId] },
       { revalidate: false },
     );
-    dismissHintAction({ hintId }).then(() => mutate());
+    dismissHintAction({ hintId }).then((result) => {
+      if (result?.serverError || result?.validationErrors) {
+        toastError({ description: getActionErrorMessage(result) });
+      }
+      mutate();
+    });
   };
 
   return (

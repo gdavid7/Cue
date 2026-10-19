@@ -9,22 +9,22 @@ export function shouldShowSampleThread({
   isPlainInbox,
   isFirstSync,
   isLoading,
+  hasError,
   threadCount,
-  userLoaded,
   dismissed,
 }: {
   isPlainInbox: boolean;
   isFirstSync: boolean;
   isLoading: boolean;
+  hasError: boolean;
   threadCount: number;
-  userLoaded: boolean;
   dismissed: boolean;
 }) {
   return (
     isPlainInbox &&
     !isFirstSync &&
     !isLoading &&
-    userLoaded &&
+    !hasError &&
     !dismissed &&
     threadCount < SAMPLE_THREAD_THRESHOLD
   );

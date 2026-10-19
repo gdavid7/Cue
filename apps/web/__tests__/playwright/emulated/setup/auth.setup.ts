@@ -102,13 +102,15 @@ async function markOnboardingComplete(email: string) {
         );
         if (account.rowCount === 1) {
           // The first-run "Let Cue find what needs you" card, the "Remove
-          // Cue's labels" card and the one-time pointer to Today (hint ids
-          // from getInboxStyleHintId, getCueLabelsHintId and
-          // getTodayIntroHintId) would shift every mail spec's list down.
+          // Cue's labels" card, the one-time pointer to Today and the sample
+          // thread for quiet inboxes (hint ids from getInboxStyleHintId,
+          // getCueLabelsHintId, getTodayIntroHintId and
+          // getSampleThreadHintId) would shift every mail spec's list down.
           for (const prefix of [
             "inbox-style:",
             "cue-labels:",
             "today-intro:",
+            "sample-thread:",
           ]) {
             await client.query(
               `UPDATE "User" u

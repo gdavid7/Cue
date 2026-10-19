@@ -2096,6 +2096,7 @@ export function MailShell() {
                   isPlainInbox={!isScoped && !searchQuery && !activeSplitId}
                   isFirstSync={isFirstSync}
                   isLoading={isLoading}
+                  hasError={Boolean(error) || routeFailed}
                   threadCount={threads.length}
                 />
               )}
