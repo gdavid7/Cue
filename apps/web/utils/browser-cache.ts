@@ -11,6 +11,9 @@ const PREFIX = "cue:browser-cache:v2:";
 // Stores from before entries were scoped to the signed-in user.
 const STALE_PREFIXES = ["cue:browser-cache:v1:"];
 
+/** The chat composer's unsent message, which sign-out clears too. */
+export const CHAT_DRAFT_STORAGE_KEY = "input";
+
 type Stored<T> = Record<string, { savedAt: number; value: T }>;
 
 // Nothing is read or kept until the signed-in user is known.
@@ -73,6 +76,7 @@ export function createBrowserCache<T>({
 
 export function clearBrowserCaches() {
   blocked = true;
+  remove(CHAT_DRAFT_STORAGE_KEY);
   // So whoever signs in next, the same user included, lifts the block.
   currentUserId = null;
   for (const key of cacheKeys()) remove(key);

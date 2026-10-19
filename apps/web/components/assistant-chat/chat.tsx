@@ -1,5 +1,6 @@
 "use client";
 
+import { CHAT_DRAFT_STORAGE_KEY } from "@/utils/browser-cache";
 import type { ChangeEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -771,11 +772,9 @@ function ChatAccountNotice() {
   );
 }
 
-const DRAFT_INPUT_STORAGE_KEY = "input";
-
 function readDraftInput(): string {
   try {
-    const stored = window.localStorage.getItem(DRAFT_INPUT_STORAGE_KEY);
+    const stored = window.localStorage.getItem(CHAT_DRAFT_STORAGE_KEY);
     const value: unknown = stored ? JSON.parse(stored) : "";
     return typeof value === "string" ? value : "";
   } catch {
@@ -785,7 +784,7 @@ function readDraftInput(): string {
 
 function saveDraftInput(value: string) {
   try {
-    window.localStorage.setItem(DRAFT_INPUT_STORAGE_KEY, JSON.stringify(value));
+    window.localStorage.setItem(CHAT_DRAFT_STORAGE_KEY, JSON.stringify(value));
   } catch {
     // Storage can be full or blocked; the draft just won't survive a reload.
   }

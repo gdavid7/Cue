@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  CHAT_DRAFT_STORAGE_KEY,
   clearBrowserCaches,
   clearBrowserCachesForAccount,
   createBrowserCache,
@@ -105,10 +106,11 @@ describe("createBrowserCache", () => {
     expect(window.localStorage.length).toBe(0);
   });
 
-  it("forgets everything on sign-out and refuses late writes, until someone signs in", () => {
+  it("forgets everything on sign-out, the chat's unsent message too, and refuses late writes until someone signs in", () => {
     const cache = briefs();
     cache.set("account-a", "thread-1", "Pay the invoice", 0);
 
+    window.localStorage.setItem(CHAT_DRAFT_STORAGE_KEY, '"Unsent question"');
     clearBrowserCaches();
     cache.set("account-a", "thread-2", "Late write", 0);
 
