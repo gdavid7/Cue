@@ -1,4 +1,5 @@
 import { redis } from "@/utils/redis";
+import { hashAddressForKey } from "@/utils/redis/address-key";
 import {
   acquireOwnedLock,
   clearOwnedLock,
@@ -10,6 +11,19 @@ const OUTBOUND_PROCESSED_TTL_SECONDS = 60 * 60 * 24 * 30;
 const OUTBOUND_PROCESSED_STATUS = "processed";
 
 function getProcessingKey({
+  userEmail,
+  messageId,
+}: {
+  userEmail: string;
+  messageId: string;
+}) {
+  return `processing-message:${hashAddressForKey(userEmail)}:${messageId}`;
+}
+
+// Keys written before RD-3 named the address. A message an older deploy
+// marked processed is still recognized until those markers expire, eight
+// days after RD-3 shipped; scripts/deletePiiCacheKeys.ts renames them sooner.
+function getLegacyProcessingKey({
   userEmail,
   messageId,
 }: {
@@ -72,7 +86,18 @@ export async function acquireMessageProcessing(key: {
         processingTtlSeconds: MESSAGE_PROCESSING_TTL_SECONDS,
       });
     const lockToken = await claim();
-    if (lockToken) return { status: "acquired", lockToken };
+    if (lockToken) {
+      const legacy = await redis.get<string>(getLegacyProcessingKey(key));
+      if (legacy !== MESSAGE_PROCESSED_STATUS)
+        return { status: "acquired", lockToken };
+      await markOwnedLockProcessed({
+        key: getProcessingKey(key),
+        lockToken,
+        processedStatus: MESSAGE_PROCESSED_STATUS,
+        processedTtlSeconds: MESSAGE_PROCESSED_TTL_SECONDS,
+      });
+      return { status: "processed" };
+    }
     const stored = await redis.get<string>(getProcessingKey(key));
     if (stored === MESSAGE_PROCESSED_STATUS) return { status: "processed" };
     const retryAt = getRetryAt(stored);
@@ -195,7 +220,7 @@ function getFailuresKey({
   userEmail: string;
   messageId: string;
 }) {
-  return `processing-message-failures:${userEmail}:${messageId}`;
+  return `processing-message-failures:${hashAddressForKey(userEmail)}:${messageId}`;
 }
 
 type OutboundMessageKey = {

@@ -1,10 +1,6 @@
 import "server-only";
 import Redis from "ioredis";
-import { after } from "next/server";
-import {
-  createResumableStreamContext,
-  type ResumableStreamContext,
-} from "resumable-stream/ioredis";
+import type { ResumableStreamContext } from "resumable-stream/ioredis";
 import { env } from "@/env";
 import { createScopedLogger, type Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
@@ -22,7 +18,6 @@ declare global {
   var assistantChatRedis:
     | {
         publisher: Redis;
-        streams: ResumableStreamContext;
         listening: Promise<void>;
       }
     | undefined;
@@ -31,10 +26,11 @@ declare global {
 const runs = global.assistantChatRuns ?? new Map<string, AbortController>();
 global.assistantChatRuns = runs;
 
-// Resuming needs a shared Redis; without one, replies still stream and save,
-// they just can't be reattached after a dropped connection.
-export function getChatStreamContext() {
-  return getRedis()?.streams ?? null;
+// Resuming would relay the reply's chunks, which quote the user's mail,
+// through Redis pub/sub, so replies are never resumable (RD-3). They still
+// stream and save; a dropped connection shows the reply once it is saved.
+export function getChatStreamContext(): ResumableStreamContext | null {
+  return null;
 }
 
 // A stop request can land on any server instance, so the instance running the
@@ -139,15 +135,6 @@ function getRedis() {
       logger.error("Unable to listen for assistant chat stops", { error });
     });
 
-  global.assistantChatRedis = {
-    publisher,
-    listening,
-    streams: createResumableStreamContext({
-      keyPrefix: "assistant-chat",
-      waitUntil: after,
-      publisher,
-      subscriber,
-    }),
-  };
+  global.assistantChatRedis = { publisher, listening };
   return global.assistantChatRedis;
 }

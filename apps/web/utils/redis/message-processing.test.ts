@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { redis } from "@/utils/redis";
+import { hashAddressForKey } from "@/utils/redis/address-key";
 import {
   countMessageProcessingFailure,
   deferMessageProcessing,
@@ -11,7 +12,8 @@ import {
   markOutboundMessageProcessed,
 } from "@/utils/redis/message-processing";
 
-vi.mock("node:crypto", () => ({
+vi.mock("node:crypto", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:crypto")>()),
   randomUUID: vi.fn(() => "lock-uuid"),
 }));
 
@@ -24,6 +26,10 @@ vi.mock("@/utils/redis", () => ({
     multi: vi.fn(),
   },
 }));
+
+// RD-3: keys hold a hash of the mailbox address, never the address.
+const USER_HASH = hashAddressForKey("user@example.com");
+const PROCESSING_KEY = `processing-message:${USER_HASH}:message-1`;
 
 describe("countMessageProcessingFailure", () => {
   it("counts a failure and keeps when the message first failed, expiring both together", async () => {
@@ -45,7 +51,7 @@ describe("countMessageProcessingFailure", () => {
 
     expect(result).toEqual({ failures: 2, firstFailedAt: 1_700_000_000_000 });
     expect(commands).toContainEqual(
-      `expire processing-message-failures:user@example.com:message-1 ${8 * 24 * 60 * 60}`,
+      `expire processing-message-failures:${USER_HASH}:message-1 ${8 * 24 * 60 * 60}`,
     );
   });
 });
@@ -70,7 +76,7 @@ describe("message retries", () => {
     const { processingKey, options } = await deferAndReadBack(retryAt);
     vi.mocked(redis.set).mockResolvedValue(null);
 
-    expect(processingKey).toBe("processing-message:user@example.com:message-1");
+    expect(processingKey).toBe(PROCESSING_KEY);
     expect(options).toEqual(expect.objectContaining({ nx: true }));
     expect(await acquireMessageProcessing(key)).toEqual({
       status: "retry-pending",
@@ -88,9 +94,7 @@ describe("message retries", () => {
       status: "acquired",
       lockToken: "lock-uuid",
     });
-    expect(redis.del).toHaveBeenCalledWith(
-      "processing-message:user@example.com:message-1",
-    );
+    expect(redis.del).toHaveBeenCalledWith(PROCESSING_KEY);
   });
 });
 
@@ -108,11 +112,10 @@ describe("message-processing redis locks", () => {
     });
 
     expect(acquired).toBe(true);
-    expect(redis.set).toHaveBeenCalledWith(
-      "processing-message:user@example.com:message-1",
-      "true",
-      { ex: 300, nx: true },
-    );
+    expect(redis.set).toHaveBeenCalledWith(PROCESSING_KEY, "true", {
+      ex: 300,
+      nx: true,
+    });
   });
 
   it("acquires an outbound message lock and returns its token", async () => {
@@ -162,11 +165,34 @@ describe("message-processing redis locks", () => {
     });
 
     expect(result).toEqual(expected);
-    expect(redis.set).toHaveBeenCalledWith(
-      "processing-message:user@example.com:message-1",
-      "lock-uuid",
-      { ex: 300, nx: true },
+    expect(redis.set).toHaveBeenCalledWith(PROCESSING_KEY, "lock-uuid", {
+      ex: 300,
+      nx: true,
+    });
+  });
+
+  it("treats a message an older deploy processed under the address key as processed", async () => {
+    vi.mocked(redis.set).mockResolvedValue("OK");
+    vi.mocked(redis.get).mockImplementation(async (key: string) =>
+      key === "processing-message:user@example.com:message-1"
+        ? "processed"
+        : null,
     );
+    vi.mocked(redis.eval).mockResolvedValue(1);
+
+    const result = await acquireMessageProcessing({
+      userEmail: "user@example.com",
+      messageId: "message-1",
+    });
+
+    expect(result).toEqual({ status: "processed" });
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.stringContaining('redis.call("SET"'),
+      [PROCESSING_KEY],
+      ["lock-uuid", "processed", "691200"],
+    );
+    for (const [key] of vi.mocked(redis.set).mock.calls)
+      expect(key).not.toContain("@");
   });
 
   it("remembers a handled message for longer than Gmail keeps history", async () => {
@@ -180,7 +206,7 @@ describe("message-processing redis locks", () => {
 
     expect(redis.eval).toHaveBeenCalledWith(
       expect.stringContaining('redis.call("SET"'),
-      ["processing-message:user@example.com:message-1"],
+      [PROCESSING_KEY],
       ["lock-uuid", "processed", "691200"],
     );
   });

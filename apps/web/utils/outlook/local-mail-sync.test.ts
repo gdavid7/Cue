@@ -352,6 +352,10 @@ describe("Outlook category identities", () => {
       expect.anything(),
       { ex: 300 },
     );
+    // RD-3: category names are the user's words; only their hashes are kept.
+    expect(JSON.stringify(vi.mocked(redis.set).mock.calls)).not.toContain(
+      "Project",
+    );
   });
 
   it("resumes a paginated catalog before returning a message and reuses its scoped cache", async () => {

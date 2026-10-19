@@ -1,6 +1,7 @@
 import { BRAND_NAME } from "@/utils/branding";
 import type { SlackAdapter, SlackEvent } from "@chat-adapter/slack";
 import { createIoRedisState } from "@chat-adapter/state-ioredis";
+import { withoutMessageContent } from "@/utils/messaging/chat-sdk/state";
 import { createMemoryState } from "@chat-adapter/state-memory";
 import type { TelegramRawMessage } from "@chat-adapter/telegram";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -2747,11 +2748,13 @@ function createChatStateAdapter() {
   // Redis handles this efficiently across replicas; a SQL store would add
   // latency and lock contention in the webhook path.
   if (env.REDIS_URL) {
-    return createIoRedisState({
-      url: env.REDIS_URL,
-      keyPrefix: CHAT_SDK_STATE_KEY_PREFIX,
-      logger: new ConsoleLogger("warn").child("chat-sdk-state"),
-    });
+    return withoutMessageContent(
+      createIoRedisState({
+        url: env.REDIS_URL,
+        keyPrefix: CHAT_SDK_STATE_KEY_PREFIX,
+        logger: new ConsoleLogger("warn").child("chat-sdk-state"),
+      }),
+    );
   }
 
   return createMemoryState();
