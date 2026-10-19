@@ -18,13 +18,19 @@ import {
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
-const { collectThreadContext, getEmailAccountWithAi, generateObject, exa } =
-  vi.hoisted(() => ({
-    collectThreadContext: vi.fn(),
-    getEmailAccountWithAi: vi.fn(),
-    generateObject: vi.fn(),
-    exa: { enabled: true, search: vi.fn() },
-  }));
+const {
+  collectThreadContext,
+  getEmailAccountWithAi,
+  generateObject,
+  getModelForUseCase,
+  exa,
+} = vi.hoisted(() => ({
+  collectThreadContext: vi.fn(),
+  getEmailAccountWithAi: vi.fn(),
+  generateObject: vi.fn(),
+  getModelForUseCase: vi.fn(() => ({})),
+  exa: { enabled: true, search: vi.fn() },
+}));
 vi.mock("@/utils/redis", async () => ({
   redis: (await import("@/__tests__/mocks/recording-redis.mock")).recordingRedis
     .client,
@@ -33,8 +39,8 @@ vi.mock("@/utils/llms", () => ({
   createGenerateObject: () => generateObject,
 }));
 vi.mock("@/utils/llms/use-cases", () => ({
-  getModelForUseCase: () => ({}),
-  LlmUseCase: { DraftReply: "draft-reply" },
+  getModelForUseCase,
+  LlmUseCase: { DraftReply: "draft-reply", PredraftReply: "predraft-reply" },
 }));
 vi.mock("@/utils/premium/limits", () => ({
   assertHasAiAccess: async () => {},
@@ -563,6 +569,52 @@ describe("suggestReply when auto draft replies are off", () => {
 
     expect(result).toMatchObject({ status: "insufficient" });
     expect(getEmailAccountWithAi).toHaveBeenCalled();
+  });
+
+  // Written unasked for incoming mail, so it runs on the cheap tier.
+  it("writes a pre-draft on its own model tier", async () => {
+    const latest = getMockMessage({
+      id: "m5",
+      threadId: "t5",
+      from: "sarah@example.com",
+    });
+    collectThreadContext.mockResolvedValue({
+      thread: { id: "t5", messages: [latest], snippet: "" },
+      items: [],
+    });
+    getEmailAccountWithAi.mockResolvedValue({
+      id: "a1",
+      userId: "u1",
+      email: "me@example.com",
+      name: "Me",
+      timezone: null,
+      user: { aiApiKey: null },
+    });
+    generateObject.mockResolvedValue({
+      object: {
+        enoughEvidence: false,
+        missing: "Which Friday.",
+        webQuery: "",
+        reply: "",
+        claims: [],
+      },
+    });
+    getModelForUseCase.mockClear();
+
+    await suggestReply({
+      emailAccountId: "a1",
+      userEmail: "me@example.com",
+      threadId: "t5",
+      emailProvider: {} as EmailProvider,
+      logger,
+      settings: { draftReplies: "on", webLookupEnabled: false },
+      source: "predraft",
+    });
+
+    expect(getModelForUseCase).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      "predraft-reply",
+    );
   });
 
   it("suggests nothing when the To Reply rule is turned off", async () => {

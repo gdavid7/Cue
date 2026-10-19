@@ -37,6 +37,7 @@ export const LlmUseCase = {
   MeetingWebSearch: "meeting-web-search",
   ParseFilingReply: "parse-filing-reply",
   PersonaAnalysis: "persona-analysis",
+  PredraftReply: "predraft-reply",
   PromptToRules: "prompt-to-rules",
   PromptToSplit: "prompt-to-split",
   ReplyContextCollector: "reply-context-collector",
@@ -87,6 +88,8 @@ export const LLM_USE_CASE_MODEL_TYPES = {
   [LlmUseCase.MeetingWebSearch]: "economy",
   [LlmUseCase.ParseFilingReply]: "economy",
   [LlmUseCase.PersonaAnalysis]: "economy",
+  // Written unasked for incoming mail, under a daily cap: the cheap tier.
+  [LlmUseCase.PredraftReply]: "economy",
   [LlmUseCase.PromptToRules]: "chat",
   [LlmUseCase.PromptToSplit]: "economy",
   [LlmUseCase.ReplyContextCollector]: "economy",
