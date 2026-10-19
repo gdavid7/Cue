@@ -92,12 +92,22 @@ export function useUnsubscribeSender(
     updatedAutoArchive?.sender === canonicalSenderEmail
       ? updatedAutoArchive.enabled
       : undefined;
+  const isAutoArchivedInDb =
+    senderStats?.searchedSenderStatus === NewsletterStatus.AUTO_ARCHIVED;
   const isAutoArchived =
     updatedAutoArchiveEnabled ??
-    (senderStats?.searchedSenderStatus === NewsletterStatus.AUTO_ARCHIVED ||
-      Boolean(sender?.autoArchived));
+    (isAutoArchivedInDb || Boolean(sender?.autoArchived));
+  // Unreadable provider filters leave the status unknown, so hold the toggle
+  // rather than show off for a sender that may be skipping the inbox.
+  const isFilterStatusUnknown =
+    senderStats?.filtersAvailable === false && !isAutoArchivedInDb;
   const isAutoArchiveStatusLoading = Boolean(
     senderEmail && !senderStats && updatedAutoArchiveEnabled === undefined,
+  );
+  const isAutoArchiveStatusUnknown = Boolean(
+    senderEmail &&
+      isFilterStatusUnknown &&
+      updatedAutoArchiveEnabled === undefined,
   );
 
   const onToggleAutoArchive = useCallback(async () => {
@@ -263,6 +273,7 @@ export function useUnsubscribeSender(
     canManageAutoArchive: Boolean(senderEmail),
     isAutoArchived,
     isAutoArchiveStatusLoading,
+    isAutoArchiveStatusUnknown,
     isUpdatingAutoArchive,
     onToggleAutoArchive,
     onUnsubscribe,
