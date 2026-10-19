@@ -1555,9 +1555,10 @@ describe("createEmailProviderMailboxSource", () => {
         pageSize: 50,
       });
 
+    // A first screen of rows comes back on its own...
     const first = await enumerate({ scopeId: "primary", initial: true });
     expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
-      maxResults: 50,
+      maxResults: 12,
       pageToken: undefined,
       includeDrafts: true,
       format: "metadata",
@@ -1571,8 +1572,29 @@ describe("createEmailProviderMailboxSource", () => {
       },
     });
 
+    // ...then the rest of the first 50, as metadata too.
+    const firstValue = first.status === "ok" ? first.value : null;
+    const rest = await enumerate(JSON.parse(firstValue?.nextPage ?? "{}"));
+    expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
+      maxResults: 38,
+      pageToken: "next",
+      includeDrafts: true,
+      format: "metadata",
+    });
+    expect(rest).toMatchObject({
+      status: "ok",
+      value: { requiredHydration: [{ messageId: "m1" }], bodies: [] },
+    });
+
     // Later pages, and a resync where nobody waits on an empty inbox, read
     // whole messages as before.
+    const restValue = rest.status === "ok" ? rest.value : null;
+    await enumerate(JSON.parse(restValue?.nextPage ?? "{}"));
+    expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
+      maxResults: 50,
+      pageToken: "next",
+      includeDrafts: true,
+    });
     await enumerate({ scopeId: "primary", initial: true, pageToken: "next" });
     expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
       maxResults: 50,
