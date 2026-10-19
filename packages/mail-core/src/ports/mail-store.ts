@@ -264,19 +264,6 @@ export interface MailStore {
     previousPage: string | null;
     page: ConversationMembershipPage;
   }): Promise<Admission | { status: "stale" }>;
-  /**
-   * Applies changes read while a scan of `scopeId` is still running, from
-   * the position the scan will hand its stream (`page.from`, which must be
-   * the scan's), and moves that position to `page.to`. Stale when the scan
-   * has ended, restarted or moved on.
-   */
-  applyScanCatchUpPage(input: {
-    scopeId: string;
-    bootstrapId: string;
-    page: SyncPage;
-  }): Promise<
-    { status: "committed"; revision: LocalRevision } | { status: "stale" }
-  >;
   applySyncPage(input: {
     page: SyncPage;
     ownerId: string;

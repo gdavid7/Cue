@@ -1800,18 +1800,7 @@ export async function createSqliteMailStore(
           bodies,
           digest,
           bodyCodec,
-          skipOlderSnapshots: true,
         });
-        // Catch-up alongside the scan has applied changes past where the
-        // scan began; that position, not the page's, is the scan's.
-        const catchUpFrom =
-          Number(current.catch_advanced) === 1
-            ? {
-                streamId: String(current.catch_stream_id),
-                generation: String(current.catch_generation),
-                checkpoint: nullableString(current.catch_checkpoint),
-              }
-            : input.catchUpFrom;
         if (input.nextPage) {
           await tx.execute(
             `UPDATE bootstrap_scans
@@ -1825,9 +1814,9 @@ export async function createSqliteMailStore(
              WHERE account_id = ? AND scope_id = ? AND bootstrap_id = ?`,
             [
               input.nextPage,
-              catchUpFrom?.streamId ?? null,
-              catchUpFrom?.generation ?? null,
-              catchUpFrom?.checkpoint ?? null,
+              input.catchUpFrom?.streamId ?? null,
+              input.catchUpFrom?.generation ?? null,
+              input.catchUpFrom?.checkpoint ?? null,
               Date.now(),
               input.session.accountId,
               input.scopeId,
@@ -1835,7 +1824,7 @@ export async function createSqliteMailStore(
             ],
           );
         } else {
-          const nextStream = catchUpFrom ?? input.from;
+          const nextStream = input.catchUpFrom ?? input.from;
           await tx.execute(
             `INSERT INTO sync_streams(account_id, stream_id, generation, checkpoint)
              VALUES (?, ?, ?, ?)
@@ -1936,80 +1925,6 @@ export async function createSqliteMailStore(
             [input.session.accountId, input.scopeId],
           );
         }
-        const revision = await bumpRevision(tx);
-        return { status: "committed" as const, revision };
-      });
-    },
-    async applyScanCatchUpPage(input) {
-      return driver.write(async (tx) => {
-        const { page } = input;
-        if (
-          !(await accountGenerationMatches(tx, page.session)) ||
-          page.from.generation !== page.session.generation ||
-          page.to.streamId !== page.from.streamId
-        ) {
-          return { status: "stale" as const };
-        }
-        const scan = await tx.query(
-          `SELECT * FROM bootstrap_scans
-           WHERE account_id = ? AND scope_id = ?`,
-          [page.session.accountId, input.scopeId],
-        );
-        const current = scan[0];
-        if (
-          !current ||
-          String(current.bootstrap_id) !== input.bootstrapId ||
-          current.page == null ||
-          nullableString(current.catch_stream_id) !== page.from.streamId ||
-          nullableString(current.catch_generation) !== page.from.generation ||
-          nullableString(current.catch_checkpoint) !== page.from.checkpoint
-        ) {
-          return { status: "stale" as const };
-        }
-        const bodies = page.bodies ?? [];
-        if (
-          !pageFactsBelongToAccount(
-            page.session.accountId,
-            page.changes,
-            page.requiredHydration,
-            bodies,
-          )
-        ) {
-          return { status: "stale" as const };
-        }
-        // What catch-up added is mail the scan has seen, so finishing it
-        // never takes these for messages gone from the mailbox.
-        for (const change of page.changes) {
-          if (change.kind === "message_patch") {
-            await tx.execute(
-              `INSERT OR IGNORE INTO bootstrap_seen_messages(account_id, scope_id, message_id)
-               VALUES (?, ?, ?)`,
-              [page.session.accountId, input.scopeId, change.key.messageId],
-            );
-          }
-        }
-        await applyPageFacts(tx, {
-          accountId: page.session.accountId,
-          requestId: page.requestId,
-          changes: page.changes,
-          requiredHydration: page.requiredHydration,
-          bodies,
-          digest,
-          bodyCodec,
-          skipOlderSnapshots: true,
-        });
-        await tx.execute(
-          `UPDATE bootstrap_scans
-           SET catch_checkpoint = ?, catch_advanced = 1, updated_at_ms = ?
-           WHERE account_id = ? AND scope_id = ? AND bootstrap_id = ?`,
-          [
-            page.to.checkpoint,
-            Date.now(),
-            page.session.accountId,
-            input.scopeId,
-            input.bootstrapId,
-          ],
-        );
         const revision = await bumpRevision(tx);
         return { status: "committed" as const, revision };
       });
@@ -2687,21 +2602,9 @@ async function applyPageFacts(
     bodies: BodyObservation[];
     digest: (value: unknown) => Promise<string>;
     bodyCodec: MessageBodyCodec;
-    /**
-     * A scan and catch-up alongside it apply the same messages in either
-     * order, so a copy older than the one stored, or one deleted since,
-     * is skipped rather than written over the newer state.
-     */
-    skipOlderSnapshots?: boolean;
   },
 ) {
   for (const change of input.changes) {
-    if (
-      input.skipOlderSnapshots &&
-      change.kind === "message_patch" &&
-      (await isOlderSnapshot(tx, change))
-    )
-      continue;
     await applyChange(tx, change);
   }
   for (const body of input.bodies) {
@@ -3526,21 +3429,6 @@ async function isStaleMessageVersion(
   if (!current?.version) return false;
   const comparison = compareProviderVersions(incomingVersion, current.version);
   return comparison === "older" || comparison === "unknown";
-}
-
-// Only versions both copies can order, such as Gmail's history ids, decide:
-// a provider without them (Outlook's scans) applies its copy as before, since
-// a message missing from one folder's scan can come back from another's.
-async function isOlderSnapshot(
-  tx: SqlTransaction,
-  change: Extract<ProviderChange, { kind: "message_patch" }>,
-) {
-  const incoming = change.reference.version;
-  if (!incoming || !isDecimalVersion(incoming)) return false;
-  const current = await loadConfirmed(tx, change.key);
-  if (!current?.version || !isDecimalVersion(current.version)) return false;
-  const comparison = compareProviderVersions(incoming, current.version);
-  return comparison === "older" || (current.deleted && comparison !== "newer");
 }
 
 function compareProviderVersions(left: string, right: string) {

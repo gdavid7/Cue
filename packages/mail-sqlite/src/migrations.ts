@@ -198,7 +198,6 @@ CREATE TABLE IF NOT EXISTS bootstrap_scans (
   catch_stream_id TEXT,
   catch_generation TEXT,
   catch_checkpoint TEXT,
-  catch_advanced INTEGER NOT NULL DEFAULT 0,
   next_attempt_at_ms INTEGER,
   error_code TEXT,
   updated_at_ms INTEGER NOT NULL,
@@ -349,13 +348,6 @@ export async function migrateMailbox(
   }
   try {
     await tx.exec("ALTER TABLE bootstrap_scans ADD COLUMN error_code TEXT");
-  } catch {
-    // column already exists on freshly created databases
-  }
-  try {
-    await tx.exec(
-      "ALTER TABLE bootstrap_scans ADD COLUMN catch_advanced INTEGER NOT NULL DEFAULT 0",
-    );
   } catch {
     // column already exists on freshly created databases
   }
