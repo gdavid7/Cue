@@ -64,7 +64,8 @@ describe("Gmail per-second cap", () => {
   const row = (account: string, minute: string) => ({
     account,
     minute,
-    peakSecondUnits: 200,
+    peakSecondUnits: 700,
+    capUnits: 700,
   });
 
   it("fails on three consecutive pinned minutes", () => {
@@ -79,6 +80,7 @@ describe("Gmail per-second cap", () => {
     });
     expect(check.status).toBe("FAIL");
     expect(check.lines[0]).toContain("longest run 3");
+    expect(check.lines[0]).toContain("700 units/s");
     expect(check.lines[0]).not.toContain("acct-aaaaaaaa");
   });
 
@@ -205,7 +207,7 @@ describe("report", () => {
     expect(queries.drafting).toContain("['cue']");
     expect(queries.drafting).toContain("ago(24h)");
     expect(queries.deferredStorms).toContain("deferred > 50");
-    expect(queries.quotaPeaks).toContain(">= 200");
+    expect(queries.quotaPeaks).toContain("peakSecondCapUnits");
   });
 });
 

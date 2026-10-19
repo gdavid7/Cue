@@ -336,6 +336,7 @@ describe("Gmail quota gate", () => {
         minute: "2026-10-14T13:00:00.000Z",
         totalUnits: 120,
         peakSecondUnits: 120,
+        peakSecondCapUnits: expect.any(Number),
         unitsByCaller: [
           {
             priority: "interactive",
@@ -352,6 +353,7 @@ describe("Gmail quota gate", () => {
       "emailAccountId",
       "limitUnits",
       "minute",
+      "peakSecondCapUnits",
       "peakSecondUnits",
       "refusedByCaller",
       "storeUnavailableByCaller",

@@ -6,8 +6,10 @@ export const SLOW_LOAD_SCOPES = ["mail/v1/enumeration", "mail/v1/changes"];
 export const SLOW_LOAD_P95_MS = 10_000;
 // A rate needs a minimum of logged requests, or one call on a quiet hour is a p95.
 export const MIN_REQUESTS_FOR_RATE = 5;
-// The interactive priority's per-second pace cap in utils/gmail/quota.ts.
-export const GMAIL_PEAK_SECOND_CAP_UNITS = 200;
+// A second counts as pinned at this share of the cap the "Gmail quota usage"
+// line reports as `peakSecondCapUnits` (the highest PACE_CAP in
+// utils/gmail/quota.ts). Lines without that field are not judged.
+export const GMAIL_PINNED_CAP_SHARE = 0.95;
 export const GMAIL_PINNED_MINUTES = 3;
 export const AI_SCOPES = [
   "user/suggested-reply",
@@ -63,7 +65,7 @@ export function buildServiceHealthQueries(dataset: string) {
     `${source(SHORT_WINDOW)} | where ['message'] == "Request completed" | extend scope = tostring(${field("scope")}), weight = ${weight} | where scope in (${scopes.map((scope) => `'${scope}'`).join(", ")})`;
   return {
     requestLatency: `${requests(SLOW_LOAD_SCOPES)} | summarize requests = sum(weight), slowRequests = sumif(weight, todouble(${field("durationMs")}) > ${SLOW_LOAD_P95_MS}), events = count() by scope`,
-    quotaPeaks: `${source(SHORT_WINDOW)} | where ['message'] == "Gmail quota usage" | summarize peakSecondUnits = max(toint(${field("peakSecondUnits")})) by account = tostring(${field("emailAccountId")}), minute = bin(_time, 1m) | where peakSecondUnits >= ${GMAIL_PEAK_SECOND_CAP_UNITS} | order by account asc, minute asc`,
+    quotaPeaks: `${source(SHORT_WINDOW)} | where ['message'] == "Gmail quota usage" | where isnotnull(${field("peakSecondCapUnits")}) | summarize peakSecondUnits = max(toint(${field("peakSecondUnits")})), capUnits = max(toint(${field("peakSecondCapUnits")})) by account = tostring(${field("emailAccountId")}), minute = bin(_time, 1m) | where peakSecondUnits >= ${GMAIL_PINNED_CAP_SHARE} * capUnits | order by account asc, minute asc`,
     aiRequests: `${requests(AI_SCOPES)} | summarize requests = sum(weight), unavailable = sumif(weight, toint(${field("status")}) == 503), events = count() by scope`,
     deferredStorms: `${source(SHORT_WINDOW)} | where ['message'] == "Gmail call deferred by the account's quota budget" | summarize deferred = count() by account = tostring(${field("emailAccountId")}), minute = bin(_time, 1m) | where deferred > ${DEFERRED_PER_MINUTE_LIMIT} | summarize minutes = count(), peakPerMinute = max(deferred) by account`,
     drafting: `${source(DRAFTING_WINDOW)} | summarize toReply = countif(['message'] == "AI determined thread status" and tostring(${field("scope")}) == "conversation-status-handler" and tostring(${field("status")}) == "TO_REPLY"), draftActions = countif(['message'] == "Running action" and tostring(${field("actionType")}) == "DRAFT_EMAIL"), suggested = countif(['message'] == "Reply suggestion outcome" and tostring(${field("outcome")}) == "suggested"), outcomeLogs = countif(['message'] == "Reply suggestion outcome")`,
@@ -126,7 +128,9 @@ function checkQuotaPinned(result: AxiomQueryResult): ServiceCheck {
   const name = `Gmail per-second cap pinned (${GMAIL_PINNED_MINUTES}+ consecutive minutes, ${SHORT_WINDOW})`;
   if ("error" in result) return queryFailed(name, result.error);
   const minutesByAccount = new Map<string, number[]>();
+  let capUnits = 0;
   for (const row of result.rows) {
+    capUnits = Math.max(capUnits, toNumber(row.capUnits));
     const minute = Date.parse(String(row.minute));
     if (Number.isNaN(minute)) continue;
     const account = String(row.account);
@@ -142,11 +146,11 @@ function checkQuotaPinned(result: AxiomQueryResult): ServiceCheck {
     const pinned = longest >= GMAIL_PINNED_MINUTES;
     failed ||= pinned;
     lines.push(
-      `account ${shortId(account)}: ${new Set(minutes).size} minutes at ${GMAIL_PEAK_SECOND_CAP_UNITS} units/s, longest run ${longest}${pinned ? " (pinned)" : ""}`,
+      `account ${shortId(account)}: ${new Set(minutes).size} minutes near the ${capUnits} units/s cap, longest run ${longest}${pinned ? " (pinned)" : ""}`,
     );
   }
   if (!lines.length) {
-    lines.push(`no account reached ${GMAIL_PEAK_SECOND_CAP_UNITS} units/s`);
+    lines.push("no account pinned at the per-second cap");
   }
   return { name, status: failed ? "FAIL" : "PASS", lines };
 }

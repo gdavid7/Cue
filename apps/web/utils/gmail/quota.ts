@@ -1053,6 +1053,9 @@ function logMinuteUsage(
     budgetUnits,
     // The most units admitted within any one second of the minute.
     peakSecondUnits,
+    // The highest per-second cap of any priority, so health checks can tell a
+    // pinned second without hardcoding the cap.
+    peakSecondCapUnits: Math.max(...Object.values(PACE_CAP)),
     unitsByCaller: unitsByCaller.sort((a, b) => b.units - a.units),
     deferredByCaller,
     refusedByCaller,
