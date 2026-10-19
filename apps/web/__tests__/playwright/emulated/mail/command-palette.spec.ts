@@ -384,7 +384,7 @@ test("sender actions are available for a selected list row and match the reader"
   await page.keyboard.press(`${commandModifier}+KeyK`);
   const palette = page.getByRole("dialog");
   await expect(
-    palette.getByRole("option", { name: "Block sender ⇧U" }),
+    palette.getByRole("option", { name: "Block sender", exact: true }),
   ).toBeEnabled();
   await expect(
     palette.getByRole("option", { name: "Skip inbox for this sender ⇧E" }),
@@ -403,7 +403,7 @@ test("sender actions are available for a selected list row and match the reader"
   await page.getByRole("button", { name: /^More actions/ }).click();
   const menu = page.getByRole("menu");
   await expect(
-    menu.getByRole("menuitem", { name: "Block sender ⇧U" }),
+    menu.getByRole("menuitem", { name: "Block sender", exact: true }),
   ).toBeEnabled();
   await expect(
     menu.getByRole("menuitem", { name: "Skip inbox for this sender ⇧E" }),

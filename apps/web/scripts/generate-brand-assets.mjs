@@ -93,18 +93,16 @@ function adaptiveMarkSvg() {
 const IOS_SPLASH_SIZES = {
   "4__iPhone_SE__iPod_touch_5th_generation_and_later": [640, 1136],
   "iPhone_8__iPhone_7__iPhone_6s__iPhone_6__4.7__iPhone_SE": [750, 1334],
-  "iPhone_11__iPhone_XR": [828, 1792],
-  "iPhone_13_mini__iPhone_12_mini__iPhone_11_Pro__iPhone_XS__iPhone_X": [
+  iPhone_11__iPhone_XR: [828, 1792],
+  iPhone_13_mini__iPhone_12_mini__iPhone_11_Pro__iPhone_XS__iPhone_X: [
     1125, 2436,
   ],
-  "iPhone_14__iPhone_13_Pro__iPhone_13__iPhone_12_Pro__iPhone_12": [
-    1170, 2532,
-  ],
-  "iPhone_15_Pro__iPhone_15__iPhone_14_Pro": [1179, 2556],
-  "iPhone_8_Plus__iPhone_7_Plus__iPhone_6s_Plus__iPhone_6_Plus": [1242, 2208],
-  "iPhone_11_Pro_Max__iPhone_XS_Max": [1242, 2688],
-  "iPhone_14_Plus__iPhone_13_Pro_Max__iPhone_12_Pro_Max": [1284, 2778],
-  "iPhone_15_Pro_Max__iPhone_15_Plus__iPhone_14_Pro_Max": [1290, 2796],
+  iPhone_14__iPhone_13_Pro__iPhone_13__iPhone_12_Pro__iPhone_12: [1170, 2532],
+  iPhone_15_Pro__iPhone_15__iPhone_14_Pro: [1179, 2556],
+  iPhone_8_Plus__iPhone_7_Plus__iPhone_6s_Plus__iPhone_6_Plus: [1242, 2208],
+  iPhone_11_Pro_Max__iPhone_XS_Max: [1242, 2688],
+  iPhone_14_Plus__iPhone_13_Pro_Max__iPhone_12_Pro_Max: [1284, 2778],
+  iPhone_15_Pro_Max__iPhone_15_Plus__iPhone_14_Pro_Max: [1290, 2796],
   "8.3__iPad_Mini": [1488, 2266],
   "9.7__iPad_Pro__7.9__iPad_mini__9.7__iPad_Air__9.7__iPad": [1536, 2048],
   "10.2__iPad": [1620, 2160],
