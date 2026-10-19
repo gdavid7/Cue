@@ -156,6 +156,20 @@ import { getOutlookMailboxSyncPage } from "@/utils/outlook/mailbox-sync";
 import { requireSentMessageId } from "@/utils/email/sent-message-id";
 import { searchContacts } from "@/utils/outlook/contact";
 import { mapWithConcurrency } from "@/utils/async";
+import { SafeError } from "@/utils/error";
+import {
+  deleteTrashedOutlookMessagesForever,
+  keepMatchingOutlookMessage,
+  outlookMatchingRequest,
+} from "@/utils/outlook/matching";
+import type {
+  MatchingFilter,
+  MatchingScope,
+} from "@/utils/actions/mail-bulk-matching.validation";
+
+// Graph's largest message page; a `$search` page is capped lower.
+const MATCHING_PAGE_SIZE = 500;
+const MATCHING_SELECT_FIELDS = "id,conversationId,isRead";
 
 export class OutlookProvider implements EmailProvider {
   readonly name = "microsoft";
@@ -172,6 +186,101 @@ export class OutlookProvider implements EmailProvider {
 
   toJSON() {
     return { name: this.name, type: "OutlookProvider" };
+  }
+
+  // Outlook counts messages, not conversations, so a view has no exact count
+  // to offer as one.
+  async countMatchingConversations(_scope: MatchingScope) {
+    return null;
+  }
+
+  async listMatchingMessages({
+    scope,
+    only,
+    pageToken,
+  }: {
+    scope: MatchingScope;
+    only: MatchingFilter;
+    pageToken?: string;
+  }) {
+    const request = outlookMatchingRequest(scope, only);
+    if (request.kind === "unsupported")
+      throw new SafeError("This view can't be acted on in bulk");
+
+    const client = this.client.getClient();
+    const nextLink = resolveMicrosoftGraphNextLink(pageToken);
+    let response: { value: Message[]; "@odata.nextLink"?: string };
+    if (nextLink) {
+      response = await withMicrosoftGraphRetry(
+        () => client.api(nextLink).get(),
+        this.logger,
+      );
+    } else if (request.kind === "list") {
+      response = await withMicrosoftGraphRetry(() => {
+        let list = client
+          .api(request.endpoint)
+          .select(MATCHING_SELECT_FIELDS)
+          .top(MATCHING_PAGE_SIZE);
+        if (request.filter) list = list.filter(request.filter);
+        return list.get();
+      }, this.logger);
+    } else {
+      const compiled = compileOutlookThreadSearch(request.query);
+      if (request.folderKey && !compiled.folderKey && !compiled.folderName)
+        compiled.folderKey = request.folderKey;
+      if (isEmptyOutlookSearch(compiled)) return { messages: [] };
+      // Flags and categories narrow a search locally, which a bulk action
+      // can't do without reading every result, so those searches stay out.
+      if (compiled.search && (compiled.flagged || compiled.category))
+        throw new SafeError("This search can't be acted on in bulk");
+      const folderId = await resolveOutlookSearchFolderId({
+        compiled,
+        folderIds: await getFolderIds(this.client, this.logger),
+        getFolders: () => this.getFolders(),
+      });
+      if ((compiled.folderKey || compiled.folderName) && !folderId)
+        return { messages: [] };
+      response = await withMicrosoftGraphRetry(
+        () =>
+          fetchOutlookSearchPage({
+            client,
+            apiPath: folderId
+              ? `/me/mailFolders/${encodeURIComponent(folderId)}/messages`
+              : "/me/messages",
+            selectFields: MATCHING_SELECT_FIELDS,
+            compiled,
+          }),
+        this.logger,
+      );
+    }
+
+    return {
+      messages: response.value.flatMap((message) =>
+        keepMatchingOutlookMessage(message, only) &&
+        message.id &&
+        message.conversationId
+          ? [{ id: message.id, threadId: message.conversationId }]
+          : [],
+      ),
+      nextPageToken: response["@odata.nextLink"],
+    };
+  }
+
+  async deleteMessagesForever(messageIds: string[]): Promise<string[]> {
+    const { deleteditems } = await getFolderIds(this.client, this.logger);
+    if (!deleteditems) throw new Error("Outlook did not return Deleted Items");
+    return deleteTrashedOutlookMessagesForever({
+      client: this.client.getClient(),
+      messageIds,
+      deletedItemsFolderId: deleteditems,
+      logger: this.logger,
+    });
+  }
+
+  async labelMessages(messageIds: string[], labelId: string): Promise<void> {
+    await mapWithConcurrency([...new Set(messageIds)], 4, (messageId) =>
+      this.labelMessage({ messageId, labelId, labelName: null }),
+    );
   }
 
   async countMessages({

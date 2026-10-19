@@ -31,6 +31,21 @@ import { getEmailTerminology } from "@/utils/terminology";
 import { MailShellSidebar } from "@/app/(app)/[emailAccountId]/mail/MailShellSidebar";
 import { MailSplitTabs } from "@/app/(app)/[emailAccountId]/mail/MailSplitTabs";
 import { SelectAllCheckbox } from "@/app/(app)/[emailAccountId]/mail/SelectAllCheckbox";
+import chunk from "lodash/chunk";
+import { SelectAllMatchingBanner } from "@/app/(app)/[emailAccountId]/mail/SelectAllMatchingBanner";
+import { MatchingConfirmDialog } from "@/app/(app)/[emailAccountId]/mail/MatchingConfirmDialog";
+import { TrashNotice } from "@/app/(app)/[emailAccountId]/mail/TrashNotice";
+import { useSelectAllMatching } from "@/app/(app)/[emailAccountId]/mail/use-select-all-matching";
+import {
+  getMatchingResultCopy,
+  getMatchingScope,
+  needsMatchingConfirm,
+} from "@/app/(app)/[emailAccountId]/mail/select-all-matching";
+import type {
+  MatchingBulkAction,
+  MatchingScope,
+} from "@/utils/actions/mail-bulk-matching.validation";
+import { deleteMessagesForeverAction } from "@/utils/actions/mail-bulk-action";
 import { MailReaderPane } from "@/app/(app)/[emailAccountId]/mail/MailReaderPane";
 import { preloadEmailThread } from "@/components/email-list/EmailThreadLazy";
 import { scheduleAfterPageLoad } from "@/utils/schedule-after-page-load";
@@ -334,6 +349,8 @@ export function MailShell() {
   const [labelPicker, setLabelPicker] = useState<{
     mode: "label" | "move";
     targets: ThreadSelection[];
+    /** Labels every conversation the view matches, not just the targets. */
+    matching?: boolean;
   } | null>(null);
   const [replyToMessageId, setReplyToMessageId] = useState<string>();
   const [replyAll, setReplyAll] = useState(false);
@@ -988,6 +1005,75 @@ export function MailShell() {
     (threadKeys: string[]) => setReadState(threadKeys, true, false),
     [setReadState],
   );
+
+  // Gmail's "select all conversations that match": past the loaded page, a
+  // bulk action runs as a server job per account.
+  const allPageSelected =
+    threads.length > 0 && selection.selectedCount === threads.length;
+  const matchingAccounts = useMemo(() => {
+    if (isAllAccounts) {
+      let scope: MatchingScope | null = null;
+      if (searchQuery) scope = { q: searchQuery };
+      else if (!activeSplit?.filters.length) scope = { type: "inbox" };
+      return scope
+        ? combinedAccounts.map((account) => ({ id: account.id, scope }))
+        : null;
+    }
+    const scope = getMatchingScope(query, provider);
+    return scope ? [{ id: emailAccountId, scope }] : null;
+  }, [
+    activeSplit?.filters.length,
+    combinedAccounts,
+    emailAccountId,
+    isAllAccounts,
+    provider,
+    query,
+    searchQuery,
+  ]);
+  const refreshAfterMatching = useStableCallback(() => {
+    refetchThreadList();
+    client
+      ?.requestSync(matchingAccounts?.map((account) => account.id) ?? [])
+      .catch(() => undefined);
+  });
+  const matching = useSelectAllMatching({
+    accounts: matchingAccounts,
+    viewIdentity: JSON.stringify([
+      emailAccountId,
+      isAllAccounts,
+      query,
+      searchQuery,
+      displayedActiveSplitId,
+    ]),
+    selection: selection.selectedIds,
+    allPageSelected,
+    hasMore: Boolean(hasMore),
+    onFinished: refreshAfterMatching,
+  });
+  const [bulkConfirm, setBulkConfirm] = useState<{
+    action: MatchingBulkAction;
+    total: number | null;
+    target: "matching" | "selection";
+  } | null>(null);
+  const startMatching = useStableCallback(
+    (action: MatchingBulkAction, labelId?: string) => {
+      selection.clear();
+      matching.run(action, { labelId }).catch(() => {
+        toast.error("Couldn't start that. Please try again.");
+      });
+    },
+  );
+  const runMatching = useStableCallback((action: MatchingBulkAction) => {
+    if (needsMatchingConfirm(action, matching.total)) {
+      setBulkConfirm({ action, total: matching.total, target: "matching" });
+      return;
+    }
+    startMatching(action);
+  });
+  // Outlook's access can delete mail for good; Cue's Gmail access can't.
+  const isTrashView = !isAllAccounts && !searchQuery && scopeType === "trash";
+  const canDeleteForever = isTrashView && isOutlook;
+
   const rowActions = useMemo(
     () => ({
       archive: (key: string) => archive([key]),
@@ -1248,9 +1334,8 @@ export function MailShell() {
     openThreadKey,
     readerSelectionSettled,
   ]);
-  const archiveTargets = useCallback(
-    () => runOn(archive, true, true),
-    [archive, runOn],
+  const archiveTargets = useStableCallback(() =>
+    matching.active ? runMatching("archive") : runOn(archive, true, true),
   );
   const archiveAndOpenPrevious = useStableCallback(async () => {
     const wasReaderOpen = Boolean(openThreadKey);
@@ -1311,25 +1396,81 @@ export function MailShell() {
     () => runOn((ids) => setImportantState(ids, false), false),
     [runOn, setImportantState],
   );
-  const trashTargets = useCallback(
-    () => runOn(trash, true, true),
-    [runOn, trash],
+  const trashTargets = useStableCallback(() => {
+    if (matching.active)
+      return runMatching(canDeleteForever ? "delete_forever" : "trash");
+    if (canDeleteForever) {
+      setBulkConfirm({
+        action: "delete_forever",
+        total: actionTargets.length,
+        target: "selection",
+      });
+      return;
+    }
+    return runOn(trash, true, true);
+  });
+  const deleteSelectionForever = useStableCallback(async () => {
+    const targets = actionTargets;
+    const keys = targets.map((target) => target.key);
+    // Only what is in the trash goes for good; the server checks again.
+    const messageIds = targets.flatMap((target) =>
+      target.messages
+        .filter((message) => message.labelIds?.includes(GmailLabel.TRASH))
+        .map((message) => message.id),
+    );
+    selection.clear();
+    if (openThreadKey && keys.includes(openThreadKey)) setOpenThread(null);
+    if (!messageIds.length) return;
+    const deleted = new Set<string>();
+    for (const ids of chunk(messageIds, 1000)) {
+      const result = await deleteMessagesForeverAction(emailAccountId, {
+        messageIds: ids,
+      });
+      if (!result?.data) {
+        toast.error(getActionErrorMessage(result ?? {}));
+        break;
+      }
+      for (const id of result.data.deletedIds) deleted.add(id);
+    }
+    // Counts the conversations that actually lost mail, not those asked for.
+    const deletedConversations = targets.filter((target) =>
+      target.messages.some((message) => deleted.has(message.id)),
+    ).length;
+    if (deletedConversations)
+      toast.success(
+        getMatchingResultCopy("delete_forever", deletedConversations),
+      );
+    refreshAfterMatching();
+  });
+  const confirmBulkAction = useStableCallback(() => {
+    const pending = bulkConfirm;
+    setBulkConfirm(null);
+    if (!pending) return;
+    if (pending.target === "selection") deleteSelectionForever();
+    else startMatching(pending.action);
+  });
+  const emptyTrash = useStableCallback(() =>
+    setBulkConfirm({
+      action: "delete_forever",
+      total: null,
+      target: "matching",
+    }),
   );
-  const markSpamTargets = useCallback(
-    () => runOn(markSpam, true, true),
-    [markSpam, runOn],
+  const markSpamTargets = useStableCallback(() =>
+    matching.active ? runMatching("spam") : runOn(markSpam, true, true),
   );
-  const markReadTargets = useCallback(
-    () => runOn(markRead, false),
-    [markRead, runOn],
+  const markReadTargets = useStableCallback(() =>
+    matching.active ? runMatching("mark_read") : runOn(markRead, false),
   );
   const markUnreadTargets = useStableCallback(() =>
-    runOn((ids) => {
-      if (openThreadKey && ids.includes(openThreadKey)) {
-        readAttemptedForOpenThread.current = openThreadKey;
-      }
-      return setReadState(ids, false);
-    }, true),
+    matching.active
+      ? runMatching("mark_unread")
+      : runOn((ids) => {
+          if (openThreadKey && ids.includes(openThreadKey)) {
+            readAttemptedForOpenThread.current = openThreadKey;
+          }
+          return setReadState(ids, false);
+        }, true),
   );
   const allStarred =
     actionTargets.length > 0 &&
@@ -1357,21 +1498,32 @@ export function MailShell() {
     (target) => target.emailAccountId !== labelAccountId,
   );
   // Outlook categories use the same engine membership command as Gmail labels.
+  // Every match across accounts has no one account's labels to pick from.
+  const matchingAcrossAccounts = matching.active && isAllAccounts;
   const canLabel =
     currentLabelTargets.length > 0 &&
     (isGoogleProvider(labelAccount?.account.provider) ||
       isMicrosoftProvider(labelAccount?.account.provider)) &&
-    !mixedLabelAccounts;
-  const canMarkImportant = canMarkThreadsImportant({
-    provider: labelAccount?.account.provider,
-    mixedAccounts: mixedLabelAccounts,
-  });
+    !mixedLabelAccounts &&
+    !matchingAcrossAccounts;
+  // Importance acts on the page's rows, so it waits while every match is
+  // selected rather than change only the page.
+  const canMarkImportant =
+    !matching.active &&
+    canMarkThreadsImportant({
+      provider: labelAccount?.account.provider,
+      mixedAccounts: mixedLabelAccounts,
+    });
   const openLabelPicker = useStableCallback(() => {
     if (canLabel)
-      setLabelPicker({ mode: "label", targets: currentLabelTargets });
+      setLabelPicker({
+        mode: "label",
+        targets: currentLabelTargets,
+        matching: matching.active,
+      });
   });
   const openMovePicker = useStableCallback(() => {
-    if (canLabel)
+    if (canLabel && !matching.active)
       setLabelPicker({ mode: "move", targets: currentLabelTargets });
   });
   const singleActionTarget =
@@ -1418,10 +1570,11 @@ export function MailShell() {
     () => ({
       actions: {
         archive: archiveTargets,
-        moveToInbox: targetsArchived ? moveToInboxTargets : undefined,
+        moveToInbox:
+          targetsArchived && !matching.active ? moveToInboxTargets : undefined,
         forward: singleActionTarget ? requestForwardTarget : undefined,
         label: canLabel ? openLabelPicker : undefined,
-        star: starTargets,
+        star: matching.active ? undefined : starTargets,
         markRead: markReadTargets,
         markSpam: markSpamTargets,
         markUnread: markUnreadTargets,
@@ -1431,7 +1584,7 @@ export function MailShell() {
             ? () =>
                 window.open(openExternalUrl, "_blank", "noopener,noreferrer")
             : undefined,
-        snooze: snoozeTargets,
+        snooze: matching.active ? undefined : snoozeTargets,
         translate: isReaderTarget ? translateOpenThread : undefined,
         comment: isReaderTarget ? openTeamComments : undefined,
         trash: trashTargets,
@@ -1462,6 +1615,7 @@ export function MailShell() {
       canLabel,
       isReaderTarget,
       allStarred,
+      matching.active,
       starTargets,
       markReadTargets,
       markSpamTargets,
@@ -1638,12 +1792,15 @@ export function MailShell() {
       extendSelectionUp: () => extendSelection(-1),
       label: canLabel ? openLabelPicker : undefined,
       move: canLabel ? openMovePicker : undefined,
-      archive: targetsArchived ? undefined : archiveTargets,
-      archiveAndNext: targetsArchived ? undefined : archiveTargets,
-      archiveAndPrevious: targetsArchived ? undefined : archiveAndOpenPrevious,
+      archive: targetsArchived && !matching.active ? undefined : archiveTargets,
+      // Archive covers every match; moving on through the page doesn't.
+      archiveAndNext:
+        targetsArchived || matching.active ? undefined : archiveTargets,
+      archiveAndPrevious:
+        targetsArchived || matching.active ? undefined : archiveAndOpenPrevious,
       markImportant: canMarkImportant ? markImportantTargets : undefined,
       markNotImportant: canMarkImportant ? markNotImportantTargets : undefined,
-      star: starTargets,
+      star: matching.active ? undefined : starTargets,
       markSpam: markSpamTargets,
       markUnread: markUnreadTargets,
       delete: trashTargets,
@@ -1880,6 +2037,12 @@ export function MailShell() {
     isInbox: !isScoped && !searchQuery && !activeSplitId,
   });
   const threadCount = threads.length;
+  let matchingSelectionLabel: string | undefined;
+  if (matching.active)
+    matchingSelectionLabel =
+      matching.total === null
+        ? "All selected"
+        : `${matching.total.toLocaleString("en-US")} selected`;
   const { selectedCount, selectAll, clear: clearSelection } = selection;
   // Only offered once something is selected, so the tabs sit flush otherwise.
   const selectAllCheckbox = useMemo(
@@ -1934,6 +2097,11 @@ export function MailShell() {
         <LabelPickerDialog
           threadIds={labelPicker.targets.map((target) => target.threadId)}
           mode={labelPicker.mode}
+          onPick={
+            labelPicker.matching
+              ? (labelId) => startMatching("label", labelId)
+              : undefined
+          }
           onClose={() => setLabelPicker(null)}
           onApplied={(threadIds, _labelId) => {
             const keys = threadIds.map((threadId) =>
@@ -1993,7 +2161,16 @@ export function MailShell() {
         />
       }
       floating={senderCommandsPanel}
-      dialogs={labelPickerDialog}
+      dialogs={
+        <>
+          {labelPickerDialog}
+          <MatchingConfirmDialog
+            pending={bulkConfirm}
+            onConfirm={confirmBulkAction}
+            onCancel={() => setBulkConfirm(null)}
+          />
+        </>
+      }
     >
       <MailShellSidebar
         activeType={
@@ -2047,21 +2224,25 @@ export function MailShell() {
                 viewTitle={viewTitle}
                 selectAll={showSplitTabs ? null : selectAllCheckbox}
                 selectedCount={selection.selectedCount}
+                selectionLabel={matchingSelectionLabel}
                 onArchiveSelected={archiveTargets}
                 onMoveToInboxSelected={
-                  targetsArchived ? moveToInboxTargets : undefined
+                  targetsArchived && !matching.active
+                    ? moveToInboxTargets
+                    : undefined
                 }
                 onDeleteSelected={trashTargets}
+                deleteLabel={canDeleteForever ? "Delete forever" : undefined}
                 isUnreadSelected={actionTargets.some((target) =>
                   isThreadUnread(target.messages),
                 )}
                 onMarkReadSelected={markReadTargets}
                 onMarkUnreadSelected={markUnreadTargets}
                 isStarredSelected={allStarred}
-                onStarSelected={starTargets}
+                onStarSelected={matching.active ? undefined : starTargets}
                 onLabelSelected={canLabel ? openLabelPicker : undefined}
                 labelUnavailableReason={
-                  mixedLabelAccounts
+                  mixedLabelAccounts || matchingAcrossAccounts
                     ? "Labels belong to one account"
                     : undefined
                 }
@@ -2082,6 +2263,22 @@ export function MailShell() {
                   labelsByAccount={isAllAccounts ? labelsByAccount : undefined}
                 />
               )}
+              {matching.showBanner ? (
+                <SelectAllMatchingBanner
+                  pageCount={threadCount}
+                  total={matching.total}
+                  viewTitle={viewTitle ?? "Inbox"}
+                  isSearch={Boolean(searchQuery)}
+                  active={matching.active}
+                  onSelectAll={matching.select}
+                  onClear={selection.clear}
+                />
+              ) : null}
+              {isTrashView && threads.length > 0 ? (
+                <TrashNotice
+                  onEmptyTrash={canDeleteForever ? emptyTrash : undefined}
+                />
+              ) : null}
               {showSplitTabs && !isAllAccounts && (
                 <InboxStyleCard
                   ready={threads.length > 0 || (!isLoading && !isFirstSync)}
@@ -2247,10 +2444,11 @@ export function MailShell() {
                 onAskCue={threadInChatAccount ? onAskCueAboutThread : undefined}
                 lastMessage={openMessages.at(-1) ?? null}
                 isStarred={allStarred}
-                onToggleStar={starTargets}
+                onToggleStar={matching.active ? undefined : starTargets}
                 isImportant={allImportant}
                 onToggleImportant={
-                  isGoogleProvider(readerEmailAccount?.account.provider)
+                  isGoogleProvider(readerEmailAccount?.account.provider) &&
+                  !matching.active
                     ? importantTargets
                     : undefined
                 }
