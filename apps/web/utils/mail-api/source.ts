@@ -245,7 +245,9 @@ export function createEmailProviderMailboxSource(input: {
         if (isPrimaryGmailScan && !syncPage.nextPageToken)
           await setGmailInitialSync(accountId, false);
         const changes = syncPage.messages.map((message) =>
-          parsedMessagePatch(accountId, provider.name, message),
+          parsedMessagePatch(accountId, provider.name, message, {
+            format: isFirstSyncFirstPage ? "metadata" : undefined,
+          }),
         );
         const { requiredHydration, bodies } = parsedMessageBodies(
           accountId,
