@@ -53,6 +53,7 @@ import {
   hideSendingDraftMessages,
   upcomingScheduledEmailsKey,
 } from "@/hooks/useHiddenDraftMessageIds";
+import { forgetDeletedDrafts } from "@/utils/mail-engine/forget-deleted-drafts";
 import { VoiceInput } from "@/components/voice/VoiceInput";
 import { toastError, toastSuccess } from "@/components/Toast";
 import {
@@ -1617,10 +1618,19 @@ function ComposeEmailFormContent({
           if (!result?.data)
             throw new Error(getActionErrorMessage(result ?? {}));
           // The local draft hid its mailbox copy; once it is cleared, that
-          // copy would open again as a draft until sync drops it.
-          hideSendingDraftMessages(
+          // copy would open again as a draft, even after a reload, until sync
+          // drops it.
+          const discardedMessageIds = [
+            ...(local?.content?.providerDraftMessageIds ?? []),
+            ...(result.data.deletedMessageId
+              ? [result.data.deletedMessageId]
+              : []),
+          ];
+          hideSendingDraftMessages(selectedEmailAccountId, discardedMessageIds);
+          await forgetDeletedDrafts(
+            client,
             selectedEmailAccountId,
-            local?.content?.providerDraftMessageIds ?? [],
+            discardedMessageIds,
           );
           await client?.requestSync([selectedEmailAccountId]);
         }

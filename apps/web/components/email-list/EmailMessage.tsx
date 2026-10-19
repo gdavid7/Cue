@@ -49,6 +49,8 @@ import { textToHtmlParagraphs } from "@/utils/string";
 import { decodeSnippet } from "@/utils/gmail/decode";
 import { GmailLabel } from "@/utils/gmail/label";
 import { deleteDraftAction } from "@/utils/actions/mail";
+import { getActiveMailClient } from "@/utils/mail-engine/active-client";
+import { forgetDeletedDrafts } from "@/utils/mail-engine/forget-deleted-drafts";
 import type { ThreadMessage } from "@/components/email-list/types";
 import { EmailDetails } from "@/components/email-list/EmailDetails";
 import { HtmlEmail, PlainEmail } from "@/components/email-list/EmailContents";
@@ -1115,6 +1117,9 @@ function ReplyPanel({
           onRestoreCompose(composeSession);
           return false;
         }
+        await forgetDeletedDrafts(getActiveMailClient(), emailAccountId, [
+          result?.data?.deletedMessageId,
+        ]);
       } catch {
         toastError({ description: "Failed to discard draft" });
         onRestoreCompose(composeSession);
@@ -1129,6 +1134,7 @@ function ReplyPanel({
       composeMode,
       draftMessage,
       discardDraft,
+      emailAccountId,
       onCloseCompose,
       onDraftDiscarded,
       onRestoreCompose,

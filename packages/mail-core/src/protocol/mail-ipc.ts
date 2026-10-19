@@ -114,6 +114,15 @@ export const mailIpcRequestSchema = z.discriminatedUnion("method", [
   z.object({
     protocolVersion: z.literal(MAIL_IPC_PROTOCOL_VERSION),
     requestId: z.string().min(1).max(128),
+    method: z.literal("forgetDeletedDrafts"),
+    payload: z.object({
+      accountId: accountIdSchema,
+      messageIds: z.array(z.string().min(1).max(256)).max(500),
+    }),
+  }),
+  z.object({
+    protocolVersion: z.literal(MAIL_IPC_PROTOCOL_VERSION),
+    requestId: z.string().min(1).max(128),
     method: z.literal("purgeAccount"),
     payload: z.object({ accountId: accountIdSchema }),
   }),
