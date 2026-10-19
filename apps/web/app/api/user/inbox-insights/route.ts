@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
-  createGmailQuotaStats,
   OPEN_THREAD_GMAIL_WAIT_MS,
-  runWithGmailQuota,
+  runWithGmailWaitBudget,
 } from "@/utils/gmail/quota";
 import { getInboxInsights } from "@/utils/inbox-insights/get-inbox-insights";
 import { withEmailProvider } from "@/utils/middleware";
@@ -70,14 +69,9 @@ export const GET = withEmailProvider("user/inbox-insights", async (request) => {
     });
   const result =
     searchParams.get("open") === "1" && items.length === 1
-      ? await runWithGmailQuota(
-          {
-            priority: "interactive",
-            maxTotalWaitMs: OPEN_THREAD_GMAIL_WAIT_MS,
-            stats: createGmailQuotaStats(),
-          },
-          load,
-        )
+      ? await runWithGmailWaitBudget(OPEN_THREAD_GMAIL_WAIT_MS, load, {
+          priority: "interactive",
+        })
       : await load();
   return NextResponse.json(result satisfies GetInboxInsightsResponse);
 });

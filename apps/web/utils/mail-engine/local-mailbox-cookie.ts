@@ -13,6 +13,9 @@ const MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
 const STALE_AFTER_MS = 15 * 60_000;
 // The time is rewritten at most this often while Cue stays open.
 const REWRITE_EVERY_MS = 60_000;
+// Times are written on the server's clock, so one further ahead than this
+// came from a browser whose clock was off and isn't trusted.
+const FUTURE_SLACK_MS = 5 * 60_000;
 const SYNCED_AT_SEPARATOR = "~";
 
 /**
@@ -34,10 +37,15 @@ export function hasLocalMailbox(
 }
 
 export function isLocalMailboxStale(syncedAtMs: number, nowMs = Date.now()) {
+  if (syncedAtMs > nowMs + FUTURE_SLACK_MS) return true;
   return nowMs - syncedAtMs > STALE_AFTER_MS;
 }
 
-/** `syncedAtMs` is when its last sync finished, if one has. */
+/**
+ * `syncedAtMs` is when its last sync finished, if one has, on the server's
+ * clock (see `useServerClockOffset`), which is what the server compares it
+ * with.
+ */
 export function markLocalMailboxSynced(
   accountId: string,
   syncedAtMs: number | null = null,

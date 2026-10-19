@@ -50,6 +50,7 @@ const ingestedPreviews = new WeakSet<Promise<InboxPreview>>();
 
 const InboxPreviewSeedContext = createContext<{
   seed: Seed | null;
+  serverClockOffsetMs: number;
   retired: boolean;
   retire: () => void;
   opened: MessageKey[];
@@ -57,6 +58,7 @@ const InboxPreviewSeedContext = createContext<{
   settleOpened: (keys: MessageKey[]) => void;
 }>({
   seed: null,
+  serverClockOffsetMs: 0,
   retired: false,
   retire: IGNORE,
   opened: [],
@@ -74,13 +76,21 @@ export function InboxPreviewSeed({
   emailAccountId,
   preview,
   catchUp = false,
+  serverNowMs,
   children,
 }: {
   emailAccountId: string;
   preview: Promise<InboxPreview> | null;
   catchUp?: boolean;
+  /** The server's clock as it rendered the page. */
+  serverNowMs?: number;
   children: ReactNode;
 }) {
+  // Read as the page first renders here; a stream that took a few seconds
+  // only makes the browser's recorded times that much older.
+  const [serverClockOffsetMs] = useState(() =>
+    serverNowMs === undefined ? 0 : serverNowMs - Date.now(),
+  );
   const [seed, setSeed] = useState<Seed | null>(() =>
     preview ? { emailAccountId, preview, catchUp } : null,
   );
@@ -103,14 +113,31 @@ export function InboxPreviewSeed({
     [],
   );
   const value = useMemo(
-    () => ({ seed, retired, retire, opened, open, settleOpened }),
-    [seed, retired, retire, opened, open, settleOpened],
+    () => ({
+      seed,
+      serverClockOffsetMs,
+      retired,
+      retire,
+      opened,
+      open,
+      settleOpened,
+    }),
+    [seed, serverClockOffsetMs, retired, retire, opened, open, settleOpened],
   );
   return (
     <InboxPreviewSeedContext.Provider value={value}>
       {children}
     </InboxPreviewSeedContext.Provider>
   );
+}
+
+/**
+ * How far the server's clock is ahead of this browser's, so a time the
+ * browser records for the server to compare (the local mailbox's last sync)
+ * is on the server's clock, whatever this browser's clock says.
+ */
+export function useServerClockOffset() {
+  return useContext(InboxPreviewSeedContext).serverClockOffsetMs;
 }
 
 /**

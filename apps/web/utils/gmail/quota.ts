@@ -457,18 +457,20 @@ export const OPEN_THREAD_GMAIL_WAIT_MS = 4000;
 
 /**
  * Caps how long all of `operation`'s Gmail calls wait at the gate together,
- * at the current priority, so a request someone is waiting on answers or
- * defers (with its retry time) within `maxTotalWaitMs` instead of queueing
- * one call after another for most of a minute.
+ * at `priority` (the current one by default), so a request someone is
+ * waiting on answers or defers (with its retry time) within
+ * `maxTotalWaitMs` instead of queueing one call after another for most of
+ * a minute.
  */
 export function runWithGmailWaitBudget<T>(
   maxTotalWaitMs: number,
   operation: () => T,
+  { priority }: { priority?: GmailQuotaPriority } = {},
 ): T {
   const current = currentGmailQuotaContext();
   return runWithGmailQuota(
     {
-      priority: current.priority,
+      priority: priority ?? current.priority,
       maxTotalWaitMs,
       stats: current.stats ?? createGmailQuotaStats(),
     },

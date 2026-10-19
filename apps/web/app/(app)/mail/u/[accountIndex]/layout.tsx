@@ -77,6 +77,7 @@ export default async function MailRouteLayout({
         emailAccountId={account.id}
         preview={preview}
         catchUp={catchUp}
+        serverNowMs={Date.now()}
       >
         <MailScreen />
       </InboxPreviewSeed>

@@ -164,6 +164,7 @@ import {
   useFetchOpenedPreviewThreads,
   useIngestInboxPreview,
   useRetireInboxPreview,
+  useServerClockOffset,
 } from "@/app/(app)/[emailAccountId]/mail/InboxPreviewList";
 import { markLocalMailboxSynced } from "@/utils/mail-engine/local-mailbox-cookie";
 import { showMailView } from "@/app/(app)/[emailAccountId]/mail/show-mail-view";
@@ -730,16 +731,20 @@ export function MailShell() {
     retireInboxPreview();
     markFirstMailListShown();
   }, [hasLocalMail, retireInboxPreview]);
+  const serverClockOffsetMs = useServerClockOffset();
   // When the mailbox last caught up, so a visit after it has fallen behind
   // has the server fetch the newest inbox mail with the page (RL-1).
   useEffect(() => {
     if (!hasLocalMail) return;
-    markLocalMailboxSynced(emailAccountId, lastSyncedAtMs);
+    markLocalMailboxSynced(
+      emailAccountId,
+      lastSyncedAtMs == null ? null : lastSyncedAtMs + serverClockOffsetMs,
+    );
     // A round finished since this page opened: what arrived while Cue was
     // closed is in, so background reads stop waiting on it.
     if (lastSyncedAtMs != null && lastSyncedAtMs >= performance.timeOrigin)
       markMailCaughtUp();
-  }, [hasLocalMail, emailAccountId, lastSyncedAtMs]);
+  }, [hasLocalMail, emailAccountId, lastSyncedAtMs, serverClockOffsetMs]);
   useFetchOpenedPreviewThreads();
   useIngestInboxPreview();
   const listPlaceholderMessage = getListPlaceholderMessage({

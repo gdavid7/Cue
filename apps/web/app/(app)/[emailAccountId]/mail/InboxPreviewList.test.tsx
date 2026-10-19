@@ -16,6 +16,7 @@ import {
   useFetchOpenedPreviewThreads,
   useIngestInboxPreview,
   useRetireInboxPreview,
+  useServerClockOffset,
 } from "./InboxPreviewList";
 
 const account = vi.hoisted(() => ({ emailAccountId: "acc-1" }));
@@ -294,6 +295,31 @@ describe("InboxPreviewList", () => {
     });
 
     expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  // RL-1 review S2: the last sync is recorded on the server's clock, which
+  // is what the server compares it with.
+  it("measures how far the server's clock is from this browser's", async () => {
+    let offset: number | undefined;
+    function ReadOffset() {
+      offset = useServerClockOffset();
+      return null;
+    }
+    const browserNow = Date.now();
+    await act(async () => {
+      render(
+        <InboxPreviewSeed
+          emailAccountId="acc-1"
+          preview={null}
+          serverNowMs={browserNow + 3_600_000}
+        >
+          <ReadOffset />
+        </InboxPreviewSeed>,
+      );
+    });
+
+    expect(offset).toBeGreaterThan(3_600_000 - 5000);
+    expect(offset).toBeLessThanOrEqual(3_600_000);
   });
 
   it("keeps the mail screen and hands nothing over when the rows fail", async () => {

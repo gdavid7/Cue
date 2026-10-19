@@ -58,6 +58,14 @@ describe("local mailbox cookie", () => {
     expect(isLocalMailboxStale(0)).toBe(true);
   });
 
+  // RL-1 review S2: a browser whose clock ran ahead would otherwise never
+  // look stale.
+  it("doesn't trust a sync time from the future", () => {
+    const now = Date.parse("2026-10-19T20:23:00Z");
+    expect(isLocalMailboxStale(now + 60_000, now)).toBe(false);
+    expect(isLocalMailboxStale(now + 2 * 3_600_000, now)).toBe(true);
+  });
+
   it("calls a mailbox stale once it is a quarter of an hour behind", () => {
     const now = Date.parse("2026-10-19T20:23:00Z");
     expect(isLocalMailboxStale(now - 5 * 60_000, now)).toBe(false);
