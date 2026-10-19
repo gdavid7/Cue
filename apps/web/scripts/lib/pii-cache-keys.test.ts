@@ -70,6 +70,22 @@ describe("deletePiiCacheKeys", () => {
     expect(again["usage-migration:weekly-usage-cost-user:*:done"]).toBe(0);
   });
 
+  it("rewrites a weekly migration record stored in the object shape", async () => {
+    const redis = fakeRedis({
+      "usage-migration:weekly-usage-cost-user:u1:done": {
+        weeklyCosts: { "usage-weekly-cost:me@example.com:2026-10-18": 1.5 },
+      },
+    });
+
+    await deletePiiCacheKeys({ redis: redis.client });
+
+    expect(
+      JSON.stringify(
+        redis.store.get("usage-migration:weekly-usage-cost-user:u1:done"),
+      ),
+    ).not.toContain("@");
+  });
+
   it("moves a message claim to its hashed key, so a handled message stays handled", async () => {
     const redis = fakeRedis({
       "processing-message:me@example.com:m1": "processed",

@@ -3,6 +3,10 @@ import type { LanguageModelUsage } from "ai";
 import { redis } from "@/utils/redis";
 import { createScopedLogger } from "@/utils/logger";
 import { logRedisFailureOnce } from "@/utils/redis/unavailable-log";
+import {
+  readUsageMigrationRecord,
+  readWeeklyCostsByDay,
+} from "@/utils/redis/usage-migration-state";
 import type { AiSpendBucket } from "@/utils/llms/spend-bucket";
 
 const logger = createScopedLogger("redis/usage");
@@ -778,14 +782,10 @@ function getUsageMigrationLockKey(migrationName: string) {
 }
 
 function parseLegacyUsageMigrationState(rawState: unknown): RedisUsage | null {
-  if (typeof rawState !== "string") return null;
-
-  try {
-    const parsed = JSON.parse(rawState) as { usage?: Record<string, unknown> };
-    return parsed.usage ? normalizeUsageFields(parsed.usage) : null;
-  } catch {
-    return null;
-  }
+  const usage = readUsageMigrationRecord(rawState)?.usage;
+  return usage && typeof usage === "object"
+    ? normalizeUsageFields(usage as Record<string, unknown>)
+    : null;
 }
 
 function serializeLegacyUsageMigrationState(usage: RedisUsage) {
@@ -830,33 +830,7 @@ function normalizeUsageFields(
 function parseWeeklyUsageMigrationState(
   rawState: unknown,
 ): Map<string, number> | null {
-  if (typeof rawState !== "string") return null;
-
-  try {
-    const parsed = JSON.parse(rawState) as {
-      weeklyCostsByDay?: Record<string, string | number>;
-      /** Before RD-3: keyed by the legacy key, which named the address. */
-      weeklyCosts?: Record<string, string | number>;
-    };
-    if (parsed.weeklyCostsByDay)
-      return new Map(
-        Object.entries(parsed.weeklyCostsByDay).flatMap(([day, value]) => {
-          const cost = parseRedisNumber(value);
-          return cost > 0 ? [[day, cost]] : [];
-        }),
-      );
-    if (!parsed.weeklyCosts) return null;
-
-    const byDay = new Map<string, number>();
-    for (const [key, value] of Object.entries(parsed.weeklyCosts)) {
-      const day = parseWeeklyUsageCostKey(key)?.day;
-      const cost = parseRedisNumber(value);
-      if (day && cost > 0) byDay.set(day, (byDay.get(day) ?? 0) + cost);
-    }
-    return byDay;
-  } catch {
-    return null;
-  }
+  return readWeeklyCostsByDay(rawState)?.costsByDay ?? null;
 }
 
 function serializeWeeklyUsageMigrationState(costsByDay: Map<string, number>) {

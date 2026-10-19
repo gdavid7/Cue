@@ -1,4 +1,5 @@
 import { hashAddressForKey } from "@/utils/redis/address-key";
+import { readWeeklyCostsByDay } from "@/utils/redis/usage-migration-state";
 
 /**
  * RD-3: keys written before Cue stopped keeping email content and personal
@@ -141,13 +142,15 @@ export async function deletePiiCacheKeys({
   let rewritten = 0;
   for await (const batch of scanKeys(redis, WEEKLY_MIGRATION_PATTERN)) {
     for (const key of batch) {
-      const byDay = weeklyCostsByDay(await redis.get(key));
-      if (!byDay) continue;
+      const record = readWeeklyCostsByDay(await redis.get(key));
+      if (!record?.keyedByAddress) continue;
       rewritten++;
       if (!dryRun)
         await redis.set(
           key,
-          JSON.stringify({ weeklyCostsByDay: Object.fromEntries(byDay) }),
+          JSON.stringify({
+            weeklyCostsByDay: Object.fromEntries(record.costsByDay),
+          }),
         );
     }
   }
@@ -165,28 +168,6 @@ function isSettledClaim(value: unknown) {
     value === "processed" ||
     (typeof value === "string" && value.startsWith("retry:"))
   );
-}
-
-/** An old weekly migration record summed by day, or null if already by day. */
-export function weeklyCostsByDay(value: unknown) {
-  let state: unknown = value;
-  if (typeof value === "string") {
-    try {
-      state = JSON.parse(value);
-    } catch {
-      return null;
-    }
-  }
-  const legacy = (state as { weeklyCosts?: Record<string, unknown> } | null)
-    ?.weeklyCosts;
-  if (!legacy || typeof legacy !== "object") return null;
-  const byDay = new Map<string, number>();
-  for (const [key, raw] of Object.entries(legacy)) {
-    const day = /:(\d{4}-\d{2}-\d{2})$/.exec(key)?.[1];
-    const cost = Number(raw);
-    if (day && cost > 0) byDay.set(day, (byDay.get(day) ?? 0) + cost);
-  }
-  return byDay;
 }
 
 /** `processing-message:{address}:{messageId}` with the address hashed. */
