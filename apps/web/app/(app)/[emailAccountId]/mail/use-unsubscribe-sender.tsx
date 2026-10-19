@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
 import { toastUndo } from "@/components/Toast";
@@ -122,8 +122,16 @@ export function useUnsubscribeSender(
       updatedAutoArchiveEnabled === undefined,
   );
 
+  // State lags a fast double-click, so a ref decides whether one is in flight.
+  const isTogglingAutoArchive = useRef(false);
+
   const onToggleAutoArchive = useCallback(async () => {
-    if (!senderEmail || isAutoArchiveStatusLoading || isUpdatingAutoArchive)
+    if (
+      !senderEmail ||
+      isAutoArchiveStatusLoading ||
+      isUpdatingAutoArchive ||
+      isTogglingAutoArchive.current
+    )
       return;
 
     if (!isAutoArchived && !hasUnsubscribeAccess) {
@@ -131,7 +139,11 @@ export function useUnsubscribeSender(
       return;
     }
 
+    isTogglingAutoArchive.current = true;
     setIsUpdatingAutoArchive(true);
+    const recordedStatus = senderStats?.searchedSenderStatus ?? null;
+    const previousStatus =
+      recordedStatus === NewsletterStatus.AUTO_ARCHIVED ? null : recordedStatus;
     const toastId = toast.loading(
       `${isAutoArchived ? "Disabling" : "Enabling"} auto archive for ${senderName}`,
     );
@@ -155,6 +167,7 @@ export function useUnsubscribeSender(
       );
       return;
     } finally {
+      isTogglingAutoArchive.current = false;
       setIsUpdatingAutoArchive(false);
     }
 
@@ -168,12 +181,14 @@ export function useUnsubscribeSender(
     // Undo only reverses the filter: mail already archived stays archived.
     toast.dismiss(toastId);
     toastUndo({
+      // Its own id, so it doesn't replace a pending archive or send undo.
+      id: "block-sender-undo",
       message: `Future emails from ${senderName} will be archived`,
       onUndo: async () => {
         try {
           const undone = await setSenderStatusAction(emailAccountId, {
             senderEmail,
-            status: null,
+            status: previousStatus,
           });
           assertActionSucceeded(undone);
           refetchSenderStats().catch(captureException);
@@ -197,6 +212,7 @@ export function useUnsubscribeSender(
   }, [
     canonicalSenderEmail,
     refetchSenderStats,
+    senderStats?.searchedSenderStatus,
     emailAccountId,
     hasUnsubscribeAccess,
     isAutoArchived,

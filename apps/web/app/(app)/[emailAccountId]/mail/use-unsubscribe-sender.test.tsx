@@ -60,6 +60,7 @@ vi.mock("@/utils/actions/unsubscriber", () => ({
 describe("useUnsubscribeSender", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.stats.searchedSenderStatus = null;
     mocks.setSenderStatusAction.mockResolvedValue({ data: {} });
     mocks.unsubscribeSenderAction.mockResolvedValue({
       data: { unsubscribe: { success: true } },
@@ -84,6 +85,34 @@ describe("useUnsubscribeSender", () => {
       senderEmail: "news@example.com",
       status: null,
     });
+  });
+
+  it("puts the previous status back on undo and keeps its own toast id", async () => {
+    mocks.stats.searchedSenderStatus = "APPROVED";
+    const { result } = renderHook(() => useUnsubscribeSender(message({})));
+
+    await act(() => result.current.onUnsubscribe());
+    expect(mocks.toastUndo.mock.calls[0][0].id).toBe("block-sender-undo");
+    await act(() => mocks.toastUndo.mock.calls[0][0].onUndo());
+
+    expect(mocks.setSenderStatusAction).toHaveBeenLastCalledWith("account-1", {
+      senderEmail: "news@example.com",
+      status: "APPROVED",
+    });
+  });
+
+  it("shows one undo toast when the action fires twice in the same tick", async () => {
+    const { result } = renderHook(() => useUnsubscribeSender(message({})));
+
+    await act(async () => {
+      await Promise.all([
+        result.current.onUnsubscribe(),
+        result.current.onUnsubscribe(),
+      ]);
+    });
+
+    expect(mocks.setSenderStatusAction).toHaveBeenCalledTimes(1);
+    expect(mocks.toastUndo).toHaveBeenCalledTimes(1);
   });
 
   it("asks before sending a one-click unsubscribe it cannot take back", async () => {
