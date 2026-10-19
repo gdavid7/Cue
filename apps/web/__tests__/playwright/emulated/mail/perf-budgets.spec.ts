@@ -2,6 +2,7 @@ import { type BrowserContext, expect, type Page } from "@playwright/test";
 import { getEmailAccountId } from "../account-test-helpers";
 import { test } from "../playwright-test";
 import { buildMailPath } from "@/utils/mail-url";
+import { readProviderAccessToken, withClient } from "./mail-test-helpers";
 import {
   PERF_BUDGETS_MS,
   PerfRecorder,
@@ -61,6 +62,17 @@ test("inbox paints its rows quickly on a cold and a warm load", async ({
             180_000,
           ),
         );
+        // The server's placeholder rows count above; the engine's own list,
+        // which can select and triage, is timed on its own.
+        recorder.add(
+          "cold-engine-rows",
+          await timeSinceNavigation(
+            cold,
+            firstEngineRowVisible,
+            undefined,
+            180_000,
+          ),
+        );
         const coldVitals = await readVitals(cold);
         recorder.add("cold-lcp", coldVitals.lcp);
         recorder.add("cold-ttfb", coldVitals.ttfb);
@@ -77,6 +89,10 @@ test("inbox paints its rows quickly on a cold and a warm load", async ({
       recorder.add(
         "warm-inbox-rows",
         await timeSinceNavigation(warm, firstInboxRowVisible, undefined),
+      );
+      recorder.add(
+        "warm-engine-rows",
+        await timeSinceNavigation(warm, firstEngineRowVisible, undefined),
       );
       const warmVitals = await readVitals(warm);
       recorder.add("warm-lcp", warmVitals.lcp);
@@ -342,6 +358,258 @@ test("Today, Rules, Settings and chat are ready quickly", async ({
     await recorder.attach(testInfo, "pages");
   }
 });
+
+// Someone who just signed in: the app's service worker is installed from the
+// sign-in pages, but there is no local mailbox yet. Harness only, as each run
+// syncs the account from scratch.
+test("inbox paints quickly right after sign-in", async ({
+  browser,
+}, testInfo) => {
+  test.skip(
+    process.env.PERF_MAILBOX !== "large",
+    "Runs only in the perf harness",
+  );
+  test.setTimeout(300_000 + perfRuns * 360_000);
+  const recorder = new PerfRecorder();
+  const cooldownMs = Number(process.env.PERF_COLD_COOLDOWN_MS ?? 0);
+  try {
+    for (let run = 0; run < perfRuns; run++) {
+      if (run > 0) await sleep(cooldownMs);
+      const context = await newPerfContext(browser);
+      try {
+        const settings = await newPerfPage(context);
+        await settings.goto("/settings");
+        await settings.waitForFunction(
+          () => navigator.serviceWorker?.controller,
+          undefined,
+          { timeout: 180_000 },
+        );
+        await settings.close();
+        const page = await newPerfPage(context, { network: true });
+        await page.goto(inbox, { waitUntil: "commit" });
+        recorder.add(
+          "signin-inbox-rows",
+          await timeSinceNavigation(page, firstInboxRowVisible, undefined),
+        );
+        recorder.add(
+          "signin-engine-rows",
+          await timeSinceNavigation(
+            page,
+            firstEngineRowVisible,
+            undefined,
+            180_000,
+          ),
+        );
+        const vitals = await readVitals(page);
+        recorder.add("signin-ttfb", vitals.ttfb);
+        recorder.add("signin-cls-x1000", vitals.cls * 1000);
+        await waitForEngineIdle(page);
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await recorder.attach(testInfo, "signin");
+  }
+});
+
+// Only the large perf mailbox runs this: it resets the account's signature and
+// adds mail to the provider, which the shared suite's other specs don't expect.
+test("first compose, mail that arrived while closed, and list input are quick", async ({
+  browser,
+}, testInfo) => {
+  test.skip(
+    process.env.PERF_MAILBOX !== "large",
+    "Runs only in the perf harness",
+  );
+  test.setTimeout(900_000);
+  const recorder = new PerfRecorder();
+  const context = await newPerfContext(browser);
+  let page = await newPerfPage(context);
+  try {
+    await page.goto(inbox);
+    await page.waitForFunction(firstEngineRowVisible, undefined, {
+      timeout: 180_000,
+    });
+    await waitForEngineIdle(page);
+    await page.close();
+
+    for (let run = 0; run < perfRuns; run++) {
+      // The first compose after sign-in, while the signature was never read
+      // from Gmail: someone who opens Cue and starts writing a second later.
+      await resetSignature();
+      page = await newPerfPage(context);
+      await page.goto(inbox, { waitUntil: "commit" });
+      await page.waitForFunction(firstEngineRowVisible, undefined, {
+        timeout: 60_000,
+      });
+      await page.waitForTimeout(1000);
+      await armInteraction(page);
+      await page.keyboard.press("c");
+      recorder.add(
+        "first-compose",
+        await timeSinceInput(page, editorReady, undefined, 30_000),
+      );
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await page.close();
+
+      // Mail that arrived while Cue was closed, then Cue opened.
+      const subject = `Perf arrival ${Date.now()}`;
+      await insertNewMail(subject);
+      await sleep(1000);
+      page = await newPerfPage(context);
+      await page.goto(inbox, { waitUntil: "commit" });
+      recorder.add(
+        "new-mail-first-row",
+        await timeSinceNavigation(page, firstEngineRowVisible, undefined),
+      );
+      recorder.add(
+        "new-mail-on-open",
+        await timeSinceNavigation(page, rowWithSubjectShown, subject, 60_000),
+      );
+      await page.waitForTimeout(2000);
+      recorder.add("new-mail-cls-x1000", (await readVitals(page)).cls * 1000);
+
+      // Moving through the list and archiving, judged by the focused row.
+      await waitForEngineIdle(page);
+      for (let step = 0; step < 5; step++) {
+        const before = await focusedSubject(page).catch(() => "");
+        await armInteraction(page);
+        await page.keyboard.press("j");
+        recorder.add(
+          "list-nav",
+          await timeSinceInput(page, focusedSubjectIsNot, before),
+        );
+      }
+      for (let step = 0; step < 2; step++) {
+        const target = await focusedSubject(page);
+        await armInteraction(page);
+        await page.keyboard.press("e");
+        recorder.add(
+          "archive-input",
+          await timeSinceInput(page, rowWithSubjectGone, target),
+        );
+        await page.keyboard.press("z");
+        await page
+          .waitForFunction(
+            rowWithSubjectMatches,
+            { subject: target, text: "", present: true },
+            { timeout: 20_000 },
+          )
+          .catch(async (error: unknown) => {
+            console.log(
+              `PERF-UNDO-FAILED ${JSON.stringify(await describeUndoState(page, target))}`,
+            );
+            throw error;
+          });
+      }
+      const vitals = await readVitals(page);
+      recorder.add("list-inp", vitals.inp);
+      recorder.add("list-longest-task", vitals.longestTaskMs);
+      await page.close();
+    }
+  } catch (error) {
+    testInfo.annotations.push({ type: "failed-at", description: page.url() });
+    await page
+      .screenshot({ path: testInfo.outputPath("perf-failure.png") })
+      .catch(() => undefined);
+    throw error;
+  } finally {
+    await context.close();
+    await recorder.attach(testInfo, "arrivals");
+  }
+});
+
+// What the screen and the mail engine show when an undo does not bring the
+// archived conversation back, so a failure says which side lost it.
+async function describeUndoState(page: Page, subject: string) {
+  return page.evaluate(async (subject) => {
+    const subjects = Array.from(
+      document.querySelectorAll("[data-mail-thread-subject]"),
+      (element) => element.textContent ?? "",
+    );
+    const inspect = (await window.__inboxZeroMailInspect
+      ?.read()
+      .catch(() => null)) as Record<string, unknown> | null;
+    return {
+      rowsShown: subjects.length,
+      targetShown: subjects.includes(subject),
+      inPreview: Boolean(document.querySelector("[data-mail-inbox-preview]")),
+      toasts: Array.from(
+        document.querySelectorAll("[data-sonner-toast]"),
+        (toast) => (toast.textContent ?? "").slice(0, 80),
+      ),
+      focused: document.activeElement?.tagName,
+      inspectKeys: inspect ? Object.keys(inspect) : null,
+      pending: inspect
+        ? JSON.stringify(
+            (inspect as { commands?: unknown; outbox?: unknown }).commands ??
+              (inspect as { outbox?: unknown }).outbox ??
+              null,
+          ).slice(0, 600)
+        : null,
+    };
+  }, subject);
+}
+
+async function resetSignature() {
+  await withClient((client) =>
+    client.query(
+      `UPDATE "EmailAccount" SET signature = NULL WHERE email = $1`,
+      [process.env.PLAYWRIGHT_TEST_EMAIL],
+    ),
+  );
+}
+
+async function insertNewMail(subject: string) {
+  const token = await readProviderAccessToken();
+  const response = await fetch(
+    `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/messages`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        from: "Arrivals <arrivals@example.com>",
+        to: process.env.PLAYWRIGHT_TEST_EMAIL,
+        subject,
+        body_text: "Mail that arrived while Cue was closed.",
+        labelIds: ["INBOX", "UNREAD"],
+        internalDate: String(Date.now()),
+      }),
+    },
+  );
+  expect(response.ok).toBe(true);
+}
+
+function firstEngineRowVisible() {
+  for (const row of document.querySelectorAll(
+    '[role="listbox"][aria-label="Conversations"] [data-mail-thread-row]',
+  )) {
+    if (
+      !row.closest("[data-mail-inbox-preview]") &&
+      row.getBoundingClientRect().height > 0
+    )
+      return performance.now();
+  }
+  return false;
+}
+
+function rowWithSubjectShown(subject: string) {
+  for (const element of document.querySelectorAll("[data-mail-thread-subject]"))
+    if (element.textContent === subject) return performance.now();
+  return false;
+}
+
+function focusedSubjectIsNot(previous: string) {
+  const subject = document.querySelector(
+    '[data-mail-thread-row][tabindex="0"] [data-mail-thread-subject]',
+  )?.textContent;
+  return subject && subject !== previous ? performance.now() : false;
+}
 
 /** The sidebar on a laptop; the go-to shortcut on a phone, which has none. */
 async function goToView(page: Page, view: "Inbox" | "Sent") {

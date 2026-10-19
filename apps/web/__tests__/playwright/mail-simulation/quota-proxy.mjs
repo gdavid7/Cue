@@ -19,6 +19,8 @@ export const QUOTA_COSTS = {
   "messages.untrash": 5,
   "messages.delete": 10,
   "messages.send": 100,
+  // messages.insert (POST /messages), how harnesses deliver new mail.
+  "messages.create": 25,
   "messages.attachments.get": 20,
   "drafts.list": 5,
   "drafts.get": 20,

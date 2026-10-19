@@ -24,8 +24,11 @@ import { findLandingSplit } from "@/utils/split-inbox/inbox-styles";
 import { getMailSettings } from "@/utils/split-inbox/settings.server";
 import { loadInboxPreview } from "@/utils/threads/inbox-preview.server";
 import { createScopedLogger } from "@/utils/logger";
+import { OFFLINE_MAIL_SAVE_HEADER } from "@/utils/offline/mail-cache";
 
 const logger = createScopedLogger("mail/route-layout");
+// Next.js names the server action a request runs in this header.
+const SERVER_ACTION_HEADER = "next-action";
 
 // The mail screen lives in the layout, not the page: a layout persists while
 // the view below it (`inbox`, `sent`, a thread) changes, so switching views
@@ -89,6 +92,15 @@ async function startInboxPreview(account: { id: string; provider: string }) {
   const [pathname, search] = (headerStore.get(MAIL_PATH_HEADER) ?? "").split(
     "?",
   );
+  // A server action that sets a cookie, such as the last account opened,
+  // renders this layout again to answer it, and the service worker's offline
+  // copy is a shell. Neither shows these rows (the page keeps the ones it
+  // has), so neither spends Gmail quota on them during the first sync.
+  if (
+    headerStore.has(SERVER_ACTION_HEADER) ||
+    headerStore.has(OFFLINE_MAIL_SAVE_HEADER)
+  )
+    return { preview: null };
   const location = parseMailPath(pathname ?? "", search);
   if (location?.view?.kind !== "inbox" || location.allInboxes)
     return { preview: null };

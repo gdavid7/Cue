@@ -28,3 +28,12 @@ Contexts use a persistent browser profile: an incognito context keeps the local
 mailbox in memory behind a browser round trip for every disk access, which
 makes local writes many times slower than on a real profile. Set
 `PERF_INCOGNITO=1` to measure the incognito path.
+
+Tracing and video are off here: trace snapshots run on the page's main thread
+around every action and land inside input timings.
+
+Flows beyond the CI budgets run only on this large mailbox: an inbox opened
+right after sign-in with the service worker installed, the first compose
+while the signature was never read from Gmail, mail delivered while Cue was
+closed (with its layout shift), and moving through and archiving in the
+list.

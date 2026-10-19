@@ -48,6 +48,8 @@ import type {
 import { deleteMessagesForeverAction } from "@/utils/actions/mail-bulk-action";
 import { MailReaderPane } from "@/app/(app)/[emailAccountId]/mail/MailReaderPane";
 import { preloadEmailThread } from "@/components/email-list/EmailThreadLazy";
+import { useWarmComposer } from "@/app/(app)/[emailAccountId]/compose/use-warm-composer";
+import { markFirstMailListShown } from "@/utils/mail-engine/first-mail-list";
 import { scheduleAfterPageLoad } from "@/utils/schedule-after-page-load";
 import { MailTitlebarNav } from "@/app/(app)/[emailAccountId]/mail/MailTitlebarNav";
 import {
@@ -715,6 +717,7 @@ export function MailShell() {
     if (!hasLocalMail) return;
     markLocalMailboxSynced(emailAccountId);
     retireInboxPreview();
+    markFirstMailListShown();
   }, [hasLocalMail, emailAccountId, retireInboxPreview]);
   useFetchOpenedPreviewThreads();
   const listPlaceholderMessage = getListPlaceholderMessage({
@@ -795,6 +798,7 @@ export function MailShell() {
       idleTimeout: 3000,
     });
   }, [hasOpenThread]);
+  useWarmComposer();
   const openThreadKey = isAllAccounts
     ? getThreadSelectionKey(openThreadSelection)
     : openThreadId;
@@ -2197,11 +2201,11 @@ export function MailShell() {
               ref={listSectionRef}
               className={
                 layout === "split"
-                  ? "flex min-h-0 w-[clamp(258px,32vw,400px)] shrink-0 flex-col border-r border-border"
+                  ? "relative flex min-h-0 w-[clamp(258px,32vw,400px)] shrink-0 flex-col border-r border-border"
                   : // min-w-0 matters: a flex item won't shrink below its content
                     // width without it, so long snippets would widen the column
                     // past the viewport instead of truncating.
-                    "flex min-h-0 min-w-0 flex-1 flex-col"
+                    "relative flex min-h-0 min-w-0 flex-1 flex-col"
               }
             >
               <ListToolbar
