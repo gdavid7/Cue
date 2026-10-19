@@ -33,6 +33,7 @@ import { MailSplitTabs } from "@/app/(app)/[emailAccountId]/mail/MailSplitTabs";
 import { SelectAllCheckbox } from "@/app/(app)/[emailAccountId]/mail/SelectAllCheckbox";
 import { MailReaderPane } from "@/app/(app)/[emailAccountId]/mail/MailReaderPane";
 import { preloadEmailThread } from "@/components/email-list/EmailThreadLazy";
+import { useWarmComposer } from "@/app/(app)/[emailAccountId]/compose/use-warm-composer";
 import { scheduleAfterPageLoad } from "@/utils/schedule-after-page-load";
 import { MailTitlebarNav } from "@/app/(app)/[emailAccountId]/mail/MailTitlebarNav";
 import {
@@ -758,6 +759,7 @@ export function MailShell() {
       idleTimeout: 3000,
     });
   }, [hasOpenThread]);
+  useWarmComposer();
   const openThreadKey = isAllAccounts
     ? getThreadSelectionKey(openThreadSelection)
     : openThreadId;
