@@ -26,6 +26,8 @@ const DEADLINE_WINDOW_DAYS = 7;
 // Today shouldn't wait on a slow app or calendar: what's late is left out.
 const CALENDAR_TIMEOUT_MS = 3000;
 const SOURCE_TIMEOUT_MS = 2500;
+// Comfortably longer than connecting a calendar after sign-in takes.
+const SIGN_IN_CALENDAR_GRACE_MS = 2 * 60 * 1000;
 const DEADLINE_PAUSE_SECONDS = 5 * 60;
 const TASK_LIST_CACHE_SECONDS = 7 * 24 * 60 * 60;
 const EVENING_HOUR = 17;
@@ -182,12 +184,36 @@ async function upcomingEvents({
       }),
       CALENDAR_TIMEOUT_MS,
     );
+    // Sign-in connects the calendar after it redirects, so a mailbox added
+    // moments ago may not have it yet: that's unknown, not "not connected".
+    if (
+      result.noCalendarConnected &&
+      (await isNewMailbox({ emailAccountId, now }))
+    )
+      return { connected: true, events: [] };
     return { connected: !result.noCalendarConnected, events: result.events };
   } catch (error) {
     // Unknown isn't "not connected": don't ask a connected user to connect.
     logger.warn("Failed to fetch calendar events for Today", { error });
     return { connected: true, events: [] };
   }
+}
+
+async function isNewMailbox({
+  emailAccountId,
+  now,
+}: {
+  emailAccountId: string;
+  now: Date;
+}) {
+  const mailbox = await prisma.emailAccount.findUnique({
+    where: { id: emailAccountId },
+    select: { createdAt: true },
+  });
+  return (
+    !!mailbox &&
+    now.getTime() - mailbox.createdAt.getTime() < SIGN_IN_CALENDAR_GRACE_MS
+  );
 }
 
 /**
