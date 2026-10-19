@@ -25,14 +25,15 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads", () => ({
   useEngineMailThreads: ({
-    query,
+    predicate,
     enabled,
   }: {
-    query: { q: string };
+    predicate?: unknown;
     enabled: boolean;
   }) => {
-    if (enabled) state.enabledWindows.push(query.q);
-    const result = enabled ? state.results.get(query.q) : undefined;
+    const key = searchesOf(predicate).join(" | ");
+    if (enabled) state.enabledWindows.push(key);
+    const result = enabled ? state.results.get(key) : undefined;
     return {
       threads: (result?.ids ?? []).map((id) => ({ id, messages: [] })),
       hasRemoteResponse: Boolean(result?.settled),
@@ -47,7 +48,7 @@ import { useCueSearch } from "@/app/(app)/[emailAccountId]/mail/use-cue-search";
 const SENTENCE = "the lease contract Sarah sent last month";
 const SEARCH =
   "from:sarah has:attachment after:2026/09/01 before:2026/10/01 lease OR contract";
-const WIDER = "from:sarah lease OR contract";
+const WIDER = "from:sarah (lease OR contract)";
 
 function render(query: string | null, enabled = true) {
   return renderHook(
@@ -125,6 +126,48 @@ describe("useCueSearch", () => {
     expect(result.current.widerSearches).toEqual([]);
   });
 
+  it("keeps out mail its searches find after the budget", () => {
+    state.results.set(SEARCH, { settled: false, ids: ["a"] });
+    const { result, rerender } = render(SENTENCE);
+    expect(result.current.threads.map((t) => t.id)).toEqual(["a"]);
+
+    act(() => {
+      vi.advanceTimersByTime(CUE_SEARCH_BUDGET_MS);
+    });
+    state.results.set(SEARCH, { settled: true, ids: ["late", "a"] });
+    rerender({ q: SENTENCE });
+
+    expect(result.current.threads.map((t) => t.id)).toEqual(["a"]);
+    expect(result.current.foundNothing).toBe(false);
+  });
+
+  it("says it found nothing only once its searches have answered", () => {
+    state.results.set(SEARCH, { settled: false, ids: [] });
+    const { result, rerender } = render(SENTENCE);
+    act(() => {
+      vi.advanceTimersByTime(CUE_SEARCH_BUDGET_MS);
+    });
+    expect(result.current.stage).toBe("done");
+    expect(result.current.foundNothing).toBe(false);
+
+    state.results.set(SEARCH, { settled: true, ids: [] });
+    rerender({ q: SENTENCE });
+    expect(result.current.foundNothing).toBe(true);
+  });
+
+  it("starts the budget again for a search that comes back", () => {
+    state.results.set(SEARCH, { settled: false, ids: [] });
+    const { result, rerender } = render(SENTENCE);
+    act(() => {
+      vi.advanceTimersByTime(CUE_SEARCH_BUDGET_MS);
+    });
+    expect(result.current.stage).toBe("done");
+
+    rerender({ q: "invoices from Acme this year" });
+    rerender({ q: SENTENCE });
+    expect(result.current.stage).toBe("searching");
+  });
+
   it("drops a reading that arrives after the budget and answers from the typed words", () => {
     state.intent = undefined;
     const { result, rerender } = render("when is my flight?");
@@ -160,3 +203,14 @@ describe("useCueSearch", () => {
     });
   });
 });
+
+function searchesOf(predicate: unknown): string[] {
+  if (!predicate || typeof predicate !== "object") return [];
+  const node = predicate as {
+    kind: string;
+    query?: string;
+    predicates?: unknown[];
+  };
+  if (node.kind === "search" && node.query) return [node.query];
+  return (node.predicates ?? []).flatMap(searchesOf);
+}

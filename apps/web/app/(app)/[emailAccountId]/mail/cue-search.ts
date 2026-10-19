@@ -1,3 +1,7 @@
+import {
+  type ActionableThread,
+  getListThreadKey,
+} from "@/app/(app)/[emailAccountId]/mail/types";
 import type { GetSearchIntentResponse } from "@/app/api/user/search-intent/route";
 import { widenSearch } from "@/utils/mail-search/natural-language-search";
 
@@ -8,6 +12,8 @@ import { widenSearch } from "@/utils/mail-search/natural-language-search";
 export const CUE_SEARCH_BUDGET_MS = 4000;
 /** Fewer matches than this and Cue widens the search, once. */
 export const WIDEN_BELOW_RESULTS = 2;
+/** The plain results a Cue found row would repeat on screen. */
+export const PLAIN_ROWS_IN_VIEW = 5;
 
 export type CueSearchIntent = NonNullable<GetSearchIntentResponse>;
 
@@ -109,4 +115,33 @@ export function getSearchAnswerRequest({
   return intent.searches.length
     ? { query, searches: intent.searches }
     : { query };
+}
+
+/**
+ * The rows the budget left on screen: once it's spent, mail the searches
+ * find later stays out, so nothing lands above results being read. The rows
+ * kept still show their latest state.
+ */
+export function keepFrozenRows<T extends ActionableThread>(
+  threads: T[],
+  frozenKeys: string[] | null,
+): T[] {
+  if (!frozenKeys) return threads;
+  const kept = new Set(frozenKeys);
+  return threads.filter((thread) => kept.has(getListThreadKey(thread)));
+}
+
+/**
+ * Cue's rows less the ones the first plain results already show, so no
+ * conversation appears twice on screen. The plain list itself is untouched,
+ * which keeps its keyboard positions.
+ */
+export function withoutPlainDuplicates<T extends ActionableThread>(
+  cueThreads: T[],
+  plainThreads: ActionableThread[],
+): T[] {
+  const shown = new Set(
+    plainThreads.slice(0, PLAIN_ROWS_IN_VIEW).map(getListThreadKey),
+  );
+  return cueThreads.filter((thread) => !shown.has(getListThreadKey(thread)));
 }

@@ -20,6 +20,7 @@ function renderSection(props: Partial<ComponentProps<typeof CueFoundSection>>) {
   render(
     <CueFoundSection
       expandedPreview={false}
+      foundNothing={false}
       intent={INTENT}
       layout="list"
       onEditSearch={onEditSearch}
@@ -62,11 +63,16 @@ describe("CueFoundSection", () => {
     ).toBeTruthy();
   });
 
-  it("says when its searches found nothing, only once they have", () => {
-    renderSection({ stage: "searching" });
+  it("says its searches found nothing only when told they all answered", () => {
+    renderSection({ stage: "done" });
     expect(screen.queryByText("No mail matched Cue's searches.")).toBeNull();
     cleanup();
-    renderSection({ stage: "done" });
+    renderSection({ stage: "done", foundNothing: true });
     expect(screen.getByText("No mail matched Cue's searches.")).toBeTruthy();
+  });
+
+  it("closes when Cue has nothing to search", () => {
+    renderSection({ stage: "off", intent: null });
+    expect(screen.queryByRole("region", { name: "Cue found" })).toBeNull();
   });
 });

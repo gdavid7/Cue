@@ -4,7 +4,10 @@ import {
   getCueSearchStage,
   getSearchAnswerRequest,
   getWiderSearches,
+  keepFrozenRows,
+  PLAIN_ROWS_IN_VIEW,
   shouldWidenCueSearch,
+  withoutPlainDuplicates,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
 
 const INTENT: CueSearchIntent = {
@@ -64,7 +67,7 @@ describe("shouldWidenCueSearch", () => {
   const wider = getWiderSearches(INTENT.searches);
 
   it("widens a search that found too little", () => {
-    expect(wider).toEqual(["from:sarah lease OR contract"]);
+    expect(wider).toEqual(["from:sarah (lease OR contract)"]);
     expect(
       shouldWidenCueSearch({
         stage: stage({ primary: EMPTY }),
@@ -207,3 +210,30 @@ describe("getSearchAnswerRequest", () => {
     ).toEqual({ query });
   });
 });
+
+describe("keepFrozenRows", () => {
+  it("keeps out mail found after the budget, in its latest state", () => {
+    const live = [row("late"), { ...row("a"), snippet: "now read" }, row("b")];
+    expect(keepFrozenRows(live, ["a", "b"])).toEqual([live[1], live[2]]);
+    expect(keepFrozenRows(live, null)).toBe(live);
+  });
+});
+
+describe("withoutPlainDuplicates", () => {
+  it("hides rows the plain results already show on screen, and only those", () => {
+    const plain = Array.from({ length: PLAIN_ROWS_IN_VIEW + 2 }, (_, i) =>
+      row(`p${i}`),
+    );
+    const cue = [row("p0"), row("new"), row(`p${PLAIN_ROWS_IN_VIEW}`)];
+    expect(withoutPlainDuplicates(cue, plain).map((t) => t.id)).toEqual([
+      "new",
+      `p${PLAIN_ROWS_IN_VIEW}`,
+    ]);
+    // The plain list is left as it is.
+    expect(plain.map((t) => t.id)[0]).toBe("p0");
+  });
+});
+
+function row(id: string) {
+  return { id, messages: [{ id: `${id}-m` }], snippet: "" };
+}

@@ -49,6 +49,7 @@ import { deleteMessagesForeverAction } from "@/utils/actions/mail-bulk-action";
 import { MailReaderPane } from "@/app/(app)/[emailAccountId]/mail/MailReaderPane";
 import { CueFoundSection } from "@/app/(app)/[emailAccountId]/mail/CueFoundSection";
 import { useCueSearch } from "@/app/(app)/[emailAccountId]/mail/use-cue-search";
+import { withoutPlainDuplicates } from "@/app/(app)/[emailAccountId]/mail/cue-search";
 import { usePremium } from "@/hooks/usePremium";
 import { preloadEmailThread } from "@/components/email-list/EmailThreadLazy";
 import { scheduleAfterPageLoad } from "@/utils/schedule-after-page-load";
@@ -780,8 +781,11 @@ export function MailShell() {
   const searchFoundNothingAtAll =
     searchFoundNothing &&
     isSearchCommitted &&
-    (!showCueFound ||
-      (cueSearch.stage === "done" && !cueSearch.threads.length));
+    (!showCueFound || cueSearch.foundNothing);
+  const cueFoundThreads = useMemo(
+    () => withoutPlainDuplicates(cueSearch.threads, threads),
+    [cueSearch.threads, threads],
+  );
 
   const selection = useThreadSelection(orderedIds);
 
@@ -2401,16 +2405,17 @@ export function MailShell() {
                   request={cueSearch.answerRequest}
                 />
               ) : null}
-              {cueSearch.stage !== "off" ? (
+              {cueSearch.natural ? (
                 <CueFoundSection
                   expandedPreview={expandedPreview}
+                  foundNothing={cueSearch.foundNothing}
                   intent={cueSearch.intent}
                   key={searchParam}
                   layout={layout}
                   onEditSearch={editCueSearch}
                   onOpenThread={openCueFoundThread}
                   stage={cueSearch.stage}
-                  threads={cueSearch.threads}
+                  threads={cueFoundThreads}
                   userEmail={userEmail}
                   userLabels={userLabels}
                   widerSearches={cueSearch.widerSearches}
