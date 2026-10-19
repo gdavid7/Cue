@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { env } from "@/env";
 import { getWeeklyUsageCostByBucket } from "@/utils/redis/usage";
 import { createScopedLogger, type Logger } from "@/utils/logger";
@@ -355,7 +356,11 @@ async function getWeeklySpend(userId: string, legacyEmails: string[]) {
 }
 
 function getWeeklySpendByBucket(userId: string, legacyEmails: string[]) {
-  const key = `${userId}:${[...new Set(legacyEmails)].sort().join(",")}`;
+  // Hashed so the memo holds no addresses (RD-3).
+  const emailsHash = createHash("sha256")
+    .update([...new Set(legacyEmails)].sort().join(","))
+    .digest("hex");
+  const key = `${userId}:${emailsHash}`;
   return weeklySpendByBucket.get(key, () =>
     getWeeklyUsageCostByBucket({ userId, legacyEmails }),
   );

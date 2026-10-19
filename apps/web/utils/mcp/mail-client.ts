@@ -32,13 +32,6 @@ export const sendMailSchema = editorSchema.extend({
   mutationId: z.string().uuid(),
   queuedAt: z.number().int().nonnegative(),
 });
-const navigationCache = new Map<
-  string,
-  {
-    expiresAt: number;
-    value: Promise<Awaited<ReturnType<typeof fetchMailNavigation>>>;
-  }
->();
 const systemViews = new Set([
   "inbox",
   "sent",
@@ -61,12 +54,9 @@ export async function browseMailForMcp(
     args.emailAccountId,
     logger,
   );
-  const navigationPromise = getMailNavigation(
-    userId,
-    emailAccount.id,
-    provider,
-    logger,
-  );
+  // Label names can name people, so they are read per call rather than
+  // kept in instance memory (RD-3).
+  const navigationPromise = fetchMailNavigation(provider, logger);
   const pagePromise = (async () => {
     if (args.query?.trim())
       return provider.searchThreads({
@@ -175,7 +165,6 @@ export async function saveMailDraftForMcp(
     if (!draft.id) throw new Error("Draft could not be saved.");
     draftId = draft.id;
   }
-  navigationCache.delete(JSON.stringify([userId, emailAccount.id]));
   return {
     emailAccount,
     emailAccountId: emailAccount.id,
@@ -226,7 +215,6 @@ export async function sendMailForMcp(
       },
     },
   });
-  navigationCache.delete(JSON.stringify([userId, emailAccount.id]));
   return { emailAccount, ...outcome };
 }
 
@@ -245,7 +233,6 @@ export async function changeMailForMcp(
   else if (args.action === "unarchive")
     await provider.unarchiveThread(args.threadId);
   else await provider.markReadThread(args.threadId, args.action === "read");
-  navigationCache.delete(JSON.stringify([userId, emailAccount.id]));
   return {
     emailAccount,
     threadId: args.threadId,
@@ -301,35 +288,6 @@ function validateRecipients(to: string, cc?: string) {
     )
       throw new Error("Enter valid recipient email addresses.");
   }
-}
-
-function getMailNavigation(
-  userId: string,
-  emailAccountId: string,
-  provider: Awaited<ReturnType<typeof createEmailProvider>>,
-  logger: Logger,
-) {
-  const key = JSON.stringify([userId, emailAccountId]);
-  const existing = navigationCache.get(key);
-  if (existing && existing.expiresAt > Date.now()) return existing.value;
-  navigationCache.delete(key);
-  if (navigationCache.size >= 100)
-    navigationCache.delete(navigationCache.keys().next().value!);
-  const entry = {
-    expiresAt: Date.now() + 60_000,
-    value: fetchMailNavigation(provider, logger),
-  };
-  navigationCache.set(key, entry);
-  entry.value.then(
-    (navigation) => {
-      if (navigation.unavailable && navigationCache.get(key) === entry)
-        navigationCache.delete(key);
-    },
-    () => {
-      if (navigationCache.get(key) === entry) navigationCache.delete(key);
-    },
-  );
-  return entry.value;
 }
 
 async function fetchMailNavigation(
