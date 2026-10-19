@@ -7,7 +7,6 @@ import { loadCombinedThreads } from "@/utils/threads/load-combined";
 import { loadThreads, toListThreads } from "@/utils/threads/load";
 import { threadsQuery } from "@/utils/threads/validation";
 import { labelIdsToThreadsQuery } from "@/utils/split-inbox/split-query";
-import { createPageBuffer } from "@/utils/redis/thread-page-buffer";
 import { MAX_SPLIT_LABELS } from "@/utils/split-inbox/split-constants";
 
 export const maxDuration = 30;
@@ -42,11 +41,6 @@ export const GET = withAuth(
     });
     const result = await loadCombinedThreads({
       accounts,
-      pageBuffer: createPageBuffer({
-        kind: "combined",
-        userId: request.auth.userId,
-        query: { q, labelNames, isUnread, limit },
-      }),
       cursor: cursor ?? null,
       limit,
       logger: request.logger,

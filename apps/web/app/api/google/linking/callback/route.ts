@@ -33,7 +33,6 @@ import {
 import { isDuplicateError } from "@/utils/prisma-helpers";
 import { SafeError } from "@/utils/error";
 import { scheduleWatchAfterLinking } from "@/utils/email/watch-after-linking";
-import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
 import { shareChannelsAcrossMailboxes } from "@/utils/messaging/shared-channels";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 import { INITIAL_REPLY_TRACKING_RULES } from "@/utils/reply-tracker/initial-rules";
@@ -488,7 +487,6 @@ async function completeGoogleAccountLinking({
       });
     },
   );
-  await invalidateUserOwnAddresses(targetUserId);
   await setOAuthCodeResult(code, { success });
 
   scheduleWatchAfterLinking({ targetUserId, logger });

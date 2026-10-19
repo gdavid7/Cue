@@ -1,6 +1,5 @@
 import { deleteContact as deleteLoopsContact } from "@inboxzero/loops";
 import { deleteContact as deleteResendContact } from "@inboxzero/transactional-email";
-import { withThreadPageBufferDeletion } from "@/utils/redis/thread-page-buffer";
 import prisma from "@/utils/prisma";
 import { deleteTinybirdEmailData } from "@inboxzero/tinybird";
 import { after } from "next/server";
@@ -13,8 +12,6 @@ import { captureException, SafeError } from "@/utils/error";
 import { stopWatchingEmailAccount } from "@/utils/email/watch-manager";
 import type { Logger } from "@/utils/logger";
 import { prepareMemberRemovalNotifications } from "@/utils/team-comments/member-removal";
-import { clearCachedResearchForUser } from "@/utils/redis/research-cache";
-import { invalidateAccountValidation } from "@/utils/redis/account-validation";
 import { releaseAccountRecordings } from "@/utils/meeting-recorder/delete-media";
 import {
   DELETE_ACCOUNT_REQUIRES_OWNER_TRANSFER_ERROR,
@@ -67,64 +64,50 @@ export async function deleteUser({
       captureException(error);
     });
 
-    clearCachedResearchForUser(userId).catch((error) => {
-      logger.error("Error clearing cached research", { error });
-      captureException(error);
+    await deleteSoloOrganizations({
+      organizationIds: organizationIdsToDelete,
+      deletedEmailAccountIds: emailAccountIds,
     });
 
-    await withThreadPageBufferDeletion(emailAccountIds, async () => {
-      await deleteSoloOrganizations({
-        organizationIds: organizationIdsToDelete,
-        deletedEmailAccountIds: emailAccountIds,
-      });
+    const emailAccounts = accounts.flatMap((account) =>
+      account.emailAccount
+        ? [{ ...account.emailAccount, provider: account.provider }]
+        : [],
+    );
 
-      const emailAccounts = accounts.flatMap((account) =>
-        account.emailAccount
-          ? [{ ...account.emailAccount, provider: account.provider }]
-          : [],
-      );
+    // Watches and meeting bots are found through rows that cascade with the
+    // user, so every mailbox is released before the user is deleted.
+    const releases = await Promise.allSettled(
+      emailAccounts.map(async (emailAccount) => {
+        await stopWatchingEmailAccount({
+          emailAccountId: emailAccount.id,
+          provider: emailAccount.provider,
+          subscriptionId: emailAccount.watchEmailsSubscriptionId,
+          logger,
+        });
+        await releaseAccountRecordings({
+          emailAccountId: emailAccount.id,
+          logger,
+        });
+      }),
+    );
+    // Settle every mailbox first so a retry cannot overlap unfinished cleanup.
+    const failedRelease = releases.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (failedRelease) throw failedRelease.reason;
 
-      // Watches and meeting bots are found through rows that cascade with the
-      // user, so every mailbox is released before the user is deleted.
-      const releases = await Promise.allSettled(
-        emailAccounts.map(async (emailAccount) => {
-          await stopWatchingEmailAccount({
-            emailAccountId: emailAccount.id,
-            provider: emailAccount.provider,
-            subscriptionId: emailAccount.watchEmailsSubscriptionId,
-            logger,
-          });
-          await releaseAccountRecordings({
-            emailAccountId: emailAccount.id,
-            logger,
-          });
-        }),
-      );
-      // Settle every mailbox first so a retry cannot overlap unfinished cleanup.
-      const failedRelease = releases.find(
-        (result): result is PromiseRejectedResult =>
-          result.status === "rejected",
-      );
-      if (failedRelease) throw failedRelease.reason;
+    await deleteUserRows({ userId, emailAccountIds, logger });
 
-      await deleteUserRows({ userId, emailAccountIds, logger });
+    await Promise.allSettled(
+      emailAccounts.flatMap(({ email }) => [
+        deleteLoopsContact(email),
+        deletePosthogUser({ email }),
+        deleteResendContact({ email }),
+      ]),
+    );
 
-      await Promise.all(
-        emailAccountIds.map((emailAccountId) =>
-          invalidateAccountValidation({ userId, emailAccountId }),
-        ),
-      );
-
-      await Promise.allSettled(
-        emailAccounts.flatMap(({ email }) => [
-          deleteLoopsContact(email),
-          deletePosthogUser({ email }),
-          deleteResendContact({ email }),
-        ]),
-      );
-
-      logger.info("User resources deleted");
-    });
+    logger.info("User resources deleted");
 
     const emails = accounts
       .map((account) => account.emailAccount?.email)

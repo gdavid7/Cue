@@ -4,7 +4,6 @@ import { z } from "zod";
 import { after } from "next/server";
 import { Prisma } from "@/generated/prisma/client";
 import prisma from "@/utils/prisma";
-import { withThreadPageBufferDeletion } from "@/utils/redis/thread-page-buffer";
 import { deleteUser } from "@/utils/user/delete";
 import { stopWatchingEmailAccount } from "@/utils/email/watch-manager";
 import { actionClient, actionClientUser } from "@/utils/actions/safe-action";
@@ -31,8 +30,6 @@ import {
 } from "@/utils/ai/draft-cleanup";
 import { isDuplicateError, isNotFoundError } from "@/utils/prisma-helpers";
 import { type Logger, toLogJson } from "@/utils/logger";
-import { invalidateAccountValidation } from "@/utils/redis/account-validation";
-import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
 import { prepareMemberRemovalNotifications } from "@/utils/team-comments/member-removal";
 import {
   DELETE_ACCOUNT_REQUIRES_OWNER_TRANSFER_ERROR,
@@ -297,17 +294,15 @@ async function runDeleteEmailAccountTransaction(
   },
 ) {
   try {
-    await withThreadPageBufferDeletion([context.emailAccountId], () =>
-      prisma.$transaction([
-        prisma.$queryRaw`
+    await prisma.$transaction([
+      prisma.$queryRaw`
         SELECT true AS locked
         FROM (
           SELECT pg_advisory_xact_lock(539114481, hashtext(${userId}))
         ) lock
       `,
-        ...operations,
-      ]),
-    );
+      ...operations,
+    ]);
   } catch (error) {
     context.logger.error("Delete email account transaction failed", {
       error,
@@ -353,14 +348,6 @@ async function runDeleteEmailAccountTransaction(
       "We couldn't delete this email account. Please contact support if this keeps happening.",
     );
   }
-
-  await Promise.all([
-    invalidateAccountValidation({
-      userId,
-      emailAccountId: context.emailAccountId,
-    }),
-    invalidateUserOwnAddresses(userId),
-  ]);
 }
 
 function getPrismaErrorCode(error: unknown) {

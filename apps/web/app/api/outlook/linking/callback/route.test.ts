@@ -1,7 +1,6 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
-import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
 import { env } from "@/env";
@@ -95,9 +94,7 @@ vi.mock("@/utils/oauth/account-linking", async (importActual) => {
   };
 });
 
-vi.mock("@/utils/user/own-addresses", () => ({
-  invalidateUserOwnAddresses: vi.fn(),
-}));
+vi.mock("@/utils/user/own-addresses", () => ({}));
 
 vi.mock("@/utils/user/merge-account", () => ({
   mergeAccount: vi.fn(),
@@ -337,7 +334,6 @@ describe("outlook linking callback route", () => {
       logger: expect.anything(),
     });
     await expectWatchScheduledForUser("user-123");
-    expect(invalidateUserOwnAddresses).toHaveBeenCalledWith("user-123");
   });
 
   // Parallel auth URLs all pass the check there, so each callback checks again

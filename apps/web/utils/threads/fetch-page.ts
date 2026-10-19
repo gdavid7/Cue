@@ -2,7 +2,6 @@ import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import { queryIncludesSpamOrTrash } from "@/utils/gmail/thread";
 import { GmailLabel } from "@/utils/gmail/label";
 import { mergePaginatedSources } from "@/utils/threads/merge-paginated-sources";
-import { createPageBuffer } from "@/utils/redis/thread-page-buffer";
 import { getThreadTimestamp } from "@/utils/threads/sort";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 
@@ -94,13 +93,6 @@ export async function fetchThreadsPage({
         condition,
       })),
       cursor: pageToken ?? null,
-      pageBuffer: createPageBuffer<EmailThread>({
-        kind: "labels",
-        emailAccountId,
-        messageFormat,
-        maxResults,
-        query,
-      }),
       limit: maxResults,
       concurrency: LABEL_CONCURRENCY,
       compare: (left, right) =>
@@ -162,13 +154,6 @@ export async function fetchThreadsPage({
   const merged = await mergePaginatedSources({
     sources: anyLabelIds.map((labelId) => ({ id: labelId })),
     cursor: pageToken ?? null,
-    pageBuffer: createPageBuffer<EmailThread>({
-      kind: "labels",
-      emailAccountId,
-      messageFormat,
-      maxResults,
-      query,
-    }),
     limit: maxResults,
     concurrency: LABEL_CONCURRENCY,
     compare: (left, right) =>
