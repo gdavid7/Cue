@@ -3,7 +3,8 @@
  *
  * Tests that emails are correctly classified and labeled:
  * - Emails needing reply get appropriate labels
- * - FYI/informational emails don't trigger drafts
+ * - FYI/informational emails don't get reply suggestions
+ * - A reply suggestion stays in Cue: the mailbox never holds a draft for it
  * - Labels are actually applied in the email provider
  *
  * Usage:
@@ -14,8 +15,16 @@ import { describe, test, expect, beforeAll, afterEach } from "vitest";
 import { shouldRunFlowTests, TIMEOUTS } from "./config";
 import { initializeFlowTests, setupFlowTest } from "./setup";
 import { generateTestSummary } from "./teardown";
-import { sendTestEmail, TEST_EMAIL_SCENARIOS } from "./helpers/email";
-import { waitForExecutedRule, waitForMessageInInbox } from "./helpers/polling";
+import {
+  assertNoThreadDrafts,
+  sendTestEmail,
+  TEST_EMAIL_SCENARIOS,
+} from "./helpers/email";
+import {
+  waitForExecutedRule,
+  waitForMessageInInbox,
+  waitForReplySuggestion,
+} from "./helpers/polling";
 import { logStep, clearLogs, setTestStartTime } from "./helpers/logging";
 import type { TestAccount } from "./helpers/accounts";
 
@@ -101,12 +110,20 @@ describe.skipIf(!shouldRunFlowTests())("Auto-Labeling", () => {
         (a) => a.type === "DRAFT_EMAIL",
       );
 
-      // For a "needs reply" email, we expect a draft to be created
+      // A "needs reply" email gets a reply suggestion, kept in Cue
       expect(draftAction).toBeDefined();
-      expect(draftAction?.draftId).toBeTruthy();
+      const suggestion = await waitForReplySuggestion({
+        threadId: outlookMessage.threadId,
+        emailAccountId: outlook.id,
+      });
+      expect(suggestion.executedActionId).toBe(draftAction?.id);
+      await assertNoThreadDrafts({
+        provider: outlook.emailProvider,
+        threadId: outlookMessage.threadId,
+      });
 
-      logStep("Draft created for needs-reply email", {
-        draftId: draftAction?.draftId,
+      logStep("Reply suggestion kept for needs-reply email", {
+        executedActionId: suggestion.executedActionId,
       });
 
       // ========================================
@@ -188,7 +205,7 @@ describe.skipIf(!shouldRunFlowTests())("Auto-Labeling", () => {
       logStep("Verifying no draft for FYI email");
 
       const draftAction = executedRule.actionItems.find(
-        (a) => a.type === "DRAFT_EMAIL" && a.draftId,
+        (a) => a.type === "DRAFT_EMAIL" && a.draftStatus === "PENDING",
       );
 
       // FYI emails should NOT create drafts
@@ -274,7 +291,7 @@ describe.skipIf(!shouldRunFlowTests())("Auto-Labeling", () => {
 
       // Thank you emails typically don't need replies
       const draftAction = executedRule.actionItems.find(
-        (a) => a.type === "DRAFT_EMAIL" && a.draftId,
+        (a) => a.type === "DRAFT_EMAIL" && a.draftStatus === "PENDING",
       );
 
       // Thank you emails should NOT create drafts
@@ -356,7 +373,7 @@ describe.skipIf(!shouldRunFlowTests())("Auto-Labeling", () => {
       expect(draftAction).toBeDefined();
 
       logStep("Question email processed", {
-        hasDraft: !!draftAction?.draftId,
+        hasSuggestion: draftAction?.draftStatus === "PENDING",
         actionsCount: executedRule.actionItems.length,
       });
     },
@@ -432,11 +449,20 @@ describe.skipIf(!shouldRunFlowTests())("Auto-Labeling", () => {
         (a) => a.type === "DRAFT_EMAIL",
       );
 
+      // A "needs reply" email gets a reply suggestion, kept in Cue
       expect(draftAction).toBeDefined();
-      expect(draftAction?.draftId).toBeTruthy();
+      const suggestion = await waitForReplySuggestion({
+        threadId: gmailMessage.threadId,
+        emailAccountId: gmail.id,
+      });
+      expect(suggestion.executedActionId).toBe(draftAction?.id);
+      await assertNoThreadDrafts({
+        provider: gmail.emailProvider,
+        threadId: gmailMessage.threadId,
+      });
 
-      logStep("Draft created for needs-reply email", {
-        draftId: draftAction?.draftId,
+      logStep("Reply suggestion kept for needs-reply email", {
+        executedActionId: suggestion.executedActionId,
       });
 
       // ========================================
@@ -516,7 +542,7 @@ describe.skipIf(!shouldRunFlowTests())("Auto-Labeling", () => {
       logStep("Verifying no draft for FYI email");
 
       const draftAction = executedRule.actionItems.find(
-        (a) => a.type === "DRAFT_EMAIL" && a.draftId,
+        (a) => a.type === "DRAFT_EMAIL" && a.draftStatus === "PENDING",
       );
 
       expect(draftAction).toBeUndefined();

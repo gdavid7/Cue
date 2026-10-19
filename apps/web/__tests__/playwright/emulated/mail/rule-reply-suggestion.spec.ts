@@ -5,7 +5,9 @@ import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
 import {
   grantAiAccess,
+  readLatestMailMutation,
   readProviderAccessToken,
+  UNDO_WINDOW_SEND_TIMEOUT_MS,
   withClient,
 } from "./mail-test-helpers";
 
@@ -14,11 +16,14 @@ import {
 const SUGGESTION = "Hi Jonas, Thursday at 10 works for me. See you then.";
 const RULE_ID = "playwright-rule-suggestion-to-reply";
 const DRAFT_ACTION_ID = "playwright-rule-suggestion-draft-action";
+// Long enough for autosave to have written a draft, had it been going to.
+const AUTOSAVE_WINDOW_MS = 4000;
 
 test.describe.configure({ mode: "serial" });
 
 let restoreAiAccess: (() => Promise<unknown>) | undefined;
 let restoreRule: (() => Promise<unknown>) | undefined;
+const seededRuns: string[] = [];
 
 test.beforeEach(async ({ page }) => {
   test.skip(
@@ -31,6 +36,20 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.afterEach(async () => {
+  const runs = seededRuns.splice(0);
+  if (runs.length) {
+    await withClient(async (client) => {
+      await client.query(
+        `DELETE FROM "SuggestedReplyDraft" WHERE "executedActionId" IN
+           (SELECT id FROM "ExecutedAction" WHERE "executedRuleId" = ANY($1))`,
+        [runs],
+      );
+      // Its actions go with it.
+      await client.query(`DELETE FROM "ExecutedRule" WHERE id = ANY($1)`, [
+        runs,
+      ]);
+    });
+  }
   await restoreRule?.();
   await restoreAiAccess?.();
   restoreRule = undefined;
@@ -50,18 +69,32 @@ test("shows the rule's suggestion at once, and drafts it only once edited", asyn
   });
 
   await openThread(page, emailAccountId, threadId, subject);
-  const editor = page.locator(
-    '[data-testid="thread-reader"] [data-email-editor-content]',
-  );
+  const reader = page.getByTestId("thread-reader");
+  const editor = reader.locator("[data-email-editor-content]");
   await expect(editor).toContainText(SUGGESTION, { timeout: 60_000 });
+  await expect(reader.getByText("Suggested by Cue")).toBeVisible();
   await capturePlaywrightCheckpoint(page, testInfo, "rule-suggestion-shown");
 
-  // Long enough for autosave to have written a draft, had it been going to.
-  await page.waitForTimeout(4000);
+  await page.waitForTimeout(AUTOSAVE_WINDOW_MS);
   expect(await countDrafts(page, threadId)).toBe(0);
 
-  await editor.click();
-  await page.keyboard.press("End");
+  // A reload opens the reply from this device's copy, not the suggestion:
+  // it still knows the text is Cue's and saves nothing to the mailbox.
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(editor).toContainText(SUGGESTION, { timeout: 60_000 });
+  await page.waitForTimeout(AUTOSAVE_WINDOW_MS);
+  expect(await countDrafts(page, threadId)).toBe(0);
+
+  // Popped out, the composer no longer has the suggestion handed to it.
+  await reader.getByRole("button", { name: "Pop out draft" }).click();
+  const dialog = page.getByRole("dialog", { name: new RegExp(subject) });
+  const dialogEditor = dialog.locator("[contenteditable='true']");
+  await expect(dialogEditor).toContainText(SUGGESTION);
+  await page.waitForTimeout(AUTOSAVE_WINDOW_MS);
+  expect(await countDrafts(page, threadId)).toBe(0);
+
+  await dialogEditor.click();
+  await page.keyboard.press("ControlOrMeta+End");
   await page.keyboard.type(" Bring the slides.");
 
   await expect
@@ -70,6 +103,74 @@ test("shows the rule's suggestion at once, and drafts it only once edited", asyn
   await expect
     .poll(() => rememberedDraft(executedActionId), { timeout: 30_000 })
     .toEqual({ content: SUGGESTION });
+});
+
+test("sends the suggestion as it is without a draft", async ({
+  page,
+}, testInfo) => {
+  const emailAccountId = await getEmailAccountId(page);
+  const subject = `Contract question ${testInfo.retry}-${Date.now()}`;
+  const { threadId, messageId } = await insertMessage(page, subject);
+  await seedSuggestion({ emailAccountId, threadId, messageId });
+
+  await openThread(page, emailAccountId, threadId, subject);
+  const reader = page.getByTestId("thread-reader");
+  await expect(reader.locator("[data-email-editor-content]")).toContainText(
+    SUGGESTION,
+    { timeout: 60_000 },
+  );
+
+  await reader.getByRole("button", { name: "Send", exact: true }).click();
+  await expect
+    .poll(
+      () =>
+        readLatestMailMutation(page, {
+          emailAccountId,
+          kind: "reply",
+          threadId,
+        }),
+      { timeout: UNDO_WINDOW_SEND_TIMEOUT_MS },
+    )
+    .toMatchObject({ status: "succeeded" });
+
+  await expect
+    .poll(() => sentReplyText(page, threadId), { timeout: 30_000 })
+    .toContain("Thursday at 10 works for me");
+  expect(await countDrafts(page, threadId)).toBe(0);
+  await capturePlaywrightCheckpoint(page, testInfo, "rule-suggestion-sent");
+});
+
+// D-084: a rule can write to someone other than the sender. It opens
+// addressed to them, and says so, rather than passing as the reply.
+test("opens a rule's reply to someone else addressed and labelled as theirs", async ({
+  page,
+}, testInfo) => {
+  const emailAccountId = await getEmailAccountId(page);
+  const subject = `Invoice forward ${testInfo.retry}-${Date.now()}`;
+  const { threadId, messageId } = await insertMessage(page, subject);
+  await seedSuggestion({
+    emailAccountId,
+    threadId,
+    messageId,
+    to: "finance@partner.example",
+  });
+
+  await openThread(page, emailAccountId, threadId, subject);
+  const reader = page.getByTestId("thread-reader");
+  await expect(reader.locator("[data-email-editor-content]")).toContainText(
+    SUGGESTION,
+    { timeout: 60_000 },
+  );
+  await expect(
+    reader.getByText("Cue's draft to finance@partner.example"),
+  ).toBeVisible();
+  await expect(reader.getByText("Suggested by Cue")).toHaveCount(0);
+  await expect(
+    reader.getByText("finance@partner.example").first(),
+  ).toBeVisible();
+  await capturePlaywrightCheckpoint(page, testInfo, "rule-suggestion-to-other");
+  await page.waitForTimeout(AUTOSAVE_WINDOW_MS);
+  expect(await countDrafts(page, threadId)).toBe(0);
 });
 
 test("dismisses the rule's suggestion when its reply is discarded", async ({
@@ -178,13 +279,16 @@ async function seedSuggestion({
   emailAccountId,
   threadId,
   messageId,
+  to,
 }: {
   emailAccountId: string;
   threadId: string;
   messageId: string;
+  to?: string;
 }) {
   const executedRuleId = `pw_rule_run_${messageId}`;
   const executedActionId = `pw_suggestion_${messageId}`;
+  seededRuns.push(executedRuleId);
   await withClient(async (client) => {
     const rule = await client.query<{ id: string }>(
       `SELECT id FROM "Rule"
@@ -202,12 +306,12 @@ async function seedSuggestion({
     );
     await client.query(
       `INSERT INTO "ExecutedAction"
-        (id, "createdAt", "updatedAt", type, "executedRuleId", content,
+        (id, "createdAt", "updatedAt", type, "executedRuleId", content, "to",
          "draftStatus", "executionStatus")
        VALUES ($1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'DRAFT_EMAIL', $2, $3,
-               'PENDING', 'SUCCEEDED')
+               $4, 'PENDING', 'SUCCEEDED')
        ON CONFLICT (id) DO NOTHING`,
-      [executedActionId, executedRuleId, SUGGESTION],
+      [executedActionId, executedRuleId, SUGGESTION, to ?? null],
     );
   });
   return executedActionId;
@@ -266,6 +370,22 @@ async function countDrafts(page: Page, threadId: string) {
   };
   return (drafts ?? []).filter((draft) => draft.message?.threadId === threadId)
     .length;
+}
+
+/** The text of the thread's sent reply, once the mailbox has it. */
+async function sentReplyText(page: Page, threadId: string) {
+  const response = await page.request.get(
+    `${gmailBaseUrl()}/gmail/v1/users/me/threads/${threadId}`,
+    { headers: await gmailHeaders(), params: { format: "full" } },
+  );
+  if (!response.ok()) return "";
+  const { messages } = (await response.json()) as {
+    messages?: { labelIds?: string[]; snippet?: string }[];
+  };
+  return (messages ?? [])
+    .filter((message) => message.labelIds?.includes("SENT"))
+    .map((message) => message.snippet ?? "")
+    .join("\n");
 }
 
 async function gmailHeaders() {

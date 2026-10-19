@@ -4,10 +4,10 @@
  * Tests the complete email processing flow:
  * 1. Gmail sends email to Outlook
  * 2. Outlook webhook fires
- * 3. Rule processes and creates draft
- * 4. Draft is sent as reply
+ * 3. Rule processes and keeps a reply suggestion in Cue (no mailbox draft)
+ * 4. The suggestion is sent as the reply
  * 5. Gmail receives the reply
- * 6. Outbound handling cleans up drafts
+ * 6. Outbound handling settles the suggestion as sent
  *
  * Usage:
  * RUN_E2E_FLOW_TESTS=true pnpm test-e2e full-reply-cycle
@@ -21,15 +21,17 @@ import {
   sendTestEmail,
   sendTestReply,
   TEST_EMAIL_SCENARIOS,
-  assertDraftExists,
+  assertNoThreadDrafts,
 } from "./helpers/email";
 import {
   waitForExecutedRule,
   waitForMessageInInbox,
   waitForReplyInInbox,
-  waitForDraftDeleted,
   waitForDraftSendLog,
+  waitForReplySuggestion,
+  waitForSuggestionStatus,
 } from "./helpers/polling";
+import { DraftEmailStatus } from "@/generated/prisma/enums";
 import { logStep, clearLogs, setTestStartTime } from "./helpers/logging";
 import type { TestAccount } from "./helpers/accounts";
 
@@ -124,26 +126,22 @@ describe.skipIf(!shouldRunFlowTests())("Full Reply Cycle", () => {
       });
 
       // ========================================
-      // Step 4: Verify draft was created
+      // Step 4: Verify the rule's reply waits in Cue, not in the mailbox
       // ========================================
-      logStep("Step 4: Verifying draft creation");
+      logStep("Step 4: Verifying the reply suggestion");
 
-      const draftAction = executedRule.actionItems.find(
-        (a) => a.type === "DRAFT_EMAIL" && a.draftId,
-      );
-
-      expect(draftAction).toBeDefined();
-      expect(draftAction?.draftId).toBeTruthy();
-
-      // Verify draft exists in Outlook
-      const draftInfo = await assertDraftExists({
+      const suggestion = await waitForReplySuggestion({
+        threadId: outlookMessage.threadId,
+        emailAccountId: outlook.id,
+      });
+      await assertNoThreadDrafts({
         provider: outlook.emailProvider,
         threadId: outlookMessage.threadId,
       });
 
-      logStep("Draft created", {
-        draftId: draftInfo.draftId,
-        contentPreview: draftInfo.content?.slice(0, 100),
+      logStep("Reply suggestion kept in Cue", {
+        executedActionId: suggestion.executedActionId,
+        contentPreview: suggestion.content.slice(0, 100),
       });
 
       // ========================================
@@ -170,10 +168,6 @@ describe.skipIf(!shouldRunFlowTests())("Full Reply Cycle", () => {
       // ========================================
       logStep("Step 6: Sending draft reply from Outlook");
 
-      // Get the draft content
-      const draft = await outlook.emailProvider.getDraft(draftInfo.draftId);
-      expect(draft).toBeDefined();
-
       // Send a reply (simulating user sending the draft)
       // Note: Only use textPlain here since sendTestReply wraps body in <p> tags,
       // which would create invalid HTML if body already contains HTML markup
@@ -182,9 +176,7 @@ describe.skipIf(!shouldRunFlowTests())("Full Reply Cycle", () => {
         to: gmail,
         threadId: outlookMessage.threadId,
         originalMessageId: outlookMessage.messageId,
-        body:
-          draft?.textPlain ||
-          "Thank you for your email. Here is the information you requested.",
+        body: suggestion.content,
       });
 
       logStep("Reply sent from Outlook", {
@@ -259,19 +251,20 @@ describe.skipIf(!shouldRunFlowTests())("Full Reply Cycle", () => {
       });
 
       // ========================================
-      // Step 9: Verify draft cleanup
+      // Step 9: Verify the suggestion settled as used
       // ========================================
-      logStep("Step 9: Verifying draft cleanup");
+      logStep("Step 9: Verifying the suggestion settled");
 
-      // The AI draft should have been deleted since user sent their own reply
-      // or used the draft
-      await waitForDraftDeleted({
-        draftId: draftInfo.draftId,
+      await waitForSuggestionStatus({
+        executedActionId: suggestion.executedActionId,
+        statuses: [DraftEmailStatus.LIKELY_SENT],
+      });
+      await assertNoThreadDrafts({
         provider: outlook.emailProvider,
-        timeout: TIMEOUTS.WEBHOOK_PROCESSING,
+        threadId: outlookMessage.threadId,
       });
 
-      logStep("Draft cleanup verified - draft deleted");
+      logStep("Suggestion settled as sent; the mailbox never held a draft");
 
       // ========================================
       // Test Complete
@@ -429,26 +422,22 @@ describe.skipIf(!shouldRunFlowTests())("Full Reply Cycle", () => {
       });
 
       // ========================================
-      // Step 4: Verify draft was created
+      // Step 4: Verify the rule's reply waits in Cue, not in the mailbox
       // ========================================
-      logStep("Step 4: Verifying draft creation");
+      logStep("Step 4: Verifying the reply suggestion");
 
-      const draftAction = executedRule.actionItems.find(
-        (a) => a.type === "DRAFT_EMAIL" && a.draftId,
-      );
-
-      expect(draftAction).toBeDefined();
-      expect(draftAction?.draftId).toBeTruthy();
-
-      // Verify draft exists in Gmail
-      const draftInfo = await assertDraftExists({
+      const suggestion = await waitForReplySuggestion({
+        threadId: gmailMessage.threadId,
+        emailAccountId: gmail.id,
+      });
+      await assertNoThreadDrafts({
         provider: gmail.emailProvider,
         threadId: gmailMessage.threadId,
       });
 
-      logStep("Draft created", {
-        draftId: draftInfo.draftId,
-        contentPreview: draftInfo.content?.slice(0, 100),
+      logStep("Reply suggestion kept in Cue", {
+        executedActionId: suggestion.executedActionId,
+        contentPreview: suggestion.content.slice(0, 100),
       });
 
       // ========================================
@@ -474,9 +463,6 @@ describe.skipIf(!shouldRunFlowTests())("Full Reply Cycle", () => {
       // ========================================
       logStep("Step 6: Sending draft reply from Gmail");
 
-      const draft = await gmail.emailProvider.getDraft(draftInfo.draftId);
-      expect(draft).toBeDefined();
-
       // Note: Only use textPlain here since sendTestReply wraps body in <p> tags,
       // which would create invalid HTML if body already contains HTML markup
       const replyResult = await sendTestReply({
@@ -484,9 +470,7 @@ describe.skipIf(!shouldRunFlowTests())("Full Reply Cycle", () => {
         to: outlook,
         threadId: gmailMessage.threadId,
         originalMessageId: gmailMessage.messageId,
-        body:
-          draft?.textPlain ||
-          "Thank you for your email. Here is the information you requested.",
+        body: suggestion.content,
       });
 
       logStep("Reply sent from Gmail", {
@@ -554,17 +538,20 @@ describe.skipIf(!shouldRunFlowTests())("Full Reply Cycle", () => {
       });
 
       // ========================================
-      // Step 9: Verify draft cleanup
+      // Step 9: Verify the suggestion settled as used
       // ========================================
-      logStep("Step 9: Verifying draft cleanup");
+      logStep("Step 9: Verifying the suggestion settled");
 
-      await waitForDraftDeleted({
-        draftId: draftInfo.draftId,
+      await waitForSuggestionStatus({
+        executedActionId: suggestion.executedActionId,
+        statuses: [DraftEmailStatus.LIKELY_SENT],
+      });
+      await assertNoThreadDrafts({
         provider: gmail.emailProvider,
-        timeout: TIMEOUTS.WEBHOOK_PROCESSING,
+        threadId: gmailMessage.threadId,
       });
 
-      logStep("Draft cleanup verified - draft deleted");
+      logStep("Suggestion settled as sent; the mailbox never held a draft");
 
       // ========================================
       // Test Complete
