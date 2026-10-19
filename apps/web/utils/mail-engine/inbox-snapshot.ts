@@ -9,8 +9,8 @@ import type { ListThread } from "@/app/(app)/[emailAccountId]/mail/types";
  */
 
 const PREFIX = "cue:inbox-snapshot:v1:";
-// About two screens of rows on a large display.
-export const INBOX_SNAPSHOT_ROWS = 30;
+// About one screen of rows: each costs main-thread time while the engine opens.
+export const INBOX_SNAPSHOT_ROWS = 15;
 // A row shows one line of preview; the rest would only take up storage.
 const PREVIEW_LENGTH = 200;
 

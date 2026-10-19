@@ -6,6 +6,7 @@ import {
   type MouseEvent,
   type ReactNode,
   Suspense,
+  startTransition,
   use,
   useCallback,
   useContext,
@@ -28,7 +29,6 @@ import type {
   ListThread,
   MailLayoutMode,
 } from "@/app/(app)/[emailAccountId]/mail/types";
-import { useHydrated } from "@/hooks/useHydrated";
 import { readInboxSnapshot } from "@/utils/mail-engine/inbox-snapshot";
 import { useEmailLabels } from "@/providers/EmailLabelsProvider";
 import { useAccount } from "@/providers/EmailAccountProvider";
@@ -159,15 +159,22 @@ export function InboxPreviewList({
   const isInbox =
     enabled ?? parseMailPath(pathname ?? "")?.view?.kind === "inbox";
   const seeded = seed?.emailAccountId === emailAccountId;
-  // Browser storage is not there for the server render or hydration.
-  const hydrated = useHydrated();
-  const snapshot = useMemo(
-    () =>
-      hydrated && isInbox && !retired && !seeded
-        ? readInboxSnapshot(emailAccountId)
-        : null,
-    [hydrated, isInbox, retired, seeded, emailAccountId],
-  );
+  const wantsSnapshot = isInbox && !retired && !seeded;
+  const [saved, setSaved] = useState<{
+    accountId: string;
+    threads: ListThread[];
+  } | null>(null);
+  // Browser storage is not there for the server render or hydration. The
+  // rows render in a transition, which yields to the mail engine starting
+  // beside them instead of holding up its first list.
+  useEffect(() => {
+    if (!wantsSnapshot) return;
+    const threads = readInboxSnapshot(emailAccountId);
+    if (threads)
+      startTransition(() => setSaved({ accountId: emailAccountId, threads }));
+  }, [wantsSnapshot, emailAccountId]);
+  const snapshot =
+    wantsSnapshot && saved?.accountId === emailAccountId ? saved.threads : null;
   const placeholder = (
     <MailListPlaceholder
       message={message}
