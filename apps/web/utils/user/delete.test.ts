@@ -34,6 +34,7 @@ vi.mock("@/utils/meeting-recorder/delete-media", () => ({
 }));
 
 const logger = createTestLogger();
+const GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 
 describe("deleteUser", () => {
   beforeEach(() => {
@@ -234,6 +235,95 @@ describe("deleteUser", () => {
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(prisma.user.deleteMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("revokes the Google grant after deleting the user, and still deletes when the revoke fails", async () => {
+    prisma.account.findMany
+      .mockResolvedValueOnce([
+        {
+          provider: "google",
+          emailAccount: {
+            id: "email-account-1",
+            email: "user@example.com",
+            watchEmailsSubscriptionId: null,
+          },
+        },
+      ] as unknown as Awaited<ReturnType<typeof prisma.account.findMany>>)
+      .mockResolvedValueOnce([
+        {
+          id: "account-1",
+          refresh_token: "refresh-token-1",
+          access_token: null,
+          emailAccount: { id: "email-account-1", email: "user@example.com" },
+        },
+      ] as unknown as Awaited<ReturnType<typeof prisma.account.findMany>>);
+    prisma.calendarConnection.count.mockResolvedValue(0);
+    prisma.driveConnection.count.mockResolvedValue(0);
+    prisma.executedRule.findMany.mockResolvedValue([]);
+    prisma.user.deleteMany.mockResolvedValue({ count: 1 } as any);
+    const revokeMock = vi.fn().mockRejectedValue(new Error("Google down"));
+    vi.stubGlobal("fetch", (url: string, init: RequestInit) =>
+      url === GOOGLE_REVOKE_URL
+        ? revokeMock(url, init)
+        : Promise.resolve(new Response(null, { status: 200 })),
+    );
+
+    try {
+      await deleteUser({ userId: "user-1", logger });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(revokeMock).toHaveBeenCalledTimes(1);
+    expect(
+      new URLSearchParams(revokeMock.mock.calls[0][1].body).get("token"),
+    ).toBe("refresh-token-1");
+    expect(prisma.user.deleteMany).toHaveBeenCalledWith({
+      where: { id: "user-1" },
+    });
+    expect(revokeMock.mock.invocationCallOrder[0]).toBeGreaterThan(
+      prisma.$transaction.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("keeps the Google grant when deleting the user fails", async () => {
+    prisma.account.findMany
+      .mockResolvedValueOnce([
+        {
+          provider: "google",
+          emailAccount: {
+            id: "email-account-1",
+            email: "user@example.com",
+            watchEmailsSubscriptionId: null,
+          },
+        },
+      ] as unknown as Awaited<ReturnType<typeof prisma.account.findMany>>)
+      .mockResolvedValueOnce([
+        {
+          id: "account-1",
+          refresh_token: "refresh-token-1",
+          access_token: null,
+          emailAccount: { id: "email-account-1", email: "user@example.com" },
+        },
+      ] as unknown as Awaited<ReturnType<typeof prisma.account.findMany>>);
+    prisma.executedRule.findMany.mockResolvedValue([]);
+    prisma.user.deleteMany.mockRejectedValue(new Error("database unavailable"));
+    const revokeMock = vi.fn();
+    vi.stubGlobal("fetch", (url: string, init: RequestInit) =>
+      url === GOOGLE_REVOKE_URL
+        ? revokeMock(url, init)
+        : Promise.resolve(new Response(null, { status: 200 })),
+    );
+
+    try {
+      await expect(deleteUser({ userId: "user-1", logger })).rejects.toThrow(
+        "database unavailable",
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(revokeMock).not.toHaveBeenCalled();
   });
 
   it("keeps the user when a meeting bot cannot be released", async () => {
