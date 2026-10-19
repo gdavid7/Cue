@@ -90,6 +90,10 @@ test("inbox paints its rows quickly on a cold and a warm load", async ({
         "warm-inbox-rows",
         await timeSinceNavigation(warm, firstInboxRowVisible, undefined),
       );
+      recorder.add(
+        "warm-engine-rows",
+        await timeSinceNavigation(warm, firstEngineRowVisible, undefined),
+      );
       const warmVitals = await readVitals(warm);
       recorder.add("warm-lcp", warmVitals.lcp);
       recorder.add("warm-ttfb", warmVitals.ttfb);
