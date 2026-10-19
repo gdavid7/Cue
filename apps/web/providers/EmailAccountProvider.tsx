@@ -85,7 +85,10 @@ export function EmailAccountProvider({
   userId?: string;
 }) {
   // Before any child reads the browser caches: their entries are this user's.
-  setBrowserCacheUser(userId);
+  setBrowserCacheUser(
+    userId,
+    serverAccounts.map((account) => account.id),
+  );
   const params = useParams<{
     emailAccountId: string | undefined;
     accountIndex: string | undefined;

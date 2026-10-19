@@ -133,6 +133,36 @@ describe("createBrowserCache", () => {
     expect(cache.get("account-a", "thread-1", 1)).toBeUndefined();
     expect(cache.get("account-b", "thread-1", 1)).toBe("B");
   });
+
+  it("deletes an expired entry when it is read, keeping the rest", () => {
+    const cache = briefs();
+    cache.set("account-a", "old", "Old brief", 0);
+    cache.set("account-a", "new", "New brief", 5000);
+
+    expect(cache.get("account-a", "old", 10_000)).toBeUndefined();
+    expect(storedText()).not.toContain("Old brief");
+    expect(cache.get("account-a", "new", 10_000)).toBe("New brief");
+
+    expect(cache.get("account-a", "new", 20_000)).toBeUndefined();
+    expect(window.localStorage.length).toBe(0);
+  });
+
+  it("forgets accounts the signed-in user no longer has", () => {
+    const cache = briefs();
+    cache.set("account-a", "thread-1", "A", 0);
+    cache.set("account-b", "thread-1", "B", 0);
+
+    // Account B was removed on another device.
+    setBrowserCacheUser("user-1", ["account-a"]);
+
+    expect(cache.get("account-a", "thread-1", 1)).toBe("A");
+    expect(cache.get("account-b", "thread-1", 1)).toBeUndefined();
+    expect(storedText()).not.toContain('"B"');
+
+    // Without a list nothing more is dropped.
+    setBrowserCacheUser("user-1");
+    expect(cache.get("account-a", "thread-1", 1)).toBe("A");
+  });
 });
 
 function briefs() {
@@ -141,6 +171,12 @@ function briefs() {
     ttlMs: 10_000,
     maxEntries: 10,
   });
+}
+
+function storedText() {
+  return Object.keys(window.localStorage)
+    .map((key) => window.localStorage.getItem(key))
+    .join("");
 }
 
 function storedBytes() {

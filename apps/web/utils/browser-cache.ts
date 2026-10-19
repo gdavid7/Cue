@@ -19,21 +19,36 @@ type Stored<T> = Record<string, { savedAt: number; value: T }>;
 
 // Nothing is read or kept until the signed-in user is known.
 let currentUserId: string | null = null;
+let currentAccountIds = "";
 // Set on sign-out, so a load landing on the way out can't save again.
 let blocked = false;
 const blockedAccountIds = new Set<string>();
 
 /**
- * Who is signed in. Another user's entries are dropped (one user's at a time
- * on a shared device), and a sign-out's block lifts for the new session.
+ * Who is signed in, and their accounts when known. Another user's entries
+ * are dropped (one user's at a time on a shared device), as are those of an
+ * account removed elsewhere, and a sign-out's block lifts for the new session.
  */
-export function setBrowserCacheUser(userId: string | null | undefined) {
-  if (!userId || userId === currentUserId) return;
+export function setBrowserCacheUser(
+  userId: string | null | undefined,
+  accountIds: readonly string[] = [],
+) {
+  if (!userId) return;
+  const accounts = accountIds.join(",");
+  if (userId === currentUserId && accounts === currentAccountIds) return;
+  if (userId !== currentUserId) {
+    blocked = false;
+    blockedAccountIds.clear();
+  }
   currentUserId = userId;
-  blocked = false;
-  blockedAccountIds.clear();
-  for (const key of cacheKeys())
+  currentAccountIds = accounts;
+  const known = new Set(accountIds);
+  for (const key of cacheKeys()) {
     if (!key.startsWith(`${PREFIX}${userId}:`)) remove(key);
+    // Keys end with the account id, which holds no colon.
+    else if (known.size && !known.has(key.slice(key.lastIndexOf(":") + 1)))
+      remove(key);
+  }
 }
 
 export function createBrowserCache<T>({
@@ -57,8 +72,17 @@ export function createBrowserCache<T>({
     get(emailAccountId: string, key: string, now = Date.now()): T | undefined {
       const storeKey = storageKey(emailAccountId);
       if (!storeKey) return;
-      const entry = read<T>(storeKey)[key];
-      if (!entry || now - entry.savedAt >= ttlMs) return;
+      const entries = read<T>(storeKey);
+      const entry = entries[key];
+      if (!entry) return;
+      if (now - entry.savedAt >= ttlMs) {
+        // An expired entry holds mail content; it isn't kept for the next set.
+        const { [key]: _expired, ...rest } = entries;
+        if (Object.keys(rest).length)
+          write(storeKey, Object.entries(rest), maxBytes);
+        else remove(storeKey);
+        return;
+      }
       return entry.value;
     },
     set(emailAccountId: string, key: string, value: T, now = Date.now()) {
@@ -80,6 +104,7 @@ export function clearBrowserCaches() {
   remove(CHAT_DRAFT_STORAGE_KEY);
   // So whoever signs in next, the same user included, lifts the block.
   currentUserId = null;
+  currentAccountIds = "";
   for (const key of cacheKeys()) remove(key);
 }
 
@@ -91,6 +116,7 @@ export function clearBrowserCachesForAccount(emailAccountId: string) {
 
 export function resetBrowserCacheForTesting(userId: string | null = "user-1") {
   currentUserId = null;
+  currentAccountIds = "";
   blocked = false;
   blockedAccountIds.clear();
   setBrowserCacheUser(userId);
