@@ -48,6 +48,13 @@ import { useAllAccountsScope } from "@/hooks/useTodayHref";
 import { announceTodayChanged } from "@/utils/home/today-changes";
 import { browserMailEngineCapabilities } from "@/utils/mail-engine/worker-protocol";
 import {
+  getConnectedEngineAccounts,
+  markEngineAccountRegistered,
+  registerEngineAccounts,
+  registerEngineAccountsInTurn,
+} from "@/utils/mail-engine/engine-accounts";
+import { afterFirstMailList } from "@/utils/mail-engine/first-mail-list";
+import {
   MAIL_ENGINE_OWNER_LOCK,
   MAIL_ENGINE_TAB_CHANNEL,
   bindTabMailOwner,
@@ -185,7 +192,26 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
     accountsLoading: isLoading,
     provider,
   });
+  // The browser engine serves every account, so it starts on the account in
+  // view and keeps running when the user switches; replacing it would cut off
+  // whatever is still watching it, such as an undo toast. The desktop client
+  // sends its provider with each sync, so it follows the viewed account.
+  const viewedAccount = useRef({ accountId: emailAccountId, mailProvider });
+  useEffect(() => {
+    viewedAccount.current = { accountId: emailAccountId, mailProvider };
+  }, [emailAccountId, mailProvider]);
+  const canStart = Boolean(emailAccountId && enabled && mailProvider);
+  const desktopAccountKey = desktopIpc
+    ? `${emailAccountId}:${mailProvider}`
+    : "";
   const [client, setClient] = useState<MailClient | null>(null);
+  // The account the running engine started on, or its owner tab was asked for.
+  const [startedAccountId, setStartedAccountId] = useState<string | null>(null);
+  const [inspect, setInspect] = useState<{
+    client: MailClient;
+    role: "owner" | "follower";
+    transport: MailEngineInspectTransport;
+  } | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [startAttempt, setStartAttempt] = useState(0);
@@ -194,14 +220,16 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
     [],
   );
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: startAttempt is how Retry starts the engine again
+  // biome-ignore lint/correctness/useExhaustiveDependencies: startAttempt is how Retry starts the engine again, and desktopAccountKey how the desktop client follows the viewed account
   useEffect(() => {
-    if (!emailAccountId || !enabled || !mailProvider) {
+    const { accountId: emailAccountId, mailProvider: viewedProvider } =
+      viewedAccount.current;
+    if (!canStart || !emailAccountId || !viewedProvider) {
       setUnavailable(false);
       return;
     }
     // Narrowed copy: TypeScript drops the null check inside the async callbacks below.
-    const engineProvider = mailProvider;
+    const engineProvider = viewedProvider;
     // Keep queued sends and undo working after the initiating page or composer closes.
     if (!desktopIpc) requestBrowserEngine();
     setUnavailable(false);
@@ -224,9 +252,11 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
       if (abort.signal.aborted) return;
       if (published && published !== next) disposeTabFollowerClient(published);
       published = next;
-      publishMailEngineInspect(next, emailAccountId, role, transport);
+      markEngineAccountRegistered(next, emailAccountId);
+      setInspect({ client: next, role, transport });
       setActiveMailClient(next);
       setRebuilding(false);
+      setStartedAccountId(emailAccountId);
       setClient(next);
     }
 
@@ -243,8 +273,9 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
         unsubscribeLogout();
         abort.abort();
         if (published) disposeTabFollowerClient(published);
-        clearMailEngineInspect();
+        setInspect(null);
         setActiveMailClient(null);
+        setStartedAccountId(null);
         setClient(null);
       };
     }
@@ -362,21 +393,55 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
       unbindOwner?.();
       unbindHello?.();
       if (published) disposeTabFollowerClient(published);
-      clearMailEngineInspect();
+      setInspect(null);
       setActiveMailClient(null);
       channel?.close();
       engine?.close().catch(() => undefined);
       setRebuilding(false);
+      setStartedAccountId(null);
       setClient(null);
     };
   }, [
-    emailAccountId,
-    mailProvider,
-    enabled,
+    canStart,
+    desktopAccountKey,
     desktopIpc,
     requestBrowserEngine,
     startAttempt,
   ]);
+
+  useEffect(() => {
+    if (!inspect || !emailAccountId) return;
+    publishMailEngineInspect(
+      inspect.client,
+      emailAccountId,
+      inspect.role,
+      inspect.transport,
+    );
+    return clearMailEngineInspect;
+  }, [inspect, emailAccountId]);
+
+  // An account switch keeps the engine; the account now in view is registered
+  // (an admin may be viewing a member's mailbox the user doesn't own) and synced.
+  const syncedView = useRef<{ client: MailClient; accountId: string } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!client || !emailAccountId || !mailProvider || !startedAccountId) {
+      return;
+    }
+    if (hasDesktopMailEngineIpc()) return;
+    const previous = syncedView.current;
+    syncedView.current = { client, accountId: emailAccountId };
+    // The engine synced the account it started on as it started.
+    const synced =
+      previous?.client === client ? previous.accountId : startedAccountId;
+    if (synced === emailAccountId) return;
+    registerEngineAccounts(client, [
+      { accountId: emailAccountId, provider: mailProvider },
+    ])
+      .then(() => client.requestSync([emailAccountId]))
+      .catch(() => undefined);
+  }, [client, emailAccountId, mailProvider, startedAccountId]);
 
   useEffect(() => {
     if (!client || !emailAccountId) return;
@@ -399,6 +464,31 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
   }, [client, emailAccountId]);
 
   const { data: accountsData } = useAccounts();
+  // A string, so a refetched account list that changed nothing registers nothing.
+  const connectedAccountsKey = JSON.stringify(
+    getConnectedEngineAccounts(accountsData?.emailAccounts ?? []),
+  );
+  // Accounts nobody is looking at sync so they can notify, but only once the
+  // first list is up, and one at a time, so they never slow the account in
+  // view. The viewed account and All inboxes register their own at once.
+  useEffect(() => {
+    // The desktop engine registers accounts itself.
+    if (!client || hasDesktopMailEngineIpc()) return;
+    const accounts: ReturnType<typeof getConnectedEngineAccounts> =
+      JSON.parse(connectedAccountsKey);
+    if (accounts.length === 0) return;
+    const abort = new AbortController();
+    const cancel = afterFirstMailList(() => {
+      registerEngineAccountsInTurn(client, accounts, abort.signal).catch(
+        () => undefined,
+      );
+    });
+    return () => {
+      cancel();
+      abort.abort();
+    };
+  }, [client, connectedAccountsKey]);
+
   const allAccounts = useAllAccountsScope();
   // A string, so a refetched account list that changed nothing keeps the streams.
   const followedAccountIds = emailAccountId

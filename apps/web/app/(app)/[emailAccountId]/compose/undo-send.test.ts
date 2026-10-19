@@ -46,30 +46,49 @@ describe("undo send", () => {
     vi.useRealTimers();
   });
 
-  it("cancels on the server when an account switch closed the engine", async () => {
+  it("follows the engine that replaced the one the send was queued on", async () => {
     const restoreComposer = vi.fn();
-    const closed = createClient();
+    const replaced = createClient();
     const next = createClient();
+    setActiveMailClient(replaced.client);
     beginUndoSend({
-      client: closed.client,
+      client: replaced.client,
       operationId: "mutation",
       emailAccountId: "account-a",
       holdUntil: Date.now() + UNDO_SEND_DELAY_MS,
       restoreComposer,
     });
-    // Switching to account B replaces the engine the send was queued on.
+    // A retry or another tab taking over replaces the engine on the same mailbox.
+    setActiveMailClient(next.client);
+    expect(replaced.handle.close).toHaveBeenCalled();
+    next.handle.set("succeeded");
+
+    expect(notifications.toastSent).toHaveBeenCalledWith("undo-send:mutation");
+    await expect(undoPendingSend()).resolves.toBe(false);
+    expect(replaced.cancel).not.toHaveBeenCalled();
+  });
+
+  it("undoes through the engine that replaced the one the send was queued on", async () => {
+    const restoreComposer = vi.fn();
+    const replaced = createClient();
+    const next = createClient();
+    setActiveMailClient(replaced.client);
+    beginUndoSend({
+      client: replaced.client,
+      operationId: "mutation",
+      emailAccountId: "account-a",
+      holdUntil: Date.now() + UNDO_SEND_DELAY_MS,
+      restoreComposer,
+    });
     setActiveMailClient(next.client);
 
     await expect(undoPendingSend()).resolves.toBe(true);
-    expect(server.cancelHeldSendAction).toHaveBeenCalledWith("account-a", {
-      operationId: "mutation",
-    });
-    expect(closed.cancel).not.toHaveBeenCalled();
-    // The engine that now owns the queued send records the cancellation too.
     expect(next.cancel).toHaveBeenCalledWith({
       accountId: "account-a",
       operationId: "mutation",
     });
+    expect(replaced.cancel).not.toHaveBeenCalled();
+    expect(server.cancelHeldSendAction).not.toHaveBeenCalled();
     expect(restoreComposer).toHaveBeenCalledOnce();
     expect(notifications.toastSendUndone).toHaveBeenCalledWith(
       "undo-send:mutation",

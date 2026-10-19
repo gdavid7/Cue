@@ -1,13 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
 import { MCP_INTEGRATIONS } from "@/utils/mcp/integrations";
-import { getMoveSharedConnectionsOperations } from "./move-shared-connections";
+import {
+  getConnectionsLostOnRemoval,
+  getMoveSharedConnectionsOperations,
+} from "./move-shared-connections";
 
 vi.mock("@/utils/prisma");
 
 const providerHostedApps = Object.values(MCP_INTEGRATIONS)
   .filter((integration) => integration.provider)
   .map((integration) => integration.name);
+
+const fromRemoved = {
+  emailAccountId: "removed",
+  emailAccount: { userId: "user-1" },
+};
 
 describe("getMoveSharedConnectionsOperations", () => {
   beforeEach(() => {
@@ -26,23 +34,22 @@ describe("getMoveSharedConnectionsOperations", () => {
 
     expect(operations).toHaveLength(4);
     expect(prisma.calendarConnection.updateMany).toHaveBeenCalledWith({
-      where: { emailAccountId: "removed", emailAccount: { userId: "user-1" } },
+      where: fromRemoved,
       data: { emailAccountId: "remaining" },
     });
     expect(prisma.driveConnection.updateMany).toHaveBeenCalledWith({
-      where: { emailAccountId: "removed", emailAccount: { userId: "user-1" } },
+      where: fromRemoved,
       data: { emailAccountId: "remaining" },
     });
     expect(prisma.mcpIntegration.updateMany).toHaveBeenCalledWith({
-      where: { emailAccountId: "removed", emailAccount: { userId: "user-1" } },
+      where: fromRemoved,
       data: { emailAccountId: "remaining" },
     });
     expect(prisma.mcpConnection.updateMany).toHaveBeenCalledWith({
       where: {
-        emailAccountId: "removed",
-        emailAccount: { userId: "user-1" },
+        ...fromRemoved,
         // A provider-hosted app knows the person by the removed mailbox's id.
-        integration: { name: { notIn: providerHostedApps } },
+        NOT: { OR: [{ integration: { name: { in: providerHostedApps } } }] },
       },
       data: { emailAccountId: "remaining" },
     });
@@ -71,28 +78,83 @@ describe("getMoveSharedConnectionsOperations", () => {
     });
     expect(prisma.calendarConnection.updateMany).toHaveBeenCalledWith({
       where: {
-        emailAccountId: "removed",
-        emailAccount: { userId: "user-1" },
-        NOT: [{ provider: "google", email: "cal@example.com" }],
+        ...fromRemoved,
+        NOT: { OR: [{ provider: "google", email: "cal@example.com" }] },
       },
       data: { emailAccountId: "remaining" },
     });
     expect(prisma.driveConnection.updateMany).toHaveBeenCalledWith({
-      where: {
-        emailAccountId: "removed",
-        emailAccount: { userId: "user-1" },
-        provider: { notIn: ["microsoft"] },
-      },
+      where: { ...fromRemoved, NOT: { provider: { in: ["microsoft"] } } },
       data: { emailAccountId: "remaining" },
     });
     expect(prisma.mcpConnection.updateMany).toHaveBeenCalledWith({
       where: {
-        emailAccountId: "removed",
-        emailAccount: { userId: "user-1" },
-        integration: { name: { notIn: providerHostedApps } },
-        integrationId: { notIn: ["notion-id"] },
+        ...fromRemoved,
+        NOT: {
+          OR: [
+            { integration: { name: { in: providerHostedApps } } },
+            { integrationId: { in: ["notion-id"] } },
+          ],
+        },
       },
       data: { emailAccountId: "remaining" },
     });
+  });
+});
+
+describe("getConnectionsLostOnRemoval", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("names what stays behind, but not exact copies the remaining mailbox has", async () => {
+    // The remaining mailbox's own connections.
+    prisma.calendarConnection.findMany.mockResolvedValueOnce([
+      { provider: "google", email: "cal@example.com" },
+    ] as never);
+    prisma.driveConnection.findMany
+      .mockResolvedValueOnce([
+        { provider: "google", email: "same@example.com" },
+      ] as never)
+      // The removed mailbox's Drives that stay behind.
+      .mockResolvedValueOnce([
+        { provider: "google", email: "same@example.com" },
+        { provider: "google", email: "other@example.com" },
+      ] as never);
+    prisma.mcpConnection.findMany
+      .mockResolvedValueOnce([{ integrationId: "notion-id" }] as never)
+      .mockResolvedValueOnce([
+        { integrationId: "notion-id", integration: { name: "notion" } },
+        { integrationId: "hubspot-id", integration: { name: "hubspot" } },
+        { integrationId: "hubspot-id", integration: { name: "hubspot" } },
+      ] as never);
+
+    const lost = await getConnectionsLostOnRemoval({
+      userId: "user-1",
+      fromEmailAccountId: "removed",
+      toEmailAccountId: "remaining",
+    });
+
+    // The same calendar account, Drive account and app are kept by the
+    // remaining mailbox, so only real losses are named.
+    expect(lost).toEqual(["Google Drive (other@example.com)", "HubSpot"]);
+    expect(prisma.driveConnection.findMany).toHaveBeenLastCalledWith({
+      where: { ...fromRemoved, provider: { in: ["google"] } },
+      select: { provider: true, email: true },
+    });
+  });
+
+  it("names nothing when every connection can move", async () => {
+    prisma.calendarConnection.findMany.mockResolvedValue([] as never);
+    prisma.driveConnection.findMany.mockResolvedValue([] as never);
+    prisma.mcpConnection.findMany.mockResolvedValue([] as never);
+
+    await expect(
+      getConnectionsLostOnRemoval({
+        userId: "user-1",
+        fromEmailAccountId: "removed",
+        toEmailAccountId: "remaining",
+      }),
+    ).resolves.toEqual([]);
   });
 });

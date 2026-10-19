@@ -65,6 +65,10 @@ const IDLE_CATCH_UP_INTERVAL_MS = 60_000;
 // A lane is abandoned after this long, so a request that never settles
 // cannot keep its account from syncing again.
 const SYNC_LANE_TIMEOUT_MS = 2 * 60_000;
+// How often a busy queue (a provider search, a backlog of bodies) stops to
+// restart sync lanes that finished, so one account's work never keeps the
+// others from reading new mail.
+const SYNC_LANE_RESTART_INTERVAL_MS = 1000;
 // How long one bootstrap call may keep paging before the lane moves on to the
 // account's other streams; the scan resumes on the lane's next pass.
 const SYNC_LANE_BOOTSTRAP_SLICE_MS = 2000;
@@ -239,6 +243,7 @@ export function createMailEngine(input: {
   const assistant = input.assistant;
   const queries = createQueryRegistry();
   let evictedForCurrentPressure = false;
+  let syncLanesStartedAtMs = Number.NEGATIVE_INFINITY;
   // Keyed by operation, so one command stuck on a failing request does not
   // slow the retry of every other command.
   const commandRequestFailures = new Map<string, number>();
@@ -537,6 +542,17 @@ export function createMailEngine(input: {
           nowMs: runtime.nowMs(),
           leaseMs: 30_000,
         });
+        // Commands never wait on it: the check reads the store, which a
+        // lane's page can be holding.
+        if (
+          work &&
+          work.kind !== "command" &&
+          work.kind !== "inspect" &&
+          runtime.nowMs() - syncLanesStartedAtMs >=
+            SYNC_LANE_RESTART_INTERVAL_MS
+        ) {
+          await startSyncLanes();
+        }
         if (!work) {
           await startSyncLanes();
           if (signal?.aborted || runtime.nowMs() >= deadlineMs) return;
@@ -1413,6 +1429,7 @@ export function createMailEngine(input: {
   // never holds up another account or the command loop. A lane outlives the
   // runUntil call that started it; later calls skip accounts already running.
   async function startSyncLanes() {
+    syncLanesStartedAtMs = runtime.nowMs();
     const accounts = await store.readAccountSyncStates();
     for (const account of accounts) {
       startLane(account.accountId, (signal) => catchUpAccount(account, signal));

@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OperationState } from "@inboxzero/mail-core/operations";
 import type { QueryHandle } from "@inboxzero/mail-core/queries";
-import { queueReaderEmail } from "./queued-reply";
+import { setActiveMailClient } from "@/utils/mail-engine/active-client";
+import { queueReaderEmail, waitForReaderEmailSettlement } from "./queued-reply";
 import { UNDO_SEND_DELAY_MS } from "./undo-send";
 import { admissionRejectionCopy } from "@/utils/mail-engine/admission-notice";
 
@@ -434,6 +435,36 @@ describe("queueReaderEmail", () => {
       threadId: "thread",
     });
     vi.useRealTimers();
+  });
+});
+
+describe("waitForReaderEmailSettlement", () => {
+  it("reports a send that settles on the engine that replaced the one it was queued on", async () => {
+    const queuedOn = createClient();
+    const replacement = createHandle();
+    const next = createClient({ handle: replacement });
+    setActiveMailClient(queuedOn);
+
+    const settled = waitForReaderEmailSettlement({
+      client: queuedOn,
+      accountId: "account-two",
+      mutationId: "mutation",
+      settlementTimeoutMs: 60_000,
+      threadId: "thread",
+    });
+    setActiveMailClient(next);
+    replacement.set({ status: "succeeded" });
+
+    await expect(settled).resolves.toEqual({
+      status: "sent",
+      messageId: "",
+      threadId: "thread",
+    });
+    expect(next.observeOperation).toHaveBeenCalledWith({
+      accountId: "account-two",
+      operationId: "mutation",
+    });
+    setActiveMailClient(null);
   });
 });
 

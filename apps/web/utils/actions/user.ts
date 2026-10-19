@@ -30,7 +30,10 @@ import {
 } from "@/utils/ai/draft-cleanup";
 import { isDuplicateError, isNotFoundError } from "@/utils/prisma-helpers";
 import { type Logger, toLogJson } from "@/utils/logger";
-import { getMoveSharedConnectionsOperations } from "@/utils/user/move-shared-connections";
+import {
+  getMoveSharedConnectionsOperations,
+  remainingEmailAccountQuery,
+} from "@/utils/user/move-shared-connections";
 import { shareChannelsAcrossMailboxes } from "@/utils/messaging/shared-channels";
 import { prepareMemberRemovalNotifications } from "@/utils/team-comments/member-removal";
 import {
@@ -175,8 +178,10 @@ export const deleteEmailAccountAction = actionClientUser
       // The oldest other mailbox: the next primary, and where shared
       // connections move.
       const remainingEmailAccount = await prisma.emailAccount.findFirst({
-        where: { userId, id: { not: emailAccountId } },
-        orderBy: { createdAt: "asc" },
+        ...remainingEmailAccountQuery({
+          userId,
+          removedEmailAccountId: emailAccountId,
+        }),
         select: { id: true, email: true, name: true, image: true },
       });
 

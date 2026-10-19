@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearLocalMailboxCookie,
+  forgetLocalMailbox,
   hasLocalMailbox,
   LOCAL_MAILBOX_COOKIE,
   markLocalMailboxSynced,
@@ -30,6 +31,16 @@ describe("local mailbox cookie", () => {
     clearLocalMailboxCookie();
 
     expect(hasLocalMailbox(readCookie(), "acc-1")).toBe(false);
+  });
+
+  it("forgets one account when its mail is removed from this browser", () => {
+    markLocalMailboxSynced("acc-1");
+    markLocalMailboxSynced("acc-2");
+
+    forgetLocalMailbox("acc-1");
+
+    expect(hasLocalMailbox(readCookie(), "acc-1")).toBe(false);
+    expect(hasLocalMailbox(readCookie(), "acc-2")).toBe(true);
   });
 
   it("treats a missing or malformed cookie as no local mailbox", () => {

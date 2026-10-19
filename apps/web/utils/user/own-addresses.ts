@@ -13,6 +13,26 @@ export async function getUserOwnAddresses(userId: string): Promise<string[]> {
     where: { userId },
     select: { email: true },
   });
+  return toOwnAddresses(accounts);
+}
+
+/** {@link getUserOwnAddresses} for the user who owns an email account. */
+export async function getEmailAccountOwnAddresses(
+  emailAccountId: string,
+): Promise<string[]> {
+  const accounts = await prisma.emailAccount.findMany({
+    where: { user: { emailAccounts: { some: { id: emailAccountId } } } },
+    select: { email: true },
+  });
+  return toOwnAddresses(accounts);
+}
+
+export function isOwnAddress(header: string, ownAddresses: string[]) {
+  const address = canonicalizeEmailAddress(header);
+  return Boolean(address) && ownAddresses.includes(address);
+}
+
+function toOwnAddresses(accounts: { email: string }[]) {
   return [
     ...new Set(
       accounts
@@ -20,9 +40,4 @@ export async function getUserOwnAddresses(userId: string): Promise<string[]> {
         .filter(Boolean),
     ),
   ];
-}
-
-export function isOwnAddress(header: string, ownAddresses: string[]) {
-  const address = canonicalizeEmailAddress(header);
-  return Boolean(address) && ownAddresses.includes(address);
 }

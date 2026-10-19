@@ -131,6 +131,67 @@ describe("a provider's exact search matches", () => {
   });
 });
 
+describe("a provider search in one account", () => {
+  it("doesn't hold back another account's sync while it waits", async () => {
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    for (const accountId of ["acc-1", "acc-2"]) {
+      await store.ensureAccount({
+        accountId,
+        provider: "google",
+        generation: accountId,
+      });
+    }
+    const source = searchSource();
+    let answerSearch = () => {};
+    source.search = () =>
+      new Promise((resolve) => {
+        answerSearch = () =>
+          resolve({
+            status: "ok",
+            value: { matches: [], nextPage: null, semantics: "exact" },
+          });
+      });
+    const synced = new Set<string>();
+    source.discoverScopes = async (input) => {
+      synced.add(input.session.accountId);
+      return { status: "ok", value: { scopes: [], nextPage: null } };
+    };
+    const engine = createMailEngine({
+      store,
+      source,
+      executor: {
+        async execute() {
+          return { status: "uncertain", receiptId: null };
+        },
+        async inspect() {
+          return { status: "uncertain", receiptId: null };
+        },
+      },
+      runtime: createHostRuntime(),
+    });
+    const view = engine.observeMailbox({
+      accountIds: ["acc-1"],
+      predicate: {
+        kind: "search",
+        query: "larger:5M",
+        local: { kind: "any", predicates: [] },
+        possible: { kind: "any", predicates: [] },
+      },
+      order: "newest_first",
+      pageSize: 25,
+      after: null,
+    });
+
+    const running = engine.runUntil(Date.now() + 1000);
+    await waitFor(() => synced.has("acc-2"));
+
+    answerSearch();
+    await running;
+    view.close();
+    await engine.close();
+  });
+});
+
 async function waitFor(condition: () => boolean) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     if (condition()) return;

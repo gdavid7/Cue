@@ -21,6 +21,16 @@ export function markLocalMailboxSynced(accountId: string) {
   writeCookie([...accountIds, accountId].join("."), MAX_AGE_SECONDS);
 }
 
+/** Part of removing one account's mail from this browser. */
+export function forgetLocalMailbox(accountId: string) {
+  const accountIds = readAccountIds(readCookie());
+  if (!accountIds.includes(accountId)) return;
+  writeCookie(
+    accountIds.filter((id) => id !== accountId).join("."),
+    MAX_AGE_SECONDS,
+  );
+}
+
 /** Part of wiping the local mailbox, on sign-out. */
 export function clearLocalMailboxCookie() {
   writeCookie("", 0);

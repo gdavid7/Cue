@@ -16,6 +16,7 @@ import {
 import { withEmailAccount } from "@/utils/middleware";
 import { checkHasAccess } from "@/utils/premium/server";
 import prisma from "@/utils/prisma";
+import { getEmailAccountOwnAddresses } from "@/utils/user/own-addresses";
 
 export type GetMeetingRecorderUpcomingResponse = Awaited<
   ReturnType<typeof getData>
@@ -46,22 +47,25 @@ async function getData({
   const timeMin = new Date();
   const timeMax = addHours(timeMin, MEETING_LOOKAHEAD_HOURS);
 
-  const [hasAccess, emailAccount, { events }] = await Promise.all([
-    checkHasAccess({ userId, minimumTier: MEETING_RECORDER_MIN_TIER }),
-    prisma.emailAccount.findUnique({
-      where: { id: emailAccountId },
-      select: { email: true, meetingRecorderJoinRule: true },
-    }),
-    fetchCalendarEventsInWindow({
-      emailAccountId,
-      timeMin,
-      timeMax,
-      maxResultsPerProvider: MAX_EVENTS_PER_PROVIDER,
-      // Same calendars the recorder cron reconciles for this account.
-      ownConnectionsOnly: true,
-      logger,
-    }),
-  ]);
+  const [hasAccess, emailAccount, ownAddresses, { events }] = await Promise.all(
+    [
+      checkHasAccess({ userId, minimumTier: MEETING_RECORDER_MIN_TIER }),
+      prisma.emailAccount.findUnique({
+        where: { id: emailAccountId },
+        select: { email: true, meetingRecorderJoinRule: true },
+      }),
+      getEmailAccountOwnAddresses(emailAccountId),
+      fetchCalendarEventsInWindow({
+        emailAccountId,
+        timeMin,
+        timeMax,
+        maxResultsPerProvider: MAX_EVENTS_PER_PROVIDER,
+        // Same calendars the recorder cron reconciles for this account.
+        ownConnectionsOnly: true,
+        logger,
+      }),
+    ],
+  );
 
   const videoEvents = events.filter((event) => event.videoConferenceLink);
   const videoEventIds = new Set(videoEvents.map((event) => event.id));
@@ -137,6 +141,7 @@ async function getData({
           event,
           rule,
           userEmail: emailAccount?.email ?? "",
+          ownAddresses,
           joinOverride: meeting?.joinOverride,
         }),
       recordingStatus: meeting?.recording?.status,
