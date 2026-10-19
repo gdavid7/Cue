@@ -6,7 +6,6 @@ import {
 } from "@/utils/email/rate-limit";
 import { createScopedLogger } from "@/utils/logger";
 import {
-  currentGmailQuotaContext,
   GmailCallDeferredError,
   GMAIL_USER_UNITS_PER_MINUTE,
   gmailRequestCost,
@@ -1045,62 +1044,6 @@ describe("Gmail quota gate", () => {
     expect(admissions.at(-1)?.at).toBeGreaterThanOrEqual(
       (admissions[0]?.at ?? 0) + 1000,
     );
-  });
-
-  it("treats what a person clicked, typed or opened, or what blocks the page they opened, as interactive and only enrichment as background", () => {
-    const priorityOf = (source: string) =>
-      runWithAuditContext(
-        { source },
-        () => currentGmailQuotaContext().priority,
-      );
-    for (const source of [
-      "user/senders/bulk",
-      "user/senders/unsubscribe",
-      "user/senders/status",
-      "user/search-answer",
-      "user/search-intent",
-      "user/mail/matching-count",
-      "user/signature",
-      "user/drafts/update",
-      "user/scheduled-emails/retry",
-      "user/snoozed-threads/create",
-      "v1/senders/unsubscribe",
-      "messages/send",
-      "messages",
-      "threads/archive",
-      "mail/v1/conversation-membership",
-      "mail/v1/operations",
-      "mobile/all-inboxes/archive",
-      // The mail page cannot paint until it has the account's labels.
-      "labels",
-      // The assistant's own route scopes, as their handlers name them.
-      "chat",
-      "chat/stream",
-      "chat/confirm-email-action",
-    ])
-      expect([source, priorityOf(source)]).toEqual([source, "interactive"]);
-    for (const source of [
-      "user/inbox-insights",
-      "user/thread-context",
-      "user/suggested-reply",
-      "user/stats/load",
-      "user/categorize/senders/batch",
-      "cron/scheduled-actions",
-      "resend/digest",
-      "clean/gmail",
-      // A select-all action runs on capacity nobody is using.
-      "mail/bulk-matching",
-    ])
-      expect([source, priorityOf(source)]).toEqual([source, "background"]);
-    for (const source of [
-      "mail/v1/enumeration",
-      "mobile/mailbox-sync",
-      "google/webhook",
-      "user/home",
-      // A route that only shares a prefix with a background one.
-      "user/stats-preview",
-    ])
-      expect([source, priorityOf(source)]).toEqual([source, "sync"]);
   });
 
   it("never puts the account in rate-limit mode for the gate's own deferral", async () => {

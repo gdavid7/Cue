@@ -170,14 +170,16 @@ type GmailQuotaContext = {
 };
 
 // Route scopes, matched exactly so a route added under a background path is
-// never held back by accident. Interactive: someone is waiting on it, for a
-// thread they opened, a message they send, a search they typed, a bulk action
-// they clicked or a question they asked the assistant, or it blocks first
-// paint of a page the person opened. Background: it only
-// enriches or analyzes mail the user already has. Any other route, the sync
-// engine's scans and webhooks among them, is sync. A route a person is
-// waiting on that also fans out raises its own reads to interactive, with a
-// wait budget, through runWithGmailQuota.
+// never held back by accident (D-086). Interactive: a person triggered it or
+// is looking at it right now: a thread they opened and that thread's summary,
+// context and reply suggestion, a message they send, a search they typed, a
+// bulk action they clicked, a question they asked the assistant, or the first
+// paint of a page they opened. Sync: the mail engine's own reads and the
+// provider's push notifications, which keep the mailbox current. Background:
+// everything else, so a route nobody listed only spends capacity nobody else
+// is using; a user-facing route must be listed as interactive. A route a
+// person is waiting on that also fans out raises its own reads to
+// interactive, with a wait budget, through runWithGmailQuota.
 const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
   ...withPriority("interactive", [
     "labels",
@@ -240,12 +242,54 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     "user/scheduled-emails/retry",
     "user/snoozed-threads/create",
     "user/snoozed-threads/delete",
+    "user/snoozed-threads",
+    // The open thread's summary, context and reply suggestion: the reader
+    // only asks for them while the conversation is on screen.
+    "user/thread-context",
+    "user/thread-brief",
+    "user/suggested-reply",
+    "user/public-contact-context",
+    // Pages and panels a person opened.
+    "user/home",
+    "user/contacts",
+    "user/folders",
+    "user/mail-splits",
+    "user/vacation-responder",
+    "user/meeting-recorder/meeting-draft",
+    "labels/counts",
+    "/api/labels/create",
+    "/api/user/drive/preview",
+    "/api/user/drive/preview/attachments",
+    // Connecting an account: the person waits on the redirect.
+    "google/linking/callback",
+    "outlook/linking/callback",
+    // Another assistant's tool call, asked for by the person using it.
+    "mcp-server",
+  ]),
+  ...withPriority("sync", [
+    "mail/v1/bootstrap",
+    "mail/v1/capabilities",
+    "mail/v1/changes",
+    "mail/v1/changes-batch",
+    "mail/v1/enumeration",
+    "mail/v1/hydration",
+    "mail/v1/scopes",
+    "mobile/mailbox-sync",
+    "google/webhook",
+    "google/webhook/catch-up",
+    "outlook/webhook",
+    "watch",
+    "watch/all",
+    "watch/resume",
+    "/api/watch/unwatch",
+    // Continues a sender archive a person started, once a deferral passes.
+    "user/senders/archive-existing",
+    // What a person scheduled, due now.
+    "scheduled-actions/execute",
+    "snoozed-threads/execute",
   ]),
   ...withPriority("background", [
     "user/inbox-insights",
-    "user/thread-context",
-    "user/suggested-reply",
-    "user/thread-brief",
     "user/thread-plans",
     "user/meeting-briefs",
     "user/meeting-briefs/history",
@@ -273,9 +317,6 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     "mail/bulk-matching",
   ]),
 ]);
-// Jobs nobody waits on; a durable send one delivers raises itself to
-// interactive.
-const BACKGROUND_NAMESPACES = ["cron/", "resend/"];
 
 const quotaContext = new AsyncLocalStorage<GmailQuotaContext>();
 const logger = createScopedLogger("gmail-quota");
@@ -397,6 +438,27 @@ export function runWithGmailQuota<T>(
       stats: context.stats ?? current.stats,
       maxTotalWaitMs: context.maxTotalWaitMs ?? current.maxTotalWaitMs,
       onAdmit: context.onAdmit ?? current.onAdmit,
+    },
+    operation,
+  );
+}
+
+/**
+ * Caps how long all of `operation`'s Gmail calls wait at the gate together,
+ * at the current priority, so a request someone is waiting on answers or
+ * defers (with its retry time) within `maxTotalWaitMs` instead of queueing
+ * one call after another for most of a minute.
+ */
+export function runWithGmailWaitBudget<T>(
+  maxTotalWaitMs: number,
+  operation: () => T,
+): T {
+  const current = currentGmailQuotaContext();
+  return runWithGmailQuota(
+    {
+      priority: current.priority,
+      maxTotalWaitMs,
+      stats: current.stats ?? createGmailQuotaStats(),
     },
     operation,
   );
@@ -973,9 +1035,7 @@ export function gmailRequestCost(method: string, url: string | URL): number {
 function priorityForCaller(caller: string): GmailQuotaPriority {
   const routePriority = ROUTE_PRIORITY.get(caller);
   if (routePriority) return routePriority;
-  if (BACKGROUND_NAMESPACES.some((prefix) => caller.startsWith(prefix)))
-    return "background";
-  return "sync";
+  return "background";
 }
 
 function withPriority(priority: GmailQuotaPriority, callers: string[]) {

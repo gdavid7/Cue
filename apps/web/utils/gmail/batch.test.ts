@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { rememberGmailAccessToken } from "@/utils/gmail/quota";
+import {
+  rememberGmailAccessToken,
+  runWithGmailQuota,
+} from "@/utils/gmail/quota";
 import { gmailQuotaStore } from "@/utils/gmail/quota-store";
 import {
   GMAIL_INFLIGHT_LIMIT,
@@ -77,12 +80,14 @@ describe("getBatch", () => {
       }),
     );
 
-    await Promise.all(
-      Array.from({ length: 6 }, (_, index) =>
-        getBatch(
-          [`a${index}`, `b${index}`, `c${index}`],
-          "/gmail/v1/users/me/labels",
-          "inflight-token",
+    await runWithGmailQuota({ caller: "test/sync", priority: "sync" }, () =>
+      Promise.all(
+        Array.from({ length: 6 }, (_, index) =>
+          getBatch(
+            [`a${index}`, `b${index}`, `c${index}`],
+            "/gmail/v1/users/me/labels",
+            "inflight-token",
+          ),
         ),
       ),
     );
@@ -122,10 +127,9 @@ describe("getBatch", () => {
     );
     const ids = Array.from({ length: 50 }, (_, index) => `label-${index}`);
 
-    const items = await getBatch(
-      ids,
-      "/gmail/v1/users/me/labels",
-      "split-token",
+    const items = await runWithGmailQuota(
+      { caller: "test/sync", priority: "sync" },
+      () => getBatch(ids, "/gmail/v1/users/me/labels", "split-token"),
     );
 
     expect(items.map((item: { id: string }) => item.id)).toEqual(ids);
