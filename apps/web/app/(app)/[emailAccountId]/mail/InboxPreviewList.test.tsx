@@ -10,8 +10,6 @@ import {
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThreadsListResponse } from "@/app/api/threads/route";
-import type { ListThread } from "@/app/(app)/[emailAccountId]/mail/types";
-import { writeInboxSnapshot } from "@/utils/mail-engine/inbox-snapshot";
 import {
   InboxPreviewList,
   InboxPreviewSeed,
@@ -74,7 +72,6 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  window.localStorage.clear();
   vi.unstubAllGlobals();
   fetchMock.mockReset();
   mailClient.ensureMessageContent.mockClear();
@@ -169,61 +166,6 @@ describe("InboxPreviewList", () => {
 
     // The mail screen opens the conversation in the address when it mounts.
     expect(window.location.pathname).toBe("/mail/u/0/inbox/t2");
-  });
-
-  it("shows the inbox as this browser last saw it while the engine opens", async () => {
-    writeInboxSnapshot("acc-1", [
-      thread("w1"),
-      thread("w2"),
-    ] as unknown as ListThread[]);
-    await act(async () => {
-      render(seeded(null));
-    });
-
-    expect(screen.getAllByText(/^w\d$/).map((row) => row.textContent)).toEqual([
-      "w1",
-      "w2",
-    ]);
-    // Still a placeholder: the engine's own list is the one to triage.
-    expect(screen.queryByRole("listbox")).toBeNull();
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("never shows another account's saved inbox", async () => {
-    writeInboxSnapshot("acc-2", [thread("w1")] as unknown as ListThread[]);
-    await act(async () => {
-      render(seeded(null));
-    });
-
-    expect(screen.queryByText("w1")).toBeNull();
-    expect(screen.getByText("Opening your mailbox…")).toBeTruthy();
-  });
-
-  it("puts the saved rows away for good once the engine has shown mail", async () => {
-    writeInboxSnapshot("acc-1", [thread("w1")] as unknown as ListThread[]);
-    await act(async () => {
-      render(seeded(null));
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByText("engine has mail"));
-    });
-
-    expect(screen.queryByText("w1")).toBeNull();
-  });
-
-  it("opens a saved row from the local mailbox without fetching it", async () => {
-    window.history.replaceState(null, "", "/mail/u/0/inbox");
-    writeInboxSnapshot("acc-1", [thread("w1")] as unknown as ListThread[]);
-    engine.client = mailClient;
-    await act(async () => {
-      render(seeded(null));
-    });
-
-    fireEvent.click(screen.getByText("w1"));
-
-    expect(window.location.pathname).toBe("/mail/u/0/inbox/w1");
-    expect(mailClient.ensureMessageContent).not.toHaveBeenCalled();
   });
 
   it("has the engine fetch a conversation clicked before its sync reaches it", async () => {

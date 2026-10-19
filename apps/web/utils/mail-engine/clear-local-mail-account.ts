@@ -3,7 +3,6 @@ import { clearDeleteSenderStatuses } from "@/store/delete-sender-queue";
 import { clearMarkReadSenderStatuses } from "@/store/mark-read-sender-queue";
 import { clearRecentSearchHistoryForAccount } from "@/store/mail-search-history";
 import { getActiveMailClient } from "@/utils/mail-engine/active-client";
-import { clearInboxSnapshot } from "@/utils/mail-engine/inbox-snapshot";
 import { clearLocalReplyDrafts } from "@/utils/mail-engine/reply-drafts";
 import { clearPersistedSwrCacheForAccount } from "@/utils/swr-persistence";
 import { clearCachedTodayForAccount } from "@/utils/home/today-cache";
@@ -12,7 +11,6 @@ export async function clearLocalMailAccountState(emailAccountId: string) {
   clearLocalReplyDrafts(emailAccountId);
   clearPersistedSwrCacheForAccount(emailAccountId);
   clearCachedTodayForAccount(emailAccountId);
-  clearInboxSnapshot(emailAccountId);
   clearRecentSearchHistoryForAccount(emailAccountId);
   clearArchiveSenderStatuses(emailAccountId);
   clearDeleteSenderStatuses(emailAccountId);

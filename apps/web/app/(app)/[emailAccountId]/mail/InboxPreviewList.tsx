@@ -6,7 +6,6 @@ import {
   type MouseEvent,
   type ReactNode,
   Suspense,
-  startTransition,
   use,
   useCallback,
   useContext,
@@ -25,11 +24,7 @@ import {
 } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { showMailView } from "@/app/(app)/[emailAccountId]/mail/show-mail-view";
 import { ThreadList } from "@/app/(app)/[emailAccountId]/mail/ThreadList";
-import type {
-  ListThread,
-  MailLayoutMode,
-} from "@/app/(app)/[emailAccountId]/mail/types";
-import { readInboxSnapshot } from "@/utils/mail-engine/inbox-snapshot";
+import type { MailLayoutMode } from "@/app/(app)/[emailAccountId]/mail/types";
 import { useEmailLabels } from "@/providers/EmailLabelsProvider";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { buildMailPath, parseMailPath, withPageParams } from "@/utils/mail-url";
@@ -136,10 +131,8 @@ export function useFetchOpenedPreviewThreads() {
  * Stands in for the inbox while the local mailbox opens or first syncs,
  * showing the newest conversations the server fetched with the page, so the
  * inbox reads at once rather than after the engine has booted and synced.
- * A browser that already holds the mailbox shows the top of the inbox as it
- * last saw it instead, while the engine opens. Without either, or elsewhere,
- * or with `enabled` off, it is the usual skeleton and asks the provider for
- * nothing.
+ * Without them, as on every warm open, or elsewhere, or with `enabled` off, it
+ * is the usual skeleton and asks the provider for nothing.
  */
 export function InboxPreviewList({
   message,
@@ -158,23 +151,6 @@ export function InboxPreviewList({
   const { seed, retired } = useContext(InboxPreviewSeedContext);
   const isInbox =
     enabled ?? parseMailPath(pathname ?? "")?.view?.kind === "inbox";
-  const seeded = seed?.emailAccountId === emailAccountId;
-  const wantsSnapshot = isInbox && !retired && !seeded;
-  const [saved, setSaved] = useState<{
-    accountId: string;
-    threads: ListThread[];
-  } | null>(null);
-  // Browser storage is not there for the server render or hydration. The
-  // rows render in a transition, which yields to the mail engine starting
-  // beside them instead of holding up its first list.
-  useEffect(() => {
-    if (!wantsSnapshot) return;
-    const threads = readInboxSnapshot(emailAccountId);
-    if (threads)
-      startTransition(() => setSaved({ accountId: emailAccountId, threads }));
-  }, [wantsSnapshot, emailAccountId]);
-  const snapshot =
-    wantsSnapshot && saved?.accountId === emailAccountId ? saved.threads : null;
   const placeholder = (
     <MailListPlaceholder
       message={message}
@@ -182,19 +158,8 @@ export function InboxPreviewList({
       withChrome={withChrome}
     />
   );
-  if (snapshot) {
-    return (
-      <PreviewRows
-        threads={snapshot}
-        fetchOpened={false}
-        message={message}
-        layout={layout}
-        withChrome={withChrome}
-      />
-    );
-  }
   // Only ever the open account's mail.
-  if (!isInbox || retired || !seeded) {
+  if (!isInbox || retired || seed?.emailAccountId !== emailAccountId) {
     return placeholder;
   }
   return (
@@ -225,22 +190,16 @@ function SeededPreviewRows({
 }) {
   const data = use(preview);
   if (!data?.threads.length) return placeholder;
-  return <PreviewRows threads={data.threads} fetchOpened {...props} />;
+  return <PreviewRows preview={data} {...props} />;
 }
 
 function PreviewRows({
-  threads,
-  fetchOpened,
+  preview,
   message,
   layout,
   withChrome,
 }: {
-  threads: ListThread[];
-  /**
-   * The server's rows can reach back further than the engine's first sync,
-   * so a clicked one is fetched; a saved row is already in the local mailbox.
-   */
-  fetchOpened: boolean;
+  preview: ThreadsListResponse;
   message: string;
   layout: MailLayoutMode;
   withChrome: boolean;
@@ -249,16 +208,14 @@ function PreviewRows({
   const { userLabels } = useEmailLabels();
   const { open } = useContext(InboxPreviewSeedContext);
   const openThread = (index: number) => {
-    const thread = threads[index];
+    const thread = preview.threads[index];
     if (!thread) return;
-    if (fetchOpened) {
-      open(
-        thread.messages.slice(-OPENED_MESSAGES).map((message) => ({
-          accountId: emailAccountId,
-          messageId: message.id,
-        })),
-      );
-    }
+    open(
+      thread.messages.slice(-OPENED_MESSAGES).map((message) => ({
+        accountId: emailAccountId,
+        messageId: message.id,
+      })),
+    );
     openInAddress(thread.id);
   };
   return (
@@ -278,7 +235,7 @@ function PreviewRows({
         onMouseDown={keepFocus}
       >
         <ThreadList
-          threads={threads}
+          threads={preview.threads}
           layout={layout}
           expandedPreview={false}
           userEmail={userEmail}
