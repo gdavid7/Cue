@@ -1,5 +1,4 @@
 import he from "he";
-import type { EmailProvider } from "@/utils/email/types";
 import { createGenerateObject } from "@/utils/llms";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
@@ -46,13 +45,19 @@ export type SearchIntent = {
 export async function interpretSearch({
   emailAccountId,
   query,
-  emailProvider,
+  provider,
+  labelNames,
   logger,
   now = new Date(),
 }: {
   emailAccountId: string;
   query: string;
-  emailProvider: EmailProvider;
+  provider: "google" | "microsoft";
+  /**
+   * The account's label names, from the browser, which already holds them. A
+   * label the account doesn't have would make a search find nothing.
+   */
+  labelNames: string[];
   logger: Logger;
   now?: Date;
 }): Promise<SearchIntent | null> {
@@ -73,20 +78,20 @@ export async function interpretSearch({
     () => timeout.abort(new Error("Search interpretation timed out")),
     INTERPRET_SEARCH_TIMEOUT_MS,
   );
-  // Both settle at the deadline even if a call ignores the abort.
-  const [parts, labelNames] = await Promise.all([
-    Promise.race([
-      aiInterpretSearch({
-        emailAccount,
-        query,
-        now,
-        abortSignal: timeout.signal,
-        onCompleted: (completed) => {
-          call = completed;
-        },
-      }),
-      rejectOnAbort(timeout.signal),
-    ]).catch((error) => {
+  // Settles at the deadline even if the call ignores the abort.
+  const parts = await Promise.race([
+    aiInterpretSearch({
+      emailAccount,
+      query,
+      now,
+      abortSignal: timeout.signal,
+      onCompleted: (completed) => {
+        call = completed;
+      },
+    }),
+    rejectOnAbort(timeout.signal),
+  ])
+    .catch((error) => {
       // A parse or validation error's message can quote the model's output.
       logger.warn("Search interpretation failed", {
         timedOut: timeout.signal.aborted,
@@ -94,27 +99,13 @@ export async function interpretSearch({
       });
       logger.trace("Search interpretation error", { error });
       return null;
-    }),
-    // A label the account doesn't have would make a search find nothing.
-    Promise.race([
-      emailProvider
-        .getLabels()
-        .then((labels) => labels.map((label) => label.name)),
-      rejectOnAbort(timeout.signal),
-    ]).catch((error) => {
-      logger.warn("Failed to load labels for search interpretation", {
-        timedOut: timeout.signal.aborted,
-        errorName: errorName(error),
-      });
-      logger.trace("Label load error", { error });
-      return [] as string[];
-    }),
-  ]).finally(() => clearTimeout(timer));
+    })
+    .finally(() => clearTimeout(timer));
   const intent = parts
     ? toSearchIntent(parts, {
         now,
         timeZone: accountTimeZone(emailAccount.timezone),
-        provider: emailProvider.name,
+        provider,
         labelNames,
       })
     : null;

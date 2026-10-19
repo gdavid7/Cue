@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { EmailProvider } from "@/utils/email/types";
 import { createScopedLogger } from "@/utils/logger";
 
 const mocks = vi.hoisted(() => ({
@@ -62,20 +61,15 @@ function reading(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function provider(
-  name: "google" | "microsoft",
-  getLabels: () => Promise<{ name: string }[]> = async () => [
-    { name: "Receipts" },
-  ],
+function interpret(
+  provider: "google" | "microsoft" = "google",
+  labelNames = ["Receipts"],
 ) {
-  return { name, getLabels } as unknown as EmailProvider;
-}
-
-function interpret(emailProvider = provider("google")) {
   return interpretSearch({
     emailAccountId: "account-1",
     query: "the lease contract Sarah sent last month",
-    emailProvider,
+    provider,
+    labelNames,
     logger,
     now: NOW,
   });
@@ -117,7 +111,7 @@ describe("interpretSearch", () => {
   it("writes the search in Outlook's syntax for an Outlook account", async () => {
     mocks.generateObject.mockResolvedValue({ usage: USAGE, object: reading() });
 
-    const intent = await interpret(provider("microsoft"));
+    const intent = await interpret("microsoft");
     expect(intent?.searches).toEqual([
       "from:sarah (lease OR contract) hasattachments:true category:Receipts received>=2026-09-01 received<2026-10-01",
     ]);
@@ -129,7 +123,7 @@ describe("interpretSearch", () => {
       object: reading({ unread: true, dateRange: "none", label: "" }),
     });
 
-    const outlook = await interpret(provider("microsoft"));
+    const outlook = await interpret("microsoft");
     expect(outlook?.searches).toEqual([
       "from:sarah (lease OR contract) hasattachments:true",
     ]);
@@ -142,17 +136,18 @@ describe("interpretSearch", () => {
     expect(gmail?.unreadOnly).toBe(false);
   });
 
-  it("keeps the search but drops the label when labels can't be loaded", async () => {
+  it("keeps the search but drops a label the account doesn't have", async () => {
     mocks.generateObject.mockResolvedValue({
       usage: USAGE,
       object: reading({ dateRange: "none" }),
     });
 
-    const intent = await interpret(
-      provider("google", async () => {
-        throw new Error("Labels unavailable");
-      }),
-    );
+    mocks.generateObject.mockResolvedValue({
+      usage: USAGE,
+      object: reading({ dateRange: "none", label: "Invoices" }),
+    });
+
+    const intent = await interpret("google", ["Receipts"]);
     expect(intent?.searches).toEqual([
       "from:sarah (lease OR contract) has:attachment",
     ]);

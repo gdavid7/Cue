@@ -23,9 +23,10 @@ import { useAccount } from "@/providers/EmailAccountProvider";
 import { searchProvider } from "@/utils/mail-search/search-query-predicate";
 import { looksLikeNaturalLanguage } from "@/utils/mail-search/natural-language-search";
 import { threadsQueryToPredicate } from "@/utils/mail-engine/threads-query";
-import { getAccountScopedKey } from "@/utils/swr";
+import { swrFetcher } from "@/providers/swr-fetcher";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 
+const SEARCH_INTENT_PATH = "/api/user/search-intent";
 const NO_SEARCHES: string[] = [];
 // The predicate carries the searches; the query only names the window.
 const PREDICATE_ONLY_QUERY: ThreadsQuery = { q: "" };
@@ -58,13 +59,26 @@ export function useCueSearch({
   enabled: boolean;
 }) {
   const natural = Boolean(enabled && query && looksLikeNaturalLanguage(query));
+  // The browser already holds the labels, so they go with the search rather
+  // than the route asking the provider for them on every search. They stay
+  // out of the key: a label added later doesn't read the search again.
+  const { userLabels, isLoading: labelsLoading } = useLabels();
+  const labelNamesRef = useRef<string[]>([]);
+  labelNamesRef.current = userLabels.map((label) => label.name);
   const { data, error } = useSWR<GetSearchIntentResponse>(
-    natural && query
-      ? getAccountScopedKey(
-          `/api/user/search-intent?q=${encodeURIComponent(query)}`,
-          emailAccountId,
-        )
+    natural && query && !labelsLoading
+      ? ([SEARCH_INTENT_PATH, emailAccountId, query] as const)
       : null,
+    ([path, accountId, q]: readonly [string, string, string]) =>
+      swrFetcher(
+        path,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ q, labels: labelNamesRef.current }),
+        },
+        accountId,
+      ),
     { revalidateOnFocus: false, shouldRetryOnError: false },
   );
   const answered = data !== undefined || error !== undefined;

@@ -27,9 +27,9 @@ vi.mock("@/utils/ai/mail-search/interpret-search", () => ({
   interpretSearch: mocks.interpretSearch,
 }));
 
-import { GET } from "./route";
+import { POST } from "./route";
 
-describe("GET /api/user/search-intent", () => {
+describe("POST /api/user/search-intent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.rateLimitCount.mockResolvedValue(1);
@@ -52,6 +52,17 @@ describe("GET /api/user/search-intent", () => {
     );
   });
 
+  it("reads the search against the labels the browser sent", async () => {
+    await get("receipts from Acme", ["Receipts", "Trips"]);
+
+    expect(mocks.interpretSearch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "google",
+        labelNames: ["Receipts", "Trips"],
+      }),
+    );
+  });
+
   it("makes no model call for a user over the limit", async () => {
     mocks.rateLimitCount.mockResolvedValue(61);
 
@@ -62,11 +73,12 @@ describe("GET /api/user/search-intent", () => {
   });
 });
 
-async function get(q: string) {
-  const response = await GET(
-    new NextRequest(
-      `http://localhost:3000/api/user/search-intent?q=${encodeURIComponent(q)}`,
-    ),
+async function get(q: string, labels: string[] = []) {
+  const response = await POST(
+    new NextRequest("http://localhost:3000/api/user/search-intent", {
+      method: "POST",
+      body: JSON.stringify({ q, labels }),
+    }),
     { params: Promise.resolve({}) },
   );
   return response.json();
