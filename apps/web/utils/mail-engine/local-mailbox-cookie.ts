@@ -53,8 +53,17 @@ export function markLocalMailboxSynced(
   const entries = readEntries(readCookie());
   const recorded = entries.get(accountId);
   const at = syncedAtMs ?? 0;
-  if (recorded !== undefined && at - recorded < REWRITE_EVERY_MS) return;
-  entries.set(accountId, Math.max(at, recorded ?? 0));
+  // A time recorded ahead of this sync came from a clock that was off; this
+  // one replaces it rather than waiting for the clock to catch up.
+  const recordedAhead =
+    recorded !== undefined && at > 0 && recorded > at + FUTURE_SLACK_MS;
+  if (
+    recorded !== undefined &&
+    !recordedAhead &&
+    at - recorded < REWRITE_EVERY_MS
+  )
+    return;
+  entries.set(accountId, recordedAhead ? at : Math.max(at, recorded ?? 0));
   writeCookie(
     [...entries]
       .map(([id, time]) =>

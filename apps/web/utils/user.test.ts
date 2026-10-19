@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   clearLastEmailAccount: vi.fn(),
   swrFetcher: vi.fn(),
   clearBrowserCaches: vi.fn(),
+  clearInboxInsightRequests: vi.fn(),
   syncWebPush: vi.fn(),
 }));
 
@@ -26,6 +27,9 @@ vi.mock("@/utils/mail-engine/reply-drafts", () => ({
 vi.mock("@/providers/swr-fetcher", () => ({ swrFetcher: mocks.swrFetcher }));
 vi.mock("@/utils/swr-persistence", () => ({
   clearPersistedSwrCache: vi.fn(),
+}));
+vi.mock("@/hooks/useInboxInsights", () => ({
+  clearInboxInsightRequests: mocks.clearInboxInsightRequests,
 }));
 vi.mock("@/utils/browser-cache", () => ({
   clearBrowserCaches: mocks.clearBrowserCaches,
@@ -121,6 +125,8 @@ describe("logOut", () => {
     await logOut();
 
     expect(mocks.clearBrowserCaches).toHaveBeenCalledTimes(1);
+    // And the insights this page was given, kept beside them in memory.
+    expect(mocks.clearInboxInsightRequests).toHaveBeenCalledTimes(1);
   });
 
   it("stops push notifications to this browser before leaving", async () => {

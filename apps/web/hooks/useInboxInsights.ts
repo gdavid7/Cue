@@ -219,6 +219,11 @@ export function getInboxInsightRequests(items: InboxInsightItem[]) {
     });
 }
 
+/** Part of signing out: nothing read for this user stays on the page. */
+export function clearInboxInsightRequests() {
+  resetInboxInsightRequestsForTesting();
+}
+
 export function resetInboxInsightRequestsForTesting() {
   for (const queue of queues.values()) {
     if (queue.timer) clearTimeout(queue.timer);

@@ -9,6 +9,7 @@ import { wipeLocalMailbox } from "@/utils/mail-engine/wipe-local-mailbox";
 import { clearLocalReplyDrafts } from "@/utils/mail-engine/reply-drafts";
 import { clearPersistedSwrCache } from "@/utils/swr-persistence";
 import { clearBrowserCaches } from "@/utils/browser-cache";
+import { clearInboxInsightRequests } from "@/hooks/useInboxInsights";
 import {
   isWebPushAvailable,
   syncWebPushSubscription,
@@ -32,6 +33,7 @@ async function signOutAndLeave(callbackUrl: string) {
   stopEmailAccountsFetches();
   clearPersistedSwrCache();
   clearBrowserCaches();
+  clearInboxInsightRequests();
   clearLocalReplyDrafts();
   const localWipe = wipeLocalMailbox();
   // The next person on this browser must not get this account's mail alerts.

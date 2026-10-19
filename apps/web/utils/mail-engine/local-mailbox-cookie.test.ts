@@ -66,6 +66,14 @@ describe("local mailbox cookie", () => {
     expect(isLocalMailboxStale(now + 2 * 3_600_000, now)).toBe(true);
   });
 
+  it("replaces a sync time recorded ahead of the latest sync", () => {
+    const syncedAt = Date.parse("2026-10-19T20:00:00Z");
+    markLocalMailboxSynced("acc-1", syncedAt + 3 * 3_600_000);
+    markLocalMailboxSynced("acc-1", syncedAt);
+
+    expect(localMailboxSyncedAt(readCookie(), "acc-1")).toBe(syncedAt);
+  });
+
   it("calls a mailbox stale once it is a quarter of an hour behind", () => {
     const now = Date.parse("2026-10-19T20:23:00Z");
     expect(isLocalMailboxStale(now - 5 * 60_000, now)).toBe(false);
