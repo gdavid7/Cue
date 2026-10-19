@@ -61,6 +61,7 @@ describe("CueStrip", () => {
     mocks.insightByMessage = {};
     mocks.insightGate = null;
     mocks.aiAccess = true;
+    window.localStorage.clear();
   });
   afterEach(cleanup);
 
@@ -69,6 +70,20 @@ describe("CueStrip", () => {
 
     const strip = await screen.findByRole("region", { name: "Cue summary" });
     expect(await within(strip).findByText(SUMMARY)).toBeTruthy();
+  });
+
+  // RD-3: the server keeps no briefs, so this browser keeps the one it got.
+  it("shows a reopened conversation's brief from this browser without asking again", async () => {
+    renderStrip({ labels: ["Label_reply"] });
+    await screen.findByText(SUMMARY);
+    cleanup();
+
+    renderStrip({ labels: ["Label_reply"] });
+
+    expect(await screen.findByText(SUMMARY)).toBeTruthy();
+    expect(
+      mocks.requests.filter((r) => r.url.startsWith("/api/user/thread-brief")),
+    ).toHaveLength(1);
   });
 
   // Opening each conversation already speaks its subject; the strip filling in

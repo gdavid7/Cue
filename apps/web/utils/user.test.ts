@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   clearLastEmailAccount: vi.fn(),
   swrFetcher: vi.fn(),
   clearCachedToday: vi.fn(),
+  clearBrowserCaches: vi.fn(),
 }));
 
 vi.mock("@/utils/auth-client", () => ({ signOut: mocks.signOut }));
@@ -28,6 +29,9 @@ vi.mock("@/utils/swr-persistence", () => ({
 }));
 vi.mock("@/utils/home/today-cache", () => ({
   clearCachedToday: mocks.clearCachedToday,
+}));
+vi.mock("@/utils/browser-cache", () => ({
+  clearBrowserCaches: mocks.clearBrowserCaches,
 }));
 
 describe("logOut", () => {
@@ -115,6 +119,14 @@ describe("logOut", () => {
     await logOut();
 
     expect(mocks.clearCachedToday).toHaveBeenCalledTimes(1);
+  });
+
+  it("forgets the briefs, replies and insights kept in this browser", async () => {
+    const logOut = await loadLogOut();
+
+    await logOut();
+
+    expect(mocks.clearBrowserCaches).toHaveBeenCalledTimes(1);
   });
 
   it("still leaves when the sign-out request fails", async () => {

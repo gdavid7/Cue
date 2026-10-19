@@ -1,16 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import {
-  getCachedThreadBrief,
-  getThreadBrief,
-} from "@/utils/home/get-thread-brief";
+import { getThreadBrief } from "@/utils/home/get-thread-brief";
 import { withEmailProvider } from "@/utils/middleware";
 import { assertWithinUserRateLimit } from "@/utils/rate-limit";
 
 const threadBriefQuery = z.object({
   threadId: z.string().trim().min(1).max(512),
-  /** The newest message the caller shows, to answer from the cache alone. */
-  messageId: z.string().trim().min(1).max(512).nullish(),
 });
 
 export type GetThreadBriefResponse = {
@@ -21,24 +16,13 @@ export const maxDuration = 300;
 
 export const GET = withEmailProvider("user/thread-brief", async (request) => {
   const { searchParams } = new URL(request.url);
-  const { threadId, messageId } = threadBriefQuery.parse({
+  const { threadId } = threadBriefQuery.parse({
     threadId: searchParams.get("threadId"),
-    messageId: searchParams.get("messageId"),
   });
   const emailAccountId = request.auth.emailAccountId;
 
-  // Reopening a conversation reads the cache and nothing else: no provider
-  // read, no model call, and no rate-limit charge.
-  const cached = messageId
-    ? await getCachedThreadBrief({ emailAccountId, threadId, messageId })
-    : null;
-  if (cached) {
-    return NextResponse.json({
-      brief: cached,
-    } satisfies GetThreadBriefResponse);
-  }
-
-  // An uncached brief is a model call.
+  // Every request is a model call: the browser keeps briefs it was given and
+  // asks again only for a conversation with a new message (RD-3).
   await assertWithinUserRateLimit({
     scope: "thread-brief",
     userId: request.auth.userId,

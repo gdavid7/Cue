@@ -9,6 +9,7 @@ import { wipeLocalMailbox } from "@/utils/mail-engine/wipe-local-mailbox";
 import { clearLocalReplyDrafts } from "@/utils/mail-engine/reply-drafts";
 import { clearPersistedSwrCache } from "@/utils/swr-persistence";
 import { clearCachedToday } from "@/utils/home/today-cache";
+import { clearBrowserCaches } from "@/utils/browser-cache";
 
 // Enough for a normal wipe (and the last-account cookie clear) to finish
 // before leaving. A slower one stays marked and the next mail engine finishes
@@ -28,6 +29,7 @@ async function signOutAndLeave(callbackUrl: string) {
   stopEmailAccountsFetches();
   clearPersistedSwrCache();
   clearCachedToday();
+  clearBrowserCaches();
   clearLocalReplyDrafts();
   const localWipe = wipeLocalMailbox();
   // Needs no session, so it may finish after sign-out; awaited below so
