@@ -88,8 +88,8 @@ import {
 import {
   getThreadsBatch,
   getThreadsWithNextPageToken,
-  queryIncludesSpamOrTrash,
 } from "@/utils/gmail/thread";
+import { searchReachesSpamOrTrash } from "@/utils/mail-search/search-query-predicate";
 import { decodeSnippet } from "@/utils/gmail/decode";
 import {
   getDraft,
@@ -1536,7 +1536,7 @@ export class GmailProvider implements EmailProvider {
       labelIds,
       includeSpamTrash:
         options.includeSpamTrash ||
-        queryIncludesSpamOrTrash(query) ||
+        searchReachesSpamOrTrash(query, "google") ||
         labelIds?.some(
           (labelId) =>
             labelId === GmailLabel.SPAM || labelId === GmailLabel.TRASH,
@@ -2123,7 +2123,7 @@ export class GmailProvider implements EmailProvider {
       const labelIds = searchLabelIds(options);
       const includeSpamTrash = Boolean(
         options.includeSpamTrash ||
-          queryIncludesSpamOrTrash(options.query) ||
+          searchReachesSpamOrTrash(options.query, "google") ||
           labelIds.some(
             (labelId) =>
               labelId === GmailLabel.SPAM || labelId === GmailLabel.TRASH,
@@ -2381,7 +2381,7 @@ function gmailMailboxQuery(search: ProviderMailboxSearch): string {
         ? [search.text.value.trim()].filter(Boolean)
         : search.text.value.trim().split(/\s+/).filter(Boolean);
     for (const term of terms) {
-      const literal = `"${term.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+      const literal = gmailLiteral(term);
       parts.push(
         search.text.field === "any"
           ? literal
@@ -2389,6 +2389,8 @@ function gmailMailboxQuery(search: ProviderMailboxSearch): string {
       );
     }
   }
+  for (const address of search.addresses ?? [])
+    parts.push(`${address.field}:${gmailLiteral(address.value)}`);
   const mailboxQueries = {
     all: "",
     inbox: "in:inbox",
@@ -2410,4 +2412,8 @@ function gmailMailboxQuery(search: ProviderMailboxSearch): string {
   if (search.hasAttachment !== undefined)
     parts.push(search.hasAttachment ? "has:attachment" : "-has:attachment");
   return parts.join(" ");
+}
+
+function gmailLiteral(value: string) {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }

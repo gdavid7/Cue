@@ -54,7 +54,7 @@ export const mailPredicateSchema: z.ZodType<MailPredicate> = z.lazy(() =>
     }),
     z.object({
       kind: z.literal("address"),
-      field: z.enum(["from", "to", "cc"]),
+      field: z.enum(["from", "to", "cc", "bcc"]),
       value: z.string().min(1).max(4096),
       match: z.enum(["address", "domain"]),
     }),
@@ -67,12 +67,24 @@ export const mailPredicateSchema: z.ZodType<MailPredicate> = z.lazy(() =>
     z.object({
       kind: z.literal("message"),
       ids: z.array(z.string().min(1).max(512)).max(MAX_MESSAGE_PREDICATE_IDS),
+      accountId: accountIdSchema.optional(),
     }),
     z.object({
       kind: z.literal("text"),
       field: z.enum(["any", "subject", "body"]),
       value: z.string().min(1).max(4096),
       match: z.enum(["term", "phrase"]),
+    }),
+    z.object({
+      kind: z.literal("search"),
+      query: z.string().min(1).max(4096),
+      local: mailPredicateSchema,
+      possible: mailPredicateSchema,
+      accountIds: z.array(accountIdSchema).min(1).max(50).optional(),
+    }),
+    z.object({
+      kind: z.literal("account"),
+      ids: z.array(accountIdSchema).max(50),
     }),
   ]),
 );
@@ -94,19 +106,41 @@ export type MailPredicate =
     }
   | {
       kind: "address";
-      field: "from" | "to" | "cc";
+      field: "from" | "to" | "cc" | "bcc";
       value: string;
       match: "address" | "domain";
     }
   | { kind: "received"; afterMs: number | null; beforeMs: number | null }
   | { kind: "has_attachment"; value: boolean }
-  | { kind: "message"; ids: string[] }
+  /** These messages, of `accountId` alone when it is set. */
+  | { kind: "message"; ids: string[]; accountId?: string }
   | {
       kind: "text";
       field: "any" | "subject" | "body";
       value: string;
       match: "term" | "phrase";
-    };
+    }
+  /**
+   * A search the user typed, in the provider's own syntax. `local` is what the
+   * store answers by itself, and never matches a message the whole query
+   * wouldn't. The provider's own search for `query` finds the rest, as long
+   * as they still meet `possible`, which matches every message the query
+   * could: a match the reader has since archived or read drops out of an
+   * `in:inbox` or `is:unread` search.
+   */
+  | {
+      kind: "search";
+      query: string;
+      local: MailPredicate;
+      possible: MailPredicate;
+      /**
+       * The accounts the query is written for, when a view across accounts
+       * reads it differently per provider. Left out, every account's.
+       */
+      accountIds?: string[];
+    }
+  /** Mail of these accounts. */
+  | { kind: "account"; ids: string[] };
 
 export const conversationQuerySchema = z.object({
   accountIds: z.array(accountIdSchema).min(1).max(50),
@@ -114,6 +148,11 @@ export const conversationQuerySchema = z.object({
   order: z.literal("newest_first"),
   pageSize: z.number().int().min(1).max(100),
   after: z.string().max(512).nullable(),
+  /**
+   * False keeps the view's searches to the store, as for a search still
+   * being typed: the provider is only asked once it is committed.
+   */
+  providerSearch: z.boolean().optional(),
 });
 export type ConversationQuery = z.infer<typeof conversationQuerySchema>;
 
@@ -161,6 +200,29 @@ export const mailboxViewSchema = z.object({
   nextPage: z.string().nullable(),
   coverage: z.array(coverageSchema),
   connection: z.enum(["ready", "offline", "blocked_auth"]).optional(),
+  /**
+   * For a view with a typed search, per account: whether the provider's
+   * search is still running, answered, held back by quota, can't be reached,
+   * needs the account reconnected, or can't run the query at all.
+   */
+  providerSearch: z
+    .array(
+      z.object({
+        accountId: accountIdSchema,
+        state: z.enum([
+          "searching",
+          "complete",
+          "busy",
+          "unavailable",
+          "reconnect",
+          "unsupported",
+        ]),
+        /** Whether the provider has answered any of the search yet. */
+        answered: z.boolean(),
+      }),
+    )
+    .max(50)
+    .optional(),
 });
 export type MailboxView = z.infer<typeof mailboxViewSchema>;
 
@@ -223,6 +285,7 @@ export function canonicalizeQuery(query: ConversationQuery): string {
     order: query.order,
     pageSize: query.pageSize,
     after: query.after,
+    ...(query.providerSearch === false ? { providerSearch: false } : {}),
   });
 }
 

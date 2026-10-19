@@ -1,5 +1,9 @@
-import { EMAIL_ATTACHMENT_LIMITS } from "@inboxzero/email-editor/core";
+import {
+  EMAIL_ATTACHMENT_LIMITS,
+  getAttachmentTotalLimitError,
+} from "@inboxzero/email-editor/core";
 import { SafeError } from "@/utils/error";
+import { isMicrosoftProvider } from "@/utils/email/provider-types";
 
 /**
  * Shared by the browser and the server: how composer attachments travel to a
@@ -8,10 +12,20 @@ import { SafeError } from "@/utils/error";
  * Every request to our server must stay under the 4.5 MB function payload cap,
  * so files at or above the direct limit go through a provider upload session.
  */
-export const DRAFT_ATTACHMENT_DIRECT_UPLOAD_LIMIT_BYTES = 3 * 1024 * 1024;
+// Graph's documented cutoff for a single attachment POST: "under 3 MB".
+export const DRAFT_ATTACHMENT_DIRECT_UPLOAD_LIMIT_BYTES = 3_000_000;
+
+// Exchange Online and Outlook.com cap the whole sent message, base64
+// included, at about 25-35 MB depending on the mailbox. 20 MB of files
+// encodes to about 27 MB, which the common limits accept.
+export const OUTLOOK_MAX_ATTACHMENT_TOTAL_BYTES = 20_000_000;
 
 const GMAIL_UPLOAD_GRANULARITY_BYTES = 256 * 1024;
 export const GMAIL_UPLOAD_CHUNK_BYTES = 16 * GMAIL_UPLOAD_GRANULARITY_BYTES;
+
+// Gmail's media upload takes a whole message, base64 files included, up to
+// 35 MB. Decimal, as the smaller reading of Google's documented limit.
+export const GMAIL_MAX_MESSAGE_UPLOAD_BYTES = 35_000_000;
 
 // Graph takes each upload session range under 4 MB.
 export const GRAPH_UPLOAD_CHUNK_BYTES = 10 * 320 * 1024;
@@ -29,18 +43,40 @@ export type DraftMessageUploadPart =
       source?: { messageId: string; providerAttachmentId: string };
     };
 
+export function getAttachmentTotalLimitBytes(
+  provider: string | null | undefined,
+): number {
+  return isMicrosoftProvider(provider)
+    ? OUTLOOK_MAX_ATTACHMENT_TOTAL_BYTES
+    : EMAIL_ATTACHMENT_LIMITS.maxTotalBytes;
+}
+
 /** The composer's file count and total size limits, enforced on the draft. */
 export function assertDraftAttachmentLimits(
   existing: { size: number }[],
   size: number,
+  maxTotalBytes: number = EMAIL_ATTACHMENT_LIMITS.maxTotalBytes,
 ) {
   const totalBytes = existing.reduce((total, file) => total + file.size, size);
   if (existing.length + 1 > EMAIL_ATTACHMENT_LIMITS.maxFiles)
     throw new SafeError(
       `Attach at most ${EMAIL_ATTACHMENT_LIMITS.maxFiles} files.`,
     );
-  if (totalBytes > EMAIL_ATTACHMENT_LIMITS.maxTotalBytes)
-    throw new SafeError("Attachments must total 15 MB or less.");
+  if (totalBytes > maxTotalBytes)
+    throw new SafeError(
+      getAttachmentTotalLimitError(totalBytes, maxTotalBytes),
+    );
+}
+
+/**
+ * Files within the attachment limit can still pass Gmail's message limit
+ * once a long body is added, so the built message is checked too.
+ */
+export function assertGmailMessageUploadSize(messageBytes: number) {
+  if (messageBytes > GMAIL_MAX_MESSAGE_UPLOAD_BYTES)
+    throw new SafeError(
+      "This message is too large for Gmail. Remove an attachment or shorten the message.",
+    );
 }
 
 export function usesDirectDraftAttachmentUpload(size: number) {

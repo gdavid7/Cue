@@ -34,7 +34,9 @@ export function getForcedTheme(pathname: string | null) {
 }
 
 /** Browser chrome before hydration; `ThemeProvider` then follows the page. */
+export const THEME_COLOR_DARK = "#26282c";
+
 export const THEME_COLOR = [
   { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-  { media: "(prefers-color-scheme: dark)", color: "#26282c" },
+  { media: "(prefers-color-scheme: dark)", color: THEME_COLOR_DARK },
 ];

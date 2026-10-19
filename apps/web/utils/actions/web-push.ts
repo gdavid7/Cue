@@ -1,0 +1,52 @@
+"use server";
+
+import { headers } from "next/headers";
+import { WebPushMode } from "@/generated/prisma/enums";
+import { actionClientUser } from "@/utils/actions/safe-action";
+import {
+  deleteWebPushSubscriptionBody,
+  saveWebPushSubscriptionBody,
+} from "@/utils/actions/web-push.validation";
+import { SafeError } from "@/utils/error";
+import prisma from "@/utils/prisma";
+import { getWebPushVapidConfig } from "@/utils/web-push/config";
+
+const USER_AGENT_MAX_LENGTH = 512;
+
+export const saveWebPushSubscriptionAction = actionClientUser
+  .metadata({ name: "saveWebPushSubscription" })
+  .inputSchema(saveWebPushSubscriptionBody)
+  .action(
+    async ({ ctx: { userId }, parsedInput: { endpoint, keys, mode } }) => {
+      if (!getWebPushVapidConfig())
+        throw new SafeError("Push notifications aren't available.");
+
+      const userAgent =
+        (await headers()).get("user-agent")?.slice(0, USER_AGENT_MAX_LENGTH) ??
+        null;
+      const fields = {
+        p256dh: keys.p256dh,
+        auth: keys.auth,
+        mode: mode === "all" ? WebPushMode.ALL : WebPushMode.IMPORTANT,
+        userId,
+        userAgent,
+      };
+
+      // The endpoint belongs to the browser, so whoever signs in there last
+      // owns it.
+      await prisma.webPushSubscription.upsert({
+        where: { endpoint },
+        create: { endpoint, ...fields },
+        update: { ...fields, failureCount: 0 },
+      });
+    },
+  );
+
+export const deleteWebPushSubscriptionAction = actionClientUser
+  .metadata({ name: "deleteWebPushSubscription" })
+  .inputSchema(deleteWebPushSubscriptionBody)
+  .action(async ({ ctx: { userId }, parsedInput: { endpoint } }) => {
+    await prisma.webPushSubscription.deleteMany({
+      where: { endpoint, userId },
+    });
+  });

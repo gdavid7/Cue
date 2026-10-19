@@ -1,9 +1,19 @@
 "use client";
 
-import type { ReactNode } from "react";
-import { useEffect } from "react";
+import { createContext, type ReactNode, useEffect, useState } from "react";
 import { HotkeysProvider, useHotkeysContext } from "react-hotkeys-hook";
-import type { ShortcutScope } from "@/lib/shortcuts/registry";
+import {
+  createSequencePrefixTracker,
+  type ShortcutScope,
+} from "@/lib/shortcuts/registry";
+
+/**
+ * One keyboard, one pending `g` or `*`: every `useShortcuts` under a provider
+ * shares its tracker, so a second binding of the second key can't also fire.
+ */
+export const SequenceTrackerContext = createContext<ReturnType<
+  typeof createSequencePrefixTracker
+> | null>(null);
 
 /**
  * Enables the given shortcut scopes for everything it wraps. Bindings from
@@ -18,10 +28,14 @@ export function ShortcutsProvider({
   scopes: readonly ShortcutScope[];
   children: ReactNode;
 }) {
+  const [sequence] = useState(createSequencePrefixTracker);
+
   return (
     <HotkeysProvider initiallyActiveScopes={[...scopes]}>
-      <ActiveScopes scopes={scopes} />
-      {children}
+      <SequenceTrackerContext.Provider value={sequence}>
+        <ActiveScopes scopes={scopes} />
+        {children}
+      </SequenceTrackerContext.Provider>
     </HotkeysProvider>
   );
 }

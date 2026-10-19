@@ -150,8 +150,13 @@ export const SERVER_CACHE_WRITES: Record<
     ],
   },
   "utils/llms/model-usage-guard.ts": {
-    writes: 4,
+    writes: 5,
     keys: [
+      {
+        key: "memo spendUnreadable {userId}:{sha256(addresses)}",
+        holds: "the error from a failed spend read (instance memory)",
+        ttl: "30s",
+      },
       {
         key: "memo weeklySpendByBucket {userId}:{sha256(addresses)}",
         holds: "weekly spend in dollars per bucket (instance memory)",

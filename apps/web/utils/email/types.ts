@@ -168,6 +168,8 @@ export type GetThreadOptions = {
 
 export type ProviderMailboxSearch = {
   text?: Extract<MailPredicate, { kind: "text" }>;
+  /** Senders and recipients, each matched by address or part of one. */
+  addresses?: Array<{ field: "from" | "to" | "cc" | "bcc"; value: string }>;
   mailbox:
     | "all"
     | "inbox"

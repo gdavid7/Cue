@@ -112,7 +112,7 @@ describe("POST /api/user/drafts/[draftId]/attachments/uploads", () => {
     );
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
-      error: expect.stringContaining("3 MiB"),
+      error: expect.stringContaining("under 3 MB"),
     });
     expect(provider.startDraftAttachmentUpload).not.toHaveBeenCalled();
   });
