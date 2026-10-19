@@ -115,14 +115,17 @@ export function useCueSearch({
   const primary = useCueFoundThreads({
     emailAccountId,
     searches,
+    unreadOnly: Boolean(intent?.unreadOnly),
     enabled: natural && searches.length > 0,
   });
 
   const [widenedFor, setWidenedFor] = useState<string | null>(null);
   const widening = widenedFor === query;
+  // Widening drops narrowing conditions, unread among them.
   const wider = useCueFoundThreads({
     emailAccountId,
     searches: widerSearches,
+    unreadOnly: false,
     enabled: widening,
   });
 
@@ -183,10 +186,13 @@ export function useCueSearch({
 function useCueFoundThreads({
   emailAccountId,
   searches,
+  unreadOnly,
   enabled,
 }: {
   emailAccountId: string;
   searches: string[];
+  /** Keeps only unread mail, for a provider whose search can't. */
+  unreadOnly: boolean;
   enabled: boolean;
 }): { threads: ListThread[]; window: { settled: boolean; count: number } } {
   const { userLabels } = useLabels();
@@ -199,9 +205,15 @@ function useCueFoundThreads({
     const predicates = searches.map((q) =>
       threadsQueryToPredicate({ q }, undefined, context),
     );
-    if (predicates.length < 2) return predicates[0];
-    return { kind: "any", predicates };
-  }, [searches, userLabels, provider]);
+    const matching: MailPredicate | undefined =
+      predicates.length < 2 ? predicates[0] : { kind: "any", predicates };
+    // Outside the search, so the provider's matches are filtered too.
+    if (!matching || !unreadOnly) return matching;
+    return {
+      kind: "all",
+      predicates: [matching, { kind: "read", value: false }],
+    };
+  }, [searches, unreadOnly, userLabels, provider]);
   const state = useEngineMailThreads({
     emailAccountId,
     query: PREDICATE_ONLY_QUERY,

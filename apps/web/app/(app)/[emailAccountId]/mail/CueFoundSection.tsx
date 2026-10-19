@@ -35,6 +35,7 @@ export function CueFoundSection({
   widerSearches,
   threads,
   foundNothing,
+  allInPlainResults,
   layout,
   expandedPreview,
   userEmail,
@@ -49,6 +50,8 @@ export function CueFoundSection({
   threads: ListThread[];
   /** Cue's searches have all answered with no mail. */
   foundNothing: boolean;
+  /** Cue found mail, all of it already among the first plain results. */
+  allInPlainResults: boolean;
   layout: MailLayoutMode;
   expandedPreview: boolean;
   userEmail: string;
@@ -68,7 +71,7 @@ export function CueFoundSection({
     const thread = visible[index];
     if (thread) onOpenThread(thread);
   });
-  const searches = intent ? [...intent.searches, ...widerSearches] : [];
+  const searches = intent ? [...intent.editableSearches, ...widerSearches] : [];
 
   return (
     <EaseHeight>
@@ -155,6 +158,11 @@ export function CueFoundSection({
           {foundNothing ? (
             <p className="px-4 pb-3 text-muted-foreground text-sm">
               No mail matched Cue&apos;s searches.
+            </p>
+          ) : null}
+          {allInPlainResults && !pending ? (
+            <p className="px-4 pb-3 text-muted-foreground text-sm">
+              Cue&apos;s matches are in the results below.
             </p>
           ) : null}
           {threads.length > VISIBLE_ROWS ? (

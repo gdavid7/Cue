@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   /** Results by the joined searches each window runs. */
   results: new Map<string, { settled: boolean; ids: string[] }>(),
   enabledWindows: [] as string[],
+  enabledPredicates: [] as unknown[],
 }));
 
 vi.mock("swr", () => ({
@@ -33,6 +34,7 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads", () => ({
   }) => {
     const key = searchesOf(predicate).join(" | ");
     if (enabled) state.enabledWindows.push(key);
+    if (enabled) state.enabledPredicates.push(predicate);
     const result = enabled ? state.results.get(key) : undefined;
     return {
       threads: (result?.ids ?? []).map((id) => ({ id, messages: [] })),
@@ -68,6 +70,7 @@ beforeEach(() => {
   };
   state.results = new Map();
   state.enabledWindows = [];
+  state.enabledPredicates = [];
 });
 
 afterEach(() => {
@@ -188,6 +191,22 @@ describe("useCueSearch", () => {
     expect(result.current.answerRequest).toEqual({
       query: "when is my flight?",
     });
+  });
+
+  it("keeps only unread mail itself when the provider's search can't", () => {
+    state.intent = {
+      searches: ["from:sarah"],
+      editableSearches: ["from:sarah"],
+      unreadOnly: true,
+      explanation: "Unread mail from Sarah",
+      isQuestion: false,
+    };
+    state.results.set("from:sarah", { settled: true, ids: ["a", "b"] });
+    render(SENTENCE);
+
+    expect(JSON.stringify(state.enabledPredicates.at(-1))).toContain(
+      '{"kind":"read","value":false}',
+    );
   });
 
   it("answers a question from Cue's searches", () => {

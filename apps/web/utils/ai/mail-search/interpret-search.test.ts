@@ -100,6 +100,10 @@ describe("interpretSearch", () => {
       searches: [
         `from:sarah (lease OR contract) has:attachment label:Receipts after:${epoch("2026-09-01T07:00:00Z")} before:${epoch("2026-10-01T07:00:00Z")}`,
       ],
+      editableSearches: [
+        "from:sarah (lease OR contract) has:attachment label:Receipts after:2026/09/01 before:2026/10/01",
+      ],
+      unreadOnly: false,
       explanation: "Mail from Sarah with attachments last month",
       isQuestion: false,
     });
@@ -112,6 +116,24 @@ describe("interpretSearch", () => {
     expect(intent?.searches).toEqual([
       "from:sarah (lease OR contract) hasattachments:true category:Receipts received>=2026-09-01 received<2026-10-01",
     ]);
+  });
+
+  it("leaves unread out of an Outlook search and asks Cue to apply it", async () => {
+    mocks.generateObject.mockResolvedValue({
+      object: reading({ unread: true, dateRange: "none", label: "" }),
+    });
+
+    const outlook = await interpret(provider("microsoft"));
+    expect(outlook?.searches).toEqual([
+      "from:sarah (lease OR contract) hasattachments:true",
+    ]);
+    expect(outlook?.unreadOnly).toBe(true);
+
+    const gmail = await interpret();
+    expect(gmail?.searches).toEqual([
+      "from:sarah (lease OR contract) has:attachment is:unread",
+    ]);
+    expect(gmail?.unreadOnly).toBe(false);
   });
 
   it("keeps the search but drops the label when labels can't be loaded", async () => {

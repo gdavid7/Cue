@@ -170,6 +170,19 @@ export function buildGeneratedSearch(
   );
 }
 
+/**
+ * A built search with its epoch-second dates written as the account's local
+ * days, for a person to read and edit. Gmail reads those days at midnight
+ * Pacific, close enough for a search someone is editing.
+ */
+export function readableSearch(search: string, timeZone: string): string {
+  return search.replace(
+    /\b(after|before):(\d{9,11})\b/g,
+    (_, name: string, seconds: string) =>
+      `${name}:${localDate(Number(seconds) * 1000, timeZone).replaceAll("-", "/")}`,
+  );
+}
+
 export type DateRange = { startMs: number | null; endMs: number | null };
 
 /**

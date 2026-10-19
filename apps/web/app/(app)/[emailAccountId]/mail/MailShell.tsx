@@ -2409,6 +2409,9 @@ export function MailShell() {
                 <CueFoundSection
                   expandedPreview={expandedPreview}
                   foundNothing={cueSearch.foundNothing}
+                  allInPlainResults={
+                    cueSearch.threads.length > 0 && !cueFoundThreads.length
+                  }
                   intent={cueSearch.intent}
                   key={searchParam}
                   layout={layout}

@@ -6,6 +6,7 @@ import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
 import type { Logger } from "@/utils/logger";
 import {
   buildGeneratedSearch,
+  readableSearch,
   type SearchIntentParts,
   searchIntentSchema,
 } from "@/utils/mail-search/generated-search";
@@ -21,6 +22,13 @@ export const INTERPRET_SEARCH_TIMEOUT_MS = 3000;
 export type SearchIntent = {
   /** Searches in the account provider's syntax; may be empty. */
   searches: string[];
+  /** The same searches with dates a person can read, to edit one. */
+  editableSearches: string[];
+  /**
+   * Only unread mail, which Cue applies to its local mail itself: Outlook's
+   * search can't filter on it, so it isn't in the search.
+   */
+  unreadOnly: boolean;
   explanation: string;
   isQuestion: boolean;
 };
@@ -139,8 +147,7 @@ export async function aiInterpretSearch({
 }
 
 export const SEARCH_INTENT_INSTRUCTIONS = `You read what the user typed into their mailbox search bar and name the parts of the mail they mean, which Cue turns into a search.
-Fill only what the user states or clearly implies, and leave everything else empty: an added sender, date or condition hides the mail they want.
-Write the explanation in the language the user typed in.`;
+Fill only what the user states or clearly implies, and leave everything else empty: an added sender, date or condition hides the mail they want.`;
 
 export function buildSearchIntentPrompt({
   query,
@@ -169,8 +176,11 @@ export function toSearchIntent(
   context: Parameters<typeof buildGeneratedSearch>[1],
 ): SearchIntent {
   const search = buildGeneratedSearch(parts, context);
+  const searches = search ? [search] : [];
   return {
-    searches: search ? [search] : [],
+    searches,
+    editableSearches: searches.map((s) => readableSearch(s, context.timeZone)),
+    unreadOnly: parts.unread && context.provider === "microsoft",
     explanation: parts.explanation.trim(),
     isQuestion: parts.isQuestion,
   };

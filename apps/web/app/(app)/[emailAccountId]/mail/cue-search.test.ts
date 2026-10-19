@@ -12,6 +12,8 @@ import {
 
 const INTENT: CueSearchIntent = {
   searches: ["from:sarah has:attachment lease OR contract"],
+  editableSearches: ["from:sarah has:attachment lease OR contract"],
+  unreadOnly: false,
   explanation: "Mail from Sarah with attachments mentioning lease or contract",
   isQuestion: false,
 };

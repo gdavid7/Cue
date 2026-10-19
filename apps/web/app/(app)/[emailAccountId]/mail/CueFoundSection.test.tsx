@@ -8,7 +8,11 @@ import { CueFoundSection } from "./CueFoundSection";
 vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => false }));
 
 const INTENT = {
-  searches: ["from:sarah has:attachment after:2026/09/01 lease OR contract"],
+  searches: ["from:sarah has:attachment after:1756710000 (lease OR contract)"],
+  editableSearches: [
+    "from:sarah has:attachment after:2026/09/01 (lease OR contract)",
+  ],
+  unreadOnly: false,
   explanation: "Mail from Sarah with attachments in September",
   isQuestion: false,
 };
@@ -20,6 +24,7 @@ function renderSection(props: Partial<ComponentProps<typeof CueFoundSection>>) {
   render(
     <CueFoundSection
       expandedPreview={false}
+      allInPlainResults={false}
       foundNothing={false}
       intent={INTENT}
       layout="list"
@@ -58,8 +63,9 @@ describe("CueFoundSection", () => {
     );
 
     expect(onEditSearch).toHaveBeenCalledWith("from:sarah lease OR contract");
+    // Dates read as days to edit, not the epoch seconds Gmail is sent.
     expect(
-      screen.getByRole("button", { name: INTENT.searches[0] }),
+      screen.getByRole("button", { name: INTENT.editableSearches[0] }),
     ).toBeTruthy();
   });
 
@@ -69,6 +75,13 @@ describe("CueFoundSection", () => {
     cleanup();
     renderSection({ stage: "done", foundNothing: true });
     expect(screen.getByText("No mail matched Cue's searches.")).toBeTruthy();
+  });
+
+  it("says where its matches are when the plain results already show them all", () => {
+    renderSection({ stage: "done", allInPlainResults: true });
+    expect(
+      screen.getByText("Cue's matches are in the results below."),
+    ).toBeTruthy();
   });
 
   it("closes when Cue has nothing to search", () => {
