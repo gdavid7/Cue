@@ -24,7 +24,12 @@ import {
 } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { showMailView } from "@/app/(app)/[emailAccountId]/mail/show-mail-view";
 import { ThreadList } from "@/app/(app)/[emailAccountId]/mail/ThreadList";
-import type { MailLayoutMode } from "@/app/(app)/[emailAccountId]/mail/types";
+import type {
+  ListThread,
+  MailLayoutMode,
+} from "@/app/(app)/[emailAccountId]/mail/types";
+import { useHydrated } from "@/hooks/useHydrated";
+import { readInboxSnapshot } from "@/utils/mail-engine/inbox-snapshot";
 import { useEmailLabels } from "@/providers/EmailLabelsProvider";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { buildMailPath, parseMailPath, withPageParams } from "@/utils/mail-url";
@@ -131,8 +136,10 @@ export function useFetchOpenedPreviewThreads() {
  * Stands in for the inbox while the local mailbox opens or first syncs,
  * showing the newest conversations the server fetched with the page, so the
  * inbox reads at once rather than after the engine has booted and synced.
- * Without them, as on every warm open, or elsewhere, or with `enabled` off, it
- * is the usual skeleton and asks the provider for nothing.
+ * A browser that already holds the mailbox shows the top of the inbox as it
+ * last saw it instead, while the engine opens. Without either, or elsewhere,
+ * or with `enabled` off, it is the usual skeleton and asks the provider for
+ * nothing.
  */
 export function InboxPreviewList({
   message,
@@ -151,6 +158,16 @@ export function InboxPreviewList({
   const { seed, retired } = useContext(InboxPreviewSeedContext);
   const isInbox =
     enabled ?? parseMailPath(pathname ?? "")?.view?.kind === "inbox";
+  const seeded = seed?.emailAccountId === emailAccountId;
+  // Browser storage is not there for the server render or hydration.
+  const hydrated = useHydrated();
+  const snapshot = useMemo(
+    () =>
+      hydrated && isInbox && !retired && !seeded
+        ? readInboxSnapshot(emailAccountId)
+        : null,
+    [hydrated, isInbox, retired, seeded, emailAccountId],
+  );
   const placeholder = (
     <MailListPlaceholder
       message={message}
@@ -158,8 +175,19 @@ export function InboxPreviewList({
       withChrome={withChrome}
     />
   );
+  if (snapshot) {
+    return (
+      <PreviewRows
+        threads={snapshot}
+        fetchOpened={false}
+        message={message}
+        layout={layout}
+        withChrome={withChrome}
+      />
+    );
+  }
   // Only ever the open account's mail.
-  if (!isInbox || retired || seed?.emailAccountId !== emailAccountId) {
+  if (!isInbox || retired || !seeded) {
     return placeholder;
   }
   return (
@@ -190,16 +218,22 @@ function SeededPreviewRows({
 }) {
   const data = use(preview);
   if (!data?.threads.length) return placeholder;
-  return <PreviewRows preview={data} {...props} />;
+  return <PreviewRows threads={data.threads} fetchOpened {...props} />;
 }
 
 function PreviewRows({
-  preview,
+  threads,
+  fetchOpened,
   message,
   layout,
   withChrome,
 }: {
-  preview: ThreadsListResponse;
+  threads: ListThread[];
+  /**
+   * The server's rows can reach back further than the engine's first sync,
+   * so a clicked one is fetched; a saved row is already in the local mailbox.
+   */
+  fetchOpened: boolean;
   message: string;
   layout: MailLayoutMode;
   withChrome: boolean;
@@ -208,20 +242,22 @@ function PreviewRows({
   const { userLabels } = useEmailLabels();
   const { open } = useContext(InboxPreviewSeedContext);
   const openThread = (index: number) => {
-    const thread = preview.threads[index];
+    const thread = threads[index];
     if (!thread) return;
-    open(
-      thread.messages.slice(-OPENED_MESSAGES).map((message) => ({
-        accountId: emailAccountId,
-        messageId: message.id,
-      })),
-    );
+    if (fetchOpened) {
+      open(
+        thread.messages.slice(-OPENED_MESSAGES).map((message) => ({
+          accountId: emailAccountId,
+          messageId: message.id,
+        })),
+      );
+    }
     openInAddress(thread.id);
   };
   return (
     <div
       aria-busy="true"
-      className="flex min-h-0 flex-1 flex-col overflow-hidden"
+      className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
       data-mail-inbox-preview
     >
       {withChrome ? <PlaceholderChrome /> : null}
@@ -235,7 +271,7 @@ function PreviewRows({
         onMouseDown={keepFocus}
       >
         <ThreadList
-          threads={preview.threads}
+          threads={threads}
           layout={layout}
           expandedPreview={false}
           userEmail={userEmail}

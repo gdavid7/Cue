@@ -34,6 +34,7 @@ import { SelectAllCheckbox } from "@/app/(app)/[emailAccountId]/mail/SelectAllCh
 import { MailReaderPane } from "@/app/(app)/[emailAccountId]/mail/MailReaderPane";
 import { preloadEmailThread } from "@/components/email-list/EmailThreadLazy";
 import { useWarmComposer } from "@/app/(app)/[emailAccountId]/compose/use-warm-composer";
+import { writeInboxSnapshot } from "@/utils/mail-engine/inbox-snapshot";
 import { scheduleAfterPageLoad } from "@/utils/schedule-after-page-load";
 import { MailTitlebarNav } from "@/app/(app)/[emailAccountId]/mail/MailTitlebarNav";
 import {
@@ -687,6 +688,43 @@ export function MailShell() {
     markLocalMailboxSynced(emailAccountId);
     retireInboxPreview();
   }, [hasLocalMail, emailAccountId, retireInboxPreview]);
+  // The top of the inbox, saved as the page hides so the next visit paints
+  // it while the engine opens.
+  const inboxSnapshotSource = useRef<{
+    accountId: string;
+    threads: ListThread[];
+  } | null>(null);
+  useEffect(() => {
+    if (!showsWholeInbox || !hasLocalMail) return;
+    const previous = inboxSnapshotSource.current;
+    if (previous && previous.accountId !== emailAccountId)
+      writeInboxSnapshot(previous.accountId, previous.threads);
+    inboxSnapshotSource.current = {
+      accountId: emailAccountId,
+      threads: accountThreadState.threads,
+    };
+  }, [
+    showsWholeInbox,
+    hasLocalMail,
+    emailAccountId,
+    accountThreadState.threads,
+  ]);
+  useEffect(() => {
+    const save = () => {
+      const source = inboxSnapshotSource.current;
+      if (source) writeInboxSnapshot(source.accountId, source.threads);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") save();
+    };
+    window.addEventListener("pagehide", save);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      save();
+      window.removeEventListener("pagehide", save);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, []);
   useFetchOpenedPreviewThreads();
   const listPlaceholderMessage = getListPlaceholderMessage({
     engineStarting: !client,
