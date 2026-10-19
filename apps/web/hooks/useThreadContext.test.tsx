@@ -3,8 +3,8 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useThreadContext } from "@/hooks/useThreadContext";
-import { resetBrowserCacheBlocksForTesting } from "@/utils/browser-cache";
+import { contextWithText, useThreadContext } from "@/hooks/useThreadContext";
+import { resetBrowserCacheForTesting } from "@/utils/browser-cache";
 
 vi.mock("@/env", () => ({ env: {} }));
 
@@ -16,7 +16,7 @@ const CONTEXT = {
 describe("useThreadContext", () => {
   beforeEach(() => {
     window.localStorage.clear();
-    resetBrowserCacheBlocksForTesting();
+    resetBrowserCacheForTesting();
     fetcher.mockReset();
   });
   afterEach(cleanup);
@@ -33,6 +33,37 @@ describe("useThreadContext", () => {
 
     expect(second.current.data).toEqual(CONTEXT);
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  // F5: the panel's items are kept; their text and a linked page's words
+  // stay in memory for this page only.
+  it("keeps no item text or linked-page words in this browser", async () => {
+    const page = {
+      id: "page-1",
+      kind: "web",
+      title: "Opening hours",
+      snippet: "Open 9 to 5 on weekdays",
+      reasons: [],
+      text: "Open 9 to 5 on weekdays, closed on holidays.",
+    };
+    fetcher.mockResolvedValue({ items: [page] });
+
+    const first = render();
+    await waitFor(() => expect(first.current.data).toEqual({ items: [page] }));
+    cleanup();
+
+    expect(JSON.stringify({ ...window.localStorage })).not.toContain("9 to 5");
+    const second = render();
+    expect(second.current.data?.items).toEqual([
+      {
+        id: "page-1",
+        kind: "web",
+        title: "Opening hours",
+        snippet: "",
+        reasons: [],
+      },
+    ]);
+    expect(contextWithText(second.current.data)).toBeUndefined();
   });
 });
 

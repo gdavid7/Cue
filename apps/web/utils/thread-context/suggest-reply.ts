@@ -139,6 +139,7 @@ export async function suggestReply({
   logger,
   searchWeb: searchWebRequested = false,
   webQuery: knownWebQuery,
+  context: knownContext,
   settings: knownSettings,
   now = new Date(),
 }: {
@@ -154,6 +155,11 @@ export async function suggestReply({
    * web pass then skips writing the plain answer again.
    */
   webQuery?: string;
+  /**
+   * The context the reader already gathered for this thread, so the related
+   * mail, events and linked pages aren't fetched again for the suggestion.
+   */
+  context?: Awaited<ReturnType<typeof collectThreadContext>>["items"];
   /** From `getSuggestedReplySettings`, when the caller already has them. */
   settings?: SuggestedReplySettings;
   now?: Date;
@@ -165,6 +171,7 @@ export async function suggestReply({
     emailProvider,
     logger,
     now,
+    knownItems: knownContext,
   });
   const latest = thread?.messages.at(-1);
   if (!thread || !latest) return null;

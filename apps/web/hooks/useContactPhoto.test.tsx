@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useContactPhoto } from "@/hooks/useContactPhoto";
-import { resetBrowserCacheBlocksForTesting } from "@/utils/browser-cache";
+import { resetBrowserCacheForTesting } from "@/utils/browser-cache";
 
 vi.mock("@/env", () => ({ env: { NEXT_PUBLIC_CONTACTS_ENABLED: true } }));
 
@@ -13,7 +13,7 @@ const fetcher = vi.fn();
 describe("useContactPhoto", () => {
   beforeEach(() => {
     window.localStorage.clear();
-    resetBrowserCacheBlocksForTesting();
+    resetBrowserCacheForTesting();
     fetcher.mockReset();
   });
   afterEach(cleanup);

@@ -15,7 +15,7 @@ import { CueStrip } from "@/app/(app)/[emailAccountId]/mail/CueStrip";
 import type { ThreadMessage } from "@/components/email-list/types";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { onSWRErrorRetry } from "@/utils/swr";
-import { resetBrowserCacheBlocksForTesting } from "@/utils/browser-cache";
+import { resetBrowserCacheForTesting } from "@/utils/browser-cache";
 
 const mocks = vi.hoisted(() => ({
   requests: [] as { url: string; emailAccountId: string | undefined }[],
@@ -63,7 +63,7 @@ describe("CueStrip", () => {
     mocks.insightGate = null;
     mocks.aiAccess = true;
     window.localStorage.clear();
-    resetBrowserCacheBlocksForTesting();
+    resetBrowserCacheForTesting();
   });
   afterEach(cleanup);
 

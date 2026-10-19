@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ZodError } from "zod";
 
 const mocks = vi.hoisted(() => ({
   rateLimitCount: vi.fn(),
@@ -23,9 +24,9 @@ vi.mock("@/utils/middleware", async () => {
   return createWithEmailProviderTestMiddleware({}, { handleSafeErrors: true });
 });
 
-import { GET } from "./route";
+import { POST } from "./route";
 
-describe("GET /api/user/suggested-reply", () => {
+describe("POST /api/user/suggested-reply", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.suggestReply.mockResolvedValue({ status: "insufficient" });
@@ -60,6 +61,43 @@ describe("GET /api/user/suggested-reply", () => {
     );
   });
 
+  // RD-3g: the reader's context is reused, not gathered again.
+  it("hands the suggestion the context the reader already has", async () => {
+    const item = {
+      id: "page-1",
+      kind: "web",
+      title: "Opening hours",
+      snippet: "",
+      at: "2026-10-01T00:00:00.000Z",
+      reasons: [{ type: "linked" }],
+      text: "Open 9 to 5.",
+    };
+
+    await get("threadId=t1", { context: [item] });
+
+    expect(mocks.suggestReply).toHaveBeenCalledWith(
+      expect.objectContaining({ context: [item] }),
+    );
+  });
+
+  it("refuses context longer than the reader is ever given", async () => {
+    const item = {
+      id: "page-1",
+      kind: "web",
+      title: "Opening hours",
+      snippet: "",
+      at: "2026-10-01T00:00:00.000Z",
+      reasons: [],
+      text: "x".repeat(5000),
+    };
+
+    // withEmailProvider answers a ZodError with a 400.
+    await expect(get("threadId=t1", { context: [item] })).rejects.toThrow(
+      ZodError,
+    );
+    expect(mocks.suggestReply).not.toHaveBeenCalled();
+  });
+
   it("does not count suggestions from mail and calendar alone", async () => {
     mocks.rateLimitCount.mockResolvedValue(1000);
 
@@ -70,9 +108,12 @@ describe("GET /api/user/suggested-reply", () => {
   });
 });
 
-function get(query: string) {
-  return GET(
-    new NextRequest(`http://localhost:3000/api/user/suggested-reply?${query}`),
+function get(query: string, body: unknown = {}) {
+  return POST(
+    new NextRequest(`http://localhost:3000/api/user/suggested-reply?${query}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
     { params: Promise.resolve({}) },
   );
 }

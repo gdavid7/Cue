@@ -5,7 +5,11 @@ import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import { recordingRedis } from "@/__tests__/mocks/recording-redis.mock";
 import { fetchConnectorCandidates } from "@/utils/thread-context/connector-context";
 import { fetchLinkedPages } from "@/utils/thread-context/linked-pages";
-import { getThreadContext } from "./get-thread-context";
+import {
+  CONTEXT_TEXT_LIMIT,
+  collectThreadContext,
+  getThreadContext,
+} from "./get-thread-context";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/calendar/fetch-events-in-window", () => ({
@@ -59,6 +63,49 @@ describe("getThreadContext", () => {
     expect(JSON.stringify(second)).toContain("Pricing sheet");
     expect(recordingRedis.everythingWritten()).not.toContain("Pricing sheet");
     expect(recordingRedis.everythingWritten()).not.toContain("northwind");
+  });
+
+  // RD-3g: the reader's context reaches the suggested reply with its text,
+  // capped, so the suggestion doesn't gather it again.
+  it("returns each item's text, capped, for the reader to hand on", async () => {
+    const { items } = await run(renewalProvider(), "renewal");
+
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(typeof item.text).toBe("string");
+      expect(item.text.length).toBeLessThanOrEqual(CONTEXT_TEXT_LIMIT);
+    }
+  });
+
+  it("reads only the thread when the reader already has its context", async () => {
+    const provider = renewalProvider();
+    const known = [
+      {
+        id: "pricing",
+        kind: "email" as const,
+        title: "Pricing sheet",
+        snippet: "",
+        at: NOW.toISOString(),
+        reasons: [],
+        text: "The price is 40.",
+      },
+    ];
+
+    const result = await collectThreadContext({
+      emailAccountId: "account-1",
+      userEmail: USER,
+      threadId: "renewal",
+      emailProvider: provider,
+      logger: createTestLogger(),
+      now: NOW,
+      knownItems: known,
+    });
+
+    expect(result.thread?.id).toBe("renewal");
+    expect(result.items).toBe(known);
+    expect(provider.getThreadsWithParticipant).not.toHaveBeenCalled();
+    expect(fetchLinkedPages).not.toHaveBeenCalled();
+    expect(fetchCalendarEventsInWindow).not.toHaveBeenCalled();
   });
 
   it("finds other conversations with the people on the thread, never the thread itself", async () => {

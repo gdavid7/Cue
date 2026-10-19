@@ -42,6 +42,8 @@ const SNIPPET_LENGTH = 180;
 // Suggested replies are checked against these same items, so a short list
 // hides evidence the reply needs; the ranker still drops weak matches.
 const CONTEXT_LIMIT = 8;
+/** The most of each item's text that leaves for the browser and comes back. */
+export const CONTEXT_TEXT_LIMIT = 2000;
 // The reader panel and the suggested reply both ask for the same thread's
 // context. A new message in this thread changes the key, but related threads
 // and meetings change too, so the result is kept only for a few minutes.
@@ -81,7 +83,7 @@ export async function getThreadContext({
   emailProvider: EmailProvider;
   logger: Logger;
   now?: Date;
-}): Promise<{ items: ThreadContextItem[] }> {
+}): Promise<{ items: (ThreadContextItem & { text: string })[] }> {
   const { items } = await collectThreadContext({
     emailAccountId,
     userEmail,
@@ -90,7 +92,14 @@ export async function getThreadContext({
     logger,
     now,
   });
-  return { items: items.map(({ text: _text, ...item }) => item) };
+  // With its text, capped, so the reader can hand the same context to a
+  // suggested reply instead of it being gathered again (no server cache).
+  return {
+    items: items.map((item) => ({
+      ...item,
+      text: item.text.slice(0, CONTEXT_TEXT_LIMIT),
+    })),
+  };
 }
 
 /**
@@ -104,6 +113,7 @@ export async function collectThreadContext({
   emailProvider,
   logger,
   now = new Date(),
+  knownItems,
 }: {
   emailAccountId: string;
   userEmail: string;
@@ -111,6 +121,8 @@ export async function collectThreadContext({
   emailProvider: EmailProvider;
   logger: Logger;
   now?: Date;
+  /** Context the reader already gathered: only the thread is read again. */
+  knownItems?: (ThreadContextItem & { text: string })[];
 }): Promise<{
   thread: EmailThread | null;
   items: (ThreadContextItem & { text: string })[];
@@ -124,6 +136,7 @@ export async function collectThreadContext({
     return null;
   });
   if (!thread?.messages.length) return { thread: null, items: [] };
+  if (knownItems) return { thread, items: knownItems };
 
   const focus = toFocus(thread);
   const participants = focus.people

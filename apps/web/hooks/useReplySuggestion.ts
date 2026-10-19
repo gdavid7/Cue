@@ -1,3 +1,4 @@
+import type { SuggestedReplyBody } from "@/app/api/user/suggested-reply/route";
 import { useSuggestedReply } from "@/hooks/useSuggestedReply";
 
 /**
@@ -15,18 +16,22 @@ export function useReplySuggestion({
   emailAccountId,
   messageId,
   enabled,
+  context,
 }: {
   threadId: string | null | undefined;
   emailAccountId?: string | null;
   /** The newest message shown, which keys what this browser keeps. */
   messageId?: string;
   enabled: boolean;
+  /** The thread's context the reader already gathered, for both passes. */
+  context?: SuggestedReplyBody["context"];
 }) {
   const plain = useSuggestedReply({
     threadId,
     emailAccountId,
     messageId,
     enabled,
+    context,
   });
   const abstention =
     plain.data?.suggestion?.status === "insufficient"
@@ -43,6 +48,7 @@ export function useReplySuggestion({
     searchWeb: true,
     // The abstention's own query, so the web pass skips the plain answer.
     webQuery: abstention?.webQuery || undefined,
+    context,
   });
   // A failed web pass leaves the answer from mail and calendar standing.
   const result = needsWeb && !web.error ? web : plain;

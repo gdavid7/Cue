@@ -1,5 +1,8 @@
-import useSWR from "swr";
-import type { GetSuggestedReplyResponse } from "@/app/api/user/suggested-reply/route";
+import useSWR, { useSWRConfig } from "swr";
+import type {
+  GetSuggestedReplyResponse,
+  SuggestedReplyBody,
+} from "@/app/api/user/suggested-reply/route";
 import { getAccountScopedKey } from "@/utils/swr";
 import {
   keptSuggestions,
@@ -11,7 +14,9 @@ import {
  * kept is a model call. `messageId`, the newest message shown, keys what this
  * browser keeps (the server keeps nothing, RD-3). `searchWeb` retries an
  * abstention with what a web search finds for its `webQuery`. `keptOnly`
- * reads back what this browser kept and never asks the server.
+ * reads back what this browser kept and never asks the server. `context`,
+ * the thread's context the reader already has, spares the server gathering
+ * it again.
  */
 export function useSuggestedReply({
   threadId,
@@ -21,6 +26,7 @@ export function useSuggestedReply({
   searchWeb = false,
   webQuery,
   keptOnly = false,
+  context,
 }: {
   threadId: string | null | undefined;
   emailAccountId?: string | null;
@@ -29,7 +35,9 @@ export function useSuggestedReply({
   searchWeb?: boolean;
   webQuery?: string;
   keptOnly?: boolean;
+  context?: SuggestedReplyBody["context"];
 }) {
+  const { fetcher } = useSWRConfig();
   const keptKey =
     threadId && messageId
       ? suggestionKey({ threadId, messageId, web: searchWeb })
@@ -51,6 +59,12 @@ export function useSuggestedReply({
       : null;
   const result = useSWR<GetSuggestedReplyResponse>(
     path ? getAccountScopedKey(path, emailAccountId) : null,
+    (key: unknown) =>
+      fetcher?.(key, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ context } satisfies SuggestedReplyBody),
+      }) as Promise<GetSuggestedReplyResponse>,
     {
       revalidateOnFocus: false,
       onSuccess: (data) => {

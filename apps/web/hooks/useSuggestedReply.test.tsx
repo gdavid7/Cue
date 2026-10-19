@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSuggestedReply } from "@/hooks/useSuggestedReply";
-import { resetBrowserCacheBlocksForTesting } from "@/utils/browser-cache";
+import { resetBrowserCacheForTesting } from "@/utils/browser-cache";
 
 vi.mock("@/env", () => ({ env: {} }));
 
@@ -17,7 +17,7 @@ const SUGGESTION = {
 describe("useSuggestedReply", () => {
   beforeEach(() => {
     window.localStorage.clear();
-    resetBrowserCacheBlocksForTesting();
+    resetBrowserCacheForTesting();
     fetcher.mockReset();
   });
   afterEach(cleanup);
@@ -52,6 +52,30 @@ describe("useSuggestedReply", () => {
     expect(JSON.stringify(fetcher.mock.calls[0][0])).toContain(
       "webQuery=venue+hours",
     );
+  });
+
+  // RD-3g: the reader's context goes with the request instead of being
+  // gathered again on the server.
+  it("sends the reader's context with the request", async () => {
+    fetcher.mockResolvedValue(SUGGESTION);
+    const context = [
+      {
+        id: "thread-2",
+        kind: "email" as const,
+        title: "Pricing",
+        snippet: "",
+        at: "2026-10-01T00:00:00.000Z",
+        reasons: [],
+        text: "The price is 40.",
+      },
+    ];
+
+    render({ enabled: true, context });
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalled());
+    const init = fetcher.mock.calls[0][1];
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ context });
   });
 });
 
