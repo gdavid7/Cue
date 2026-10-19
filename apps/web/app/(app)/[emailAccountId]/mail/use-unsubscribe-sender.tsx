@@ -3,6 +3,17 @@
 import { useCallback, useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
+import { toastUndo } from "@/components/Toast";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { usePremiumModal } from "@/app/(app)/premium/PremiumModal";
 import type { NewsletterStatsResponse } from "@/app/api/user/stats/newsletters/route";
 import { usePremium } from "@/hooks/usePremium";
@@ -49,6 +60,7 @@ export function useUnsubscribeSender(
     enabled: boolean;
   } | null>(null);
   const [isUpdatingAutoArchive, setIsUpdatingAutoArchive] = useState(false);
+  const [isConfirmingUnsubscribe, setIsConfirmingUnsubscribe] = useState(false);
 
   const listUnsubscribeHeader = message?.headers["list-unsubscribe"] ?? null;
   const from = message?.headers.from ?? "";
@@ -153,8 +165,27 @@ export function useUnsubscribeSender(
       return;
     }
 
-    toast.success(`Future emails from ${senderName} will be archived`, {
-      id: toastId,
+    // Undo only reverses the filter: mail already archived stays archived.
+    toast.dismiss(toastId);
+    toastUndo({
+      message: `Future emails from ${senderName} will be archived`,
+      onUndo: async () => {
+        try {
+          const undone = await setSenderStatusAction(emailAccountId, {
+            senderEmail,
+            status: null,
+          });
+          assertActionSucceeded(undone);
+          refetchSenderStats().catch(captureException);
+          setUpdatedAutoArchive({
+            sender: canonicalSenderEmail,
+            enabled: false,
+          });
+        } catch (error) {
+          captureException(error);
+          toast.error(`Couldn't undo auto archive for ${senderName}`);
+        }
+      },
     });
 
     // These follow-up tasks do not change the provider filter that was just
@@ -199,13 +230,29 @@ export function useUnsubscribeSender(
 
     // Sending the user to a mailto they have to compose is the last resort: an
     // http link opens a page that finishes the job, so it wins when both exist.
-    const manualLink = httpLink ?? userFacingLink;
-
     if (!httpLink) {
       openUnsubscribePage(userFacingLink);
       return;
     }
 
+    setIsConfirmingUnsubscribe(true);
+  }, [
+    canUnsubscribe,
+    isSenderStatsLoading,
+    isAutoArchiveStatusLoading,
+    isUpdatingAutoArchive,
+    isAutoArchived,
+    onToggleAutoArchive,
+    hasUnsubscribeAccess,
+    httpLink,
+    openModal,
+    senderEmail,
+    userFacingLink,
+  ]);
+
+  const confirmUnsubscribe = useCallback(async () => {
+    if (!senderEmail || !httpLink) return;
+    const manualLink = httpLink;
     const toastId = toast.loading(`Unsubscribing from ${senderName}`);
     const failed = () =>
       toast.error(`Couldn't unsubscribe from ${senderName}`, {
@@ -241,22 +288,13 @@ export function useUnsubscribeSender(
       .then(() => refetchPremium())
       .catch(() => {});
   }, [
-    canUnsubscribe,
-    isSenderStatsLoading,
-    isAutoArchiveStatusLoading,
-    isUpdatingAutoArchive,
-    isAutoArchived,
-    onToggleAutoArchive,
     emailAccountId,
-    hasUnsubscribeAccess,
     httpLink,
     listUnsubscribeHeader,
-    openModal,
     refetchPremium,
     senderEmail,
     senderName,
     unsubscribeLink,
-    userFacingLink,
     queueArchiveSenders,
   ]);
 
@@ -278,7 +316,38 @@ export function useUnsubscribeSender(
     onToggleAutoArchive,
     onUnsubscribe,
     PremiumModal,
+    unsubscribeConfirm: {
+      open: isConfirmingUnsubscribe,
+      onOpenChange: setIsConfirmingUnsubscribe,
+      senderName,
+      onConfirm: confirmUnsubscribe,
+    },
   };
+}
+
+export function UnsubscribeConfirmDialog({
+  open,
+  onOpenChange,
+  senderName,
+  onConfirm,
+}: ReturnType<typeof useUnsubscribeSender>["unsubscribeConfirm"]) {
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Unsubscribe from {senderName}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Cue will send an unsubscribe request to {senderName} and archive
+            their emails. The request can't be undone from Cue.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={onConfirm}>Unsubscribe</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
 }
 
 function openUnsubscribePage(link: string) {
