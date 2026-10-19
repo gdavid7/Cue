@@ -55,6 +55,7 @@ import {
   useSearchAnswer,
 } from "@/app/(app)/[emailAccountId]/mail/SearchAnswerCard";
 import { ScheduledEmailList } from "@/app/(app)/[emailAccountId]/mail/ScheduledEmailList";
+import { SampleThread } from "@/app/(app)/[emailAccountId]/mail/SampleThread";
 import { SnoozedThreadList } from "@/app/(app)/[emailAccountId]/mail/SnoozedThreadList";
 import type { MailboxItem } from "@/app/(app)/[emailAccountId]/mail/MailboxItemContextMenu";
 import { ListSenderCommands } from "@/app/(app)/[emailAccountId]/mail/ListSenderCommands";
@@ -2287,6 +2288,15 @@ export function MailShell() {
               )}
               {showSplitTabs && !isAllAccounts && <CueLabelsCard />}
               {!isAllAccounts && <ReplyTrackingNotice />}
+              {!isAllAccounts && (
+                <SampleThread
+                  isPlainInbox={!isScoped && !searchQuery && !activeSplitId}
+                  isFirstSync={isFirstSync}
+                  isLoading={isLoading}
+                  hasError={Boolean(error) || routeFailed}
+                  threadCount={threads.length}
+                />
+              )}
               {isTourOpen && (
                 <WhatsNewTour onClose={() => setIsTourOpen(false)} />
               )}
