@@ -109,7 +109,7 @@ export async function compactMessages({
 
 Preserve:
 - All specific actions taken (rules created/modified, emails archived, labels applied) with exact names and IDs
-- Changes still waiting for the user's confirmation (results with requiresConfirmation), marked as pending and not applied, with what each would change
+- Changes still waiting for the user's confirmation (results with confirmationState pending), marked as pending and not applied, with what each would change. Results with confirmationState confirmed were applied after the user confirmed; report them as done
 - The identifiers later requests may refer to: thread and message IDs of emails discussed or listed (with the number each was shown under), and exact rule and label names
 - Tool call results and data retrieved (sender names, email counts, rule names)
 - User preferences and instructions expressed
@@ -252,9 +252,10 @@ function serializeContent(content: ModelMessage["content"]): string {
     }
     if (part.type === "tool-result") {
       const text = getToolOutputText(part.output);
-      // A pending confirmation is short and must survive whole, or the
-      // summary could report an unconfirmed change as done or drop it.
-      const output = isPendingConfirmation(text)
+      // A confirmation result must reach the summary with its state, or the
+      // summary could report a pending change as done, or a confirmed one,
+      // such as a sent email, as still waiting.
+      const output = isConfirmationResult(text)
         ? text
         : truncatePromptContent(text, COMPACTION_TOOL_RESULT_CHAR_LIMIT);
       parts.push(`[Tool result (${part.toolName}): ${output}]`);
@@ -275,13 +276,13 @@ export function buildCompactionSummaryMessage(summary: string): ModelMessage {
   };
 }
 
-function isPendingConfirmation(text: string) {
+function isConfirmationResult(text: string) {
   try {
     const value = JSON.parse(text);
     return (
       typeof value === "object" &&
       value !== null &&
-      value.requiresConfirmation === true
+      typeof value.confirmationState === "string"
     );
   } catch {
     return false;

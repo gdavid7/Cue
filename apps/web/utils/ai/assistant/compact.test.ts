@@ -210,6 +210,39 @@ describe("chat compaction", () => {
     expect(result.compactedMessages).toBe(messages);
   });
 
+  it("gives the summary a confirmed action with its confirmed state", async () => {
+    mockGenerateText.mockResolvedValue({ text: "Summary" });
+    mockCreateGenerateText.mockReturnValue(mockGenerateText);
+    mockGetModel.mockReturnValue({ model: {}, providerOptions: undefined });
+
+    const confirmed = {
+      actionType: "send_email",
+      requiresConfirmation: true,
+      confirmationState: "confirmed",
+      pendingAction: { to: "sam@example.com", content: "b".repeat(6000) },
+    };
+    const messages: ModelMessage[] = [
+      { role: "user", content: "email Sam the update" },
+      ...toolRound("call-1", "sendEmail", confirmed),
+      { role: "assistant", content: "The email is ready to send." },
+      ...Array.from({ length: 6 }, (_, index) => ({
+        role: "user" as const,
+        content: `follow-up ${index}`,
+      })),
+    ];
+
+    await compactMessages({
+      messages,
+      user: getEmailAccount(),
+      logger: createTestLogger(),
+    });
+
+    const prompt: string = mockGenerateText.mock.calls.at(-1)?.[0].prompt;
+    expect(prompt).toContain('"confirmationState":"confirmed"');
+    expect(prompt).toContain("confirmationState pending");
+    expect(prompt).toContain("confirmationState confirmed");
+  });
+
   it("gives the summary pending confirmations whole and every listed email's ids", async () => {
     mockGenerateText.mockResolvedValue({ text: "Summary" });
     mockCreateGenerateText.mockReturnValue(mockGenerateText);

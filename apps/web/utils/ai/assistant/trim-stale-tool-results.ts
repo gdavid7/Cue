@@ -103,7 +103,7 @@ function isTrimmable(part: ToolResultPart) {
       !("trimmedForContext" in output.value) &&
       // A change still waiting for the user's yes stays whole, so it is
       // never reported from a partial copy.
-      output.value.requiresConfirmation !== true);
+      output.value.confirmationState !== "pending");
 
   return (
     canShorten && getToolOutputText(output).length >= MIN_TRIMMABLE_RESULT_CHARS

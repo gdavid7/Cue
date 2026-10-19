@@ -218,6 +218,38 @@ describe("projectEarlierTurnToolResults", () => {
     );
   });
 
+  it("keeps a change awaiting confirmation whole but shortens a confirmed one", () => {
+    const sentEmail = {
+      actionType: "send_email",
+      requiresConfirmation: true,
+      pendingAction: { to: "someone@example.com", content: "b".repeat(3000) },
+    };
+    const messages = [
+      userMessage("Email Sam the update"),
+      ...toolRound("sendEmail", "pending-0", {
+        ...sentEmail,
+        confirmationState: "pending",
+      }),
+      ...toolRound("sendEmail", "confirmed-0", {
+        ...sentEmail,
+        confirmationState: "confirmed",
+      }),
+      userMessage("Thanks"),
+    ];
+
+    const projected = projectEarlierTurnToolResults(messages);
+
+    expect(getToolOutputValue(projected, "pending-0")).toEqual(
+      getToolOutputValue(messages, "pending-0"),
+    );
+    const confirmed = getToolOutputValue(projected, "confirmed-0") as {
+      confirmationState: string;
+      trimmedForContext?: string;
+    };
+    expect(confirmed.confirmationState).toBe("confirmed");
+    expect(confirmed.trimmedForContext).toBeDefined();
+  });
+
   it.each([
     "getUserRulesAndSettings",
     "getLearnedPatterns",
