@@ -314,7 +314,13 @@ function cleanTerms(values: string[]) {
       .replace(/^[-+]+/, "")
       .slice(0, MAX_TERM_LENGTH);
     const key = term.toLowerCase();
-    if (!term || seen.has(key) || /^(OR|AND|NOT|AROUND)$/.test(term)) return [];
+    // A term with no letter or digit (a stray backslash) matches nothing.
+    if (
+      !/[\p{L}\p{N}]/u.test(term) ||
+      seen.has(key) ||
+      /^(OR|AND|NOT|AROUND)$/.test(term)
+    )
+      return [];
     seen.add(key);
     return [term];
   });

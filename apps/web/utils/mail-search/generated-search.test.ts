@@ -98,7 +98,9 @@ describe("buildGeneratedSearch", () => {
 
   it("keeps words from reading as search syntax", () => {
     expect(
-      build({ keywordGroups: [["(lease)", "OR", "-draft", "re:offer"]] }),
+      build({
+        keywordGroups: [["(lease)", "OR", "-draft", "re:offer", "\\", "*"]],
+      }),
     ).toBe('lease OR draft OR "re:offer"');
   });
 
