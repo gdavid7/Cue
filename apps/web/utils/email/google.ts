@@ -41,6 +41,7 @@ import {
   createLabel,
   getOrCreateLabel,
   getOrCreateInboxZeroLabel,
+  getGmailViewLabelIds,
   GmailLabel,
 } from "@/utils/gmail/label";
 import { labelVisibility, messageVisibility } from "@/utils/gmail/constants";
@@ -157,6 +158,14 @@ import {
   getGmailMailboxSyncPage,
 } from "@/utils/gmail/mailbox-sync";
 import { isGoogleOauthEmulationEnabled } from "@/utils/gmail/oauth";
+import {
+  countGmailMatchingConversations,
+  listGmailMatchingMessages,
+} from "@/utils/gmail/matching";
+import type {
+  MatchingFilter,
+  MatchingScope,
+} from "@/utils/actions/mail-bulk-matching.validation";
 
 const GMAIL_MESSAGE_WRITE_CONCURRENCY = 5;
 const THREAD_METADATA_CACHE_SECONDS = 15 * 60;
@@ -183,6 +192,18 @@ export class GmailProvider implements EmailProvider {
 
   toJSON() {
     return { name: this.name, type: "GmailProvider" };
+  }
+
+  async countMatchingConversations(scope: MatchingScope) {
+    return countGmailMatchingConversations({ gmail: this.client, scope });
+  }
+
+  async listMatchingMessages(options: {
+    scope: MatchingScope;
+    only: MatchingFilter;
+    pageToken?: string;
+  }) {
+    return listGmailMatchingMessages({ gmail: this.client, ...options });
   }
 
   async countMessages({
@@ -616,6 +637,16 @@ export class GmailProvider implements EmailProvider {
         requestBody: starred
           ? { ids, addLabelIds: [GmailLabel.STARRED] }
           : { ids, removeLabelIds: [GmailLabel.STARRED] },
+      });
+    }
+  }
+
+  async labelMessages(messageIds: string[], labelId: string): Promise<void> {
+    for (const ids of chunk([...new Set(messageIds)], 1000)) {
+      if (!ids.length) continue;
+      await this.client.users.messages.batchModify({
+        userId: "me",
+        requestBody: { ids, addLabelIds: [labelId] },
       });
     }
   }
@@ -2024,33 +2055,7 @@ export class GmailProvider implements EmailProvider {
           return labelIds;
         }
         if (labelId) return [labelId];
-
-        switch (type) {
-          case "inbox":
-            return [GmailLabel.INBOX];
-          case "sent":
-            return [GmailLabel.SENT];
-          case "draft":
-            return [GmailLabel.DRAFT];
-          case "trash":
-            return [GmailLabel.TRASH];
-          case "spam":
-            return [GmailLabel.SPAM];
-          case "starred":
-            return [GmailLabel.STARRED];
-          case "important":
-            return [GmailLabel.IMPORTANT];
-          case "unread":
-            return [GmailLabel.UNREAD];
-          case "archive":
-            return;
-          case "all":
-            return;
-          default:
-            if (!type || type === "undefined" || type === "null")
-              return [GmailLabel.INBOX];
-            return [type];
-        }
+        return getGmailViewLabelIds(type);
       }
 
       const resolvedLabelIds = getLabelIds(type);

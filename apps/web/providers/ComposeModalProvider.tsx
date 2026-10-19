@@ -23,6 +23,7 @@ import {
 import { deleteDraftAction } from "@/utils/actions/mail";
 import { parseMailPath } from "@/utils/mail-url";
 import { getActiveMailClient } from "@/utils/mail-engine/active-client";
+import { forgetDeletedDrafts } from "@/utils/mail-engine/forget-deleted-drafts";
 import type { ReplyDraftMode } from "@/utils/mail-engine/reply-drafts";
 import { getActionErrorMessage } from "@/utils/error";
 import { toastError } from "@/components/Toast";
@@ -155,9 +156,11 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
           });
           return false;
         }
-        getActiveMailClient()
-          ?.requestSync([reply.emailAccountId])
-          .catch(() => {});
+        const client = getActiveMailClient();
+        forgetDeletedDrafts(client, reply.emailAccountId, [
+          result.data?.deletedMessageId,
+        ]);
+        client?.requestSync([reply.emailAccountId]).catch(() => {});
       }
       closeCompose();
       return true;

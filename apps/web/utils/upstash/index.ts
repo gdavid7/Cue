@@ -25,6 +25,14 @@ function getQstashClient(callbackUrl: string = getQstashCallbackBaseUrl()) {
   return new Client({ token: env.QSTASH_TOKEN });
 }
 
+/**
+ * Whether QStash is set up to deliver later work durably, with retries and
+ * delays. Without it, publishing falls back to a one-off internal request.
+ */
+export function hasDurableQstash() {
+  return Boolean(getQstashClient());
+}
+
 export async function publishToQstash<T>(
   path: string,
   body: T,

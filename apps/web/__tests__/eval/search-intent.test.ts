@@ -13,6 +13,7 @@ import {
   buildSearchIntentPrompt,
   cleanGeneratedSearches,
 } from "@/utils/ai/mail-search/interpret-search";
+import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
 
 // pnpm --filter inbox-zero-ai test-ai eval/search-intent
 // Multi-model: EVAL_MODELS=all pnpm --filter inbox-zero-ai test-ai eval/search-intent
@@ -198,6 +199,12 @@ describe.runIf(shouldRunEval)("search-intent eval", () => {
       test(
         testCase.name,
         async () => {
+          // The intent call runs on the economy tier; a user key routes every
+          // tier to the matrix model, so this grades the model under test.
+          expect(
+            getModelForUseCase(emailAccount.user, LlmUseCase.SearchIntent)
+              .modelName,
+          ).toBe(model.model);
           const raw = await aiInterpretSearch({
             emailAccount: { ...emailAccount, timezone: TIMEZONE },
             query: testCase.query,

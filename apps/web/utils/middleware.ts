@@ -64,6 +64,7 @@ const FAST_REQUEST_SAMPLE_RATE = 0.08;
 const POLLING_REQUEST_SAMPLE_RATE = 0.015;
 const POLLING_SCOPES = new Set([
   "mail-stream",
+  "mail-version",
   "email-stream",
   "team-comments/stream",
   "health",

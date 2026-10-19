@@ -20,6 +20,12 @@ vi.mock("@/utils/mail-engine/reply-drafts", () => ({
 vi.mock("./upload-draft-attachment", () => ({
   forgetAttachedFiles: vi.fn(),
 }));
+const mailClient = vi.hoisted(() => ({
+  forgetDeletedDrafts: vi.fn(async () => {}),
+}));
+vi.mock("@/utils/mail-engine/active-client", () => ({
+  getActiveMailClient: () => mailClient,
+}));
 
 const localDraft = {
   emailAccountId: "account-a",
@@ -39,11 +45,11 @@ describe("finishComposeDraftMove", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(discardComposeDraftAction).mockResolvedValue({
-      data: { success: true },
+      data: { success: true, deletedMessageId: "message-a2" },
     } as never);
     vi.mocked(getReplyDraft).mockResolvedValue({
       ...localDraft,
-      content: {} as never,
+      content: { providerDraftMessageIds: ["message-a1"] } as never,
       revision: 4,
       updatedAt: 0,
     });
@@ -67,6 +73,11 @@ describe("finishComposeDraftMove", () => {
     expect(createReplyDraftWriter).toHaveBeenCalledWith(localDraft, 4);
     expect(clear).toHaveBeenCalledOnce();
     expect(forgetAttachedFiles).toHaveBeenCalledWith("account-a", ["file-1"]);
+    // Gone from the old account's local Drafts too, so a reload can't show it.
+    expect(mailClient.forgetDeletedDrafts).toHaveBeenCalledWith({
+      accountId: "account-a",
+      messageIds: ["message-a1", "message-a2"],
+    });
   });
 
   // The new account's device copy can vanish with the tab or a private
@@ -109,6 +120,7 @@ describe("finishComposeDraftMove", () => {
       }),
     ).rejects.toThrow("Gmail is unavailable.");
     expect(clear).not.toHaveBeenCalled();
+    expect(mailClient.forgetDeletedDrafts).not.toHaveBeenCalled();
   });
 });
 

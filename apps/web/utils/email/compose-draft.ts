@@ -47,7 +47,7 @@ export async function discardComposeDraft({
   provider: EmailProvider;
 }) {
   const message = await provider.getDraft(draftId);
-  if (!message) return;
+  if (!message) return null;
   const reference = await provider.getDraftReferenceForMessage(message.id);
   if (
     !reference ||
@@ -56,6 +56,7 @@ export async function discardComposeDraft({
     throw new SafeError(
       "The mailbox draft changed. Reopen it before discarding.",
     );
+  return message.id;
 }
 
 export async function sendComposeDraft({

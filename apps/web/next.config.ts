@@ -31,7 +31,22 @@ const microsoftEmulatorOrigin = env.MICROSOFT_BASE_URL
   : null;
 
 const nextConfig: NextConfig = {
-  env: { SHIP_LOGS_TO_AXIOM: shipLogsToAxiom ? "1" : "" },
+  env: {
+    SHIP_LOGS_TO_AXIOM: shipLogsToAxiom ? "1" : "",
+    // Vercel rejects variable names containing "PUBLIC", so these may be set
+    // under the NEXT_* names. Inlining here also covers next-axiom's own
+    // process.env reads in the client bundle.
+    NEXT_PUBLIC_AXIOM_TOKEN:
+      process.env.NEXT_PUBLIC_AXIOM_TOKEN || process.env.NEXT_AXIOM_TOKEN || "",
+    NEXT_PUBLIC_AXIOM_DATASET:
+      process.env.NEXT_PUBLIC_AXIOM_DATASET ||
+      process.env.NEXT_AXIOM_DATASET ||
+      "",
+    NEXT_PUBLIC_VAPID_PUBLIC_KEY:
+      process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ||
+      process.env.NEXT_VAPID_PUBLIC_KEY ||
+      "",
+  },
   allowedDevOrigins: [
     "127.0.0.1",
     ...(URL.canParse(env.NEXT_PUBLIC_BASE_URL)

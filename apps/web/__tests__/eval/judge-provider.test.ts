@@ -10,6 +10,7 @@ describe("getEvalJudgeUserAi", () => {
     vi.stubEnv("EVAL_JUDGE_PROVIDER", "");
     vi.stubEnv("EVAL_JUDGE_MODEL", "");
     vi.stubEnv("OPENROUTER_API_KEY", "test-key");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
 
     expect(getEvalJudgeUserAi()).toEqual({
       aiProvider: "openrouter",
@@ -27,6 +28,19 @@ describe("getEvalJudgeUserAi", () => {
     expect(getEvalJudgeUserAi()).toEqual({
       aiProvider: "anthropic",
       aiModel: "claude-haiku-5-5",
+      aiApiKey: "test-anthropic-key",
+    });
+  });
+
+  it("falls back to Claude Sonnet 5.5 when only an Anthropic key is present", () => {
+    vi.stubEnv("EVAL_JUDGE_PROVIDER", "");
+    vi.stubEnv("EVAL_JUDGE_MODEL", "");
+    vi.stubEnv("OPENROUTER_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_API_KEY", "test-anthropic-key");
+
+    expect(getEvalJudgeUserAi()).toEqual({
+      aiProvider: "anthropic",
+      aiModel: "claude-sonnet-5-5",
       aiApiKey: "test-anthropic-key",
     });
   });

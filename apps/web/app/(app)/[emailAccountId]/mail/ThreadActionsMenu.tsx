@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { useAction } from "next-safe-action/hooks";
 import { type ReactNode, useRef } from "react";
+import { UnsubscribeConfirmDialog } from "@/app/(app)/[emailAccountId]/mail/use-unsubscribe-sender";
 import { useSenderCommands } from "@/app/(app)/[emailAccountId]/mail/use-sender-commands";
 import { getEmailMessageCellActions } from "@/components/EmailMessageCellActions";
 import { Kbd } from "@/components/Kbd";
@@ -50,7 +51,8 @@ import type { ParsedMessage } from "@/utils/types";
 export type ThreadActionsMenuProps = {
   message: ParsedMessage | null;
   isStarred: boolean;
-  onToggleStar: () => void;
+  /** Omitted while every matching conversation is selected. */
+  onToggleStar?: () => void;
   isImportant?: boolean;
   /** Gmail only: Outlook has no per-thread importance in the mail engine. */
   onToggleImportant?: () => void;
@@ -118,6 +120,7 @@ export function ThreadActionsMenu({
     onToggleAutoArchive,
     onUnsubscribe,
     PremiumModal,
+    unsubscribeConfirm,
   } = useSenderCommands(message);
   // The team comment box takes focus, so it opens once the menu has closed:
   // while open, the menu keeps focus inside itself, and on closing it hands
@@ -186,15 +189,17 @@ export function ThreadActionsMenu({
             </DropdownMenuItem>
           )}
 
-          <DropdownMenuItem onSelect={onToggleStar}>
-            {isStarred ? (
-              <StarOffIcon className="mr-2 size-4" />
-            ) : (
-              <StarIcon className="mr-2 size-4" />
-            )}
-            {isStarred ? "Unstar" : "Star"}
-            <MenuShortcut id="star" />
-          </DropdownMenuItem>
+          {onToggleStar && (
+            <DropdownMenuItem onSelect={onToggleStar}>
+              {isStarred ? (
+                <StarOffIcon className="mr-2 size-4" />
+              ) : (
+                <StarIcon className="mr-2 size-4" />
+              )}
+              {isStarred ? "Unstar" : "Star"}
+              <MenuShortcut id="star" />
+            </DropdownMenuItem>
+          )}
 
           {onToggleImportant && (
             <DropdownMenuItem onSelect={onToggleImportant}>
@@ -317,6 +322,7 @@ export function ThreadActionsMenu({
       </DropdownMenu>
 
       <PremiumModal />
+      <UnsubscribeConfirmDialog {...unsubscribeConfirm} />
     </>
   );
 }

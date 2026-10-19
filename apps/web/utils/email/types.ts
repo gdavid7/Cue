@@ -12,6 +12,10 @@ import type { Attachment as MailAttachment } from "nodemailer/lib/mailer";
 import type { SendEmailBody } from "@/utils/types/mail";
 import type { DraftAttachmentMetadata } from "@/utils/actions/draft-attachments.validation";
 import type { VacationResponderBody } from "@/utils/actions/vacation-responder.validation";
+import type {
+  MatchingFilter,
+  MatchingScope,
+} from "@/utils/actions/mail-bulk-matching.validation";
 import type { DraftMessageUploadPart } from "@/utils/email/draft-attachment-upload";
 import type { EmailContact } from "@/utils/email/contact";
 import type {
@@ -224,6 +228,11 @@ export interface EmailProvider {
     emailAccountId: string,
   ): Promise<void>;
   checkIfReplySent(senderEmail: string): Promise<boolean>;
+  /**
+   * How many conversations a view holds, when the provider knows it exactly;
+   * null when it could only estimate.
+   */
+  countMatchingConversations(scope: MatchingScope): Promise<number | null>;
   /** Exact message count, including drafts. Folder and label scopes intersect. */
   countMessages(options: {
     folderId?: string;
@@ -258,6 +267,13 @@ export interface EmailProvider {
   deleteFilter(id: string): Promise<{ status: number }>;
   deleteFolder(folderId: string): Promise<void>;
   deleteLabel(labelId: string): Promise<void>;
+  /**
+   * Deletes for good the given messages that are in the trash right now,
+   * skipping any moved out of it, and resolves the ids it deleted. Only
+   * providers whose granted access allows it implement this: Gmail needs a
+   * scope Cue doesn't ask for.
+   */
+  deleteMessagesForever?(messageIds: string[]): Promise<string[]>;
   draftEmail(
     email: ParsedMessage,
     args: {
@@ -434,6 +450,20 @@ export interface EmailProvider {
     labelId: string;
     labelName: string | null;
   }): Promise<{ usedFallback?: boolean; actualLabelId?: string }>;
+  /** Adds one label (Outlook: category) to many messages. */
+  labelMessages(messageIds: string[], labelId: string): Promise<void>;
+  /**
+   * One page of the ids of every message a view or search holds, narrowed by
+   * `only` to the ones an action would change.
+   */
+  listMatchingMessages(options: {
+    scope: MatchingScope;
+    only: MatchingFilter;
+    pageToken?: string;
+  }): Promise<{
+    messages: { id: string; threadId: string }[];
+    nextPageToken?: string;
+  }>;
   readonly localMailSyncStrategy: "account-history" | "folder-delta";
   markMessagesReadState(messageIds: string[], read: boolean): Promise<void>;
   markMessagesStarredState(

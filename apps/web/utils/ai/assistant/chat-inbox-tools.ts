@@ -71,6 +71,7 @@ import {
   runOnOtherAccounts,
 } from "@/utils/ai/assistant/chat-other-accounts";
 import { toOtherAccountEmailId } from "@/utils/ai/assistant/other-account-email-id";
+import { toSearchInboxModelValue } from "@/utils/ai/assistant/search-inbox-model-output";
 import {
   type AccountSearch,
   translateAccountSearch,
@@ -527,7 +528,7 @@ const gmailSearchInboxInputSchema = z.object({
     .min(1)
     .max(500)
     .describe(
-      "Gmail search query. Use from:person@example.com for an exact sender search. Also supports: to:, subject:, in:inbox, is:unread, has:attachment, after:YYYY/MM/DD, before:YYYY/MM/DD, label:, newer_than:, older_than:.",
+      "Gmail search query. Gmail search syntax is supported. Use from:person@example.com for an exact sender search. Dates: after:YYYY/MM/DD, before:YYYY/MM/DD; relative: newer_than:2d, older_than:1y.",
     ),
   ...searchInboxBaseFields,
 });
@@ -612,6 +613,7 @@ const gmailSearchInboxTool = (options: InboxToolOptions) =>
         otherAccounts,
       });
     },
+    toModelOutput: searchInboxModelOutput,
   });
 
 const outlookSearchInboxTool = (options: InboxToolOptions) =>
@@ -634,6 +636,7 @@ const outlookSearchInboxTool = (options: InboxToolOptions) =>
         otherAccounts,
       });
     },
+    toModelOutput: searchInboxModelOutput,
   });
 
 const searchInboxTools = {
@@ -2524,4 +2527,11 @@ async function extractAttachmentText(
   }
 
   return { text: "", truncated: false };
+}
+
+function searchInboxModelOutput({ output }: { output: unknown }) {
+  return {
+    type: "json" as const,
+    value: toSearchInboxModelValue(JSON.parse(JSON.stringify(output))),
+  };
 }

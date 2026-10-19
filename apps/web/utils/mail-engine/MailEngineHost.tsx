@@ -38,6 +38,10 @@ import {
   followMailboxChanges,
   getFollowedAccountIds,
 } from "@/utils/mail-engine/follow-mailbox-changes";
+import {
+  getPolledAccountIds,
+  pollMailVersions,
+} from "@/utils/mail-engine/poll-mail-versions";
 import { getAllInboxesAccounts } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useAllAccountsScope } from "@/hooks/useTodayHref";
@@ -422,6 +426,23 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
       for (const stop of stops) stop();
     };
   }, [client, followedAccountIds]);
+
+  // A string, so a refetched account list that changed nothing keeps the poll.
+  const polledAccountIds = emailAccountId
+    ? getPolledAccountIds(
+        emailAccountId,
+        (accountsData?.emailAccounts ?? []).map((account) => account.id),
+      ).join(",")
+    : "";
+  useEffect(() => {
+    if (!client || !polledAccountIds || hasDesktopMailEngineIpc()) return;
+    return pollMailVersions({
+      accountIds: polledAccountIds.split(","),
+      onChanged: (accountIds) => {
+        client.requestSync(accountIds).catch(() => undefined);
+      },
+    });
+  }, [client, polledAccountIds]);
 
   useEffect(() => {
     if (!client || !emailAccountId) return;

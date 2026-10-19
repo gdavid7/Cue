@@ -148,6 +148,7 @@ export function filterNewsletters<
 >(
   newsletters: T[],
   filters: ("unhandled" | "autoArchived" | "unsubscribed" | "approved" | "")[],
+  { filtersAvailable = true }: { filtersAvailable?: boolean } = {},
 ): T[] {
   const showAutoArchived = filters.includes("autoArchived");
   const showApproved = filters.includes("approved");
@@ -163,7 +164,15 @@ export function filterNewsletters<
     if (showUnsubscribed && email.status === NewsletterStatus.UNSUBSCRIBED)
       return true;
     if (showApproved && email.status === NewsletterStatus.APPROVED) return true;
-    if (showUnhandled && !email.status && !email.autoArchived) return true;
+    // Without readable provider filters a sender with no status may already
+    // be skipping the inbox, so it can't be called unhandled.
+    if (
+      showUnhandled &&
+      filtersAvailable &&
+      !email.status &&
+      !email.autoArchived
+    )
+      return true;
 
     return false;
   });

@@ -109,6 +109,18 @@ describe("buildResolvedSystemPrompt", () => {
     expect(plainPrompt).toContain("numbered list");
   });
 
+  it("reads a write's confirmation state, not requiresConfirmation, as pending or applied", () => {
+    // Confirmed results replayed in history still carry requiresConfirmation.
+    const prompt = buildPrompt();
+
+    expect(prompt).toContain('confirmationState "pending"');
+    expect(prompt).toContain('confirmationState "confirmed"');
+    expect(prompt).not.toMatch(
+      /requiresConfirmation(=true)?,? (means|explain)/,
+    );
+    expect(prompt).not.toContain("returns requiresConfirmation");
+  });
+
   it("never asks for inline email card markup on messaging surfaces", () => {
     const prompt = buildPrompt({
       responseSurface: "messaging",
@@ -644,23 +656,78 @@ describe("aiProcessAssistantChat turn limits", () => {
     );
   });
 
-  it("keeps Claude's tool definitions when it forces the answer", async () => {
+  it("keeps Claude's and Gemini's tool definitions when it forces the answer", async () => {
     const step = await prepareStepFor();
 
-    const forced = await step(6, CLAUDE_STEP_MODEL);
+    for (const model of [CLAUDE_STEP_MODEL, GEMINI_STEP_MODEL]) {
+      const forced = await step(6, model);
 
-    expect(forced).toMatchObject({ toolChoice: "none" });
-    expect(forced).not.toHaveProperty("activeTools");
+      expect(forced, model.provider).toMatchObject({ toolChoice: "none" });
+      expect(forced, model.provider).not.toHaveProperty("activeTools");
+    }
+  });
+
+  it("moves Claude's fourth cache breakpoint to the end of each step's prompt", async () => {
+    vi.clearAllMocks();
+    vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
+    await aiProcessAssistantChat({
+      messages: [
+        { role: "user", content: "what's new?" },
+        { role: "assistant", content: "Two newsletters." },
+        { role: "user", content: "and from Acme?" },
+      ],
+      emailAccountId: "email-account-id",
+      user: getEmailAccount(),
+      logger: createTestLogger(),
+    });
+    const [options] = vi.mocked(toolCallAgentStream).mock.calls[0];
+    const toolBreakpoints = Object.values(
+      options.tools as Record<string, Tool>,
+    ).filter((tool) => tool.providerOptions?.anthropic?.cacheControl).length;
+
+    let messages = options.messages as ModelMessage[];
+    for (let stepNumber = 0; stepNumber < 4; stepNumber++) {
+      const prepared = await options.prepareStep!({
+        stepNumber,
+        steps: [],
+        messages,
+        model: CLAUDE_STEP_MODEL,
+      } as never);
+      // The AI SDK carries a step's prepared messages into the next step.
+      messages = [
+        ...(prepared?.messages ?? messages),
+        ...toolRound(`call-${stepNumber}`),
+      ];
+      const stepPrompt = prepared?.messages ?? [];
+      const breakpoints = stepPrompt.flatMap((message, index) =>
+        message.providerOptions?.anthropic?.cacheControl ? [index] : [],
+      );
+
+      expect(toolBreakpoints + breakpoints.length).toBeLessThanOrEqual(4);
+      expect(breakpoints).toContain(stepPrompt.length - 1);
+      expect(breakpoints).toContain(0);
+      // The end of the earlier turns' history.
+      expect(breakpoints).toContain(2);
+      expect(stepPrompt[2]).toMatchObject({
+        role: "assistant",
+        content: "Two newsletters.",
+      });
+    }
+  });
+
+  it("drops the tools of other providers when it forces the answer", async () => {
+    const step = await prepareStepFor();
+
+    expect(
+      await step(6, { provider: "openai.responses", modelId: "gpt-6-luna" }),
+    ).toMatchObject({ activeTools: [], toolChoice: "none" });
   });
 
   it("answers without more tools after six steps", async () => {
     const step = await prepareStepFor();
 
     expect(await step(5)).not.toMatchObject({ toolChoice: "none" });
-    expect(await step(6)).toMatchObject({
-      activeTools: [],
-      toolChoice: "none",
-    });
+    expect(await step(6)).toMatchObject({ toolChoice: "none" });
   });
 
   it("caps Slack, Teams and Telegram turns at six tool steps too", async () => {
@@ -686,7 +753,7 @@ describe("aiProcessAssistantChat turn limits", () => {
           modelId: "gemini-3.8-flash",
         },
       } as never),
-    ).toMatchObject({ activeTools: [], toolChoice: "none" });
+    ).toMatchObject({ toolChoice: "none" });
   });
 
   it("answers without more tools once a web turn has spent 45 seconds", async () => {
@@ -696,13 +763,46 @@ describe("aiProcessAssistantChat turn limits", () => {
       vi.setSystemTime(Date.now() + 44_000);
       expect(await step(1)).not.toMatchObject({ toolChoice: "none" });
       vi.setSystemTime(Date.now() + 2000);
-      expect(await step(1)).toMatchObject({
-        activeTools: [],
-        toolChoice: "none",
-      });
+      expect(await step(1)).toMatchObject({ toolChoice: "none" });
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("aiProcessAssistantChat step log", () => {
+  it("logs each step's cached input tokens next to its input tokens", async () => {
+    vi.clearAllMocks();
+    vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
+    const logger = createTestLogger();
+    const info = vi.spyOn(logger, "info");
+    await aiProcessAssistantChat({
+      messages: [{ role: "user", content: "what's new?" }],
+      emailAccountId: "email-account-id",
+      user: getEmailAccount(),
+      logger,
+    });
+    const [options] = vi.mocked(toolCallAgentStream).mock.calls[0];
+
+    await options.onStepEnd?.({
+      stepNumber: 1,
+      model: { provider: "google.generative-ai", modelId: "gemini-3.8-flash" },
+      finishReason: "tool-calls",
+      toolCalls: [],
+      usage: {
+        inputTokens: 22_600,
+        inputTokenDetails: { cacheReadTokens: 21_000 },
+        outputTokens: 40,
+      },
+    } as never);
+
+    expect(info).toHaveBeenCalledWith(
+      "Assistant chat step finished",
+      expect.objectContaining({
+        inputTokens: 22_600,
+        cachedInputTokens: 21_000,
+      }),
+    );
   });
 });
 
@@ -797,3 +897,35 @@ const CLAUDE_STEP_MODEL = {
   provider: "anthropic.messages",
   modelId: "claude-sonnet-5-5",
 };
+
+const GEMINI_STEP_MODEL = {
+  provider: "google.generative-ai",
+  modelId: "gemini-3.8-flash",
+};
+
+function toolRound(toolCallId: string): ModelMessage[] {
+  return [
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "tool-call",
+          toolCallId,
+          toolName: "searchInbox",
+          input: { query: "from:acme" },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId,
+          toolName: "searchInbox",
+          output: { type: "json", value: { messages: [] } },
+        },
+      ],
+    },
+  ];
+}

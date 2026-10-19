@@ -125,7 +125,7 @@ describe("deleteDraftAction", () => {
 
   it("discards an autosaved draft using its current message and version", async () => {
     mocks.getDraft.mockResolvedValue({ id: "new-message" });
-    await deleteDraftAction(EMAIL_ACCOUNT_ID, {
+    const result = await deleteDraftAction(EMAIL_ACCOUNT_ID, {
       draftMessageId: "old-message",
       draftId: "draft-1",
     });
@@ -133,6 +133,8 @@ describe("deleteDraftAction", () => {
       "new-message",
     );
     expect(mocks.deleteDraft).toHaveBeenCalledWith("draft-1", 'W/"version-1"');
+    // The client removes exactly this message from its local Drafts.
+    expect(result?.data).toEqual({ deletedMessageId: "new-message" });
   });
 
   it("updates tracking after the provider deletes the draft", async () => {
@@ -159,6 +161,8 @@ describe("deleteDraftAction", () => {
     expect(result?.serverError).toBeUndefined();
     expect(mocks.deleteDraft).toHaveBeenCalledWith("draft-1", 'W/"version-1"');
     expect(mocks.markTrackedDraftDeleted).not.toHaveBeenCalled();
+    // The draft may still exist, so the client must keep showing it.
+    expect(result?.data).toEqual({ deletedMessageId: null });
   });
 
   it("succeeds without deleting when the draft is already gone", async () => {

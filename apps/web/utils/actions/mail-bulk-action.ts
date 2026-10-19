@@ -4,8 +4,10 @@ import { actionClient } from "@/utils/actions/safe-action";
 import {
   bulkArchiveThreadsActionSchema,
   bulkSenderActionSchema,
+  deleteMessagesForeverSchema,
 } from "@/utils/actions/mail-bulk-action.validation";
 import { createEmailProvider } from "@/utils/email/provider";
+import { SafeError } from "@/utils/error";
 
 export const bulkArchiveThreadsAction = actionClient
   .metadata({ name: "bulkArchiveThreads", gmailPriority: "sync" })
@@ -81,5 +83,35 @@ export const bulkTrashAction = actionClient
         emailAccount.email,
         emailAccountId,
       );
+    },
+  );
+
+export const deleteMessagesForeverAction = actionClient
+  .metadata({ name: "deleteMessagesForever" })
+  .inputSchema(deleteMessagesForeverSchema)
+  .action(
+    async ({
+      ctx: { emailAccountId, provider, logger },
+      parsedInput: { messageIds },
+    }) => {
+      const emailProvider = await createEmailProvider({
+        emailAccountId,
+        provider,
+        logger,
+      });
+      if (!emailProvider.deleteMessagesForever)
+        throw new SafeError(
+          "This account's mail can't be deleted forever from Cue",
+        );
+
+      // The provider deletes only what is in the trash as it goes, so a
+      // conversation's other messages, such as a sent reply, stay put.
+      const deletedIds = await emailProvider.deleteMessagesForever(messageIds);
+
+      logger.info("Deleted messages forever", {
+        requestedCount: messageIds.length,
+        deletedCount: deletedIds.length,
+      });
+      return { deletedIds };
     },
   );

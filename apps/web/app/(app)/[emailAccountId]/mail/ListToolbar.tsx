@@ -90,16 +90,21 @@ export type ListToolbarProps = {
   /** Rendered here only when the split tabs row isn't showing to hold it. */
   selectAll?: ReactNode;
   selectedCount: number;
+  /** Replaces "N selected", e.g. once every matching conversation is. */
+  selectionLabel?: string;
   onArchiveSelected: () => void;
   /** Set when every selected conversation is already archived; replaces Archive. */
   onMoveToInboxSelected?: () => void;
   onDeleteSelected: () => void;
+  /** Names Delete when it deletes for good rather than moving to Trash. */
+  deleteLabel?: string;
   isUnreadSelected: boolean;
   onMarkReadSelected: () => void;
   onMarkUnreadSelected: () => void;
   /** True when every selected conversation is already starred. */
   isStarredSelected: boolean;
-  onStarSelected: () => void;
+  /** Omitted when the selection can't be starred, such as a whole view. */
+  onStarSelected?: () => void;
   /** Omitted when the current view can't label (combined inboxes). */
   onLabelSelected?: () => void;
   /** Shown on a disabled Label button when the selection can't be labelled. */
@@ -126,9 +131,11 @@ export const ListToolbar = memo(function ListToolbar({
   onToggleAssistant,
   selectAll,
   selectedCount,
+  selectionLabel,
   onArchiveSelected,
   onMoveToInboxSelected,
   onDeleteSelected,
+  deleteLabel,
   isUnreadSelected,
   onMarkReadSelected,
   onMarkUnreadSelected,
@@ -157,7 +164,9 @@ export const ListToolbar = memo(function ListToolbar({
           <span
             aria-live="polite"
             className="min-w-0 flex-1 truncate font-medium text-sm"
-          >{`${selectedCount} selected`}</span>
+          >
+            {selectionLabel ?? `${selectedCount} selected`}
+          </span>
 
           {onMoveToInboxSelected ? (
             <Tooltip content="Move to inbox">
@@ -203,26 +212,31 @@ export const ListToolbar = memo(function ListToolbar({
             </button>
           </Tooltip>
 
-          <Tooltip shortcuts={["star"]}>
-            <button
-              type="button"
-              onClick={onStarSelected}
-              aria-label={isStarredSelected ? "Unstar" : "Star"}
-              className={selectionButton}
-            >
-              {isStarredSelected ? (
-                <StarOffIcon className="size-3.5" />
-              ) : (
-                <StarIcon className="size-3.5" />
-              )}
-            </button>
-          </Tooltip>
+          {onStarSelected ? (
+            <Tooltip shortcuts={["star"]}>
+              <button
+                type="button"
+                onClick={onStarSelected}
+                aria-label={isStarredSelected ? "Unstar" : "Star"}
+                className={selectionButton}
+              >
+                {isStarredSelected ? (
+                  <StarOffIcon className="size-3.5" />
+                ) : (
+                  <StarIcon className="size-3.5" />
+                )}
+              </button>
+            </Tooltip>
+          ) : null}
 
-          <Tooltip shortcuts={["delete"]}>
+          <Tooltip
+            content={deleteLabel}
+            shortcuts={deleteLabel ? undefined : ["delete"]}
+          >
             <button
               type="button"
               onClick={onDeleteSelected}
-              aria-label="Delete"
+              aria-label={deleteLabel ?? "Delete"}
               className={cn(
                 selectionButton,
                 "hover:bg-destructive/10 hover:text-destructive",

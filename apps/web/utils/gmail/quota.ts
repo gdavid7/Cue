@@ -215,6 +215,8 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     "v1/senders/unsubscribe",
     "user/search-answer",
     "user/search-intent",
+    // The select-all banner waits on it to say how many conversations match.
+    "user/mail/matching-count",
     // An open composer waits on it before showing its editor.
     "user/signature",
     "user/drafts",
@@ -260,6 +262,9 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     "meeting-briefs",
     "automation-jobs/execute",
     "mail/v1/assistant-state",
+    // Acting on every conversation a view matches; the person sees progress
+    // and can leave, so it only spends capacity nobody else is using.
+    "mail/bulk-matching",
   ]),
 ]);
 // Jobs nobody waits on; a durable send one delivers raises itself to

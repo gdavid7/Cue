@@ -186,6 +186,15 @@ export type MailClient = {
    */
   releaseConversationMessages(key: ConversationKey): Promise<void>;
   getDiagnostics(accountId: string): Promise<MailDiagnostics>;
+  /**
+   * Drops mailbox drafts the provider confirmed deleted, as after a discard,
+   * so they stay gone across reloads before sync reports it. Desktop engines
+   * older than the web app leave it out.
+   */
+  forgetDeletedDrafts?(input: {
+    accountId: string;
+    messageIds: string[];
+  }): Promise<void>;
   purgeAccount(accountId: string): Promise<LocalRevision>;
   /** Purges every local account outside `accountIds`; an empty list is ignored. */
   retainAccounts(accountIds: string[]): Promise<void>;
@@ -206,6 +215,13 @@ export function createMailEngine(input: {
   ownerId?: string;
   assistant?: AssistantStateSource;
   idleCatchUpIntervalMs?: number;
+  /**
+   * How often an account's change streams and assistant state are read with
+   * nobody asking. Hosts that hear about provider changes some other way
+   * (a push stream, a version poll) and call `requestSync` can stretch it;
+   * retries of failed or blocked work keep `idleCatchUpIntervalMs`.
+   */
+  changesCatchUpIntervalMs?: number;
   syncLaneTimeoutMs?: number;
   conversationFetchTimeoutMs?: number;
   /** Committed incremental changes only; bootstrap and backfill never emit. */
@@ -214,6 +230,8 @@ export function createMailEngine(input: {
   const { store, source, executor, runtime } = input;
   const idleCatchUpIntervalMs =
     input.idleCatchUpIntervalMs ?? IDLE_CATCH_UP_INTERVAL_MS;
+  const changesCatchUpIntervalMs =
+    input.changesCatchUpIntervalMs ?? idleCatchUpIntervalMs;
   const syncLaneTimeoutMs = input.syncLaneTimeoutMs ?? SYNC_LANE_TIMEOUT_MS;
   const conversationFetchTimeoutMs =
     input.conversationFetchTimeoutMs ?? CONVERSATION_FETCH_TIMEOUT_MS;
@@ -468,6 +486,11 @@ export function createMailEngine(input: {
     },
     getDiagnostics(accountId) {
       return store.getDiagnostics(accountId);
+    },
+    async forgetDeletedDrafts(input) {
+      if (input.messageIds.length === 0) return;
+      await store.forgetDeletedDrafts(input);
+      await refreshViews();
     },
     async purgeAccount(accountId) {
       stopSyncLane(accountId);
@@ -1751,7 +1774,10 @@ export function createMailEngine(input: {
     } else {
       // A throttled read comes back as soon as the provider allows, so new
       // mail waits out the quota window rather than a whole idle interval.
-      const intervalMs = streamCatchUpInterval(idleGate, stream.streamId);
+      // Any other failure retries on the idle clock, not the stretched one.
+      const intervalMs = idleGate.lowPriorityStreams.has(stream.streamId)
+        ? LOW_PRIORITY_CATCH_UP_INTERVAL_MS
+        : idleCatchUpIntervalMs;
       const retryMs =
         changes.status === "paused" && changes.reason === "throttled"
           ? Math.max(SYNC_LANE_RETRY_MIN_MS, changes.retryAfterMs)
@@ -1785,7 +1811,7 @@ export function createMailEngine(input: {
   function streamCatchUpInterval(idleGate: IdleCatchUpGate, streamId: string) {
     return idleGate.lowPriorityStreams.has(streamId)
       ? LOW_PRIORITY_CATCH_UP_INTERVAL_MS
-      : idleCatchUpIntervalMs;
+      : changesCatchUpIntervalMs;
   }
 
   // Requests are counted rather than applied to deadlines, so a request that
@@ -1884,15 +1910,20 @@ export function createMailEngine(input: {
       !idleGateDue(
         idleGate.nextAssistantCatchUpAtMs,
         runtime.nowMs(),
-        idleCatchUpIntervalMs,
+        changesCatchUpIntervalMs,
       )
     ) {
       return;
     }
-    const advanced = await catchUpAssistant(account, signal);
-    idleGate.nextAssistantCatchUpAtMs = advanced
-      ? 0
-      : runtime.nowMs() + idleCatchUpIntervalMs;
+    const result = await catchUpAssistant(account, signal);
+    // A failed read retries on the idle clock, not the stretched one.
+    idleGate.nextAssistantCatchUpAtMs =
+      result === "advanced"
+        ? 0
+        : runtime.nowMs() +
+          (result === "failed"
+            ? idleCatchUpIntervalMs
+            : changesCatchUpIntervalMs);
   }
 
   async function catchUpAssistant(
@@ -1901,8 +1932,8 @@ export function createMailEngine(input: {
       "accountId" | "generation" | "assistantCursor"
     >,
     signal?: AbortSignal,
-  ) {
-    if (!assistant) return false;
+  ): Promise<"advanced" | "caught_up" | "failed"> {
+    if (!assistant) return "caught_up";
     const session = {
       accountId: account.accountId,
       generation: account.generation,
@@ -1912,7 +1943,7 @@ export function createMailEngine(input: {
       cursor: account?.assistantCursor ?? null,
       signal: signal ?? new AbortController().signal,
     });
-    if (page.status !== "ok") return false;
+    if (page.status !== "ok") return "failed";
     await store.applyAssistantEntries({
       accountId: session.accountId,
       cursor: page.page.nextCursor,
@@ -1926,7 +1957,9 @@ export function createMailEngine(input: {
       })),
     });
     await refreshViews();
-    return page.page.nextCursor !== (account.assistantCursor ?? null);
+    return page.page.nextCursor !== (account.assistantCursor ?? null)
+      ? "advanced"
+      : "caught_up";
   }
 
   async function resolveScope(

@@ -2,7 +2,8 @@ import type { JSONValue, ModelMessage, ToolResultPart } from "ai";
 import {
   getToolOutputText,
   truncatePromptContent,
-} from "@/utils/ai/assistant/compact";
+} from "@/utils/ai/assistant/prompt-size";
+import { toSearchInboxModelValue } from "@/utils/ai/assistant/search-inbox-model-output";
 
 export const RECENT_TOOL_RESULTS_TO_KEEP = 10;
 const UNTRIMMED_RESULT_CHAR_BUDGET = 200_000;
@@ -47,14 +48,63 @@ export function trimStaleToolResults(messages: ModelMessage[]) {
   });
 }
 
+// History is rebuilt from the stored UI messages, which hold each tool's full
+// output, so earlier turns' results first get the same model view the live run
+// gave them through the tool's toModelOutput. They are then shortened like
+// stale results: every step of every later turn re-sends them, and a later
+// turn that needs one in full can run the tool again. Results of the latest
+// turn stay complete.
+export function projectEarlierTurnToolResults(messages: ModelMessage[]) {
+  const latestUserIndex = messages.findLastIndex(
+    (message) => message.role === "user",
+  );
+
+  return messages.map((message, index): ModelMessage => {
+    if (index > latestUserIndex || message.role !== "tool") return message;
+
+    return {
+      ...message,
+      content: message.content.map((part) =>
+        part.type === "tool-result"
+          ? shortenToolResult(projectEarlierTurnResult(part))
+          : part,
+      ),
+    };
+  });
+}
+
+function projectEarlierTurnResult(part: ToolResultPart): ToolResultPart {
+  const project = MODEL_OUTPUT_PROJECTIONS[part.toolName];
+  if (!project || part.output.type !== "json") return part;
+
+  return {
+    ...part,
+    output: { ...part.output, value: project(part.output.value) },
+  };
+}
+
+// Reduces a result to what the model needs to keep acting on it, leaving
+// results a later write saves back whole, and short ones, as they are.
+export function shortenToolResult(part: ToolResultPart): ToolResultPart {
+  if (!isTrimmable(part)) return part;
+
+  return { ...part, output: trimOutput(part.toolName, part.output) };
+}
+
 function isTrimmable(part: ToolResultPart) {
+  if (WRITE_SOURCE_TOOLS.has(part.toolName)) return false;
+
   const { output } = part;
   const canShorten =
     output.type === "text" ||
     output.type === "error-text" ||
     (output.type === "json" &&
       isJsonObject(output.value) &&
-      !("trimmedForContext" in output.value));
+      !("trimmedForContext" in output.value) &&
+      // A change not yet confirmed (pending, or still being applied) stays
+      // whole, so it is never reported from a partial copy.
+      (output.value.confirmationState === undefined ||
+        output.value.confirmationState === "confirmed"));
 
   return (
     canShorten && getToolOutputText(output).length >= MIN_TRIMMABLE_RESULT_CHARS
@@ -82,6 +132,23 @@ function trimOutput(
     value: { ...projected, trimmedForContext: TRIMMED_NOTE },
   };
 }
+
+const MODEL_OUTPUT_PROJECTIONS: Record<
+  string,
+  (value: JSONValue) => JSONValue
+> = {
+  searchInbox: toSearchInboxModelValue,
+};
+
+// Their results hold text a later write saves back whole: updateRule's
+// instructions and actions, updatePersonalInstructions' replace,
+// updateLearnedPatterns, and updateAssistantSettings' knowledge and prompts.
+// A shortened copy would be saved as the new value and lose the rest.
+const WRITE_SOURCE_TOOLS = new Set([
+  "getUserRulesAndSettings",
+  "getLearnedPatterns",
+  "getAssistantCapabilities",
+]);
 
 const STALE_RESULT_PROJECTIONS: Record<
   string,

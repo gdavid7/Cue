@@ -404,5 +404,16 @@ test("creates and edits a label and shows every keyboard workflow", async ({
       editDialog.getByRole("textbox", { name: "label name" }),
     ).toHaveValue(`${updatedLabelName}/Clients/Acme`);
     await editDialog.getByRole("button", { name: "Cancel" }).click();
+
+    await grandchild.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Delete", exact: true }).click();
+    const deleteDialog = page.getByRole("alertdialog", {
+      name: `Delete ${labelType}?`,
+    });
+    await expect(deleteDialog).toContainText(
+      `Your emails aren't deleted, only the ${labelType}.`,
+    );
+    await deleteDialog.getByRole("button", { name: "Delete" }).click();
+    await expect(grandchild).toBeHidden();
   }
 });
