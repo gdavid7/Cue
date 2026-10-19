@@ -1,7 +1,7 @@
 import "../../styles/globals.css";
 import type { Metadata } from "next";
 import type React from "react";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { Inter } from "next/font/google";
@@ -17,6 +17,7 @@ import { AiAutomationStatusBanner } from "@/app/(app)/AiAutomationStatusBanner";
 import { ErrorMessages } from "@/app/(app)/ErrorMessages";
 import { DesktopMailIndicators } from "@/app/(app)/DesktopMailIndicators";
 import { TabUnreadTitle } from "@/app/(app)/TabUnreadTitle";
+import { KeepTodayPrefetched } from "@/app/(app)/KeepTodayPrefetched";
 import { WebNewMailNotifications } from "@/app/(app)/WebNewMailNotifications";
 import { ProviderRateLimitBanner } from "@/app/(app)/ProviderRateLimitBanner";
 import { MailEngineRuntime } from "@/utils/mail-engine/MailEngineHost";
@@ -72,14 +73,19 @@ export default async function AppLayout({
 
   if (!session?.user.email) redirect("/login");
 
-  const [cookieStore, accounts, aiAccess] = await Promise.all([
+  const [cookieStore, headerStore, accounts, aiAccess] = await Promise.all([
     cookies(),
+    headers(),
     getOrderedEmailAccounts(session.user.id),
     getUserAiAccess(session.user.id),
   ]);
   const isClosed = cookieStore.get("left-sidebar:state")?.value === "false";
 
+  // Fetching a page ahead isn't the user showing up.
+  const isPrefetch = headerStore.has("next-router-prefetch");
+
   after(async () => {
+    if (isPrefetch) return;
     const email = session.user.email;
     try {
       await prisma.user.update({
@@ -104,6 +110,7 @@ export default async function AppLayout({
             <SideNavWithTopNav defaultOpen={!isClosed}>
               <DesktopMailIndicators />
               <TabUnreadTitle />
+              <KeepTodayPrefetched />
               <WebNewMailNotifications />
               <AiAutomationStatusBanner
                 aiAccess={aiAccess}

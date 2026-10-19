@@ -1,4 +1,9 @@
-import { expect, type Page, type Request } from "@playwright/test";
+import {
+  expect,
+  type Page,
+  type Request,
+  type Response,
+} from "@playwright/test";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
 import { buildMailPath } from "@/utils/mail-url";
@@ -97,14 +102,17 @@ test("switching between Today and the inbox answers at once", async ({
     }
 
     // A new session in the same browser: Today opens on what it last showed.
+    // A person takes a moment before reaching for Today; by then the page
+    // has fetched Today's route ahead, which is what this measures past.
+    const todayRouteFetched = page.waitForResponse(isTodayRouteFetch, {
+      timeout: 60_000,
+    });
     await page.goto(inbox);
     await page.waitForFunction(firstInboxRowVisible, undefined, {
       timeout: 60_000,
     });
     await waitForEngineIdle(page);
-    // A person takes a moment before reaching for Today; by then the page
-    // has fetched Today's route, which is what this measures past.
-    await page.waitForTimeout(2000);
+    await todayRouteFetched;
     await switchTo("today", "reload");
     const cacheBytes = await page.evaluate(cachedTodayBytes);
     recorder.add("today-cache-bytes", cacheBytes);
@@ -151,6 +159,16 @@ function rowStillLit(destination: Destination) {
   ))
     if (left.test(link.textContent?.trim() ?? "")) return true;
   return false;
+}
+
+/** The page fetching Today's route itself, past the route tree. */
+function isTodayRouteFetch(response: Response) {
+  const url = new URL(response.url());
+  return (
+    url.pathname.endsWith("/home") &&
+    url.searchParams.has("_rsc") &&
+    !response.request().headers()["next-router-segment-prefetch"]
+  );
 }
 
 /** The size of Today's saved copy in this browser. */

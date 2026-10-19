@@ -38,7 +38,6 @@ import { useMailHref } from "@/hooks/useMailHref";
 import { useWarmHome } from "@/hooks/useHome";
 import { useTodayHref } from "@/hooks/useTodayHref";
 import { useIntent } from "@/hooks/useIntent";
-import { useKeepRoutePrefetched } from "@/hooks/useKeepRoutePrefetched";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Sidebar, useSidebar } from "@/components/ui/sidebar";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
@@ -138,9 +137,6 @@ export const MailShellSidebar = memo(function MailShellSidebar({
   const { state: openSidebars } = useSidebar();
   const isMailSidebarOpen = openSidebars.includes("left-sidebar");
   const todayHref = useTodayHref();
-  // Opening Today from anywhere in mail, after any idle, never waits on
-  // the server for its route.
-  useKeepRoutePrefetched(activeType === "today" ? null : todayHref);
 
   // Dragging writes straight to the CSS variable: re-rendering on every
   // pointer move would make the sidebar edge lag behind the cursor. It lives
