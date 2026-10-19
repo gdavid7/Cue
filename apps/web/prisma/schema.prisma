@@ -22,6 +22,7 @@ model Account {
   providerAccountId     String
   refresh_token         String?       @db.Text
   refreshTokenExpiresAt DateTime?
+  refreshTokenIssuedAt  DateTime? // When the user last granted consent (a fresh refresh token); Google expires Testing-mode tokens 7 days later
   access_token          String?       @db.Text
   expires_at            DateTime?     @default(now())
   disconnectedAt        DateTime? // When OAuth tokens were invalidated (password change, revoked access)
