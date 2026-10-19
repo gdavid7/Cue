@@ -6,7 +6,7 @@ import { checkPermissionsAction } from "@/utils/actions/permissions";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { getPermissionsConsentPath } from "@/utils/permissions-consent";
 import { useOrgAccess } from "@/hooks/useOrgAccess";
-import { scheduleAfterPageLoad } from "@/utils/schedule-after-page-load";
+import { afterFirstMailList } from "@/utils/mail-engine/first-mail-list";
 
 const permissionsChecked: Record<string, boolean> = {};
 
@@ -22,22 +22,19 @@ export function PermissionsCheck() {
     if (permissionsChecked[emailAccountId]) return;
 
     // Server actions run one at a time, ahead of navigations, so this waits
-    // for the page to settle instead of queueing in front of the first load.
-    return scheduleAfterPageLoad(
-      () => {
-        if (permissionsChecked[emailAccountId]) return;
-        permissionsChecked[emailAccountId] = true;
-        checkPermissionsAction(emailAccountId).then((result) => {
-          const expired = result?.data?.hasRefreshToken === false;
-          if (expired || result?.data?.hasAllPermissions === false) {
-            router.replace(
-              getPermissionsConsentPath(emailAccountId, { expired }),
-            );
-          }
-        });
-      },
-      { fallbackDelay: 3000, idleTimeout: 5000 },
-    );
+    // for the mail list instead of queueing in front of the first load.
+    return afterFirstMailList(() => {
+      if (permissionsChecked[emailAccountId]) return;
+      permissionsChecked[emailAccountId] = true;
+      checkPermissionsAction(emailAccountId).then((result) => {
+        const expired = result?.data?.hasRefreshToken === false;
+        if (expired || result?.data?.hasAllPermissions === false) {
+          router.replace(
+            getPermissionsConsentPath(emailAccountId, { expired }),
+          );
+        }
+      });
+    });
   }, [router, emailAccountId, isAccountOwner]);
 
   return null;

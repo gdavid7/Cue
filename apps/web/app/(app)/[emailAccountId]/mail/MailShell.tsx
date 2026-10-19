@@ -34,6 +34,7 @@ import { SelectAllCheckbox } from "@/app/(app)/[emailAccountId]/mail/SelectAllCh
 import { MailReaderPane } from "@/app/(app)/[emailAccountId]/mail/MailReaderPane";
 import { preloadEmailThread } from "@/components/email-list/EmailThreadLazy";
 import { useWarmComposer } from "@/app/(app)/[emailAccountId]/compose/use-warm-composer";
+import { markFirstMailListShown } from "@/utils/mail-engine/first-mail-list";
 import { writeInboxSnapshot } from "@/utils/mail-engine/inbox-snapshot";
 import { scheduleAfterPageLoad } from "@/utils/schedule-after-page-load";
 import { MailTitlebarNav } from "@/app/(app)/[emailAccountId]/mail/MailTitlebarNav";
@@ -687,6 +688,7 @@ export function MailShell() {
     if (!hasLocalMail) return;
     markLocalMailboxSynced(emailAccountId);
     retireInboxPreview();
+    markFirstMailListShown();
   }, [hasLocalMail, emailAccountId, retireInboxPreview]);
   // The top of the inbox, saved as the page hides so the next visit paints
   // it while the engine opens.
