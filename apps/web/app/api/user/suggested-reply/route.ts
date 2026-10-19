@@ -36,7 +36,13 @@ const contextItem = z.object({
   title: z.string().max(500),
   snippet: z.string().max(500),
   at: z.string().max(64),
-  url: z.string().max(2048).optional(),
+  // Only a web page's link; any other is dropped rather than failing the
+  // whole suggestion over one item.
+  url: z
+    .url({ protocol: /^https?$/ })
+    .max(2048)
+    .optional()
+    .catch(undefined),
   source: z.string().max(100).optional(),
   linkedFrom: z.string().max(512).optional(),
   reasons: z
@@ -90,17 +96,26 @@ export const POST = withEmailProvider(
       webQuery: searchParams.get("webQuery"),
     });
 
-    // Only the web pass is limited: it calls a model and a web search for
-    // every thread mail and calendar couldn't answer.
-    if (web === "1") {
-      await assertWithinUserRateLimit({
-        scope: "suggested-reply-web",
-        userId: request.auth.userId,
-        limit: 40,
-        windowSeconds: 5 * 60,
-        logger: request.logger,
-      });
-    }
+    // Each pass is a model call. The web pass also searches the web for every
+    // thread that mail and calendar couldn't answer, so it gets the tighter
+    // limit. The plain pass's limit only stops a runaway client.
+    await assertWithinUserRateLimit(
+      web === "1"
+        ? {
+            scope: "suggested-reply-web",
+            userId: request.auth.userId,
+            limit: 40,
+            windowSeconds: 5 * 60,
+            logger: request.logger,
+          }
+        : {
+            scope: "suggested-reply",
+            userId: request.auth.userId,
+            limit: 60,
+            windowSeconds: 5 * 60,
+            logger: request.logger,
+          },
+    );
 
     const settings = await getSuggestedReplySettings(
       request.auth.emailAccountId,

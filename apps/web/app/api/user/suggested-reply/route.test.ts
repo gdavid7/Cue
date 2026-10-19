@@ -98,13 +98,37 @@ describe("POST /api/user/suggested-reply", () => {
     expect(mocks.suggestReply).not.toHaveBeenCalled();
   });
 
-  it("does not count suggestions from mail and calendar alone", async () => {
-    mocks.rateLimitCount.mockResolvedValue(1000);
+  it("limits suggestions from mail and calendar alone loosely, on their own count", async () => {
+    mocks.rateLimitCount.mockResolvedValueOnce(60);
+    expect((await get("threadId=t1")).status).toBe(200);
+    expect(mocks.rateLimitCount).toHaveBeenCalledWith(
+      expect.any(String),
+      ["rate-limit:suggested-reply:user-1"],
+      ["300"],
+    );
 
-    const response = await get("threadId=t1");
+    mocks.rateLimitCount.mockResolvedValueOnce(61);
+    expect((await get("threadId=t1")).status).toBe(429);
+  });
 
-    expect(response.status).toBe(200);
-    expect(mocks.rateLimitCount).not.toHaveBeenCalled();
+  it("drops a context link that isn't a web page", async () => {
+    const item = {
+      id: "page-1",
+      kind: "web",
+      title: "Opening hours",
+      snippet: "",
+      at: "2026-10-01T00:00:00.000Z",
+      url: "javascript:alert(1)",
+      reasons: [],
+      text: "Open 9 to 5.",
+    };
+    mocks.rateLimitCount.mockResolvedValue(1);
+
+    await get("threadId=t1", { context: [item] });
+
+    const [{ context }] = mocks.suggestReply.mock.calls[0];
+    expect(context[0].url).toBeUndefined();
+    expect(context[0].title).toBe("Opening hours");
   });
 });
 
