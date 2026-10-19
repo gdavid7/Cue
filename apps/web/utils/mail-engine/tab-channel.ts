@@ -346,6 +346,9 @@ export function createTabFollowerClient(input: {
     async getDiagnostics(accountId) {
       return call("getDiagnostics", [accountId]) as never;
     },
+    async forgetDeletedDrafts(input) {
+      await call("forgetDeletedDrafts", [input]);
+    },
     async purgeAccount(accountId) {
       return call("purgeAccount", [accountId]) as never;
     },

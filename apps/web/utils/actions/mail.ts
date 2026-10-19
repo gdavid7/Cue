@@ -479,18 +479,17 @@ export const deleteDraftAction = actionClient
         provider: providerName,
         logger,
       });
-      const draft = draftId
-        ? await provider
-            .getDraft(draftId)
-            .then((message) =>
-              message ? provider.getDraftReferenceForMessage(message.id) : null,
-            )
-        : await provider.getDraftReferenceForMessage(draftMessageId);
+      const messageId = draftId
+        ? ((await provider.getDraft(draftId))?.id ?? null)
+        : draftMessageId;
+      const draft = messageId
+        ? await provider.getDraftReferenceForMessage(messageId)
+        : null;
       // Already sent, deleted, or replaced elsewhere: nothing left to discard.
-      if (!draft) return;
+      if (!draft) return { deletedMessageId: null };
 
       const wasDeleted = await provider.deleteDraft(draft.id, draft.version);
-      if (!wasDeleted) return;
+      if (!wasDeleted) return { deletedMessageId: null };
 
       try {
         await markTrackedDraftDeleted({
@@ -503,6 +502,7 @@ export const deleteDraftAction = actionClient
           error,
         });
       }
+      return { deletedMessageId: messageId };
     },
   );
 
@@ -554,7 +554,10 @@ export const discardComposeDraftAction = actionClient
         provider: providerName,
         logger,
       });
-      await discardComposeDraft({ provider, ...parsedInput });
-      return { success: true };
+      const deletedMessageId = await discardComposeDraft({
+        provider,
+        ...parsedInput,
+      });
+      return { success: true, deletedMessageId };
     },
   );

@@ -953,19 +953,42 @@ export async function createSqliteMailStore(
               await upsertConfirmed(tx, { ...confirmed, ...next });
             }
           }
+          const sentMessageId =
+            input.operation.intent.kind === "send"
+              ? sentMessageIdFromObservations(input.result.observations)
+              : null;
           await tx.execute(
             `UPDATE operations SET status = ?, receipt_id = ?, sent_message_id = ?, claimed_by = NULL, attempt_id = NULL
              WHERE account_id = ? AND command_id = ?`,
             [
               operationStatusFromTargets(targets, "succeeded"),
               input.result.receiptId,
-              input.operation.intent.kind === "send"
-                ? sentMessageIdFromObservations(input.result.observations)
-                : null,
+              sentMessageId,
               input.operation.key.accountId,
               input.operation.key.operationId,
             ],
           );
+          if (
+            input.operation.intent.kind === "send" &&
+            input.operation.intent.providerDraftId &&
+            sentMessageId
+          ) {
+            // Sending the mailbox draft removes it there; its copies here
+            // would stay in Drafts until sync reports that. Without the sent
+            // message the draft's row may be that message (Gmail keeps the
+            // id), so it waits for sync.
+            await removeDraftMessages(
+              tx,
+              input.operation.key.accountId,
+              (
+                await readProviderDraftMessageIds(
+                  tx,
+                  input.operation.key.accountId,
+                  input.operation.intent.frozenDraftId,
+                )
+              ).filter((messageId) => messageId !== sentMessageId),
+            );
+          }
         } else if (input.result.status === "rejected") {
           const targets = resolveTargetOutcomes(
             input.operation,
@@ -1055,6 +1078,16 @@ export async function createSqliteMailStore(
         }
         const revision = await bumpRevision(tx);
         return { status: "committed", revision };
+      });
+    },
+    async forgetDeletedDrafts(input) {
+      return driver.write(async (tx) => {
+        const removed = await removeDraftMessages(
+          tx,
+          input.accountId,
+          input.messageIds,
+        );
+        return removed > 0 ? bumpRevision(tx) : readRevision(tx);
       });
     },
     async tombstoneUnseen(input) {
@@ -3515,6 +3548,46 @@ async function unfreezeSendDraft(
     "UPDATE drafts SET frozen = 0 WHERE account_id = ? AND draft_id = ?",
     [accountId, frozenDraftId],
   );
+}
+
+// Only rows still drafts: a provider that sends a draft under its own id
+// has already turned that row into the sent message.
+async function removeDraftMessages(
+  tx: SqlTransaction,
+  accountId: string,
+  messageIds: string[],
+) {
+  if (messageIds.length === 0) return 0;
+  const drafts = await tx.query(
+    `SELECT message_id FROM messages
+     WHERE account_id = ? AND deleted = 0 AND in_draft = 1
+       AND message_id IN (${messageIds.map(() => "?").join(",")})`,
+    [accountId, ...messageIds],
+  );
+  for (const row of drafts) {
+    await applyChange(tx, {
+      kind: "message_deleted",
+      key: { accountId, messageId: String(row.message_id) },
+      evidence: "provider_draft_removed",
+    });
+  }
+  return drafts.length;
+}
+
+async function readProviderDraftMessageIds(
+  tx: SqlTransaction,
+  accountId: string,
+  draftId: string,
+) {
+  const rows = await tx.query(
+    "SELECT content_json FROM drafts WHERE account_id = ? AND draft_id = ?",
+    [accountId, draftId],
+  );
+  if (!rows[0]) return [];
+  const draft = draftContentSchema.safeParse(
+    JSON.parse(String(rows[0].content_json)),
+  );
+  return draft.success ? (draft.data.providerDraftMessageIds ?? []) : [];
 }
 
 async function readConversationSends(tx: SqlTransaction, key: ConversationKey) {
