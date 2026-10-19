@@ -19,11 +19,31 @@ export type SearchQueryContext = {
   labels?: SearchLabel[];
   /** The user's time zone, which Outlook's whole-day dates are read in. */
   timeZone?: string;
+  /**
+   * Whose syntax the query is in. Left out (a view across accounts), both
+   * Gmail's operators and the KQL Cue's Outlook form writes are read.
+   */
+  provider?: "google" | "microsoft";
 };
 
 // The Gmail API reads after:/before: dates as midnight Pacific time, so the
 // store does too and both halves of a search agree on the day's edges.
 const GMAIL_QUERY_TIME_ZONE = "America/Los_Angeles";
+
+// Outlook's KQL, which Gmail reads as words.
+const KQL_OPERATORS = new Set([
+  "hasattachment",
+  "hasattachments",
+  "received",
+  "sent",
+  "folder",
+  "body",
+  "participants",
+  "importance",
+  "attachment",
+  "attachments",
+  "kind",
+]);
 
 // The schema allows this many children per all/any.
 const MAX_CHILDREN = 32;
@@ -49,8 +69,9 @@ export function searchQueryToPredicate(
     kind: "search",
     query: trimmed,
     local: compileSearchNode(ast, context),
+    possible: compile(ast, context, "over", true),
   };
-  if (reachesSpamOrTrash(ast)) return search;
+  if (reachesSpamOrTrash(ast, context.provider)) return search;
   return {
     kind: "all",
     predicates: [search, { kind: "mailbox", mailbox: "all" }],
@@ -68,7 +89,39 @@ export function compileSearchNode(
   node: SearchNode,
   context: SearchQueryContext,
 ): MailPredicate {
-  return compile(node, context, "under");
+  return compile(node, context, "under", false);
+}
+
+/**
+ * Whether a predicate holds a typed search the local mail can't answer any
+ * of (`larger:5M`), so only the provider can find its mail.
+ */
+export function searchNeedsProvider(predicate: MailPredicate): boolean {
+  switch (predicate.kind) {
+    case "search":
+      return (
+        predicate.local.kind === "any" && !predicate.local.predicates.length
+      );
+    case "all":
+    case "any":
+      return predicate.predicates.some(searchNeedsProvider);
+    case "not":
+      return searchNeedsProvider(predicate.predicate);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Whether a search reaches spam and trash, which Gmail's search (and Cue's)
+ * leaves out unless the query names them. Only a token the provider reads
+ * counts, and only where it isn't negated: `-in:trash` still leaves spam out.
+ */
+export function searchReachesSpamOrTrash(
+  query: string,
+  provider?: SearchQueryContext["provider"],
+): boolean {
+  return reachesSpamOrTrash(parseSearchQuery(query), provider);
 }
 
 /** Maps a Gmail label or system token to the store's predicate for it. */
@@ -87,34 +140,38 @@ export function gmailTokenToPredicate(id: string): MailPredicate {
 }
 
 // "under" never matches more than the query, "over" never matches less; a
-// negation swaps them so the result stays an under-approximation.
+// negation swaps them so each stays what it is.
 type Bound = "under" | "over";
 
+// `looseText` leaves words to the provider too: its word matching (stems,
+// attachments, bodies the store never got) differs from the store's, so a
+// bound that must not drop the provider's matches can't judge them.
 function compile(
   node: SearchNode,
   context: SearchQueryContext,
   bound: Bound,
+  looseText: boolean,
 ): MailPredicate {
   switch (node.kind) {
     case "and":
       return allOf(
         mergeWords(node.children).map((child) =>
-          compile(child, context, bound),
+          compile(child, context, bound, looseText),
         ),
       );
     case "or":
       return anyOf(
-        node.children.map((child) => compile(child, context, bound)),
+        node.children.map((child) => compile(child, context, bound, looseText)),
       );
     case "not": {
-      const inner = compile(node.child, context, flip(bound));
+      const inner = compile(node.child, context, flip(bound), looseText);
       if (inner === TRUE) return FALSE;
       if (inner === FALSE) return TRUE;
       return { kind: "not", predicate: inner };
     }
     default: {
       const leaf = leafPredicate(node, context);
-      if (leaf) return leaf;
+      if (leaf && !(looseText && leaf.kind === "text")) return leaf;
       return bound === "under" ? FALSE : TRUE;
     }
   }
@@ -139,6 +196,9 @@ function leafPredicate(
 ): MailPredicate | null {
   if (node.kind === "around") return null;
   if (node.kind === "text") {
+    // The one place the store can match more than Gmail: it reads each word
+    // as a prefix, as the search box does while typing (see search-text.ts
+    // in mail-sqlite), where Gmail matches whole words.
     return {
       kind: "text",
       field: "any",
@@ -148,6 +208,18 @@ function leafPredicate(
   }
   const { name, comparator, value, quoted } = node;
   if (!value) return null;
+  // To Gmail these are just words.
+  if (
+    context.provider === "google" &&
+    (KQL_OPERATORS.has(name) || (name === "size" && comparator !== ":"))
+  ) {
+    return {
+      kind: "text",
+      field: "any",
+      value: `${name}${comparator}${value}`,
+      match: quoted ? "phrase" : "term",
+    };
+  }
   if (name === "received") return receivedPredicate(comparator, value, context);
   if (comparator !== ":") return null;
   const lower = value.toLowerCase();
@@ -386,18 +458,28 @@ function receivedPredicate(
   return { kind: "received", afterMs, beforeMs };
 }
 
-function reachesSpamOrTrash(node: SearchNode): boolean {
+// The tokens each provider reads as reaching spam or trash. Outlook has no
+// in:anywhere: its search covers the folders it is pointed at.
+const SPAM_OR_TRASH_TOKENS = {
+  google: /^(?:(?:in|label):(?:spam|trash)|in:anywhere)$/i,
+  microsoft: /^in:(?:spam|junk|junkemail|trash|deleted|deleteditems)$/i,
+};
+
+function reachesSpamOrTrash(
+  node: SearchNode,
+  provider: SearchQueryContext["provider"],
+): boolean {
   switch (node.kind) {
     case "and":
     case "or":
-      return node.children.some(reachesSpamOrTrash);
+      return node.children.some((child) => reachesSpamOrTrash(child, provider));
     case "not":
-      return reachesSpamOrTrash(node.child);
+      return false;
     case "operator":
       return (
-        (node.name === "in" || node.name === "label") &&
-        /^(spam|trash|anywhere|junk|junkemail|bin|deleted|deleteditems)$/i.test(
-          node.value,
+        node.comparator === ":" &&
+        SPAM_OR_TRASH_TOKENS[provider ?? "google"].test(
+          `${node.name}:${node.value}`,
         )
       );
     default:

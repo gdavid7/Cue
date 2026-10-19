@@ -25,6 +25,7 @@ export function useCombinedMailThreads({
   isUnread,
   labelNames,
   searchQuery,
+  providerSearch,
 }: {
   accounts: AllInboxesAccount[];
   emailAccountId: string;
@@ -32,6 +33,8 @@ export function useCombinedMailThreads({
   isUnread: boolean;
   labelNames?: string[];
   searchQuery?: string;
+  /** False while a search is still being typed: it reads local mail only. */
+  providerSearch?: boolean;
 }) {
   const accountIds = useMemo(
     () => accounts.map((account) => account.id),
@@ -67,6 +70,7 @@ export function useCombinedMailThreads({
     accounts: accountsById,
     query,
     predicate: searchQuery ? undefined : predicate,
+    providerSearch,
     enabled,
   });
   const client = useEngineMailClient();

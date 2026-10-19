@@ -204,7 +204,11 @@ describe("local text search", () => {
 
   it("lists a typed search's index hits next to the messages the provider matched", async () => {
     const { store, close } = await searchableMailbox();
-    const providerMatched = (rest: MailPredicate[]): MailPredicate => ({
+    // The shape resolveSearchPredicates gives a search with matches.
+    const providerMatched = (
+      rest: MailPredicate[],
+      matchedIn = "acc-1",
+    ): MailPredicate => ({
       kind: "all",
       predicates: [
         {
@@ -214,7 +218,19 @@ describe("local text search", () => {
               kind: "all",
               predicates: [text("any", "quarterly"), ...rest],
             },
-            { kind: "message", ids: ["bare"] },
+            {
+              kind: "all",
+              predicates: [
+                { kind: "not", predicate: { kind: "role", role: "trash" } },
+                {
+                  kind: "any",
+                  predicates: [
+                    { kind: "message", accountId: matchedIn, ids: ["bare"] },
+                    { kind: "message", accountId: "other", ids: ["lunch"] },
+                  ],
+                },
+              ],
+            },
           ],
         },
         { kind: "not", predicate: { kind: "role", role: "spam" } },
@@ -234,6 +250,11 @@ describe("local text search", () => {
     expect(
       await store.readMailboxView(query(providerMatched([]))),
     ).toMatchObject({ view: { counts: { matchingConversations: 3 } } });
+    // Another account's match with the same id isn't this account's mail.
+    expect(await search(store, providerMatched([], "other"))).toEqual([
+      "html",
+      "text",
+    ]);
     await close();
   });
 });

@@ -615,9 +615,15 @@ export function MailShell() {
       : { type: "inbox" };
   }, [searchQuery, scopeQuery, activeSplit, splits]);
 
+  // Typing searches local mail as you go; the provider is only asked once
+  // the search is committed (Enter, or a search address), so a pause
+  // mid-word never spends a provider search on half a query.
+  const searchCommitted = !!searchParam && searchQuery === searchParam.trim();
+  const providerSearch = !searchQuery || searchCommitted;
   const accountThreadState = useMailThreads({
     emailAccountId,
     query,
+    providerSearch,
     enabled:
       !isAllAccounts &&
       searchSettled &&
@@ -637,6 +643,7 @@ export function MailShell() {
       ),
     labelNames: searchQuery ? undefined : activeCombinedLabelNames,
     searchQuery: searchQuery ?? undefined,
+    providerSearch,
   });
   const { labelsByAccount } = combinedThreadState;
   const splitCountAccountIds = useMemo(
@@ -717,7 +724,7 @@ export function MailShell() {
   const searchFoundNothing = Boolean(
     searchQuery && hasProviderResponse && !threads.length,
   );
-  const isSearchCommitted = !!searchParam && searchQuery === searchParam.trim();
+  const isSearchCommitted = searchCommitted;
   let emptySearchMessage: string | undefined;
   if (searchFoundNothing)
     emptySearchMessage = `No emails match “${searchQuery}”.`;
@@ -2029,6 +2036,17 @@ export function MailShell() {
                   }}
                 />
               ) : null}
+              {searchQuery && providerState.providerSearchNotice ? (
+                <p
+                  role="status"
+                  className="px-5 pt-3 text-muted-foreground text-xs"
+                >
+                  {providerSearchNoticeText(
+                    providerState.providerSearchNotice,
+                    isAllAccounts ? null : provider,
+                  )}
+                </p>
+              ) : null}
               {!isAllAccounts && accountThreadState.cueSortingUnavailable ? (
                 <p
                   role="status"
@@ -2333,4 +2351,16 @@ function getListPlaceholderMessage({
   if (isAllAccounts) return allInboxesFirstSyncMessage ?? "Loading your mail…";
   if (isFirstSync) return "Getting your last 3 days of mail first…";
   return `Loading your mail from ${isOutlook ? "Outlook" : "Gmail"}…`;
+}
+
+function providerSearchNoticeText(
+  notice: "unavailable" | "unsupported",
+  provider: string | null,
+) {
+  let name: string | null = null;
+  if (isGoogleProvider(provider)) name = "Gmail";
+  else if (isMicrosoftProvider(provider)) name = "Outlook";
+  if (notice === "unavailable")
+    return `Can't reach ${name ?? "your mail provider"}; showing mail on this device.`;
+  return `${name ?? "Your mail provider"} can't run this search; showing mail on this device.`;
 }

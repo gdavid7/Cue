@@ -13,7 +13,11 @@ import {
   EMPTY_OUTLOOK_SEARCH_FIELDS,
   type OutlookSearchFields,
 } from "@/app/(app)/[emailAccountId]/mail/outlook-search-query";
-import { searchQueryToPredicate } from "@/utils/mail-search/search-query-predicate";
+import { resolveSearchPredicates } from "@inboxzero/mail-core/query-semantics";
+import {
+  searchQueryToPredicate,
+  searchReachesSpamOrTrash,
+} from "@/utils/mail-search/search-query-predicate";
 
 const ACCOUNT = "account-1";
 const NOW = new Date("2024-03-10T12:00:00Z");
@@ -244,7 +248,7 @@ describe("advanced search form queries", () => {
       ...EMPTY_MAIL_SEARCH_FIELDS,
       ...fields,
     });
-    expect(await localMatches(query)).toEqual(expected.sort());
+    expect(await localMatches(query, "google")).toEqual(expected.sort());
   });
 
   it("writes the size Gmail reads", () => {
@@ -279,20 +283,100 @@ describe("advanced search form queries", () => {
       ...EMPTY_OUTLOOK_SEARCH_FIELDS,
       ...fields,
     });
-    expect(await localMatches(query)).toEqual(expected.sort());
+    expect(await localMatches(query, "microsoft")).toEqual(expected.sort());
   });
 });
 
-async function localMatches(query: string) {
+describe("the provider's matches", () => {
+  it("shows what only the provider could match", async () => {
+    expect(await localMatches("larger:5M", "google", ["bob"])).toEqual(["bob"]);
+  });
+
+  it.each<[string, string[], string[]]>([
+    // Archived since Gmail matched it.
+    ["in:inbox larger:5M", ["amy", "bob"], ["amy"]],
+    // Read since Gmail matched it.
+    ["is:unread larger:5M", ["amy", "bob"], ["amy"]],
+    ["larger:5M -is:starred", ["amy", "bob"], ["amy"]],
+  ])("drops a match %s no longer allows", async (query, matched, expected) => {
+    expect(await localMatches(query, "google", matched)).toEqual(expected);
+  });
+
+  it("keeps a match on words the store can't judge", async () => {
+    // Gmail may have matched the word in a body or attachment the store
+    // doesn't hold.
+    expect(await localMatches("ledger larger:5M", "google", ["amy"])).toEqual([
+      "amy",
+    ]);
+  });
+
+  it("still leaves spam and trash out", async () => {
+    expect(await localMatches("larger:5M", "google", ["spam"])).toEqual([]);
+  });
+});
+
+describe("searchReachesSpamOrTrash", () => {
+  it.each<[string, "google" | "microsoft" | undefined, boolean]>([
+    ["in:trash", "google", true],
+    ["in:spam invoice", "google", true],
+    ["label:spam", "google", true],
+    ["in:anywhere", "google", true],
+    ["invoice OR in:trash", "google", true],
+    ["IN:TRASH", "google", true],
+    ["-in:trash", "google", false],
+    ["NOT in:spam", "google", false],
+    ['"in:trash"', "google", false],
+    ["in:junk", "google", false],
+    ["invoice", "google", false],
+    ["in:junk", "microsoft", true],
+    ["in:deleted", "microsoft", true],
+    // Graph has no in:anywhere.
+    ["in:anywhere", "microsoft", false],
+    ["in:trash", undefined, true],
+  ])("%s (%s) → %s", (query, provider, expected) => {
+    expect(searchReachesSpamOrTrash(query, provider)).toBe(expected);
+  });
+
+  it("keeps Gmail's default scope for Outlook's in:anywhere", async () => {
+    expect(await localMatches("in:anywhere dinner", "microsoft")).toEqual([
+      "amy",
+      "sent",
+    ]);
+  });
+});
+
+describe("syntax per provider", () => {
+  it("reads Outlook's KQL as words for a Gmail account, as Gmail does", async () => {
+    expect(await localMatches("hasattachments:true", "google")).toEqual([]);
+    expect(await localMatches("received>=2024-03-01", "google")).toEqual([]);
+    expect(await localMatches("hasattachments:true", "microsoft")).toEqual([
+      "amy",
+    ]);
+  });
+
+  it("matches LIKE wildcards in an address as themselves", async () => {
+    expect(await localMatches("from:_")).toEqual([]);
+    expect(await localMatches("from:%")).toEqual([]);
+  });
+});
+
+async function localMatches(
+  query: string,
+  provider?: "google" | "microsoft",
+  providerMatched: string[] = [],
+) {
   const predicate = searchQueryToPredicate(query, {
     now: NOW,
     labels: LABELS,
     timeZone: "UTC",
+    provider,
   });
   if (!predicate) throw new Error("No predicate");
   const { view } = await store.readMailboxView({
     accountIds: [ACCOUNT],
-    predicate,
+    predicate: resolveSearchPredicates(predicate, () => [
+      { accountId: ACCOUNT, messageIds: providerMatched },
+    ]),
     order: "newest_first",
     pageSize: 50,
     after: null,

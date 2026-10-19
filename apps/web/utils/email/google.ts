@@ -90,8 +90,8 @@ import {
 import {
   getThreadsBatch,
   getThreadsWithNextPageToken,
-  queryIncludesSpamOrTrash,
 } from "@/utils/gmail/thread";
+import { searchReachesSpamOrTrash } from "@/utils/mail-search/search-query-predicate";
 import { decodeSnippet } from "@/utils/gmail/decode";
 import {
   getDraft,
@@ -1539,7 +1539,7 @@ export class GmailProvider implements EmailProvider {
       labelIds,
       includeSpamTrash:
         options.includeSpamTrash ||
-        queryIncludesSpamOrTrash(query) ||
+        searchReachesSpamOrTrash(query, "google") ||
         labelIds?.some(
           (labelId) =>
             labelId === GmailLabel.SPAM || labelId === GmailLabel.TRASH,
@@ -2126,7 +2126,7 @@ export class GmailProvider implements EmailProvider {
       const labelIds = searchLabelIds(options);
       const includeSpamTrash = Boolean(
         options.includeSpamTrash ||
-          queryIncludesSpamOrTrash(options.query) ||
+          searchReachesSpamOrTrash(options.query, "google") ||
           labelIds.some(
             (labelId) =>
               labelId === GmailLabel.SPAM || labelId === GmailLabel.TRASH,

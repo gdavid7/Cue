@@ -11,7 +11,10 @@ import { useMailboxWindow } from "@inboxzero/mail-react/use-mailbox-window";
 import type { ListThread } from "@/app/(app)/[emailAccountId]/mail/types";
 import type { CombinedListThread } from "@/utils/threads/load-combined";
 import type { EmailLabels } from "@/providers/email-label-types";
-import type { SearchLabel } from "@/utils/mail-search/search-query-predicate";
+import {
+  type SearchQueryContext,
+  searchNeedsProvider,
+} from "@/utils/mail-search/search-query-predicate";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 import { conversationSummaryToListThread } from "@/utils/mail-engine/list-thread";
 import { threadsQueryToConversationQuery } from "@/utils/mail-engine/threads-query";
@@ -35,7 +38,8 @@ export function useEngineMailThreads({
   accounts,
   query,
   predicate,
-  searchLabels,
+  search,
+  providerSearch = true,
   enabled = true,
 }: {
   emailAccountId: string;
@@ -43,8 +47,10 @@ export function useEngineMailThreads({
   accounts?: Record<string, CombinedListThread["account"]>;
   query: ThreadsQuery;
   predicate?: MailPredicate;
-  /** Lets a typed `label:Name` match locally, not only through the provider. */
-  searchLabels?: SearchLabel[];
+  /** How to read a typed search: the account's labels and syntax. */
+  search?: Partial<SearchQueryContext>;
+  /** False while a search is still being typed: it reads local mail only. */
+  providerSearch?: boolean;
   enabled?: boolean;
 }) {
   const client = useOptionalMailClient();
@@ -56,10 +62,14 @@ export function useEngineMailThreads({
     const baseQuery = threadsQueryToConversationQuery({
       accountIds: resolvedAccountIds,
       query,
-      search: { labels: searchLabels },
+      search,
     });
-    return predicate ? { ...baseQuery, predicate } : baseQuery;
-  }, [resolvedAccountIds, query, predicate, searchLabels]);
+    return {
+      ...baseQuery,
+      ...(predicate ? { predicate } : {}),
+      ...(providerSearch ? {} : { providerSearch: false }),
+    };
+  }, [resolvedAccountIds, query, predicate, search, providerSearch]);
   const mailbox = useMailboxWindow(conversationQuery, {
     client,
     enabled: enabled && Boolean(client),
@@ -138,6 +148,14 @@ export function useEngineMailThreads({
     threads,
     hasRemoteResponse: !engineStarting && mailbox.status !== "loading",
     searchError: undefined,
+    /**
+     * Why a typed search may be missing mail: its provider can't be reached,
+     * or can't run a search the local mail can't answer at all.
+     */
+    providerSearchNotice: providerSearchNotice(
+      mailbox.data?.providerSearch,
+      conversationQuery.predicate,
+    ),
     isLoading: engineStarting || (enabled && mailbox.status === "loading"),
     error: mailboxQueryError(mailbox.error),
     hasMore: mailbox.canLoadMore,
@@ -222,6 +240,16 @@ async function readFailedAccountIds(
     const accountId = accountIds[index];
     return diagnostic?.connection !== "ready" && accountId ? [accountId] : [];
   });
+}
+
+function providerSearchNotice(
+  state: "searching" | "complete" | "unavailable" | "unsupported" | undefined,
+  predicate: MailPredicate,
+): "unavailable" | "unsupported" | null {
+  if (state === "unavailable") return "unavailable";
+  if (state === "unsupported" && searchNeedsProvider(predicate))
+    return "unsupported";
+  return null;
 }
 
 function mailboxQueryError(

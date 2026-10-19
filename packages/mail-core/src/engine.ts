@@ -83,6 +83,8 @@ const SEARCH_PAGE_SIZE = 50;
 // A provider search page costs Gmail about 1000 of its 6000 units a minute,
 // so one view's demand for rows never fetches more than this many pages.
 const MAX_SEARCH_PAGES_PER_DEMAND = 2;
+// Closed searches kept for a view that reopens them.
+const MAX_RELEASED_SEARCHES = 16;
 // Each conversation fill is an interactive provider read; anything past this
 // waits its turn instead of crowding out sync and commands.
 const MAX_CONVERSATION_FETCHES = 2;
@@ -235,6 +237,7 @@ export function createMailEngine(input: {
   // as they need rows; a page left in the store by an earlier session or a
   // closed view is dropped instead of walking the whole result set.
   const providerSearches = new Map<string, ProviderSearch>();
+  const releasedSearches = new Map<string, ProviderSearch>();
   // Keyed by account and conversation, so concurrent opens share one read.
   // Completion itself is stored, and resets with the account.
   const conversationFetches = new Map<string, ConversationFetchEntry>();
@@ -280,7 +283,7 @@ export function createMailEngine(input: {
       const handle = queries.observe(mailboxQueryKey(query), () =>
         store.readMailboxView(withProviderMatches(query)).then((result) => ({
           revision: result.revision,
-          data: result.view,
+          data: withProviderSearchState(query, result.view),
         })),
       );
       return {
@@ -311,7 +314,7 @@ export function createMailEngine(input: {
               databaseEpoch: `${result.revision.databaseEpoch}:pages:${pageCount}`,
               sequence: result.revision.sequence,
             },
-            data: result.view,
+            data: withProviderSearchState(query, result.view),
           })),
       );
       return {
@@ -608,9 +611,11 @@ export function createMailEngine(input: {
           continue;
         }
         if (work.kind === "search") {
-          const search = providerSearches.get(
-            providerSearchKey(work.accountId, work.predicate),
-          );
+          const searchKey = providerSearchKey(work.accountId, work.predicate);
+          // A page asked for before its view closed still lands, so the
+          // search keeps it if the view comes back.
+          const search =
+            providerSearches.get(searchKey) ?? releasedSearches.get(searchKey);
           if (!search?.requestedPages.has(work.page)) {
             await store.completeJob({
               jobId: work.jobId,
@@ -618,18 +623,33 @@ export function createMailEngine(input: {
             });
             continue;
           }
-          const searched = await source.search({
-            session: work.session,
-            requestId: work.jobId,
-            signal: signal ?? new AbortController().signal,
-            predicate: work.predicate,
-            page: work.page,
-            pageSize: SEARCH_PAGE_SIZE,
-          });
+          let searched: Awaited<ReturnType<MailboxSource["search"]>>;
+          try {
+            searched = await source.search({
+              session: work.session,
+              requestId: work.jobId,
+              signal: signal ?? new AbortController().signal,
+              // The view's latest form of the search, whose local part may
+              // have changed since the page was asked for.
+              predicate: search.predicate,
+              page: work.page,
+              pageSize: SEARCH_PAGE_SIZE,
+            });
+          } catch (error) {
+            search.state = "unavailable";
+            await refreshViews();
+            throw error;
+          }
+          if (searched.status === "unsupported") {
+            search.state = "unsupported";
+            await refreshViews();
+          }
           if (
             searched.status === "paused" ||
             searched.status === "blocked_auth"
           ) {
+            search.state = "unavailable";
+            await refreshViews();
             await store.deferJob({
               jobId: work.jobId,
               attemptId: work.attemptId,
@@ -658,6 +678,7 @@ export function createMailEngine(input: {
               });
             }
             search.matched += matches.length;
+            search.state = "answered";
             if (searched.value.semantics === "exact") {
               for (const match of matches)
                 search.exactMatches.add(match.messageId);
@@ -1009,6 +1030,34 @@ export function createMailEngine(input: {
 
   // A typed search shows what the provider's own search matched next to what
   // the store matches itself, for as long as a view keeps the search open.
+  // How far the provider got with a view's typed searches, so a view whose
+  // answer must come from it can say why it is empty.
+  function withProviderSearchState(
+    query: ConversationQuery,
+    view: MailboxView,
+  ): MailboxView {
+    const states = typedSearchesOf(query).map(
+      (search) => search?.state ?? "searching",
+    );
+    if (!states.length) return view;
+    let providerSearch: NonNullable<MailboxView["providerSearch"]> = "complete";
+    if (states.includes("unavailable")) providerSearch = "unavailable";
+    else if (states.includes("searching")) providerSearch = "searching";
+    else if (states.includes("unsupported")) providerSearch = "unsupported";
+    return { ...view, providerSearch };
+  }
+
+  function typedSearchesOf(query: ConversationQuery) {
+    if (query.providerSearch === false) return [];
+    return extractProviderSearches(query.predicate).flatMap((predicate) =>
+      predicate.kind === "search"
+        ? query.accountIds.map((accountId) =>
+            providerSearches.get(providerSearchKey(accountId, predicate)),
+          )
+        : [],
+    );
+  }
+
   function withProviderMatches(query: ConversationQuery): ConversationQuery {
     const typed = extractProviderSearches(query.predicate).some(
       (search) => search.kind === "search",
@@ -1017,10 +1066,13 @@ export function createMailEngine(input: {
     return {
       ...query,
       predicate: resolveSearchPredicates(query.predicate, (search) =>
-        query.accountIds.flatMap((accountId) => [
-          ...(providerSearches.get(providerSearchKey(accountId, search))
-            ?.exactMatches ?? []),
-        ]),
+        query.accountIds.map((accountId) => ({
+          accountId,
+          messageIds: [
+            ...(providerSearches.get(providerSearchKey(accountId, search))
+              ?.exactMatches ?? []),
+          ],
+        })),
       ),
     };
   }
@@ -1028,11 +1080,19 @@ export function createMailEngine(input: {
   function watchProviderSearches(query: ConversationQuery, wantedRows: number) {
     const observer = Symbol("mailbox-view");
     const watched: ProviderSearch[] = [];
-    for (const accountId of query.accountIds) {
+    // A search still being typed reads the store alone.
+    const accountIds = query.providerSearch === false ? [] : query.accountIds;
+    for (const accountId of accountIds) {
       for (const predicate of extractProviderSearches(query.predicate)) {
         const key = providerSearchKey(accountId, predicate);
-        let search = providerSearches.get(key);
-        if (!search) {
+        let search = providerSearches.get(key) ?? releasedSearches.get(key);
+        if (search && !providerSearches.has(key)) {
+          releasedSearches.delete(key);
+          providerSearches.set(key, search);
+        }
+        if (search) {
+          search.predicate = predicate;
+        } else {
           search = {
             key,
             accountId,
@@ -1041,6 +1101,7 @@ export function createMailEngine(input: {
             nextPage: null,
             matched: 0,
             exactMatches: new Set(),
+            state: "searching",
             pagesSinceDemand: 1,
             wantedRows: new Map(),
           };
@@ -1069,6 +1130,13 @@ export function createMailEngine(input: {
             providerSearches.get(search.key) === search
           ) {
             providerSearches.delete(search.key);
+            // A view reopening the same search, as a search box does when
+            // its local part changes, picks up what was already found.
+            releasedSearches.set(search.key, search);
+            for (const key of releasedSearches.keys()) {
+              if (releasedSearches.size <= MAX_RELEASED_SEARCHES) break;
+              releasedSearches.delete(key);
+            }
           }
         }
       },
@@ -1890,11 +1958,17 @@ type ProviderSearch = {
   matched: number;
   /** What a provider that answers the query exactly matched, so far. */
   exactMatches: Set<string>;
+  /** "unavailable" while the provider can't be reached or keeps refusing. */
+  state: "searching" | "answered" | "unavailable" | "unsupported";
   pagesSinceDemand: number;
   wantedRows: Map<symbol, number>;
 };
 
+// A typed search is the provider's query, whatever the store makes of it: its
+// local part changes as labels load or a relative date moves on.
 function providerSearchKey(accountId: string, predicate: MailPredicate) {
+  if (predicate.kind === "search")
+    return `${accountId}:search:${predicate.query}`;
   return `${accountId}:${JSON.stringify(predicate)}`;
 }
 

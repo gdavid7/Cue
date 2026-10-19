@@ -255,6 +255,18 @@ describe("threadsQueryToPredicate", () => {
               { kind: "read", value: false },
             ],
           },
+          possible: {
+            kind: "all",
+            predicates: [
+              {
+                kind: "address",
+                field: "from",
+                value: "amy@example.com",
+                match: "address",
+              },
+              { kind: "read", value: false },
+            ],
+          },
         },
         { kind: "mailbox", mailbox: "all" },
       ],

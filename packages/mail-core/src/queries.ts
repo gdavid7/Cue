@@ -67,6 +67,7 @@ export const mailPredicateSchema: z.ZodType<MailPredicate> = z.lazy(() =>
     z.object({
       kind: z.literal("message"),
       ids: z.array(z.string().min(1).max(512)).max(MAX_MESSAGE_PREDICATE_IDS),
+      accountId: accountIdSchema.optional(),
     }),
     z.object({
       kind: z.literal("text"),
@@ -78,6 +79,7 @@ export const mailPredicateSchema: z.ZodType<MailPredicate> = z.lazy(() =>
       kind: z.literal("search"),
       query: z.string().min(1).max(4096),
       local: mailPredicateSchema,
+      possible: mailPredicateSchema,
     }),
   ]),
 );
@@ -105,7 +107,8 @@ export type MailPredicate =
     }
   | { kind: "received"; afterMs: number | null; beforeMs: number | null }
   | { kind: "has_attachment"; value: boolean }
-  | { kind: "message"; ids: string[] }
+  /** These messages, of `accountId` alone when it is set. */
+  | { kind: "message"; ids: string[]; accountId?: string }
   | {
       kind: "text";
       field: "any" | "subject" | "body";
@@ -115,9 +118,17 @@ export type MailPredicate =
   /**
    * A search the user typed, in the provider's own syntax. `local` is what the
    * store answers by itself, and never matches a message the whole query
-   * wouldn't. The provider's own search for `query` finds the rest.
+   * wouldn't. The provider's own search for `query` finds the rest, as long
+   * as they still meet `possible`, which matches every message the query
+   * could: a match the reader has since archived or read drops out of an
+   * `in:inbox` or `is:unread` search.
    */
-  | { kind: "search"; query: string; local: MailPredicate };
+  | {
+      kind: "search";
+      query: string;
+      local: MailPredicate;
+      possible: MailPredicate;
+    };
 
 export const conversationQuerySchema = z.object({
   accountIds: z.array(accountIdSchema).min(1).max(50),
@@ -125,6 +136,11 @@ export const conversationQuerySchema = z.object({
   order: z.literal("newest_first"),
   pageSize: z.number().int().min(1).max(100),
   after: z.string().max(512).nullable(),
+  /**
+   * False keeps the view's searches to the store, as for a search still
+   * being typed: the provider is only asked once it is committed.
+   */
+  providerSearch: z.boolean().optional(),
 });
 export type ConversationQuery = z.infer<typeof conversationQuerySchema>;
 
@@ -167,6 +183,13 @@ export const mailboxViewSchema = z.object({
   nextPage: z.string().nullable(),
   coverage: z.array(coverageSchema),
   connection: z.enum(["ready", "offline", "blocked_auth"]).optional(),
+  /**
+   * For a view with a typed search: whether the provider's search for it is
+   * still running, answered, can't be reached, or can't run it at all.
+   */
+  providerSearch: z
+    .enum(["searching", "complete", "unavailable", "unsupported"])
+    .optional(),
 });
 export type MailboxView = z.infer<typeof mailboxViewSchema>;
 
@@ -229,6 +252,7 @@ export function canonicalizeQuery(query: ConversationQuery): string {
     order: query.order,
     pageSize: query.pageSize,
     after: query.after,
+    ...(query.providerSearch === false ? { providerSearch: false } : {}),
   });
 }
 

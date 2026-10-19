@@ -2643,6 +2643,27 @@ describe("typed search", () => {
     };
   }
 
+  it("goes through Gmail's quota gate as interactive and waits when it is held back", async () => {
+    const priorities: string[] = [];
+    const searchMessages = vi.fn(async () => {
+      priorities.push(currentGmailQuotaContext().priority);
+      throw new GmailCallDeferredError(7000, "interactive");
+    });
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "a",
+      provider: { name: "google", searchMessages } as unknown as EmailProvider,
+    });
+    await expect(source.search(typedSearchInput("larger:5M"))).resolves.toEqual(
+      {
+        status: "paused",
+        retryAfterMs: 7000,
+        reason: "throttled",
+      },
+    );
+    expect(priorities).toEqual(["interactive"]);
+  });
+
   it.each([
     "from:amy@example.com",
     "to:bob@example.com",

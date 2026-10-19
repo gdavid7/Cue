@@ -510,7 +510,13 @@ export function createEmailProviderMailboxSource(input: {
       // typed, and what it matches is the answer: operators the store can't
       // evaluate, and mail older than what it holds, come from here.
       if (isGmail && predicate.kind === "search") {
-        const result = await searchProvider({ query: predicate.query });
+        // Someone is waiting on it, so it goes through the gate as
+        // interactive and waits out an interactive pause like the rest.
+        const query = predicate.query;
+        const result = await runWithGmailQuota(
+          { priority: "interactive" },
+          () => searchProvider({ query }),
+        );
         if ("status" in result) return result;
         return {
           status: "ok",
