@@ -38,7 +38,8 @@ export function isWebPushAvailable() {
     typeof navigator !== "undefined" &&
     "serviceWorker" in navigator &&
     typeof PushManager !== "undefined" &&
-    !getInboxZeroDesktopApp()
+    !getInboxZeroDesktopApp() &&
+    !/Electron/i.test(navigator.userAgent)
   );
 }
 

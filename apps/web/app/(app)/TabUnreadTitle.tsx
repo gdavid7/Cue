@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { getAllInboxesAccounts } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useInboxUnreadCount } from "@/hooks/useInboxUnreadCount";
@@ -13,11 +13,8 @@ import { keepUnreadTitle } from "@/utils/web-notifications/unread-title";
 /** Gmail-style "Inbox (3) – Cue" in the tab, for the inbox the reader is in. */
 export function TabUnreadTitle() {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const { emailAccountId } = useAccount();
-  const isAllInboxes = Boolean(
-    parseMailPath(pathname ?? "", searchParams)?.allInboxes,
-  );
+  const isAllInboxes = Boolean(parseMailPath(pathname ?? "", "")?.allInboxes);
   const { data } = useAccounts(isAllInboxes);
   const accountIds = useMemo(() => {
     if (isAllInboxes)

@@ -25,7 +25,8 @@ export function createNewMailNotifier(deps: {
   triageSettleMs: number;
 }) {
   const tracker = createNewMailTracker({ startedAtMs: deps.startedAtMs });
-  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const pending: TrackedConversation[] = [];
+  let timer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
 
   function canNotify() {
@@ -54,7 +55,13 @@ export function createNewMailNotifier(deps: {
   }
 
   return {
-    handle(conversations: TrackedConversation[]) {
+    /**
+     * `synced` is false until every watched account finished its first sync;
+     * before then the list is a stale cache or a partial backfill, so nothing
+     * is recorded or notified.
+     */
+    handle(conversations: TrackedConversation[], synced = true) {
+      if (!synced) return;
       const fresh = tracker.take(conversations);
       if (fresh.length === 0 || !canNotify()) return;
 
@@ -62,21 +69,26 @@ export function createNewMailNotifier(deps: {
         deps.notify(fresh);
         return;
       }
-      const timer = setTimeout(() => {
-        timers.delete(timer);
+      // One timer and one triage lookup per account for everything that
+      // arrives while it waits.
+      pending.push(...fresh);
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        const batch = pending.splice(0);
         if (!canNotify()) return;
-        dropBulk(fresh)
+        dropBulk(batch)
           .then((important) => {
             if (important.length > 0 && canNotify()) deps.notify(important);
           })
           .catch(() => undefined);
       }, deps.triageSettleMs);
-      timers.add(timer);
     },
     dispose() {
       disposed = true;
-      for (const timer of timers) clearTimeout(timer);
-      timers.clear();
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+      pending.length = 0;
     },
   };
 }
