@@ -158,7 +158,10 @@ describe("useThread", () => {
     ).toEqual([["outgoing:send-1", "<p>On my way</p>"]]);
   });
 
-  it("fills in the conversation during a first sync without holding an earlier-messages row", async () => {
+  // A scope the first sync hasn't listed yet, such as Sent, may hold any of
+  // the conversation's messages; the row holds their place so the newest
+  // message doesn't move down when the fill finds them.
+  it("holds an earlier-messages row while a first sync fills in the conversation", async () => {
     let complete: (value: { status: "complete" }) => void = () => undefined;
     mail.client.ensureConversationMessages.mockReturnValue(
       new Promise((resolve) => {
@@ -178,13 +181,15 @@ describe("useThread", () => {
       conversationId: "c-1",
     });
     expect(result.current.localAvailability).toMatchObject({
-      hasMore: false,
+      hasMore: true,
+      loadingMore: true,
       filling: true,
     });
 
     await act(async () => complete({ status: "complete" }));
     expect(result.current.localAvailability).toMatchObject({
       hasMore: false,
+      loadingMore: false,
       filling: false,
     });
   });

@@ -122,6 +122,16 @@ export function useThread(
           coverage.windowStartMs !== undefined,
       ),
   );
+  // Before a first sync has listed every scope (a folder such as Sent still
+  // unread), any of the conversation's messages may be missing, and a fill
+  // often finds some; they load into the row held for them. A sync that only
+  // stopped at a window misses mail older than it, which a fill rarely
+  // finds, so no row is held that would go away again after painting.
+  const fillMayFindMessages =
+    completing &&
+    Boolean(
+      view?.coverage.some((coverage) => coverage.metadata !== "complete"),
+    );
 
   const data = useMemo<ThreadResponse | undefined>(() => {
     if (!id || !view) return;
@@ -154,11 +164,8 @@ export function useThread(
       missingBodyIds: missingConversationBodyIds(view),
       outgoing: conversationOutgoingMessages(view),
       sendOperationIds: conversationSendOperationIds(view),
-      hasMore: Boolean(view.nextPage),
-      loadingMore,
-      // Most fills find nothing older, so they hold no row above the
-      // messages: one that went away again would move the newest message
-      // up after it had painted.
+      hasMore: Boolean(view.nextPage) || fillMayFindMessages,
+      loadingMore: loadingMore || fillMayFindMessages,
       filling: completing,
       loadMore: () =>
         setPagination({
@@ -167,7 +174,16 @@ export function useThread(
           pageSize: pageSize + CONVERSATION_PAGE_SIZE,
         }),
     };
-  }, [completing, data, emailAccountId, id, loadingMore, pageSize, view]);
+  }, [
+    completing,
+    data,
+    emailAccountId,
+    fillMayFindMessages,
+    id,
+    loadingMore,
+    pageSize,
+    view,
+  ]);
 
   return {
     data,
