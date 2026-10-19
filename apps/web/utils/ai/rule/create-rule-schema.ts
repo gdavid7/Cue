@@ -26,90 +26,25 @@ const conditionalOperatorSchema = z
     "The conditional operator to use. AND means all conditions must be true for the rule to match. OR means any condition can be true for the rule to match. This does not impact sub-conditions.",
   );
 
-const optionalAiInstructionsSchema = z
-  .string()
-  .nullish()
-  .transform((v) => (v?.trim() ? v : null));
-
-const requiredAiInstructionsSchema = z.string().trim().min(1);
-
-const optionalStaticFromSchema = z
-  .string()
-  .nullish()
-  .transform((v) => (v?.trim() ? v : null))
-  .refine((value) => !isInvalidStaticFromValue(value), {
-    message: INVALID_STATIC_FROM_MESSAGE,
-  });
-
-const requiredStaticFromSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .refine((value) => !isInvalidStaticFromValue(value), {
-    message: INVALID_STATIC_FROM_MESSAGE,
-  });
-
 const STATIC_TO_DESCRIPTION = "The to email address to match";
 const STATIC_SUBJECT_DESCRIPTION =
   "Subject-line text to match. Use this when the user explicitly asks to match the email subject. If the user describes email content, topic, meaning, or general keyword matching without naming the subject line, use aiInstructions instead.";
-
-const optionalStaticToSchema = z.string().nullish();
-const requiredStaticToSchema = z.string().trim().min(1);
-const optionalStaticSubjectSchema = z.string().nullish();
-const requiredStaticSubjectSchema = z.string().trim().min(1);
-
-const optionalStaticConditionSchema = z
-  .object({
-    from: optionalStaticFromSchema,
-    to: optionalStaticToSchema,
-    subject: optionalStaticSubjectSchema,
-  })
-  .nullish();
-
-const semanticConditionSchema = z.object({
-  conditionalOperator: conditionalOperatorSchema,
-  aiInstructions: requiredAiInstructionsSchema,
-  static: optionalStaticConditionSchema,
-});
-
-const staticFromConditionSchema = z.object({
-  conditionalOperator: conditionalOperatorSchema,
-  aiInstructions: optionalAiInstructionsSchema,
-  static: z.object({
-    from: requiredStaticFromSchema,
-    to: optionalStaticToSchema,
-    subject: optionalStaticSubjectSchema,
-  }),
-});
-
-const staticToConditionSchema = z.object({
-  conditionalOperator: conditionalOperatorSchema,
-  aiInstructions: optionalAiInstructionsSchema,
-  static: z.object({
-    from: optionalStaticFromSchema,
-    to: requiredStaticToSchema,
-    subject: optionalStaticSubjectSchema,
-  }),
-});
-
-const staticSubjectConditionSchema = z.object({
-  conditionalOperator: conditionalOperatorSchema,
-  aiInstructions: optionalAiInstructionsSchema,
-  static: z.object({
-    from: optionalStaticFromSchema,
-    to: optionalStaticToSchema,
-    subject: requiredStaticSubjectSchema,
-  }),
-});
-
 const MISSING_CONDITION_MESSAGE =
   "The conditions to match. Include at least one semantic condition in aiInstructions or one static condition in from, to, or subject.";
 
-// The model sees one flat condition object, with each field described once.
-// Its checks report a bad condition in one message; the union of valid
-// shapes, which would otherwise repeat every description in each variant of
-// the tool schema, then builds the condition.
-const modelFacingConditionSchema = z
+type RuleCondition = {
+  conditionalOperator: LogicalOperator | null;
+  aiInstructions: string | null;
+  static?: {
+    from: string | null;
+    to: string | null;
+    subject: string | null;
+  } | null;
+};
+
+// The model sees one flat condition object, with each field described once,
+// and one check reports a bad condition in one message.
+const conditionSchema = z
   .object({
     conditionalOperator: conditionalOperatorSchema,
     aiInstructions: z
@@ -128,17 +63,17 @@ const modelFacingConditionSchema = z
       ),
   })
   .superRefine((condition, ctx) => {
-    const { static: staticCondition } = condition;
-    const hasCondition = [
-      condition.aiInstructions,
-      staticCondition?.from,
-      staticCondition?.to,
-      staticCondition?.subject,
-    ].some((value) => value?.trim());
+    const { aiInstructions, static: staticCondition } =
+      normalizeCondition(condition);
+    const hasCondition =
+      aiInstructions ||
+      staticCondition?.from ||
+      staticCondition?.to ||
+      staticCondition?.subject;
     if (!hasCondition) {
       ctx.addIssue({ code: "custom", message: MISSING_CONDITION_MESSAGE });
     }
-    if (isInvalidStaticFromValue(staticCondition?.from?.trim())) {
+    if (isInvalidStaticFromValue(staticCondition?.from)) {
       ctx.addIssue({
         code: "custom",
         path: ["static", "from"],
@@ -146,16 +81,8 @@ const modelFacingConditionSchema = z
       });
     }
   })
-  .describe(MISSING_CONDITION_MESSAGE);
-
-const conditionSchema = modelFacingConditionSchema.pipe(
-  z.union([
-    semanticConditionSchema,
-    staticFromConditionSchema,
-    staticToConditionSchema,
-    staticSubjectConditionSchema,
-  ]),
-);
+  .describe(MISSING_CONDITION_MESSAGE)
+  .transform(normalizeCondition);
 
 export function getAvailableActions(provider: string) {
   const availableActions = getAvailableActionsForRuleEditor({
@@ -496,4 +423,33 @@ function requiredStringField(message: string) {
     .string({ error: message })
     .transform((value) => value.trim())
     .refine(Boolean, message);
+}
+
+// Blank values count as unset, so every check and the saved rule agree.
+function normalizeCondition(condition: {
+  conditionalOperator: LogicalOperator | null;
+  aiInstructions?: string | null;
+  static?: {
+    from?: string | null;
+    to?: string | null;
+    subject?: string | null;
+  } | null;
+}): RuleCondition {
+  const { static: staticCondition } = condition;
+  return {
+    conditionalOperator: condition.conditionalOperator,
+    aiInstructions: textOrNull(condition.aiInstructions),
+    static:
+      staticCondition == null
+        ? staticCondition
+        : {
+            from: textOrNull(staticCondition.from),
+            to: textOrNull(staticCondition.to),
+            subject: textOrNull(staticCondition.subject),
+          },
+  };
+}
+
+function textOrNull(value: string | null | undefined) {
+  return value?.trim() || null;
 }

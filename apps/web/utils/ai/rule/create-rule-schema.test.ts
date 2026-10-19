@@ -459,6 +459,23 @@ describe("createRuleSchema validation errors", () => {
     ).toEqual([INVALID_STATIC_FROM_MESSAGE]);
   });
 
+  it("treats blank condition values as unset when building the rule", () => {
+    const result = createRuleSchema("google").parse({
+      ...buildRule({ type: ActionType.ARCHIVE, delayInMinutes: null }),
+      condition: {
+        conditionalOperator: null,
+        aiInstructions: "  ",
+        static: { from: " @billing.example ", to: "", subject: null },
+      },
+    });
+
+    expect(result.condition).toEqual({
+      conditionalOperator: null,
+      aiInstructions: null,
+      static: { from: "@billing.example", to: null, subject: null },
+    });
+  });
+
   it("still describes the condition to the model", async () => {
     const jsonSchema = (await asSchema(createRuleSchema("google"))
       .jsonSchema) as {
