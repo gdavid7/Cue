@@ -14,11 +14,11 @@ import {
 } from "@/utils/gmail/quota";
 
 vi.mock("@/utils/gmail/batch");
-// These cases are about retries, not sizing: pin a request to 500 units
-// (25 messages) so their hand-built responses line up with the batches.
+// These cases are about retries, not sizing: pin a request to 1,500 units
+// (25 full messages) so their hand-built responses line up with the batches.
 vi.mock("@/utils/gmail/quota", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/utils/gmail/quota")>()),
-  gmailRequestUnitsFor: vi.fn(() => 500),
+  gmailRequestUnitsFor: vi.fn(() => 1500),
 }));
 vi.mock("@/utils/sleep", () => ({
   sleep: vi.fn().mockResolvedValue(undefined),
@@ -237,7 +237,7 @@ describe("getMessagesBatch", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(quotaRequestUnits).mockImplementation(() => 500);
+    vi.mocked(quotaRequestUnits).mockImplementation(() => 1500);
   });
 
   it("should retry on retryable 403 error (rate limit)", async () => {
@@ -372,7 +372,7 @@ describe("getMessagesBatch", () => {
       }));
     });
 
-    // A chat search: 100 units, five messages at a time.
+    // A chat search reading in full: 300 units, five messages at a time.
     const result = await runWithGmailQuota({ priority: "interactive" }, () =>
       getMessagesBatch({ messageIds, accessToken, logger }),
     );
@@ -383,7 +383,7 @@ describe("getMessagesBatch", () => {
     );
     expect(maxActiveBatchRequests).toBe(1);
 
-    // A sync scan: 80 units, four at a time.
+    // A sync scan: 240 units, four at a time.
     vi.mocked(getBatch).mockClear();
     await runWithGmailQuota({ priority: "sync" }, () =>
       getMessagesBatch({
@@ -600,8 +600,8 @@ describe("getMessagesBatchPartial", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    // Two 20-unit message reads per batch.
-    vi.mocked(quotaRequestUnits).mockImplementation(() => 40);
+    // Two 60-unit message reads per batch.
+    vi.mocked(quotaRequestUnits).mockImplementation(() => 120);
   });
 
   it("keeps the messages that loaded and counts the ones Gmail kept refusing", async () => {

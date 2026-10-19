@@ -1,8 +1,11 @@
 import { Readable } from "node:stream";
 import { getAuditContext } from "@/utils/audit/context";
 
-// An independent copy of Google's published per-method costs, so the test
-// measures what Gmail would charge rather than what Cue believes it costs.
+// An independent copy of per-method costs modelled on Google's published
+// quota table, so the test measures what the fake charges rather than what
+// the gate believes. These are conservative stand-ins, not Gmail's exact
+// accounting: a message, draft or thread read costs three times as much in
+// full (the default) or raw as in metadata or minimal format.
 // https://developers.google.com/workspace/gmail/api/reference/quota
 const GMAIL_COSTS: Array<[method: string, pattern: RegExp, units: number]> = [
   ["GET", /^\/profile$/, 1],
@@ -11,12 +14,12 @@ const GMAIL_COSTS: Array<[method: string, pattern: RegExp, units: number]> = [
   ["GET", /^\/labels\/[^/]+$/, 1],
   ["GET", /^\/settings\/.+$/, 1],
   ["GET", /^\/messages$/, 5],
-  ["GET", /^\/messages\/[^/]+$/, 20],
+  ["GET", /^\/messages\/[^/]+$/, 60],
   ["GET", /^\/messages\/[^/]+\/attachments\/[^/]+$/, 20],
   ["GET", /^\/threads$/, 10],
-  ["GET", /^\/threads\/[^/]+$/, 40],
+  ["GET", /^\/threads\/[^/]+$/, 120],
   ["GET", /^\/drafts$/, 5],
-  ["GET", /^\/drafts\/[^/]+$/, 20],
+  ["GET", /^\/drafts\/[^/]+$/, 60],
   ["POST", /^\/messages\/send$/, 100],
   ["POST", /^\/messages\/batchModify$/, 50],
   ["POST", /^\/messages\/[^/]+\/modify$/, 5],
@@ -49,13 +52,11 @@ export type FakeGmailCall = {
 };
 
 /**
- * A Gmail double that charges each request its documented cost and, like
+ * A Gmail double that charges each request its modelled cost and, like
  * Gmail, refuses requests once a rolling minute of accepted cost would pass
  * `unitsPerMinute`. Recent mail is `recentCount` messages; older mail is
  * `historyCount` more. With `unitsPerSecond`, it also refuses what would push
- * the last second past that many units, as Gmail does for bursts well under
- * the per-minute limit (seen in production: the tail of each 25-message batch
- * refused while the minute held about 3,300 units).
+ * the last second past that many units, for a test that bounds bursts.
  */
 export function createFakeGmail({
   unitsPerMinute = 6000,
@@ -91,12 +92,18 @@ export function createFakeGmail({
     return !limited;
   }
 
-  function costOf(method: string, path: string) {
+  function costOf(method: string, url: URL) {
+    const path = stripUser(url.pathname);
     const match = GMAIL_COSTS.find(
       ([m, pattern]) => m === method && pattern.test(path),
     );
     if (!match) throw new Error(`Unpriced fake Gmail call ${method} ${path}`);
-    return match[2];
+    const format = url.searchParams.get("format");
+    const light =
+      method === "GET" &&
+      /^\/(messages|drafts|threads)\/[^/]+$/.test(path) &&
+      (format === "metadata" || format === "minimal");
+    return light ? match[2] / 3 : match[2];
   }
 
   function handle(url: URL): unknown {
@@ -185,7 +192,7 @@ export function createFakeGmail({
       const body = String(init?.body ?? "");
       const parts = [...body.matchAll(/^GET (\S+)$/gm)].map((match) => {
         const itemUrl = new URL(match[1]!, "https://gmail.googleapis.com");
-        const allowed = charge(costOf("GET", stripUser(itemUrl.pathname)));
+        const allowed = charge(costOf("GET", itemUrl));
         const status = allowed ? "200 OK" : "403 Forbidden";
         const json = allowed ? handle(itemUrl) : RATE_LIMIT_BODY;
         return `--batch_fake\r\nContent-Type: application/http\r\n\r\nHTTP/1.1 ${status}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(json)}\r\n`;
@@ -196,7 +203,7 @@ export function createFakeGmail({
       });
     }
 
-    const allowed = charge(costOf(method, stripUser(url.pathname)));
+    const allowed = charge(costOf(method, url));
     if (!allowed)
       return new Response(JSON.stringify(RATE_LIMIT_BODY), {
         status: 403,

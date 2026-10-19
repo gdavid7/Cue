@@ -130,24 +130,25 @@ const ACCOUNT = "account-1";
 const logger = createScopedLogger("first-load-quota-test");
 const END_MS = 240_000;
 const STEADY_MS = 180_000;
-// The gate refills at the account's budget, 4,000 units a minute to start;
-// a thread open costs 40 units, so one every 0.7 s spends 86% of that.
-const BUCKET_UNITS_PER_SECOND =
-  Math.round((GMAIL_USER_UNITS_PER_MINUTE * 0.8) / 3) / 60;
+// The gate refills at the account's budget, 12,000 units a minute to start;
+// a thread open reads it in full, 120 units, so one every 0.7 s spends 86%
+// of that.
+const BUCKET_UNITS_PER_SECOND = (GMAIL_USER_UNITS_PER_MINUTE * 0.8) / 60;
+const THREAD_OPEN_UNITS = 120;
 const OPEN_EVERY_MS = 700;
-// Gmail refuses short bursts well under its minute's limit, so the fake
-// refuses any second past the minute spread evenly, and the gate keeps a
-// fifth under that.
-const GMAIL_UNITS_PER_SECOND = GMAIL_USER_UNITS_PER_MINUTE / 60;
-const GATE_UNITS_PER_SECOND = GMAIL_UNITS_PER_SECOND * 0.8;
+// Gmail's limit is a moving average that allows short bursts. Google
+// publishes no burst size, so the fake refuses any second past four times
+// the minute spread evenly, and the gate keeps under that.
+const GMAIL_UNITS_PER_SECOND = (GMAIL_USER_UNITS_PER_MINUTE / 60) * 4;
+const GATE_UNITS_PER_SECOND = 700;
 const HOME_BUDGET_MS = 10_000;
 
 // Replays what opening Cue fires at Gmail: two tabs each scanning the recent
 // window and backfilling older mail, a deep-linked thread plus three more
 // opened over the minute (each with its context panel, suggested reply and
 // insight), inbox insights for the first rows, Today and sidebar reads, a
-// stats refresh and a webhook. A fake Gmail charges each call its documented
-// cost and refuses calls past 6,000 units in any rolling minute, as Gmail does.
+// stats refresh and a webhook. A fake Gmail charges each call its modelled
+// cost and refuses calls past the per-user limit in any rolling minute.
 describe("Gmail quota on a first load", () => {
   let start = 0;
 
@@ -316,10 +317,11 @@ describe("Gmail quota on a first load", () => {
 
     expect(gmail.limitedCalls()).toEqual([]);
     expect(rateLimitModes).toEqual([]);
-    // 80% of Gmail's limit leaves room for estimation error and for clients
-    // of the same Google project outside this account's budget.
+    // Any minute carries at most the account's budget, 80% of Gmail's limit,
+    // and the bucket's 2,000 units saved before it, which leaves the rest of
+    // the limit for estimation error and for the project's other clients.
     expect(gmail.peakMinuteUnits()).toBeLessThanOrEqual(
-      GMAIL_USER_UNITS_PER_MINUTE * 0.8,
+      GMAIL_USER_UNITS_PER_MINUTE * 0.8 + 2000,
     );
     // Opening a thread never waits on sync or analysis: each read is served
     // within the fake's single round trip.
@@ -394,8 +396,8 @@ describe("Gmail quota on a first load", () => {
     ).toBeGreaterThan(2000);
   }, 60_000);
 
-  // The inbox's first page is one interactive request for 25 messages:
-  // about 505 units, two and a half seconds of the per-second cap.
+  // The inbox's first page is one interactive request for 25 messages'
+  // metadata: about 505 units, which the bucket's floor under sync covers.
   it("serves a first inbox page within the per-second cap's time while a first sync runs", async () => {
     const { gmail, provider, route, engineScope, sleep, rateLimitModes } =
       await startReplay(STEADY_MS, { unitsPerSecond: GMAIL_UNITS_PER_SECOND });
@@ -408,7 +410,10 @@ describe("Gmail quota on a first load", () => {
         const askedAt = Date.now();
         const result = await route("threads", () =>
           runWithGmailQuota({ priority: "interactive" }, () =>
-            provider.getMessagesWithPagination({ maxResults: 25 }),
+            provider.getMessagesWithPagination({
+              maxResults: 25,
+              format: "metadata",
+            }),
           ),
         );
         firstPage = {
@@ -429,6 +434,36 @@ describe("Gmail quota on a first load", () => {
     expect(gmail.peakSecondUnits()).toBeLessThanOrEqual(GATE_UNITS_PER_SECOND);
     expect(firstPage).toMatchObject({ ok: true, count: 25 });
     expect(firstPage?.ms).toBeLessThanOrEqual(2600);
+  }, 60_000);
+
+  // Right after a sign-in, the first sync's first page is the inbox someone
+  // waits on, but they may open a conversation from the server's preview
+  // rows before it lands. That read must not queue behind the page.
+  it("serves a thread opened during a first sync's first page in one round trip", async () => {
+    const { gmail, provider, route, engineScope, sleep, rateLimitModes } =
+      await startReplay(30_000, { unitsPerSecond: GMAIL_UNITS_PER_SECOND });
+    let openedIn: number | null = null;
+    const actors = Promise.all([
+      engineScope("a", "primary", { initial: true }),
+      engineScope("a", "history", { initial: true }),
+      // The bootstrap's reads take three round trips; the page is listed and
+      // its first batches are in flight.
+      sleep(1100).then(async () => {
+        const openedAt = Date.now();
+        const result = await route("threads/detail", () =>
+          provider.getThread("t3"),
+        );
+        if (result.ok) openedIn = Date.now() - openedAt;
+      }),
+    ]);
+    await advanceUntilSettled(actors, 30_000);
+
+    expect(gmail.limitedCalls()).toEqual([]);
+    expect(rateLimitModes).toEqual([]);
+    expect(
+      gmail.unitsByCaller(start, start + 1200)["mail/v1/enumeration"],
+    ).toBeGreaterThan(0);
+    expect(openedIn).toBe(250);
   }, 60_000);
 
   // Production, 20:14: Today on a large mailbox ran into the route's 30 s
@@ -488,9 +523,9 @@ describe("Gmail quota on a first load", () => {
     expect(home).toMatchObject({ ok: true });
     expect(home!.ms).toBeLessThanOrEqual(HOME_BUDGET_MS);
     // Today's reads go ahead of the sync. Its thirty thread reads (about
-    // 1,200 units) are more than the half bucket sync leaves plus ten
-    // seconds of a 4,000-unit budget, so the first lanes land and the rest
-    // come back pending, never empty.
+    // 1,200 units) may outrun what sync leaves of the bucket while two tabs
+    // sync, so the first lanes land and any rest come back pending, never
+    // empty.
     expect(home!.value).toMatchObject({
       needsYou: expect.arrayContaining([expect.anything()]),
     });
@@ -505,7 +540,7 @@ describe("Gmail quota on a first load", () => {
   // showed a reply thread without its original, still on page two).
   it("keeps the first sync filling the inbox while someone opens threads", async () => {
     // A small mailbox, as in the emulated QA account: the recent window is
-    // two pages, about 810 units, which the minute's bucket covers at once.
+    // two pages read in full, about 2,410 units.
     const { gmail, provider, route, retried, engineScope, sleep } =
       await startReplay(STEADY_MS, {
         unitsPerSecond: GMAIL_UNITS_PER_SECOND,
@@ -554,10 +589,10 @@ describe("Gmail quota on a first load", () => {
     expect(gmail.limitedCalls()).toEqual([]);
     expect(gmail.peakSecondUnits()).toBeLessThanOrEqual(GATE_UNITS_PER_SECOND);
     expect(opens).toHaveLength(3);
-    // About 810 units: the half bucket sync may spend, then the rest at a
-    // 4,000-unit budget's refill, around the thread's reads and the insights.
+    // About 2,410 units: what sync may spend of the bucket, then the rest at
+    // a 12,000-unit budget's refill, around the thread's reads.
     expect(recentWindowMs).not.toBeNull();
-    expect(recentWindowMs).toBeLessThanOrEqual(10_000);
+    expect(recentWindowMs).toBeLessThanOrEqual(12_000);
   }, 60_000);
 
   it("keeps the backfill moving while someone opens threads at nearly the bucket's refill rate", async () => {
@@ -601,7 +636,7 @@ describe("Gmail quota on a first load", () => {
     // least half of the little the reader leaves. A backfill batch that
     // needs a nearly full bucket got a tenth of it.
     const spareUnitsPerSecond =
-      BUCKET_UNITS_PER_SECOND - 40_000 / OPEN_EVERY_MS;
+      BUCKET_UNITS_PER_SECOND - (THREAD_OPEN_UNITS * 1000) / OPEN_EVERY_MS;
     const backfill =
       gmail.unitsByCaller(start + 60_000, start + STEADY_MS)[
         "mail/v1/enumeration"
@@ -675,7 +710,7 @@ describe("Gmail quota on a first load", () => {
 });
 
 /**
- * A fake Gmail that charges documented costs, wired under the real Gmail
+ * A fake Gmail that charges modelled costs, wired under the real Gmail
  * client and provider, and the actors a replay is built from: a route that
  * records rate-limit mode, an SWR-style retry, and a tab's engine scope.
  */
@@ -744,7 +779,11 @@ async function startReplay(
   const running = () => Date.now() - start < endMs;
 
   // Each tab or device runs its own engine with its own local store.
-  const engineScope = async (tab: string, scopeId: string) => {
+  const engineScope = async (
+    tab: string,
+    scopeId: string,
+    { initial }: { initial?: boolean } = {},
+  ) => {
     const source = createEmailProviderMailboxSource({
       provider,
       accountId: ACCOUNT,
@@ -763,6 +802,7 @@ async function startReplay(
           ...context,
           scope: { id: scopeId, kind: "account", folderId: null },
           afterMs: null,
+          initial,
         }),
       );
       if (begun.ok && begun.value.status === "ok")

@@ -45,6 +45,7 @@ import {
   Users2Icon,
 } from "lucide-react";
 import type { MailboxLabelCount } from "@/utils/mail-engine/label-count-targets";
+import { useMailEngineStarting } from "@/utils/mail-engine/MailEngineHost";
 import { Tooltip as ShortcutTooltip } from "@/components/Tooltip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1061,6 +1062,7 @@ function NavRow({
   collapsed?: boolean;
 }) {
   const pendingNavigation = useContext(PendingNavigationContext);
+  const engineStarting = useMailEngineStarting();
   // aria-current stays with the open page; only the highlight runs ahead.
   const highlighted = isSidebarRowActive({
     active,
@@ -1108,9 +1110,14 @@ function NavRow({
         data-highlighted={highlighted || undefined}
         className={className}
         // Views of the open mail screen change on the client, so fetching
-        // them from the server ahead of time would be wasted.
+        // them from the server ahead of time would be wasted. Other pages
+        // wait until the mail engine has started, so they don't compete with
+        // its first load.
         prefetch={
-          prefetch ?? (parseMailPath(href.split("?")[0]) ? false : undefined)
+          prefetch ??
+          (engineStarting || parseMailPath(href.split("?")[0])
+            ? false
+            : undefined)
         }
         onPointerEnter={onIntent}
         onFocus={onIntent}

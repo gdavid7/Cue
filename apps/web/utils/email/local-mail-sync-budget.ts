@@ -9,20 +9,21 @@ import {
 
 // Conservative local-mail envelopes reserve provider capacity for existing
 // automation and interactive operations. They are not total application quotas.
-// Gmail allows 6,000 units per user per minute; a full 50-message sync page
-// costs 1,005 units, so one page must fit in a single reservation and the
-// backfill half of the account envelope.
-// https://developers.google.com/workspace/gmail/api/reference/quota
+// Cue's Gmail project allows 15,000 units per user per minute, and the
+// account envelope claims two thirds of that. The costs below are Cue's own
+// conservative units, a full read priced like a whole message: a 50-message
+// sync page of them costs 3,005, so one page must fit in a single reservation
+// and the backfill half of the account envelope.
 // https://learn.microsoft.com/en-us/graph/throttling-limits#outlook-service-limits
 const policies = {
-  google: { account: 4000, app: 120_000, maximumCost: 1100 },
+  google: { account: 10_000, app: 360_000, maximumCost: 3100 },
   microsoft: { account: 60, app: 600, maximumCost: 1 },
 };
 export const gmailMailSyncCosts = {
   profile: 1,
   list: 5,
   history: 2,
-  message: 20,
+  message: 60,
 } as const;
 
 type Input = {

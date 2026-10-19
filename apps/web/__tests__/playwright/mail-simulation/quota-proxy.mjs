@@ -2,6 +2,8 @@ import { createServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 
 // Published May 2026 schedule. Existing projects may have different quotas.
+// A message, draft or thread read costs three times its listed cost in full
+// (the default) or raw format; see `gmailCost`.
 // https://developers.google.com/workspace/gmail/api/reference/quota
 export const QUOTA_COSTS = {
   "threads.list": 10,
@@ -69,6 +71,16 @@ export function gmailMethod(method, path) {
   return `${resource}.${operation}`;
 }
 
+const FORMATTED_READS = new Set(["messages.get", "drafts.get", "threads.get"]);
+
+/** What Gmail charges one call, from its method name and path. */
+export function gmailCost(method, path) {
+  const cost = QUOTA_COSTS[method];
+  if (!FORMATTED_READS.has(method)) return cost;
+  const format = new URL(path, "http://localhost").searchParams.get("format");
+  return format === "metadata" || format === "minimal" ? cost : cost * 3;
+}
+
 export function createQuotaLedger(options = {}, now = Date.now) {
   const config = {
     userUnits: 6000,
@@ -85,10 +97,9 @@ export function createQuotaLedger(options = {}, now = Date.now) {
   return {
     config,
     events,
-    admit(method, user = "mailbox") {
+    admit(method, user = "mailbox", cost = QUOTA_COSTS[method]) {
       const time = now();
       usage = usage.filter((entry) => entry.time > time - config.windowMs);
-      const cost = QUOTA_COSTS[method];
       if (cost === undefined)
         throw new Error(`Unmodelled Gmail method: ${method}`);
       const userUsage = usage
@@ -225,7 +236,9 @@ export async function createQuotaProxy({ upstream, port = 0, options }) {
     target.pathname = requested.pathname;
     target.search = requested.search;
     const name = gmailMethod(method, path);
-    const admission = name ? ledger.admit(name) : null;
+    const admission = name
+      ? ledger.admit(name, "mailbox", gmailCost(name, path))
+      : null;
     const event = admission?.event;
     if (event?.reason) {
       const seconds = Math.max(1, Math.ceil(event.retryAfterMs / 1000));

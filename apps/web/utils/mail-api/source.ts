@@ -70,10 +70,13 @@ const GMAIL_FIRST_BACKFILL_WINDOW_MS = 30 * DAY_MS;
 // The two scans start at different times, so the backfill reaches into the
 // recent window to leave no gap at the boundary between them.
 const GMAIL_HISTORY_OVERLAP_MS = DAY_MS;
-const GMAIL_THREAD_COST = 40;
-// The first page of a scan is what the inbox shows first; a smaller one fills
-// it sooner and spends less of the minute's Gmail quota before it does.
-const GMAIL_FIRST_PAGE_SIZE = 25;
+// A conversation read whole, in the sync envelope's units.
+const GMAIL_THREAD_COST = 120;
+// The first page of a scan is what the inbox shows first. It reads whole
+// messages, so it creates no hydration that would hold the engine's command
+// loop, and a first screen of them comes back on its own so the inbox fills
+// sooner; later pages read 50.
+const GMAIL_FIRST_PAGE_SIZE = 12;
 
 const SUPPORTED_CHANGES = [
   "archive",
@@ -241,11 +244,13 @@ export function createEmailProviderMailboxSource(input: {
             }),
           });
         // The backfill only fills in older mail, so it yields to everything
-        // else. The primary scan fills the inbox the user is waiting on, and
-        // after a sign-in the screen waits on its very first page.
-        let priority: GmailQuotaPriority = "sync";
-        if (isBackfill) priority = "background";
-        else if (token.initial && !token.pageToken) priority = "interactive";
+        // else. The primary scan fills the inbox the user is waiting on, its
+        // first page after a sign-in included: that page is sync too, so it
+        // never takes the in-flight slots or the share of the second kept
+        // for what a person opens meanwhile. It goes first all the same, as
+        // the first sync's first call, with background held off until the
+        // scan ends and a full bucket that covers it above sync's floor.
+        const priority: GmailQuotaPriority = isBackfill ? "background" : "sync";
         const syncPage = isGmail
           ? await runWithGmailQuota({ priority }, () =>
               withGmailSyncBudget(

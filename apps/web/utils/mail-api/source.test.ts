@@ -943,9 +943,8 @@ describe("createEmailProviderMailboxSource", () => {
       page: "{}",
       pageSize: 50,
     });
-    // A scan's first Gmail page is smaller so the inbox fills sooner.
     expect(getMessagesWithPagination).toHaveBeenCalledWith({
-      maxResults: 25,
+      maxResults: 12,
       pageToken: undefined,
       includeDrafts: true,
     });
@@ -1480,8 +1479,8 @@ describe("createEmailProviderMailboxSource", () => {
     expect(result).toMatchObject({ status: "paused", reason: "throttled" });
     const [reservation] =
       vi.mocked(withLocalMailSyncBudget).mock.calls[0] ?? [];
-    expect(reservation?.cost).toBe(1005);
-    expect(reservation?.unspentCost?.(deferred)).toBe(1005 - 605);
+    expect(reservation?.cost).toBe(3005);
+    expect(reservation?.unspentCost?.(deferred)).toBe(3005 - 605);
     // Any other failure may have reached Gmail, so nothing is given back.
     expect(reservation?.unspentCost?.(new Error("Gmail failed"))).toBe(0);
   });
@@ -1516,7 +1515,46 @@ describe("createEmailProviderMailboxSource", () => {
     expect(getMessagesWithPagination).not.toHaveBeenCalled();
   });
 
-  it("asks Gmail for a first sync's first page at the priority of someone waiting", async () => {
+  it("reads a scan's first screen whole on its own, then 50 at a time", async () => {
+    const getMessagesWithPagination = vi.fn(async () => ({
+      messages: [],
+      nextPageToken: "next",
+    }));
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination,
+      } as unknown as EmailProvider,
+    });
+    const enumerate = (token: object) =>
+      source.enumerate({
+        session: { accountId: "acc-1", generation: "g1" },
+        requestId: "r1",
+        signal: new AbortController().signal,
+        bootstrapId: "mailbox",
+        page: JSON.stringify(token),
+        pageSize: 50,
+      });
+
+    // Whole messages, so the page leaves no hydration to hold the engine's
+    // commands, and only a screen of them, so the inbox fills sooner.
+    await enumerate({ scopeId: "primary", initial: true });
+    expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
+      maxResults: 12,
+      pageToken: undefined,
+      includeDrafts: true,
+    });
+    await enumerate({ scopeId: "primary", initial: true, pageToken: "next" });
+    expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
+      maxResults: 50,
+      pageToken: "next",
+      includeDrafts: true,
+    });
+  });
+
+  it("asks Gmail for a first sync's first page as sync, leaving a person's share free", async () => {
     const priorities: string[] = [];
     const getMessagesWithPagination = vi.fn(async () => {
       priorities.push(currentGmailQuotaContext().priority);
@@ -1546,7 +1584,7 @@ describe("createEmailProviderMailboxSource", () => {
     await enumerate({ scopeId: "primary" });
     await enumerate({ scopeId: "history", initial: true });
 
-    expect(priorities).toEqual(["interactive", "sync", "sync", "background"]);
+    expect(priorities).toEqual(["sync", "sync", "sync", "background"]);
   });
 
   it("keeps a first backfill whole for a client that can't record a window", async () => {

@@ -9,11 +9,12 @@ import {
 } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ThreadsListResponse } from "@/app/api/threads/route";
+import type { InboxPreview } from "@/utils/threads/inbox-preview.server";
 import {
   InboxPreviewList,
   InboxPreviewSeed,
   useFetchOpenedPreviewThreads,
+  useIngestInboxPreview,
   useRetireInboxPreview,
 } from "./InboxPreviewList";
 
@@ -22,6 +23,7 @@ const navigation = vi.hoisted(() => ({ pathname: "/mail/u/0/inbox" }));
 const engine = vi.hoisted(() => ({ client: null as unknown }));
 const mailClient = vi.hoisted(() => ({
   ensureMessageContent: vi.fn(async () => ({ status: "scheduled" })),
+  ingestMessages: vi.fn(async () => undefined),
 }));
 
 vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
@@ -75,6 +77,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   fetchMock.mockReset();
   mailClient.ensureMessageContent.mockClear();
+  mailClient.ingestMessages.mockClear();
   engine.client = null;
   account.emailAccountId = "acc-1";
   navigation.pathname = "/mail/u/0/inbox";
@@ -189,6 +192,90 @@ describe("InboxPreviewList", () => {
     });
     expect(mailClient.ensureMessageContent).toHaveBeenCalledTimes(1);
   });
+
+  it("hands the rows' messages to the engine once it runs, and only once", async () => {
+    const view = await renderSeeded(previewOf("t1", "t2"));
+    expect(mailClient.ingestMessages).not.toHaveBeenCalled();
+
+    engine.client = mailClient;
+    await act(async () => {
+      view.rerender(seeded(null));
+    });
+    await act(async () => {
+      view.rerender(seeded(null));
+    });
+
+    expect(mailClient.ingestMessages.mock.calls).toEqual([
+      [{ accountId: "acc-1", changes: [patch("t1"), patch("t2")] }],
+    ]);
+  });
+
+  it("hands over rows streamed from the server, whose then() returns nothing", async () => {
+    const loaded = await previewOf("t1");
+    // React's streamed promise: then() takes callbacks and returns nothing.
+    const streamed = {
+      // biome-ignore lint/suspicious/noThenProperty: a streamed promise has a then
+      then(resolve: (value: unknown) => void) {
+        resolve(loaded);
+      },
+    } as unknown as Promise<InboxPreview>;
+    const view = await renderSeeded(streamed);
+
+    engine.client = mailClient;
+    await act(async () => {
+      view.rerender(seeded(null));
+    });
+
+    expect(mailClient.ingestMessages.mock.calls).toEqual([
+      [{ accountId: "acc-1", changes: [patch("t1")] }],
+    ]);
+  });
+
+  it("hands the engine nothing when it shows mail while the rows are still on their way", async () => {
+    let arrive: (preview: InboxPreview) => void = () => undefined;
+    const pending = new Promise<InboxPreview>((resolve) => {
+      arrive = resolve;
+    });
+    engine.client = mailClient;
+    mounts = 0;
+    await act(async () => {
+      render(seeded(pending));
+    });
+
+    fireEvent.click(screen.getByText("engine has mail"));
+    await act(async () => {
+      arrive(await previewOf("t1"));
+      await pending;
+    });
+
+    expect(mailClient.ingestMessages).not.toHaveBeenCalled();
+  });
+
+  it("keeps the mail screen and hands nothing over when the rows fail", async () => {
+    const failed = {
+      // biome-ignore lint/suspicious/noThenProperty: a streamed promise has a then
+      then(_resolve: unknown, reject: (error: Error) => void) {
+        reject(new Error("preview failed"));
+      },
+    } as unknown as Promise<InboxPreview>;
+    engine.client = mailClient;
+    await renderSeeded(failed);
+
+    expect(screen.getByTestId("screen")).toBeTruthy();
+    expect(mailClient.ingestMessages).not.toHaveBeenCalled();
+  });
+
+  it("hands the engine nothing once it has shown this account's mail", async () => {
+    const view = await renderSeeded(previewOf("t1"));
+    fireEvent.click(screen.getByText("engine has mail"));
+
+    engine.client = mailClient;
+    await act(async () => {
+      view.rerender(seeded(null));
+    });
+
+    expect(mailClient.ingestMessages).not.toHaveBeenCalled();
+  });
 });
 
 let mounts = 0;
@@ -200,6 +287,7 @@ function Screen() {
   });
   const retire = useRetireInboxPreview();
   useFetchOpenedPreviewThreads();
+  useIngestInboxPreview();
   return (
     <>
       <span data-testid="screen">{`mounted ${mountedAs}`}</span>
@@ -211,7 +299,7 @@ function Screen() {
   );
 }
 
-function seeded(preview: Promise<ThreadsListResponse | null> | null) {
+function seeded(preview: Promise<InboxPreview | null> | null) {
   return (
     <InboxPreviewSeed emailAccountId="acc-1" preview={preview}>
       <Screen />
@@ -219,7 +307,7 @@ function seeded(preview: Promise<ThreadsListResponse | null> | null) {
   );
 }
 
-async function renderSeeded(preview: Promise<ThreadsListResponse | null>) {
+async function renderSeeded(preview: Promise<InboxPreview | null>) {
   mounts = 0;
   let view: ReturnType<typeof render> | undefined;
   // Suspense resolves inside an async act.
@@ -227,7 +315,7 @@ async function renderSeeded(preview: Promise<ThreadsListResponse | null>) {
     view = render(seeded(preview));
   });
   await act(async () => {
-    await preview.catch(() => undefined);
+    await Promise.resolve(preview).catch(() => undefined);
   });
   if (!view) throw new Error("not rendered");
   return view;
@@ -237,7 +325,35 @@ function previewOf(...ids: string[]) {
   return Promise.resolve({
     threads: ids.map((id) => thread(id)),
     nextPageToken: null,
-  } as unknown as ThreadsListResponse);
+    changes: ids.map((id) => patch(id)),
+  } as unknown as InboxPreview);
+}
+
+function patch(id: string) {
+  return {
+    kind: "message_patch",
+    key: { accountId: "acc-1", messageId: `${id}-m` },
+    reference: {
+      provider: "google",
+      messageId: `${id}-m`,
+      conversationId: id,
+      version: "7",
+    },
+    fields: {
+      subject: id,
+      preview: "",
+      from: "ada@example.com",
+      to: ["me@example.com"],
+      cc: [],
+      receivedAtMs: 1,
+      read: true,
+      starred: false,
+      folderId: null,
+      labelIds: ["INBOX"],
+      categoryIds: [],
+      roles: ["inbox"],
+    },
+  };
 }
 
 function thread(id: string) {

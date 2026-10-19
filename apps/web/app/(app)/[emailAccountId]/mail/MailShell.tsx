@@ -163,6 +163,7 @@ import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-accoun
 import {
   InboxPreviewList,
   useFetchOpenedPreviewThreads,
+  useIngestInboxPreview,
   useRetireInboxPreview,
 } from "@/app/(app)/[emailAccountId]/mail/InboxPreviewList";
 import { markLocalMailboxSynced } from "@/utils/mail-engine/local-mailbox-cookie";
@@ -729,6 +730,7 @@ export function MailShell() {
     markFirstMailListShown();
   }, [hasLocalMail, emailAccountId, retireInboxPreview]);
   useFetchOpenedPreviewThreads();
+  useIngestInboxPreview();
   const listPlaceholderMessage = getListPlaceholderMessage({
     engineStarting: !client,
     isAllAccounts,

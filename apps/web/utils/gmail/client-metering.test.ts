@@ -21,7 +21,8 @@ vi.mock("@/utils/redis/email-provider-rate-limit", () => ({
 vi.mock("@/utils/auth/save-tokens", () => ({ saveTokens: vi.fn() }));
 
 const logger = createScopedLogger("gmail-client-metering-test");
-const MESSAGE_GET_UNITS = 20;
+// A message read with no format is a full one.
+const MESSAGE_GET_UNITS = 60;
 const QUOTA_REFUSAL = {
   error: {
     code: 403,

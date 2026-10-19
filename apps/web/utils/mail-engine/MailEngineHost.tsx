@@ -73,11 +73,16 @@ type MailEngineRuntimeStatus = {
   unavailable: boolean;
   /** A corrupt local mailbox is being rebuilt before the engine can start. */
   rebuilding: boolean;
+  /** This page is starting the engine and has no client from it yet. */
+  starting: boolean;
   requestBrowserEngine: () => void;
   retryStart: () => void;
 };
 
 type MailEngineInspectTransport = "browser" | "desktop-ipc";
+
+// How long other pages' prefetches wait on the engine's first load at most.
+const ENGINE_START_PREFETCH_HOLD_MS = 10_000;
 
 // On a page that starts the engine, its worker and SQLite load while the page
 // hydrates instead of after; the worker opens nothing until the engine starts.
@@ -98,9 +103,19 @@ const MailEngineRuntimeStatusContext = createContext<MailEngineRuntimeStatus>({
   mounted: false,
   unavailable: false,
   rebuilding: false,
+  starting: false,
   requestBrowserEngine: () => {},
   retryStart: () => {},
 });
+
+/**
+ * Whether this page is still starting its mail engine, whose first load (its
+ * worker, SQLite and first sync) everything else the page fetches competes
+ * with.
+ */
+export function useMailEngineStarting() {
+  return useContext(MailEngineRuntimeStatusContext).starting;
+}
 
 export function useMailEngineDemand() {
   const { requestBrowserEngine } = useContext(MailEngineRuntimeStatusContext);
@@ -215,6 +230,9 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
   const [unavailable, setUnavailable] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [startAttempt, setStartAttempt] = useState(0);
+  // A start that fails or waits on another tab's lock must not keep the
+  // page's other prefetches off for good.
+  const [startOverdue, setStartOverdue] = useState(false);
   const retryStart = useCallback(
     () => setStartAttempt((attempt) => attempt + 1),
     [],
@@ -544,6 +562,16 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("online", resumeDeferred);
   }, [client, emailAccountId]);
 
+  useEffect(() => {
+    setStartOverdue(false);
+    if (client) return;
+    const timer = setTimeout(
+      () => setStartOverdue(true),
+      ENGINE_START_PREFETCH_HOLD_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [client]);
+
   return (
     <MailEngineRuntimeStatusContext.Provider
       value={{
@@ -551,6 +579,11 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
         mounted: true,
         unavailable,
         rebuilding,
+        starting:
+          Boolean(emailAccountId && enabled && mailProvider) &&
+          !client &&
+          !unavailable &&
+          !startOverdue,
         requestBrowserEngine,
         retryStart,
       }}

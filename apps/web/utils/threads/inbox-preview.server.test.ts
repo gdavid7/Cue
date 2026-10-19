@@ -95,6 +95,34 @@ describe("loadInboxPreview", () => {
     ]);
   });
 
+  it("carries the rows' messages as the mail engine records a metadata read", async () => {
+    passPlansThrough();
+    const read = [message("m2", "t2", 2000), message("m1", "t1", 1000)];
+    mocks.getMessagesWithPagination.mockResolvedValue({ messages: read });
+
+    const preview = await loadInboxPreview({
+      emailAccountId: "acc-1",
+      provider: "google",
+    });
+
+    // The engine shows these as its own rows, ready to open and triage,
+    // before its first sync reads them again.
+    const changes = read.map((entry) =>
+      parsedMessagePatch("acc-1", "google", entry as unknown as ParsedMessage),
+    );
+    expect(preview?.changes).toEqual(
+      changes.map((change) => ({
+        ...change,
+        // A metadata read can't tell, so it leaves the stored flag alone.
+        fields: expect.not.objectContaining({ hasAttachments: false }),
+      })),
+    );
+    expect(preview?.changes?.[0]).toMatchObject({
+      kind: "message_patch",
+      key: { accountId: "acc-1", messageId: "m2" },
+    });
+  });
+
   it("keys each row by the id the mail engine gives its conversation, for Outlook too", async () => {
     passPlansThrough();
     // Outlook's conversationId, as the message parser sets it.

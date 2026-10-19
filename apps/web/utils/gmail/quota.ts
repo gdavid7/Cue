@@ -17,15 +17,18 @@ import { sleep } from "@/utils/sleep";
 // https://developers.google.com/workspace/gmail/api/reference/quota
 export const GMAIL_USER_UNITS_PER_MINUTE = 15_000;
 
-// Google may enforce less than that in practice, and what it refuses follows
-// an account's own units over the last minute or two rather than its busiest
-// second. So each account has its own per-minute budget, which the bucket
-// refills at. It starts at 80% of a third of the limit; a refusal for volume
-// cuts it to 85% of what the gate let through in the minute before, never
-// below `floor`; each ten minutes without one raise it a tenth, up to 80% of
-// the limit.
+// What Google refuses follows an account's own units over the last minute or
+// two rather than its busiest second. So each account has its own per-minute
+// budget, which the bucket refills at. It starts at 80% of the limit, about
+// what Gmail counted when the gate started at a third: the gate then priced
+// every read at 20 units while Gmail charged a full one 60. A full bucket and
+// a minute of refill stay under the limit. A refusal for volume cuts it to
+// 85% of what the gate let through in the minute before, never below
+// `floor`; each ten minutes without one raise it a tenth, up to 80% of the
+// limit again.
+const BUCKET_CAPACITY = 2000;
 const BUDGET = {
-  start: Math.round((GMAIL_USER_UNITS_PER_MINUTE * 0.8) / 3),
+  start: GMAIL_USER_UNITS_PER_MINUTE * 0.8,
   max: GMAIL_USER_UNITS_PER_MINUTE * 0.8,
   floor: 1200,
   cutFraction: 0.85,
@@ -33,41 +36,43 @@ const BUDGET = {
   raiseEveryMs: 10 * 60_000,
 };
 const TRAILING_WINDOW_MS = 60_000;
-// A first inbox page (about 505 units) fits the bucket at once. What each
-// priority must leave in the bucket after its debit: sync leaves half of it
-// for a person, so a first page during a first sync needs little refill;
-// background leaves more, so it only runs on capacity nobody else is using.
-const BUCKET_CAPACITY = 800;
+// What each priority must leave in the bucket after its debit: sync leaves
+// a person a page of the inbox or several thread opens, and still finds a
+// first sync's first page (a screen of whole messages, about 725 units) in a
+// full bucket; background leaves more, so it only runs on capacity nobody
+// else is using.
 const FLOOR: Record<GmailQuotaPriority, number> = {
   interactive: 0,
-  sync: 400,
-  background: 600,
+  sync: 800,
+  background: 1400,
 };
-// Any one second admits at most `PACE_CAP` units in all, 80% of the
-// limit's minute spread evenly. Each priority may fill the
-// second up to its own level: sync leaves interactive calls room, and
-// background only runs below sync's level, so it never slows the sync that
-// fills the inbox.
+// Any one second admits at most `PACE_CAP` units in all, a short burst of two
+// to three times the limit's minute spread evenly, which Gmail's moving
+// average allows; the bucket, not this, bounds what an account spends over
+// time.
+// Each priority may fill the second up to its own level: sync leaves
+// interactive calls room, and background only runs below sync's level, so
+// it never slows the sync that fills the inbox.
 const PACE_WINDOW_MS = 1000;
 const PACE_CAP: Record<GmailQuotaPriority, number> = {
-  interactive: 200,
-  sync: 160,
-  background: 80,
+  interactive: 700,
+  sync: 500,
+  background: 250,
 };
-// For two seconds from when a person's large request arrives, such as a first
-// inbox page or an assistant search, sync drops to 40 units a second and
-// background waits, so a first page of 25 messages (about 505 units) takes the
-// two and a half seconds the cap allows. It starts on arrival, not admission:
-// otherwise sync refills each second before a waiting batch fits. Opening a
-// thread is a few small reads and starts no episode: the sync that fills that
-// thread's older messages keeps its share. A new episode starts at most every three seconds, so someone
-// working all the time still leaves sync and background one second in three.
-const INTERACTIVE_DEMAND_MIN_UNITS = 100;
+// For two seconds from when a person's large request arrives, such as an
+// assistant search or a page of the inbox, sync drops to a quarter of its
+// pace and background waits. It starts on arrival, not admission: otherwise
+// sync refills each second before a waiting batch fits. Opening a thread is
+// a few reads (a thread in full is 120 units) and starts no episode: the sync
+// that fills that thread's older messages keeps its share. A new episode
+// starts at most every three seconds, so someone working all the time still
+// leaves sync and background one second in three.
+const INTERACTIVE_DEMAND_MIN_UNITS = 300;
 const INTERACTIVE_DEMAND_MS = 2000;
 const INTERACTIVE_DEMAND_EVERY_MS = 3000;
 // What sync and background get between two episodes.
 const DEMAND_GAP_MS = INTERACTIVE_DEMAND_EVERY_MS - INTERACTIVE_DEMAND_MS;
-const PACE_YIELD_CAP = { sync: 40, background: 0 };
+const PACE_YIELD_CAP = { sync: 120, background: 0 };
 const MAX_WAIT_MS: Record<GmailQuotaPriority, number> = {
   interactive: 10_000,
   sync: 15_000,
@@ -119,8 +124,8 @@ const SUMMARY_LOOKBACK_MINUTES = 4;
 //   however late it is spent. The one slack is across minutes: units
 //   reserved just before a minute can be spent in it. All live reservations
 //   fit in half the largest per-second cap, so a minute can carry at most
-//   100 units more than the gate debited for it (0.7% of Gmail's 15,000
-//   units per user, under 1% of the highest budget).
+//   350 units more than the gate debited for it (2.3% of Gmail's 15,000
+//   units per user, about 3% of the highest budget).
 // - A call whose lane was just told to wait, for a call costing no more, takes
 //   that answer for up to `SHARED_WAIT_MS` instead of asking again. This can
 //   only make a call wait, never admit it.
@@ -905,13 +910,19 @@ export function resetGmailQuotaInstanceState() {
 }
 
 /**
- * The documented quota cost of one Gmail REST call, from its HTTP method and
- * URL. Unknown calls are charged like a write so they are never undercounted.
+ * What the gate charges one Gmail REST call, from its HTTP method and URL,
+ * whose `format` query parameter decides what a read costs. These are Cue's
+ * own conservative units, modelled on Google's published costs: a full, raw
+ * or html read at three times a metadata or minimal one. Unknown calls are
+ * charged like a write so they are never undercounted.
  */
 export function gmailRequestCost(method: string, url: string | URL): number {
-  const pathname =
-    typeof url === "string" ? new URL(url, "https://x").pathname : url.pathname;
-  const match = pathname.match(/\/gmail\/v1\/users\/[^/]+(\/.*)?$/);
+  const parsed = typeof url === "string" ? new URL(url, "https://x") : url;
+  const match = parsed.pathname.match(/\/gmail\/v1\/users\/[^/]+(\/.*)?$/);
+  // Gmail reads a message, thread or draft in full when no format is given;
+  // a full read is charged three times a lighter one.
+  const format = parsed.searchParams.get("format")?.toLowerCase() ?? "full";
+  const fullRead = format === "full" || format === "raw" || format === "html";
   const parts = (match?.[1] ?? "").split("/").filter(Boolean);
   const verb = method.toUpperCase();
   const [resource, id, action] = parts;
@@ -939,18 +950,20 @@ export function gmailRequestCost(method: string, url: string | URL): number {
     if (action === "attachments") return 20;
     if (action === "modify" || action === "untrash") return 5;
     if (action === "trash") return 20;
-    return verb === "DELETE" ? 10 : 20;
+    if (verb === "DELETE") return 10;
+    return verb === "GET" && fullRead ? 60 : 20;
   }
   if (resource === "threads") {
     if (!id) return 10;
     if (action === "modify" || action === "untrash") return 10;
     if (action === "trash") return 20;
-    return verb === "DELETE" ? 20 : 40;
+    if (verb === "DELETE") return 20;
+    return verb === "GET" && fullRead ? 120 : 40;
   }
   if (resource === "drafts") {
     if (!id) return verb === "GET" ? 5 : 10;
     if (id === "send") return 100;
-    if (verb === "GET") return 20;
+    if (verb === "GET") return fullRead ? 60 : 20;
     if (verb === "DELETE") return 10;
     return 15;
   }
