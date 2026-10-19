@@ -15,6 +15,7 @@ import { CueStrip } from "@/app/(app)/[emailAccountId]/mail/CueStrip";
 import type { ThreadMessage } from "@/components/email-list/types";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { onSWRErrorRetry } from "@/utils/swr";
+import { resetBrowserCacheBlocksForTesting } from "@/utils/browser-cache";
 
 const mocks = vi.hoisted(() => ({
   requests: [] as { url: string; emailAccountId: string | undefined }[],
@@ -62,6 +63,7 @@ describe("CueStrip", () => {
     mocks.insightGate = null;
     mocks.aiAccess = true;
     window.localStorage.clear();
+    resetBrowserCacheBlocksForTesting();
   });
   afterEach(cleanup);
 
@@ -500,7 +502,18 @@ async function fetcher(key: string | [string, string]) {
     if (byMessage && mocks.insightGate) await mocks.insightGate;
     const insight = byMessage ? { action: byMessage } : mocks.insight;
     return {
-      insights: insight ? { t1: { insight, meeting: null, reply: null } } : {},
+      insights: insight
+        ? {
+            t1: {
+              messageId: asked,
+              insight,
+              people: [],
+              withAi: true,
+            },
+          }
+        : {},
+      events: [],
+      draftRepliesEnabled: true,
     };
   }
   if (url.startsWith("/api/user/save-destinations")) return { calendar: false };

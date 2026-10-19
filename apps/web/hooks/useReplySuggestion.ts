@@ -13,23 +13,36 @@ export const AUTO_WEB_LOOKUP = true;
 export function useReplySuggestion({
   threadId,
   emailAccountId,
+  messageId,
   enabled,
 }: {
   threadId: string | null | undefined;
   emailAccountId?: string | null;
+  /** The newest message shown, which keys what this browser keeps. */
+  messageId?: string;
   enabled: boolean;
 }) {
-  const plain = useSuggestedReply({ threadId, emailAccountId, enabled });
+  const plain = useSuggestedReply({
+    threadId,
+    emailAccountId,
+    messageId,
+    enabled,
+  });
+  const abstention =
+    plain.data?.suggestion?.status === "insufficient"
+      ? plain.data.suggestion
+      : undefined;
   const needsWeb = Boolean(
-    AUTO_WEB_LOOKUP &&
-      plain.data?.canSearchWeb &&
-      plain.data.suggestion?.status === "insufficient",
+    AUTO_WEB_LOOKUP && plain.data?.canSearchWeb && abstention,
   );
   const web = useSuggestedReply({
     threadId,
     emailAccountId,
+    messageId,
     enabled: enabled && needsWeb,
     searchWeb: true,
+    // The abstention's own query, so the web pass skips the plain answer.
+    webQuery: abstention?.webQuery || undefined,
   });
   // A failed web pass leaves the answer from mail and calendar standing.
   const result = needsWeb && !web.error ? web : plain;

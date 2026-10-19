@@ -114,16 +114,19 @@ export function useReaderReplySuggestion({
   const { phase, suggestion } = useReplySuggestion({
     threadId,
     emailAccountId,
+    messageId: latestId,
     enabled: enabled && run,
   });
 
-  // Reopened with a draft: the suggestion Cue made for this message, if any,
-  // so a draft that is still Cue's text keeps saying so.
+  // Reopened with a draft: the suggestion this browser kept for this message,
+  // if any, so a draft that is still Cue's text keeps saying so.
   const { data: saved } = useSuggestedReply({
     threadId,
     emailAccountId,
-    enabled: enabled && !run && !latestIsFromUser && hasDraft,
-    cachedFor: latestId,
+    messageId: latestId,
+    enabled:
+      enabled && !run && !latestIsFromUser && hasDraft && draftReplies.enabled,
+    keptOnly: true,
   });
   const latestSuggestion = suggestion ?? saved?.suggestion;
   const verified =

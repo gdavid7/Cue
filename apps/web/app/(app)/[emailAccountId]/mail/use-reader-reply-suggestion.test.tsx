@@ -93,18 +93,20 @@ describe("useReaderReplySuggestion", () => {
 
   // The draft Cue saved keeps its credit when the conversation is reopened.
   it("brings back the suggestion behind a saved draft without writing a new one", () => {
-    mocks.useSuggestedReply.mockImplementation(({ enabled, cachedFor }) => ({
-      data:
-        enabled && cachedFor === "ask"
-          ? {
-              suggestion: {
-                status: "suggested",
-                reply: "See you Thursday.",
-                citations: [],
-              },
-            }
-          : undefined,
-    }));
+    mocks.useSuggestedReply.mockImplementation(
+      ({ enabled, keptOnly, messageId }) => ({
+        data:
+          enabled && keptOnly && messageId === "ask"
+            ? {
+                suggestion: {
+                  status: "suggested",
+                  reply: "See you Thursday.",
+                  citations: [],
+                },
+              }
+            : undefined,
+      }),
+    );
 
     const { result } = renderSuggestion([
       incoming("ask", ["INBOX", "Label_to_reply"]),

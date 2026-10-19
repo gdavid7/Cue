@@ -13,7 +13,6 @@ vi.mock("@/utils/redis", () => ({
 vi.mock("@/utils/exa/search", () => ({ isExaSearchEnabled: () => true }));
 vi.mock("@/utils/thread-context/suggest-reply", () => ({
   getSuggestedReplySettings: async () => ({ webLookupEnabled: true }),
-  getCachedSuggestedReply: async () => null,
   suggestReply: mocks.suggestReply,
 }));
 vi.mock("@/utils/middleware", async () => {
@@ -44,6 +43,20 @@ describe("GET /api/user/suggested-reply", () => {
       expect.any(String),
       ["rate-limit:suggested-reply-web:user-1"],
       ["300"],
+    );
+  });
+
+  // RD-3: the browser kept the abstention, so the web pass gets its query.
+  it("hands the web pass the query the browser kept", async () => {
+    mocks.rateLimitCount.mockResolvedValue(1);
+
+    await get("threadId=t1&web=1&webQuery=venue%20opening%20hours");
+
+    expect(mocks.suggestReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        searchWeb: true,
+        webQuery: "venue opening hours",
+      }),
     );
   });
 

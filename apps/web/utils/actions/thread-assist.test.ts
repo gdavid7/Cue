@@ -13,13 +13,11 @@ vi.mock("@/utils/auth", () => ({
 
 const mocks = vi.hoisted(() => ({
   createEmailProvider: vi.fn(),
-  getCachedSuggestedReply: vi.fn(),
 }));
 vi.mock("@/utils/email/provider", () => ({
   createEmailProvider: mocks.createEmailProvider,
 }));
 vi.mock("@/utils/thread-context/suggest-reply", () => ({
-  getCachedSuggestedReply: mocks.getCachedSuggestedReply,
   getSuggestedReplySettings: async () => SUGGESTION_SETTINGS,
 }));
 vi.mock("@/utils/user/own-addresses", () => ({
@@ -44,11 +42,6 @@ describe("saveSuggestedReplyAction", () => {
     );
     mailbox = createMailbox();
     mocks.createEmailProvider.mockResolvedValue(mailbox.provider);
-    mocks.getCachedSuggestedReply.mockResolvedValue({
-      status: "suggested",
-      reply: "Wednesday works.",
-      citations: [],
-    });
   });
 
   // D5: the user's other connected mailbox is never copied on the reply.
@@ -79,20 +72,14 @@ describe("saveSuggestedReplyAction", () => {
     expect(mailbox.drafts[0].html).not.toContain("Wednesday works.");
   });
 
+  // RD-3: the browser kept the suggestion, so it sends Cue's original text.
   it("remembers the suggestion as Cue wrote it, not as the user edited it", async () => {
     const result = await saveSuggestedReplyAction(EMAIL_ACCOUNT_ID, {
       threadId: "thread-1",
       content: "Wednesday at 3 works.",
+      suggested: "Wednesday works.",
     });
 
-    expect(mocks.getCachedSuggestedReply).toHaveBeenCalledWith(
-      {
-        emailAccountId: EMAIL_ACCOUNT_ID,
-        threadId: "thread-1",
-        messageId: "m1",
-      },
-      SUGGESTION_SETTINGS,
-    );
     expect(prisma.suggestedReplyDraft.upsert).toHaveBeenCalledWith({
       where: {
         emailAccountId_draftId: {
@@ -112,8 +99,6 @@ describe("saveSuggestedReplyAction", () => {
   });
 
   it("saves the draft without remembering it when the suggestion is gone", async () => {
-    mocks.getCachedSuggestedReply.mockResolvedValue(null);
-
     const result = await saveSuggestedReplyAction(EMAIL_ACCOUNT_ID, {
       threadId: "thread-1",
       content: "Wednesday at 3 works.",

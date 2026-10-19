@@ -4,9 +4,29 @@ import { createElement, type ReactNode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetBrowserCacheBlocksForTesting } from "@/utils/browser-cache";
+import {
+  keptSuggestions,
+  suggestionKey,
+} from "@/utils/thread-context/suggested-reply-store";
 import { getInboxInsightRequests, useInboxInsights } from "./useInboxInsights";
 
 vi.mock("@/providers/EmailAccountProvider", () => ({ useAccount: vi.fn() }));
+
+const INSIGHT = {
+  action: "reply",
+  task: "Confirm the time",
+  date: null,
+  dateRole: null,
+  fact: null,
+  factLabel: null,
+};
+const SHOWN = { insight: INSIGHT, meeting: null, reply: null };
+
+beforeEach(() => {
+  window.localStorage.clear();
+  resetBrowserCacheBlocksForTesting();
+});
 
 describe("getInboxInsightRequests", () => {
   it("asks each account about its own rows, even when thread ids collide", () => {
@@ -39,9 +59,7 @@ describe("getInboxInsightRequests", () => {
 
 describe("useInboxInsights", () => {
   it("asks for nothing while paused, then asks once for the rows on screen", async () => {
-    const fetcher = vi.fn(async () => ({
-      insights: { t1: { insight: null, meeting: null, reply: "ready" } },
-    }));
+    const fetcher = vi.fn(async () => fromServer({ t1: extraction("t1") }));
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(
         SWRConfig,
@@ -59,9 +77,7 @@ describe("useInboxInsights", () => {
 
     rerender({ enabled: true });
     await waitFor(() =>
-      expect(result.current.data).toEqual({
-        "work:t1": { insight: null, meeting: null, reply: "ready" },
-      }),
+      expect(result.current.data).toEqual({ "work:t1": SHOWN }),
     );
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
@@ -71,9 +87,7 @@ describe("useInboxInsights", () => {
       if (url.includes("t2")) {
         throw Object.assign(new Error("Rate limited"), { status: 429 });
       }
-      return {
-        insights: { t1: { insight: null, meeting: null, reply: "ready" } },
-      };
+      return fromServer({ t1: extraction("t1") });
     });
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(
@@ -113,10 +127,90 @@ describe("useInboxInsights", () => {
   });
 });
 
+// RD-3: the server keeps none of this, so the browser does.
+describe("useInboxInsights and what this browser keeps", () => {
+  it("keeps what it read from each email and names it to the server next time", async () => {
+    const fetcher = vi.fn(async ([url]: [string, string]) =>
+      url.includes("known=")
+        ? fromServer({})
+        : fromServer({ t1: extraction("t1") }),
+    );
+    const items = [item({ emailAccountId: "work", threadId: "t1" })];
+
+    const first = renderHook(() => useInboxInsights(items), {
+      wrapper: wrapperFor(fetcher),
+    });
+    await waitFor(() =>
+      expect(first.result.current.data).toEqual({ "work:t1": SHOWN }),
+    );
+    first.unmount();
+    const second = renderHook(() => useInboxInsights(items), {
+      wrapper: wrapperFor(fetcher),
+    });
+
+    await waitFor(() =>
+      expect(second.result.current.data).toEqual({ "work:t1": SHOWN }),
+    );
+    expect(fetcher.mock.calls.at(-1)?.[0][0]).toContain("known=t1-latest");
+  });
+
+  it("matches the meeting with someone on the email in this browser", async () => {
+    const fetcher = vi.fn(async () => ({
+      ...fromServer({
+        t1: {
+          ...extraction("t1"),
+          people: [{ email: "sarah@acme.com", name: "Sarah Chen" }],
+        },
+      }),
+      events: [
+        {
+          title: "Renewal call",
+          at: "2026-10-20T17:00:00.000Z",
+          attendees: ["sarah@acme.com"],
+        },
+      ],
+    }));
+
+    const { result } = renderHook(
+      () =>
+        useInboxInsights([item({ emailAccountId: "work", threadId: "t1" })]),
+      { wrapper: wrapperFor(fetcher) },
+    );
+
+    await waitFor(() =>
+      expect(result.current.data?.["work:t1"]?.meeting).toMatchObject({
+        title: "Renewal call",
+        with: "Sarah Chen",
+      }),
+    );
+  });
+
+  it("says a draft is ready from the reply this browser kept", async () => {
+    keptSuggestions.set(
+      "work",
+      suggestionKey({ threadId: "t1", messageId: "t1-latest", web: false }),
+      {
+        suggestion: { status: "suggested", reply: "Yes.", citations: [] },
+        canSearchWeb: false,
+      },
+    );
+    const fetcher = vi.fn(async () => fromServer({ t1: extraction("t1") }));
+
+    const { result } = renderHook(
+      () =>
+        useInboxInsights([item({ emailAccountId: "work", threadId: "t1" })]),
+      { wrapper: wrapperFor(fetcher) },
+    );
+
+    await waitFor(() =>
+      expect(result.current.data?.["work:t1"]?.reply).toBe("ready"),
+    );
+  });
+});
+
 describe("useInboxInsights with one account busy in All inboxes", () => {
-  const READY = { insight: null, meeting: null, reply: "ready" };
-  const BOTH = { "work:t1": READY, "personal:t1": READY };
-  const WORK_ONLY = { "work:t1": READY };
+  const BOTH = { "work:t1": SHOWN, "personal:t1": SHOWN };
+  const WORK_ONLY = { "work:t1": SHOWN };
   const items = [
     item({ emailAccountId: "work", threadId: "t1" }),
     item({ emailAccountId: "personal", threadId: "t1" }),
@@ -208,7 +302,7 @@ describe("useInboxInsights with one account busy in All inboxes", () => {
           throw Object.assign(new Error("Gmail is busy"), error);
         }
       }
-      return { insights: { t1: READY } };
+      return fromServer({ t1: extraction("t1") });
     });
     return { fetcher, personalRequests: () => personal };
   }
@@ -244,4 +338,17 @@ function item({
     threadId,
     messageId: `${threadId}-latest`,
   };
+}
+
+function extraction(threadId: string) {
+  return {
+    messageId: `${threadId}-latest`,
+    insight: INSIGHT,
+    people: [],
+    withAi: true,
+  };
+}
+
+function fromServer(insights: Record<string, ReturnType<typeof extraction>>) {
+  return { insights, events: [], draftRepliesEnabled: true };
 }

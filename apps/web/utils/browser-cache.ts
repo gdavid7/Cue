@@ -14,6 +14,8 @@ type Stored<T> = Record<string, { savedAt: number; value: T }>;
 // state ends with the page, which is the life the block needs.
 let blocked = false;
 const blockedAccountIds = new Set<string>();
+// Parsed once per page: a page of inbox rows reads a cache many times.
+const parsed = new Map<string, Stored<unknown>>();
 
 export function createBrowserCache<T>({
   name,
@@ -52,11 +54,14 @@ export function createBrowserCache<T>({
 
 export function clearBrowserCaches() {
   blocked = true;
+  parsed.clear();
   for (const key of cacheKeys()) remove(key);
 }
 
 export function clearBrowserCachesForAccount(emailAccountId: string) {
   blockedAccountIds.add(emailAccountId);
+  for (const key of parsed.keys())
+    if (key.endsWith(`:${emailAccountId}`)) parsed.delete(key);
   for (const key of cacheKeys())
     if (key.endsWith(`:${emailAccountId}`)) remove(key);
 }
@@ -64,20 +69,27 @@ export function clearBrowserCachesForAccount(emailAccountId: string) {
 export function resetBrowserCacheBlocksForTesting() {
   blocked = false;
   blockedAccountIds.clear();
+  parsed.clear();
 }
 
 function read<T>(key: string): Stored<T> {
+  const known = parsed.get(key);
+  if (known) return known as Stored<T>;
+  let value: Stored<T> = {};
   try {
     if (typeof window === "undefined") return {};
     const raw = window.localStorage.getItem(key);
-    const parsed: unknown = raw ? JSON.parse(raw) : {};
-    return parsed && typeof parsed === "object" ? (parsed as Stored<T>) : {};
+    const stored: unknown = raw ? JSON.parse(raw) : {};
+    if (stored && typeof stored === "object") value = stored as Stored<T>;
   } catch {
-    return {};
+    // Unreadable storage holds nothing.
   }
+  parsed.set(key, value);
+  return value;
 }
 
 function write<T>(key: string, value: Stored<T>) {
+  parsed.set(key, value);
   try {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(key, JSON.stringify(value));
@@ -87,6 +99,7 @@ function write<T>(key: string, value: Stored<T>) {
 }
 
 function remove(key: string) {
+  parsed.delete(key);
   try {
     window.localStorage.removeItem(key);
   } catch {
