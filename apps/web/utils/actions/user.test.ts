@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Prisma } from "@/generated/prisma/client";
 import prisma from "@/utils/__mocks__/prisma";
 import { invalidateAccountOwnership } from "@/utils/redis/account-validation";
@@ -270,6 +270,89 @@ describe("deleteEmailAccountAction", () => {
 
     expect(result?.serverError).toBeUndefined();
     expect(prisma.$transaction).toHaveBeenCalled();
+  });
+
+  describe("Google grant", () => {
+    const fetchMock = vi.fn();
+
+    beforeEach(() => {
+      vi.stubGlobal("fetch", fetchMock);
+      fetchMock.mockReset();
+      fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+      prisma.emailAccount.findUnique.mockResolvedValue({
+        email: "secondary@example.com",
+        accountId: "account-2",
+        watchEmailsSubscriptionId: null,
+        account: { provider: "google" },
+        user: { email: "primary@example.com" },
+      } as unknown as Awaited<
+        ReturnType<typeof prisma.emailAccount.findUnique>
+      >);
+      prisma.emailAccount.findFirst.mockResolvedValue({
+        id: "primary-email-account",
+      } as Awaited<ReturnType<typeof prisma.emailAccount.findFirst>>);
+      prisma.account.findMany.mockResolvedValue([
+        {
+          id: "account-2",
+          refresh_token: "refresh-token-2",
+          access_token: "access-token-2",
+          emailAccount: {
+            id: "secondary-account",
+            email: "secondary@example.com",
+          },
+        },
+      ] as unknown as Awaited<ReturnType<typeof prisma.account.findMany>>);
+      prisma.calendarConnection.count.mockResolvedValue(0);
+      prisma.driveConnection.count.mockResolvedValue(0);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("revokes the removed mailbox's refresh token after unwatching and before deleting it", async () => {
+      const result = await deleteEmailAccountAction({
+        emailAccountId: "secondary-account",
+      });
+
+      expect(result?.serverError).toBeUndefined();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(
+        new URLSearchParams(fetchMock.mock.calls[0][1].body).get("token"),
+      ).toBe("refresh-token-2");
+      expect(
+        vi.mocked(stopWatchingEmailAccount).mock.invocationCallOrder[0],
+      ).toBeLessThan(fetchMock.mock.invocationCallOrder[0]);
+      expect(fetchMock.mock.invocationCallOrder[0]).toBeLessThan(
+        prisma.$transaction.mock.invocationCallOrder[0],
+      );
+    });
+
+    it("keeps the grant when the mailbox's calendar connection moves to a remaining mailbox", async () => {
+      prisma.calendarConnection.count.mockResolvedValue(1);
+
+      const result = await deleteEmailAccountAction({
+        emailAccountId: "secondary-account",
+      });
+
+      expect(result?.serverError).toBeUndefined();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(prisma.account.delete).toHaveBeenCalled();
+    });
+
+    it("still removes the mailbox when the revoke fails", async () => {
+      fetchMock.mockRejectedValue(new Error("Google down"));
+
+      const result = await deleteEmailAccountAction({
+        emailAccountId: "secondary-account",
+      });
+
+      expect(result?.serverError).toBeUndefined();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(prisma.account.delete).toHaveBeenCalledWith({
+        where: { id: "account-2", userId: "user-1" },
+      });
+    });
   });
 
   it("keeps watching the only mailbox when its removal is refused", async () => {

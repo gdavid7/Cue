@@ -22,6 +22,7 @@ import {
   isOrganizationOwnerInvariantError,
 } from "@/utils/organizations/ownership";
 import { invalidateAccountOwnership } from "@/utils/redis/account-validation";
+import { revokeGoogleGrants } from "@/utils/user/revoke-google-grants";
 
 export async function deleteUser({
   userId,
@@ -97,6 +98,12 @@ export async function deleteUser({
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );
     if (failedRelease) throw failedRelease.reason;
+
+    await revokeGoogleGrants({
+      emailAccountIds,
+      keepsConnections: false,
+      logger,
+    });
 
     await deleteUserRows({ userId, emailAccountIds, logger });
 

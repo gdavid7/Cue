@@ -44,6 +44,7 @@ import {
   isOrganizationOwnerInvariantError,
 } from "@/utils/organizations/ownership";
 import { invalidateAccountOwnership } from "@/utils/redis/account-validation";
+import { revokeGoogleGrants } from "@/utils/user/revoke-google-grants";
 
 export const saveAboutAction = actionClient
   .metadata({ name: "saveAbout" })
@@ -189,17 +190,25 @@ export const deleteEmailAccountAction = actionClientUser
         logger,
       });
 
+      await stopWatchingEmailAccount({
+        emailAccountId,
+        provider: emailAccount.account.provider,
+        subscriptionId: emailAccount.watchEmailsSubscriptionId,
+        logger,
+      });
+
+      // A mailbox always remains here, and the removed one's connections move
+      // to it.
+      await revokeGoogleGrants({
+        emailAccountIds: [emailAccountId],
+        keepsConnections: true,
+        logger,
+      });
+
       if (isPrimaryAccount && remainingEmailAccount) {
         // Promote the next email account to primary
         const newPrimaryAccount = remainingEmailAccount;
         const oldEmail = emailAccount.user.email;
-
-        await stopWatchingEmailAccount({
-          emailAccountId,
-          provider: emailAccount.account.provider,
-          subscriptionId: emailAccount.watchEmailsSubscriptionId,
-          logger,
-        });
 
         await runDeleteEmailAccountTransaction(
           userId,
@@ -241,13 +250,6 @@ export const deleteEmailAccountAction = actionClientUser
           });
         });
       } else {
-        await stopWatchingEmailAccount({
-          emailAccountId,
-          provider: emailAccount.account.provider,
-          subscriptionId: emailAccount.watchEmailsSubscriptionId,
-          logger,
-        });
-
         await runDeleteEmailAccountTransaction(
           userId,
           [
