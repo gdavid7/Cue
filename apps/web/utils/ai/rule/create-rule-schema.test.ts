@@ -1,3 +1,4 @@
+import { asSchema } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
 import { ActionType } from "@/generated/prisma/enums";
@@ -6,6 +7,7 @@ import {
   getAvailableActions,
   getExtraActions,
 } from "./create-rule-schema";
+import { INVALID_STATIC_FROM_MESSAGE } from "./rule-condition-descriptions";
 
 const { mockEnv } = vi.hoisted(() => ({
   mockEnv: {
@@ -407,6 +409,68 @@ describe("createRuleSchema", () => {
   });
 });
 
+describe("createRuleSchema validation errors", () => {
+  // The model reads these issues after a rejected tool call, so each mistake
+  // should come back as one message that says what to fix.
+  const issueMessages = async (input: unknown) => {
+    const result = await asSchema(createRuleSchema("google")).validate?.(input);
+    if (!result || result.success) throw new Error("expected a failure");
+    return (result.error as z.ZodError).issues.map((issue) => issue.message);
+  };
+
+  it("names the missing field of an action in one message", async () => {
+    expect(
+      await issueMessages(
+        buildRule({ type: ActionType.LABEL, fields: {}, delayInMinutes: null }),
+      ),
+    ).toEqual(["LABEL requires fields.label."]);
+    expect(
+      await issueMessages(
+        buildRule({ type: ActionType.LABEL, delayInMinutes: null }),
+      ),
+    ).toEqual(["LABEL requires fields.label."]);
+  });
+
+  it("explains a missing condition in one message", async () => {
+    expect(
+      await issueMessages({
+        ...buildRule({ type: ActionType.ARCHIVE, delayInMinutes: null }),
+        condition: {
+          conditionalOperator: null,
+          aiInstructions: " ",
+          static: null,
+        },
+      }),
+    ).toEqual([
+      "The conditions to match. Include at least one semantic condition in aiInstructions or one static condition in from, to, or subject.",
+    ]);
+  });
+
+  it("explains a placeholder sender in one message", async () => {
+    expect(
+      await issueMessages({
+        ...buildRule({ type: ActionType.ARCHIVE, delayInMinutes: null }),
+        condition: {
+          conditionalOperator: null,
+          aiInstructions: null,
+          static: { from: "*@*.*" },
+        },
+      }),
+    ).toEqual([INVALID_STATIC_FROM_MESSAGE]);
+  });
+
+  it("still describes the condition to the model", async () => {
+    const jsonSchema = (await asSchema(createRuleSchema("google"))
+      .jsonSchema) as {
+      properties: { condition: { description?: string } };
+    };
+
+    expect(jsonSchema.properties.condition.description).toContain(
+      "Include at least one semantic condition",
+    );
+  });
+});
+
 describe("getExtraActions", () => {
   beforeEach(() => {
     mockEnv.emailSendEnabled = true;
@@ -466,8 +530,9 @@ describe("delete action availability", () => {
   });
 });
 
-type CreateRuleInput = z.input<ReturnType<typeof createRuleSchema>>;
-type RuleActionFixture = CreateRuleInput["actions"][number] & {
+type RuleActionFixture = {
+  type: ActionType;
+  delayInMinutes?: number | null;
   fields?: Partial<{
     label: string | null;
     to: string | null;

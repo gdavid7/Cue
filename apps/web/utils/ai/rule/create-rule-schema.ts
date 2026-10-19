@@ -102,9 +102,13 @@ const staticSubjectConditionSchema = z.object({
   }),
 });
 
+const MISSING_CONDITION_MESSAGE =
+  "The conditions to match. Include at least one semantic condition in aiInstructions or one static condition in from, to, or subject.";
+
 // The model sees one flat condition object, with each field described once.
-// The union of valid shapes, which would otherwise repeat every description
-// in each variant of the tool schema, still validates the input.
+// Its checks report a bad condition in one message; the union of valid
+// shapes, which would otherwise repeat every description in each variant of
+// the tool schema, then builds the condition.
 const modelFacingConditionSchema = z
   .object({
     conditionalOperator: conditionalOperatorSchema,
@@ -123,9 +127,26 @@ const modelFacingConditionSchema = z
         "The static conditions to match. If multiple static conditions are specified, the rule will match if ALL of the conditions match (AND operation)",
       ),
   })
-  .describe(
-    "The conditions to match. Include at least one semantic condition in aiInstructions or one static condition in from, to, or subject.",
-  );
+  .superRefine((condition, ctx) => {
+    const { static: staticCondition } = condition;
+    const hasCondition = [
+      condition.aiInstructions,
+      staticCondition?.from,
+      staticCondition?.to,
+      staticCondition?.subject,
+    ].some((value) => value?.trim());
+    if (!hasCondition) {
+      ctx.addIssue({ code: "custom", message: MISSING_CONDITION_MESSAGE });
+    }
+    if (isInvalidStaticFromValue(staticCondition?.from?.trim())) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["static", "from"],
+        message: INVALID_STATIC_FROM_MESSAGE,
+      });
+    }
+  })
+  .describe(MISSING_CONDITION_MESSAGE);
 
 const conditionSchema = modelFacingConditionSchema.pipe(
   z.union([
@@ -289,11 +310,13 @@ export const createRuleActionSchema = (
     }),
   );
 
+  // Keyed on type, a bad action reports only its own type's problem.
   return modelFacingSchema.pipe(
-    z.union([first, second, ...rest]) as unknown as z.ZodType<
-      RuleAction,
-      z.output<typeof modelFacingSchema>
-    >,
+    z.discriminatedUnion("type", [
+      first,
+      second,
+      ...rest,
+    ]) as unknown as z.ZodType<RuleAction, z.output<typeof modelFacingSchema>>,
   ) as unknown as z.ZodType<RuleAction>;
 };
 
@@ -411,10 +434,14 @@ function createRequiredFieldsSchema(
   field: "label" | "to" | "webhookUrl",
   actionType: string,
 ) {
-  return z.object({
-    ...createActionFieldShape(provider),
-    [field]: requiredStringField(`${actionType} requires fields.${field}.`),
-  });
+  const message = `${actionType} requires fields.${field}.`;
+  return z.object(
+    {
+      ...createActionFieldShape(provider),
+      [field]: requiredStringField(message),
+    },
+    { error: message },
+  );
 }
 
 function createRequiredFolderFieldsSchema(provider: string) {
@@ -424,10 +451,11 @@ function createRequiredFolderFieldsSchema(provider: string) {
     throw new Error("MOVE_FOLDER is only supported for Microsoft providers.");
   }
 
-  return z.object({
-    ...fieldShape,
-    folderName: requiredStringField("MOVE_FOLDER requires fields.folderName."),
-  });
+  const message = "MOVE_FOLDER requires fields.folderName.";
+  return z.object(
+    { ...fieldShape, folderName: requiredStringField(message) },
+    { error: message },
+  );
 }
 
 /** Accepts exactly the args the spec marks as LLM-settable. */
@@ -465,7 +493,7 @@ function optionalStringField() {
 
 function requiredStringField(message: string) {
   return z
-    .string()
+    .string({ error: message })
     .transform((value) => value.trim())
     .refine(Boolean, message);
 }
