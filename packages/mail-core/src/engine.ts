@@ -542,8 +542,12 @@ export function createMailEngine(input: {
           nowMs: runtime.nowMs(),
           leaseMs: 30_000,
         });
+        // Commands never wait on it: the check reads the store, which a
+        // lane's page can be holding.
         if (
           work &&
+          work.kind !== "command" &&
+          work.kind !== "inspect" &&
           runtime.nowMs() - syncLanesStartedAtMs >=
             SYNC_LANE_RESTART_INTERVAL_MS
         ) {

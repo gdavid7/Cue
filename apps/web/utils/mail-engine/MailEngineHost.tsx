@@ -51,7 +51,9 @@ import {
   getConnectedEngineAccounts,
   markEngineAccountRegistered,
   registerEngineAccounts,
+  registerEngineAccountsInTurn,
 } from "@/utils/mail-engine/engine-accounts";
+import { afterFirstMailList } from "@/utils/mail-engine/first-mail-list";
 import {
   MAIL_ENGINE_OWNER_LOCK,
   MAIL_ENGINE_TAB_CHANNEL,
@@ -466,13 +468,25 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
   const connectedAccountsKey = JSON.stringify(
     getConnectedEngineAccounts(accountsData?.emailAccounts ?? []),
   );
+  // Accounts nobody is looking at sync so they can notify, but only once the
+  // first list is up, and one at a time, so they never slow the account in
+  // view. The viewed account and All inboxes register their own at once.
   useEffect(() => {
     // The desktop engine registers accounts itself.
     if (!client || hasDesktopMailEngineIpc()) return;
     const accounts: ReturnType<typeof getConnectedEngineAccounts> =
       JSON.parse(connectedAccountsKey);
     if (accounts.length === 0) return;
-    registerEngineAccounts(client, accounts).catch(() => undefined);
+    const abort = new AbortController();
+    const cancel = afterFirstMailList(() => {
+      registerEngineAccountsInTurn(client, accounts, abort.signal).catch(
+        () => undefined,
+      );
+    });
+    return () => {
+      cancel();
+      abort.abort();
+    };
   }, [client, connectedAccountsKey]);
 
   const allAccounts = useAllAccountsScope();

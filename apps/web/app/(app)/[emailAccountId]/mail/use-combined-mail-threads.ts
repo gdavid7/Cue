@@ -13,6 +13,7 @@ import {
 import type { LabelsResponse } from "@/app/api/labels/route";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { isMicrosoftProvider } from "@/utils/email/provider-types";
+import { registerEngineAccounts } from "@/utils/mail-engine/engine-accounts";
 import { searchQueryForAccounts } from "@/utils/mail-search/search-query-predicate";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 
@@ -129,15 +130,12 @@ export function useCombinedMailThreads({
 }
 
 function startFirstSync(client: MailClient, accounts: AllInboxesAccount[]) {
-  Promise.all(
-    accounts.map((account) =>
-      client.ensureAccount?.({
-        accountId: account.id,
-        provider: isMicrosoftProvider(account.provider)
-          ? "microsoft"
-          : "google",
-      }),
-    ),
+  registerEngineAccounts(
+    client,
+    accounts.map((account) => ({
+      accountId: account.id,
+      provider: isMicrosoftProvider(account.provider) ? "microsoft" : "google",
+    })),
   )
     .then(() => client.requestSync(accounts.map((account) => account.id)))
     .catch(() => undefined);

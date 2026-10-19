@@ -61,6 +61,22 @@ export async function registerEngineAccounts(
   await client.requestSync(ensured.map((account) => account.accountId));
 }
 
+/**
+ * {@link registerEngineAccounts} one account at a time, for accounts nobody is
+ * looking at: each first sync waits for the one before, so together they never
+ * crowd the worker, the store or the network. Stops once `signal` aborts.
+ */
+export async function registerEngineAccountsInTurn(
+  client: MailClient,
+  accounts: EngineAccount[],
+  signal: AbortSignal,
+) {
+  for (const account of accounts) {
+    if (signal.aborted) return;
+    await registerEngineAccounts(client, [account]).catch(() => undefined);
+  }
+}
+
 /** Records an account the engine already knows, such as the one it started on. */
 export function markEngineAccountRegistered(
   client: MailClient,
