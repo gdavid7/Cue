@@ -1985,16 +1985,15 @@ export function MailShell() {
       });
     },
   );
-  // The assistant chat belongs to the screen's account; in All inboxes a
-  // thread from another account is invisible to it, so nothing offers it.
-  const threadInChatAccount =
-    !isAllAccounts || openThreadSelection?.emailAccountId === emailAccountId;
   const onToggleAssistant = useStableCallback(() =>
     toggleSidebar(["chat-sidebar"]),
   );
   // The chat already reads the open thread, so asking about this email is
-  // opening it with the cursor in place.
+  // opening it with the cursor in place, in the email's account (in All
+  // inboxes it may be another one than the chat's).
   const onAskCueAboutThread = useStableCallback(() => {
+    if (openThreadSelection)
+      switchChatAccount(openThreadSelection.emailAccountId);
     const withChat = (open: string[]) =>
       open.includes("chat-sidebar") ? open : [...open, "chat-sidebar"];
     // Phones keep their own list of open panels.
@@ -2450,8 +2449,8 @@ export function MailShell() {
                 }
                 onReady={setVisibleReaderThreadKey}
                 onClose={closeReader}
-                showFixWithChat={threadInChatAccount}
-                onAskCue={threadInChatAccount ? onAskCueAboutThread : undefined}
+                showFixWithChat
+                onAskCue={onAskCueAboutThread}
                 lastMessage={openMessages.at(-1) ?? null}
                 isStarred={allStarred}
                 onToggleStar={matching.active ? undefined : starTargets}

@@ -24,6 +24,7 @@ import { useSidebar } from "@/components/ui/sidebar";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useChat } from "@/providers/ChatProvider";
+import { useAccount } from "@/providers/EmailAccountProvider";
 import {
   NEW_RULE_ID as CONST_NEW_RULE_ID,
   NONE_RULE_ID as CONST_NONE_RULE_ID,
@@ -54,7 +55,9 @@ export function FixWithChat({
   const [showExplanation, setShowExplanation] = useState(false);
 
   const { setOpen } = useSidebar();
-  const { setContext } = useChat();
+  const { setContext, switchChatAccount } = useChat();
+  // The reader's account, which in All inboxes may not be the chat's.
+  const { emailAccountId } = useAccount();
 
   const selectedRuleName = useMemo(() => {
     if (!data) return null;
@@ -124,6 +127,8 @@ export function FixWithChat({
                 name: selectedRuleName || "Unknown",
               },
     };
+    // The fix is to this account's rules, so the chat moves to it first.
+    switchChatAccount(emailAccountId);
     setContext(context);
 
     setInput(input);
