@@ -1515,7 +1515,7 @@ describe("createEmailProviderMailboxSource", () => {
     expect(getMessagesWithPagination).not.toHaveBeenCalled();
   });
 
-  it("reads a first sync's first page as a screen of metadata and leaves its bodies to hydration", async () => {
+  it("reads a first sync's first page as metadata and leaves its bodies to hydration", async () => {
     const getMessagesWithPagination = vi.fn(async () => ({
       messages: [
         {
@@ -1557,7 +1557,7 @@ describe("createEmailProviderMailboxSource", () => {
 
     const first = await enumerate({ scopeId: "primary", initial: true });
     expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
-      maxResults: 50,
+      maxResults: 25,
       pageToken: undefined,
       includeDrafts: true,
       format: "metadata",
