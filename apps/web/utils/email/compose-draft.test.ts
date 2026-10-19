@@ -113,7 +113,9 @@ it("rejects an unconfirmed creation", async () => {
   );
 });
 it("conditionally discards the provider draft", async () => {
-  await discardComposeDraft({ provider, draftId: "draft-1" });
+  expect(await discardComposeDraft({ provider, draftId: "draft-1" })).toBe(
+    "message-1",
+  );
   expect(provider.deleteDraft).toHaveBeenCalledWith("draft-1", "v1");
 });
 it("keeps local recovery possible when the provider rejects deletion", async () => {

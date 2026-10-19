@@ -4,6 +4,7 @@ import prisma from "@/utils/__mocks__/prisma";
 import {
   bulkArchiveAction,
   bulkArchiveThreadsAction,
+  deleteMessagesForeverAction,
 } from "@/utils/actions/mail-bulk-action";
 
 vi.mock("@/utils/prisma");
@@ -124,5 +125,45 @@ describe("bulkArchiveAction", () => {
       succeededThreadIds: ["thread-1"],
       failedThreadIds: ["thread-2"],
     });
+  });
+});
+
+describe("deleteMessagesForeverAction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    prisma.emailAccount.findUnique.mockResolvedValue(
+      getMockEmailAccountWithAccount({
+        email: "owner@example.com",
+        userId: "user-1",
+        provider: "microsoft",
+      }),
+    );
+  });
+
+  it("reports the messages the provider found in the trash and deleted", async () => {
+    // The provider skips anything outside the trash, such as a sent reply.
+    const deleteMessagesForever = vi.fn().mockResolvedValue(["trashed"]);
+    mockCreateEmailProvider.mockResolvedValue({ deleteMessagesForever });
+
+    const result = await deleteMessagesForeverAction("account-1", {
+      messageIds: ["trashed", "sent-reply"],
+    });
+
+    expect(result?.serverError).toBeUndefined();
+    expect(deleteMessagesForever).toHaveBeenCalledWith([
+      "trashed",
+      "sent-reply",
+    ]);
+    expect(result?.data).toEqual({ deletedIds: ["trashed"] });
+  });
+
+  it("refuses where the provider's access can't delete for good", async () => {
+    mockCreateEmailProvider.mockResolvedValue({});
+
+    const result = await deleteMessagesForeverAction("account-1", {
+      messageIds: ["trashed"],
+    });
+
+    expect(result?.serverError).toMatch(/can't be deleted forever/);
   });
 });

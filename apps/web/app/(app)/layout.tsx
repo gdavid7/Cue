@@ -15,6 +15,7 @@ import { AssessUser } from "@/app/(app)/[emailAccountId]/assess";
 import { SentryIdentify } from "@/app/(app)/sentry-identify";
 import { AiAutomationStatusBanner } from "@/app/(app)/AiAutomationStatusBanner";
 import { ErrorMessages } from "@/app/(app)/ErrorMessages";
+import { GoogleSignInReminder } from "@/app/(app)/GoogleSignInReminder";
 import { DesktopMailIndicators } from "@/app/(app)/DesktopMailIndicators";
 import { TabUnreadTitle } from "@/app/(app)/TabUnreadTitle";
 import { KeepTodayPrefetched } from "@/app/(app)/KeepTodayPrefetched";
@@ -112,6 +113,7 @@ export default async function AppLayout({
                 }
               />
               <ErrorMessages />
+              <GoogleSignInReminder />
               <ProviderRateLimitBanner />
               {children}
             </SideNavWithTopNav>

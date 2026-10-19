@@ -1,3 +1,5 @@
+import { asSchema, jsonSchema } from "ai";
+import type { JSONSchema7 } from "@ai-sdk/provider";
 import { z } from "zod";
 import { createGenerateObject } from "@/utils/llms";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
@@ -6,6 +8,7 @@ import {
   createRuleSchema,
 } from "@/utils/ai/rule/create-rule-schema";
 import { createScopedLogger } from "@/utils/logger";
+import { SafeError } from "@/utils/error";
 import { convertMentionsToLabels } from "@/utils/mention";
 import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
 import { isIntegrationActionEnabledForUserId } from "@/utils/integration-action.server";
@@ -44,18 +47,21 @@ ${cleanedPromptFile}
     emailAccount.userId,
   );
 
+  const ruleSchema = createRuleSchema(
+    emailAccount.account.provider,
+    integrationActionsEnabled,
+  );
+  // The model is shown the rule schema, but each rule is checked here rather
+  // than by generateObject: a schema failure there fails every rule at once
+  // and is retried with the same prompt, which fails the same way.
   const aiResponse = await generateObject({
     ...modelOptions,
     prompt,
     instructions: system,
-    schema: z.object({
-      rules: z.array(
-        createRuleSchema(
-          emailAccount.account.provider,
-          integrationActionsEnabled,
-        ),
-      ),
-    }),
+    schema: jsonSchema<{ rules?: unknown }>(
+      asSchema(z.object({ rules: z.array(ruleSchema) }))
+        .jsonSchema as JSONSchema7,
+    ),
   });
 
   if (!aiResponse.object) {
@@ -64,13 +70,36 @@ ${cleanedPromptFile}
       modelId: aiResponse.response.modelId,
       totalTokens: aiResponse.usage.totalTokens,
     });
-    throw new Error("No rules found in AI response");
+    throw new SafeError(INVALID_RULES_MESSAGE, 422);
   }
 
-  const rules = aiResponse.object.rules;
+  const generated = aiResponse.object.rules;
+  if (!Array.isArray(generated)) {
+    logger.warn("AI response had no rules list");
+    throw new SafeError(INVALID_RULES_MESSAGE, 422);
+  }
+
+  // All or nothing, so a request never creates only some of its rules.
+  const rules: CreateRuleSchema[] = [];
+  for (const rule of generated) {
+    const parsed = ruleSchema.safeParse(rule);
+    if (!parsed.success) {
+      logger.warn("AI response had an invalid rule", {
+        generatedCount: generated.length,
+      });
+      throw new SafeError(
+        `${INVALID_RULES_MESSAGE} ${parsed.error.issues[0]?.message ?? ""}`.trim(),
+        422,
+      );
+    }
+    rules.push(parsed.data);
+  }
 
   return rules;
 }
+
+const INVALID_RULES_MESSAGE =
+  "Could not turn that into a valid rule. Try describing it differently.";
 
 function getSystemPrompt() {
   return `You are an AI assistant that converts email management rules into a structured format. Parse the given prompt and convert it into rules.

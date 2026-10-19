@@ -348,6 +348,14 @@ export interface MailStore {
     accountId: string;
     commandId: string;
   }): Promise<Admission | { status: "stale" }>;
+  /**
+   * Removes mailbox drafts the provider confirmed deleted, before sync reports
+   * it. Messages that aren't drafts stay; a later provider patch restores one.
+   */
+  forgetDeletedDrafts(input: {
+    accountId: string;
+    messageIds: string[];
+  }): Promise<LocalRevision>;
   getDiagnostics(accountId: string): Promise<{
     accountId: string;
     revision: LocalRevision;

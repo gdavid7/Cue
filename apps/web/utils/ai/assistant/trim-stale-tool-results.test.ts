@@ -1,6 +1,7 @@
 import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
 import {
+  projectEarlierTurnToolResults,
   RECENT_TOOL_RESULTS_TO_KEEP,
   trimStaleToolResults,
 } from "@/utils/ai/assistant/trim-stale-tool-results";
@@ -126,6 +127,171 @@ describe("trimStaleToolResults", () => {
   });
 });
 
+describe("trimStaleToolResults write sources", () => {
+  it.each([
+    "getUserRulesAndSettings",
+    "getLearnedPatterns",
+    "getAssistantCapabilities",
+  ])("never shortens a stale %s result, since a later write can save it back", (toolName) => {
+    const messages = [
+      userMessage("Show my rules, then clean up"),
+      ...toolRound(toolName, "settings-0", {
+        personalInstructions: "p".repeat(2000),
+        rules: [{ name: "Newsletters", aiInstructions: "a".repeat(1500) }],
+      }),
+      ...buildLargeTurn(),
+    ];
+
+    const trimmed = trimStaleToolResults(messages);
+
+    expect(getToolOutputValue(trimmed, "call-0")).toHaveProperty(
+      "trimmedForContext",
+    );
+    expect(getToolOutputValue(trimmed, "settings-0")).toEqual(
+      getToolOutputValue(messages, "settings-0"),
+    );
+  });
+});
+
+describe("projectEarlierTurnToolResults", () => {
+  it("replays earlier turns' searches in the model's view and leaves the latest turn alone", () => {
+    const messages = [
+      userMessage("What's new?"),
+      ...searchRound(0, { snippetLength: 20 }),
+      userMessage("And from Acme?"),
+      ...searchRound(1, { snippetLength: 20 }),
+    ];
+
+    const projected = projectEarlierTurnToolResults(messages);
+
+    const [earlier] = (
+      getToolOutputValue(projected, "call-0") as {
+        messages: Array<Record<string, unknown>>;
+      }
+    ).messages;
+    expect(earlier).toMatchObject({
+      messageId: "message-0",
+      threadId: "thread-0",
+      subject: "Subject 0",
+    });
+    expect(earlier).not.toHaveProperty("externalUrl");
+    expect(earlier).not.toHaveProperty("hasAttachments");
+    expect(getToolOutputValue(projected, "call-1")).toEqual(
+      getToolOutputValue(messages, "call-1"),
+    );
+  });
+
+  it("shortens earlier turns' large results however little output there is", () => {
+    const messages = [
+      userMessage("What did the contract say?"),
+      ...readEmailRound("read-0", "c".repeat(4000)),
+      ...searchRound(0, { snippetLength: 3000 }),
+      ...moveRound("move-0"),
+      userMessage("And the latest one?"),
+      ...readEmailRound("read-1", "d".repeat(4000)),
+    ];
+
+    const projected = projectEarlierTurnToolResults(messages);
+
+    const earlierRead = getToolOutputValue(projected, "read-0") as {
+      content: string;
+      attachments: unknown;
+      trimmedForContext?: string;
+    };
+    expect(earlierRead.content.length).toBeLessThan(1000);
+    expect(earlierRead.attachments).toEqual([
+      { attachmentId: "attachment-1", filename: "contract.pdf" },
+    ]);
+    expect(earlierRead.trimmedForContext).toBeDefined();
+    const earlierSearch = getToolOutputValue(projected, "call-0");
+    expect(earlierSearch).toMatchObject({
+      nextPageToken: "page-token-0",
+      messages: [{ messageId: "message-0", threadId: "thread-0" }],
+    });
+    expect(JSON.stringify(earlierSearch)).not.toContain("snippet-0");
+    expect(getToolOutputValue(projected, "move-0")).toEqual({
+      success: true,
+      movedCount: 1,
+    });
+    expect(getToolOutputValue(projected, "read-1")).toEqual(
+      getToolOutputValue(messages, "read-1"),
+    );
+  });
+
+  it("keeps a change awaiting confirmation whole but shortens a confirmed one", () => {
+    const sentEmail = {
+      actionType: "send_email",
+      requiresConfirmation: true,
+      pendingAction: { to: "someone@example.com", content: "b".repeat(3000) },
+    };
+    const messages = [
+      userMessage("Email Sam the update"),
+      ...toolRound("sendEmail", "pending-0", {
+        ...sentEmail,
+        confirmationState: "pending",
+      }),
+      ...toolRound("sendEmail", "confirmed-0", {
+        ...sentEmail,
+        confirmationState: "confirmed",
+      }),
+      userMessage("Thanks"),
+    ];
+
+    const projected = projectEarlierTurnToolResults(messages);
+
+    expect(getToolOutputValue(projected, "pending-0")).toEqual(
+      getToolOutputValue(messages, "pending-0"),
+    );
+    const confirmed = getToolOutputValue(projected, "confirmed-0") as {
+      confirmationState: string;
+      trimmedForContext?: string;
+    };
+    expect(confirmed.confirmationState).toBe("confirmed");
+    expect(confirmed.trimmedForContext).toBeDefined();
+  });
+
+  it("keeps a change that is still being applied whole", () => {
+    const messages = [
+      userMessage("Email Sam the update"),
+      ...toolRound("sendEmail", "processing-0", {
+        actionType: "send_email",
+        requiresConfirmation: true,
+        confirmationState: "processing",
+        pendingAction: { content: "b".repeat(3000) },
+      }),
+      userMessage("Thanks"),
+    ];
+
+    expect(
+      getToolOutputValue(
+        projectEarlierTurnToolResults(messages),
+        "processing-0",
+      ),
+    ).toEqual(getToolOutputValue(messages, "processing-0"));
+  });
+
+  it.each([
+    "getUserRulesAndSettings",
+    "getLearnedPatterns",
+    "getAssistantCapabilities",
+  ])("keeps earlier turns' %s results whole, since a later write can save them back", (toolName) => {
+    const messages = [
+      userMessage("Show my rules"),
+      ...toolRound(toolName, "settings-0", {
+        personalInstructions: "p".repeat(2000),
+        rules: [{ name: "Newsletters", aiInstructions: "a".repeat(1500) }],
+      }),
+      userMessage("Now make the newsletter rule archive too"),
+    ];
+
+    const projected = projectEarlierTurnToolResults(messages);
+
+    expect(getToolOutputValue(projected, "settings-0")).toEqual(
+      getToolOutputValue(messages, "settings-0"),
+    );
+  });
+});
+
 const TURN_ROUNDS = RECENT_TOOL_RESULTS_TO_KEEP + 150;
 
 function buildLargeTurn(): ModelMessage[] {
@@ -193,6 +359,30 @@ function searchRound(
               ],
             },
           },
+        },
+      ],
+    },
+  ];
+}
+
+function toolRound(
+  toolName: string,
+  callId: string,
+  value: Record<string, unknown>,
+): ModelMessage[] {
+  return [
+    {
+      role: "assistant",
+      content: [{ type: "tool-call", toolCallId: callId, toolName, input: {} }],
+    },
+    {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: callId,
+          toolName,
+          output: { type: "json", value: value as never },
         },
       ],
     },

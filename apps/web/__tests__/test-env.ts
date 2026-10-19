@@ -29,6 +29,8 @@ for (const key of [
   "AXIOM_DATASET",
   "NEXT_PUBLIC_AXIOM_TOKEN",
   "NEXT_PUBLIC_AXIOM_DATASET",
+  "NEXT_AXIOM_TOKEN",
+  "NEXT_AXIOM_DATASET",
 ]) {
   delete process.env[key];
 }

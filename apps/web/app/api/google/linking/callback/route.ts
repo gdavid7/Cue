@@ -271,6 +271,7 @@ export const GET = withError("google/linking/callback", async (request) => {
             providerAccountId,
             access_token: tokens.access_token,
             refresh_token: tokens.refresh_token,
+            refreshTokenIssuedAt: tokens.refresh_token ? new Date() : null,
             expires_at: tokens.expiry_date
               ? new Date(tokens.expiry_date)
               : null,
@@ -516,6 +517,7 @@ async function updateGoogleAccount({
       access_token: tokens.access_token,
       ...(tokens.refresh_token != null && {
         refresh_token: tokens.refresh_token,
+        refreshTokenIssuedAt: new Date(),
       }),
       expires_at: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
       scope: tokens.scope,
