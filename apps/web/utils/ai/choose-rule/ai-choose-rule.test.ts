@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Logger } from "@/utils/logger";
 import { getEmail, getEmailAccount } from "@/__tests__/helpers";
 import type { ClassificationFeedbackItem } from "@/utils/rule/classification-feedback";
+import { getModel } from "@/utils/llms/model";
 
 const generateObjectSpy = vi.fn();
 
@@ -85,6 +86,30 @@ describe.each([
     });
 
     expect(capturedRequest().prompt).not.toContain(FEEDBACK_MARKER);
+  });
+});
+
+describe("aiChooseRule model tier", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    generateObjectSpy.mockResolvedValue({
+      object: { reasoning: "r", ruleName: null, noMatchFound: true },
+    });
+  });
+
+  it("selects the model for the tier the caller passes", async () => {
+    const emailAccount = getEmailAccount();
+    const { aiChooseRule } = await import("./ai-choose-rule");
+
+    await aiChooseRule({
+      email: getEmail(),
+      rules,
+      emailAccount,
+      modelType: "economy",
+      logger: noopLogger,
+    });
+
+    expect(getModel).toHaveBeenCalledWith(emailAccount.user, "economy");
   });
 });
 
