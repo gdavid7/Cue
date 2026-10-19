@@ -138,9 +138,10 @@ export function useThreadActions({
     [client],
   );
 
-  // Switching account replaces the engine, and an undo (the shortcut, or a
-  // toast shown before the switch) must reach the one running now. Batches
-  // carry their own accounts, so the last one stays undoable across a switch.
+  // A retry or another tab taking over can replace the engine, and an undo
+  // (the shortcut, or a toast shown before) must reach the one running now.
+  // Batches carry their own accounts, so the last one stays undoable across
+  // an account switch.
   const undoBatch = useStableCallback(async (batch: UndoableBatch) => {
     if (batch.undone || !client) return [];
     batch.undone = true;

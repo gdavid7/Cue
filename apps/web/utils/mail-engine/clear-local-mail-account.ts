@@ -6,6 +6,7 @@ import { getActiveMailClient } from "@/utils/mail-engine/active-client";
 import { clearLocalReplyDrafts } from "@/utils/mail-engine/reply-drafts";
 import { clearPersistedSwrCacheForAccount } from "@/utils/swr-persistence";
 import { clearBrowserCachesForAccount } from "@/utils/browser-cache";
+import { forgetLocalMailbox } from "@/utils/mail-engine/local-mailbox-cookie";
 
 export async function clearLocalMailAccountState(emailAccountId: string) {
   clearLocalReplyDrafts(emailAccountId);
@@ -15,6 +16,7 @@ export async function clearLocalMailAccountState(emailAccountId: string) {
   clearArchiveSenderStatuses(emailAccountId);
   clearDeleteSenderStatuses(emailAccountId);
   clearMarkReadSenderStatuses(emailAccountId);
+  forgetLocalMailbox(emailAccountId);
   const client = getActiveMailClient();
   if (!client) {
     throw new Error("Mail engine is not ready to remove this mailbox.");
