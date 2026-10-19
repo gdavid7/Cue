@@ -125,13 +125,28 @@ export async function withNetworkRetry<T>(
 
       if (isRetryable && attempt < MAX_RETRIES) {
         const errorType = isNetworkError ? "network" : "validation";
-        logger.warn(`Retrying after ${errorType} error`, {
+        const retryFields = {
           label,
           attempt,
           maxRetries: MAX_RETRIES,
           errorType,
-          error,
-        });
+        };
+        if (isNetworkError) {
+          logger.warn(`Retrying after ${errorType} error`, {
+            ...retryFields,
+            error,
+          });
+        } else {
+          // Validation errors carry the model's raw output, which can echo email content.
+          logger.warn(`Retrying after ${errorType} error`, {
+            ...retryFields,
+            errorName: error instanceof Error ? error.name : undefined,
+          });
+          logger.trace("Retrying after validation error (full error)", {
+            ...retryFields,
+            error,
+          });
+        }
 
         // Exponential backoff: 1s, 2s, 4s
         const delayMs = 1000 * 2 ** attempt;

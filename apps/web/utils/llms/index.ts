@@ -22,7 +22,7 @@ import {
   NoObjectGeneratedError,
   TypeValidationError,
 } from "ai";
-import type { LanguageModelV4 } from "@ai-sdk/provider";
+import { JSONParseError, type LanguageModelV4 } from "@ai-sdk/provider";
 import { captureAiGeneration } from "@posthog/ai";
 import { jsonrepair } from "jsonrepair";
 import { type ModelFallbackRecord, saveAiUsage } from "@/utils/usage";
@@ -1390,16 +1390,22 @@ async function handleError(
       modelName,
     });
   } else {
-    const fields = {
-      error,
-      userId,
-      userEmail,
-      emailAccountId,
-      label,
-      modelName,
-    };
-    if (timedOut) logger.warn("Error in LLM call", fields);
-    else logger.error("Error in LLM call", fields);
+    const fields = { userId, userEmail, emailAccountId, label, modelName };
+    const log = timedOut ? logger.warn : logger.error;
+    const modelOutputError = findModelOutputError(error);
+    if (modelOutputError) {
+      // These errors carry the model's raw output, which can echo email content.
+      log("Error in LLM call", {
+        ...fields,
+        errorName: modelOutputError.name,
+        finishReason: NoObjectGeneratedError.isInstance(modelOutputError)
+          ? modelOutputError.finishReason
+          : undefined,
+      });
+      logger.trace("Error in LLM call (full error)", { ...fields, error });
+    } else {
+      log("Error in LLM call", { ...fields, error });
+    }
   }
 
   const notifyUser = async (
@@ -1465,6 +1471,22 @@ async function handleError(
         "Your AI provider has rejected requests due to rate limits or quota. Please check your provider account if this persists.",
       logger,
     });
+  }
+}
+
+function findModelOutputError(error: unknown, depth = 0): Error | undefined {
+  if (depth > 5 || !error || typeof error !== "object") return;
+  if (
+    JSONParseError.isInstance(error) ||
+    TypeValidationError.isInstance(error) ||
+    NoObjectGeneratedError.isInstance(error)
+  ) {
+    return error;
+  }
+  const { cause, lastError, error: inner } = error as Record<string, unknown>;
+  for (const nested of [cause, lastError, inner]) {
+    const found = findModelOutputError(nested, depth + 1);
+    if (found) return found;
   }
 }
 
