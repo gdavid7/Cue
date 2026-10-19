@@ -32,7 +32,7 @@ export const searchIntentSchema = z.object({
   senders: z
     .array(z.string())
     .describe(
-      "Who the mail is from: people, companies or addresses the user names, as written (Sarah, Acme). Never a role or relation without a name (my landlord, the bank, mom), which can't be looked up.",
+      "Who the mail is from: people, companies or addresses the user names, as written (Sarah, Acme). Never a role or relation without a name (my landlord, the bank, mom): it can't be looked up, so add only words such mail would contain to keywordGroups (rent for a landlord).",
     ),
   recipients: z
     .array(z.string())
@@ -45,7 +45,7 @@ export const searchIntentSchema = z.object({
   keywordGroups: z
     .array(z.array(z.string()))
     .describe(
-      'Words the mail itself would contain, one group per thing it must mention: a mail matches with a word from every group. Put a thing\'s synonyms and translations in its group, e.g. [["lease", "rental agreement"]]. Use as few groups as find the mail, usually one or two. Leave out filler, question words and words about the search itself (email, message, find).',
+      'Words the mail itself would contain, one group per thing it must mention: a mail matches with a word from every group. Put a thing\'s synonyms and translations in its group, e.g. [["lease", "rental agreement"]], and different things in different groups: a generic word beside a specific one matches almost any mail. Use as few groups as find the mail, usually one or two. Leave out filler, question words and words about the search itself (email, message, find).',
     ),
   hasAttachment: z
     .boolean()
