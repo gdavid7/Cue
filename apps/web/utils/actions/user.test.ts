@@ -13,6 +13,7 @@ import { publishConversationChange } from "@/utils/team-comments/events";
 import { deleteTinybirdEmailData } from "@inboxzero/tinybird";
 import { invalidateAccountValidation } from "@/utils/redis/account-validation";
 import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
+import { shareChannelsAcrossMailboxes } from "@/utils/messaging/shared-channels";
 import { deleteAccountAction, deleteEmailAccountAction } from "./user";
 
 vi.mock("@/utils/prisma");
@@ -65,6 +66,9 @@ vi.mock("@/utils/redis/account-validation", () => ({
 vi.mock("@/utils/user/own-addresses", () => ({
   invalidateUserOwnAddresses: vi.fn(() => Promise.resolve()),
 }));
+vi.mock("@/utils/messaging/shared-channels", () => ({
+  shareChannelsAcrossMailboxes: vi.fn(() => Promise.resolve()),
+}));
 vi.mock("@/utils/ai/draft-cleanup", () => ({
   cleanupAIDraftsForAccount: vi.fn(),
   getConfiguredDraftCleanupDays: vi.fn(),
@@ -85,6 +89,9 @@ describe("deleteEmailAccountAction", () => {
     );
     prisma.member.findMany.mockResolvedValue([]);
     prisma.conversation.findMany.mockResolvedValue([]);
+    prisma.calendarConnection.findMany.mockResolvedValue([]);
+    prisma.driveConnection.findMany.mockResolvedValue([]);
+    prisma.mcpConnection.findMany.mockResolvedValue([]);
     prisma.emailAccount.findUnique.mockResolvedValue({
       email: "primary@example.com",
       accountId: "account-1",
@@ -219,6 +226,47 @@ describe("deleteEmailAccountAction", () => {
       },
     });
     expect(updateAccountSeats).not.toHaveBeenCalled();
+  });
+
+  it("moves shared connections to a remaining mailbox in the same transaction as the delete", async () => {
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      email: "secondary@example.com",
+      accountId: "account-2",
+      account: { provider: "google" },
+      user: { email: "primary@example.com" },
+    } as Awaited<ReturnType<typeof prisma.emailAccount.findUnique>>);
+    prisma.emailAccount.findFirst.mockResolvedValue({
+      id: "primary-email-account",
+    } as Awaited<ReturnType<typeof prisma.emailAccount.findFirst>>);
+    const moveCalendars = { operation: "move calendars" };
+    prisma.calendarConnection.updateMany.mockReturnValue(
+      moveCalendars as never,
+    );
+
+    const result = await deleteEmailAccountAction({
+      emailAccountId: "secondary-account",
+    });
+
+    expect(result?.serverError).toBeUndefined();
+    expect(prisma.emailAccount.findFirst).toHaveBeenCalledWith({
+      where: { userId: "user-1", id: { not: "secondary-account" } },
+      orderBy: { createdAt: "asc" },
+      select: { id: true },
+    });
+    expect(prisma.calendarConnection.updateMany).toHaveBeenCalledWith({
+      where: { emailAccountId: "secondary-account" },
+      data: { emailAccountId: "primary-email-account" },
+    });
+    const operations = prisma.$transaction.mock.calls[0]?.[0] as unknown[];
+    const deleteMailbox = prisma.emailAccount.delete.mock.results[0]?.value;
+    expect(operations.indexOf(moveCalendars)).toBeGreaterThan(-1);
+    expect(operations.indexOf(moveCalendars)).toBeLessThan(
+      operations.indexOf(deleteMailbox),
+    );
+    expect(shareChannelsAcrossMailboxes).toHaveBeenCalledWith({
+      userId: "user-1",
+      logger: expect.anything(),
+    });
   });
 
   it("stops watching a removed mailbox before deleting it", async () => {
