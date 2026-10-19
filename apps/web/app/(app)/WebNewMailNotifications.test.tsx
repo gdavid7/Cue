@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebNewMailNotifications } from "@/app/(app)/WebNewMailNotifications";
 
@@ -57,6 +57,16 @@ function stubPermission(permission: NotificationPermission) {
   vi.stubGlobal("Notification", { permission, requestPermission: vi.fn() });
 }
 
+function inboxConversation(id: string, latestMessageAtMs: number) {
+  return {
+    latestMessageId: id,
+    key: { accountId: "acc-1", conversationId: `thread-${id}` },
+    from: "Dana <dana@example.com>",
+    subject: "Hello",
+    latestMessageAtMs,
+  };
+}
+
 function unreadInboxWatchers() {
   return mocks.observeMailbox.mock.calls.filter(
     ([query]) => query.pageSize > 1,
@@ -92,6 +102,49 @@ describe("WebNewMailNotifications", () => {
 
     expect(unreadInboxWatchers()).toHaveLength(1);
     expect(unreadInboxWatchers()[0][0].accountIds).toEqual(["acc-1", "acc-2"]);
+  });
+
+  it("notifies new mail in a synced account while another account has never synced here", async () => {
+    const shown: string[] = [];
+    vi.stubGlobal(
+      "Notification",
+      Object.assign(
+        vi.fn(function (title: string) {
+          shown.push(title);
+          return { close: () => undefined, onclick: null };
+        }),
+        { permission: "granted", requestPermission: vi.fn() },
+      ),
+    );
+    window.localStorage.setItem("cue:web-notifications:mode", "all");
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    Object.defineProperty(navigator, "locks", {
+      value: undefined,
+      configurable: true,
+    });
+    const listeners = new Set<() => void>();
+    // acc-2 is connected but this browser has never finished syncing it.
+    const coverage = [{ accountId: "acc-1", lastCompletedSyncAtMs: 1 }];
+    let conversations = [inboxConversation("m0", Date.now() - 1000)];
+    mocks.observeMailbox.mockImplementation(() => ({
+      getSnapshot: () => ({
+        status: "ready",
+        data: { conversations, coverage },
+      }),
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      close: () => undefined,
+    }));
+
+    render(<WebNewMailNotifications />);
+    await act(async () => {
+      conversations = [inboxConversation("m1", Date.now()), ...conversations];
+      for (const listener of listeners) listener();
+    });
+
+    expect(shown).toEqual(["Dana"]);
   });
 
   it("stays out of the way inside the Electron shell", () => {

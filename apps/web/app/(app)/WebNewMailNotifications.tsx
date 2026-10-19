@@ -175,7 +175,7 @@ export function WebNewMailNotifications() {
       if (snapshot.status !== "ready" || !snapshot.data) return;
       notifierRef.current?.handle(
         toTracked(snapshot.data),
-        allAccountsSynced(snapshot.data.coverage, connectedAccountIds),
+        unsyncedAccounts(snapshot.data.coverage, connectedAccountIds),
       );
     };
     const unsubscribe = handle.subscribe(apply);
@@ -274,13 +274,17 @@ function toTracked(view: MailboxView): TrackedConversation[] {
   );
 }
 
-// Until each account has finished a sync, the list is a stale cache or a
-// partial backfill.
-function allAccountsSynced(coverage: Coverage[], accountIds: string[]) {
-  return accountIds.every((accountId) =>
-    coverage.some(
-      (entry) =>
-        entry.accountId === accountId && entry.lastCompletedSyncAtMs !== null,
+// An account this browser has never finished syncing (one that is excluded
+// from All inboxes may never be) holds back only its own mail.
+function unsyncedAccounts(coverage: Coverage[], accountIds: string[]) {
+  return new Set(
+    accountIds.filter(
+      (accountId) =>
+        !coverage.some(
+          (entry) =>
+            entry.accountId === accountId &&
+            entry.lastCompletedSyncAtMs !== null,
+        ),
     ),
   );
 }
